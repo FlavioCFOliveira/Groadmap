@@ -418,12 +418,18 @@ func publishedKeyLists() []keyListCase {
 	return slices.Concat(modelSurfaces, graphKeyLists())
 }
 
-// graphKeyLists covers the graph family, where every help surface publishes the
-// same two result envelopes.
+// graphKeyLists covers the graph family, whose two help surfaces — the family
+// help and the single subcommand's — publish the same two result envelopes.
 //
 // Each surface introduces them with its own wording, so the phrase is given per
-// surface. A read-only subcommand has no no-RETURN form to publish, which an
-// empty okMarker records.
+// surface. The family help sketches the pair by what a statement produces, and
+// `graph execute` names the same discriminator: "produces result columns" and
+// "carries a RETURN clause" coincide for a data statement but part company on
+// the schema statements this subcommand also runs, where SHOW INDEXES produces
+// columns while carrying no RETURN (DATA_FORMATS.md § Graph Write Result, "Why
+// the discriminator is the columns and not the RETURN clause"). There is no
+// longer any surface with only one envelope to publish: the read-only
+// subcommands that had no no-RETURN form are gone.
 func graphKeyLists() []keyListCase {
 	surfaces := []struct {
 		name          string
@@ -432,27 +438,10 @@ func graphKeyLists() []keyListCase {
 		okMarker      string
 	}{
 		{"graph family help", printGraphHelp,
-			"Read subcommands and write subcommands with RETURN:",
-			"Write subcommands without RETURN:"},
-		{"graph create help", printGraphCreateHelp,
-			"With a RETURN clause:", "Without a RETURN clause:"},
-		{"graph query help", printGraphQueryHelp,
-			"Output (stdout JSON):", ""},
-		// `graph update` publishes the pair under a different phrase from its two
-		// sibling write subcommands, and the difference is the specification's.
-		// For a data-writing query "produces result columns" and "carries a
-		// RETURN clause" coincide exactly, so `create` and `delete` may say
-		// either; they part company on the schema statements only `update`
-		// accepts, where SHOW INDEXES produces columns while carrying no RETURN
-		// (DATA_FORMATS.md § Graph Write Result, "Why the discriminator is the
-		// columns and not the RETURN clause"). Its help therefore names the
-		// discriminator that is true of every statement it runs.
-		{"graph update help", printGraphUpdateHelp,
+			"Statement that produces result columns:",
+			"Statement that produces none:"},
+		{"graph execute help", printGraphExecuteHelp,
 			"With result columns:", "Without result columns:"},
-		{"graph delete help", printGraphDeleteHelp,
-			"With a RETURN clause:", "Without a RETURN clause:"},
-		{"graph search help", printGraphSearchHelp,
-			"Output (stdout JSON):", ""},
 	}
 
 	cases := make([]keyListCase, 0, 2*len(surfaces))

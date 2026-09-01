@@ -1,6 +1,6 @@
 package cypherguard_test
 
-// Unit half of the regression for rmp task #275: `rmp graph query --query
+// Unit half of the regression for rmp task #275: a CLI graph read given `--query
 // "SHOW  INDEXES"` (two spaces) passed the guard rail and died in the engine's
 // parser under a diagnostic that lists every clause keyword EXCEPT SHOW, so it
 // read as though schema introspection were unsupported — while the identical

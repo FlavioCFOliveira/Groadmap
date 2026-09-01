@@ -188,8 +188,13 @@ const (
 // unchecked example, so the set may not grow without someone confirming that
 // what was added really is a synopsis or a transcript.
 const (
-	exampleCommandSlotSynopses    = 6
-	exampleSubcommandSlotSynopses = 6
+	exampleCommandSlotSynopses = 6
+	// Five, not six: DOCS/commands/graph.md's synopsis names its subcommand
+	// (`rmp graph execute ...`) rather than leaving the slot a placeholder,
+	// because the family has exactly one subcommand to name
+	// (SPEC/COMMANDS.md § Graph Management). That line is therefore CHECKED
+	// rather than skipped, which is the direction this count wants to move in.
+	exampleSubcommandSlotSynopses = 5
 	examplePromptedTranscripts    = 6
 	// Three of the six prompted transcripts document exit 127 and are invalid
 	// by name on purpose.
@@ -1657,8 +1662,10 @@ func TestExampleInvocations_OracleShape(t *testing.T) {
 	oracle := loadExampleOracle(t)
 
 	const (
-		wantCommands    = 9
-		wantSubcommands = 59
+		wantCommands = 9
+		// 55, down from 59: the five `graph` subcommands collapsed onto one
+		// (SPEC/COMMANDS.md § Graph Management).
+		wantSubcommands = 55
 	)
 	if len(oracle.commandOrder) != wantCommands {
 		t.Errorf("the contract declares %d command families, this gate was written against %d: %v",

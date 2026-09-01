@@ -13,8 +13,8 @@ The SPEC is unversioned. Git is the source of truth for its evolution — recove
 | CLI command syntax / flags | `COMMANDS.md` |
 | JSON input/output formats | `DATA_FORMATS.md` |
 | Help text structure | `HELP.md` |
-| Knowledge graph feature (design, persistence, guard rails) | `GRAPH.md` |
-| Read-only web interface (`rmp web`, server, pages, graph viz) | `WEB.md` |
+| Knowledge graph feature (design, persistence, what is and is not checked) | `GRAPH.md` |
+| Web interface (`rmp web`, server, pages, graph viz) | `WEB.md` |
 | Web roadmap sprints page / landing (`/roadmaps/{name}`, sprint tabs Próximos / Actual / Concluídos) | `WEB.md § Roadmap Sprints Page` |
 | Web roadmap tasks page (`/roadmaps/{name}/tasks`, Kanban task board, header search and type / priority / severity filters) | `WEB.md § Roadmap Tasks Page` |
 | Web board search text rules (trim by White_Space, Unicode NFC normalisation, simple lowercase fold, and the three tables shipped to the browser) | `WEB.md § Roadmap Tasks Page` |
@@ -24,8 +24,9 @@ The SPEC is unversioned. Git is the source of truth for its evolution — recove
 | Web task detail modal (read-only task popup) | `WEB.md § Task Detail Modal` |
 | Web graph labels sidebar (node-label / edge-type inventory, counts, section totals, highlight, collapse/expand) | `WEB.md § Graph Labels Sidebar` |
 | Web graph query bar (editable Cypher query box, Search button, node-limit dropdown) | `WEB.md § Graph Query Bar` |
-| Web graph query-bar error handling (the failure classes, their precedence, and the boundary against the internal read error) | `WEB.md § Query-Bar Error Handling` |
-| Web graph data endpoint `q` / `limit` parameters, read-only guard-rail, limit injection, node/edge extraction | `WEB.md § Graph Data Endpoint` |
+| Web graph query-bar error handling (the two failure classes, the order they are decided in, and the boundary against the internal read error) | `WEB.md § Query-Bar Error Handling` |
+| Web graph data endpoint `q` / `limit` parameters, limit injection, node/edge extraction | `WEB.md § Graph Data Endpoint` |
+| Web graph data endpoint executes writes over HTTP with no authentication (what a `GET` of it can change, and the only access control there is) | `WEB.md § Security and Constraints` |
 | Web startup schema migration (automatic, no-input, before serving) | `WEB.md § Startup Schema Migration` |
 | `rmp web` command syntax / flags | `COMMANDS.md § Web Interface` |
 | Web graph data endpoint JSON shape | `DATA_FORMATS.md § Graph View Data` |
@@ -38,7 +39,7 @@ The SPEC is unversioned. Git is the source of truth for its evolution — recove
 | Vendored web assets / embedded Tabler framework and D3.js (with d3-sankey) | `BUILD.md § Vendored Web Assets` |
 | Free-text control-character constraint (CWE-150 / Trojan Source) | `MODELS.md § Task` (Free-Text Control-Character Constraint) |
 | Free-text UTF-8 encoding constraint (only valid UTF-8 is accepted and stored) | `MODELS.md § Task` (Free-Text UTF-8 Encoding Constraint) |
-| The two free-text content rules applied to Cypher and to knowledge-graph property values (which `rmp graph` subcommand each rule binds, and why the two reaches differ) | `GRAPH.md § Cypher Query and Property Value Content Rules` |
+| What Groadmap does not check about a Cypher statement (the seven silent hazards, each reporting success) | `GRAPH.md § What Groadmap Does Not Check` |
 | Published field name in a validation error message (one name per field, underscored; how it differs from the flag name) | `COMMANDS.md § Published Field Names in Validation Messages` |
 | Task commit-hash format (7-64 hexadecimal characters, lowercase on storage, no git invocation) | `MODELS.md § Task` (Commit Hash Constraint) |
 | Task commit-hash `CHECK` constraints and why `GLOB` is case-sensitive | `DATABASE.md § Commit Hash Format Constraint` |
@@ -68,15 +69,14 @@ The SPEC is unversioned. Git is the source of truth for its evolution — recove
 | Node `key` uniqueness in the knowledge graph (a convention the caller honours, judged on the NFC form, and the two-step audit that detects a violation) | `GRAPH.md § Node Key Uniqueness` |
 | Cypher input via flag or stdin | `GRAPH.md § Cypher Input Source and Precedence` |
 | Maximum Cypher query length (1 MiB, counted in bytes) and the exit code for exceeding it | `GRAPH.md § Maximum Query Length` |
-| A stray positional argument on a `graph` subcommand (the five accept none), the exact line it publishes, and where the refusal lands in the subcommand's order | `GRAPH.md § No Positional Query: A Stray Token Is Refused` |
+| A stray positional argument on `graph execute` (it accepts none), the exact line it publishes, and where the refusal lands in the subcommand's order | `GRAPH.md § No Positional Query: A Stray Token Is Refused` |
 | Bounded standard-input read of a Cypher query, and the refusal of an empty, whitespace-only, or terminal standard input | `GRAPH.md § Bounded Standard-Input Read` and `GRAPH.md § Standard Input That Supplies No Query` |
-| Keyword spacing the guard rail requires in a `SHOW INDEX(ES)` / `SHOW CONSTRAINT(S)` command, and why the DDL class stays whitespace-tolerant | `GRAPH.md § Keyword Spacing in a Schema-Introspection Command` |
-| Knowledge-graph schema management through `rmp graph update` (which index and constraint statements it accepts, how a schema object is named, why changing an index is two invocations, and how a schema failure surfaces) | `GRAPH.md § Schema Management` |
-| Which Cypher engine constructor each graph path uses (read vs transactional write) and why a read opens no store | `GRAPH.md § Engine Constructor by Path` |
+| Knowledge-graph schema management through `rmp graph execute` (which index and constraint statements the engine accepts, how a schema object is named, why changing an index is two invocations, and how a schema failure surfaces) | `GRAPH.md § Schema Management` |
+| Which Cypher engine constructor the graph path uses, and why the web endpoint is on it too | `GRAPH.md § Engine Constructor by Path` |
 | Graph query notifications on stderr (e.g. Cartesian-product warning) | `GRAPH.md § Query Notifications as Diagnostics` |
 | Graph store concurrency / recovery | `IMPLEMENTATION.md § Graph Store Concurrency` |
-| Graph store access lock (shared for reads, exclusive for writes), and what happens on contention | `GRAPH.md § Concurrency and Recovery` and `GRAPH.md § Lock Contention` |
-| What a graph read does and does not change on disk (the recovery repair performed on open) | `GRAPH.md § What a Read Changes on Disk` |
+| Graph store access lock (one exclusive mode for every statement), and what happens on contention | `GRAPH.md § Concurrency and Recovery` and `GRAPH.md § Lock Contention` |
+| What a statement that writes nothing does and does not change on disk (the recovery repair performed on open) | `GRAPH.md § What a Statement That Writes Nothing Changes on Disk` |
 | Go toolchain / external dependencies | `BUILD.md § Go Toolchain` |
 | Dependency version pins (the four direct modules — GoGraph, `golang.org/x/sys`, `golang.org/x/text`, `modernc.org/sqlite` — and the exact `modernc.org/libc` / `modernc.org/memory` versions the driver requires) | `BUILD.md § External Dependencies` |
 | AI agent contract (CLI surface) | `COMMANDS.md § AI Help` |
@@ -132,8 +132,8 @@ The SPEC is unversioned. Git is the source of truth for its evolution — recove
 | `COMMANDS.md` | CLI commands, subcommands, flags, aliases |
 | `DATA_FORMATS.md` | JSON schemas, input/output formats |
 | `HELP.md` | CLI help skeleton and structure |
-| `GRAPH.md` | Knowledge graph feature: GoGraph integration, persistence, multi-layer conventions, guard-rail validation |
-| `WEB.md` | Read-only web interface: `rmp web` server, server-rendered pages, interactive knowledge-graph visualisation, embedded assets |
+| `GRAPH.md` | Knowledge graph feature: GoGraph integration, persistence, multi-layer conventions, the single `graph execute` surface |
+| `WEB.md` | Web interface: `rmp web` server, server-rendered pages, interactive knowledge-graph visualisation, embedded assets |
 | `MODELS.md` | Structs, enums, memory layout |
 | `STATE_MACHINE.md` | Task and Sprint state transitions |
 | `ARCHITECTURE.md` | System design, modules, error handling, exit codes |
@@ -160,10 +160,10 @@ To prevent drift across SPEC files, the following topics have a single authorita
 | Published field names in validation messages (field to published name, and when a message names the flag instead) | `COMMANDS.md § Published Field Names in Validation Messages` |
 | Which commands read standard input at all (exactly two flag values, and no other command) | `DATA_FORMATS.md § Input` |
 | Comment body input source and precedence (`--body` or stdin) | `COMMANDS.md § Comment Body Input Source and Precedence` |
-| Cypher query input source, maximum query length, the bounded standard-input read, and the refusal of a positional argument on any `graph` subcommand | `GRAPH.md § Cypher Input Source and Precedence` |
-| Cypher query and knowledge-graph property value content (the UTF-8 encoding rule on every graph subcommand, the control-character rule on the two that write, their order, and the limits of both) | `GRAPH.md § Cypher Query and Property Value Content Rules` |
+| Cypher query input source, maximum query length, the bounded standard-input read, and the refusal of a positional argument on `graph execute` | `GRAPH.md § Cypher Input Source and Precedence` |
+| What Groadmap does not check about a Cypher statement, and the outcome of each unchecked hazard | `GRAPH.md § What Groadmap Does Not Check` |
 | Knowledge-graph node `key` uniqueness (what the invariant is, which comparison decides that two keys are the same, that the product does not enforce it, and the audit that detects a violation) | `GRAPH.md § Node Key Uniqueness` |
-| Knowledge-graph schema management (the index and constraint statements `rmp graph update` accepts, schema object naming, the non-atomic drop-then-create, and the schema failure classes) | `GRAPH.md § Schema Management` |
+| Knowledge-graph schema management (the index and constraint statements the engine accepts, schema object naming, the non-atomic drop-then-create, and the schema failure classes) | `GRAPH.md § Schema Management` |
 | Declared positional arity per command, and the refusal of an excess positional argument (exit code 2, the published line, no side effect) | `COMMANDS.md § Positional Arguments` |
 | Comment positional arguments (exactly one id per subcommand, and what that id identifies) | `COMMANDS.md § Comment Positional Argument Contract` |
 | Memory layout / struct field ordering | `MODELS.md § Memory Layout Optimization` |
@@ -183,17 +183,17 @@ To prevent drift across SPEC files, the following topics have a single authorita
 | Schema migrations | `VERSION.md § Migrations` |
 | Concurrency model (WAL, pool, retry) | `IMPLEMENTATION.md § Concurrency Model` |
 | Caching strategies (query, connection) | `IMPLEMENTATION.md` |
-| Knowledge graph feature, persistence layout, guard rails, multi-layer conventions | `GRAPH.md` |
-| Read-only web interface (server behaviour, routes, pages, security model) | `WEB.md` |
+| Knowledge graph feature, persistence layout, multi-layer conventions | `GRAPH.md` |
+| Web interface (server behaviour, routes, pages, security model) | `WEB.md` |
 | Graph store directory (`graph/` subdir) | `GRAPH.md § Persistence Layout` (layout referenced from `ARCHITECTURE.md § Directory Structure`) |
 | Graph query result JSON and property-type mapping | `DATA_FORMATS.md § Graph Query Result` |
 | Web graph view-data JSON shape | `DATA_FORMATS.md § Graph View Data` |
 | Board search text preparation (the trim, normalisation, and folding rules; the single implementation of each; the tables shipped to the browser) | `WEB.md § Roadmap Tasks Page` |
 | Web UI framework (Tabler admin shell, dark theme) | `WEB.md § UI Framework` |
 | Vendored web assets / embedded Tabler framework and D3.js (with d3-sankey) | `BUILD.md § Vendored Web Assets` |
-| Graph store concurrency / writer serialisation / reader locking / recovery | `IMPLEMENTATION.md § Graph Store Concurrency` (contract in `GRAPH.md § Concurrency and Recovery`) |
+| Graph store concurrency / store locking / recovery | `IMPLEMENTATION.md § Graph Store Concurrency` (contract in `GRAPH.md § Concurrency and Recovery`) |
 | Graph store lock file (`write.lock`) | `GRAPH.md § Concurrency and Recovery` (layout in `GRAPH.md § Persistence Layout`) |
-| Cypher engine constructor per path (`cypher.NewEngineWithOptions` on the read path, `cypher.NewEngineWithStoreAndRecovery` on the write path, both carrying the recovered schema) | `GRAPH.md § Engine Constructor by Path` |
+| Cypher engine constructor (`cypher.NewEngineWithStoreAndRecovery` on the one path both the CLI and the web endpoint run on, carrying the recovered schema) | `GRAPH.md § Engine Constructor by Path` |
 | Minimum Go version and external dependencies | `BUILD.md § Go Toolchain` |
 | Validation gate set and where it is enforced (local, CI, release) | `BUILD.md § Validation Gates` |
 | Help text canonical | code in `internal/commands/*.go` (structure in `HELP.md`) |

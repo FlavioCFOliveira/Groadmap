@@ -13,24 +13,23 @@
 - [Persistence Layout](#persistence-layout)
 - [Multi-Layer Modelling Conventions](#multi-layer-modelling-conventions)
   - [Node Key Uniqueness](#node-key-uniqueness)
-- [Subcommands and Guard-Rail Validation](#subcommands-and-guard-rail-validation)
-  - [Operation Classes](#operation-classes)
-  - [Per-Subcommand Validation Rules](#per-subcommand-validation-rules)
-  - [Relationship Write Direction](#relationship-write-direction)
-  - [Relationship Read Direction](#relationship-read-direction)
-  - [Cypher Query and Property Value Content Rules](#cypher-query-and-property-value-content-rules)
-  - [Cypher Input Source and Precedence](#cypher-input-source-and-precedence)
+- [What Groadmap Does Not Check](#what-groadmap-does-not-check)
+- [Literal-Aware Normalization](#literal-aware-normalization)
+- [Cypher Input Source and Precedence](#cypher-input-source-and-precedence)
+  - [No Positional Query: A Stray Token Is Refused](#no-positional-query-a-stray-token-is-refused)
+  - [Maximum Query Length](#maximum-query-length)
+  - [Bounded Standard-Input Read](#bounded-standard-input-read)
+  - [Standard Input That Supplies No Query](#standard-input-that-supplies-no-query)
 - [Schema Management](#schema-management)
   - [Accepted Schema Statements](#accepted-schema-statements)
   - [Schema Object Names](#schema-object-names)
-  - [One Statement per Invocation](#one-statement-per-invocation)
   - [Altering and Recreating an Index](#altering-and-recreating-an-index)
   - [Schema Failure Classes](#schema-failure-classes)
-  - [Recovered Schema on Both Paths](#recovered-schema-on-both-paths)
+  - [Recovered Schema on Every Surface](#recovered-schema-on-every-surface)
 - [Query Notifications as Diagnostics](#query-notifications-as-diagnostics)
 - [Error Handling and Exit Codes](#error-handling-and-exit-codes)
 - [Concurrency and Recovery](#concurrency-and-recovery)
-  - [What a Read Changes on Disk](#what-a-read-changes-on-disk)
+  - [What a Statement That Writes Nothing Changes on Disk](#what-a-statement-that-writes-nothing-changes-on-disk)
   - [Lock Contention](#lock-contention)
 - [Constraints](#constraints)
 - [Acceptance Criteria](#acceptance-criteria)
@@ -50,52 +49,62 @@ roadmap's SQLite tasks and sprints data in this first version; the two stores
 are not linked, and graph operations never read or write the `project.db`
 database.
 
-The graph is accessed through the `rmp graph` command and its five subcommands,
-which accept Cypher and return results as JSON. The graph is backed by the
-external GoGraph module, which provides a labelled property graph, a Cypher
-engine, and durable on-disk persistence.
+The graph is accessed through the `rmp graph` command and its single subcommand
+`execute`, which accepts Cypher and returns results as JSON. The graph is backed
+by the external GoGraph module, which provides a labelled property graph, a
+Cypher engine, and durable on-disk persistence.
+
+**`rmp graph execute` runs whatever Cypher it is given.** Groadmap does not
+classify a statement, does not route it by the clauses it contains, and does not
+refuse it on the ground of what it would read, write, or delete. A read, a write,
+a deletion, and a schema change all reach the engine through the one subcommand
+and the one execution path. What Groadmap still refuses is stated in
+[Error Handling and Exit Codes](#error-handling-and-exit-codes), and what it
+deliberately does not examine is stated in
+[What Groadmap Does Not Check](#what-groadmap-does-not-check).
+
+**The web graph data endpoint is the second surface onto the same graph, and it
+behaves the same way.** It executes the statement it is given, on the same
+execution path and under the same store lock, so everything this file says about a
+statement holds of one submitted through the web query bar (see
+`WEB.md § Graph Data Endpoint`). The one thing that surface does with a statement
+which the CLI does not is decide whether to append a node `LIMIT` to it, which is
+a decision about the response's size and refuses nothing (see
+[Literal-Aware Normalization](#literal-aware-normalization)).
 
 ## Functional Requirements
 
-1. `rmp graph` provides five subcommands: `create`, `query`, `update`,
-   `delete`, and `search`. Each subcommand accepts a Cypher query and validates
-   that the query matches one of the operation classes that subcommand accepts
-   before executing it (see
-   [Subcommands and Guard-Rail Validation](#subcommands-and-guard-rail-validation)).
-   Four of the five accept exactly one class; `graph update` accepts three,
-   because it is also the subcommand through which the graph's schema is managed
-   (see [Schema Management](#schema-management)).
-2. Every graph subcommand requires a target roadmap, selected with the shared
+1. `rmp graph` provides one subcommand, `execute`. It accepts any Cypher
+   statement the engine accepts and executes it. There is no per-statement
+   operation-class check and no second subcommand: `execute` is the whole of the
+   command's Cypher surface.
+2. `graph execute` requires a target roadmap, selected with the shared
    `-r` / `--roadmap` flag (see `COMMANDS.md § Roadmap Selection (Always Required)`).
-3. Each subcommand reads its Cypher from the `--query` flag, or from standard
+3. `execute` reads its Cypher from the `-q` / `--query` flag, or from standard
    input when the flag is absent, and never from a positional argument: a query
    written bare on the command line is refused (see
    [Cypher Input Source and Precedence](#cypher-input-source-and-precedence)).
-4. Read subcommands (`query`, `search`) return their result columns and rows as
-   JSON to stdout, in the shape defined in `DATA_FORMATS.md § Graph Query Result`.
-5. Write subcommands (`create`, `update`, `delete`) execute a data-writing query
-   inside a single transaction and persist the change durably before the process
-   exits. Their output mirrors the query's `RETURN` clause: a query with a
-   `RETURN` clause returns the same `columns`/`rows` shape as a read result, and
-   a query without a `RETURN` clause returns `{"ok": true}` (see
+4. The output mirrors what the executed statement returns. A statement that
+   produces result columns returns those columns and rows as JSON to stdout, in
+   the shape defined in `DATA_FORMATS.md § Graph Query Result`; a statement that
+   produces none returns `{"ok": true}` (see
    `DATA_FORMATS.md § Graph Write Result`). The engine reports no
-   affected-element count, so the write result carries no such field. The schema
-   statements `graph update` additionally accepts are the one exception to both
-   halves of this requirement, and [Schema Management](#schema-management) is
-   canonical for them: the engine runs a schema statement outside the
-   transaction, and a schema-introspection command returns rows while carrying no
-   `RETURN` clause.
-6. After a write subcommand (`create`, `update`, `delete`) commits its
-   transaction durably, and before the process exits, the implementation MUST
-   produce a self-sufficient on-disk snapshot of the committed graph state and
-   truncate the write-ahead log, synchronously within the same invocation. This
-   checkpoint bounds write-ahead-log growth and keeps recovery cost proportional
-   to the live graph size rather than to the total history of writes (see
-   [Synchronous Checkpoint on Write](#synchronous-checkpoint-on-write)). Read
-   subcommands (`query`, `search`) never checkpoint and never truncate the
-   write-ahead log. What a read does change on disk, which is limited to the
-   repair of an interrupted checkpoint that opening the store performs, is
-   specified in [What a Read Changes on Disk](#what-a-read-changes-on-disk).
+   affected-element count, so the result carries no such field.
+5. Every statement runs inside a single transaction on the transactional
+   execution path, and a statement that changes the graph persists that change
+   durably before the process exits (see
+   [Engine Constructor by Path](#engine-constructor-by-path)).
+6. After a statement whose transaction committed a change, and before the process
+   exits, the implementation MUST produce a self-sufficient on-disk snapshot of
+   the committed graph state and truncate the write-ahead log, synchronously
+   within the same invocation. This checkpoint bounds write-ahead-log growth and
+   keeps recovery cost proportional to the live graph size rather than to the
+   total history of writes (see
+   [Synchronous Checkpoint on Write](#synchronous-checkpoint-on-write)). A
+   statement whose transaction appended nothing to the write-ahead log never
+   checkpoints and never truncates the log; what such a statement does change on
+   disk is specified in
+   [What a Statement That Writes Nothing Changes on Disk](#what-a-statement-that-writes-nothing-changes-on-disk).
 7. A checkpoint that fails after the transaction has already committed durably
    MUST NOT fail the user-visible write. The write succeeded, the write-ahead log
    is durable, and the next successful write reconciles the snapshot; recovery
@@ -107,25 +116,20 @@ engine, and durable on-disk persistence.
    created on first use (see [Persistence Layout](#persistence-layout)).
 9. Errors are written as plain text to stderr and map to the existing exit-code
    conventions (see [Error Handling and Exit Codes](#error-handling-and-exit-codes)).
-10. Every graph subcommand that executes a query (`create`, `query`, `update`,
-    `delete`, `search`) surfaces, on stderr, exactly the advisory notifications
-    the engine returns for that query, as one plain-text diagnostic line per
-    notification. The surfacing is wired identically on the read path (`query`,
-    `search`) and the write path (`create`, `update`, `delete`). Groadmap does
-    not generate notifications; the engine alone decides which queries and which
-    execution paths carry them, and Groadmap emits whatever it is given (which may
-    be none). Notifications never change the stdout success output or the exit code
-    (see [Query Notifications as Diagnostics](#query-notifications-as-diagnostics)).
-11. `rmp graph update` is the subcommand through which the knowledge graph's
-    schema is managed. In addition to the mutating writes `SET` and `REMOVE`, it
-    accepts the schema-mutating DDL statements `CREATE INDEX`, `DROP INDEX`,
-    `CREATE CONSTRAINT` and `DROP CONSTRAINT`, and the schema-introspection
-    commands `SHOW INDEX(ES)` and `SHOW CONSTRAINT(S)`. The other four
-    subcommands are unchanged: `create`, `query`, `delete` and `search` reject
-    every DDL statement, and schema introspection remains accepted by the two
-    read subcommands as the read-only class it is. What each statement does, how
-    a schema object is named, why changing an index is two invocations rather
-    than one, and how a schema failure surfaces are specified in
+10. `rmp graph execute` surfaces, on stderr, exactly the advisory notifications
+    the engine returns for the statement it ran, as one plain-text diagnostic line
+    per notification. Groadmap does not generate notifications; the engine alone
+    decides which statements carry them, and Groadmap emits whatever it is given
+    (which may be none). Notifications never change the stdout success output or
+    the exit code (see
+    [Query Notifications as Diagnostics](#query-notifications-as-diagnostics)).
+11. `rmp graph execute` is also the surface through which the knowledge graph's
+    schema is managed. It accepts the schema-mutating DDL statements
+    `CREATE INDEX`, `DROP INDEX`, `CREATE CONSTRAINT` and `DROP CONSTRAINT`, and
+    the schema-introspection commands `SHOW INDEX(ES)` and `SHOW CONSTRAINT(S)`,
+    because it accepts every statement the engine accepts. What each statement
+    does, how a schema object is named, why changing an index is two invocations
+    rather than one, and how a schema failure surfaces are specified in
     [Schema Management](#schema-management).
 
 ## Backing Engine: GoGraph
@@ -187,26 +191,24 @@ changes can land without a major-version bump. The following residual risks rema
    directory remains owned by GoGraph and is not specified by Groadmap (see
    [Persistence Layout](#persistence-layout), rule 5).
 
-3. **A widened Cypher clause surface.** The guard rail classifies a query by the
-   clauses it contains, so the set of clauses the engine accepts is part of
-   Groadmap's integration surface even though no Go symbol expresses it. When the
-   engine learns a new clause family, queries that the previous engine rejected as
-   a syntax error start executing, and each subcommand's accepted class widens
-   without a line of Groadmap changing. This is invisible to the two checks an
-   upgrade would otherwise rely on: a diff of removed or re-signed exported
-   symbols finds nothing, because nothing was removed, and re-running the
-   acceptance criteria finds nothing, because no existing criterion mentions a
-   clause that did not previously exist.
+3. **A widened Cypher statement surface.** `rmp graph execute` runs whatever the
+   engine accepts, so the set of statements the engine accepts is Groadmap's
+   Cypher surface, and it widens with the engine rather than with a Groadmap
+   release. Groadmap neither publishes that set nor bounds it. The widening is
+   invisible to the two checks an upgrade would otherwise rely on: a diff of
+   removed or re-signed exported symbols finds nothing, because nothing was
+   removed, and re-running the acceptance criteria finds nothing, because no
+   existing criterion mentions a statement form that did not previously exist.
 
-   This has already happened. The engine gained the `FOREACH` updating clause and
-   the `SHOW CONSTRAINTS` / `SHOW INDEXES` schema-introspection commands, and it
-   extended its own `cypher/ir.IsDDL` predicate to report the latter as DDL —
-   which, because `cypher.QueryHasWritingClause` returns false for anything
-   `IsDDL` accepts, made a schema-introspection command classify as neither a
-   write nor DDL and so pass the read-only check. The outcome is the one this
-   specification now mandates (see
-   [Schema Introspection](#schema-introspection)), but it was reached by omission
-   rather than by decision, which is what mitigation 5 below exists to prevent.
+   One place in the product still reads that surface, and it is the one the
+   widening can break. The web graph data endpoint injects a node `LIMIT` into the
+   statement it is given unless the statement is a form that admits no `LIMIT`
+   clause, and it recognises those forms itself (see
+   `WEB.md § Graph Data Endpoint`). A new statement form that admits no `LIMIT`,
+   and that the endpoint does not recognise, is injected into and then fails in the
+   parser — a statement `rmp graph execute` runs becoming unusable through the
+   endpoint, with a diagnostic that names the injected clause rather than the
+   cause.
 
 Mitigations required by this specification:
 
@@ -228,60 +230,59 @@ Mitigations required by this specification:
    rewriting the directory in the new one. Backward compatibility MUST NOT be inferred
    from release notes alone, because Groadmap has no migration path of its own for a
    graph it can no longer open. An upgrade that fails this check MUST NOT be released.
-5. **The guard rail's clause surface MUST be re-verified against the new engine,
-   and every operation class this specification names MUST be pinned by a
-   regression test.** Before an upgrade is released, the classes in
-   [Operation Classes](#operation-classes) MUST be re-checked against the engine
-   being adopted: each class MUST still be classified as specified, and any clause
-   family the new engine accepts that this specification does not name MUST be
-   classified deliberately — specified into an existing class or into a new one —
-   rather than left to fall through the discriminators. A regression test MUST
-   assert the accepted and rejected class of every subcommand for every named
-   clause family, so that a later upgrade which widens the surface fails the test
-   instead of passing unnoticed. Symbol-level compatibility is NOT sufficient
-   evidence here: the surface can widen with no symbol change at all.
+
+5. **The set of statement forms that admit no `LIMIT` clause MUST be re-verified
+   against the new engine.** Before an upgrade is released, the forms named in
+   `WEB.md § Graph Data Endpoint`, Suppression 2, MUST be re-checked against the
+   engine being adopted: each MUST still admit no `LIMIT`, and any statement form
+   the new engine accepts that admits none MUST be added there deliberately rather
+   than left to fail in the parser once the endpoint injects into it. A regression
+   test MUST assert, form by form, which of them the endpoint injects into and
+   which it leaves alone. Symbol-level compatibility is NOT sufficient evidence
+   here: the surface can widen with no symbol change at all.
 
 ### Engine Construction and Lifecycle
 
-The CLI is a short-lived process. For each `rmp graph` invocation the
+The CLI is a short-lived process. For each `rmp graph execute` invocation the
 implementation:
 
 1. Resolves the graph directory for the selected roadmap (see [Persistence Layout](#persistence-layout)).
-2. Takes the store's advisory lock, before opening the store: exclusively for a
-   write subcommand, in shared mode for a read subcommand (see
+2. Takes the store's advisory lock, exclusively, before opening the store, and
+   holds it until step 6 has completed (see
    [Concurrency and Recovery](#concurrency-and-recovery)).
 3. Opens the GoGraph store rooted at that directory, recovering any committed
-   state from the snapshot and write-ahead log. **For a read subcommand, the
-   shared lock is released as soon as this step returns**; every step below runs
-   with no lock held. A write subcommand keeps the exclusive lock until step 7
-   has completed.
-4. Constructs the Cypher engine that will run the query. The two paths construct
-   it differently. A **write** subcommand wraps the recovered graph and a
-   write-ahead-log writer in a transactional store and constructs a store-backed
-   engine over that store. A **read** subcommand constructs the engine directly
-   over the graph the previous step recovered, and opens neither a transactional
-   store nor a write-ahead-log writer. Which constructor each path uses, and why
-   a read needs no store, are stated once, in
+   state from the snapshot and write-ahead log.
+4. Constructs the Cypher engine that will run the statement: it wraps the
+   recovered graph and a write-ahead-log writer in a transactional store and
+   constructs a store-backed engine over that store. There is one such
+   construction and it is fixed by
    [Engine Constructor by Path](#engine-constructor-by-path).
-5. Runs the validated query:
-   - Read subcommands (`query`, `search`) run through the engine's read path
-     (`Run` / `RunAny`).
-   - Write subcommands (`create`, `update`, `delete`) run through the engine's
-     transactional path (`RunInTx` / `RunInTxAny`) so the change is committed
-     atomically.
-6. Iterates the result for read subcommands (`Columns`, then `Next` / `Record`
-   until exhausted, checking `Err`), serialises it to JSON, and writes it to
-   stdout.
-7. For write subcommands only, after the transaction has committed durably,
+5. Runs the statement through the engine's transactional path
+   (`RunInTx` / `RunInTxAny`), so that a change it makes is committed atomically.
+   It then iterates the result (`Columns`, then `Next` / `Record` until exhausted,
+   checking `Err`), serialises it to JSON, and writes it to stdout.
+6. After a transaction that appended to the write-ahead log has committed durably,
    produces a self-sufficient snapshot of the committed graph state and truncates
    the write-ahead log, synchronously, before the process exits (see
    [Synchronous Checkpoint on Write](#synchronous-checkpoint-on-write)).
-8. Closes the result and the store, ensuring committed writes are durable, then
+7. Closes the result and the store, ensuring committed writes are durable, then
    exits.
 
+**There is one execution path, because nothing decides between two.** Groadmap
+does not examine a statement to learn whether it reads or writes, so it cannot
+choose an execution path from the statement. Choosing the transactional path for
+every statement is the only choice that is correct for every statement: a writing
+statement run on an engine constructed without a transactional store executes
+against the recovered in-memory graph, commits nothing, writes nothing to the
+write-ahead log, and still reports success, so the write is lost silently and the
+caller has no reason to look again. The reverse cost — a statement that changes
+nothing running inside a transaction and holding a write-ahead-log writer it never
+uses — is paid in resources rather than in correctness, and it is the cost this
+specification accepts.
+
 Parameter binding: when query parameters are supported, the implementation binds
-them through GoGraph's parameter-binding path (`RunAny` / `RunInTxAny`, which
-accept `map[string]any`, or `cypher.BindParams` followed by `Run` / `RunInTx`).
+them through GoGraph's parameter-binding path (`RunInTxAny`, which accepts
+`map[string]any`, or `cypher.BindParams` followed by `RunInTx`).
 
 The exact Go types, function signatures, and any wrapper structs are
 implementation details for `go-developer`; this specification fixes the
@@ -312,29 +313,35 @@ serve a `graph` subcommand or a web graph request.
 
 | Path | Surface | GoGraph constructor | Transactional store and write-ahead-log writer |
 |------|---------|---------------------|------------------------------------------------|
-| Read | `graph query` and `graph search`, including the schema-introspection commands they accept | `cypher.NewEngineWithOptions`, over the graph the store open recovered, with the recovered constraints and the recovered indexes carried in the engine options | Neither is opened |
-| Read | The web graph page and the web graph data endpoint (see `WEB.md § Knowledge Graph from the GoGraph Store`) | `cypher.NewEngineWithOptions`, over the graph the store open recovered, with the recovered constraints and the recovered indexes carried in the engine options | Neither is opened |
-| Transactional write | `graph create`, `graph update`, and `graph delete` | `cypher.NewEngineWithStoreAndRecovery`, over a transactional store, given the whole recovery result the store open returned | Both are opened: the write-ahead-log writer over `wal`, and the transactional store over the recovered graph and that writer |
+| Transactional | `graph execute` | `cypher.NewEngineWithStoreAndRecovery`, over a transactional store, given the whole recovery result the store open returned | Both are opened: the write-ahead-log writer over `wal`, and the transactional store over the recovered graph and that writer |
+| Transactional | The web graph page and the web graph data endpoint (see `WEB.md § Knowledge Graph from the GoGraph Store`) | `cypher.NewEngineWithStoreAndRecovery`, over a transactional store, given the whole recovery result the store open returned | Both are opened: the write-ahead-log writer over `wal`, and the transactional store over the recovered graph and that writer |
 
-The two path names are the ones the **Engine path** column of
-[Per-Subcommand Validation Rules](#per-subcommand-validation-rules) uses. Three
-surfaces run on those two paths: the read path serves both the CLI read
-subcommands and the web interface, and the two are not distinguished here because
-they construct the same engine.
+There is **one** path, and both surfaces run on it. The two rows name the two
+surfaces rather than two constructions: they construct the same engine, in the
+same way, from the same recovery result.
 
 Groadmap constructs an engine through no other constructor. The pinned engine
-also exposes `NewEngine`, `NewEngineWithRegistry`, `NewEngineWithStore`,
-`NewEngineWithStoreAndConstraints`, and `NewEngineWithStoreAndSchema`; Groadmap
-uses none of the five, and adopting one is a change to this table before it is a
-change to the code.
+also exposes `NewEngine`, `NewEngineWithOptions`, `NewEngineWithRegistry`,
+`NewEngineWithStore`, `NewEngineWithStoreAndConstraints`, and
+`NewEngineWithStoreAndSchema`; Groadmap uses none of the six, and adopting one is
+a change to this table before it is a change to the code.
 
-**Why the write path takes the whole recovery result rather than the schema
+**Why the web surface is on the transactional path too.** The web graph data
+endpoint executes caller-supplied Cypher, and it does not examine that Cypher any
+more than `graph execute` does, so a statement submitted through the page's query
+bar may write, delete, or change the schema (see `WEB.md § Graph Data Endpoint`).
+An endpoint constructed without a transactional store would run such a statement
+against the request's own in-memory graph, discard it when the request ended, and
+answer `200`. The write would be reported as done and would not exist. Putting the
+endpoint on the same path as the CLI is what makes the endpoint's answer true.
+
+**Why the constructor takes the whole recovery result rather than the schema
 alone.** The declined `NewEngineWithStoreAndSchema` re-registers the same
 constraints and the same index definitions, under the same declared names, and
-answers every query identically. What it does not carry is the snapshot's index
-payloads, so an engine built through it **rebuilds every index by a full scan of
-the recovered graph** each time the store is opened. The constructor this table
-gives loads each index from the payload the snapshot already holds, wherever
+answers every statement identically. What it does not carry is the snapshot's
+index payloads, so an engine built through it **rebuilds every index by a full
+scan of the recovered graph** each time the store is opened. The constructor this
+table gives loads each index from the payload the snapshot already holds, wherever
 recovery certifies that safe, and falls back to the same rebuild where it does
 not.
 
@@ -360,10 +367,9 @@ statement, and exits, so at this size the process start and the store open
 dominate whatever the plan chooses. The constructor chosen here is therefore
 about what happens as a graph grows, and this specification does not assert that
 it makes any command measurably faster today. Should a future change seek a
-measured improvement — carrying the same payloads to the read path through the
-engine's option for them, for instance — the rule below applies to it: a path
-moves on evidence gathered against this project's own graph, never on an upstream
-recommendation, and the table is amended first.
+measured improvement, the rule below applies to it: a path moves on evidence
+gathered against this project's own graph, never on an upstream recommendation,
+and the table is amended first.
 
 **The floor's value is deliberately not restated here, and no conclusion above
 rests on it.** It is an engine-internal constant, set from the engine's own
@@ -374,7 +380,7 @@ specification a fact that a dependency bump can falsify in silence: no exported
 symbol changes, so a symbol diff reports nothing, and no acceptance criterion in
 this file names the constant, so re-running the criteria reports nothing either.
 That is the hazard [Dependency Maturity Risk](#dependency-maturity-risk)
-describes for the clause surface, in a second guise. Naming the floor as an
+describes for the statement surface, in a second guise. Naming the floor as an
 engine-owned threshold, and resting the paragraph on a measurement rather than on
 the threshold's value, is what keeps the paragraph true across the next bump.
 [Engine Construction and Lifecycle](#engine-construction-and-lifecycle) states
@@ -383,41 +389,24 @@ rather than a constant, for the same reason.
 
 **The recovery result handed to the constructor MUST be the one that opened this
 store.** It is the result of the completed store open for this roadmap's graph
-directory, in the same invocation, and it is passed whole rather than as extracted
-fields — which is the reason the engine offers it in that shape: a handoff the
-caller must remember to perform is one a caller eventually forgets, and forgetting
-this one is silent, costing correctness nothing and rebuilding everything. A
-result from any other open would describe a different graph, and neither the
-engine nor the store can detect the substitution, because the mismatch is in the
-caller's wiring and not on disk.
+directory, in the same invocation or the same request, and it is passed whole
+rather than as extracted fields — which is the reason the engine offers it in that
+shape: a handoff the caller must remember to perform is one a caller eventually
+forgets, and forgetting this one is silent, costing correctness nothing and
+rebuilding everything. A result from any other open would describe a different
+graph, and neither the engine nor the store can detect the substitution, because
+the mismatch is in the caller's wiring and not on disk.
 
-**Both paths are given the schema the store open recovered, and neither may be
+**The engine is given the schema the store open recovered, and it may not be
 given less.** Opening the store returns the graph together with the index and
 constraint definitions committed to it. A constructor that takes the graph alone
 discards those definitions, and an engine built that way reports an empty schema
 whatever the store holds: `SHOW INDEXES` answers with no rows, and `DROP INDEX`
-fails as though the index had never been created. That is why the read path
-constructs the engine with options carrying the recovered constraints and the
-recovered indexes, and the write path uses the constructor that takes them as
-arguments. Passing the recovered schema is not an optimisation; it is what makes
-the two paths report the schema the store actually holds.
+fails as though the index had never been created. Passing the recovered schema is
+not an optimisation; it is what makes the engine report the schema the store
+actually holds.
 
-**The schema is not a store-side resource, and this is why the read path still
-opens no store.** A reader who sees that the read path now needs something the
-plain constructor did not give it MUST NOT conclude that the read needs a
-transactional store. A store-backed engine over the same recovered graph reports
-the same empty schema when it is not given the definitions, so the store was
-never what carried them. The recovered schema travels in the engine's options,
-which open no file and take no write-ahead-log writer. The engine's option set
-does have a place for a transactional store, and the read path leaves it unset:
-the read supplies the recovered constraints and the recovered indexes and nothing
-else. The read path's guarantee in the fourth column above — neither a
-transactional store nor a write-ahead-log writer is opened — is therefore
-unchanged by this, and the web interface, which drives that path on every graph
-page and every graph data request, keeps the strictly read-only construction it
-depends on.
-
-**The write path's constructor is the one the engine names as recommended for
+**The constructor this table gives is the one the engine names as recommended for
 opening a persisted store, and the alternative it replaces is not merely less
 informative.** An engine opened over a store that holds durable constraints
 without being given them does not report an empty constraint set: it re-registers
@@ -428,43 +417,30 @@ all. The engine emits a warning at construction saying so and naming the
 constructor that avoids it. Groadmap uses that constructor, so the names it
 reports are the names the caller declared.
 
-**Why a read needs no store.** Opening the store — step 3 of
-[Engine Construction and Lifecycle](#engine-construction-and-lifecycle) — runs
-GoGraph's recovery, and recovery returns a graph that already carries the last
-committed state, replayed from the snapshot and from the write-ahead-log tail. A
-store-backed engine over that same state would observe the same graph and produce
-the same results, so a transactional store gives a read nothing further to read.
-It does cost something: constructing one requires opening a write-ahead-log
-writer, which is a write-side resource, and a read would then hold that writer
-for the whole of a query that commits nothing. The cost falls hardest on the web
-interface, which drives the read path on every graph page and every graph data
-request and which must stay strictly read-only. Constructing the plain engine is
-also what keeps the read path's on-disk guarantees simple to state and to test:
-once the open returns, the query runs against an in-memory graph and touches no
-file in the store (see [Concurrency and Recovery](#concurrency-and-recovery) and
-[What a Read Changes on Disk](#what-a-read-changes-on-disk)).
-
-**The asymmetry between the two paths is deliberate, not an omission.** A reader
-who notices that the write path is store-backed while the read path is not MUST
-NOT align the two on that ground alone: making a read store-backed would hand a
-read subcommand, and the web server, a write-ahead-log writer neither has a use
-for, in exchange for no observable difference in any result. Moving a path to a
-different constructor means amending this table first, and it requires the same
-kind of measured evidence that
+**Moving a surface off this path is a change to this table first.** It requires
+the same kind of measured evidence that
 [Engine Construction and Lifecycle](#engine-construction-and-lifecycle) demands
-before an engine option is changed. The one condition that would force the change
-is a read that must observe state the recovery does not return, and no such read
-exists. The registered schema is not that condition: the recovery does return it,
-and the read observes it because the constructor is given it, as the paragraphs
-above set out.
+before an engine option is changed, and it requires an answer to the question this
+section settles: what runs the statements that write, and how a lost write is
+prevented.
 
 ### Synchronous Checkpoint on Write
 
-Every successful graph write invocation produces a durable snapshot and truncates
-the write-ahead log before the process exits. This step is synchronous: it runs
-inside the same short-lived CLI invocation, not in a background goroutine. It
-applies to the three write subcommands (`create`, `update`, `delete`) only; read
-subcommands (`query`, `search`) never checkpoint.
+An invocation whose transaction committed a change produces a durable snapshot
+and truncates the write-ahead log before the process exits. This step is
+synchronous: it runs inside the same short-lived invocation, not in a background
+goroutine.
+
+**What decides whether the checkpoint runs is the write-ahead log, not the
+statement.** Groadmap does not examine a statement to learn whether it writes, so
+it cannot decide in advance. The transaction runs, and the checkpoint follows only
+when that transaction appended to the write-ahead log. A statement that appended
+nothing never checkpoints and never truncates: the snapshot directory and the log
+are left exactly as it found them (see
+[What a Statement That Writes Nothing Changes on Disk](#what-a-statement-that-writes-nothing-changes-on-disk)).
+Checkpointing unconditionally would rewrite a full snapshot of the whole graph
+after every statement, including one that only counted nodes, which is a cost
+proportional to the graph paid for no change at all.
 
 Sequence and durability boundary:
 
@@ -570,18 +546,19 @@ Rules:
 1. The graph store is a **directory**, not a single file, because GoGraph
    persists through an on-disk snapshot plus a write-ahead log. The directory is
    `~/.roadmaps/<name>/graph/`.
-2. The graph directory is created on first use of any `rmp graph` subcommand for
-   that roadmap, including read subcommands. A read against a roadmap that has no
-   graph yet creates an empty graph store and returns an empty result; it is not
-   an error.
+2. The graph directory is created on first use of `rmp graph execute` for that
+   roadmap, whatever the statement does. A statement that only reads, run against
+   a roadmap that has no graph yet, creates an empty graph store and returns an
+   empty result; it is not an error.
 3. The `snapshot/` subdirectory (including its `manifest.json`) is produced by the
-   synchronous checkpoint that runs after each successful write (see
+   synchronous checkpoint that follows a transaction that wrote (see
    [Synchronous Checkpoint on Write](#synchronous-checkpoint-on-write)). It is
-   expected to be present after the first successful write subcommand. A graph
-   that has only ever been read has no `snapshot/` subdirectory and no `wal` file:
-   a read creates neither, because the write-ahead log is created by the write
-   path and the snapshot by the checkpoint. Such a directory holds only
-   `write.lock`, and it holds that only once a read has actually opened the store.
+   expected to be present after the first statement that changed the graph. A
+   graph against which no statement has ever written has no `snapshot/`
+   subdirectory and holds a `wal` file that recovery finds empty, because the
+   snapshot is produced by the checkpoint and the checkpoint has never run. Such a
+   directory holds `write.lock`, and it holds that only once a statement has
+   actually opened the store.
 4. The graph directory uses permissions `0700`, consistent with the roadmap home
    directory and the data directory (see `ARCHITECTURE.md § Directory Structure`).
 5. The internal file names and on-disk format inside `graph/`, including the
@@ -692,7 +669,8 @@ exist:
    caller would not enforce this invariant anyway.** Groadmap emits no constraint
    DDL of its own on any code path, so no `rmp` command puts a constraint on a
    graph as a side effect of anything else it does. A caller may declare one
-   deliberately, because `graph update` accepts `CREATE CONSTRAINT` (see
+   deliberately, because `graph execute` runs `CREATE CONSTRAINT` like any other
+   statement (see
    [Schema Management](#schema-management)); that is the caller's own instrument,
    which Groadmap neither issues, requires, nor assumes. It would not make this
    convention enforced, because the two judge sameness differently: this section's
@@ -761,8 +739,8 @@ the second is outside the engine**: GoGraph's function registry holds no
 normalising function, so no single Cypher query can group keys by their NFC form.
 A query that claimed to would not run.
 
-**Step 1 — read every key, with `rmp graph query`.** This query is read-only and
-is accepted by both read subcommands:
+**Step 1 — read every key, with `rmp graph execute`.** This statement reads and
+changes nothing:
 
 ```cypher
 MATCH (n) WHERE n.key IS NOT NULL
@@ -793,280 +771,160 @@ Notes:
    is the caller's decision, because only the caller knows which of the two
    spellings the artefact is meant to carry.
 
-## Subcommands and Guard-Rail Validation
+## What Groadmap Does Not Check
 
-The `graph` command exposes five semantic subcommands. Each subcommand is a
-guard rail: it accepts only Cypher whose operation class matches that
-subcommand, and it rejects everything else **before** executing the query. The
-guard rail prevents an agent from, for example, deleting data through a command
-it believes is read-only.
+`rmp graph execute` hands the statement to the engine. Between reading the
+statement and running it, Groadmap checks its length and nothing else about its
+content: it does not parse it, does not classify it, does not inspect the patterns
+it binds, and does not inspect the values it would write. The web graph data
+endpoint is bound by this section identically, because it runs the statement it is
+given on the same path (see `WEB.md § Graph Data Endpoint`).
 
-### Operation Classes
+This section enumerates the hazards that follow. Each is a real outcome of a real
+statement, each is silent, and every one of them reports success. They are stated
+here so that a caller meets them in the specification rather than in the store.
 
-The guard rail classifies a query by the Cypher clauses it contains:
+1. **A statement runs whatever it says.** There is no subcommand whose contract is
+   "this cannot delete". A statement that deletes reaches the engine the same way
+   one that counts does, so the protection against deleting through a command
+   believed to be read-only is the caller's own care with the text it supplies.
 
-| Clause | Operation | Class |
-|--------|-----------|-------|
-| `CREATE`, `MERGE` | Adds nodes or edges | Write (creating) |
-| `SET`, `REMOVE` | Mutates properties or labels on existing elements | Write (mutating) |
-| `DELETE`, `DETACH DELETE` | Removes nodes or edges | Write (deleting) |
-| `CREATE INDEX`, `DROP INDEX`, `CREATE CONSTRAINT`, `DROP CONSTRAINT` | Mutates the graph schema (indexes, constraints) | DDL (schema-mutating) |
-| `SHOW INDEXES`, `SHOW INDEX`, `SHOW CONSTRAINTS`, `SHOW CONSTRAINT`, each written with exactly one space between the two keywords (see [Keyword Spacing in a Schema-Introspection Command](#keyword-spacing-in-a-schema-introspection-command)) and each with an optional `YIELD` / `WHERE` / `RETURN` projection tail | Lists the registered schema without altering it | Schema introspection (read-only) |
-| `MATCH ... RETURN`, or a schema-introspection command, with no writing clause and no DDL clause | Reads and returns data | Read-only |
+2. **A statement whose bytes are not valid UTF-8 executes.** The engine decodes
+   the statement to characters before its grammar runs and replaces every byte
+   that decodes to no character with `U+FFFD` (REPLACEMENT CHARACTER). The
+   statement the engine executes is therefore not the statement the caller wrote,
+   and no later point can recover the byte the caller supplied. A write stores a
+   value that was never supplied; a match compares against a literal that was never
+   supplied, so a row that should have matched does not and the command reports
+   success having found nothing; and a deletion gated by such a literal removes
+   nothing and still reports success.
 
-A query is a **writing query** when GoGraph's `cypher.QueryHasWritingClause`
-reports that it contains any writing clause (`CREATE`, `MERGE`, `SET`, `REMOVE`,
-`DELETE`, or `DETACH DELETE`). A query is **read-only** when it contains neither a
-writing clause nor a DDL clause; a schema-introspection command is read-only.
-The guard rail uses `QueryHasWritingClause` as the primary read-vs-write
-discriminator, and additionally inspects which writing clauses are present to
-distinguish creating, mutating, and deleting writes for the per-subcommand rules
-below.
+3. **A property value carrying a control character is stored.** Cypher decodes
+   escape sequences inside a string literal — among them `\b` (backspace), `\f`
+   (form feed), and `\uXXXX`, a code point written as four hexadecimal digits — so
+   a statement whose own text is pure ASCII can write a value that carries a real
+   control character. `SET n.body = 'red\u001b[31m'` writes an `ESC` (`U+001B`)
+   into the store, and every later surface that renders that value renders the
+   control character with it. The free-text control-character constraint that
+   governs task and sprint fields (`MODELS.md § Task`) does not reach
+   knowledge-graph property values.
 
-**DDL (Data Definition Language) in the guard-rail context.** DDL means a Cypher
-clause that mutates the graph **schema** rather than its data: specifically
-`CREATE INDEX`, `DROP INDEX`, `CREATE CONSTRAINT`, and `DROP CONSTRAINT`. These
-clauses are schema-mutating and are therefore **not** read-only, even though the
-two-word `CREATE INDEX` / `CREATE CONSTRAINT` forms begin with the `CREATE`
-keyword and the `DROP` forms contain no data-writing clause. The guard rail MUST
-detect a DDL clause independently of `QueryHasWritingClause`, because the
-read-only contract of the read subcommands forbids any schema-mutating DDL, not
-only data-writing (DML) clauses. A query that contains any DDL clause is treated as
-schema-mutating for classification purposes. The detection of DDL clauses, like all
-clause-class classification, runs on the masked normalization of the query (see
-[Literal-Aware Normalization](#literal-aware-normalization)), so a DDL keyword that
-appears only inside a string literal, a comment, or a backtick-quoted identifier
-does not trigger DDL classification.
+4. **A relationship written through an incoming or undirected pattern is not
+   written, and the statement reports success.** The engine writes a relationship
+   property by its endpoint pair, and it takes that pair from the columns the
+   expansion emitted. Those columns carry the relationship the way the **pattern**
+   walked it, not the way storage holds it, so for a relationship reached against
+   the stored arrow the pair is reversed, the write is addressed to a pair that
+   has no relationship, and the storage layer answers a write to an absent
+   relationship with a documented no-op. Nothing is written, no error is raised,
+   and the transaction still commits. The engine's own write-effect counters do not
+   reveal it either: a reverse-leg `SET` that wrote nothing still reports one
+   property set, because the counter is incremented above the layer that dropped
+   the write. `MATCH (v:Test {key:'…'})<-[e]-(s) SET e.last_commit = '…'` is such a
+   statement. The reach is unaffected: **every** relationship is writable through an
+   outgoing pattern, because an outgoing pattern may be anchored on either
+   endpoint, so `MATCH (s)-[e]->(v:Test {key:'…'}) SET e.last_commit = '…'` writes
+   what the reverse form did not.
 
-**The DDL class is accepted by exactly one subcommand.** `graph update` accepts
-it; `graph create`, `graph query`, `graph delete` and `graph search` reject it,
-and the read-only web graph data endpoint rejects it too. The classification
-above is what makes that possible: because DDL is detected independently of
-`QueryHasWritingClause`, one subcommand can be given the class deliberately
-without the other four losing the refusal that protects them. Which statements
-`graph update` accepts under this class, and what each of them does, are
-specified in [Schema Management](#schema-management); this section fixes only how
-a query is classified.
+5. **A relationship read through an incoming or undirected fixed-length pattern
+   can be reported wrong.** The engine resolves a bound relationship's identity
+   from the same endpoint pair, and to recover the stored orientation it probes the
+   topology: when the pair carries no relationship in the emitted order but carries
+   one in the opposite order, the engine inverts the pair and reports what it finds
+   there. That probe decides correctly only while the two endpoints are joined in
+   **one** direction. Where they are joined in both, the emitted order already
+   carries a relationship of its own, so the engine finds one there, inverts
+   nothing, and resolves the reverse leg of the traversal as though it were the
+   forward one. The consequences are all silent and all report success: a
+   projection over an undirected pattern reports the forward relationship twice and
+   never the reverse one; `startNode(e)` and `endNode(e)` under an incoming pattern
+   report the exact reverse of what storage holds; a `WHERE` predicate over the
+   relationship is evaluated against the wrong relationship, so a row that should
+   have matched is discarded inside the engine and the result is short by that row;
+   a `SET` whose right-hand side reads the relationship persists the wrong value;
+   and a `DELETE` whose predicate reads it removes nothing while reporting
+   `{"ok": true}`. Two shapes are not affected, because neither is resolved by that
+   probe: a **variable-length** relationship (`-[e*1..2]-`, and equally
+   `-[e*1..1]-`) and a projected **named path**
+   (`MATCH p=(a {key:'…'})-[e]-(b) RETURN p`) are told which way each hop was
+   walked instead of inferring it. A bare `DELETE e` is not affected either: the
+   delete names the relationship as a target and the engine resolves that
+   relationship itself. Reading through an outgoing pattern is correct whatever the
+   data, and both directions are read in one statement as the union of the two
+   outgoing legs:
 
-#### Schema Introspection
+   ```
+   MATCH (a {key:'…'})-[e]->(x) RETURN type(e) AS t, x.key AS k
+   UNION ALL
+   MATCH (x)-[e]->(a {key:'…'}) RETURN type(e) AS t, x.key AS k
+   ```
 
-**Schema introspection is a read-only class of its own.** A schema-introspection
-command — `SHOW INDEXES`, `SHOW CONSTRAINTS`, their singular aliases `SHOW INDEX`
-and `SHOW CONSTRAINT`, and any of them followed by a `YIELD` / `WHERE` / `RETURN`
-projection tail — lists the schema that is registered on the graph. It reads; it
-creates, drops, and alters nothing. It is therefore **accepted by the two read
-subcommands** (`query` and `search`), which accept it as the read it is, and by
-**`graph update`**, which accepts it because that subcommand owns the graph's
-schema and reporting a schema belongs with changing it (see
-[Schema Management](#schema-management)). It is **rejected by `graph create` and
-`graph delete`**, each of which accepts only its own data-writing clause class.
-Accepting the class under `graph update` does not make it a write: the statement
-is still a read, it commits nothing, and it is answered from the same registered
-schema whichever of the three subcommands is used.
+6. **A schema statement carrying a further clause after it executes in part.** The
+   engine's schema parser stops as soon as its grammar is satisfied and discards
+   the rest of the statement without an error, without a notification, and without
+   any other trace. Handed
+   `CREATE INDEX spec_key FOR (n:Spec) ON (n.key) MATCH (m) SET m.reviewed = true`,
+   the engine creates the index, drops the `MATCH ... SET` on the floor, and
+   returns success, so `rmp graph execute` prints `{"ok": true}` and exits 0 for a
+   statement half of which never ran. This is a property of the engine's schema
+   parser and applies to the four schema-mutating DDL statements; a
+   schema-introspection command carrying a further clause is refused by the engine
+   itself, which names the unsupported clause and discards nothing.
 
-The guard rail MUST classify schema introspection **deliberately**, by
-recognising the statement form, and MUST NOT arrive at the read-only verdict by
-the absence of every other class. The distinction is not cosmetic: a verdict
-reached because nothing matched cannot be reviewed and cannot be tested for
-intent, and it silently absorbs whatever clause family the engine gains next.
-Recognition is anchored to the start of the statement, so an identifier, a label,
-or a property named `show` elsewhere in a query does not make that query an
-introspection command. Like every other clause-class check it runs on the masked
-normalization (see [Literal-Aware Normalization](#literal-aware-normalization)),
-so a `SHOW` keyword that appears only inside a string literal, a comment, or a
-backtick-quoted identifier does not trigger the classification. Recognition is
-also exact about the spacing between the two keywords, for reasons given in
-[Keyword Spacing in a Schema-Introspection Command](#keyword-spacing-in-a-schema-introspection-command).
+7. **A schema-introspection command written with anything but a single space
+   between its two keywords fails as a syntax error.** The engine decides whether
+   to route a statement to its schema-introspection parser by testing it against
+   the literal prefixes `SHOW CONSTRAINT` and `SHOW INDEX`, each carrying exactly
+   one space; it trims leading whitespace and leading comments before that test, so
+   the separator between the two keywords is the only spacing that matters. A
+   statement that misses those prefixes by its spacing is routed to the general
+   Cypher grammar, which has no `SHOW` production and rejects it with a diagnostic
+   that reports `SHOW` as unexpected and lists the clause keywords it did expect.
+   Nothing in that message points at the spacing, so it reads as though schema
+   introspection were unsupported, while the identical statement with a single
+   space returns its result set. `SHOW  INDEXES` fails; `SHOW INDEXES` succeeds.
+   The same is true of the four DDL forms: `CREATE   INDEX ...` is refused by the
+   general grammar rather than routed to the schema parser, and
+   `CREATE INDEX ...` is not.
 
-**This classification is Groadmap's, and it is deliberately narrower than the
-engine's.** GoGraph reports schema introspection as DDL from its own
-`cypher/ir.IsDDL` predicate, which folds `SHOW` in with `CREATE INDEX` and its
-siblings, and `cypher.QueryHasWritingClause` consequently reports a
-schema-introspection command as **not** a writing query. Groadmap does not adopt
-that grouping, because the two behave differently against the property this guard
-rail protects: `CREATE INDEX` and `DROP INDEX` change the graph's schema, while
-`SHOW INDEXES` only reports it. Groadmap's DDL class is therefore exactly the
-four schema-**mutating** forms, and schema introspection is a separate,
-read-only class. Where the engine's grouping and this specification disagree,
-this specification governs what each subcommand accepts.
+**The divergences in items 4 and 5 are upstream in GoGraph and cannot be corrected
+from this repository.** Groadmap holds no position from which to repair them: for
+`type(e)`, `startNode(e).key`, and their siblings, what reaches Groadmap is a bare
+scalar with no relationship identity attached to it, and in the `WHERE` case the
+row is dropped inside the engine before any result reaches Groadmap at all.
 
-#### Keyword Spacing in a Schema-Introspection Command
+**None of the items above is a reason for Groadmap to inspect a statement.** A
+check for any one of them would introduce the coupling this specification does not
+carry: Groadmap would hold an opinion about which Cypher the engine ought to run,
+that opinion would be narrower or wider than the engine's own on the day the
+engine changed, and the caller would be refused a statement the engine would have
+executed or admitted one it would not. The statement surface belongs to
+the engine (see [Dependency Maturity Risk](#dependency-maturity-risk), risk 3).
+What this specification owes instead is that these outcomes are written down.
 
-**The guard rail recognises a schema-introspection command only when exactly one
-space separates `SHOW` from the keyword that follows it.** `SHOW INDEXES` is a
-schema-introspection command. The same statement written with two spaces, with a
-tab, with a line break, or with a comment between the two keywords is not, and
-neither is any other spelling that places anything except a single space there.
+## Literal-Aware Normalization
 
-The rule governs that one separator and nothing else about the statement's
-spacing. Whitespace and comments **before** `SHOW` are accepted, and so is any
-amount of whitespace **after** the target keyword, including before a `YIELD` /
-`WHERE` / `RETURN` projection tail. `SHOW INDEXES  YIELD name` is a
-schema-introspection command; `SHOW  INDEXES YIELD name` is not. Like every other
-clause-class check, this one runs on the masked normalization of the query and
-never on the raw string (see
-[Literal-Aware Normalization](#literal-aware-normalization)); masking neutralizes
-a comment to spaces, which is why a comment between the two keywords reads as
-spacing rather than as an absent separator.
+A decision taken about a Cypher statement by inspecting its text MUST run on a
+**masked normalization** of that statement, never on the raw string. The mask
+neutralizes the contents of Cypher string literals, comments, and backtick-quoted
+identifiers, so that a keyword appearing only inside a property value can never
+affect the decision.
 
-**The rule is the engine's, not Groadmap's.** GoGraph decides
-whether to route a statement to its schema-introspection parser by testing that
-statement against the literal prefixes `SHOW CONSTRAINT` and `SHOW INDEX`, each
-carrying exactly one space. It trims leading whitespace and leading comments
-before applying that test, which is exactly why the separator between the two
-keywords is the only spacing that matters. A statement that misses those prefixes
-by its spacing never reaches the introspection parser: the engine routes it to
-the general Cypher grammar, which has no `SHOW` production and rejects it as a
-syntax error.
-
-**The guard rail MUST classify by what the engine accepts, and MUST NOT apply a
-broader grammar of its own.** A classification wider than the engine's admits a
-statement the engine then refuses, and the user receives a diagnostic that names
-the wrong problem: the engine reports `SHOW` as unexpected and lists the clause
-keywords it did expect, none of which is `SHOW`, so the message reads as though
-schema introspection were unsupported — while the identical statement with a
-single space returns its result set. Nothing in that message points at the
-spacing, so the user cannot reach the real cause from what is printed. The fault
-in that outcome is the classification, not the engine's diagnostic; the
-diagnostic is only where the fault becomes visible.
-
-**A statement rejected under this rule is rejected by the guard rail, not by the
-engine.** A `SHOW INDEX(ES)` or `SHOW CONSTRAINT(S)` statement whose keyword
-spacing the engine does not accept is rejected with `utils.ErrValidation` (exit
-code 6) and the guard rail's own message, before the query is handed to the
-engine. The message MUST name the cause: that the statement was read as a
-schema-introspection command, that exactly one space is required between the two
-keywords, and what the accepted spelling is. It MUST NOT be the engine's parse
-diagnostic, and this rejection MUST NOT surface with the exit code 1 that an
-engine parse failure carries (see
-[Error Handling and Exit Codes](#error-handling-and-exit-codes)). Exit code 1 for
-a genuine engine parse failure is unchanged; a statement rejected here never
-reaches the parser.
-
-**Rejecting is the specified behaviour; normalizing the spacing is not.**
-Groadmap MUST NOT rewrite the separator and execute the repaired statement.
-Normalizing would silently alter a query the user wrote, and it would make
-Groadmap the party that decides which Cypher the engine ought to have accepted.
-The accepted statement surface belongs to the engine (see
-[Dependency Maturity Risk](#dependency-maturity-risk), risk 3). The user is told
-what is wrong and rewrites the statement.
-
-**The exactness applies to this class alone and MUST NOT be carried over to the
-DDL class.** DDL matching stays tolerant of arbitrary whitespace between `CREATE`
-or `DROP` and `INDEX` or `CONSTRAINT`, and the asymmetry between the two is
-deliberate. The two classes are matched for opposite purposes, so being wider
-than the engine has opposite consequences for each. The guard rail matches DDL in
-order to **refuse** it: a match wider than the engine's can only refuse more than
-is strictly necessary, which is safe, whereas a narrower one would let a
-schema-mutating statement past the check that exists to stop it. The guard rail
-matches schema introspection in order to **admit** it: a match wider than the
-engine's admits statements the engine then refuses, which is the misdiagnosis
-described above. A reader who notices that the two matchers treat whitespace
-differently MUST NOT align them on that ground: narrowing the DDL matcher would
-reopen a guard-rail hole, and the difference is intentional.
-
-**The asymmetry carries two qualifications, both measured against the pinned
-engine, and neither is a reason to change either matcher.** First, the DDL
-matcher no longer only refuses. `graph update` accepts the DDL class (see
-[Schema Management](#schema-management)), so on that one subcommand a match wider
-than the engine's routing **admits** a statement the engine will not route to its
-schema parser: `CREATE   INDEX ...`, or the same statement with a tab, a line
-break, or a comment between the two keywords, is admitted by the guard rail and
-then refused by the engine's general grammar, which names the wrong problem in
-exactly the way this section describes. That refusal happens while the statement
-is being built, before anything executes: nothing is created, nothing is
-committed, and the graph is byte-identical afterwards. The cost is therefore a
-misleading diagnostic and exit code 1 in place of a clear one and exit code 6 —
-not a schema change that slipped through. The matcher stays wide because
-narrowing it would reopen a real hole on the other four subcommands, which must
-refuse the class at any spacing. Second, the DDL matcher is not wider than the
-engine's routing in every direction: a statement such as `CREATE INDEXES ...` or
-`CREATE CONSTRAINTX ...` fails the matcher's word boundary while satisfying the
-engine's prefix test, so the guard rail does not classify it as DDL at all. It is
-refused all the same, by the engine's own schema parser, which rejects the token
-it was handed. The class is closed, but in this corner it is closed by the parser
-rather than by the matcher — a property of the pinned engine that
-[Dependency Maturity Risk](#dependency-maturity-risk) mitigation 5 MUST
-re-verify on every upgrade, rather than a guarantee this specification may assert
-of the matcher on its own.
-
-**The rule holds identically on the three CLI surfaces that accept this class.**
-`graph query`, `graph search` and `graph update` apply one shared classification,
-so a statement rejected under this rule on one of them is rejected on all three.
-`graph update` is on this list because it accepts the schema-introspection class
-(see [Schema Introspection](#schema-introspection)); a surface that admits the
-class inherits the rule that decides which spelling of it the engine will run, and
-a `graph update` that admitted a badly spaced `SHOW` would hand the user exactly
-the misdiagnosis the rule exists to prevent. On each of the three the rejection is
-`utils.ErrValidation` and exit code 6, as above.
-
-**This rule does not bind the read-only web graph data endpoint, and that is
-deliberate.** That endpoint does not accept the schema-introspection class at all:
-its response carries nodes and edges, and a schema listing is neither, so it
-refuses the whole family before execution with the single failure class
-`schema_introspection`, at every keyword spacing (see
-`WEB.md § Query-Bar Error Handling`, case 10). It publishes no
-`invalid_keyword_spacing` class and its message never names the spacing.
-
-**Why the divergence is right rather than an inconsistency.** This rule exists so
-that a surface which *runs* a schema-introspection command tells the user the one
-thing that stands between their statement and an answer. On the three CLI
-subcommands that is true, and the spacing is the whole objection. On the web
-endpoint it is not: correcting the spacing yields the same refusal for a different
-stated reason, so naming the spacing there would prescribe a correction that does
-not work and would send the caller round a loop. A surface that refuses the class
-owes no working spelling, and must not imply one. **The classification is
-nonetheless shared and identical** — the same start anchoring, the same masked
-normalization, the same recognition of which statements are the class and which
-spelling the engine routes — and only the verdict differs. What MUST NOT happen is
-the reverse alignment: relaxing this rule on `graph query`, `graph search` or
-`graph update` to match the endpoint would restore exactly the misdiagnosis the
-rule was written to prevent.
-`WEB.md § Query-Bar Error Handling` is canonical for
-the endpoint's failure classes and for the precedence between them, and
-`DATA_FORMATS.md § Graph View Data`, **Error Shape**, is canonical for the
-response body. Because that refusal precedes execution, the endpoint's own
-decision about injecting a node `LIMIT` into the query is never reached.
-
-**`graph create` and `graph delete` are unaffected by this rule.** They reject a
-`SHOW` statement on its operation class, with that subcommand's own message,
-whatever its spacing — the objection that it carries none of the data-writing
-clauses they accept holds for the well-formed spelling too (see
-[Per-Subcommand Validation Rules](#per-subcommand-validation-rules), note 6).
-`graph update` is not in that position and is bound by this rule, because it
-accepts the class: a well-spaced `SHOW INDEXES` runs under it, so the badly
-spaced spelling is refused here, by the spacing rule, rather than on a class
-objection that would no longer be true.
-
-**This rule MUST be re-verified on every GoGraph upgrade.** It states a property
-of the pinned engine, so it falls under the clause-surface re-verification that
-[Dependency Maturity Risk](#dependency-maturity-risk) mitigation 5 requires before
-an upgrade is released. If a later engine recognises other spacing, this section
-and the classification MUST be updated together, so that the guard rail and the
-engine do not disagree about the same input again.
-
-#### Literal-Aware Normalization
-
-Clause-class classification MUST run on a **masked normalization** of the query,
-never on the raw query string. The mask neutralizes the contents of Cypher
-string literals so that a clause keyword that appears only inside a property
-value can never affect classification.
-
-Both discriminators operate on the masked query: the read-vs-write
-determination (`cypher.QueryHasWritingClause`) AND the which-clauses-are-present
-checks. The guard rail builds the masked string from the raw query and feeds
-that masked string to BOTH discriminators. The query that is actually executed
-against the store is always the **original, unmodified** query; masking affects
-classification only.
+One such decision exists in the product, and this section is canonical for the
+normalization it runs on: the web graph data endpoint decides whether to inject a
+node `LIMIT` into the statement it was given, which requires it to know whether the
+statement already carries a top-level `LIMIT` and whether it is a form that admits
+one at all (see `WEB.md § Graph Data Endpoint`). `rmp graph execute` takes no such
+decision and performs no masking: it checks the statement's length and runs it.
 
 Masking rules:
 
 1. **String literals (mandatory).** Both single-quoted (`'...'`) and
    double-quoted (`"..."`) Cypher string literals are masked. Masking replaces
    the interior characters of each literal with a neutral placeholder character
-   (for example, a space), while leaving the surrounding query structure intact.
-   The quote delimiters and the overall positions of surrounding tokens are
-   preserved so that clause detection sees the same query shape with only the
+   (for example, a space), while leaving the surrounding statement structure
+   intact. The quote delimiters and the overall positions of surrounding tokens
+   are preserved so that the decision sees the same statement shape with only the
    literal contents neutralized.
 2. **Backslash escape sequences.** While scanning a string literal, a backslash
    escape sequence (for example `\"`, `\'`, `\\`) does not terminate the literal:
@@ -1076,593 +934,28 @@ Masking rules:
 3. **Comments and backtick identifiers (robustness).** For robustness, keyword
    text inside line comments (`// ...` to end of line), block comments
    (`/* ... */`), and backtick-quoted identifiers (`` `...` ``) MUST likewise not
-   influence classification, and is masked under the same neutralization. The
+   influence the decision, and is masked under the same neutralization. The
    string-literal masking in rule 1 is the mandatory normative requirement; the
    comment and backtick-identifier masking is an additional robustness
    requirement applied by the same normalization.
 
-The masked classification remains a pure clause-class check. It still does NOT
-validate Cypher syntax: a syntactically invalid query that passes the masked
-clause check is still passed to the engine and rejected there (see note 3 under
-[Per-Subcommand Validation Rules](#per-subcommand-validation-rules) and
-[Error Handling and Exit Codes](#error-handling-and-exit-codes)). Whitespace
-trimming and all existing exit-code semantics (exit code 6 for an operation-class
-mismatch) are unchanged.
+The statement that is actually executed against the store is always the
+**original, unmodified** statement, with only the endpoint's own `LIMIT` clause
+appended where it injects one. Masking affects the decision and never the text
+that runs.
 
-### Per-Subcommand Validation Rules
+The masked normalization validates no Cypher syntax and refuses nothing. A
+statement is not rejected on anything the mask reveals; the mask exists so that a
+`LIMIT` written inside a string literal is not mistaken for the statement's own.
 
-Each subcommand accepts exactly the operation class listed below and rejects all
-others. A query that does not match is rejected with `utils.ErrValidation`
-(exit code 6) before execution; the graph is not opened for writing and no
-change is made (see [Error Handling and Exit Codes](#error-handling-and-exit-codes)).
-In the table below, every reference to a clause a query "contains" or to the
-result of `QueryHasWritingClause` is evaluated on the masked normalization of the
-query, not on the raw string (see
-[Literal-Aware Normalization](#literal-aware-normalization)). The **Engine path**
-column names which of the two execution paths the subcommand runs on; the engine
-constructor each of those paths uses is fixed by
-[Engine Constructor by Path](#engine-constructor-by-path).
+## Cypher Input Source and Precedence
 
-| Subcommand | Accepts | Rejects | Engine path |
-|------------|---------|---------|-------------|
-| `graph create` | A writing query whose only writing clauses are `CREATE` and/or `MERGE`. | Read-only queries; any query containing `SET`, `REMOVE`, `DELETE`, or `DETACH DELETE`; any DDL clause; any schema-introspection command. | Transactional write |
-| `graph query` | A read-only query: `MATCH ... RETURN` with no writing clause and no DDL clause, or a schema-introspection command. | Any query for which `QueryHasWritingClause` is true (contains `CREATE`, `MERGE`, `SET`, `REMOVE`, `DELETE`, or `DETACH DELETE`); any query containing a DDL clause (`CREATE INDEX`, `DROP INDEX`, `CREATE CONSTRAINT`, `DROP CONSTRAINT`). | Read |
-| `graph update` | A writing query whose writing clauses are `SET` and/or `REMOVE` (mutations on existing elements); a schema-mutating DDL statement (`CREATE INDEX`, `DROP INDEX`, `CREATE CONSTRAINT`, `DROP CONSTRAINT`); or a schema-introspection command, in the one spelling [Keyword Spacing in a Schema-Introspection Command](#keyword-spacing-in-a-schema-introspection-command) admits. `graph update` is the schema subcommand, and [Schema Management](#schema-management) is canonical for the two schema classes it adds. | Read-only queries, except a schema-introspection command; queries containing the data-writing clauses `CREATE`, `MERGE`, `DELETE`, or `DETACH DELETE`. | Transactional write |
-| `graph delete` | A writing query whose writing clauses are `DELETE` and/or `DETACH DELETE`. | Read-only queries; queries containing `CREATE`, `MERGE`, `SET`, or `REMOVE`; any DDL clause; any schema-introspection command. | Transactional write |
-| `graph search` | A read-only query, intended for traversal and pattern matching, including variable-length paths (for example `-[*1..3]-`); a schema-introspection command is likewise accepted. | Any query for which `QueryHasWritingClause` is true; any query containing a DDL clause. | Read |
+`rmp graph execute` obtains its Cypher from one of two sources:
 
-Notes:
-
-1. `graph query` and `graph search` enforce the **same** guard rail (read-only).
-   They are distinct subcommands so the agent's intent is explicit and so the
-   help and AI contract can describe `search` as the richer traversal-oriented
-   read. The guard rail does not attempt to forbid simple matches under `search`
-   or rich traversals under `query`; both accept any read-only Cypher.
-2. A `MATCH` clause that only locates elements to write (for example,
-   `MATCH (n:Spec {key:"x"}) SET n.status = "done"`) is classified by its
-   **writing** clause, not by the presence of `MATCH`. The example is a mutating
-   write and is valid only under `graph update`.
-3. The guard rail is purely a clause-class check. It does not validate Cypher
-   syntax; a syntactically invalid query that passes the clause check is rejected
-   by the engine at execution time and surfaces as an engine error (see
-   [Error Handling and Exit Codes](#error-handling-and-exit-codes)).
-4. Classification ignores clause keywords that appear only inside Cypher string
-   literals (mandatory), and likewise inside comments and backtick-quoted
-   identifiers (robustness), because classification runs on the masked
-   normalization described in
-   [Literal-Aware Normalization](#literal-aware-normalization). Concretely:
-   - `graph create` accepts
-     `CREATE (m:Memory {body:"discusses delete, set and detach"})`, because the
-     words `delete`, `set`, and `detach` appear only inside the property value
-     and are masked before classification; the only real writing clause is
-     `CREATE`.
-   - `graph query` accepts
-     `MATCH (m) WHERE m.title = "mentions delete and set" RETURN m.key`, because
-     the masked query contains no writing clause and is therefore read-only.
-5. **DDL is rejected by every subcommand except `graph update`.** The read
-   subcommands (`query` and `search`) accept only read-only queries; a
-   schema-mutating DDL clause (`CREATE INDEX`, `DROP INDEX`, `CREATE CONSTRAINT`,
-   or `DROP CONSTRAINT`) is **not** read-only and is rejected with
-   `utils.ErrValidation` (exit code 6) and the message
-   "graph query accepts only read-only queries". The read-only contract forbids
-   schema-mutating DDL, not only data-writing (DML) clauses, because a DDL clause
-   changes the graph's schema and is therefore not a read. `graph create` and
-   `graph delete` likewise reject DDL: each accepts only its own data-writing
-   clause class, and DDL is outside both (see the Rejects column above).
-   `graph update` is the single exception, and it is one by decision rather than
-   by omission: it accepts the DDL class because it is the subcommand through
-   which the graph's schema is managed (see
-   [Schema Management](#schema-management)). Widening the class on any of the
-   other four is a change to this table before it is a change to the code.
-6. **Schema introspection is accepted by the read subcommands and by
-   `graph update`, and rejected by `graph create` and `graph delete`.**
-   `graph query` and `graph search` accept a schema-introspection command because
-   it reads the schema without altering it (see
-   [Schema Introspection](#schema-introspection)). `graph update` accepts it
-   because that subcommand owns the schema, so listing the schema and changing it
-   are reached the same way. `graph create` and `graph delete` reject it for the
-   same reason they reject a read-only `MATCH`: it carries none of the
-   data-writing clauses they accept, so it is rejected with
-   `utils.ErrValidation` (exit code 6) and that subcommand's own message.
-7. **`FOREACH` is a writing clause and is classified by the clauses its body
-   contains.** `FOREACH (x IN list | <updating clauses>)` runs its body once per
-   list element. Its body may contain only `CREATE`, `MERGE`, `SET`, `REMOVE`,
-   `DELETE`, `DETACH DELETE`, or a nested `FOREACH`, so every `FOREACH` that has
-   an effect carries at least one of the six writing keywords, and the guard rail
-   classifies it by those keywords: a `FOREACH` whose body sets a property is a
-   mutating write valid only under `graph update`, one whose body creates is a
-   creating write valid only under `graph create`, and every `FOREACH` is rejected
-   by `graph query` and `graph search`. The classification is therefore correct
-   without a `FOREACH` discriminator of its own, but it rests on that containment
-   property rather than on the keyword `FOREACH`, so the property MUST be pinned
-   by regression tests rather than left as an emergent consequence.
-8. **A schema-introspection command is accepted only in the spelling the engine
-   routes to its introspection parser.** `graph query`, `graph search`, and
-   `graph update` accept the class only when exactly one space separates `SHOW`
-   from the target keyword. A `SHOW INDEX(ES)` or `SHOW CONSTRAINT(S)` statement written with any
-   other separator is rejected with `utils.ErrValidation` (exit code 6) and a
-   message naming the keyword spacing, before the query reaches the engine,
-   rather than admitted and left to fail at the parser (see
-   [Keyword Spacing in a Schema-Introspection Command](#keyword-spacing-in-a-schema-introspection-command)).
-   `graph update` is bound by the rule for the same reason the read subcommands
-   are: it accepts the class, so it is a surface on which the well-spaced spelling
-   runs and the badly spaced one must be refused with the spacing named. This
-   changes nothing for `graph create` and `graph delete`, which reject the
-   statement on its class under note 6 whatever its spacing.
-
-### Relationship Write Direction
-
-Two rules govern the **direction** of the pattern that binds a relationship
-variable: this one, which governs writing that relationship, and
-[Relationship Read Direction](#relationship-read-direction), which governs
-reading it. Both rest on the same **direction doctrine**: an outgoing pattern
-(`-[e]->`) is correct against every graph, while an incoming (`<-[e]-`) or
-undirected (`-[e]-`) pattern is correct only against some graphs. Whether a
-reverse leg behaves is decided by the data the traversal meets — by which
-relationships the two endpoints happen to carry — and not by the query, so the
-query text alone never tells the agent whether the result it is about to get is
-right. A guarantee that holds only for the data seen so far is not a guarantee,
-so Groadmap refuses the reverse forms in both rules rather than leaving the
-outcome to the shape of the graph.
-
-A `SET` or `REMOVE` whose target is a **relationship variable** MUST bind that
-variable with an **outgoing** relationship pattern (`-[e]->`). `graph update`
-rejects a query that writes a relationship bound by an **incoming** (`<-[e]-`) or
-**undirected** (`-[e]-`) pattern, with `utils.ErrValidation` (exit code 6), before
-the graph store is opened. A rejected query changes nothing.
-
-This is a **separate contract from the clause-class guard rail**, not another
-operation class. The query's class is already correct — it is a mutating write
-under the subcommand that accepts mutating writes — and what is refused is the
-**orientation** of the pattern that binds the relationship being written. The
-clause-class classification described above is unaffected, and so is the
-read-only check the web graph data endpoint shares.
-
-#### The traversal contract for SET on relationships
-
-| Pattern binding the relationship | `SET` / `REMOVE` on that relationship | `graph update` |
-|----------------------------------|----------------------------------------|----------------|
-| `(a)-[e]->(b)` — outgoing | Writes every matched relationship | Accepted |
-| `(a)<-[e]-(b)` — incoming | Writes nothing | Rejected, exit 6 |
-| `(a)-[e]-(b)` — undirected | Writes only the relationships the traversal reaches along the stored arrow; silently skips the rest | Rejected, exit 6 |
-
-The contract is a property of the **pattern**, not of the anchor: an incoming
-pattern is rejected whether it is anchored on the relationship's source or on its
-target, and an undirected pattern is rejected even when the data it happens to
-match would all be written.
-
-#### Why the reverse forms are refused rather than executed
-
-The engine writes a relationship property by its **endpoint pair**, and it takes
-that pair from the columns the expansion emitted. Those columns carry the
-relationship the way the **pattern** walked it, not the way storage holds it, so
-for a relationship reached against the stored arrow the pair is reversed. The
-engine's **read** path tries to correct that orientation before it reports a
-relationship, by probing the stored topology for the pair, and the probe decides
-correctly whenever the two endpoints are joined in one direction only; its
-**write** path does not correct the orientation at all, so the write is addressed
-to a pair that has no relationship, and the storage layer answers a write to an
-absent relationship with a documented no-op. Nothing is written, no error is
-raised, and the transaction still commits. Where that read-side probe cannot
-decide — a node pair joined in both directions — the read is wrong in a way of
-its own, which is what [Relationship Read Direction](#relationship-read-direction)
-refuses.
-
-The divergence is upstream in GoGraph and cannot be corrected from this
-repository. Groadmap therefore refuses the query, because the alternative — a
-warning on stderr with exit 0 — still reports success for a write that did not
-happen, which is the failure mode being removed. The engine's own write-effect
-counters cannot be used to detect it after the fact: a reverse-leg `SET` that
-wrote nothing still reports one property set, because the counter is incremented
-above the layer that dropped the write.
-
-#### Rewriting a refused query
-
-Refusal removes no reach: **every** relationship stays writable through an
-outgoing pattern, because an outgoing pattern may be anchored on either endpoint.
-A relationship arriving at a node is written by anchoring the outgoing pattern on
-that node rather than by reversing the arrow:
-
-```
-MATCH (other)-[e:VERIFIED_BY]->(target {key:'…'}) SET e.last_commit = '…'
-```
-
-The provenance idiom that stamps every relationship incident to a node is
-therefore written as two outgoing statements, one per direction:
-
-```
-MATCH (n {key:'…'})-[e]->(other) SET e.last_commit = '…'
-MATCH (other)-[e]->(n {key:'…'}) SET e.last_commit = '…'
-```
-
-Notes:
-
-1. The check inspects the **target** of the `SET` / `REMOVE` only. A relationship
-   a query merely traverses is not affected by **this** rule: `MATCH (b)-[e]-(x)
-   SET x.reviewed = true` writes a node, which the engine resolves by identifier
-   rather than by endpoint pair, and is accepted. A relationship that appears on
-   the right-hand side of an assignment, as in `SET n.last_type = type(e)`, is
-   outside this rule as well, but it is an expression use and is therefore
-   governed by [Relationship Read Direction](#relationship-read-direction):
-   that form is accepted when `e` is bound by an outgoing pattern and refused
-   when `e` is bound by an incoming or undirected one.
-2. The check applies to `graph update` only. A bare `DELETE e` is unaffected: the
-   delete resolves the relationship itself rather than through the endpoint
-   columns, and removes a relationship bound by a reverse traversal correctly.
-   The other four subcommands are outside **this** rule, but none of them is
-   therefore unconstrained: reading a relationship bound by a reverse pattern has
-   a defect of its own and a refusal of its own, in
-   [Relationship Read Direction](#relationship-read-direction), which binds all
-   five subcommands. `graph delete` is among them: what that rule exempts is the
-   `DELETE` clause, so a bare `DELETE e` stays accepted while a `WHERE` predicate
-   over the same relationship is refused. `graph create` cannot reach the
-   condition of **this** rule, because the clause-class rules above already
-   reject any creating query that contains `SET` or `REMOVE`; it is nonetheless
-   bound by the read rule, which does not depend on `SET` or `REMOVE` being
-   present.
-3. A `FOREACH` body is inspected like a top-level `SET`, for the same reason the
-   clause-class rules give it: `FOREACH (x IN list | SET e.k = …)` reaches the
-   same write operator.
-4. Detection runs on the **parsed** query rather than on the masked
-   normalization, so the directions read are the directions the engine will plan.
-   A relationship arrow that appears only inside a string literal or a comment is
-   not pattern syntax to the parser and cannot trigger a rejection. A query the
-   parser rejects is passed through to the engine unchanged, so a syntax error is
-   reported as a syntax error rather than masked by a direction error.
-5. Inserting a `WITH <relationship variable>` between the `MATCH` and the `SET`
-   is **not** accepted as a substitute for an outgoing pattern, even though the
-   projection it forces happens to repair the write in the pinned engine version.
-   That repair is a consequence of projection materialisation, which the engine is
-   free to elide; admitting the shape would make the guarantee depend on an
-   unspecified optimisation decision and would fail open the day it changed.
-
-### Relationship Read Direction
-
-A relationship variable bound by a fixed-length **incoming** (`<-[e]-`) or
-**undirected** (`-[e]-`) pattern MUST NOT be used in an **expression**. All five
-graph subcommands — `graph query`, `graph search`, `graph create`, `graph update`
-and `graph delete` — reject a query that uses one with `utils.ErrValidation`
-(exit code 6), before the graph store is opened. A rejected query returns nothing
-and changes nothing.
-
-The rule binds every subcommand because a misresolved relationship value is
-harmful wherever it is read, and the subcommand carrying the expression decides
-only what the harm looks like: `graph query` and `graph search` deliver the wrong
-value to the caller, `graph update` persists it, `graph create` derives new graph
-content from it, and a `graph delete` whose predicate reads it deletes nothing
-while reporting success. What this rule exempts is the `DELETE` **clause**, not
-the `graph delete` **command**; note 3 below draws that line and gives the
-measurement behind it.
-
-This rule is the read-side half of the direction doctrine stated at the head of
-[Relationship Write Direction](#relationship-write-direction). Like the write
-rule, it is a **separate contract from the clause-class guard rail**, not another
-operation class: the query's class is already correct, and what is refused is the
-**orientation** of the pattern that binds the relationship being read. The
-clause-class classification is unaffected.
-
-**Used in an expression** means any of the following, anywhere in the query:
-
-- projected by `RETURN` or `WITH`, including by a `RETURN *` star projection,
-  which projects every bound variable and therefore projects the relationship;
-- passed to a function, as in `type(e)`, `startNode(e)`, `endNode(e)`,
-  `properties(e)`, or `keys(e)`;
-- read as a property, as in `e.key`;
-- used in a `WHERE` predicate;
-- used in `ORDER BY`, `SKIP`, or `LIMIT`;
-- used on the right-hand side of a `SET`, as in `SET n.last_type = type(e)`.
-
-#### The traversal contract for reading a bound relationship
-
-| Pattern binding the relationship | Expression use of that relationship | Every `graph` subcommand |
-|----------------------------------|-------------------------------------|--------------------------|
-| `(a)-[e]->(b)` — outgoing | Reports the stored type, endpoints, and properties of every matched relationship | Accepted |
-| `(a)<-[e]-(b)` — incoming | Reports the true relationship only while the two endpoints are joined in one direction; where they are joined in both, reports the opposite relationship's type and the pattern's own orientation | Rejected, exit 6 |
-| `(a)-[e]-(b)` — undirected | Reports the forward leg correctly; where the two endpoints are joined in both directions, reports the forward relationship a second time in place of the reverse one | Rejected, exit 6 |
-
-As with the write contract, this contract is a property of the **pattern**, not
-of the anchor and not of the data: an incoming or undirected pattern is refused
-whether it is anchored on the relationship's source or on its target, and it is
-refused even against a graph whose node pairs are today all joined in one
-direction only, where the read would in fact have been correct.
-
-#### Why the corrupted reads are refused rather than corrected
-
-The engine resolves a bound relationship's identity from the **endpoint pair**
-the expansion emitted, exactly as the write path does, and that pair carries the
-relationship the way the **pattern** walked it rather than the way storage holds
-it. To recover the stored orientation, the read path probes the topology: when
-the pair carries no relationship in the emitted order but carries one in the
-opposite order, the engine inverts the pair and reports the relationship it finds
-there. That probe decides correctly only while the two endpoints are joined in
-**one** direction. Where they are joined in both, the emitted order already
-carries a relationship of its own, so the engine finds one there, inverts
-nothing, and resolves the reverse leg of the traversal as though it were the
-forward one.
-
-The consequences are all silent, and all of them report success:
-
-- A projection over an undirected pattern reports the forward relationship
-  twice, once per leg, and never reports the reverse relationship at all.
-- `startNode(e)` and `endNode(e)` under an incoming pattern report the pattern's
-  orientation, which is the exact reverse of what storage holds.
-- A `WHERE` predicate over the relationship is evaluated against the wrong
-  relationship, so a row that should have matched is discarded inside the engine.
-  The result is short by that row, with exit code 0 and no notification.
-- A `SET` whose right-hand side reads the relationship persists the wrong value
-  and exits 0, so the wrong value outlives the query.
-
-Groadmap cannot repair any of this after the fact, and correction inside Groadmap
-was investigated before refusal was chosen. For `type(e)`, `startNode(e).key`,
-and their siblings, what reaches Groadmap is a bare scalar with no relationship
-identity attached to it, so there is nothing left to correct against. The `WHERE`
-case is worse: the row is dropped inside the engine before any result reaches
-Groadmap, so the missing row cannot be detected, let alone restored.
-
-The divergence is upstream in GoGraph and cannot be corrected from this
-repository. Groadmap therefore refuses the query, for the same reason the write
-rule refuses its own: the alternative — a diagnostic on stderr with exit 0 —
-still reports success for an answer that is wrong, which is the failure mode
-being removed.
-
-#### Rewriting a refused read
-
-Refusal removes no reach: **every** relationship stays readable through an
-outgoing pattern, because an outgoing pattern may be anchored on either endpoint.
-The error message offers the three rewrites below, and each of them reports the
-relationship's true stored type and orientation.
-
-Anchor the outgoing pattern on the relationship's source to read the
-relationships leaving a node:
-
-```
-MATCH (a {key:'…'})-[e]->(x) RETURN type(e)
-```
-
-Anchor it on the relationship's target to read the relationships arriving at a
-node, rather than reversing the arrow:
-
-```
-MATCH (x)-[e]->(a {key:'…'}) RETURN type(e)
-```
-
-Read both directions in one query as the union of the two outgoing legs, which is
-the rewrite for an undirected pattern:
-
-```
-MATCH (a {key:'…'})-[e]->(x) RETURN type(e) AS t, x.key AS k
-UNION ALL
-MATCH (x)-[e]->(a {key:'…'}) RETURN type(e) AS t, x.key AS k
-```
-
-Notes:
-
-1. The rule inspects **uses of the relationship variable**. A pattern that binds
-   no variable is unaffected, because no relationship value is built for it:
-   `MATCH (a {key:'…'})-[:COVERS]-(b) RETURN b.key` is an ordinary read and is
-   accepted.
-2. A **variable-length** relationship (`-[e*1..2]-`, and equally `-[e*1..1]-`)
-   and a projected **named path** (`MATCH p=(a {key:'…'})-[e]-(b) RETURN p`) are
-   accepted through an incoming or undirected pattern. Neither is resolved by the
-   endpoint-pair probe described above: the engine is told which way each hop was
-   walked instead of inferring it, so both report the true stored type and
-   orientation, including on a node pair joined in both directions. A direct
-   expression use of a fixed-length relationship variable is the only shape the
-   probe resolves incorrectly, and it is the only shape this rule refuses.
-3. The exemption is of the `DELETE` **clause**, not of the `graph delete`
-   **command**. A bare `DELETE e` names the relationship as a delete **target**
-   rather than as a value: the engine resolves that relationship itself rather
-   than through the endpoint columns, so
-   `MATCH (a {key:'…'})-[e]-(b) DELETE e` remains accepted and removes the right
-   relationship. The moment a predicate over the relationship decides **which**
-   relationships the statement deletes, that predicate is an ordinary expression
-   use, and `graph delete` refuses it exactly as the other subcommands do:
-   `MATCH (a {key:'…'})-[e]-(b) WHERE type(e) = 'COVERS' DELETE e` is rejected
-   with exit code 6. It has to be. Executed rather than refused, the engine
-   evaluates the predicate against the misresolved type, discards the row inside
-   the engine, and the destructive statement exits 0 reporting `{"ok": true}`
-   having removed nothing at all. That is the sharpest failure in this family:
-   the caller asked for a deletion, was told it succeeded, and has no reason to
-   look again.
-4. A relationship variable that appears only as the **target** of a `SET` or
-   `REMOVE` is not an expression use. That shape belongs to
-   [Relationship Write Direction](#relationship-write-direction), which continues
-   to own it and to refuse it when the binding pattern is incoming or undirected.
-5. A `WITH *` that only carries the binding forward is accepted; a later
-   expression use of the variable it carried is refused like any other.
-6. Detection runs on the **parsed** query rather than on the masked
-   normalization, exactly as the write rule's detection does. The directions read
-   are therefore the directions the engine will plan; a relationship arrow that
-   appears only inside a string literal or a comment is not pattern syntax to the
-   parser and cannot trigger a rejection; and a query the parser rejects is passed
-   through to the engine unchanged, so a syntax error is reported as a syntax
-   error rather than masked by a direction error.
-7. A `FOREACH` body is inspected like a top-level clause, for the same reason the
-   write rule gives: `FOREACH (x IN list | SET n.last_type = type(e))` reaches
-   the same expression.
-
-### Cypher Query and Property Value Content Rules
-
-Two content rules govern what a Cypher query may **contain** and what a query may
-**write** into a knowledge-graph property value. They are the graph's instances of
-the two rules every other free-text value in Groadmap obeys — the Free-Text UTF-8
-Encoding Constraint and the Free-Text Control-Character Constraint, both defined
-in `MODELS.md § Task`, which stays canonical for what each rule forbids. This
-section is canonical for how the two apply to the graph.
-
-Both rules refuse with `utils.ErrValidation` (exit code 6), before the graph store
-is opened. A refused query returns nothing and changes nothing.
-
-The two rules **do not have the same reach**, because they object to different
-things. The encoding rule objects to a query the engine would silently rewrite,
-which is a fact about the statement. The control-character rule objects to a value
-that would be stored, and only a write stores one.
-
-| Rule | Decided on | `graph create` | `graph update` | `graph delete` | `graph query` | `graph search` |
-|------|------------|----------------|----------------|----------------|---------------|----------------|
-| Free-Text UTF-8 Encoding Constraint | The raw bytes of the query, before the parse | Binds | Binds | Binds | Binds | Binds |
-| Free-Text Control-Character Constraint | The property values the query will write | Binds | Binds | Does not bind | Does not bind | Does not bind |
-
-Like [Relationship Write Direction](#relationship-write-direction) and
-[Relationship Read Direction](#relationship-read-direction), these rules are a
-**separate contract from the clause-class guard rail**, not another operation
-class. What they refuse is the query's **content**; the clause-class
-classification is unaffected.
-
-**Precedence.** Both rules are applied after the clause-class guard rail and after
-both relationship-direction rules, and still before the graph store is opened. The
-rules that precede them decide what the query **is** — its operation class, and the
-orientation of the patterns it binds — while these decide what the query, or a
-value it carries, **contains**, which matters only once the statement is otherwise
-one that the subcommand would run.
-
-#### Why the encoding rule binds every subcommand
-
-The rule is decided on the raw query bytes, before the parse, because the parse
-destroys the evidence: the engine decodes the query to characters before its
-grammar runs, and replaces every byte that decodes to no character with `U+FFFD`
-(REPLACEMENT CHARACTER). No later point can see the byte the caller supplied.
-
-That substitution is a fact about the **statement**, not about storage, and it is
-indifferent to what the statement then does. The subcommand carrying the byte
-decides only what the damage looks like:
-
-- `graph create` and `graph update` store a value that was never supplied, and
-  report success.
-- `graph query` and `graph search` compare against a literal that was never
-  supplied, so a row that should have matched does not, and the command reports
-  success having found nothing.
-- `graph delete` gated by such a literal matches nothing, removes nothing, and
-  still reports success.
-
-The third is the worst of the three, and it is why the rule is keyed on the
-**cause** rather than on the command. A destructive statement that reports success
-having removed nothing is the failure shape the caller has no reason to check —
-the same judgement already recorded for `graph delete` in
-[Relationship Read Direction](#relationship-read-direction), note 3. Stated by
-command, one cause would have become three rules, and two of the three would never
-have been written.
-
-Because the rule is decided on the raw bytes, a query that carries an invalid byte
-**anywhere** is refused: in a label, in a match pattern, in a property key, or in a
-comment, and not only in a value the query writes. That widening is intended and is
-not a false positive. The engine replaces those bytes just the same, so the
-statement it would execute is not the statement the caller wrote.
-
-#### Why the control-character rule does not extend to the reads
-
-The control-character rule objects to what is **stored**, and a read stores
-nothing: a control character in a read literal is compared against what the graph
-already holds.
-
-The store can legitimately hold a value that carries a control character, from two
-ordinary sources: every value written before this rule existed, and any value a
-computed expression produces, which the rule cannot see (see
-[What the rules do not reach](#what-the-rules-do-not-reach) below). Refusing a read
-or a delete that named such a value would leave that data **unreadable** rather
-than merely unwritable, which is a loss of reach the rule never intended.
-`graph delete` is on the same side: it removes elements, it stores no value, and a
-predicate naming a control character is how an operator reaches the entry that
-carries one.
-
-#### Where each rule is decided
-
-The control-character rule applies to the value the engine **will write**, never to
-the query text. Cypher decodes escape sequences inside a string literal — among
-them `\b` (backspace), `\f` (form feed), and `\uXXXX`, a code point written as four
-hexadecimal digits — so a query whose own text is pure ASCII can write a value that
-carries a real control character, and a scan of the query string would admit it.
-`SET n.body = 'a\u001b[31mred'` is such a query: its text carries no control
-character, and the value it writes carries a real `ESC`. The escape sequences are
-those of `Cypher Query Language Reference, Version 9`, the openCypher 9 reference
-document, which states them under the heading "Note on string literals"; that
-document numbers no sections, so it is cited by heading and not by number.
-
-The encoding rule applies to the raw query bytes, for the reason given above. The
-two rules therefore read two different objects, and each reads the only object in
-which what it objects to can be seen.
-
-#### The order of the two rules
-
-Where both rules apply, the application applies the **encoding rule first**. This is
-the order `MODELS.md § Task` (Free-Text UTF-8 Encoding Constraint) fixes for the
-pair, and it is not a preference: an invalid byte decodes to `U+FFFD`, which is not
-a forbidden control character, so the control-character rule would report as
-acceptable a value that the encoding rule refuses.
-
-#### What the rules do not reach
-
-Both rules reach **literal** values only. A right-hand side that the statement
-computes at execution time is outside both, because the value does not exist until
-the statement runs and Groadmap never holds it. This is a **limit**, stated here
-rather than left to be discovered:
-
-- A function result, as in `SET n.last_type = type(e)` or `SET n.name = toUpper(x)`.
-  In the first example the relationship must be bound by an outgoing pattern; a
-  reverse binding is refused by
-  [Relationship Read Direction](#relationship-read-direction), which runs before
-  these rules.
-- Another element's property, as in `SET n.name = other.key`.
-- A parameter reference, as in `SET n.name = $value`.
-
-A value of any of those shapes is written unchecked, exactly as it was before these
-rules existed. Closing the limit means checking at the storage boundary, which is
-inside the engine and not in this repository.
-
-One computed shape **is** covered, and needs no treatment of its own: the
-concatenation of string literals, as in `SET n.name = 'a' + 'b'`. Both rules are
-closed under concatenation — two values free of forbidden code points concatenate to
-one, and two well-formed UTF-8 strings concatenate to one — so checking each literal
-operand decides the result. A list of string literals is covered element by element
-for the same kind of reason: each element is stored as a value in its own right.
-
-#### What a refusal names
-
-A refusal identifies what is wrong without ever echoing the offending bytes.
-Printing them would emit into the terminal exactly the characters the
-control-character rule exists to keep out of it, and for the encoding rule the value
-the caller supplied is no longer recoverable from the parsed query in any case. Each
-refusal therefore names the offending byte or code point in a written form, and
-reproduces none of the text around it.
-
-- A **control-character** refusal names the **property key** the value is assigned
-  to, and the first forbidden **code point**, written in the `U+001B` form. It also
-  states that the query text alone does not show the character, because Cypher
-  decodes escapes inside a string literal.
-- An **encoding** refusal names the offending **byte** and its **offset** in the
-  query, and states the consequence for the subcommand at hand: a stored value that
-  differs from the supplied one, a match against a literal that was never supplied,
-  or a deletion that removes nothing while reporting success.
-- An encoding refusal names the **property key** as well, where the byte falls
-  inside a value that the query writes. Where no property can be named, the message
-  says so, in terms that are true for the subcommand at hand: a subcommand that
-  writes no property value has none to name, and the message states instead that
-  the byte corrupts the literal the query matches on.
-
-Notes:
-
-1. Both rules run before the graph store is opened, so a refusal is the guard's own
-   and not the engine's. The exit code distinguishes the two: 6, and not the 1 an
-   engine failure carries.
-2. Neither rule uses the masked normalization that the clause-class guard rail
-   classifies on (see [Literal-Aware Normalization](#literal-aware-normalization)).
-   The encoding rule reads the raw query string, and the control-character rule
-   reads the values of the parsed query. Masking is a device for deciding a query's
-   operation class, and it answers neither of the questions these rules ask.
-3. A query the parser rejects is still refused by the encoding rule, which needs no
-   parse. It draws no control-character refusal: the values that rule inspects do
-   not exist for an unparseable query, so the syntax error is left to the engine to
-   report, exactly as the two direction rules leave it. An encoding refusal for such
-   a query names no property, because none can be attributed.
-
-### Cypher Input Source and Precedence
-
-Each graph subcommand obtains its Cypher from one of two sources:
-
-1. The `--query "<cypher>"` flag.
+1. The `-q` / `--query "<cypher>"` flag.
 2. Standard input, read under a bound, when the `--query` flag is absent. This
-   allows piping a query, for example
-   `cat query.cypher | rmp graph query -r myproject`.
+   allows piping a statement, for example
+   `cat statement.cypher | rmp graph execute -r myproject`.
 
 Whichever source carries it, a query is subject to the maximum length stated in
 [Maximum Query Length](#maximum-query-length) below.
@@ -1703,25 +996,23 @@ Precedence and rules:
    flag-like. It is a legitimate query value: the command accepts it and passes it
    to the engine like any other query, and the engine then accepts or rejects it on
    its own Cypher-validity merits.
-5. Leading and trailing whitespace is trimmed from the query before the guard-rail
-   check and before execution. The trim happens **after** the length check, which
-   counts the bytes as supplied (see
-   [Maximum Query Length](#maximum-query-length)).
+5. Leading and trailing whitespace is trimmed from the query before execution.
+   The trim happens **after** the length check, which counts the bytes as
+   supplied (see [Maximum Query Length](#maximum-query-length)).
 
-Standard input carries the Cypher query itself here: what the `graph` subcommands
-read from it is the instruction they execute, not a value they store. Other
+Standard input carries the Cypher query itself here: what `graph execute` reads
+from it is the instruction it runs, not a value it stores. Other
 commands accept standard input as well, and the cross-cutting input rule is
 stated in `DATA_FORMATS.md § Input`, which is the canonical statement of every
-command that reads standard input: it lists the `--query` of the `graph`
-subcommands together with the `--body` of the comment subcommands of the `task`
-and `sprint` families.
+command that reads standard input: it lists the `--query` of `graph execute`
+together with the `--body` of the comment subcommands of the `task` and `sprint`
+families.
 
-#### No Positional Query: A Stray Token Is Refused
+### No Positional Query: A Stray Token Is Refused
 
-The two sources above are the only two. A `graph` subcommand accepts **no
-positional argument at all**: each of the five declares a maximum of zero, which
-is what `COMMANDS.md § Positional Arity by Command` publishes for `graph create`,
-`graph query`, `graph update`, `graph delete`, and `graph search`. A Cypher query
+The two sources above are the only two. `graph execute` accepts **no positional
+argument at all**: it declares a maximum of zero, which is what
+`COMMANDS.md § Positional Arity by Command` publishes for it. A Cypher query
 written bare on the command line is therefore not a third source. It is an excess
 positional argument, and the subcommand refuses it.
 
@@ -1734,11 +1025,11 @@ The rules are:
    token is flag-like when it begins with `--`, or with a single `-` immediately
    followed by an ASCII letter. Every other token is a positional argument,
    including a `-` followed by a digit or a decimal point (`-1`, `-0.5`) and a
-   bare `-`. A flag-like token that no `graph` subcommand defines is refused as an
-   unknown flag, under the CLI-wide wording `COMMANDS.md § Positional Arguments`
+   bare `-`. A flag-like token that `graph execute` does not define is refused as
+   an unknown flag, under the CLI-wide wording `COMMANDS.md § Positional Arguments`
    rule 5 publishes; every other stray token is refused by rule 2 below. This is
-   the one point on which the `graph` family and the comment subcommands classify
-   the same token differently, and each family states its own rule: on a comment
+   the one point on which `graph execute` and the comment subcommands classify
+   the same token differently, and each states its own rule: on a comment
    subcommand a stray `-1` is an unknown flag
    (`COMMANDS.md § Comment Positional Argument Contract`, rule 2).
 2. **The refusal.** An invocation that supplies a positional argument is refused
@@ -1749,12 +1040,10 @@ The rules are:
    ```
 
    `X` is the offending token, quoted and echoed exactly as the user supplied it.
-   All five subcommands emit this line, and they emit it identically: they share
-   one argument-parsing rule, so the family has one wording and not five.
 3. **Only the first offending token is named.** The tokens are examined left to
    right and the first positional argument ends the invocation, so
-   `rmp graph query -r <roadmap> --query "<cypher>" alpha beta` names `alpha` and
-   never mentions `beta`.
+   `rmp graph execute -r <roadmap> --query "<cypher>" alpha beta` names `alpha`
+   and never mentions `beta`.
 4. **The position of the offending token does not matter; the order of the
    tokens decides which refusal is reached.** A stray token written before the
    flags is refused exactly as one written after them. When an invocation carries
@@ -1772,11 +1061,7 @@ The rules are:
      writing to;
    - **before the maximum-length check**, so an over-long query offered alongside
      a stray token exits 2 and not the 6 of
-     [Maximum Query Length](#maximum-query-length);
-   - **before the guard rail classifies anything**, so a query of the wrong
-     operation class supplied alongside a stray token exits 2 and not 6, and
-     before the two content rules of
-     [Cypher Query and Property Value Content Rules](#cypher-query-and-property-value-content-rules).
+     [Maximum Query Length](#maximum-query-length).
 
    A refused invocation therefore does nothing: it opens no store, creates,
    changes and deletes nothing, leaves the snapshot directory and the
@@ -1791,13 +1076,13 @@ The rules are:
    for every other error line: a reader must not have to work out which half of a
    line is normative. Its absence on the comment subcommands is not a divergence
    between two copies of one wording. The hint names the two sources of a
-   **Cypher query**, which only these five subcommands have; the comment
-   subcommands, whose body has two sources of its own, publish the canonical line
-   without it, and a hint naming `--query` would be false on them. An edit to
-   either family must therefore keep the shared part of the line shared and keep
-   this hint confined to the `graph` family.
+   **Cypher query**, which only `graph execute` has; the comment subcommands,
+   whose body has two sources of its own, publish the canonical line without it,
+   and a hint naming `--query` would be false on them. An edit to either family
+   must therefore keep the shared part of the line shared and keep this hint
+   confined to `graph execute`.
 
-#### Maximum Query Length
+### Maximum Query Length
 
 A Cypher query MUST NOT exceed **1 MiB, which is 1048576 bytes**. A query longer
 than that is refused with `utils.ErrValidation` (exit code 6) and the message:
@@ -1821,12 +1106,9 @@ The rules are:
    whether it arrived through `--query` or through standard input, so the same
    text never passes at one door and fails at the other. The count is taken over
    the bytes as supplied, before the trim of rule 5 above.
-3. **The length check runs first.** It precedes the guard-rail classification,
-   the literal masking that classification depends on
-   ([Literal-Aware Normalization](#literal-aware-normalization)), the opening of
-   the graph store, and the engine. An over-long query is never masked, never
-   classified, never parsed, and never executed; nothing in the graph changes and
-   stdout stays empty.
+3. **The length check runs first.** It precedes the opening of the graph store
+   and the engine. An over-long query is never parsed and never executed; nothing
+   in the graph changes and stdout stays empty.
 4. **Why 1 MiB and not something tighter.** One MiB is roughly a million
    characters, which is generous even for a graph bootstrap script carrying
    hundreds of `MERGE` statements, while the harm measured against the unbounded
@@ -1836,7 +1118,7 @@ The rules are:
    choosing it well once. A 64 KiB cap was considered and declined for exactly
    that reason.
 
-#### Bounded Standard-Input Read
+### Bounded Standard-Input Read
 
 When the query comes from standard input, the command does **not** read the
 stream to EOF. It consumes at most one byte beyond the maximum — 1048577 bytes —
@@ -1853,9 +1135,8 @@ This is a security property and not an implementation detail: an over-long query
 is refused without ever being buffered, so a producer that writes without limit
 cannot drive the command's memory. The measured behaviour of the unbounded read
 this replaces was 867 MB of peak resident memory and 15.9 seconds of wall time
-for 256 MiB offered to `rmp graph query`, the time going into the guard rail's
-masking pass and the engine's parse attempt, both run over a 256 MB "query" that
-was never going to be accepted.
+for 256 MiB offered to a graph subcommand, the time going into the engine's parse
+attempt over a 256 MB "query" that was never going to be accepted.
 
 A producer still writing when the command exits observes the usual broken-pipe
 result. The bound is a promise about what `rmp` consumes and retains, not about
@@ -1873,7 +1154,7 @@ to the maximum. The simpler rule is the right one here because a query's length
 is not a value anybody reads back, and a producer that pads a megabyte of Cypher
 with more whitespace is not a case worth reading further for.
 
-#### Standard Input That Supplies No Query
+### Standard Input That Supplies No Query
 
 Rule 3 above refuses an empty, whitespace-only, or terminal standard input with
 exit code 2. For the terminal, the refusal comes **before any read**, and that
@@ -1886,9 +1167,10 @@ omitted `--query`, with a terminal on standard input, printed nothing and never
 returned; it was terminated after roughly forty minutes. Nothing on the command
 line looks wrong, no diagnostic appears, and any automated caller — a script, a
 CI step, an agent — blocks indefinitely. This half of the unbounded read is the
-cheaper one to trigger: it needs no hostile input and consumes no memory. An interactive terminal is not a source a `graph` subcommand
-ever expects a query from, because the two documented ways to supply one are the
-flag and a pipe or a redirection.
+cheaper one to trigger: it needs no hostile input and consumes no memory. An
+interactive terminal is not a source `graph execute` ever expects a statement
+from, because the two documented ways to supply one are the flag and a pipe or a
+redirection.
 
 The exit code is 2 and not the 6 that an over-long query carries, and the two
 MUST NOT be collapsed into one class. Supplying no query at all is a missing
@@ -1900,14 +1182,11 @@ body and the bounded read for the over-long one).
 
 ## Schema Management
 
-`rmp graph update` is the subcommand through which a knowledge graph's schema —
-its indexes and its constraints — is managed. This section is canonical for that:
-which statements the subcommand accepts, what each of them does, how a schema
-object is named, why changing an index is two invocations rather than one, and
-how a schema failure reaches the caller. Which subcommand may issue which class
-is fixed by
-[Per-Subcommand Validation Rules](#per-subcommand-validation-rules) and is not
-restated here.
+`rmp graph execute` is how a knowledge graph's schema — its indexes and its
+constraints — is managed. This section is canonical for that: which statements the
+engine accepts, what each of them does, how a schema object is named, why changing
+an index is two invocations rather than one, and how a schema failure reaches the
+caller.
 
 **The surface is the engine's own Cypher, not a Groadmap verb.** A schema
 statement is written through `--query` or standard input exactly as every other
@@ -1915,9 +1194,9 @@ graph statement is (see
 [Cypher Input Source and Precedence](#cypher-input-source-and-precedence)):
 
 ```bash
-rmp graph update -r <roadmap> --query "CREATE INDEX spec_key FOR (n:Spec) ON (n.key)"
-rmp graph update -r <roadmap> --query "SHOW INDEXES"
-rmp graph update -r <roadmap> --query "DROP INDEX spec_key"
+rmp graph execute -r <roadmap> --query "CREATE INDEX spec_key FOR (n:Spec) ON (n.key)"
+rmp graph execute -r <roadmap> --query "SHOW INDEXES"
+rmp graph execute -r <roadmap> --query "DROP INDEX spec_key"
 ```
 
 Groadmap adds no `index` subcommand, no `--create` / `--drop` flags, and no
@@ -1925,8 +1204,7 @@ vocabulary of its own. The consequence is deliberate and is the reason the choic
 was made: the set of schema statements Groadmap supports is exactly the set the
 pinned engine supports, so it widens or narrows with the engine rather than with
 a Groadmap release, and Groadmap never has to decide what a schema statement
-means. What Groadmap owns is which subcommand may issue one, and what happens
-when the engine refuses it.
+means. What Groadmap owns is what happens when the engine refuses one.
 
 **Groadmap declares no schema object of its own.** No `rmp` command creates,
 drops, or requires an index or a constraint as a side effect of anything else it
@@ -1952,11 +1230,8 @@ Rules:
    describes what the pinned engine accepts; it is not a grammar Groadmap
    defines, and Groadmap MUST NOT rewrite, complete, or normalise a schema
    statement before executing it. A statement outside the engine's grammar is
-   refused by the engine, not by the guard rail (see
-   [Schema Failure Classes](#schema-failure-classes)). Because the surface is the
-   engine's, it falls under the clause-surface re-verification that
-   [Dependency Maturity Risk](#dependency-maturity-risk) mitigation 5 requires
-   before an engine upgrade is released.
+   refused by the engine (see
+   [Schema Failure Classes](#schema-failure-classes)).
 2. **An index and a constraint each cover exactly one node property.** The engine
    supports neither a composite (multi-property) form nor a form over a
    relationship property, and refuses both. A constraint is either a uniqueness
@@ -1966,19 +1241,19 @@ Rules:
    `OPTIONS` map. These are not the index kinds of any other Cypher
    implementation, and a statement written against another implementation's
    vocabulary is refused by the engine.
-4. **A schema statement runs on the transactional-write path, and the engine runs
-   it outside the transaction.** The **Engine path** column of
-   [Per-Subcommand Validation Rules](#per-subcommand-validation-rules) is
-   unchanged: `graph update` still takes the store's exclusive lock, still opens
-   the transactional store and the write-ahead-log writer, and still runs the
-   statement through the engine's transactional entry point. The engine itself
+4. **A schema statement runs on the one execution path, and the engine runs it
+   outside the transaction.** `graph execute` takes the store's exclusive lock,
+   opens the transactional store and the write-ahead-log writer, and runs the
+   statement through the engine's transactional entry point, exactly as it does
+   for every other statement (see
+   [Engine Constructor by Path](#engine-constructor-by-path)). The engine itself
    recognises a schema statement there and executes it outside the transaction it
    would otherwise open, because a schema change is not transactional in this
    engine. Groadmap MUST NOT attempt to make one transactional, MUST NOT wrap it
    in a transaction of its own, and MUST NOT report it as one: a schema statement
    that succeeds has taken effect, and there is nothing to roll back it into.
-5. **A successful schema statement checkpoints like any other successful
-   `graph update`.** The synchronous snapshot and write-ahead-log truncation of
+5. **A successful schema-mutating statement checkpoints.** The synchronous
+   snapshot and write-ahead-log truncation of
    [Synchronous Checkpoint on Write](#synchronous-checkpoint-on-write) run after
    it, and the snapshot MUST carry the registered schema, for the reason that
    section gives: without it the truncation that follows destroys the definition
@@ -1986,14 +1261,10 @@ Rules:
 6. **The output shape follows the columns the statement produces.** A
    schema-mutating statement produces none and returns `{"ok": true}`; a
    schema-introspection command produces the listing and returns the
-   `{columns, rows}` shape, identical to the listing the same command returns
-   under `graph query` (see `DATA_FORMATS.md § Graph Write Result`).
+   `{columns, rows}` shape (see `DATA_FORMATS.md § Graph Write Result`).
 7. **Every other rule that binds a graph statement binds a schema statement.**
    Roadmap selection, the refusal of a positional argument, the maximum query
-   length, the bounded standard-input read, and the UTF-8 encoding rule all apply
-   unchanged. The relationship-direction rules and the control-character rule
-   apply too and find nothing to object to: a schema statement binds no
-   relationship variable and writes no property value.
+   length, and the bounded standard-input read all apply unchanged.
 
 ### Schema Object Names
 
@@ -2020,48 +1291,6 @@ Rules:
    [Multi-Layer Modelling Conventions](#multi-layer-modelling-conventions): no
    `rmp` command requires a name or rejects a statement for omitting one.
 
-### One Statement per Invocation
-
-**An invocation carries exactly one schema statement, and `graph update` MUST
-refuse a statement that carries a further clause after it.** The refusal is
-`utils.ErrValidation` (exit code 6), it happens before the store is opened, and
-the message names the trailing text.
-
-**This refusal is load-bearing, and leaving it to the engine is not an option.**
-The engine's schema parser stops as soon as its grammar is satisfied and
-**discards the rest of the statement without an error, without a notification,
-and without any other trace**. Handed
-`CREATE INDEX spec_key FOR (n:Spec) ON (n.key) MATCH (m) SET m.reviewed = true`,
-the engine creates the index, drops the `MATCH ... SET` on the floor, and returns
-success. Unrefused, `graph update` would print `{"ok": true}` and exit 0 for a
-statement half of which never ran, and the caller has no reason to check: the
-command reported that it worked. This is the same failure shape as the silent
-non-deletion that
-[Relationship Read Direction](#relationship-read-direction) refuses, and it is
-refused for the same reason.
-
-**The check MUST be decided on the statement's structure, not by searching its
-text for clause keywords.** A keyword search misfires on a legitimate schema
-statement whose label or property is named after a clause — `CREATE INDEX
-spec_set FOR (n:Spec) ON (n.set)` is a valid index on a property called `set` —
-and refusing that would deny the caller an index the engine would have created.
-Refusing what the engine silently discards and admitting what it executes are
-both required; a mechanism that achieves only the first is not sufficient.
-
-**Two boundaries of this rule, both deliberate.** First, it belongs to the DDL
-class alone. A schema-introspection command carrying a further clause is already
-refused by the engine, which names the unsupported clause and does not discard
-it, so the rule adds nothing there and MUST NOT be extended to it: doing so would
-change what `graph query`, `graph search`, and `graph update` do
-with such a statement today, which is outside this rule's purpose. The web graph
-data endpoint is not on that list because it refuses the schema-introspection
-class before execution and never hands such a statement to the engine (see
-`WEB.md § Query-Bar Error Handling`, case 10). Second, it
-does not reach a statement that **begins** with a data-writing clause and carries
-schema text after it. That statement is not a schema statement at all: the engine
-routes it to the general Cypher grammar, which refuses it as a parse error
-(exit code 1), so nothing is silently discarded and nothing reports success.
-
 ### Altering and Recreating an Index
 
 **The engine has no statement that changes an index in place.** There is no
@@ -2072,8 +1301,8 @@ statements, and Groadmap composes nothing on the caller's behalf. Both are the
 caller issuing two statements in two invocations:
 
 ```bash
-rmp graph update -r <roadmap> --query "DROP INDEX spec_ord"
-rmp graph update -r <roadmap> --query "CREATE INDEX spec_ord FOR (n:Spec) ON (n.ord) OPTIONS {indexType: 'btree'}"
+rmp graph execute -r <roadmap> --query "DROP INDEX spec_ord"
+rmp graph execute -r <roadmap> --query "CREATE INDEX spec_ord FOR (n:Spec) ON (n.ord) OPTIONS {indexType: 'btree'}"
 ```
 
 Altering is a drop followed by a create with a different definition; recreating
@@ -2106,20 +1335,18 @@ does not stay small if the graph grows.
 
 | Failure | Refused by | Sentinel | Exit code |
 |---------|-----------|----------|-----------|
-| The statement's operation class does not match the subcommand — schema DDL under `graph create`, `graph query`, `graph delete`, or `graph search` | The guard rail, before the store is opened | `utils.ErrValidation` | 6 |
-| A `SHOW INDEX(ES)` / `SHOW CONSTRAINT(S)` statement whose keyword spacing the engine does not accept | The guard rail, before the store is opened (see [Keyword Spacing in a Schema-Introspection Command](#keyword-spacing-in-a-schema-introspection-command)) | `utils.ErrValidation` | 6 |
-| A DDL statement carrying a further clause after it | The guard rail, before the store is opened (see [One Statement per Invocation](#one-statement-per-invocation)) | `utils.ErrValidation` | 6 |
 | `CREATE INDEX` or `CREATE CONSTRAINT` whose object already exists, without `IF NOT EXISTS` | The engine | `utils.ErrDatabase` | 1 |
 | `DROP INDEX` or `DROP CONSTRAINT` naming an object that does not exist, without `IF EXISTS` | The engine | `utils.ErrDatabase` | 1 |
 | A definition the engine does not support — composite, over a relationship property, or a constraint kind it does not implement | The engine | `utils.ErrDatabase` | 1 |
 | `CREATE CONSTRAINT` that the data already in the graph does not satisfy | The engine, having validated the data and registered nothing | `utils.ErrDatabase` | 1 |
+| A schema statement whose keyword spacing the engine does not route to its schema parser | The engine's general Cypher grammar, as a parse error | `utils.ErrDatabase` | 1 |
 
 Rules:
 
-1. **The guard rail refuses three classes and the engine refuses the rest, and
-   the exit code is what tells them apart.** A guard-rail refusal is exit code 6
-   and carries Groadmap's own message; an engine refusal is exit code 1 and
-   carries the engine's diagnostic text after the wording Groadmap fixes (see
+1. **Every schema failure is the engine's, and every one of them exits 1.**
+   Groadmap refuses no schema statement of its own, so there is no second class to
+   tell apart by exit code. An engine refusal carries the engine's diagnostic text
+   after the wording Groadmap fixes (see
    [Error Handling and Exit Codes](#error-handling-and-exit-codes), rule 2). The
    engine's diagnostic text is not specified here, for the reason
    `COMMANDS.md § Graph Management` gives for every engine diagnostic: it belongs
@@ -2132,8 +1359,7 @@ Rules:
    knowledge is. A caller that wants either to be a no-op writes `IF NOT EXISTS`
    or `IF EXISTS`, which the engine accepts and which makes the statement succeed
    silently.
-3. **A `CREATE CONSTRAINT` refused by the existing data is a failure class
-   `graph update` did not previously have, and it MUST NOT surface as an
+3. **A `CREATE CONSTRAINT` refused by the existing data MUST NOT surface as an
    unexplained engine error.** The engine validates the graph's current data
    before registering a constraint and refuses the statement when the data does
    not satisfy it: a uniqueness rule over a property that already holds a repeated
@@ -2144,41 +1370,37 @@ Rules:
 4. **A failed schema statement leaves the schema as it was.** No partial
    registration exists in any of the classes above; the object is either
    registered or it is not.
+5. **A misleading diagnostic is a failure class of its own, and the caller meets
+   it here.** The last row of the table is the spacing hazard of
+   [What Groadmap Does Not Check](#what-groadmap-does-not-check), item 7, seen from
+   the exit-code side: the message names `SHOW` or the clause keyword as
+   unexpected and never names the separator, so a caller reading it has no route
+   from the diagnostic to the cause. Nothing in Groadmap improves that message.
 
-### Recovered Schema on Both Paths
+### Recovered Schema on Every Surface
 
-**Every surface that reports the schema reports the schema the store actually
-holds.** `graph update`, `graph query`, and `graph search` each answer a
-schema-introspection command from the
-definitions the store open recovered, under the names the caller declared. The
-three agree, because the difference between them is the execution path and not the
-schema, and
-[Engine Constructor by Path](#engine-constructor-by-path) is what makes them
-agree: both paths construct the engine with the recovered constraints and the
-recovered indexes.
+**Every surface reports the schema the store actually holds.** `rmp graph execute`
+and the web graph data endpoint each answer a schema-introspection command from
+the definitions the store open recovered, under the names the caller declared. The
+two agree because they construct the same engine from the same recovery result,
+which is what [Engine Constructor by Path](#engine-constructor-by-path) requires.
 
-**The read-only web graph data endpoint is not a fourth such surface, because it
-reports no schema at all.** It refuses a schema-introspection command before
-execution, since its response carries nodes and edges and a schema listing is
-neither (see `WEB.md § Query-Bar Error Handling`, case 10). That refusal is a
-property of the endpoint's **response shape**, not of its engine: the endpoint
-runs on the read path and constructs its engine with the recovered constraints and
-the recovered indexes exactly as the CLI read subcommands do, which is what
-[Engine Constructor by Path](#engine-constructor-by-path) requires and what keeps
-its ordinary reads planned against the schema the store actually holds. Refusing
-the class is therefore not a narrowing of the engine the endpoint builds, and that
-table's entry for the web path is unchanged by this rule.
+**An engine that is not given the recovered schema reports an empty one, and
+reports it as the truth.** `SHOW INDEXES` answers with zero rows whatever the
+store holds — not an error, and not a partial answer — and `DROP INDEX` fails as
+though the index had never been created. That is why the constructor is given the
+recovery result whole, and why a surface may not be moved to a constructor that
+takes less.
 
-**This corrects a defect that predates schema management and was unreachable
-only for want of a way to create an index.** `graph query` and `graph search`
-have accepted `SHOW INDEXES` and `SHOW CONSTRAINTS` since the schema-introspection
-class was specified, and on an engine constructed without the recovered schema
-those commands report an **empty listing whatever the store holds** — not an
-error, and not a partial answer, but zero rows presented as the truth. No `rmp`
-path could create an index, so no store held one, so the wrong answer was never
-visibly wrong. It becomes visible the moment `graph update` can create one, which
-is why the constructor change is part of this work and not an improvement that
-could follow it.
+**The web graph data endpoint reports a schema listing as no graph.** Its response
+carries nodes and edges, and a schema-introspection command returns tabular rows
+and neither a node nor an edge, so the walk over the result collects nothing and
+the endpoint answers `{"nodes": [], "edges": []}` with HTTP `200`. That answer is
+indistinguishable from a statement that genuinely matched nothing, and it is the
+answer every statement that returns no graph element gets from this endpoint — a
+`MATCH (n) RETURN count(n)` as much as a `SHOW INDEXES` (see
+`WEB.md § Graph Data Endpoint`). A schema listing is obtained from
+`rmp graph execute`, which returns the rows.
 
 ## Query Notifications as Diagnostics
 
@@ -2191,17 +1413,11 @@ of the other, which can be expensive and is usually unintended.
 
 Behaviour:
 
-1. Every graph subcommand that executes a query (`create`, `query`, `update`,
-   `delete`, and `search`) MUST, after the query has run, surface on stderr
-   exactly the notifications the engine returns for that query, as a
-   human-readable diagnostic line per notification. The surfacing is wired
-   identically on the read path (`query`, `search`) and the write path
-   (`create`, `update`, `delete`): each path emits whatever notifications the
-   engine attaches to its result. Groadmap does not generate notifications and
-   does not decide which queries or paths carry them; it only surfaces what the
-   engine supplies, which may be none. If the engine attaches a notification to a
-   given execution path, the corresponding subcommand surfaces it without further
-   change.
+1. `rmp graph execute` MUST, after the statement has run, surface on stderr
+   exactly the notifications the engine returns for that statement, as a
+   human-readable diagnostic line per notification. Groadmap does not generate
+   notifications and does not decide which statements carry them; it only surfaces
+   what the engine supplies, which may be none.
 2. Notifications are surfaced generically: the implementation emits whatever
    notifications the engine returns for the query, whatever their code, severity,
    or category. The set of notifications the engine produces may grow across
@@ -2214,31 +1430,29 @@ Behaviour:
    `INFORMATION Neo.ClientNotification.Statement.CartesianProductWarning: this query builds a cartesian product between disconnected patterns.`
 4. Notifications are advisory and never change the outcome of the command. The
    stdout output is exactly the existing success output, unchanged: the
-   `columns`/`rows` shape for a read or a `RETURN`-bearing write, or `{"ok": true}`
-   for a write with no `RETURN` clause (see
+   `columns`/`rows` shape for a statement that produces columns, or
+   `{"ok": true}` for one that produces none (see
    `DATA_FORMATS.md § Graph Query Result` and `DATA_FORMATS.md § Graph Write Result`).
    The exit code is unaffected and remains 0 on success.
 5. A query that produces no notifications writes nothing extra to stderr.
 
 This is consistent with the existing stderr-diagnostic pattern: notifications use
-the same channel as the non-fatal checkpoint diagnostic on the write path (see
-functional requirement 7 and
-[Synchronous Checkpoint on Write](#synchronous-checkpoint-on-write)). A graph
-write invocation may therefore emit, on stderr, both any query notifications and,
-if a post-commit checkpoint fails, the non-fatal checkpoint diagnostic; neither
-changes the success stdout output or the exit code.
+the same channel as the non-fatal checkpoint diagnostic (see functional
+requirement 7 and
+[Synchronous Checkpoint on Write](#synchronous-checkpoint-on-write)). One
+invocation may therefore emit, on stderr, both any query notifications and, if a
+post-commit checkpoint fails, the non-fatal checkpoint diagnostic; neither changes
+the success stdout output or the exit code.
 
 The exact GoGraph notification accessor, the notification type, and its field
 names are implementation details for `go-developer`; this specification fixes the
 behaviour, not the Go API.
 
-The set of notifications that exist, and which execution paths (read, write, or
-both) carry them, are determined entirely by the backing engine. Groadmap's
-contract is to surface, on each path, exactly what the engine returns for the
-query it executed. Whether a notification appears for a given query on a given
-path therefore follows the engine's behaviour, and this specification does not
-promise that any particular subcommand will emit a notification for any
-particular query.
+The set of notifications that exist is determined entirely by the backing engine.
+Groadmap's contract is to surface exactly what the engine returns for the
+statement it executed. Whether a notification appears for a given statement
+therefore follows the engine's behaviour, and this specification does not promise
+that any particular statement will produce one.
 
 ## Error Handling and Exit Codes
 
@@ -2251,50 +1465,46 @@ sentinel is introduced for the graph feature.
 | No roadmap selected and none provided via `-r` | `utils.ErrNoRoadmap` | 3 |
 | Selected roadmap does not exist | `utils.ErrNotFound` | 4 |
 | No query supplied: `--query` absent and standard input empty, whitespace only, or a terminal; or `--query` present with an empty, whitespace-only, or absent value (see [Cypher Input Source and Precedence](#cypher-input-source-and-precedence)) | `utils.ErrRequired` | 2 |
-| Any graph subcommand — `graph create`, `graph query`, `graph update`, `graph delete` or `graph search` — receives a positional argument, a bare Cypher query included; the five accept none (see [No Positional Query: A Stray Token Is Refused](#no-positional-query-a-stray-token-is-refused)) | `utils.ErrInvalidInput` | 2 |
+| `graph execute` receives a positional argument, a bare Cypher query included; it accepts none (see [No Positional Query: A Stray Token Is Refused](#no-positional-query-a-stray-token-is-refused)) | `utils.ErrInvalidInput` | 2 |
 | Query longer than the maximum query length of 1 MiB, from either source (see [Maximum Query Length](#maximum-query-length)) | `utils.ErrValidation` | 6 |
-| Query's operation class does not match the subcommand | `utils.ErrValidation` | 6 |
-| `graph update` writes a relationship bound by an incoming or undirected pattern (see [Relationship Write Direction](#relationship-write-direction)) | `utils.ErrValidation` | 6 |
-| Any graph subcommand — `graph query`, `graph search`, `graph create`, `graph update` or `graph delete` — uses a relationship variable bound by an incoming or undirected pattern in an expression; a bare `DELETE e` is not an expression use and stays accepted (see [Relationship Read Direction](#relationship-read-direction)) | `utils.ErrValidation` | 6 |
-| `graph query`, `graph search`, or `graph update` receives a `SHOW INDEX(ES)` / `SHOW CONSTRAINT(S)` statement whose keyword spacing the engine does not accept (see [Keyword Spacing in a Schema-Introspection Command](#keyword-spacing-in-a-schema-introspection-command)) | `utils.ErrValidation` | 6 |
-| Any graph subcommand — `graph create`, `graph query`, `graph update`, `graph delete` or `graph search` — receives a query whose raw bytes are not valid UTF-8 (see [Cypher Query and Property Value Content Rules](#cypher-query-and-property-value-content-rules)) | `utils.ErrValidation` | 6 |
-| `graph create` or `graph update` would write a property value carrying a forbidden control character; the other three subcommands write no property value and are not bound by this rule (see [Cypher Query and Property Value Content Rules](#cypher-query-and-property-value-content-rules)) | `utils.ErrValidation` | 6 |
-| `graph update` receives a DDL statement carrying a further clause after it (see [One Statement per Invocation](#one-statement-per-invocation)) | `utils.ErrValidation` | 6 |
-| `graph update` runs a schema statement the engine refuses: a `CREATE INDEX` or `CREATE CONSTRAINT` whose object already exists, a `DROP INDEX` or `DROP CONSTRAINT` naming an object that does not exist, an index or constraint definition outside the shape the engine supports, or a `CREATE CONSTRAINT` the graph's existing data does not satisfy (see [Schema Failure Classes](#schema-failure-classes)) | `utils.ErrDatabase` | 1 |
-| Cypher fails to parse or execute in the engine | `utils.ErrDatabase` | 1 |
+| Cypher fails to parse or execute in the engine, a schema statement included (see [Schema Failure Classes](#schema-failure-classes)) | `utils.ErrDatabase` | 1 |
 | Graph store cannot be opened, recovered, read, or written (I/O, corruption, lock) | `utils.ErrDatabase` | 1 |
 | Successful execution | — | 0 |
 
 Rules:
 
-1. The guard-rail rejection (operation class mismatch) is detected before the
-   graph store is opened for writing. A rejected query never mutates the graph.
-   The relationship-write-direction rejection, the relationship-read-direction
-   rejection, the introspection keyword-spacing rejection, and the two content
-   rejections of
-   [Cypher Query and Property Value Content Rules](#cypher-query-and-property-value-content-rules)
-   are detected at the same point and carry the same guarantee; none of those
-   statements is ever handed to the engine. The three refusals
-   that belong to the subcommand's arguments and to the query's source are
-   detected earlier still, before the guard rail classifies anything: the
+1. **The maximum query length is the only condition on which Groadmap refuses a
+   statement's content, and it is the only cause of exit code 6 in this file.**
+   Exit code 6 remains the CLI's validation class and is reached from other
+   commands for their own reasons (see `ARCHITECTURE.md § Exit Codes`); within the
+   graph feature the over-long query is its single cause. The three refusals that
+   precede the engine are all decided before the graph store is opened: the
    stray-positional refusal (exit code 2), the missing-query refusal (exit
    code 2) and the maximum-length refusal (exit code 6), all three stated in
-   [Cypher Input Source and Precedence](#cypher-input-source-and-precedence).
-   The stray-positional refusal is settled while the arguments are still being
-   read, so it precedes the maximum-length refusal always; against the
+   [Cypher Input Source and Precedence](#cypher-input-source-and-precedence). A
+   statement refused by any of the three never reaches the engine and changes
+   nothing. The stray-positional refusal is settled while the arguments are still
+   being read, so it precedes the maximum-length refusal always; against the
    missing-query refusal it does not, because a `--query` whose value is absent
    is settled in the same left-to-right pass and the earlier token wins (see
    [No Positional Query: A Stray Token Is Refused](#no-positional-query-a-stray-token-is-refused),
    rule 4).
 2. A Cypher parse or execution failure reported by the engine is wrapped as
    `utils.ErrDatabase` (exit code 1), consistent with treating the graph store as
-   a database-class dependency. The error message names the subcommand and
-   includes the engine's diagnostic text.
+   a database-class dependency. The message carries a fixed prefix and then the
+   engine's diagnostic text; `COMMANDS.md § Graph Management` publishes the exact
+   line, and the engine's half of it is not specified there or here.
 3. Errors are written as plain text to stderr and carry the standard AI-agent
    hint (see `HELP.md § Error message format`).
 4. The graph feature introduces no new exit codes. If a future need arises for a
    dedicated graph error class, it MUST be added following the procedure in
    `ARCHITECTURE.md § Adding New Error Types`.
+5. **A statement that the engine executes, and that does the wrong thing quietly,
+   carries exit code 0 and no diagnostic.** Every hazard listed in
+   [What Groadmap Does Not Check](#what-groadmap-does-not-check) reaches the
+   caller as a success, because that is what the engine reports. No exit code in
+   the table above distinguishes them, and none is added to: an exit code that
+   claimed to would require the inspection this specification does not perform.
 
 ## Concurrency and Recovery
 
@@ -2304,177 +1514,141 @@ transactions are not excluded from one another inside a single process: a
 write-write collision is detected rather than prevented, on a first-updater-wins
 basis, and the losing transaction receives a retriable serialization-conflict
 error. Groadmap does not rely on that intra-process behaviour, because each
-`rmp graph` invocation is a separate short-lived process that runs exactly one
-transaction; that one-transaction-per-process model is why the conflict path is
-not reachable today.
+`rmp graph execute` invocation is a separate short-lived process that runs exactly
+one transaction, and each web graph request runs exactly one; that
+one-transaction-per-invocation model is why the conflict path is not reachable
+today.
 
 Groadmap does not depend on the engine to serialise access to the store. It
 serialises it itself, at the process level, through a single advisory lock file
 that Groadmap maintains in the roadmap's graph directory, `write.lock` (see
-[Persistence Layout](#persistence-layout)). Every invocation that opens the store
-takes that lock before opening it, in one of two modes:
+[Persistence Layout](#persistence-layout)). Every invocation and every web graph
+request takes that lock **exclusively** before opening the store, and holds it
+across the whole open, execution, commit, checkpoint, and write-ahead-log
+truncation sequence.
 
-- A **write** invocation takes the lock **exclusively** and holds it across the
-  whole open, commit, checkpoint, and write-ahead-log truncation sequence.
-- A **read** invocation takes the lock in **shared** mode and holds it across the
-  **store open alone**: it acquires the lock before opening the store and
-  releases it as soon as the open returns. The query then runs with no lock
-  held.
+**There is one lock mode, because there is one execution path.** Groadmap does not
+examine a statement, so it cannot know before running one whether it will write,
+and a lock mode chosen on a guess would be a shared lock held while a statement
+committed. The exclusive lock is the mode that is correct for every statement. The
+cost is stated rather than hidden: two statements against the same roadmap
+serialise even when neither of them writes, where a shared mode would have let
+them overlap.
 
-The two modes are mutually exclusive. While a writer holds the lock exclusively,
-no reader can hold it; while one or more readers hold it in shared mode, no
-writer can. Several readers may hold the shared lock at the same time, so reads
-never serialise against one another. The operating system releases the lock when
-the holding process exits, so an invocation that crashes does not strand it. The
-lock file itself is created by whichever invocation first needs it, reader or
-writer, and is never removed.
+The operating system releases the lock when the holding process exits, so an
+invocation that crashes does not strand it. The lock file itself is created by
+whichever invocation first needs it, and is never removed.
 
-The exclusive lock covers the writer's full sequence, not just the transaction,
-because that is the span that must not interleave: a second writer that had
-loaded the graph before the first writer's commit would checkpoint a full
-snapshot of its own stale in-memory graph and then truncate the write-ahead log
-that still held the first writer's committed change, silently losing an
-acknowledged write. Because the sequence Groadmap needs serialised is wider than
-a transaction, no engine-level writer exclusion would have covered it in any
-case.
+The exclusive lock covers the whole sequence, not just the transaction, because
+that is the span that must not interleave: a second writer that had loaded the
+graph before the first writer's commit would checkpoint a full snapshot of its own
+stale in-memory graph and then truncate the write-ahead log that still held the
+first writer's committed change, silently losing an acknowledged write. Because
+the sequence Groadmap needs serialised is wider than a transaction, no
+engine-level writer exclusion would have covered it in any case.
 
-A read takes the shared lock because **opening the store is not a read-only
-operation on disk**. Opening it runs GoGraph's recovery step, and recovery
-repairs an interrupted checkpoint before it loads anything: it removes a stale
-staging directory `snapshot.tmp` unconditionally, and, when the live `snapshot/`
-directory carries no manifest while `snapshot.bak/` does, it promotes the backup
-by renaming `snapshot.bak` to `snapshot` and making that rename durable. Both
-actions repair the very directory a writer's checkpoint publishes into. Without
-the shared lock, a read could delete the staging directory a concurrent writer
-was assembling its snapshot in, or interleave with that writer's own publish
-sequence.
-
-**The store open is also the whole of what a read needs the lock for, which is
-why the lock is released the moment the open returns.** Every on-disk action a
-read performs happens inside the open: the staging-directory removal and the
-backup promotion are both part of the recovery step, and the snapshot components
-and the write-ahead log are read there and closed there. The open returns a graph
-that is fully materialised in memory, including the state replayed from the
-write-ahead-log tail; the query, the traversal, and the serialisation of the
-result that follow read that in-memory graph and touch no file in the store.
-Holding the lock past the open would therefore protect nothing that is not
-already protected, while blocking writers for as long as the query takes.
-
-This is a deliberate, load-bearing narrowness, not an oversight. A future change
-that makes any part of a read touch the store **after** the open — a lazily
-loaded component, a memory-mapped snapshot, a handle kept open past recovery, or
-a re-read during iteration — invalidates the reasoning above, and the hold MUST
-then be widened to cover the new access. Widening it in the absence of such a
-change is a regression: it reintroduces contention that buys no safety.
+Opening the store is itself not a read-only operation on disk, which is a second
+reason the lock is taken before the open rather than around the transaction alone.
+Opening it runs GoGraph's recovery step, and recovery repairs an interrupted
+checkpoint before it loads anything: it removes a stale staging directory
+`snapshot.tmp` unconditionally, and, when the live `snapshot/` directory carries no
+manifest while `snapshot.bak/` does, it promotes the backup by renaming
+`snapshot.bak` to `snapshot` and making that rename durable. Both actions repair
+the very directory a checkpoint publishes into.
 
 Durability is provided by a write-ahead log with CRC32C integrity checks plus
 atomic on-disk snapshots; on opening the store, GoGraph runs recovery to restore
 the last committed state from the snapshot and log.
 
-### What a Read Changes on Disk
+### What a Statement That Writes Nothing Changes on Disk
 
-A read changes exactly what the recovery repair above changes, and nothing else.
-Every change below happens **inside the store open**, while the shared lock is
-held; after the open returns, a read touches no file in the store at all. A read
-invocation, whether it is a CLI read subcommand or a web request:
+A statement whose transaction appended nothing to the write-ahead log changes
+exactly what the recovery repair above changes, and nothing else. It is not
+distinguished in advance — the transaction runs, appends nothing, and commits —
+and it is the write-ahead log's own state that decides whether the checkpoint of
+[Synchronous Checkpoint on Write](#synchronous-checkpoint-on-write) runs at all.
+Such a statement, whether it arrived through `rmp graph execute` or through a web
+graph request:
 
-1. MUST NOT run a write transaction, and MUST NOT add, alter, or remove any node,
-   relationship, property, label, index, or constraint.
+1. Adds, alters, and removes no node, relationship, property, label, index, or
+   constraint, because it wrote none.
 2. MUST NOT checkpoint and MUST NOT write a snapshot. The contents of `snapshot/`
-   are left exactly as the read found them.
-3. MUST NOT truncate or otherwise write to the write-ahead log. The log is opened
-   for reading only and is left byte for byte as the read found it, so a read
-   never shortens the history a subsequent recovery replays.
+   are left exactly as the statement found them.
+3. MUST NOT truncate the write-ahead log. The log is left byte for byte as the
+   statement found it, so a statement that wrote nothing never shortens the
+   history a subsequent recovery replays.
 4. MAY remove a stale `snapshot.tmp` staging directory, and MAY promote
    `snapshot.bak` to `snapshot`, as the recovery repair above describes.
 5. Creates the lock file `write.lock` when it does not already exist.
-6. Creates the graph directory itself when, and only when, the invocation is a
-   CLI read subcommand (see [Persistence Layout](#persistence-layout), rule 2).
-   The web interface never creates the graph directory: a roadmap with no graph
-   directory is an empty graph and is served as such (see `WEB.md § Knowledge
+6. Creates the graph directory itself when, and only when, the statement arrived
+   through `rmp graph execute` (see [Persistence Layout](#persistence-layout),
+   rule 2). The web interface never creates the graph directory: a roadmap with no
+   graph directory is an empty graph and is served as such (see `WEB.md § Knowledge
    Graph from the GoGraph Store`).
 
-The **content** of the graph is therefore never changed by a read. What a read can
-change is the store directory's structure, and only by completing a repair that
-the next invocation to open the store would otherwise complete instead.
+The **content** of the graph is therefore never changed by a statement that writes
+nothing. What such a statement can change is the store directory's structure, and
+only by completing a repair that the next invocation to open the store would
+otherwise complete instead.
 
 ### Lock Contention
 
-The two lock modes handle contention differently, because their callers differ.
+One lock mode carries one contention policy.
 
-1. A **write** invocation takes the exclusive lock without waiting. A writer that
-   finds the lock held, by another writer or by a reader, fails immediately with
-   `utils.ErrDatabase` (exit code 1) rather than waiting or corrupting the store.
-   Because a reader holds the lock only across the store open, the window in
-   which a read can make a concurrent write fail is the duration of that open,
-   and is **not** proportional to how long the read's query runs. A long-running
-   query cannot fail a concurrent write.
-2. A **read** invocation MUST NOT block indefinitely and MUST NOT fail on the
-   first collision. It waits for the shared lock under the bounded
+1. An invocation that finds the exclusive lock held **waits**, under the bounded
    exponential-backoff policy specified in
-   `IMPLEMENTATION.md § Graph Store Concurrency`. If the lock is still unavailable
-   when that bounded wait is exhausted, the read fails: with `utils.ErrDatabase`
-   (exit code 1) for a CLI read subcommand, and as an internal read error
-   (HTTP 500) for the web graph data endpoint, which is the status that endpoint
-   already returns for a graph store that cannot be opened (see
-   `WEB.md § Routes and Pages`).
+   `IMPLEMENTATION.md § Graph Store Concurrency`. It MUST NOT block indefinitely
+   and MUST NOT fail on the first collision.
+2. If the lock is still unavailable when that bounded wait is exhausted, the
+   invocation fails: with `utils.ErrDatabase` (exit code 1) for
+   `rmp graph execute`, and as an internal read error (HTTP 500) for the web graph
+   data endpoint, which is the status that endpoint already returns for a graph
+   store that cannot be opened (see `WEB.md § Routes and Pages`).
 
-A read waits where a write fails at once because the two are not symmetrical, and
-the asymmetry survives the narrow reader hold. What a read waits for is a
-**writer's** hold, and that hold is unchanged: it still spans the whole open,
-commit, checkpoint, and write-ahead-log truncation sequence, including a full
-snapshot rewrite whose cost grows with the live graph size. The reader's wait is
-therefore sized against the writer's critical section, not against its own, which
-is why narrowing the reader's hold does not narrow the wait it may face. Reads
-are also by far the more frequent operation, so failing a read on the first
-collision would make ordinary reads intermittently unavailable.
+**Waiting rather than failing fast is the policy because every caller is now a
+possible reader.** A policy that failed on the first collision would make ordinary
+statements intermittently unavailable, and one of the two callers is an HTTP
+request handler, for which an unbounded block would let a long-running statement
+hang a `GET` until the server's write timeout fired (see
+`WEB.md § HTTP Server Timeouts`). A bounded wait keeps the worst case well inside
+that timeout, and it does not consume the endpoint's query time budget, because
+the wait ends before the statement starts (see `WEB.md § Graph Query Time Budget`).
 
-The wait is bounded, and never unbounded, because one of the two readers is an
-HTTP request handler: an unbounded block would let a long write hang a `GET`
-until the server's write timeout fired (see `WEB.md § HTTP Server Timeouts`). A
-bounded wait keeps the worst case well inside that timeout, and it does not
-consume the endpoint's query time budget, because the wait ends before the query
-starts (see `WEB.md § Graph Query Time Budget`).
+**The wait is sized against the holder's critical section, which now spans the
+statement as well.** The hold covers the whole open, execution, commit,
+checkpoint, and write-ahead-log truncation sequence, including a full snapshot
+rewrite whose cost grows with the live graph size, and the execution of a
+statement whose cost the caller chooses. An expensive statement therefore delays
+every other statement against the same roadmap for as long as it runs, which a
+shared reader hold did not.
 
 Groadmap's usage model and expectations:
 
-1. Each `rmp graph` invocation is a short-lived process that opens the store,
-   runs one query, commits any write, checkpoints after a successful write (see
+1. Each `rmp graph execute` invocation is a short-lived process that opens the
+   store, runs one statement, commits, checkpoints if that transaction wrote (see
    [Synchronous Checkpoint on Write](#synchronous-checkpoint-on-write)), and
    closes the store. The process does not hold the store open across invocations.
-2. Because a write invocation takes the lock exclusively before opening the store,
-   two concurrent `rmp graph` write invocations against the **same** roadmap
-   contend for it. The implementation MUST surface a contention or lock failure as
-   `utils.ErrDatabase` (exit code 1) rather than corrupting the store or hanging
-   indefinitely. The checkpoint that follows a successful write runs inside the
-   invocation that already holds the lock: it adds no separate lock and two
-   concurrent writers still serialise. The retry and timeout behaviour for graph
-   writes is specified in `IMPLEMENTATION.md § Graph Store Concurrency`.
-3. Because a read invocation takes the same lock in shared mode, a read and a
-   write against the **same** roadmap also contend, in both directions: a read
-   waits for an in-flight write to finish, and a write that finds a read inside
-   its store open fails fast. This is deliberate. A read that opened the store
-   while a writer was publishing its checkpoint could delete or race the writer's
-   staging directory, because opening the store performs the recovery repair
-   described above. The contention is confined to the open on the reader's side:
-   once a read has loaded the graph it holds no lock, so it neither waits nor
-   blocks a writer for the time its query takes. Reads against **different**
-   roadmaps never contend, since each roadmap has its own graph directory and its
-   own lock file. The contention rules for each mode are in
-   [Lock Contention](#lock-contention).
+2. Two concurrent invocations against the **same** roadmap contend for the lock,
+   whatever their statements do. The implementation MUST surface an exhausted wait
+   as `utils.ErrDatabase` (exit code 1) rather than corrupting the store or
+   hanging indefinitely. The checkpoint runs inside the invocation that already
+   holds the lock: it adds no separate lock, and two concurrent invocations still
+   serialise.
+3. A web graph request contends with `rmp graph execute` in both directions, and
+   with another web graph request, on the same lock and under the same policy.
+   Statements against **different** roadmaps never contend, since each roadmap has
+   its own graph directory and its own lock file.
 4. Recovery on open restores the last committed state from the snapshot and the
-   write-ahead-log tail. Because every successful write now writes a self-sufficient
-   snapshot and truncates the log (see
-   [Synchronous Checkpoint on Write](#synchronous-checkpoint-on-write)), recovery
-   genuinely exercises the snapshot path: a graph opened after a previous write is
-   rebuilt from that snapshot plus any log entries written since the last
-   checkpoint, rather than by replaying the entire write history. The restored
-   state includes deletions: a node deleted by a previous invocation stays deleted
-   after the store is reopened, because the snapshot records the tombstone set and
-   recovery reconstructs it. A graph left in a consistent committed state by a
-   previous invocation opens cleanly. A graph whose store is corrupt or unreadable
-   surfaces as `utils.ErrDatabase` (exit code 1); there is no automatic graph-store
-   repair in this first version.
+   write-ahead-log tail. Because every write checkpoints, recovery genuinely
+   exercises the snapshot path: a graph opened after a previous write is rebuilt
+   from that snapshot plus any log entries written since the last checkpoint,
+   rather than by replaying the entire write history. The restored state includes
+   deletions: a node deleted by a previous invocation stays deleted after the
+   store is reopened, because the snapshot records the tombstone set and recovery
+   reconstructs it. A graph left in a consistent committed state by a previous
+   invocation opens cleanly. A graph whose store is corrupt or unreadable surfaces
+   as `utils.ErrDatabase` (exit code 1); there is no automatic graph-store repair
+   in this first version.
 5. The graph store is independent of the SQLite layer and the SQLite WAL
    model described in `IMPLEMENTATION.md § Concurrency Model`; the two persistence
    mechanisms do not share connections, locks, or transactions.
@@ -2485,7 +1659,7 @@ Groadmap's usage model and expectations:
    node/edge schema. The conventions in
    [Multi-Layer Modelling Conventions](#multi-layer-modelling-conventions) are
    recommendations only. A caller may declare indexes and constraints of its own
-   through `graph update` (see [Schema Management](#schema-management)). That does
+   through `graph execute` (see [Schema Management](#schema-management)). That does
    not weaken this constraint: Groadmap declares no schema object, requires none,
    creates none implicitly, and assumes nothing about what any graph's schema
    holds. Every schema object in a knowledge graph is one its owner asked for.
@@ -2503,423 +1677,175 @@ Groadmap's usage model and expectations:
 
 ## Acceptance Criteria
 
-1. `rmp graph create -r <roadmap> --query "CREATE (s:Spec {key:'user-authentication'})"`
-   creates the node, persists it, prints `{"ok": true}` (the query has no `RETURN`
-   clause), and exits 0. The same query with `... RETURN s` appended instead
-   returns the created node in the `columns`/`rows` shape
+1. `rmp graph execute -r <roadmap> --query "CREATE (s:Spec {key:'user-authentication'})"`
+   creates the node, persists it, prints `{"ok": true}` (the statement has no
+   `RETURN` clause), and exits 0. The same statement with `... RETURN s` appended
+   instead returns the created node in the `columns`/`rows` shape
    (see `DATA_FORMATS.md § Graph Write Result`).
-2. `rmp graph query -r <roadmap> --query "MATCH (s:Spec) RETURN s.key"` returns
+2. `rmp graph execute -r <roadmap> --query "MATCH (s:Spec) RETURN s.key"` returns
    the previously created node's `key` as JSON in the shape defined in
    `DATA_FORMATS.md § Graph Query Result`, and exits 0.
-3. A query is read back correctly in a **separate** invocation, proving the graph
-   persisted to `~/.roadmaps/<roadmap>/graph/` across process exits.
-4. `rmp graph query --query "CREATE (n:Spec)"` is rejected with exit code 6 and a
-   plain-text error on stderr, and creates nothing (guard-rail enforcement).
-5. `rmp graph delete --query "MATCH (s:Spec) RETURN s"` is rejected with exit
-   code 6 (a read-only query under a delete subcommand).
-6. `rmp graph update --query "CREATE (n:Spec)"` is rejected with exit code 6 (a
-   creating query under an update subcommand).
-7. `echo "MATCH (n) RETURN count(n)" | rmp graph query -r <roadmap>` reads the
-   query from stdin and returns the count, exits 0.
-8. `rmp graph query -r <roadmap>` with no `--query` and no piped stdin fails with
-   exit code 2 (no query supplied).
-9. `rmp graph search -r <roadmap> --query "MATCH p=(a)-[*1..3]-(b) RETURN p"`
+3. A statement is read back correctly in a **separate** invocation, proving the
+   graph persisted to `~/.roadmaps/<roadmap>/graph/` across process exits.
+4. **One subcommand runs every class of statement, and the criterion MUST assert
+   all four together.** Against one roadmap and in this order, each exiting 0:
+   `CREATE (n:Spec {key:'k'})`, then
+   `MATCH (n:Spec {key:'k'}) SET n.status = 'implemented'`, then
+   `CREATE INDEX spec_key FOR (n:Spec) ON (n.key)`, then
+   `MATCH (n:Spec {key:'k'}) DETACH DELETE n`. Each is submitted to
+   `rmp graph execute`, and a read-back after each confirms the effect. An
+   implementation that refused any one of them on the ground of what it does fails
+   this criterion.
+5. **`execute` is the only subcommand name `rmp graph` resolves.** Each of
+   `rmp graph create`, `rmp graph query`, `rmp graph update`,
+   `rmp graph delete`, and `rmp graph search`, invoked with an otherwise valid
+   `-r` and `--query`, is an unresolved subcommand name: it exits `127`, writes
+   zero bytes to stdout, and writes the dispatch-failure error and the `graph`
+   help to stderr (see
+   `COMMANDS.md § Dispatch Failures (Unresolved Command or Subcommand Names)`).
+   The criterion MUST assert the exit code **and** that the statement did not
+   run — the graph is byte-identical afterwards — because an alias that quietly
+   executed would otherwise pass an exit-code-only check on the success path.
+6. `echo "MATCH (n) RETURN count(n)" | rmp graph execute -r <roadmap>` reads the
+   statement from standard input and returns the count, exits 0.
+7. `rmp graph execute -r <roadmap>` with no `--query` and no piped standard input
+   fails with exit code 2 (no query supplied).
+8. `rmp graph execute -r <roadmap> --query "MATCH p=(a)-[*1..3]-(b) RETURN p"`
    executes a variable-length traversal and returns results, exits 0.
-10. `rmp graph query -r missing-roadmap --query "MATCH (n) RETURN n"` against a
-    non-existent roadmap fails with exit code 4.
-11. A syntactically invalid Cypher query that passes the guard-rail clause check
-    fails at execution with exit code 1 and a plain-text engine diagnostic on
-    stderr.
-12. Each graph subcommand is represented in the AI Agent Contract emitted by
+9. `rmp graph execute -r missing-roadmap --query "MATCH (n) RETURN n"` against a
+   non-existent roadmap fails with exit code 4.
+10. A syntactically invalid Cypher statement fails at execution with exit code 1
+    and a plain-text engine diagnostic on stderr. The exit code is what
+    distinguishes an engine failure from the two refusals Groadmap owns: 1, and
+    not the 2 of a missing query or the 6 of an over-long one.
+11. `graph execute` is represented in the AI Agent Contract emitted by
     `rmp graph --ai-help` and `rmp --ai-help`, with the same fields as every
-    other subcommand (see `DATA_FORMATS.md § AI Agent Contract`).
-13. The graph directory `~/.roadmaps/<roadmap>/graph/` is created with `0700`
+    other subcommand, and no entry remains for any of the five removed names (see
+    `DATA_FORMATS.md § AI Agent Contract`).
+12. The graph directory `~/.roadmaps/<roadmap>/graph/` is created with `0700`
     permissions on first graph use.
-14. After a successful `rmp graph create -r <roadmap> --query "..."`, the snapshot
-    manifest `~/.roadmaps/<roadmap>/graph/snapshot/manifest.json` exists, proving a
-    checkpoint ran (see [Synchronous Checkpoint on Write](#synchronous-checkpoint-on-write)).
-15. After a successful write subcommand and its checkpoint, the write-ahead log
+13. After a successful `rmp graph execute -r <roadmap> --query "CREATE ..."`, the
+    snapshot manifest `~/.roadmaps/<roadmap>/graph/snapshot/manifest.json` exists,
+    proving a checkpoint ran (see
+    [Synchronous Checkpoint on Write](#synchronous-checkpoint-on-write)).
+14. After a statement that wrote, and its checkpoint, the write-ahead log
     `~/.roadmaps/<roadmap>/graph/wal` is truncated (small or empty), proving the
     log was bounded rather than left to grow with history.
-16. After a successful write and its checkpoint, a subsequent read in a
+15. After a statement that wrote and its checkpoint, a subsequent read in a
     **separate** invocation returns the written data, proving recovery from the
     snapshot plus any log tail works across process exits.
-17. When the checkpoint fails after the write transaction has already committed
-    durably, the write subcommand still returns its normal success output (the
+16. When the checkpoint fails after the transaction has already committed
+    durably, the invocation still returns its normal success output (the
     `RETURN`-mirroring shape or `{"ok": true}`) and exit code 0, and the checkpoint
     failure is reported as a diagnostic on stderr without changing the exit code
     (see [Synchronous Checkpoint on Write](#synchronous-checkpoint-on-write)).
-18. `rmp graph create -r <roadmap> --query 'CREATE (m:Memory {body:"... node-delete ... MATCH...SET ..."})'`
-    is accepted and creates the node, exits 0. The `delete` and `set` keywords
-    appear only inside the string-literal property value and are masked before
-    classification (see
-    [Literal-Aware Normalization](#literal-aware-normalization)); the only
-    writing clause is `CREATE`.
-19. `rmp graph query -r <roadmap> --query 'MATCH (m) WHERE m.title = "mentions delete and set" RETURN m.key'`
-    is accepted as read-only and exits 0. The `delete` and `set` keywords appear
-    only inside the string-literal value and are masked, so the masked query
-    contains no writing clause.
-20. `rmp graph query -r <roadmap> --query "MATCH (a:Spec), (b:Code) RETURN a.key, b.path"`
+17. **A statement that writes nothing leaves the store's data untouched, and the
+    criterion MUST be run against a store whose write-ahead log is not empty.**
+    After `rmp graph execute -r <roadmap> --query "MATCH (n) RETURN count(n)"`, the
+    `wal` file is byte for byte identical to what it was before, and every file
+    under `snapshot/` is unchanged, proving that a transaction which appended
+    nothing neither checkpointed nor truncated the log. An implementation that
+    checkpointed unconditionally fails this criterion, and it fails it in the way
+    that matters: it would rewrite a full snapshot on every statement (see
+    [What a Statement That Writes Nothing Changes on Disk](#what-a-statement-that-writes-nothing-changes-on-disk)).
+18. A statement completes an interrupted checkpoint, and this is expected
+    behaviour rather than a defect. With a stale `snapshot.tmp` staging directory
+    present, an invocation removes it. With `snapshot/` absent while
+    `snapshot.bak/` carries a manifest, an invocation promotes the backup to
+    `snapshot/`. In both cases the statement still returns the correct result and
+    exits 0.
+19. Two concurrent invocations against the same roadmap serialise on the exclusive
+    lock, and neither fails on the first collision: the second **waits** and then
+    succeeds once the first releases the lock. This holds whether or not either
+    statement writes, which is what fixes the single lock mode; an implementation
+    that let two non-writing statements overlap fails this criterion.
+20. An invocation that cannot take the lock within the bounded wait fails rather
+    than hanging: `rmp graph execute` exits 1 with a plain-text diagnostic on
+    stderr, and the web graph data endpoint answers HTTP 500. Neither blocks
+    indefinitely (see [Lock Contention](#lock-contention)).
+21. `rmp graph execute -r <roadmap> --query "MATCH (a:Spec), (b:Code) RETURN a.key, b.path"`
     runs a disconnected multi-pattern `MATCH` and surfaces a Cartesian-product
     notification on stderr (a plain-text line carrying at least the severity, the
     stable code, and the description). The stdout JSON is exactly the normal
     `columns`/`rows` result, unchanged by the notification, and the exit code is 0
     (see [Query Notifications as Diagnostics](#query-notifications-as-diagnostics)).
-21. `rmp graph query -r <roadmap> --query "MATCH (s:Spec) RETURN s.key"`, a query
-    that produces no notifications, writes nothing extra to stderr: stderr is empty
-    on success, while stdout carries the normal result and the exit code is 0.
-22. Notification surfacing is wired on both the read path and the write path,
-    and each path surfaces exactly the notifications the engine returns for the
-    query it executed:
-    - Read path: a read subcommand (`query` or `search`) running a query for
-      which the engine returns a notification emits the corresponding diagnostic
-      line on stderr; its stdout success output and exit code 0 remain unchanged.
-    - Write path: a write subcommand (`create`, `update`, or `delete`) surfaces
-      exactly the notifications the engine returns for the committed query, which
-      may be none. When the engine returns no notification for the write path,
-      the subcommand emits no notification line; in all cases its stdout JSON
-      success output and exit code 0 remain unchanged.
-    This holds with the pinned engine, where the write path returns no
-    notification, and remains correct without further change if a future engine
-    attaches notifications to the write path.
-23. `rmp graph query -r <roadmap> --query "SHOW INDEXES"` is accepted as a
-    schema-introspection command and exits 0, returning the engine's schema
-    listing in the normal `columns`/`rows` shape. The same holds for
-    `SHOW CONSTRAINTS`, for the singular `SHOW INDEX` / `SHOW CONSTRAINT`
-    aliases, for any of them under `graph search`, and for a form carrying a
-    `YIELD` / `WHERE` / `RETURN` projection tail such as
-    `SHOW INDEXES YIELD name RETURN name`.
-24. `rmp graph create` and `rmp graph delete` each reject `SHOW INDEXES` with
-    exit code 6 and that subcommand's own guard-rail message, because a
-    schema-introspection command carries none of the data-writing clauses those
-    two subcommands accept. `rmp graph update` **accepts** it and returns the
-    schema listing (criterion 62). The criterion MUST assert the two rejections
-    and the one acceptance together, so that widening the class on `create` or
-    `delete`, or narrowing it on `update`, fails it.
-25. A `SHOW` keyword that appears only inside a string literal, a comment, or a
-    backtick-quoted identifier does not make a query a schema-introspection
-    command, and an identifier, label, or property named `show` elsewhere in a
-    query does not either: for example
-    `rmp graph query --query 'MATCH (n) WHERE n.title = "SHOW INDEXES" RETURN n.key'`
-    is accepted as an ordinary read, and
-    `rmp graph create --query 'CREATE (n:Panel {show:"indexes"})'` is accepted as
-    an ordinary creating write.
-26. `rmp graph query --query "MATCH (n:Spec) FOREACH (x IN [1] | SET n.seen = true)"`
-    is rejected with exit code 6, and so is the same query under `graph search`,
-    because `FOREACH` is classified by the writing clauses its body contains. The
-    same query is accepted by `graph update` and rejected by `graph create` and
-    `graph delete`; a `FOREACH` whose body creates is accepted by `graph create`
-    and rejected by `graph update` and `graph delete`; and a nested `FOREACH` is
-    classified by the innermost body's writing clauses in the same way.
-27. The four schema-mutating DDL forms remain rejected by `graph create`,
-    `graph query`, `graph delete` and `graph search` with exit code 6 regardless
-    of keyword case and of the amount of whitespace between the two keywords:
-    `create index`, `CREATE   INDEX`, `Drop Constraint` and their siblings are
-    each rejected exactly as the canonical spelling is. `graph update` is outside
-    this criterion, and deliberately so: it accepts the class (criteria 62 and
-    69). This whitespace tolerance belongs to the DDL class alone and MUST NOT be
-    carried over to the schema-introspection class, which is matched exactly
-    (see criterion 39 and
-    [Keyword Spacing in a Schema-Introspection Command](#keyword-spacing-in-a-schema-introspection-command)).
-28. For one relationship `(s:Spec)-[:VERIFIED_BY]->(v:Test)`, an outgoing
-    `SET` writes and reads back from **either** endpoint: both
-    `MATCH (s:Spec {key:'…'})-[e:VERIFIED_BY]->(v) SET e.last_commit = '…'` and
-    `MATCH (other)-[e:VERIFIED_BY]->(v:Test {key:'…'}) SET e.last_commit = '…'`
-    exit 0, and a subsequent read reports the value on that relationship. This
-    is what makes the rejections below cost no reach (see
-    [Relationship Write Direction](#relationship-write-direction)).
-29. The same `SET` written through a reverse pattern is rejected with exit code 6
-    and writes nothing: `MATCH (v:Test {key:'…'})-[e]-(x) SET e.last_commit = '…'`
-    and `MATCH (v:Test {key:'…'})<-[e:VERIFIED_BY]-(s) SET e.last_commit = '…'`
-    each fail, a read-back reports the property absent, and the error message
-    names the relationship variable, the direction that would have been skipped,
-    and the outgoing rewrite. An undirected pattern is rejected even when
-    anchored on the relationship's source, where every matched relationship would
-    in fact have been written.
-30. The rejection does not spread beyond `graph update`'s relationship writes:
-    `MATCH (v:Test {key:'…'})-[e]-(x) SET x.reviewed = true` is accepted (the
-    write targets a node, and the relationship variable is bound but never read),
-    and `MATCH (v:Test {key:'…'})-[e]-(x) DELETE e` is accepted by `graph delete`
-    and removes the relationship. Reading the relationship through that same
-    undirected pattern is refused, but by the separate
-    [Relationship Read Direction](#relationship-read-direction) rule rather than
-    by this one: `MATCH (v:Test {key:'…'})-[e]-(x) RETURN type(e)` fails with exit
-    code 6 under `graph query`, and the type is read instead through an outgoing
-    pattern anchored on the node the relationship arrives at,
-    `MATCH (x)-[e]->(v:Test {key:'…'}) RETURN type(e)` (see criteria 42 and 43).
-31. A read leaves the graph's data untouched on disk. After
-    `rmp graph query -r <roadmap> --query "MATCH (n) RETURN count(n)"` runs
-    against a store whose write-ahead log is **not** empty, the `wal` file is
-    byte for byte identical to what it was before the read, and every file under
-    `snapshot/` is unchanged, proving the read neither checkpointed nor truncated
-    the log (see [What a Read Changes on Disk](#what-a-read-changes-on-disk)).
-32. A read completes an interrupted checkpoint, and this is expected behaviour
-    rather than a defect. With a stale `snapshot.tmp` staging directory present, a
-    read removes it. With `snapshot/` absent while `snapshot.bak/` carries a
-    manifest, a read promotes the backup to `snapshot/`. In both cases the read
-    still returns the correct result and exits 0.
-33. A write and a read against the same roadmap exclude each other while the read
-    is opening the store. While a write holds the exclusive lock, a concurrent
-    read does **not** fail on the first collision: it waits and then succeeds once
-    the writer releases the lock.
-34. A read holds the shared lock across the store open only, and this is
-    observable: a read whose query runs for a long time does **not** fail a
-    concurrent `rmp graph create` issued after that read has opened the store. The
-    write succeeds and exits 0 while the read is still executing its query. This
-    criterion is what prevents the hold from being silently widened back to the
-    whole read.
-35. Nothing in the store is read after the open. With the graph directory removed
-    from disk immediately after a read has opened the store, the read still
-    returns the complete and correct result, including any state that came from
-    the write-ahead-log tail rather than the snapshot. This is the property the
-    narrow lock hold depends on (see
-    [Concurrency and Recovery](#concurrency-and-recovery)); if it ever stops
-    holding, the hold MUST be widened.
-36. A read that cannot take the shared lock within the bounded wait fails rather
-    than hanging: a CLI read subcommand exits 1 with a plain-text diagnostic on
-    stderr, and the web graph data endpoint answers HTTP 500. Neither blocks
-    indefinitely (see [Lock Contention](#lock-contention)).
-37. Two concurrent read invocations against the same roadmap both succeed and
-    neither waits on the other, because the lock they take is shared.
-38. The specification and the implementation name the same engine constructor for
+22. `rmp graph execute -r <roadmap> --query "MATCH (s:Spec) RETURN s.key"`, a
+    statement that produces no notifications, writes nothing extra to stderr:
+    stderr is empty on success, while stdout carries the normal result and the exit
+    code is 0.
+23. A statement longer than the maximum is refused, and the read that refuses it
+    is bounded. A producer that offers `rmp graph execute -r <roadmap>` far more
+    than 1 MiB on standard input, with `--query` absent, sees the command exit 6
+    with `Error: validation error: query exceeds maximum length of 1048576 bytes`
+    on stderr while it is still writing: the pipe breaks after the producer has
+    managed to send only a small fraction of what it offered, which is what
+    bounds the command's peak memory. Stdout is empty and the graph is unchanged.
+    The refusal is the length check's own, not the engine's: the exit code is 6
+    and not the 1 an engine parse failure carries, and the message is the one
+    above rather than an engine diagnostic. A legitimate statement of several
+    hundred kilobytes, supplied the same way, still executes normally and exits 0,
+    so the bound refuses only what the maximum forbids. Lowering the maximum below
+    what ordinary work needs, or restoring a read that drains whatever it is
+    offered, MUST fail this criterion (see
+    [Maximum Query Length](#maximum-query-length) and
+    [Bounded Standard-Input Read](#bounded-standard-input-read)).
+24. An invocation that supplies no statement fails at once instead of blocking.
+    `rmp graph execute -r <roadmap>` with `--query` absent fails with exit code 2
+    and `Error: required parameter missing: no query supplied` on stderr in each
+    of the three cases the rule names: standard input at end of stream, standard
+    input carrying only whitespace, and standard input connected to a terminal.
+    The terminal case is the one that regressed into a hang, and it is asserted
+    on wall-clock time: the process exits without waiting for input, rather than
+    sitting there until something kills it. Criterion 7 fixes the exit code for
+    the first case; this criterion fixes the message, all three cases, and the
+    requirement that none of them waits (see
+    [Standard Input That Supplies No Query](#standard-input-that-supplies-no-query)).
+25. `graph execute` refuses a positional argument.
+    `rmp graph execute -r <roadmap> --query "<cypher>" stray`
+    exits 2, writes zero bytes to stdout, and writes to stderr the line
+    `Error: invalid input: unexpected argument "stray" (graph queries use --query or stdin)`.
+    The criterion MUST compare the whole line, the parenthetical included.
+26. The classification of a `-`-prefixed token is asserted in both directions. A
+    stray `-1` and a stray bare `-` each exit 2 and are reported as an
+    **unexpected argument**, while a stray `--foo` exits 2 and is reported as an
+    **unknown flag**. Of several stray tokens only the first is named: an
+    invocation carrying `alpha beta` names `alpha`, and its stderr does not
+    contain `beta`.
+27. The refusal precedes every other check the subcommand performs, and roadmap
+    selection precedes the refusal. Measured against the built binary:
+    `rmp graph execute stray -r <a roadmap that does not exist> --query "<cypher>"`
+    exits 2 and not 4; the same invocation with no `-r` and no roadmap selected
+    exits 3; and `rmp graph execute -r <roadmap> stray` with a producer still
+    writing to standard input exits 2 at once, reads nothing, and leaves the
+    producer to observe a broken pipe. In every case stdout is empty, stderr
+    carries the error line and the AI-agent hint and no help body, and the
+    roadmap's `graph/` directory — its snapshot directory and its write-ahead
+    log — is byte-identical before and after.
+28. The rule is one rule across the two families that publish it. The line
+    `graph execute` emits is the line `COMMANDS.md § Positional Arguments`
+    publishes for the whole CLI with this family's hint appended, and the line the
+    comment subcommands emit is that same line without a hint
+    (`COMMANDS.md § Comment Positional Argument Contract`). A test that asserts one
+    family's wording MUST cite the other's, so that a change to either is made
+    deliberately rather than by copying.
+29. The specification and the implementation name the same engine constructor for
     every path. A regression test enumerates every Cypher engine the
     implementation constructs to serve a `graph` subcommand or a web graph
     request, and fails if any of them is constructed through a constructor other
     than the one [Engine Constructor by Path](#engine-constructor-by-path) gives
     for that path, or if an engine is constructed on a path that table does not
     list. This is what stops the table and the code from drifting apart again.
-39. A schema-introspection command is accepted with exactly one space between its
-    two keywords and rejected by the guard rail with any other spacing.
-    `rmp graph query -r <roadmap> --query "SHOW INDEXES"` exits 0 and returns the
-    schema listing (criterion 23), while the same command with two spaces, with a
-    tab, or with a line break in place of that single space fails with exit code 6
-    and a plain-text message that names the keyword spacing as the cause. The
-    rejected statement is never executed: the message is the guard rail's own, not
-    the engine's `unexpected "SHOW"` parse diagnostic, and the exit code is not the
-    1 that an engine parse failure carries. This holds for all four target keywords
-    (`INDEXES`, `INDEX`, `CONSTRAINTS`, `CONSTRAINT`), in any keyword case, under
-    `graph query`, `graph search` and `graph update` alike. It does **not** hold on
-    the web graph data endpoint, and asserting it there MUST fail: that endpoint
-    refuses the schema-introspection class at every spacing with `kind`
-    `schema_introspection`, publishes no keyword-spacing class, and never names the
-    spacing in its message (`WEB.md` Acceptance Criteria 151 and 157). The
-    divergence is deliberate and is argued in
-    [Keyword Spacing in a Schema-Introspection Command](#keyword-spacing-in-a-schema-introspection-command);
-    relaxing this criterion on the three CLI subcommands to match the endpoint MUST
-    fail it. Widening the introspection classification to
-    tolerate other spacing again MUST fail this criterion too.
-40. A query longer than the maximum is refused, and the read that refuses it is
-    bounded. A producer that offers `rmp graph query -r <roadmap>` far more than
-    1 MiB on standard input, with `--query` absent, sees the command exit 6 with
-    `Error: validation error: query exceeds maximum length of 1048576 bytes` on
-    stderr while it is still writing: the pipe breaks after the producer has
-    managed to send only a small fraction of what it offered, which is what
-    bounds the command's peak memory. Stdout is empty and the graph is unchanged.
-    The refusal is the length check's own, not the engine's: the exit code is 6
-    and not the 1 an engine parse failure carries, and the message is the one
-    above rather than an engine diagnostic. A legitimate query of several hundred
-    kilobytes, supplied the same way, still executes normally and exits 0, so the
-    bound refuses only what the maximum forbids. Lowering the maximum below what
-    ordinary work needs, or restoring a read that drains whatever it is offered,
-    MUST fail this criterion (see
-    [Maximum Query Length](#maximum-query-length) and
-    [Bounded Standard-Input Read](#bounded-standard-input-read)).
-41. An invocation that supplies no query fails at once instead of blocking.
-    `rmp graph query -r <roadmap>` with `--query` absent fails with exit code 2
-    and `Error: required parameter missing: no query supplied` on stderr in each
-    of the three cases the rule names: standard input at end of stream, standard
-    input carrying only whitespace, and standard input connected to a terminal.
-    The terminal case is the one that regressed into a hang, and it is asserted
-    on wall-clock time: the process exits without waiting for input, rather than
-    sitting there until something kills it. Criterion 8 fixes the exit code for
-    the first case; this criterion fixes the message, all three cases, and the
-    requirement that none of them waits (see
-    [Standard Input That Supplies No Query](#standard-input-that-supplies-no-query)).
-42. Reading a relationship through an **outgoing** pattern is correct whatever the
-    data, which is what makes the refusals below cost no reach. For a node pair
-    joined in **both** directions — `(s:Spec)-[:VERIFIED_BY]->(v:Test)` and
-    `(v:Test)-[:COVERS]->(s:Spec)` —
-    `MATCH (s:Spec {key:'…'})-[e]->(x) RETURN type(e)` reports `VERIFIED_BY` and
-    nothing else, `MATCH (x)-[e]->(s:Spec {key:'…'}) RETURN type(e)` reports
-    `COVERS` and nothing else, and the union of the two legs,
-    `MATCH (s:Spec {key:'…'})-[e]->(x) RETURN type(e) AS t, x.key AS k UNION ALL MATCH (x)-[e]->(s:Spec {key:'…'}) RETURN type(e) AS t, x.key AS k`,
-    reports both, each with its own endpoint. Each of the three exits 0 (see
-    [Relationship Read Direction](#relationship-read-direction)).
-43. The same reads written through a reverse pattern are rejected with exit code 6
-    and return nothing: `MATCH (s:Spec {key:'…'})-[e]-(x) RETURN type(e)` and
-    `MATCH (s:Spec {key:'…'})<-[e]-(x) RETURN startNode(e).key, endNode(e).key`
-    each fail under `graph query`, stdout is empty, and the error message names
-    the relationship variable, the pattern direction that bound it, and the
-    outgoing rewrite. The refusal is the guard's own, not the engine's: the exit
-    code is 6 and not the 1 an engine failure carries, and the graph store is
-    never opened. An undirected pattern is rejected even against a graph whose
-    node pairs are all joined in one direction only, where the read would in fact
-    have been correct.
-44. The rule reaches **every** expression use of the bound variable, not only
-    `type(e)`. Under `graph query` and under `graph search` alike, each of
-    `RETURN e`, `RETURN *`, `RETURN properties(e)`, `RETURN e.key`,
-    `WHERE type(e) = 'COVERS'`, and `ORDER BY type(e)` is rejected with exit code
-    6 when `e` is bound by an incoming or undirected pattern, and accepted when
-    the same query binds `e` by an outgoing pattern. The `WHERE` case is the one
-    that loses a row rather than corrupting a visible value, so it MUST be refused
-    rather than executed: against the two-way pair of criterion 42,
-    `MATCH (s:Spec {key:'…'})-[e]-(x) WHERE type(e) = 'COVERS' RETURN e` matches
-    no row at all, although the `COVERS` relationship exists and an outgoing read
-    reports it.
-45. `graph update` refuses the same use on the right-hand side of a `SET`, and
-    nothing is written: `MATCH (s:Spec {key:'…'})<-[e]-(v) SET v.last_type = type(e)`
-    fails with exit code 6, and a subsequent read reports `v.last_type` absent.
-    Executed instead of refused, that query exits 0 and persists the **forward**
-    relationship's type on the node, so the refusal is what keeps a wrong value
-    off disk.
-46. The read rejection does not spread further.
-    `MATCH (s:Spec {key:'…'})-[:COVERS]-(x) RETURN x.key` is accepted, because the
-    pattern binds no relationship variable and no relationship value is built;
-    `MATCH (s:Spec {key:'…'})-[e]-(x) DELETE e` is accepted by `graph delete` and
-    removes the relationship; `MATCH (s:Spec {key:'…'})-[e]-(x) SET x.reviewed = true`
-    remains accepted by `graph update`, because the relationship variable is bound
-    but never read; `MATCH p=(s:Spec {key:'…'})-[e]-(x) RETURN p` and
-    `MATCH (s:Spec {key:'…'})-[e*1..1]-(x) RETURN e` are accepted and each reports
-    the two legs with their own types and stored orientations; and
-    `MATCH (s:Spec {key:'…'})-[e]-(x) WITH * RETURN x.key` is accepted, because
-    carrying the binding forward is not a use of it.
-47. A `graph delete` whose predicate reads the relationship is refused, and the
-    refusal is what leaves the relationships intact. Against the two-way pair of
-    criterion 42,
-    `MATCH (s:Spec {key:'…'})-[e]-(x) WHERE type(e) = 'COVERS' DELETE e` fails
-    with exit code 6 under `graph delete`, and the same statement written with an
-    incoming pattern fails likewise. The exit code alone does **not** establish
-    this criterion and MUST NOT be the only assertion: a read-back through
-    outgoing patterns MUST report **both** relationships of the pair still
-    present, because an implementation that accepted the statement would leave
-    the same two in place, and an exit-code-only check could not tell the two
-    apart. Executed rather than refused, that statement exits 0 reporting
-    `{"ok": true}` and removes nothing at all: the engine resolves the reverse
-    leg from the forward pair, evaluates the predicate against the wrong type,
-    and discards the row. This criterion fixes the exemption of note 3 as an
-    exemption of the `DELETE` **clause**; criterion 46 fixes its other half, that
-    a bare `DELETE e` through the same pattern stays accepted and removes the
-    right relationship.
-48. `graph create` is bound by the rule as well, so the rule's coverage does not
-    depend on which subcommand carries the expression.
-    `MATCH (s:Spec {key:'…'})-[e]-(x) CREATE (n:Probe {t: type(e)})` is rejected
-    with exit code 6 under `graph create`, the same statement written with an
-    incoming pattern is rejected likewise, and the `MERGE` spelling of either is
-    rejected as well. Nothing is created in any of these cases: a read-back
-    reports no `Probe` node. The refusal is the guard's own and not the engine's,
-    which the exit code distinguishes — 6, not the 1 an engine failure carries —
-    and the graph store is never opened.
-
-49. A query whose raw bytes are not valid UTF-8 is refused by every graph
-    subcommand, and the write subcommands store nothing.
-    `rmp graph create -r <roadmap> --query "CREATE (m:Memory {key:'sprint-38-sco<0x80>pe'})"`
-    fails with exit code 6, stdout is empty, and a read-back reports no such node.
-    `rmp graph update` fails likewise on
-    `MATCH (m:Memory {key:'…'}) SET m.body = 'commit cf27c57<0x80>'`, and a
-    read-back reports `m.body` unchanged. Executed rather than refused, each of
-    those exits 0 reporting success while the store holds `U+FFFD` in place of the
-    byte supplied, so the refusal is what keeps the stored value equal to the
-    supplied one (see
-    [Cypher Query and Property Value Content Rules](#cypher-query-and-property-value-content-rules)).
-50. `graph create` and `graph update` refuse a written property value that carries
-    a forbidden control character, even when the query text is pure ASCII.
-    `rmp graph update -r <roadmap> --query "MATCH (m:Memory {key:'…'}) SET m.body = 'red\u001b[31m'"`
-    fails with exit code 6, and a read-back reports `m.body` unchanged. The
-    criterion MUST assert, before running the query, that the query text itself
-    carries no control character: that is what establishes that a check on the
-    query string could not have caught this case, because the character reaches
-    the value only through the escape sequence Cypher decodes. The refusal names
-    the property `body` and the code point `U+001B`.
-51. The encoding rule binds the read subcommands, and refusing costs no reach.
-    Against a stored node whose `key` is `sprint-38-scope`,
-    `rmp graph query -r <roadmap> --query "MATCH (m:Memory {key:'sprint-38-sco<0x80>pe'}) RETURN m.body"`
-    fails with exit code 6 and prints nothing on stdout, and `rmp graph search`
-    fails likewise. A query carrying the same byte in a label, in a property key,
-    or in a Cypher comment is refused as well, which is the intended widening. The
-    same queries with the byte removed match the node and exit 0. Executed rather
-    than refused, each of them exits 0 having found nothing, because the engine
-    matched on a literal that was never supplied.
-52. `graph delete` is bound by the encoding rule, and the exit code alone does
-    **not** establish this criterion and MUST NOT be the only assertion. With a
-    node whose `key` is `delete-target` and whose `body` holds a known value,
-    `rmp graph delete -r <roadmap> --query "MATCH (m:Memory {key:'delete-tar<0x80>get'}) DELETE m"`
-    fails with exit code 6, and a read-back MUST report that node still present
-    with its `body` unchanged; the same holds for the `WHERE`-predicate spelling
-    and for the `DETACH DELETE` spelling. Executed rather than refused, that
-    statement exits 0 reporting `{"ok": true}` having removed nothing at all,
-    which is the failure the caller has no reason to check. The criterion MUST
-    also delete the same node through a well-formed query and read back its
-    absence, without which it would pass equally well if `graph delete` had
-    stopped deleting altogether. The refusal names the consequence for a delete:
-    that the statement would have reported success having deleted nothing.
-53. The encoding rule is applied first. A value that is at once not valid UTF-8
-    and carrying a forbidden control character is refused as an **encoding**
-    failure — the message names the byte and its offset and carries the wording
-    `the value is not valid UTF-8` — and never as a control-character failure.
-    This ordering is load-bearing rather than cosmetic: an invalid byte decodes to
-    `U+FFFD`, which is not a forbidden control character, so the
-    control-character rule alone would report the value acceptable.
-54. The control-character rule does **not** extend to the subcommands that write
-    no property value. `rmp graph query`, `rmp graph search`, and
-    `rmp graph delete -r <roadmap> --query "MATCH (m:Memory {key:'legacy\u001b entry'}) DELETE m"`
-    each name a forbidden control character in a match literal, and each is
-    **accepted** and exits 0. In the same sequence, `graph update` still refuses
-    that character on the right-hand side of a `SET`, so the asymmetry is a
-    boundary of the rule and not an absence of it. Refusing the reads and the
-    delete would leave a value the store legitimately holds unreadable, and beyond
-    the reach of a delete, which is the loss of reach the rule never intended.
-55. The stated limit is measured rather than assumed. A property value that the
-    statement computes at execution time is written without inspection:
-    `rmp graph update -r <roadmap> --query "MATCH (m:Memory {key:'…'}) SET m.body = toUpper(m.key)"`
-    is accepted and exits 0, because the value does not exist until the engine
-    runs the statement and Groadmap never holds it. Concatenated string literals
-    are covered rather than exempt: `SET m.body = 'red' + '\u001b[31m'` is refused
-    with exit code 6, and so is a list of string literals one of whose elements
-    carries the character.
-56. No refusal echoes the offending bytes, and each names what it can. A
-    control-character refusal names the property key and the code point in the
-    `U+001B` form, and stderr carries neither the character itself nor the value.
-    An encoding refusal names the byte and its offset; it names the property key
-    where the byte falls inside a value the query writes, and where no property
-    can be named — which is always the case for `graph query`, `graph search`, and
-    `graph delete`, and also for a query the parser rejects — the message says so
-    in terms true for that subcommand instead of withholding the naming in
-    silence. Every one of these refusals is the guard's own and not the engine's,
-    which the exit code distinguishes: 6, and not the 1 an engine failure carries.
-57. All five subcommands refuse a positional argument, with one wording. For each
-    of `create`, `query`, `update`, `delete`, and `search`,
-    `rmp graph <subcommand> -r <roadmap> --query "<a query of that subcommand's class>" stray`
-    exits 2, writes zero bytes to stdout, and writes to stderr the line
-    `Error: invalid input: unexpected argument "stray" (graph queries use --query or stdin)`.
-    The criterion MUST compare the whole line, the parenthetical included, and
-    MUST compare the five lines against each other: a wording that drifts on one
-    subcommand is the failure this criterion exists to catch.
-58. The classification of a `-`-prefixed token is asserted in both directions. On
-    each of the five subcommands, a stray `-1` and a stray bare `-` each exit 2
-    and are reported as an **unexpected argument**, while a stray `--foo` exits 2
-    and is reported as an **unknown flag**. Of several stray tokens only the first
-    is named: an invocation carrying `alpha beta` names `alpha`, and its stderr
-    does not contain `beta`.
-59. The refusal precedes every other check the subcommand performs, and roadmap
-    selection precedes the refusal. Measured against the built binary:
-    `rmp graph query stray -r <a roadmap that does not exist> --query "<cypher>"`
-    exits 2 and not 4; the same invocation with no `-r` and no roadmap selected
-    exits 3; a stray token supplied with a query of the wrong operation class
-    exits 2 and not 6; and `rmp graph query -r <roadmap> stray` with a producer
-    still writing to standard input exits 2 at once, reads nothing, and leaves the
-    producer to observe a broken pipe. In every case stdout is empty, stderr
-    carries the error line and the AI-agent hint and no help body, and the
-    roadmap's `graph/` directory — its snapshot directory and its write-ahead
-    log — is byte-identical before and after.
-60. The rule is one rule across the two families that publish it. The line the
-    `graph` subcommands emit is the line
-    `COMMANDS.md § Positional Arguments` publishes for the whole CLI with this
-    family's hint appended, and the line the comment subcommands emit is that same
-    line without a hint (`COMMANDS.md § Comment Positional Argument Contract`). A
-    test that asserts one family's wording MUST cite the other's, so that a change
-    to either is made deliberately rather than by copying.
-
-61. The key-uniqueness convention is stated and its violation is detectable. On a
+30. **A write submitted to the web graph data endpoint persists, and the response
+    status alone does not establish this criterion.** A `GET` of
+    `/roadmaps/<roadmap>/graph/data` whose `q` parameter carries
+    `CREATE (n:WebProbe {key:'p'})` is answered HTTP `200`, and a subsequent
+    `rmp graph execute` in a separate process reports the `WebProbe` node present.
+    The read-back is what the criterion turns on: an endpoint constructed without a
+    transactional store answers the identical request with the identical `200` and
+    stores nothing, so the status is exactly what the defect returns (see
+    [Engine Constructor by Path](#engine-constructor-by-path) and
+    `WEB.md § Graph Data Endpoint`).
+31. The key-uniqueness convention is stated and its violation is detectable. On a
     graph seeded with two nodes whose `key` values are equal under NFC and
     different in bytes — a precomposed `U+00C9` against the decomposed
     `U+0045 U+0301`, for example — each node's stored `key` is byte-for-byte the
@@ -2927,28 +1853,27 @@ Groadmap's usage model and expectations:
     never both, and the byte-wise duplicate audit reports the two as separate
     single-count rows. The two-step audit of
     [Auditing the convention](#auditing-the-convention) reports the pair: step 1
-    runs under `rmp graph query` and exits 0, and step 2 groups its rows by NFC
+    runs under `rmp graph execute` and exits 0, and step 2 groups its rows by NFC
     form and names the group holding both nodes. The same audit reports nothing on
     a graph whose keys are all distinct under NFC.
-
-62. `graph update` runs the schema statements, and each returns the shape the
+32. `graph execute` runs the schema statements, and each returns the shape the
     specification gives it.
-    `rmp graph update -r <roadmap> --query "CREATE INDEX spec_key FOR (n:Spec) ON (n.key)"`
+    `rmp graph execute -r <roadmap> --query "CREATE INDEX spec_key FOR (n:Spec) ON (n.key)"`
     prints `{"ok": true}` and exits 0.
-    `rmp graph update -r <roadmap> --query "SHOW INDEXES"` exits 0 and returns the
+    `rmp graph execute -r <roadmap> --query "SHOW INDEXES"` exits 0 and returns the
     listing in the `{columns, rows}` shape — not `{"ok": true}`, although the
     statement carries no `RETURN` clause — with a row whose name is `spec_key`.
-    `rmp graph update -r <roadmap> --query "DROP INDEX spec_key"` prints
+    `rmp graph execute -r <roadmap> --query "DROP INDEX spec_key"` prints
     `{"ok": true}`, exits 0, and a subsequent `SHOW INDEXES` no longer reports the
     row. The same three hold for
     `CREATE CONSTRAINT spec_key_uq FOR (n:Spec) REQUIRE n.key IS UNIQUE`,
     `SHOW CONSTRAINTS`, and `DROP CONSTRAINT spec_key_uq` (see
     [Schema Management](#schema-management)).
-63. A schema change survives the checkpoint and a reopen, and this is the
-    criterion the destroyed-schema defect fails. Because every successful write
-    checkpoints, the `CREATE INDEX` of criterion 62 truncates the write-ahead log
+33. A schema change survives the checkpoint and a reopen, and this is the
+    criterion the destroyed-schema defect fails. Because a statement that writes
+    checkpoints, the `CREATE INDEX` of criterion 32 truncates the write-ahead log
     and rewrites the snapshot before the process exits. In a **separate**
-    invocation afterwards, `rmp graph update -r <roadmap> --query "SHOW INDEXES"`
+    invocation afterwards, `rmp graph execute -r <roadmap> --query "SHOW INDEXES"`
     still reports `spec_key`. Asserting this inside the creating invocation does
     **not** establish the criterion and MUST NOT be the only assertion: an
     implementation whose snapshot carries no schema at all passes that check and
@@ -2956,43 +1881,26 @@ Groadmap's usage model and expectations:
     additionally assert **enforcement** after the reopen, because a constraint
     that is merely listed is not a constraint that is applied: with
     `spec_key_uq` declared over `Spec.key` and a node already carrying
-    `'user-authentication'`, a later `rmp graph create` of a second node with that
-    same key fails, and a read-back reports one such node and not two. Executed
-    against an implementation whose checkpoint dropped the constraint, that second
-    create exits 0 reporting `{"ok": true}` and the duplicate is stored, which is
-    the silent integrity loss this criterion exists to catch (see
+    `'user-authentication'`, a later `rmp graph execute` creating a second node
+    with that same key fails, and a read-back reports one such node and not two.
+    Executed against an implementation whose checkpoint dropped the constraint,
+    that second create exits 0 reporting `{"ok": true}` and the duplicate is
+    stored, which is the silent integrity loss this criterion exists to catch (see
     [Synchronous Checkpoint on Write](#synchronous-checkpoint-on-write)).
-64. Every surface that reports the schema reports the schema the store holds, and
-    the one surface that cannot report it refuses rather than answers.
-    **The three CLI surfaces agree on the rows.** Against the store of criterion
-    62, each of
-    `rmp graph query -r <roadmap> --query "SHOW INDEXES"`,
-    `rmp graph search -r <roadmap> --query "SHOW INDEXES"`, and
-    `rmp graph update -r <roadmap> --query "SHOW INDEXES"` reports the row named
-    `spec_key` and succeeds.
-    The exit code alone does **not** establish this criterion and MUST NOT be the
-    only assertion: a read path constructed without the recovered schema answers
-    the identical query with **zero rows** and exits 0, so success is exactly what
-    the defect returns. The rows MUST be compared, and the three surfaces MUST be
-    compared against one another on the same store, so that a listing which is
-    wrong in the same way everywhere cannot pass. The same holds for
-    `SHOW CONSTRAINTS`, and the name reported MUST be the one the caller declared
-    rather than a name synthesised by the engine.
-    **The web graph data endpoint is asserted differently, because it reports no
-    schema.** `GET /roadmaps/<roadmap>/graph/data?q=SHOW INDEXES` against that same
-    store is answered HTTP `400 Bad Request` with the failure class
-    `schema_introspection` and a body that names `rmp graph query`. It MUST NOT be
-    asserted to report the `spec_key` row, because its response shape carries nodes
-    and edges and no rows; and it MUST NOT be asserted to return HTTP 200 with
-    `{"nodes": [], "edges": []}`, which is the defect this refusal replaces — an
-    empty graph reporting success against a store that does hold the index. The
-    same holds for `SHOW CONSTRAINTS` and for the singular aliases (see
-    [Recovered Schema on Both Paths](#recovered-schema-on-both-paths),
-    [Engine Constructor by Path](#engine-constructor-by-path), and
-    `WEB.md § Query-Bar Error Handling`, case 10; `WEB.md` Acceptance Criterion 157
-    is canonical for the endpoint's half of this criterion and states the control
-    and the precedence assertions it requires).
-65. A declared name is used verbatim and an omitted one is derived, and the drop
+34. Every surface reports the schema the store holds, and the surface that cannot
+    report it says nothing false about it. Against the store of criterion 32,
+    `rmp graph execute -r <roadmap> --query "SHOW INDEXES"` reports the row named
+    `spec_key` and succeeds. The exit code alone does **not** establish this
+    criterion and MUST NOT be the only assertion: an engine constructed without
+    the recovered schema answers the identical statement with **zero rows** and
+    exits 0, so success is exactly what the defect returns. The rows MUST be
+    compared, and the name reported MUST be the one the caller declared rather
+    than a name synthesised by the engine. The same statement submitted to the web
+    graph data endpoint is answered HTTP `200` with `{"nodes": [], "edges": []}`,
+    because the endpoint's response carries nodes and edges and a schema listing is
+    neither; it MUST NOT be asserted to report the `spec_key` row (see
+    [Recovered Schema on Every Surface](#recovered-schema-on-every-surface)).
+35. A declared name is used verbatim and an omitted one is derived, and the drop
     accepts only the name the object actually carries.
     `CREATE INDEX spec_key FOR (n:Spec) ON (n.key)` is reported by `SHOW INDEXES`
     as exactly `spec_key`, with nothing appended.
@@ -3002,62 +1910,55 @@ Groadmap's usage model and expectations:
     place, which is what fixes the derived name as the only one a drop accepts. An
     unnamed constraint is likewise reported under a derived name and dropped by it
     (see [Schema Object Names](#schema-object-names)).
-66. Altering an index is two invocations, and the state between them is the
-    specified one rather than a defect. `rmp graph update --query "DROP INDEX
-    spec_ord"` followed by
-    `rmp graph update --query "CREATE INDEX spec_ord FOR (n:Spec) ON (n.ord) OPTIONS {indexType: 'btree'}"`
+36. Altering an index is two invocations, and the state between them is the
+    specified one rather than a defect.
+    `rmp graph execute --query "DROP INDEX spec_ord"` followed by
+    `rmp graph execute --query "CREATE INDEX spec_ord FOR (n:Spec) ON (n.ord) OPTIONS {indexType: 'btree'}"`
     each exit 0, and `SHOW INDEXES` afterwards reports `spec_ord` with the changed
     kind. Between the two invocations `SHOW INDEXES` reports the index **absent**,
-    and a query over `Spec.ord` still returns the correct rows, which is what
+    and a statement over `Spec.ord` still returns the correct rows, which is what
     establishes that the intermediate state costs speed and not answers. When the
     second invocation fails — a definition the engine refuses, for example — the
     index stays absent, `SHOW INDEXES` reports it absent, and no `rmp` command
     reports the situation or repairs it (see
     [Altering and Recreating an Index](#altering-and-recreating-an-index)).
-67. A DDL statement carrying a further clause is refused before execution, and
-    refusing it is what keeps the success report honest.
-    `rmp graph update -r <roadmap> --query "CREATE INDEX spec_key FOR (n:Spec) ON (n.key) MATCH (m:Spec) SET m.reviewed = true"`
-    fails with exit code 6, stdout is empty, a subsequent `SHOW INDEXES` reports
-    no `spec_key`, and a read-back reports `m.reviewed` absent. The exit code
-    alone does **not** establish this criterion and MUST NOT be the only
-    assertion: executed rather than refused, that statement exits 0 reporting
-    `{"ok": true}`, creates the index, and discards the `MATCH ... SET` without an
-    error, a notification, or any other trace. The criterion MUST also assert the
-    opposite direction, because a check that refused both would be worse than the
-    defect: `rmp graph update --query "CREATE INDEX spec_set FOR (n:Spec) ON (n.set)"`,
-    a valid index on a property named after a clause keyword, is **accepted** and
-    exits 0, and `SHOW INDEXES` reports `spec_set`. That pair is what fixes the
-    check as one decided on the statement's structure rather than by searching its
-    text for keywords (see
-    [One Statement per Invocation](#one-statement-per-invocation)).
-68. The schema failure classes carry the exit codes this specification gives them,
-    and the two that look like input errors carry the one a reader does not
-    expect. Against the store of criterion 62: a second
+37. The schema failure classes carry the exit codes this specification gives them,
+    and every one of them is 1. Against the store of criterion 32: a second
     `CREATE INDEX spec_key FOR (n:Spec) ON (n.key)` fails with exit code **1** and
     not 6; the same statement written `CREATE INDEX IF NOT EXISTS spec_key ...`
     exits 0 and prints `{"ok": true}`; `DROP INDEX no_such_index` fails with exit
     code **1** and not 6, while `DROP INDEX no_such_index IF EXISTS` exits 0; a
     composite index and an index over a relationship property each fail with exit
-    code 1; and `CREATE CONSTRAINT ... REQUIRE n.key IS UNIQUE` over a property
-    that already holds a repeated value fails with exit code 1, registers nothing,
-    and is absent from a subsequent `SHOW CONSTRAINTS`. Each of these carries the
-    engine's own diagnostic after the wording Groadmap fixes, and the exit code is
-    what distinguishes them from a guard-rail refusal, which is 6 (see
+    code 1; `CREATE CONSTRAINT ... REQUIRE n.key IS UNIQUE` over a property that
+    already holds a repeated value fails with exit code 1, registers nothing, and
+    is absent from a subsequent `SHOW CONSTRAINTS`; and
+    `CREATE   INDEX spec_key FOR (n:Spec) ON (n.key)`, whose keyword spacing the
+    engine does not route to its schema parser, fails with exit code **1**
+    carrying a parse diagnostic, creates no index, and leaves the graph's node and
+    relationship counts as they were (see
     [Schema Failure Classes](#schema-failure-classes)).
-69. A DDL statement whose keyword spacing the engine does not accept is admitted
-    by the guard rail under `graph update` and refused by the engine, and it
-    changes nothing.
-    `rmp graph update -r <roadmap> --query "CREATE   INDEX spec_key FOR (n:Spec) ON (n.key)"`
-    fails with exit code **1**, not 6, carrying an engine parse diagnostic rather
-    than a guard-rail message; stdout is empty; a subsequent `SHOW INDEXES`
-    reports no such index; and the graph's node and relationship counts are what
-    they were before. The same holds with a tab, a line break, or a comment in
-    place of that single space, and for the `DROP INDEX`, `CREATE CONSTRAINT` and
-    `DROP CONSTRAINT` spellings. This criterion fixes the cost of the DDL
-    matcher's deliberate whitespace tolerance as a misleading diagnostic and
-    nothing more; narrowing that matcher to a single space to improve the
-    diagnostic MUST fail criterion 27 instead (see
-    [Keyword Spacing in a Schema-Introspection Command](#keyword-spacing-in-a-schema-introspection-command)).
+38. **The hazards this specification declines to check are asserted as the
+    specified behaviour, so that a check cannot be reintroduced without a
+    deliberate change to this file.** Each of the following exits 0, and the
+    criterion MUST assert the observable outcome and not only the exit code:
+    - a statement whose raw bytes are not valid UTF-8 executes, and a node created
+      by it is stored carrying `U+FFFD` in place of the byte supplied;
+    - a `SET` whose right-hand side is a pure-ASCII string literal carrying the
+      four-hex-digit Cypher escape for `U+001B` stores a value whose first code
+      point after the literal's leading text is a real `U+001B`, read back through
+      a subsequent statement;
+    - `MATCH (v:Test {key:'…'})<-[e]-(s) SET e.last_commit = 'x'` reports success
+      while a read-back through an outgoing pattern reports `last_commit` absent;
+    - against a node pair joined in both directions,
+      `MATCH (s:Spec {key:'…'})-[e]-(x) RETURN type(e)` reports the forward
+      relationship's type twice and the reverse relationship's type not at all,
+      while the `UNION ALL` of the two outgoing legs reports both;
+    - `CREATE INDEX spec_key FOR (n:Spec) ON (n.key) MATCH (m) SET m.reviewed = true`
+      creates the index, prints `{"ok": true}`, and leaves `m.reviewed` absent.
+    An implementation that refused any of the five fails this criterion. It is
+    stated in this direction — asserting the outcome rather than the absence of a
+    check — because an absence cannot be tested and an outcome can (see
+    [What Groadmap Does Not Check](#what-groadmap-does-not-check)).
 
 ## See Also
 
@@ -3067,6 +1968,6 @@ Groadmap's usage model and expectations:
 - The sibling standard-input rule for the comment body, whose cap counts characters rather than bytes → `COMMANDS.md § Comment Body Input Source and Precedence`
 - GoGraph integration, directory layout, error handling → `ARCHITECTURE.md`
 - The required Go version, and the minor-version floor the GoGraph dependency contributes to it → `BUILD.md § Go Toolchain`
-- Writer serialisation, reader locking, recovery, lock contention, and the synchronous checkpoint trade-off → `IMPLEMENTATION.md § Graph Store Concurrency`
-- Graph reads through the web interface, and the HTTP consequences of the read lock → `WEB.md § Knowledge Graph from the GoGraph Store`
+- Store serialisation, recovery, lock contention, and the synchronous checkpoint trade-off → `IMPLEMENTATION.md § Graph Store Concurrency`
+- Graph statements executed through the web interface, and the HTTP consequences of the store lock → `WEB.md § Knowledge Graph from the GoGraph Store`
 - Help skeleton and AI-help entry for `graph` → `HELP.md`

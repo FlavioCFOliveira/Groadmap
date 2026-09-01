@@ -414,7 +414,7 @@ func IntrospectSpacingRejection(query string) (reason string, misspaced bool) {
 // FOLDING, whose orbit for 'I'/'i' does not contain U+0131. So `(?i)INDEX` does
 // NOT match "ıNDEX", and the guard rail classified such a statement as an
 // ordinary read while the engine executed it as schema DDL — a fail-OPEN
-// divergence reachable from `rmp graph query`/`search` and, worse, from an
+// divergence reachable from a CLI graph read and, worse, from an
 // unauthenticated GET on the read-only web graph data endpoint.
 //
 // Matching the uppercased copy as well makes the guard rail see every keyword

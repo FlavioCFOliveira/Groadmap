@@ -159,24 +159,30 @@ class TestGraphRealisticUsage:
 
     # ---- low-level call wrappers (each counts exactly one invocation) ----
 
-    def _write(self, subcmd: str, query: str):
+    # `_write` and `_read` name what the CALLER is doing, not which command
+    # is run: `rmp graph` has one subcommand and it runs both
+    # (SPEC/COMMANDS.md § Graph Management). The distinction is kept because
+    # the two assert different things -- a write must emit {"ok": true}, a
+    # read returns the columns/rows envelope the callers below index into.
+
+    def _write(self, query: str):
         self.calls += 1
-        result = self.test.run_cmd_json(["graph", subcmd, "-r", self.roadmap, "--query", query])
+        result = self.test.run_cmd_json(["graph", "execute", "-r", self.roadmap, "--query", query])
         assert result == {"ok": True}, (
-            f"write without RETURN must emit {{'ok': true}}; {subcmd} {query!r} -> {result!r}")
+            f"write without RETURN must emit {{'ok': true}}; {query!r} -> {result!r}")
 
-    def _read(self, query: str, subcmd: str = "query"):
+    def _read(self, query: str):
         self.calls += 1
-        return self.test.run_cmd_json(["graph", subcmd, "-r", self.roadmap, "--query", query])
+        return self.test.run_cmd_json(["graph", "execute", "-r", self.roadmap, "--query", query])
 
-    def scalar(self, query: str, col: str, subcmd: str = "query"):
-        result = self._read(query, subcmd=subcmd)
+    def scalar(self, query: str, col: str):
+        result = self._read(query)
         idx = result["columns"].index(col)
         assert len(result["rows"]) == 1, f"expected exactly one row for {query!r}: {result!r}"
         return result["rows"][0][idx]
 
-    def col_set(self, query: str, col: str, subcmd: str = "query"):
-        result = self._read(query, subcmd=subcmd)
+    def col_set(self, query: str, col: str):
+        result = self._read(query)
         idx = result["columns"].index(col)
         return {row[idx] for row in result["rows"]}
 
@@ -191,17 +197,17 @@ class TestGraphRealisticUsage:
 
     def create_node(self, label: str, key: str, **props):
         body = ", ".join(f"{k}: {cypher_lit(v)}" for k, v in {"key": key, **props}.items())
-        self._write("create", f"CREATE (n:{label} {{{body}}})")
+        self._write(f"CREATE (n:{label} {{{body}}})")
         self.model.add_node(label, key)
 
     def merge_node(self, label: str, key: str):
-        self._write("create", f"MERGE (n:{label} {{key: {cypher_lit(key)}}})")
+        self._write(f"MERGE (n:{label} {{key: {cypher_lit(key)}}})")
         self.model.add_node(label, key)
 
     def set_props(self, key: str, **props):
         label = self.model.label_of(key)
         body = ", ".join(f"n.{k} = {cypher_lit(v)}" for k, v in props.items())
-        self._write("update", f"MATCH (n:{label} {{key: {cypher_lit(key)}}}) SET {body}")
+        self._write(f"MATCH (n:{label} {{key: {cypher_lit(key)}}}) SET {body}")
 
     def create_edge(self, src: str, dst: str, etype: str, **props):
         slabel, dlabel = self.model.label_of(src), self.model.label_of(dst)
@@ -211,7 +217,6 @@ class TestGraphRealisticUsage:
         else:
             rel = f"[:{etype}]"
         self._write(
-            "create",
             f"MATCH (a:{slabel} {{key: {cypher_lit(src)}}}), (b:{dlabel} {{key: {cypher_lit(dst)}}}) "
             f"CREATE (a)-{rel}->(b)")
         self.model.add_edge(src, dst, etype)
@@ -219,14 +224,13 @@ class TestGraphRealisticUsage:
     def delete_edge(self, src: str, dst: str, etype: str):
         slabel, dlabel = self.model.label_of(src), self.model.label_of(dst)
         self._write(
-            "delete",
             f"MATCH (a:{slabel} {{key: {cypher_lit(src)}}})-[r:{etype}]->(b:{dlabel} {{key: {cypher_lit(dst)}}}) "
             f"DELETE r")
         self.model.remove_edge(src, dst, etype)
 
     def detach_delete_node(self, key: str):
         label = self.model.label_of(key)
-        self._write("delete", f"MATCH (n:{label} {{key: {cypher_lit(key)}}}) DETACH DELETE n")
+        self._write(f"MATCH (n:{label} {{key: {cypher_lit(key)}}}) DETACH DELETE n")
         self.model.remove_node(key)
 
     # ---- consistency oracle ----
@@ -460,7 +464,7 @@ class TestGraphRealisticUsage:
             "MATCH (t:Task {key:'task-oauth'}) RETURN t.review_flag AS f", "f") == "needs-design"
         self.calls += 1
         self.test.run_cmd_json(
-            ["graph", "update", "-r", self.roadmap, "--query",
+            ["graph", "execute", "-r", self.roadmap, "--query",
              "MATCH (t:Task {key:'task-oauth'}) REMOVE t.review_flag"])
         assert self.scalar(
             "MATCH (t:Task {key:'task-oauth'}) RETURN t.review_flag AS f", "f") is None
@@ -506,7 +510,7 @@ class TestGraphRealisticUsage:
         # ---------------------------------------------------------------
         reachable = self.col_set(
             "MATCH (c:Component {key:'comp-web'})-[:DEPENDS_ON*1..4]->(x:Component) RETURN x.key AS k",
-            "k", subcmd="search")
+            "k")
         assert reachable == self.model.depends_on_closure("comp-web"), (
             f"transitive DEPENDS_ON closure mismatch: store={sorted(reachable)} "
             f"model={sorted(self.model.depends_on_closure('comp-web'))}")
@@ -550,7 +554,7 @@ class TestGraphRealisticUsage:
         assert row["enabled"] is True, row
         assert row["text"] == "edge-case", row
         # REMOVE makes the property read back as null without dropping the node.
-        self._write("update", "MATCH (n:Sample {key:'types'}) REMOVE n.enabled")
+        self._write("MATCH (n:Sample {key:'types'}) REMOVE n.enabled")
         assert self.scalar("MATCH (n:Sample {key:'types'}) RETURN n.enabled AS e", "e") is None
         assert self.scalar("MATCH (n:Sample) RETURN count(n) AS c", "c") == 1
 
@@ -611,55 +615,79 @@ class TestGraphRealisticUsage:
         pair = "MATCH (a:Component {key:'left'}),(b:Component {key:'right'})"
         edge_q = "MATCH (:Component {key:'left'})-[r]->(:Component {key:'right'}) RETURN count(r) AS c"
         # Two different relationship types on the same ordered pair.
-        self._write("create", f"{pair} CREATE (a)-[:USES]->(b)")
-        self._write("create", f"{pair} CREATE (a)-[:CALLS]->(b)")
+        self._write(f"{pair} CREATE (a)-[:USES]->(b)")
+        self._write(f"{pair} CREATE (a)-[:CALLS]->(b)")
         assert self.scalar(edge_q, "c") == 2, "CREATE of a second edge type must add a parallel edge"
         types = self.col_set(
             "MATCH (:Component {key:'left'})-[r]->(:Component {key:'right'}) RETURN type(r) AS t", "t")
         assert types == {"USES", "CALLS"}, f"both relationship types must coexist: {types}"
         # A parallel edge of the SAME type is preserved too (true multigraph).
-        self._write("create", f"{pair} CREATE (a)-[:USES]->(b)")
+        self._write(f"{pair} CREATE (a)-[:USES]->(b)")
         assert self.scalar(edge_q, "c") == 3, "a parallel same-type edge must be preserved"
         assert self.scalar(
             "MATCH (:Component {key:'left'})-[r:USES]->(:Component {key:'right'}) RETURN count(r) AS c", "c") == 2
 
-    def test_guardrail_blocks_mismatched_operations(self):
+    def test_no_operation_class_is_refused(self):
+        """SPEC/GRAPH.md acceptance criterion 4 and § What Groadmap Does Not
+        Check, item 1.
+
+        This test used to be the guard-rail matrix: eleven invocations, each
+        asserting that a subcommand refused a query of another operation
+        class with exit code 6, and a closing assertion that the graph was
+        unchanged. Every one of those refusals is gone, so the inverse is
+        what has to be proven -- and proven by EFFECT, because an exit code
+        of 0 is what a command that silently did nothing would also return.
+
+        The order is deliberate: each statement acts on what the previous one
+        left, so an implementation that dropped any of them on the floor
+        fails on a later read rather than on its own exit code.
+        """
         self.create_node("Spec", "spec-x", status="draft")
-        # create rejects mutating / deleting / read-only queries.
-        for query in [
-            "MATCH (n:Spec {key:'spec-x'}) SET n.status='done'",
-            "MATCH (n:Spec {key:'spec-x'}) DETACH DELETE n",
-            "MATCH (n:Spec) RETURN n.key",
-        ]:
+
+        # A mutation, through the same subcommand that created the node.
+        self._write("MATCH (n:Spec {key:'spec-x'}) SET n.status = 'done'")
+        assert self.scalar(
+            "MATCH (n:Spec {key:'spec-x'}) RETURN n.status AS s", "s") == "done", (
+            "a SET reached the store and must have changed the property")
+
+        # A second create, a read, a traversal and a schema statement, each
+        # through that same subcommand.
+        self._write("CREATE (n:Spec {key:'spec-y'})")
+        assert self.col_set("MATCH (s:Spec) RETURN s.key AS k", "k") == {"spec-x", "spec-y"}
+
+        self._write("CREATE INDEX spec_key FOR (n:Spec) ON (n.key)")
+        self.calls += 1
+        listing = self.test.run_cmd_json(
+            ["graph", "execute", "-r", self.roadmap, "--query", "SHOW INDEXES"])
+        names = {row[listing["columns"].index("name")] for row in listing["rows"]}
+        assert "spec_key" in names, f"the index was not registered: {names!r}"
+
+        # A deletion. Nothing refuses it, which is the whole point: there is
+        # no subcommand whose contract is "this cannot delete".
+        self._write("MATCH (n:Spec {key:'spec-y'}) DETACH DELETE n")
+        assert self.col_set("MATCH (s:Spec) RETURN s.key AS k", "k") == {"spec-x"}, (
+            "the DETACH DELETE must have removed exactly the node it named")
+
+    def test_retired_subcommand_names_do_not_resolve(self):
+        """SPEC/GRAPH.md acceptance criterion 5.
+
+        The five names must not run and must not be answered by any of the
+        graph family's own exit codes: they are dispatch failures, exit 127.
+        The graph is read back afterwards to prove no invocation of any of
+        them reached the store.
+        """
+        self.create_node("Spec", "spec-x", status="draft")
+        for name in ("create", "query", "update", "delete", "search"):
             self.calls += 1
-            self.test.assert_exit_code(
-                ["graph", "create", "-r", self.roadmap, "--query", query], EXIT_GUARD_RAIL)
-        # update rejects creating / deleting / read-only queries.
-        for query in [
-            "CREATE (n:Spec {key:'spec-y'})",
-            "MATCH (n:Spec {key:'spec-x'}) DELETE n",
-            "MATCH (n:Spec) RETURN n.key",
-        ]:
-            self.calls += 1
-            self.test.assert_exit_code(
-                ["graph", "update", "-r", self.roadmap, "--query", query], EXIT_GUARD_RAIL)
-        # delete rejects creating / mutating queries.
-        for query in [
-            "CREATE (n:Spec {key:'spec-z'})",
-            "MATCH (n:Spec {key:'spec-x'}) SET n.status='done'",
-        ]:
-            self.calls += 1
-            self.test.assert_exit_code(
-                ["graph", "delete", "-r", self.roadmap, "--query", query], EXIT_GUARD_RAIL)
-        # query and search reject any writing clause.
-        for subcmd in ["query", "search"]:
-            self.calls += 1
-            self.test.assert_exit_code(
-                ["graph", subcmd, "-r", self.roadmap, "--query", "CREATE (n:Spec {key:'spec-w'})"],
-                EXIT_GUARD_RAIL)
-        # The rejected writes must have changed nothing: still exactly one Spec.
-        assert self.scalar("MATCH (s:Spec) RETURN count(s) AS c", "c") == 1, (
-            "a guard-rail rejection must never mutate the graph")
+            code, stdout, _stderr = self.test.run_cmd(
+                ["graph", name, "-r", self.roadmap, "--query",
+                 "CREATE (n:Spec {key:'must-not-exist'})"], check=False)
+            assert code == 127, (
+                f"`rmp graph {name}` exited {code}, want 127: the five names were "
+                f"replaced by `execute` and none survives as an alias")
+            assert stdout == "", f"`rmp graph {name}` wrote to stdout: {stdout!r}"
+        assert self.col_set("MATCH (s:Spec) RETURN s.key AS k", "k") == {"spec-x"}, (
+            "an unresolved subcommand must never reach the graph store")
 
 
 def _run_all():

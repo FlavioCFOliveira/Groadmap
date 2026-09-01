@@ -203,8 +203,13 @@ func TestHandleGraphData_ExpensiveQueryHitsTimeBudget(t *testing.T) {
 }
 
 // TestHandleGraphData_BudgetExhaustionWritesNothing asserts rule 7: cancelling a
-// query changes nothing on disk. The store is opened read-only, so an abandoned
-// query writes no data, runs no checkpoint, and truncates no write-ahead log.
+// statement changes nothing on disk.
+//
+// The endpoint now opens a TRANSACTIONAL store, so this is no longer true by
+// construction and has to be asserted: a cancelled statement's transaction never
+// commits, so it writes no data, and the checkpoint is gated on the write-ahead
+// log having grown, so none runs and the log is not truncated
+// (SPEC/WEB.md Acceptance Criterion 110).
 //
 // It asserts that the way every other graph test asserts store immutability — a
 // fresh read after the failure must still return exactly the seeded graph, with

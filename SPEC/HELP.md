@@ -219,7 +219,7 @@ help text must match the command contract in `COMMANDS.md`.
 | Audit | `rmp audit [list \| history \| stats]` | `COMMANDS.md § Audit Log Management` |
 | Backlog | `rmp backlog [list \| show-next]` | `COMMANDS.md § Backlog Management` |
 | Stats | `rmp stats` | `COMMANDS.md § Statistics Command` |
-| Graph | `rmp graph [create \| query \| update \| delete \| search]` | `COMMANDS.md § Graph Management` |
+| Graph | `rmp graph execute` | `COMMANDS.md § Graph Management` |
 | Web | `rmp web` | `COMMANDS.md § Web Interface` |
 
 Each subcommand in the inventory has its own dedicated help printer in
@@ -589,26 +589,27 @@ explicit, because a reader cannot infer them from the generic template:
 
 ### Graph family help specifics
 
-The `graph` family help and each graph subcommand help follow the same
-structure template as every other family but MUST additionally make two
+The `graph` family help and the `graph execute` help follow the same
+structure template as every other family but MUST additionally make three
 graph-specific behaviours explicit, because an agent cannot infer them
 from the generic template:
 
-1. **Query input.** State that the Cypher query comes from the `--query`
-   flag or, when the flag is absent, from standard input, and that
-   supplying neither is an error (exit code 2). The `graph` subcommands and
-   the comment subcommands of the `task` and `sprint` families are the only
+1. **Query input.** State that the Cypher statement comes from the `-q` /
+   `--query` flag or, when the flag is absent, from standard input, and that
+   supplying neither is an error (exit code 2). `graph execute` and the
+   comment subcommands of the `task` and `sprint` families are the only
    commands in the CLI that read standard input. See
    `GRAPH.md § Cypher Input Source and Precedence`.
-2. **Guard rail.** State, per subcommand, which Cypher operation class or
-   classes are accepted and that a mismatching query is rejected with exit code 6
-   before execution. The family help lists the five subcommand-to-operation
-   mappings; each subcommand help names its own allowed class or classes. Four
-   subcommands accept one class each; `graph update` accepts three, because it is
-   also the schema subcommand, and its help MUST name the schema statements it
-   accepts rather than leaving an agent to discover them by trial. See
-   `GRAPH.md § Subcommands and Guard-Rail Validation` and
-   `GRAPH.md § Schema Management`.
+2. **One subcommand, and what it runs.** State that `execute` runs any
+   Cypher statement the engine accepts — a read, a write, a deletion, a
+   schema change — and that `rmp` does not examine the statement or refuse
+   it on the ground of what it does. The help MUST NOT describe any
+   statement as rejected before execution on its operation class, because
+   none is. See `COMMANDS.md § Graph Management`.
+3. **Schema statements.** State that index and constraint DDL and the
+   `SHOW INDEX(ES)` / `SHOW CONSTRAINT(S)` commands run through this same
+   subcommand, and name them, rather than leaving an agent to discover them
+   by trial. See `GRAPH.md § Schema Management`.
 
 ### Web command help specifics
 
@@ -621,9 +622,13 @@ or user cannot infer from the generic template:
    `--roadmap`: it lists all roadmaps and the user selects one in the browser.
    This is the one command exempt from the always-required-roadmap rule (see
    `COMMANDS.md § Roadmap Selection (Always Required)`).
-2. **Read-only, loopback by default.** State that the interface is read-only
-   (the CLI remains the sole write path) and binds loopback (`127.0.0.1`) by
-   default, so it is reachable only from the local machine; that
+2. **Pages are read-only, the graph endpoint is not, and loopback is the
+   default.** State that every page the server renders is read-only and that the
+   server never writes to a roadmap's `project.db`; that the graph page's query
+   bar is the exception, because the statement it submits is executed as written
+   and may create, change, or delete graph data, with no authentication; and that
+   the server binds loopback (`127.0.0.1`) by default, so it is reachable only
+   from the local machine. State that
    `--host 0.0.0.0` is the explicit opt-in to expose it on all interfaces
    (network-reachable); and that `--host`/`--port` override the bind address,
    with the default-port ephemeral fallback. See `WEB.md`.
@@ -638,10 +643,12 @@ The skeleton (illustrative; the canonical contract is
 ```
 Usage: rmp web [options]
 
-Start a read-only web interface for the roadmaps under ~/.roadmaps/.
-The browser lists every roadmap and lets you view its tasks, sprints,
-and knowledge graph. The web interface never writes; the rmp CLI
-remains the sole write path. rmp web does not take -r/--roadmap.
+Start a web interface for the roadmaps under ~/.roadmaps/. The browser
+lists every roadmap and lets you view its tasks, sprints, and knowledge
+graph. Every page is read-only and no roadmap database is ever written.
+The knowledge-graph query bar is the exception: it runs the Cypher you
+type, including statements that write or delete, and it is not
+authenticated. rmp web does not take -r/--roadmap.
 
 Options:
   --host <address>   Bind host. Default 127.0.0.1 (loopback, local machine

@@ -2045,7 +2045,7 @@ class TestErrorStringParity:
         )
 
     # ------------------------------------------------------------------
-    # `graph create` / `query` / `update` / `delete` / `search`
+    # `graph execute`
     # ------------------------------------------------------------------
 
     def test_graph_errors(self):
@@ -2053,7 +2053,7 @@ class TestErrorStringParity:
         # #106: no query supplied (neither --query nor stdin).
         self.check(
             "Error: required parameter missing: no query supplied",
-            ["graph", "query", "-r", r], 2, note="graph query no query supplied",
+            ["graph", "execute", "-r", r], 2, note="graph execute no query supplied",
         )
         # #107: query above the maximum length (1 MiB). Fed on stdin rather
         # than as a --query argument: an argv entry this large trips the
@@ -2062,51 +2062,28 @@ class TestErrorStringParity:
         # host), and GRAPH.md's Cypher Input Source and Precedence makes
         # standard input an equally valid, equally load-bearing source for
         # the SAME bounded-length check.
+        #
+        # This is now the ONLY cause of exit code 6 the graph family has.
+        # Five operation-class refusals used to sit below it, one per
+        # subcommand; the subcommands are gone and so are their lines
+        # (SPEC/COMMANDS.md § Graph Management), and the corpus this module
+        # reads no longer publishes them -- so a case left here would fail on
+        # its `key in CORPUS` assertion rather than on the binary.
         oversized = "RETURN " + ("1" * 1048571)
         assert len(oversized) == 1048578
         self.check(
             "Error: validation error: query exceeds maximum length of 1048576 bytes",
-            ["graph", "query", "-r", r], 6, stdin=oversized,
-            note="graph query oversized",
+            ["graph", "execute", "-r", r], 6, stdin=oversized,
+            note="graph execute oversized",
         )
-        # #108: `graph create` rejects a read-only query.
-        self.check(
-            "Error: validation error: graph create accepts only CREATE/MERGE queries",
-            ["graph", "create", "-r", r, "--query", "MATCH (n) RETURN n"], 6,
-            note="graph create rejects read-only query",
-        )
-        # #109: `graph query` rejects a writing query.
-        self.check(
-            "Error: validation error: graph query accepts only read-only queries",
-            ["graph", "query", "-r", r, "--query", "CREATE (n:Incident {key:'payment-outage-0417'})"],
-            6, note="graph query rejects writing query",
-        )
-        # #110: `graph update` rejects a query outside SET/REMOVE.
-        self.check(
-            "Error: validation error: graph update accepts only SET/REMOVE, index/constraint DDL, and schema-introspection queries",
-            ["graph", "update", "-r", r, "--query", "CREATE (n:Incident {key:'payment-outage-0417'})"],
-            6, note="graph update rejects create query",
-        )
-        # #111: `graph delete` rejects a query outside DELETE/DETACH DELETE.
-        self.check(
-            "Error: validation error: graph delete accepts only DELETE/DETACH DELETE queries",
-            ["graph", "delete", "-r", r, "--query", "CREATE (n:Incident {key:'payment-outage-0417'})"],
-            6, note="graph delete rejects create query",
-        )
-        # #112: `graph search` rejects a writing query.
-        self.check(
-            "Error: validation error: graph search accepts only read-only queries",
-            ["graph", "search", "-r", r, "--query", "CREATE (n:Incident {key:'payment-outage-0417'})"],
-            6, note="graph search rejects writing query",
-        )
-        # Roadmap not found, on a graph subcommand (WITH "not found",
+        # Roadmap not found, on the graph subcommand (WITH "not found",
         # distinct from #104's stats/backlog wording).
         self.check(
             'Error: resource not found: roadmap "X" not found',
-            ["graph", "query", "-r", "ghost-roadmap-9182", "--query", "MATCH (n) RETURN n"], 4,
-            subs={"X": "ghost-roadmap-9182"}, note="graph query roadmap not found",
+            ["graph", "execute", "-r", "ghost-roadmap-9182", "--query", "MATCH (n) RETURN n"], 4,
+            subs={"X": "ghost-roadmap-9182"}, note="graph execute roadmap not found",
         )
-        # A Cypher query written as a positional argument. The graph family
+        # A Cypher query written as a positional argument. `graph execute`
         # declares a maximum of zero positional arguments (COMMANDS.md
         # § Positional Arity by Command), and it is one of the three commands
         # that publish a line of their own for the refusal: the canonical
@@ -2116,9 +2093,9 @@ class TestErrorStringParity:
         # a lookup failure.
         self.check(
             'Error: invalid input: unexpected argument "X" (graph queries use --query or stdin)',
-            ["graph", "query", "-r", r, "MATCH (n:Incident) RETURN n"], 2,
+            ["graph", "execute", "-r", r, "MATCH (n:Incident) RETURN n"], 2,
             subs={"X": "MATCH (n:Incident) RETURN n"},
-            note="graph query bare positional query",
+            note="graph execute bare positional query",
         )
 
     # ------------------------------------------------------------------

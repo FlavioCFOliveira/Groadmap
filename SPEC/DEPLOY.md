@@ -25,7 +25,7 @@ The `rmp` binary installs to a system location (default `/usr/local/bin`). Its r
 
 The full data directory layout and permission model are specified in `ARCHITECTURE.md § Directory Structure`.
 
-The `rmp web` command (read-only web interface, see `WEB.md`) reads this same data and installs no new on-disk artefact: its HTML templates, static assets, and vendored graph library are embedded in the binary, so the runtime data footprint under `~/.roadmaps/` is unchanged. Serving a graph request may create the graph store's own lock file inside an existing `graph/` directory, which is part of the store rather than a deployment artefact (see `GRAPH.md § What a Read Changes on Disk`).
+The `rmp web` command (web interface, see `WEB.md`) reads this same data and installs no new on-disk artefact: its HTML templates, static assets, and vendored graph library are embedded in the binary, so the runtime data footprint under `~/.roadmaps/` is unchanged. Serving a graph request may create the graph store's own lock file inside an existing `graph/` directory, which is part of the store rather than a deployment artefact (see `GRAPH.md § What a Statement That Writes Nothing Changes on Disk`).
 
 ## Installation Methods
 

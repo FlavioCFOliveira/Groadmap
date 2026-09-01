@@ -61,7 +61,7 @@ import (
 func runSchemaStatement(t *testing.T, graphDir, query string) error {
 	t.Helper()
 
-	res, err := recovery.Open[string, float64](graphDir, graphReadOpts)
+	res, err := recovery.Open[string, float64](graphDir, graphOpenOpts)
 	if err != nil {
 		t.Fatalf("opening the graph store at %s: %v", graphDir, err)
 	}
@@ -118,7 +118,7 @@ func checkpointedSchemaStatement(t *testing.T, graphDir, query string) {
 // what comes back is what is on disk.
 func reopenGraphStore(t *testing.T, graphDir string) recovery.Result[string, float64] {
 	t.Helper()
-	res, err := recovery.Open[string, float64](graphDir, graphReadOpts)
+	res, err := recovery.Open[string, float64](graphDir, graphOpenOpts)
 	if err != nil {
 		t.Fatalf("reopening the graph store at %s: %v", graphDir, err)
 	}
@@ -197,7 +197,7 @@ func TestCheckpointPreservesIndexDefinition(t *testing.T) {
 	// Seed through the ordinary write path, which creates the store directory
 	// and leaves a checkpointed graph behind.
 	captureStdStreams(t, func() {
-		if err := runGraphCreate([]string{"-r", roadmap, "--query",
+		if err := runGraphExecute([]string{"-r", roadmap, "--query",
 			"CREATE (:Spec {key:'user-authentication'})"}); err != nil {
 			t.Fatalf("seeding the graph: %v", err)
 		}
@@ -256,7 +256,7 @@ func TestCheckpointPreservesConstraintEnforcement(t *testing.T) {
 	defer setupTestGraphRoadmap(t, roadmap)()
 
 	captureStdStreams(t, func() {
-		if err := runGraphCreate([]string{"-r", roadmap, "--query",
+		if err := runGraphExecute([]string{"-r", roadmap, "--query",
 			"CREATE (:Spec {key:'user-authentication'})"}); err != nil {
 			t.Fatalf("seeding the graph: %v", err)
 		}
@@ -299,7 +299,7 @@ func TestCheckpointPreservesConstraintEnforcement(t *testing.T) {
 	// as far as the store is concerned: the duplicate MUST be refused.
 	var writeErr error
 	stdout, _ := captureStdStreams(t, func() {
-		writeErr = runGraphCreate([]string{"-r", roadmap, "--query",
+		writeErr = runGraphExecute([]string{"-r", roadmap, "--query",
 			"CREATE (:Spec {key:'user-authentication'})"})
 	})
 	if writeErr == nil {
@@ -324,7 +324,7 @@ func specKeyCount(t *testing.T, roadmap, key string) int {
 
 	var readErr error
 	stdout, _ := captureStdStreams(t, func() {
-		readErr = runGraphQuery([]string{"-r", roadmap, "--query",
+		readErr = runGraphExecute([]string{"-r", roadmap, "--query",
 			"MATCH (s:Spec) WHERE s.key = '" + key + "' RETURN count(s)"})
 	})
 	if readErr != nil {
@@ -360,7 +360,7 @@ func TestReadPathReportsRecoveredSchema(t *testing.T) {
 	defer setupTestGraphRoadmap(t, roadmap)()
 
 	captureStdStreams(t, func() {
-		if err := runGraphCreate([]string{"-r", roadmap, "--query",
+		if err := runGraphExecute([]string{"-r", roadmap, "--query",
 			"CREATE (:Spec {key:'user-authentication'})"}); err != nil {
 			t.Fatalf("seeding the graph: %v", err)
 		}
@@ -389,8 +389,8 @@ func TestReadPathReportsRecoveredSchema(t *testing.T) {
 		name string
 		run  func(args []string) error
 	}{
-		{"query", runGraphQuery},
-		{"search", runGraphSearch},
+		{"query", runGraphExecute},
+		{"search", runGraphExecute},
 	} {
 		t.Run(subcommand.name+" reports the index", func(t *testing.T) {
 			names := readSchemaNames(t, subcommand.run, roadmap, "SHOW INDEXES")
@@ -472,7 +472,7 @@ func TestOrdinaryWriteCheckpointPreservesSchema(t *testing.T) {
 	defer setupTestGraphRoadmap(t, roadmap)()
 
 	captureStdStreams(t, func() {
-		if err := runGraphCreate([]string{"-r", roadmap, "--query",
+		if err := runGraphExecute([]string{"-r", roadmap, "--query",
 			"CREATE (:Spec {key:'user-authentication'})"}); err != nil {
 			t.Fatalf("seeding the graph: %v", err)
 		}
@@ -487,7 +487,7 @@ func TestOrdinaryWriteCheckpointPreservesSchema(t *testing.T) {
 	// checkpoints, and its checkpoint rewrites the snapshot and truncates the
 	// log over a graph that carries a schema this statement never names.
 	captureStdStreams(t, func() {
-		if err := runGraphCreate([]string{"-r", roadmap, "--query",
+		if err := runGraphExecute([]string{"-r", roadmap, "--query",
 			"CREATE (:Spec {key:'session-management'})"}); err != nil {
 			t.Fatalf("writing a second Spec node: %v", err)
 		}
@@ -501,11 +501,11 @@ func TestOrdinaryWriteCheckpointPreservesSchema(t *testing.T) {
 			"did not create", size)
 	}
 
-	if names := readSchemaNames(t, runGraphQuery, roadmap, "SHOW INDEXES"); !containsName(names, "spec_key") {
+	if names := readSchemaNames(t, runGraphExecute, roadmap, "SHOW INDEXES"); !containsName(names, "spec_key") {
 		t.Errorf("after an ordinary data write checkpointed, SHOW INDEXES reports %v, which does not "+
 			"include `spec_key`. A command that never mentioned the index erased it", names)
 	}
-	if names := readSchemaNames(t, runGraphQuery, roadmap, "SHOW CONSTRAINTS"); !containsName(names, "spec_key_uq") {
+	if names := readSchemaNames(t, runGraphExecute, roadmap, "SHOW CONSTRAINTS"); !containsName(names, "spec_key_uq") {
 		t.Errorf("after an ordinary data write checkpointed, SHOW CONSTRAINTS reports %v, which does "+
 			"not include `spec_key_uq`", names)
 	}
@@ -514,7 +514,7 @@ func TestOrdinaryWriteCheckpointPreservesSchema(t *testing.T) {
 	// because this is the path on which the loss would be silent.
 	var writeErr error
 	stdout, _ := captureStdStreams(t, func() {
-		writeErr = runGraphCreate([]string{"-r", roadmap, "--query",
+		writeErr = runGraphExecute([]string{"-r", roadmap, "--query",
 			"CREATE (:Spec {key:'session-management'})"})
 	})
 	if writeErr == nil {

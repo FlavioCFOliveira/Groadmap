@@ -26,7 +26,7 @@
 ### Input
 
 **Application inputs are via CLI parameters. Exactly two flag values may also
-arrive on standard input: the Cypher query of the `graph` subcommands, and the
+arrive on standard input: the Cypher statement of `graph execute`, and the
 comment body of the comment subcommands of the `task` and `sprint` families.**
 
 - No JSON input
@@ -34,7 +34,7 @@ comment body of the comment subcommands of the `task` and `sprint` families.**
 - No interactive input
 - **Standard input:** used as an alternative source for exactly two flag values,
   and by no other command:
-  - the `--query` Cypher string of the `graph` subcommands (see
+  - the `--query` Cypher string of `graph execute` (see
     `GRAPH.md § Cypher Input Source and Precedence`);
   - the `--body` comment text of `comment-add` and `comment-edit` under `task`
     and `sprint` (see
@@ -387,10 +387,12 @@ receives.
 
 ## Graph Query Result
 
-The read graph subcommands (`rmp graph query` and `rmp graph search`) return the
-result of a Cypher query as a single JSON object to stdout. The shape exposes the
-result's columns and its rows, mirroring the GoGraph engine result, which exposes
-the ordered column names (`Columns()`) and an iterable sequence of records.
+`rmp graph execute` returns the result of a Cypher statement that produces result
+columns as a single JSON object to stdout. The shape exposes the result's columns
+and its rows, mirroring the GoGraph engine result, which exposes the ordered
+column names (`Columns()`) and an iterable sequence of records. A statement that
+produces no columns returns the shape in [Graph Write Result](#graph-write-result)
+instead.
 
 This is the canonical specification of the graph read-result shape. The command
 contract that references it is `COMMANDS.md § Graph Management`; the feature
@@ -419,9 +421,10 @@ Rules:
 
 1. `columns` and `rows` are always present. A query that matches nothing returns
    its declared `columns` and an empty `rows` array (`[]`), never `null`.
-2. A query that returns no columns (for example a write run through a read path,
-   which the guard rail forbids) is not a valid read result; read subcommands
-   always declare at least one return column.
+2. A statement that returns no columns does not produce this shape at all; it
+   produces the `{"ok": true}` object of
+   [Graph Write Result](#graph-write-result). This shape is the answer to a
+   statement that declares at least one result column.
 3. Each row cell is a JSON value produced by the property-type mapping below.
 4. The result is pretty-printed with two-space indentation and a trailing
    newline, consistent with all other JSON output (see
@@ -475,8 +478,7 @@ Rules:
 
 ## Graph Write Result
 
-The write graph subcommands (`rmp graph create`, `rmp graph update`,
-`rmp graph delete`) mirror what the executed statement returns. The discriminator
+`rmp graph execute` mirrors what the executed statement returns. The discriminator
 is whether the statement produces **result columns**:
 
 1. **The statement produces result columns:** the output is the standard
@@ -497,16 +499,14 @@ one. The `{"ok": true}` object is the success signal for a statement that return
 data.
 
 **Why the discriminator is the columns and not the `RETURN` clause.** For every
-data-writing query the two coincide exactly: a `CREATE`, `MERGE`, `SET`,
-`REMOVE`, `DELETE`, or `DETACH DELETE` query produces columns when, and only
+data-writing statement the two coincide exactly: a `CREATE`, `MERGE`, `SET`,
+`REMOVE`, `DELETE`, or `DETACH DELETE` statement produces columns when, and only
 when, it carries a `RETURN` clause. They part company on the schema statements
-`rmp graph update` also accepts (see `GRAPH.md § Schema Management`). A
-schema-introspection command — `SHOW INDEXES` and its siblings — produces columns
-while carrying no `RETURN` clause, so it returns the `{columns, rows}` shape, and
-the listing it returns is identical to the one the same command returns under
-`rmp graph query`. A schema-mutating statement — `CREATE INDEX`, `DROP INDEX`,
-`CREATE CONSTRAINT`, `DROP CONSTRAINT` — produces no columns and returns
-`{"ok": true}`.
+(see `GRAPH.md § Schema Management`). A schema-introspection command —
+`SHOW INDEXES` and its siblings — produces columns while carrying no `RETURN`
+clause, so it returns the `{columns, rows}` shape. A schema-mutating statement —
+`CREATE INDEX`, `DROP INDEX`, `CREATE CONSTRAINT`, `DROP CONSTRAINT` — produces no
+columns and returns `{"ok": true}`.
 
 Field reference (no-columns case):
 
@@ -547,25 +547,24 @@ A write query that ends with `RETURN n` (same shape as a read result):
 The web interface's graph data endpoint (`GET /roadmaps/{name}/graph/data`, see
 `WEB.md § Graph Data Endpoint`) returns a roadmap's knowledge graph as a single
 JSON object describing its nodes and edges, shaped for an interactive node-link
-visualisation. The endpoint reads the graph **read-only**, the same way
-`rmp graph query`/`search` do (see `GRAPH.md § Engine Construction and
-Lifecycle`); it never writes and never checkpoints.
+visualisation. The endpoint runs the statement it is given exactly as
+`rmp graph execute` runs it (see `GRAPH.md § Engine Construction and Lifecycle`),
+so a statement that writes is committed and checkpointed like any other.
 
-The endpoint accepts two optional URL query parameters, `q` (the Cypher query to
-run, URL-encoded) and `limit` (the node-limit value), that the graph page's query
-bar sends. When `q` is absent or empty, the endpoint runs the default query
+The endpoint accepts two optional URL query parameters, `q` (the Cypher statement
+to run, URL-encoded) and `limit` (the node-limit value), that the graph page's
+query bar sends. When `q` is absent or empty, the endpoint runs the default query
 `MATCH (n) OPTIONAL MATCH (n)-[r]->(m) RETURN n, r, m`, which yields the same
 full-graph view a request with no parameters always produced (backward
-compatible). User-supplied `q` is validated as **read-only** before execution
-(reusing the graph guard-rail) and the resolved `limit` is applied as a `LIMIT`
-clause only when the query both lacks a top-level `LIMIT` of its own and is a
-statement form that admits a `LIMIT` clause. The full parameter contract, the
-read-only guard-rail, the limit-injection and suppression rules, and the
-failure modes are specified in `WEB.md § Graph Data Endpoint` and
+compatible). A user-supplied `q` is executed as written, and the resolved `limit`
+is applied as a `LIMIT` clause only when the statement both lacks a top-level
+`LIMIT` of its own and is a form that admits a `LIMIT` clause. The full parameter
+contract, the limit-injection and suppression rules, and the failure modes are
+specified in `WEB.md § Graph Data Endpoint` and
 `WEB.md § Query-Bar Error Handling`; this section specifies the response shapes —
-the successful one below, which is identical regardless of which query produced
-it, and the error one in [Error Shape](#error-shape) — and not the behaviour that
-selects between them.
+the successful one below, which is identical regardless of which statement
+produced it, and the error one in [Error Shape](#error-shape) — and not the
+behaviour that selects between them.
 
 This is the canonical specification of the graph view-data shape. It **reuses**
 the graph-element and property-type conventions already defined in
@@ -596,12 +595,15 @@ Field reference:
 Rules:
 
 1. `nodes` and `edges` are always present **in a successful response**. An empty
-   graph returns `{"nodes": [], "edges": []}` (empty arrays, never `null`). A
-   roadmap that has never used the `graph` command is treated as an empty graph and
-   returns this empty object; it is not an error (see
-   `GRAPH.md § Persistence Layout`, rule 2). A response that is not successful
-   carries neither field: it carries the object in [Error Shape](#error-shape)
-   below, or, for an internal read error, no JSON at all.
+   graph returns `{"nodes": [], "edges": []}` (empty arrays, never `null`), and so
+   does any statement whose result carries no node and no edge — a count, a schema
+   listing, or a write with no `RETURN` clause among them (see
+   `WEB.md § Query-Bar Error Handling`, rule 9). A roadmap that has never used the
+   `graph` command is treated as an empty graph and returns this empty object; it
+   is not an error (see `GRAPH.md § Persistence Layout`, rule 2). A response that
+   is not successful carries neither field: it carries the object in
+   [Error Shape](#error-shape) below, or, for an internal read error, no JSON at
+   all.
 2. Each node object follows the Node mapping and each edge object follows the
    Relationship mapping in [Graph element mapping](#graph-element-mapping),
    including the `properties` object, whose values follow the
@@ -632,17 +634,17 @@ Rules:
 
 ### Error Shape
 
-A request the graph data endpoint refuses, and a query that fails, are answered
-with this object in place of the node-and-edge object above. The endpoint returns
-it for each of the five query-bar failures, always with HTTP `400 Bad Request`.
-The status, the failure classes, and the rules that select between them are
-specified in `WEB.md § Query-Bar Error Handling`, which is canonical for them; this
-section is canonical for the shape.
+A request the graph data endpoint refuses, and a statement that fails, are
+answered with this object in place of the node-and-edge object above. The endpoint
+returns it for each of the two query-bar failures, always with HTTP
+`400 Bad Request`. The status, the failure classes, and the rule that selects
+between them are specified in `WEB.md § Query-Bar Error Handling`, which is
+canonical for them; this section is canonical for the shape.
 
 ```json
 {
-  "error": "query rejected: not read-only",
-  "kind": "not_read_only"
+  "error": "invalid limit: 7",
+  "kind": "invalid_limit"
 }
 ```
 
@@ -651,47 +653,33 @@ Field reference:
 | Field | Type | Description |
 |-------|------|-------------|
 | `error` | string | The human-readable reason. The graph page shows it in place as its failure message. |
-| `kind` | string | The machine-readable failure class. `WEB.md § Query-Bar Error Handling`, rule 5, enumerates the value set and is canonical for it; this file does not repeat it. |
+| `kind` | string | The machine-readable failure class. `WEB.md § Query-Bar Error Handling`, rule 4, enumerates the value set and is canonical for it; this file does not repeat it. |
 
 Rules:
 
 1. Both fields are always present and both are always strings. The object carries
    these two fields and no others, and it carries neither `nodes` nor `edges`.
 2. `kind` carries one value per failure class, drawn from the closed set
-   `WEB.md § Query-Bar Error Handling`, rule 5, publishes; that rule is canonical
+   `WEB.md § Query-Bar Error Handling`, rule 4, publishes; that rule is canonical
    for which values exist and how many, and this file deliberately does not carry
    a second copy of the list, so the two cannot disagree. What each value means is
-   fixed there too: a read-only guard-rail rejection, an invalid `limit`, a
-   schema-introspection command the endpoint renders no listing for (see
-   `GRAPH.md § Schema Introspection`), a relationship read through an incoming or
-   undirected fixed-length pattern (see `GRAPH.md § Relationship Read Direction`),
-   and a query accepted as read-only that then failed once running. A query
-   cancelled for exhausting the endpoint's query time budget is an execution
-   failure and carries the execution value; the budget adds no value of its own
-   (see `WEB.md § Graph Query Time Budget`).
+   fixed there too: an invalid `limit`, and a statement that failed once running. A
+   statement cancelled for exhausting the endpoint's query time budget is an
+   execution failure and carries the execution value; the budget adds no value of
+   its own (see `WEB.md § Graph Query Time Budget`).
 3. `error` is written to be read by a person and is not parsed. For an execution
-   failure it carries the engine's own diagnostic text, so a given query produces
-   the same diagnostic here as it produces on the CLI (see
+   failure it carries the engine's own diagnostic text, so a given statement
+   produces the same diagnostic here as it produces on the CLI (see
    `GRAPH.md § Error Handling and Exit Codes`, rule 2). For an invalid limit it
-   names the rejected value. For
-   a relationship-read-direction rejection it names the relationship variable, the
-   direction of the pattern that bound it, and the outgoing rewrite, and likewise
-   never describes the query as not read-only: such a query carries no writing
-   clause and no DDL clause, and only the orientation of its pattern is refused.
-   For a schema-introspection rejection it states that the page draws a graph and
-   names `rmp graph query` as the command that reports the schema; it likewise
-   never describes the query as not read-only, because the statement reads the
-   registered schema and writes nothing, and it never names the statement's keyword
-   spacing, because the refusal holds at every spacing and correcting the spacing
-   would change nothing.
+   names the rejected value.
 4. The object is serialized exactly as every other response of this endpoint is:
    HTML-safe, so `<`, `>`, and `&` are escaped (see `WEB.md § Graph Data Endpoint`),
    pretty-printed with two-space indentation, and terminated by a newline (see
    [Implementation Notes](#implementation-notes)).
-5. This is the endpoint's error contract for the five query-bar failures only. An
+5. This is the endpoint's error contract for the two query-bar failures only. An
    internal read error — a graph store that cannot be opened, for example — is
    answered HTTP `500` as on every other route of the web interface and does not
-   carry this shape (see `WEB.md § Query-Bar Error Handling`, rule 7).
+   carry this shape (see `WEB.md § Query-Bar Error Handling`, rule 6).
 
 ---
 
@@ -1242,14 +1230,14 @@ MUST NOT show `null` in place of an empty array.
 | `min_length` | integer or absent | no | Minimum string length when applicable. |
 | `description` | string | yes | One-sentence description of the flag's purpose. |
 | `mutually_exclusive_with` | array of string or absent | no | Long flag names that cannot be combined with this one. |
-| `stdin_fallback` | boolean or absent | no | `true` when the flag's value is read from standard input if the flag is omitted. Present and `true` on the `graph` subcommands' `--query` flag and on the `--body` flag of the `comment-add` and `comment-edit` subcommands of the `task` and `sprint` families. When `stdin_fallback` is `true`, `required` is `false` (the value may come from stdin instead), but the value is mandatory from one source or the other; supplying neither is an error. The flag's own `description` states any condition under which the fallback does not apply: on `comment-edit` the body is read from stdin only when `--type` is absent as well, so a type-only edit does not wait for input. See `GRAPH.md § Cypher Input Source and Precedence` and `COMMANDS.md § Comment Body Input Source and Precedence`. |
+| `stdin_fallback` | boolean or absent | no | `true` when the flag's value is read from standard input if the flag is omitted. Present and `true` on the `--query` flag of `graph execute` and on the `--body` flag of the `comment-add` and `comment-edit` subcommands of the `task` and `sprint` families. When `stdin_fallback` is `true`, `required` is `false` (the value may come from stdin instead), but the value is mandatory from one source or the other; supplying neither is an error. The flag's own `description` states any condition under which the fallback does not apply: on `comment-edit` the body is read from stdin only when `--type` is absent as well, so a type-only edit does not wait for input. See `GRAPH.md § Cypher Input Source and Precedence` and `COMMANDS.md § Comment Body Input Source and Precedence`. |
 
 ### Field reference: subcommand-level fields
 
 | Field | Type | Description |
 |-------|------|-------------|
 | `usage` | string | One-line usage signature. |
-| `reads_stdin` | boolean or absent | `true` when the subcommand reads standard input as an input source: the `graph` subcommands, and the `comment-add` and `comment-edit` subcommands of the `task` and `sprint` families. Absent or `false` for every other subcommand, which ignores stdin. |
+| `reads_stdin` | boolean or absent | `true` when the subcommand reads standard input as an input source: `graph execute`, and the `comment-add` and `comment-edit` subcommands of the `task` and `sprint` families. Absent or `false` for every other subcommand, which ignores stdin. |
 | `positional_arguments` | array of object | Each entry: `{name, type, required, description}`. |
 | `mutual_exclusion_groups` | array of array of string | Each inner array is a set of long flag names of which at most one may be supplied. |
 | `stdout_on_success.kind` | string | One of `object`, `array`, `empty`. `empty` is used by mutating commands that return no body. |

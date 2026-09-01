@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """
-Test 64: schema management through `rmp graph update`.
+Test 64: schema management through `rmp graph execute`.
 
 End-to-end backstop for SPEC/GRAPH.md "Schema Management" and Acceptance
 Criteria 62 to 69, driven against the compiled ./bin/rmp.
 
-`rmp graph update` is the subcommand through which a knowledge graph's schema --
+`rmp graph execute` is the subcommand through which a knowledge graph's schema --
 its indexes and its constraints -- is managed. Three things about that make an
 end-to-end suite the only place several of these criteria can be established at
 all, rather than a duplicate of the Go tests:
@@ -24,8 +24,8 @@ all, rather than a duplicate of the Go tests:
   guard rail admits it deliberately and the engine refuses it (AC69). Exit codes
   are a property of the binary, not of a function.
 
-- Four surfaces answer a schema-introspection command -- `graph update`,
-  `graph query`, `graph search`, and the read-only web graph data endpoint --
+- Four surfaces answer a schema-introspection command -- `graph execute`,
+  `graph execute`, `graph execute`, and the read-only web graph data endpoint --
   and they must agree. The exit code alone establishes nothing there: a read
   path constructed without the recovered schema answers the identical query with
   ZERO ROWS and exits 0, so the rows are what is compared (AC64).
@@ -79,45 +79,45 @@ class SchemaTestBase:
         self.test = GroadmapTestBase()
         self.test.setup()
         self.roadmap = self.test.create_roadmap()
-        self.test.run_cmd(["graph", "create", "-r", self.roadmap, "--query", SEED_QUERY])
+        self.test.run_cmd(["graph", "execute", "-r", self.roadmap, "--query", SEED_QUERY])
 
     def teardown_method(self):
         self.test.teardown()
 
     # ---- helpers -----------------------------------------------------
 
-    def run(self, subcmd, query):
-        """One `rmp graph <subcmd>` invocation: its own process, every time."""
+    def run(self, query):
+        """One `rmp graph execute` invocation: its own process, every time."""
         return self.test.run_cmd(
-            ["graph", subcmd, "-r", self.roadmap, "--query", query], check=False)
+            ["graph", "execute", "-r", self.roadmap, "--query", query], check=False)
 
-    def ok(self, subcmd, query):
+    def ok(self, query):
         """Run a statement that must succeed, and return its parsed stdout."""
-        code, stdout, stderr = self.run(subcmd, query)
+        code, stdout, stderr = self.run(query)
         assert code == EXIT_OK, (
-            f"`graph {subcmd} --query {query!r}` must succeed; "
+            f"`graph execute --query {query!r}` must succeed; "
             f"exit={code} stderr={stderr!r}")
         return json.loads(stdout)
 
-    def schema_rows(self, subcmd, statement):
-        """The full row set a SHOW statement reports through one subcommand."""
-        result = self.ok(subcmd, statement)
+    def schema_rows(self, statement):
+        """The full row set a SHOW statement reports."""
+        result = self.ok(statement)
         assert "columns" in result and "rows" in result, (
             f"{statement!r} must return the columns/rows listing shape, not "
             f"{result!r}")
         return result["rows"]
 
-    def schema_names(self, statement="SHOW INDEXES", subcmd="update"):
+    def schema_names(self, statement="SHOW INDEXES"):
         """The `name` column of every row a SHOW statement reports."""
-        result = self.ok(subcmd, statement)
+        result = self.ok(statement)
         name_col = result["columns"].index("name")
         return [row[name_col] for row in result["rows"]]
 
     def node_count(self):
-        return self.ok("query", "MATCH (n) RETURN count(n)")["rows"][0][0]
+        return self.ok("MATCH (n) RETURN count(n)")["rows"][0][0]
 
     def edge_count(self):
-        return self.ok("query", "MATCH ()-[r]->() RETURN count(r)")["rows"][0][0]
+        return self.ok("MATCH ()-[r]->() RETURN count(r)")["rows"][0][0]
 
 
 class TestGraphSchemaStatements(SchemaTestBase):
@@ -126,7 +126,7 @@ class TestGraphSchemaStatements(SchemaTestBase):
     # ---- AC62: each statement returns the shape the specification gives it ---
 
     def test_ac62_index_lifecycle_across_separate_invocations(self):
-        result = self.ok("update", "CREATE INDEX spec_key FOR (n:Spec) ON (n.key)")
+        result = self.ok("CREATE INDEX spec_key FOR (n:Spec) ON (n.key)")
         assert result == {"ok": True}, (
             f"AC62: a schema-mutating statement produces no result columns and "
             f"returns {{'ok': true}}; got {result!r}")
@@ -135,7 +135,7 @@ class TestGraphSchemaStatements(SchemaTestBase):
         # process -- must still see it. This is the assertion the destroyed-
         # schema defect fails (AC63): the create above checkpointed and
         # truncated the write-ahead log before the process exited.
-        listing = self.ok("update", "SHOW INDEXES")
+        listing = self.ok("SHOW INDEXES")
         assert set(listing.keys()) == {"columns", "rows"}, (
             f"AC62: SHOW INDEXES returns the columns/rows shape even though it "
             f"carries no RETURN clause, not {{'ok': true}}; got {listing!r}")
@@ -146,18 +146,16 @@ class TestGraphSchemaStatements(SchemaTestBase):
             f"AC62/AC63: SHOW INDEXES must report the index created in an earlier "
             f"invocation; got {listing['rows']!r}")
 
-        result = self.ok("update", "DROP INDEX spec_key")
+        result = self.ok("DROP INDEX spec_key")
         assert result == {"ok": True}, f"AC62: DROP INDEX returns ok; got {result!r}"
         assert self.schema_names() == [], (
             "AC62: a dropped index must be gone from a subsequent SHOW INDEXES")
 
     def test_ac62_constraint_lifecycle_across_separate_invocations(self):
-        result = self.ok(
-            "update",
-            "CREATE CONSTRAINT spec_key_uq FOR (n:Spec) REQUIRE n.key IS UNIQUE")
+        result = self.ok("CREATE CONSTRAINT spec_key_uq FOR (n:Spec) REQUIRE n.key IS UNIQUE")
         assert result == {"ok": True}, f"AC62: got {result!r}"
 
-        listing = self.ok("update", "SHOW CONSTRAINTS")
+        listing = self.ok("SHOW CONSTRAINTS")
         assert listing["columns"] == [
             "name", "type", "entityType", "labelsOrTypes", "properties",
         ], f"AC62: unexpected SHOW CONSTRAINTS columns: {listing['columns']!r}"
@@ -165,7 +163,7 @@ class TestGraphSchemaStatements(SchemaTestBase):
             f"AC62/AC63: SHOW CONSTRAINTS must report the constraint created in "
             f"an earlier invocation; got {listing['rows']!r}")
 
-        assert self.ok("update", "DROP CONSTRAINT spec_key_uq") == {"ok": True}
+        assert self.ok("DROP CONSTRAINT spec_key_uq") == {"ok": True}
         assert self.schema_names("SHOW CONSTRAINTS") == [], (
             "AC62: a dropped constraint must be gone from a subsequent listing")
 
@@ -181,11 +179,9 @@ class TestGraphSchemaStatements(SchemaTestBase):
         and the duplicate is stored -- the silent integrity loss this test
         exists to catch.
         """
-        self.ok("update",
-                "CREATE CONSTRAINT spec_key_uq FOR (n:Spec) REQUIRE n.key IS UNIQUE")
+        self.ok("CREATE CONSTRAINT spec_key_uq FOR (n:Spec) REQUIRE n.key IS UNIQUE")
 
-        code, stdout, stderr = self.run(
-            "create", "CREATE (:Spec {key:'user-authentication'})")
+        code, stdout, stderr = self.run("CREATE (:Spec {key:'user-authentication'})")
         assert code == EXIT_ENGINE, (
             f"AC63: with spec_key_uq declared over Spec.key and a node already "
             f"carrying 'user-authentication', a second create of that key must "
@@ -194,9 +190,7 @@ class TestGraphSchemaStatements(SchemaTestBase):
             f"AC63: the refusal must name the constraint that failed; got {stderr!r}")
 
         # And the read-back reports one such node, not two.
-        count = self.ok(
-            "query",
-            "MATCH (n:Spec {key:'user-authentication'}) RETURN count(n)")["rows"][0][0]
+        count = self.ok("MATCH (n:Spec {key:'user-authentication'}) RETURN count(n)")["rows"][0][0]
         assert count == 1, (
             f"AC63: the duplicate must not have been stored; the graph holds "
             f"{count} nodes with that key")
@@ -206,10 +200,10 @@ class TestGraphSchemaStatements(SchemaTestBase):
         the schema, so an ordinary write later in the graph's life must not
         destroy a definition that was already there.
         """
-        self.ok("update", "CREATE INDEX spec_key FOR (n:Spec) ON (n.key)")
-        self.ok("create", "CREATE (:Spec {key:'audit-logging', title:'Audit logging', ord:4})")
-        self.ok("update", "MATCH (n:Spec {key:'audit-logging'}) SET n.status = 'draft'")
-        self.ok("delete", "MATCH (n:Spec {key:'audit-logging'}) DETACH DELETE n")
+        self.ok("CREATE INDEX spec_key FOR (n:Spec) ON (n.key)")
+        self.ok("CREATE (:Spec {key:'audit-logging', title:'Audit logging', ord:4})")
+        self.ok("MATCH (n:Spec {key:'audit-logging'}) SET n.status = 'draft'")
+        self.ok("MATCH (n:Spec {key:'audit-logging'}) DETACH DELETE n")
 
         assert self.schema_names() == ["spec_key"], (
             "AC63: an ordinary create, update and delete each checkpoint, and "
@@ -218,50 +212,50 @@ class TestGraphSchemaStatements(SchemaTestBase):
     # ---- AC65: names ---------------------------------------------------
 
     def test_ac65_declared_name_is_verbatim_and_derived_name_is_the_only_drop_key(self):
-        self.ok("update", "CREATE INDEX spec_key FOR (n:Spec) ON (n.key)")
+        self.ok("CREATE INDEX spec_key FOR (n:Spec) ON (n.key)")
         assert self.schema_names() == ["spec_key"], (
             "AC65: a declared name is used verbatim, with nothing appended")
 
-        self.ok("update", "CREATE INDEX FOR (n:Spec) ON (n.title)")
+        self.ok("CREATE INDEX FOR (n:Spec) ON (n.title)")
         assert sorted(self.schema_names()) == ["spec_key", "spec_title_hash"], (
             f"AC65: an omitted name is derived as <label>_<property>_<kind>; "
             f"got {self.schema_names()!r}")
 
         # The derived name is the ONLY name a drop accepts. Dropping by the name
         # a reader would guess fails, and leaves the index in place.
-        code, _stdout, stderr = self.run("update", "DROP INDEX spec_title")
+        code, _stdout, stderr = self.run("DROP INDEX spec_title")
         assert code == EXIT_ENGINE, (
             f"AC65: DROP INDEX by a name no object carries must fail with exit "
             f"{EXIT_ENGINE}; exit={code} stderr={stderr!r}")
         assert "spec_title_hash" in self.schema_names(), (
             "AC65: a failed drop must leave the index in place")
 
-        assert self.ok("update", "DROP INDEX spec_title_hash") == {"ok": True}
+        assert self.ok("DROP INDEX spec_title_hash") == {"ok": True}
         assert self.schema_names() == ["spec_key"], (
             "AC65: the derived name is what drops the unnamed index")
 
     def test_ac65_unnamed_constraint_is_derived_and_dropped_by_the_derived_name(self):
-        self.ok("update", "CREATE CONSTRAINT FOR (n:Spec) REQUIRE n.title IS NOT NULL")
+        self.ok("CREATE CONSTRAINT FOR (n:Spec) REQUIRE n.title IS NOT NULL")
         names = self.schema_names("SHOW CONSTRAINTS")
         assert len(names) == 1, f"AC65: expected one constraint; got {names!r}"
         derived = names[0]
         assert derived != "" and "title" in derived, (
             f"AC65: the derived constraint name must be built from the label and "
             f"property; got {derived!r}")
-        assert self.ok("update", f"DROP CONSTRAINT {derived}") == {"ok": True}
+        assert self.ok(f"DROP CONSTRAINT {derived}") == {"ok": True}
         assert self.schema_names("SHOW CONSTRAINTS") == [], (
             "AC65: the derived name is what drops the unnamed constraint")
 
     # ---- AC66: altering an index is two invocations ---------------------
 
     def test_ac66_altering_an_index_is_two_invocations_with_a_visible_gap(self):
-        self.ok("update", "CREATE INDEX spec_ord FOR (n:Spec) ON (n.ord)")
-        rows = self.schema_rows("update", "SHOW INDEXES")
-        kind_col = self.ok("update", "SHOW INDEXES")["columns"].index("type")
+        self.ok("CREATE INDEX spec_ord FOR (n:Spec) ON (n.ord)")
+        rows = self.schema_rows("SHOW INDEXES")
+        kind_col = self.ok("SHOW INDEXES")["columns"].index("type")
         assert rows[0][kind_col] == "hash", (
             f"AC66: an index is a hash index by default; got {rows[0]!r}")
 
-        assert self.ok("update", "DROP INDEX spec_ord") == {"ok": True}
+        assert self.ok("DROP INDEX spec_ord") == {"ok": True}
 
         # BETWEEN the two invocations the index is absent, and a query over the
         # property it covered still returns the correct rows -- which is what
@@ -269,16 +263,14 @@ class TestGraphSchemaStatements(SchemaTestBase):
         assert self.schema_names() == [], (
             "AC66: between the drop and the create, SHOW INDEXES must report the "
             "index absent")
-        ordered = self.ok(
-            "query", "MATCH (s:Spec) WHERE s.ord >= 2 RETURN s.key AS k ORDER BY s.ord")
+        ordered = self.ok("MATCH (s:Spec) WHERE s.ord >= 2 RETURN s.key AS k ORDER BY s.ord")
         assert [row[0] for row in ordered["rows"]] == [
             "credential-storage", "session-management"], (
             f"AC66: a query over the uncovered property must still return the "
             f"correct rows; got {ordered['rows']!r}")
 
-        self.ok("update",
-                "CREATE INDEX spec_ord FOR (n:Spec) ON (n.ord) OPTIONS {indexType: 'btree'}")
-        listing = self.ok("update", "SHOW INDEXES")
+        self.ok("CREATE INDEX spec_ord FOR (n:Spec) ON (n.ord) OPTIONS {indexType: 'btree'}")
+        listing = self.ok("SHOW INDEXES")
         kind_col = listing["columns"].index("type")
         assert [row[0] for row in listing["rows"]] == ["spec_ord"], (
             f"AC66: the recreated index must be reported; got {listing['rows']!r}")
@@ -290,12 +282,11 @@ class TestGraphSchemaStatements(SchemaTestBase):
         """Nothing in Groadmap detects, reports, or repairs the gap: the caller
         learns of it from SHOW INDEXES, which is what this asserts.
         """
-        self.ok("update", "CREATE INDEX spec_ord FOR (n:Spec) ON (n.ord)")
-        assert self.ok("update", "DROP INDEX spec_ord") == {"ok": True}
+        self.ok("CREATE INDEX spec_ord FOR (n:Spec) ON (n.ord)")
+        assert self.ok("DROP INDEX spec_ord") == {"ok": True}
 
         # A definition the engine refuses: composite indexes are out of scope.
-        code, _stdout, stderr = self.run(
-            "update", "CREATE INDEX spec_ord FOR (n:Spec) ON (n.ord, n.key)")
+        code, _stdout, stderr = self.run("CREATE INDEX spec_ord FOR (n:Spec) ON (n.ord, n.key)")
         assert code == EXIT_ENGINE, (
             f"AC66: a composite definition is refused by the engine with exit "
             f"{EXIT_ENGINE}; exit={code} stderr={stderr!r}")
@@ -310,32 +301,37 @@ class TestGraphSchemaFailureClasses(SchemaTestBase):
 
     # ---- AC67: one statement per invocation ----------------------------
 
-    def test_ac67_a_trailing_clause_is_refused_and_nothing_runs(self):
-        """The exit code alone does not establish this criterion.
+    def test_a_trailing_clause_after_ddl_executes_in_part_and_reports_success(self):
+        """SPEC/GRAPH.md acceptance criterion 38, last bullet, and
+        section "What Groadmap Does Not Check", item 6.
 
-        Executed rather than refused, the statement below exits 0 reporting
-        {"ok": true}, creates the index, and discards the MATCH ... SET without
-        an error, a notification, or any other trace -- so the assertions that
-        matter are that the index was NOT created and the property was NOT set.
+        This test asserted the opposite until sprint 41: Groadmap refused a DDL
+        statement carrying a further clause, with exit 6 and a message naming
+        the trailing text. That refusal was WITHDRAWN, and what it protected
+        against is now specified as a hazard rather than prevented.
+
+        The exit code alone establishes nothing here either -- it is 0 in both
+        readings -- so what is asserted is the split outcome: the index IS
+        created, the trailing clause is NOT run, and the caller is told the
+        statement succeeded.
         """
         mixed = ("CREATE INDEX spec_key FOR (n:Spec) ON (n.key) "
                  "MATCH (m:Spec) SET m.reviewed = true")
-        code, stdout, stderr = self.run("update", mixed)
-        assert code == EXIT_GUARD_RAIL, (
-            f"AC67: a DDL statement carrying a further clause must be refused "
-            f"with exit {EXIT_GUARD_RAIL}; exit={code} stderr={stderr!r}")
-        assert stdout.strip() == "", (
-            f"AC67: a refused statement produces no stdout; got {stdout!r}")
-        assert "MATCH (m:Spec) SET m.reviewed = true" in stderr, (
-            f"AC67: the refusal must name the trailing text; got {stderr!r}")
+        code, stdout, stderr = self.run(mixed)
+        assert code == EXIT_OK, (
+            f"the statement must execute rather than be refused; exit={code} "
+            f"stderr={stderr!r}")
+        assert '"ok": true' in stdout, (
+            f"the caller is told the whole statement succeeded; got {stdout!r}")
 
-        assert self.schema_names() == [], (
-            "AC67: the refused statement must not have created the index")
-        reviewed = self.ok(
-            "query", "MATCH (m:Spec) WHERE m.reviewed IS NOT NULL RETURN count(m)")
+        assert self.schema_names() == ["spec_key"], (
+            f"the schema half of the statement must have run; "
+            f"SHOW INDEXES reports {self.schema_names()!r}")
+        reviewed = self.ok("MATCH (m:Spec) WHERE m.reviewed IS NOT NULL RETURN count(m)")
         assert reviewed["rows"][0][0] == 0, (
-            f"AC67: the refused statement must not have set the property; "
-            f"got {reviewed['rows']!r}")
+            f"the MATCH ... SET half must have been discarded by the engine's schema "
+            f"parser, leaving `reviewed` absent on every node; got {reviewed['rows']!r}. "
+            f"This is the hazard: half the statement never ran and nothing said so")
 
     def test_ac67_a_property_named_after_a_clause_keyword_is_accepted(self):
         """The opposite direction, and the half a keyword scan fails.
@@ -343,8 +339,7 @@ class TestGraphSchemaFailureClasses(SchemaTestBase):
         A check that refused both would be worse than the defect, because it
         would deny the caller an index the engine would have created.
         """
-        assert self.ok(
-            "update", "CREATE INDEX spec_set FOR (n:Spec) ON (n.set)") == {"ok": True}
+        assert self.ok("CREATE INDEX spec_set FOR (n:Spec) ON (n.set)") == {"ok": True}
         assert self.schema_names() == ["spec_set"], (
             "AC67: an index on a property named after a clause keyword must be "
             "created and reported")
@@ -352,19 +347,19 @@ class TestGraphSchemaFailureClasses(SchemaTestBase):
         # And the same for the other clause keywords a scan would look for, so
         # the acceptance is not an accident of the word `set`.
         for prop in ("match", "delete", "remove", "merge", "create"):
-            assert self.ok(
-                "update",
-                f"CREATE INDEX spec_{prop} FOR (n:Spec) ON (n.{prop})") == {"ok": True}
+            assert self.ok(f"CREATE INDEX spec_{prop} FOR (n:Spec) ON (n.{prop})") == {"ok": True}
         assert sorted(self.schema_names()) == sorted(
             ["spec_set", "spec_match", "spec_delete", "spec_remove", "spec_merge",
              "spec_create"]), (
             f"AC67: every property named after a clause keyword must be "
             f"indexable; got {self.schema_names()!r}")
 
-    def test_ac67_the_trailing_clause_refusal_covers_all_four_ddl_forms(self):
-        self.ok("update", "CREATE INDEX spec_key FOR (n:Spec) ON (n.key)")
-        self.ok("update",
-                "CREATE CONSTRAINT spec_title_nn FOR (n:Spec) REQUIRE n.title IS NOT NULL")
+    def test_the_partial_execution_reaches_all_four_ddl_forms(self):
+        """The hazard is a property of the engine's schema parser, so it holds
+        for every DDL form the parser routes: two creates and two drops, each
+        of which runs and each of which discards the clause after it."""
+        self.ok("CREATE INDEX spec_key FOR (n:Spec) ON (n.key)")
+        self.ok("CREATE CONSTRAINT spec_title_nn FOR (n:Spec) REQUIRE n.title IS NOT NULL")
 
         mixed = [
             "CREATE INDEX spec_ord FOR (n:Spec) ON (n.ord) MATCH (m:Spec) SET m.reviewed = true",
@@ -374,23 +369,26 @@ class TestGraphSchemaFailureClasses(SchemaTestBase):
             "DROP CONSTRAINT spec_title_nn MATCH (m:Spec) SET m.reviewed = true",
         ]
         for query in mixed:
-            code, stdout, stderr = self.run("update", query)
-            assert code == EXIT_GUARD_RAIL, (
-                f"AC67: {query!r} must be refused with exit {EXIT_GUARD_RAIL}; "
-                f"exit={code} stderr={stderr!r}")
-            assert stdout.strip() == "", f"AC67: got stdout {stdout!r}"
+            code, stdout, stderr = self.run(query)
+            assert code == EXIT_OK, (
+                f"{query!r} must execute; exit={code} stderr={stderr!r}")
+            assert '"ok": true' in stdout, f"got stdout {stdout!r}"
 
-        # Nothing ran: the two objects declared above are untouched, no third
-        # was created, and no property was set.
-        assert sorted(self.schema_names()) == ["spec_key"], (
-            f"AC67: the refused statements must have changed no index; "
-            f"got {self.schema_names()!r}")
-        assert self.schema_names("SHOW CONSTRAINTS") == ["spec_title_nn"], (
-            "AC67: the refused DROP CONSTRAINT must have removed nothing")
-        reviewed = self.ok(
-            "query", "MATCH (m:Spec) WHERE m.reviewed IS NOT NULL RETURN count(m)")
+        # The DDL half of each ran: spec_key was dropped, spec_ord created,
+        # spec_title_nn dropped, spec_ord_uq created.
+        # spec_key dropped, spec_ord created, and the UNIQUE constraint's own
+        # backing index registered alongside it.
+        assert sorted(self.schema_names()) == ["__uniq__Spec.ord", "spec_ord"], (
+            f"each statement's DDL half must have run; SHOW INDEXES reports "
+            f"{sorted(self.schema_names())!r}")
+        assert self.schema_names("SHOW CONSTRAINTS") == ["spec_ord_uq"], (
+            f"the DROP CONSTRAINT and the CREATE CONSTRAINT must both have run; "
+            f"SHOW CONSTRAINTS reports {self.schema_names('SHOW CONSTRAINTS')!r}")
+
+        # And not one of the four trailing clauses ran.
+        reviewed = self.ok("MATCH (m:Spec) WHERE m.reviewed IS NOT NULL RETURN count(m)")
         assert reviewed["rows"][0][0] == 0, (
-            "AC67: no refused statement may have set the property")
+            "every trailing clause must have been discarded; one of the four ran")
 
     # ---- AC68: the failure classes and their exit codes -----------------
 
@@ -400,10 +398,9 @@ class TestGraphSchemaFailureClasses(SchemaTestBase):
         Groadmap cannot know whether an object exists without opening the store,
         so the check belongs where the knowledge is: both exit 1, not 6.
         """
-        self.ok("update", "CREATE INDEX spec_key FOR (n:Spec) ON (n.key)")
+        self.ok("CREATE INDEX spec_key FOR (n:Spec) ON (n.key)")
 
-        code, _stdout, stderr = self.run(
-            "update", "CREATE INDEX spec_key FOR (n:Spec) ON (n.key)")
+        code, _stdout, stderr = self.run("CREATE INDEX spec_key FOR (n:Spec) ON (n.key)")
         assert code == EXIT_ENGINE, (
             f"AC68: a duplicate CREATE INDEX exits {EXIT_ENGINE}, not "
             f"{EXIT_GUARD_RAIL}; exit={code} stderr={stderr!r}")
@@ -411,16 +408,13 @@ class TestGraphSchemaFailureClasses(SchemaTestBase):
             f"AC68: it is an engine failure, so it carries the database-error "
             f"class rather than the guard rail's validation error; got {stderr!r}")
 
-        assert self.ok(
-            "update",
-            "CREATE INDEX IF NOT EXISTS spec_key FOR (n:Spec) ON (n.key)") == {"ok": True}
+        assert self.ok("CREATE INDEX IF NOT EXISTS spec_key FOR (n:Spec) ON (n.key)") == {"ok": True}
 
-        code, _stdout, stderr = self.run("update", "DROP INDEX no_such_index")
+        code, _stdout, stderr = self.run("DROP INDEX no_such_index")
         assert code == EXIT_ENGINE, (
             f"AC68: DROP INDEX of an absent object exits {EXIT_ENGINE}, not "
             f"{EXIT_GUARD_RAIL}; exit={code} stderr={stderr!r}")
-        assert self.ok(
-            "update", "DROP INDEX no_such_index IF EXISTS") == {"ok": True}
+        assert self.ok("DROP INDEX no_such_index IF EXISTS") == {"ok": True}
 
         # The store is unchanged by the two failures and the two no-ops.
         assert self.schema_names() == ["spec_key"], (
@@ -432,7 +426,7 @@ class TestGraphSchemaFailureClasses(SchemaTestBase):
             "CREATE INDEX rel_since FOR ()-[e:DEPENDS_ON]-() ON (e.since)",
             "CREATE CONSTRAINT spec_nk FOR (n:Spec) REQUIRE (n.key, n.title) IS UNIQUE",
         ):
-            code, stdout, stderr = self.run("update", query)
+            code, stdout, stderr = self.run(query)
             assert code == EXIT_ENGINE, (
                 f"AC68: {query!r} is a definition the engine does not support and "
                 f"must exit {EXIT_ENGINE}; exit={code} stderr={stderr!r}")
@@ -441,16 +435,15 @@ class TestGraphSchemaFailureClasses(SchemaTestBase):
             "AC68: a refused definition registers nothing")
 
     def test_ac68_a_constraint_the_data_does_not_satisfy_registers_nothing(self):
-        """The failure class `graph update` did not previously have.
+        """The failure class `graph execute` did not previously have.
 
         The engine validates the graph's current data before registering a
         constraint. Groadmap's obligation is to surface that diagnostic intact,
         so the caller learns WHICH rule failed and on WHICH property.
         """
-        self.ok("create", "CREATE (:Spec {key:'user-authentication', ord:9})")
+        self.ok("CREATE (:Spec {key:'user-authentication', ord:9})")
 
-        code, stdout, stderr = self.run(
-            "update", "CREATE CONSTRAINT spec_key_uq FOR (n:Spec) REQUIRE n.key IS UNIQUE")
+        code, stdout, stderr = self.run("CREATE CONSTRAINT spec_key_uq FOR (n:Spec) REQUIRE n.key IS UNIQUE")
         assert code == EXIT_ENGINE, (
             f"AC68: a constraint the data does not satisfy exits {EXIT_ENGINE}; "
             f"exit={code} stderr={stderr!r}")
@@ -462,52 +455,55 @@ class TestGraphSchemaFailureClasses(SchemaTestBase):
             "AC68: nothing is registered when the validation fails")
 
         # Presence rules fail the same way, on a property some node lacks.
-        code, _stdout, stderr = self.run(
-            "update", "CREATE CONSTRAINT spec_status_nn FOR (n:Spec) REQUIRE n.status IS NOT NULL")
+        code, _stdout, stderr = self.run("CREATE CONSTRAINT spec_status_nn FOR (n:Spec) REQUIRE n.status IS NOT NULL")
         assert code == EXIT_ENGINE, (
             f"AC68: a presence rule over a property some node lacks exits "
             f"{EXIT_ENGINE}; exit={code} stderr={stderr!r}")
         assert self.schema_names("SHOW CONSTRAINTS") == [], (
             "AC68: nothing is registered when the validation fails")
 
-    def test_ac68_a_guard_rail_refusal_is_the_other_exit_code(self):
-        """What distinguishes the engine's 1 from the guard rail's 6.
+    def test_the_retired_subcommand_names_are_the_other_exit_code(self):
+        """What used to distinguish the engine's 1 from the guard rail's 6.
 
-        Asserted beside the engine failures above rather than in a module of its
-        own, because the criterion is about the CONTRAST: two classes that both
-        look like input errors carry different codes, and a reader who sees only
-        one of them learns nothing.
+        This test drove five operation-class mismatches, one per subcommand, and
+        required each to exit 6 with a validation-error message. There is no
+        operation class and there are no five subcommands, so the contrast the
+        criterion is about has moved: the exit code a caller now meets for
+        naming one of the retired subcommands is 127, the dispatch failure, and
+        it is worth asserting beside the engine's 1 for the same reason the old
+        pair was -- a reader who sees only one of them learns nothing.
         """
-        class_mismatches = [
-            ("query", "CREATE INDEX spec_key FOR (n:Spec) ON (n.key)"),
-            ("search", "DROP INDEX spec_key"),
-            ("create", "CREATE CONSTRAINT c FOR (n:Spec) REQUIRE n.key IS UNIQUE"),
-            ("delete", "DROP CONSTRAINT c"),
-            ("update", "CREATE (n:Spec {key:'smuggled'})"),
-        ]
-        for subcmd, query in class_mismatches:
-            code, stdout, stderr = self.run(subcmd, query)
-            assert code == EXIT_GUARD_RAIL, (
-                f"AC68: an operation-class mismatch on `graph {subcmd}` exits "
-                f"{EXIT_GUARD_RAIL}; exit={code} stderr={stderr!r}")
-            assert "validation error" in stderr, (
-                f"AC68: a guard-rail refusal carries the validation-error class, "
-                f"not the engine's; got {stderr!r}")
-            assert stdout.strip() == "", f"AC68: got stdout {stdout!r}"
+        for name in ("create", "query", "update", "delete", "search"):
+            code, stdout, stderr = self.test.run_cmd(
+                ["graph", name, "-r", self.roadmap, "--query",
+                 "CREATE INDEX spec_key FOR (n:Spec) ON (n.key)"], check=False)
+            assert code == 127, (
+                f"`rmp graph {name}` exits 127 as an unresolved subcommand; "
+                f"exit={code} stderr={stderr!r}")
+            assert "validation error" not in stderr, (
+                f"a dispatch failure is not a validation failure; got {stderr!r}")
+            assert stdout.strip() == "", f"got stdout {stdout!r}"
 
         assert self.schema_names() == [] and self.node_count() == 3, (
-            "AC68: a guard-rail refusal precedes the store open, so nothing changed")
+            "an unresolved subcommand never reaches the graph store, so nothing changed")
 
     # ---- AC69: DDL the engine will not route to its schema parser -------
 
-    def test_ac69_badly_spaced_ddl_is_admitted_and_refused_by_the_engine(self):
-        """The whole cost of the DDL matcher's deliberate whitespace tolerance.
+    def test_ac69_badly_spaced_ddl_is_refused_by_the_engine(self):
+        """SPEC/GRAPH.md section "What Groadmap Does Not Check", item 7.
 
-        The matcher stays wide because narrowing it would reopen a real hole on
-        the other four subcommands, which must refuse the class at any spacing
-        (AC27). The cost here is a misleading diagnostic and exit 1 in place of
-        a clear one and exit 6 -- not a schema change that slipped through, which
-        is what the assertions after the exit code establish.
+        The engine routes a statement to its schema parser by testing it against
+        literal prefixes carrying exactly one space. A statement that misses
+        those prefixes by its spacing goes to the general Cypher grammar, which
+        has no such production and rejects it with a diagnostic that names the
+        keyword rather than the spacing.
+
+        Groadmap used to admit these statements through a deliberately wide DDL
+        matcher and let the engine refuse them, which produced the same outcome
+        by a different route. It now inspects nothing at all, so the outcome is
+        the engine's alone. The cost is a misleading diagnostic and exit 1 --
+        not a schema change that slipped through, which is what the assertions
+        after the exit code establish.
         """
         before_nodes, before_edges = self.node_count(), self.edge_count()
 
@@ -522,14 +518,14 @@ class TestGraphSchemaFailureClasses(SchemaTestBase):
             "DROP  CONSTRAINT spec_key_uq",
         ]
         for query in spellings:
-            code, stdout, stderr = self.run("update", query)
+            code, stdout, stderr = self.run(query)
             assert code == EXIT_ENGINE, (
                 f"AC69: {query!r} must fail with exit {EXIT_ENGINE}, not "
-                f"{EXIT_GUARD_RAIL}: the guard rail admits it and the engine "
+                f"{EXIT_GUARD_RAIL}: Groadmap inspects nothing and the engine "
                 f"refuses it; exit={code} stderr={stderr!r}")
             assert "validation error" not in stderr, (
-                f"AC69: the refusal must be the engine's, not a guard-rail "
-                f"message; got {stderr!r}")
+                f"AC69: the refusal must be the engine's, not a validation "
+                f"message of Groadmap's; got {stderr!r}")
             assert stdout.strip() == "", (
                 f"AC69: {query!r} must produce no stdout; got {stdout!r}")
 
@@ -542,17 +538,18 @@ class TestGraphSchemaFailureClasses(SchemaTestBase):
 class TestGraphSchemaOnEverySurface(SchemaTestBase):
     """AC64: every surface that can report the schema reports the same schema.
 
-    The exit code establishes nothing here. A read path constructed WITHOUT the
+    The exit code establishes nothing here. An engine constructed WITHOUT the
     recovered schema answers the identical query with zero rows and exits 0, so
     success is exactly what the defect returns -- the rows are compared instead.
+
+    Two surfaces remain: `rmp graph execute` and the web graph data endpoint.
     """
 
     def setup_method(self):
         super().setup_method()
         self._procs = []
-        self.ok("update", "CREATE INDEX spec_key FOR (n:Spec) ON (n.key)")
-        self.ok("update",
-                "CREATE CONSTRAINT spec_title_nn FOR (n:Spec) REQUIRE n.title IS NOT NULL")
+        self.ok("CREATE INDEX spec_key FOR (n:Spec) ON (n.key)")
+        self.ok("CREATE CONSTRAINT spec_title_nn FOR (n:Spec) REQUIRE n.title IS NOT NULL")
 
     def teardown_method(self):
         for proc in self._procs:
@@ -606,92 +603,115 @@ class TestGraphSchemaOnEverySurface(SchemaTestBase):
 
     # ---- the comparison ----------------------------------------------
 
-    def test_ac64_the_three_cli_surfaces_report_identical_schema_rows(self):
-        for statement in ("SHOW INDEXES", "SHOW CONSTRAINTS"):
-            reported = {}
-            for subcmd in ("update", "query", "search"):
-                result = self.ok(subcmd, statement)
-                reported[subcmd] = (result["columns"], result["rows"])
+    def test_the_cli_reports_the_schema_the_store_holds_across_the_process_boundary(self):
+        """SPEC/GRAPH.md section "Recovered Schema on Every Surface".
 
-            # Non-vacuity first: an empty listing is exactly what a read path
-            # WITHOUT the recovered schema returns, so three agreeing empties
-            # would pass a comparison that establishes nothing.
-            declared = "spec_key" if statement == "SHOW INDEXES" else "spec_title_nn"
-            for subcmd, (_columns, rows) in reported.items():
-                names = [row[0] for row in rows]
-                assert names == [declared], (
-                    f"AC64: `graph {subcmd} --query {statement!r}` reported "
-                    f"{names!r}, which is not the single declared name "
-                    f"[{declared!r}]. Zero rows and exit 0 is exactly what a "
-                    f"surface constructed without the recovered schema returns")
+        This compared THREE CLI surfaces -- `graph update`, `graph query` and
+        `graph search` -- against each other. There is one CLI surface now, so
+        the comparison that replaces it is against a SECOND OPENING of the
+        store: each read below is its own process, and the schema it reports is
+        the schema recovery reconstructed from disk rather than anything an
+        earlier invocation left in memory.
 
-            assert reported["update"] == reported["query"] == reported["search"], (
-                f"AC64: the three surfaces disagree about {statement!r}: "
-                f"{reported!r}")
-
-    def test_ac64_the_name_reported_is_the_one_the_caller_declared(self):
-        """Not a name synthesised by the engine: an object created under a
-        declared name must be reported under it on every surface, which is what
-        makes the comparison above a statement about the recovered definitions
-        rather than about a listing rebuilt from the data.
+        The exit code establishes nothing here either. An engine constructed
+        WITHOUT the recovered schema answers the identical statement with zero
+        rows and exits 0, so success is exactly what the defect returns; the
+        ROWS are compared, and a declared name is what they must carry.
         """
-        for subcmd in ("update", "query", "search"):
-            assert self.schema_names("SHOW INDEXES", subcmd=subcmd) == ["spec_key"], (
-                f"AC64: `graph {subcmd}` must report the declared name")
-            assert self.schema_names("SHOW CONSTRAINTS", subcmd=subcmd) == [
-                "spec_title_nn"], (
-                f"AC64: `graph {subcmd}` must report the declared name")
+        for statement, declared in (("SHOW INDEXES", "spec_key"),
+                                    ("SHOW CONSTRAINTS", "spec_title_nn")):
+            first = self.ok(statement)
+            second = self.ok(statement)
 
-    def test_ac64_the_web_endpoint_refuses_the_statement_the_cli_answers(self):
+            names = [row[0] for row in first["rows"]]
+            assert names == [declared], (
+                f"`graph execute --query {statement!r}` reported {names!r}, which is "
+                f"not the single declared name [{declared!r}]. Zero rows and exit 0 is "
+                f"exactly what a surface constructed without the recovered schema "
+                f"returns, so an empty listing would make this comparison vacuous")
+            assert (first["columns"], first["rows"]) == (second["columns"], second["rows"]), (
+                f"two separate invocations disagree about {statement!r}: "
+                f"{first!r} then {second!r}")
+
+    def test_the_name_reported_is_the_one_the_caller_declared(self):
+        """Not a name synthesised by the engine: an object created under a
+        declared name must be reported under it, which is what makes the
+        comparison above a statement about the recovered DEFINITIONS rather
+        than about a listing rebuilt from the data.
+        """
+        assert self.schema_names("SHOW INDEXES") == ["spec_key"], (
+            "`graph execute` must report the declared index name")
+        assert self.schema_names("SHOW CONSTRAINTS") == ["spec_title_nn"], (
+            "`graph execute` must report the declared constraint name")
+
+    def test_ac64_the_web_endpoint_answers_an_empty_graph_and_the_cli_the_rows(self):
         """The fourth surface, and why it is asserted differently.
 
         The graph data endpoint's response shape is {"nodes", "edges"} and
         carries no tabular rows (SPEC/DATA_FORMATS.md "Graph View Data"), so it
-        has nowhere to put a schema listing. It therefore REFUSES the class
-        before execution -- HTTP 400, kind schema_introspection, and a body that
-        names `rmp graph query` as where the listing is obtained -- rather than
-        executing the statement and answering the empty graph.
+        has nowhere to put a schema listing. It EXECUTES the statement like any
+        other and answers HTTP 200 with {"nodes": [], "edges": []}, because the
+        rows the statement returns carry no node and no edge (SPEC/WEB.md AC156
+        and AC157, canonical for the endpoint's half of AC64).
 
-        The empty graph was the defect (rmp task #344). Against this store,
-        which holds the spec_key index the three CLI surfaces report above,
-        {"nodes": [], "edges": []} with HTTP 200 reported success while stating
-        something false, and was indistinguishable from a query that genuinely
-        matched nothing. Answering HTTP 200 here MUST fail this test
-        (SPEC/WEB.md AC157, which is canonical for the endpoint's half of AC64).
+        The empty answer is only defensible ALONGSIDE the CLI read, and the two
+        are asserted together for that reason: the endpoint's answer is empty
+        because of its response shape, not because the store's schema is empty,
+        and the three CLI assertions above are what establish the difference.
+        Asserting that the endpoint reports the index row MUST fail this test.
+
+        This test has asserted the opposite twice before. The endpoint answered
+        HTTP 200 with an empty graph and nothing beside it (the defect of rmp
+        task #344, an empty graph reporting success with no way to tell it from
+        a query that matched nothing); then it refused the class outright with
+        kind schema_introspection; and the guard rail is now withdrawn (rmp task
+        #364), so the empty graph is back -- this time as the specified answer,
+        with the CLI read named as where the listing is obtained.
         """
         port = self._start_web()
 
         for statement in ("SHOW INDEXES", "SHOW INDEX",
                           "SHOW CONSTRAINTS", "SHOW CONSTRAINT",
-                          "SHOW INDEXES YIELD name RETURN name",
-                          # The same class at a spacing the CLI refuses: the
-                          # endpoint answers it identically (SPEC/WEB.md AC151).
-                          "SHOW  INDEXES"):
+                          "SHOW INDEXES YIELD name RETURN name"):
             status, body = self._graph_data(port, statement)
-            assert status == 400, (
-                f"AC64/AC157: the endpoint must refuse {statement!r} rather "
-                f"than answer it; got {status} {body!r}. HTTP 200 with an empty "
-                f"graph is the defect this refusal replaces, against a store "
-                f"that does hold the spec_key index")
-            err = json.loads(body)
-            assert err.get("kind") == "schema_introspection", (
-                f"AC64/AC157: {statement!r} must carry kind "
-                f"schema_introspection; got {err!r}")
-            assert set(err) == {"error", "kind"}, (
-                f"AC64/AC157: the refusal carries neither nodes nor edges; "
-                f"got {err!r}")
-            assert "rmp graph query" in err["error"], (
-                f"AC157: the message must name `rmp graph query` as where a "
-                f"schema listing is obtained; got {err['error']!r}")
-            for forbidden in ("keyword spacing", "one space", "not read-only"):
-                assert forbidden not in err["error"], (
-                    f"AC151: the message must never carry {forbidden!r}; "
-                    f"got {err['error']!r}")
+            assert status == 200, (
+                f"AC64/AC157: the endpoint executes {statement!r} and answers "
+                f"200; got {status} {body!r}")
+            assert json.loads(body) == {"nodes": [], "edges": []}, (
+                f"AC64/AC157: {statement!r} returns tabular rows the response "
+                f"shape cannot carry, so the answer is the empty graph; "
+                f"got {body!r}")
+
+        # The same class at a spacing the ENGINE does not route to its schema
+        # parser. The endpoint holds no opinion about the spacing and hands the
+        # statement to the engine, which fails it: HTTP 400, kind execution, the
+        # engine's own diagnostic (SPEC/WEB.md AC151).
+        status, body = self._graph_data(port, "SHOW  INDEXES")
+        assert status == 400, (
+            f"AC151: a badly spaced SHOW is not routed to the engine's schema "
+            f"parser and fails there; got {status} {body!r}")
+        err = json.loads(body)
+        assert err.get("kind") == "execution", (
+            f"AC151: the failure is the engine's, so the kind is execution; "
+            f"got {err!r}")
+        assert set(err) == {"error", "kind"}, (
+            f"AC151: the failure body carries neither nodes nor edges; got {err!r}")
+        assert "cypher:" in err["error"], (
+            f"AC151: the message must be the engine's own diagnostic; got "
+            f"{err['error']!r}")
+
+        # The other half of AC157, without which the empty answers above are
+        # consistent with a store that simply has no schema: the CLI answers the
+        # identical statement with the rows.
+        assert self.schema_names("SHOW INDEXES") == ["spec_key"], (
+            "AC157: `rmp graph execute` must report the declared index, which "
+            "is what makes the endpoint's empty answer a property of its "
+            "response shape rather than of the store")
 
         # The control: the same endpoint, the same store, an ordinary read. It
-        # returns the seeded graph, which is what makes the refusals above a
-        # fact about a CLASS rather than about an endpoint that refuses
-        # everything or a store that is empty.
+        # returns the seeded graph, which is what makes the empty answers above
+        # a fact about a CLASS of statement rather than about an endpoint that
+        # answers everything empty or a store that is empty.
         status, body = self._graph_data(port, "MATCH (n:Spec) RETURN n")
         assert status == 200, f"AC64: got {status} {body!r}"
         nodes = json.loads(body)["nodes"]
@@ -699,10 +719,12 @@ class TestGraphSchemaOnEverySurface(SchemaTestBase):
             f"AC64: the endpoint reads the same store the schema was declared "
             f"on, which holds three Spec nodes; got {len(nodes)}")
 
-        # And the schema is still there afterwards: the refusal precedes the
-        # store open, so it read nothing and changed nothing.
-        assert self.schema_names("SHOW INDEXES", subcmd="query") == ["spec_key"], (
-            "AC157: a refused request opens no store and changes nothing")
+        # And the schema is still there afterwards: a statement that wrote
+        # nothing neither checkpointed nor truncated, so nothing was lost.
+        assert self.schema_names("SHOW INDEXES") == ["spec_key"], (
+            "AC157: a statement that writes nothing changes nothing")
+        assert self.schema_names("SHOW CONSTRAINTS") == ["spec_title_nn"], (
+            "AC157: the declared constraint survives too")
 
 
 def _run_all():

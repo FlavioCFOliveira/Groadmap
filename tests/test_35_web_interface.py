@@ -213,11 +213,11 @@ class TestWebInterface:
         self.closed_task_id = t_closed
 
         # A small knowledge graph: two nodes and one relationship.
-        self._run(["graph", "create", "-r", ROADMAP,
+        self._run(["graph", "execute", "-r", ROADMAP,
                    "--query", "CREATE (s:Spec {key:'passwordless-auth'})"])
-        self._run(["graph", "create", "-r", ROADMAP,
+        self._run(["graph", "execute", "-r", ROADMAP,
                    "--query", "CREATE (c:Code {path:'internal/auth/magiclink.go'})"])
-        self._run(["graph", "create", "-r", ROADMAP,
+        self._run(["graph", "execute", "-r", ROADMAP,
                    "--query",
                    "MATCH (s:Spec {key:'passwordless-auth'}), "
                    "(c:Code {path:'internal/auth/magiclink.go'}) "
@@ -4814,78 +4814,198 @@ class TestWebInterface:
         assert len(explicit["edges"]) == len(baseline["edges"])
         assert len(baseline["nodes"]) >= 2 and len(baseline["edges"]) >= 1
 
-    def test_query_bar_rejects_write_and_ddl_without_executing(self):
-        """AC47: a writing or DDL query is rejected (HTTP 400, kind
-        not_read_only) before execution; the store is unchanged."""
-        proc, port = self._start(["--port", "0"])
-        before = json.loads(self._req(port, self._graph_data(port))[2])
-        write_queries = [
-            "MATCH (n) DELETE n",
-            "MATCH (n) DETACH DELETE n",
-            "CREATE (x:Spec {key:'injected-by-web'})",
-            "MATCH (n:Spec) SET n.compromised = true",
-            "CREATE INDEX ON :Spec(key)",
-            "create   index spec_idx",  # non-canonical spacing/casing
-        ]
-        for q in write_queries:
-            status, _, body = self._req(port, self._graph_data(port, q=q))
-            assert status == 400, f"write query not rejected with 400: {q!r}"
-            err = json.loads(body)
-            assert err.get("kind") == "not_read_only", (
-                f"query {q!r} not classified as not_read_only: {err}"
-            )
-        # The store is unchanged: the default read returns the same node count
-        # and no injected node appeared.
-        after = json.loads(self._req(port, self._graph_data(port))[2])
-        assert len(after["nodes"]) == len(before["nodes"]), (
-            "rejected write queries must not change the store"
-        )
-        for n in after["nodes"]:
-            assert n["properties"].get("key") != "injected-by-web", (
-                "a rejected CREATE must not have inserted a node"
-            )
+    def test_query_bar_executes_writes_and_they_persist(self):
+        """AC47: a statement submitted through the query bar is executed
+        whatever it does, its change is committed, and a SEPARATE process finds
+        it afterwards.
 
-    def test_query_bar_refuses_schema_introspection_at_every_spacing(self):
-        """AC157 and AC151: the endpoint refuses the whole schema-introspection
-        family before execution, with HTTP 400 and kind schema_introspection,
-        and the keyword spacing changes nothing about the answer.
+        The read-back through `rmp graph execute` is what the criterion asks
+        for, and it is not a courtesy. The endpoint opens the store per request,
+        so a write executed against the request's own in-memory graph and
+        discarded when the request ended would answer 200 exactly as a real
+        write does; only a second reader, over a second store open, tells the
+        two apart. That is precisely what an endpoint built without a
+        transactional store does.
 
-        The defect this replaces: the endpoint ACCEPTED a well-spaced SHOW
-        command, executed it, and returned {"nodes": [], "edges": []} with HTTP
-        200 -- an empty graph reporting success against a store that does hold a
-        schema, and indistinguishable from a query that genuinely matched
-        nothing (SPEC/WEB.md - Query-Bar Error Handling, case 10). The store used
-        here carries a declared index and a declared constraint, so the old 200
-        would have been stating something false.
-
-        Spacing equivalence is asserted by comparing the two RESPONSES to each
-        other rather than each against a literal: that is what makes "the
-        spacing changes nothing" the claim under test.
-
-        The CLI is unaffected, and this test pins that too: the same badly
-        spaced statement given to `rmp graph query`, `rmp graph search` and
-        `rmp graph update` still exits 6 with a message naming the keyword
-        spacing (SPEC/GRAPH.md AC39). The divergence is deliberate -- the CLI
-        answers the class, so a working spelling is owed there, while this
-        endpoint refuses the class, so no spelling works here.
+        The status alone establishes nothing in the other direction either.
+        Before this change the endpoint answered 400 with kind not_read_only,
+        and with the guard rail withdrawn but the read-path engine still in
+        place it answered 400 with kind execution and the engine's own "Run does
+        not execute write or DDL statements". Both are refusals; only a 200 plus
+        a read-back meets the criterion.
         """
-        # The store must hold a schema for the refusal to be worth making, and
-        # the CLI is the surface that reports one, which is also the non-vacuity
-        # check: an empty listing is what a broken read path returns.
-        self._run(["graph", "update", "-r", ROADMAP, "--query",
+        proc, port = self._start(["--port", "0"])
+
+        # CREATE: executed, committed, and found by the CLI afterwards.
+        status, _, body = self._req(
+            port, self._graph_data(port, q="CREATE (n:WebProbe {key:'p'})"))
+        assert status == 200, (
+            f"AC47: a CREATE through the query bar must be executed, not "
+            f"refused; got {status} {body!r}")
+        _, out, _ = self._run(["graph", "execute", "-r", ROADMAP, "--query",
+                               "MATCH (n:WebProbe {key:'p'}) RETURN count(n)"])
+        assert json.loads(out)["rows"][0][0] == 1, (
+            "AC47: the node the endpoint created must be present on a separate "
+            "read; a 200 that stored nothing is the silent-wrong-data failure "
+            f"this criterion exists against; got {out!r}")
+
+        # The store is checkpointed: the snapshot exists and the log is
+        # truncated (SPEC/GRAPH.md section Synchronous Checkpoint on Write).
+        graph_dir = Path(self.home) / ".roadmaps" / ROADMAP / "graph"
+        assert (graph_dir / "snapshot" / "manifest.json").exists(), (
+            "AC47: a write through the endpoint must checkpoint")
+        wal_after_write = (graph_dir / "wal").stat().st_size
+
+        # SET: the property change is committed and visible afterwards.
+        status, _, body = self._req(port, self._graph_data(
+            port, q="MATCH (n:WebProbe {key:'p'}) SET n.state = 'seen'"))
+        assert status == 200, f"a SET must execute; got {status} {body!r}"
+        _, out, _ = self._run(["graph", "execute", "-r", ROADMAP, "--query",
+                               "MATCH (n:WebProbe {key:'p'}) RETURN n.state"])
+        assert json.loads(out)["rows"][0][0] == "seen", (
+            f"AC47: the property change must persist; got {out!r}")
+
+        # DETACH DELETE: the node is gone afterwards.
+        status, _, body = self._req(
+            port, self._graph_data(port, q="MATCH (n:WebProbe) DETACH DELETE n"))
+        assert status == 200, (
+            f"AC47: a DETACH DELETE must execute; got {status} {body!r}")
+        _, out, _ = self._run(["graph", "execute", "-r", ROADMAP, "--query",
+                               "MATCH (n:WebProbe) RETURN count(n)"])
+        assert json.loads(out)["rows"][0][0] == 0, (
+            f"AC47: the delete must persist; got {out!r}")
+
+        # Every write checkpointed, so the log never grew without bound.
+        assert (graph_dir / "wal").stat().st_size <= wal_after_write * 4, (
+            "AC47: each write must checkpoint and truncate the log; it is "
+            f"{(graph_dir / 'wal').stat().st_size} bytes and was "
+            f"{wal_after_write} after the first write")
+
+        # The seeded graph is intact: the writes above touched only their own
+        # nodes.
+        status, _, body = self._req(port, self._graph_data(port))
+        assert status == 200
+        assert json.loads(body)["nodes"], (
+            "the roadmap's own graph must survive the probe writes")
+
+    def test_query_bar_publishes_exactly_two_failure_kinds(self):
+        """AC123: the endpoint's `kind` takes exactly two values,
+        invalid_limit and execution, and the criterion requires the CLOSED set to
+        be asserted rather than only the two members -- "a third value is exactly
+        what an endpoint that started refusing statements again would publish".
+
+        The corpus is made of the statements the withdrawn guard rail refused: a
+        write, schema DDL, a schema-introspection command at both spacings, and
+        an undirected relationship read. Each is either served or fails in the
+        engine; none of them may produce a kind of its own.
+        """
+        proc, port = self._start(["--port", "0"])
+        withdrawn = ("not_read_only", "schema_introspection",
+                     "relationship_read_direction", "invalid_keyword_spacing")
+
+        probes = [
+            ("MATCH (n) DETACH DELETE n", None),
+            ("CREATE (n:WebProbe {key:'closed-set'})", None),
+            ("CREATE INDEX web_idx FOR (n:Spec) ON (n.key)", None),
+            ("DROP INDEX web_idx", None),
+            ("SHOW INDEXES", None),
+            ("SHOW  INDEXES", None),
+            ("MATCH (a)-[e]-(b) RETURN type(e)", None),
+            ("MATCH (a)<-[e]-(b) RETURN type(e)", None),
+            ("MATCH (n) RETURN", None),
+            ("SHOW DATABASES", None),
+            (None, "7"),
+        ]
+        for query, limit in probes:
+            status, _, body = self._req(
+                port, self._graph_data(port, q=query, limit=limit))
+            assert status in (200, 400), (
+                f"{query!r} limit={limit!r}: status = {status}, want 200 or 400; "
+                f"{body!r}")
+            if status == 200:
+                continue
+            err = json.loads(body)
+            assert err.get("kind") in ("invalid_limit", "execution"), (
+                f"AC123: {query!r} limit={limit!r} carries kind "
+                f"{err.get('kind')!r}, outside the closed set "
+                f"{{invalid_limit, execution}}: {err!r}")
+            for gone in withdrawn:
+                assert gone not in body, (
+                    f"AC123: the body for {query!r} names the withdrawn kind "
+                    f"{gone!r}: {body!r}")
+
+    def test_schema_listing_is_read_from_the_cli_not_the_endpoint(self):
+        """AC157 and AC156: a schema-introspection command is EXECUTED and
+        answered HTTP 200 with {"nodes": [], "edges": []}, while
+        `rmp graph execute` answers the identical statement with the rows naming
+        the index the caller declared.
+
+        Both halves are required together. The endpoint's answer is empty
+        because its response shape carries nodes and edges, not because the
+        store's schema is empty, and the CLI read is what establishes the
+        difference. Asserting that the endpoint reports the index row MUST fail
+        AC157.
+
+        This test has now asserted three different things, and each step
+        withdrew a rule rather than adding one: the endpoint used to publish an
+        invalid_keyword_spacing class; then it refused the whole family at every
+        spacing (rmp task #344); and the guard rail is now withdrawn entirely
+        (rmp task #364), so the empty graph is back and is the specified answer.
+        """
+        # The store must hold a schema, or "the endpoint answers an empty graph"
+        # would be true for the wrong reason and the distinction AC157 turns on
+        # would be unobservable.
+        self._run(["graph", "execute", "-r", ROADMAP, "--query",
                    "CREATE INDEX spec_key FOR (n:Spec) ON (n.key)"])
-        _, out, _ = self._run(["graph", "query", "-r", ROADMAP,
+        _, out, _ = self._run(["graph", "execute", "-r", ROADMAP,
                                "--query", "SHOW INDEXES"])
-        declared = [row[json.loads(out)["columns"].index("name")]
-                    for row in json.loads(out)["rows"]]
+        listing = json.loads(out)
+        declared = [row[listing["columns"].index("name")] for row in listing["rows"]]
         assert "spec_key" in declared, (
-            f"AC157: the store must hold the declared index for the refusal to "
-            f"be refusing something real; SHOW INDEXES reported {declared!r}"
-        )
+            f"AC157: the store must hold the declared index; SHOW INDEXES "
+            f"reported {declared!r}")
 
         proc, port = self._start(["--port", "0"])
 
-        # Every member of the family, at one space and at every other spacing.
+        for query in ("SHOW INDEXES", "SHOW INDEX", "SHOW CONSTRAINTS",
+                      "SHOW CONSTRAINT", "show indexes",
+                      "SHOW INDEXES YIELD name RETURN name",
+                      "SHOW INDEXES WHERE type = 'hash'"):
+            status, _, body = self._req(port, self._graph_data(port, q=query))
+            assert status == 200, (
+                f"AC157: {query!r} must be executed and answered 200; got "
+                f"{status} {body!r}")
+            assert json.loads(body) == {"nodes": [], "edges": []}, (
+                f"AC157: {query!r} returns tabular rows the response shape "
+                f"cannot carry, so the answer is the empty graph; got {body!r}")
+
+        # The other half: the CLI answers the same statement with the rows.
+        _, out, _ = self._run(["graph", "execute", "-r", ROADMAP,
+                               "--query", "SHOW INDEXES"])
+        assert "spec_key" in out, (
+            f"AC157: `rmp graph execute` must report the declared index, which "
+            f"is what makes the endpoint's empty answer a property of its "
+            f"response shape rather than of the store; got {out!r}")
+
+    def test_schema_keyword_spacing_is_the_engines_verdict(self):
+        """AC151: a schema-introspection command written with anything but a
+        single space between its two keywords is answered as the ENGINE's own
+        parse failure -- HTTP 400, kind execution, and the engine's diagnostic in
+        error. The endpoint neither refuses it before execution nor repairs the
+        spacing, and it publishes no class of its own for it.
+
+        The same statement written with one space is answered HTTP 200 with an
+        empty graph, so the two spellings differ in the response and the
+        difference is the engine's routing rather than a rule of this
+        endpoint's (SPEC/GRAPH.md section "What Groadmap Does Not Check",
+        item 7).
+
+        The engine diagnostic is asserted and not only the status: a refusal
+        decided before execution could not carry one, so it is what
+        distinguishes "the engine rejected it" from "the endpoint rejected it".
+        """
+        proc, port = self._start(["--port", "0"])
+
         for one_space, misspaced in (
             ("SHOW INDEXES", "SHOW  INDEXES"),
             ("SHOW INDEX", "SHOW\tINDEX"),
@@ -4894,180 +5014,170 @@ class TestWebInterface:
             ("SHOW INDEXES YIELD name RETURN name",
              "SHOW  INDEXES YIELD name RETURN name"),
         ):
-            responses = {}
-            for query in (one_space, misspaced):
-                status, _, body = self._req(port, self._graph_data(port, q=query))
-                assert status == 400, (
-                    f"AC157: {query!r} must be refused with 400; got {status} "
-                    f"{body!r}. HTTP 200 with an empty graph is the defect this "
-                    f"refusal replaces"
-                )
-                err = json.loads(body)
-                assert err.get("kind") == "schema_introspection", (
-                    f"AC157: {query!r} must carry kind schema_introspection, "
-                    f"not {err.get('kind')!r}: {err}"
-                )
-                assert set(err) == {"error", "kind"}, (
-                    f"the failure body must carry exactly error and kind, and "
-                    f"neither nodes nor edges; got {err!r}"
-                )
-                reason = err["error"]
-                # What the message must say: the page draws a graph, and
-                # `rmp graph query` is where the listing is obtained.
-                for fragment in ("graph", "nodes and edges", "schema listing",
-                                 "rmp graph query"):
-                    assert fragment in reason, (
-                        f"AC157: the message for {query!r} must name "
-                        f"{fragment!r}; got {reason!r}"
-                    )
-                # What it must never say. Correcting the spacing changes nothing
-                # here, the statement writes nothing, and it never reached the
-                # engine.
-                for forbidden in ("keyword spacing", "one space", "not read-only",
-                                  "cypher: parse", 'unexpected "SHOW"'):
-                    assert forbidden not in reason, (
-                        f"AC151: the message for {query!r} must never carry "
-                        f"{forbidden!r}; got {reason!r}"
-                    )
-                assert err["kind"] != "invalid_keyword_spacing", (
-                    "AC123: invalid_keyword_spacing is not a value this "
-                    "endpoint publishes"
-                )
-                responses[query] = (status, body)
+            status, _, body = self._req(port, self._graph_data(port, q=one_space))
+            assert status == 200 and json.loads(body) == {"nodes": [], "edges": []}, (
+                f"AC151: the well-spaced {one_space!r} must be executed and "
+                f"answered 200 with an empty graph; got {status} {body!r}")
 
-            # AC151 proper: the two spellings are answered identically, asserted
-            # by comparing the responses to each other.
-            assert responses[one_space] == responses[misspaced], (
-                f"AC151: the spacing must change nothing about the answer, but "
-                f"{one_space!r} got {responses[one_space]!r} and {misspaced!r} "
-                f"got {responses[misspaced]!r}"
-            )
+            status, _, body = self._req(port, self._graph_data(port, q=misspaced))
+            assert status == 400, (
+                f"AC151: {misspaced!r} is not routed to the engine's schema "
+                f"parser and fails there; got {status} {body!r}")
+            err = json.loads(body)
+            assert err.get("kind") == "execution", (
+                f"AC151: {misspaced!r} must carry kind execution, not "
+                f"{err.get('kind')!r}: the endpoint publishes no class of its "
+                f"own for the spacing")
+            assert set(err) == {"error", "kind"}, (
+                f"the failure body must carry exactly error and kind; got {err!r}")
+            assert "cypher:" in err["error"], (
+                f"AC151: the message must be the engine's own diagnostic; a "
+                f"message without one would mean the statement never reached "
+                f"the engine; got {err['error']!r}")
+            for forbidden in ("keyword spacing", "exactly one space"):
+                assert forbidden not in err["error"], (
+                    f"AC151: the endpoint states no spacing correction; got "
+                    f"{err['error']!r}")
+            assert err["kind"] != "invalid_keyword_spacing", (
+                "AC123: invalid_keyword_spacing is not a value this endpoint "
+                "publishes")
 
-        # The control, without which the refusal is not shown to be narrow: an
-        # ordinary read of the same store still returns the graph.
-        status, _, body = self._req(
-            port, self._graph_data(port, q="MATCH (n) OPTIONAL MATCH (n)-[r]->(m) RETURN n, r, m"))
+        # THE CLI ANSWERS THE SAME WAY, which is the point: with the guard rail
+        # withdrawn on both surfaces there is no divergence left to reconcile.
+        # `rmp graph execute` hands the badly spaced statement to the engine,
+        # which rejects it as a syntax error -- exit 1, and a diagnostic naming
+        # SHOW rather than the spacing.
+        code, _out, err = self._run(
+            ["graph", "execute", "-r", ROADMAP, "--query", "SHOW  INDEXES"],
+            check=False)
+        assert code == 1, (
+            f"AC151: `rmp graph execute` must let the engine refuse a badly "
+            f"spaced SHOW, which is exit 1; got {code} with stderr={err!r}")
+        assert "validation error" not in err, (
+            f"AC151: the refusal is the engine's, not a validation refusal of "
+            f"Groadmap's; got {err!r}")
+
+    def test_schema_ddl_through_the_endpoint_persists(self):
+        """The pair to the listing above, and the plainest statement of what
+        SPEC/WEB.md section Security and Constraints rule 3 grants: an
+        unauthenticated GET creates an index in the roadmap's knowledge graph,
+        and a separate process finds it under the name the caller declared.
+
+        The pre-existing schema surviving is asserted too: the checkpoint that
+        follows a DDL statement must carry the WHOLE registered schema, not just
+        the new definition. A snapshot that omitted it, followed by the
+        truncation that always follows, destroys every index and constraint the
+        graph had (SPEC/GRAPH.md section Synchronous Checkpoint on Write,
+        step 2).
+        """
+        self._run(["graph", "execute", "-r", ROADMAP, "--query",
+                   "CREATE INDEX spec_key FOR (n:Spec) ON (n.key)"])
+        self._run(["graph", "execute", "-r", ROADMAP, "--query",
+                   "CREATE CONSTRAINT spec_key_unique FOR (n:Spec) "
+                   "REQUIRE n.key IS UNIQUE"])
+
+        proc, port = self._start(["--port", "0"])
+
+        status, _, body = self._req(port, self._graph_data(
+            port, q="CREATE INDEX audit_key FOR (n:Audit) ON (n.key)"))
         assert status == 200, (
-            f"AC157: an ordinary read must be unaffected; got {status} {body!r}"
-        )
-        data = json.loads(body)
-        assert set(data) == {"nodes", "edges"} and data["nodes"], (
-            f"AC157: the control must return the ordinary node-and-edge shape "
-            f"with content, so what is refused is a class and not queries in "
-            f"general; got {body!r}"
-        )
+            f"schema DDL through the endpoint must execute; got {status} {body!r}")
 
-        # The two guard-rail rejections stay distinct in both directions: a
-        # genuine write still answers not_read_only.
-        status, _, body = self._req(
-            port, self._graph_data(port, q="MATCH (n) DELETE n"))
-        assert status == 400
-        assert json.loads(body).get("kind") == "not_read_only", (
-            "a writing query must still be classified not_read_only"
-        )
-
-        # Precedence, in both directions (SPEC/WEB.md - Query-Bar Error
-        # Handling, rule 6; AC157).
-        status, _, body = self._req(
-            port, self._graph_data(port, q="SHOW INDEXES", limit="7"))
-        assert status == 400
-        assert json.loads(body).get("kind") == "invalid_limit", (
-            "the limit is resolved before the guard rail runs, so an invalid "
-            "limit outranks the schema-introspection refusal"
-        )
-        status, _, body = self._req(
-            port, self._graph_data(port, q="SHOW INDEXES", limit="250"))
-        assert status == 400
-        assert json.loads(body).get("kind") == "schema_introspection", (
-            "the same statement under an allowed limit is the "
-            "schema-introspection refusal"
-        )
-
-        ddl_tail = ("SHOW INDEXES YIELD name CREATE INDEX audit_key "
-                    "FOR (n:Audit) ON (n.key)")
-        status, _, body = self._req(port, self._graph_data(port, q=ddl_tail))
-        assert status == 400
-        assert json.loads(body).get("kind") == "not_read_only", (
-            "a schema-introspection command carrying a DDL tail is answered "
-            "not_read_only: the guard rail's clause classes are independent and "
-            "the objection that a statement writes outranks the refusal"
-        )
-        status, _, body = self._req(
-            port, self._graph_data(port, q="SHOW INDEXES YIELD name"))
-        assert status == 400
-        assert json.loads(body).get("kind") == "schema_introspection", (
-            "the same statement without its DDL tail is the "
-            "schema-introspection refusal"
-        )
-        # A DATA-writing tail is NOT that pair and must not be used as one: the
-        # engine reports a statement its own DDL predicate accepts as carrying
-        # no writing clause, so this one is read-only and is itself refused as
-        # schema_introspection.
-        status, _, body = self._req(
-            port, self._graph_data(port, q="SHOW INDEXES YIELD name CREATE (n:Audit)"))
-        assert status == 400
-        assert json.loads(body).get("kind") == "schema_introspection", (
-            "a data-writing tail does not make the statement not read-only, so "
-            "it must not be used to assert that precedence pair"
-        )
-
-        # Nothing ran: the DDL tail created no index and the data-writing tail
-        # created no node.
-        _, out, _ = self._run(["graph", "query", "-r", ROADMAP,
+        _, out, _ = self._run(["graph", "execute", "-r", ROADMAP,
                                "--query", "SHOW INDEXES"])
         listing = json.loads(out)
-        after = [row[listing["columns"].index("name")] for row in listing["rows"]]
-        assert "audit_key" not in after, (
-            f"AC157: the refusal precedes execution, so the DDL tail must never "
-            f"have created its index; SHOW INDEXES reported {after!r}"
-        )
-        _, out, _ = self._run(["graph", "query", "-r", ROADMAP,
-                               "--query", "MATCH (n:Audit) RETURN count(n)"])
-        assert json.loads(out)["rows"][0][0] == 0, (
-            "AC157: the data-writing tail must never have created its node"
-        )
+        names = [row[listing["columns"].index("name")] for row in listing["rows"]]
+        assert "audit_key" in names, (
+            f"an index created through the endpoint must persist under the name "
+            f"the caller declared; SHOW INDEXES reported {names!r}")
+        assert "spec_key" in names, (
+            f"the pre-existing index was lost by the checkpoint that followed "
+            f"the DDL, which is the snapshot-without-schema defect; SHOW "
+            f"INDEXES reported {names!r}")
+        _, out, _ = self._run(["graph", "execute", "-r", ROADMAP,
+                               "--query", "SHOW CONSTRAINTS"])
+        assert "spec_key_unique" in out, (
+            f"the declared constraint was lost by the checkpoint; got {out!r}")
 
-        # THE CLI IS UNAFFECTED (AC151, second half; SPEC/GRAPH.md AC39). The
-        # same badly spaced statement still exits 6 there, with a message that
-        # DOES name the spacing -- the divergence this task made deliberate.
-        for subcmd in ("query", "search", "update"):
-            code, _out, err = self._run(
-                ["graph", subcmd, "-r", ROADMAP, "--query", "SHOW  INDEXES"],
-                check=False)
-            assert code == 6, (
-                f"AC151: `rmp graph {subcmd}` must still exit 6 for a badly "
-                f"spaced SHOW; got {code} with stderr={err!r}"
-            )
-            assert "one space" in err, (
-                f"AC151: the CLI message must still name the keyword spacing "
-                f"the endpoint no longer names; got {err!r}"
-            )
-            assert "SHOW INDEXES" in err, (
-                f"AC151: the CLI message must still offer the accepted "
-                f"spelling; got {err!r}"
-            )
-        # And the well-spaced statement still SUCCEEDS on the CLI, which is what
-        # makes the endpoint's refusal a divergence rather than a shared refusal.
-        code, out, err = self._run(
-            ["graph", "query", "-r", ROADMAP, "--query", "SHOW INDEXES"],
-            check=False)
-        assert code == 0 and "spec_key" in out, (
-            f"AC151/AC64: `rmp graph query` still answers the class in full; "
-            f"got {code} out={out!r} err={err!r}"
-        )
+        # And the DROP is symmetric.
+        status, _, body = self._req(
+            port, self._graph_data(port, q="DROP INDEX audit_key"))
+        assert status == 200, f"a DROP must execute; got {status} {body!r}"
+        _, out, _ = self._run(["graph", "execute", "-r", ROADMAP,
+                               "--query", "SHOW INDEXES"])
+        listing = json.loads(out)
+        names = [row[listing["columns"].index("name")] for row in listing["rows"]]
+        assert "audit_key" not in names, (
+            f"the DROP must persist; SHOW INDEXES reported {names!r}")
 
-    def test_query_bar_refuses_a_misresolved_relationship_read(self):
-        """rmp task #288: the endpoint runs caller-supplied Cypher through its
-        own engine, so the relationship-read direction rule
-        (SPEC/GRAPH.md) applies here exactly as it does to `rmp graph query`.
-        A read of a relationship bound by an incoming or undirected pattern is
-        refused with HTTP 400 and the kind relationship_read_direction, before
-        the store is opened.
+    def test_empty_graph_answers_are_indistinguishable(self):
+        """AC156: four statements that produce no node and no edge for four
+        different reasons are answered identically, because the endpoint
+        publishes no class that separates them. The four responses are compared
+        TO ONE ANOTHER, which is what the criterion asks for.
 
-        The fixture is its own roadmap carrying a node pair with edges BOTH
-        ways and DIFFERENT types each way, because that is the only shape the
-        engine misresolves: a one-way pair reads back correctly with or without
-        the rule and could not tell them apart.
+        The control keeps it narrow: the default query over the same store
+        returns a non-empty nodes array, so an empty answer is a property of the
+        statement rather than of the endpoint.
+        """
+        self._run(["graph", "execute", "-r", ROADMAP, "--query",
+                   "CREATE INDEX spec_key FOR (n:Spec) ON (n.key)"])
+        proc, port = self._start(["--port", "0"])
+
+        statements = [
+            "MATCH (n:Absent) RETURN n",       # matched nothing
+            "MATCH (n) RETURN count(n)",       # returned a number
+            "SHOW INDEXES",                    # returned tabular rows
+            "CREATE (n:Probe {key:'ac156'})",  # created a node, no columns
+        ]
+        answers = []
+        for query in statements:
+            status, _, body = self._req(port, self._graph_data(port, q=query))
+            assert status == 200, (
+                f"AC156: {query!r} must be answered 200; got {status} {body!r}")
+            answers.append((status, body))
+        assert len(set(answers)) == 1, (
+            f"AC156: the four answers must be indistinguishable; got "
+            f"{dict(zip(statements, answers))!r}")
+        assert json.loads(answers[0][1]) == {"nodes": [], "edges": []}
+
+        # The CREATE really created: the empty answer is the response shape, not
+        # a statement that did nothing.
+        _, out, _ = self._run(["graph", "execute", "-r", ROADMAP, "--query",
+                               "MATCH (n:Probe {key:'ac156'}) RETURN count(n)"])
+        assert json.loads(out)["rows"][0][0] == 1, (
+            f"AC156: the CREATE that answered an empty graph must have "
+            f"persisted; got {out!r}")
+
+        # The control.
+        status, _, body = self._req(port, self._graph_data(
+            port, q="MATCH (n) OPTIONAL MATCH (n)-[r]->(m) RETURN n, r, m"))
+        assert status == 200 and json.loads(body)["nodes"], (
+            f"AC156: the same store must answer the default query with a "
+            f"non-empty nodes array, or an empty answer is a property of the "
+            f"endpoint and the comparison above proves nothing; got {body!r}")
+
+    def test_query_bar_misresolved_relationship_reads_are_no_longer_refused(self):
+        """What became of rmp task #288 at this endpoint.
+
+        #288 added a refusal here: a read of a relationship bound by an incoming
+        or undirected pattern was answered HTTP 400 with the kind
+        relationship_read_direction. The refusal is withdrawn with the rest of
+        the guard rail, so every one of those shapes now EXECUTES.
+
+        This test asserts NEITHER reading of the disputed hazard, exactly as
+        tests/test_56_graph_read_direction.py and
+        internal/web/graph_relread_test.go do. SPEC/GRAPH.md item 5 still says
+        the shapes are reported wrong; task #362 measured every one of them
+        answering correctly at GoGraph v0.12.0, and correcting the item is task
+        #373's. What is asserted is only what is true on both readings: the
+        shapes execute, the outgoing forms return the graph, and the published
+        UNION ALL rewrite returns both legs.
+
+        The fixture is its own roadmap carrying a node pair with edges BOTH ways
+        and DIFFERENT types each way, because that is the only shape the
+        disputed behaviour would be visible on: a one-way pair reads back
+        correctly on either reading.
         """
         name = "identity-platform"
         self._run(["roadmap", "create", name])
@@ -5078,84 +5188,52 @@ class TestWebInterface:
             "MATCH (s:Spec {key:'session-revocation'}), (v:Test {key:'revoke-on-logout'}) "
             "MERGE (v)-[:COVERS]->(s)",
         ]:
-            self._run(["graph", "create", "-r", name, "--query", query])
+            self._run(["graph", "execute", "-r", name, "--query", query])
 
         proc, port = self._start(["--port", "0"])
 
-        refused = [
+        for query in [
             "MATCH (s:Spec)-[e]-(x) RETURN type(e), x.key",
             "MATCH (s:Spec)<-[e]-(x) RETURN type(e)",
             "MATCH (s:Spec)-[e]-(x) RETURN startNode(e).key, endNode(e).key",
             "MATCH (s:Spec)-[e]-(x) WHERE type(e) = 'COVERS' RETURN x.key",
             "MATCH (s:Spec)-[e]-(x) RETURN *",
-        ]
-        for query in refused:
+        ]:
             status, _, body = self._req(
                 port, self._graph_data(port, q=query, roadmap=name))
-            assert status == 400, (
-                f"{query!r} must be refused with 400; got {status} {body!r}")
-            err = json.loads(body)
-            assert err.get("kind") == "relationship_read_direction", (
-                f"{query!r} must carry its own kind; got {err!r}")
-            assert set(err) == {"error", "kind"}, (
-                f"the error body must carry exactly error and kind, never the "
-                f"success shape; got {err!r}")
-            for fragment in ('"e"', "outgoing", "UNION ALL"):
-                assert fragment in err["error"], (
-                    f"the message for {query!r} must name {fragment!r} so the "
-                    f"caller can act on it; got {err['error']!r}")
+            assert status == 200, (
+                f"{query!r} must execute: the endpoint refuses nothing on the "
+                f"ground of what a statement does; got {status} {body!r}")
+            assert "relationship_read_direction" not in body, (
+                f"the response for {query!r} names a withdrawn kind: {body!r}")
 
-        # The other half: every shape the engine resolves correctly is still
-        # answered, so the refusal cost no reach. The default query is the one
-        # that matters most — it binds a relationship variable through an
-        # OPTIONAL MATCH, and a rule keyed on the variable rather than on the
-        # direction would have broken the graph page outright.
+        # The outgoing forms and the endpoint default still return the graph.
         for query in [
             None,  # the endpoint default
-            "MATCH (s:Spec)-[e]->(x) RETURN type(e), x.key",
-            "MATCH (x)-[e]->(s:Spec) RETURN type(e), x.key",
+            "MATCH (s:Spec)-[e]->(x) RETURN s, e, x",
+            "MATCH (x)-[e]->(s:Spec) RETURN x, e, s",
             "MATCH (s:Spec)-[:COVERS]-(x) RETURN x.key",
-            "MATCH (s:Spec)-[e]-(x) RETURN x.key",
             "MATCH p=(s:Spec)-[e]-(x:Test) RETURN p",
         ]:
             status, _, body = self._req(
                 port, self._graph_data(port, q=query, roadmap=name))
             assert status == 200, (
-                f"{query!r} resolves correctly and must not be refused; "
-                f"got {status} {body!r}")
+                f"{query!r} must be answered; got {status} {body!r}")
 
-        # Precedence (SPEC/WEB.md § Query-Bar Error Handling): every earlier
-        # objection outranks this one. The two controls are what make the
-        # assertion non-vacuous — without them an endpoint that never reached
-        # the new kind at all would pass.
+        # The published UNION ALL rewrite of the two outgoing legs returns both
+        # typed edges, which is the property the rewrite exists to deliver and
+        # is true whichever way item 5 is corrected.
+        rewrite = ("MATCH (s:Spec {key:'session-revocation'})-[e]->(x:Test) "
+                   "RETURN s, e, x UNION ALL "
+                   "MATCH (x:Test)-[e]->(s:Spec {key:'session-revocation'}) "
+                   "RETURN s, e, x")
         status, _, body = self._req(
-            port, self._graph_data(
-                port, q="MATCH (s:Spec)-[e]-(x) RETURN type(e)", limit="7",
-                roadmap=name))
-        assert status == 400 and json.loads(body).get("kind") == "invalid_limit", (
-            "an invalid limit is resolved first, so it outranks the "
-            f"relationship-direction objection; got {status} {body!r}")
-
-        status, _, body = self._req(
-            port, self._graph_data(
-                port, q="MATCH (s:Spec)-[e]-(x) SET x.seen = type(e)",
-                roadmap=name))
-        assert status == 400 and json.loads(body).get("kind") == "not_read_only", (
-            "the objection that a query writes outranks the objection that its "
-            f"traversal is misoriented; got {status} {body!r}")
-
-    def test_query_bar_literal_masking_not_falsely_rejected(self):
-        """AC47: write keywords only inside a string literal are accepted as
-        read-only and executed; a genuine DELETE is rejected."""
-        proc, port = self._start(["--port", "0"])
-        accepted = 'MATCH (m) WHERE m.key = "mentions delete and set and create" RETURN m'
-        status, _, _ = self._req(port, self._graph_data(port, q=accepted))
-        assert status == 200, "literal-only write keywords must be accepted as read-only"
-
-        rejected = 'MATCH (m) WHERE m.key = "mentions delete" DELETE m'
-        status, _, body = self._req(port, self._graph_data(port, q=rejected))
-        assert status == 400
-        assert json.loads(body).get("kind") == "not_read_only"
+            port, self._graph_data(port, q=rewrite, roadmap=name))
+        assert status == 200, f"the rewrite must run; got {status} {body!r}"
+        types = {e["type"] for e in json.loads(body)["edges"]}
+        assert types == {"VERIFIED_BY", "COVERS"}, (
+            f"the union of the two outgoing legs must return both edge types; "
+            f"got {types!r}")
 
     def test_query_bar_limit_injection_and_invalid_limit(self):
         """AC48: an invalid limit is rejected (not clamped); allowed limits are
@@ -5178,10 +5256,11 @@ class TestWebInterface:
 
     def test_query_bar_statements_admitting_no_limit_are_exempt(self):
         """AC111: the node-limit injection is suppressed for the statement forms
-        that admit NO top-level LIMIT clause at all — the SHOW schema-
-        introspection commands and standalone procedure calls — so a read the
-        guard rail admits, and that `rmp graph query` runs, stays usable through
-        the endpoint (SPEC/WEB.md § Graph Data Endpoint, Suppression 2).
+        that admit NO top-level LIMIT clause at all -- the SHOW schema-
+        introspection commands, standalone procedure calls, and every statement
+        with no top-level RETURN for a LIMIT to attach to -- so a statement that
+        `rmp graph execute` runs stays usable through the endpoint
+        (SPEC/WEB.md section Graph Data Endpoint, Suppression 2).
 
         Appending a LIMIT to one of those bounds nothing: it makes the statement
         fail in the PARSER. The claim under test is therefore that each one
@@ -5207,9 +5286,9 @@ class TestWebInterface:
         # visible as a cap. The module fixture's own graph is two nodes, which
         # no limit in the allowed set could narrow. Each test method runs against
         # its own temporary HOME, so this widening is local to this scenario.
-        self._run(["graph", "create", "-r", ROADMAP,
+        self._run(["graph", "execute", "-r", ROADMAP,
                    "--query", "UNWIND range(1,60) AS i CREATE (:Bulk {i:i})"])
-        _, out, _ = self._run(["graph", "query", "-r", ROADMAP,
+        _, out, _ = self._run(["graph", "execute", "-r", ROADMAP,
                                "--query", "MATCH (n) RETURN count(n)"])
         total = json.loads(out)["rows"][0][0]
         assert total > 50, (
@@ -5219,14 +5298,9 @@ class TestWebInterface:
         proc, port = self._start(["--port", "0"])
 
         # The exempt forms: a bare standalone call, a standalone call that is
-        # not a pure read of the store, and a standalone call carrying a YIELD.
-        #
-        # The SHOW schema-introspection commands are deliberately NOT in this
-        # list. They admit no LIMIT either, but this criterion does not reach
-        # them: the endpoint refuses that class before the injection decision is
-        # taken, and AC111 states that asserting HTTP 200 for one here would
-        # contradict AC157. The refusal is asserted right below, so the form is
-        # covered rather than dropped.
+        # not a pure read of the store, a standalone call carrying a YIELD, and
+        # the write with no projection — which the endpoint could not execute at
+        # all while it injected into one, and which AC47 requires it to execute.
         exempt = (
             "CALL db.labels()",
             "CALL db.stats.refresh()",
@@ -5245,25 +5319,25 @@ class TestWebInterface:
                 f"the response is the empty graph shape; got {body!r}"
             )
 
-        # The other non-limitable form never reaches the injection decision at
-        # all. This assertion is what keeps the two rules consistent: it fails
-        # if the refusal is lost (200 comes back) and equally if the refusal
-        # were moved AFTER the injection (kind=execution would come back,
-        # carrying the engine's parse diagnostic for the appended LIMIT).
+        # The other non-limitable form: the schema-introspection command. It
+        # admits no LIMIT either, so it is suppressed and EXECUTED, and the rows
+        # it returns carry no graph element (AC111, AC156). This assertion fails
+        # both ways round: if the suppression is lost the injected LIMIT reaches
+        # the engine and the form comes back 400 with the parse diagnostic, and
+        # if a refusal is reintroduced it comes back 400 with a kind of its own,
+        # which AC111 states MUST fail.
         for query in ("SHOW INDEXES", "SHOW CONSTRAINTS",
                       "SHOW INDEXES YIELD name, state RETURN name"):
             status, _, body = self._req(
                 port, self._graph_data(port, q=query, limit="100")
             )
-            assert status == 400, (
-                f"AC111/AC157: {query!r} is refused before the injection "
-                f"decision; got {status} {body!r}"
+            assert status == 200, (
+                f"AC111: {query!r} admits no LIMIT, so nothing is injected and "
+                f"it is executed as written; got {status} {body!r}"
             )
-            err = json.loads(body)
-            assert err.get("kind") == "schema_introspection", (
-                f"AC157: {query!r} must carry kind schema_introspection, not "
-                f"{err.get('kind')!r}: an execution failure here would mean the "
-                f"LIMIT was injected first"
+            assert json.loads(body) == {"nodes": [], "edges": []}, (
+                f"AC111/AC156: {query!r} returns tabular rows carrying no graph "
+                f"element, so the answer is the empty graph; got {body!r}"
             )
 
         # The control on the other side of the boundary: projected through a
@@ -5330,7 +5404,7 @@ class TestWebInterface:
         other scenario stays fast.
 
         That store is sized from measurement. Unbounded — through
-        `rmp graph query`, which has no budget — the three-way Cartesian product
+        `rmp graph execute`, which has no budget — the three-way Cartesian product
         below costs 61.2s over these 799 nodes against a 5s budget: a twelvefold
         margin, so the query still cannot finish inside the budget on hardware an
         order of magnitude faster than the machine this was measured on. The
@@ -5349,16 +5423,16 @@ class TestWebInterface:
         name = "telemetry"
         bulk = 797
         self._run(["roadmap", "create", name])
-        self._run(["graph", "create", "-r", name,
+        self._run(["graph", "execute", "-r", name,
                    "--query", "CREATE (s:Spec {key:'passwordless-auth'})"])
-        self._run(["graph", "create", "-r", name,
+        self._run(["graph", "execute", "-r", name,
                    "--query", "CREATE (c:Code {path:'internal/auth/magiclink.go'})"])
-        self._run(["graph", "create", "-r", name,
+        self._run(["graph", "execute", "-r", name,
                    "--query",
                    "MATCH (s:Spec {key:'passwordless-auth'}), "
                    "(c:Code {path:'internal/auth/magiclink.go'}) "
                    "CREATE (s)-[:IMPLEMENTED_BY]->(c)"])
-        self._run(["graph", "create", "-r", name,
+        self._run(["graph", "execute", "-r", name,
                    "--query",
                    "UNWIND range(1," + str(bulk) + ") AS i CREATE (:Bulk {i:i})"])
 
@@ -5366,7 +5440,7 @@ class TestWebInterface:
         # so the completeness assertion below cannot silently drift with the
         # seed. The reader limit must sit above it, or a capped read would be
         # mistaken for a complete one.
-        _, out, _ = self._run(["graph", "query", "-r", name,
+        _, out, _ = self._run(["graph", "execute", "-r", name,
                                "--query", "MATCH (n) RETURN count(n)"])
         seeded = json.loads(out)["rows"][0][0]
         assert seeded == bulk + 2, (
@@ -5454,29 +5528,32 @@ class TestWebInterface:
             f"{len(view['edges'])} edges"
         )
 
-    def test_query_bar_invalid_limit_outranks_not_read_only(self):
-        """AC123: one request can be wrong in more than one way at once. The
-        endpoint resolves the limit BEFORE it runs the read-only guard rail, so a
-        request carrying both an invalid limit and a query that is not read-only
-        is answered kind=invalid_limit, never kind=not_read_only. The order in
-        which SPEC/WEB.md lists the three failure cases is an order of
-        explanation, not an order of precedence (§ Query-Bar Error Handling,
-        rule 6). The two single-fault controls keep the assertion honest: without
-        them an endpoint that never classified anything as not_read_only would
-        pass the combined case."""
+    def test_query_bar_invalid_limit_is_resolved_before_the_statement_runs(self):
+        """AC123: the limit is resolved BEFORE the statement runs, so a request
+        carrying both an invalid limit and a statement that would have written is
+        answered kind=invalid_limit and the statement is not executed
+        (SPEC/WEB.md section Query-Bar Error Handling, rule 5).
+
+        The write is what makes the assertion decisive: "the statement was not
+        executed" is observable only through a statement whose execution leaves a
+        trace, and a read leaves none. The two single-fault controls keep the
+        combined case honest -- without them an endpoint that never executed
+        anything would pass it.
+        """
         proc, port = self._start(["--port", "0"])
-        before = json.loads(self._req(port, self._graph_data(port))[2])
-        write_query = "MATCH (n) DELETE n"
         bad_limit = "7"
 
-        # Control A: the query alone is classified not_read_only.
-        status, _, body = self._req(
-            port, self._graph_data(port, q=write_query, limit="100")
-        )
-        assert status == 400, "a write query with a valid limit must be rejected"
-        assert json.loads(body).get("kind") == "not_read_only", (
-            "the write query must reach the guard rail when the limit is valid"
-        )
+        # Control A: the statement alone EXECUTES under an allowed limit.
+        status, _, body = self._req(port, self._graph_data(
+            port, q="CREATE (n:WebProbe {key:'control'})", limit="100"))
+        assert status == 200, (
+            f"control A: a CREATE under an allowed limit must execute; got "
+            f"{status} {body!r}")
+        _, out, _ = self._run(["graph", "execute", "-r", ROADMAP, "--query",
+                               "MATCH (n:WebProbe {key:'control'}) RETURN count(n)"])
+        assert json.loads(out)["rows"][0][0] == 1, (
+            f"control A: the write did not land, so this test cannot tell an "
+            f"unexecuted statement from an executed one; got {out!r}")
 
         # Control B: the limit alone is classified invalid_limit.
         status, _, body = self._req(port, self._graph_data(port, limit=bad_limit))
@@ -5484,25 +5561,21 @@ class TestWebInterface:
         assert json.loads(body).get("kind") == "invalid_limit"
 
         # The claim: both wrong at once resolves to invalid_limit.
-        status, _, body = self._req(
-            port, self._graph_data(port, q=write_query, limit=bad_limit)
-        )
+        status, _, body = self._req(port, self._graph_data(
+            port, q="CREATE (n:WebProbe {key:'never-created'})", limit=bad_limit))
         assert status == 400, "a doubly invalid request must still be a 400"
         err = json.loads(body)
         assert err.get("kind") == "invalid_limit", (
-            "the limit is resolved before the guard rail runs, so an invalid "
-            f"limit outranks a query that is not read-only: {err}"
-        )
+            f"the limit is resolved before the statement runs: {err!r}")
         assert bad_limit in err.get("error", ""), (
-            f"the invalid-limit message must name the rejected value: {err}"
-        )
+            f"the invalid-limit message must name the rejected value: {err!r}")
 
-        # The query never ran: the DELETE would have emptied the store.
-        after = json.loads(self._req(port, self._graph_data(port))[2])
-        assert len(after["nodes"]) == len(before["nodes"]), (
-            "the request must be rejected before the query runs, so the store "
-            "is untouched"
-        )
+        # The statement never ran.
+        _, out, _ = self._run(["graph", "execute", "-r", ROADMAP, "--query",
+                               "MATCH (n:WebProbe {key:'never-created'}) RETURN count(n)"])
+        assert json.loads(out)["rows"][0][0] == 0, (
+            f"the CREATE executed despite the invalid limit; the request must "
+            f"be rejected before the statement runs; got {out!r}")
 
     def test_query_bar_error_body_carries_exactly_error_and_kind(self):
         """AC123: every query-bar failure is answered with a JSON body of exactly
@@ -5511,9 +5584,7 @@ class TestWebInterface:
         (SPEC/DATA_FORMATS.md - Graph View Data, Error Shape, rule 1)."""
         proc, port = self._start(["--port", "0"])
         cases = (
-            ("not_read_only", {"q": "MATCH (n) DELETE n"}),
             ("invalid_limit", {"limit": "7"}),
-            ("schema_introspection", {"q": "SHOW INDEXES"}),
             ("execution", {"q": "MATCH (n) RETURN"}),
         )
         for want_kind, params in cases:
@@ -6113,20 +6184,24 @@ class TestWebInterface:
         self._assert_canonical_utc(rec)
 
     def test_graph_query_bar_rejection_is_logged_as_a_slog_warn_record(self):
-        """AC142: the graph data endpoint's 400 is a WARN, not an ERROR — the
-        user's query failed, not the server — and the record carries the same
-        failure kind the JSON response body carries.
+        """AC142: the graph data endpoint's 400 is a WARN, not an ERROR -- the
+        user's statement failed, not the server -- and the record carries the
+        same failure kind the JSON response body carries.
+
+        The probe is an unexecutable statement. It used to be a CREATE, which
+        the endpoint refused as not read-only; the endpoint now runs a CREATE
+        and answers 200, so that probe would assert nothing.
         """
         proc, port = self._start(["--port", "0"])
-        query = urllib.parse.quote("CREATE (n:Injected {via:'query bar'}) RETURN n")
+        query = urllib.parse.quote("MATCH (n) RETURN")
         status, _, body = self._req(port, f"/roadmaps/{ROADMAP}/graph/data?q={query}")
-        assert status == 400, f"a writing query must be rejected with 400, got {status}"
+        assert status == 400, f"an unexecutable statement must be a 400, got {status}"
         payload = json.loads(body)
-        assert payload["kind"] == "not_read_only", f"unexpected kind: {payload!r}"
+        assert payload["kind"] == "execution", f"unexpected kind: {payload!r}"
 
         records = self._log_records(self._drain(proc.err_file))
         assert not [r for r in records if r["level"] == "ERROR"], (
-            f"a rejected user query is not a server error: {[r['raw'] for r in records]}"
+            f"a failed user statement is not a server error: {[r['raw'] for r in records]}"
         )
         warns = [r for r in records if r["level"] == "WARN"]
         assert len(warns) == 1, (
@@ -6135,7 +6210,7 @@ class TestWebInterface:
         rec = warns[0]
         assert rec["msg"] == "graph query bar request failed", f"msg = {rec['msg']!r}"
         for fragment in ("method=GET", f"roadmap={ROADMAP}",
-                         "kind=not_read_only", "status=400", "err="):
+                         "kind=execution", "status=400", "err="):
             assert fragment in rec["raw"], (
                 f"record is missing {fragment!r}: {rec['raw']!r}"
             )

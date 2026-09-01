@@ -81,14 +81,21 @@ class TestGraphCheckpoint:
         wal = self.graph_dir() / "wal"
         return wal.stat().st_size if wal.exists() else None
 
-    def write(self, subcmd: str, query: str, check: bool = True):
-        return self.test.run_cmd(["graph", subcmd, "-r", self.roadmap, "--query", query], check=check)
+    # The three helpers below took a `subcmd` argument until `rmp graph`
+    # collapsed onto its single `execute` subcommand
+    # (SPEC/COMMANDS.md § Graph Management). They are kept as three names
+    # rather than merged into one because what each CALL means is still worth
+    # reading off the call site: `write` issues a statement that changes the
+    # graph, `query_json` one that does not. The command they run is the same.
 
-    def write_json(self, subcmd: str, query: str):
-        return self.test.run_cmd_json(["graph", subcmd, "-r", self.roadmap, "--query", query])
+    def write(self, query: str, check: bool = True):
+        return self.test.run_cmd(["graph", "execute", "-r", self.roadmap, "--query", query], check=check)
 
-    def query_json(self, query: str, subcmd: str = "query"):
-        return self.test.run_cmd_json(["graph", subcmd, "-r", self.roadmap, "--query", query])
+    def write_json(self, query: str):
+        return self.test.run_cmd_json(["graph", "execute", "-r", self.roadmap, "--query", query])
+
+    def query_json(self, query: str):
+        return self.test.run_cmd_json(["graph", "execute", "-r", self.roadmap, "--query", query])
 
     @staticmethod
     def rows_by(result, key_col):
@@ -99,18 +106,14 @@ class TestGraphCheckpoint:
 
     def seed_knowledge_graph(self):
         """A small, realistic project knowledge graph."""
-        self.write("create",
-                   "CREATE (s:Spec {key:'authentication', title:'User Authentication', status:'approved'})")
-        self.write("create",
-                   "CREATE (t:Task {key:'login-flow', title:'Implement login flow', status:'in_progress'})")
-        self.write("create",
-                   "CREATE (d:Decision {key:'use-jwt', rationale:'Stateless sessions scale horizontally'})")
+        self.write("CREATE (s:Spec {key:'authentication', title:'User Authentication', status:'approved'})")
+        self.write("CREATE (t:Task {key:'login-flow', title:'Implement login flow', status:'in_progress'})")
+        self.write("CREATE (d:Decision {key:'use-jwt', rationale:'Stateless sessions scale horizontally'})")
 
     # ---- baseline graph behaviour ------------------------------------
 
     def test_create_and_query_roundtrip(self):
-        ok = self.write_json("create",
-                             "CREATE (s:Spec {key:'authentication', title:'User Authentication'})")
+        ok = self.write_json("CREATE (s:Spec {key:'authentication', title:'User Authentication'})")
         assert ok == {"ok": True}, f"create without RETURN must emit {{'ok': true}}, got {ok!r}"
         result = self.query_json("MATCH (s:Spec) RETURN s.key, s.title")
         by_key = self.rows_by(result, "s.key")
@@ -119,44 +122,73 @@ class TestGraphCheckpoint:
         assert by_key["authentication"][title_idx] == "User Authentication"
 
     def test_update_mutates_property(self):
-        self.write("create", "CREATE (t:Task {key:'login-flow', status:'in_progress'})")
-        self.write("update", "MATCH (t:Task {key:'login-flow'}) SET t.status='done'")
+        self.write("CREATE (t:Task {key:'login-flow', status:'in_progress'})")
+        self.write("MATCH (t:Task {key:'login-flow'}) SET t.status='done'")
         result = self.query_json("MATCH (t:Task {key:'login-flow'}) RETURN t.status")
         assert result["rows"] == [["done"]], f"update did not persist new status: {result!r}"
 
     def test_delete_removes_node(self):
-        self.write("create", "CREATE (d:Decision {key:'use-jwt'})")
+        self.write("CREATE (d:Decision {key:'use-jwt'})")
         before = self.query_json("MATCH (d:Decision) RETURN count(d)")["rows"][0][0]
         assert before == 1
-        self.write("delete", "MATCH (d:Decision {key:'use-jwt'}) DETACH DELETE d")
+        self.write("MATCH (d:Decision {key:'use-jwt'}) DETACH DELETE d")
         after = self.query_json("MATCH (d:Decision) RETURN count(d)")["rows"][0][0]
         assert after == 0, f"delete did not remove the node: count={after}"
 
     def test_search_variable_length_path(self):
-        self.write("create",
-                   "CREATE (s:Spec {key:'authentication'})-[:HAS_TASK]->(t:Task {key:'login-flow'})")
-        result = self.query_json("MATCH p=(s:Spec)-[*1..2]-(b) RETURN b.key", subcmd="search")
+        self.write("CREATE (s:Spec {key:'authentication'})-[:HAS_TASK]->(t:Task {key:'login-flow'})")
+        result = self.query_json("MATCH p=(s:Spec)-[*1..2]-(b) RETURN b.key")
         assert ["login-flow"] in result["rows"], f"variable-length search failed: {result!r}"
 
-    def test_query_rejects_writing_clause(self):
-        # graph query must reject a CREATE (guard-rail), exit code 6.
-        self.test.assert_exit_code(
-            ["graph", "query", "-r", self.roadmap, "--query", "CREATE (n:Spec {key:'x'})"],
-            EXIT_GUARD_RAIL,
-        )
+    def test_one_subcommand_runs_every_statement_class(self):
+        """SPEC/GRAPH.md acceptance criterion 4.
 
-    def test_create_rejects_delete_clause(self):
-        self.test.assert_exit_code(
-            ["graph", "create", "-r", self.roadmap, "--query", "MATCH (n) DETACH DELETE n"],
-            EXIT_GUARD_RAIL,
-        )
+        The two tests this replaces asserted the opposite: that `graph query`
+        refused a CREATE and `graph create` refused a DETACH DELETE, each with
+        exit code 6. There is no operation-class check any more and there is
+        one subcommand, so what has to be proven is that the SAME invocation
+        runs every class -- and that a read-back after each confirms the
+        effect, since an exit code alone would pass against a command that
+        did nothing.
+        """
+        self.write("CREATE (n:Spec {key:'class-matrix'})")
+        assert self.query_json(
+            "MATCH (n:Spec {key:'class-matrix'}) RETURN n.key")["rows"] == [["class-matrix"]]
+
+        self.write("MATCH (n:Spec {key:'class-matrix'}) SET n.status = 'implemented'")
+        assert self.query_json(
+            "MATCH (n:Spec {key:'class-matrix'}) RETURN n.status")["rows"] == [["implemented"]]
+
+        self.write("CREATE INDEX spec_key FOR (n:Spec) ON (n.key)")
+        names = [row[0] for row in self.query_json("SHOW INDEXES")["rows"]]
+        assert "spec_key" in names, f"the index was not registered: {names!r}"
+
+        self.write("MATCH (n:Spec {key:'class-matrix'}) DETACH DELETE n")
+        assert self.query_json(
+            "MATCH (n:Spec {key:'class-matrix'}) RETURN n.key")["rows"] == []
+
+    def test_retired_subcommand_names_exit_127(self):
+        """SPEC/GRAPH.md acceptance criterion 5.
+
+        Each retired name is an unresolved subcommand, not a synonym of
+        `execute`: it must not run, and it must not be answered with any of
+        the graph family's own exit codes.
+        """
+        for name in ("create", "query", "update", "delete", "search"):
+            rc, _out, err = self.test.run_cmd(
+                ["graph", name, "-r", self.roadmap, "--query", "MATCH (n) RETURN n"],
+                check=False)
+            assert rc == 127, (
+                f"`rmp graph {name}` exited {rc}, want 127: the five names were "
+                f"replaced by `execute` and none survives as an alias "
+                f"(SPEC/COMMANDS.md § Graph Management); stderr={err!r}")
 
     def test_query_from_stdin(self):
-        self.write("create", "CREATE (s:Spec {key:'authentication'})")
+        self.write("CREATE (s:Spec {key:'authentication'})")
         env = os.environ.copy()
         env["HOME"] = str(self.test.home_dir)
         proc = subprocess.run(
-            [self.test.cli_path, "graph", "query", "-r", self.roadmap],
+            [self.test.cli_path, "graph", "execute", "-r", self.roadmap],
             input="MATCH (n) RETURN count(n)",
             capture_output=True, text=True, env=env,
         )
@@ -165,22 +197,22 @@ class TestGraphCheckpoint:
 
     def test_missing_roadmap_flag_exits_3(self):
         self.test.assert_exit_code(
-            ["graph", "query", "--query", "MATCH (n) RETURN n"], EXIT_NO_ROADMAP)
+            ["graph", "execute", "--query", "MATCH (n) RETURN n"], EXIT_NO_ROADMAP)
 
     def test_unknown_roadmap_exits_4(self):
         self.test.assert_exit_code(
-            ["graph", "query", "-r", "no_such_roadmap_xyz", "--query", "MATCH (n) RETURN n"],
+            ["graph", "execute", "-r", "no_such_roadmap_xyz", "--query", "MATCH (n) RETURN n"],
             EXIT_NOT_FOUND)
 
     def test_empty_query_exits_2(self):
         self.test.assert_exit_code(
-            ["graph", "query", "-r", self.roadmap, "--query", ""], EXIT_NO_QUERY)
+            ["graph", "execute", "-r", self.roadmap, "--query", ""], EXIT_NO_QUERY)
 
     # ---- synchronous checkpoint on write -----------------------------
 
     def test_snapshot_created_after_first_write(self):
         assert not self.snapshot_dir().exists(), "snapshot/ must not exist before any write"
-        self.write("create", "CREATE (s:Spec {key:'authentication'})")
+        self.write("CREATE (s:Spec {key:'authentication'})")
         manifest = self.snapshot_dir() / "manifest.json"
         mapper = self.snapshot_dir() / "mapper.bin"
         assert manifest.is_file(), "checkpoint must produce snapshot/manifest.json after a write"
@@ -188,7 +220,7 @@ class TestGraphCheckpoint:
             "snapshot must carry mapper.bin (self-sufficient) so the WAL can be truncated safely")
 
     def test_wal_truncated_after_write(self):
-        self.write("create", "CREATE (s:Spec {key:'authentication'})")
+        self.write("CREATE (s:Spec {key:'authentication'})")
         assert self.wal_size() == 0, (
             f"WAL must be truncated to 0 after the post-commit checkpoint, got {self.wal_size()}")
 
@@ -196,13 +228,13 @@ class TestGraphCheckpoint:
         # Without checkpointing the WAL would grow monotonically with
         # every write. With it, each write truncates back to 0.
         for i in range(1, 8):
-            self.write("create", f"CREATE (t:Task {{key:'task-{i}'}})")
+            self.write(f"CREATE (t:Task {{key:'task-{i}'}})")
             assert self.wal_size() == 0, (
                 f"WAL grew unbounded after write {i}: size={self.wal_size()} (checkpoint not truncating)")
 
     def test_durability_across_processes_from_snapshot(self):
         self.seed_knowledge_graph()
-        self.write("update", "MATCH (s:Spec {key:'authentication'}) SET s.status='shipped'")
+        self.write("MATCH (s:Spec {key:'authentication'}) SET s.status='shipped'")
         # WAL is empty after the last checkpoint, so a read in a fresh
         # process can only reconstruct labels + properties from the snapshot.
         assert self.wal_size() == 0, "precondition: WAL truncated after last write"
@@ -218,8 +250,8 @@ class TestGraphCheckpoint:
             "snapshot lost a string property")
 
     def test_delete_also_checkpoints(self):
-        self.write("create", "CREATE (d:Decision {key:'use-jwt'})")
-        self.write("delete", "MATCH (d:Decision {key:'use-jwt'}) DETACH DELETE d")
+        self.write("CREATE (d:Decision {key:'use-jwt'})")
+        self.write("MATCH (d:Decision {key:'use-jwt'}) DETACH DELETE d")
         assert self.wal_size() == 0, (
             f"delete must checkpoint and truncate the WAL, got {self.wal_size()}")
 
@@ -232,7 +264,7 @@ class TestGraphCheckpoint:
         # writes inside snapshot/ itself.
         return self.graph_dir() / "snapshot.tmp"
 
-    def _run_with_unwritable_snapshot(self, subcmd, query):
+    def _run_with_unwritable_snapshot(self, query):
         """Force a post-commit checkpoint failure by blocking the snapshot
         staging directory, then restore perms. Returns (exit_code, stdout,
         stderr).
@@ -255,18 +287,18 @@ class TestGraphCheckpoint:
         staging.chmod(0o500)
         try:
             return self.test.run_cmd(
-                ["graph", subcmd, "-r", self.roadmap, "--query", query], check=False)
+                ["graph", "execute", "-r", self.roadmap, "--query", query], check=False)
         finally:
             staging.chmod(0o700)
             shutil.rmtree(staging, ignore_errors=True)
 
     def test_checkpoint_failure_is_non_fatal(self):
         # First successful write creates the snapshot dir.
-        self.write("create", "CREATE (s:Spec {key:'authentication'})")
+        self.write("CREATE (s:Spec {key:'authentication'})")
         assert self.wal_size() == 0
         # Now force the checkpoint to fail after a durable commit.
         code, stdout, stderr = self._run_with_unwritable_snapshot(
-            "create", "CREATE (d:Decision {key:'use-jwt', rationale:'stateless'})")
+            "CREATE (d:Decision {key:'use-jwt', rationale:'stateless'})")
         assert code == EXIT_OK, f"checkpoint failure must NOT fail the write (FR7); exit={code}"
         assert '"ok": true' in stdout, f"success JSON must still be emitted; stdout={stdout!r}"
         assert "checkpoint" in stderr.lower(), f"a checkpoint diagnostic must go to stderr; stderr={stderr!r}"
@@ -278,24 +310,38 @@ class TestGraphCheckpoint:
         result = self.query_json("MATCH (d:Decision {key:'use-jwt'}) RETURN d.key")
         assert result["rows"] == [["use-jwt"]], "committed node lost after a non-fatal checkpoint failure"
 
-    def test_read_does_not_checkpoint(self):
-        self.write("create", "CREATE (s:Spec {key:'authentication'})")
-        self._run_with_unwritable_snapshot("create", "CREATE (d:Decision {key:'use-jwt'})")
+    def test_statement_that_writes_nothing_does_not_checkpoint(self):
+        """SPEC/GRAPH.md acceptance criterion 17.
+
+        This used to be a statement about the READ SUBCOMMANDS, which never
+        reached the checkpoint at all because they ran on a different engine.
+        There is one execution path now, so a statement that changes nothing
+        runs through the very code that checkpoints, and what keeps the
+        snapshot and the log untouched is that the transaction appended
+        nothing to the write-ahead log. The precondition below is load
+        bearing: the log is deliberately left NON-EMPTY by an orphaned
+        transaction, so an implementation that checkpointed unconditionally
+        would truncate it and be caught.
+        """
+        self.write("CREATE (s:Spec {key:'authentication'})")
+        self._run_with_unwritable_snapshot("CREATE (d:Decision {key:'use-jwt'})")
         wal_after_failed_write = self.wal_size()
         assert wal_after_failed_write and wal_after_failed_write > 0, "precondition: WAL has the orphan tx"
         # A read must not checkpoint, so it must not truncate the WAL.
         self.query_json("MATCH (n) RETURN count(n)")
         assert self.wal_size() == wal_after_failed_write, (
-            "a read subcommand must never checkpoint/truncate the WAL")
+            "a statement whose transaction appended nothing must never "
+            "checkpoint or truncate the WAL (SPEC/GRAPH.md § What a Statement "
+            "That Writes Nothing Changes on Disk, rules 2 and 3)")
 
     def test_checkpoint_reconciles_after_failure(self):
-        self.write("create", "CREATE (s:Spec {key:'authentication'})")
+        self.write("CREATE (s:Spec {key:'authentication'})")
         # Orphan transaction left only in the WAL by a failed checkpoint.
-        self._run_with_unwritable_snapshot("create", "CREATE (d:Decision {key:'use-jwt'})")
+        self._run_with_unwritable_snapshot("CREATE (d:Decision {key:'use-jwt'})")
         assert self.wal_size() and self.wal_size() > 0
         # The next successful write reconciles: it rewrites the snapshot
         # (absorbing the orphan tx) and truncates the WAL back to 0.
-        self.write("create", "CREATE (t:Task {key:'login-flow'})")
+        self.write("CREATE (t:Task {key:'login-flow'})")
         assert self.wal_size() == 0, "a successful write after a failure must reconcile and truncate the WAL"
         # All three nodes survive with the WAL empty => all are in the snapshot.
         result = self.query_json("MATCH (n) RETURN n.key ORDER BY n.key")

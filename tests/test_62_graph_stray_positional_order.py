@@ -48,7 +48,7 @@ What every case asserts, beyond the exit code:
     print the right line, and only the bytes on disk would say so.
 
 The module also carries the end-to-end half of acceptance criteria 57, 58 and
-60. The five subcommands' lines are compared against each other and against the
+28. The lines every statement class produces are compared against each other and against the
 CANONICAL line plus this family's HINT, and the comment subcommands' line is
 compared against that same canonical line without the hint. The two constants
 below are written once and every expectation is derived from them, so no
@@ -68,12 +68,13 @@ from tests.base_test import GroadmapTestBase
 
 
 EXIT_OK = 0
+EXIT_DATABASE = 1
 EXIT_MISUSE = 2
 EXIT_NO_ROADMAP = 3
 EXIT_NOT_FOUND = 4
 EXIT_VALIDATION = 6
 
-# The refusal, in the two pieces SPEC/GRAPH.md acceptance criterion 60 names:
+# The refusal, in the two pieces SPEC/GRAPH.md acceptance criterion 28 names:
 # the line SPEC/COMMANDS.md § Positional Arguments publishes for the WHOLE CLI,
 # and the hint the `graph` family appends to it. Neither family's line is
 # written out anywhere below; both are DERIVED from these two, so the
@@ -130,22 +131,23 @@ def comment_line(token):
     return canonical_line(token)
 
 
-# The five subcommands, each with a query of its own operation class, so every
-# invocation driven below is one that would SUCCEED were the stray token
-# removed. The queries act on different nodes of the same seeded graph, so the
-# controls do not undo one another.
-GRAPH_SUBCOMMANDS = [
+# `rmp graph` has one subcommand, `execute`
+# (SPEC/COMMANDS.md section "Graph Management"). This table used to hold the
+# five it had, each paired with a query of its own operation class; what it
+# varies now is the STATEMENT CLASS, because that is the only dimension left and
+# because the refusal must not depend on it. Every entry would SUCCEED were the
+# stray token removed, and the statements act on different nodes of the same
+# seeded graph so the controls do not undo one another.
+ENGINE_REFUSED_QUERY = "MATCH (n:Spec RETURN n"
+
+GRAPH_STATEMENT_CLASSES = [
     ("create", "CREATE (:Spec {key:'chargeback-handling'})"),
-    ("query", "MATCH (s:Spec) RETURN s.key ORDER BY s.key"),
+    ("read", "MATCH (s:Spec) RETURN s.key ORDER BY s.key"),
     ("update", "MATCH (s:Spec {key:'payment-capture'}) SET s.status = 'ready'"),
     ("delete", "MATCH (s:Spec {key:'refund-flow'}) DETACH DELETE s"),
-    ("search", "MATCH p=(a:Spec)-[*1..3]-(b:Spec) RETURN p"),
+    ("traversal", "MATCH p=(a:Spec)-[*1..3]-(b:Spec) RETURN p"),
+    ("schema-introspection", "SHOW INDEXES"),
 ]
-
-# A query of the WRONG class for `graph query`: it writes, and a read
-# subcommand refuses it with exit 6. Used to prove the refusal precedes the
-# guard rail.
-WRONG_CLASS_QUERY = "CREATE (:Spec {key:'settlement-reconciliation'})"
 
 
 def stderr_parts(stderr):
@@ -175,7 +177,7 @@ class GraphStrayBase:
         self.test.setup()
         self.roadmap = self.test.create_roadmap(self.ROADMAP)
         for query in self.SEED_QUERIES:
-            self.test.run_cmd(["graph", "create", "-r", self.roadmap, "--query", query])
+            self.test.run_cmd(["graph", "execute", "-r", self.roadmap, "--query", query])
 
     def teardown_method(self):
         self.test.teardown()
@@ -270,7 +272,7 @@ class TestGraphStrayRefusalOrder(GraphStrayBase):
         """The control for the case below: without the stray token, a roadmap
         that does not exist really is an exit-4 verdict."""
         code, stdout, stderr = self.run(
-            ["graph", "query", "-r", "roadmap-that-does-not-exist",
+            ["graph", "execute", "-r", "roadmap-that-does-not-exist",
              "--query", "MATCH (s:Spec) RETURN s.key"])
         assert code == EXIT_NOT_FOUND, (
             f"a missing roadmap alone exits {code}, want {EXIT_NOT_FOUND}; the ordering case below "
@@ -281,7 +283,7 @@ class TestGraphStrayRefusalOrder(GraphStrayBase):
         """The refusal precedes opening the graph store, so exit 2 and not 4."""
         before = self.graph_fingerprint()
         code, stdout, stderr = self.run(
-            ["graph", "query", STRAY, "-r", "roadmap-that-does-not-exist",
+            ["graph", "execute", STRAY, "-r", "roadmap-that-does-not-exist",
              "--query", "MATCH (s:Spec) RETURN s.key"])
 
         self.assert_refused_cleanly(
@@ -302,7 +304,7 @@ class TestGraphStrayRefusalOrder(GraphStrayBase):
         roadmaps_before = sorted(os.listdir(self.test.home_dir / ".roadmaps"))
 
         code, stdout, stderr = self.run(
-            ["graph", "query", STRAY, "--query", "MATCH (s:Spec) RETURN s.key"])
+            ["graph", "execute", STRAY, "--query", "MATCH (s:Spec) RETURN s.key"])
 
         self.assert_refused_cleanly(
             code, stdout, stderr, EXIT_NO_ROADMAP, NO_ROADMAP_LINE,
@@ -314,29 +316,40 @@ class TestGraphStrayRefusalOrder(GraphStrayBase):
             "a refused invocation changed the set of roadmaps")
         self.assert_store_untouched(before, "a stray token with no roadmap selected")
 
-    def test_a_query_of_the_wrong_class_alone_exits_six(self):
-        """The control for the case below: without the stray token, a writing
-        query under `graph query` really is an exit-6 verdict."""
-        before = self.graph_fingerprint()
-        code, stdout, stderr = self.run(
-            ["graph", "query", "-r", self.roadmap, "--query", WRONG_CLASS_QUERY])
-        assert code == EXIT_VALIDATION, (
-            f"a wrong-class query alone exits {code}, want {EXIT_VALIDATION}; stderr={stderr!r}")
-        assert stdout == ""
-        self.assert_store_untouched(before, "a wrong-class query alone")
+    def test_a_statement_the_engine_refuses_alone_exits_one(self):
+        """The control for the case below: without the stray token, this
+        statement really does reach the engine and fail there.
 
-    def test_a_stray_beats_a_query_of_the_wrong_class(self):
-        """The refusal precedes the guard rail, so exit 2 and not 6."""
+        This pair used to be written with a query of the WRONG OPERATION CLASS,
+        whose verdict was exit 6 from the guard rail. There is no operation
+        class and no guard rail (SPEC/COMMANDS.md section "Graph Management"),
+        so the check the stray token must be shown to precede is the ENGINE
+        itself -- which is the stronger of the two orderings anyway, because
+        reaching the engine means the store was opened.
+        """
         before = self.graph_fingerprint()
         code, stdout, stderr = self.run(
-            ["graph", "query", "-r", self.roadmap, "--query", WRONG_CLASS_QUERY, STRAY])
+            ["graph", "execute", "-r", self.roadmap, "--query", ENGINE_REFUSED_QUERY])
+        assert code == EXIT_DATABASE, (
+            f"an unparseable statement alone exits {code}, want {EXIT_DATABASE}; "
+            f"stderr={stderr!r}")
+        assert stdout == ""
+        self.assert_store_untouched(before, "an unparseable statement alone")
+
+    def test_a_stray_beats_a_statement_the_engine_would_refuse(self):
+        """Criterion 27: the refusal precedes the graph store being opened, so
+        exit 2 and not the 1 the engine's own refusal carries."""
+        before = self.graph_fingerprint()
+        code, stdout, stderr = self.run(
+            ["graph", "execute", "-r", self.roadmap, "--query", ENGINE_REFUSED_QUERY, STRAY])
 
         self.assert_refused_cleanly(
             code, stdout, stderr, EXIT_MISUSE, graph_line(STRAY),
-            "a stray token beside a query of the wrong operation class")
-        assert code != EXIT_VALIDATION, (
-            "exit 6 means the guard rail classified the query first; the refusal must precede it")
-        self.assert_store_untouched(before, "a stray token beside a wrong-class query")
+            "a stray token beside a statement the engine would refuse")
+        assert code != EXIT_DATABASE, (
+            "exit 1 means the statement reached the engine, so the store was opened; "
+            "the refusal must precede that")
+        self.assert_store_untouched(before, "a stray token beside an unparseable statement")
 
     def test_a_stray_refuses_before_standard_input_is_read(self):
         """The refusal precedes the standard-input read, and precedes the
@@ -361,7 +374,7 @@ class TestGraphStrayRefusalOrder(GraphStrayBase):
 
         started = time.time()
         proc = subprocess.Popen(
-            [self.test.cli_path, "graph", "query", "-r", self.roadmap, STRAY],
+            [self.test.cli_path, "graph", "execute", "-r", self.roadmap, STRAY],
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
             env=self.env(),
         )
@@ -412,43 +425,45 @@ class TestGraphStrayRefusalOrder(GraphStrayBase):
 
 
 class TestGraphStrayRefusalWording(GraphStrayBase):
-    """Acceptance criteria 57 and 58 at binary level: all five subcommands, one
-    wording, and the classification of a `-`-prefixed token in both directions."""
+    """Acceptance criteria 25 and 26 at binary level: one wording across every
+    statement class, and the classification of a `-`-prefixed token in both
+    directions."""
 
-    def test_all_five_subcommands_would_succeed_without_the_stray_token(self):
-        """The control half of criterion 57. Each query is of its subcommand's
-        own operation class, so every refusal asserted below is caused by the
-        stray token and not by a query the guard rail was going to reject."""
-        for subcommand, query in GRAPH_SUBCOMMANDS:
+    def test_every_statement_class_would_succeed_without_the_stray_token(self):
+        """The control half of criterion 25. Each statement executes on its own,
+        so every refusal asserted below is caused by the stray token and not by
+        a statement that was going to fail anyway."""
+        for statement_class, query in GRAPH_STATEMENT_CLASSES:
             code, stdout, stderr = self.run(
-                ["graph", subcommand, "-r", self.roadmap, "--query", query])
+                ["graph", "execute", "-r", self.roadmap, "--query", query])
             assert code == EXIT_OK, (
-                f"`graph {subcommand}` was refused its own class of query: exit={code} "
+                f"a {statement_class} statement was refused: exit={code} "
                 f"stderr={stderr!r}")
             assert stdout.strip() != "", (
-                f"`graph {subcommand}` wrote nothing to stdout, so the control did not run")
+                f"a {statement_class} statement wrote nothing to stdout, so the control did not run")
 
-    def test_all_five_subcommands_refuse_with_one_wording(self):
-        """Criterion 57. The whole line, the parenthetical included, identical
-        across the five -- and the five compared against EACH OTHER, because a
-        wording that drifts on one subcommand satisfies every assertion made
-        about that subcommand alone."""
+    def test_every_statement_class_refuses_with_one_wording(self):
+        """Criterion 25. The whole line, the parenthetical included, identical
+        across the statement classes -- and the lines compared against EACH
+        OTHER, because `graph execute` holds no opinion about what a statement
+        does, so its refusal of a stray token must not vary with the statement
+        either."""
         before = self.graph_fingerprint()
         want = graph_line(STRAY)
         produced = {}
 
-        for subcommand, query in GRAPH_SUBCOMMANDS:
+        for statement_class, query in GRAPH_STATEMENT_CLASSES:
             code, stdout, stderr = self.run(
-                ["graph", subcommand, "-r", self.roadmap, "--query", query, STRAY])
+                ["graph", "execute", "-r", self.roadmap, "--query", query, STRAY])
             self.assert_refused_cleanly(
-                code, stdout, stderr, EXIT_MISUSE, want, f"graph {subcommand}")
-            produced[subcommand] = stderr_parts(stderr)[0]
+                code, stdout, stderr, EXIT_MISUSE, want, f"a {statement_class} statement")
+            produced[statement_class] = stderr_parts(stderr)[0]
 
         distinct = {}
-        for subcommand, line in produced.items():
-            distinct.setdefault(line, []).append(subcommand)
+        for statement_class, line in produced.items():
+            distinct.setdefault(line, []).append(statement_class)
         assert len(distinct) == 1, (
-            f"the family no longer has one wording; the five subcommands share one argument "
+            f"the family no longer has one wording; every statement class shares one argument "
             f"parser, so a divergence here is a divergence in that parser: {distinct!r}")
 
         self.assert_store_untouched(before, "the five refusals")
@@ -467,26 +482,26 @@ class TestGraphStrayRefusalWording(GraphStrayBase):
         unexpected_tokens = ["-1", "-0.5", "-"]
         flag_tokens = ["--include-archived", "-x"]
 
-        for subcommand, query in GRAPH_SUBCOMMANDS:
+        for statement_class, query in GRAPH_STATEMENT_CLASSES:
             for token in unexpected_tokens:
                 code, stdout, stderr = self.run(
-                    ["graph", subcommand, "-r", self.roadmap, "--query", query, token])
+                    ["graph", "execute", "-r", self.roadmap, "--query", query, token])
                 self.assert_refused_cleanly(
                     code, stdout, stderr, EXIT_MISUSE, graph_line(token),
-                    f"graph {subcommand} with the stray token {token!r}")
+                    f"a {statement_class} statement with the stray token {token!r}")
 
             for token in flag_tokens:
                 code, stdout, stderr = self.run(
-                    ["graph", subcommand, "-r", self.roadmap, "--query", query, token])
+                    ["graph", "execute", "-r", self.roadmap, "--query", query, token])
                 assert code == EXIT_MISUSE, (
-                    f"graph {subcommand} {token}: exit={code}, want {EXIT_MISUSE}; stderr={stderr!r}")
+                    f"a {statement_class} statement with {token}: exit={code}, want {EXIT_MISUSE}; stderr={stderr!r}")
                 assert stdout == ""
                 first = stderr_parts(stderr)[0]
                 assert first == f"Error: invalid input: unknown flag: {token}", (
-                    f"graph {subcommand}: a genuine flag must be reported as an unknown flag; "
+                    f"a {statement_class} statement: a genuine flag must be reported as an unknown flag; "
                     f"got {first!r}")
                 assert "unexpected argument" not in first, (
-                    f"graph {subcommand}: a genuine flag must not be reported as a positional "
+                    f"a {statement_class} statement: a genuine flag must not be reported as a positional "
                     f"argument; got {first!r}")
 
     def test_only_the_first_stray_token_is_named(self):
@@ -496,19 +511,19 @@ class TestGraphStrayRefusalWording(GraphStrayBase):
         first, second = STRAY, "settlement-summary"
         want = graph_line(first)
 
-        for subcommand, query in GRAPH_SUBCOMMANDS:
+        for statement_class, query in GRAPH_STATEMENT_CLASSES:
             layouts = [
                 ("both strays after the flags",
-                 ["graph", subcommand, "-r", self.roadmap, "--query", query, first, second]),
+                 ["graph", "execute", "-r", self.roadmap, "--query", query, first, second]),
                 ("the first stray written before the flags",
-                 ["graph", subcommand, first, "-r", self.roadmap, "--query", query, second]),
+                 ["graph", "execute", first, "-r", self.roadmap, "--query", query, second]),
             ]
             for label, args in layouts:
                 code, stdout, stderr = self.run(args)
                 self.assert_refused_cleanly(
-                    code, stdout, stderr, EXIT_MISUSE, want, f"graph {subcommand}: {label}")
+                    code, stdout, stderr, EXIT_MISUSE, want, f"a {statement_class} statement: {label}")
                 assert second not in stderr, (
-                    f"graph {subcommand} ({label}): stderr names the second stray token as well: "
+                    f"a {statement_class} statement ({label}): stderr names the second stray token as well: "
                     f"{stderr!r}; only the first offending token may be named")
 
 
@@ -541,14 +556,14 @@ class TestGraphStrayRefusalAcrossFamilies(GraphStrayBase):
             code, stdout, stderr, EXIT_MISUSE, canonical_line(STRAY), "roadmap list")
 
     def test_the_graph_line_is_the_canonical_line_plus_this_familys_hint(self):
-        """One direction of the relation, measured on all five subcommands."""
-        for subcommand, query in GRAPH_SUBCOMMANDS:
+        """One direction of the relation, measured on every statement class."""
+        for statement_class, query in GRAPH_STATEMENT_CLASSES:
             code, stdout, stderr = self.run(
-                ["graph", subcommand, "-r", self.roadmap, "--query", query, STRAY])
+                ["graph", "execute", "-r", self.roadmap, "--query", query, STRAY])
             first = stderr_parts(stderr)[0]
-            assert code == EXIT_MISUSE, f"graph {subcommand}: exit={code}; stderr={stderr!r}"
+            assert code == EXIT_MISUSE, f"a {statement_class} statement: exit={code}; stderr={stderr!r}"
             assert first == canonical_line(STRAY) + GRAPH_HINT, (
-                f"`graph {subcommand}` emits {first!r}; the canonical CLI-wide line plus this "
+                f"a {statement_class} statement emits {first!r}; the canonical CLI-wide line plus this "
                 f"family's hint is {canonical_line(STRAY) + GRAPH_HINT!r}. The shared half of the "
                 f"two families' lines must stay shared character for character.")
             assert stdout == ""
@@ -605,7 +620,7 @@ class TestGraphStrayRefusalAcrossFamilies(GraphStrayBase):
         # And the same token on the `graph` family, so the divergence is read as
         # a divergence rather than as two unrelated facts.
         code, stdout, stderr = self.run(
-            ["graph", "query", "-r", self.roadmap, "--query", "MATCH (s:Spec) RETURN s.key", "-1"])
+            ["graph", "execute", "-r", self.roadmap, "--query", "MATCH (s:Spec) RETURN s.key", "-1"])
         first = stderr_parts(stderr)[0]
         assert code == EXIT_MISUSE, f"exit={code}, want {EXIT_MISUSE}; stderr={stderr!r}"
         assert first == graph_line("-1"), (

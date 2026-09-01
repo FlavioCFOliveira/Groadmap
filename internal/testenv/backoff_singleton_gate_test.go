@@ -17,7 +17,7 @@ import (
 // The defect: three subsystems each wrote out the project's bounded
 // exponential-backoff retry loop for themselves — internal/db's
 // retryWithBackoff, internal/commands's openWALWriter and internal/graphlock's
-// AcquireShared. Two of them read the specification's "Maximum retries: 5" as
+// acquisition. Two of them read the specification's "Maximum retries: 5" as
 // five ATTEMPTS and guarded their sleep with `attempt < N-1`, so they waited
 // four times for 1500 ms where the specification, their own comments and the
 // third site all promised five waits for 2500 ms. The three loops were only
@@ -51,10 +51,10 @@ import (
 //   - It sees production files only. Test files sleep freely — several
 //     coordinate goroutines that way — and holding them to this rule would say
 //     nothing about the binary's behaviour.
-//   - It proves that only one package waits, not that the three call sites route
+//   - It proves that only one package waits, not that the call sites route
 //     through it. That is what the measured tests in internal/db,
-//     internal/commands and internal/graphlock establish, each against
-//     backoff.Total() rather than against a figure of its own.
+//     internal/commands, internal/graphlock and internal/web establish, each
+//     against backoff.Total() rather than against a figure of its own.
 
 // backoffPkgDir is the one package allowed to block on time in production code:
 // the home of the project's single retry policy.

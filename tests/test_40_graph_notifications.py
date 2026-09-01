@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Test 40: rmp graph query notifications as stderr diagnostics.
+Test 40: rmp graph execute notifications as stderr diagnostics.
 
 End-to-end backstop for SPEC/GRAPH.md § Query Notifications as Diagnostics
 (functional requirement 10) and Acceptance Criteria 20, 21, 22.
@@ -57,19 +57,17 @@ class TestGraphNotifications:
 
     # ---- helpers -----------------------------------------------------
 
-    def graph(self, subcmd: str, query: str, check: bool = True):
-        """Run a graph subcommand, returning (exit_code, stdout, stderr)."""
+    def graph(self, query: str, check: bool = True):
+        """Run `rmp graph execute`, returning (exit_code, stdout, stderr)."""
         return self.test.run_cmd(
-            ["graph", subcmd, "-r", self.roadmap, "--query", query], check=check)
+            ["graph", "execute", "-r", self.roadmap, "--query", query], check=check)
 
     def _seed_knowledge_graph(self):
         """One Spec and one Task so a disconnected MATCH has rows to match
         while still triggering the engine's Cartesian-product advisory.
         Realistic project-knowledge nodes (no foo/bar placeholders)."""
-        self.graph("create",
-                   "CREATE (s:Spec {key:'user-authentication', title:'User Authentication'})")
-        self.graph("create",
-                   "CREATE (t:Task {key:'implement-login-flow', title:'Implement login flow'})")
+        self.graph("CREATE (s:Spec {key:'user-authentication', title:'User Authentication'})")
+        self.graph("CREATE (t:Task {key:'implement-login-flow', title:'Implement login flow'})")
 
     @staticmethod
     def _is_json_columns_rows(stdout: str) -> bool:
@@ -80,11 +78,10 @@ class TestGraphNotifications:
             return False
         return isinstance(parsed, dict) and "columns" in parsed and "rows" in parsed
 
-    # ---- AC 20: disconnected MATCH surfaces a notice on the read path ----
+    # ---- AC 21: a disconnected MATCH surfaces a notice on stderr ----
 
     def test_disconnected_match_emits_cartesian_notice_on_stderr(self):
-        code, stdout, stderr = self.graph(
-            "query", "MATCH (a:Spec), (b:Task) RETURN a.key, b.key")
+        code, stdout, stderr = self.graph("MATCH (a:Spec), (b:Task) RETURN a.key, b.key")
 
         assert code == EXIT_OK, f"a notification is advisory; exit must stay 0, got {code}"
 
@@ -109,10 +106,10 @@ class TestGraphNotifications:
         assert result["columns"] == ["a.key", "b.key"], result
         assert ["user-authentication", "implement-login-flow"] in result["rows"], result
 
-    # ---- AC 21: a connected query writes nothing extra to stderr ----
+    # ---- AC 22: a connected statement writes nothing extra to stderr ----
 
     def test_connected_query_emits_no_notice(self):
-        code, stdout, stderr = self.graph("query", "MATCH (s:Spec) RETURN s.key")
+        code, stdout, stderr = self.graph("MATCH (s:Spec) RETURN s.key")
 
         assert code == EXIT_OK, f"connected query must succeed, got exit {code}"
         assert stderr.strip() == "", (
@@ -121,26 +118,26 @@ class TestGraphNotifications:
         import json
         assert json.loads(stdout.strip())["rows"] == [["user-authentication"]]
 
-    def test_connected_search_emits_no_notice(self):
-        # A connected traversal under the search subcommand is also quiet.
-        self.graph("create",
-                   "CREATE (s:Spec {key:'session-management'})-[:HAS_TASK]->(t:Task {key:'token-rotation'})")
-        code, stdout, stderr = self.graph(
-            "search", "MATCH p=(s:Spec {key:'session-management'})-[*1..2]-(b) RETURN b.key")
+    def test_connected_traversal_emits_no_notice(self):
+        # A connected traversal is quiet too. It used to run under a separate
+        # `search` subcommand; there is one subcommand now
+        # (SPEC/COMMANDS.md § Graph Management), so what this varies is the
+        # STATEMENT and not the command.
+        self.graph("CREATE (s:Spec {key:'session-management'})-[:HAS_TASK]->(t:Task {key:'token-rotation'})")
+        code, stdout, stderr = self.graph("MATCH p=(s:Spec {key:'session-management'})-[*1..2]-(b) RETURN b.key")
 
         assert code == EXIT_OK, f"connected search must succeed, got exit {code}"
         assert stderr.strip() == "", (
             f"a connected traversal must write nothing to stderr; stderr={stderr!r}")
         assert self._is_json_columns_rows(stdout), f"stdout malformed: {stdout!r}"
 
-    # ---- AC 22: notification wiring on the write path ----
+    # ---- notifications on a statement that writes ----
 
-    def test_write_path_success_output_unchanged_by_notifications(self):
-        # A disconnected MATCH that drives a CREATE is a valid write query
-        # (the only writing clause is CREATE). The write subcommand routes its
-        # result through the same notification emitter as the read path.
-        code, stdout, stderr = self.graph(
-            "create", "MATCH (a:Spec), (b:Task) CREATE (l:Link {note:'join-spec-and-task'})")
+    def test_write_success_output_unchanged_by_notifications(self):
+        # A disconnected MATCH that drives a CREATE. A statement that writes
+        # runs through the same notification emitter as one that does not,
+        # because there is one path and one emitter.
+        code, stdout, stderr = self.graph("MATCH (a:Spec), (b:Task) CREATE (l:Link {note:'join-spec-and-task'})")
 
         # The advisory never changes the write's success output or exit code.
         assert code == EXIT_OK, f"write must succeed with exit 0; got {code}, stderr={stderr!r}"
@@ -156,16 +153,14 @@ class TestGraphNotifications:
         # The write actually committed (read it back; this read also confirms
         # the link node exists).
         result = self.test.run_cmd_json(
-            ["graph", "query", "-r", self.roadmap, "--query", "MATCH (l:Link) RETURN l.note"])
+            ["graph", "execute", "-r", self.roadmap, "--query", "MATCH (l:Link) RETURN l.note"])
         assert result["rows"] == [["join-spec-and-task"]], (
             f"write-path query did not persist the node: {result!r}")
 
-    def test_write_path_with_return_keeps_columns_rows(self):
+    def test_write_with_return_keeps_columns_rows(self):
         # A RETURN-bearing write must still emit columns/rows on stdout, with
         # any notification confined to stderr and exit code 0.
-        code, stdout, stderr = self.graph(
-            "create",
-            "CREATE (d:Decision {key:'adopt-jwt', rationale:'Stateless sessions scale'}) RETURN d.key")
+        code, stdout, stderr = self.graph("CREATE (d:Decision {key:'adopt-jwt', rationale:'Stateless sessions scale'}) RETURN d.key")
 
         assert code == EXIT_OK, f"RETURN-bearing write must succeed; got {code}, stderr={stderr!r}"
         assert self._is_json_columns_rows(stdout), (

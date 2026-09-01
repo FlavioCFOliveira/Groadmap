@@ -713,7 +713,7 @@ class TestAIContractErrorParity:
 
         # Locus 1: the Cypher engine's own parse diagnostic.
         rc, out, err = self.fx.run(
-            ["graph", "query", "-r", self.fx.roadmap, "--query", "MATCH ("])
+            ["graph", "execute", "-r", self.fx.roadmap, "--query", "MATCH ("])
         actual = err.splitlines()[0] if err else ""
         published = "Error: database error: graph query failed: <engine diagnostic>"
         mode, prefix = classify(published)

@@ -7,12 +7,20 @@
 // opening the store is not a read-only operation on disk: GoGraph's recovery
 // removes a stale snapshot.tmp staging directory and can promote snapshot.bak
 // to snapshot. A request could therefore delete the staging directory an
-// `rmp graph` write was assembling its snapshot in.
+// `rmp graph execute` write was assembling its snapshot in.
 //
-// Taking a lock is only half the fix. The other half is releasing it AT THE
-// OPEN, so that serving a slow graph query never fails a concurrent CLI write —
-// TestHandleGraphData_ReleasesTheLockAtTheOpen is what stops that hold being
-// widened back over the query.
+// **The hold used to span the store open ALONE, and one of the tests below used
+// to fail if it were widened.** That test is now inverted, and the inversion is
+// the point of rmp task #364 rather than an accident of it: the endpoint's
+// statement may write, so the hold has to cover the open, the statement, the
+// commit and the checkpoint — the same span `rmp graph execute` holds, for the
+// same reason. There is one lock mode because there is one execution path, and
+// nothing examines a statement to learn which it needs (SPEC/GRAPH.md
+// § Concurrency and Recovery).
+//
+// The cost is real and is asserted rather than assumed: a slow statement
+// submitted through the query bar blocks the CLI, and blocks a second graph
+// page, for as long as it runs.
 package web
 
 import (
@@ -21,6 +29,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -154,24 +163,29 @@ func TestHandleGraphData_LockExhaustionIsAnInternalError(t *testing.T) {
 // observation below robust rather than a race.
 const slowReadGraphNodes = 252
 
-// TestHandleGraphData_ReleasesTheLockAtTheOpen covers SPEC/WEB.md acceptance
-// criterion 148, the criterion that exists to stop the server's hold being
-// widened back over the query: the shared lock is released when the open
-// returns, so a concurrent `rmp graph` write can start, commit and checkpoint
-// while the request is still executing its query.
+// TestHandleGraphData_HoldsTheLockAcrossTheStatement covers SPEC/WEB.md
+// acceptance criterion 148: the hold spans the statement, so an
+// `rmp graph execute` invocation issued while a slow graph data request is still
+// executing WAITS for it rather than proceeding beside it.
 //
-// The observation is the exclusive lock becoming acquirable WHILE the request is
-// still in flight. That is exactly what a CLI writer would find. If the hold
-// were widened — a defer releaseLock(), or a release moved after the query — the
-// acquisition would fail for the whole duration of the request and this test
-// would go red, which is what should happen.
+// This test is the inversion of the one that stood here before. It used to
+// assert the opposite — that the exclusive lock became acquirable WHILE the
+// request was still in flight — because the endpoint was read-only and a hold
+// spanning the query would have blocked the CLI for nothing. The endpoint's
+// statement can now write and commit, so a hold released at the open would let a
+// concurrent invocation load the graph, checkpoint a full snapshot of its own
+// stale in-memory copy, and truncate the write-ahead log that still held this
+// request's committed change: an acknowledged write lost in silence
+// (SPEC/GRAPH.md § Concurrency and Recovery).
 //
-// Two assertions guard against the test passing for the wrong reason: the
-// acquisition must happen while the request is unfinished (or it proves nothing
-// about overlap), and the request must have taken meaningfully longer than the
-// acquisition (or the query was not slow enough to distinguish a narrow hold
-// from a wide one).
-func TestHandleGraphData_ReleasesTheLockAtTheOpen(t *testing.T) {
+// The observation is an ORDERING and not a threshold, which is what keeps it
+// robust on a slow machine: the acquisition must return no earlier than the
+// moment the request completed. Under a hold released at the open it would
+// return a whole statement's execution earlier, and under the correct hold it
+// cannot return before the request has released. The second assertion — that the
+// request took meaningfully longer than a store open — is what makes the
+// ordering worth observing at all.
+func TestHandleGraphData_HoldsTheLockAcrossTheStatement(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	name := seedRoadmap(t, "web-ui-rollout")
 
@@ -179,39 +193,38 @@ func TestHandleGraphData_ReleasesTheLockAtTheOpen(t *testing.T) {
 	seeds = append(seeds, fmt.Sprintf(`UNWIND range(1,%d) AS i CREATE (:Bulk {i:i})`, slowReadGraphNodes-3))
 	seedGraph(t, name, seeds...)
 
-	// A budget large enough that the query runs to completion; the point here is
-	// a long-running READ, not a cancelled one.
+	// A budget large enough that the statement runs to completion; the point
+	// here is a long-running statement, not a cancelled one.
 	setGraphQueryBudget(t, 60*time.Second)
 
 	graphDir := webGraphDir(t, name)
 
 	// Remove the lock file, so that its (re)appearance is an unambiguous,
 	// monotonic signal that the request has reached the lock acquisition. This
-	// is what makes the observation below race-free: polling the exclusive lock
-	// from t=0 would succeed trivially while the request was still resolving the
-	// roadmap and validating the query, long before it ever took the shared
-	// lock, and the test would then pass no matter how wide the hold was.
+	// is what makes the observation below race-free: acquiring from t=0 would
+	// succeed trivially while the request was still resolving the roadmap and
+	// validating the limit, long before it took the lock at all.
 	lockPath := filepath.Join(graphDir, graphlock.LockFileName)
 	if err := os.Remove(lockPath); err != nil && !os.IsNotExist(err) {
 		t.Fatalf("clearing the lock file before the request: %v", err)
 	}
 
 	type response struct {
-		body string
-		code int
+		finishedAt time.Time
+		body       string
+		code       int
 	}
 	done := make(chan response, 1)
 	start := time.Now()
 	go func() {
 		rec := doGraphData(t, name, url.Values{"q": {expensiveGraphQuery}})
-		done <- response{rec.Body.String(), rec.Code}
+		done <- response{time.Now(), rec.Body.String(), rec.Code}
 	}()
 
 	// Phase one: wait until the request has reached the lock. Creating the lock
 	// file is the first thing graphlock does and it never undoes it, so unlike
 	// the lock state itself there is no window here that a poll can miss.
 	reachedLock := false
-	deadline := time.Now().Add(20 * time.Second)
 	lockDeadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(lockDeadline) {
 		if _, err := os.Stat(lockPath); err == nil {
@@ -222,86 +235,107 @@ func TestHandleGraphData_ReleasesTheLockAtTheOpen(t *testing.T) {
 	}
 	if !reachedLock {
 		t.Fatal("the graph data request never created the store lock file, so it never took the " +
-			"shared lock at all (SPEC/WEB.md § Knowledge Graph from the GoGraph Store, rule 5)")
+			"lock at all (SPEC/WEB.md § Knowledge Graph from the GoGraph Store, rule 5)")
 	}
 
-	// Phase two: from here on the request is demonstrably inside or past its
-	// lock acquisition, so an exclusive acquisition that succeeds says something.
-	// Under the correct narrow hold it succeeds as soon as the store open
-	// returns, milliseconds in; under a hold that spans the query it cannot
-	// succeed until the request has finished, which the done check catches.
-	var (
-		acquiredAt    time.Duration
-		acquired      bool
-		stillInFlight bool
-	)
-	for time.Now().Before(deadline) {
-		select {
-		case got := <-done:
-			done <- got
-			t.Fatalf("the request finished (status %d) before a writer could take the exclusive "+
-				"lock. The server must hold the shared lock across the STORE OPEN ALONE and "+
-				"release it as soon as the open returns (SPEC/WEB.md § Knowledge Graph from the "+
-				"GoGraph Store, rule 5): a hold that spans the query blocks the CLI for the whole "+
-				"duration of the request and buys no safety.", got.code)
-		default:
-		}
-
-		release, err := graphlock.AcquireExclusive(graphDir)
-		if err == nil {
-			acquiredAt = time.Since(start)
-			acquired = true
-			select {
-			case got := <-done:
-				done <- got
-			default:
-				stillInFlight = true
-			}
-			release()
-			break
-		}
-		time.Sleep(2 * time.Millisecond)
+	// Phase two: a writer contends, exactly as `rmp graph execute` would. It
+	// waits under the project's bounded policy and is served once the request
+	// releases.
+	release, err := graphlock.AcquireExclusive(graphDir)
+	if err != nil {
+		got := <-done
+		t.Fatalf("a writer contending with a graph data request exhausted its bounded wait after "+
+			"%v (the request itself took %v): %v", time.Since(start), got.finishedAt.Sub(start), err)
 	}
-
-	if !acquired {
-		t.Fatal("a writer could not take the exclusive lock at any point while a graph data " +
-			"request was in flight, within the deadline")
-	}
-	if !stillInFlight {
-		t.Error("the lock became free only as the request finished, so the observation does not " +
-			"distinguish a narrow hold from a hold spanning the whole request")
-	}
+	acquiredAt := time.Now()
+	release()
 
 	got := <-done
-	total := time.Since(start)
 	if got.code != http.StatusOK {
 		t.Fatalf("status = %d, want 200; body=%q", got.code, got.body)
 	}
-	if total <= acquiredAt*2 {
-		t.Errorf("the request took %v and the lock was free after %v; the query was not slow "+
-			"enough for the gap to be meaningful", total, acquiredAt)
+	requestDuration := got.finishedAt.Sub(start)
+
+	// The ordering: the writer was served only after the request released.
+	// A small tolerance absorbs the scheduling gap between the request's own
+	// release and the moment it recorded its completion.
+	if acquiredAt.Before(got.finishedAt.Add(-5 * time.Millisecond)) {
+		t.Fatalf("a writer took the exclusive lock %v before the graph data request finished "+
+			"(request took %v). The hold MUST span the open, the statement, the commit and the "+
+			"checkpoint (SPEC/WEB.md acceptance criterion 148): a hold released at the open lets a "+
+			"concurrent invocation checkpoint a stale graph and truncate the log that held this "+
+			"request's committed change", got.finishedAt.Sub(acquiredAt), requestDuration)
 	}
-	t.Logf("exclusive lock free after %v; request completed in %v (%d nodes)", acquiredAt, total, slowReadGraphNodes)
+	if requestDuration < 200*time.Millisecond {
+		t.Fatalf("the request completed in %v, which is not meaningfully longer than a store open; "+
+			"the ordering above cannot distinguish a hold spanning the statement from one released "+
+			"at the open", requestDuration)
+	}
+	t.Logf("request took %v; a contending writer was served %v after it finished",
+		requestDuration, acquiredAt.Sub(got.finishedAt))
+}
+
+// TestHandleGraphData_ConcurrentRequestsSerialise is the other half of
+// acceptance criterion 148: two graph data requests against one roadmap do not
+// overlap, and both are served.
+//
+// The two statements WRITE, and each read-back afterwards is what makes the
+// serialisation matter rather than merely be observed: two overlapping writers
+// would each checkpoint a full snapshot of its own in-memory graph, and the
+// second would truncate the log that still held the first's committed change.
+// Both nodes being present at the end is the property the lock exists to
+// deliver.
+func TestHandleGraphData_ConcurrentRequestsSerialise(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	name := seedRoadmap(t, "web-ui-rollout")
+	seedGraph(t, name, graphSeedQueries()...)
+
+	codes := make(chan int, 2)
+	for _, key := range []string{"concurrent-a", "concurrent-b"} {
+		go func() {
+			rec := doGraphData(t, name, url.Values{"q": {`CREATE (n:WebProbe {key:'` + key + `'})`}})
+			codes <- rec.Code
+		}()
+	}
+	for i := 0; i < 2; i++ {
+		if code := <-codes; code != http.StatusOK {
+			t.Errorf("concurrent request %d: status = %d, want 200: both must be served, one after "+
+				"the other (SPEC/WEB.md acceptance criterion 148)", i, code)
+		}
+	}
+
+	keys := nodeKeys(t, doGraphData(t, name, nil))
+	for _, want := range []string{"concurrent-a", "concurrent-b"} {
+		if !slices.Contains(keys, want) {
+			t.Errorf("%q is absent after two concurrent writes (%v): an overlapping writer "+
+				"checkpointed a stale graph and truncated the log that held the other's change", want, keys)
+		}
+	}
 }
 
 // TestHandleGraphData_LockFileIsTheOnlyArtefactCreated covers SPEC/WEB.md
-// § Security and Constraints rule 4: the one artefact a graph read may create is
-// the store's lock file, inside a graph/ directory that already exists. In
-// particular a read must NOT create the graph directory for a roadmap that has
-// none — that roadmap is an empty graph and is served as such — and must not
-// checkpoint, so no snapshot/ appears.
+// § Security and Constraints rule 4: the one artefact a statement that writes
+// nothing may create is the store's lock file, inside a graph/ directory that
+// already exists. In particular the endpoint must NOT create the graph directory
+// for a roadmap that has none — that roadmap is an empty graph and is served as
+// such, even when the statement submitted would have written — and a statement
+// whose transaction appended nothing must not checkpoint, so no snapshot/
+// appears.
 func TestHandleGraphData_LockFileIsTheOnlyArtefactCreated(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	name := seedRoadmap(t, "web-ui-rollout")
 	graphDir := webGraphDir(t, name)
 
-	// A roadmap with no graph directory: serving it must not create one.
-	if rec := doGraphData(t, name, nil); rec.Code != http.StatusOK {
-		t.Fatalf("status = %d, want 200 for a roadmap with no graph; body=%q", rec.Code, rec.Body.String())
-	}
-	if _, err := os.Stat(graphDir); !os.IsNotExist(err) {
-		t.Fatalf("serving a roadmap with no graph created %s; the web interface must create no "+
-			"graph store (SPEC/WEB.md § Security and Constraints rule 4): %v", graphDir, err)
+	// A roadmap with no graph directory: serving it must not create one, and
+	// that holds for a statement that would have written as much as for a read.
+	for _, params := range []url.Values{nil, {"q": {`CREATE (n:WebProbe {key:'p'})`}}} {
+		if rec := doGraphData(t, name, params); rec.Code != http.StatusOK {
+			t.Fatalf("status = %d, want 200 for a roadmap with no graph; body=%q", rec.Code, rec.Body.String())
+		}
+		if _, err := os.Stat(graphDir); !os.IsNotExist(err) {
+			t.Fatalf("serving a roadmap with no graph created %s; the web interface must create no "+
+				"graph store (SPEC/WEB.md § Security and Constraints rule 4): %v", graphDir, err)
+		}
 	}
 
 	// With a graph directory that exists, the lock file is the one thing a read
@@ -318,7 +352,8 @@ func TestHandleGraphData_LockFileIsTheOnlyArtefactCreated(t *testing.T) {
 		t.Errorf("the read did not create the lock file it must take: %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(graphDir, "snapshot")); !os.IsNotExist(err) {
-		t.Errorf("a snapshot/ directory appeared after reads of a never-checkpointed store; the "+
-			"web read path must never checkpoint (SPEC/WEB.md acceptance criterion 19): %v", err)
+		t.Errorf("a snapshot/ directory appeared after statements that wrote nothing, over a "+
+			"never-checkpointed store; the checkpoint is gated on the write-ahead log having grown "+
+			"(SPEC/WEB.md acceptance criterion 19): %v", err)
 	}
 }

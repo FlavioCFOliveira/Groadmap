@@ -1,27 +1,30 @@
 package web
 
-// Regression suite for rmp task #344 and SPEC/WEB.md Acceptance Criterion 157
-// (the web half of SPEC/GRAPH.md Acceptance Criterion 64).
+// Regression suite for SPEC/WEB.md Acceptance Criteria 156 and 157 — what the
+// graph data endpoint answers for a schema-introspection command — and for the
+// two rules it has held in succession.
 //
-// The defect: the endpoint ACCEPTED a schema-introspection command. The guard
-// rail admits it — it is read-only — so the endpoint executed it against the
-// engine and then had nowhere to put the result: its response carries nodes and
-// edges, and a schema listing is tabular rows. The caller received
-// {"nodes": [], "edges": []} with HTTP 200 against a store that holds indexes,
-// which is indistinguishable from a query that genuinely matched nothing. An
-// empty graph presented as the answer reports success while stating something
-// false about the store.
+// The original defect (rmp task #344): the endpoint executed a
+// schema-introspection command and then had nowhere to put the result. Its
+// response carries nodes and edges; a schema listing is tabular rows. The caller
+// received {"nodes": [], "edges": []} with HTTP 200 against a store that holds
+// indexes, which is indistinguishable from a statement that genuinely matched
+// nothing. #344 answered that by REFUSING the whole family before execution.
 //
-// The endpoint now refuses the whole family before execution, with HTTP 400 and
-// the failure class schema_introspection, and its message names `rmp graph
-// query` as where a schema listing is obtained (SPEC/WEB.md § Query-Bar Error
-// Handling, case 10).
+// The refusal is withdrawn (rmp task #364). The endpoint executes what it is
+// given, so the empty graph is back — and it is now the specified answer, with
+// the reason stated rather than left to be inferred: it is empty because the
+// response SHAPE carries nodes and edges, not because the store's schema is
+// empty, and a schema listing is read from `rmp graph execute`, which returns the
+// rows (Acceptance Criterion 157).
 //
-// The store these tests seed really does hold an index and a constraint, and
-// that is asserted here before any refusal is: against an empty store the old
-// HTTP 200 and the new HTTP 400 would differ only in the status, and the reason
-// the refusal exists — that the 200 stated something false — could not be shown
-// at all.
+// That is why the store these tests seed really does hold a named index and a
+// named constraint, and why that is asserted here before anything else: against
+// an empty store, "the endpoint answers an empty graph" would be true for the
+// wrong reason, and the distinction the criterion turns on could not be shown at
+// all. Criterion 157 requires both halves together, and
+// TestHandleGraphData_SchemaListingIsReadFromTheStoreNotTheEndpoint is where they
+// meet.
 
 import (
 	"context"
@@ -52,7 +55,7 @@ var schemaSeedStatements = []string{
 
 // seedGraphSchema commits each schema statement through the transactional write
 // path, so the definitions reach the write-ahead log and are recovered when the
-// store is next opened — which is how `rmp graph update` persists them.
+// store is next opened — which is how `rmp graph execute` persists them.
 func seedGraphSchema(t *testing.T, name string, statements ...string) {
 	t.Helper()
 
@@ -105,16 +108,16 @@ func graphDirOf(t *testing.T, name string) string {
 	return filepath.Join(roadmapDir, "graph")
 }
 
-// schemaNamesOnTheEndpointsOwnReadPath opens the store and runs a SHOW statement
-// on the engine loadGraphView itself builds — recovery.Open followed by
-// NewEngineWithOptions carrying the recovered constraints and indexes — and
-// returns the `name` column of every row.
+// schemaNamesOnTheStore opens the roadmap's store and runs a SHOW statement
+// against it directly, returning the `name` column of every row. It is what
+// `rmp graph execute` does for the caller, performed in-process so a Go test can
+// read the rows the HTTP response shape cannot carry.
 //
-// It exists to make the refusal tests non-vacuous. The endpoint's own engine
-// answers these statements with real rows, so the empty graph the endpoint used
-// to return was not an honest report of an empty schema; it was the response
-// shape swallowing a result it could not carry.
-func schemaNamesOnTheEndpointsOwnReadPath(t *testing.T, name, query string) []string {
+// It is what makes the empty-graph assertions non-vacuous. The store answers
+// these statements with real rows, so the empty graph the endpoint returns is the
+// response shape swallowing a result it cannot carry, and not a report that the
+// store holds no schema.
+func schemaNamesOnTheStore(t *testing.T, name, query string) []string {
 	t.Helper()
 
 	res, err := recovery.Open[string, float64](graphDirOf(t, name), recovery.Options[string, float64]{
@@ -181,112 +184,151 @@ var introspectionQueries = []string{
 	"/* schema check */ SHOW CONSTRAINTS",
 }
 
-// TestHandleGraphData_StoreReallyHoldsTheSchema is the premise every refusal
-// test in this file rests on, asserted first and separately: the seeded store
-// holds a named index and a named constraint, and the engine the ENDPOINT builds
-// reports both.
+// TestHandleGraphData_StoreReallyHoldsTheSchema is the premise every test in
+// this file rests on, asserted first and separately: the seeded store holds a
+// named index and a named constraint, and reading the store reports both.
 //
-// Without it the refusal tests would still pass against a store with no schema
-// at all, and the defect they exist to close — an HTTP 200 empty graph reporting
-// success while the store does hold indexes — would not be reachable by any test
-// here.
+// Without it, every "the endpoint answers an empty graph" assertion below would
+// still pass against a store with no schema at all, and the distinction
+// Acceptance Criterion 157 turns on — an empty answer that is a property of the
+// RESPONSE SHAPE and not of the store — would be unobservable.
 func TestHandleGraphData_StoreReallyHoldsTheSchema(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	name := seedGraphWithSchema(t, "web-ui-rollout")
 
-	if names := schemaNamesOnTheEndpointsOwnReadPath(t, name, "SHOW INDEXES"); !slices.Contains(names, "spec_key") {
-		t.Fatalf("SHOW INDEXES on the endpoint's own read path reported %v, want it to contain the declared index %q", names, "spec_key")
+	if names := schemaNamesOnTheStore(t, name, "SHOW INDEXES"); !slices.Contains(names, "spec_key") {
+		t.Fatalf("SHOW INDEXES over the store reported %v, want it to contain the declared index %q", names, "spec_key")
 	}
-	if names := schemaNamesOnTheEndpointsOwnReadPath(t, name, "SHOW CONSTRAINTS"); !slices.Contains(names, "spec_key_unique") {
-		t.Fatalf("SHOW CONSTRAINTS on the endpoint's own read path reported %v, want it to contain the declared constraint %q", names, "spec_key_unique")
+	if names := schemaNamesOnTheStore(t, name, "SHOW CONSTRAINTS"); !slices.Contains(names, "spec_key_unique") {
+		t.Fatalf("SHOW CONSTRAINTS over the store reported %v, want it to contain the declared constraint %q", names, "spec_key_unique")
 	}
 }
 
-// TestHandleGraphData_SchemaIntrospectionRefused is the core regression: every
-// member of the schema-introspection family is answered HTTP 400 with `kind`
-// `schema_introspection`, the body is the error shape and carries no graph, and
-// the message says what the specification requires it to say.
+// TestHandleGraphData_SchemaListingIsReadFromTheStoreNotTheEndpoint is
+// Acceptance Criterion 157, and the criterion requires BOTH halves to be
+// asserted together: every member of the schema-introspection family is answered
+// HTTP 200 with exactly {"nodes": [], "edges": []}, while the same statement over
+// the same store returns the rows naming the index the caller declared.
 //
-// The status is deliberately not the only assertion. HTTP 200 with
-// {"nodes": [], "edges": []} is what the defect returned, and a test that only
-// checked for a non-200 would pass for a refusal under any class and any reason.
-func TestHandleGraphData_SchemaIntrospectionRefused(t *testing.T) {
+// Asserting that the endpoint reports the index row MUST fail this criterion, so
+// the empty body is asserted exactly — a body carrying any node, any edge, or any
+// `kind` fails.
+func TestHandleGraphData_SchemaListingIsReadFromTheStoreNotTheEndpoint(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	name := seedGraphWithSchema(t, "web-ui-rollout")
 
 	for _, query := range introspectionQueries {
 		t.Run(query, func(t *testing.T) {
 			rec := doGraphData(t, name, url.Values{"q": {query}})
-			if rec.Code != http.StatusBadRequest {
-				t.Fatalf("status = %d, want 400 for %q; body=%q", rec.Code, query, rec.Body.String())
+			if rec.Code != http.StatusOK {
+				kind, reason := decodeQueryError(t, rec.Body.Bytes())
+				t.Fatalf("status = %d, want 200 for %q: the endpoint executes the statement and "+
+					"refuses nothing (kind=%q, reason=%q)", rec.Code, query, kind, reason)
 			}
 
-			var body map[string]any
+			var body map[string]json.RawMessage
 			if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
-				t.Fatalf("decoding error body: %v; body=%q", err, rec.Body.String())
+				t.Fatalf("decoding body: %v; body=%q", err, rec.Body.String())
 			}
-			if body["kind"] != graphErrSchemaIntrospection {
-				t.Errorf("kind = %v, want %q; body=%q", body["kind"], graphErrSchemaIntrospection, rec.Body.String())
+			if got := slices.Sorted(maps.Keys(body)); !slices.Equal(got, []string{"edges", "nodes"}) {
+				t.Fatalf("body fields = %v, want exactly [edges nodes]; body=%q", got, rec.Body.String())
 			}
-			// The statement was never run: the body is the error shape and
-			// carries neither nodes nor edges.
-			if got := slices.Sorted(maps.Keys(body)); !slices.Equal(got, []string{"error", "kind"}) {
-				t.Errorf("body fields = %v, want exactly [error kind]; body=%q", got, rec.Body.String())
-			}
-
-			reason, _ := body["error"].(string)
-			// What the message MUST say: this page draws a graph of nodes and
-			// edges and cannot show a schema listing, and `rmp graph query` is
-			// where the listing is obtained. A refusal that named no way forward
-			// would leave the caller with a valid, supported statement and
-			// nowhere to run it.
-			for _, want := range []string{"graph", "nodes and edges", "schema listing", "rmp graph query"} {
-				if !strings.Contains(reason, want) {
-					t.Errorf("error = %q, want it to contain %q", reason, want)
-				}
-			}
-			// What it MUST NOT say. The keyword spacing is not what is wrong
-			// here and correcting it changes nothing, so naming it would
-			// prescribe a correction that does not work. The statement writes
-			// nothing, so "not read-only" would be a false classification. And
-			// it never reached the engine, so there is no parse diagnostic.
-			for _, forbidden := range []string{"spacing", "one space", "not read-only", "cypher: parse", `unexpected "SHOW"`} {
-				if strings.Contains(reason, forbidden) {
-					t.Errorf("error = %q, want it never to contain %q", reason, forbidden)
+			for _, key := range []string{"nodes", "edges"} {
+				if string(body[key]) != "[]" {
+					t.Errorf("%s = %s, want []: the rows a schema listing returns carry no node and "+
+						"no edge, so the response shape cannot carry them", key, body[key])
 				}
 			}
 		})
 	}
 
-	// Nothing executed and nothing changed: a default read still returns the
-	// three seeded nodes, and the schema is still there.
-	rec := doGraphData(t, name, nil)
-	var view graphView
-	if err := json.Unmarshal(rec.Body.Bytes(), &view); err != nil {
-		t.Fatalf("decoding post-refusal read: %v", err)
+	// The other half, without which the empty answers above are consistent with
+	// a store that simply has no schema: the same statements over the store
+	// return the declared names.
+	if names := schemaNamesOnTheStore(t, name, "SHOW INDEXES"); !slices.Contains(names, "spec_key") {
+		t.Errorf("SHOW INDEXES over the store reported %v, want the declared index: the endpoint's "+
+			"empty answer must be a property of its response shape, not of the store", names)
 	}
-	if len(view.Nodes) != 3 {
-		t.Errorf("after the refusals, nodes = %d, want 3", len(view.Nodes))
-	}
-	if names := schemaNamesOnTheEndpointsOwnReadPath(t, name, "SHOW INDEXES"); !slices.Contains(names, "spec_key") {
-		t.Errorf("after the refusals, SHOW INDEXES reported %v, want the declared index still present: a refusal changes nothing in the store", names)
+	if names := schemaNamesOnTheStore(t, name, "SHOW CONSTRAINTS"); !slices.Contains(names, "spec_key_unique") {
+		t.Errorf("SHOW CONSTRAINTS over the store reported %v, want the declared constraint", names)
 	}
 }
 
-// TestHandleGraphData_OrdinaryReadUnaffectedByTheRefusal is the control without
-// which the refusal is not shown to be narrow: against the SAME store, an
-// ordinary reading query still returns HTTP 200 and the ordinary node-and-edge
-// shape. What the endpoint refuses is a class, not queries in general.
-func TestHandleGraphData_OrdinaryReadUnaffectedByTheRefusal(t *testing.T) {
+// TestHandleGraphData_EmptyGraphAnswersAreIndistinguishable is Acceptance
+// Criterion 156: four statements that produce no node and no edge for four
+// different reasons are answered identically, because the endpoint publishes no
+// class that separates them.
+//
+// The four responses are compared TO ONE ANOTHER, which is what the criterion
+// asks for, and the control keeps it narrow: the default query over the same
+// store returns a non-empty nodes array, so an empty answer is a property of the
+// statement rather than of the endpoint.
+func TestHandleGraphData_EmptyGraphAnswersAreIndistinguishable(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	name := seedGraphWithSchema(t, "web-ui-rollout")
+
+	statements := []string{
+		`MATCH (n:Absent) RETURN n`,  // matched nothing
+		`MATCH (n) RETURN count(n)`,  // returned a number
+		`SHOW INDEXES`,               // returned tabular rows
+		`CREATE (n:Probe {key:'p'})`, // created a node, returned no columns
+	}
+
+	var first string
+	for i, q := range statements {
+		rec := doGraphData(t, name, url.Values{"q": {q}})
+		if rec.Code != http.StatusOK {
+			kind, reason := decodeQueryError(t, rec.Body.Bytes())
+			t.Fatalf("%q: status = %d, want 200 (kind=%q, reason=%q)", q, rec.Code, kind, reason)
+		}
+		if i == 0 {
+			first = rec.Body.String()
+			continue
+		}
+		if rec.Body.String() != first {
+			t.Errorf("%q answered %s, and %q answered %s. The endpoint publishes no class that "+
+				"separates them, so the four must be indistinguishable (SPEC/WEB.md § Query-Bar "+
+				"Error Handling, rule 9)", q, rec.Body.String(), statements[0], first)
+		}
+	}
+
+	// The CREATE really created: the empty answer is the response shape, not a
+	// statement that did nothing.
+	if keys := nodeKeys(t, doGraphData(t, name, nil)); !slices.Contains(keys, "p") {
+		t.Errorf("the CREATE that answered an empty graph did not persist (%v): the empty response "+
+			"must not mean the statement was discarded", keys)
+	}
+
+	// The control: the same store answers the default query with a non-empty
+	// nodes array.
+	rec := doGraphData(t, name, url.Values{"q": {defaultGraphQuery}})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("control: status = %d, want 200; body=%q", rec.Code, rec.Body.String())
+	}
+	var view graphView
+	if err := json.Unmarshal(rec.Body.Bytes(), &view); err != nil {
+		t.Fatalf("control: decoding: %v", err)
+	}
+	if len(view.Nodes) == 0 {
+		t.Fatal("control: the default query returned no node, so an empty answer is a property of " +
+			"the endpoint rather than of the statement and the comparison above proves nothing")
+	}
+}
+
+// TestHandleGraphData_OrdinaryReadUnaffected is the control that keeps the
+// empty-graph answers from being mistaken for a rule about SHOW: against the SAME
+// store, an ordinary reading query returns HTTP 200 and the ordinary
+// node-and-edge shape, populated.
+func TestHandleGraphData_OrdinaryReadUnaffected(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	name := seedGraphWithSchema(t, "web-ui-rollout")
 
 	for _, query := range []string{
 		defaultGraphQuery,
 		"MATCH (n:Spec) RETURN n",
-		// A read whose text merely mentions the refused class inside a string
-		// literal is an ordinary read: classification runs on the masked
-		// normalization, so the refusal cannot be tripped from a literal.
+		// A read whose text merely mentions a schema listing inside a string
+		// literal is an ordinary read: the injection suppression runs on the
+		// masked normalization, so it cannot be tripped from a literal.
 		`MATCH (n) WHERE n.key = 'SHOW INDEXES' RETURN n`,
 	} {
 		t.Run(query, func(t *testing.T) {
@@ -305,8 +347,6 @@ func TestHandleGraphData_OrdinaryReadUnaffectedByTheRefusal(t *testing.T) {
 		})
 	}
 
-	// The default query returns the seeded graph, so the 200s above are a fact
-	// about a store with content rather than about an empty one.
 	rec := doGraphData(t, name, url.Values{"q": {defaultGraphQuery}})
 	var view graphView
 	if err := json.Unmarshal(rec.Body.Bytes(), &view); err != nil {
@@ -317,124 +357,68 @@ func TestHandleGraphData_OrdinaryReadUnaffectedByTheRefusal(t *testing.T) {
 	}
 }
 
-// TestHandleGraphData_SchemaIntrospectionPrecedence asserts, in both directions,
-// the two objections the specification says outrank the schema-introspection
-// refusal (SPEC/WEB.md § Query-Bar Error Handling, rule 6; Acceptance Criteria
-// 123 and 157).
+// TestHandleGraphData_SchemaDDLThroughTheEndpointPersists pins what the endpoint
+// now does with the other half of the schema surface, and it is the pair to the
+// listing above: a schema statement submitted through the query bar EXECUTES,
+// commits, and is found afterwards by reading the store.
 //
-// "Both directions" means each pair carries the combined request AND the same
-// statement without the outranking half, so the precedence assertion cannot pass
-// merely because the endpoint never produces schema_introspection at all.
-//
-// The fourth ordinal — relationship_read_direction against schema_introspection
-// — is NOT asserted here, and deliberately so: a schema-introspection command
-// carries no relationship pattern to orient, so no request can exhibit that pair
-// and a test for it could only be written with a request that does not exist
-// (SPEC/WEB.md § Query-Bar Error Handling, rule 6, "The fourth place is not
-// reachable against the third"; Acceptance Criterion 123 forbids testing it).
-func TestHandleGraphData_SchemaIntrospectionPrecedence(t *testing.T) {
+// This is the construction the withdrawn precedence rule used as its worked
+// example — a schema-introspection command carrying a DDL tail — and it is kept
+// because what it establishes is now more interesting than the ordering it used
+// to prove: an unauthenticated GET creates an index in the roadmap's knowledge
+// graph (SPEC/WEB.md § Security and Constraints, rule 3).
+func TestHandleGraphData_SchemaDDLThroughTheEndpointPersists(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	name := seedGraphWithSchema(t, "web-ui-rollout")
 
-	// A schema-introspection command carrying a DDL tail. It is the ONE
-	// construction that is both an introspection command and not read-only: the
-	// guard rail's clause classes are independent, and this statement carries a
-	// DDL clause as well as the SHOW prefix.
-	const introspectionWithDDLTail = "SHOW INDEXES YIELD name CREATE INDEX audit_key FOR (n:Audit) ON (n.key)"
-
-	// A DATA-writing tail does NOT produce that overlap and must not be used to
-	// assert it: the engine reports a statement its own DDL predicate accepts as
-	// carrying no writing clause, so this one classifies read-only and is itself
-	// answered schema_introspection. It is asserted here as the trap it is, so a
-	// later edit cannot quietly substitute it for the DDL tail above and end up
-	// asserting nothing.
-	const introspectionWithDataWritingTail = "SHOW INDEXES YIELD name CREATE (n:Audit)"
-
-	cases := []struct {
-		name     string
-		params   url.Values
-		wantKind string
-	}{
-		{"alone, the introspection command is refused as its own class",
-			url.Values{"q": {"SHOW INDEXES"}}, graphErrSchemaIntrospection},
-
-		{"an invalid limit outranks the introspection refusal",
-			url.Values{"limit": {"7"}, "q": {"SHOW INDEXES"}}, graphErrInvalidLimit},
-		{"the same statement under an allowed limit is the introspection refusal",
-			url.Values{"limit": {"250"}, "q": {"SHOW INDEXES"}}, graphErrSchemaIntrospection},
-
-		{"a DDL tail makes the statement not read-only, which outranks the refusal",
-			url.Values{"q": {introspectionWithDDLTail}}, graphErrNotReadOnly},
-		{"the same statement without its DDL tail is the introspection refusal",
-			url.Values{"q": {"SHOW INDEXES YIELD name"}}, graphErrSchemaIntrospection},
-
-		{"a data-writing tail is NOT the not_read_only pair: it stays the introspection refusal",
-			url.Values{"q": {introspectionWithDataWritingTail}}, graphErrSchemaIntrospection},
-
-		{"an invalid limit outranks both objections at once",
-			url.Values{"limit": {"7"}, "q": {introspectionWithDDLTail}}, graphErrInvalidLimit},
+	if names := schemaNamesOnTheStore(t, name, "SHOW INDEXES"); slices.Contains(names, "audit_key") {
+		t.Fatalf("the index exists before anything created it: %v", names)
 	}
 
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			rec := doGraphData(t, name, tc.params)
-			if rec.Code != http.StatusBadRequest {
-				t.Fatalf("status = %d, want 400; body=%q", rec.Code, rec.Body.String())
-			}
-			kind, reason := decodeQueryError(t, rec.Body.Bytes())
-			if kind != tc.wantKind {
-				t.Errorf("kind = %q, want %q; reason=%q", kind, tc.wantKind, reason)
-			}
-		})
+	rec := doGraphData(t, name, url.Values{"q": {"CREATE INDEX audit_key FOR (n:Audit) ON (n.key)"}})
+	if rec.Code != http.StatusOK {
+		kind, reason := decodeQueryError(t, rec.Body.Bytes())
+		t.Fatalf("CREATE INDEX status = %d, want 200 (kind=%q, reason=%q)", rec.Code, kind, reason)
+	}
+	names := schemaNamesOnTheStore(t, name, "SHOW INDEXES")
+	if !slices.Contains(names, "audit_key") {
+		t.Fatalf("SHOW INDEXES over the store reports %v: an index created through the endpoint must "+
+			"persist, under the name the caller declared", names)
+	}
+	// The index the store already held is still there: the checkpoint that
+	// followed the DDL carried the whole registered schema, not just the new
+	// definition (SPEC/GRAPH.md § Synchronous Checkpoint on Write, step 2).
+	if !slices.Contains(names, "spec_key") {
+		t.Errorf("SHOW INDEXES reports %v: the pre-existing index was lost by the checkpoint that "+
+			"followed the DDL, which is the snapshot-without-schema defect", names)
+	}
+	if constraints := schemaNamesOnTheStore(t, name, "SHOW CONSTRAINTS"); !slices.Contains(constraints, "spec_key_unique") {
+		t.Errorf("SHOW CONSTRAINTS reports %v: the declared constraint was lost by the checkpoint", constraints)
 	}
 
-	// Every one of those was refused before the query ran: the DDL tail never
-	// created its index and the data-writing tail never created its node.
-	if names := schemaNamesOnTheEndpointsOwnReadPath(t, name, "SHOW INDEXES"); slices.Contains(names, "audit_key") {
-		t.Errorf("SHOW INDEXES reported %v: the DDL tail must never have executed", names)
+	// And the DROP is symmetric.
+	if rec := doGraphData(t, name, url.Values{"q": {"DROP INDEX audit_key"}}); rec.Code != http.StatusOK {
+		t.Fatalf("DROP INDEX status = %d, want 200; body=%q", rec.Code, rec.Body.String())
 	}
-	rec := doGraphData(t, name, nil)
-	var view graphView
-	if err := json.Unmarshal(rec.Body.Bytes(), &view); err != nil {
-		t.Fatalf("decoding post-precedence read: %v", err)
-	}
-	if len(view.Nodes) != 3 {
-		t.Errorf("after the precedence probes, nodes = %d, want 3: every rejection precedes execution", len(view.Nodes))
+	if names := schemaNamesOnTheStore(t, name, "SHOW INDEXES"); slices.Contains(names, "audit_key") {
+		t.Errorf("SHOW INDEXES reports %v after a DROP through the endpoint", names)
 	}
 }
 
-// TestHandleGraphData_SchemaIntrospectionRefusalIsHTMLSafe pins two properties
-// of the refusal body at once.
-//
-// The message carries no request-derived text — it cannot, because Acceptance
-// Criterion 151 requires the response to a badly spaced command to EQUAL the
-// response to the well-spaced one, which a message echoing the caller's
-// statement could not satisfy. That is asserted directly.
-//
-// And the body is serialized HTML-safe like every other response of this
-// endpoint, so a statement carrying markup in a WHERE tail cannot put a raw
-// angle bracket into it (SPEC/WEB.md Acceptance Criteria 35 and 157). The
-// assertion has teeth for a future edit: the day the message does echo any part
-// of the statement, this is the test that requires it to be escaped.
-func TestHandleGraphData_SchemaIntrospectionRefusalIsHTMLSafe(t *testing.T) {
+// TestHandleGraphData_EmptyGraphAnswerIsHTMLSafe keeps the serialization property
+// under test on this family. A statement carrying markup in a WHERE tail must not
+// put a raw angle bracket into the response, whatever the response is
+// (SPEC/WEB.md Acceptance Criteria 35 and 157).
+func TestHandleGraphData_EmptyGraphAnswerIsHTMLSafe(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	name := seedGraphWithSchema(t, "web-ui-rollout")
 
 	const crafted = `SHOW INDEXES WHERE name = '<script>alert(1)</script>'`
 	rec := doGraphData(t, name, url.Values{"q": {crafted}})
-	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("status = %d, want 400; body=%q", rec.Code, rec.Body.String())
+	if rec.Code != http.StatusOK && rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 200 or 400; body=%q", rec.Code, rec.Body.String())
 	}
-	raw := rec.Body.String()
-
-	if strings.ContainsAny(raw, "<>") {
+	if raw := rec.Body.String(); strings.ContainsAny(raw, "<>") {
 		t.Errorf("body contains a raw angle bracket, so request-derived text is not HTML-escaped; body=%q", raw)
-	}
-	kind, reason := decodeQueryError(t, rec.Body.Bytes())
-	if kind != graphErrSchemaIntrospection {
-		t.Errorf("kind = %q, want %q", kind, graphErrSchemaIntrospection)
-	}
-	if strings.Contains(reason, "script") || strings.Contains(reason, "SHOW") {
-		t.Errorf("error = %q, want it to echo no part of the submitted statement: the message is fixed so that every spelling of the class receives the identical response (Acceptance Criterion 151)", reason)
 	}
 }

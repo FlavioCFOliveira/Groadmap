@@ -22,7 +22,7 @@ package aihelp
 
 // staticPitfalls returns the canonical pitfalls: the twelve mandated by
 // SPEC/DATA_FORMATS.md § AI Agent Contract plus the curated additions for
-// the surfaces the mandatory table predates (the graph guard rail, the
+// the surfaces the mandatory table predates (the graph statement surface, the
 // comment subcommands). Fresh slice on every call, matching the
 // defensive-copy semantics of the other static helpers.
 func staticPitfalls() []Pitfall {
@@ -141,33 +141,34 @@ func staticPitfalls() []Pitfall {
 			Reference:      "task stat; task prio; sprint reorder; conventions.stdout_on_success.",
 		},
 		{
-			ID: "graph_guard_rail_mismatch",
-			Description: "Using the wrong graph subcommand for the query's operation class. Each subcommand " +
-				"is a guard rail: `create` accepts only CREATE/MERGE, `delete` only DELETE/DETACH DELETE, and " +
-				"`query`/`search` only read-only queries — a MATCH ... RETURN, or a schema-introspection " +
-				"command (SHOW INDEXES / SHOW CONSTRAINTS and their singular aliases), which lists the schema " +
-				"without altering it. `update` is the one subcommand that accepts more than one class, and it " +
-				"accepts three: SET/REMOVE mutations, schema-mutating DDL (CREATE INDEX, DROP INDEX, " +
-				"CREATE CONSTRAINT, DROP CONSTRAINT), and schema introspection — it is the subcommand through " +
-				"which the graph's schema is managed. DDL is rejected by the other four. Supplying a query " +
-				"whose clauses do not match exits with code 6 and makes no change to the graph.",
-			WrongExample:   "rmp graph query -r myproject --query \"CREATE (n:Spec {key:'auth'})\"",
-			CorrectExample: "rmp graph create -r myproject --query \"CREATE (n:Spec {key:'auth'})\"",
-			Reference:      "graph create/query/update/delete/search; SPEC/GRAPH.md § Subcommands and Guard-Rail Validation; § Schema Management.",
+			ID: "graph_statement_is_not_checked",
+			Description: "Expecting `rmp graph` to refuse a statement for what it does. It has ONE subcommand, " +
+				"execute, and no operation-class check: the same invocation runs a MATCH, a CREATE, a SET, a " +
+				"DETACH DELETE, index and constraint DDL, and the SHOW INDEXES / SHOW CONSTRAINTS listings. " +
+				"There is no subcommand whose contract is \"this cannot delete\", so the protection against " +
+				"deleting through a command believed to be read-only is care with the text supplied, not the " +
+				"subcommand chosen. The names create, query, update, delete and search were subcommands of " +
+				"rmp graph and are not any more: each is now an unresolved subcommand and exits 127. Exit code " +
+				"6 no longer means a class mismatch; on graph execute its only cause is a statement longer than " +
+				"1048576 bytes.",
+			WrongExample:   "rmp graph execute -r myproject --query \"MATCH (n:Spec) DETACH DELETE n\"  # nothing refuses this; it deletes",
+			CorrectExample: "rmp graph execute -r myproject --query \"MATCH (n:Spec) RETURN n.key\"",
+			Reference:      "graph execute; SPEC/COMMANDS.md § Graph Management; SPEC/GRAPH.md § What Groadmap Does Not Check.",
 		},
 		{
 			ID: "graph_schema_two_statements_in_one_query",
-			Description: "Putting a second clause after a schema statement in one `rmp graph update` " +
+			Description: "Putting a second clause after a schema statement in one `rmp graph execute` " +
 				"invocation, as in \"CREATE INDEX ix FOR (n:Spec) ON (n.key) MATCH (m:Spec) SET m.reviewed = true\". " +
 				"The engine's schema parser stops when its grammar is satisfied and discards whatever follows " +
-				"without an error and without a notification, so the trailing clause would never run while the " +
-				"command reported success. Groadmap refuses the whole statement with exit code 6 instead. Issue " +
-				"the two statements as two invocations. The same applies to altering an index: there is no " +
-				"ALTER INDEX, so a change of kind or definition is a DROP INDEX and then a CREATE INDEX, two " +
-				"invocations that are not atomic — the index is absent between them.",
-			WrongExample:   "rmp graph update -r myproject --query \"CREATE INDEX spec_key FOR (n:Spec) ON (n.key) MATCH (m:Spec) SET m.reviewed = true\"",
-			CorrectExample: "rmp graph update -r myproject --query \"CREATE INDEX spec_key FOR (n:Spec) ON (n.key)\" && rmp graph update -r myproject --query \"MATCH (m:Spec) SET m.reviewed = true\"",
-			Reference:      "graph update; SPEC/GRAPH.md § One Statement per Invocation; § Altering and Recreating an Index.",
+				"without an error and without a notification, so the trailing clause NEVER RUNS while the " +
+				"command prints {\"ok\": true} and exits 0. Groadmap does not inspect the statement and does " +
+				"not refuse it, so nothing warns you: the index exists, the SET did not happen, and the exit " +
+				"code says success. Issue the two statements as two invocations. The same applies to altering " +
+				"an index: there is no ALTER INDEX, so a change of kind or definition is a DROP INDEX and then " +
+				"a CREATE INDEX, two invocations that are not atomic — the index is absent between them.",
+			WrongExample:   "rmp graph execute -r myproject --query \"CREATE INDEX spec_key FOR (n:Spec) ON (n.key) MATCH (m:Spec) SET m.reviewed = true\"",
+			CorrectExample: "rmp graph execute -r myproject --query \"CREATE INDEX spec_key FOR (n:Spec) ON (n.key)\" && rmp graph execute -r myproject --query \"MATCH (m:Spec) SET m.reviewed = true\"",
+			Reference:      "graph execute; SPEC/GRAPH.md § What Groadmap Does Not Check, item 6; § Altering and Recreating an Index.",
 		},
 		{
 			ID: "graph_schema_failure_exit_code",
@@ -175,13 +176,14 @@ func staticPitfalls() []Pitfall {
 				"or CREATE CONSTRAINT, a DROP INDEX or DROP CONSTRAINT naming an object that does not exist, a " +
 				"definition the engine does not support, and a CREATE CONSTRAINT the data already in the graph " +
 				"does not satisfy all exit 1, not 6: Groadmap cannot know whether an object exists without " +
-				"opening the store, so the check belongs to the engine. Exit code 6 on `graph update` means the " +
-				"guard rail refused the query — a class mismatch, a SHOW whose two keywords are not separated " +
-				"by exactly one space, or a second clause after a schema statement. Write IF NOT EXISTS or IF " +
-				"EXISTS to make a create or a drop a silent no-op instead of a failure.",
-			WrongExample:   "rmp graph update -r myproject --query \"DROP INDEX spec_key\"  # exits 1 when spec_key is not registered",
-			CorrectExample: "rmp graph update -r myproject --query \"DROP INDEX spec_key IF EXISTS\"",
-			Reference:      "graph update; SPEC/GRAPH.md § Schema Failure Classes.",
+				"opening the store, so the check belongs to the engine. A SHOW whose two keywords are not " +
+				"separated by exactly one space also exits 1, as a syntax error from the general Cypher " +
+				"grammar, and its message names SHOW rather than the spacing. The only cause of exit code 6 on " +
+				"graph execute is a statement longer than 1048576 bytes. Write IF NOT EXISTS or IF EXISTS to " +
+				"make a create or a drop a silent no-op instead of a failure.",
+			WrongExample:   "rmp graph execute -r myproject --query \"DROP INDEX spec_key\"  # exits 1 when spec_key is not registered",
+			CorrectExample: "rmp graph execute -r myproject --query \"DROP INDEX spec_key IF EXISTS\"",
+			Reference:      "graph execute; SPEC/GRAPH.md § Schema Failure Classes.",
 		},
 		{
 			ID: "task_only_comment_type_on_sprint",
@@ -209,12 +211,13 @@ func staticPitfalls() []Pitfall {
 		},
 		{
 			ID: "graph_missing_query",
-			Description: "Invoking a graph subcommand without --query and without piping a query on stdin. " +
-				"When --query is absent the subcommand reads stdin; if stdin is also empty (terminal, no pipe) " +
-				"the command fails with exit code 2. Either pass --query or pipe the Cypher: `echo '<cypher>' | rmp graph query -r <name>`.",
-			WrongExample:   "rmp graph query -r myproject",
-			CorrectExample: "rmp graph query -r myproject --query \"MATCH (n) RETURN count(n)\"",
-			Reference:      "graph query; SPEC/GRAPH.md § Cypher Input Source and Precedence.",
+			Description: "Invoking `rmp graph execute` without --query and without piping a statement on " +
+				"stdin. When --query is absent the subcommand reads stdin; if stdin is also empty (terminal, " +
+				"no pipe) the command fails with exit code 2. Either pass --query or pipe the Cypher: " +
+				"`echo '<cypher>' | rmp graph execute -r <name>`.",
+			WrongExample:   "rmp graph execute -r myproject",
+			CorrectExample: "rmp graph execute -r myproject --query \"MATCH (n) RETURN count(n)\"",
+			Reference:      "graph execute; SPEC/GRAPH.md § Cypher Input Source and Precedence.",
 		},
 	}
 }

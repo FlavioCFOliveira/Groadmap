@@ -7,7 +7,7 @@ The defect. `internal/commands/openGraphStore` re-applied `utils.ErrValidation`
 to the error `utils.GetRoadmapDir` had already classified, so the `graph` family
 alone printed the class twice:
 
-    $ rmp graph query -r CON --query "MATCH (n) RETURN n"
+    $ rmp graph execute -r CON --query "MATCH (n) RETURN n"
     Error: validation error: validation error: "CON": roadmap name is a reserved system name
     $ rmp task list -r CON
     Error: validation error: "CON": roadmap name is a reserved system name
@@ -111,16 +111,16 @@ ENTRY_POINTS = [
     ("audit list", lambda name: ["audit", "list", "-r", name]),
     ("stats", lambda name: ["stats", "-r", name]),
     ("graph query", lambda name: [
-        "graph", "query", "-r", name, "--query", "MATCH (s:Spec) RETURN s.key"]),
+        "graph", "execute", "-r", name, "--query", "MATCH (s:Spec) RETURN s.key"]),
     ("graph search", lambda name: [
-        "graph", "search", "-r", name, "--query", "MATCH p=(a:Spec)-[*1..3]-(b:Spec) RETURN p"]),
+        "graph", "execute", "-r", name, "--query", "MATCH p=(a:Spec)-[*1..3]-(b:Spec) RETURN p"]),
     ("graph create", lambda name: [
-        "graph", "create", "-r", name, "--query", "CREATE (:Spec {key:'payment-capture'})"]),
+        "graph", "execute", "-r", name, "--query", "CREATE (:Spec {key:'payment-capture'})"]),
     ("graph update", lambda name: [
-        "graph", "update", "-r", name, "--query",
+        "graph", "execute", "-r", name, "--query",
         "MATCH (s:Spec {key:'payment-capture'}) SET s.status = 'ready'"]),
     ("graph delete", lambda name: [
-        "graph", "delete", "-r", name, "--query",
+        "graph", "execute", "-r", name, "--query",
         "MATCH (s:Spec {key:'refund-flow'}) DETACH DELETE s"]),
 ]
 

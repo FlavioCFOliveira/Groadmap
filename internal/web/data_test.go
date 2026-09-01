@@ -12,7 +12,7 @@ import (
 // TestSerializeGraphValue_AllKinds drives serializeGraphValue across every
 // expr.Value kind the switch handles, asserting the exact JSON-compatible Go
 // value produced. Most of these kinds are unreachable through the CLI (the
-// knowledge graph only persists string properties via `rmp graph create`),
+// knowledge graph only persists string properties via `rmp graph execute`),
 // but the serialiser must map them correctly should a future writer or a
 // computed Cypher expression yield them, so each branch is exercised by
 // constructing the expr.Value directly (SPEC/DATA_FORMATS.md § Graph Query

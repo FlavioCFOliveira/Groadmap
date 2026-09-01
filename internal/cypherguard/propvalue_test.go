@@ -1,8 +1,8 @@
 package cypherguard
 
 // Regression tests for rmp task #298: a Cypher property value was subject to
-// neither of the two free-text content rules, so `rmp graph create` and
-// `rmp graph update` accepted control characters verbatim and REPLACED invalid
+// neither of the two free-text content rules, so a CLI graph write
+// accepted control characters verbatim and REPLACED invalid
 // UTF-8 with U+FFFD while reporting success (SPEC/GRAPH.md § Property Value
 // Content Rules).
 //

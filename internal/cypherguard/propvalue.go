@@ -26,7 +26,7 @@ package cypherguard
 // Every free-text value Groadmap stores is subject to two content rules: the
 // Free-Text UTF-8 Encoding Constraint and the Free-Text Control-Character
 // Constraint (SPEC/MODELS.md). A Cypher property value written through
-// `rmp graph create` or `rmp graph update` was subject to neither, and the graph
+// a CLI graph write was subject to neither, and the graph
 // is the project's own memory (CLAUDE.md § 5), so what it holds is meant to be
 // the truth about the project.
 //

@@ -120,7 +120,7 @@ The rules are:
 2. **The first offending token is named, and only that one.** When several positional arguments exceed the maximum, the command names the first of them in command-line order and stops.
 3. **The position of the offending token does not matter.** What is refused is whatever positional arguments remain once the command's flags and their values have been consumed, not a particular slot on the command line. An extra token written between two flags and one written at the end of the line are the same error.
 4. **A comma-separated list is one positional argument.** Every command that takes a list of ids takes it as a single token, without spaces. `rmp task get -r <name> 12,13,14` supplies one positional argument and is within an arity of one; `rmp task get -r <name> 12 13 14` supplies three and is refused.
-5. **A token that begins with `-` is normally a flag, not a positional argument.** An unrecognised one is refused as an unknown flag — `Error: invalid input: unknown flag: --foo` — under the same exit code `2`. Two families refine that classification and each states its own rule: the comment subcommands treat every `-`-prefixed token as a flag, digits included (`Comment Positional Argument Contract` below, rule 2), while the `graph` subcommands treat a `-` followed by a digit or a decimal point as a numeric value rather than a flag (`GRAPH.md § Cypher Input Source and Precedence`, rule 4). A stray `-1` is therefore an excess positional argument on a `graph` subcommand and an unknown flag on a comment subcommand.
+5. **A token that begins with `-` is normally a flag, not a positional argument.** An unrecognised one is refused as an unknown flag — `Error: invalid input: unknown flag: --foo` — under the same exit code `2`. Two commands refine that classification and each states its own rule: the comment subcommands treat every `-`-prefixed token as a flag, digits included (`Comment Positional Argument Contract` below, rule 2), while `graph execute` treats a `-` followed by a digit or a decimal point as a numeric value rather than a flag (`GRAPH.md § Cypher Input Source and Precedence`, rule 4). A stray `-1` is therefore an excess positional argument on `graph execute` and an unknown flag on a comment subcommand.
 6. **The refusal precedes every side effect.** It happens while the arguments are parsed: before the roadmap database is opened, before the graph store is opened, and before standard input is read. A refused invocation therefore creates nothing, changes nothing, deletes nothing, writes no audit entry, and writes zero bytes to stdout. It is refused even when it also carries a value that would fail validation on its own with exit code `6`, and even when it names a roadmap, task, sprint, or comment that does not exist, which on its own would be exit code `4`.
 7. **No help follows the refusal.** An excess positional argument is not a dispatch failure, so stderr carries the error line and the AI-agent hint alone (`HELP.md § Error message format`).
 8. **The rule governs the maximum only.** A required positional argument that is absent is refused by the command's own contract, with the message that command's block publishes.
@@ -131,10 +131,10 @@ An unresolved command or subcommand name is resolved before any of this and stay
 
 | Command | Error line |
 |---------|-----------|
-| `rmp graph <subcommand>` | `Error: invalid input: unexpected argument "X" (graph queries use --query or stdin)` |
+| `rmp graph execute` | `Error: invalid input: unexpected argument "X" (graph queries use --query or stdin)` |
 | `rmp ai-help` | `Error: ai-help accepts no positional arguments or flags other than --help` |
 
-The `graph` line is the canonical line with a hint appended naming the two sources a Cypher query may come from; the exit code and the rest of the line are unchanged. **The hint is part of the published line and not an incidental remark**: a caller matching that line matches it in full, for the reason `§ Published Error Strings Are Exact` gives for every other error line. It stays confined to the `graph` family, because it names the two sources of a Cypher query and no other family has them. `GRAPH.md § No Positional Query: A Stray Token Is Refused` is canonical for that family's whole rule — the line, the classification of a `-`-prefixed token, and where the refusal lands in the subcommand's order. The `ai-help` line carries no sentinel and covers an unrecognised flag as well as a positional argument; `§ AI Help` is canonical for it. The third is `rmp web`, whose line writes the offending token after a colon and without quotes; `§ Web Interface` publishes it, in that command's own error table.
+The `graph execute` line is the canonical line with a hint appended naming the two sources a Cypher query may come from; the exit code and the rest of the line are unchanged. **The hint is part of the published line and not an incidental remark**: a caller matching that line matches it in full, for the reason `§ Published Error Strings Are Exact` gives for every other error line. It stays confined to `graph execute`, because it names the two sources of a Cypher query and no other command has them. `GRAPH.md § No Positional Query: A Stray Token Is Refused` is canonical for that subcommand's whole rule — the line, the classification of a `-`-prefixed token, and where the refusal lands in its order. The `ai-help` line carries no sentinel and covers an unrecognised flag as well as a positional argument; `§ AI Help` is canonical for it. The third is `rmp web`, whose line writes the offending token after a colon and without quotes; `§ Web Interface` publishes it, in that command's own error table.
 
 ### Positional Arity by Command
 
@@ -197,17 +197,13 @@ The table publishes the declared maximum for every command in the CLI. It is can
 | `backlog list` | 0 | - |
 | `backlog show-next` | 1 | `[count]` |
 | `stats` | 0 | - |
-| `graph create` | 0 | - |
-| `graph query` | 0 | - |
-| `graph update` | 0 | - |
-| `graph delete` | 0 | - |
-| `graph search` | 0 | - |
+| `graph execute` | 0 | - |
 | `web` | 0 | - |
 
 Three consequences of the table are worth stating, because each is a case a reader may expect to behave differently:
 
-- **A maximum of zero is a contract, not an absence of one.** Every listing, statistics, and creation command that takes all of its input through flags accepts no positional argument at all, and refuses the first one it is given. `stats` and the five `graph` subcommands are in this class: their whole input is `-r` and, for `graph`, `--query` or standard input.
-- **The graph subcommands take no positional query.** A Cypher query reaches them through `--query` or through standard input and never as a positional argument, so a bare query on the command line is an excess positional argument and is refused (`GRAPH.md § No Positional Query: A Stray Token Is Refused`).
+- **A maximum of zero is a contract, not an absence of one.** Every listing, statistics, and creation command that takes all of its input through flags accepts no positional argument at all, and refuses the first one it is given. `stats` and `graph execute` are in this class: their whole input is `-r` and, for `graph execute`, `--query` or standard input.
+- **`graph execute` takes no positional query.** A Cypher query reaches it through `--query` or through standard input and never as a positional argument, so a bare query on the command line is an excess positional argument and is refused (`GRAPH.md § No Positional Query: A Stray Token Is Refused`).
 - **An arity above one is real and is not a licence for more.** `sprint move-tasks`, `sprint move-to`, and `sprint swap` each take three positional arguments; `task stat`, `task prio`, and `task sev` each take two. The rule refuses what exceeds a command's own maximum, never everything after the first argument.
 
 ### Acceptance Criteria
@@ -217,7 +213,7 @@ Three consequences of the table are worth stating, because each is a case a read
 3. Every command's declared maximum equals the number `§ Positional Arity by Command` publishes for it. A test that reads the declarations and compares them against this section fails when a command declares an arity the table does not state, and when the table names a command that declares none. The comparison covers the commands the registry holds. The six global forms named in `§ Declared Arity`, and `rmp` with no arguments, are outside the registry and are therefore outside this comparison; criterion 9 checks them at their own enforcement point.
 4. A refused invocation performs no work: the target roadmap's task, sprint, and comment rows are identical before and after, the `audit` table gains no entry, and the graph store's snapshot and write-ahead log are unchanged on disk.
 5. An invocation carrying both an excess positional argument and a value that would otherwise fail with exit code `6`, or a roadmap that would otherwise fail with exit code `4`, exits `2`.
-6. The commands that already refused an excess positional argument are unchanged: the eight comment subcommands, the five `graph` subcommands, `rmp web`, and `rmp ai-help` produce the same exit code and the same stderr line as they did before this section was written.
+6. The commands that already refused an excess positional argument are unchanged: the eight comment subcommands, `graph execute`, `rmp web`, and `rmp ai-help` produce the same exit code and the same stderr line as they did before this section was written.
 7. An unresolved command or subcommand name accompanied by excess positional arguments still exits `127` and still writes its recovery help, so the arity rule never converts a dispatch failure into a misuse error.
 8. No invocation that stays within its declared arity changes in any way: its stdout, its stderr, and its exit code are what they were.
 9. Each of the six global forms refuses a trailing token. `rmp version check` and `rmp help sprint` each exit `2` and write `Error: invalid input: unexpected argument "check"` and `Error: invalid input: unexpected argument "sprint"` to stderr, and stdout stays empty: no version line and no help body. `rmp --version check`, `rmp -v check`, `rmp --help sprint`, and `rmp -h sprint` behave identically. Each of the six invoked on its own still exits `0` and still writes what it has always written.
@@ -258,7 +254,7 @@ A `type` value outside the set the entity accepts is rejected with exit code 6 a
 
 ### Comment Body Input Source and Precedence
 
-The comment `body` is supplied either through the `--body` flag or on standard input. This is the same input mechanism the `graph` subcommands use for `--query` (see `GRAPH.md § Cypher Input Source and Precedence`); there is no `--body-file` flag and no path argument, so the commands open no file. The rules are:
+The comment `body` is supplied either through the `--body` flag or on standard input. This is the same input mechanism `graph execute` uses for `--query` (see `GRAPH.md § Cypher Input Source and Precedence`); there is no `--body-file` flag and no path argument, so the commands open no file. The rules are:
 
 1. When `--body` is present and its value is neither empty nor whitespace only, that value is the body and standard input is **not** read.
 2. When `--body` is absent **and no other change was requested**, the body is read from standard input. The read is bounded and is not a read to EOF: see **Bounded standard-input read** below. On `comment-add` no other change is ever possible, so an absent `--body` always means "read standard input". On `comment-edit` the body is read from standard input only when `--type` is also absent; when `--type` is present and `--body` is absent, only the type changes and standard input is not read, so a type-only edit never blocks waiting for input.
@@ -296,7 +292,7 @@ Each of the eight comment subcommands takes **exactly one** positional argument,
 A declared maximum of one is what `§ Positional Arity by Command` publishes for all eight, and the CLI-wide rule in `§ Positional Arguments` refuses a second positional argument with exit code 2 and the line `Error: invalid input: unexpected argument "X"`. This section is canonical for what the one id identifies on each subcommand, and for the four points on which these subcommands need a rule of their own:
 
 1. The positional id is required. An invocation that supplies none fails with exit code 2 and a message naming the id the subcommand expects, as each subcommand's own block below states.
-2. A leftover token that begins with `-` is a flag and not a positional argument, so it is reported as an unknown flag — `Error: invalid input: unknown flag: --foo` — and not as an unexpected argument. This holds for every `-`-prefixed token, digits included: on these subcommands `-1` is an unknown flag, unlike the `graph` subcommands, which do not classify a negative numeric token as a flag at all and refuse a stray `-1` as an unexpected argument (`GRAPH.md § No Positional Query: A Stray Token Is Refused`, rule 1). The value of `--body` is the one exception, and it is not a leftover token at all: `--body -1` supplies the body `-1`, under rule 4 of `Comment Body Input Source and Precedence` above.
+2. A leftover token that begins with `-` is a flag and not a positional argument, so it is reported as an unknown flag — `Error: invalid input: unknown flag: --foo` — and not as an unexpected argument. This holds for every `-`-prefixed token, digits included: on these subcommands `-1` is an unknown flag, unlike `graph execute`, which does not classify a negative numeric token as a flag at all and refuses a stray `-1` as an unexpected argument (`GRAPH.md § No Positional Query: A Stray Token Is Refused`, rule 1). The value of `--body` is the one exception, and it is not a leftover token at all: `--body -1` supplies the body `-1`, under rule 4 of `Comment Body Input Source and Precedence` above.
 3. The refusal lands at a defined point in the subcommand's own validation order: after the positional id has been parsed, before the `--type` value is validated, and before the body is resolved. An invocation carrying an extra positional argument is therefore refused with exit code 2 even when it also carries an invalid `--type` value, which on its own would be exit code 6, and it never leaves the command waiting on standard input for a body it is going to reject.
 4. The whole "positive integer" constraint on the positional id is **exit code 2** on all eight subcommands, including the range half of it. Every other surface in the CLI reports an out-of-range id as a validation failure with exit code 6 (`§ Entity Identifier Range (All Positional Ids and --entity-id)`); these eight report it as misuse, because on them a malformed positional argument is a malformed argument list. The sentence is the shared one and only the sentinel differs:
 
@@ -310,9 +306,9 @@ A declared maximum of one is what `§ Positional Arity by Command` publishes for
 
 What the general rule already settles for these subcommands, and what this section therefore does not restate: only the first extra token is named; the position of the extra token on the command line does not matter; and nothing happens before the refusal — standard input is not read, the roadmap database is not opened, no comment is added, changed, deleted, or listed, and stdout stays empty.
 
-**The other family that publishes this refusal.** The five `graph` subcommands refuse a stray positional argument under the same CLI-wide rule, with the same sentinel and the same exit code 2, and `GRAPH.md § No Positional Query: A Stray Token Is Refused` is canonical for them. The two families are one rule with two published lines, and they differ on exactly two points, both of them deliberate:
+**The other command that publishes this refusal.** `graph execute` refuses a stray positional argument under the same CLI-wide rule, with the same sentinel and the same exit code 2, and `GRAPH.md § No Positional Query: A Stray Token Is Refused` is canonical for it. The two are one rule with two published lines, and they differ on exactly two points, both of them deliberate:
 
-- The `graph` line appends a hint that names the two sources of a Cypher query: `Error: invalid input: unexpected argument "X" (graph queries use --query or stdin)`. That hint is contractual on the `graph` family and is correctly absent here, because a comment body comes from `--body` or standard input and never from `--query` (`§ Positional Arguments`, "Commands that publish a different line").
+- The `graph execute` line appends a hint that names the two sources of a Cypher query: `Error: invalid input: unexpected argument "X" (graph queries use --query or stdin)`. That hint is contractual on `graph execute` and is correctly absent here, because a comment body comes from `--body` or standard input and never from `--query` (`§ Positional Arguments`, "Commands that publish a different line").
 - The two families classify a `-`-prefixed token differently, as rule 2 above states.
 
 Neither section may be edited as though its wording were its own invention: a change to the shared part of the line is a change to both families, and a reader who finds one of these two sections must be able to reach the other from it.
@@ -3425,82 +3421,83 @@ Command: `rmp graph` (no alias)
 
 The `graph` command operates a roadmap's knowledge graph: a free-form, queryable
 store of the project's elements and the relationships between them, backed by the
-GoGraph engine. The design, persistence layout, multi-layer conventions, and
-guard-rail rules are specified in `GRAPH.md`. This section is the CLI contract
-for the command.
+GoGraph engine. The design, persistence layout, and multi-layer conventions are
+specified in `GRAPH.md`. This section is the CLI contract for the command.
 
 Each roadmap owns one graph, stored under that roadmap's home directory at
 `~/.roadmaps/<name>/graph/` (a directory, mode `0700`). The graph is created on
-first use of any `graph` subcommand. The graph is independent of the roadmap's
+first use of the `graph` command. The graph is independent of the roadmap's
 SQLite tasks and sprints data in this version.
 
-`graph` has five subcommands, each a guard rail that accepts only Cypher whose
-operation class matches the subcommand and rejects everything else before
-execution:
+`graph` has one subcommand, `execute`. It accepts any Cypher statement the engine
+accepts and runs it.
 
-| Subcommand | Operation | Accepts | Rejects |
-|------------|-----------|---------|---------|
-| `create` | Create nodes/edges | Writing query whose only writing clauses are `CREATE` and/or `MERGE` | Read-only queries; `SET`, `REMOVE`, `DELETE`, `DETACH DELETE` |
-| `query` | Read | Read-only query (`MATCH ... RETURN`, no writing clause) | Any writing clause |
-| `update` | Mutate existing, and manage the schema | Writing query whose writing clauses are `SET` and/or `REMOVE`; schema DDL (`CREATE INDEX`, `DROP INDEX`, `CREATE CONSTRAINT`, `DROP CONSTRAINT`); schema introspection (`SHOW INDEX(ES)`, `SHOW CONSTRAINT(S)`) | Read-only queries other than schema introspection; `CREATE`, `MERGE`, `DELETE`, `DETACH DELETE` |
-| `delete` | Remove | Writing query whose writing clauses are `DELETE` and/or `DETACH DELETE` | Read-only queries; `CREATE`, `MERGE`, `SET`, `REMOVE` |
-| `search` | Read (traversal) | Read-only query, including variable-length paths (e.g. `-[*1..3]-`) | Any writing clause |
+| Subcommand | Operation | Accepts |
+|------------|-----------|---------|
+| `execute` | Run a Cypher statement | Any statement the engine accepts: reads, writes, deletions, schema DDL, and schema introspection alike |
 
-The canonical operation-class definitions and the full per-subcommand rules are
-in `GRAPH.md § Subcommands and Guard-Rail Validation`. `update` is the only
-subcommand that accepts more than one class, because it is also the subcommand
-through which a graph's indexes and constraints are managed; what those
-statements do is specified in `GRAPH.md § Schema Management`.
+**There is no operation-class check and there are no aliases.** `rmp graph`
+publishes exactly one subcommand name, `execute`. `create`, `query`, `update`,
+`delete`, and `search` are not subcommand names of `rmp graph`: each is an
+unresolved subcommand and is answered as a dispatch failure — exit code `127`, the
+`graph` help on stderr, nothing on stdout (see
+`§ Dispatch Failures (Unresolved Command or Subcommand Names)`). They are named
+here because an agent that has one of them in memory needs to be told, in the
+specification, that it will not resolve.
 
-### Shared Options (all graph subcommands)
+**`execute` runs what it is given, and the caller owns what that does.** No
+subcommand's contract says that a statement cannot delete. A statement's effect is
+decided by its Cypher and by nothing `rmp` inspects, so the guarantee an agent
+needs about a statement is a guarantee about the text it supplies.
+`GRAPH.md § What Groadmap Does Not Check` enumerates the hazards that follow, each
+of which reports success.
+
+### Options
 
 - `-r, --roadmap <name>` - REQUIRED. Target roadmap (see
   `COMMANDS.md § Roadmap Selection (Always Required)`).
-- `--query <cypher>` - The Cypher query to run. When omitted, the query is read
-  from standard input under a bound; it is not read to EOF.
+- `-q, --query <cypher>` - The Cypher statement to run. When omitted, the
+  statement is read from standard input under a bound; it is not read to EOF.
 - `-h, --help` - Show the subcommand help.
 
-**Query input source and precedence.** The query has exactly two sources,
+**Query input source and precedence.** The statement has exactly two sources,
 `--query` and standard input, and omitting `--query` selects the second. Every
 rule over those sources is specified in
 `GRAPH.md § Cypher Input Source and Precedence`, which is canonical for it: which
 source wins, the maximum query length and the bounded read that enforces it, what
-happens when no query is supplied at all, and the refusal of a query written as a
-positional argument instead of through either source. This section does not
-restate those rules. It restated them once, and the copy contradicted the
+happens when no statement is supplied at all, and the refusal of a statement
+written as a positional argument instead of through either source. This section
+does not restate those rules. It restated them once, and the copy contradicted the
 original the day the original changed, which is the outcome
 `README.md § 3. Canonical Sources` exists to prevent.
 
 ### Output
 
-- Read subcommands (`query`, `search`) on success: JSON to stdout in the shape
-  defined in `DATA_FORMATS.md § Graph Query Result` (a `columns` array and a
-  `rows` array). Exit code 0.
-- Write subcommands (`create`, `update`, `delete`) on success: the output
-  mirrors what the executed statement returns. When the statement produces result
-  columns, the output is the same `{columns, rows}` shape as a read result; when
-  it produces none, the output is exactly `{"ok": true}`. For every data-writing
-  query the two cases are exactly "has a `RETURN` clause" and "has none". A
-  schema-introspection command run under `graph update` produces columns while
-  carrying no `RETURN` clause, and therefore returns the `{columns, rows}` shape;
-  a `CREATE INDEX`, `DROP INDEX`, `CREATE CONSTRAINT`, or `DROP CONSTRAINT`
-  produces no columns and returns `{"ok": true}`. There is no affected-element
-  count, because the engine reports none. Exit code 0. The shape is fixed in
-  `DATA_FORMATS.md § Graph Write Result`.
-- Side effect of a successful write: after committing, a write subcommand
+- On success the output mirrors what the executed statement returns. When the
+  statement produces result columns, the output is the `{columns, rows}` shape
+  defined in `DATA_FORMATS.md § Graph Query Result`; when it produces none, the
+  output is exactly `{"ok": true}`. For a data-writing statement the two cases are
+  exactly "has a `RETURN` clause" and "has none". A schema-introspection command
+  produces columns while carrying no `RETURN` clause, and therefore returns the
+  `{columns, rows}` shape; a `CREATE INDEX`, `DROP INDEX`, `CREATE CONSTRAINT`, or
+  `DROP CONSTRAINT` produces no columns and returns `{"ok": true}`. There is no
+  affected-element count, because the engine reports none. Exit code 0. The shape
+  is fixed in `DATA_FORMATS.md § Graph Write Result`.
+- Side effect of a statement that wrote: after committing, the invocation
   produces an on-disk snapshot under `~/.roadmaps/<name>/graph/snapshot/` and
   truncates the write-ahead log, synchronously, before exit (see
-  `GRAPH.md § Synchronous Checkpoint on Write`). A snapshot failure after a
-  durable commit does not change the success output or the exit code; it is
-  reported as a diagnostic on stderr while the command still exits 0.
+  `GRAPH.md § Synchronous Checkpoint on Write`). A statement whose transaction
+  appended nothing to the write-ahead log neither snapshots nor truncates. A
+  snapshot failure after a durable commit does not change the success output or
+  the exit code; it is reported as a diagnostic on stderr while the command still
+  exits 0.
 - Query notifications: the subcommand surfaces, as a plain-text diagnostic line
   per notification on stderr, exactly the advisory notifications the engine
-  returns for the executed query (for example a Cartesian-product warning on a
-  disconnected multi-pattern `MATCH`). The surfacing is wired identically on the
-  read and the write path; the engine alone decides which queries and paths carry
-  notifications, so a query may produce none. Notifications do not change the
-  stdout success output or the exit code, and when the engine returns none the
-  subcommand writes nothing extra to stderr (see
+  returns for the executed statement (for example a Cartesian-product warning on a
+  disconnected multi-pattern `MATCH`). The engine alone decides which statements
+  carry notifications, so a statement may produce none. Notifications do not
+  change the stdout success output or the exit code, and when the engine returns
+  none the subcommand writes nothing extra to stderr (see
   `GRAPH.md § Query Notifications as Diagnostics`).
 - Errors: plain text to stderr, with the standard AI-agent hint.
 
@@ -3508,56 +3505,32 @@ original the day the original changed, which is the outcome
 
 | Exit Code | Cause |
 |-----------|-------|
-| 0 | Query executed successfully. |
-| 1 | Cypher failed to parse or execute, or the graph store could not be opened, read, or written (`utils.ErrDatabase`). |
-| 2 | No query supplied: `--query` absent and standard input empty, whitespace only, or a terminal; or `--query` present with an empty, whitespace-only, or absent value (`utils.ErrRequired`). |
-| 2 | A positional argument was supplied. The five subcommands accept none, so a bare Cypher query on the command line, or any other token that is neither a flag nor a flag's value, is refused (`utils.ErrInvalidInput`). See `GRAPH.md § No Positional Query: A Stray Token Is Refused`. |
+| 0 | The statement executed successfully. |
+| 1 | Cypher failed to parse or execute, or the graph store could not be opened, read, or written (`utils.ErrDatabase`). A schema statement the engine refuses is in this class, including one whose keyword spacing the engine does not route to its schema parser. See `GRAPH.md § Schema Failure Classes`. |
+| 2 | No statement supplied: `--query` absent and standard input empty, whitespace only, or a terminal; or `--query` present with an empty, whitespace-only, or absent value (`utils.ErrRequired`). |
+| 2 | A positional argument was supplied. `graph execute` accepts none, so a bare Cypher statement on the command line, or any other token that is neither a flag nor a flag's value, is refused (`utils.ErrInvalidInput`). See `GRAPH.md § No Positional Query: A Stray Token Is Refused`. |
 | 3 | No roadmap selected and none provided via `-r` (`utils.ErrNoRoadmap`). |
 | 4 | Selected roadmap does not exist (`utils.ErrNotFound`). |
-| 6 | The query's operation class does not match the subcommand (`utils.ErrValidation`). |
-| 6 | The query is longer than the maximum query length of 1 MiB (1048576 bytes), whether it arrived through `--query` or through standard input (`utils.ErrValidation`). See `GRAPH.md § Maximum Query Length`. |
-| 6 | `graph update` received a DDL statement carrying a further clause after it. The engine's schema parser would discard that clause silently and report success, so the statement is refused before execution (`utils.ErrValidation`). See `GRAPH.md § One Statement per Invocation`. |
-| 1 | A schema statement run under `graph update` was refused by the engine: a duplicate `CREATE INDEX` or `CREATE CONSTRAINT`, a `DROP INDEX` or `DROP CONSTRAINT` naming an object that does not exist, a definition outside the shape the engine supports, or a `CREATE CONSTRAINT` the existing data does not satisfy (`utils.ErrDatabase`). See `GRAPH.md § Schema Failure Classes`. |
+| 6 | The statement is longer than the maximum query length of 1 MiB (1048576 bytes), whether it arrived through `--query` or through standard input (`utils.ErrValidation`). See `GRAPH.md § Maximum Query Length`. This is the only cause of exit code 6 the command has. |
 
 The canonical exit-code catalogue is in `ARCHITECTURE.md § Exit Codes`; the graph
 feature introduces no new codes.
 
-### Create
+### Execute
 
 ```bash
-rmp graph create -r <name> --query "<cypher>"
-echo "<cypher>" | rmp graph create -r <name>
+rmp graph execute -r <name> --query "<cypher>"
+echo "<cypher>" | rmp graph execute -r <name>
 ```
 
-**Description:** Adds nodes and/or edges to the graph. Accepts only Cypher whose
-writing clauses are `CREATE` and/or `MERGE`. Runs as a single transaction.
+**Description:** Runs one Cypher statement against the roadmap's knowledge graph
+and returns its result. A statement that changes the graph runs inside a single
+transaction and is persisted durably before the process exits.
 
-**Example:**
-
-```bash
-rmp graph create -r backend-platform \
-  --query "MERGE (s:Spec {key:'user-authentication'}) MERGE (c:Code {path:'internal/auth/jwt.go'}) MERGE (s)-[:IMPLEMENTED_BY]->(c)"
-```
-
-Output (success): `{"ok": true}`, exit code 0. The query has no `RETURN` clause,
-so the output is the `{"ok": true}` object. Appending `RETURN` to the query (for
-example `... RETURN s`) returns the created elements in the `{columns, rows}`
-shape instead (see `DATA_FORMATS.md § Graph Write Result`).
-
-### Query
+**Reading:**
 
 ```bash
-rmp graph query -r <name> --query "<cypher>"
-cat query.cypher | rmp graph query -r <name>
-```
-
-**Description:** Reads from the graph and returns the result columns and rows.
-Read-only: rejects any query containing a writing clause.
-
-**Example:**
-
-```bash
-rmp graph query -r backend-platform \
+rmp graph execute -r backend-platform \
   --query "MATCH (s:Spec)-[:IMPLEMENTED_BY]->(c:Code) RETURN s.key, c.path"
 ```
 
@@ -3573,101 +3546,54 @@ Output (success): JSON in the shape defined in
 }
 ```
 
-### Update
+**Writing:**
 
 ```bash
-rmp graph update -r <name> --query "<cypher>"
-```
-
-**Description:** Mutates properties or labels on existing graph elements, and is
-also the subcommand through which the graph's schema is managed. It accepts three
-kinds of statement:
-
-- a writing query whose writing clauses are `SET` and/or `REMOVE`, which runs as
-  a single transaction;
-- schema DDL - `CREATE INDEX`, `DROP INDEX`, `CREATE CONSTRAINT`, `DROP
-  CONSTRAINT` - which the engine runs outside the transaction;
-- schema introspection - `SHOW INDEX(ES)`, `SHOW CONSTRAINT(S)` - which reads the
-  registered schema and changes nothing.
-
-`GRAPH.md § Schema Management` is canonical for the schema statements: which
-forms are accepted, how a schema object is named, why changing an index is two
-invocations rather than one, and how a schema failure surfaces.
-
-**Example:**
-
-```bash
-rmp graph update -r backend-platform \
+rmp graph execute -r backend-platform \
+  --query "MERGE (s:Spec {key:'user-authentication'}) MERGE (c:Code {path:'internal/auth/jwt.go'}) MERGE (s)-[:IMPLEMENTED_BY]->(c)"
+rmp graph execute -r backend-platform \
   --query "MATCH (s:Spec {key:'user-authentication'}) SET s.status = 'implemented'"
+rmp graph execute -r backend-platform \
+  --query "MATCH (d:Decision {key:'use-sessions'}) DETACH DELETE d"
 ```
 
-Output (success): `{"ok": true}`, exit code 0.
+Output (success): `{"ok": true}`, exit code 0. None of the three carries a
+`RETURN` clause, so none produces result columns. Appending `RETURN` to any of
+them (for example `... RETURN s`) returns the affected elements in the
+`{columns, rows}` shape instead (see `DATA_FORMATS.md § Graph Write Result`).
 
-**Schema examples:**
+**Traversal:**
 
 ```bash
-rmp graph update -r backend-platform \
+rmp graph execute -r backend-platform \
+  --query "MATCH path = (s:Spec {key:'user-authentication'})-[:DEPENDS_ON*1..3]->(d:Dependency) RETURN path"
+```
+
+**Managing the schema:**
+
+```bash
+rmp graph execute -r backend-platform \
   --query "CREATE INDEX spec_key FOR (n:Spec) ON (n.key)"
-rmp graph update -r backend-platform --query "SHOW INDEXES"
-rmp graph update -r backend-platform --query "DROP INDEX spec_key"
+rmp graph execute -r backend-platform --query "SHOW INDEXES"
+rmp graph execute -r backend-platform --query "DROP INDEX spec_key"
 ```
 
 The `CREATE INDEX` and `DROP INDEX` invocations output `{"ok": true}` and exit 0.
 The `SHOW INDEXES` invocation outputs the schema listing in the `{columns, rows}`
-shape and exits 0, exactly as the same command does under `rmp graph query`.
+shape and exits 0. `GRAPH.md § Schema Management` is canonical for the schema
+statements: which forms the engine accepts, how a schema object is named, why
+changing an index is two invocations rather than one, and how a schema failure
+surfaces.
 
-### Delete
-
-```bash
-rmp graph delete -r <name> --query "<cypher>"
-```
-
-**Description:** Removes nodes and/or edges. Accepts only Cypher whose writing
-clauses are `DELETE` and/or `DETACH DELETE`. Runs as a single transaction.
-
-**Example:**
-
-```bash
-rmp graph delete -r backend-platform \
-  --query "MATCH (d:Decision {key:'use-sessions'}) DETACH DELETE d"
-```
-
-Output (success): `{"ok": true}`, exit code 0.
-
-### Search
-
-```bash
-rmp graph search -r <name> --query "<cypher>"
-```
-
-**Description:** Read-only traversal and pattern matching, including
-variable-length paths. Semantically the traversal-oriented sibling of `query`;
-it enforces the same read-only guard rail.
-
-**Example:**
-
-```bash
-rmp graph search -r backend-platform \
-  --query "MATCH path = (s:Spec {key:'user-authentication'})-[:DEPENDS_ON*1..3]->(d:Dependency) RETURN path"
-```
-
-Output (success): JSON in the shape defined in
-`DATA_FORMATS.md § Graph Query Result`, exit code 0.
-
-### Error Cases (all graph subcommands)
+### Error Cases
 
 | Scenario | Exit Code | stderr Output (illustrative) |
 |----------|-----------|------------------------------|
 | Roadmap not specified | 3 | "Error: no roadmap selected: use -r <name> or --roadmap <name>" |
 | Roadmap not found | 4 | "Error: resource not found: roadmap \"X\" not found" |
-| No query supplied | 2 | "Error: required parameter missing: no query supplied" |
-| Stray positional argument, such as a bare Cypher query written without `--query` | 2 | "Error: invalid input: unexpected argument \"X\" (graph queries use --query or stdin)" |
-| Query above the maximum length | 6 | "Error: validation error: query exceeds maximum length of 1048576 bytes" |
-| Operation-class mismatch on `graph create` | 6 | "Error: validation error: graph create accepts only CREATE/MERGE queries" |
-| Operation-class mismatch on `graph query` | 6 | "Error: validation error: graph query accepts only read-only queries" |
-| Operation-class mismatch on `graph update` | 6 | "Error: validation error: graph update accepts only SET/REMOVE, index/constraint DDL, and schema-introspection queries" |
-| Operation-class mismatch on `graph delete` | 6 | "Error: validation error: graph delete accepts only DELETE/DETACH DELETE queries" |
-| Operation-class mismatch on `graph search` | 6 | "Error: validation error: graph search accepts only read-only queries" |
+| No statement supplied | 2 | "Error: required parameter missing: no query supplied" |
+| Stray positional argument, such as a bare Cypher statement written without `--query` | 2 | "Error: invalid input: unexpected argument \"X\" (graph queries use --query or stdin)" |
+| Statement above the maximum length | 6 | "Error: validation error: query exceeds maximum length of 1048576 bytes" |
 | Cypher parse/execution error | 1 | "Error: database error: graph query failed: <engine diagnostic>" |
 | Graph store open/read/write failure | 1 | "Error: database error: graph store unavailable: <detail>" |
 
@@ -3679,14 +3605,23 @@ The last two rows end in a diagnostic the Cypher engine produces, not `rmp`. The
 
 Command: `rmp web` (no alias)
 
-The `web` command starts a read-only, browser-based view of the data the CLI
-manages. It runs an HTTP server embedded in the `rmp` binary (Go standard-library
-`net/http`) that serves server-rendered HTML and embedded static assets, and it
-reads the same on-disk data under `~/.roadmaps/` that the CLI reads. The interface
-never writes; the CLI remains the sole write path. The full behaviour of the
-running server — routes, pages, the read-only data flow, the interactive
-knowledge-graph visualisation, and the security model — is specified in `WEB.md`.
-This section is the command-line contract.
+The `web` command starts a browser-based view of the data the CLI manages. It runs
+an HTTP server embedded in the `rmp` binary (Go standard-library `net/http`) that
+serves server-rendered HTML and embedded static assets, and it reads the same
+on-disk data under `~/.roadmaps/` that the CLI reads. Every page the server
+renders is read-only, and the server never writes to a roadmap's `project.db`.
+
+**The knowledge graph is the exception, and it is not a small one.** The graph
+page's query bar submits caller-supplied Cypher to the graph data endpoint, which
+executes it against the roadmap's graph store without examining it, so a request
+to that one endpoint can create, change, and delete graph data, and can change the
+graph's schema. The endpoint requires no authentication, and `rmp web` offers
+none. `WEB.md § Security and Constraints` states the consequence in full, and
+anyone binding a non-loopback address should read it before doing so.
+
+The full behaviour of the running server — routes, pages, the data flow, the
+interactive knowledge-graph visualisation, and the security model — is specified
+in `WEB.md`. This section is the command-line contract.
 
 `rmp web` operates across all roadmaps. The web interface lists every roadmap
 found under `~/.roadmaps/` and the user drills into one from the browser, so
@@ -3705,7 +3640,7 @@ rmp web --no-open
 ### Options
 
 - `--host <address>` - Bind host. Default `127.0.0.1` (loopback only), so the
-  read-only interface is reachable only from the local machine. Exposing the
+  interface is reachable only from the local machine. Exposing the
   interface on the network is the explicit opt-in `--host 0.0.0.0` (binds all
   interfaces), or any other non-loopback address. When a non-loopback host is
   bound, the server prints a warning to stderr that the interface is reachable

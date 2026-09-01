@@ -7,6 +7,94 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed - BREAKING
+
+- **`rmp graph` has one subcommand, `execute`, and the five it had are gone.**
+  `rmp graph create`, `rmp graph query`, `rmp graph update`, `rmp graph delete`
+  and `rmp graph search` are **removed and are not aliases**: each is now an
+  unresolved subcommand name and is answered as a dispatch failure — exit code
+  `127`, the `graph` help on stderr, nothing on stdout. Every script, agent
+  prompt and stored recipe that names one of them stops working, and the
+  replacement is textual: `rmp graph execute` runs what any of the five ran.
+  - **Why they could not survive as aliases.** The five differed in exactly one
+    thing: the operation class each accepted, enforced before execution. That
+    enforcement was withdrawn in this same cycle, and with it the only
+    distinction between them — five names for one behaviour is a difference the
+    CLI can no longer honour, and keeping them would have published a choice
+    that no longer decides anything.
+  - **`execute` runs what it is given, and the caller owns what that does.** No
+    subcommand's contract says a statement cannot delete. Groadmap checks the
+    statement's length and nothing else about its content, so a statement's
+    effect is decided by its Cypher alone. `SPEC/GRAPH.md § What Groadmap Does
+    Not Check` enumerates the hazards that follow, each of which reports
+    success.
+  - **Exit code `6` no longer means an operation-class mismatch.** On
+    `graph execute` its only cause is a statement longer than the maximum query
+    length of 1 MiB. The five refusal lines the classes published —
+    `graph create accepts only CREATE/MERGE queries` and its four siblings — are
+    withdrawn with them.
+  - **The store lock collapses to one mode with one contention policy.**
+    Groadmap cannot know before running a statement whether it will write, so
+    every invocation takes the advisory lock **exclusively**, across the whole
+    open, execution, commit, checkpoint and write-ahead-log truncation sequence,
+    and an invocation that finds it held now **waits** under the project's
+    bounded backoff instead of failing on the first collision. The cost is
+    stated rather than hidden: two statements against the same roadmap serialise
+    even when neither of them writes, where a shared reader hold let them
+    overlap.
+  - **A statement that appends nothing to the write-ahead log does not
+    checkpoint.** With every statement now on the transactional path, the
+    checkpoint is gated on the log having grown, so an ordinary read leaves
+    `snapshot/` and `wal` exactly as it found them.
+  - **The `--ai-help` contract changed shape**: the `graph` family publishes one
+    subcommand instead of five, and the `graph_guard_rail_mismatch` pitfall is
+    replaced by `graph_statement_is_not_checked`.
+
+- **The web graph data endpoint executes the statement it is given, writes
+  included, over an unauthenticated `GET`.** `GET /roadmaps/{name}/graph/data`
+  no longer validates the `q` parameter. A `CREATE`, a `SET`, a `DETACH DELETE`
+  or a schema `CREATE INDEX` submitted through the knowledge-graph page's query
+  bar is executed, committed and checkpointed, exactly as `rmp graph execute`
+  would run it. `?q=MATCH (n) DETACH DELETE n` empties the roadmap's knowledge
+  graph. **This is an owner decision taken with the consequence stated**, and it
+  is recorded in full in `SPEC/WEB.md § Security and Constraints`, rule 3: the
+  server has no login, no token and no session, so the only access control is
+  the bind address, and `--host 0.0.0.0` is now a **write** grant over every
+  roadmap's knowledge graph rather than a read grant.
+  - **The endpoint moved onto the transactional path**, which is what makes the
+    write real rather than merely permitted. It now takes the store's exclusive
+    lock before the open and holds it across the statement, the commit and the
+    checkpoint, opens a write-ahead-log writer, and constructs the engine
+    through `cypher.NewEngineWithStoreAndRecovery` — the same construction
+    `rmp graph execute` performs. Without it, withdrawing the guard rail would
+    have replaced one refusal with another: the read-path engine answers a write
+    with `Run does not execute write or DDL statements`.
+  - **A slow statement through the query bar now blocks the CLI**, and two graph
+    pages open on the same roadmap serialise. The hold spans the statement, so
+    an `rmp graph execute` against the same roadmap waits for it, bounded, and
+    fails with exit code 1 when that wait is exhausted.
+  - **The published `kind` set drops from five values to two.**
+    `not_read_only`, `schema_introspection` and `relationship_read_direction`
+    are **removed**, along with the four-deep precedence rule between them. What
+    remains is `invalid_limit` and `execution`, and the only ordering left is
+    that the `limit` is resolved before the statement runs.
+  - **`SHOW INDEXES` is answered `200` with `{"nodes": [], "edges": []}`** —
+    executed, not refused — because the rows it returns carry no node and no
+    edge. The schema listing itself is read from `rmp graph execute`. A
+    schema-introspection command written with anything but a single space
+    between its two keywords is not routed to the engine's schema parser and
+    fails there: `400` with `kind` `execution` and the engine's own diagnostic.
+    The endpoint states no spacing correction of its own.
+  - **A statement that writes nothing still changes nothing on disk.** The
+    checkpoint is gated on the write-ahead log having grown, so an ordinary page
+    load leaves `snapshot/` and `wal` byte for byte as it found them, and a
+    roadmap with no `graph/` directory is still served as an empty graph without
+    one being created — for a statement that would have written as much as for a
+    read.
+  - **`internal/graphlock` loses its shared mode.** `AcquireShared` had one
+    caller left, this endpoint, and goes with it. There is one lock mode because
+    there is one execution path.
+
 ## [1.15.2] - 2026-09-01
 
 **The release in which the knowledge graph gains a schema.** `rmp graph update` becomes

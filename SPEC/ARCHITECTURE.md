@@ -77,7 +77,7 @@ transactions, or locks. The graph layer is specified in `GRAPH.md`.
 5. Each roadmap home directory is created if absent, is owned by the user only, and uses the same `0700` permissions as the data directory; its permissions are verified on access.
 6. The roadmap's SQLite database lives inside the roadmap home directory at `~/.roadmaps/<name>/project.db` with `0600` permissions, applied and verified every time `rmp` opens the database and not only when it creates it (see `ARCHITECTURE.md § Open-Time Permission Enforcement`). Its SQLite sidecars (`project.db-wal`, `project.db-shm`) live alongside it.
 7. A roadmap home directory holds the SQLite database and its sidecars, and, once the knowledge graph is used, the `graph/` subdirectory. The directory is the designated location for per-roadmap artefacts; additional file types may be added without changing this layout.
-8. The knowledge graph for a roadmap is stored in the subdirectory `~/.roadmaps/<name>/graph/` (mode `0700`), created on first use of any `rmp graph` subcommand. It is a directory because the GoGraph backing store persists through an on-disk snapshot plus a write-ahead log; after the first successful write subcommand the directory also contains a `snapshot/` subdirectory, produced by the synchronous checkpoint that runs after each write (see `GRAPH.md § Synchronous Checkpoint on Write`). The directory also holds `write.lock`, the advisory lock file Groadmap itself maintains to serialise access to the store (see `GRAPH.md § Concurrency and Recovery`). Apart from that lock file, the internal layout is owned by GoGraph and is opaque to Groadmap. The graph store is the canonical subject of `GRAPH.md`; see `GRAPH.md § Persistence Layout`.
+8. The knowledge graph for a roadmap is stored in the subdirectory `~/.roadmaps/<name>/graph/` (mode `0700`), created on first use of `rmp graph execute`. It is a directory because the GoGraph backing store persists through an on-disk snapshot plus a write-ahead log; after the first statement that wrote, the directory also contains a `snapshot/` subdirectory, produced by the synchronous checkpoint that follows a transaction that wrote (see `GRAPH.md § Synchronous Checkpoint on Write`). The directory also holds `write.lock`, the advisory lock file Groadmap itself maintains to serialise access to the store (see `GRAPH.md § Concurrency and Recovery`). Apart from that lock file, the internal layout is owned by GoGraph and is opaque to Groadmap. The graph store is the canonical subject of `GRAPH.md`; see `GRAPH.md § Persistence Layout`.
 9. Roadmap enumeration considers the immediate **subdirectories** of `~/.roadmaps/` (one directory per roadmap), not files at the top level. A roadmap is identified by the presence of `project.db`; the optional `graph/` subdirectory does not by itself constitute a roadmap.
 10. **No symbolic links for the data directory or a roadmap home directory.** Neither the data directory `~/.roadmaps/` nor any roadmap home directory `~/.roadmaps/<name>/` may be a symbolic link. When creating, opening, or migrating a roadmap directory, `rmp` MUST refuse to follow a symbolic link: if `~/.roadmaps/` is a symlink, or if the resolved `~/.roadmaps/<name>/` path is a symlink (rather than a real directory), the operation fails with an error (`utils.ErrDatabase`, exit code 1) instead of following the link. This prevents an attacker from redirecting `project.db` writes outside the data directory and prevents `rmp` from applying its `0700`/`0600` permission changes to a directory or file outside `~/.roadmaps/` reached through a link (CWE-59, link following). The startup layout-migration sweep applies the same rule: a `.db`-named top-level symbolic link is never a migration candidate and is left untouched (see `ARCHITECTURE.md § Filesystem Layout Migration`, Edge Cases).
 
@@ -250,8 +250,9 @@ the same rule, with the sequence in step **B** followed exactly as written:
   permission and creates no roadmap database, roadmap home directory, or graph
   store directory for a read; restricting a file that is more permissive than
   `0600` is consistent with both statements. This bullet is about the roadmap
-  database only: the graph store has its own read-path rules, and what a graph
-  read may change on disk is `GRAPH.md § What a Read Changes on Disk`.
+  database only: the graph store has its own rules, and what a graph statement
+  that writes nothing may change on disk is
+  `GRAPH.md § What a Statement That Writes Nothing Changes on Disk`.
 - The read-only path does not create, modify, or verify directories. The
   directory rule in step **A** is enforced by the writable open path and by the
   web server's startup sequence, which verifies `0700` on `~/.roadmaps/` before
@@ -318,7 +319,7 @@ Groadmap/
 │   │   ├── comment.go     # Comment subcommands of the task and sprint families
 │   │   ├── graph.go       # Graph subcommands (GoGraph integration)
 │   │   └── web.go         # web command (starts the embedded HTTP server)
-│   ├── web/               # Embedded read-only HTTP server (net/http)
+│   ├── web/               # Embedded HTTP server (net/http)
 │   │   ├── server.go      # Server construction, routes, graceful shutdown
 │   │   ├── handlers.go    # Read-only route handlers (index, sprints, tasks, sprint, graph, data)
 │   │   ├── templates/     # Embedded html/template files (go:embed)
@@ -389,17 +390,16 @@ Each package implements:
   directory and, for the graph feature, the per-roadmap `graph/` subdirectory.
 
 ### 6. internal/commands/graph.go and the GoGraph dependency
-- Implements the `graph` command and its five subcommands.
+- Implements the `graph` command and its single subcommand, `execute`.
 - Integrates the external module `github.com/FlavioCFOliveira/GoGraph`, which
   supplies the labelled property graph, the Cypher engine, and the durable
   directory-based store. The integration boundary is contained in this one
   package so that an upstream API change is absorbed in a single place.
-- Owns the guard-rail validation that maps each subcommand to the Cypher
-  operation classes it accepts, the `--query`/stdin input handling, the JSON
-  serialisation of results, and the mapping of engine failures onto Groadmap's
-  sentinel errors. Four subcommands accept one class each; `graph update` accepts
-  three, because it is also the schema subcommand (see
-  `GRAPH.md § Schema Management`).
+- Owns the `--query`/stdin input handling, the JSON serialisation of results,
+  and the mapping of engine failures onto Groadmap's sentinel errors. It owns no
+  validation of the statement's content beyond its length: the statement is
+  handed to the engine as written, whatever it does (see
+  `GRAPH.md § What Groadmap Does Not Check`).
 - The behaviour is specified in `GRAPH.md`; the CLI contract is in
   `COMMANDS.md § Graph Management`; the result JSON is in
   `DATA_FORMATS.md § Graph Query Result`.
@@ -413,9 +413,8 @@ pinning requirements are in `BUILD.md § Go Toolchain`.
 
 ### 7. internal/web/ and the embedded HTTP server
 
-- Implements the read-only web interface started by `rmp web`. The command entry
-  point is `internal/commands/web.go`; the server itself lives in
-  `internal/web/`.
+- Implements the web interface started by `rmp web`. The command entry point is
+  `internal/commands/web.go`; the server itself lives in `internal/web/`.
 - Built on Go's standard-library `net/http` only. It introduces no third-party
   web framework and no external runtime dependency.
 - Serves server-rendered HTML produced from `html/template`, presented in the
@@ -428,15 +427,18 @@ pinning requirements are in `BUILD.md § Go Toolchain`.
   `BUILD.md § Vendored Web Assets`.
 - Reads the same on-disk data the CLI reads: tasks and sprints from each
   roadmap's `project.db` (via the existing read queries in `DATABASE.md`) and the
-  knowledge graph from each roadmap's `graph/` store (via the GoGraph engine's
-  read path, exactly as `graph query`/`search` open it, and under the same shared
-  lock, held across the open alone). Every per-request handler opens its data
-  **read-only**: it performs **no** write to a roadmap database, no audit entry,
-  no schema change, no write of
-  graph data, and triggers **no** graph checkpoint. Opening the graph store is the
-  one exception to "read-only" at the filesystem level: the engine's recovery
-  repairs an interrupted checkpoint on open, which is why a graph read takes a
-  lock. The exhaustive rule is `GRAPH.md § What a Read Changes on Disk`.
+  knowledge graph from each roadmap's `graph/` store. Every per-request handler
+  opens a roadmap database **read-only**: it performs no write to it and writes no
+  audit entry.
+- **The graph store is opened the way the CLI opens it, and that includes
+  writing.** The graph data endpoint executes the caller's Cypher without
+  examining it, so it takes the store's exclusive lock, constructs the same
+  transactional engine `graph execute` constructs, and checkpoints when the
+  transaction it ran wrote (see `GRAPH.md § Engine Constructor by Path` and
+  `GRAPH.md § Concurrency and Recovery`). A request to that endpoint can therefore
+  create, change, and delete graph data, and can change the graph's schema, with
+  no authentication. What a statement that writes nothing leaves untouched is the
+  exhaustive rule `GRAPH.md § What a Statement That Writes Nothing Changes on Disk`.
 - Performs one writing step, at startup only: before binding the listener it opens
   each existing roadmap's `project.db` through the normal writable open path to run
   the SQLite schema migrations (idempotent; automatic; no user input), then closes
@@ -466,7 +468,7 @@ pinning requirements are in `BUILD.md § Go Toolchain`.
 
 The startup sweep runs before routing on every `rmp` invocation, so all handlers (including `roadmap list` and `roadmap open`) observe the current filesystem layout.
 
-Most commands complete a single operation and exit. The one exception is `rmp web`, whose handler does not return after step 5: it starts the embedded HTTP server and serves read-only requests until it receives an interrupt or termination signal, then shuts down gracefully and exits 0. Each request the server handles opens the data it needs read-only, renders the response, and releases the handle; the server holds no roadmap database or graph store open across requests. The `web` lifecycle is specified in `WEB.md § Server Lifecycle`.
+Most commands complete a single operation and exit. The one exception is `rmp web`, whose handler does not return after step 5: it starts the embedded HTTP server and serves requests until it receives an interrupt or termination signal, then shuts down gracefully and exits 0. Each request the server handles opens the data it needs, renders the response, and releases the handle; the server holds no roadmap database or graph store open across requests. A roadmap database is always opened read-only; the graph store is opened the way `graph execute` opens it, so a request to the graph data endpoint may write to it. The `web` lifecycle is specified in `WEB.md § Server Lifecycle`.
 
 ## Filesystem Layout Migration
 

@@ -1,28 +1,22 @@
 // Package commands — the `graph` family's refusal of a stray positional
-// argument, read against ALL FIVE subcommands at once.
+// argument, read against every class of statement the one subcommand runs.
 //
 // # What is pinned here
 //
 // SPEC/GRAPH.md § No Positional Query: A Stray Token Is Refused is canonical.
-// A graph subcommand accepts no positional argument at all — the Cypher it runs
+// `graph execute` accepts no positional argument at all — the Cypher it runs
 // comes from `--query` or from standard input and from nowhere else — so a bare
 // query written on the command line is an excess positional argument and is
 // refused with exit code 2 and one published line:
 //
 //	Error: invalid input: unexpected argument "X" (graph queries use --query or stdin)
 //
-// Acceptance criteria 57 and 58 of that file are what this suite holds:
+// Acceptance criteria 25 and 26 of that file are what this suite holds:
 //
-//   - 57. All five subcommands refuse, with ONE wording. The whole line is
-//     compared, the parenthetical hint included, and the five lines are
-//     compared AGAINST EACH OTHER. The five share one argument parser
-//     (readQuery in graph.go), so the family has one wording and not five;
-//     a wording that drifts on a single subcommand is the failure this
-//     criterion exists to catch, and a suite that asserted only `graph query`
-//     — which is all the CLI-wide arity suite does, in
-//     TestPositionalArity_SelfRefusingCommandsKeepTheirWording — would stay
-//     green through it.
-//   - 58. The classification of a `-`-prefixed token, asserted in BOTH
+//   - 25. The refusal is asserted on the WHOLE line, the parenthetical hint
+//     included, with exit code 2 through utils.ErrInvalidInput and zero bytes on
+//     stdout.
+//   - 26. The classification of a `-`-prefixed token, asserted in BOTH
 //     directions. On this family a `-` followed by a digit or a decimal point
 //     is a query value and not a flag, so a stray `-1` and a stray bare `-`
 //     are UNEXPECTED ARGUMENTS, while a genuine long flag the family does not
@@ -30,28 +24,45 @@
 //     `-1` the other way (SPEC/COMMANDS.md § Comment Positional Argument
 //     Contract, rule 2, pinned in comment_positional_test.go), and the two
 //     refusals share exit code 2 — so nothing but the wording tells them
-//     apart, and only an assertion on the wording can hold the difference.
+//     apart, and only an assertion on the wording can hold the difference. Of
+//     several stray tokens only the first is named.
 //
-// # Why the five are enumerated from the registry
+// # What this file used to be
 //
-// The table below is keyed by subcommand name and is checked against
-// AppRegistry() rather than against a list written out here: a sixth `graph`
-// subcommand added tomorrow fails TestGraphPositional_TableCoversTheWholeFamily
-// instead of being silently left out of every assertion in the file.
+// It drove FIVE subcommands and compared their five refusal lines against each
+// other, because they shared one argument parser and a wording that drifted on
+// one of them was the failure the criterion existed to catch. `create`, `query`,
+// `update`, `delete` and `search` are no longer subcommand names
+// (SPEC/COMMANDS.md § Graph Management), so that cross-comparison has nothing
+// left to compare.
 //
-// # Why each case carries a query of its own operation class
+// The table did not become a single row, because a single row would have made
+// every "one wording" assertion in this file vacuous. What it varies now is the
+// STATEMENT CLASS: a read, a write, a property update, a deletion, a traversal
+// and a schema statement, each of which would succeed were the stray token
+// removed. The property that replaces the old one is the one that now matters —
+// the refusal does not depend on what the statement would have done, which is
+// exactly the claim a family with no operation-class check has to keep.
+//
+// # Why the family is still enumerated from the registry
+//
+// The table is checked against AppRegistry() rather than against a list written
+// out here: a second `graph` subcommand added tomorrow fails
+// TestGraphPositional_TableCoversTheWholeFamily instead of being silently left
+// out of every assertion in the file.
+//
+// # Why each case carries a query that would otherwise succeed
 //
 // Every invocation driven below is one that would SUCCEED were the stray token
-// removed, and TestGraphPositional_AllFiveRefuseAStrayTokenWithOneWording proves
-// it by running each control first. Without that half, a case could be passing
-// on a guard-rail rejection (exit 6) or a missing-query refusal that happened to
-// carry the right sentinel, and the suite would be asserting nothing about the
-// stray token at all.
+// removed, and TestGraphPositional_EveryStatementClassRefusesWithOneWording
+// proves it by running each control first. Without that half, a case could be
+// passing on a missing-query refusal that happened to carry the right sentinel,
+// and the suite would be asserting nothing about the stray token at all.
 //
-// Dispatch goes through Command.DispatchFamily, never through runGraphQuery and
-// friends directly, because the shared arity enforcement point sits on that path
-// and must be proven to DEFER to this family's own wording rather than override
-// it (checkPositionalArity, positional_arity.go).
+// Dispatch goes through Command.DispatchFamily, never through runGraphExecute
+// directly, because the shared arity enforcement point sits on that path and
+// must be proven to DEFER to this family's own wording rather than override it
+// (checkPositionalArity, positional_arity.go).
 package commands
 
 import (
@@ -62,31 +73,38 @@ import (
 	"github.com/FlavioCFOliveira/Groadmap/internal/utils"
 )
 
-// graphFamilyName is the family every case below dispatches through.
-const graphFamilyName = "graph"
+// graphFamilyName is the family every case below dispatches through, and
+// graphSubcommandName is its one subcommand.
+const (
+	graphFamilyName     = "graph"
+	graphSubcommandName = "execute"
+)
 
-// graphStrayCase pairs one `graph` subcommand with a Cypher query of that
-// subcommand's own operation class, so the invocation is otherwise valid.
+// graphStrayCase pairs one class of Cypher statement with a query of that class,
+// so the invocation is otherwise valid and its refusal can only be the stray
+// token's doing.
 type graphStrayCase struct {
-	subcommand string
-	// query is accepted by that subcommand's guard rail and executes against
-	// the seeded store.
+	// class names the statement class, and is the subtest's name.
+	class string
+	// query executes against the seeded store and would succeed on its own.
 	query string
-	// seeded names the node the control invocation acts on, purely so a
-	// failure message can say which one.
+	// seeded names what the control invocation acts on, purely so a failure
+	// message can say which one.
 	seeded string
 }
 
-// graphStrayCases is the family-wide table. The queries act on different nodes
-// of the same seeded graph, so the five controls can run in one roadmap without
-// one of them undoing another.
+// graphStrayCases is the statement-class table. The queries act on different
+// nodes of the same seeded graph, so the controls can run in one roadmap without
+// one of them undoing another; the delete runs on a node no other case touches.
 func graphStrayCases() []graphStrayCase {
 	return []graphStrayCase{
-		{subcommand: "create", query: "CREATE (:Spec {key:'chargeback-handling'})", seeded: "chargeback-handling"},
-		{subcommand: "query", query: "MATCH (s:Spec) RETURN s.key ORDER BY s.key", seeded: "every Spec"},
-		{subcommand: "update", query: "MATCH (s:Spec {key:'payment-capture'}) SET s.status = 'ready'", seeded: "payment-capture"},
-		{subcommand: "delete", query: "MATCH (s:Spec {key:'refund-flow'}) DETACH DELETE s", seeded: "refund-flow"},
-		{subcommand: "search", query: "MATCH p=(a:Spec)-[*1..3]-(b:Spec) RETURN p", seeded: "the DEPENDS_ON path"},
+		{class: "create", query: "CREATE (:Spec {key:'chargeback-handling'})", seeded: "chargeback-handling"},
+		{class: "read", query: "MATCH (s:Spec) RETURN s.key ORDER BY s.key", seeded: "every Spec"},
+		{class: "update", query: "MATCH (s:Spec {key:'payment-capture'}) SET s.status = 'ready'", seeded: "payment-capture"},
+		{class: "delete", query: "MATCH (s:Spec {key:'refund-flow'}) DETACH DELETE s", seeded: "refund-flow"},
+		{class: "traversal", query: "MATCH p=(a:Spec)-[*1..3]-(b:Spec) RETURN p", seeded: "the DEPENDS_ON path"},
+		{class: "schema-ddl", query: "CREATE INDEX spec_key FOR (n:Spec) ON (n.key)", seeded: "the spec_key index"},
+		{class: "schema-introspection", query: "SHOW INDEXES", seeded: "the registered schema"},
 	}
 }
 
@@ -103,7 +121,7 @@ func seedGraphStrayRoadmap(t *testing.T, name string) string {
 		"CREATE (:Spec {key:'payment-capture'})-[:DEPENDS_ON]->(:Spec {key:'ledger-posting'})",
 		"CREATE (:Spec {key:'refund-flow'})",
 	} {
-		out, err := dispatchInvocation(t, graphFamilyName, "create", "-r", name, "--query", seed)
+		out, err := dispatchInvocation(t, graphFamilyName, graphSubcommandName, "-r", name, "--query", seed)
 		if err != nil {
 			t.Fatalf("seeding the graph store with %q: %v", seed, err)
 		}
@@ -131,7 +149,7 @@ func registeredGraphSubcommands(t *testing.T) []string {
 		sub := &cmd.Subcommands[i]
 		if got := len(sub.Positional); got != 0 {
 			t.Errorf("graph %s declares %d positional argument(s); SPEC/GRAPH.md § No Positional Query "+
-				"gives every graph subcommand a maximum of zero", sub.Name, got)
+				"gives graph execute a maximum of zero", sub.Name, got)
 		}
 		if !sub.PublishesOwnArityRefusal {
 			t.Errorf("graph %s no longer sets PublishesOwnArityRefusal; the shared enforcement point "+
@@ -145,52 +163,60 @@ func registeredGraphSubcommands(t *testing.T) []string {
 	return names
 }
 
-// TestGraphPositional_TableCoversTheWholeFamily keeps graphStrayCases honest
-// against the registry. It is the reason the rest of the file can say "all five"
-// rather than "the five somebody remembered".
+// TestGraphPositional_TableCoversTheWholeFamily keeps this file honest against
+// the registry: every assertion below dispatches graphSubcommandName, so the
+// suite is family-wide only for as long as that name IS the family.
+//
+// A second `graph` subcommand added tomorrow fails here rather than being
+// silently left out of every assertion in the file, which is the same guarantee
+// the five-name version of this test gave.
 func TestGraphPositional_TableCoversTheWholeFamily(t *testing.T) {
 	registered := registeredGraphSubcommands(t)
 
-	covered := make(map[string]bool, len(graphStrayCases()))
-	for _, c := range graphStrayCases() {
-		if covered[c.subcommand] {
-			t.Errorf("graphStrayCases lists %q twice", c.subcommand)
-		}
-		covered[c.subcommand] = true
+	if len(registered) != 1 || registered[0] != graphSubcommandName {
+		t.Errorf("the registry declares the graph subcommands %v, and every assertion in this file "+
+			"drives `graph %s` alone. SPEC/COMMANDS.md § Graph Management publishes exactly one "+
+			"subcommand name; a family with another one is a family this suite no longer covers",
+			registered, graphSubcommandName)
 	}
 
-	for _, name := range registered {
-		if !covered[name] {
-			t.Errorf("the registry declares `graph %s` and graphStrayCases does not drive it; "+
-				"the family-wide assertions in this file would silently skip it", name)
+	seen := make(map[string]bool, len(graphStrayCases()))
+	for _, c := range graphStrayCases() {
+		if seen[c.class] {
+			t.Errorf("graphStrayCases lists the statement class %q twice", c.class)
 		}
-		delete(covered, name)
+		seen[c.class] = true
 	}
-	for name := range covered {
-		t.Errorf("graphStrayCases drives `graph %s`, which the registry does not declare", name)
+	if len(seen) < 2 {
+		t.Errorf("graphStrayCases carries %d statement class(es); the cross-comparison in "+
+			"TestGraphPositional_EveryStatementClassRefusesWithOneWording needs at least two to "+
+			"compare anything", len(seen))
 	}
 }
 
-// TestGraphPositional_AllFiveRefuseAStrayTokenWithOneWording is acceptance
-// criterion 57 of SPEC/GRAPH.md.
+// TestGraphPositional_EveryStatementClassRefusesWithOneWording is acceptance
+// criterion 25 of SPEC/GRAPH.md.
 //
 // Two halves, and the suite needs both:
 //
 //   - the CONTROL, which runs each invocation without the stray token and
 //     requires it to succeed, so the refusal below is caused by the stray token
-//     and not by a query the subcommand's guard rail was going to reject anyway;
+//     and not by a query that was going to fail anyway;
 //   - the PROBE, which adds the stray token and requires the exact published
 //     line, the parenthetical included, exit code 2 through utils.ErrInvalidInput,
 //     and an empty stdout.
 //
-// The five probe lines are then compared AGAINST EACH OTHER. That comparison is
-// the criterion's own instruction and the half a per-subcommand table cannot
-// give: an edit that reworded one subcommand's refusal would satisfy every
-// assertion made about that subcommand alone.
-func TestGraphPositional_AllFiveRefuseAStrayTokenWithOneWording(t *testing.T) {
+// The probe lines are then compared AGAINST EACH OTHER, across statement
+// classes. That comparison is what survives the collapse of the five
+// subcommands: `graph execute` holds no opinion about what a statement does, so
+// its refusal of a stray token must not vary with the statement either — a
+// refusal that named the class, or that reached a different branch for a write
+// than for a read, would be a class distinction reappearing in the one place the
+// family has left to put one.
+func TestGraphPositional_EveryStatementClassRefusesWithOneWording(t *testing.T) {
 	roadmap := seedGraphStrayRoadmap(t, "graph-stray-wording")
 
-	// The offending token is the same across the five, so the five lines differ
+	// The offending token is the same across the classes, so the lines differ
 	// only where the WORDING differs and the cross-comparison below reads as
 	// exactly that.
 	const stray = "reconciliation-report"
@@ -201,25 +227,25 @@ func TestGraphPositional_AllFiveRefuseAStrayTokenWithOneWording(t *testing.T) {
 	// with (see SPEC/GRAPH.md acceptance criterion 60).
 	want := refusalLineWithToken(t, publishedGraphRefusalLine(t), stray)
 
-	// subcommand -> the line it produced, so a drifting member can be named.
+	// statement class -> the line it produced, so a drifting member can be named.
 	produced := make(map[string]string, len(graphStrayCases()))
 
 	for _, c := range graphStrayCases() {
-		t.Run(c.subcommand, func(t *testing.T) {
+		t.Run(c.class, func(t *testing.T) {
 			controlOut, controlErr := dispatchInvocation(t, graphFamilyName,
-				c.subcommand, "-r", roadmap, "--query", c.query)
+				graphSubcommandName, "-r", roadmap, "--query", c.query)
 			if controlErr != nil {
-				t.Fatalf("the control invocation `graph %s` (acting on %s) failed with %v; "+
+				t.Fatalf("the control invocation of the %s statement (acting on %s) failed with %v; "+
 					"the probe below would then be asserting nothing about the stray token",
-					c.subcommand, c.seeded, controlErr)
+					c.class, c.seeded, controlErr)
 			}
 			if controlOut == "" {
-				t.Fatalf("the control invocation wrote nothing to stdout; every graph subcommand "+
-					"reports its result there, so %q did not run", c.query)
+				t.Fatalf("the control invocation wrote nothing to stdout; graph execute reports its "+
+					"result there whatever the statement, so %q did not run", c.query)
 			}
 
 			out, err := dispatchInvocation(t, graphFamilyName,
-				c.subcommand, "-r", roadmap, "--query", c.query, stray)
+				graphSubcommandName, "-r", roadmap, "--query", c.query, stray)
 			if err == nil {
 				t.Fatalf("a stray positional argument was accepted; stdout=%q", out)
 			}
@@ -232,23 +258,24 @@ func TestGraphPositional_AllFiveRefuseAStrayTokenWithOneWording(t *testing.T) {
 			if out != "" {
 				t.Errorf("a refused invocation wrote to stdout: %q", out)
 			}
-			produced[c.subcommand] = errorLine(err)
+			produced[c.class] = errorLine(err)
 		})
 	}
 
 	distinct := make(map[string][]string)
-	for sub, line := range produced {
-		distinct[line] = append(distinct[line], sub)
+	for class, line := range produced {
+		distinct[line] = append(distinct[line], class)
 	}
 	if len(distinct) > 1 {
-		for line, subs := range distinct {
-			t.Errorf("the family no longer has one wording: %v emit %q", subs, line)
+		for line, classes := range distinct {
+			t.Errorf("the refusal no longer has one wording: the %v statement classes emit %q",
+				classes, line)
 		}
 	}
 }
 
 // TestGraphPositional_HyphenPrefixedTokensAreClassifiedBothWays is acceptance
-// criterion 58 of SPEC/GRAPH.md, in both of the directions the criterion names.
+// criterion 26 of SPEC/GRAPH.md, in both of the directions the criterion names.
 //
 // The two refusals carry the SAME exit code, so an exit-code assertion cannot
 // tell them apart and a test that made one would keep passing if `-1` were
@@ -294,12 +321,12 @@ func TestGraphPositional_HyphenPrefixedTokensAreClassifiedBothWays(t *testing.T)
 		{
 			token:          "--include-archived",
 			wantUnexpected: false,
-			why:            "a long flag no graph subcommand defines is an unknown flag, not a positional argument",
+			why:            "a long flag graph execute does not define is an unknown flag, not a positional argument",
 		},
 		{
 			token:          "-x",
 			wantUnexpected: false,
-			why:            "'-' followed by an ASCII letter is a short flag, and no graph subcommand defines this one",
+			why:            "'-' followed by an ASCII letter is a short flag, and graph execute does not define this one",
 		},
 	}
 
@@ -307,9 +334,9 @@ func TestGraphPositional_HyphenPrefixedTokensAreClassifiedBothWays(t *testing.T)
 
 	for _, c := range graphStrayCases() {
 		for _, tc := range cases {
-			t.Run(c.subcommand+"/"+tc.token, func(t *testing.T) {
+			t.Run(c.class+"/"+tc.token, func(t *testing.T) {
 				out, err := dispatchInvocation(t, graphFamilyName,
-					c.subcommand, "-r", roadmap, "--query", c.query, tc.token)
+					graphSubcommandName, "-r", roadmap, "--query", c.query, tc.token)
 				if err == nil {
 					t.Fatalf("the stray token %q was accepted; stdout=%q", tc.token, out)
 				}
@@ -343,7 +370,7 @@ func TestGraphPositional_HyphenPrefixedTokensAreClassifiedBothWays(t *testing.T)
 }
 
 // TestGraphPositional_OnlyTheFirstStrayTokenIsNamed is the remaining half of
-// acceptance criterion 58: the tokens are examined left to right and the first
+// acceptance criterion 26: the tokens are examined left to right and the first
 // positional argument ends the invocation.
 //
 // Both orders are driven. A stray written BEFORE the flags must be refused
@@ -368,15 +395,15 @@ func TestGraphPositional_OnlyTheFirstStrayTokenIsNamed(t *testing.T) {
 		}{
 			{
 				label: "both strays after the flags",
-				args:  []string{c.subcommand, "-r", roadmap, "--query", c.query, first, second},
+				args:  []string{graphSubcommandName, "-r", roadmap, "--query", c.query, first, second},
 			},
 			{
 				label: "the first stray written before the flags",
-				args:  []string{c.subcommand, first, "-r", roadmap, "--query", c.query, second},
+				args:  []string{graphSubcommandName, first, "-r", roadmap, "--query", c.query, second},
 			},
 		}
 		for _, layout := range layouts {
-			t.Run(c.subcommand+"/"+layout.label, func(t *testing.T) {
+			t.Run(c.class+"/"+layout.label, func(t *testing.T) {
 				out, err := dispatchInvocation(t, graphFamilyName, layout.args...)
 				if err == nil {
 					t.Fatalf("two stray positional arguments were accepted; stdout=%q", out)

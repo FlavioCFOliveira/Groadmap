@@ -229,6 +229,11 @@ func TestHelpContent_SprintTasksDocumentsStatusShortForm(t *testing.T) {
 // TestHelpContent_GraphSubcommandsOutputAndQueryShortForm verifies that
 // every graph subcommand help contains an "Output (stdout JSON):" block
 // and documents the -q short form of --query.
+//
+// The list is read off the registry rather than written out, so it follows the
+// family: it held five names until they collapsed onto `execute`
+// (SPEC/COMMANDS.md § Graph Management), and a list spelled here would have
+// needed editing to stay true instead of failing when it stopped being.
 func TestHelpContent_GraphSubcommandsOutputAndQueryShortForm(t *testing.T) {
 	reg := AppRegistry()
 	graphCmd := reg.FindCommand("graph")
@@ -236,8 +241,11 @@ func TestHelpContent_GraphSubcommandsOutputAndQueryShortForm(t *testing.T) {
 		t.Fatal("graph command missing from registry")
 	}
 
-	for _, subName := range []string{"create", "query", "update", "delete", "search"} {
-		subName := subName
+	if len(graphCmd.Subcommands) == 0 {
+		t.Fatal("the graph command declares no subcommand, so this test would check nothing")
+	}
+	for _, sub := range graphCmd.Subcommands {
+		subName := sub.Name
 		t.Run(subName, func(t *testing.T) {
 			out := captureStdout(t, func() {
 				_ = graphCmd.DispatchFamily([]string{subName, "--help"})

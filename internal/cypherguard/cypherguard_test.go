@@ -677,9 +677,9 @@ func TestIsReadOnly(t *testing.T) {
 // alone does not see these as DDL.
 //
 // Before the fix this divergence was a fail-OPEN guard-rail bypass: the guard
-// rail reported "ordinary read", `rmp graph query` and the read-only web graph
+// rail reported "ordinary read", a CLI graph read and the read-only web graph
 // data endpoint admitted the statement, and the engine executed it through its
-// DDL executor (proven end to end: `rmp graph query -q "CREATE <U+0131>NDEX …"`
+// DDL executor (proven end to end: a CLI graph read given `CREATE <U+0131>NDEX …"`
 // exited 0, and the DROP form reached exec.DropIndex).
 var spoofedDDLQueries = []struct {
 	name  string

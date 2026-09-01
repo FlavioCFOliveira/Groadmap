@@ -31,9 +31,8 @@ import (
 // read BOTH sides and compare them; neither one repeats the answer:
 //
 //  1. the specification side is parsed out of SPEC/GRAPH.md — the constructor
-//     table, the Engine path column of § Per-Subcommand Validation Rules that
-//     the table's path names come from, and the paragraph naming the
-//     constructors the project does not use;
+//     table, its own claim that the paths it lists are ONE path, and the
+//     paragraph naming the constructors the project does not use;
 //  2. the implementation side is swept out of the source tree with go/ast, so
 //     the set of constructions is whatever the code actually contains, not a
 //     list somebody remembered to keep up to date here.
@@ -58,19 +57,32 @@ import (
 //     through a function value or through reflection is not seen. Nothing in
 //     this project constructs one that way.
 //   - A construction is attributed to the graph subcommands whose dispatch
-//     reaches its enclosing function with a literal name. A construction placed
-//     where that attribution cannot reach it is reported as a path the table
-//     does not list. That bias is deliberate: the opposite one would let a new
-//     construction through unexamined, which is the failure this gate exists to
-//     prevent.
+//     reaches its enclosing function: either the registry entry that names it as
+//     a Handler, or a shared handler called with a literal subcommand name. A
+//     construction placed where neither attribution reaches it is reported as a
+//     path the table does not list. That bias is deliberate: the opposite one
+//     would let a new construction through unexamined, which is the failure this
+//     gate exists to prevent.
 
 // Paths and section headings the two tests read, relative to the module root.
 const (
 	specGraphRelPath = "SPEC/GRAPH.md"
 
 	constructorTableHeading = "### Engine Constructor by Path"
-	perSubcommandHeading    = "### Per-Subcommand Validation Rules"
 )
+
+// onePathMarker is the sentence of § Engine Constructor by Path that closes the
+// Path column: the table's rows name surfaces, not paths, and every surface runs
+// on the same one.
+//
+// It replaces a second table. The Path names used to be defined by the Engine
+// path column of § Per-Subcommand Validation Rules, and this gate cross-checked
+// the two tables against each other; that section described the five graph
+// subcommands and went with them (SPEC/COMMANDS.md § Graph Management). What
+// remains to check is the claim the section makes in its own words, so the gate
+// reads that claim and holds the table to it. A reworded marker fails the test
+// rather than quietly narrowing what it inspects.
+const onePathMarker = "There is **one** path, and both surfaces run on it."
 
 // noOtherConstructorMarker opens the paragraph of § Engine Constructor by Path
 // that names the constructors Groadmap does not use. The scan for those names is
@@ -133,7 +145,7 @@ func (e storeExpectation) String() string {
 
 // specConstructorRow is one data row of § Engine Constructor by Path.
 type specConstructorRow struct {
-	path        string   // the Path cell, a name of § Per-Subcommand Validation Rules
+	path        string   // the Path cell; every row carries the same one
 	surface     string   // the Surface cell, verbatim
 	constructor string   // the single constructor the row names, qualified
 	subcommands []string // the `graph X` subcommands the Surface cell names, sorted
@@ -277,7 +289,7 @@ func TestGraphEngineConstructorInventoryMatchesGoGraph(t *testing.T) {
 func TestGraphEngineConstructionsMatchSpec(t *testing.T) {
 	spec := readRepoFileAt(t, specGraphRelPath)
 	rows := parseConstructorTable(t, spec)
-	pathBySubcommand := parseEnginePathColumn(t, spec)
+	checkTheTableListsOnePath(t, spec, rows)
 	sites := scanEngineConstructions(t, repoRoot(t))
 
 	if len(sites) == 0 {
@@ -314,7 +326,6 @@ func TestGraphEngineConstructionsMatchSpec(t *testing.T) {
 		}
 
 		checkStoreExpectation(t, row, site)
-		checkPathAgainstSubcommands(t, row, site, pathBySubcommand)
 	}
 
 	for _, row := range rows {
@@ -357,26 +368,39 @@ func checkStoreExpectation(t *testing.T, row *specConstructorRow, site *construc
 	}
 }
 
-// checkPathAgainstSubcommands ties the two tables together: the Path cell of
-// § Engine Constructor by Path must be the Engine path § Per-Subcommand
-// Validation Rules gives for every subcommand the construction serves.
-func checkPathAgainstSubcommands(t *testing.T, row *specConstructorRow, site *constructionSite, pathBySubcommand map[string]string) {
+// checkTheTableListsOnePath holds the table to the claim the section makes about
+// it in its own words: the rows name surfaces, and every one of them runs on the
+// same path.
+//
+// The Path column used to be checked against a second table, § Per-Subcommand
+// Validation Rules, which named an engine path per graph subcommand. That table
+// is gone, and with it the cross-check. What replaces it is not weaker in the
+// direction that matters: a row added on a SECOND path fails here, and the
+// hazard the whole section exists against is precisely a surface quietly moved
+// onto a path of its own.
+func checkTheTableListsOnePath(t *testing.T, spec string, rows []*specConstructorRow) {
 	t.Helper()
 
-	for _, subcommand := range site.subcommands {
-		specPath, ok := pathBySubcommand[subcommand]
-		if !ok {
-			t.Errorf("%s serves `graph %s`, which %s § Per-Subcommand Validation Rules does not list. "+
-				"§ Engine Constructor by Path takes its path names from that table, so a subcommand "+
-				"missing there has no path and cannot be checked against any row",
-				site.where(), subcommand, specGraphRelPath)
-			continue
-		}
-		if !strings.EqualFold(specPath, row.path) {
-			t.Errorf("%s serves `graph %s`, which %s § Per-Subcommand Validation Rules puts on the %s "+
-				"path, but the construction matched the %s row of § Engine Constructor by Path (%s:%d). "+
-				"The two tables disagree about which path this subcommand runs on",
-				site.where(), subcommand, specGraphRelPath, specPath, row.path, specGraphRelPath, row.line)
+	section, bodyLine := specSection(t, spec, constructorTableHeading)
+	if !strings.Contains(section, onePathMarker) {
+		t.Fatalf("%s § Engine Constructor by Path (from line %d) no longer contains the sentence %q, "+
+			"which is where this gate reads the claim that the table lists one path. Either the "+
+			"section was reworded or the table genuinely grew a second path; in both cases the check "+
+			"below is no longer the check the specification asks for, and must be re-taught before "+
+			"this gate is relied on again", specGraphRelPath, bodyLine, onePathMarker)
+	}
+
+	paths := make(map[string][]int, 1)
+	for _, row := range rows {
+		key := strings.ToLower(row.path)
+		paths[key] = append(paths[key], row.line)
+	}
+	if len(paths) != 1 {
+		for name, lines := range paths {
+			t.Errorf("%s § Engine Constructor by Path names the path %q on line(s) %v, and the section "+
+				"states %q. The table and its own prose disagree: either a surface has been moved onto "+
+				"a second path, in which case that sentence is false, or the Path cell is misspelt",
+				specGraphRelPath, name, lines, onePathMarker)
 		}
 	}
 }
@@ -438,9 +462,9 @@ func matchRow(t *testing.T, rows []*specConstructorRow, site *constructionSite) 
 	}
 	if site.pkg != webPackageName {
 		t.Errorf("%s constructs an engine in package %s that no graph subcommand reaches. %s § Engine "+
-			"Constructor by Path lists three surfaces — the CLI read subcommands, the CLI write "+
-			"subcommands, and the web interface — and this construction is on none of them, so it is a "+
-			"path the table does not list", site.where(), site.pkg, specGraphRelPath)
+			"Constructor by Path lists two surfaces — `graph execute` and the web interface — and this "+
+			"construction is on neither, so it is a surface the table does not list",
+			site.where(), site.pkg, specGraphRelPath)
 		return nil
 	}
 	return row
@@ -491,40 +515,11 @@ func parseConstructorTable(t *testing.T, spec string) []*specConstructorRow {
 	}
 
 	if len(rows) < 2 {
-		t.Fatalf("%s § Engine Constructor by Path parsed only %d rows; the table covers at least a read "+
-			"path and a write path, so the parse has drifted from the table's shape",
-			specGraphRelPath, len(rows))
+		t.Fatalf("%s § Engine Constructor by Path parsed only %d rows; the table covers at least the "+
+			"`graph execute` surface and the web surface, so the parse has drifted from the table's "+
+			"shape", specGraphRelPath, len(rows))
 	}
 	return rows
-}
-
-// parseEnginePathColumn reads the Engine path column of § Per-Subcommand
-// Validation Rules, which is where the path names used by § Engine Constructor
-// by Path are defined.
-func parseEnginePathColumn(t *testing.T, spec string) map[string]string {
-	t.Helper()
-
-	section, bodyLine := specSection(t, spec, perSubcommandHeading)
-	headers := []string{"Subcommand", "Accepts", "Rejects", "Engine path"}
-	table := specTable(t, section, bodyLine, perSubcommandHeading, headers)
-
-	paths := make(map[string]string, len(table))
-	for _, raw := range table {
-		names := graphSubcommandsIn(raw.cells[0])
-		if len(names) != 1 {
-			t.Fatalf("%s:%d names %d subcommands in its Subcommand cell (%q); each row describes exactly "+
-				"one", specGraphRelPath, raw.line, len(names), raw.cells[0])
-		}
-		if raw.cells[3] == "" {
-			t.Fatalf("%s:%d has an empty Engine path cell for `graph %s`", specGraphRelPath, raw.line, names[0])
-		}
-		paths[names[0]] = raw.cells[3]
-	}
-
-	if len(paths) == 0 {
-		t.Fatalf("%s § Per-Subcommand Validation Rules yielded no subcommand at all", specGraphRelPath)
-	}
-	return paths
 }
 
 // parseUnusedConstructors reads the constructors § Engine Constructor by Path
@@ -771,6 +766,17 @@ func inspectProductionFile(t *testing.T, fset *token.FileSet, path, rel string, 
 		enclosing := funcKey(fn)
 
 		ast.Inspect(fn.Body, func(node ast.Node) bool {
+			// A registry entry naming a handler. This is the attribution that
+			// survives a family with ONE subcommand: `graph execute` reaches
+			// runGraphExecute through the registry's Handler field and not
+			// through a literal argument, because there is no shared handler
+			// left for a subcommand name to be passed to.
+			if literal, ok := node.(*ast.CompositeLit); ok {
+				if name, handler, ok := registrySubcommandEntry(literal); ok {
+					addEdge(scan.literalArgs, handler, name)
+				}
+				return true
+			}
 			call, ok := node.(*ast.CallExpr)
 			if !ok {
 				return true
@@ -812,6 +818,44 @@ func inspectProductionFile(t *testing.T, fset *token.FileSet, path, rel string, 
 			return true
 		})
 	}
+}
+
+// registrySubcommandEntry reads a `Subcommand{Name: "<literal>", ..., Handler:
+// <function>}` composite literal and returns the pair, so a construction inside
+// that handler can be attributed to the subcommand the registry dispatches to it.
+//
+// It requires BOTH keyed fields and takes no position on the literal's type: a
+// struct that names a handler and a name is a dispatch entry whatever it is
+// called, and matching on the type name would make this gate fail silently the
+// day the type is renamed. A handler written as anything but a plain function
+// identifier — a closure, a method value — yields nothing, which lands the
+// construction in the "no subcommand reaches it" branch and is reported rather
+// than assumed away.
+func registrySubcommandEntry(literal *ast.CompositeLit) (name, handler string, ok bool) {
+	for _, elt := range literal.Elts {
+		kv, isKV := elt.(*ast.KeyValueExpr)
+		if !isKV {
+			continue
+		}
+		key, isIdent := kv.Key.(*ast.Ident)
+		if !isIdent {
+			continue
+		}
+		switch key.Name {
+		case "Name":
+			basic, isBasic := kv.Value.(*ast.BasicLit)
+			if isBasic && basic.Kind == token.STRING {
+				if unquoted, err := strconv.Unquote(basic.Value); err == nil {
+					name = unquoted
+				}
+			}
+		case "Handler":
+			if ident, isIdent := kv.Value.(*ast.Ident); isIdent {
+				handler = ident.Name
+			}
+		}
+	}
+	return name, handler, name != "" && handler != ""
 }
 
 // funcKey names a declaration for the call graph. Methods are keyed with their

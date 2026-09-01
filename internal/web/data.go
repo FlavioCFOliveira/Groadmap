@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"math"
 	"net/url"
 	"os"
@@ -16,9 +17,14 @@ import (
 
 	"github.com/FlavioCFOliveira/GoGraph/cypher"
 	"github.com/FlavioCFOliveira/GoGraph/cypher/expr"
+	"github.com/FlavioCFOliveira/GoGraph/graph/csr"
+	"github.com/FlavioCFOliveira/GoGraph/graph/lpg"
 	"github.com/FlavioCFOliveira/GoGraph/store/recovery"
+	"github.com/FlavioCFOliveira/GoGraph/store/snapshot"
 	"github.com/FlavioCFOliveira/GoGraph/store/txn"
+	"github.com/FlavioCFOliveira/GoGraph/store/wal"
 
+	"github.com/FlavioCFOliveira/Groadmap/internal/backoff"
 	"github.com/FlavioCFOliveira/Groadmap/internal/cypherguard"
 	"github.com/FlavioCFOliveira/Groadmap/internal/db"
 	"github.com/FlavioCFOliveira/Groadmap/internal/graphlock"
@@ -86,60 +92,78 @@ var allowedGraphLimits = map[int]struct{}{
 // LIMIT and does not suppress injection.
 var reTopLevelLimit = regexp.MustCompile(`(?i)\bLIMIT\b`)
 
-// reLeadingCall and reTopLevelReturn together recognise a STANDALONE PROCEDURE
-// CALL: a statement whose first clause is CALL and that carries no top-level
-// RETURN. That form admits no LIMIT clause, so the endpoint must inject nothing
-// into it (SPEC/WEB.md § Graph Data Endpoint, node-limit injection,
-// Suppression 2; Acceptance Criterion 111).
-//
-// The boundary is exactly the presence of a top-level RETURN, and it comes
-// straight from the engine's grammar (GoGraph cypher/parser/grammar):
+// reTopLevelReturn detects the RETURN that makes a statement LIMITABLE. It is
+// the whole of the general suppression rule, and it comes straight from the
+// engine's grammar (GoGraph cypher/parser/grammar):
 //
 //	query           : regularQuery | standaloneCall
 //	standaloneCall  : CALL invocationName parenExpressionChain? (YIELD ...)?
 //	singlePartQ     : readingStatement* (returnSt | updatingStatement+ returnSt?)
 //	projectionBody  : DISTINCT? projectionItems orderSt? skipSt? limitSt?
 //
-// A LIMIT attaches only to a projectionBody, which only a RETURN or a WITH
-// carries; standaloneCall has no projectionBody at all. So a leading CALL with
-// no RETURN parses as standaloneCall and rejects an appended LIMIT outright,
-// while a leading CALL that IS projected through a RETURN parses as an ordinary
-// regularQuery whose queryCallSt is just a reading statement, and takes the
-// LIMIT exactly like a MATCH ... RETURN does. Measured against the engine:
-// "CALL db.labels()\nLIMIT 100" fails with `cypher: parse: unexpected "LIMIT"`,
-// whereas "CALL db.labels() YIELD label RETURN label\nLIMIT 1" runs and returns
-// one row instead of two.
+// A LIMIT attaches only to a projectionBody, and only a RETURN or a WITH carries
+// one — so a statement that does not end in a projection admits no appended
+// LIMIT at all. Measured against the engine: "CALL db.labels()\nLIMIT 100" fails
+// with `cypher: parse: unexpected "LIMIT"`, and so does
+// "CREATE (n:Probe {key:'p'})\nLIMIT 100"; whereas
+// "CALL db.labels() YIELD label RETURN label\nLIMIT 1" runs and returns one row
+// instead of two.
 //
-// Both run on the masked normalization (cypherguard.MaskLiterals), like every
-// other discriminator in the guard rail, so a CALL or RETURN keyword that
-// appears only inside a string literal, a comment, or a backtick identifier
-// does not affect the decision.
-var (
-	// reLeadingCall is ANCHORED at the start of the statement (\A), the same
-	// anchoring cypherguard's introspection matcher uses and for the same
-	// reason: CALL introduces the standalone form only as the FIRST clause. A
-	// CALL nested inside a larger query — "MATCH (n) CALL db.labels() YIELD
-	// label RETURN n, label" — is a reading statement in a limitable query, so
-	// it must still receive the injection. Leading whitespace is allowed, which
-	// also covers a leading comment: MaskLiterals neutralises a comment to
-	// spaces before this runs.
-	reLeadingCall = regexp.MustCompile(`(?i)\A\s*CALL\b`)
-	// reTopLevelReturn detects the RETURN that makes a leading CALL a projected,
-	// and therefore limitable, query. Like reTopLevelLimit above it is a
-	// presence check on the masked text rather than a full parse, and it errs the
-	// same way: a RETURN the check sees means the query is treated as limitable
-	// and receives the injection. That is the safe direction — a query wrongly
-	// judged limitable keeps the node cap it would otherwise escape, and the only
-	// place a RETURN can hide inside a standalone call is the "CALL ... YIELD ...
-	// WHERE ..." tail, which this engine fails to plan at all ("plan root must be
-	// ProduceResults, got *ir.Selection") with or without an injected LIMIT.
-	reTopLevelReturn = regexp.MustCompile(`(?i)\bRETURN\b`)
-)
+// **Suppressing a statement with no RETURN costs nothing, and that is why the
+// rule can be this wide.** The node limit bounds the RESULT; a statement that
+// projects nothing returns no row, so it contributes no node and no edge to the
+// response whatever is appended to it. There is nothing for the limit to bound,
+// and the only effect an injection could have on such a statement is to make it
+// fail in the parser — which is exactly what a `CREATE` submitted through the
+// query bar used to do (SPEC/WEB.md § Graph Data Endpoint, Suppression 2;
+// Acceptance Criteria 47, 111 and 156).
+//
+// The rule subsumes the standalone procedure call the specification enumerates:
+// a leading CALL with no top-level RETURN parses as standaloneCall and has no
+// projectionBody, so it is suppressed by the same absence. A CALL that IS
+// projected through a top-level RETURN is an ordinary limitable query and takes
+// the injection exactly as a MATCH ... RETURN does, which is what keeps the
+// endpoint from being stricter than the contract it publishes.
+//
+// It runs on the masked normalization (cypherguard.MaskLiterals), so a RETURN
+// keyword that appears only inside a string literal, a comment, or a backtick
+// identifier does not make a non-projecting statement look limitable. It is a
+// presence check rather than a full parse, and it errs towards judging a
+// statement limitable: a statement wrongly judged limitable keeps the node cap
+// it would otherwise escape, and fails in the parser only if it also turns out
+// to carry no top-level projection — the exotic case being a RETURN buried in a
+// subquery.
+var reTopLevelReturn = regexp.MustCompile(`(?i)\bRETURN\b`)
+
+// reIntrospect recognises the one form that admits no LIMIT clause even when it
+// DOES carry a top-level projection: a
+// schema-introspection command — SHOW INDEXES, SHOW INDEX, SHOW CONSTRAINTS or
+// SHOW CONSTRAINT, with or without a YIELD, WHERE, or RETURN tail. The engine's
+// SHOW parser rejects ORDER BY, SKIP and LIMIT on every one of those forms, so a
+// tail does not make a LIMIT injectable (SPEC/WEB.md § Graph Data Endpoint,
+// Suppression 2; Acceptance Criterion 111).
+//
+// The separator between the two keywords is a SINGLE SPACE, written as a literal
+// space and deliberately not as \s+. That is the engine's own routing rule, not
+// a rule of this endpoint's: a statement written with any other separator is not
+// routed to the engine's schema parser and fails there as a syntax error, so
+// injecting into it changes nothing about its outcome (SPEC/GRAPH.md § What
+// Groadmap Does Not Check, item 7). Matching \s+ here would suppress the
+// injection for a statement the engine is going to reject anyway, and would make
+// this endpoint's LIMIT decision disagree with the engine about what a SHOW
+// command is.
+//
+// This is the one place in the module that recognises the class. It moved here
+// from the shared guard rail when the guard rail was withdrawn: nothing else
+// classifies a statement any more, and what remains is a question about a
+// STATEMENT FORM — "can it carry a LIMIT?" — which belongs beside the injection
+// rule it serves. It refuses nothing.
+var reIntrospect = regexp.MustCompile(`(?i)\A\s*SHOW (?:INDEX(?:ES)?|CONSTRAINTS?)\b`)
 
 // graphQueryError classifies a query-bar failure so the handler can map it to a
-// distinct, in-page, read-only message. The kinds are kept separate so the user
+// distinct, in-page message. The two kinds are kept separate so the user
 // understands what to fix, and the set of them is enumerated in exactly one
-// place: SPEC/WEB.md § Query-Bar Error Handling, rule 5. This comment names that
+// place: SPEC/WEB.md § Query-Bar Error Handling, rule 4. This comment names that
 // place instead of repeating the list, because a repeated list is what let the
 // count here drift out of step with the constants below it.
 type graphQueryError struct {
@@ -152,91 +176,33 @@ type graphQueryError struct {
 func (e *graphQueryError) Error() string { return e.Reason }
 
 // Query-bar failure kinds. This block is the code side of the closed value set
-// SPEC/WEB.md § Query-Bar Error Handling, rule 5, publishes and is canonical for;
+// SPEC/WEB.md § Query-Bar Error Handling, rule 4, publishes and is canonical for;
 // a value is added or removed there first, and no other comment in this file
 // restates the list.
 //
-// Every one of them is answered with HTTP 400 and told apart by this field, not
-// by the status: RFC 9110 section 15.5 puts the explanation of an error in the
-// response representation, so one status serves them all and the kind carries
+// Both are answered with HTTP 400 and told apart by this field, not by the
+// status: RFC 9110 section 15.5 puts the explanation of an error in the
+// response representation, so one status serves them both and the kind carries
 // the class. Splitting them across different statuses would assert a distinction
 // HTTP does not carry, while the body already carries it precisely.
 //
-// A kind exists per distinct FIX the caller must make, which is why
-// graphErrRelationshipDirection is its own kind rather than a variant of
-// graphErrNotReadOnly: such a query IS read-only and IS well formed, and what it
-// needs is the traversal rewritten as outgoing.
-//
-// graphErrSchemaIntrospection is a kind of its own for the same reason and is
-// likewise NOT folded into graphErrNotReadOnly: a SHOW statement reads the
-// registered schema and writes nothing, so answering not_read_only would publish
-// a classification the message printed beside it contradicts. It is not
-// graphErrExecution either — the statement never reaches the engine, so there is
-// no engine diagnostic to carry. The fix is to ask a different surface.
-//
-// There is deliberately NO keyword-spacing kind here. This endpoint refuses the
-// whole schema-introspection family at every spacing, so correcting the spacing
-// changes nothing on it: a spacing complaint would name a correction that does
-// not work and would send the caller round a loop ending in this same refusal.
-// The CLI still publishes that rejection, because `graph query`, `graph search`
-// and `graph update` ACCEPT the class and there the spacing genuinely is the
-// whole objection (SPEC/GRAPH.md § Keyword Spacing in a Schema-Introspection
-// Command, which is canonical for the divergence).
+// There were five, and the other three — not_read_only, schema_introspection and
+// relationship_read_direction — were the classifications of a guard rail that
+// examined the statement before running it. That guard rail is withdrawn: the
+// endpoint executes what it is given and refuses nothing on the ground of what
+// the statement does, so there is no longer any verdict for those kinds to carry
+// (SPEC/WEB.md § Graph Data Endpoint, "The statement is executed as written").
+// The four-deep precedence rule between them went with them; what survives is
+// rule 5's single ordering, which is not a precedence at all but a consequence
+// of the limit being resolved before the statement runs.
 const (
-	graphErrNotReadOnly           = "not_read_only"               // query contains a writing or DDL clause
-	graphErrInvalidLimit          = "invalid_limit"               // limit not one of the six allowed values
-	graphErrSchemaIntrospection   = "schema_introspection"        // SHOW INDEX(ES)/CONSTRAINT(S): a schema listing is not a graph
-	graphErrRelationshipDirection = "relationship_read_direction" // reads a relationship bound by an incoming or undirected pattern
-	graphErrExecution             = "execution"                   // accepted as read-only but failed in the engine
+	graphErrInvalidLimit = "invalid_limit" // limit not one of the six allowed values
+	graphErrExecution    = "execution"     // the statement failed once it was running
 )
-
-// graphSchemaIntrospectionReason words the in-place message for a
-// schema-introspection command. It is a FIXED string, and that is a requirement
-// rather than a convenience: SPEC/WEB.md Acceptance Criterion 151 requires the
-// response to a badly spaced command to equal the response to the well-spaced
-// one, which a message echoing the caller's statement could not satisfy.
-//
-// It states what the specification requires it to state — that this page draws a
-// graph of nodes and edges and cannot show a schema listing, and that
-// `rmp graph query` is where the schema is reported — because a message that
-// only refused would leave the caller with a correct refusal and no way forward:
-// the statement they wrote is valid, supported, and answered in full by the CLI.
-//
-// It names neither the keyword spacing nor an accepted spelling, because on this
-// endpoint the spacing is not what is wrong and correcting it changes nothing
-// (SPEC/WEB.md § Query-Bar Error Handling, case 10, What the message MUST say).
-const graphSchemaIntrospectionReason = "query rejected: this page draws a graph of nodes and edges, " +
-	"and a schema listing is neither, so it cannot be shown here. Run rmp graph query to report the " +
-	"indexes and constraints the store holds."
 
 // newGraphQueryError builds a classified query-bar error.
 func newGraphQueryError(kind, reason string) *graphQueryError {
 	return &graphQueryError{Kind: kind, Reason: reason}
-}
-
-// graphRelationshipDirectionReason words the in-place message for a query that
-// reads a relationship the engine would misresolve.
-//
-// It is deliberately shorter than the CLI's refusal: this text is rendered in
-// the query bar rather than read in a terminal, so it states the objection and
-// the shape of the rewrite, and leaves the full treatment to the SPEC. The two
-// wordings are separate for the same reason every other kind's is — the CLI and
-// this endpoint address different readers — while the CLASSIFICATION behind them
-// is shared, which is what must not diverge.
-//
-// The variable name is caller-derived text (Cypher admits a backtick-quoted
-// identifier holding arbitrary characters), so it reaches the response body as
-// untrusted input. renderJSONStatus keeps encoding/json's HTML escaping ON, which
-// is what makes that echo safe; see the graph query-bar body tests, which assert
-// no raw angle bracket survives while the decoded value stays the original text.
-func graphRelationshipDirectionReason(ref cypherguard.RelReadReference) string {
-	return fmt.Sprintf(
-		"query rejected: relationship %q is bound by an %s pattern, and on a node pair carrying "+
-			"edges in both directions the engine reports the forward edge's type and orientation "+
-			"for the reverse one. Rewrite the traversal as outgoing, anchoring it on either "+
-			"endpoint: MATCH (x)-[%s]->(target {key:'...'}). To cover both directions, take the "+
-			"union of the two outgoing legs with UNION ALL.",
-		ref.Variable, ref.Direction, ref.Variable)
 }
 
 // sprintsData is the view model handed to the roadmap sprints template (the
@@ -1849,15 +1815,13 @@ func resolveGraphQuery(raw string) string {
 //     user-authored LIMIT is respected as-is and the resolved dropdown value is
 //     not applied.
 //   - Suppression 2: the query is a statement form that admits NO LIMIT clause
-//     at all. Through this endpoint that form is the standalone procedure call:
-//     appending a LIMIT to one bounds nothing; it makes the statement fail in
-//     the PARSER, so a read the guard rail admits, and that `rmp graph query`
-//     runs, would be unusable through this endpoint and the endpoint would be
-//     stricter than the contract it publishes. The schema-introspection command
-//     admits no LIMIT either and admitsLimitClause still answers for it, but
-//     loadGraphView refuses that class before this function is reached, so no
-//     such statement arrives here (SPEC/WEB.md § Graph Data Endpoint,
-//     Suppression 2, and § Query-Bar Error Handling, case 10).
+//     at all — one carrying no top-level RETURN (the standalone procedure call
+//     and every write with no projection), or a schema-introspection command.
+//     Appending a LIMIT to one bounds nothing; it makes the statement fail in the
+//     PARSER, so a statement that `rmp graph execute` runs would be unusable
+//     through this endpoint and the endpoint would be stricter than the contract
+//     it publishes. Both forms are executed as the caller wrote them
+//     (SPEC/WEB.md § Graph Data Endpoint, Suppression 2).
 //
 // Both suppression checks run on the literal-masked normalization
 // (cypherguard.MaskLiterals), so a LIMIT, SHOW, CALL, or RETURN keyword that
@@ -1884,157 +1848,201 @@ func applyGraphLimit(query string, limit int) string {
 		return query
 	}
 	// Suppression 2: a statement form that cannot carry a LIMIT clause.
-	if !admitsLimitClause(query, masked) {
+	if !admitsLimitClause(masked) {
 		return query
 	}
 	return query + "\nLIMIT " + strconv.Itoa(limit)
 }
 
-// admitsLimitClause reports whether query is a statement form that can carry a
+// admitsLimitClause reports whether a statement is a form that can carry a
 // top-level LIMIT clause. masked MUST be cypherguard.MaskLiterals(query); it is
 // passed in rather than recomputed because the caller already holds it.
 //
-// This is a SYNTAX question — "can this statement carry a LIMIT?" — and not a
-// read-only or safety question, which is why the standalone-call predicate lives
-// here beside the injection rule it serves and not in the shared cypherguard
-// guard rail: the endpoint's admission decision is, and stays, exactly the guard
-// rail's, and this function changes no operation class. Both forms below are
-// read-only before this check and after it, and cypherguard.IsReadOnly has
-// already decided, alone, whether they execute at all. The one piece that IS
-// shared is reused rather than reimplemented: the literal masking, and the
-// recognition of the introspection class itself, both come from cypherguard, so
-// the two can never drift apart on what a SHOW command is (SPEC/WEB.md § Graph
-// Data Endpoint, Suppression 2; SPEC/GRAPH.md § Schema Introspection).
+// This is a SYNTAX question — "can this statement carry a LIMIT?" — and it is
+// the only question this endpoint asks about a statement. It is not a read-only
+// question and not a safety question: the endpoint refuses nothing on the ground
+// of what a statement does, and both forms below are executed exactly as the
+// caller wrote them. What the answer decides is whether five more characters are
+// appended (SPEC/WEB.md § Graph Data Endpoint, Suppression 2).
 //
 // Two forms admit no LIMIT:
 //
-//  1. A schema-introspection command — the SHOW INDEXES / SHOW INDEX /
+//  1. A statement carrying no top-level RETURN. A LIMIT attaches only to a
+//     projection, so a statement that ends in anything else admits none. This
+//     covers the standalone procedure call the specification enumerates, and it
+//     covers the write with no RETURN — a CREATE, a SET, a DETACH DELETE, a
+//     schema DDL statement — which the endpoint could not execute at all while
+//     it injected into one. See reTopLevelReturn for the grammar this rests on
+//     and for why suppressing such a statement costs nothing.
+//
+//  2. A schema-introspection command — the SHOW INDEXES / SHOW INDEX /
 //     SHOW CONSTRAINTS / SHOW CONSTRAINT class, INCLUDING one carrying a YIELD,
 //     WHERE, or RETURN tail: the engine's SHOW parser rejects ORDER BY, SKIP, and
-//     LIMIT on every one of those forms, so a tail does not make a LIMIT
-//     injectable. The predicate is cypherguard's own Introspect classification,
-//     which is exactly this class and nothing wider: every other SHOW the guard
-//     rail sees (SHOW DATABASES, SHOW FUNCTIONS, SHOW PROCEDURES, ...) is not
-//     part of it, and the engine rejects those at the parser whether or not a
-//     LIMIT is appended, so leaving them out changes nothing for them.
+//     LIMIT on every one of those forms, so a projection does not make a LIMIT
+//     injectable and rule 1 alone would not catch it. Recognition is
+//     reIntrospect's and is exactly this class and nothing wider: every other
+//     SHOW (SHOW DATABASES, SHOW FUNCTIONS, SHOW PROCEDURES, ...) is outside it.
 //
-//     No statement of this class reaches this function through the endpoint:
-//     loadGraphView refuses the whole family — at every keyword spacing — before
-//     the store is opened and before the injection decision is taken. The branch
-//     stays because this function answers a question about a STATEMENT FORM
-//     ("can it carry a LIMIT?"), and the answer for this form is no wherever the
-//     question is asked; the refusal that makes it unreachable lives elsewhere
-//     and could move. Deleting it would leave a predicate that silently claims
-//     a SHOW command takes a LIMIT (SPEC/WEB.md § Graph Data Endpoint,
-//     Suppression 2, third bullet).
-//
-//  2. A standalone procedure call — first clause CALL, no top-level RETURN.
-//     See reLeadingCall and reTopLevelReturn for why the top-level RETURN is the
-//     whole of the boundary.
-func admitsLimitClause(query, masked string) bool {
-	if cypherguard.Classify(query).Introspect {
+// Each matcher is applied to the masked text AND to its upper-cased copy, which
+// is the transformation the engine itself falls back to when a non-ASCII byte
+// appears in the keyword window. Unicode uppercasing maps some non-ASCII letters
+// onto ASCII ones, so a statement spelled with U+0131 (dotless i) routes to the
+// engine's schema parser while a plain case-insensitive match would miss it. The
+// consequence of missing it is no longer a security one — nothing is refused
+// here — but it would be an injection into a statement that cannot carry the
+// clause, which is the outcome this function exists to prevent.
+func admitsLimitClause(masked string) bool {
+	upper := strings.ToUpper(masked)
+	matches := func(re *regexp.Regexp) bool {
+		return re.MatchString(masked) || re.MatchString(upper)
+	}
+	if !matches(reTopLevelReturn) {
 		return false
 	}
-	if reLeadingCall.MatchString(masked) && !reTopLevelReturn.MatchString(masked) {
-		return false
-	}
-	return true
+	return !matches(reIntrospect)
 }
 
-// loadGraphView reads a roadmap's knowledge graph and returns its nodes and
-// edges in the Graph View Data shape. It mirrors the read path of
-// commands/graph.go runGraphRead exactly, down to the lock: it takes the graph
-// store's SHARED lock, opens the store via recovery, releases the lock as soon
-// as the open returns, and runs a single read-only Cypher query through the
-// engine's read path with no lock held. It MUST NOT run any writing clause and
-// MUST NOT checkpoint or truncate the WAL (SPEC/WEB.md § Graph Data Endpoint,
-// read-only guard-rail).
+// graphOpenOpts carries the recovery.Options value used for every graph store
+// open this package performs. Defined once to avoid repeating the codec wiring.
+var graphOpenOpts = recovery.Options[string, float64]{
+	Codec:       txn.NewStringCodec(),
+	WeightCodec: txn.NewFloat64WeightCodec(),
+}
+
+// openGraphWALWriter opens the write-ahead-log writer at walPath under the
+// project's single bounded backoff policy (internal/backoff), which owns the
+// attempt count and the delay ladder. Every failure is waited on, because the
+// one this retry exists for is contention — another process holding the WAL
+// directory lock — and a WAL that cannot be opened for any other reason is not
+// distinguishable here anyway. A persistent failure is returned as ErrDatabase,
+// which handleGraphData answers with HTTP 500, the status this endpoint already
+// returns for a store that cannot be opened. Callers must close the Writer.
+func openGraphWALWriter(walPath string) (*wal.Writer, error) {
+	w, err := backoff.Retry(func() (*wal.Writer, error) { return wal.Open(walPath) }, backoff.Always)
+	if err != nil {
+		return nil, fmt.Errorf("%w: graph store unavailable: %v", utils.ErrDatabase, err)
+	}
+	return w, nil
+}
+
+// checkpointGraphStore performs the synchronous post-commit checkpoint
+// (SPEC/GRAPH.md § Synchronous Checkpoint on Write) for a graph data request. It
+// writes a self-sufficient full snapshot of the committed graph state under
+// graphDir/snapshot/ and then truncates the write-ahead log so the log holds
+// only post-snapshot transactions.
 //
-// rawQuery and rawLimit are the request's q and limit URL parameters (empty
-// when absent). The query is resolved (default when absent), validated as
-// read-only via the shared cypherguard guard-rail BEFORE execution, and has a
-// LIMIT injected only when it has no top-level LIMIT of its own AND is a
-// statement form that admits a LIMIT clause. A query that contains any writing
-// or DDL clause, a query that is a schema-introspection command at any keyword
-// spacing, a query that reads a relationship bound by an incoming or undirected
-// pattern, or an invalid limit, is returned as a classified graphQueryError and
-// is never executed; the store is not opened for it.
+// It takes the engine that just executed the statement because the specification
+// requires the snapshot to carry "the schema the engine holds registered at the
+// moment of the checkpoint", and forbids Groadmap keeping a record of its own
+// beside it: the engine is the only party that knows what is registered after a
+// statement has run. The committed graph stays a separate parameter because the
+// engine exposes no accessor for it.
+//
+// The order below is load-bearing. The specs are read, and the snapshot they go
+// into is made durable, BEFORE the write-ahead log is truncated: until that
+// snapshot exists, the log holds the only record of every CREATE INDEX and
+// CREATE CONSTRAINT the graph has seen, and truncating first would destroy the
+// schema outright (SPEC/GRAPH.md § Synchronous Checkpoint on Write, step 2).
+//
+// It MUST be called only after the write transaction has committed durably, and
+// only when that transaction appended to the log; the caller treats any error
+// here as non-fatal, because the commit is the durability boundary and the write
+// has already succeeded.
+//
+// This is the second implementation of the sequence in the module: commands
+// (graph.go, checkpointGraph) holds the first, and the two cannot be shared
+// today because internal/commands imports internal/web and so the dependency
+// cannot run the other way. The duplication is recorded rather than hidden, and
+// internal/testenv's snapshot-writer gate is what stops the two drifting on the
+// one thing that silently destroys data — writing a snapshot that omits the
+// schema.
+func checkpointGraphStore(engine *cypher.Engine, g *lpg.Graph[string, float64], w *wal.Writer, graphDir string) error {
+	cs := csr.BuildFromAdjList(g.AdjList())
+
+	// The registered schema, read from the engine that ran the statement and
+	// while the write-ahead log is still intact. Either slice may be empty — the
+	// common case, a graph with no schema declared over it — and the writer then
+	// simply omits the corresponding snapshot component.
+	constraints := engine.ConstraintSpecsForSnapshot()
+	indexDefs := engine.IndexSpecsForSnapshot()
+
+	snapDir := filepath.Join(graphDir, "snapshot")
+	// WriteSnapshotFullWithMapperCodecConstraintsAndIndexDefs assembles in
+	// snapDir+".tmp" and renames atomically into snapDir; the codec emits
+	// mapper.bin so the snapshot is self-sufficient for string keys, and the two
+	// spec slices are what make it self-sufficient for the schema. The plain
+	// WriteSnapshotFullWithMapperCodec persists no schema at all, and the
+	// truncation below then leaves nothing to recover it from.
+	if err := snapshot.WriteSnapshotFullWithMapperCodecConstraintsAndIndexDefs(
+		snapDir, cs, g, txn.NewStringCodec(), constraints, indexDefs); err != nil {
+		return fmt.Errorf("snapshot write: %w", err)
+	}
+
+	if err := w.Sync(); err != nil {
+		return fmt.Errorf("wal sync: %w", err)
+	}
+	if _, err := w.Truncate(); err != nil {
+		return fmt.Errorf("wal truncate: %w", err)
+	}
+
+	// Keep the snapshot directory consistent with the 0700 the roadmap tree
+	// carries. Best-effort: a failure here does not invalidate the durable
+	// snapshot.
+	_ = os.Chmod(snapDir, 0700) // #nosec G302 G703 -- 0700 on a DIRECTORY is mandated by SPEC (CLAUDE.md §10: 0700 for the ~/.roadmaps tree), and gosec G302 false-positives on directory permissions; snapDir derives from the roadmap name utils.GetRoadmapDir already validated, so no traversal is reachable
+	return nil
+}
+
+// loadGraphView runs the caller's statement against a roadmap's knowledge graph
+// and returns the nodes and edges it produced, in the Graph View Data shape.
+//
+// It runs the statement the way `rmp graph execute` runs one, because there is
+// one execution path and this surface is on it: it takes the graph store's
+// EXCLUSIVE lock before the open and holds it across the open, the statement,
+// the commit and any checkpoint; it opens the store through recovery; it wraps
+// the recovered graph and a write-ahead-log writer in a transactional store; and
+// it constructs the engine over that store through
+// cypher.NewEngineWithStoreAndRecovery (SPEC/GRAPH.md § Engine Constructor by
+// Path; SPEC/WEB.md § Knowledge Graph from the GoGraph Store).
+//
+// **The statement is executed as written, and may write.** Nothing here examines
+// it. A CREATE, a SET, a DETACH DELETE or a schema DDL submitted through the
+// query bar executes, commits, and checkpoints, over HTTP, with no
+// authentication — the interface's principal security property, stated in full
+// in SPEC/WEB.md § Security and Constraints, rule 3, and granted there
+// deliberately. The endpoint used to hold a read-only guard rail here, and three
+// further refusals beside it; all four are withdrawn.
+//
+// The engine matters as much as the guard rail's absence. An endpoint built
+// without a transactional store would refuse the write outright — engine.Run
+// answers "Run does not execute write or DDL statements" — so removing the guard
+// rail alone would have replaced one refusal with another rather than making the
+// query bar write.
+//
+// rawQuery and rawLimit are the request's q and limit URL parameters (empty when
+// absent). The query is resolved (the default query when absent) and has a LIMIT
+// injected only when it has no top-level LIMIT of its own AND is a statement
+// form that admits a LIMIT clause. The ONE thing that can reject a request
+// before the store is opened is an invalid limit, which is returned as a
+// classified graphQueryError and for which nothing is opened and nothing is run.
 //
 // A roadmap that has never used the graph command (no graph/ directory) is an
 // empty graph, not an error: loadGraphView returns empty arrays WITHOUT creating
 // the directory (SPEC/WEB.md § Roadmap Knowledge-Graph Page, empty graph). When
-// the directory does exist, a read changes no graph DATA but is not free of
+// the directory does exist, a statement that writes nothing still is not free of
 // on-disk effect: it may create the lock file, and the recovery that opening
 // runs may complete an interrupted checkpoint. The exhaustive list is
-// SPEC/GRAPH.md § What a Read Changes on Disk.
+// SPEC/GRAPH.md § What a Statement That Writes Nothing Changes on Disk.
 func loadGraphView(ctx context.Context, name, rawQuery, rawLimit string) (graphView, error) {
 	empty := graphView{Nodes: []map[string]any{}, Edges: []map[string]any{}}
 
 	// Resolve and validate the limit first; an invalid limit rejects the
-	// request before the query runs and before the store is opened (SPEC/WEB.md
-	// § Query-Bar Error Handling, rule 2).
+	// request before the statement runs and before the store is opened
+	// (SPEC/WEB.md § Query-Bar Error Handling, rules 1 and 5).
 	limit, err := resolveGraphLimit(rawLimit)
 	if err != nil {
 		return graphView{}, err
 	}
-
-	// Read-only guard-rail (security-critical): the user-supplied query is
-	// validated against the SAME masked-normalization read-only check the CLI
-	// `graph query`/`search` subcommands enforce. A writing or DDL clause is
-	// rejected here, before the query is ever handed to the engine, so it can
-	// never run and never write (SPEC/WEB.md § Graph Data Endpoint).
 	query := resolveGraphQuery(rawQuery)
-	if !cypherguard.IsReadOnly(query) {
-		return graphView{}, newGraphQueryError(graphErrNotReadOnly, "query rejected: not read-only")
-	}
-
-	// Schema-introspection refusal, third in the precedence order the endpoint
-	// publishes (invalid_limit, then not_read_only, then schema_introspection,
-	// then relationship_read_direction; SPEC/WEB.md § Query-Bar Error Handling,
-	// rule 6). It is decided AFTER the read-only check because a statement that
-	// is BOTH an introspection command and a DDL statement — "SHOW INDEXES YIELD
-	// name CREATE INDEX …" — must be told that it writes; and it carries its own
-	// kind because a SHOW statement reads the schema and writes nothing, so
-	// reporting it as not read-only would be a false classification.
-	//
-	// The whole family is refused, at every keyword spacing, which is why the
-	// predicate is Introspect OR IntrospectMisspaced and not either alone: the
-	// two are mutually exclusive halves of one class, and this endpoint answers
-	// the same kind for both because on it both have the same cause and the same
-	// fix. cypherguard.IntrospectSpacingRejection is deliberately NOT called
-	// here — it is the CLI's rejection, and the CLI keeps it (SPEC/GRAPH.md
-	// § Keyword Spacing in a Schema-Introspection Command). The CLASSIFICATION is
-	// shared and identical; only the verdict differs.
-	//
-	// The refusal precedes execution and precedes the node-limit injection, so
-	// applyGraphLimit is never reached for such a statement and the question of
-	// whether it admits a LIMIT clause never arises (see admitsLimitClause).
-	if c := cypherguard.Classify(query); c.Introspect || c.IntrospectMisspaced {
-		return graphView{}, newGraphQueryError(graphErrSchemaIntrospection, graphSchemaIntrospectionReason)
-	}
-
-	// Relationship-read direction, last in the precedence order and, like the
-	// three above, decided before the store is opened and before the query ever
-	// reaches the engine (SPEC/GRAPH.md § Relationship Read Direction, which owns
-	// the rule; SPEC/WEB.md § Query-Bar Error Handling).
-	//
-	// It is decided LAST because every earlier objection outranks it: a query
-	// that writes must be told that it writes, and a schema-introspection command
-	// carries no relationship pattern to orient — which is also why its ordinal
-	// against this one is not reachable and must not be asserted by a test
-	// (SPEC/WEB.md § Query-Bar Error Handling, rule 6). The check runs on the
-	// query the caller supplied, before applyGraphLimit injects the node limit,
-	// because injecting a LIMIT changes no relationship pattern.
-	//
-	// The classifier is the SAME one the CLI subcommands use. There is one
-	// classification of pattern direction in this project, not a second copy that
-	// could drift: this endpoint executes caller-supplied Cypher through its own
-	// engine instance, so without it the identical misresolved read would remain
-	// reachable from the query bar after the CLI had been closed off.
-	if misread := cypherguard.MisreadRelationshipReferences(query); len(misread) > 0 {
-		return graphView{}, newGraphQueryError(
-			graphErrRelationshipDirection, graphRelationshipDirectionReason(misread[0]))
-	}
 
 	roadmapDir, err := utils.GetRoadmapDir(name)
 	if err != nil {
@@ -2042,8 +2050,11 @@ func loadGraphView(ctx context.Context, name, rawQuery, rawLimit string) (graphV
 	}
 	graphDir := filepath.Join(roadmapDir, "graph")
 
-	// A read must not create the graph store. If the directory is absent the
-	// roadmap simply has no graph yet — return the empty shape.
+	// The web interface creates no graph store. If the directory is absent the
+	// roadmap simply has no graph yet — return the empty shape. This holds for a
+	// statement that would have written, too: it is not executed, because there
+	// is nothing to execute it against and creating the store here is what
+	// SPEC/WEB.md § Security and Constraints rule 4 forbids.
 	//
 	// graphDir derives from name, which utils.GetRoadmapDir validated against
 	// the roadmap-name rules (^[a-z0-9_-]+$, no '/' and no '..') above, and the
@@ -2059,99 +2070,159 @@ func loadGraphView(ctx context.Context, name, rawQuery, rawLimit string) (graphV
 		return empty, nil
 	}
 
-	// Shared store lock, held across the store open ALONE, exactly as the CLI
-	// read subcommands hold it. It is taken because opening the store is not a
-	// read-only operation on disk: recovery repairs an interrupted checkpoint
-	// first, so an unlocked request could delete or race the staging directory
-	// a concurrent `rmp graph` write is publishing its snapshot from. Waiting
-	// for the lock is bounded by the project's single retry policy
-	// (internal/backoff) and is spent BEFORE the query starts, so it does not
-	// consume this endpoint's query time budget and stays well inside the
-	// server's write timeout; internal/graphlock's TestReaderWaitIsTheProjectPolicy
-	// is what holds that headroom. A wait that is exhausted
-	// returns a plain ErrDatabase, which handleGraphData answers with HTTP 500
-	// — the status it already returns for a store that cannot be opened
-	// (SPEC/WEB.md § Knowledge Graph from the GoGraph Store, rule 5).
+	// The store's advisory lock, taken EXCLUSIVELY before the open and held
+	// across everything that follows: the open, the statement, the commit, and
+	// any checkpoint. There is one lock mode because there is one execution
+	// path — the statement may write, and Groadmap does not examine it to find
+	// out, so a shared hold would be a shared hold held while a statement
+	// committed (SPEC/GRAPH.md § Concurrency and Recovery).
 	//
-	// It is released with an explicit call rather than a defer, on both the
-	// success and the failure path, so the hold cannot be silently widened to
-	// the query by a later edit: the server must not hold the lock for the
-	// duration of a request, or a slow query would fail a concurrent CLI write.
-	releaseLock, err := graphlock.AcquireShared(graphDir)
+	// The hold used to span the store open ALONE, and a test used to fail if it
+	// were widened. Widening it is exactly what the write path requires, and the
+	// cost is stated rather than hidden: a slow statement submitted through the
+	// query bar delays every other statement against the same roadmap until it
+	// finishes or its time budget expires, and two graph pages open on the same
+	// roadmap serialise (SPEC/WEB.md § Knowledge Graph from the GoGraph Store,
+	// rule 5).
+	//
+	// Waiting for the lock is bounded by the project's single retry policy
+	// (internal/backoff) and is spent BEFORE the statement starts, so it does
+	// not consume this endpoint's query time budget and stays well inside the
+	// server's write timeout. An exhausted wait returns a plain ErrDatabase,
+	// which handleGraphData answers with HTTP 500 — the status it already
+	// returns for a store that cannot be opened (SPEC/GRAPH.md § Lock
+	// Contention, rule 2).
+	releaseLock, err := graphlock.AcquireExclusive(graphDir)
 	if err != nil {
 		return graphView{}, err
 	}
-	res, openErr := recovery.Open[string, float64](graphDir, recovery.Options[string, float64]{
-		Codec:       txn.NewStringCodec(),
-		WeightCodec: txn.NewFloat64WeightCodec(),
-	})
-	releaseLock()
+	defer releaseLock()
+
+	res, openErr := recovery.Open[string, float64](graphDir, graphOpenOpts)
 	if openErr != nil {
 		return graphView{}, fmt.Errorf("%w: graph store unavailable: %v", utils.ErrDatabase, openErr)
 	}
 
-	// Constructed with the schema the store open recovered, and with NOTHING
-	// else: EngineOptions.Store is left unset, so this still opens neither a
-	// transactional store nor a write-ahead-log writer, which is the guarantee
-	// this endpoint depends on (SPEC/GRAPH.md § Engine Constructor by Path). The
-	// recovered constraints and indexes are what make a schema-introspection
-	// query report the schema the store actually holds instead of an empty
-	// listing (SPEC/GRAPH.md § Recovered Schema on Both Paths).
-	engine := cypher.NewEngineWithOptions(res.Graph, cypher.EngineOptions{
-		RecoveredConstraints: cypher.ConstraintDefsFromRecovery(res.Constraints),
-		RecoveredIndexes:     cypher.IndexDefsFromRecovery(res.Indexes),
+	w, walErr := openGraphWALWriter(filepath.Join(graphDir, "wal"))
+	if walErr != nil {
+		return graphView{}, walErr
+	}
+	// Registered after the lock, so it unwinds BEFORE the lock is released: the
+	// log is closed while this request still holds the store.
+	defer w.Close() //nolint:errcheck // close error is moot once the commit has been reported
+
+	store := txn.NewStoreWithOptions[string, float64](res.Graph, w, txn.Options[string, float64]{
+		Codec:       txn.NewStringCodec(),
+		WeightCodec: txn.NewFloat64WeightCodec(),
 	})
 
-	// Inject the node limit only when the (validated, read-only) query has no
-	// top-level LIMIT of its own AND is a statement form that admits a LIMIT
-	// clause at all. The original query — not the masked copy — is what executes;
-	// masking only governs the suppression checks and the guard-rail.
+	// The whole recovery result, not extracted fields: this constructor
+	// re-registers the recovered constraints and index definitions AND hydrates
+	// each index from the snapshot payload the same open returned, instead of
+	// rebuilding it by a full scan of the graph. res MUST be the result of the
+	// open that produced this store, a few lines above: a result from any other
+	// open would describe a different graph and neither the engine nor the store
+	// could detect the substitution (SPEC/GRAPH.md § Engine Constructor by Path).
+	engine := cypher.NewEngineWithStoreAndRecovery(store, res)
+
+	// Inject the node limit only when the query has no top-level LIMIT of its
+	// own AND is a statement form that admits a LIMIT clause. The original
+	// query — not the masked copy — is what executes; masking governs the
+	// suppression checks alone.
 	executed := applyGraphLimit(query, limit)
-	return runGraphViewQuery(ctx, engine, executed)
+
+	// The write-ahead log's durable offset BEFORE the statement runs. The
+	// checkpoint below is gated on this growing, because a transaction that
+	// appended nothing MUST NOT snapshot and MUST NOT truncate: an ordinary read
+	// would otherwise rewrite a full snapshot of the whole graph on every page
+	// load, and would shorten the history a later recovery replays
+	// (SPEC/GRAPH.md § What a Statement That Writes Nothing Changes on Disk,
+	// rules 2 and 3; SPEC/WEB.md Acceptance Criterion 19). The offset is the
+	// log's own answer to "did this transaction append", which is the question
+	// the specification asks — not a guess made from the statement's text.
+	walBefore := w.DurableOffset()
+
+	view, runErr := runGraphViewQuery(ctx, engine, executed)
+	if runErr != nil {
+		return graphView{}, runErr
+	}
+
+	// The transaction has committed durably; res.Graph now reflects the new
+	// state. A checkpoint failure AFTER a durable commit MUST NOT fail the
+	// request: the log is intact, recovery still works, and the next write
+	// reconciles the snapshot (SPEC/GRAPH.md § Synchronous Checkpoint on Write,
+	// failure policy). It is reported to the server log and the request still
+	// answers 200, which is the web analogue of the CLI's stderr diagnostic
+	// beside exit code 0.
+	if w.DurableOffset() > walBefore {
+		if cperr := checkpointGraphStore(engine, res.Graph, w, graphDir); cperr != nil {
+			slog.Error("graph checkpoint failed", "roadmap", name, "err", cperr)
+		}
+	}
+
+	return view, nil
 }
 
-// runGraphViewQuery executes a validated read-only query through the engine's
-// read path (Run, not RunInTx, so no write or checkpoint occurs), walks the
-// ENTIRE result, and assembles the Graph View Data shape (SPEC/WEB.md § Graph
-// Data Endpoint, result-to-graph extraction; SPEC/DATA_FORMATS.md § Graph View
-// Data). An engine failure (for example invalid Cypher syntax) is returned as a
-// classified execution-failure graphQueryError, distinct from a guard-rail
-// rejection.
+// runGraphViewQuery executes the caller's statement through the engine's
+// transactional dispatcher, walks the ENTIRE result, commits, and assembles the
+// Graph View Data shape (SPEC/WEB.md § Graph Data Endpoint, result-to-graph
+// extraction; SPEC/DATA_FORMATS.md § Graph View Data). A failure from the run,
+// from the walk, or from the commit is returned as a classified
+// execution-failure graphQueryError.
+//
+// The single engine call is RunAny, the same call `rmp graph execute` makes, and
+// for the same measured reason. RunAny is the engine's OWN transactional
+// dispatcher: it routes a statement carrying a writing clause to RunInTx and
+// every other statement to Run, so a write is committed atomically while
+// Groadmap still makes one call and examines nothing. Calling RunInTx directly
+// for everything loses a published behaviour: at the pinned engine a Result
+// produced by RunInTx carries NO plan-time notifications, while the same
+// statement through Run or RunAny carries the Cartesian-product advisory
+// (measured on GoGraph v0.12.0: Run and RunAny one notification each, RunInTx
+// nil). Run alone is not an option either — it REFUSES a write outright — and
+// that refusal is the defect this endpoint's move to the transactional path
+// repairs.
+//
+// The commit is result.Close(), not a deferred one. Close applies and commits
+// the write transaction and returns the commit error, so the result MUST be
+// fully drained and the view built BEFORE it is called, and its error MUST be
+// surfaced: a deferred Close would discard exactly the error that says the
+// caller's write did not land. A failure that surfaces from the commit is an
+// execution failure like any other, because it surfaced once the statement was
+// running (SPEC/WEB.md § Query-Bar Error Handling, rule 6).
 //
 // The whole of that execution runs under the per-request query time budget
 // (SPEC/WEB.md § Graph Query Time Budget). The deadline is derived HERE, and
 // not in loadGraphView, because rule 1 defines the budget as covering exactly
-// what this function does — the run against the engine's read path and the walk
-// over the result that run produces — and nothing else: resolving the limit,
-// the read-only guard rail, and opening the store are not query execution. The
-// walk MUST be inside the deadline and not merely the Run: the engine streams a
-// disconnected pattern's tuples as the result is iterated, so a Cartesian
-// product's cost is paid during result.Next(), and Run returns a nil error long
-// before it. A deadline covering only Run would therefore bound nothing.
+// what this function does — the run against the engine and the walk over the
+// result that run produces — and nothing else: resolving the limit, taking the
+// lock, and opening the store are not statement execution. The walk MUST be
+// inside the deadline and not merely the Run: the engine streams a disconnected
+// pattern's tuples as the result is iterated, so a Cartesian product's cost is
+// paid during result.Next(), and Run returns a nil error long before it. A
+// deadline covering only Run would therefore bound nothing.
 //
 // Deriving it from ctx (context.WithTimeout, not context.WithDeadline on a
 // fresh context) keeps the two cancellation sources composed, per rule 2: a
-// client that disconnects still cancels the query immediately, and a client
+// client that disconnects still cancels the statement immediately, and a client
 // that stays connected can no longer hold it beyond the budget.
 func runGraphViewQuery(ctx context.Context, engine *cypher.Engine, query string) (graphView, error) {
 	// Read the budget once so the deadline that fires and the message that
 	// reports it can never disagree.
 	budget := graphQueryBudget
 	budgeted, cancel := context.WithTimeout(ctx, budget)
-	// Deferred FIRST, so it unwinds LAST: result.Close() below still runs on a
-	// live context. Releasing the timer here also means the budget is strictly
-	// per request and nothing outlives the call (rule 7).
+	// Releasing the timer here means the budget is strictly per request and
+	// nothing outlives the call (rule 7).
 	defer cancel()
 
-	result, err := engine.Run(budgeted, query, nil)
+	result, err := engine.RunAny(budgeted, query, nil)
 	if err != nil {
 		return graphView{}, graphExecutionError(ctx, budget, err)
 	}
-	defer result.Close() //nolint:errcheck // read path; close commits nothing
 
 	// Collect every node and relationship anywhere in the result, deduplicated
-	// by id. nodeIDs records which node ids were collected so orphan edges (an
-	// edge whose start or end node was not collected) can be dropped afterwards.
+	// by id. A statement with no RETURN clause has no columns and yields no
+	// rows; the loop simply drains it, which is what allows the commit below.
 	c := newGraphCollector()
 	cols := result.Columns()
 	for result.Next() {
@@ -2162,8 +2233,14 @@ func runGraphViewQuery(ctx context.Context, engine *cypher.Engine, query string)
 			}
 		}
 	}
-	if err := result.Err(); err != nil {
-		return graphView{}, graphExecutionError(ctx, budget, err)
+	if iterErr := result.Err(); iterErr != nil {
+		// Close rolls the transaction back on an iteration failure; its own
+		// error is moot beside the failure that caused it.
+		_ = result.Close() //nolint:errcheck // roll back; the iteration error is the one to report
+		return graphView{}, graphExecutionError(ctx, budget, iterErr)
+	}
+	if cerr := result.Close(); cerr != nil {
+		return graphView{}, graphExecutionError(ctx, budget, cerr)
 	}
 
 	return c.view(), nil
