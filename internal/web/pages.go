@@ -344,12 +344,12 @@ func handleGraphPage(w http.ResponseWriter, r *http.Request) {
 // § Graph Query Bar). The user-supplied query is validated as read-only by the
 // shared guard-rail BEFORE execution, so a writing or DDL query never runs.
 //
-// A classified query-bar failure (the query was rejected as not read-only, the
-// limit was invalid, or the accepted query failed in the engine) is returned to
-// the client as a structured, read-only JSON error with HTTP 400 so the page can
-// surface the distinct in-place, non-fatal message; the failure triggers no
-// write, no checkpoint, and no navigation (SPEC/WEB.md § Query-Bar Error
-// Handling). Any other (internal I/O) error is a 500.
+// A classified query-bar failure is returned to the client as a structured,
+// read-only JSON error with HTTP 400 so the page can surface the distinct
+// in-place, non-fatal message; the failure triggers no write, no checkpoint, and
+// no navigation. The failure classes are enumerated in one place only —
+// SPEC/WEB.md § Query-Bar Error Handling, rule 5 — which this comment names
+// rather than repeats. Any other (internal I/O) error is a 500.
 func handleGraphData(w http.ResponseWriter, r *http.Request) {
 	name, ok := resolveRoadmap(w, r)
 	if !ok {

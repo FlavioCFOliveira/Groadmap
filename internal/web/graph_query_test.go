@@ -542,11 +542,14 @@ func TestHandleGraphData_QueryBarRejectionPrecedesStoreOpen(t *testing.T) {
 		{"invalid limit alone", url.Values{"limit": {"7"}}, graphErrInvalidLimit},
 		{"not read-only alone", url.Values{"q": {`MATCH (n) DELETE n`}}, graphErrNotReadOnly},
 		{"both wrong at once", url.Values{"limit": {"7"}, "q": {`MATCH (n) DELETE n`}}, graphErrInvalidLimit},
-		// The keyword-spacing rejection is a guard-rail rejection of the same
+		// The schema-introspection refusal is a guard-rail rejection of the same
 		// nature and carries the same guarantee: it too is decided before the
-		// store is opened, which the unopenable store proves here.
-		{"introspection keyword spacing alone", url.Values{"q": {"SHOW  INDEXES"}}, graphErrInvalidKeywordSpacing},
-		{"invalid limit outranks keyword spacing", url.Values{"limit": {"7"}, "q": {"SHOW  INDEXES"}}, graphErrInvalidLimit},
+		// store is opened, which the unopenable store proves here. Both
+		// spellings are probed, because the refusal covers the class at every
+		// keyword spacing and both must be decided this early.
+		{"schema introspection alone", url.Values{"q": {"SHOW INDEXES"}}, graphErrSchemaIntrospection},
+		{"schema introspection, badly spaced, alone", url.Values{"q": {"SHOW  INDEXES"}}, graphErrSchemaIntrospection},
+		{"invalid limit outranks the schema-introspection refusal", url.Values{"limit": {"7"}, "q": {"SHOW INDEXES"}}, graphErrInvalidLimit},
 		// The relationship-read-direction rejection carries the same guarantee:
 		// it is decided from the PARSED query, before the store is opened, which
 		// the unopenable store proves here.
@@ -575,8 +578,9 @@ func TestHandleGraphData_QueryBarRejectionPrecedesStoreOpen(t *testing.T) {
 }
 
 // TestHandleGraphData_ErrorBodyShape pins the failure body's exact field set for
-// each of the four failure classes: exactly two fields, `error` and `kind`, both
-// strings and both non-empty, and neither `nodes` nor `edges`
+// every failure class the endpoint publishes — the set enumerated in
+// SPEC/WEB.md § Query-Bar Error Handling, rule 5 — exactly two fields, `error`
+// and `kind`, both strings and both non-empty, and neither `nodes` nor `edges`
 // (SPEC/DATA_FORMATS.md § Graph View Data, Error Shape, rule 1; Acceptance
 // Criterion 123).
 //
@@ -596,7 +600,7 @@ func TestHandleGraphData_ErrorBodyShape(t *testing.T) {
 	}{
 		{"not read-only", url.Values{"q": {`MATCH (n) DELETE n`}}, graphErrNotReadOnly},
 		{"invalid limit", url.Values{"limit": {"7"}}, graphErrInvalidLimit},
-		{"invalid keyword spacing", url.Values{"q": {"SHOW  INDEXES"}}, graphErrInvalidKeywordSpacing},
+		{"schema introspection", url.Values{"q": {"SHOW INDEXES"}}, graphErrSchemaIntrospection},
 		{"relationship read direction", url.Values{"q": {`MATCH (a)-[e]-(b) RETURN type(e)`}}, graphErrRelationshipDirection},
 		{"execution failure", url.Values{"q": {`MATCH (n) RETURN`}}, graphErrExecution},
 	}

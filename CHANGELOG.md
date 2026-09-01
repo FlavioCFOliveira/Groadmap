@@ -7,6 +7,450 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.15.2] - 2026-09-01
+
+**The release in which the knowledge graph gains a schema.** `rmp graph update` becomes
+the subcommand through which a roadmap's graph indexes and constraints are created,
+listed and dropped. One sprint, five tasks, one feature commit. The sprint set out to
+survey what the backing engine offers, and found something else: of the four obstacles
+between Groadmap and index management, **three were Groadmap's own defects and not one
+of them was visible from outside**. The fourth is upstream and remains.
+
+**The number is `1.15.2`, and it is neither a pure `PATCH` nor backward compatible.**
+`SPEC/VERSION.md` defines `PATCH` as "Bug fixes, backward compatible". This release
+satisfies neither half exclusively. It adds a **feature** — schema management, a new
+`SPEC/GRAPH.md § Schema Management` and acceptance criteria 62 to 69 — which the policy
+classifies as `MINOR`. It also **narrows three published contracts**, each of which
+breaks an invocation that succeeded on `1.15.1`, which a strict reading of Semantic
+Versioning 2.0.0 classifies as `MAJOR`. `1.16.0` was recommended and not taken; `2.0.0`
+was declined as signalling a larger rupture than the changes' real reach. The project
+publishes `1.15.2` by the owner's explicit decision, recorded with its reasoning under
+**Notes** so it can be reviewed rather than inferred. **The number warns nobody about
+what breaks, and it announces nothing about what is new.** Read **Added** for the
+feature and **Changed — BREAKING** for what stops working.
+
+**What was silently wrong before is the most consequential part of this release.** The
+graph checkpoint — which runs after *every* graph write — wrote a snapshot carrying no
+schema at all, and then truncated the write-ahead log in which the `CREATE INDEX` and
+`CREATE CONSTRAINT` events were the only surviving record. Both engine constructors then
+discarded whatever schema the store open did recover. **A `UNIQUE` constraint therefore
+stopped being enforced across a restart and admitted duplicates in silence**, and
+`SHOW INDEXES` reported an empty schema whatever the store held. None of it was
+reachable through `rmp` on `1.15.1`, because the guard rail refused every DDL clause on
+all five subcommands — which is precisely what kept the defects invisible, and what
+would have made this release's feature inert had the two shipped together.
+
+The dependency moves to **GoGraph v0.12.0**, a non-breaking pre-1.0 `MINOR` release.
+There is **no database migration**: the SQLite schema version is unchanged.
+
+**No performance win is claimed, because none was measured.** See **Notes**, which also
+corrects a figure this project had been repeating.
+
+### Added
+
+- **`rmp graph update` is the schema subcommand of the knowledge graph.** It is the only
+  `graph` subcommand that accepts more than one operation class, and it accepts three:
+  the `SET`/`REMOVE` write it already accepted, schema-mutating DDL, and schema
+  introspection. `create`, `query`, `delete` and `search` are unchanged and keep
+  refusing every DDL clause; `query` and `search` keep accepting introspection as the
+  read-only class it always was.
+
+  The accepted forms, established from the pinned engine rather than from what a graph
+  engine is assumed to offer:
+
+  ```
+  CREATE INDEX [name] [IF NOT EXISTS] FOR (n:Label) ON (n.property)
+                                      [OPTIONS {indexType: 'hash' | 'btree'}]
+  DROP INDEX <name> [IF EXISTS]
+  CREATE CONSTRAINT [name] [IF NOT EXISTS] FOR (n:Label)
+                           REQUIRE n.property IS UNIQUE | IS NOT NULL
+  DROP CONSTRAINT <name> [IF EXISTS]
+  SHOW INDEXES | SHOW CONSTRAINTS   (singular aliases accepted;
+                                     optional YIELD / WHERE / RETURN tail)
+  ```
+
+  Constraints are in scope deliberately, beyond the sprint's own title, so that one
+  subcommand owns the schema rather than two-thirds of it.
+
+- **Worked example.** Each line is a separate process invocation, and that is the point:
+  the schema survives between them.
+
+  ```bash
+  rmp graph update -r myproject --query "CREATE INDEX spec_key FOR (n:Spec) ON (n.key)"
+  # {"ok": true}
+
+  rmp graph update -r myproject --query "SHOW INDEXES"
+  # {"columns":["name","state","type","entityType","labelsOrTypes","properties"],
+  #  "rows":[["spec_key","ONLINE","hash","NODE",["Spec"],["key"]]]}
+
+  rmp graph update -r myproject --query "DROP INDEX spec_key"
+  # {"ok": true}
+  ```
+
+- **Index kinds are `hash` (the default) and `btree`**, selected with
+  `OPTIONS {indexType: 'btree'}`. They are GoGraph's own vocabulary and deliberately not
+  Neo4j's `RANGE`/`TEXT`/`POINT`. An index or a constraint covers a **single node
+  property**: composite and relationship-property forms are refused by the engine.
+  `state` is always `ONLINE`, because every index is built synchronously, and
+  `entityType` is always `NODE`.
+
+- **Naming.** A declared name is used verbatim, with no suffix appended. An omitted name
+  is derived as `<lowercased label>_<property>_<type>`, so
+  `CREATE INDEX FOR (n:Spec) ON (n.title)` becomes `spec_title_hash`. Removal is by name
+  only, and `SHOW INDEXES` is the authoritative report of the name an unnamed object was
+  given.
+
+- **Altering and recreating an index are `DROP` then `CREATE`, in two invocations, and
+  they cannot be made atomic.** The engine has no `ALTER INDEX`; `REBUILD INDEX` and
+  `CREATE OR REPLACE INDEX` do not exist either, and all three were probed directly
+  against the parser at v0.12.0 rather than inferred from documentation, each failing
+  with `cypher: parse: unexpected "<KEYWORD>" at 1:0`. Atomicity is not merely absent
+  but unreachable: schema DDL does not run inside a transaction, so no invocation can
+  wrap the pair. **Between the two, the index does not exist**, and a failure of the
+  second half leaves it dropped and not recreated. Both halves are O(N) in the label's
+  population, because `CREATE INDEX` back-fills from the data already in the graph.
+
+- **One statement per invocation**, enforced by Groadmap rather than delegated. A schema
+  statement carrying a further clause is refused with exit `6` before the store is
+  opened. The check is structural — it walks the engine's own DDL grammar to find where
+  the statement ends — and never a search of the query text for clause keywords, so a
+  property legitimately named after a clause is accepted:
+  `CREATE INDEX spec_set FOR (n:Spec) ON (n.set)` creates an index on a property called
+  `set`. Before refusing, the mirror is checked against the engine's real parser and the
+  statement is admitted whenever the two disagree, so a mirror that drifts fails open.
+  See **Notes** for the upstream defect that makes the rule necessary.
+
+- **Output shape.** A schema-mutating statement returns `{"ok": true}`; a
+  schema-introspection command returns the `{columns, rows}` listing **although it
+  carries no `RETURN` clause**, and the listing is identical to the one the same command
+  returns under `rmp graph query`. `SPEC/DATA_FORMATS.md § Graph Write Result` therefore
+  changes its discriminator from "has a `RETURN` clause" to "produces result columns";
+  for every data-writing query the two coincide exactly, and they part company only on
+  the schema statements.
+
+- **Failure classes and their exit codes**, which are not the ones a reader expects.
+  Exit `6` is the guard rail: an operation-class mismatch, a `SHOW` whose two keywords
+  are not separated by exactly one space, or a second clause after a schema statement.
+  Exit **`1`** is the engine: a duplicate `CREATE INDEX` or `CREATE CONSTRAINT`, a
+  `DROP` naming an object that does not exist, a definition the engine does not support,
+  and a `CREATE CONSTRAINT` the data already in the graph does not satisfy. Groadmap
+  cannot know whether an object exists without opening the store, so the check belongs
+  to the engine. Write `IF NOT EXISTS` or `IF EXISTS` to make either a silent no-op.
+
+- **A DDL statement whose keywords are irregularly spaced is admitted by the guard rail
+  and refused by the engine at exit `1`**, with the engine's parse diagnostic rather
+  than a spacing message. This is the cost of the DDL matcher's deliberate whitespace
+  tolerance, and it is specified rather than tolerated: the matcher is wide because its
+  job on the other four subcommands is to *refuse*, and narrowing it to improve one
+  diagnostic would reopen the hole those four depend on. Nothing is created and the
+  graph is byte-identical afterwards.
+
+- **The AI contract gains two pitfalls** — `graph_schema_two_statements_in_one_query`
+  and `graph_schema_failure_exit_code` — and `graph_guard_rail_mismatch` is rewritten to
+  say that `update` accepts three classes. The `graph` and `graph update` help screens
+  document the accepted statements, the one-statement rule, the absent `ALTER INDEX`,
+  and both exit codes.
+
+- **`tests/test_64_graph_schema_management.py`**, a new E2E module that drives durability
+  across the process boundary, the exit codes, and cross-surface agreement. The suite
+  grows from 62 registered modules to **63**.
+
+### Changed — BREAKING
+
+- **The web graph data endpoint refuses a schema-introspection command: HTTP `200`
+  becomes HTTP `400`.** `GET /roadmaps/<roadmap>/graph/data?q=SHOW INDEXES` returned
+  `{"nodes":[],"edges":[]}` at HTTP `200` — an empty graph presented as the answer, with
+  nothing to distinguish it from a query that genuinely matched nothing. It now answers
+  HTTP `400` with the `schema_introspection` kind and a message naming `rmp graph query`
+  as where a schema listing is obtained. The same holds for `SHOW CONSTRAINTS` and both
+  singular aliases.
+
+  | Invocation | On `1.15.1` | On `1.15.2` |
+  |------------|-------------|-------------|
+  | `?q=SHOW INDEXES` | `200`, `{"nodes":[],"edges":[]}` | **`400`**, `kind: schema_introspection` |
+  | `?q=SHOW CONSTRAINTS` | `200`, `{"nodes":[],"edges":[]}` | **`400`**, `kind: schema_introspection` |
+  | `?q=SHOW  INDEXES` (two spaces) | `400`, `kind: invalid_keyword_spacing` | **`400`**, `kind: schema_introspection` |
+  | `?q=MATCH (n) RETURN n` | `200` | `200` — unchanged |
+
+  Measured on both binaries against the same store. **Migration:** a caller that reads a
+  schema listing through the web endpoint must move to `rmp graph query` or
+  `rmp graph update`, which report it in full. The page draws a graph of nodes and
+  edges; its response shape carries no tabular rows, and rendering one would have meant
+  changing the response shape, the handler and the front end.
+
+- **`invalid_keyword_spacing` is withdrawn from the web endpoint's published `kind`
+  enum**, replaced by `schema_introspection`. The set stays closed at **five** values:
+  `not_read_only`, `invalid_limit`, `schema_introspection`,
+  `relationship_read_direction`, `execution`. Removing a published value is a contract
+  narrowing rather than an addition, and it was chosen deliberately: with the class
+  refused outright at every spacing, a spacing complaint would have prescribed a
+  correction that does not work and sent the caller round a loop ending in the same
+  refusal — two kinds, one correction, two round trips.
+
+  **Migration:** a client that branches on `kind` must rename the case. **The CLI is
+  untouched** and keeps the keyword-spacing rejection on `graph query`, `graph search`
+  and now `graph update`, because those surfaces *accept* the class and there the
+  spacing genuinely is the whole objection. The two surfaces share the classification
+  and differ only in the verdict; the divergence is specified in both directions in
+  `SPEC/GRAPH.md § Keyword Spacing in a Schema-Introspection Command`, which is
+  canonical for it.
+
+- **The `graph update` operation-class refusal is retired and replaced.** The string
+  `graph update accepts only SET/REMOVE queries` no longer exists in the binary. The
+  line is now:
+
+  ```
+  Error: validation error: graph update accepts only SET/REMOVE, index/constraint DDL, and schema-introspection queries
+  ```
+
+  The exit code is unchanged at `6` and the condition is unchanged: a data-writing
+  `CREATE`, `MERGE`, `DELETE` or `DETACH DELETE` under `graph update`. Only the wording
+  moved, and it had to: a message naming one class would send a caller looking for a
+  schema subcommand that does not exist. `SPEC/COMMANDS.md § Published Error Strings Are
+  Exact` publishes the string verbatim and `tests/test_55_error_string_parity.py` drives
+  the published corpus against the binary, so the two are one contract.
+
+  **Migration:** any automation, test, or log matcher that compares this line exactly
+  must be updated. The other four subcommands' refusals are byte-identical to `1.15.1`.
+
+- **A fourth change was reported as breaking and, measured, is not.** `graph update` now
+  refuses a schema statement carrying a further clause. On `1.15.1` the same query
+  already exited `6` — refused by the class rule, because `graph update` accepted no DDL
+  at all — so **no invocation that succeeded on `1.15.1` fails because of this rule**;
+  only the message changed. Both binaries were run to establish that rather than reading
+  it off the diff. The rule is nevertheless load-bearing, because without it the new
+  feature would have inherited the engine's silent discard described under **Notes**;
+  it is documented under **Added**, where it belongs.
+
+### Fixed
+
+- **The graph checkpoint erased every index and constraint definition from disk.** This
+  is the defect that reshaped the sprint, and it applied to constraints exactly as to
+  indexes. `checkpointGraph` wrote the snapshot with
+  `snapshot.WriteSnapshotFullWithMapperCodec`, which persists **no schema at all**, and
+  then truncated the write-ahead log — where the `CREATE INDEX` events were the only
+  surviving record. `runGraphWrite` performs that checkpoint after **every** graph write.
+  Measured on `1.15.1`: `recovery.Open` reported `Indexes=1` before the checkpoint and
+  **`Indexes=0`** after it. The definition was not merely invisible to the wrong
+  constructor; it was gone from disk, and no constructor could recover what no longer
+  existed.
+
+  **What that costs is not a missing listing.** A `UNIQUE` constraint whose definition
+  has been erased **stops being enforced the moment the process exits**, and the next
+  write admits the duplicate it would have refused, with no error anywhere.
+
+  The snapshot is now written with
+  `snapshot.WriteSnapshotFullWithMapperCodecConstraintsAndIndexDefs`, fed from
+  `Engine.ConstraintSpecsForSnapshot()` and `Engine.IndexSpecsForSnapshot()`.
+  `checkpointGraph` takes the **engine** as a parameter rather than the two slices, so it
+  reads them itself at the one moment they are correct — from the engine that just ran
+  the statement, and **before** the log is truncated. That ordering is load-bearing and
+  is specified as such.
+
+- **Both engine constructors discarded the recovered schema.** `recovery.Open` returned
+  the durable definitions correctly and neither constructor Groadmap used re-registered
+  them, so `SHOW INDEXES` answered **zero rows at exit `0`** whatever the store held, and
+  `DROP INDEX` failed with `index: no index by that name`. The read path moves from
+  `cypher.NewEngine` to `cypher.NewEngineWithOptions` carrying the recovered constraints
+  and indexes — **still opening neither a transactional store nor a write-ahead-log
+  writer**, which is the guarantee the read path and the web interface depend on. The
+  write path moves from `cypher.NewEngineWithStore` to
+  `cypher.NewEngineWithStoreAndRecovery`.
+
+  A second symptom of the write-path constructor is worth naming, because it is quiet:
+  under the old constructor the engine **auto-registered** recovered constraints under
+  **synthesised** names — `recovered_unique_Spec_key` in place of the declared
+  `spec_key_uq` — so a constraint that survived could not be dropped by the name its
+  author gave it.
+
+- **The web graph data endpoint answered schema introspection with an empty graph.**
+  Covered above under **Changed — BREAKING**; it is recorded here too because the old
+  behaviour was a defect and not merely a different contract. The endpoint accepted the
+  statement, executed it, and had nowhere to put the result, so it returned an empty
+  graph at HTTP `200`.
+
+- **`rmp graph query` and `rmp graph search` report the schema the store actually
+  holds.** Both accepted `SHOW INDEXES` and `SHOW CONSTRAINTS` on `1.15.1` and answered
+  zero rows regardless. The shape and the exit code are unchanged, so this is a **silent
+  change in output** rather than a loud one — and it is unreachable in practice on an
+  existing roadmap, because no `rmp` path on `1.15.1` could register a schema for the
+  listing to omit.
+
+- **Four false statements in `DOCS/commands/graph.md`** — that schema introspection is
+  rejected by the write subcommands, that DDL is rejected by every subcommand, the
+  `update` row's Rejects column, and the claim that the keyword-spacing rule applies
+  under `query` and `search` only. No test gated that file, which is why the suite was
+  green with it stale. The `update` section now documents every accepted statement with
+  runnable examples, all of which were executed against a freshly built binary.
+
+- **Three stale failure-class counts in code comments and one in documentation.**
+  `internal/web/data.go` said "The four kinds" over a block holding five;
+  `internal/web/static/graph.js` said "three"; the `handleGraphData` doc comment in
+  `internal/web/pages.go` enumerated three of five; and `DOCS/commands/web.md` was two
+  kinds behind, missing `relationship_read_direction`. Each now names the single
+  canonical enumeration — `SPEC/WEB.md § Query-Bar Error Handling`, rule 5 — instead of
+  repeating the list, which is what let four copies drift apart.
+
+- **Fourteen sentences across `SPEC/` had become false and were corrected**, four of them
+  invalidated by this sprint's own design. One had gone unnoticed since long before:
+  `SPEC/DATA_FORMATS.md` stated that a query without a `RETURN` clause outputs exactly
+  `{"ok": true}`, which `SHOW INDEXES` falsifies.
+
+### Changed — toolchain and dependencies
+
+- **GoGraph `v0.11.0` → `v0.12.0`.** A pre-1.0 `MINOR` release, non-breaking by its own
+  audit: no exported identifier removed, no exported signature changed, no exported
+  struct field dropped, and 51 exported identifiers added. The openCypher TCK gate is
+  unchanged at **3897/3897**, over the same scenario population. The release is the
+  product of a deterministic-simulation-testing campaign that found **50 module
+  defects**, five of the severity-9 ones silent. GoGraph's own `go` directive stays at
+  `go 1.26`, so Groadmap's Go floor of `1.27.0` is unaffected.
+
+  The upgrade was performed mid-sprint to re-test whether the two surveyed engine
+  limitations still held — **they do**, and every finding was re-measured at v0.12.0
+  rather than carried over. It then turned out to bring something the survey had missed:
+  `cypher.NewEngineWithStoreAndRecovery` (`cypher/index_hydration.go`), in a file that
+  does not exist at v0.11.0, which GoGraph names **the recommended constructor for
+  opening a persisted store**. It hydrates each index from the snapshot payload instead
+  of rebuilding it by a full graph scan, and forgetting it is silent — the engine still
+  opens and still answers correctly. For a CLI that opens the store, runs one statement
+  and exits, "on every restart" means **on every invocation**.
+
+- `github.com/RoaringBitmap/roaring/v2` `v2.24.0` → `v2.26.0`, indirect, pulled by
+  GoGraph.
+
+- `SPEC/BUILD.md` and `SPEC/GRAPH.md § Dependency` record the new pin. GoGraph remains
+  pinned to an exact tag.
+
+### Internal
+
+- `internal/cypherguard/schemastatement.go`, the structural mixed-statement detector, with
+  its own test file. Three simpler mechanisms were rejected with evidence, one of them
+  subtle: probing the engine's DDL parser on shrinking prefixes is **unsound**, because
+  `parseIndexOptions` returns successfully with no closing brace, so a statement ending
+  in `OPTIONS {indexType:'hash'}` has a strict prefix that parses to an identical plan.
+- `internal/commands/graph_schema_durability_test.go`, four regression tests proved by
+  three separate mutations, because three independent defects produce the same zero-row
+  symptom. One asserts the write-ahead log is **0 bytes** before reading anything back,
+  so a pass cannot come from the log still holding the events; another asserts its own
+  control first, so it states something about the constructor rather than about the store.
+- `internal/web/graph_schema_introspection_test.go`, proved by five mutations, seeding a
+  real index and constraint so the refusal is refusing a statement that would have had an
+  answer.
+- `SPEC/GRAPH.md` gains `## Schema Management` with six subsections, and
+  `Operation Classes`, `Per-Subcommand Validation Rules`, `Keyword Spacing`,
+  `Engine Constructor by Path`, `Synchronous Checkpoint on Write` and `Error Handling`
+  are rewritten. Seven `SPEC/` files changed.
+
+### Notes
+
+- **On the Semantic Versioning classification.** `SPEC/VERSION.md` classifies new
+  backward-compatible functionality as `MINOR` and an incompatible change as `MAJOR`.
+  This release contains both, so no single class fits it, and the number was decided
+  rather than derived. Three readings were put to the owner with the evidence:
+
+  - **`2.0.0`** — the strict reading. Three published contracts were narrowed, and
+    Semantic Versioning 2.0.0 makes an incompatible change to a public API a `MAJOR`
+    change without regard to how small the reach is.
+  - **`1.16.0`** — the recommended reading, and **not taken**: the release's defining
+    change is a new feature, and `MINOR` is the class that announces one.
+  - **`1.15.2`** — chosen by the owner's explicit decision.
+
+  The reasoning for the choice, recorded so it can be reviewed: the narrowed contracts
+  are all on the graph surface's edges — one machine-readable enum value on a read-only
+  local web page, one status code on the same page, and one CLI error string — while the
+  surface at large is a roadmap-authoring CLI rather than a library API that other code
+  links against, with no compilation to break and no dependency resolver to mislead;
+  and every incompatibility fails loudly and immediately rather than silently altering a
+  result.
+
+  **That does not soften the incompatibility, and it does not make this release a
+  routine patch.** A reader who sees `1.15.1 → 1.15.2` and expects a drop-in replacement
+  will be wrong about three things, and a reader who concludes there is nothing new to
+  try will be wrong about the whole point of the release. The classification is a project
+  decision; both the incompatibility and the feature are facts, and all three are stated
+  here. This release states its own reading. `1.15.1` reached a comparable conclusion on
+  different grounds and is not cited as cover for this one.
+
+- **Do not run a `1.15.1` or older binary against a graph that carries schema.** This is
+  the release's one real upgrade hazard, and it is a consequence of the checkpoint fix
+  rather than of the feature. **Measured**, on a store holding one index and one enforced
+  `UNIQUE` constraint: a `1.15.1` binary *reads* the store correctly, but its first
+  **successful** graph write checkpoints through the old snapshot writer, and afterwards
+  `constraints.bin` and `indexdefs.bin` are gone from `<roadmap>/graph/snapshot/`,
+  `SHOW INDEXES` and `SHOW CONSTRAINTS` return zero rows, and **a duplicate that the
+  constraint had refused a moment earlier is accepted at exit `0`**. Nothing warns you.
+  Replace the binary on `PATH` before writing to a graph that has a schema. A roadmap
+  whose graph carries no schema is unaffected, and the snapshot for such a graph is
+  structurally unchanged, because the writer omits a component whose slice is empty.
+
+- **The upstream defect that remains, and why Groadmap refuses mixed statements itself.**
+  The engine's DDL sub-parser stops as soon as its grammar is satisfied and **discards
+  the rest of the statement with no error, no notification and no other trace**, returning
+  success. Measured at v0.12.0 on all four schema-mutating forms. The dangerous shape is
+  not garbage but a valid second clause:
+
+  ```
+  CREATE INDEX ix FOR (n:Spec) ON (n.key) MATCH (m:Spec) SET m.reviewed = true
+  ```
+
+  which creates the index, silently drops the `MATCH ... SET`, and exits `0` with
+  `n.reviewed` still `null`. The defect is confined to that one sub-parser: the `SHOW`
+  parser and the general Cypher grammar both reject a trailing tail correctly, so it is a
+  gap rather than a policy. It is not filed upstream; it is recorded here and in the
+  knowledge graph so the next GoGraph bump can re-test it.
+
+- **On scale, and a correction to a figure this project had been repeating.** The work
+  was justified throughout on the ground that "the engine's planner does not seek below
+  1024 nodes per label", so no index on a roadmap-sized graph could ever be used. **That
+  figure is stale.** It is `rangeSeekMinLabelPopulation`, and it was `1024` at
+  GoGraph v0.11.0 and is **`64`** at v0.12.0 (`cypher/range_seek_plan.go`), lowered
+  upstream after measurement showed the old floor suppressing the index across the whole
+  range where it wins. The premise was read at v0.11.0 and carried through the upgrade
+  without being re-read.
+
+  So the reasoning no longer holds as it was stated. This project's own graph holds
+  **710 nodes**, and four of its labels are above the new floor — `Test` 278,
+  `Requirement` 142, `Memory` 121, `CodeFile` 111 — where none was above the old one.
+
+  **No performance win is claimed even so, because none was measured.** Measured through
+  the CLI over a 300-node label, ten invocations each: **10 ms per invocation with no
+  index and 10 to 11 ms with one**. Process start and store open dominate, and at
+  roadmap scale any planner effect is below the noise this project can observe. What
+  this release delivers is that a schema can exist, survive a checkpoint, and go on being
+  enforced — not that a query got faster.
+
+- **No database migration, and no JSON key changed on any existing command.** The SQLite
+  schema version is unchanged. The graph snapshot gains two components,
+  `constraints.bin` and `indexdefs.bin`, and only for a graph that has a schema.
+
+- **The pre-release vulnerability check was run and is clean.** `govulncheck ./...`
+  reports `No vulnerabilities found` at exit `0` against the exact tree being released,
+  on the Go 1.27.0 toolchain with scanner v1.7.0 and a database updated 2026-08-28.
+
+- **Known issues are listed in `release-notes/v1.15.2-20260901.md`, and nothing there was
+  copied forward on trust.** Each item states how it was checked for this release. The one
+  that can affect a user in normal use — a stranded `snapshot.bak` stopping every later
+  checkpoint while the write still exits `0` — was **reproduced on this tree at GoGraph
+  v0.12.0**; the snapshot archive step was read in both engine versions and is
+  byte-for-byte the same, so the dependency bump neither fixed nor worsened it. This
+  release makes it matter more than it did, because the snapshot now carries the schema.
+  Two items `1.15.1` recorded were **not** re-verified in this cycle and are deliberately
+  not repeated; they are named in the release notes rather than dropped in silence.
+
+- See `SPEC/GRAPH.md § Schema Management`, `§ Accepted Schema Statements`,
+  `§ Schema Object Names`, `§ One Statement per Invocation`,
+  `§ Altering and Recreating an Index`, `§ Schema Failure Classes`,
+  `§ Recovered Schema on Both Paths`, `§ Engine Constructor by Path`,
+  `§ Synchronous Checkpoint on Write`, `§ Per-Subcommand Validation Rules` and
+  `§ Keyword Spacing in a Schema-Introspection Command`, with acceptance criteria 62 to
+  69; `SPEC/WEB.md § Query-Bar Error Handling` (rules 5 and 6, case 10) and
+  `§ Graph Data Endpoint`; `SPEC/COMMANDS.md § Graph Management` and `§ Published Error
+  Strings Are Exact`; `SPEC/DATA_FORMATS.md § Graph Write Result` and `§ Graph View
+  Data`; `SPEC/ARCHITECTURE.md § Exit Codes`;
+  `SPEC/HELP.md § Graph family help specifics`; and
+  `SPEC/BUILD.md § External Dependencies`.
+
 ## [1.15.1] - 2026-08-26
 
 A correctness release, and nothing else. Two sprints — **90 completed tasks across 87
@@ -2114,6 +2558,7 @@ behaviour.
   AI-contract E2E suite (`tests/test_30_aihelp_contract.py`) to lock in the
   revised help text and contract invariants.
 
+[1.15.2]: https://github.com/FlavioCFOliveira/Groadmap/compare/v1.15.1...v1.15.2
 [1.15.1]: https://github.com/FlavioCFOliveira/Groadmap/compare/v1.15.0...v1.15.1
 [1.15.0]: https://github.com/FlavioCFOliveira/Groadmap/compare/v1.14.0...v1.15.0
 [1.14.0]: https://github.com/FlavioCFOliveira/Groadmap/compare/v1.13.3...v1.14.0

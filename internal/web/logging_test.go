@@ -339,6 +339,49 @@ func TestGraphQueryBarFailureIsWarnLogged(t *testing.T) {
 	}
 }
 
+// TestGraphSchemaIntrospectionRefusalIsWarnLogged asserts the same for the
+// schema-introspection refusal, the newest member of the endpoint's failure set
+// (rmp task #344). Acceptance Criterion 142 binds EVERY query-bar failure
+// "whatever its kind", so a class added to the contract has to arrive on the
+// console under the same rule as the others: exactly one WARN, carrying that
+// kind and the same reason the JSON body carries.
+//
+// It is asserted separately rather than assumed from the sibling above, because
+// the refusal is decided at a different point in loadGraphView and a refusal
+// that returned an unclassified error would answer 500 and log an ERROR.
+func TestGraphSchemaIntrospectionRefusalIsWarnLogged(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	const name = "graph-query-roadmap"
+	seedRoadmap(t, name)
+
+	buf := captureLog(t)
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet,
+		"/roadmaps/"+name+"/graph/data?q="+url.QueryEscape("SHOW INDEXES"), nil)
+	handler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400; body=%s", rec.Code, rec.Body.String())
+	}
+	record := oneRecord(t, buf)
+	mustContainAll(t, record,
+		"level=WARN",
+		`msg="graph query bar request failed"`,
+		"roadmap="+name,
+		"kind="+graphErrSchemaIntrospection,
+		"status=400",
+		"err=",
+	)
+	if strings.Contains(record, "level=ERROR") {
+		t.Errorf("a refused user query must not be recorded as a server error\nrecord: %s", record)
+	}
+	if !strings.Contains(rec.Body.String(), graphErrSchemaIntrospection) {
+		t.Errorf("response body does not carry kind %q: %s", graphErrSchemaIntrospection, rec.Body.String())
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Acceptance Criterion 143: success, 404 and 405 leave the console silent
 // ---------------------------------------------------------------------------

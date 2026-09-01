@@ -364,7 +364,7 @@ class TestGraphPropertyValueContent:
         # the command surface, and a later change that opened it would make this
         # assertion fail and send someone back to this comment.
         for subcmd, expected in (("create", "graph create accepts only CREATE/MERGE queries"),
-                                 ("update", "graph update accepts only SET/REMOVE queries")):
+                                 ("update", "graph update accepts only SET/REMOVE, index/constraint DDL, and schema-introspection queries")):
             _, _, stderr = self.write(
                 subcmd,
                 "MERGE (n:Memory {key:'pos-c'}) ON CREATE SET n.body = 'x" + bad + "y'",
@@ -451,7 +451,7 @@ class TestGraphPropertyValueContent:
     def test_the_clause_class_objection_outranks_the_content_objection(self):
         _, _, stderr = self.write(
             "update", "CREATE (n:Memory {key:'precedence', body:'x" + CY_ESC + "y'})", expect=6)
-        assert "graph update accepts only SET/REMOVE queries" in stderr, (
+        assert "graph update accepts only SET/REMOVE, index/constraint DDL, and schema-introspection queries" in stderr, (
             f"the class objection must be reported first; got {stderr!r}")
 
     def test_the_relationship_direction_objection_outranks_the_content_objection(self):

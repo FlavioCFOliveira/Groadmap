@@ -3442,12 +3442,15 @@ execution:
 |------------|-----------|---------|---------|
 | `create` | Create nodes/edges | Writing query whose only writing clauses are `CREATE` and/or `MERGE` | Read-only queries; `SET`, `REMOVE`, `DELETE`, `DETACH DELETE` |
 | `query` | Read | Read-only query (`MATCH ... RETURN`, no writing clause) | Any writing clause |
-| `update` | Mutate existing | Writing query whose writing clauses are `SET` and/or `REMOVE` | Read-only queries; `CREATE`, `MERGE`, `DELETE`, `DETACH DELETE` |
+| `update` | Mutate existing, and manage the schema | Writing query whose writing clauses are `SET` and/or `REMOVE`; schema DDL (`CREATE INDEX`, `DROP INDEX`, `CREATE CONSTRAINT`, `DROP CONSTRAINT`); schema introspection (`SHOW INDEX(ES)`, `SHOW CONSTRAINT(S)`) | Read-only queries other than schema introspection; `CREATE`, `MERGE`, `DELETE`, `DETACH DELETE` |
 | `delete` | Remove | Writing query whose writing clauses are `DELETE` and/or `DETACH DELETE` | Read-only queries; `CREATE`, `MERGE`, `SET`, `REMOVE` |
 | `search` | Read (traversal) | Read-only query, including variable-length paths (e.g. `-[*1..3]-`) | Any writing clause |
 
 The canonical operation-class definitions and the full per-subcommand rules are
-in `GRAPH.md § Subcommands and Guard-Rail Validation`.
+in `GRAPH.md § Subcommands and Guard-Rail Validation`. `update` is the only
+subcommand that accepts more than one class, because it is also the subcommand
+through which a graph's indexes and constraints are managed; what those
+statements do is specified in `GRAPH.md § Schema Management`.
 
 ### Shared Options (all graph subcommands)
 
@@ -3474,11 +3477,16 @@ original the day the original changed, which is the outcome
   defined in `DATA_FORMATS.md § Graph Query Result` (a `columns` array and a
   `rows` array). Exit code 0.
 - Write subcommands (`create`, `update`, `delete`) on success: the output
-  mirrors the query's `RETURN` clause. When the query has a `RETURN` clause, the
-  output is the same `{columns, rows}` shape as a read result; when it has no
-  `RETURN` clause, the output is exactly `{"ok": true}`. There is no
-  affected-element count, because the engine reports none. Exit code 0. The shape
-  is fixed in `DATA_FORMATS.md § Graph Write Result`.
+  mirrors what the executed statement returns. When the statement produces result
+  columns, the output is the same `{columns, rows}` shape as a read result; when
+  it produces none, the output is exactly `{"ok": true}`. For every data-writing
+  query the two cases are exactly "has a `RETURN` clause" and "has none". A
+  schema-introspection command run under `graph update` produces columns while
+  carrying no `RETURN` clause, and therefore returns the `{columns, rows}` shape;
+  a `CREATE INDEX`, `DROP INDEX`, `CREATE CONSTRAINT`, or `DROP CONSTRAINT`
+  produces no columns and returns `{"ok": true}`. There is no affected-element
+  count, because the engine reports none. Exit code 0. The shape is fixed in
+  `DATA_FORMATS.md § Graph Write Result`.
 - Side effect of a successful write: after committing, a write subcommand
   produces an on-disk snapshot under `~/.roadmaps/<name>/graph/snapshot/` and
   truncates the write-ahead log, synchronously, before exit (see
@@ -3508,6 +3516,8 @@ original the day the original changed, which is the outcome
 | 4 | Selected roadmap does not exist (`utils.ErrNotFound`). |
 | 6 | The query's operation class does not match the subcommand (`utils.ErrValidation`). |
 | 6 | The query is longer than the maximum query length of 1 MiB (1048576 bytes), whether it arrived through `--query` or through standard input (`utils.ErrValidation`). See `GRAPH.md § Maximum Query Length`. |
+| 6 | `graph update` received a DDL statement carrying a further clause after it. The engine's schema parser would discard that clause silently and report success, so the statement is refused before execution (`utils.ErrValidation`). See `GRAPH.md § One Statement per Invocation`. |
+| 1 | A schema statement run under `graph update` was refused by the engine: a duplicate `CREATE INDEX` or `CREATE CONSTRAINT`, a `DROP INDEX` or `DROP CONSTRAINT` naming an object that does not exist, a definition outside the shape the engine supports, or a `CREATE CONSTRAINT` the existing data does not satisfy (`utils.ErrDatabase`). See `GRAPH.md § Schema Failure Classes`. |
 
 The canonical exit-code catalogue is in `ARCHITECTURE.md § Exit Codes`; the graph
 feature introduces no new codes.
@@ -3569,9 +3579,20 @@ Output (success): JSON in the shape defined in
 rmp graph update -r <name> --query "<cypher>"
 ```
 
-**Description:** Mutates properties or labels on existing graph elements. Accepts
-only Cypher whose writing clauses are `SET` and/or `REMOVE`. Runs as a single
-transaction.
+**Description:** Mutates properties or labels on existing graph elements, and is
+also the subcommand through which the graph's schema is managed. It accepts three
+kinds of statement:
+
+- a writing query whose writing clauses are `SET` and/or `REMOVE`, which runs as
+  a single transaction;
+- schema DDL - `CREATE INDEX`, `DROP INDEX`, `CREATE CONSTRAINT`, `DROP
+  CONSTRAINT` - which the engine runs outside the transaction;
+- schema introspection - `SHOW INDEX(ES)`, `SHOW CONSTRAINT(S)` - which reads the
+  registered schema and changes nothing.
+
+`GRAPH.md § Schema Management` is canonical for the schema statements: which
+forms are accepted, how a schema object is named, why changing an index is two
+invocations rather than one, and how a schema failure surfaces.
 
 **Example:**
 
@@ -3581,6 +3602,19 @@ rmp graph update -r backend-platform \
 ```
 
 Output (success): `{"ok": true}`, exit code 0.
+
+**Schema examples:**
+
+```bash
+rmp graph update -r backend-platform \
+  --query "CREATE INDEX spec_key FOR (n:Spec) ON (n.key)"
+rmp graph update -r backend-platform --query "SHOW INDEXES"
+rmp graph update -r backend-platform --query "DROP INDEX spec_key"
+```
+
+The `CREATE INDEX` and `DROP INDEX` invocations output `{"ok": true}` and exit 0.
+The `SHOW INDEXES` invocation outputs the schema listing in the `{columns, rows}`
+shape and exits 0, exactly as the same command does under `rmp graph query`.
 
 ### Delete
 
@@ -3631,7 +3665,7 @@ Output (success): JSON in the shape defined in
 | Query above the maximum length | 6 | "Error: validation error: query exceeds maximum length of 1048576 bytes" |
 | Operation-class mismatch on `graph create` | 6 | "Error: validation error: graph create accepts only CREATE/MERGE queries" |
 | Operation-class mismatch on `graph query` | 6 | "Error: validation error: graph query accepts only read-only queries" |
-| Operation-class mismatch on `graph update` | 6 | "Error: validation error: graph update accepts only SET/REMOVE queries" |
+| Operation-class mismatch on `graph update` | 6 | "Error: validation error: graph update accepts only SET/REMOVE, index/constraint DDL, and schema-introspection queries" |
 | Operation-class mismatch on `graph delete` | 6 | "Error: validation error: graph delete accepts only DELETE/DETACH DELETE queries" |
 | Operation-class mismatch on `graph search` | 6 | "Error: validation error: graph search accepts only read-only queries" |
 | Cypher parse/execution error | 1 | "Error: database error: graph query failed: <engine diagnostic>" |

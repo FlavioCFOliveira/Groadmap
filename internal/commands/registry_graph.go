@@ -80,7 +80,7 @@ func buildGraphCommand() Command {
 			{
 				Name:        "query",
 				Summary:     "Read nodes or edges (MATCH ... RETURN, read-only), or introspect the schema.",
-				Description: "Executes a read-only Cypher query. Any query containing a writing clause (CREATE, MERGE, SET, REMOVE, DELETE, DETACH DELETE) is rejected by the guard rail, as is any schema-mutating DDL clause (CREATE INDEX, DROP INDEX, CREATE CONSTRAINT, DROP CONSTRAINT). Schema introspection is accepted: SHOW INDEXES, SHOW CONSTRAINTS, and their singular aliases SHOW INDEX and SHOW CONSTRAINT, each optionally followed by a YIELD / WHERE / RETURN projection. Introspection lists the registered schema and alters nothing, so it is read-only; the write subcommands reject it. The two keywords must be separated by exactly one space, which is the only spelling the engine parses: SHOW  INDEXES with two spaces, with a tab or with a line break is rejected with exit code 6 before the query runs.",
+				Description: "Executes a read-only Cypher query. Any query containing a writing clause (CREATE, MERGE, SET, REMOVE, DELETE, DETACH DELETE) is rejected by the guard rail, as is any schema-mutating DDL clause (CREATE INDEX, DROP INDEX, CREATE CONSTRAINT, DROP CONSTRAINT). Schema introspection is accepted: SHOW INDEXES, SHOW CONSTRAINTS, and their singular aliases SHOW INDEX and SHOW CONSTRAINT, each optionally followed by a YIELD / WHERE / RETURN projection. Introspection lists the registered schema and alters nothing, so it is read-only; graph update accepts it too, because that subcommand owns the schema, while graph create and graph delete reject it. The two keywords must be separated by exactly one space, which is the only spelling the engine parses: SHOW  INDEXES with two spaces, with a tab or with a line break is rejected with exit code 6 before the query runs.",
 				Usage:       "rmp graph query -r <roadmap> [--query <cypher>]",
 				HelpPrinter: printGraphQueryHelp,
 				Handler:     runGraphQuery,
@@ -143,8 +143,8 @@ func buildGraphCommand() Command {
 			},
 			{
 				Name:        "update",
-				Summary:     "Mutate existing nodes or edges (SET / REMOVE).",
-				Description: "Executes a Cypher query whose writing clauses are SET and/or REMOVE. CREATE, MERGE, DELETE, and DETACH DELETE are rejected by the guard rail.",
+				Summary:     "Mutate existing nodes or edges (SET / REMOVE), and manage the graph schema.",
+				Description: "Mutates properties or labels on existing graph elements, and is also the subcommand through which the graph's schema is managed. It is the one graph subcommand that accepts more than one operation class, and it accepts three. First, a Cypher query whose writing clauses are SET and/or REMOVE, which runs as a single transaction; CREATE, MERGE, DELETE, and DETACH DELETE are rejected by the guard rail. Second, schema DDL, which the engine runs outside the transaction: CREATE INDEX [name] [IF NOT EXISTS] FOR (n:Label) ON (n.property) [OPTIONS {indexType:'hash'|'btree'}], DROP INDEX <name> [IF EXISTS], CREATE CONSTRAINT [name] [IF NOT EXISTS] FOR (n:Label) REQUIRE n.property IS UNIQUE (or IS NOT NULL), and DROP CONSTRAINT <name> [IF EXISTS]. Third, schema introspection: SHOW INDEXES, SHOW CONSTRAINTS and their singular aliases SHOW INDEX and SHOW CONSTRAINT, each optionally followed by a YIELD / WHERE / RETURN projection; these list the registered schema and change nothing, and they return the columns/rows listing rather than {\"ok\": true} even though they carry no RETURN clause. The two keywords of a SHOW must be separated by exactly one space, the only spelling the engine parses; any other separator is rejected with exit code 6 before the query runs. Exactly one statement per invocation: a schema statement carrying a further clause after it is rejected with exit code 6, because the engine would discard that clause silently and report success. There is no ALTER INDEX; changing an index is a DROP INDEX followed by a CREATE INDEX, as two separate invocations, and the index is absent between them. An index or a constraint covers a single node property, removal is by name, and SHOW INDEXES is the authoritative report of the name an unnamed object was given. A schema statement the engine refuses \u2014 a duplicate create, a drop of an object that does not exist, an unsupported definition, or a constraint the data already in the graph does not satisfy \u2014 exits 1, not 6.",
 				Usage:       "rmp graph update -r <roadmap> [--query <cypher>]",
 				HelpPrinter: printGraphUpdateHelp,
 				Handler:     runGraphUpdate,
@@ -181,9 +181,27 @@ func buildGraphCommand() Command {
 						Exit:   0,
 					},
 					{
+						Title:  "Create an index",
+						Cmd:    `rmp graph update -r myproject --query "CREATE INDEX spec_key FOR (n:Spec) ON (n.key)"`,
+						Stdout: `{"ok":true}`,
+						Exit:   0,
+					},
+					{
+						Title:  "List the registered indexes",
+						Cmd:    `rmp graph update -r myproject --query "SHOW INDEXES"`,
+						Stdout: `{"columns":["name","state","type","entityType","labelsOrTypes","properties"],"rows":[["spec_key","ONLINE","hash","NODE",["Spec"],["key"]]]}`,
+						Exit:   0,
+					},
+					{
+						Title:  "Drop an index by the name it carries",
+						Cmd:    `rmp graph update -r myproject --query "DROP INDEX spec_key"`,
+						Stdout: `{"ok":true}`,
+						Exit:   0,
+					},
+					{
 						Title:  "Guard-rail: CREATE not accepted",
 						Cmd:    `rmp graph update -r myproject --query "CREATE (n:Spec)"`,
-						Stderr: "Error: validation error: graph update accepts only SET/REMOVE queries",
+						Stderr: "Error: validation error: graph update accepts only SET/REMOVE, index/constraint DDL, and schema-introspection queries",
 						Exit:   6,
 					},
 				},

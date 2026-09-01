@@ -3,14 +3,14 @@ module github.com/FlavioCFOliveira/Groadmap
 go 1.27.0
 
 require (
-	github.com/FlavioCFOliveira/GoGraph v0.11.0
+	github.com/FlavioCFOliveira/GoGraph v0.12.0
 	golang.org/x/sys v0.47.0
 	golang.org/x/text v0.41.0
 	modernc.org/sqlite v1.57.0
 )
 
 require (
-	github.com/RoaringBitmap/roaring/v2 v2.24.0 // indirect
+	github.com/RoaringBitmap/roaring/v2 v2.26.0 // indirect
 	github.com/antlr4-go/antlr/v4 v4.13.1 // indirect
 	github.com/bits-and-blooms/bitset v1.25.0 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect

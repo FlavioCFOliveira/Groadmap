@@ -83,6 +83,7 @@ TEST_MODULES = [
     "test_61_family_help_dispatch_exit_code",
     "test_62_graph_stray_positional_order",
     "test_63_roadmap_name_refusal_parity",
+    "test_64_graph_schema_management",
 ]
 
 # Stress tests (run separately due to time/data volume)

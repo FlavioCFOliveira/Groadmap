@@ -355,14 +355,22 @@ func introspectSpacing(masked, upper string) (accepted string, misspaced bool) {
 // returns the guard rail's own explanation for refusing it. reason is empty when
 // misspaced is false.
 //
-// It is the rejection rule the two surfaces that ADMIT this class apply on top
-// of the read-only contract — the CLI `graph query` and `graph search`, which
-// wrap reason in utils.ErrValidation (exit code 6), and the read-only web graph
-// data endpoint, which answers HTTP 400 with the failure class
-// invalid_keyword_spacing (SPEC/GRAPH.md § Keyword Spacing in a
-// Schema-Introspection Command; SPEC/WEB.md § Query-Bar Error Handling, case 10).
-// It lives here, beside the classification it reads, so those surfaces cannot
-// drift apart on which statements are refused or on what the user is told.
+// It is the rejection rule the three CLI surfaces that ADMIT this class apply on
+// top of the read-only contract — `graph query`, `graph search` and
+// `graph update`, each of which wraps reason in utils.ErrValidation (exit code
+// 6). It lives here, beside the classification it reads, so those surfaces
+// cannot drift apart on which statements are refused or on what the user is
+// told.
+//
+// The read-only web graph data endpoint does NOT call it. That endpoint refuses
+// the schema-introspection class outright, at every spacing, so the spacing is
+// not what is wrong there and naming it would prescribe a correction that does
+// not work; it answers the single failure class schema_introspection instead.
+// The two surfaces share the CLASSIFICATION above and differ only in the
+// verdict, because a surface that answers the class owes the caller a working
+// spelling while a surface that refuses it does not (SPEC/GRAPH.md § Keyword
+// Spacing in a Schema-Introspection Command, which is canonical for the
+// divergence; SPEC/WEB.md § Query-Bar Error Handling, case 10).
 //
 // The message names the cause the SPEC requires it to name: that the statement
 // was read as a schema-introspection command, that the engine recognises it only

@@ -155,10 +155,13 @@ A published version of the binary.
 
 | Property | Required | Notes |
 |---|---|---|
-| `version` | yes | Semantic version, e.g. `v1.13.2`. |
-| `tag` | yes | Git tag. |
+| `key` | yes | Slug prefixed `release-`, followed by `version`, e.g. `release-1.13.2`. |
+| `version` | yes | Semantic version, without the tag's leading `v`, e.g. `1.13.2`. The `v` belongs to `tag`. |
+| `tag` | yes | Git tag, e.g. `v1.13.2`. |
 | `type` | yes | `major`, `minor` or `patch`. |
-| `commit` | yes | Commit the release was cut from. This is the release's own fact, not provenance. |
+| `commit` | yes | Commit the release was cut from, and the commit the tag names. This is the release's own fact, not provenance. |
+| `tag_commit` | no | Commit the tag resolves to. Recorded when a release was tagged more than once, so the node states which attempt shipped. |
+| `merge_commit_develop` | no | Commit of the back-merge into `develop` that closed the release branch. |
 | `date` | yes | Release date, `YYYY-MM-DD`. |
 | `summary` | yes | What the release delivered. |
 | `url` | no | Published release URL. |

@@ -600,11 +600,15 @@ from the generic template:
    the comment subcommands of the `task` and `sprint` families are the only
    commands in the CLI that read standard input. See
    `GRAPH.md § Cypher Input Source and Precedence`.
-2. **Guard rail.** State, per subcommand, which Cypher operation class is
-   accepted and that a mismatching query is rejected with exit code 6
+2. **Guard rail.** State, per subcommand, which Cypher operation class or
+   classes are accepted and that a mismatching query is rejected with exit code 6
    before execution. The family help lists the five subcommand-to-operation
-   mappings; each subcommand help names its own allowed class. See
-   `GRAPH.md § Subcommands and Guard-Rail Validation`.
+   mappings; each subcommand help names its own allowed class or classes. Four
+   subcommands accept one class each; `graph update` accepts three, because it is
+   also the schema subcommand, and its help MUST name the schema statements it
+   accepts rather than leaving an agent to discover them by trial. See
+   `GRAPH.md § Subcommands and Guard-Rail Validation` and
+   `GRAPH.md § Schema Management`.
 
 ### Web command help specifics
 

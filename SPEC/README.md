@@ -24,7 +24,7 @@ The SPEC is unversioned. Git is the source of truth for its evolution — recove
 | Web task detail modal (read-only task popup) | `WEB.md § Task Detail Modal` |
 | Web graph labels sidebar (node-label / edge-type inventory, counts, section totals, highlight, collapse/expand) | `WEB.md § Graph Labels Sidebar` |
 | Web graph query bar (editable Cypher query box, Search button, node-limit dropdown) | `WEB.md § Graph Query Bar` |
-| Web graph query-bar error handling (rejected vs failed vs invalid limit) | `WEB.md § Query-Bar Error Handling` |
+| Web graph query-bar error handling (the failure classes, their precedence, and the boundary against the internal read error) | `WEB.md § Query-Bar Error Handling` |
 | Web graph data endpoint `q` / `limit` parameters, read-only guard-rail, limit injection, node/edge extraction | `WEB.md § Graph Data Endpoint` |
 | Web startup schema migration (automatic, no-input, before serving) | `WEB.md § Startup Schema Migration` |
 | `rmp web` command syntax / flags | `COMMANDS.md § Web Interface` |
@@ -71,6 +71,7 @@ The SPEC is unversioned. Git is the source of truth for its evolution — recove
 | A stray positional argument on a `graph` subcommand (the five accept none), the exact line it publishes, and where the refusal lands in the subcommand's order | `GRAPH.md § No Positional Query: A Stray Token Is Refused` |
 | Bounded standard-input read of a Cypher query, and the refusal of an empty, whitespace-only, or terminal standard input | `GRAPH.md § Bounded Standard-Input Read` and `GRAPH.md § Standard Input That Supplies No Query` |
 | Keyword spacing the guard rail requires in a `SHOW INDEX(ES)` / `SHOW CONSTRAINT(S)` command, and why the DDL class stays whitespace-tolerant | `GRAPH.md § Keyword Spacing in a Schema-Introspection Command` |
+| Knowledge-graph schema management through `rmp graph update` (which index and constraint statements it accepts, how a schema object is named, why changing an index is two invocations, and how a schema failure surfaces) | `GRAPH.md § Schema Management` |
 | Which Cypher engine constructor each graph path uses (read vs transactional write) and why a read opens no store | `GRAPH.md § Engine Constructor by Path` |
 | Graph query notifications on stderr (e.g. Cartesian-product warning) | `GRAPH.md § Query Notifications as Diagnostics` |
 | Graph store concurrency / recovery | `IMPLEMENTATION.md § Graph Store Concurrency` |
@@ -162,6 +163,7 @@ To prevent drift across SPEC files, the following topics have a single authorita
 | Cypher query input source, maximum query length, the bounded standard-input read, and the refusal of a positional argument on any `graph` subcommand | `GRAPH.md § Cypher Input Source and Precedence` |
 | Cypher query and knowledge-graph property value content (the UTF-8 encoding rule on every graph subcommand, the control-character rule on the two that write, their order, and the limits of both) | `GRAPH.md § Cypher Query and Property Value Content Rules` |
 | Knowledge-graph node `key` uniqueness (what the invariant is, which comparison decides that two keys are the same, that the product does not enforce it, and the audit that detects a violation) | `GRAPH.md § Node Key Uniqueness` |
+| Knowledge-graph schema management (the index and constraint statements `rmp graph update` accepts, schema object naming, the non-atomic drop-then-create, and the schema failure classes) | `GRAPH.md § Schema Management` |
 | Declared positional arity per command, and the refusal of an excess positional argument (exit code 2, the published line, no side effect) | `COMMANDS.md § Positional Arguments` |
 | Comment positional arguments (exactly one id per subcommand, and what that id identifies) | `COMMANDS.md § Comment Positional Argument Contract` |
 | Memory layout / struct field ordering | `MODELS.md § Memory Layout Optimization` |
@@ -191,7 +193,7 @@ To prevent drift across SPEC files, the following topics have a single authorita
 | Vendored web assets / embedded Tabler framework and D3.js (with d3-sankey) | `BUILD.md § Vendored Web Assets` |
 | Graph store concurrency / writer serialisation / reader locking / recovery | `IMPLEMENTATION.md § Graph Store Concurrency` (contract in `GRAPH.md § Concurrency and Recovery`) |
 | Graph store lock file (`write.lock`) | `GRAPH.md § Concurrency and Recovery` (layout in `GRAPH.md § Persistence Layout`) |
-| Cypher engine constructor per path (`cypher.NewEngine` on the read path, `cypher.NewEngineWithStore` on the write path) | `GRAPH.md § Engine Constructor by Path` |
+| Cypher engine constructor per path (`cypher.NewEngineWithOptions` on the read path, `cypher.NewEngineWithStoreAndRecovery` on the write path, both carrying the recovered schema) | `GRAPH.md § Engine Constructor by Path` |
 | Minimum Go version and external dependencies | `BUILD.md § Go Toolchain` |
 | Validation gate set and where it is enforced (local, CI, release) | `BUILD.md § Validation Gates` |
 | Help text canonical | code in `internal/commands/*.go` (structure in `HELP.md`) |
