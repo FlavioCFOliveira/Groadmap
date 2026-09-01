@@ -345,17 +345,41 @@ it would in a long-running server. The rebuild is not amortised over anything.
 That is a structural property of the product and it holds at any graph size,
 which is why the choice is made on it rather than on a measurement.
 
-**No speed-up is claimed at present scale, and none has been measured.** The
-project's own knowledge graph holds a few hundred nodes in about a megabyte. At
-that size a full-scan rebuild is cheap, and the engine's planner does not consider
-an index seek for a label holding fewer than 1024 nodes, so no index on today's
-graph would be used by a query plan at all. The constructor chosen here is
-therefore about what happens as a graph grows, and this specification does not
-assert that it makes any command measurably faster today. Should a future change
-seek a measured improvement — carrying the same payloads to the read path through
-the engine's option for them, for instance — the rule below applies to it: a path
+**No speed-up is claimed at present scale, and measurement finds none.** The
+project's own knowledge graph holds a few hundred nodes in about a megabyte, and
+at that size a full-scan rebuild is cheap. It is not cheap because the indexes
+would go unused. The engine admits a seek only for a label whose population
+reaches a floor the engine owns — one floor, gating every seek plan it has, over
+hash and comparison-ordered indexes alike — and several of this graph's labels
+are above the floor the pinned engine applies, so a plan over today's graph can
+select an index. What is absent is a measurable gain, not the opportunity for
+one. Measured against this project's own graph, on a label of a few hundred nodes
+over repeated invocations, the same query with an index and without one are
+indistinguishable within the run-to-run spread: `rmp` opens the store, runs one
+statement, and exits, so at this size the process start and the store open
+dominate whatever the plan chooses. The constructor chosen here is therefore
+about what happens as a graph grows, and this specification does not assert that
+it makes any command measurably faster today. Should a future change seek a
+measured improvement — carrying the same payloads to the read path through the
+engine's option for them, for instance — the rule below applies to it: a path
 moves on evidence gathered against this project's own graph, never on an upstream
 recommendation, and the table is amended first.
+
+**The floor's value is deliberately not restated here, and no conclusion above
+rests on it.** It is an engine-internal constant, set from the engine's own
+measurements rather than from any property of index seeks in general, and the
+engine has already lowered it by more than an order of magnitude between two
+releases this project pinned in succession. Restating the number would give this
+specification a fact that a dependency bump can falsify in silence: no exported
+symbol changes, so a symbol diff reports nothing, and no acceptance criterion in
+this file names the constant, so re-running the criteria reports nothing either.
+That is the hazard [Dependency Maturity Risk](#dependency-maturity-risk)
+describes for the clause surface, in a second guise. Naming the floor as an
+engine-owned threshold, and resting the paragraph on a measurement rather than on
+the threshold's value, is what keeps the paragraph true across the next bump.
+[Engine Construction and Lifecycle](#engine-construction-and-lifecycle) states
+the parallel-scan gate's threshold in the same shape, as an order of magnitude
+rather than a constant, for the same reason.
 
 **The recovery result handed to the constructor MUST be the one that opened this
 store.** It is the result of the completed store open for this roadmap's graph
