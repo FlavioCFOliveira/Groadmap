@@ -48,10 +48,10 @@ import (
 // Resolution is whole-word presence anywhere in the module's Go source. That is
 // permissive on purpose: the claim being policed is existence, not location. Of
 // the tokens that resolve today, TASK_STATUS_BACKLOG resolves only through a
-// comment in internal/commands/task_mutate.go and VERIFIED_BY only through a
-// Cypher fixture string in internal/cypherguard. Demanding a declared Go
-// identifier would fail both, and neither is the defect. A name that appears
-// nowhere at all is.
+// comment in internal/commands/task_mutate.go and VERIFIED_BY only through
+// Cypher fixture strings in the graph tests (internal/commands and
+// internal/web). Demanding a declared Go identifier would fail both, and neither
+// is the defect. A name that appears nowhere at all is.
 //
 // The limitation that comes with that choice, stated rather than hidden: if some
 // future test file happens to spell a re-published SPEC identifier in a fixture,

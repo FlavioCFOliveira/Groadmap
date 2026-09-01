@@ -25,7 +25,6 @@ import (
 	"github.com/FlavioCFOliveira/GoGraph/store/wal"
 
 	"github.com/FlavioCFOliveira/Groadmap/internal/backoff"
-	"github.com/FlavioCFOliveira/Groadmap/internal/cypherguard"
 	"github.com/FlavioCFOliveira/Groadmap/internal/db"
 	"github.com/FlavioCFOliveira/Groadmap/internal/graphlock"
 	"github.com/FlavioCFOliveira/Groadmap/internal/models"
@@ -87,9 +86,9 @@ var allowedGraphLimits = map[int]struct{}{
 // of a query. The endpoint injects its own LIMIT only when the user's query has
 // none, so a user-authored LIMIT is respected as-is (SPEC/WEB.md § Graph Data
 // Endpoint, node-limit injection). The check runs on the literal-masked query
-// (cypherguard.MaskLiterals), so a LIMIT keyword that appears only inside a
-// string literal, comment, or backtick identifier does not count as an existing
-// LIMIT and does not suppress injection.
+// (maskLiterals), so a LIMIT keyword that appears only inside a string literal,
+// comment, or backtick identifier does not count as an existing LIMIT and does
+// not suppress injection.
 var reTopLevelLimit = regexp.MustCompile(`(?i)\bLIMIT\b`)
 
 // reTopLevelReturn detects the RETURN that makes a statement LIMITABLE. It is
@@ -125,9 +124,9 @@ var reTopLevelLimit = regexp.MustCompile(`(?i)\bLIMIT\b`)
 // the injection exactly as a MATCH ... RETURN does, which is what keeps the
 // endpoint from being stricter than the contract it publishes.
 //
-// It runs on the masked normalization (cypherguard.MaskLiterals), so a RETURN
-// keyword that appears only inside a string literal, a comment, or a backtick
-// identifier does not make a non-projecting statement look limitable. It is a
+// It runs on the masked normalization (maskLiterals), so a RETURN keyword that
+// appears only inside a string literal, a comment, or a backtick identifier does
+// not make a non-projecting statement look limitable. It is a
 // presence check rather than a full parse, and it errs towards judging a
 // statement limitable: a statement wrongly judged limitable keeps the node cap
 // it would otherwise escape, and fails in the parser only if it also turns out
@@ -1824,9 +1823,9 @@ func resolveGraphQuery(raw string) string {
 //     (SPEC/WEB.md § Graph Data Endpoint, Suppression 2).
 //
 // Both suppression checks run on the literal-masked normalization
-// (cypherguard.MaskLiterals), so a LIMIT, SHOW, CALL, or RETURN keyword that
-// appears only inside a string literal, a comment, or a backtick identifier does
-// not affect the decision, and both forms of Suppression 2 are anchored to the
+// (maskLiterals), so a LIMIT, SHOW, CALL, or RETURN keyword that appears only
+// inside a string literal, a comment, or a backtick identifier does not affect
+// the decision, and both forms of Suppression 2 are anchored to the
 // start of the statement. A suppressed query is not bounded by the node limit;
 // it remains bounded by the per-request query time budget, which applies to
 // every query the endpoint executes (SPEC/WEB.md § Graph Query Time Budget).
@@ -1841,7 +1840,7 @@ func resolveGraphQuery(raw string) string {
 // is always top-level and always applies. Cypher treats the newline as ordinary
 // whitespace, so every query that worked before is unaffected.
 func applyGraphLimit(query string, limit int) string {
-	masked := cypherguard.MaskLiterals(query)
+	masked := maskLiterals(query)
 
 	// Suppression 1: the caller wrote their own top-level LIMIT.
 	if reTopLevelLimit.MatchString(masked) {
@@ -1855,7 +1854,7 @@ func applyGraphLimit(query string, limit int) string {
 }
 
 // admitsLimitClause reports whether a statement is a form that can carry a
-// top-level LIMIT clause. masked MUST be cypherguard.MaskLiterals(query); it is
+// top-level LIMIT clause. masked MUST be maskLiterals(query); it is
 // passed in rather than recomputed because the caller already holds it.
 //
 // This is a SYNTAX question — "can this statement carry a LIMIT?" — and it is
