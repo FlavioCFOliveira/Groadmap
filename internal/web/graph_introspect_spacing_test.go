@@ -1,44 +1,44 @@
 package web
 
-// Web half of the regression for rmp task #275, and of SPEC/WEB.md Acceptance
-// Criterion 151 (the web surface of SPEC/GRAPH.md Acceptance Criterion 39).
+// Web half of SPEC/WEB.md Acceptance Criterion 151: KEYWORD SPACING CHANGES
+// NOTHING about what the graph data endpoint answers.
 //
-// The graph data endpoint shares the CLI's guard rail, so a schema-introspection
-// command whose keyword spacing the engine does not accept — `SHOW  INDEXES`
-// with two spaces, with a tab, or with a line break — is refused here before it
-// is executed, exactly as `rmp graph query` refuses it.
+// This file used to assert the opposite. The endpoint published an
+// `invalid_keyword_spacing` class and refused a badly spaced
+// schema-introspection command with a message naming the spacing and the
+// accepted spelling, while accepting the well-spaced spelling with HTTP 200.
 //
-// The refusal carries its OWN failure class, `invalid_keyword_spacing`, and not
-// `not_read_only`. A SHOW statement reads the schema and writes nothing whatever
-// its spacing, so answering `not_read_only` would publish a classification the
-// message printed beside it contradicts, and would tell a client the query
-// writes when it does not. The two failures also have different fixes: one query
-// must be rewritten to stop writing, the other only to close a gap between two
-// keywords (SPEC/WEB.md § Query-Bar Error Handling, case 10).
+// The endpoint now refuses the whole schema-introspection class (rmp task #344,
+// Acceptance Criterion 157), and once it does, a spacing complaint names a
+// correction that does not work: the corrected statement is refused too, for the
+// same reason. So the two spellings receive the SAME status, the SAME kind and
+// the SAME message, and this endpoint publishes no keyword-spacing class at all.
 //
-// Precedence, which these tests pin because it is the part a refactor is most
-// likely to reorder: `invalid_limit`, then `not_read_only`, then
-// `invalid_keyword_spacing` (rule 6).
+// The CLI is untouched and the divergence is deliberate. `graph query`,
+// `graph search` and `graph update` ACCEPT the class, so on those surfaces the
+// spacing genuinely is the whole objection and they keep rejecting it with exit
+// code 6 and a message that names it (SPEC/GRAPH.md Acceptance Criterion 39,
+// which states that asserting the spacing rule HERE must fail; the CLI half is
+// asserted in internal/commands/graph_introspect_spacing_test.go and end-to-end
+// in tests/test_35_web_interface.py).
 
 import (
 	"encoding/json"
-	"maps"
 	"net/http"
 	"net/url"
-	"slices"
 	"strings"
 	"testing"
 )
 
-// misspacedIntrospectionQueries are the separators the endpoint must refuse,
-// paired with the accepted spelling its message has to name. One space is the
-// only accepted separator, and all four target keywords are covered: the two
-// plurals are matched by differently spelled patterns, so a regression in either
-// would drop one form silently.
-var misspacedIntrospectionQueries = []struct {
-	name     string
-	query    string
-	accepted string
+// spacingPairs pair each badly spaced spelling with the well-spaced spelling of
+// the SAME command, so the two differ in the separator and in nothing else. All
+// four target keywords are covered: the two plurals are matched by differently
+// spelled patterns in the shared classifier, so a regression in either would
+// drop one form silently.
+var spacingPairs = []struct {
+	name      string
+	misspaced string
+	oneSpace  string
 }{
 	{"two spaces before INDEXES", "SHOW  INDEXES", "SHOW INDEXES"},
 	{"a tab before INDEXES", "SHOW\tINDEXES", "SHOW INDEXES"},
@@ -49,205 +49,124 @@ var misspacedIntrospectionQueries = []struct {
 	{"a line break before CONSTRAINTS", "SHOW\nCONSTRAINTS", "SHOW CONSTRAINTS"},
 	{"two spaces before the singular CONSTRAINT", "SHOW  CONSTRAINT", "SHOW CONSTRAINT"},
 	{"a tab before the singular CONSTRAINT", "SHOW\tCONSTRAINT", "SHOW CONSTRAINT"},
-	{"a lowercase statement with two spaces", "show  indexes", "SHOW INDEXES"},
-	{"a mixed-case statement with a tab", "sHoW\tcOnStRaInT", "SHOW CONSTRAINT"},
-	{"a misspaced statement with a projection tail", "SHOW  INDEXES YIELD name, type RETURN name", "SHOW INDEXES"},
+	{"a lowercase statement with two spaces", "show  indexes", "show indexes"},
+	{"a mixed-case statement with a tab", "sHoW\tcOnStRaInT", "sHoW cOnStRaInT"},
+	{"a comment standing in for the separator", "SHOW /* which ones? */ INDEXES", "SHOW INDEXES"},
+	{"a misspaced statement with a projection tail", "SHOW  INDEXES YIELD name, type RETURN name", "SHOW INDEXES YIELD name, type RETURN name"},
 }
 
-// TestHandleGraphData_IntrospectionKeywordSpacingRejected is the core web
-// regression: every misspaced schema-introspection command is answered HTTP 400
-// with `kind` `invalid_keyword_spacing`, the body carries no graph, and the
-// message names the spacing and the accepted spelling without describing the
-// query as not read-only or echoing the engine's parse diagnostic.
+// TestHandleGraphData_KeywordSpacingChangesNothing is the criterion itself: for
+// each pair, the two responses are compared TO EACH OTHER rather than each
+// against a literal, which is what makes "the spacing changes nothing" the thing
+// asserted. Status and body must be equal, byte for byte.
 //
-// It fails if cypherguard's reIntrospect is widened back to arbitrary
-// whitespace: the endpoint would admit each query, hand it to the engine, and
-// answer `kind` `execution` carrying the diagnostic that names the wrong problem.
-func TestHandleGraphData_IntrospectionKeywordSpacingRejected(t *testing.T) {
+// The equality alone would be satisfied by a server that answered both spellings
+// with the same wrong thing — HTTP 200 and an empty graph, for instance — so the
+// class both must carry is asserted too.
+func TestHandleGraphData_KeywordSpacingChangesNothing(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
-	name := seedRoadmap(t, "web-ui-rollout")
-	seedGraph(t, name, graphSeedQueries()...)
+	name := seedGraphWithSchema(t, "web-ui-rollout")
 
-	for _, tc := range misspacedIntrospectionQueries {
+	for _, tc := range spacingPairs {
 		t.Run(tc.name, func(t *testing.T) {
-			rec := doGraphData(t, name, url.Values{"q": {tc.query}})
-			if rec.Code != http.StatusBadRequest {
-				t.Fatalf("status = %d, want 400 for %q; body=%q", rec.Code, tc.query, rec.Body.String())
+			bad := doGraphData(t, name, url.Values{"q": {tc.misspaced}})
+			good := doGraphData(t, name, url.Values{"q": {tc.oneSpace}})
+
+			if bad.Code != good.Code {
+				t.Fatalf("status differs across the spelling: %q got %d, %q got %d",
+					tc.misspaced, bad.Code, tc.oneSpace, good.Code)
+			}
+			if bad.Body.String() != good.Body.String() {
+				t.Fatalf("body differs across the spelling:\n %q -> %s\n %q -> %s",
+					tc.misspaced, bad.Body.String(), tc.oneSpace, good.Body.String())
 			}
 
+			// And what they agree on is the refusal of the class.
+			if bad.Code != http.StatusBadRequest {
+				t.Fatalf("status = %d, want 400 for both spellings; body=%q", bad.Code, bad.Body.String())
+			}
+			kind, reason := decodeQueryError(t, bad.Body.Bytes())
+			if kind != graphErrSchemaIntrospection {
+				t.Errorf("kind = %q, want %q for both spellings", kind, graphErrSchemaIntrospection)
+			}
+			if !strings.Contains(reason, "rmp graph query") {
+				t.Errorf("error = %q, want it to name rmp graph query as where a schema listing is obtained", reason)
+			}
+		})
+	}
+}
+
+// TestHandleGraphData_PublishesNoKeywordSpacingKind asserts the removal of the
+// value from the endpoint's published contract, in the two ways it can be
+// observed from outside the server: no response carries the kind, and no message
+// names the spacing or offers a spelling to correct it to.
+//
+// On this endpoint correcting the spacing changes nothing, so a message that
+// asked for it would send the caller round a loop ending in this same refusal
+// (SPEC/WEB.md § Query-Bar Error Handling, case 10, "Why one kind and not two";
+// Acceptance Criteria 123 and 151).
+func TestHandleGraphData_PublishesNoKeywordSpacingKind(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	name := seedGraphWithSchema(t, "web-ui-rollout")
+
+	// Every spelling of the class, well spaced and badly spaced, plus the
+	// requests that reach the other failure classes: none of them may answer
+	// with the withdrawn value.
+	probes := []url.Values{
+		{"q": {"SHOW INDEXES"}},
+		{"q": {"SHOW  INDEXES"}},
+		{"q": {"SHOW\tCONSTRAINTS"}},
+		{"q": {"SHOW\nINDEX"}},
+		{"q": {"show  constraint"}},
+		{"q": {"SHOW  INDEXES YIELD name"}},
+		{"q": {"MATCH (n) DELETE n"}},
+		{"q": {"MATCH (n) RETURN"}},
+		{"q": {"MATCH (a)-[e]-(b) RETURN type(e)"}},
+		{"limit": {"7"}},
+	}
+
+	for _, params := range probes {
+		t.Run(params.Encode(), func(t *testing.T) {
+			rec := doGraphData(t, name, params)
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("status = %d, want 400; body=%q", rec.Code, rec.Body.String())
+			}
 			var body map[string]any
 			if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
 				t.Fatalf("decoding error body: %v; body=%q", err, rec.Body.String())
 			}
-			if body["kind"] != graphErrInvalidKeywordSpacing {
-				t.Errorf("kind = %v, want %q; body=%q", body["kind"], graphErrInvalidKeywordSpacing, rec.Body.String())
+			if body["kind"] == "invalid_keyword_spacing" {
+				t.Errorf("body carries kind invalid_keyword_spacing, a value this endpoint does not publish; body=%q", rec.Body.String())
 			}
-			// The query was never run: the body is the error shape and carries
-			// no graph at all.
-			if got := slices.Sorted(maps.Keys(body)); !slices.Equal(got, []string{"error", "kind"}) {
-				t.Errorf("body fields = %v, want exactly [error kind]; body=%q", got, rec.Body.String())
-			}
-
 			reason, _ := body["error"].(string)
-			for _, want := range []string{"schema-introspection command", "exactly one space", "keyword spacing", tc.accepted} {
-				if !strings.Contains(reason, want) {
-					t.Errorf("error = %q, want it to contain %q", reason, want)
-				}
-			}
-			// The message must not misdescribe the failure, and must not be the
-			// engine's diagnostic: the query never reached the engine.
-			for _, forbidden := range []string{"not read-only", "cypher: parse", `unexpected "SHOW"`} {
+			for _, forbidden := range []string{"keyword spacing", "exactly one space", "one space"} {
 				if strings.Contains(reason, forbidden) {
-					t.Errorf("error = %q, want it never to contain %q", reason, forbidden)
+					t.Errorf("error = %q names %q: on this endpoint the spacing is not what is wrong, and correcting it changes nothing", reason, forbidden)
 				}
 			}
 		})
 	}
-
-	// Nothing was executed and nothing changed: a default read still returns the
-	// three seeded nodes.
-	rec := doGraphData(t, name, nil)
-	var view graphView
-	if err := json.Unmarshal(rec.Body.Bytes(), &view); err != nil {
-		t.Fatalf("decoding post-rejection read: %v", err)
-	}
-	if len(view.Nodes) != 3 {
-		t.Errorf("after the spacing rejections, nodes = %d, want 3", len(view.Nodes))
-	}
 }
 
-// TestHandleGraphData_IntrospectionOneSpaceStillAccepted is the control that
-// makes the test above non-vacuous: the SAME statements with exactly one space
-// are accepted, executed, and answered with the normal graph shape and HTTP 200.
-// The two differ in the separator and in nothing else.
-//
-// Without this control an endpoint that had simply stopped supporting schema
-// introspection altogether would satisfy every rejection assertion.
-func TestHandleGraphData_IntrospectionOneSpaceStillAccepted(t *testing.T) {
+// TestHandleGraphData_SpacingDoesNotWidenTheClass is the narrowness control for
+// the two tests above. A statement that is NOT a schema-introspection command
+// under any spacing must still reach the engine and fail there, so the refusal
+// covers the class the classifier recognises and not every statement beginning
+// with SHOW.
+func TestHandleGraphData_SpacingDoesNotWidenTheClass(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
-	name := seedRoadmap(t, "web-ui-rollout")
-	seedGraph(t, name, graphSeedQueries()...)
-
-	for _, query := range []string{
-		"SHOW INDEXES",
-		"SHOW INDEX",
-		"SHOW CONSTRAINTS",
-		"SHOW CONSTRAINT",
-		"show indexes",
-		"SHOW INDEXES   YIELD name",
-		"   SHOW INDEXES",
-		"/* schema check */ SHOW CONSTRAINTS",
-	} {
-		t.Run(query, func(t *testing.T) {
-			rec := doGraphData(t, name, url.Values{"q": {query}})
-			if rec.Code != http.StatusOK {
-				t.Fatalf("status = %d, want 200 for %q; body=%q", rec.Code, query, rec.Body.String())
-			}
-			// The success shape, not the error shape: a schema listing carries
-			// no graph elements, so both arrays are present and empty.
-			var body map[string]any
-			if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
-				t.Fatalf("decoding body: %v; body=%q", err, rec.Body.String())
-			}
-			if got := slices.Sorted(maps.Keys(body)); !slices.Equal(got, []string{"edges", "nodes"}) {
-				t.Errorf("body fields = %v, want exactly [edges nodes]; body=%q", got, rec.Body.String())
-			}
-		})
-	}
-}
-
-// TestHandleGraphData_KeywordSpacingPrecedence pins the order in which the
-// endpoint resolves a request that is wrong in more than one way:
-// `invalid_limit`, then `not_read_only`, then `invalid_keyword_spacing`
-// (SPEC/WEB.md § Query-Bar Error Handling, rule 6).
-//
-// Each combined case is preceded by the control that shows the lower-ranked
-// objection really does fire on its own, so the precedence assertions cannot
-// pass merely because the endpoint never produces the lower-ranked kind.
-func TestHandleGraphData_KeywordSpacingPrecedence(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
-	name := seedRoadmap(t, "web-ui-rollout")
-	seedGraph(t, name, graphSeedQueries()...)
-
-	// A statement that opens with a badly spaced SHOW and also carries a writing
-	// clause. It is nonsense Cypher, which is harmless precisely because it is
-	// never executed: the guard rail classifies it as a write AND as a misspaced
-	// introspection command, which is the only way to observe the precedence
-	// between the two.
-	const writingAndMisspaced = "SHOW  INDEXES YIELD name CREATE (n:Spec {key:'injected'})"
-
-	kindOf := func(t *testing.T, params url.Values) string {
-		t.Helper()
-		rec := doGraphData(t, name, params)
-		if rec.Code != http.StatusBadRequest {
-			t.Fatalf("status = %d, want 400; body=%q", rec.Code, rec.Body.String())
-		}
-		var body map[string]any
-		if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
-			t.Fatalf("decoding error body: %v; body=%q", err, rec.Body.String())
-		}
-		kind, _ := body["kind"].(string)
-		return kind
-	}
-
-	t.Run("control: the misspaced statement alone is a spacing rejection", func(t *testing.T) {
-		if got := kindOf(t, url.Values{"q": {"SHOW  INDEXES"}}); got != graphErrInvalidKeywordSpacing {
-			t.Errorf("kind = %q, want %q", got, graphErrInvalidKeywordSpacing)
-		}
-	})
-
-	t.Run("a writing query outranks the spacing objection", func(t *testing.T) {
-		if got := kindOf(t, url.Values{"q": {writingAndMisspaced}}); got != graphErrNotReadOnly {
-			t.Errorf("kind = %q, want %q: the objection that the query writes outranks the objection that it is misspelled", got, graphErrNotReadOnly)
-		}
-	})
-
-	t.Run("an invalid limit outranks the spacing objection", func(t *testing.T) {
-		if got := kindOf(t, url.Values{"limit": {"7"}, "q": {"SHOW  INDEXES"}}); got != graphErrInvalidLimit {
-			t.Errorf("kind = %q, want %q: the limit is resolved before the query is classified", got, graphErrInvalidLimit)
-		}
-	})
-
-	t.Run("an invalid limit outranks both other objections at once", func(t *testing.T) {
-		if got := kindOf(t, url.Values{"limit": {"7"}, "q": {writingAndMisspaced}}); got != graphErrInvalidLimit {
-			t.Errorf("kind = %q, want %q", got, graphErrInvalidLimit)
-		}
-	})
-
-	// The store is untouched by any of it: the injected node never appeared.
-	rec := doGraphData(t, name, nil)
-	var view graphView
-	if err := json.Unmarshal(rec.Body.Bytes(), &view); err != nil {
-		t.Fatalf("decoding post-rejection read: %v", err)
-	}
-	if len(view.Nodes) != 3 {
-		t.Errorf("after the precedence probes, nodes = %d, want 3: every rejection precedes execution", len(view.Nodes))
-	}
-}
-
-// TestHandleGraphData_KeywordSpacingKindIsDistinct asserts the new failure class
-// is genuinely a class of its own and is never confused with the read-only
-// rejection in either direction. A writing query keeps answering
-// `not_read_only`, and a misspaced SHOW never does — which is the whole reason
-// the value was added to the published contract.
-func TestHandleGraphData_KeywordSpacingKindIsDistinct(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
-	name := seedRoadmap(t, "web-ui-rollout")
-	seedGraph(t, name, graphSeedQueries()...)
+	name := seedGraphWithSchema(t, "web-ui-rollout")
 
 	cases := []struct {
 		name     string
 		query    string
 		wantKind string
 	}{
-		{"a delete is still not read-only", `MATCH (n) DELETE n`, graphErrNotReadOnly},
-		{"schema-mutating DDL is still not read-only", `CREATE   INDEX spec_idx FOR (n:Spec) ON (n.key)`, graphErrNotReadOnly},
-		{"a misspaced SHOW is a spacing rejection", "SHOW  INDEXES", graphErrInvalidKeywordSpacing},
-		{"a tab-spaced SHOW is a spacing rejection", "SHOW\tCONSTRAINTS", graphErrInvalidKeywordSpacing},
-		// Not a schema-introspection command under any spacing, so the guard
-		// rail must not answer for it: it reaches the engine and fails there.
 		{"a near miss on the keyword is an execution failure", "SHOW  INDEXER", graphErrExecution},
 		{"an unimplemented SHOW family is an execution failure", "SHOW  DATABASES", graphErrExecution},
+		{"a well-spaced unimplemented SHOW family is one too", "SHOW DATABASES", graphErrExecution},
+		{"a delete is still not read-only", `MATCH (n) DELETE n`, graphErrNotReadOnly},
+		{"schema-mutating DDL is still not read-only", `CREATE   INDEX spec_idx FOR (n:Spec) ON (n.key)`, graphErrNotReadOnly},
 	}
 
 	for _, tc := range cases {
@@ -256,12 +175,9 @@ func TestHandleGraphData_KeywordSpacingKindIsDistinct(t *testing.T) {
 			if rec.Code != http.StatusBadRequest {
 				t.Fatalf("status = %d, want 400; body=%q", rec.Code, rec.Body.String())
 			}
-			var body map[string]any
-			if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
-				t.Fatalf("decoding error body: %v; body=%q", err, rec.Body.String())
-			}
-			if body["kind"] != tc.wantKind {
-				t.Errorf("kind = %v, want %q; body=%q", body["kind"], tc.wantKind, rec.Body.String())
+			kind, reason := decodeQueryError(t, rec.Body.Bytes())
+			if kind != tc.wantKind {
+				t.Errorf("kind = %q, want %q; reason=%q", kind, tc.wantKind, reason)
 			}
 		})
 	}

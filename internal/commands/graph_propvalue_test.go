@@ -302,7 +302,7 @@ func TestGraphWrite_ContentRuleIsDecidedAfterTheClassRules(t *testing.T) {
 	if err == nil {
 		t.Fatal("graph update accepted a CREATE query")
 	}
-	if !strings.Contains(err.Error(), "graph update accepts only SET/REMOVE queries") {
+	if !strings.Contains(err.Error(), "graph update accepts only SET/REMOVE, index/constraint DDL, and schema-introspection queries") {
 		t.Errorf("the class objection must outrank the content objection, got: %v", err)
 	}
 

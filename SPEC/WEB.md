@@ -751,7 +751,7 @@ HTTP status mapping for page and data routes:
 | Tasks `type`, `priority`, or `severity` filter parameter absent, unknown, malformed, or undecodable | 200 (never an error; the dimension applies no filter; see [Roadmap Tasks Page](#roadmap-tasks-page)) |
 | Graph data `q` rejected by the read-only guard-rail | 400 (`kind` `not_read_only`; the query is not executed; see [Query-Bar Error Handling](#query-bar-error-handling)) |
 | Graph data `limit` not one of the six allowed values | 400 (`kind` `invalid_limit`; the query is not executed; see [Query-Bar Error Handling](#query-bar-error-handling)) |
-| Graph data `q` is a schema-introspection command whose keyword spacing the engine does not accept | 400 (`kind` `invalid_keyword_spacing`; the query is not executed; see [Query-Bar Error Handling](#query-bar-error-handling)) |
+| Graph data `q` is a schema-introspection command, at any keyword spacing | 400 (`kind` `schema_introspection`; the query is not executed; see [Query-Bar Error Handling](#query-bar-error-handling)) |
 | Graph data `q` reads a relationship bound by an incoming or undirected fixed-length pattern | 400 (`kind` `relationship_read_direction`; the query is not executed; see [Query-Bar Error Handling](#query-bar-error-handling) and `GRAPH.md § Relationship Read Direction`) |
 | Graph data query fails once running, a query cancelled for exhausting the time budget included | 400 (`kind` `execution`; see [Query-Bar Error Handling](#query-bar-error-handling)) |
 | Non-read HTTP method on any route | 405 |
@@ -2956,10 +2956,13 @@ already consumes; it adds no new endpoint and no write path.
    parameter sent on the request. The endpoint applies it as a `LIMIT` clause only
    when the user's query both lacks a top-level `LIMIT` of its own and is a
    statement form that admits a `LIMIT` clause. A user who writes their own `LIMIT`
-   keeps it and the dropdown value is not applied; a schema-introspection command
-   or a standalone procedure call admits no `LIMIT` at all, so the dropdown value
-   does not apply to it either and the query runs as written rather than failing in
-   the parser. The injection, precedence, and suppression rules are specified in
+   keeps it and the dropdown value is not applied; a standalone procedure call
+   admits no `LIMIT` at all, so the dropdown value does not apply to it either and
+   the query runs as written rather than failing in the parser. A
+   schema-introspection command likewise admits no `LIMIT`, but the endpoint
+   refuses that class outright, so the injection decision is never reached for it
+   (see [Query-Bar Error Handling](#query-bar-error-handling), case 10). The
+   injection, precedence, and suppression rules are specified in
    [Graph Data Endpoint](#graph-data-endpoint).
 
 7. **Read-only.** The query bar submits only read-only Cypher. A query containing
@@ -2975,9 +2978,9 @@ already consumes; it adds no new endpoint and no write path.
 
 8. **Error surfacing.** When a search fails — because the query is rejected as not
    read-only, because the limit is invalid, because the query is a
-   schema-introspection command whose keyword spacing the engine does not accept,
-   because the query reads a relationship bound by an incoming or undirected
-   fixed-length pattern, or because the query fails to execute,
+   schema-introspection command this endpoint does not render, because the query
+   reads a relationship bound by an incoming or undirected fixed-length pattern,
+   or because the query fails to execute,
    which includes exhausting the endpoint's query time budget (see
    [Graph Query Time Budget](#graph-query-time-budget)) — the page shows a clear,
    read-only message in place and does not crash, exactly as the layout
@@ -3008,9 +3011,9 @@ layout degradation already specified (see
 rule 5). The failure modes are kept distinct so the user understands what to fix.
 
 The endpoint answers each of the five — cases 1, 2 and 3 below, and the
-guard-rail rejections of cases 10 and 11 — with HTTP `400 Bad Request` and a JSON
-body that names the failure's class in a `kind` field, in the shape specified in
-`DATA_FORMATS.md § Graph View Data`, **Error Shape**. Rules 5 to 9 below fix the
+guard-rail rejections of cases 10 and 11 — with HTTP `400 Bad Request` and a
+JSON body that names the failure's class in a `kind` field, in the shape specified
+in `DATA_FORMATS.md § Graph View Data`, **Error Shape**. Rules 5 to 9 below fix the
 status, the precedence between the five, the boundary against the `500` of an
 internal read error, and what the body carries.
 
@@ -3048,14 +3051,21 @@ internal read error, and what the body carries.
    navigation, exactly as the layout-degradation message does. The user can edit
    the query or change the limit and search again.
 
-5. **One status, five kinds.** All five failures carry HTTP `400 Bad Request`,
+5. **One status, five kinds — and this rule is the one place the set is
+   enumerated.** The endpoint's `kind` takes exactly these five values and no
+   others: `not_read_only`, `invalid_limit`, `schema_introspection`,
+   `relationship_read_direction`, and `execution`. Every other statement of the
+   set in this specification refers here rather than repeating it, so the
+   count and the list cannot drift apart across sections; a value is added or
+   removed here first. All five failures carry HTTP `400 Bad Request`,
    and the body's `kind` field is what distinguishes them. One status fits all
    five because in each of them the server is able to serve the route and refuses
    the request the caller made: the query carries a clause the endpoint's contract
    forbids, the `limit` falls outside the closed set the endpoint publishes, the
-   query is a schema-introspection command written in a spelling the engine does
-   not accept, the query reads a relationship through a pattern the engine does not
-   resolve reliably, or the query the caller wrote cannot be executed. RFC 9110,
+   query is a schema-introspection command and this endpoint renders no schema
+   listing, the query reads
+   a relationship through a pattern the engine does not resolve reliably, or the
+   query the caller wrote cannot be executed. RFC 9110,
    Section 15.5.1, defines `400` as the status for a request the server "cannot or
    will not process ... due to something that is perceived to be a client error",
    and RFC 9110, Section
@@ -3063,7 +3073,11 @@ internal read error, and what the body carries.
    exactly what the `kind` and `error` fields are. A relationship-read-direction
    rejection is the "will not process" half of that definition rather than the
    "cannot": the endpoint is able to run the query and refuses to, because the
-   answer it would return is wrong. Splitting the five across
+   answer it would return is wrong. A schema-introspection rejection is that same
+   half for a different reason: the endpoint is able to run the statement and
+   refuses to, because its response carries nodes and edges and a schema listing is
+   neither, so running it would produce a result this endpoint has no shape to
+   return. Splitting the five across
    different statuses would assert a distinction HTTP does not carry, while the
    body already carries it precisely.
 
@@ -3085,18 +3099,48 @@ internal read error, and what the body carries.
    can be wrong in more than one way at once. The endpoint resolves the `limit`
    first and validates the query as read-only second, so a request carrying both an
    invalid `limit` and a query that is not read-only is answered `invalid_limit`,
-   not `not_read_only`. The keyword-spacing rejection of case 10 is third:
-   a query that is not read-only is answered `not_read_only` even when it also
-   carries a badly spaced `SHOW`, because the objection that it writes outranks the
-   objection that it is misspelled. The relationship-read-direction rejection of
-   case 11 is fourth and last, because every earlier objection outranks it: a query
-   that writes must be told that it writes, and a schema-introspection command the
-   engine cannot parse carries no pattern to orient. The full order is therefore
-   `invalid_limit`, then `not_read_only`, then `invalid_keyword_spacing`, then
-   `relationship_read_direction`, and it matches the CLI,
-   where the operation-class objection is likewise decided first (see
-   `GRAPH.md § Keyword Spacing in a Schema-Introspection Command` and
-   `GRAPH.md § Relationship Read Direction`). The order in
+   not `not_read_only`. The schema-introspection rejection of case 10 is third, and
+   the relationship-read-direction rejection of case 11 is fourth and last, because
+   every earlier objection outranks it: a query that writes must be told that it
+   writes, and a schema-introspection command carries no pattern to orient. The
+   full order is therefore `invalid_limit`, then `not_read_only`, then
+   `schema_introspection`, then `relationship_read_direction`, and its first two
+   places match the CLI, where the operation-class objection is likewise decided
+   first (see `GRAPH.md § Relationship Read Direction`).
+
+   **The two objections that outrank the schema-introspection rejection, in both
+   directions.** A request carrying an invalid `limit` and `SHOW INDEXES` is
+   answered `invalid_limit`, because the `limit` is resolved before the guard rail
+   runs at all; the same statement under an allowed `limit` is answered
+   `schema_introspection`. And a statement that is **both** an introspection
+   command and not read-only is answered `not_read_only`:
+   `SHOW INDEXES YIELD name CREATE INDEX audit_key FOR (n:Audit) ON (n.key)` is
+   such a statement, because the guard rail's clause classes are independent and
+   this one carries a DDL clause as well as the `SHOW` prefix; the same statement
+   without its DDL tail is answered `schema_introspection`. That is the CLI's order
+   too, where such a statement is refused on its DDL clause rather than admitted on
+   its `SHOW` prefix (see `GRAPH.md § Per-Subcommand Validation Rules`). A
+   **data-writing** tail does not produce this overlap and MUST NOT be used to
+   assert it: the engine reports a statement on which its own DDL predicate is true
+   as carrying no writing clause, so `SHOW INDEXES YIELD name CREATE (n:Audit)` is
+   classified read-only and is answered `schema_introspection`, not
+   `not_read_only`. A DDL tail is the one construction that exercises this pair.
+
+   **Keyword spacing decides nothing on this endpoint.** A badly spaced
+   `SHOW  INDEXES` and a well-spaced `SHOW INDEXES` receive the **same** status and
+   the **same** `kind`, because case 10 refuses the whole family, so the two are
+   indistinguishable in the response and there is no precedence question between
+   them. This endpoint publishes no keyword-spacing class; the CLI still does, and
+   `GRAPH.md § Keyword Spacing in a Schema-Introspection Command` is canonical for
+   that difference and for why it is deliberate.
+
+   **The fourth place is not reachable against the third.** A schema-introspection
+   command carries no relationship pattern the direction rule can read, so no
+   request is both a `schema_introspection` and a `relationship_read_direction`
+   rejection. The ordinal is published for completeness and MUST NOT be asserted by
+   a test, which could only assert it with a request that does not exist.
+
+   The order in
    which cases 1 to 3 and cases 10 and 11 appear above is the order in which they are
    easiest to explain and is **not** an order of precedence; this rule is the order
    of precedence and is the one to implement. The two orders
@@ -3129,20 +3173,21 @@ internal read error, and what the body carries.
 8. **The response body.** Each of the five failures carries a JSON body of exactly
    two string fields, `error` and `kind`, in the shape specified in
    `DATA_FORMATS.md § Graph View Data`, **Error Shape**, which is canonical for it.
-   `kind` is the machine-readable class — `not_read_only`, `invalid_limit`,
-   `invalid_keyword_spacing`, `relationship_read_direction`, or `execution` — and
-   `error` is the human-readable reason the page shows in place.
+   `kind` is the machine-readable class; rule 5 above enumerates its value set and
+   is canonical for it. `error` is the human-readable reason the page shows in
+   place.
    The `error` of an execution failure carries the engine's own diagnostic text, so
    the user reads for a given query the same diagnostic the CLI prints for it (see
    `GRAPH.md § Error Handling and Exit Codes`, rule 2) and can act on it; the
    `error` of an invalid limit names the rejected value, which is what case 2's
-   message requires, the `error` of a keyword-spacing rejection names the
-   spacing and the accepted spelling, which is what case 10's message requires, and
-   the `error` of a relationship-read-direction rejection names the relationship
-   variable, the direction of the pattern that bound it, and the outgoing rewrite,
-   which is what case 11's message requires. The `500` of an internal read error
-   does not carry this shape: it is answered as every other route's internal read
-   error is.
+   message requires; the `error` of a schema-introspection rejection states that
+   this page draws graphs and names `rmp graph query` as where a schema listing is
+   obtained, without naming the keyword spacing, which is what case 10's message
+   requires; and the `error` of a relationship-read-direction rejection names the
+   relationship variable, the direction of the pattern that bound it, and the
+   outgoing rewrite, which is what case 11's message requires. The `500` of an
+   internal read error does not carry this shape: it is answered as every other
+   route's internal read error is.
 
 9. **A request the caller abandoned is answered, but nobody reads the answer.** A
    client that disconnects mid-query cancels the query immediately (see
@@ -3156,27 +3201,88 @@ internal read error, and what the body carries.
    would be incomplete on the day it is written. It is not an outcome a connected
    client can observe, so no client-side test can assert it.
 
-10. **Query rejected: keyword spacing the engine does not accept.** When the
-    submitted query is a schema-introspection command — `SHOW INDEXES`,
-    `SHOW INDEX`, `SHOW CONSTRAINTS`, `SHOW CONSTRAINT` — written with anything
-    other than exactly one space between the two keywords, the shared guard rail
-    rejects it before execution and the query is never run (see
-    `GRAPH.md § Keyword Spacing in a Schema-Introspection Command`, which is
-    canonical for the rule and for why it exists). The endpoint answers HTTP
-    `400 Bad Request` with `kind` `invalid_keyword_spacing`, and the page surfaces
-    a clear message naming the spacing and the accepted spelling. The graph already
-    shown is left in place; the rejection changes nothing in the store.
+10. **Query rejected: a schema listing is not a graph.** When the submitted query
+    is a schema-introspection command — `SHOW INDEXES`, `SHOW INDEX`,
+    `SHOW CONSTRAINTS`, `SHOW CONSTRAINT`, with or without a `YIELD`, `WHERE`, or
+    `RETURN` tail — the shared guard rail rejects it before execution and the query
+    is never run. The endpoint answers HTTP `400 Bad Request` with `kind`
+    `schema_introspection`, and the page surfaces a clear message in place. The
+    graph already shown is left in place; the rejection changes nothing in the
+    store.
 
-    **Why this is a kind of its own and not `not_read_only`.** A `SHOW` statement
-    reads the schema and writes nothing, whatever its spacing, so answering
-    `not_read_only` would publish a classification that the message printed beside
-    it contradicts, and would tell a client that the query writes when it does not.
-    The two failures also have different fixes — one query must be rewritten to
-    stop writing, the other only to close a gap between two keywords — and a
-    machine-readable class exists to tell such cases apart. Adding a value is a
-    widening of the published contract, so a client that switches exhaustively over
-    `kind` sees a value it did not have before; that cost is accepted in exchange
-    for the distinction.
+    **The refusal covers the whole family, at every keyword spacing.** It reaches
+    the statement written with exactly one space between the two keywords — the
+    spelling the engine routes to its introspection parser — and equally the
+    statement written with two spaces, a tab, a line break, or a comment there. The
+    endpoint answers **one** `kind` for both, because on this surface both have the
+    **same** cause and the **same** fix (see
+    `GRAPH.md § Keyword Spacing in a Schema-Introspection Command`, which is
+    canonical for the spacing rule and for the CLI surfaces the rule still binds).
+
+    **What the message MUST say.** It MUST state that this page draws a graph of
+    nodes and edges and cannot show a schema listing, and it MUST name
+    `rmp graph query` as the command that reports the schema. A message that only
+    refused, without naming where the answer is obtained, would leave the caller
+    with a correct refusal and no way forward; the statement the caller wrote is
+    valid, supported, and answered in full by the CLI, so the endpoint owes them
+    that pointer. The exact wording is not fixed here, but the presence of
+    `rmp graph query` in the `error` is part of the contract and is testable. The
+    message MUST NOT name the keyword spacing, and MUST NOT invite the caller to
+    correct it: on this endpoint the spacing is not what is wrong.
+
+    **Why the class is refused rather than executed.** This endpoint's response
+    carries nodes and edges and nothing else (`DATA_FORMATS.md § Graph View Data`).
+    A schema-introspection command returns **tabular rows** — an index or
+    constraint name, its entity type, its properties — and no node and no edge. The
+    endpoint therefore has nowhere to put the result: executing the statement and
+    walking its result collects zero nodes and zero relationships, and the caller
+    receives `{"nodes": [], "edges": []}` with HTTP `200`, which is
+    **indistinguishable from a query that genuinely matched nothing**. An empty
+    graph presented as the answer is worse than a refusal, because it reports
+    success and states something false about the store: it says the schema is
+    empty when the store holds indexes. Refusing the class is what makes the
+    endpoint's answer honest.
+
+    **Why one kind and not two.** A kind exists per distinct **fix** the caller
+    must make. Because this endpoint refuses the class outright, correcting the
+    keyword spacing changes nothing here — the corrected statement is refused too,
+    for the same reason. Answering a badly spaced statement with a spacing
+    complaint would therefore name a correction that does not work, and would send
+    the caller round a loop that ends in this same refusal; the single fix, for
+    every spelling, is to ask `rmp graph query` instead. That is why this endpoint
+    publishes no `invalid_keyword_spacing` class at all.
+
+    **This is a deliberate divergence from the CLI, and the only one.** `graph
+    query`, `graph search` and `graph update` **accept** the schema-introspection
+    class, so on those surfaces the spacing genuinely is the whole objection to a
+    badly spaced statement, and they keep rejecting it with a message that names
+    the spacing and the accepted spelling, exactly as
+    `GRAPH.md § Keyword Spacing in a Schema-Introspection Command` specifies. That
+    rule is unchanged and MUST NOT be relaxed on the CLI to match this endpoint.
+    The two surfaces diverge because they differ in what they can return, not in
+    how they classify: **recognition is shared and identical** — the same start
+    anchoring, the same masked normalization, the same two spellings told apart —
+    and only the **verdict** differs, because a surface that answers the class owes
+    the caller a working spelling while a surface that refuses the class does not.
+
+    **Why this is a kind of its own and not `not_read_only`.** A
+    schema-introspection command reads the registered schema and writes nothing, so
+    answering `not_read_only` would publish a classification the message printed
+    beside it contradicts, and would tell a client the query writes when it does
+    not. It is not `execution` either: the statement does not fail in the engine,
+    and it never reaches the engine at all, so an `execution` answer would promise
+    an engine diagnostic that does not exist. The fix the caller must make is
+    distinct from every other case's — not to stop writing, not to reorient a
+    pattern, but to ask a different surface — and a machine-readable class exists
+    to tell such cases apart.
+
+    **Decided before the store is opened.** Like the rejections of cases 1, 2 and
+    11, this one is decided before the roadmap's graph store is opened and before
+    the endpoint injects its node `LIMIT`, so a rejected request opens nothing,
+    reads nothing, and writes nothing. Because the refusal precedes the injection
+    decision, the question of whether the statement admits a `LIMIT` clause is
+    never reached for it (see [Graph Data Endpoint](#graph-data-endpoint),
+    Suppression 2).
 
     This case is a guard-rail rejection of the same nature as case 1 and shares its
     precedence rule (rule 6). It is numbered after the rules, rather than inserted
@@ -3418,9 +3524,9 @@ write.
   the same file (see the next bullet).
 - **Failure responses.** The five ways a request to this endpoint fails — the
   read-only guard-rail rejection, an invalid `limit`, the guard-rail rejection of a
-  schema-introspection command whose keyword spacing the engine does not accept,
-  the guard-rail rejection of a query that reads a relationship bound by an
-  incoming or undirected fixed-length pattern, and a query execution failure — are
+  schema-introspection command, the guard-rail rejection of a query that reads a
+  relationship bound by an incoming or undirected fixed-length pattern, and a query
+  execution failure — are
   each answered with HTTP `400 Bad Request` and
   a JSON body naming the failure's class in a `kind` field, in the shape specified
   in `DATA_FORMATS.md § Graph View Data`, **Error Shape**. The status, the `kind`
@@ -3491,14 +3597,8 @@ write.
     statement fail in the **parser**, so a read form the guard rail accepts, and
     that `rmp graph query` runs, would be unusable through this endpoint and the
     endpoint would be stricter than the contract it publishes. The endpoint MUST
-    therefore inject nothing into either form below, and MUST execute each of them
-    as the caller wrote it.
-    - **A schema-introspection command.** The `SHOW INDEXES`, `SHOW INDEX`,
-      `SHOW CONSTRAINTS`, and `SHOW CONSTRAINT` forms that
-      `GRAPH.md § Schema Introspection` defines as a read-only class of their own.
-      Suppression covers the **whole** class, including a command that carries a
-      `YIELD`, `WHERE`, or `RETURN` tail: no form of the command admits a `LIMIT`
-      clause, so a tail does not make one injectable.
+    therefore inject nothing into the form below, and MUST execute it as the caller
+    wrote it.
     - **A standalone procedure call.** A statement whose first clause is `CALL`
       and that has **no top-level `RETURN`**. The call's result is not projected,
       and the unprojected form admits no `LIMIT` clause. A `CALL` that **is**
@@ -3509,18 +3609,27 @@ write.
       of the boundary: a `LIMIT` clause attaches only to a `RETURN` or a `WITH`
       projection, so a call carrying a `YIELD` but no top-level `RETURN` admits no
       `LIMIT` either, and is a standalone call for this rule.
-  - **Recognising the two non-limitable forms.** Both are recognised on the
+  - **The schema-introspection command is the other form that admits no `LIMIT`,
+    and this rule never reaches it.** The `SHOW INDEXES`, `SHOW INDEX`,
+    `SHOW CONSTRAINTS`, and `SHOW CONSTRAINT` forms admit no `LIMIT` clause either,
+    whole class and tails included. They are not listed above because the endpoint
+    refuses the class outright, before the injection decision is taken (see
+    [Query-Bar Error Handling](#query-bar-error-handling), case 10), so no such
+    statement ever reaches this rule and the question of injecting into one never
+    arises. The fact is recorded here rather than omitted, because the reason the
+    form is absent from the list is a refusal elsewhere and not an oversight.
+  - **Recognising the non-limitable form.** It is recognised on the
     **masked normalization** of the query, exactly as Suppression 1 and the
     read-only guard-rail are (see `GRAPH.md § Literal-Aware Normalization`), so a
-    `SHOW`, `CALL`, or `RETURN` keyword that appears only inside a string literal,
+    `CALL` or `RETURN` keyword that appears only inside a string literal,
     a comment, or a backtick-quoted identifier does not affect the decision.
     Recognition is **anchored to the start of the statement**, the same anchoring
     `GRAPH.md § Schema Introspection` requires of the introspection class: a `CALL`
     that appears inside a larger query, and an identifier, label, or property named
-    `show` or `call`, do not make the statement one of these forms. Suppression 2
-    changes no operation class: both forms are read-only before this rule and
-    after it, and the guard rail of the preceding bullet still runs on them first
-    and still decides, alone, whether they execute at all.
+    `call`, do not make the statement this form. Suppression 2
+    changes no operation class: the form is read-only before this rule and
+    after it, and the guard rail of the preceding bullet still runs on it first
+    and still decides, alone, whether it executes at all.
   - **Separator: the injected clause begins on a new line.** When the endpoint does
     inject, it MUST separate the injected `LIMIT <n>` from the query with a
     **newline**, never with a space. A query whose last line ends in a line comment
@@ -4830,7 +4939,7 @@ states explicitly.
 | Level | Meaning | Examples |
 |-------|---------|----------|
 | `ERROR` | The server failed. The condition is answered with HTTP 500 and is a fault of the server or of the environment it cannot recover from. | A roadmap's database cannot be read; a page template fails to execute; a response body fails to encode; the knowledge-graph store cannot be opened. |
-| `WARN` | The server did not fail, but an operator needs to know what happened. The condition is caused by the client or by the environment and leaves the server serving. | A query-bar query rejected as not read-only or failing in the engine (HTTP 400); a roadmap skipped by the startup schema migration; the interface bound to a non-loopback address. |
+| `WARN` | The server did not fail, but an operator needs to know what happened. The condition is caused by the client or by the environment and leaves the server serving. | A query-bar query rejected by the guard rail or failing in the engine (HTTP 400); a roadmap skipped by the startup schema migration; the interface bound to a non-loopback address. |
 | `INFO` | Enabled, but unused in this version: a successful request and a successful startup write no record. | — |
 
 ### What Is Logged
@@ -4866,7 +4975,7 @@ HTTP 400 the graph data endpoint produces by exactly one `WARN` record.
 | `GET /roadmaps/{name}/tasks/{id}/data` | the task detail cannot be loaded for a reason other than not-found | `ERROR` | 500 |
 | `GET /roadmaps/{name}/audit` | the audit page cannot be loaded | `ERROR` | 500 |
 | `GET /roadmaps/{name}/sprints/{id}` | the sprint cannot be loaded for a reason other than not-found | `ERROR` | 500 |
-| `GET /roadmaps/{name}/graph/data` | the query bar's query was rejected as not read-only, its limit was invalid, its keyword spacing was one the engine does not accept, it read a relationship bound by an incoming or undirected pattern, or the accepted query failed in the engine | `WARN` | 400 |
+| `GET /roadmaps/{name}/graph/data` | the query bar's query was rejected as not read-only, its limit was invalid, it was a schema-introspection command this endpoint does not render, it read a relationship bound by an incoming or undirected pattern, or the accepted query failed in the engine | `WARN` | 400 |
 | `GET /roadmaps/{name}/graph/data` | the graph cannot be read for any other reason | `ERROR` | 500 |
 | HTML rendering | the page template fails to execute | `ERROR` | 500 |
 | JSON rendering | the response body fails to encode | `ERROR` | 500 |
@@ -5489,9 +5598,10 @@ Rules:
     rejection, invalid limit, or execution failure — the message is shown in place,
     the page does not crash, and the failure triggers no write and no navigation,
     consistent with the graceful layout degradation; the user can edit the query or
-    change the limit and search again. The same holds for the keyword-spacing
-    rejection of Acceptance Criterion 151 and for the relationship-read-direction
-    rejection of Acceptance Criterion 156. All five failures are answered HTTP
+    change the limit and search again. The same holds for the schema-introspection
+    rejection of Acceptance Criteria 157 and 151, and for the
+    relationship-read-direction rejection of Acceptance Criterion 156. All five
+    failures are answered HTTP
     `400 Bad Request`, and the body's `kind` is what tells them apart
     (Acceptance Criterion 123; see
     [Query-Bar Error Handling](#query-bar-error-handling)).
@@ -6079,20 +6189,25 @@ Rules:
     [Graph Query Time Budget](#graph-query-time-budget)).
 111. `GET /roadmaps/{name}/graph/data` injects no node `LIMIT` into a statement form
     that admits no `LIMIT` clause, and runs that form instead of failing it in the
-    parser. Two forms admit none: a schema-introspection command (`SHOW INDEXES`,
-    `SHOW INDEX`, `SHOW CONSTRAINTS`, or `SHOW CONSTRAINT`, with or without a
-    `YIELD`, `WHERE`, or `RETURN` tail) and a standalone procedure call (a statement
-    whose first clause is `CALL` and that has no top-level `RETURN`). A request
-    whose `q` is either form executes and succeeds; neither is answered with the
-    parse failure that appending a `LIMIT` to it produces. Both are classified
-    read-only by the guard rail and both run from `rmp graph query`, so the endpoint
+    parser. The form this criterion reaches is a standalone procedure call (a
+    statement whose first clause is `CALL` and that has no top-level `RETURN`). A
+    request whose `q` is that form executes and succeeds; it is not answered with
+    the parse failure that appending a `LIMIT` to it produces. It is classified
+    read-only by the guard rail and runs from `rmp graph query`, so the endpoint
     is no stricter than the contract it publishes (see
-    [Graph Data Endpoint](#graph-data-endpoint) and
-    `GRAPH.md § Schema Introspection`). A `CALL` projected through a top-level
+    [Graph Data Endpoint](#graph-data-endpoint)). The **schema-introspection
+    command** (`SHOW INDEXES`, `SHOW INDEX`, `SHOW CONSTRAINTS`, or
+    `SHOW CONSTRAINT`, with or without a `YIELD`, `WHERE`, or `RETURN` tail) admits
+    no `LIMIT` clause either, but it does **not** execute here: the endpoint refuses
+    the class before the injection decision is taken, so this criterion never
+    reaches it and an assertion that it returns HTTP 200 contradicts Acceptance
+    Criterion 157 (see `GRAPH.md § Schema Introspection` for the class and
+    [Query-Bar Error Handling](#query-bar-error-handling), case 10, for the
+    refusal). A `CALL` projected through a top-level
     `RETURN` (`CALL ... YIELD ... RETURN ...`) is **not** a standalone call: it
     admits a `LIMIT`, receives the injection, and returns at most the resolved
-    limit's worth of rows. The two forms are recognised on the masked
-    normalization and anchored to the start of the statement, so a `SHOW`, `CALL`,
+    limit's worth of rows. The form is recognised on the masked
+    normalization and anchored to the start of the statement, so a `CALL`
     or `RETURN` keyword inside a string literal, a comment, or a backtick-quoted
     identifier, and a `CALL` nested inside a larger query, do not trigger
     suppression. Every ordinary reading query is unaffected and keeps the behaviour
@@ -6274,23 +6389,37 @@ Rules:
 123. Every query-bar failure of `GET /roadmaps/{name}/graph/data` is answered with
     HTTP `400 Bad Request` and a JSON body of exactly two string fields, `error`
     and `kind`, and never with HTTP 200 and never with the
-    `{"nodes": ..., "edges": ...}` shape. `kind` takes exactly five values:
+    `{"nodes": ..., "edges": ...}` shape. `kind` takes exactly five values, the
+    set [Query-Bar Error Handling](#query-bar-error-handling), rule 5, enumerates
+    and is canonical for:
     `not_read_only` for a query the read-only guard-rail rejected (Acceptance
     Criterion 47), `invalid_limit` for a `limit` outside the six allowed values
-    (Acceptance Criterion 48), `invalid_keyword_spacing` for a schema-introspection
-    command whose keyword spacing the engine does not accept (Acceptance Criterion
-    151), `relationship_read_direction` for a query that reads a relationship bound
+    (Acceptance Criterion 48),
+    `relationship_read_direction` for a query that reads a relationship bound
     by an incoming or undirected fixed-length pattern (Acceptance Criterion 156),
+    `schema_introspection` for a schema-introspection command at any keyword
+    spacing (Acceptance Criteria 157 and 151),
     and `execution` for a query that failed once running, which includes a
     query cancelled for exhausting the 5-second time budget (Acceptance Criterion
-    110). One status serves all five and the `kind` is what distinguishes them. The
+    110). One status serves all five and the `kind` is what distinguishes them.
+    There is **no** `invalid_keyword_spacing` value on this endpoint: a body
+    carrying one MUST fail this criterion. The
     precedence is fixed and testable: a request carrying both an invalid `limit` and
     a query that is not read-only is answered `invalid_limit`, because the endpoint
     resolves the limit before it runs the guard rail, a query that is not
     read-only is answered `not_read_only` even when it also carries a badly spaced
-    `SHOW`, and a query that both writes and reads a relationship through an
+    `SHOW`, a query that both writes and reads a relationship through an
     incoming or undirected pattern is answered `not_read_only` rather than
-    `relationship_read_direction`. The boundary against the internal read error is
+    `relationship_read_direction`, a request carrying both an invalid `limit` and
+    `SHOW INDEXES` is answered `invalid_limit` rather than `schema_introspection`,
+    and a schema-introspection command carrying a DDL tail
+    (`SHOW INDEXES YIELD name CREATE INDEX audit_key FOR (n:Audit) ON (n.key)`) is
+    answered `not_read_only` rather than `schema_introspection`, while the same
+    statement without that tail is answered `schema_introspection`. One ordinal
+    this specification publishes is **not** assertable and MUST NOT be tested,
+    because no request can exhibit it: `relationship_read_direction` against
+    `schema_introspection`, because an introspection command carries no
+    relationship pattern to orient. The boundary against the internal read error is
     drawn at the moment the failure surfaces: a graph store that fails to open is
     answered HTTP 500,
     while a failure surfacing once the query is running is answered HTTP 400 with
@@ -6627,9 +6756,8 @@ Rules:
     unchanged: it remains the opaque `internal server error` text, and the error
     detail never reaches the client. Stdout carries only the startup URL object;
     no log record is ever written to it.
-142. An HTTP 400 from `GET /roadmaps/{name}/graph/data` — a query-bar query
-    rejected as not read-only, an invalid limit, or an accepted query that failed
-    in the engine — is accompanied by exactly one `WARN` record carrying the
+142. An HTTP 400 from `GET /roadmaps/{name}/graph/data` — any query-bar failure,
+    whatever its `kind` — is accompanied by exactly one `WARN` record carrying the
     failure `kind` and the reason under `err`, matching the `kind` and `error` the
     structured JSON response already carries. The failure still triggers no write,
     no checkpoint, and no navigation.
@@ -6672,19 +6800,29 @@ Rules:
     is served correctly: the response carries the committed graph, and the
     recovery repair those two states require is expected behaviour, not a defect
     (see `GRAPH.md § What a Read Changes on Disk`).
-151. A graph data request whose `q` is a schema-introspection command written with
-    two spaces, with a tab, or with a line break between `SHOW` and its target
-    keyword is answered HTTP `400 Bad Request` with a JSON body whose `kind` is
-    `invalid_keyword_spacing`, and the query is never executed: the body carries no
-    `nodes` and no `edges`, and the `error` names the spacing and the accepted
-    spelling rather than describing the query as not read-only. The same request
-    with exactly one space returns the normal `{"nodes": ..., "edges": ...}` shape
-    with HTTP 200, so the two differ only in the separator. The rejection is the
-    guard rail's, not the engine's: the response is not `kind` `execution` and
-    carries no engine parse diagnostic. This is the web surface of
-    `GRAPH.md § Keyword Spacing in a Schema-Introspection Command` and of that
-    file's Acceptance Criterion 39, which the CLI subcommands satisfy on the same
-    input (see [Query-Bar Error Handling](#query-bar-error-handling), case 10).
+151. Keyword spacing changes nothing about what the graph data endpoint answers.
+    A request whose `q` is a schema-introspection command written with two spaces,
+    with a tab, or with a line break between `SHOW` and its target keyword is
+    answered exactly as the same command written with one space is: HTTP
+    `400 Bad Request`, `kind` `schema_introspection`, and the message Acceptance
+    Criterion 157 requires. The status, the `kind`, and the `error` MUST be equal
+    across the spellings, asserted by comparing the two responses rather than by
+    checking each against a literal. The `error` MUST NOT name the keyword spacing
+    and MUST NOT offer the one-space spelling as a correction, because on this
+    endpoint correcting it changes nothing; and the body MUST NOT carry `kind`
+    `invalid_keyword_spacing`, a value this endpoint does not publish
+    (Acceptance Criterion 123).
+    **The CLI is unaffected, and this criterion pins that too.** The same badly
+    spaced statement given to `rmp graph query`, `rmp graph search` and
+    `rmp graph update` still exits **6** with a message naming the keyword spacing
+    and the accepted spelling, exactly as `GRAPH.md` Acceptance Criterion 39
+    requires. The divergence is deliberate: the CLI answers the class, so a working
+    spelling is owed there, while this endpoint refuses the class, so no spelling
+    works here. A change that made the endpoint report the spacing again, or that
+    relaxed the CLI's spacing rejection to match the endpoint, MUST fail this
+    criterion (see
+    `GRAPH.md § Keyword Spacing in a Schema-Introspection Command` and
+    [Query-Bar Error Handling](#query-bar-error-handling), case 10).
 152. A term and a task's searchable text are normalised to Unicode's **Normalization
     Form C** before they are folded, and the pipeline for a term is trim, then NFC,
     then fold, then NFC, in that order, on both paths. The normalisation is for
@@ -6782,6 +6920,45 @@ Rules:
     for those exclusions (notes 1, 2 and 5), and of that file's Acceptance Criteria
     42 to 44, which fix the same rule on the CLI's read subcommands (see
     [Query-Bar Error Handling](#query-bar-error-handling), case 11).
+157. A graph data request whose `q` is a schema-introspection command is refused
+    with an explanation, and is never executed. Against a store that holds at least
+    one index and one constraint — the store of `GRAPH.md` Acceptance Criterion 62
+    — each of `SHOW INDEXES`, `SHOW INDEX`, `SHOW CONSTRAINTS` and
+    `SHOW CONSTRAINT` submitted as `q` is answered HTTP `400 Bad Request` with a
+    JSON body whose `kind` is `schema_introspection`, whose `error` states that
+    this page draws a graph and names `rmp graph query` as where a schema listing
+    is obtained, and which carries neither `nodes` nor `edges`. The same holds for
+    a command carrying a `YIELD`, `WHERE`, or `RETURN` tail, and at any keyword
+    spacing (Acceptance Criterion 151). Answering HTTP 200 with
+    `{"nodes": [], "edges": []}` MUST
+    fail this criterion, and the status alone MUST NOT be the only assertion: an empty
+    graph reports success while stating something false about a store that does
+    hold a schema, and is indistinguishable from a query that genuinely matched
+    nothing.
+    **The control, without which the refusal is not shown to be narrow:** a request
+    whose `q` is `MATCH (n) OPTIONAL MATCH (n)-[r]->(m) RETURN n, r, m` returns
+    HTTP 200 and the ordinary `{"nodes": ..., "edges": ...}` shape against the same
+    store, so what the endpoint refuses is a class and not queries in general.
+    **The refusal precedes the store open**, on the same terms as the guard-rail
+    rejections of Acceptance Criteria 47 and 156: a request rejected under this
+    criterion opens no graph store, runs no checkpoint, truncates no write-ahead
+    log, and leaves the store's files unmodified.
+    **The precedence is asserted in both directions** (Acceptance Criterion 123): a
+    request carrying `SHOW INDEXES` with a `limit` of `7` is answered
+    `invalid_limit`, while the same query under an allowed `limit` is answered
+    `schema_introspection`; and a request whose `q` is
+    `SHOW INDEXES YIELD name CREATE INDEX audit_key FOR (n:Audit) ON (n.key)` is
+    answered `not_read_only`, while the same statement without that DDL tail is
+    answered `schema_introspection`. A **data-writing** tail MUST NOT be used to
+    assert that second pair, and a test that uses one asserts nothing: the engine
+    reports a statement its own DDL predicate accepts as carrying no writing
+    clause, so `SHOW INDEXES YIELD name CREATE (n:Audit)` classifies as read-only
+    and is itself answered `schema_introspection`. The `error` is HTML-escaped as
+    every other response of this endpoint is (Acceptance Criterion 35). This is the
+    web surface of `GRAPH.md § Recovered Schema on Both Paths`, whose three CLI
+    surfaces answer the same statement with the schema the store holds
+    (`GRAPH.md` Acceptance Criterion 64); see
+    [Query-Bar Error Handling](#query-bar-error-handling), case 10.
 
 ## See Also
 
@@ -6807,8 +6984,8 @@ Rules:
   the query bar's user-supplied Cypher →
   `GRAPH.md § Subcommands and Guard-Rail Validation` and
   `GRAPH.md § Literal-Aware Normalization`
-- Schema-introspection commands, the read-only class the graph data endpoint
-  admits and injects no node limit into → `GRAPH.md § Schema Introspection`
+- Schema-introspection commands, the read-only class the CLI read subcommands
+  answer and the graph data endpoint refuses → `GRAPH.md § Schema Introspection`
 - Roadmap discovery, data directory layout, and permissions →
   `ARCHITECTURE.md § Directory Structure`
 - SQLite schema migrations the startup step runs, and their idempotency →

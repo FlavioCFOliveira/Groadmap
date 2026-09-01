@@ -476,15 +476,15 @@ Rules:
 ## Graph Write Result
 
 The write graph subcommands (`rmp graph create`, `rmp graph update`,
-`rmp graph delete`) mirror their query's `RETURN` clause. The output shape
-depends on whether the query returns anything:
+`rmp graph delete`) mirror what the executed statement returns. The discriminator
+is whether the statement produces **result columns**:
 
-1. **With a `RETURN` clause:** the output is the standard read-result shape
-   defined in [Graph Query Result](#graph-query-result) — a `columns` array and a
-   `rows` array — populated with the elements the query returns. For example, a
-   `CREATE ... RETURN n` query returns the created node in the `{columns, rows}`
-   shape.
-2. **Without a `RETURN` clause:** the output is exactly:
+1. **The statement produces result columns:** the output is the standard
+   read-result shape defined in [Graph Query Result](#graph-query-result) — a
+   `columns` array and a `rows` array — populated with the elements the statement
+   returns. For example, a `CREATE ... RETURN n` query returns the created node in
+   the `{columns, rows}` shape.
+2. **The statement produces no result columns:** the output is exactly:
 
 ```json
 {"ok": true}
@@ -493,18 +493,31 @@ depends on whether the query returns anything:
 The GoGraph engine exposes only the result's columns and an iterable record
 sequence; it reports no mutation or affected-element counter. There is therefore
 **no** count field in the write result, and the CLI does not attempt to compute
-one. The `{"ok": true}` object is the success signal for a write query that
-returns no data.
+one. The `{"ok": true}` object is the success signal for a statement that returns no
+data.
 
-Field reference (no-`RETURN` case):
+**Why the discriminator is the columns and not the `RETURN` clause.** For every
+data-writing query the two coincide exactly: a `CREATE`, `MERGE`, `SET`,
+`REMOVE`, `DELETE`, or `DETACH DELETE` query produces columns when, and only
+when, it carries a `RETURN` clause. They part company on the schema statements
+`rmp graph update` also accepts (see `GRAPH.md § Schema Management`). A
+schema-introspection command — `SHOW INDEXES` and its siblings — produces columns
+while carrying no `RETURN` clause, so it returns the `{columns, rows}` shape, and
+the listing it returns is identical to the one the same command returns under
+`rmp graph query`. A schema-mutating statement — `CREATE INDEX`, `DROP INDEX`,
+`CREATE CONSTRAINT`, `DROP CONSTRAINT` — produces no columns and returns
+`{"ok": true}`.
+
+Field reference (no-columns case):
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `ok` | boolean | Always `true`. Confirms the write transaction committed successfully. |
+| `ok` | boolean | Always `true`. Confirms the statement succeeded: for a data-writing query, that its transaction committed; for a schema-mutating statement, that the schema change was applied. |
 
 Examples:
 
-A write query without `RETURN`:
+A write query without `RETURN`, or a schema-mutating statement such as
+`CREATE INDEX`:
 
 ```json
 {"ok": true}
@@ -638,38 +651,39 @@ Field reference:
 | Field | Type | Description |
 |-------|------|-------------|
 | `error` | string | The human-readable reason. The graph page shows it in place as its failure message. |
-| `kind` | string | The machine-readable failure class: `not_read_only`, `invalid_limit`, `invalid_keyword_spacing`, `relationship_read_direction`, or `execution`. |
+| `kind` | string | The machine-readable failure class. `WEB.md § Query-Bar Error Handling`, rule 5, enumerates the value set and is canonical for it; this file does not repeat it. |
 
 Rules:
 
 1. Both fields are always present and both are always strings. The object carries
    these two fields and no others, and it carries neither `nodes` nor `edges`.
-2. `kind` takes exactly five values, one per failure class in
-   `WEB.md § Query-Bar Error Handling`: `not_read_only` for a query the read-only
-   guard-rail rejected before execution, `invalid_limit` for a `limit` that is not
-   one of the six allowed values, `invalid_keyword_spacing` for a
-   schema-introspection command the guard rail rejected before execution because
-   its keyword spacing is not the one the engine accepts (see
-   `GRAPH.md § Keyword Spacing in a Schema-Introspection Command`),
-   `relationship_read_direction` for a query the guard rail rejected before
-   execution because it reads a relationship bound by an incoming or undirected
-   fixed-length pattern (see `GRAPH.md § Relationship Read Direction`), and
-   `execution` for a query that was accepted as read-only and then failed once
-   running. A query
+2. `kind` carries one value per failure class, drawn from the closed set
+   `WEB.md § Query-Bar Error Handling`, rule 5, publishes; that rule is canonical
+   for which values exist and how many, and this file deliberately does not carry
+   a second copy of the list, so the two cannot disagree. What each value means is
+   fixed there too: a read-only guard-rail rejection, an invalid `limit`, a
+   schema-introspection command the endpoint renders no listing for (see
+   `GRAPH.md § Schema Introspection`), a relationship read through an incoming or
+   undirected fixed-length pattern (see `GRAPH.md § Relationship Read Direction`),
+   and a query accepted as read-only that then failed once running. A query
    cancelled for exhausting the endpoint's query time budget is an execution
-   failure and carries `execution`; the budget adds no value of its own (see
-   `WEB.md § Graph Query Time Budget`).
+   failure and carries the execution value; the budget adds no value of its own
+   (see `WEB.md § Graph Query Time Budget`).
 3. `error` is written to be read by a person and is not parsed. For an execution
    failure it carries the engine's own diagnostic text, so a given query produces
    the same diagnostic here as it produces on the CLI (see
    `GRAPH.md § Error Handling and Exit Codes`, rule 2). For an invalid limit it
-   names the rejected value. For a keyword-spacing rejection it names the spacing
-   and the accepted spelling, and never describes the query as not read-only: a
-   schema-introspection command reads and writes nothing whatever its spacing. For
+   names the rejected value. For
    a relationship-read-direction rejection it names the relationship variable, the
    direction of the pattern that bound it, and the outgoing rewrite, and likewise
    never describes the query as not read-only: such a query carries no writing
    clause and no DDL clause, and only the orientation of its pattern is refused.
+   For a schema-introspection rejection it states that the page draws a graph and
+   names `rmp graph query` as the command that reports the schema; it likewise
+   never describes the query as not read-only, because the statement reads the
+   registered schema and writes nothing, and it never names the statement's keyword
+   spacing, because the refusal holds at every spacing and correcting the spacing
+   would change nothing.
 4. The object is serialized exactly as every other response of this endpoint is:
    HTML-safe, so `<`, `>`, and `&` are escaped (see `WEB.md § Graph Data Endpoint`),
    pretty-printed with two-space indentation, and terminated by a newline (see

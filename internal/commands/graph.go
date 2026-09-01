@@ -89,7 +89,9 @@ is read from standard input.
 Subcommands:
   create   Execute a CREATE / MERGE query (adds nodes or edges)
   query    Execute a read-only MATCH ... RETURN or SHOW query
-  update   Execute a SET / REMOVE query (mutates existing elements)
+  update   Execute a SET / REMOVE query (mutates existing elements), or
+           manage the schema (CREATE/DROP INDEX, CREATE/DROP CONSTRAINT,
+           SHOW INDEXES / SHOW CONSTRAINTS)
   delete   Execute a DELETE / DETACH DELETE query (removes nodes or edges)
   search   Execute a read-only traversal query (variable-length paths, etc.)
 
@@ -190,9 +192,27 @@ Examples:
 func printGraphUpdateHelp() {
 	fmt.Fprint(helpDst(), `Usage: rmp graph update -r <roadmap> [-q <cypher>]
 
-Execute a SET or REMOVE query against the roadmap's knowledge graph.
-The query MUST contain SET and/or REMOVE clauses and MUST NOT contain
-CREATE, MERGE, DELETE, or DETACH DELETE.
+Mutate existing graph elements, and manage the graph's schema. This is the
+only subcommand that accepts more than one operation class; it accepts three:
+
+  1. A SET and/or REMOVE query, which runs as a single transaction. It MUST
+     NOT contain CREATE, MERGE, DELETE, or DETACH DELETE.
+  2. Schema DDL, which the engine runs outside the transaction:
+       CREATE INDEX [name] [IF NOT EXISTS] FOR (n:Label) ON (n.property)
+                                           [OPTIONS {indexType:'hash'|'btree'}]
+       DROP INDEX <name> [IF EXISTS]
+       CREATE CONSTRAINT [name] [IF NOT EXISTS] FOR (n:Label)
+                                REQUIRE n.property IS UNIQUE | IS NOT NULL
+       DROP CONSTRAINT <name> [IF EXISTS]
+  3. Schema introspection: SHOW INDEXES and SHOW CONSTRAINTS (and their
+     singular aliases), optionally followed by a YIELD / WHERE / RETURN
+     projection. They list the registered schema and change nothing.
+
+One statement per invocation. There is no ALTER INDEX: changing an index is a
+DROP INDEX followed by a CREATE INDEX, as two separate invocations, and the
+index is absent between them. An index or a constraint covers a single node
+property; removal is by name, and SHOW INDEXES reports the name an unnamed
+object was given.
 
 Required:
   -r, --roadmap <name>    Target roadmap
@@ -202,20 +222,29 @@ Optional:
   -h, --help              Show this help message
 
 Output (stdout JSON):
-  Without a RETURN clause:  {"ok": true}
-  With a RETURN clause:     {"columns": [...], "rows": [[...], ...]}
+  Without result columns:   {"ok": true}
+  With result columns:      {"columns": [...], "rows": [[...], ...]}
+  A schema-mutating statement returns {"ok": true}; SHOW INDEXES and
+  SHOW CONSTRAINTS return the listing, though they carry no RETURN clause.
 
 Exit codes:
   0   Success
-  1   Graph store unavailable or Cypher execution error
+  1   Graph store unavailable, Cypher execution error, or a schema statement
+      the engine refused: a duplicate create, a drop of an object that does
+      not exist, an unsupported definition, or a constraint the data does
+      not satisfy
   2   No query supplied
   3   No roadmap selected
   4   Roadmap not found
-  6   Query class mismatch (guard-rail rejection)
+  6   Query class mismatch, keyword spacing, or a second clause after a
+      schema statement (guard-rail rejection)
 
 Examples:
   rmp graph update -r myproject --query "MATCH (n:Spec {key:'auth'}) SET n.status='done'"
   echo "MATCH (n:Spec {key:'auth'}) REMOVE n.status" | rmp graph update -r myproject
+  rmp graph update -r myproject --query "CREATE INDEX spec_key FOR (n:Spec) ON (n.key)"
+  rmp graph update -r myproject --query "SHOW INDEXES"
+  rmp graph update -r myproject --query "DROP INDEX spec_key"
 `)
 }
 
@@ -531,16 +560,37 @@ func maskCypherLiterals(query string) string {
 	return cypherguard.MaskLiterals(query)
 }
 
+// updateClassRefusal is the message `graph update` publishes when a query's
+// operation class is outside every class it accepts. It names all three, because
+// `graph update` is the one subcommand that accepts more than one and a message
+// naming only the first would send a caller looking for a schema subcommand that
+// does not exist.
+//
+// It is a constant because SPEC/COMMANDS.md § Graph Management publishes it
+// verbatim as the refusal for an operation-class mismatch on this subcommand,
+// and tests/test_55_error_string_parity drives the published corpus against the
+// binary: the string here and the string there are one contract.
+const updateClassRefusal = "graph update accepts only SET/REMOVE, index/constraint DDL, and schema-introspection queries"
+
 // validateGuardRail checks that query matches the operation class required by
 // subcmd. It returns ErrValidation when the class does not match, with a
 // message that names the subcommand and the expected class.
 //
-// The read subcommands carry one further acceptance rule, applied after the
-// class rule and only to them: a schema-introspection command is accepted only
-// in the keyword spelling the engine routes to its introspection parser
-// (SPEC/GRAPH.md § Keyword Spacing in a Schema-Introspection Command). It is a
-// rule about which statements the introspection class covers, which is why it
-// belongs to the guard rail rather than beside it.
+// Four subcommands accept one class each. `graph update` accepts THREE, because
+// it is also the schema subcommand: a mutating SET/REMOVE write, a
+// schema-mutating DDL statement, and a schema-introspection command
+// (SPEC/GRAPH.md § Per-Subcommand Validation Rules; § Schema Management). The
+// other four keep rejecting DDL at every spacing, which is what lets one
+// subcommand be given the class without the rest losing the refusal that
+// protects them.
+//
+// Every subcommand that ACCEPTS the schema-introspection class carries one
+// further acceptance rule, applied after the class rule: such a command is
+// accepted only in the keyword spelling the engine routes to its introspection
+// parser (SPEC/GRAPH.md § Keyword Spacing in a Schema-Introspection Command).
+// That is the two read subcommands and `graph update`. It is a rule about which
+// statements the introspection class covers, which is why it belongs to the
+// guard rail rather than beside it.
 //
 // Classification runs on the literal-masked normalization of the query, never
 // on the raw string (SPEC/GRAPH.md § Literal-Aware Normalization): a clause
@@ -553,22 +603,28 @@ func validateGuardRail(subcmd, allowed, query string) error {
 	c := cypherguard.Classify(query)
 
 	// DDL (CREATE INDEX, DROP INDEX, CREATE CONSTRAINT, DROP CONSTRAINT) is a
-	// schema-mutating clause class that is outside every subcommand's accepted
-	// class (SPEC/GRAPH.md § Per-Subcommand Validation Rules note 5): the read
-	// subcommands accept only read-only queries and DDL is not read-only, and
-	// the write subcommands each accept only their own data-writing clause.
-	// QueryHasWritingClause does not flag DDL (and the two-word CREATE INDEX /
-	// CREATE CONSTRAINT forms would otherwise satisfy the create accept check),
-	// so DDL is rejected up front for ALL subcommands, with the per-subcommand
-	// message that names the class each one does accept.
+	// schema-mutating clause class that is outside the accepted class of every
+	// subcommand BUT `graph update` (SPEC/GRAPH.md § Per-Subcommand Validation
+	// Rules note 5): the read subcommands accept only read-only queries and DDL
+	// is not read-only, and `graph create` and `graph delete` each accept only
+	// their own data-writing clause. QueryHasWritingClause does not flag DDL
+	// (and the two-word CREATE INDEX / CREATE CONSTRAINT forms would otherwise
+	// satisfy the create accept check), so DDL is rejected up front for those
+	// four, with the per-subcommand message that names the class each one does
+	// accept.
+	//
+	// `graph update` is deliberately absent from this block rather than absent
+	// by oversight: it is the subcommand through which the graph's schema is
+	// managed, so it is the single subcommand that accepts the class, and its
+	// own branch below decides the statement. Adding a subcommand back to this
+	// block, or removing one from it, is a change to that table before it is a
+	// change to this code.
 	if c.DDL {
 		switch subcmd {
 		case "query", "search":
 			return fmt.Errorf("%w: graph %s accepts only %s queries", utils.ErrValidation, subcmd, allowed)
 		case "create":
 			return fmt.Errorf("%w: graph create accepts only CREATE/MERGE queries", utils.ErrValidation)
-		case "update":
-			return fmt.Errorf("%w: graph update accepts only SET/REMOVE queries", utils.ErrValidation)
 		case "delete":
 			return fmt.Errorf("%w: graph delete accepts only DELETE/DETACH DELETE queries", utils.ErrValidation)
 		}
@@ -605,9 +661,46 @@ func validateGuardRail(subcmd, allowed, query string) error {
 			return fmt.Errorf("%w: graph %s: %s", utils.ErrValidation, subcmd, reason)
 		}
 	case "update":
-		// Must be write, must have SET/REMOVE, must not have CREATE/MERGE/DELETE.
-		if !c.Write || !c.Mutate || c.Create || c.Delete {
-			return fmt.Errorf("%w: graph update accepts only SET/REMOVE queries", utils.ErrValidation)
+		// Three accepted classes, decided in an order the classification forces.
+		//
+		// Schema-mutating DDL comes FIRST because the two-word CREATE INDEX and
+		// CREATE CONSTRAINT forms also satisfy the CREATE discriminator: read in
+		// the other order, every index creation would be refused as the
+		// data-writing CREATE this subcommand does not accept. Deciding it here
+		// is also what admits a DDL statement whose two keywords are separated
+		// by something other than a single space. The engine will not route that
+		// statement to its schema parser and refuses it at the grammar with exit
+		// code 1, which is the cost the DDL matcher's deliberate whitespace
+		// tolerance carries and which SPEC/GRAPH.md § Keyword Spacing in a
+		// Schema-Introspection Command fixes as a misleading diagnostic and
+		// nothing more: the statement is refused while it is being built, so
+		// nothing is created and the graph is byte-identical afterwards.
+		if c.DDL {
+			return nil
+		}
+		// A data-writing CREATE, MERGE, DELETE or DETACH DELETE is outside both
+		// remaining classes, so it is refused before either is considered. This
+		// is reached only when the query is NOT DDL, so the CREATE it names here
+		// is a data-writing one.
+		if c.Create || c.Delete {
+			return fmt.Errorf("%w: %s", utils.ErrValidation, updateClassRefusal)
+		}
+		// Schema introspection: accepted because this subcommand owns the
+		// schema, so reporting a schema belongs with changing it. Accepting the
+		// class carries the spacing rule with it — the well-spaced spelling runs
+		// here, so the badly spaced one must be refused with the spacing named
+		// rather than on a class objection that is no longer true
+		// (SPEC/GRAPH.md § Per-Subcommand Validation Rules note 8).
+		if c.Introspect {
+			return nil
+		}
+		if reason, misspaced := cypherguard.IntrospectSpacingRejection(query); misspaced {
+			return fmt.Errorf("%w: graph %s: %s", utils.ErrValidation, subcmd, reason)
+		}
+		// The original class: a writing query whose writing clauses are SET
+		// and/or REMOVE.
+		if !c.Write || !c.Mutate {
+			return fmt.Errorf("%w: %s", utils.ErrValidation, updateClassRefusal)
 		}
 	case "delete":
 		// Must be write, must have DELETE/DETACH, must not have CREATE/MERGE/SET/REMOVE.
@@ -616,6 +709,76 @@ func validateGuardRail(subcmd, allowed, query string) error {
 		}
 	}
 	return nil
+}
+
+// maxNamedTrailingClause bounds how much of a refused statement's trailing text
+// the refusal quotes back. A query may be a megabyte long (see maxQueryBytes),
+// and a refusal that echoed all of it would bury its own explanation; the point
+// of quoting the tail is to let the caller SEE which part of what they wrote was
+// going to be dropped, and the opening of it identifies that unambiguously.
+const maxNamedTrailingClause = 160
+
+// validateSingleSchemaStatement rejects a `graph update` query that carries a
+// further clause after a schema-mutating DDL statement (SPEC/GRAPH.md § One
+// Statement per Invocation; Acceptance Criterion 67).
+//
+// # Why Groadmap refuses this instead of the engine
+//
+// The engine's schema parser stops as soon as its grammar is satisfied and
+// discards the rest of the statement with no error, no notification, and no
+// other trace. Handed
+//
+//	CREATE INDEX spec_key FOR (n:Spec) ON (n.key) MATCH (m) SET m.reviewed = true
+//
+// it creates the index, drops the MATCH ... SET, and returns success — so
+// unrefused, `graph update` would print {"ok": true} and exit 0 for a statement
+// half of which never ran. That is the same failure shape as the silent
+// non-deletion validateRelationshipReadDirection refuses, and it is refused for
+// the same reason: a command that reports success gives the caller no reason to
+// check.
+//
+// # Why only `update`, and only the DDL class
+//
+// Only `graph update` accepts the DDL class at all; the other four refuse it on
+// its class before this rule could apply. And within that class the rule covers
+// the four schema-MUTATING forms alone: a SHOW schema-introspection command
+// carrying a further clause is already refused by the engine, which names the
+// unsupported clause instead of discarding it, so extending the rule there would
+// change what `graph query`, `graph search` and the web graph data endpoint do
+// with such a statement today.
+//
+// The detection is structural — it walks the engine's own DDL grammar to find
+// where the statement ends — and never a search of the query's text for clause
+// keywords, because a schema object may legitimately be NAMED after a clause:
+// `CREATE INDEX spec_set FOR (n:Spec) ON (n.set)` is a valid index on a property
+// called `set` and must be accepted. See
+// cypherguard.TrailingClauseAfterSchemaStatement for the mechanism and for the
+// engine-backed proof it takes before any statement is refused.
+func validateSingleSchemaStatement(subcmd, query string) error {
+	if subcmd != "update" {
+		return nil
+	}
+	tail, found := cypherguard.TrailingClauseAfterSchemaStatement(query)
+	if !found {
+		return nil
+	}
+	return fmt.Errorf("%w: graph update accepts one schema statement per invocation, and this query carries "+
+		"%q after it. The engine's schema parser stops when its grammar is satisfied and discards whatever "+
+		"follows, without an error and without a notification, so running this would report success for a "+
+		"statement that clause never ran in. Issue it as a separate rmp graph invocation.",
+		utils.ErrValidation, truncateForMessage(tail, maxNamedTrailingClause))
+}
+
+// truncateForMessage shortens s to at most maxRunes runes, marking the cut with
+// an ellipsis so a reader can tell a quoted fragment from a quoted whole. It
+// counts runes rather than bytes so a multi-byte character is never split into
+// an invalid sequence.
+func truncateForMessage(s string, maxRunes int) string {
+	r := []rune(s)
+	if len(r) <= maxRunes {
+		return s
+	}
+	return string(r[:maxRunes]) + "..."
 }
 
 // validateRelationshipWriteDirection rejects a `graph update` query whose SET or
@@ -1157,7 +1320,19 @@ func runGraphRead(subcmd, allowed string, args []string) error {
 		return fmt.Errorf("%w: graph store unavailable: %v", utils.ErrDatabase, openErr)
 	}
 
-	engine := cypher.NewEngine(res.Graph)
+	// The recovered schema travels in the engine's options, which open no file
+	// and take no write-ahead-log writer: the read path's guarantee that it
+	// constructs neither a transactional store nor a WAL writer is unchanged by
+	// this (SPEC/GRAPH.md § Engine Constructor by Path). Without the recovered
+	// constraints and indexes the engine reports an EMPTY schema whatever the
+	// store holds, so `SHOW INDEXES` and `SHOW CONSTRAINTS` — which this path
+	// accepts — would answer zero rows and exit 0, which is the shape of the
+	// defect rather than of an error (SPEC/GRAPH.md § Recovered Schema on Both
+	// Paths).
+	engine := cypher.NewEngineWithOptions(res.Graph, cypher.EngineOptions{
+		RecoveredConstraints: cypher.ConstraintDefsFromRecovery(res.Constraints),
+		RecoveredIndexes:     cypher.IndexDefsFromRecovery(res.Indexes),
+	})
 	ctx := context.Background()
 	result, err := engine.Run(ctx, query, nil)
 	if err != nil {
@@ -1184,20 +1359,50 @@ func runGraphRead(subcmd, allowed string, args []string) error {
 // self-sufficient full snapshot of the committed graph state under
 // graphDir/snapshot/ and then truncates the write-ahead log so the log
 // holds only post-snapshot transactions. The snapshot carries the
-// node-key mapping (mapper.bin) for string keys, so snapshot + WAL tail
-// is enough for recovery to reconstruct the graph.
+// node-key mapping (mapper.bin) for string keys AND the registered schema
+// (constraints.bin, indexdefs.bin), so snapshot + WAL tail is enough for
+// recovery to reconstruct both the graph and the schema declared over it.
+//
+// It takes the engine that just executed the statement because the
+// specification requires the snapshot to carry "the schema the engine holds
+// registered at the moment of the checkpoint", and forbids Groadmap keeping a
+// record of its own beside it: the engine is the only party that knows what is
+// registered after a statement has run. The engine is therefore a parameter
+// rather than the two spec slices, so this function reads them itself, at the
+// one moment they are correct, and no caller can hand it a set assembled
+// earlier or elsewhere. The committed graph stays a separate parameter because
+// the engine exposes no accessor for it, and because the snapshot's subject is
+// the graph the store open recovered and the transaction then committed into —
+// which is what the caller holds.
+//
+// The order below is load-bearing. The specs are read, and the snapshot they
+// go into is made durable, BEFORE the write-ahead log is truncated: until that
+// snapshot exists, the log holds the only record of every CREATE INDEX and
+// CREATE CONSTRAINT the graph has seen, and truncating first would destroy the
+// schema outright (SPEC/GRAPH.md § Synchronous Checkpoint on Write, step 2).
 //
 // It MUST be called only after the write transaction has committed
 // durably; the caller treats any error here as non-fatal (see FR7).
-func checkpointGraph(g *lpg.Graph[string, float64], w *wal.Writer, graphDir string) error {
+func checkpointGraph(engine *cypher.Engine, g *lpg.Graph[string, float64], w *wal.Writer, graphDir string) error {
 	// Build a CSR view of the committed in-memory graph for the snapshot.
 	cs := csr.BuildFromAdjList(g.AdjList())
 
+	// The registered schema, read from the engine that ran the statement and
+	// while the write-ahead log is still intact. Either slice may be empty —
+	// the common case, a graph with no schema declared over it — and the
+	// writer then simply omits the corresponding snapshot component.
+	constraints := engine.ConstraintSpecsForSnapshot()
+	indexDefs := engine.IndexSpecsForSnapshot()
+
 	snapDir := filepath.Join(graphDir, "snapshot")
-	// WriteSnapshotFullWithMapperCodec assembles in snapDir+".tmp" and
-	// renames atomically into snapDir; the codec emits mapper.bin so the
-	// snapshot is self-sufficient for string keys.
-	if err := snapshot.WriteSnapshotFullWithMapperCodec(snapDir, cs, g, txn.NewStringCodec()); err != nil {
+	// WriteSnapshotFullWithMapperCodecConstraintsAndIndexDefs assembles in
+	// snapDir+".tmp" and renames atomically into snapDir; the codec emits
+	// mapper.bin so the snapshot is self-sufficient for string keys, and the
+	// two spec slices are what make it self-sufficient for the schema. The
+	// plain WriteSnapshotFullWithMapperCodec persists no schema at all, and
+	// the truncation below then leaves nothing to recover it from.
+	if err := snapshot.WriteSnapshotFullWithMapperCodecConstraintsAndIndexDefs(
+		snapDir, cs, g, txn.NewStringCodec(), constraints, indexDefs); err != nil {
 		return fmt.Errorf("snapshot write: %w", err)
 	}
 
@@ -1233,6 +1438,16 @@ func runGraphWrite(subcmd, allowed string, args []string) error {
 	}
 
 	if err := validateGuardRail(subcmd, allowed, query); err != nil {
+		return err
+	}
+
+	// Decided immediately after the class rule and before the store is opened,
+	// because it objects to a statement whose class is already correct: a schema
+	// statement under the subcommand that accepts schema statements, carrying a
+	// second clause the engine would silently discard (SPEC/GRAPH.md § One
+	// Statement per Invocation). Ordered ahead of the relationship rules because
+	// those read the statement as a data write, which a schema statement is not.
+	if err := validateSingleSchemaStatement(subcmd, query); err != nil {
 		return err
 	}
 
@@ -1309,7 +1524,16 @@ func runGraphWrite(subcmd, allowed string, args []string) error {
 		WeightCodec: txn.NewFloat64WeightCodec(),
 	})
 
-	engine := cypher.NewEngineWithStore(store)
+	// The whole recovery result, not extracted fields: this constructor
+	// re-registers the recovered constraints and index definitions AND hydrates
+	// each index from the snapshot payload the same open returned, instead of
+	// rebuilding it by a full scan of the graph. `rmp` opens the store, runs one
+	// statement and exits, so a rebuild would be paid once per command rather
+	// than once per process lifetime (SPEC/GRAPH.md § Engine Constructor by
+	// Path). res MUST be the result of the open that produced this store, a few
+	// lines above: a result from any other open would describe a different graph
+	// and neither the engine nor the store could detect the substitution.
+	engine := cypher.NewEngineWithStoreAndRecovery(store, res)
 	ctx := context.Background()
 	result, err := engine.RunInTx(ctx, query, nil)
 	if err != nil {
@@ -1361,7 +1585,7 @@ func runGraphWrite(subcmd, allowed string, args []string) error {
 	// commit MUST NOT fail the write: the WAL is intact, recovery still
 	// works, and the next write reconciles the snapshot. Surface the failure
 	// as a diagnostic on stderr but return success with exit code 0.
-	if cperr := checkpointGraph(res.Graph, w, graphDir); cperr != nil {
+	if cperr := checkpointGraph(engine, res.Graph, w, graphDir); cperr != nil {
 		fmt.Fprintf(os.Stderr, "Warning: graph checkpoint failed: %v\n", cperr)
 	}
 

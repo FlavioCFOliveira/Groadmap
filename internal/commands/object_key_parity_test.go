@@ -438,8 +438,17 @@ func graphKeyLists() []keyListCase {
 			"With a RETURN clause:", "Without a RETURN clause:"},
 		{"graph query help", printGraphQueryHelp,
 			"Output (stdout JSON):", ""},
+		// `graph update` publishes the pair under a different phrase from its two
+		// sibling write subcommands, and the difference is the specification's.
+		// For a data-writing query "produces result columns" and "carries a
+		// RETURN clause" coincide exactly, so `create` and `delete` may say
+		// either; they part company on the schema statements only `update`
+		// accepts, where SHOW INDEXES produces columns while carrying no RETURN
+		// (DATA_FORMATS.md § Graph Write Result, "Why the discriminator is the
+		// columns and not the RETURN clause"). Its help therefore names the
+		// discriminator that is true of every statement it runs.
 		{"graph update help", printGraphUpdateHelp,
-			"With a RETURN clause:", "Without a RETURN clause:"},
+			"With result columns:", "Without result columns:"},
 		{"graph delete help", printGraphDeleteHelp,
 			"With a RETURN clause:", "Without a RETURN clause:"},
 		{"graph search help", printGraphSearchHelp,

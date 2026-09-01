@@ -24,8 +24,12 @@ package commands
 //     query — never with the ErrDatabase (exit code 1) an engine parse failure
 //     carries, which SPEC/GRAPH.md Acceptance Criterion 11 specifies and which
 //     this change does not touch;
-//   - the write subcommands are unaffected: they reject a SHOW on its operation
-//     class, with their own message, at any spacing (note 6);
+//   - `graph update` is bound by the rule too, because it ACCEPTS the
+//     schema-introspection class: the well-spaced spelling runs under it, so the
+//     badly spaced one must be refused with the spacing named rather than on a
+//     class objection that is no longer true (note 8);
+//   - `graph create` and `graph delete` are unaffected: they reject a SHOW on its
+//     operation class, with their own message, at any spacing (note 6);
 //   - the DDL class stays whitespace-TOLERANT. The asymmetry is deliberate and
 //     must survive: the DDL pairing exists to refuse, so being wider than the
 //     engine only refuses more, which is fail-closed; the introspection pairing
@@ -186,16 +190,23 @@ func TestGraphRead_IntrospectionKeywordSpacingIgnoresCase(t *testing.T) {
 }
 
 // TestGraphGuardRail_IntrospectionSpacingLeavesWriteSubcommandsAlone asserts the
-// spacing rule changed nothing for `graph create`, `graph update` and
-// `graph delete`. Their objection to a SHOW statement is that it carries none of
-// the data-writing clauses they accept, and that objection is decided first and
-// holds at every spacing (SPEC/GRAPH.md § Per-Subcommand Validation Rules note 6;
-// Acceptance Criterion 24).
+// spacing rule changed nothing for `graph create` and `graph delete`. Their
+// objection to a SHOW statement is that it carries none of the data-writing
+// clauses they accept, and that objection is decided first and holds at every
+// spacing (SPEC/GRAPH.md § Per-Subcommand Validation Rules note 6; Acceptance
+// Criterion 24).
 //
 // This matters because the fix would be easy to write in the shared code path:
 // doing so would replace each write subcommand's own contract message with a
 // spacing complaint that tells the user nothing about why `graph create` refused
 // a SHOW.
+//
+// `graph update` is deliberately NOT in this list any more. It accepts the
+// schema-introspection class, so it has no class objection to make and is bound
+// by the spacing rule instead — asserted in
+// TestGraphUpdate_IntrospectionKeywordSpacing below (note 8; § Keyword Spacing in
+// a Schema-Introspection Command, "`graph create` and `graph delete` are
+// unaffected by this rule").
 func TestGraphGuardRail_IntrospectionSpacingLeavesWriteSubcommandsAlone(t *testing.T) {
 	writeSubcommands := []struct {
 		subcmd  string
@@ -203,7 +214,6 @@ func TestGraphGuardRail_IntrospectionSpacingLeavesWriteSubcommandsAlone(t *testi
 		wantMsg string
 	}{
 		{"create", "CREATE/MERGE", "graph create accepts only CREATE/MERGE queries"},
-		{"update", "SET/REMOVE", "graph update accepts only SET/REMOVE queries"},
 		{"delete", "DELETE/DETACH DELETE", "graph delete accepts only DELETE/DETACH DELETE queries"},
 	}
 
@@ -221,6 +231,66 @@ func TestGraphGuardRail_IntrospectionSpacingLeavesWriteSubcommandsAlone(t *testi
 					if got := strings.TrimPrefix(err.Error(), "validation error: "); got != w.wantMsg {
 						t.Errorf("graph %s on %q: message = %q, want %q — the class objection, not a spacing complaint",
 							w.subcmd, query, got, w.wantMsg)
+					}
+				})
+			}
+		})
+	}
+}
+
+// TestGraphUpdate_IntrospectionKeywordSpacing carries the spacing rule onto the
+// subcommand this sprint gave the schema-introspection class.
+//
+// It is the same contract the read subcommands are held to and it is here for
+// the reason the specification gives: `graph update` accepts the class, so the
+// well-spaced spelling RUNS under it, and the badly spaced spelling must be
+// refused by the guard rail with the spacing named — not admitted and left to
+// die in the engine's parser under a diagnostic that lists every clause keyword
+// except SHOW (SPEC/GRAPH.md § Keyword Spacing in a Schema-Introspection
+// Command; § Per-Subcommand Validation Rules note 8; Acceptance Criterion 39,
+// which names `graph update` alongside `graph query` and `graph search`).
+//
+// The accepted spelling is driven through the real handler rather than through
+// validateGuardRail alone, because `graph update` runs on the transactional
+// write path: a SHOW that passed the guard rail and then failed to produce a
+// result set there would satisfy a guard-rail-only assertion and still be broken.
+func TestGraphUpdate_IntrospectionKeywordSpacing(t *testing.T) {
+	const roadmap = "graph-update-introspect-spacing"
+	defer setupTestGraphRoadmap(t, roadmap)()
+
+	if err := runGraphCreate([]string{"-r", roadmap, "--query",
+		"CREATE (:Spec {key:'graph-update-keyword-spacing'})"}); err != nil {
+		t.Fatalf("seeding the graph store: %v", err)
+	}
+
+	for _, keyword := range introspectTargetKeywords {
+		t.Run(keyword, func(t *testing.T) {
+			accepted := "SHOW " + keyword
+
+			t.Run("one space is accepted and executes", func(t *testing.T) {
+				stdout, _ := captureStdStreams(t, func() {
+					if err := runGraphUpdate([]string{"-r", roadmap, "--query", accepted}); err != nil {
+						t.Fatalf("%q was refused under graph update: %v", accepted, err)
+					}
+				})
+				// The listing, not {"ok": true}: a schema-introspection command
+				// produces result columns even though it carries no RETURN
+				// clause (SPEC/GRAPH.md § Accepted Schema Statements, rule 6).
+				if !strings.Contains(stdout, `"columns"`) || !strings.Contains(stdout, `"rows"`) {
+					t.Errorf("%q produced no result set on stdout; stdout=%q", accepted, stdout)
+				}
+			})
+
+			for _, sep := range misspacedIntrospectSeparators {
+				query := "SHOW" + sep.sep + keyword
+				t.Run(sep.name+" is refused", func(t *testing.T) {
+					var err error
+					stdout, _ := captureStdStreams(t, func() {
+						err = runGraphUpdate([]string{"-r", roadmap, "--query", query})
+					})
+					assertGuardRailSpacingRejection(t, err, query, accepted)
+					if strings.TrimSpace(stdout) != "" {
+						t.Errorf("%q wrote %q to stdout; a refused query must produce no output", query, stdout)
 					}
 				})
 			}

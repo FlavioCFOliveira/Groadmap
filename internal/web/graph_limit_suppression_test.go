@@ -396,24 +396,27 @@ func TestApplyGraphLimit_SuppressedFormsExecute(t *testing.T) {
 }
 
 // TestHandleGraphData_NonLimitableFormsRunThroughTheEndpoint is the end-to-end
-// acceptance test: each non-limitable form is answered with 200 and the ordinary
-// {"nodes": [], "edges": []} shape, not the 400 parse failure the injected LIMIT
-// used to produce (SPEC/WEB.md Acceptance Criterion 111).
+// acceptance test: each non-limitable form the endpoint EXECUTES is answered
+// with 200 and the ordinary {"nodes": [], "edges": []} shape, not the 400 parse
+// failure the injected LIMIT used to produce (SPEC/WEB.md Acceptance Criterion
+// 111).
 //
 // The empty arrays are the specified answer, not an omission: these statements
 // return tabular rows, which carry no graph elements for the result walk to
 // collect, and the response shape is deliberately unchanged.
+//
+// The schema-introspection command is deliberately absent from this list. It
+// admits no LIMIT either, but this criterion does not reach it: the endpoint
+// refuses the class before the injection decision is taken, and Acceptance
+// Criterion 111 states that asserting HTTP 200 for it here would contradict
+// Acceptance Criterion 157. The sibling test below asserts that refusal, so the
+// form is covered rather than dropped.
 func TestHandleGraphData_NonLimitableFormsRunThroughTheEndpoint(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	name := seedRoadmap(t, "web-ui-rollout")
 	seedLabelledGraph(t, name)
 
 	queries := []string{
-		// Schema introspection, plain and with each tail the class allows.
-		"SHOW INDEXES",
-		"SHOW CONSTRAINTS",
-		"SHOW INDEXES YIELD name, state RETURN name",
-		"SHOW CONSTRAINTS WHERE type = 'UNIQUE'",
 		// Standalone procedure calls, projected and not.
 		"CALL db.stats.refresh()",
 		"CALL db.labels()",
@@ -449,6 +452,51 @@ func TestHandleGraphData_NonLimitableFormsRunThroughTheEndpoint(t *testing.T) {
 				if string(raw) != "[]" {
 					t.Errorf("%s = %s, want []: tabular rows carry no graph elements", key, raw)
 				}
+			}
+		})
+	}
+}
+
+// TestHandleGraphData_SchemaIntrospectionNeverReachesTheInjectionDecision is the
+// other half of Suppression 2's boundary, and the reason the SHOW forms left the
+// list above.
+//
+// The schema-introspection command admits no LIMIT clause, so before rmp task
+// #344 it was suppressed here and executed. The endpoint now refuses the class
+// outright, BEFORE the injection decision is taken, so the question of injecting
+// into one never arises (SPEC/WEB.md § Graph Data Endpoint, Suppression 2, third
+// bullet; § Query-Bar Error Handling, case 10).
+//
+// This test is what keeps the two rules consistent: it fails both if the refusal
+// is lost (the form would come back 200) and if the refusal were moved AFTER the
+// injection (the form would come back 400 with kind execution, carrying the
+// engine's parse diagnostic for the appended LIMIT).
+func TestHandleGraphData_SchemaIntrospectionNeverReachesTheInjectionDecision(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	name := seedRoadmap(t, "web-ui-rollout")
+	seedLabelledGraph(t, name)
+
+	for _, q := range []string{
+		"SHOW INDEXES",
+		"SHOW CONSTRAINTS",
+		"SHOW INDEXES YIELD name, state RETURN name",
+		"SHOW CONSTRAINTS WHERE type = 'UNIQUE'",
+	} {
+		t.Run(q, func(t *testing.T) {
+			rec := doGraphData(t, name, url.Values{"q": {q}, "limit": {"100"}})
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("status = %d, want 400: the endpoint refuses this class before the injection decision; body=%q", rec.Code, rec.Body.String())
+			}
+			kind, reason := decodeQueryError(t, rec.Body.Bytes())
+			if kind != graphErrSchemaIntrospection {
+				t.Errorf("kind = %q, want %q; reason=%q", kind, graphErrSchemaIntrospection, reason)
+			}
+			// Not an execution failure: the statement never reached the engine,
+			// so no engine diagnostic can appear in the message. That is what
+			// distinguishes "refused before the injection" from "injected, then
+			// failed in the parser".
+			if strings.Contains(reason, "cypher:") || strings.Contains(reason, "LIMIT") {
+				t.Errorf("error = %q, want no engine diagnostic and no mention of LIMIT: the statement never reached the engine", reason)
 			}
 		})
 	}

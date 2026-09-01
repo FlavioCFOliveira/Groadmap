@@ -394,17 +394,20 @@ Each package implements:
   supplies the labelled property graph, the Cypher engine, and the durable
   directory-based store. The integration boundary is contained in this one
   package so that an upstream API change is absorbed in a single place.
-- Owns the guard-rail validation that maps each subcommand to an allowed Cypher
-  operation class, the `--query`/stdin input handling, the JSON serialisation of
-  results, and the mapping of engine failures onto Groadmap's sentinel errors.
+- Owns the guard-rail validation that maps each subcommand to the Cypher
+  operation classes it accepts, the `--query`/stdin input handling, the JSON
+  serialisation of results, and the mapping of engine failures onto Groadmap's
+  sentinel errors. Four subcommands accept one class each; `graph update` accepts
+  three, because it is also the schema subcommand (see
+  `GRAPH.md § Schema Management`).
 - The behaviour is specified in `GRAPH.md`; the CLI contract is in
   `COMMANDS.md § Graph Management`; the result JSON is in
   `DATA_FORMATS.md § Graph Query Result`.
 
 **External dependency note.** GoGraph requires Go 1.26 and is consumed at the exact
-tag **v0.11.0**. Because v0.11.0 is a v0 (pre-1.0) version,
+tag **v0.12.0**. Because v0.12.0 is a v0 (pre-1.0) version,
 it is consumable directly at the bare module path and `go.mod` pins the clean exact tag
-`v0.11.0`. GoGraph MUST be pinned to an exact version in `go.mod`. The risk analysis and
+`v0.12.0`. GoGraph MUST be pinned to an exact version in `go.mod`. The risk analysis and
 required mitigations are in `GRAPH.md § Dependency Maturity Risk`; the toolchain and
 pinning requirements are in `BUILD.md § Go Toolchain`.
 

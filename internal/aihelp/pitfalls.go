@@ -143,15 +143,45 @@ func staticPitfalls() []Pitfall {
 		{
 			ID: "graph_guard_rail_mismatch",
 			Description: "Using the wrong graph subcommand for the query's operation class. Each subcommand " +
-				"is a guard rail: `create` accepts only CREATE/MERGE, `update` only SET/REMOVE, `delete` only " +
-				"DELETE/DETACH DELETE, and `query`/`search` only read-only queries — a MATCH ... RETURN, or a " +
-				"schema-introspection command (SHOW INDEXES / SHOW CONSTRAINTS and their singular aliases), " +
-				"which lists the schema without altering it. Schema-mutating DDL (CREATE INDEX, DROP INDEX, " +
-				"CREATE CONSTRAINT, DROP CONSTRAINT) is rejected by every subcommand. Supplying a query " +
+				"is a guard rail: `create` accepts only CREATE/MERGE, `delete` only DELETE/DETACH DELETE, and " +
+				"`query`/`search` only read-only queries — a MATCH ... RETURN, or a schema-introspection " +
+				"command (SHOW INDEXES / SHOW CONSTRAINTS and their singular aliases), which lists the schema " +
+				"without altering it. `update` is the one subcommand that accepts more than one class, and it " +
+				"accepts three: SET/REMOVE mutations, schema-mutating DDL (CREATE INDEX, DROP INDEX, " +
+				"CREATE CONSTRAINT, DROP CONSTRAINT), and schema introspection — it is the subcommand through " +
+				"which the graph's schema is managed. DDL is rejected by the other four. Supplying a query " +
 				"whose clauses do not match exits with code 6 and makes no change to the graph.",
 			WrongExample:   "rmp graph query -r myproject --query \"CREATE (n:Spec {key:'auth'})\"",
 			CorrectExample: "rmp graph create -r myproject --query \"CREATE (n:Spec {key:'auth'})\"",
-			Reference:      "graph create/query/update/delete/search; SPEC/GRAPH.md § Subcommands and Guard-Rail Validation.",
+			Reference:      "graph create/query/update/delete/search; SPEC/GRAPH.md § Subcommands and Guard-Rail Validation; § Schema Management.",
+		},
+		{
+			ID: "graph_schema_two_statements_in_one_query",
+			Description: "Putting a second clause after a schema statement in one `rmp graph update` " +
+				"invocation, as in \"CREATE INDEX ix FOR (n:Spec) ON (n.key) MATCH (m:Spec) SET m.reviewed = true\". " +
+				"The engine's schema parser stops when its grammar is satisfied and discards whatever follows " +
+				"without an error and without a notification, so the trailing clause would never run while the " +
+				"command reported success. Groadmap refuses the whole statement with exit code 6 instead. Issue " +
+				"the two statements as two invocations. The same applies to altering an index: there is no " +
+				"ALTER INDEX, so a change of kind or definition is a DROP INDEX and then a CREATE INDEX, two " +
+				"invocations that are not atomic — the index is absent between them.",
+			WrongExample:   "rmp graph update -r myproject --query \"CREATE INDEX spec_key FOR (n:Spec) ON (n.key) MATCH (m:Spec) SET m.reviewed = true\"",
+			CorrectExample: "rmp graph update -r myproject --query \"CREATE INDEX spec_key FOR (n:Spec) ON (n.key)\" && rmp graph update -r myproject --query \"MATCH (m:Spec) SET m.reviewed = true\"",
+			Reference:      "graph update; SPEC/GRAPH.md § One Statement per Invocation; § Altering and Recreating an Index.",
+		},
+		{
+			ID: "graph_schema_failure_exit_code",
+			Description: "Reading a failed schema statement as a validation error. A duplicate CREATE INDEX " +
+				"or CREATE CONSTRAINT, a DROP INDEX or DROP CONSTRAINT naming an object that does not exist, a " +
+				"definition the engine does not support, and a CREATE CONSTRAINT the data already in the graph " +
+				"does not satisfy all exit 1, not 6: Groadmap cannot know whether an object exists without " +
+				"opening the store, so the check belongs to the engine. Exit code 6 on `graph update` means the " +
+				"guard rail refused the query — a class mismatch, a SHOW whose two keywords are not separated " +
+				"by exactly one space, or a second clause after a schema statement. Write IF NOT EXISTS or IF " +
+				"EXISTS to make a create or a drop a silent no-op instead of a failure.",
+			WrongExample:   "rmp graph update -r myproject --query \"DROP INDEX spec_key\"  # exits 1 when spec_key is not registered",
+			CorrectExample: "rmp graph update -r myproject --query \"DROP INDEX spec_key IF EXISTS\"",
+			Reference:      "graph update; SPEC/GRAPH.md § Schema Failure Classes.",
 		},
 		{
 			ID: "task_only_comment_type_on_sprint",
