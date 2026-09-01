@@ -5397,9 +5397,9 @@ class TestWebInterface:
         invalid Cypher, distinguished only by the reason it gives (rules 4, 5).
 
         The five seconds this costs are inherent. The budget has no URL
-        parameter, no flag and no environment variable: graphQueryBudget is
-        assigned once, in the server process, and nothing outside it can move it
-        (rule 8). The cost is confined instead — the store below belongs to this
+        parameter, no flag and no environment variable: graphlock.StatementBudget
+        is assigned once, in the server process, and nothing outside it can move
+        it (rule 8). The cost is confined instead — the store below belongs to this
         scenario alone, so the module's shared fixture stays two nodes and every
         other scenario stays fast.
 

@@ -569,7 +569,15 @@ work with an explicit time budget.
    over a 252-node store spent 1.32 seconds of server time to return a single
    aggregate row — and well below the 30-second `WriteTimeout`, so a query that
    exhausts the budget is cancelled, and its failure is rendered, while the
-   response can still be written.
+   response can still be written. This value is not the endpoint's own bound
+   alone. It is also the quantity the graph store lock's bounded wait is sized
+   against, because a waiter has to know how long a hold may lawfully last and
+   the hold spans the statement (see `GRAPH.md § Lock Contention`). The budget is
+   therefore a graph-store-wide quantity rather than a web-local one, and what
+   must fit inside the `WriteTimeout` is the wait and the statement together
+   rather than either of them alone; `GRAPH.md § Lock Contention` is canonical
+   for that invariant and for the wait budget this value yields. Changing this
+   value changes that wait.
 2. **Derived from the request context.** The deadline MUST be derived from the
    request's own context, so the two sources of cancellation compose rather than
    replace one another: a client that disconnects still cancels the query
@@ -3874,12 +3882,19 @@ re-presents an earlier, now-stale response in its place.
    Three consequences are specific to the web interface and are stated here:
    - A graph data request may **wait** for an in-flight `rmp graph execute`
      invocation, or for another graph data request, against the same roadmap. The
-     wait is bounded (see `GRAPH.md § Lock Contention`), it is spent before the
-     statement starts and so does not consume the endpoint's query time budget
-     (see [Graph Query Time Budget](#graph-query-time-budget)), and the worst case
-     stays well inside the server's write timeout (see
-     [HTTP Server Timeouts](#http-server-timeouts)). A request MUST NOT block
-     indefinitely on the lock.
+     wait is bounded (see `GRAPH.md § Lock Contention`), and it is spent before
+     the statement starts and so does not consume the endpoint's query time
+     budget (see [Graph Query Time Budget](#graph-query-time-budget)). It is
+     sized against the longest hold this endpoint may lawfully take, one whose
+     statement runs to the end of that query time budget, so the wait and the
+     statement together stay well inside the server's write timeout (see
+     [HTTP Server Timeouts](#http-server-timeouts)): it is the two together that
+     have to fit, not the wait alone. `GRAPH.md § Lock Contention` fixes the
+     sizing rule and that invariant, and states the limit that comes with them —
+     an `rmp graph execute` statement runs under no time budget, so a hold of the
+     CLI's can still outlast the wait, and the request is then answered as the
+     next consequence describes. A request MUST NOT block indefinitely on the
+     lock.
    - A request that still cannot take the lock when the bounded wait is exhausted
      is answered HTTP `500`, the status this endpoint already returns for a graph
      store that cannot be opened (see [Routes and Pages](#routes-and-pages)). It is

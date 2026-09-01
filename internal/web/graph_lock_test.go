@@ -103,6 +103,19 @@ func TestHandleGraphData_LockExhaustionIsAnInternalError(t *testing.T) {
 	name := seedRoadmap(t, "web-ui-rollout")
 	seedGraph(t, name, graphSeedQueries()...)
 
+	// The request under test never reaches its statement — it fails at the lock
+	// — so the statement budget in force here does exactly one thing: size the
+	// wait the request has to exhaust, since graphlock.WaitBudget is that budget
+	// plus the fixed-cost allowance. Zeroing it collapses the wait to the
+	// allowance alone, 2.5 s, which is what this test cost before the budget
+	// sized the wait at all.
+	//
+	// It is a test-time cost control and not a weakening. The derivation itself
+	// is fenced independently of whatever value is in force, by
+	// TestGraphQueryBudget_StatementAndWaitFitTheWriteTimeout here and by
+	// internal/graphlock's TestWaitBudgetIsDerivedFromTheStatementBudget.
+	setGraphQueryBudget(t, 0)
+
 	release, err := graphlock.AcquireExclusive(webGraphDir(t, name))
 	if err != nil {
 		t.Fatalf("taking the exclusive lock: %v", err)
@@ -146,7 +159,10 @@ func TestHandleGraphData_LockExhaustionIsAnInternalError(t *testing.T) {
 			"(SPEC/WEB.md acceptance criterion 149)")
 	}
 
-	// The server keeps serving: the very next request is answered normally.
+	// The server keeps serving: the very next request is answered normally. The
+	// production budget goes back first, so that read runs under a real deadline
+	// rather than the zero installed above.
+	setGraphQueryBudget(t, graphlock.DefaultStatementBudget)
 	next := doGraphData(t, name, nil)
 	if next.Code != http.StatusOK {
 		t.Fatalf("follow-up status = %d, want 200: one lock failure must not take the server "+
@@ -195,6 +211,16 @@ func TestHandleGraphData_HoldsTheLockAcrossTheStatement(t *testing.T) {
 
 	// A budget large enough that the statement runs to completion; the point
 	// here is a long-running statement, not a cancelled one.
+	//
+	// Raising it raises the contending writer's wait WITH it, by construction:
+	// the wait budget is the statement budget plus the fixed-cost allowance
+	// (graphlock.WaitBudget), so 60 s of statement grants the writer 62.5 s in
+	// which to outlast it. That is what makes the observation below hold on any
+	// machine rather than merely on a fast one. Under the race detector this
+	// statement runs for upwards of fourteen seconds, and against a wait fixed at
+	// the SQLite policy's 2500 ms the writer gave up while the request was still
+	// running — a lawful holder starving a waiter, which is the defect this
+	// arrangement fences (SPEC/GRAPH.md § Lock Contention).
 	setGraphQueryBudget(t, 60*time.Second)
 
 	graphDir := webGraphDir(t, name)

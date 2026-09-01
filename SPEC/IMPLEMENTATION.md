@@ -417,21 +417,34 @@ state from the snapshot and log.
    web graph request, it surfaces as an internal read error (HTTP 500), the status
    that endpoint already returns for a graph store that cannot be opened.
 3. Every caller waits, and waits a bounded time. It retries the lock under the
-   **same** bounded exponential-backoff policy specified for SQLite in
-   [Retry Logic](#retry-logic): six attempts in all — one initial attempt plus at
-   most five retries — and 2500 ms of waiting in the worst case. That section
-   states the delay ladder and the wait ordering, and this rule does not restate
-   them, so the two cannot diverge. The caller retries only on lock/contention
+   **loop and the delay ladder** of the project's single retry policy, the one
+   specified for SQLite in [Retry Logic](#retry-logic): the first attempt is
+   immediate, each retry is preceded by the next delay of that ladder, and no
+   wait follows an attempt that is not retried. That section states the ladder
+   and the wait ordering, and this rule does not restate them, so the two cannot
+   diverge. What the graph store lock does **not** take from that section is its
+   total. This lock has a **wait budget of its own**, the statement budget plus
+   the backoff total, so the loop keeps retrying until that budget is exhausted
+   rather than stopping after the five retries the SQLite policy makes.
+   `GRAPH.md § Lock Contention` is canonical for that sizing rule, for the figure
+   it yields, and for the measurements behind it, and this rule does not restate
+   those either. The SQLite total is not reused because the two locks do not
+   cover the same thing: no SQLite lock is held across a statement whose cost a
+   caller chooses, since Groadmap issues every SQL statement itself, while the
+   graph store lock is held across the statement its invocation carries. A wait
+   sized against the SQLite total is therefore shorter than the hold it has to
+   cover, and it starves the waiter. The caller retries only on lock/contention
    conditions and never on parse or execution errors. When the bounded wait is
    exhausted the invocation fails as rule 2 describes. The contract is a bounded
-   wait and then failure, never an unbounded block: a caller that blocked without a
-   bound would let a long statement hang a web request until the server's write
-   timeout fired (see `WEB.md § HTTP Server Timeouts`). The worst-case wait is a
-   fraction of that timeout, and it is spent before the statement starts, so it
-   does not consume the graph data endpoint's own query time budget (see
-   `WEB.md § Graph Query Time Budget`). The reasoning behind the single policy is
-   in `GRAPH.md § Lock Contention`.
-5. Recovery on open is expected to be transparent for a consistently committed
+   wait and then failure, never an unbounded block: a caller that blocked without
+   a bound would let a long statement hang a web request until the server's write
+   timeout fired (see `WEB.md § HTTP Server Timeouts`). The wait is spent before
+   the statement starts, so it does not consume the graph data endpoint's own
+   query time budget (see `WEB.md § Graph Query Time Budget`); what has to fit
+   inside that timeout is the wait and the statement together, which
+   `GRAPH.md § Lock Contention` states. The reasoning behind the single policy is
+   there too.
+4. Recovery on open is expected to be transparent for a consistently committed
    store. A corrupt or unreadable store surfaces as `utils.ErrDatabase` (exit code
    1); there is no automatic graph-store repair in this version.
 

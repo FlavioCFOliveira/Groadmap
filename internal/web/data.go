@@ -44,36 +44,6 @@ const defaultGraphQuery = "MATCH (n) OPTIONAL MATCH (n)-[r]->(m) RETURN n, r, m"
 // § Graph Data Endpoint, query parameters).
 const defaultGraphLimit = 100
 
-// defaultGraphQueryBudget is the per-request time budget the graph data
-// endpoint executes the caller's Cypher query under: the run against the
-// engine's read path plus the walk over the result that run produces
-// (SPEC/WEB.md § Graph Query Time Budget, rule 1).
-//
-// Five seconds sits well above the slowest execution measured on a small store
-// — a three-way Cartesian product over a 252-node store spent 1.32 seconds of
-// server time to return a single aggregate row — and well below the 30-second
-// WriteTimeout (SPEC/WEB.md § HTTP Server Timeouts), so a query that exhausts
-// the budget is cancelled and its failure is still written to the client.
-//
-// The budget bounds the WORK; the injected LIMIT bounds only the RESULT
-// (SPEC/WEB.md § Graph Query Time Budget, rule 3). An aggregate over a
-// Cartesian product returns one row whatever the limit is, yet scans the whole
-// product to produce it, so the limit cannot bound it and the budget is the
-// only bound on that work.
-const defaultGraphQueryBudget = 5 * time.Second
-
-// graphQueryBudget is the budget runGraphViewQuery actually applies. It is a
-// var rather than a const for exactly one reason: the regression test for this
-// bound drives it down to a few milliseconds so it can prove the cancellation
-// without spending five real seconds per run.
-//
-// Production never reassigns it. It is initialised from
-// defaultGraphQueryBudget and there is no flag, environment variable, request
-// parameter, or any other user-facing knob that can change it, so every graph
-// data request the server serves runs under the 5-second budget (SPEC/WEB.md
-// § Graph Query Time Budget, rules 1 and 8).
-var graphQueryBudget = defaultGraphQueryBudget
-
 // allowedGraphLimits is the closed set of node-limit values the limit dropdown
 // offers and the endpoint accepts. A limit outside this set is rejected as an
 // invalid limit; the endpoint never clamps to the nearest value (SPEC/WEB.md
@@ -2206,9 +2176,18 @@ func loadGraphView(ctx context.Context, name, rawQuery, rawLimit string) (graphV
 // client that disconnects still cancels the statement immediately, and a client
 // that stays connected can no longer hold it beyond the budget.
 func runGraphViewQuery(ctx context.Context, engine *cypher.Engine, query string) (graphView, error) {
-	// Read the budget once so the deadline that fires and the message that
+	// The budget is graphlock.StatementBudget, and this endpoint reads it rather
+	// than declaring one. SPEC/WEB.md § Graph Query Time Budget rule 1 fixes the
+	// figure and this is where it is applied, but the same quantity also bounds
+	// the variable part of a graph store lock hold, and the party that has to
+	// know how long a hold may lawfully last is the one waiting for it — which is
+	// not necessarily the web (SPEC/GRAPH.md § Lock Contention). It is therefore
+	// declared in the package that owns the lock, which this package imports and
+	// which cannot import this one back.
+	//
+	// It is read ONCE, so that the deadline which fires and the message that
 	// reports it can never disagree.
-	budget := graphQueryBudget
+	budget := graphlock.StatementBudget
 	budgeted, cancel := context.WithTimeout(ctx, budget)
 	// Releasing the timer here means the budget is strictly per request and
 	// nothing outlives the call (rule 7).

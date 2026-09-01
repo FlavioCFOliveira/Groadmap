@@ -10,28 +10,38 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/FlavioCFOliveira/Groadmap/internal/graphlock"
 )
 
-// setGraphQueryBudget installs a per-request query time budget for the duration
-// of one test and restores the previous value when the test ends.
+// setGraphQueryBudget installs a statement time budget for the duration of one
+// test and restores the previous value when the test ends.
 //
 // It is the ONLY way the budget is ever reassigned: production initialises
-// graphQueryBudget from defaultGraphQueryBudget and never writes to it again,
-// and no flag, environment variable, or URL parameter reaches it (SPEC/WEB.md
-// § Graph Query Time Budget, rules 1 and 8). The override exists so the
-// regression tests below can prove the cancellation in milliseconds instead of
-// spending five real seconds per run; it does not weaken the production value,
-// which TestGraphQueryBudget_ProductionDefault fences.
+// graphlock.StatementBudget from graphlock.DefaultStatementBudget and never
+// writes to it again, and no flag, environment variable, or URL parameter
+// reaches it (SPEC/WEB.md § Graph Query Time Budget, rules 1 and 8). The
+// override exists so the regression tests below can prove the cancellation in
+// milliseconds instead of spending five real seconds per run; it does not weaken
+// the production value, which TestGraphQueryBudget_ProductionDefault fences.
+//
+// **It moves the lock's wait budget with it, and that is the point rather than
+// a side effect.** The quantity is graph-store-wide: it bounds the variable part
+// of a lock hold as well as this endpoint's own execution, and
+// graphlock.WaitBudget is derived from it (SPEC/GRAPH.md § Lock Contention). So
+// a test that grants itself a long statement thereby grants a contending waiter
+// long enough to outlast it, and a test that shortens the statement shortens the
+// wait it has to spend. Neither could be arranged by moving a web-local figure.
 //
 // Restoring through t.Cleanup makes nested calls safe: cleanups unwind LIFO, so
 // a test that lowers the budget and later raises it back still leaves
-// defaultGraphQueryBudget installed for the next test. The package runs no test
-// with t.Parallel, so no test observes another test's override.
+// graphlock.DefaultStatementBudget installed for the next test. The package runs
+// no test with t.Parallel, so no test observes another test's override.
 func setGraphQueryBudget(t *testing.T, d time.Duration) {
 	t.Helper()
-	previous := graphQueryBudget
-	t.Cleanup(func() { graphQueryBudget = previous })
-	graphQueryBudget = d
+	previous := graphlock.StatementBudget
+	t.Cleanup(func() { graphlock.StatementBudget = previous })
+	graphlock.StatementBudget = d
 }
 
 // expensiveGraphQuery is an aggregate over a three-way Cartesian product: it
@@ -79,19 +89,67 @@ func decodeQueryError(t *testing.T, body []byte) (kind, reason string) {
 // bound rests on. The regression tests below lower the budget to prove the
 // cancellation quickly, so the value they lower it FROM must be asserted
 // somewhere or an accidental edit to it would go unnoticed: a budget silently
-// reduced to milliseconds would cancel legitimate queries, and one silently
-// raised past the 30-second WriteTimeout would let the connection time out
-// before the failure could be written (SPEC/WEB.md § Graph Query Time Budget,
-// rule 1; § HTTP Server Timeouts).
+// reduced to milliseconds would cancel legitimate queries (SPEC/WEB.md § Graph
+// Query Time Budget, rule 1).
+//
+// The value is read from internal/graphlock, which declares it. This endpoint
+// applies it as its per-request deadline, but the same quantity bounds the
+// variable part of a graph store lock hold, and the waiter that needs to know
+// how long a hold may lawfully last is not necessarily the web (SPEC/GRAPH.md
+// § Lock Contention). What the figure must fit inside is asserted separately, by
+// TestGraphQueryBudget_StatementAndWaitFitTheWriteTimeout, because the bound is
+// on the statement and the wait together rather than on either alone.
 func TestGraphQueryBudget_ProductionDefault(t *testing.T) {
-	if defaultGraphQueryBudget != 5*time.Second {
-		t.Errorf("defaultGraphQueryBudget = %v, want 5s (SPEC/WEB.md § Graph Query Time Budget, rule 1)", defaultGraphQueryBudget)
+	if graphlock.DefaultStatementBudget != 5*time.Second {
+		t.Errorf("graphlock.DefaultStatementBudget = %v, want 5s (SPEC/WEB.md § Graph Query Time Budget, rule 1)", graphlock.DefaultStatementBudget)
 	}
-	if graphQueryBudget != defaultGraphQueryBudget {
-		t.Errorf("graphQueryBudget = %v, want the production default %v: production must never reassign it", graphQueryBudget, defaultGraphQueryBudget)
+	if graphlock.StatementBudget != graphlock.DefaultStatementBudget {
+		t.Errorf("graphlock.StatementBudget = %v, want the production default %v: production must never reassign it", graphlock.StatementBudget, graphlock.DefaultStatementBudget)
 	}
-	if defaultGraphQueryBudget >= 30*time.Second {
-		t.Errorf("defaultGraphQueryBudget = %v, must stay well below the 30s WriteTimeout so the failure response can still be written", defaultGraphQueryBudget)
+}
+
+// TestGraphQueryBudget_StatementAndWaitFitTheWriteTimeout is the fence on the
+// invariant SPEC/GRAPH.md § Lock Contention states, and the half of it that only
+// this package can assert: internal/graphlock cannot see the server's
+// WriteTimeout, and this package can see both.
+//
+// **What must fit inside the write timeout is the SUM.** A request that exhausts
+// the lock wait must still have its 500 written, and a request that waits and
+// then runs its statement to the end of its budget must still have its response
+// written — so the quantity to compare against WriteTimeout is the statement
+// budget plus the wait budget, 12.5 s of 30 s at the values in force.
+//
+// This replaced a weaker test. The old assertion asked only that the statement
+// budget stay "well below" the write timeout, and a sibling in internal/graphlock
+// asked that the wait stay under a tenth of it. Neither property is necessary or
+// sufficient: both were satisfied, comfortably, by the very sizing that let a
+// lawful 4.71-second holder starve a contender which gave up after 2.5018
+// seconds. A wait that is a small fraction of the write timeout says nothing
+// about whether it outlasts the hold it has to cover, which is the property that
+// actually matters (SPEC/GRAPH.md § Lock Contention).
+func TestGraphQueryBudget_StatementAndWaitFitTheWriteTimeout(t *testing.T) {
+	// The term comes from the server the process actually builds, so the fence
+	// moves with the timeout instead of restating it.
+	writeTimeout := newServer().WriteTimeout
+	if want := 30 * time.Second; writeTimeout != want {
+		t.Fatalf("WriteTimeout = %v, want %v (SPEC/WEB.md § HTTP Server Timeouts): the budgets below "+
+			"are sized against this figure, so a change to it is a change to them", writeTimeout, want)
+	}
+
+	total := graphlock.StatementBudget + graphlock.WaitBudget()
+	if total >= writeTimeout {
+		t.Errorf("a request may spend %v waiting for the lock and then running its statement "+
+			"(statement budget %v + wait budget %v), which reaches the server's %v WriteTimeout: the "+
+			"connection would time out before the response could be written (SPEC/GRAPH.md "+
+			"§ Lock Contention)", total, graphlock.StatementBudget, graphlock.WaitBudget(), writeTimeout)
+	}
+	// Fitting is not enough; it must fit with room. A sum that merely squeezed
+	// under the timeout would leave nothing for the fixed cost of serving the
+	// request around it.
+	if headroom := writeTimeout / 2; total > headroom {
+		t.Errorf("statement budget %v + wait budget %v = %v, more than half the %v WriteTimeout: "+
+			"the two budgets must leave real headroom, not merely fit",
+			graphlock.StatementBudget, graphlock.WaitBudget(), total, writeTimeout)
 	}
 }
 
@@ -188,7 +246,7 @@ func TestHandleGraphData_ExpensiveQueryHitsTimeBudget(t *testing.T) {
 
 	// (iii) The server keeps serving: the process did not terminate and the very
 	// next ordinary request is answered normally, on the production budget.
-	setGraphQueryBudget(t, defaultGraphQueryBudget)
+	setGraphQueryBudget(t, graphlock.DefaultStatementBudget)
 	next := doGraphData(t, name, url.Values{"limit": {"3000"}})
 	if next.Code != http.StatusOK {
 		t.Fatalf("follow-up status = %d, want 200: the server must keep serving; body=%q", next.Code, next.Body.String())
@@ -231,7 +289,7 @@ func TestHandleGraphData_BudgetExhaustionWritesNothing(t *testing.T) {
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("expensive query status = %d, want 400; body=%q", rec.Code, rec.Body.String())
 	}
-	setGraphQueryBudget(t, defaultGraphQueryBudget)
+	setGraphQueryBudget(t, graphlock.DefaultStatementBudget)
 
 	after := doGraphData(t, name, url.Values{"limit": {"3000"}})
 	if after.Code != http.StatusOK {
@@ -282,7 +340,7 @@ func TestHandleGraphData_OrdinaryQueryUnaffectedByBudget(t *testing.T) {
 			// never elapses.
 			setGraphQueryBudget(t, time.Hour)
 			unbounded := doGraphData(t, name, tc.param)
-			setGraphQueryBudget(t, defaultGraphQueryBudget)
+			setGraphQueryBudget(t, graphlock.DefaultStatementBudget)
 
 			if unbounded.Code != withBudget.Code {
 				t.Fatalf("status = %d under the production budget, %d effectively unbounded", withBudget.Code, unbounded.Code)

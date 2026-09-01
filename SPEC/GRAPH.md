@@ -1598,7 +1598,10 @@ One lock mode carries one contention policy.
 1. An invocation that finds the exclusive lock held **waits**, under the bounded
    exponential-backoff policy specified in
    `IMPLEMENTATION.md § Graph Store Concurrency`. It MUST NOT block indefinitely
-   and MUST NOT fail on the first collision.
+   and MUST NOT fail on the first collision. The wait carries a budget of its
+   own, sized against the maximum lawful hold rather than against the fixed total
+   the SQLite layer waits; the sizing rule, and the 7.5 seconds it yields at the
+   statement budget in force, are stated below.
 2. If the lock is still unavailable when that bounded wait is exhausted, the
    invocation fails: with `utils.ErrDatabase` (exit code 1) for
    `rmp graph execute`, and as an internal read error (HTTP 500) for the web graph
@@ -1610,17 +1613,82 @@ possible reader.** A policy that failed on the first collision would make ordina
 statements intermittently unavailable, and one of the two callers is an HTTP
 request handler, for which an unbounded block would let a long-running statement
 hang a `GET` until the server's write timeout fired (see
-`WEB.md § HTTP Server Timeouts`). A bounded wait keeps the worst case well inside
-that timeout, and it does not consume the endpoint's query time budget, because
-the wait ends before the statement starts (see `WEB.md § Graph Query Time Budget`).
+`WEB.md § HTTP Server Timeouts`). The wait does not consume the endpoint's query
+time budget, because the wait ends before the statement starts (see
+`WEB.md § Graph Query Time Budget`).
 
-**The wait is sized against the holder's critical section, which now spans the
-statement as well.** The hold covers the whole open, execution, commit,
-checkpoint, and write-ahead-log truncation sequence, including a full snapshot
-rewrite whose cost grows with the live graph size, and the execution of a
-statement whose cost the caller chooses. An expensive statement therefore delays
-every other statement against the same roadmap for as long as it runs, which a
-shared reader hold did not.
+**The hold spans the statement, so the statement is the variable part of it.**
+The hold covers the whole open, execution, commit, checkpoint, and
+write-ahead-log truncation sequence, including a full snapshot rewrite whose cost
+grows with the live graph size, and the execution of a statement whose cost the
+caller chooses. An expensive statement therefore delays every other statement
+against the same roadmap for as long as it runs, which a shared reader hold did
+not. Nothing is taken out of the hold to shorten it: the sequence that must not
+interleave is the one [Concurrency and Recovery](#concurrency-and-recovery)
+fixes, and it is the wait that is sized to the hold, never the hold that is
+trimmed to the wait.
+
+**The wait is sized against the maximum lawful hold.** A finite wait can be sized
+against a hold only when that hold has an upper bound, so the budget is derived
+from one:
+
+```
+wait budget = statement budget + backoff total
+```
+
+- **Statement budget** is the deadline `WEB.md § Graph Query Time Budget` fixes
+  for a caller-supplied statement, 5 seconds. It bounds the variable part of a
+  hold. It is a graph-store-wide quantity rather than a web-local one, because
+  the party that must wait for a hold has to know how long a hold may lawfully
+  last, and the waiter is not necessarily the web.
+- **Backoff total** is the worst-case total wait of the project's single retry
+  policy, 2500 ms (see `IMPLEMENTATION.md § Retry Logic`), reused here as the
+  allowance for the **fixed** part of a hold: the store open, the write-ahead-log
+  open, the engine construction, the commit, and a full snapshot checkpoint with
+  its log truncation, plus scheduling. It is reused rather than replaced by a
+  figure of its own so that the project keeps one set of timing numbers, and it
+  is generous rather than tight. The fixed part measures 19.2 ms on a 252-node
+  store and 22.7 ms under the race detector, which barely moves it, while a whole
+  read invocation against this project's own knowledge graph, 700 nodes and
+  1.3 MB, costs 29 ms. The allowance stands three orders of magnitude above the
+  quantity it covers.
+
+At the 5-second statement budget in force, the wait budget is therefore
+**7.5 seconds**.
+
+**A wait shorter than the hold it must cover starves the waiter.** A wait sized
+against the SQLite policy's fixed total would put two of this project's own
+constants in a two-to-one ratio in the holder's favour: a hold may lawfully last
+the whole 5-second statement budget, while the waiter would give up after
+2500 ms. The consequence is measured, not theoretical. With the race detector
+absent and the statement budget untouched, a holder whose statement ran 4.71
+seconds, lawfully and inside its own budget, starved a contending invocation,
+which failed after 2.5018 seconds. The statement dominates the hold it belongs
+to: 98.0% of a 951.86 ms hold without the race detector, and 99.84% of a
+14.26-second hold under it.
+
+**The invariant is that the statement and the wait fit inside the server's write
+timeout together.** A request that exhausts the wait must still have its `500`
+written, and a request that waits and then runs its statement to the end of its
+budget must still have its response written. The quantity to compare against the
+30-second `WriteTimeout` (see `WEB.md § HTTP Server Timeouts`) is therefore the
+sum of the two budgets: 5 seconds of statement budget plus 7.5 seconds of wait
+budget is 12.5 seconds, comfortably inside 30. It is the sum that must fit. A
+wait that is merely a small fraction of the write timeout is neither necessary
+nor sufficient, and sizing on that property alone is what admits a wait shorter
+than the hold it has to cover.
+
+**The wait is sized against the budgeted hold, and one hold carries no budget.**
+The statement budget that bounds the variable part of a hold is the web graph
+data endpoint's. `rmp graph execute` runs its statement under no time budget at
+all, so its hold has no lawful maximum, and no finite wait can guarantee that a
+waiter contending with such an invocation is served: a CLI statement expensive
+enough will exhaust whatever budget the waiter is given. That outcome is the
+specified one and not corruption. The waiter fails exactly as rule 2 describes,
+with `utils.ErrDatabase` (exit code 1) for the CLI and HTTP 500 for the web graph
+data endpoint. It is a real limit of this policy and is stated here rather than
+hidden. Giving `rmp graph execute` a statement budget of its own is not specified,
+and remains an open question.
 
 Groadmap's usage model and expectations:
 
