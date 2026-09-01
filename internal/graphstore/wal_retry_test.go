@@ -1,6 +1,11 @@
 // Regression fence for defect #294 at the graph write-ahead-log call site.
 //
-// openWALWriter used to own a private copy of the bounded backoff, taken from
+// The site moved here with the store open sequence it belongs to (rmp task
+// #375); it was internal/commands's openWALWriter, and internal/web held a
+// second copy of the same function. Both are gone, and this is the one that
+// remains.
+//
+// openWAL used to own a private copy of the bounded backoff, taken from
 // constants named walRetryInitial/walRetryMax/walRetryAttempts whose comment
 // claimed to "mirror the SQLite bounded exponential-backoff specified in
 // IMPLEMENTATION.md § Concurrency Model". It did not mirror it: the loop read
@@ -13,7 +18,7 @@
 // precisely the failure the retry exists for. Every figure comes from
 // internal/backoff, so these assertions follow the policy instead of restating
 // it.
-package commands
+package graphstore
 
 import (
 	"errors"
@@ -23,6 +28,7 @@ import (
 	"time"
 
 	"github.com/FlavioCFOliveira/GoGraph/store/wal"
+
 	"github.com/FlavioCFOliveira/Groadmap/internal/backoff"
 	"github.com/FlavioCFOliveira/Groadmap/internal/utils"
 )
@@ -50,24 +56,24 @@ func heldWALPath(t *testing.T) string {
 	return path
 }
 
-// TestOpenWALWriterExhaustsTheSharedPolicy is the measured proof that the graph
+// TestOpenWALExhaustsTheSharedPolicy is the measured proof that the graph
 // WAL opener realises the shared policy and nothing of its own.
 //
 // It measures elapsed time under real contention rather than reading the
 // constants back, because the constants were never the defect: they said 100 ms,
 // 1000 ms and 5 all along while the loop they fed waited four times.
-func TestOpenWALWriterExhaustsTheSharedPolicy(t *testing.T) {
+func TestOpenWALExhaustsTheSharedPolicy(t *testing.T) {
 	t.Parallel()
 
 	path := heldWALPath(t)
 
 	start := time.Now()
-	writer, err := openWALWriter(path)
+	writer, err := openWAL(path)
 	elapsed := time.Since(start)
 
 	if err == nil {
 		_ = writer.Close()
-		t.Fatal("openWALWriter returned a writer for a path whose lock was held throughout")
+		t.Fatal("openWAL returned a writer for a path whose lock was held throughout")
 	}
 	if floor := backoff.Total() - backoff.Total()/10; elapsed < floor {
 		t.Errorf("a contended graph WAL open gave up after %v; the shared policy sleeps about %v "+
@@ -77,16 +83,16 @@ func TestOpenWALWriterExhaustsTheSharedPolicy(t *testing.T) {
 	}
 }
 
-// TestOpenWALWriterExhaustionSurfacesAsErrDatabase pins the error contract the
+// TestOpenWALExhaustionSurfacesAsErrDatabase pins the error contract the
 // timing fix had to leave untouched: an exhausted wait is a database-class
 // failure (exit code 1), carrying the diagnostic the CLI prints, with the
 // underlying WAL error still named.
-func TestOpenWALWriterExhaustionSurfacesAsErrDatabase(t *testing.T) {
+func TestOpenWALExhaustionSurfacesAsErrDatabase(t *testing.T) {
 	t.Parallel()
 
-	_, err := openWALWriter(heldWALPath(t))
+	_, err := openWAL(heldWALPath(t))
 	if err == nil {
-		t.Fatal("openWALWriter returned a writer for a path whose lock was held throughout")
+		t.Fatal("openWAL returned a writer for a path whose lock was held throughout")
 	}
 	if !errors.Is(err, utils.ErrDatabase) {
 		t.Errorf("an exhausted wait must surface as utils.ErrDatabase (exit 1), got: %v", err)
@@ -99,21 +105,21 @@ func TestOpenWALWriterExhaustionSurfacesAsErrDatabase(t *testing.T) {
 	}
 }
 
-// TestOpenWALWriterSucceedsWithoutWaiting pins the uncontended path: an
+// TestOpenWALSucceedsWithoutWaiting pins the uncontended path: an
 // available WAL is opened on the first attempt, with no part of the ladder
 // slept. Every ordinary graph write takes this path, so a policy that slept
 // before its first attempt would tax all of them.
-func TestOpenWALWriterSucceedsWithoutWaiting(t *testing.T) {
+func TestOpenWALSucceedsWithoutWaiting(t *testing.T) {
 	t.Parallel()
 
 	path := filepath.Join(t.TempDir(), "graph.wal")
 
 	start := time.Now()
-	writer, err := openWALWriter(path)
+	writer, err := openWAL(path)
 	elapsed := time.Since(start)
 
 	if err != nil {
-		t.Fatalf("openWALWriter failed on an uncontended path: %v", err)
+		t.Fatalf("openWAL failed on an uncontended path: %v", err)
 	}
 	defer func() { _ = writer.Close() }()
 
@@ -122,11 +128,11 @@ func TestOpenWALWriterSucceedsWithoutWaiting(t *testing.T) {
 	}
 }
 
-// TestOpenWALWriterSucceedsOnceTheHolderReleases pins the middle of the ladder
+// TestOpenWALSucceedsOnceTheHolderReleases pins the middle of the ladder
 // under real contention: a writer released partway through the wait is picked
 // up on a later attempt rather than after the whole ladder, and rather than not
 // at all.
-func TestOpenWALWriterSucceedsOnceTheHolderReleases(t *testing.T) {
+func TestOpenWALSucceedsOnceTheHolderReleases(t *testing.T) {
 	t.Parallel()
 
 	path := filepath.Join(t.TempDir(), "graph.wal")
@@ -143,11 +149,11 @@ func TestOpenWALWriterSucceedsOnceTheHolderReleases(t *testing.T) {
 	}()
 
 	start := time.Now()
-	writer, err := openWALWriter(path)
+	writer, err := openWAL(path)
 	elapsed := time.Since(start)
 
 	if err != nil {
-		t.Fatalf("openWALWriter never acquired a WAL released after 50ms: %v", err)
+		t.Fatalf("openWAL never acquired a WAL released after 50ms: %v", err)
 	}
 	defer func() { _ = writer.Close() }()
 

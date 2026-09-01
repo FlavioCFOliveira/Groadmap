@@ -12,9 +12,8 @@ import (
 	"testing"
 )
 
-// This file is the regression fence for the one defect a duplicated checkpoint
-// can produce in silence: a snapshot written WITHOUT the graph's registered
-// schema.
+// This file is the regression fence for the one defect a checkpoint can produce
+// in silence: a snapshot written WITHOUT the graph's registered schema.
 //
 // Why it exists. SPEC/GRAPH.md § Synchronous Checkpoint on Write, step 2, calls
 // the schema clause of the self-sufficiency requirement "load-bearing" and spells
@@ -28,21 +27,47 @@ import (
 // is a real defect this project has already shipped and fixed once (release
 // 1.15.2, "the checkpoint erasing schema").
 //
-// Why a GATE and not a test beside each call site. There are now TWO checkpoint
-// implementations in the module — internal/commands (the CLI) and internal/web
-// (the graph data endpoint, since rmp task #364) — and they cannot share one
-// today, because internal/commands imports internal/web and the dependency
-// cannot run the other way. Two copies of a durability sequence drift; that is
-// the hazard internal/backoff's singleton gate and the engine-constructor gate
-// were each written against, in their own guise. A behavioural test beside each
+// Why a GATE and not a test beside the call site. A behavioural test beside one
 // site proves that site correct on the day it is written and says nothing about
-// the next site somebody adds.
+// the next site somebody adds — and this checkpoint has already been written
+// twice. internal/commands held the CLI's copy and internal/web gained a second
+// when the graph data endpoint moved onto the transactional path (rmp task
+// #364); they could not share one, because internal/commands imports
+// internal/web and the dependency cannot run the other way.
 //
-// What it checks: every call in production source to a snapshot-writing function
-// of GoGraph's store/snapshot package is the schema-carrying variant. The engine
-// also exposes WriteSnapshotFullWithMapperCodec, which persists no schema at all,
-// and the plainer WriteSnapshotFull; either of them, followed by the truncation
-// that always follows, is the defect above.
+// THAT IS NO LONGER TRUE, AND THIS GATE GREW A SECOND RULE BECAUSE OF IT. Task
+// #375 extracted the store's lifecycle into internal/graphstore, and both copies
+// are gone. So the gate now asserts the stronger property the extraction bought:
+// not merely that every snapshot write carries the schema, but that there is
+// exactly ONE snapshot write in the whole of production source, and it is in the
+// package that owns the store. The first rule keeps the copy correct; the second
+// stops a second copy appearing at all, which is the same shape as
+// internal/backoff's singleton gate.
+//
+// A THIRD ROUTE EXISTS AND IS ALSO FENCED, BEFORE ANYTHING TAKES IT. GoGraph
+// ships its own background checkpointer (store/checkpoint), which a long-running
+// server wires up rather than checkpointing after each statement — the shape
+// GoGraph's own store/db.go documents, and the shape rmp task #367's dedicated
+// Bolt server will take. That checkpointer writes the snapshot ITSELF, inside
+// GoGraph, so the sweep below cannot see it: a Checkpointer built without
+// WithConstraintSpecs and WithIndexSpecs reintroduces exactly this defect through
+// a route the first two rules are blind to. TestCheckpointerCarriesTheSchema
+// therefore holds any such construction to those two options.
+//
+// That third rule matches nothing in the tree today, and the fact is stated
+// rather than hidden: the server does not exist yet. What keeps it from being
+// decoration is that it does not assert an absence — it asserts a property OF
+// each construction, and it verifies against the upstream source that both
+// options still exist under those names, so a rename upstream fails loudly
+// instead of leaving a rule nothing could ever violate. It is written now
+// because the moment it starts matching is the moment it is needed.
+//
+// What the first two rules check: every call in production source to a
+// snapshot-writing function of GoGraph's store/snapshot package is the
+// schema-carrying variant, and there is exactly one such call. The engine also
+// exposes WriteSnapshotFullWithMapperCodec, which persists no schema at all, and
+// the plainer WriteSnapshotFull; either of them, followed by the truncation that
+// always follows, is the defect above.
 //
 // Known limits, stated rather than papered over:
 //
@@ -67,11 +92,21 @@ const snapshotWriterPrefix = "WriteSnapshot"
 // self-sufficient for the schema as well as for the graph.
 const schemaCarryingSnapshotWriter = "WriteSnapshotFullWithMapperCodecConstraintsAndIndexDefs"
 
-// mustWriteSnapshotIn are the directories that MUST hold at least one snapshot
-// write. Without this anchor the sweep could stop matching — a renamed import, a
-// changed AST shape — and the gate would report success over an empty set, which
-// is how a guard quietly becomes decoration.
-var mustWriteSnapshotIn = []string{"internal/commands", "internal/web"}
+// snapshotWriteDir is the ONE directory production source may write a snapshot
+// from: the package that owns the graph store's lifecycle. It is both the anchor
+// that stops the sweep quietly matching nothing and the singleton rule itself.
+const snapshotWriteDir = "internal/graphstore"
+
+// The GoGraph checkpointer, and the two options that make the snapshot it writes
+// carry the registered schema. A construction without them is the defect this
+// file exists against, arriving through GoGraph rather than through our own
+// snapshot call.
+const (
+	checkpointImportPath   = goGraphModulePath + "/store/checkpoint"
+	checkpointConstructor  = "New"
+	checkpointConstraintFn = "WithConstraintSpecs"
+	checkpointIndexFn      = "WithIndexSpecs"
+)
 
 // snapshotWriteSite is one call to a snapshot-writing function in production
 // source.
@@ -98,19 +133,23 @@ func TestEveryCheckpointWritesTheSchema(t *testing.T) {
 			"implementation certainly writes one, so the sweep has stopped matching and this gate " +
 			"would now pass whatever the code did")
 	}
-	for _, dir := range mustWriteSnapshotIn {
-		found := false
+	// The singleton rule. One snapshot write, in the package that owns the store.
+	// A second one anywhere is a second checkpoint implementation, which is the
+	// arrangement task #375 removed and the arrangement the schema defect drifted
+	// into last time.
+	if len(sites) != 1 || sites[0].dir != snapshotWriteDir {
+		where := make([]string, 0, len(sites))
 		for _, site := range sites {
-			if site.dir == dir {
-				found = true
-				break
-			}
+			where = append(where, site.file+":"+itoa(site.line)+" ("+site.function+")")
 		}
-		if !found {
-			t.Errorf("no snapshot write was found in %s, which runs the synchronous checkpoint of "+
-				"SPEC/GRAPH.md § Synchronous Checkpoint on Write. Either the checkpoint moved — in "+
-				"which case this list needs amending — or the sweep no longer recognises it", dir)
-		}
+		t.Errorf("production source writes %d snapshot(s), at %s.\n"+
+			"  Exactly one is expected, in %s, which owns the graph store's whole lifecycle: the open, "+
+			"the write-ahead-log writer, the transactional store, the engine, and this checkpoint.\n"+
+			"  A second write is a second checkpoint implementation. Two of them existed before rmp "+
+			"task #375 — internal/commands and internal/web each held one — and the only thing keeping "+
+			"them from drifting apart on the schema clause was this file. Call "+
+			"graphstore.Store.Checkpoint instead of writing a snapshot here.",
+			len(sites), strings.Join(where, ", "), snapshotWriteDir)
 	}
 
 	for _, site := range sites {
@@ -276,4 +315,207 @@ func scanSnapshotWrites(t *testing.T, root string) []*snapshotWriteSite {
 		return sites[i].line < sites[j].line
 	})
 	return sites
+}
+
+// TestCheckpointerCarriesTheSchema fences the third route a snapshot can reach
+// disk by: GoGraph's own background checkpointer.
+//
+// The sweep above reads OUR calls into GoGraph's snapshot package, so it is blind
+// to a snapshot GoGraph writes on our behalf. checkpoint.Checkpointer does
+// exactly that, on a cadence, and it carries the registered schema only when it
+// is given the two option functions that supply it. Built without them it writes
+// a schemaless snapshot and truncates the write-ahead log after it — the defect
+// this file exists against, reached by a route the first two rules cannot see.
+//
+// Nothing in the tree constructs one today; the long-running server that will
+// (rmp task #367) is not written yet. The test is therefore a property of each
+// construction rather than an assertion about how many there are, and its
+// non-vacuity anchor is upstream: both option names are verified to exist in the
+// pinned GoGraph release, so a rename there fails this test loudly instead of
+// leaving behind a rule that nothing could violate.
+func TestCheckpointerCarriesTheSchema(t *testing.T) {
+	for _, name := range []string{checkpointConstructor, checkpointConstraintFn, checkpointIndexFn} {
+		if !checkpointFuncExists(t, name) {
+			t.Fatalf("GoGraph %s does not expose checkpoint.%s. Either it was renamed upstream and this "+
+				"gate outlived it, or the name is misspelt — and a misspelt name here is a rule that can "+
+				"never be violated", goGraphVersion(t), name)
+		}
+	}
+
+	for _, site := range scanCheckpointerConstructions(t, repoRoot(t)) {
+		missing := make([]string, 0, 2)
+		if !site.withConstraints {
+			missing = append(missing, checkpointConstraintFn)
+		}
+		if !site.withIndexes {
+			missing = append(missing, checkpointIndexFn)
+		}
+		if len(missing) == 0 {
+			continue
+		}
+		t.Errorf("%s:%d (%s) builds a checkpoint.Checkpointer without checkpoint.%s.\n"+
+			"  The checkpointer writes the snapshot itself, so the snapshot-writer sweep in this file "+
+			"cannot see what it wrote. Without those options it writes a snapshot carrying no schema and "+
+			"truncates the write-ahead log after it, which is the defect of release 1.15.2 arriving "+
+			"through GoGraph instead of through our own snapshot call.\n"+
+			"  Pass checkpoint.%s and checkpoint.%s, reading them from the engine that runs the "+
+			"statements — Engine.ConstraintSpecsForSnapshot and Engine.IndexSpecsForSnapshot.",
+			site.file, site.line, site.function, strings.Join(missing, " and "),
+			checkpointConstraintFn, checkpointIndexFn)
+	}
+}
+
+// checkpointerSite is one construction of a GoGraph checkpointer in production
+// source, with whether the two schema options appear in the same enclosing
+// function.
+type checkpointerSite struct {
+	file            string
+	function        string
+	line            int
+	withConstraints bool
+	withIndexes     bool
+}
+
+// checkpointFuncExists reports whether the pinned GoGraph release exposes name as
+// an exported function of its store/checkpoint package, read from the upstream
+// source in the module cache rather than from a list kept here.
+func checkpointFuncExists(t *testing.T, name string) bool {
+	t.Helper()
+
+	dir := filepath.Join(goGraphModuleDir(t), "store", "checkpoint")
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("reading the GoGraph checkpoint package at %s: %v", dir, err)
+	}
+
+	fset := token.NewFileSet()
+	for _, entry := range entries {
+		fileName := entry.Name()
+		if entry.IsDir() || !strings.HasSuffix(fileName, ".go") || strings.HasSuffix(fileName, "_test.go") {
+			continue
+		}
+		file, parseErr := parser.ParseFile(fset, filepath.Join(dir, fileName), nil, parser.SkipObjectResolution)
+		if parseErr != nil {
+			t.Fatalf("parsing %s: %v", fileName, parseErr)
+		}
+		for _, decl := range file.Decls {
+			fn, ok := decl.(*ast.FuncDecl)
+			if !ok || fn.Recv != nil {
+				continue
+			}
+			if fn.Name.Name == name {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// scanCheckpointerConstructions walks the repository's production Go files and
+// returns every construction of a GoGraph checkpointer, noting whether the two
+// schema options are applied in the same enclosing function.
+//
+// The options are looked for across the whole enclosing function rather than
+// inside the constructor's own argument list, because a caller that assembles its
+// options into a slice first is doing the same thing and must not be reported for
+// it. The attribution is therefore generous in the direction that avoids a false
+// failure and strict in the direction that matters: a function that never
+// mentions the option at all cannot be passing it.
+func scanCheckpointerConstructions(t *testing.T, root string) []*checkpointerSite {
+	t.Helper()
+
+	fset := token.NewFileSet()
+	var sites []*checkpointerSite
+
+	err := filepath.WalkDir(root, func(path string, entry os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if entry.IsDir() {
+			if path != root && skipDirs[entry.Name()] {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		name := entry.Name()
+		if !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
+			return nil
+		}
+		rel, relErr := filepath.Rel(root, path)
+		if relErr != nil {
+			return relErr
+		}
+		rel = filepath.ToSlash(rel)
+
+		file, parseErr := parser.ParseFile(fset, path, nil, parser.SkipObjectResolution)
+		if parseErr != nil {
+			t.Fatalf("parsing %s: %v", rel, parseErr)
+		}
+		local := importLocalName(file, checkpointImportPath)
+		if local == "" {
+			return nil
+		}
+
+		for _, decl := range file.Decls {
+			fn, ok := decl.(*ast.FuncDecl)
+			if !ok || fn.Body == nil {
+				continue
+			}
+			called := checkpointCallsIn(fn.Body, local)
+			for _, line := range called[checkpointConstructor] {
+				sites = append(sites, &checkpointerSite{
+					file:            rel,
+					function:        fn.Name.Name,
+					line:            fset.Position(line).Line,
+					withConstraints: len(called[checkpointConstraintFn]) > 0,
+					withIndexes:     len(called[checkpointIndexFn]) > 0,
+				})
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("walking the repository: %v", err)
+	}
+
+	sort.Slice(sites, func(i, j int) bool {
+		if sites[i].file != sites[j].file {
+			return sites[i].file < sites[j].file
+		}
+		return sites[i].line < sites[j].line
+	})
+	return sites
+}
+
+// checkpointCallsIn returns, for every function of the checkpoint package called
+// inside body under the local import name, the positions of those calls. Generic
+// instantiations are followed, because every option function in that package is
+// generic and is therefore written checkpoint.WithIndexSpecs[string, float64](…).
+func checkpointCallsIn(body *ast.BlockStmt, local string) map[string][]token.Pos {
+	calls := make(map[string][]token.Pos, 4)
+	ast.Inspect(body, func(n ast.Node) bool {
+		call, isCall := n.(*ast.CallExpr)
+		if !isCall {
+			return true
+		}
+		fun := call.Fun
+		// checkpoint.WithIndexSpecs[string, float64] — strip the instantiation.
+		if idx, isIndex := fun.(*ast.IndexExpr); isIndex {
+			fun = idx.X
+		}
+		if idx, isIndex := fun.(*ast.IndexListExpr); isIndex {
+			fun = idx.X
+		}
+		sel, isSel := fun.(*ast.SelectorExpr)
+		if !isSel {
+			return true
+		}
+		pkg, isIdent := sel.X.(*ast.Ident)
+		if !isIdent || pkg.Name != local {
+			return true
+		}
+		calls[sel.Sel.Name] = append(calls[sel.Sel.Name], call.Pos())
+		return true
+	})
+	return calls
 }

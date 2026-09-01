@@ -50,23 +50,23 @@
 #
 # TWO COUNTS, BOTH TRUE, MEASURING DIFFERENT THINGS.
 #
-#   55  RULES suppressed in the module, the number this register accounts for
+#   54  RULES suppressed in the module, the number this register accounts for
 #       and the number the gate sweeps. It counts rules, not directives: a
 #       directive naming two rules counts once under each, and the module has
 #       exactly one such directive — the `#nosec G302 G703` on
-#       internal/web/data.go's checkpoint chmod, which is both a
+#       internal/graphstore/graphstore.go's checkpoint chmod, which is both a
 #       directory-permission finding and a taint-analysis one. So the module
-#       carries 54 directives suppressing 55 rules. The gate reads comment
+#       carries 53 directives suppressing 54 rules. The gate reads comment
 #       groups the way gosec does, so the tag counts only where the scanner
 #       honours it.
-#   41  rules suppressed outside _test.go, across 40 directives. gosec does not
-#       scan _test.go files unless -tests is passed, and 14 of the 55 are in
-#       test files: 55 - 14 = 41. That the scanner does not read those 14 is an
+#   40  rules suppressed outside _test.go, across 39 directives. gosec does not
+#       scan _test.go files unless -tests is passed, and 14 of the 54 are in
+#       test files: 54 - 14 = 40. That the scanner does not read those 14 is an
 #       accepted gap, measured and reasoned in SPEC/BUILD.md § Security Scan;
 #       the register accounts for them anyway, so they stay reviewed even where
 #       the scanner is silent.
 #
-#       gosec's own summary prints `Nosec: 40`, and the difference is the
+#       gosec's own summary prints `Nosec: 39`, and the difference is the
 #       two-rule directive: gosec counts DIRECTIVES it honoured, this register
 #       counts RULES accepted. The two figures agreed while every directive
 #       named one rule, and the release notes quoted that agreement; they no
@@ -96,11 +96,11 @@
 #     Reason: <prose, continuing on the following indented lines>
 #
 # A directive naming two rules counts once under each. Exactly one does today —
-# the `#nosec G302 G703` on internal/web/data.go's checkpoint chmod, which is
-# both a directory-permission finding and a taint-analysis one — so the totals
-# below are the number of directives plus one.
+# the `#nosec G302 G703` on internal/graphstore/graphstore.go's checkpoint
+# chmod, which is both a directory-permission finding and a taint-analysis one —
+# so the totals below are the number of directives plus one.
 #
-# totals: 55 suppressions, 41 outside _test.go
+# totals: 54 suppressions, 40 outside _test.go
 #
 # G104 Audit errors not checked (CWE-703)  [11]
 #   internal/db/connection.go                          6
@@ -176,18 +176,22 @@
 #     launcher. host comes from this user's own --host flag on their own machine;
 #     no privilege boundary is crossed.
 #
-# G302 Poor file permissions used when creating file or using chmod (CWE-276)  [3]
-#   internal/commands/graph.go                         2
-#   internal/web/data.go                               1
+# G302 Poor file permissions used when creating file or using chmod (CWE-276)  [2]
+#   internal/commands/graph.go                         1
+#   internal/graphstore/graphstore.go                  1
 #   Reason: The 0700 is applied to DIRECTORIES — the graph store and its snapshot
 #     directory — where owner-only access requires the execute bit, and 0700 on
 #     the ~/.roadmaps tree is what CLAUDE.md § 10 and SPEC/ARCHITECTURE.md
 #     § Directory Structure mandate. gosec's threshold is file-oriented and does
 #     not distinguish the two. A 0700 applied to a FILE would not be covered by
-#     this reason. The internal/web one is the snapshot directory of the
-#     checkpoint the graph data endpoint now runs after a statement that wrote,
-#     and it is the same chmod on the same kind of directory as the two in
-#     internal/commands.
+#     this reason. The internal/commands one narrows the graph store directory
+#     the CLI creates; the internal/graphstore one narrows the snapshot directory
+#     the synchronous checkpoint publishes into.
+#     There were three. Two of them were the SAME chmod, in the two copies of the
+#     checkpoint that internal/commands and internal/web each carried, and they
+#     went with the copies when rmp task #375 moved the store's lifecycle into
+#     internal/graphstore. A register entry disappearing because the duplication
+#     behind it disappeared is the healthy direction for this list to move.
 #
 # G304 File path provided as taint input (CWE-22)  [13]
 #   internal/commands/comments_test.go                 1
@@ -225,23 +229,31 @@
 #     derives from it.
 #
 # G703 Path traversal via taint analysis (CWE-22)  [2]
-#   internal/web/data.go                               2
-#   Reason: os.Stat on ~/.roadmaps/<name>/graph, where <name> was validated by the
-#     route guard and again by utils.GetRoadmapDir before the path was built, so
-#     no path outside the data directory is reachable. The stat only decides
-#     whether the roadmap has a graph store yet; the read never creates one.
+#   internal/graphstore/graphstore.go                  1
+#   internal/web/data.go                               1
+#   Reason: Both paths are built under ~/.roadmaps/<name>/graph, where <name> was
+#     validated by utils.GetRoadmapDir — and, on the web path, by the route guard
+#     before that — so no path outside the data directory is reachable. The
+#     internal/web one is the os.Stat that decides whether the roadmap has a graph
+#     store yet; the read never creates one. The internal/graphstore one is the
+#     chmod narrowing the snapshot directory the checkpoint publishes into, whose
+#     parent is the graph directory the caller has already resolved.
 #
 # TWO OBSERVATIONS THIS REGISTER MAKES DELIBERATELY, because a reviewer who
 # trusts the list should also know what the list does not mean.
 #
-# A suppression is not evidence that gosec had a finding. Of the 42 suppressions
-# the scanner reads, 30 suppress a reported finding and 12 currently suppress
-# nothing: gosec's G201 does not follow fmt.Sprintf through a query issued on the
-# embedded *sql.DB or through a function that only returns the assembled string,
-# and G104 does not report an error discarded by an explicit `_ =`. Those 12 are
-# documentation at the site rather than an accepted finding. They are kept and
-# listed because they are still standing scope-limited suppressions: if the rule
-# starts reporting at that node, they will silence it.
+# A suppression is not evidence that gosec had a finding. Of the 40 rules
+# suppressed outside test files, 26 suppress a reported finding and 14 currently
+# suppress nothing: gosec's G201 does not follow fmt.Sprintf through a query
+# issued on the embedded *sql.DB or through a function that only returns the
+# assembled string, and G104 does not report an error discarded by an explicit
+# `_ =`. Those 14 are documentation at the site rather than an accepted finding.
+# They are kept and listed because they are still standing scope-limited
+# suppressions: if the rule starts reporting at that node, they will silence it.
+#
+# The split is MEASURED rather than counted by hand, and it is reproducible:
+# `gosec -nosec=true -exclude-dir=.claude/worktrees ./...` disables suppression
+# handling and reports 26 issues where the ordinary run reports 0.
 #
 # A #nosec is a permanent blindfold over one node. Every G201 line above means
 # that if the statement at that site is ever edited to interpolate a value

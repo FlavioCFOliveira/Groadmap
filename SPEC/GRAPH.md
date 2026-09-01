@@ -331,6 +331,13 @@ There is **one** path, and both surfaces run on it. The two rows name the two
 surfaces rather than two constructions: they construct the same engine, in the
 same way, from the same recovery result.
 
+**The construction is literally one, in `internal/graphstore`, and every surface
+reaches it.** That package owns the graph store's whole lifecycle — the exclusive
+advisory hold, the recovery open, the write-ahead-log writer, the transactional
+store, the engine over them, and the synchronous checkpoint — and a surface is on
+this path by calling it, not by repeating it. A second construction anywhere in
+the product is a second path, whatever constructor it names.
+
 Groadmap constructs an engine through no other constructor. The pinned engine
 also exposes `NewEngine`, `NewEngineWithOptions`, `NewEngineWithRegistry`,
 `NewEngineWithStore`, `NewEngineWithStoreAndConstraints`, and

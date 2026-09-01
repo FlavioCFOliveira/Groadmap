@@ -55,6 +55,7 @@ import (
 	"github.com/FlavioCFOliveira/GoGraph/store/wal"
 
 	"github.com/FlavioCFOliveira/Groadmap/internal/graphkeys"
+	"github.com/FlavioCFOliveira/Groadmap/internal/graphstore"
 )
 
 const (
@@ -720,7 +721,7 @@ func seedKeyUniquenessGraph(t *testing.T) string {
 func writeKeyUniquenessTx(t *testing.T, graphDir, query string) {
 	t.Helper()
 
-	res, err := recovery.Open[string, float64](graphDir, graphOpenOpts)
+	res, err := recovery.Open[string, float64](graphDir, graphstore.RecoveryOptions())
 	if err != nil {
 		t.Fatalf("opening the witness graph for seeding: %v", err)
 	}
@@ -752,7 +753,7 @@ func writeKeyUniquenessTx(t *testing.T, graphDir, query string) {
 func runGraphQueryForTest(t *testing.T, graphDir, query string) ([]string, [][]any) {
 	t.Helper()
 
-	res, err := recovery.Open[string, float64](graphDir, graphOpenOpts)
+	res, err := recovery.Open[string, float64](graphDir, graphstore.RecoveryOptions())
 	if err != nil {
 		t.Fatalf("opening the witness graph: %v", err)
 	}

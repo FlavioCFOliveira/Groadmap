@@ -17,16 +17,10 @@ import (
 
 	"github.com/FlavioCFOliveira/GoGraph/cypher"
 	"github.com/FlavioCFOliveira/GoGraph/cypher/expr"
-	"github.com/FlavioCFOliveira/GoGraph/graph/csr"
-	"github.com/FlavioCFOliveira/GoGraph/graph/lpg"
-	"github.com/FlavioCFOliveira/GoGraph/store/recovery"
-	"github.com/FlavioCFOliveira/GoGraph/store/snapshot"
-	"github.com/FlavioCFOliveira/GoGraph/store/txn"
-	"github.com/FlavioCFOliveira/GoGraph/store/wal"
 
-	"github.com/FlavioCFOliveira/Groadmap/internal/backoff"
 	"github.com/FlavioCFOliveira/Groadmap/internal/db"
 	"github.com/FlavioCFOliveira/Groadmap/internal/graphlock"
+	"github.com/FlavioCFOliveira/Groadmap/internal/graphstore"
 	"github.com/FlavioCFOliveira/Groadmap/internal/models"
 	"github.com/FlavioCFOliveira/Groadmap/internal/utils"
 )
@@ -1871,96 +1865,6 @@ func admitsLimitClause(masked string) bool {
 	return !matches(reIntrospect)
 }
 
-// graphOpenOpts carries the recovery.Options value used for every graph store
-// open this package performs. Defined once to avoid repeating the codec wiring.
-var graphOpenOpts = recovery.Options[string, float64]{
-	Codec:       txn.NewStringCodec(),
-	WeightCodec: txn.NewFloat64WeightCodec(),
-}
-
-// openGraphWALWriter opens the write-ahead-log writer at walPath under the
-// project's single bounded backoff policy (internal/backoff), which owns the
-// attempt count and the delay ladder. Every failure is waited on, because the
-// one this retry exists for is contention — another process holding the WAL
-// directory lock — and a WAL that cannot be opened for any other reason is not
-// distinguishable here anyway. A persistent failure is returned as ErrDatabase,
-// which handleGraphData answers with HTTP 500, the status this endpoint already
-// returns for a store that cannot be opened. Callers must close the Writer.
-func openGraphWALWriter(walPath string) (*wal.Writer, error) {
-	w, err := backoff.Retry(func() (*wal.Writer, error) { return wal.Open(walPath) }, backoff.Always)
-	if err != nil {
-		return nil, fmt.Errorf("%w: graph store unavailable: %v", utils.ErrDatabase, err)
-	}
-	return w, nil
-}
-
-// checkpointGraphStore performs the synchronous post-commit checkpoint
-// (SPEC/GRAPH.md § Synchronous Checkpoint on Write) for a graph data request. It
-// writes a self-sufficient full snapshot of the committed graph state under
-// graphDir/snapshot/ and then truncates the write-ahead log so the log holds
-// only post-snapshot transactions.
-//
-// It takes the engine that just executed the statement because the specification
-// requires the snapshot to carry "the schema the engine holds registered at the
-// moment of the checkpoint", and forbids Groadmap keeping a record of its own
-// beside it: the engine is the only party that knows what is registered after a
-// statement has run. The committed graph stays a separate parameter because the
-// engine exposes no accessor for it.
-//
-// The order below is load-bearing. The specs are read, and the snapshot they go
-// into is made durable, BEFORE the write-ahead log is truncated: until that
-// snapshot exists, the log holds the only record of every CREATE INDEX and
-// CREATE CONSTRAINT the graph has seen, and truncating first would destroy the
-// schema outright (SPEC/GRAPH.md § Synchronous Checkpoint on Write, step 2).
-//
-// It MUST be called only after the write transaction has committed durably, and
-// only when that transaction appended to the log; the caller treats any error
-// here as non-fatal, because the commit is the durability boundary and the write
-// has already succeeded.
-//
-// This is the second implementation of the sequence in the module: commands
-// (graph.go, checkpointGraph) holds the first, and the two cannot be shared
-// today because internal/commands imports internal/web and so the dependency
-// cannot run the other way. The duplication is recorded rather than hidden, and
-// internal/testenv's snapshot-writer gate is what stops the two drifting on the
-// one thing that silently destroys data — writing a snapshot that omits the
-// schema.
-func checkpointGraphStore(engine *cypher.Engine, g *lpg.Graph[string, float64], w *wal.Writer, graphDir string) error {
-	cs := csr.BuildFromAdjList(g.AdjList())
-
-	// The registered schema, read from the engine that ran the statement and
-	// while the write-ahead log is still intact. Either slice may be empty — the
-	// common case, a graph with no schema declared over it — and the writer then
-	// simply omits the corresponding snapshot component.
-	constraints := engine.ConstraintSpecsForSnapshot()
-	indexDefs := engine.IndexSpecsForSnapshot()
-
-	snapDir := filepath.Join(graphDir, "snapshot")
-	// WriteSnapshotFullWithMapperCodecConstraintsAndIndexDefs assembles in
-	// snapDir+".tmp" and renames atomically into snapDir; the codec emits
-	// mapper.bin so the snapshot is self-sufficient for string keys, and the two
-	// spec slices are what make it self-sufficient for the schema. The plain
-	// WriteSnapshotFullWithMapperCodec persists no schema at all, and the
-	// truncation below then leaves nothing to recover it from.
-	if err := snapshot.WriteSnapshotFullWithMapperCodecConstraintsAndIndexDefs(
-		snapDir, cs, g, txn.NewStringCodec(), constraints, indexDefs); err != nil {
-		return fmt.Errorf("snapshot write: %w", err)
-	}
-
-	if err := w.Sync(); err != nil {
-		return fmt.Errorf("wal sync: %w", err)
-	}
-	if _, err := w.Truncate(); err != nil {
-		return fmt.Errorf("wal truncate: %w", err)
-	}
-
-	// Keep the snapshot directory consistent with the 0700 the roadmap tree
-	// carries. Best-effort: a failure here does not invalidate the durable
-	// snapshot.
-	_ = os.Chmod(snapDir, 0700) // #nosec G302 G703 -- 0700 on a DIRECTORY is mandated by SPEC (CLAUDE.md §10: 0700 for the ~/.roadmaps tree), and gosec G302 false-positives on directory permissions; snapDir derives from the roadmap name utils.GetRoadmapDir already validated, so no traversal is reachable
-	return nil
-}
-
 // loadGraphView runs the caller's statement against a roadmap's knowledge graph
 // and returns the nodes and edges it produced, in the Graph View Data shape.
 //
@@ -2039,12 +1943,17 @@ func loadGraphView(ctx context.Context, name, rawQuery, rawLimit string) (graphV
 		return empty, nil
 	}
 
-	// The store's advisory lock, taken EXCLUSIVELY before the open and held
-	// across everything that follows: the open, the statement, the commit, and
-	// any checkpoint. There is one lock mode because there is one execution
-	// path — the statement may write, and Groadmap does not examine it to find
-	// out, so a shared hold would be a shared hold held while a statement
-	// committed (SPEC/GRAPH.md § Concurrency and Recovery).
+	// The store's whole lifecycle belongs to internal/graphstore, which owns the
+	// one copy of it: the advisory lock, the recovery open, the write-ahead-log
+	// writer, the transactional store, the engine over them, and the checkpoint
+	// below. Open takes the lock EXCLUSIVELY before it reads anything and holds
+	// it across everything that follows — the open, the statement, the commit,
+	// and any checkpoint — until Close.
+	//
+	// There is one lock mode because there is one execution path: the statement
+	// may write, and Groadmap does not examine it to find out, so a shared hold
+	// would be a shared hold held while a statement committed (SPEC/GRAPH.md
+	// § Concurrency and Recovery).
 	//
 	// The hold used to span the store open ALONE, and a test used to fail if it
 	// were widened. Widening it is exactly what the write path requires, and the
@@ -2061,38 +1970,18 @@ func loadGraphView(ctx context.Context, name, rawQuery, rawLimit string) (graphV
 	// which handleGraphData answers with HTTP 500 — the status it already
 	// returns for a store that cannot be opened (SPEC/GRAPH.md § Lock
 	// Contention, rule 2).
-	releaseLock, err := graphlock.AcquireExclusive(graphDir)
+	//
+	// Close releases the write-ahead log and then the lock, in that order, so
+	// the log is closed while this request still holds the store. That ordering
+	// used to depend on this function registering its defers in the right
+	// sequence; it is now the store's own.
+	st, err := graphstore.Open(graphDir)
 	if err != nil {
 		return graphView{}, err
 	}
-	defer releaseLock()
+	defer st.Close() //nolint:errcheck // close error is moot once the commit has been reported
 
-	res, openErr := recovery.Open[string, float64](graphDir, graphOpenOpts)
-	if openErr != nil {
-		return graphView{}, fmt.Errorf("%w: graph store unavailable: %v", utils.ErrDatabase, openErr)
-	}
-
-	w, walErr := openGraphWALWriter(filepath.Join(graphDir, "wal"))
-	if walErr != nil {
-		return graphView{}, walErr
-	}
-	// Registered after the lock, so it unwinds BEFORE the lock is released: the
-	// log is closed while this request still holds the store.
-	defer w.Close() //nolint:errcheck // close error is moot once the commit has been reported
-
-	store := txn.NewStoreWithOptions[string, float64](res.Graph, w, txn.Options[string, float64]{
-		Codec:       txn.NewStringCodec(),
-		WeightCodec: txn.NewFloat64WeightCodec(),
-	})
-
-	// The whole recovery result, not extracted fields: this constructor
-	// re-registers the recovered constraints and index definitions AND hydrates
-	// each index from the snapshot payload the same open returned, instead of
-	// rebuilding it by a full scan of the graph. res MUST be the result of the
-	// open that produced this store, a few lines above: a result from any other
-	// open would describe a different graph and neither the engine nor the store
-	// could detect the substitution (SPEC/GRAPH.md § Engine Constructor by Path).
-	engine := cypher.NewEngineWithStoreAndRecovery(store, res)
+	engine := st.Engine()
 
 	// Inject the node limit only when the query has no top-level LIMIT of its
 	// own AND is a statement form that admits a LIMIT clause. The original
@@ -2100,33 +1989,28 @@ func loadGraphView(ctx context.Context, name, rawQuery, rawLimit string) (graphV
 	// suppression checks alone.
 	executed := applyGraphLimit(query, limit)
 
-	// The write-ahead log's durable offset BEFORE the statement runs. The
-	// checkpoint below is gated on this growing, because a transaction that
-	// appended nothing MUST NOT snapshot and MUST NOT truncate: an ordinary read
-	// would otherwise rewrite a full snapshot of the whole graph on every page
-	// load, and would shorten the history a later recovery replays
-	// (SPEC/GRAPH.md § What a Statement That Writes Nothing Changes on Disk,
-	// rules 2 and 3; SPEC/WEB.md Acceptance Criterion 19). The offset is the
-	// log's own answer to "did this transaction append", which is the question
-	// the specification asks — not a guess made from the statement's text.
-	walBefore := w.DurableOffset()
-
 	view, runErr := runGraphViewQuery(ctx, engine, executed)
 	if runErr != nil {
 		return graphView{}, runErr
 	}
 
-	// The transaction has committed durably; res.Graph now reflects the new
-	// state. A checkpoint failure AFTER a durable commit MUST NOT fail the
-	// request: the log is intact, recovery still works, and the next write
-	// reconciles the snapshot (SPEC/GRAPH.md § Synchronous Checkpoint on Write,
-	// failure policy). It is reported to the server log and the request still
-	// answers 200, which is the web analogue of the CLI's stderr diagnostic
-	// beside exit code 0.
-	if w.DurableOffset() > walBefore {
-		if cperr := checkpointGraphStore(engine, res.Graph, w, graphDir); cperr != nil {
-			slog.Error("graph checkpoint failed", "roadmap", name, "err", cperr)
-		}
+	// The transaction has committed durably. A checkpoint failure AFTER a durable
+	// commit MUST NOT fail the request: the log is intact, recovery still works,
+	// and the next write reconciles the snapshot (SPEC/GRAPH.md § Synchronous
+	// Checkpoint on Write, failure policy). It is reported to the server log and
+	// the request still answers 200, which is the web analogue of the CLI's
+	// stderr diagnostic beside exit code 0.
+	//
+	// Store.Checkpoint carries the gate: a transaction that appended nothing
+	// MUST NOT snapshot and MUST NOT truncate, or an ordinary read would rewrite
+	// a full snapshot of the whole graph on every page load and would shorten the
+	// history a later recovery replays (SPEC/GRAPH.md § What a Statement That
+	// Writes Nothing Changes on Disk, rules 2 and 3; SPEC/WEB.md Acceptance
+	// Criterion 19). The decision is the store's, not this call site's, so the two
+	// surfaces that take this checkpoint cannot come to disagree about when it
+	// runs.
+	if _, cperr := st.Checkpoint(); cperr != nil {
+		slog.Error("graph checkpoint failed", "roadmap", name, "err", cperr)
 	}
 
 	return view, nil

@@ -4,7 +4,7 @@
 // Constructor by Path; § Recovered Schema on Both Paths; acceptance criteria
 // 63 and 64).
 //
-// The defect these tests close. checkpointGraph wrote the snapshot with a
+// The defect these tests close. The checkpoint wrote the snapshot with a
 // writer that persists no schema at all and then truncated the write-ahead
 // log, which was where the CREATE INDEX and CREATE CONSTRAINT records lived.
 // Every successful write checkpoints, so a single write was enough to erase
@@ -39,46 +39,38 @@ import (
 
 	"github.com/FlavioCFOliveira/GoGraph/cypher"
 	"github.com/FlavioCFOliveira/GoGraph/store/recovery"
-	"github.com/FlavioCFOliveira/GoGraph/store/txn"
+
+	"github.com/FlavioCFOliveira/Groadmap/internal/graphstore"
 )
 
-// runSchemaStatement executes one statement through the same sequence
-// runGraphWrite runs — recovery.Open, the write-ahead-log writer, the
-// transactional store, cypher.NewEngineWithStoreAndRecovery, RunInTx, the
-// commit performed by Result.Close, and finally checkpointGraph — and returns
-// the engine's error, or nil.
+// runSchemaStatement executes one statement through the production store
+// sequence — graphstore.Open (the advisory hold, recovery, the write-ahead-log
+// writer, the transactional store and cypher.NewEngineWithStoreAndRecovery),
+// RunInTx, the commit performed by Result.Close, and finally
+// graphstore.Store.Checkpoint — and returns the engine's error, or nil.
 //
 // It bypasses only the guard rail, which today refuses the DDL these tests
 // need and is widened by a separate task. Everything after the guard rail is
-// the production sequence, and the checkpoint is the production function: a
+// the production sequence, and the checkpoint is the production method: a
 // test that reimplemented the checkpoint would prove nothing about the one the
-// command runs.
+// command runs. That is why this helper was rewired rather than kept when the
+// sequence moved into internal/graphstore (rmp task #375); a copy left here
+// would have been a third implementation of exactly what that task removed.
 //
 // An engine refusal (a constraint violation, a duplicate index name) is
 // returned so the caller can assert on it. An infrastructure failure — the
-// store not opening, the checkpoint failing — fails the test, because it means
-// the harness, not the behaviour under test, is broken.
+// store not opening, the checkpoint failing or declining to run — fails the
+// test, because it means the harness, not the behaviour under test, is broken.
 func runSchemaStatement(t *testing.T, graphDir, query string) error {
 	t.Helper()
 
-	res, err := recovery.Open[string, float64](graphDir, graphOpenOpts)
+	st, err := graphstore.Open(graphDir)
 	if err != nil {
 		t.Fatalf("opening the graph store at %s: %v", graphDir, err)
 	}
+	defer st.Close() //nolint:errcheck // test cleanup; the assertions are made against the reopened store
 
-	w, err := openWALWriter(filepath.Join(graphDir, "wal"))
-	if err != nil {
-		t.Fatalf("opening the write-ahead log: %v", err)
-	}
-	defer w.Close() //nolint:errcheck
-
-	store := txn.NewStoreWithOptions[string, float64](res.Graph, w, txn.Options[string, float64]{
-		Codec:       txn.NewStringCodec(),
-		WeightCodec: txn.NewFloat64WeightCodec(),
-	})
-	engine := cypher.NewEngineWithStoreAndRecovery(store, res)
-
-	result, runErr := engine.RunInTx(context.Background(), query, nil)
+	result, runErr := st.Engine().RunInTx(context.Background(), query, nil)
 	if runErr != nil {
 		return runErr
 	}
@@ -97,9 +89,17 @@ func runSchemaStatement(t *testing.T, graphDir, query string) error {
 	// The checkpoint under test. Its failure is non-fatal in production
 	// (SPEC/GRAPH.md FR7) but is fatal here: these tests exist to assert what
 	// the checkpoint persisted, and a checkpoint that did not run persisted
-	// nothing to assert about.
-	if cperr := checkpointGraph(engine, res.Graph, w, graphDir); cperr != nil {
-		t.Fatalf("checkpointGraph after %q: %v", query, cperr)
+	// nothing to assert about. Checkpoint reports whether it ran, so "did not
+	// run" is now a distinguishable outcome rather than a silent one: every
+	// statement these tests pass are schema DDL, which appends, so a false here
+	// means the write-ahead-log gate has stopped seeing what a write does.
+	ran, cperr := st.Checkpoint()
+	if cperr != nil {
+		t.Fatalf("checkpoint after %q: %v", query, cperr)
+	}
+	if !ran {
+		t.Fatalf("the checkpoint after %q declined to run: the write-ahead log did not grow, so the "+
+			"statement appended nothing and there is nothing on disk for this test to assert about", query)
 	}
 	return nil
 }
@@ -118,7 +118,7 @@ func checkpointedSchemaStatement(t *testing.T, graphDir, query string) {
 // what comes back is what is on disk.
 func reopenGraphStore(t *testing.T, graphDir string) recovery.Result[string, float64] {
 	t.Helper()
-	res, err := recovery.Open[string, float64](graphDir, graphOpenOpts)
+	res, err := recovery.Open[string, float64](graphDir, graphstore.RecoveryOptions())
 	if err != nil {
 		t.Fatalf("reopening the graph store at %s: %v", graphDir, err)
 	}

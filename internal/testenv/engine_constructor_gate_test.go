@@ -118,7 +118,19 @@ const (
 	// webPackageName is the package that serves the web graph page and the web
 	// graph data endpoint, which is the surface the table's second row names.
 	webPackageName = "web"
+
+	// storeOpenFunc is the entry point of the package that owns the store's
+	// lifecycle. A surface is on the path by calling it.
+	storeOpenFunc = "Open"
 )
+
+// oneConstructionMarker opens the sentence of § Engine Constructor by Path that
+// states the property this gate enforces on the code: the construction is one, it
+// lives in a named package, and every surface reaches it. The package itself is
+// read out of the backticked span that follows this phrase rather than restated
+// here, so the specification and the code stay two independent sides being
+// compared. A reworded marker fails the gate rather than quietly narrowing it.
+const oneConstructionMarker = "The construction is literally one, in"
 
 // storeExpectation is the fourth column of § Engine Constructor by Path:
 // whether the path opens a transactional store and a write-ahead-log writer.
@@ -157,12 +169,11 @@ type specConstructorRow struct {
 // constructionSite is one call to a Cypher engine constructor in production
 // source.
 type constructionSite struct {
-	file        string   // repository-relative
-	pkg         string   // package name as declared
-	dir         string   // repository-relative directory
-	function    string   // enclosing top-level function
-	constructor string   // as written, normalised to the cypher package name
-	subcommands []string // graph subcommands whose dispatch reaches function
+	file        string // repository-relative
+	pkg         string // package name as declared
+	dir         string // repository-relative directory
+	function    string // enclosing top-level function
+	constructor string // as written, normalised to the cypher package name
 	line        int
 	opensStore  bool
 	opensWAL    bool
@@ -173,11 +184,16 @@ func (s *constructionSite) where() string {
 	return s.file + ":" + itoa(s.line) + " (" + s.function + ")"
 }
 
-// mustConstructIn are the directories that MUST hold at least one engine
-// construction. Without this anchor the sweep could stop matching — a renamed
-// import, a changed AST shape — and the gate would report success over an empty
-// set, which is how a guard quietly becomes decoration.
-var mustConstructIn = []string{"internal/commands", "internal/web"}
+// mustReachTheStoreFrom are the directories that MUST contain a function
+// reaching the store's Open. They are the two surfaces the table names, and
+// without this anchor the sweep could stop matching — a renamed import, a changed
+// AST shape — and the gate would report success over an empty set, which is how a
+// guard quietly becomes decoration.
+//
+// It replaces a list of directories that had to hold a CONSTRUCTION. There is one
+// construction now and it is in neither of them, so the anchor moved to the thing
+// that still distinguishes a surface on this path from one that is not: the call.
+var mustReachTheStoreFrom = []string{"internal/commands", "internal/web"}
 
 // Cell scanners. Backticked spans carry every name the table states, so all
 // three read the same span and differ only in what they accept inside it.
@@ -275,67 +291,117 @@ func TestGraphEngineConstructorInventoryMatchesGoGraph(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 // TestGraphEngineConstructionsMatchSpec enumerates every Cypher engine the
-// implementation constructs to serve a graph subcommand or a web graph request,
-// and fails if any of them is constructed through a constructor other than the
-// one SPEC/GRAPH.md § Engine Constructor by Path gives for that path, or if an
-// engine is constructed on a path that table does not list.
+// implementation constructs and holds the result to what SPEC/GRAPH.md § Engine
+// Constructor by Path says: there is ONE construction, it is in the package the
+// section names, it uses the constructor every row gives, it opens what the
+// fourth column says it opens, and every surface the table lists reaches it.
 //
-// Each construction is attributed to a row of the table by its surface, which is
-// read off the code: the graph subcommands whose dispatch reaches the enclosing
-// function with a literal name, or — for the row whose surface names no
-// subcommand — the web package. The attribution is deliberately independent of
-// the constructor being checked, so swapping only the constructor cannot move a
-// construction to a row that would accept it.
+// It used to attribute a construction PER SURFACE, because there was one per
+// surface — internal/commands held the CLI's and internal/web held the web's, and
+// the pair could drift into naming different constructors. There is one now, so
+// the singleton itself is the strongest form of the section's "one path" claim
+// and is checked directly, and what is attributed per surface instead is the CALL
+// that puts that surface on the path. A row nothing calls from is a surface that
+// has left the path, which is the same failure the old row-claiming caught.
+//
+// The attribution never looks at the constructor: a row is claimed by what calls
+// the store, so the constructor check is a real comparison and not a tautology.
 func TestGraphEngineConstructionsMatchSpec(t *testing.T) {
 	spec := readRepoFileAt(t, specGraphRelPath)
 	rows := parseConstructorTable(t, spec)
 	checkTheTableListsOnePath(t, spec, rows)
-	sites := scanEngineConstructions(t, repoRoot(t))
+	storePkg := parseStoreOwnerPackage(t, spec)
 
+	sites := scanEngineConstructions(t, repoRoot(t))
 	if len(sites) == 0 {
 		t.Fatal("the sweep found no engine construction anywhere in the production source. " +
 			"The implementation certainly constructs one, so the sweep has stopped matching and this " +
 			"gate would now pass whatever the code did")
 	}
-	for _, dir := range mustConstructIn {
-		if !anyConstructionIn(sites, dir) {
-			t.Errorf("no engine construction was found in %s, which serves one of the surfaces "+
-				"%s § Engine Constructor by Path lists. Either the construction moved — in which case "+
-				"the table's Surface column needs amending — or the sweep no longer recognises it",
-				dir, specGraphRelPath)
+
+	// The singleton. Every row describes the same path, so a second construction
+	// is a second path however it is written.
+	if len(sites) != 1 || sites[0].dir != storePkg {
+		where := make([]string, 0, len(sites))
+		for _, site := range sites {
+			where = append(where, site.where())
+		}
+		t.Fatalf("production source constructs %d Cypher engine(s), at %s.\n"+
+			"  %s § Engine Constructor by Path states that the construction is one and that it lives in "+
+			"%s, which is what makes the section's claim of a single path a property of the code rather "+
+			"than a promise about it.\n"+
+			"  A surface joins that path by CALLING %s, not by constructing an engine of its own: two "+
+			"constructions is the arrangement that let the CLI and the web drift into different "+
+			"constructors before, and it is the arrangement rmp task #375 removed.",
+			len(sites), strings.Join(where, ", "), specGraphRelPath, storePkg, storePkg)
+	}
+	site := sites[0]
+
+	// Every row names the same path, so every row must name the same constructor
+	// and the same write-side shape; otherwise the single construction cannot
+	// satisfy them all and the table contradicts itself.
+	for _, row := range rows[1:] {
+		if row.constructor != rows[0].constructor {
+			t.Fatalf("%s § Engine Constructor by Path gives %s on line %d and %s on line %d, while "+
+				"stating that every row is the same path. One construction serves both surfaces, so it "+
+				"cannot be built two ways", specGraphRelPath, rows[0].constructor, rows[0].line,
+				row.constructor, row.line)
+		}
+		if row.expect != rows[0].expect {
+			t.Fatalf("%s § Engine Constructor by Path says the path opens %s on line %d and %s on line "+
+				"%d, while stating that every row is the same path", specGraphRelPath,
+				rows[0].expect, rows[0].line, row.expect, row.line)
 		}
 	}
 
-	for _, site := range sites {
-		row := matchRow(t, rows, site)
-		if row == nil {
-			continue // matchRow has already reported why
-		}
-		row.claimed++
-
-		if site.constructor != row.constructor {
-			t.Errorf("%s constructs the engine through %s, but %s § Engine Constructor by Path gives %s "+
-				"for the %s path serving %s.\n"+
-				"  That table is the single authoritative statement of the constructor each path uses, so "+
-				"one of the two is wrong.\n"+
-				"  If the code is right, amend the table first: the section requires the change to be made "+
-				"there before it is made here.\n"+
-				"  If the table is right, restore the construction to %s.",
-				site.where(), site.constructor, specGraphRelPath, row.constructor,
-				row.path, row.surface, row.constructor)
-		}
-
-		checkStoreExpectation(t, row, site)
+	if site.constructor != rows[0].constructor {
+		t.Errorf("%s constructs the engine through %s, but %s § Engine Constructor by Path gives %s "+
+			"for the %s path.\n"+
+			"  That table is the single authoritative statement of the constructor each path uses, so "+
+			"one of the two is wrong.\n"+
+			"  If the code is right, amend the table first: the section requires the change to be made "+
+			"there before it is made here.\n"+
+			"  If the table is right, restore the construction to %s.",
+			site.where(), site.constructor, specGraphRelPath, rows[0].constructor,
+			rows[0].path, rows[0].constructor)
 	}
 
+	checkStoreExpectation(t, rows[0], site)
+
+	// The surfaces. Each row is claimed by a production function that reaches the
+	// store package's Open, which is what being on this path now means.
+	openers := scanStoreOpeners(t, repoRoot(t), storePkg)
+	if len(openers) == 0 {
+		t.Fatal("the sweep found no production function calling the store package's Open. The two " +
+			"surfaces certainly call it, so the sweep has stopped matching and every surface check " +
+			"below would pass whatever the code did")
+	}
+	for _, dir := range mustReachTheStoreFrom {
+		found := false
+		for _, opener := range openers {
+			if opener.dir == dir {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("nothing in %s reaches %s.%s, and %s § Engine Constructor by Path lists a surface "+
+				"served from there. Either the surface moved — in which case the table's Surface column "+
+				"needs amending — or it has stopped running on the transactional path",
+				dir, storePkg, storeOpenFunc, specGraphRelPath)
+		}
+	}
 	for _, row := range rows {
-		if row.claimed == 0 {
-			t.Errorf("%s:%d lists a %s path serving %s, and the sweep found no construction on it. "+
-				"The table claims to cover every Cypher engine Groadmap constructs; a row nothing "+
-				"matches means the surface was removed, renamed, or moved out of reach of the sweep, "+
-				"and until it is reconciled this gate is checking one path fewer than it reports",
-				specGraphRelPath, row.line, row.path, row.surface)
+		if claimRow(row, openers) {
+			row.claimed++
+			continue
 		}
+		t.Errorf("%s:%d lists a %s path serving %s, and no production function serving that surface "+
+			"reaches %s.%s.\n"+
+			"  The table claims to cover every Cypher engine Groadmap constructs; a row nothing "+
+			"matches means the surface was removed, renamed, or has stopped opening the store, and "+
+			"until it is reconciled this gate is checking one surface fewer than it reports",
+			specGraphRelPath, row.line, row.path, row.surface, storePkg, storeOpenFunc)
 	}
 }
 
@@ -403,71 +469,6 @@ func checkTheTableListsOnePath(t *testing.T, spec string, rows []*specConstructo
 				specGraphRelPath, name, lines, onePathMarker)
 		}
 	}
-}
-
-// matchRow attributes a construction to the row of § Engine Constructor by Path
-// whose surface it serves, and reports a construction on a path the table does
-// not list. The attribution never looks at the constructor: a row is chosen by
-// what the construction serves, so the constructor check that follows is a real
-// comparison and not a tautology.
-func matchRow(t *testing.T, rows []*specConstructorRow, site *constructionSite) *specConstructorRow {
-	t.Helper()
-
-	if len(site.subcommands) > 0 {
-		matched := make([]*specConstructorRow, 0, 1)
-		for _, row := range rows {
-			if equalStrings(row.subcommands, site.subcommands) {
-				matched = append(matched, row)
-			}
-		}
-		switch len(matched) {
-		case 1:
-			return matched[0]
-		case 0:
-			t.Errorf("%s constructs an engine serving %s, and no row of %s § Engine Constructor by Path "+
-				"names that set of subcommands. Either a construction was added on a path the table does "+
-				"not list, or a subcommand was added to an existing path without extending the row's "+
-				"Surface cell. The table is required to cover every Cypher engine Groadmap constructs",
-				site.where(), quotedSubcommands(site.subcommands), specGraphRelPath)
-		default:
-			t.Errorf("%s constructs an engine serving %s, and %d rows of %s § Engine Constructor by Path "+
-				"name that same set of subcommands. A surface on two rows makes the constructor for it "+
-				"ambiguous", site.where(), quotedSubcommands(site.subcommands), len(matched), specGraphRelPath)
-		}
-		return nil
-	}
-
-	// No subcommand reaches this construction, so the only surface the table
-	// describes that it can be is the web one — the row that names no
-	// subcommand at all.
-	matched := make([]*specConstructorRow, 0, 1)
-	for _, row := range rows {
-		if len(row.subcommands) == 0 {
-			matched = append(matched, row)
-		}
-	}
-	if len(matched) != 1 {
-		t.Errorf("%s constructs an engine that no graph subcommand reaches, and %d rows of %s "+
-			"§ Engine Constructor by Path name no subcommand. Exactly one row is expected to describe "+
-			"the web surface", site.where(), len(matched), specGraphRelPath)
-		return nil
-	}
-	row := matched[0]
-	if !strings.Contains(strings.ToLower(row.surface), webPackageName) {
-		t.Errorf("%s:%d is the only row of § Engine Constructor by Path naming no graph subcommand, so "+
-			"it is the row the web surface must match, but its Surface cell (%q) does not mention the "+
-			"web at all. The table's shape has changed and this gate can no longer attribute the web "+
-			"construction", specGraphRelPath, row.line, row.surface)
-		return nil
-	}
-	if site.pkg != webPackageName {
-		t.Errorf("%s constructs an engine in package %s that no graph subcommand reaches. %s § Engine "+
-			"Constructor by Path lists two surfaces — `graph execute` and the web interface — and this "+
-			"construction is on neither, so it is a surface the table does not list",
-			site.where(), site.pkg, specGraphRelPath)
-		return nil
-	}
-	return row
 }
 
 // ---------------------------------------------------------------------------
@@ -672,7 +673,6 @@ func constructorsIn(passage string) []string {
 // and which functions open a write-side resource.
 type packageScan struct {
 	dir         string
-	literalArgs map[string]map[string]bool // callee -> first string-literal arguments
 	calls       map[string]map[string]bool // caller -> same-package callees
 	directWAL   map[string]bool            // functions calling the wal package
 	directStore map[string]bool            // functions calling txn.NewStore*
@@ -713,7 +713,6 @@ func scanEngineConstructions(t *testing.T, root string) []*constructionSite {
 		if scan == nil {
 			scan = &packageScan{
 				dir:         dir,
-				literalArgs: make(map[string]map[string]bool),
 				calls:       make(map[string]map[string]bool),
 				directWAL:   make(map[string]bool),
 				directStore: make(map[string]bool),
@@ -736,7 +735,6 @@ func scanEngineConstructions(t *testing.T, root string) []*constructionSite {
 		opensWAL := closeOverCalls(scan.directWAL, scan.calls)
 		opensStore := closeOverCalls(scan.directStore, scan.calls)
 		for _, site := range scan.sites {
-			site.subcommands = sortedSet(scan.literalArgs[site.function])
 			site.opensWAL = opensWAL[site.function]
 			site.opensStore = opensStore[site.function]
 			sites = append(sites, site)
@@ -766,17 +764,6 @@ func inspectProductionFile(t *testing.T, fset *token.FileSet, path, rel string, 
 		enclosing := funcKey(fn)
 
 		ast.Inspect(fn.Body, func(node ast.Node) bool {
-			// A registry entry naming a handler. This is the attribution that
-			// survives a family with ONE subcommand: `graph execute` reaches
-			// runGraphExecute through the registry's Handler field and not
-			// through a literal argument, because there is no shared handler
-			// left for a subcommand name to be passed to.
-			if literal, ok := node.(*ast.CompositeLit); ok {
-				if name, handler, ok := registrySubcommandEntry(literal); ok {
-					addEdge(scan.literalArgs, handler, name)
-				}
-				return true
-			}
 			call, ok := node.(*ast.CallExpr)
 			if !ok {
 				return true
@@ -805,15 +792,11 @@ func inspectProductionFile(t *testing.T, fset *token.FileSet, path, rel string, 
 					scan.directStore[enclosing] = true
 				}
 			case *ast.Ident:
-				// A call to a function of the same package. Both the edge and
-				// any literal first argument are recorded: the edge carries the
-				// write-side resources a helper opens back to its caller, and
-				// the argument is how a subcommand name reaches the shared
-				// handler that constructs the engine.
+				// A call to a function of the same package. The edge carries the
+				// write-side resources a helper opens back to its caller, so a
+				// construction inside a function whose helper opens them is
+				// attributed the same shape as one that opens them itself.
 				addEdge(scan.calls, enclosing, fun.Name)
-				if literal, ok := firstStringArgument(call); ok {
-					addEdge(scan.literalArgs, fun.Name, literal)
-				}
 			}
 			return true
 		})
@@ -1077,25 +1060,6 @@ func readRepoFileAt(t *testing.T, rel string) string {
 	return string(content)
 }
 
-// anyConstructionIn reports whether any construction was found in a directory.
-func anyConstructionIn(sites []*constructionSite, dir string) bool {
-	for _, site := range sites {
-		if site.dir == dir {
-			return true
-		}
-	}
-	return false
-}
-
-// quotedSubcommands renders a surface as the specification writes it.
-func quotedSubcommands(subcommands []string) string {
-	quoted := make([]string, 0, len(subcommands))
-	for _, name := range subcommands {
-		quoted = append(quoted, "`graph "+name+"`")
-	}
-	return strings.Join(quoted, ", ")
-}
-
 // sortedSet returns a set's members in a stable order.
 func sortedSet(set map[string]bool) []string {
 	members := make([]string, 0, len(set))
@@ -1128,4 +1092,214 @@ func equalStrings(a, b []string) bool {
 		}
 	}
 	return true
+}
+
+// ---------------------------------------------------------------------------
+// The single construction, and the surfaces that reach it.
+// ---------------------------------------------------------------------------
+
+// parseStoreOwnerPackage reads, out of § Engine Constructor by Path, the
+// repository-relative package the specification says holds the one engine
+// construction. It is read rather than restated so that the gate below is still
+// comparing two sides: move the construction and the specification must move
+// with it, or this fails.
+func parseStoreOwnerPackage(t *testing.T, spec string) string {
+	t.Helper()
+
+	section, bodyLine := specSection(t, spec, constructorTableHeading)
+	start := strings.Index(section, oneConstructionMarker)
+	if start < 0 {
+		t.Fatalf("%s § Engine Constructor by Path (from line %d) no longer contains the phrase %q, "+
+			"which is where this gate reads the package holding the single engine construction. Either "+
+			"the sentence was reworded or the claim is gone; in both cases the check below is no longer "+
+			"the check the specification asks for", specGraphRelPath, bodyLine, oneConstructionMarker)
+	}
+
+	match := backtickedSpan.FindStringSubmatch(section[start:])
+	if match == nil {
+		t.Fatalf("%s § Engine Constructor by Path states %q and then names no package in backticks. "+
+			"The package is what this gate looks in, so without it the sentence is unenforceable",
+			specGraphRelPath, oneConstructionMarker)
+	}
+	pkg := strings.Trim(match[1], "`/ ")
+	if !strings.HasPrefix(pkg, "internal/") {
+		t.Fatalf("%s § Engine Constructor by Path names %q as the package holding the single engine "+
+			"construction, which is not a repository-relative internal package. This gate matches it "+
+			"against a directory in the tree, so it must be one", specGraphRelPath, pkg)
+	}
+	return pkg
+}
+
+// moduleImportPath renders an import path for a repository-relative package,
+// reading the module path out of go.mod. internal/testenv has no first-party
+// dependencies by design, so it cannot import the package to learn its path, and
+// a written-out module path would silently stop matching after a module rename.
+func moduleImportPath(t *testing.T, rel string) string {
+	t.Helper()
+
+	for _, line := range strings.Split(readRepoFileAt(t, "go.mod"), "\n") {
+		if after, found := strings.CutPrefix(strings.TrimSpace(line), "module "); found {
+			return strings.TrimSpace(after) + "/" + rel
+		}
+	}
+	t.Fatal("go.mod declares no module path; this gate cannot resolve the import path of the package " +
+		"holding the engine construction")
+	return ""
+}
+
+// storeOpenerSite is one production function that reaches the store's Open,
+// directly or through another function of its own package.
+type storeOpenerSite struct {
+	file        string
+	dir         string
+	pkg         string
+	function    string
+	subcommands []string
+}
+
+// scanStoreOpeners walks the repository's production Go files and returns every
+// function that reaches the store package's Open.
+//
+// It is what replaces the old per-surface construction anchor. A surface is on
+// the transactional path by CALLING the package that owns the store, so the call
+// is what a row of the table is now claimed by, and a row nothing calls from is a
+// surface that has silently left the path.
+//
+// The reachability is closed over the enclosing package's own call graph, exactly
+// as the write-side resource attribution is: a handler that opens the store
+// through a helper of its own package is still a handler that opens the store.
+func scanStoreOpeners(t *testing.T, root, storePkg string) []*storeOpenerSite {
+	t.Helper()
+
+	importPath := moduleImportPath(t, storePkg)
+	fset := token.NewFileSet()
+
+	type openScan struct {
+		dir         string
+		pkg         string
+		file        map[string]string          // function -> file it is declared in
+		literalArgs map[string]map[string]bool // callee -> first string-literal arguments
+		calls       map[string]map[string]bool // caller -> same-package callees
+		direct      map[string]bool            // functions calling <store>.Open
+	}
+	scans := make(map[string]*openScan, 8)
+
+	err := filepath.WalkDir(root, func(path string, entry os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if entry.IsDir() {
+			if path != root && skipDirs[entry.Name()] {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		name := entry.Name()
+		if !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
+			return nil
+		}
+		rel, relErr := filepath.Rel(root, path)
+		if relErr != nil {
+			return relErr
+		}
+		rel = filepath.ToSlash(rel)
+		dir := filepath.ToSlash(filepath.Dir(rel))
+
+		file, parseErr := parser.ParseFile(fset, path, nil, parser.SkipObjectResolution)
+		if parseErr != nil {
+			t.Fatalf("parsing %s: %v", rel, parseErr)
+		}
+
+		scan := scans[dir]
+		if scan == nil {
+			scan = &openScan{
+				dir:         dir,
+				pkg:         file.Name.Name,
+				file:        make(map[string]string),
+				literalArgs: make(map[string]map[string]bool),
+				calls:       make(map[string]map[string]bool),
+				direct:      make(map[string]bool),
+			}
+			scans[dir] = scan
+		}
+		local := importLocalName(file, importPath)
+
+		for _, decl := range file.Decls {
+			fn, ok := decl.(*ast.FuncDecl)
+			if !ok || fn.Body == nil {
+				continue
+			}
+			enclosing := funcKey(fn)
+			scan.file[enclosing] = rel
+
+			ast.Inspect(fn.Body, func(node ast.Node) bool {
+				if literal, isLit := node.(*ast.CompositeLit); isLit {
+					if subName, handler, found := registrySubcommandEntry(literal); found {
+						addEdge(scan.literalArgs, handler, subName)
+					}
+					return true
+				}
+				call, isCall := node.(*ast.CallExpr)
+				if !isCall {
+					return true
+				}
+				switch fun := unwrapGenericCall(call.Fun).(type) {
+				case *ast.SelectorExpr:
+					qualifier, isIdent := fun.X.(*ast.Ident)
+					if isIdent && local != "" && qualifier.Name == local && fun.Sel.Name == storeOpenFunc {
+						scan.direct[enclosing] = true
+					}
+				case *ast.Ident:
+					addEdge(scan.calls, enclosing, fun.Name)
+					if literal, found := firstStringArgument(call); found {
+						addEdge(scan.literalArgs, fun.Name, literal)
+					}
+				}
+				return true
+			})
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("walking the repository: %v", err)
+	}
+
+	dirs := make([]string, 0, len(scans))
+	for dir := range scans {
+		dirs = append(dirs, dir)
+	}
+	sort.Strings(dirs)
+
+	sites := make([]*storeOpenerSite, 0, 4)
+	for _, dir := range dirs {
+		scan := scans[dir]
+		for _, fn := range sortedSet(closeOverCalls(scan.direct, scan.calls)) {
+			sites = append(sites, &storeOpenerSite{
+				file:        scan.file[fn],
+				dir:         dir,
+				pkg:         scan.pkg,
+				function:    fn,
+				subcommands: sortedSet(scan.literalArgs[fn]),
+			})
+		}
+	}
+	return sites
+}
+
+// claimRow reports whether any function that reaches the store serves the surface
+// this row names: the same set of graph subcommands, or — for the row naming no
+// subcommand — a function in the web package.
+func claimRow(row *specConstructorRow, openers []*storeOpenerSite) bool {
+	for _, site := range openers {
+		if len(row.subcommands) > 0 {
+			if equalStrings(site.subcommands, row.subcommands) {
+				return true
+			}
+			continue
+		}
+		if site.pkg == webPackageName {
+			return true
+		}
+	}
+	return false
 }

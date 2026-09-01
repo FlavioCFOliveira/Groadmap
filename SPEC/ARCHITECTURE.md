@@ -319,6 +319,8 @@ Groadmap/
 │   │   ├── comment.go     # Comment subcommands of the task and sprint families
 │   │   ├── graph.go       # Graph subcommands (GoGraph integration)
 │   │   └── web.go         # web command (starts the embedded HTTP server)
+│   ├── graphstore/        # The graph store's lifecycle: open, checkpoint, close
+│   │   └── graphstore.go  # The ONE open/checkpoint sequence; every surface calls it
 │   ├── web/               # Embedded HTTP server (net/http)
 │   │   ├── server.go      # Server construction, routes, graceful shutdown
 │   │   ├── handlers.go    # Read-only route handlers (index, sprints, tasks, sprint, graph, data)
@@ -400,6 +402,11 @@ Each package implements:
   validation of the statement's content beyond its length: the statement is
   handed to the engine as written, whatever it does (see
   `GRAPH.md § What Groadmap Does Not Check`).
+- It does **not** own the graph store's lifecycle. Opening the store, holding its
+  lock, building the engine and taking the checkpoint belong to
+  `internal/graphstore` (module 8 below); this package calls it and then does
+  what only a CLI does — reads the statement, serialises the result, prints the
+  diagnostics, and chooses the exit code.
 - The behaviour is specified in `GRAPH.md`; the CLI contract is in
   `COMMANDS.md § Graph Management`; the result JSON is in
   `DATA_FORMATS.md § Graph Query Result`.
@@ -454,6 +461,32 @@ pinning requirements are in `BUILD.md § Go Toolchain`.
   `DATA_FORMATS.md § Graph View Data`; the embedded-asset bundling is in
   `BUILD.md § Vendored Web Assets`.
 
+
+### 8. internal/graphstore/ and the graph store's lifecycle
+
+- Owns the lifecycle of a roadmap's GoGraph store, and only that: taking the
+  directory's exclusive advisory lock, opening the store through recovery, opening
+  the write-ahead-log writer, wrapping both in the transactional store,
+  constructing the Cypher engine over it, taking the synchronous checkpoint, and
+  releasing everything in the one safe order. The behaviour is specified in
+  `GRAPH.md § Concurrency and Recovery`, `GRAPH.md § Engine Constructor by Path`
+  and `GRAPH.md § Synchronous Checkpoint on Write`, all of which remain canonical.
+- **There is exactly one realisation of that sequence, and every surface calls
+  it.** `graph execute` and the web graph data endpoint are both on it, and the
+  dedicated graph server will be. `GRAPH.md § Engine Constructor by Path` states
+  the single-construction rule and `internal/testenv` enforces it: one engine
+  construction and one snapshot write in the whole of production source.
+- The package exists as its own package rather than inside either caller because
+  `internal/commands` imports `internal/web`, so the dependency cannot run the
+  other way, and because a store's lifecycle is neither a CLI concern nor an HTTP
+  one. It is the same reasoning that gave `internal/graphlock` and
+  `internal/backoff` packages of their own.
+- **What it deliberately does not own.** It does not create the graph directory:
+  the CLI creates it, and the web interface is forbidden to (`WEB.md § Security
+  and Constraints`). And it does not execute statements, drain results, or
+  classify failures — those differ by surface (a CLI exit code, an HTTP status, a
+  Bolt session), and a boundary drawn around them would fit two callers and not
+  the third.
 ## Command Lifecycle
 
 ```

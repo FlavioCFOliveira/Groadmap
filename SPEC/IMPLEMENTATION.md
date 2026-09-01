@@ -385,6 +385,29 @@ Durability comes from a write-ahead log (with CRC32C integrity checks) plus atom
 on-disk snapshots; opening the store runs recovery to restore the last committed
 state from the snapshot and log.
 
+### One Realisation of the Sequence
+
+The lock, the open, the engine construction and the checkpoint described above are
+implemented **once**, in `internal/graphstore`, and every surface reaches that
+sequence by calling it rather than by repeating it. This is an implementation
+requirement and not an incidental fact of the current layout.
+
+The reason is the failure mode a second copy produces. Every step above is silent
+when it is wrong: a lock taken after the open rather than before it still runs, a
+write-ahead-log writer closed after its lock is released still returns nil, and a
+snapshot written without the registered schema is indistinguishable from a correct
+one until the next open finds the schema gone. Two copies of such a sequence do not
+fail loudly when they diverge; they diverge and keep passing. The project has
+already had two, in `internal/commands` and `internal/web`, and the only thing
+holding them together was a static gate over the one divergence anybody had thought
+to fence.
+
+`GRAPH.md § Engine Constructor by Path` states the rule in its canonical form —
+one construction, in that package, reached by every surface — and `internal/testenv`
+enforces both it and the matching rule for the snapshot write. A surface that needs
+the store behaves differently (a longer hold, a different checkpoint cadence) varies
+how it *uses* the sequence; it does not acquire a copy of it.
+
 ### Process Model
 
 1. The `rmp` CLI is a short-lived process. Each `rmp graph execute` invocation
