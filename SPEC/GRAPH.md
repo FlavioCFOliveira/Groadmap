@@ -202,13 +202,17 @@ changes can land without a major-version bump. The following residual risks rema
 
    One place in the product still reads that surface, and it is the one the
    widening can break. The web graph data endpoint injects a node `LIMIT` into the
-   statement it is given unless the statement is a form that admits no `LIMIT`
-   clause, and it recognises those forms itself (see
-   `WEB.md § Graph Data Endpoint`). A new statement form that admits no `LIMIT`,
-   and that the endpoint does not recognise, is injected into and then fails in the
-   parser — a statement `rmp graph execute` runs becoming unusable through the
-   endpoint, with a diagnostic that names the injected clause rather than the
-   cause.
+   statement it is given unless the statement admits no `LIMIT` clause, which it
+   decides from the statement's own grammar: a statement with no top-level `RETURN`
+   carries no projection for a `LIMIT` to attach to (see
+   `WEB.md § Graph Data Endpoint`, Suppression 2). That rule is general, so a new
+   statement form is covered by it without having to be foreseen. What the widening
+   can still introduce is a form that **does** carry a top-level projection and yet
+   admits no `LIMIT` — a new sibling of the schema-introspection class, which is the
+   one class the general rule does not reach and which the endpoint therefore
+   recognises by name. Such a form is injected into and then fails in the parser — a
+   statement `rmp graph execute` runs becoming unusable through the endpoint, with a
+   diagnostic that names the injected clause rather than the cause.
 
 Mitigations required by this specification:
 
@@ -231,15 +235,22 @@ Mitigations required by this specification:
    from release notes alone, because Groadmap has no migration path of its own for a
    graph it can no longer open. An upgrade that fails this check MUST NOT be released.
 
-5. **The set of statement forms that admit no `LIMIT` clause MUST be re-verified
-   against the new engine.** Before an upgrade is released, the forms named in
+5. **Which statements admit no `LIMIT` clause MUST be re-verified against the new
+   engine.** Before an upgrade is released, the rule in
    `WEB.md § Graph Data Endpoint`, Suppression 2, MUST be re-checked against the
-   engine being adopted: each MUST still admit no `LIMIT`, and any statement form
-   the new engine accepts that admits none MUST be added there deliberately rather
-   than left to fail in the parser once the endpoint injects into it. A regression
-   test MUST assert, form by form, which of them the endpoint injects into and
-   which it leaves alone. Symbol-level compatibility is NOT sufficient evidence
-   here: the surface can widen with no symbol change at all.
+   engine being adopted, in both of its halves. The general half: a `LIMIT` MUST
+   still attach only to a top-level projection, so that a statement with no
+   top-level `RETURN` still admits none — a grammar in which a `LIMIT` attaches
+   anywhere else invalidates the rule rather than one of its cases. The named half:
+   the schema-introspection class MUST still be the only form that carries a
+   projection and admits no `LIMIT`, and any new form of that kind the engine
+   accepts MUST be added there deliberately rather than left to fail in the parser
+   once the endpoint injects into it. A regression test MUST assert, form by form,
+   which statements the endpoint injects into and which it leaves alone, and MUST
+   cover the injecting half as well: a test that only checks suppression is
+   satisfied by an endpoint that injects nothing at all. Symbol-level compatibility
+   is NOT sufficient evidence here: the surface can widen with no symbol change at
+   all.
 
 ### Engine Construction and Lifecycle
 
@@ -780,9 +791,18 @@ it binds, and does not inspect the values it would write. The web graph data
 endpoint is bound by this section identically, because it runs the statement it is
 given on the same path (see `WEB.md § Graph Data Endpoint`).
 
-This section enumerates the hazards that follow. Each is a real outcome of a real
-statement, each is silent, and every one of them reports success. They are stated
-here so that a caller meets them in the specification rather than in the store.
+This section enumerates what follows. Every item but one is a hazard: a real
+outcome of a real statement, silent, reporting success. They are stated here so
+that a caller meets them in the specification rather than in the store.
+
+Item 5 is the exception and states the opposite of a hazard: a direction in which
+the engine is correct. It is here because it is the neighbour of item 4 and would
+otherwise be inferred from it — a reader told that a relationship cannot be
+written through an incoming or undirected pattern has every reason to assume it
+cannot be read through one either, and that assumption is false. Item 5 is a
+measured property of the pinned engine, not a property of Cypher, so it is
+re-measured whenever the pin moves (see
+[Dependency Maturity Risk](#dependency-maturity-risk), mitigation 3).
 
 1. **A statement runs whatever it says.** There is no subcommand whose contract is
    "this cannot delete". A statement that deletes reaches the engine the same way
@@ -827,31 +847,35 @@ here so that a caller meets them in the specification rather than in the store.
    what the reverse form did not.
 
 5. **A relationship read through an incoming or undirected fixed-length pattern
-   can be reported wrong.** The engine resolves a bound relationship's identity
-   from the same endpoint pair, and to recover the stored orientation it probes the
-   topology: when the pair carries no relationship in the emitted order but carries
-   one in the opposite order, the engine inverts the pair and reports what it finds
-   there. That probe decides correctly only while the two endpoints are joined in
-   **one** direction. Where they are joined in both, the emitted order already
-   carries a relationship of its own, so the engine finds one there, inverts
-   nothing, and resolves the reverse leg of the traversal as though it were the
-   forward one. The consequences are all silent and all report success: a
-   projection over an undirected pattern reports the forward relationship twice and
-   never the reverse one; `startNode(e)` and `endNode(e)` under an incoming pattern
-   report the exact reverse of what storage holds; a `WHERE` predicate over the
-   relationship is evaluated against the wrong relationship, so a row that should
-   have matched is discarded inside the engine and the result is short by that row;
-   a `SET` whose right-hand side reads the relationship persists the wrong value;
-   and a `DELETE` whose predicate reads it removes nothing while reporting
-   `{"ok": true}`. Two shapes are not affected, because neither is resolved by that
-   probe: a **variable-length** relationship (`-[e*1..2]-`, and equally
-   `-[e*1..1]-`) and a projected **named path**
-   (`MATCH p=(a {key:'…'})-[e]-(b) RETURN p`) are told which way each hop was
-   walked instead of inferring it. A bare `DELETE e` is not affected either: the
-   delete names the relationship as a target and the engine resolves that
-   relationship itself. Reading through an outgoing pattern is correct whatever the
-   data, and both directions are read in one statement as the union of the two
-   outgoing legs:
+   is reported correctly, and this is measured rather than assumed.** The reach of
+   item 4 stops at writing. Reading a bound relationship resolves its identity, its
+   type and its stored orientation whichever way the pattern walked it, including
+   on the shape that is hardest for an engine to get right: a node pair joined in
+   **both** directions, where an implementation that inferred the relationship from
+   the endpoint pair alone would find one in the emitted order and report the
+   forward leg twice. Measured at the pinned engine version, on such a pair, every
+   one of the following is correct — a projection over an undirected pattern
+   reports each relationship once; `startNode(e)` and `endNode(e)` under an
+   incoming pattern report what storage holds; a `WHERE` predicate over the
+   relationship selects the relationship the traversal bound; a `SET` whose
+   right-hand side reads the relationship persists the true value; and a `DELETE`
+   gated by such a predicate removes the relationship the predicate names and
+   leaves its sibling in place. The same holds for a **variable-length**
+   relationship (`-[e*1..2]-`, and equally `-[e*1..1]-`), for a projected **named
+   path** (`MATCH p=(a {key:'…'})-[e]-(b) RETURN p`), and for a bare `DELETE e`.
+
+   This is a statement about GoGraph at the pinned tag and about nothing else.
+   Groadmap does not verify it per statement, cannot repair it if a later engine
+   regresses, and does not refuse the shape: acceptance criterion 38's fourth
+   bullet is the assertion that would fail if it stopped holding, and mitigation 3
+   of [Dependency Maturity Risk](#dependency-maturity-risk) is what makes that
+   assertion run before a new engine is adopted.
+
+   Reading through an outgoing pattern is correct whatever the data and whatever
+   the engine, because nothing about the stored orientation has to be recovered.
+   That form therefore remains the one to reach for where a statement must hold
+   independently of the pin, and both directions are read in one statement as the
+   union of the two outgoing legs:
 
    ```
    MATCH (a {key:'…'})-[e]->(x) RETURN type(e) AS t, x.key AS k
@@ -887,11 +911,13 @@ here so that a caller meets them in the specification rather than in the store.
    general grammar rather than routed to the schema parser, and
    `CREATE INDEX ...` is not.
 
-**The divergences in items 4 and 5 are upstream in GoGraph and cannot be corrected
-from this repository.** Groadmap holds no position from which to repair them: for
-`type(e)`, `startNode(e).key`, and their siblings, what reaches Groadmap is a bare
-scalar with no relationship identity attached to it, and in the `WHERE` case the
-row is dropped inside the engine before any result reaches Groadmap at all.
+**The divergence in item 4 is upstream in GoGraph and cannot be corrected from
+this repository.** Groadmap holds no position from which to repair it: the write
+is dropped below the engine's own accounting, so what reaches Groadmap is a
+committed transaction reporting one property set, which is indistinguishable from
+the same statement having written. Detecting it would require reading the
+relationship back and comparing, which is the caller's statement to write and not
+Groadmap's to insert.
 
 **None of the items above is a reason for Groadmap to inspect a statement.** A
 check for any one of them would introduce the coupling this specification does not
@@ -2005,7 +2031,7 @@ Groadmap's usage model and expectations:
     carrying a parse diagnostic, creates no index, and leaves the graph's node and
     relationship counts as they were (see
     [Schema Failure Classes](#schema-failure-classes)).
-38. **The hazards this specification declines to check are asserted as the
+38. **The outcomes this specification declines to check are asserted as the
     specified behaviour, so that a check cannot be reintroduced without a
     deliberate change to this file.** Each of the following exits 0, and the
     criterion MUST assert the observable outcome and not only the exit code:
@@ -2017,10 +2043,25 @@ Groadmap's usage model and expectations:
       a subsequent statement;
     - `MATCH (v:Test {key:'…'})<-[e]-(s) SET e.last_commit = 'x'` reports success
       while a read-back through an outgoing pattern reports `last_commit` absent;
-    - against a node pair joined in both directions,
-      `MATCH (s:Spec {key:'…'})-[e]-(x) RETURN type(e)` reports the forward
-      relationship's type twice and the reverse relationship's type not at all,
-      while the `UNION ALL` of the two outgoing legs reports both;
+    - against a node pair joined in both directions with a **different**
+      relationship type each way — the fixture the criterion requires, because a
+      pair whose two legs share a type cannot tell a correctly resolved read from
+      one that reported the other leg — every one of the following resolves
+      correctly, and each MUST be asserted on the rows and not on the exit code:
+      `MATCH (s:Spec {key:'…'})-[e]-(x) RETURN type(e)` reports each incident
+      relationship's type exactly once, the same multiset the `UNION ALL` of the
+      two outgoing legs reports; the incoming spelling
+      `MATCH (s:Spec {key:'…'})<-[e]-(x:Test) RETURN type(e), startNode(e).key, endNode(e).key`
+      reports the reverse leg's type with the orientation storage holds; a `WHERE`
+      over `type(e)` selects the leg it names and returns no row for its sibling; a
+      `SET` deriving its value from `type(e)` persists the type the traversal
+      bound; and a `DELETE` gated by such a predicate removes that relationship and
+      leaves the other in place. The undirected and the incoming spelling are each
+      asserted with the far endpoint bound by key and bound by label alone. This
+      bullet is the one whose subject is not a hazard (see item 5), and it is
+      asserted for the mirror-image reason: it is what fails if the engine stops
+      resolving these reads correctly, and equally what fails if a refusal of the
+      shape is reintroduced;
     - `CREATE INDEX spec_key FOR (n:Spec) ON (n.key) MATCH (m) SET m.reviewed = true`
       creates the index, prints `{"ok": true}`, and leaves `m.reviewed` absent.
     An implementation that refused any of the five fails this criterion. It is

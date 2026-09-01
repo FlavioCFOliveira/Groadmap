@@ -39,7 +39,7 @@ The SPEC is unversioned. Git is the source of truth for its evolution — recove
 | Vendored web assets / embedded Tabler framework and D3.js (with d3-sankey) | `BUILD.md § Vendored Web Assets` |
 | Free-text control-character constraint (CWE-150 / Trojan Source) | `MODELS.md § Task` (Free-Text Control-Character Constraint) |
 | Free-text UTF-8 encoding constraint (only valid UTF-8 is accepted and stored) | `MODELS.md § Task` (Free-Text UTF-8 Encoding Constraint) |
-| What Groadmap does not check about a Cypher statement (the seven silent hazards, each reporting success) | `GRAPH.md § What Groadmap Does Not Check` |
+| What Groadmap does not check about a Cypher statement (six silent hazards, each reporting success, and the one direction the pinned engine is measured to get right) | `GRAPH.md § What Groadmap Does Not Check` |
 | Published field name in a validation error message (one name per field, underscored; how it differs from the flag name) | `COMMANDS.md § Published Field Names in Validation Messages` |
 | Task commit-hash format (7-64 hexadecimal characters, lowercase on storage, no git invocation) | `MODELS.md § Task` (Commit Hash Constraint) |
 | Task commit-hash `CHECK` constraints and why `GLOB` is case-sensitive | `DATABASE.md § Commit Hash Format Constraint` |
@@ -161,7 +161,7 @@ To prevent drift across SPEC files, the following topics have a single authorita
 | Which commands read standard input at all (exactly two flag values, and no other command) | `DATA_FORMATS.md § Input` |
 | Comment body input source and precedence (`--body` or stdin) | `COMMANDS.md § Comment Body Input Source and Precedence` |
 | Cypher query input source, maximum query length, the bounded standard-input read, and the refusal of a positional argument on `graph execute` | `GRAPH.md § Cypher Input Source and Precedence` |
-| What Groadmap does not check about a Cypher statement, and the outcome of each unchecked hazard | `GRAPH.md § What Groadmap Does Not Check` |
+| What Groadmap does not check about a Cypher statement, the outcome of each unchecked hazard, and the relationship-read direction measured correct at the pinned engine | `GRAPH.md § What Groadmap Does Not Check` |
 | Knowledge-graph node `key` uniqueness (what the invariant is, which comparison decides that two keys are the same, that the product does not enforce it, and the audit that detects a violation) | `GRAPH.md § Node Key Uniqueness` |
 | Knowledge-graph schema management (the index and constraint statements the engine accepts, schema object naming, the non-atomic drop-then-create, and the schema failure classes) | `GRAPH.md § Schema Management` |
 | Declared positional arity per command, and the refusal of an excess positional argument (exit code 2, the published line, no side effect) | `COMMANDS.md § Positional Arguments` |

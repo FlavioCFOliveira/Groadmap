@@ -2978,13 +2978,15 @@ authenticates the request (see
 6. **Node limit applied by the endpoint.** The dropdown value is the `limit`
    parameter sent on the request. The endpoint applies it as a `LIMIT` clause only
    when the user's query both lacks a top-level `LIMIT` of its own and is a
-   statement form that admits a `LIMIT` clause. A user who writes their own `LIMIT`
-   keeps it and the dropdown value is not applied; a standalone procedure call
-   admits no `LIMIT` at all, so the dropdown value does not apply to it either and
-   the statement runs as written rather than failing in the parser. A
-   schema-introspection command is the other such form and is treated the same
-   way. The injection, precedence, and suppression rules are specified in
-   [Graph Data Endpoint](#graph-data-endpoint).
+   statement that admits a `LIMIT` clause. A user who writes their own `LIMIT`
+   keeps it and the dropdown value is not applied. A statement with no top-level
+   `RETURN` admits no `LIMIT` at all — a standalone procedure call, and every write
+   that projects nothing, which is what rule 7 below depends on — so the dropdown
+   value does not apply to it either and the statement runs as written rather than
+   failing in the parser. A schema-introspection command admits none despite
+   carrying a projection, and is treated the same way. The injection, precedence,
+   and suppression rules are specified in
+   [Graph Data Endpoint](#graph-data-endpoint), which is canonical for them.
 
 7. **The bar submits whatever is typed into it.** The query box offers no create,
    edit, or delete affordance of its own — there is no button that writes — but
@@ -3402,41 +3404,76 @@ write.
     `GRAPH.md § Literal-Aware Normalization`), so a `LIMIT` keyword that appears
     only inside a string literal, a comment, or a backtick-quoted identifier does
     not count as an existing top-level `LIMIT` and does not suppress injection.
-  - **Suppression 2: the statement is a form that admits no `LIMIT` clause.** Not
-    every statement the engine accepts can carry a `LIMIT` clause. Appending one to
-    a statement that cannot carry it bounds nothing: it makes the statement fail in
-    the **parser**, so a form that `rmp graph execute` runs would be unusable
-    through this endpoint, and the endpoint would be stricter than the contract it
-    publishes. The endpoint MUST therefore inject nothing into either form below,
-    and MUST execute each as the caller wrote it.
-    - **A standalone procedure call.** A statement whose first clause is `CALL`
-      and that has **no top-level `RETURN`**. The call's result is not projected,
-      and the unprojected form admits no `LIMIT` clause. A `CALL` that **is**
-      projected through a top-level `RETURN` — the `CALL ... YIELD ... RETURN ...`
-      form — is an ordinary reading query for this rule: it admits a `LIMIT`, and
-      the endpoint injects the resolved limit into it exactly as it does into a
-      `MATCH ... RETURN` query. The presence of a top-level `RETURN` is the whole
-      of the boundary: a `LIMIT` clause attaches only to a `RETURN` or a `WITH`
-      projection, so a call carrying a `YIELD` but no top-level `RETURN` admits no
-      `LIMIT` either, and is a standalone call for this rule.
-    - **A schema-introspection command.** `SHOW INDEXES`, `SHOW INDEX`,
-      `SHOW CONSTRAINTS`, and `SHOW CONSTRAINT`, with or without a `YIELD`,
-      `WHERE`, or `RETURN` tail, admit no `LIMIT` clause. The endpoint executes
-      such a statement like any other and returns its result through the same walk,
-      which collects no node and no edge from it, so the response is
-      `{"nodes": [], "edges": []}` with HTTP `200` (see
-      [Query-Bar Error Handling](#query-bar-error-handling), rule 9). A schema
-      listing is read from `rmp graph execute`, which returns the rows.
-  - **Recognising the non-limitable forms.** Each is recognised on the
-    **masked normalization** of the statement, exactly as Suppression 1 is (see
-    `GRAPH.md § Literal-Aware Normalization`), so a `CALL`, `SHOW`, or `RETURN`
+  - **Suppression 2: the statement admits no `LIMIT` clause.** Not every statement
+    the engine accepts can carry a `LIMIT` clause, and which ones can is decided by
+    the grammar rather than by a list. **A `LIMIT` attaches only to a top-level
+    projection, and only a `RETURN` or a `WITH` carries one, so a statement with no
+    top-level `RETURN` admits no `LIMIT`.** That is the rule. The endpoint MUST
+    inject nothing into such a statement and MUST execute it as the caller wrote
+    it.
+
+    The rule is stated as a rule and not as an enumeration of forms, because an
+    enumeration is answerable only for the statements someone thought of. It
+    reaches, among others, a **standalone procedure call**; and every **write with
+    no projection** — a `CREATE`, a `MERGE`, a `SET`, a `REMOVE`, a `DELETE` or
+    `DETACH DELETE`, and a schema DDL statement — which is the class an enumeration
+    left out and which the endpoint could not execute at all while it injected into
+    one. It reaches a form a future engine accepts on the same terms, without that
+    form having to be foreseen here.
+
+    **The boundary is the projection and nothing else.** A `CALL` projected through
+    a top-level `RETURN` — the `CALL ... YIELD ... RETURN ...` form — is an
+    ordinary reading query for this rule: it admits a `LIMIT` and receives the
+    injection exactly as a `MATCH ... RETURN` does. A call carrying a `YIELD` but
+    no top-level `RETURN` admits none. A write projected through a top-level
+    `RETURN` receives the injection; the same write without one does not. The
+    decision turns on the projection, never on what the statement does.
+
+    **One class carries a top-level projection and still admits no `LIMIT`, so the
+    rule above does not reach it and it is named here: a schema-introspection
+    command.** `SHOW INDEXES`, `SHOW INDEX`, `SHOW CONSTRAINTS`, and
+    `SHOW CONSTRAINT`, with or without a `YIELD`, `WHERE`, or `RETURN` tail, are
+    refused a `LIMIT` by the engine's schema parser on every one of those forms, so
+    a tail does not make one limitable. The endpoint executes such a statement like
+    any other and returns its result through the same walk, which collects no node
+    and no edge from it, so the response is `{"nodes": [], "edges": []}` with HTTP
+    `200` (see [Query-Bar Error Handling](#query-bar-error-handling), rule 9). A
+    schema listing is read from `rmp graph execute`, which returns the rows.
+
+    **Why the suppression is required, and why it costs nothing.** Appending a
+    `LIMIT` to a statement that admits none bounds nothing, and has one of two
+    outcomes. Usually the statement fails in the **parser**, so a form that
+    `rmp graph execute` runs would be unusable through this endpoint and the
+    endpoint would be stricter than the contract it publishes. For a schema DDL
+    statement it does not fail: the engine's schema parser stops when its grammar
+    is satisfied and discards the appended clause silently
+    (`GRAPH.md § What Groadmap Does Not Check`, item 6), so the statement runs and
+    the injection vanishes. Neither outcome is one to rely on — the first breaks
+    the statement and the second leaves the endpoint depending on a documented
+    hazard to save it. Suppressing costs nothing in return: the node limit bounds
+    the **result**, and a statement that projects nothing returns no row and
+    contributes no node and no edge to the response, so there is nothing for a
+    limit to bound.
+  - **Recognising a statement that admits no `LIMIT`.** Both parts of the decision
+    run on the **masked normalization** of the statement, exactly as Suppression 1
+    does (see `GRAPH.md § Literal-Aware Normalization`), so a `RETURN` or `SHOW`
     keyword that appears only inside a string literal, a comment, or a
-    backtick-quoted identifier does not affect the decision. Recognition is
-    **anchored to the start of the statement**: a `CALL` or a `SHOW` that appears
-    inside a larger statement, and an identifier, label, or property named `call`
-    or `show`, do not make the statement one of these forms. For the
-    schema-introspection form, recognition follows the engine's own routing, which
-    admits exactly one space between the two keywords
+    backtick-quoted identifier does not affect it: a write whose only `RETURN` sits
+    inside a property value is still a write with no projection.
+
+    The general rule is decided by the **presence** of a `RETURN`, not by a parse,
+    and it errs deliberately towards judging a statement limitable. A statement
+    wrongly judged limitable keeps the node cap it would otherwise escape, and
+    fails in the parser only in the exotic case where the `RETURN` it carries is
+    confined to a subquery and the statement has no top-level projection of its
+    own. Erring the other way would silently withdraw the cap from ordinary
+    queries, which is the outcome the cap exists to prevent.
+
+    The schema-introspection class is recognised **anchored to the start of the
+    statement**, so a `SHOW` appearing inside a larger statement, and an
+    identifier, label, or property named `show`, do not make a statement one of
+    that class. Recognition there follows the engine's own routing, which admits
+    exactly one space between the two keywords
     (`GRAPH.md § What Groadmap Does Not Check`, item 7): a statement written with
     any other separator is not routed to the engine's schema parser and will fail
     there as a syntax error, so injecting into it changes nothing about its
@@ -5380,9 +5417,14 @@ Rules:
     `MATCH (n:WebProbe) DETACH DELETE n` is answered HTTP `200`, and the same
     read-back afterwards reports it gone. Each of the two leaves the store
     checkpointed: `snapshot/manifest.json` exists and the `wal` file is truncated.
-    An endpoint that refused either request, and an endpoint that answered `200`
-    while storing nothing, both fail this criterion — the second is why the
-    read-back is required (see [Graph Data Endpoint](#graph-data-endpoint) and
+    Neither statement carries a top-level `RETURN`, so neither is injected into,
+    which is what makes this criterion reachable at all: an endpoint that appended
+    the node `LIMIT` to either would hand the engine a statement that fails in the
+    parser and would answer `400` (Suppression 2 of
+    [Graph Data Endpoint](#graph-data-endpoint), and Acceptance Criterion 111). An
+    endpoint that refused either request, and an endpoint that answered `200` while
+    storing nothing, both fail this criterion — the second is why the read-back is
+    required (see [Graph Data Endpoint](#graph-data-endpoint) and
     `GRAPH.md § Engine Constructor by Path`).
 48. The endpoint applies the node limit by appending `LIMIT <n>` only when the
     user's query both lacks a top-level `LIMIT` of its own and is a statement form
@@ -6006,33 +6048,43 @@ Rules:
     request writes nothing: the store is unchanged, no checkpoint runs, no
     write-ahead log is truncated, and the server keeps serving later requests (see
     [Graph Query Time Budget](#graph-query-time-budget)).
-111. `GET /roadmaps/{name}/graph/data` injects no node `LIMIT` into a statement form
-    that admits no `LIMIT` clause, and runs that form instead of failing it in the
-    parser. Two forms are reached. The first is a standalone procedure call (a
-    statement whose first clause is `CALL` and that has no top-level `RETURN`): a
-    request whose `q` is that form executes and succeeds, and is not answered with
-    the parse failure that appending a `LIMIT` to it produces, so the endpoint is no
-    stricter than the contract it publishes (see
-    [Graph Data Endpoint](#graph-data-endpoint)). The second is a
-    **schema-introspection command** (`SHOW INDEXES`, `SHOW INDEX`,
-    `SHOW CONSTRAINTS`, or `SHOW CONSTRAINT`, with or without a `YIELD`, `WHERE`,
-    or `RETURN` tail), written with exactly one space between its two keywords: it
-    likewise admits no `LIMIT`, is not injected into, executes, and is answered
-    HTTP `200` with `{"nodes": [], "edges": []}`, because its rows carry no node
-    and no edge. Asserting that either form is refused MUST fail this criterion. A
-    `CALL` projected through a top-level
-    `RETURN` (`CALL ... YIELD ... RETURN ...`) is **not** a standalone call: it
-    admits a `LIMIT`, receives the injection, and returns at most the resolved
-    limit's worth of rows. The form is recognised on the masked
-    normalization and anchored to the start of the statement, so a `CALL`
-    or `RETURN` keyword inside a string literal, a comment, or a backtick-quoted
-    identifier, and a `CALL` nested inside a larger query, do not trigger
-    suppression. Every ordinary reading query is unaffected and keeps the behaviour
-    of Acceptance Criterion 48: a query with no top-level `LIMIT` still receives the
-    injection, a query with its own top-level `LIMIT` still keeps it, and a query
-    whose last line ends in a line comment still has the injected clause applied on
-    a new line. A suppressed query is not bounded by the node limit; it remains
-    bounded by the 5-second query time budget (see Acceptance Criterion 110 and
+111. `GET /roadmaps/{name}/graph/data` injects no node `LIMIT` into a statement
+    that admits no `LIMIT` clause, and runs it instead of failing it in the parser.
+    The criterion is over the **rule**, not over a list of forms, so it MUST assert
+    the general case and both of the classes below rather than any single statement.
+
+    **A statement with no top-level `RETURN` is not injected into.** A request whose
+    `q` is a **standalone procedure call** executes and succeeds, and is not
+    answered with the parse failure that appending a `LIMIT` to it produces. So does
+    a request whose `q` is a **write with no projection**: a `CREATE`, a `SET`, a
+    `DETACH DELETE`, and a schema DDL statement MUST each be asserted, because the
+    write class is the one an enumeration of forms omitted, and each of the first
+    three fails in the parser when injected into (Acceptance Criteria 47 and 156
+    depend on this half). A `RETURN` appearing only inside a string literal, a
+    comment, or a backtick-quoted identifier does not make such a statement
+    limitable, and MUST be asserted not to.
+
+    **A schema-introspection command is not injected into either**, although it does
+    carry a projection: `SHOW INDEXES`, `SHOW INDEX`, `SHOW CONSTRAINTS`, or
+    `SHOW CONSTRAINT`, with or without a `YIELD`, `WHERE`, or `RETURN` tail, written
+    with exactly one space between its two keywords. It executes and is answered
+    HTTP `200` with `{"nodes": [], "edges": []}`, because its rows carry no node and
+    no edge. Recognition of this class is anchored to the start of the statement, so
+    a `SHOW` nested inside a larger query does not trigger suppression.
+
+    **The complementary half MUST be asserted too, or the criterion is satisfied by
+    an endpoint that injects nothing at all.** A `CALL` projected through a
+    top-level `RETURN` (`CALL ... YIELD ... RETURN ...`) admits a `LIMIT`, receives
+    the injection, and returns at most the resolved limit's worth of rows; so does a
+    write projected through a top-level `RETURN`. Every ordinary reading query is
+    unaffected and keeps the behaviour of Acceptance Criterion 48: a query with no
+    top-level `LIMIT` still receives the injection, a query with its own top-level
+    `LIMIT` still keeps it, and a query whose last line ends in a line comment still
+    has the injected clause applied on a new line.
+
+    Asserting that any suppressed statement is refused MUST fail this criterion. A
+    suppressed query is not bounded by the node limit; it remains bounded by the
+    5-second query time budget (see Acceptance Criterion 110 and
     [Graph Query Time Budget](#graph-query-time-budget)).
 
 112. The roadmap tasks page header carries, beside the search input, exactly three
@@ -6695,8 +6747,13 @@ Rules:
     nothing; `MATCH (n) RETURN count(n)`, which returned a number; `SHOW INDEXES`,
     which returned tabular rows the response shape cannot carry; and
     `CREATE (n:Probe {key:'p'})`, which created a node and returned no columns at
-    all. The four responses MUST be compared against one another and found equal,
-    because the endpoint publishes no class that separates them. The criterion also
+    all. The last two reach this criterion only because neither is injected into:
+    the `CREATE` carries no top-level `RETURN` and the `SHOW` is a
+    schema-introspection command, so both are suppressed under Suppression 2 of
+    [Graph Data Endpoint](#graph-data-endpoint), and an endpoint that appended the
+    node `LIMIT` to either would answer `400` instead. The four responses MUST be
+    compared against one another and found equal, because the endpoint publishes no
+    class that separates them. The criterion also
     requires the control that keeps it narrow: `MATCH (n) OPTIONAL MATCH (n)-[r]->(m)
     RETURN n, r, m` against the same store returns HTTP `200` and a non-empty
     `nodes` array, so an empty answer is a property of the statement and not of the
