@@ -5,8 +5,16 @@
 // DROP INDEX, CREATE CONSTRAINT, DROP CONSTRAINT) are not read-only and
 // MUST be rejected by the read subcommands (query, search) with
 // utils.ErrValidation (exit code 6) and the message
-// "graph query accepts only read-only queries". DDL is also outside every
-// write subcommand's accepted class, so create/update/delete reject it too.
+// "graph query accepts only read-only queries". DDL is outside the accepted
+// class of `graph create` and `graph delete` too, each of which accepts only its
+// own data-writing clause.
+//
+// `graph update` is the ONE subcommand that accepts the class, and it does so by
+// decision rather than by omission: it is the subcommand through which the
+// graph's schema is managed (SPEC/GRAPH.md § Per-Subcommand Validation Rules
+// note 5; § Schema Management). Its acceptance is asserted here beside the four
+// refusals, so that widening the class on any of those four — or narrowing it on
+// update — fails a test rather than passing unnoticed.
 //
 // The detection runs on the literal-masked query, so a DDL keyword that
 // appears only inside a string literal must NOT be misclassified as DDL.
@@ -17,6 +25,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/FlavioCFOliveira/Groadmap/internal/cypherguard"
 	"github.com/FlavioCFOliveira/Groadmap/internal/utils"
 )
 
@@ -136,13 +145,57 @@ func TestValidateGuardRailRejectsDDL(t *testing.T) {
 			wantReject: true,
 			wantMsg:    "graph create accepts only CREATE/MERGE queries",
 		},
+		// --- `graph update` ACCEPTS the DDL class: it is the schema subcommand. ---
 		{
-			name:       "update rejects CREATE CONSTRAINT",
+			name:    "update accepts CREATE INDEX",
+			subcmd:  "update",
+			allowed: "SET/REMOVE",
+			query:   `CREATE INDEX idx FOR (n:Spec) ON (n.key)`,
+		},
+		{
+			name:    "update accepts DROP INDEX",
+			subcmd:  "update",
+			allowed: "SET/REMOVE",
+			query:   `DROP INDEX idx`,
+		},
+		{
+			name:    "update accepts CREATE CONSTRAINT",
+			subcmd:  "update",
+			allowed: "SET/REMOVE",
+			query:   `CREATE CONSTRAINT c FOR (n:Spec) REQUIRE n.key IS UNIQUE`,
+		},
+		{
+			name:    "update accepts DROP CONSTRAINT",
+			subcmd:  "update",
+			allowed: "SET/REMOVE",
+			query:   `DROP CONSTRAINT c`,
+		},
+		{
+			// The DDL matcher stays whitespace-tolerant, so `graph update`
+			// admits this spelling and the engine refuses it at the grammar with
+			// exit code 1. Acceptance Criterion 69 fixes that as the whole cost
+			// of the tolerance; narrowing the matcher to a single space to
+			// improve the diagnostic would fail Criterion 27 instead.
+			name:    "update accepts CREATE   INDEX and leaves the spacing to the engine",
+			subcmd:  "update",
+			allowed: "SET/REMOVE",
+			query:   "CREATE   INDEX idx FOR (n:Spec) ON (n.key)",
+		},
+		{
+			// A mutating write is still the subcommand's original class.
+			name:    "update still accepts a SET write",
+			subcmd:  "update",
+			allowed: "SET/REMOVE",
+			query:   `MATCH (n:Spec {key:'auth'}) SET n.status = 'done'`,
+		},
+		{
+			// And a data-writing CREATE is still outside every class it accepts.
+			name:       "update rejects a data-writing CREATE",
 			subcmd:     "update",
 			allowed:    "SET/REMOVE",
-			query:      `CREATE CONSTRAINT c FOR (n:Spec) REQUIRE n.key IS UNIQUE`,
+			query:      `CREATE (n:Spec {key:'auth'})`,
 			wantReject: true,
-			wantMsg:    "graph update accepts only SET/REMOVE queries",
+			wantMsg:    "graph update accepts only SET/REMOVE, index/constraint DDL, and schema-introspection queries",
 		},
 		{
 			name:       "delete rejects DROP CONSTRAINT",
@@ -209,7 +262,6 @@ func TestValidateGuardRailRejectsSpoofedDDLKeywords(t *testing.T) {
 			{name: "query", allowed: "read-only", wantMsg: "graph query accepts only read-only queries"},
 			{name: "search", allowed: "read-only", wantMsg: "graph search accepts only read-only queries"},
 			{name: "create", allowed: "CREATE/MERGE", wantMsg: "graph create accepts only CREATE/MERGE queries"},
-			{name: "update", allowed: "SET/REMOVE", wantMsg: "graph update accepts only SET/REMOVE queries"},
 			{name: "delete", allowed: "DELETE/DETACH DELETE", wantMsg: "graph delete accepts only DELETE/DETACH DELETE queries"},
 		} {
 			t.Run(sub.name+": "+query, func(t *testing.T) {
@@ -225,6 +277,41 @@ func TestValidateGuardRailRejectsSpoofedDDLKeywords(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+// TestValidateGuardRailSeesSpoofedDDLKeywordsOnUpdateToo is the other half of the
+// spoofing regression, restated for the one subcommand that now ACCEPTS the DDL
+// class.
+//
+// The bypass being guarded against was never "the statement runs"; it was "the
+// guard rail and the engine disagree about what the statement IS". On
+// `graph update` that disagreement would be just as real and just as invisible:
+// the statement would be admitted as an ordinary read or refused as a data
+// write, while the engine executed it as schema DDL. So what must be asserted
+// here is not a refusal but that the guard rail CLASSIFIES these as DDL, which
+// is exactly what admitting them under the schema subcommand means. A
+// classification that missed them would surface as the class refusal below.
+func TestValidateGuardRailSeesSpoofedDDLKeywordsOnUpdateToo(t *testing.T) {
+	spoofed := []string{
+		"CREATE ıNDEX idx FOR (n:Spec) ON (n.key)",
+		"CREATE ıNDEX IF NOT EXISTS idx FOR (n:Spec) ON (n.key)",
+		"DROP ıNDEX idx",
+		"drop ındex idx",
+		"CREATE CONSTRAıNT c1 FOR (n:Spec) REQUIRE n.key IS UNIQUE",
+		"DROP CONSTRAıNT c1",
+		"CREATE CONſTRAINT c1 FOR (n:Spec) REQUIRE n.key IS UNIQUE",
+	}
+	for _, query := range spoofed {
+		t.Run(query, func(t *testing.T) {
+			if !cypherguard.Classify(query).DDL {
+				t.Fatalf("Classify(%q).DDL = false; the engine routes this to its schema executor, so the "+
+					"guard rail must see the same statement it does", query)
+			}
+			if err := validateGuardRail("update", "SET/REMOVE", query); err != nil {
+				t.Errorf("validateGuardRail(update, %q) = %v, want nil: `graph update` accepts the DDL class", query, err)
+			}
+		})
 	}
 }
 

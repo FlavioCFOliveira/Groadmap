@@ -2083,7 +2083,7 @@ class TestErrorStringParity:
         )
         # #110: `graph update` rejects a query outside SET/REMOVE.
         self.check(
-            "Error: validation error: graph update accepts only SET/REMOVE queries",
+            "Error: validation error: graph update accepts only SET/REMOVE, index/constraint DDL, and schema-introspection queries",
             ["graph", "update", "-r", r, "--query", "CREATE (n:Incident {key:'payment-outage-0417'})"],
             6, note="graph update rejects create query",
         )

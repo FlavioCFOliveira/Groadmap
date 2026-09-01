@@ -23,16 +23,21 @@ compiled ./bin/rmp:
 - Schema introspection (SHOW INDEXES / SHOW INDEX / SHOW CONSTRAINTS /
   SHOW CONSTRAINT, with an optional YIELD / WHERE / RETURN tail) lists the
   registered schema without altering it. It is accepted by `query` and `search`
-  (exit 0, columns/rows payload) and rejected by `create`, `update` and `delete`
+  (exit 0, columns/rows payload) as the read it is, accepted by `update` because
+  that subcommand owns the graph's schema, and rejected by `create` and `delete`
   (exit 6, each subcommand's own message).
 
 - FOREACH is an updating clause with no discriminator of its own: it is
   classified by the writing clauses its body carries. That containment is an
   emergent property of the grammar, so it is asserted here rather than assumed.
 
-The schema-MUTATING DDL forms must stay rejected everywhere, in any case and
-with any spacing between the two keywords — adding an introspection class must
-not loosen the DDL rejection.
+The schema-MUTATING DDL forms must stay rejected by `query`, `search`, `create`
+and `delete`, in any case and with any spacing between the two keywords — the
+introspection class and the schema subcommand must not loosen that rejection.
+`graph update` is the one subcommand that accepts the DDL class, by decision
+(SPEC/GRAPH.md § Per-Subcommand Validation Rules note 5, § Schema Management,
+Acceptance Criteria 24 and 27), and its acceptance is asserted here beside the
+four refusals so that neither can drift without failing a test.
 
 A third family belongs here for the same reason: the relationship-write-
 direction check (SPEC/GRAPH.md § Relationship Write Direction, Acceptance
@@ -77,12 +82,26 @@ SHOW_FORMS = [
     "SHOW CONSTRAINTS YIELD name RETURN name",
 ]
 
-# The per-subcommand guard-rail message each write subcommand must produce.
+# The per-subcommand guard-rail message each write subcommand produces when a
+# query's operation class is outside every class that subcommand accepts.
+# `graph update` names three classes because it accepts three.
 WRITE_SUBCOMMAND_MESSAGE = {
     "create": "graph create accepts only CREATE/MERGE queries",
-    "update": "graph update accepts only SET/REMOVE queries",
+    "update": ("graph update accepts only SET/REMOVE, index/constraint DDL, "
+               "and schema-introspection queries"),
     "delete": "graph delete accepts only DELETE/DETACH DELETE queries",
 }
+
+# The write subcommands that reject the two SCHEMA classes -- introspection and
+# schema-mutating DDL -- on their operation class. `graph update` is absent
+# because it accepts both: it is the subcommand through which the graph's schema
+# is managed (SPEC/GRAPH.md § Schema Management).
+NON_SCHEMA_WRITE_SUBCOMMANDS = ("create", "delete")
+
+# The subcommands that reject schema-mutating DDL. `graph update` is the single
+# exception, and Acceptance Criterion 27 puts it outside the criterion in as many
+# words: "graph update is outside this criterion, and deliberately so".
+DDL_REJECTING_SUBCOMMANDS = ("query", "search", "create", "delete")
 
 
 class TestGraphClauseSurface:
@@ -136,16 +155,18 @@ class TestGraphClauseSurface:
 
     def test_ac23_show_indexes_returns_the_documented_columns(self):
         # The engine yields the openCypher column order for SHOW INDEXES. The
-        # assertion is on the columns rather than the rows because Groadmap's
-        # guard rail rejects index DDL, so a roadmap graph has no index to list;
-        # an empty row set with the right columns is the correct outcome.
+        # row set is empty because this suite's fixture declares no schema --
+        # Groadmap creates no index of its own accord, so a graph has exactly
+        # the schema its owner asked for (SPEC/GRAPH.md § Schema Management).
+        # Indexes that ARE created are exercised in
+        # tests/test_64_graph_schema_management.py.
         result = self.json("query", "SHOW INDEXES")
         assert result["columns"] == [
             "name", "state", "type", "entityType", "labelsOrTypes", "properties",
         ], f"AC23: unexpected SHOW INDEXES columns: {result['columns']!r}"
         assert result["rows"] == [], (
-            f"AC23: a roadmap graph cannot hold an index (index DDL is rejected "
-            f"by every subcommand), so SHOW INDEXES must list none; got {result['rows']!r}")
+            f"AC23: this fixture declares no index, so SHOW INDEXES must list "
+            f"none; got {result['rows']!r}")
 
     def test_ac23_show_constraints_returns_the_documented_columns(self):
         result = self.json("query", "SHOW CONSTRAINTS")
@@ -153,8 +174,8 @@ class TestGraphClauseSurface:
             "name", "type", "entityType", "labelsOrTypes", "properties",
         ], f"AC23: unexpected SHOW CONSTRAINTS columns: {result['columns']!r}"
         assert result["rows"] == [], (
-            f"AC23: constraint DDL is rejected by every subcommand, so "
-            f"SHOW CONSTRAINTS must list none; got {result['rows']!r}")
+            f"AC23: this fixture declares no constraint, so SHOW CONSTRAINTS "
+            f"must list none; got {result['rows']!r}")
 
     def test_ac23_projection_tail_selects_the_yielded_columns(self):
         # The YIELD / RETURN tail must actually project, not merely parse.
@@ -165,8 +186,16 @@ class TestGraphClauseSurface:
 
     # ---- AC 24: introspection is rejected by the write subcommands ---
 
-    def test_ac24_write_subcommands_reject_introspection(self):
-        for subcmd, message in WRITE_SUBCOMMAND_MESSAGE.items():
+    def test_ac24_create_and_delete_reject_introspection_and_update_accepts_it(self):
+        """AC24 requires the two rejections and the one acceptance TOGETHER.
+
+        Asserting them in one test is what makes widening the class on `create`
+        or `delete` -- or narrowing it on `update` -- fail, which two separate
+        tests would not: a change that moved the class from one group to the
+        other could be made to pass by editing whichever test it broke.
+        """
+        for subcmd in NON_SCHEMA_WRITE_SUBCOMMANDS:
+            message = WRITE_SUBCOMMAND_MESSAGE[subcmd]
             for query in ("SHOW INDEXES", "SHOW CONSTRAINTS"):
                 code, _stdout, stderr = self.run(subcmd, query)
                 assert code == EXIT_GUARD_RAIL, (
@@ -175,6 +204,20 @@ class TestGraphClauseSurface:
                 assert message in stderr, (
                     f"AC24: `graph {subcmd}` must reject {query!r} with its own "
                     f"guard-rail message {message!r}; got {stderr!r}")
+
+        # `graph update` accepts the class and returns the listing. The exit code
+        # alone would not establish it: the assertion is on the payload, so a
+        # subcommand that accepted the statement and produced nothing would fail.
+        for query in ("SHOW INDEXES", "SHOW CONSTRAINTS"):
+            code, stdout, stderr = self.run("update", query)
+            assert code == EXIT_OK, (
+                f"AC24: `graph update` must ACCEPT {query!r} -- it is the "
+                f"subcommand through which the schema is managed; "
+                f"exit={code} stderr={stderr!r}")
+            assert '"columns"' in stdout and '"rows"' in stdout, (
+                f"AC24: `graph update` on {query!r} must return the schema "
+                f"listing in the columns/rows shape, not {{\"ok\": true}}; "
+                f"got {stdout!r}")
 
     # ---- AC 25: SHOW must be a statement, not any occurrence -------
 
@@ -329,7 +372,7 @@ class TestGraphClauseSurface:
             "CREATE CONSTRAINT unique_spec_key FOR (n:Spec) REQUIRE n.key IS UNIQUE",
             "Drop Constraint unique_spec_key",
         ]
-        for subcmd in ("query", "search", "create", "update", "delete"):
+        for subcmd in DDL_REJECTING_SUBCOMMANDS:
             for query in ddl_queries:
                 code, _stdout, stderr = self.run(subcmd, query)
                 assert code == EXIT_GUARD_RAIL, (
@@ -338,6 +381,19 @@ class TestGraphClauseSurface:
                     f"exit={code} stderr={stderr!r}")
                 assert "validation error" in stderr, (
                     f"AC27: expected a guard-rail validation error; got {stderr!r}")
+
+        # `graph update` is outside AC27 by name, because it accepts the class
+        # (AC62 and AC69). Asserting that here rather than leaving it implicit
+        # is what stops the exclusion being read as an oversight: every one of
+        # these spellings is ADMITTED by the guard rail there, and each then
+        # either runs or is refused by the ENGINE with exit 1 -- never with the
+        # guard rail's exit 6.
+        for query in ddl_queries:
+            code, _stdout, stderr = self.run("update", query)
+            assert code != EXIT_GUARD_RAIL, (
+                f"AC27/AC62: `graph update` accepts the DDL class, so {query!r} "
+                f"must not be refused by the guard rail; exit={code} "
+                f"stderr={stderr!r}")
 
     def test_ac27_ddl_rejection_leaves_the_schema_untouched(self):
         # The rejection must happen before execution: no index may exist after
@@ -372,7 +428,7 @@ class TestGraphClauseSurface:
             "DROP CONSTRA\u0131NT unique_spec_key",
             "CREATE CON\u017fTRAINT unique_spec_key FOR (n:Spec) REQUIRE n.key IS UNIQUE",
         ]
-        for subcmd in ("query", "search", "create", "update", "delete"):
+        for subcmd in DDL_REJECTING_SUBCOMMANDS:
             for query in spoofed:
                 code, _stdout, stderr = self.run(subcmd, query)
                 assert code == EXIT_GUARD_RAIL, (
@@ -381,6 +437,21 @@ class TestGraphClauseSurface:
                     f"exit={code} stderr={stderr!r}")
                 assert "validation error" in stderr, (
                     f"expected a guard-rail validation error; got {stderr!r}")
+
+        # The bypass being guarded against was never "the statement runs"; it was
+        # "the guard rail and the engine disagree about what the statement IS".
+        # On `graph update` that disagreement would be just as real: the
+        # statement would be refused as a data-writing CREATE while the engine
+        # executed it as schema DDL. So what must hold there is that the guard
+        # rail CLASSIFIES these as DDL, which is what admitting them under the
+        # schema subcommand means -- a missed classification surfaces as the
+        # class refusal, exit 6.
+        for query in spoofed:
+            code, _stdout, stderr = self.run("update", query)
+            assert code != EXIT_GUARD_RAIL, (
+                f"`graph update` refused the spoofed DDL {query!r} with exit 6, "
+                f"so the guard rail did not see the schema statement the engine "
+                f"sees; stderr={stderr!r}")
 
     def test_spoofed_ddl_never_reaches_the_engine(self):
         """The rejection happens before execution: no index is created."""
@@ -605,8 +676,8 @@ class TestGraphIntrospectionKeywordSpacing:
             self.assert_guard_rail_refusal(
                 subcmd, "SHOW /* which ones? */ INDEXES", "SHOW INDEXES")
 
-    def test_ac39_write_subcommands_still_object_on_class(self):
-        """The rule changed nothing for the write subcommands.
+    def test_ac39_create_and_delete_still_object_on_class(self):
+        """The rule changed nothing for `graph create` and `graph delete`.
 
         Their objection to a SHOW statement is that it carries none of the
         data-writing clauses they accept, that objection is decided first, and
@@ -614,8 +685,14 @@ class TestGraphIntrospectionKeywordSpacing:
         shared code path would have replaced each subcommand's own contract
         message with a spacing complaint that says nothing about why
         `graph create` refused a SHOW.
+
+        `graph update` is not in this list, because it ACCEPTS the class and so
+        has no class objection to make; it is bound by the spacing rule instead,
+        which the test below asserts (AC39 names `graph update` alongside
+        `graph query` and `graph search`).
         """
-        for subcmd, message in WRITE_SUBCOMMAND_MESSAGE.items():
+        for subcmd in NON_SCHEMA_WRITE_SUBCOMMANDS:
+            message = WRITE_SUBCOMMAND_MESSAGE[subcmd]
             for query in ("SHOW INDEXES", "SHOW  INDEXES", "SHOW\tCONSTRAINT",
                           "SHOW\nINDEX"):
                 code, _stdout, stderr = self.run(subcmd, query)
@@ -629,6 +706,40 @@ class TestGraphIntrospectionKeywordSpacing:
                 assert "keyword spacing" not in stderr, (
                     f"AC39: `graph {subcmd}` must not answer a class objection "
                     f"with a spacing complaint; got {stderr!r}")
+
+    def test_ac39_update_is_bound_by_the_spacing_rule(self):
+        """`graph update` accepts the schema-introspection class, so the
+        well-spaced spelling runs under it and the badly spaced one must be
+        refused by the GUARD RAIL with the spacing named -- not admitted and
+        left to die in the engine's parser under a diagnostic that lists every
+        clause keyword except SHOW.
+        """
+        for keyword in ("INDEXES", "INDEX", "CONSTRAINTS", "CONSTRAINT"):
+            accepted = "SHOW " + keyword
+            code, stdout, stderr = self.run("update", accepted)
+            assert code == EXIT_OK, (
+                f"AC39: `graph update` must accept {accepted!r}; "
+                f"exit={code} stderr={stderr!r}")
+            assert '"columns"' in stdout, (
+                f"AC39: {accepted!r} must return the listing under "
+                f"`graph update`; got {stdout!r}")
+
+            for sep in ("  ", "\t", "\n"):
+                query = "SHOW" + sep + keyword
+                code, stdout, stderr = self.run("update", query)
+                assert code == EXIT_GUARD_RAIL, (
+                    f"AC39: `graph update` must refuse {query!r} with exit "
+                    f"{EXIT_GUARD_RAIL}, not leave it to the engine; "
+                    f"exit={code} stderr={stderr!r}")
+                assert "keyword spacing" in stderr and accepted in stderr, (
+                    f"AC39: the refusal must name the keyword spacing and the "
+                    f"accepted spelling {accepted!r}; got {stderr!r}")
+                assert "cypher: parse" not in stderr, (
+                    f"AC39: the user must not be shown the engine's parse "
+                    f"diagnostic; got {stderr!r}")
+                assert stdout.strip() == "", (
+                    f"AC39: a refused query must produce no output; "
+                    f"got {stdout!r}")
 
     def test_ac39_non_introspection_show_still_reaches_the_engine(self):
         """The refusal is confined to statements that ARE schema-introspection

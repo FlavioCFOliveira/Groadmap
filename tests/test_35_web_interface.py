@@ -4845,73 +4845,120 @@ class TestWebInterface:
                 "a rejected CREATE must not have inserted a node"
             )
 
-    def test_query_bar_rejects_misspaced_introspection_with_its_own_kind(self):
-        """AC151: a schema-introspection command whose keyword spacing the
-        engine does not accept is rejected by the shared guard rail before
-        execution, answered HTTP 400 with kind invalid_keyword_spacing, and
-        never reported as not_read_only.
+    def test_query_bar_refuses_schema_introspection_at_every_spacing(self):
+        """AC157 and AC151: the endpoint refuses the whole schema-introspection
+        family before execution, with HTTP 400 and kind schema_introspection,
+        and the keyword spacing changes nothing about the answer.
 
-        The kind is its own, and deliberately not not_read_only: a SHOW
-        statement reads the schema and writes nothing whatever its spacing, so
-        not_read_only would publish a classification the message printed beside
-        it contradicts, and would tell a client the query writes when it does
-        not (SPEC/WEB.md § Query-Bar Error Handling, case 10).
+        The defect this replaces: the endpoint ACCEPTED a well-spaced SHOW
+        command, executed it, and returned {"nodes": [], "edges": []} with HTTP
+        200 -- an empty graph reporting success against a store that does hold a
+        schema, and indistinguishable from a query that genuinely matched
+        nothing (SPEC/WEB.md - Query-Bar Error Handling, case 10). The store used
+        here carries a declared index and a declared constraint, so the old 200
+        would have been stating something false.
 
-        Each misspaced statement is paired with the identical statement carrying
-        one space, which must return the normal graph shape with HTTP 200, so
-        the two differ in the separator and in nothing else. Without that
-        control a server that had dropped schema introspection altogether would
-        satisfy every rejection assertion here.
+        Spacing equivalence is asserted by comparing the two RESPONSES to each
+        other rather than each against a literal: that is what makes "the
+        spacing changes nothing" the claim under test.
+
+        The CLI is unaffected, and this test pins that too: the same badly
+        spaced statement given to `rmp graph query`, `rmp graph search` and
+        `rmp graph update` still exits 6 with a message naming the keyword
+        spacing (SPEC/GRAPH.md AC39). The divergence is deliberate -- the CLI
+        answers the class, so a working spelling is owed there, while this
+        endpoint refuses the class, so no spelling works here.
         """
+        # The store must hold a schema for the refusal to be worth making, and
+        # the CLI is the surface that reports one, which is also the non-vacuity
+        # check: an empty listing is what a broken read path returns.
+        self._run(["graph", "update", "-r", ROADMAP, "--query",
+                   "CREATE INDEX spec_key FOR (n:Spec) ON (n.key)"])
+        _, out, _ = self._run(["graph", "query", "-r", ROADMAP,
+                               "--query", "SHOW INDEXES"])
+        declared = [row[json.loads(out)["columns"].index("name")]
+                    for row in json.loads(out)["rows"]]
+        assert "spec_key" in declared, (
+            f"AC157: the store must hold the declared index for the refusal to "
+            f"be refusing something real; SHOW INDEXES reported {declared!r}"
+        )
+
         proc, port = self._start(["--port", "0"])
 
-        for query, accepted in (
-            ("SHOW  INDEXES", "SHOW INDEXES"),
-            ("SHOW\tINDEX", "SHOW INDEX"),
-            ("SHOW\nCONSTRAINTS", "SHOW CONSTRAINTS"),
-            ("show  constraint", "SHOW CONSTRAINT"),
+        # Every member of the family, at one space and at every other spacing.
+        for one_space, misspaced in (
+            ("SHOW INDEXES", "SHOW  INDEXES"),
+            ("SHOW INDEX", "SHOW\tINDEX"),
+            ("SHOW CONSTRAINTS", "SHOW\nCONSTRAINTS"),
+            ("SHOW CONSTRAINT", "show  constraint"),
+            ("SHOW INDEXES YIELD name RETURN name",
+             "SHOW  INDEXES YIELD name RETURN name"),
         ):
-            status, _, body = self._req(port, self._graph_data(port, q=query))
-            assert status == 400, (
-                f"misspaced introspection {query!r} not rejected with 400; "
-                f"got {status} {body!r}"
-            )
-            err = json.loads(body)
-            assert err.get("kind") == "invalid_keyword_spacing", (
-                f"query {query!r} must carry its own failure class, not "
-                f"{err.get('kind')!r}: {err}"
-            )
-            # The query was never run: the failure body carries no graph.
-            assert set(err) == {"error", "kind"}, (
-                f"the failure body must carry exactly error and kind; got {err!r}"
-            )
-            reason = err["error"]
-            for fragment in ("schema-introspection command", "exactly one space",
-                             "keyword spacing", accepted):
-                assert fragment in reason, (
-                    f"the message for {query!r} must name {fragment!r}; got {reason!r}"
+            responses = {}
+            for query in (one_space, misspaced):
+                status, _, body = self._req(port, self._graph_data(port, q=query))
+                assert status == 400, (
+                    f"AC157: {query!r} must be refused with 400; got {status} "
+                    f"{body!r}. HTTP 200 with an empty graph is the defect this "
+                    f"refusal replaces"
                 )
-            for forbidden in ("not read-only", "cypher: parse", 'unexpected "SHOW"'):
-                assert forbidden not in reason, (
-                    f"the message for {query!r} must never carry {forbidden!r}: "
-                    f"it is neither a write nor the engine's parse diagnostic; "
-                    f"got {reason!r}"
+                err = json.loads(body)
+                assert err.get("kind") == "schema_introspection", (
+                    f"AC157: {query!r} must carry kind schema_introspection, "
+                    f"not {err.get('kind')!r}: {err}"
                 )
+                assert set(err) == {"error", "kind"}, (
+                    f"the failure body must carry exactly error and kind, and "
+                    f"neither nodes nor edges; got {err!r}"
+                )
+                reason = err["error"]
+                # What the message must say: the page draws a graph, and
+                # `rmp graph query` is where the listing is obtained.
+                for fragment in ("graph", "nodes and edges", "schema listing",
+                                 "rmp graph query"):
+                    assert fragment in reason, (
+                        f"AC157: the message for {query!r} must name "
+                        f"{fragment!r}; got {reason!r}"
+                    )
+                # What it must never say. Correcting the spacing changes nothing
+                # here, the statement writes nothing, and it never reached the
+                # engine.
+                for forbidden in ("keyword spacing", "one space", "not read-only",
+                                  "cypher: parse", 'unexpected "SHOW"'):
+                    assert forbidden not in reason, (
+                        f"AC151: the message for {query!r} must never carry "
+                        f"{forbidden!r}; got {reason!r}"
+                    )
+                assert err["kind"] != "invalid_keyword_spacing", (
+                    "AC123: invalid_keyword_spacing is not a value this "
+                    "endpoint publishes"
+                )
+                responses[query] = (status, body)
 
-            # The control: one space, same statement, accepted and executed.
-            status, _, body = self._req(port, self._graph_data(port, q=accepted))
-            assert status == 200, (
-                f"the single-space spelling {accepted!r} must be accepted; "
-                f"got {status} {body!r}"
+            # AC151 proper: the two spellings are answered identically, asserted
+            # by comparing the responses to each other.
+            assert responses[one_space] == responses[misspaced], (
+                f"AC151: the spacing must change nothing about the answer, but "
+                f"{one_space!r} got {responses[one_space]!r} and {misspaced!r} "
+                f"got {responses[misspaced]!r}"
             )
-            assert json.loads(body) == {"nodes": [], "edges": []}, (
-                f"{accepted!r} is a tabular result carrying no graph elements, "
-                f"so the response is the empty graph shape; got {body!r}"
-            )
+
+        # The control, without which the refusal is not shown to be narrow: an
+        # ordinary read of the same store still returns the graph.
+        status, _, body = self._req(
+            port, self._graph_data(port, q="MATCH (n) OPTIONAL MATCH (n)-[r]->(m) RETURN n, r, m"))
+        assert status == 200, (
+            f"AC157: an ordinary read must be unaffected; got {status} {body!r}"
+        )
+        data = json.loads(body)
+        assert set(data) == {"nodes", "edges"} and data["nodes"], (
+            f"AC157: the control must return the ordinary node-and-edge shape "
+            f"with content, so what is refused is a class and not queries in "
+            f"general; got {body!r}"
+        )
 
         # The two guard-rail rejections stay distinct in both directions: a
-        # genuine write still answers not_read_only, so the new kind did not
-        # swallow the old one.
+        # genuine write still answers not_read_only.
         status, _, body = self._req(
             port, self._graph_data(port, q="MATCH (n) DELETE n"))
         assert status == 400
@@ -4919,15 +4966,94 @@ class TestWebInterface:
             "a writing query must still be classified not_read_only"
         )
 
-        # Precedence (SPEC/WEB.md § Query-Bar Error Handling, rule 6): the limit
-        # is resolved before the query is classified, so an invalid limit
-        # outranks the spacing objection.
+        # Precedence, in both directions (SPEC/WEB.md - Query-Bar Error
+        # Handling, rule 6; AC157).
         status, _, body = self._req(
-            port, self._graph_data(port, q="SHOW  INDEXES", limit="7"))
+            port, self._graph_data(port, q="SHOW INDEXES", limit="7"))
         assert status == 400
         assert json.loads(body).get("kind") == "invalid_limit", (
-            "an invalid limit is resolved before the query is classified, so it "
-            "outranks the keyword-spacing objection"
+            "the limit is resolved before the guard rail runs, so an invalid "
+            "limit outranks the schema-introspection refusal"
+        )
+        status, _, body = self._req(
+            port, self._graph_data(port, q="SHOW INDEXES", limit="250"))
+        assert status == 400
+        assert json.loads(body).get("kind") == "schema_introspection", (
+            "the same statement under an allowed limit is the "
+            "schema-introspection refusal"
+        )
+
+        ddl_tail = ("SHOW INDEXES YIELD name CREATE INDEX audit_key "
+                    "FOR (n:Audit) ON (n.key)")
+        status, _, body = self._req(port, self._graph_data(port, q=ddl_tail))
+        assert status == 400
+        assert json.loads(body).get("kind") == "not_read_only", (
+            "a schema-introspection command carrying a DDL tail is answered "
+            "not_read_only: the guard rail's clause classes are independent and "
+            "the objection that a statement writes outranks the refusal"
+        )
+        status, _, body = self._req(
+            port, self._graph_data(port, q="SHOW INDEXES YIELD name"))
+        assert status == 400
+        assert json.loads(body).get("kind") == "schema_introspection", (
+            "the same statement without its DDL tail is the "
+            "schema-introspection refusal"
+        )
+        # A DATA-writing tail is NOT that pair and must not be used as one: the
+        # engine reports a statement its own DDL predicate accepts as carrying
+        # no writing clause, so this one is read-only and is itself refused as
+        # schema_introspection.
+        status, _, body = self._req(
+            port, self._graph_data(port, q="SHOW INDEXES YIELD name CREATE (n:Audit)"))
+        assert status == 400
+        assert json.loads(body).get("kind") == "schema_introspection", (
+            "a data-writing tail does not make the statement not read-only, so "
+            "it must not be used to assert that precedence pair"
+        )
+
+        # Nothing ran: the DDL tail created no index and the data-writing tail
+        # created no node.
+        _, out, _ = self._run(["graph", "query", "-r", ROADMAP,
+                               "--query", "SHOW INDEXES"])
+        listing = json.loads(out)
+        after = [row[listing["columns"].index("name")] for row in listing["rows"]]
+        assert "audit_key" not in after, (
+            f"AC157: the refusal precedes execution, so the DDL tail must never "
+            f"have created its index; SHOW INDEXES reported {after!r}"
+        )
+        _, out, _ = self._run(["graph", "query", "-r", ROADMAP,
+                               "--query", "MATCH (n:Audit) RETURN count(n)"])
+        assert json.loads(out)["rows"][0][0] == 0, (
+            "AC157: the data-writing tail must never have created its node"
+        )
+
+        # THE CLI IS UNAFFECTED (AC151, second half; SPEC/GRAPH.md AC39). The
+        # same badly spaced statement still exits 6 there, with a message that
+        # DOES name the spacing -- the divergence this task made deliberate.
+        for subcmd in ("query", "search", "update"):
+            code, _out, err = self._run(
+                ["graph", subcmd, "-r", ROADMAP, "--query", "SHOW  INDEXES"],
+                check=False)
+            assert code == 6, (
+                f"AC151: `rmp graph {subcmd}` must still exit 6 for a badly "
+                f"spaced SHOW; got {code} with stderr={err!r}"
+            )
+            assert "one space" in err, (
+                f"AC151: the CLI message must still name the keyword spacing "
+                f"the endpoint no longer names; got {err!r}"
+            )
+            assert "SHOW INDEXES" in err, (
+                f"AC151: the CLI message must still offer the accepted "
+                f"spelling; got {err!r}"
+            )
+        # And the well-spaced statement still SUCCEEDS on the CLI, which is what
+        # makes the endpoint's refusal a divergence rather than a shared refusal.
+        code, out, err = self._run(
+            ["graph", "query", "-r", ROADMAP, "--query", "SHOW INDEXES"],
+            check=False)
+        assert code == 0 and "spec_key" in out, (
+            f"AC151/AC64: `rmp graph query` still answers the class in full; "
+            f"got {code} out={out!r} err={err!r}"
         )
 
     def test_query_bar_refuses_a_misresolved_relationship_read(self):
@@ -5092,14 +5218,16 @@ class TestWebInterface:
 
         proc, port = self._start(["--port", "0"])
 
-        # The exempt forms: two bare SHOW commands, a SHOW carrying a YIELD tail
-        # (a tail does not make a LIMIT injectable), a bare standalone call, a
-        # standalone call that is not a pure read of the store, and a standalone
-        # call carrying a YIELD.
+        # The exempt forms: a bare standalone call, a standalone call that is
+        # not a pure read of the store, and a standalone call carrying a YIELD.
+        #
+        # The SHOW schema-introspection commands are deliberately NOT in this
+        # list. They admit no LIMIT either, but this criterion does not reach
+        # them: the endpoint refuses that class before the injection decision is
+        # taken, and AC111 states that asserting HTTP 200 for one here would
+        # contradict AC157. The refusal is asserted right below, so the form is
+        # covered rather than dropped.
         exempt = (
-            "SHOW INDEXES",
-            "SHOW CONSTRAINTS",
-            "SHOW INDEXES YIELD name, state RETURN name",
             "CALL db.labels()",
             "CALL db.stats.refresh()",
             "CALL db.propertyKeys() YIELD propertyKey",
@@ -5115,6 +5243,27 @@ class TestWebInterface:
             assert json.loads(body) == {"nodes": [], "edges": []}, (
                 f"{query!r} is a tabular result carrying no graph elements, so "
                 f"the response is the empty graph shape; got {body!r}"
+            )
+
+        # The other non-limitable form never reaches the injection decision at
+        # all. This assertion is what keeps the two rules consistent: it fails
+        # if the refusal is lost (200 comes back) and equally if the refusal
+        # were moved AFTER the injection (kind=execution would come back,
+        # carrying the engine's parse diagnostic for the appended LIMIT).
+        for query in ("SHOW INDEXES", "SHOW CONSTRAINTS",
+                      "SHOW INDEXES YIELD name, state RETURN name"):
+            status, _, body = self._req(
+                port, self._graph_data(port, q=query, limit="100")
+            )
+            assert status == 400, (
+                f"AC111/AC157: {query!r} is refused before the injection "
+                f"decision; got {status} {body!r}"
+            )
+            err = json.loads(body)
+            assert err.get("kind") == "schema_introspection", (
+                f"AC157: {query!r} must carry kind schema_introspection, not "
+                f"{err.get('kind')!r}: an execution failure here would mean the "
+                f"LIMIT was injected first"
             )
 
         # The control on the other side of the boundary: projected through a
@@ -5364,6 +5513,7 @@ class TestWebInterface:
         cases = (
             ("not_read_only", {"q": "MATCH (n) DELETE n"}),
             ("invalid_limit", {"limit": "7"}),
+            ("schema_introspection", {"q": "SHOW INDEXES"}),
             ("execution", {"q": "MATCH (n) RETURN"}),
         )
         for want_kind, params in cases:

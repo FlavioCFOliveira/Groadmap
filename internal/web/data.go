@@ -137,11 +137,11 @@ var (
 )
 
 // graphQueryError classifies a query-bar failure so the handler can map it to a
-// distinct, in-page, read-only message (SPEC/WEB.md § Query-Bar Error Handling).
-// The four kinds are kept separate so the user understands what to fix: a
-// rejection (the query is not read-only), an invalid limit, a schema-
-// introspection command whose keyword spacing the engine does not accept, or an
-// execution failure in the engine.
+// distinct, in-page, read-only message. The kinds are kept separate so the user
+// understands what to fix, and the set of them is enumerated in exactly one
+// place: SPEC/WEB.md § Query-Bar Error Handling, rule 5. This comment names that
+// place instead of repeating the list, because a repeated list is what let the
+// count here drift out of step with the constants below it.
 type graphQueryError struct {
 	// Reason is the user-facing message shown in place on the page.
 	Reason string
@@ -151,8 +151,10 @@ type graphQueryError struct {
 
 func (e *graphQueryError) Error() string { return e.Reason }
 
-// Query-bar failure kinds. They map 1:1 to the distinct cases in
-// SPEC/WEB.md § Query-Bar Error Handling.
+// Query-bar failure kinds. This block is the code side of the closed value set
+// SPEC/WEB.md § Query-Bar Error Handling, rule 5, publishes and is canonical for;
+// a value is added or removed there first, and no other comment in this file
+// restates the list.
 //
 // Every one of them is answered with HTTP 400 and told apart by this field, not
 // by the status: RFC 9110 section 15.5 puts the explanation of an error in the
@@ -165,20 +167,47 @@ func (e *graphQueryError) Error() string { return e.Reason }
 // graphErrNotReadOnly: such a query IS read-only and IS well formed, and what it
 // needs is the traversal rewritten as outgoing.
 //
-// graphErrInvalidKeywordSpacing is deliberately NOT folded into
-// graphErrNotReadOnly. A SHOW statement reads the schema and writes nothing
-// whatever its spacing, so answering not_read_only would publish a
-// classification the message printed beside it contradicts, and would tell a
-// client the query writes when it does not. The two failures also have different
-// fixes — one query must be rewritten to stop writing, the other only to close a
-// gap between two keywords (SPEC/WEB.md § Query-Bar Error Handling, case 10).
+// graphErrSchemaIntrospection is a kind of its own for the same reason and is
+// likewise NOT folded into graphErrNotReadOnly: a SHOW statement reads the
+// registered schema and writes nothing, so answering not_read_only would publish
+// a classification the message printed beside it contradicts. It is not
+// graphErrExecution either — the statement never reaches the engine, so there is
+// no engine diagnostic to carry. The fix is to ask a different surface.
+//
+// There is deliberately NO keyword-spacing kind here. This endpoint refuses the
+// whole schema-introspection family at every spacing, so correcting the spacing
+// changes nothing on it: a spacing complaint would name a correction that does
+// not work and would send the caller round a loop ending in this same refusal.
+// The CLI still publishes that rejection, because `graph query`, `graph search`
+// and `graph update` ACCEPT the class and there the spacing genuinely is the
+// whole objection (SPEC/GRAPH.md § Keyword Spacing in a Schema-Introspection
+// Command, which is canonical for the divergence).
 const (
 	graphErrNotReadOnly           = "not_read_only"               // query contains a writing or DDL clause
 	graphErrInvalidLimit          = "invalid_limit"               // limit not one of the six allowed values
-	graphErrInvalidKeywordSpacing = "invalid_keyword_spacing"     // SHOW INDEX(ES)/CONSTRAINT(S) spelled with a separator the engine does not accept
+	graphErrSchemaIntrospection   = "schema_introspection"        // SHOW INDEX(ES)/CONSTRAINT(S): a schema listing is not a graph
 	graphErrRelationshipDirection = "relationship_read_direction" // reads a relationship bound by an incoming or undirected pattern
 	graphErrExecution             = "execution"                   // accepted as read-only but failed in the engine
 )
+
+// graphSchemaIntrospectionReason words the in-place message for a
+// schema-introspection command. It is a FIXED string, and that is a requirement
+// rather than a convenience: SPEC/WEB.md Acceptance Criterion 151 requires the
+// response to a badly spaced command to equal the response to the well-spaced
+// one, which a message echoing the caller's statement could not satisfy.
+//
+// It states what the specification requires it to state — that this page draws a
+// graph of nodes and edges and cannot show a schema listing, and that
+// `rmp graph query` is where the schema is reported — because a message that
+// only refused would leave the caller with a correct refusal and no way forward:
+// the statement they wrote is valid, supported, and answered in full by the CLI.
+//
+// It names neither the keyword spacing nor an accepted spelling, because on this
+// endpoint the spacing is not what is wrong and correcting it changes nothing
+// (SPEC/WEB.md § Query-Bar Error Handling, case 10, What the message MUST say).
+const graphSchemaIntrospectionReason = "query rejected: this page draws a graph of nodes and edges, " +
+	"and a schema listing is neither, so it cannot be shown here. Run rmp graph query to report the " +
+	"indexes and constraints the store holds."
 
 // newGraphQueryError builds a classified query-bar error.
 func newGraphQueryError(kind, reason string) *graphQueryError {
@@ -1820,11 +1849,15 @@ func resolveGraphQuery(raw string) string {
 //     user-authored LIMIT is respected as-is and the resolved dropdown value is
 //     not applied.
 //   - Suppression 2: the query is a statement form that admits NO LIMIT clause
-//     at all — a schema-introspection command, or a standalone procedure call.
-//     Appending a LIMIT to one of those bounds nothing; it makes the statement
-//     fail in the PARSER, so a read the guard rail admits, and that
-//     `rmp graph query` runs, would be unusable through this endpoint and the
-//     endpoint would be stricter than the contract it publishes.
+//     at all. Through this endpoint that form is the standalone procedure call:
+//     appending a LIMIT to one bounds nothing; it makes the statement fail in
+//     the PARSER, so a read the guard rail admits, and that `rmp graph query`
+//     runs, would be unusable through this endpoint and the endpoint would be
+//     stricter than the contract it publishes. The schema-introspection command
+//     admits no LIMIT either and admitsLimitClause still answers for it, but
+//     loadGraphView refuses that class before this function is reached, so no
+//     such statement arrives here (SPEC/WEB.md § Graph Data Endpoint,
+//     Suppression 2, and § Query-Bar Error Handling, case 10).
 //
 // Both suppression checks run on the literal-masked normalization
 // (cypherguard.MaskLiterals), so a LIMIT, SHOW, CALL, or RETURN keyword that
@@ -1883,11 +1916,18 @@ func applyGraphLimit(query string, limit int) string {
 //     which is exactly this class and nothing wider: every other SHOW the guard
 //     rail sees (SHOW DATABASES, SHOW FUNCTIONS, SHOW PROCEDURES, ...) is not
 //     part of it, and the engine rejects those at the parser whether or not a
-//     LIMIT is appended, so leaving them out changes nothing for them. A SHOW
-//     command whose keyword spacing the engine does not accept is not part of
-//     the class either, and never reaches here: loadGraphView refuses it before
-//     the store is opened, so the question of whether it admits a LIMIT never
-//     arises (SPEC/GRAPH.md § Keyword Spacing in a Schema-Introspection Command).
+//     LIMIT is appended, so leaving them out changes nothing for them.
+//
+//     No statement of this class reaches this function through the endpoint:
+//     loadGraphView refuses the whole family — at every keyword spacing — before
+//     the store is opened and before the injection decision is taken. The branch
+//     stays because this function answers a question about a STATEMENT FORM
+//     ("can it carry a LIMIT?"), and the answer for this form is no wherever the
+//     question is asked; the refusal that makes it unreachable lives elsewhere
+//     and could move. Deleting it would leave a predicate that silently claims
+//     a SHOW command takes a LIMIT (SPEC/WEB.md § Graph Data Endpoint,
+//     Suppression 2, third bullet).
+//
 //  2. A standalone procedure call — first clause CALL, no top-level RETURN.
 //     See reLeadingCall and reTopLevelReturn for why the top-level RETURN is the
 //     whole of the boundary.
@@ -1914,11 +1954,11 @@ func admitsLimitClause(query, masked string) bool {
 // when absent). The query is resolved (default when absent), validated as
 // read-only via the shared cypherguard guard-rail BEFORE execution, and has a
 // LIMIT injected only when it has no top-level LIMIT of its own AND is a
-// statement form that admits a LIMIT clause. A query that contains any
-// writing or DDL clause, a query that is a schema-introspection command whose
-// keyword spacing the engine does not accept, or an invalid limit, is returned
-// as a classified graphQueryError and is never executed; the store is not opened
-// for it when the failure is detectable before opening.
+// statement form that admits a LIMIT clause. A query that contains any writing
+// or DDL clause, a query that is a schema-introspection command at any keyword
+// spacing, a query that reads a relationship bound by an incoming or undirected
+// pattern, or an invalid limit, is returned as a classified graphQueryError and
+// is never executed; the store is not opened for it.
 //
 // A roadmap that has never used the graph command (no graph/ directory) is an
 // empty graph, not an error: loadGraphView returns empty arrays WITHOUT creating
@@ -1948,19 +1988,29 @@ func loadGraphView(ctx context.Context, name, rawQuery, rawLimit string) (graphV
 		return graphView{}, newGraphQueryError(graphErrNotReadOnly, "query rejected: not read-only")
 	}
 
-	// Keyword-spacing rejection, third and last in the precedence order the
-	// endpoint publishes (invalid_limit, then not_read_only, then
-	// invalid_keyword_spacing; SPEC/WEB.md § Query-Bar Error Handling, rule 6).
-	// It is decided AFTER the read-only check because the objection that a query
-	// writes outranks the objection that it is misspelled, and it carries its own
-	// kind because a SHOW statement is read-only at any spacing — reporting it as
-	// not read-only would be a false classification.
+	// Schema-introspection refusal, third in the precedence order the endpoint
+	// publishes (invalid_limit, then not_read_only, then schema_introspection,
+	// then relationship_read_direction; SPEC/WEB.md § Query-Bar Error Handling,
+	// rule 6). It is decided AFTER the read-only check because a statement that
+	// is BOTH an introspection command and a DDL statement — "SHOW INDEXES YIELD
+	// name CREATE INDEX …" — must be told that it writes; and it carries its own
+	// kind because a SHOW statement reads the schema and writes nothing, so
+	// reporting it as not read-only would be a false classification.
 	//
-	// The rejection precedes execution and precedes the node-limit injection, so
+	// The whole family is refused, at every keyword spacing, which is why the
+	// predicate is Introspect OR IntrospectMisspaced and not either alone: the
+	// two are mutually exclusive halves of one class, and this endpoint answers
+	// the same kind for both because on it both have the same cause and the same
+	// fix. cypherguard.IntrospectSpacingRejection is deliberately NOT called
+	// here — it is the CLI's rejection, and the CLI keeps it (SPEC/GRAPH.md
+	// § Keyword Spacing in a Schema-Introspection Command). The CLASSIFICATION is
+	// shared and identical; only the verdict differs.
+	//
+	// The refusal precedes execution and precedes the node-limit injection, so
 	// applyGraphLimit is never reached for such a statement and the question of
 	// whether it admits a LIMIT clause never arises (see admitsLimitClause).
-	if reason, misspaced := cypherguard.IntrospectSpacingRejection(query); misspaced {
-		return graphView{}, newGraphQueryError(graphErrInvalidKeywordSpacing, "query rejected: "+reason)
+	if c := cypherguard.Classify(query); c.Introspect || c.IntrospectMisspaced {
+		return graphView{}, newGraphQueryError(graphErrSchemaIntrospection, graphSchemaIntrospectionReason)
 	}
 
 	// Relationship-read direction, last in the precedence order and, like the
@@ -1970,7 +2020,9 @@ func loadGraphView(ctx context.Context, name, rawQuery, rawLimit string) (graphV
 	//
 	// It is decided LAST because every earlier objection outranks it: a query
 	// that writes must be told that it writes, and a schema-introspection command
-	// the engine cannot parse has no pattern to orient. The check runs on the
+	// carries no relationship pattern to orient — which is also why its ordinal
+	// against this one is not reachable and must not be asserted by a test
+	// (SPEC/WEB.md § Query-Bar Error Handling, rule 6). The check runs on the
 	// query the caller supplied, before applyGraphLimit injects the node limit,
 	// because injecting a LIMIT changes no relationship pattern.
 	//
@@ -2038,7 +2090,17 @@ func loadGraphView(ctx context.Context, name, rawQuery, rawLimit string) (graphV
 		return graphView{}, fmt.Errorf("%w: graph store unavailable: %v", utils.ErrDatabase, openErr)
 	}
 
-	engine := cypher.NewEngine(res.Graph)
+	// Constructed with the schema the store open recovered, and with NOTHING
+	// else: EngineOptions.Store is left unset, so this still opens neither a
+	// transactional store nor a write-ahead-log writer, which is the guarantee
+	// this endpoint depends on (SPEC/GRAPH.md § Engine Constructor by Path). The
+	// recovered constraints and indexes are what make a schema-introspection
+	// query report the schema the store actually holds instead of an empty
+	// listing (SPEC/GRAPH.md § Recovered Schema on Both Paths).
+	engine := cypher.NewEngineWithOptions(res.Graph, cypher.EngineOptions{
+		RecoveredConstraints: cypher.ConstraintDefsFromRecovery(res.Constraints),
+		RecoveredIndexes:     cypher.IndexDefsFromRecovery(res.Indexes),
+	})
 
 	// Inject the node limit only when the (validated, read-only) query has no
 	// top-level LIMIT of its own AND is a statement form that admits a LIMIT

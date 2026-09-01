@@ -15,10 +15,13 @@
 //   - Schema introspection (SHOW INDEXES / SHOW INDEX / SHOW CONSTRAINTS /
 //     SHOW CONSTRAINT, with an optional YIELD / WHERE / RETURN tail). It lists
 //     the registered schema without altering it, so it is read-only: accepted by
-//     query and search, rejected by create, update and delete, each of which
-//     accepts only its own data-writing clause class. Note that the engine's own
+//     query and search as the read it is, accepted by update because that
+//     subcommand owns the graph's schema and reporting a schema belongs with
+//     changing it, and rejected by create and delete, each of which accepts only
+//     its own data-writing clause class (SPEC/GRAPH.md § Schema Introspection;
+//     § Per-Subcommand Validation Rules note 6). Note that the engine's own
 //     cypher/ir.IsDDL folds SHOW in with the schema-MUTATING forms; Groadmap
-//     deliberately does not (SPEC/GRAPH.md § Schema Introspection).
+//     deliberately does not.
 //
 //   - FOREACH, an updating clause with no discriminator of its own. It is
 //     classified by the writing clauses its body contains, which is sound only
@@ -117,12 +120,22 @@ func TestValidateGuardRailClauseSurface(t *testing.T) {
 			wantMsg:    "graph create accepts only CREATE/MERGE queries",
 		},
 		{
-			name:       "update rejects SHOW INDEXES",
-			subcmd:     "update",
-			allowed:    "SET/REMOVE",
-			query:      `SHOW INDEXES`,
-			wantReject: true,
-			wantMsg:    "graph update accepts only SET/REMOVE queries",
+			// `graph update` is the schema subcommand, so it ACCEPTS schema
+			// introspection: listing the schema and changing it are reached the
+			// same way (SPEC/GRAPH.md § Schema Introspection; Acceptance
+			// Criterion 24, which requires the two rejections above and below
+			// and this one acceptance to be asserted together, so that widening
+			// the class on create or delete — or narrowing it on update — fails).
+			name:    "update accepts SHOW INDEXES",
+			subcmd:  "update",
+			allowed: "SET/REMOVE",
+			query:   `SHOW INDEXES`,
+		},
+		{
+			name:    "update accepts SHOW CONSTRAINTS",
+			subcmd:  "update",
+			allowed: "SET/REMOVE",
+			query:   `SHOW CONSTRAINTS`,
 		},
 		{
 			name:       "delete rejects SHOW CONSTRAINTS",
@@ -220,7 +233,7 @@ func TestValidateGuardRailClauseSurface(t *testing.T) {
 			allowed:    "SET/REMOVE",
 			query:      `FOREACH (name IN ['auth'] | CREATE (:Spec {key: name}))`,
 			wantReject: true,
-			wantMsg:    "graph update accepts only SET/REMOVE queries",
+			wantMsg:    "graph update accepts only SET/REMOVE, index/constraint DDL, and schema-introspection queries",
 		},
 		{
 			name:    "delete accepts FOREACH with a DETACH DELETE body",

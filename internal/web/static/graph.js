@@ -1587,10 +1587,12 @@
 
   // showQueryError displays a clear, read-only, in-place message in the query
   // bar and leaves the graph already shown in place; it triggers no write and no
-  // navigation (SPEC/WEB.md § Query-Bar Error Handling, rule 4). The three
-  // distinct messages — not read-only, invalid limit, query failed to execute —
-  // come straight from the endpoint's classified error so the user knows what to
-  // fix (rules 1-3).
+  // navigation (SPEC/WEB.md § Query-Bar Error Handling, rule 4). The message
+  // comes straight from the endpoint's classified error, so the user reads what
+  // to fix whichever class the failure is. The classes are enumerated in one
+  // place only — SPEC/WEB.md § Query-Bar Error Handling, rule 5 — which this
+  // comment names rather than repeats: the list this page renders is whatever
+  // the endpoint sends, so a copy of it here could only go stale.
   function showQueryError(message) {
     if (!queryError) {
       return;
