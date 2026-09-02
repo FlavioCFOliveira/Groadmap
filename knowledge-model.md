@@ -6,7 +6,10 @@ exist in one and not in the other. Whenever the graph gains a new label, edge ty
 property, this file is updated in the same commit.
 
 The graph is a Label Property Graph stored by GoGraph at `~/.roadmaps/groadmap/graph/` and
-is reached only through `rmp graph` (`query`, `search`, `create`, `update`, `delete`).
+is reached only through `rmp graph` (`execute`, `serve`, `client`). The five subcommands
+`query`, `search`, `create`, `update` and `delete` were removed at commit 40d1b37 and exit 127;
+`rmp graph execute -r <roadmap> [-q <cypher>]` replaces all of them and reads the statement from
+standard input when `-q` is absent.
 Groadmap models itself: the project described by the graph is this repository.
 
 ## Conventions
