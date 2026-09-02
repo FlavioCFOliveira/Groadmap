@@ -7,9 +7,18 @@ package commands
 // that pair from the columns the expansion emitted. Those columns carry the
 // relationship the way the pattern walked it, not the way storage holds it, so a
 // relationship reached against the stored arrow is addressed as a pair that has
-// no relationship, and the storage layer answers a write to an absent
-// relationship with a documented no-op. Nothing is written, no error is raised,
-// and the transaction still commits.
+// no relationship. The write is not refused; it is MISFILED. One store answers a
+// write to an absent pair with a documented no-op, but the other does not test
+// the pair at all: it records the property under the correct handle in a bucket
+// keyed by the reversed pair, which no read consults. Nothing is readable, no
+// error is raised, and the transaction still commits.
+//
+// How much of a statement's write survives is decided by the DATA rather than by
+// the statement: a write persists only where the row's left-bound node is the
+// stored source and its right-bound node the stored target, so the same
+// statement may write every relationship it matched, some of them, or none.
+// The tests below fix the stored orientation of every relationship they measure,
+// because the shape of a statement does not tell an assertion what to expect.
 //
 // Groadmap used to REFUSE such a statement. It no longer does: it hands the
 // engine whatever it is given and holds no opinion about the patterns a
