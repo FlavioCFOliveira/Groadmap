@@ -103,6 +103,25 @@ Work ALWAYS follows these phases, in order:
 3. **Test** — validate behavior and acceptance criteria.
 4. **Document** — keep documentation accurate and faithful to the code.
 
+#### Complete the Code Before Testing It
+
+Inside the **Implement** phase, you MUST **ALWAYS** write **all** of a task's code
+first, and only then move on to testing and to correcting or adjusting whatever
+the tests reveal. This is a strategic rule whose purpose is a faster, more
+efficient development process: finishing the whole implementation in one pass
+avoids the cost of repeatedly reloading the same context, and it lets the test
+phase exercise the finished behaviour rather than a half-built one.
+
+- Do NOT write tests before the code, and do NOT interleave the two.
+- Do NOT stop mid-implementation to test a part of the task.
+- Once the code is complete, test it in full, then correct and adjust.
+
+This rule governs the ORDER of work within a task. It does not weaken any other
+rule: the phases still run Specify → Implement → Test → Document, the task is
+still self-contained (see Self-Contained Development), every bug still gets its
+regression test in the same cycle (see Regression Prevention), and no task is
+closed before the validation gates pass (see Section 6, Rule 2).
+
 ---
 
 ## 1. Critical Policy: Specification First
@@ -470,6 +489,7 @@ global Claude Code configuration.
 | Change to scope, behavior, architecture, or requirements | ASK the user BEFORE acting |
 | Obvious, low-risk fix (e.g. unambiguous bug) | Proceed immediately; no need to ask |
 | New need discovered mid-task | Add task via `rmp`; resolve in the SAME cycle |
+| Implementing a task | Write ALL the task's code first; test, correct, and adjust only after |
 | Pre-existing bug found | Fix on the spot, then resume the original work |
 | Bug identified (any) | Add regression test(s) in the SAME cycle so it cannot reappear |
 | Assess performance / completeness / correctness | Gather evidence; decide empirically |
@@ -498,6 +518,8 @@ global Claude Code configuration.
 ### Other Forbidden
 - Ignore `go vet` or `go test` failures
 - Partial (non-self-contained) deliverables or tests created with skip
+- Writing tests before a task's code is complete, or interleaving the two, or
+  stopping mid-implementation to test a part of the task
 - Leaving pre-existing bugs unfixed once found
 - Fixing a bug without adding the regression test(s) that prevent its recurrence
 - Executing tasks or sprints in parallel (execution is sequential)
