@@ -208,11 +208,11 @@ func Run(opts Options) error {
 		return err
 	}
 
-	db, srv, err := build(st, opts.GraphDir)
+	closer, srv, err := build(st, opts.GraphDir)
 	if err != nil {
-		_ = db.Close() //nolint:errcheck // tearing down a server that never served; the close error cannot be acted on
-		_ = st.Close() //nolint:errcheck // idem: the lock is released by this call whatever it returns
-		_ = ln.Close() //nolint:errcheck // idem
+		_ = closer.Close() //nolint:errcheck // tearing down a server that never served; the close error cannot be acted on
+		_ = st.Close()     //nolint:errcheck // idem: the lock is released by this call whatever it returns
+		_ = ln.Close()     //nolint:errcheck // idem
 		return err
 	}
 
@@ -220,9 +220,9 @@ func Run(opts Options) error {
 	// loop, so a caller that reads stdout for the path has it before the first
 	// session can produce a diagnostic.
 	if err := opts.Announce(opts.SocketPath); err != nil {
-		_ = db.Close() //nolint:errcheck // the announcement failed, so nothing was served; the close error cannot be acted on
-		_ = st.Close() //nolint:errcheck // idem
-		_ = ln.Close() //nolint:errcheck // idem
+		_ = closer.Close() //nolint:errcheck // the announcement failed, so nothing was served; the close error cannot be acted on
+		_ = st.Close()     //nolint:errcheck // idem
+		_ = ln.Close()     //nolint:errcheck // idem
 		return err
 	}
 
@@ -315,12 +315,18 @@ func bind(path string) (*serverListener, error) {
 //     and CREATE CONSTRAINT the graph has seen — the defect of release 1.15.2,
 //     arriving through the engine instead of through our own snapshot call.
 //
-// The composed store.DB is handed to the server as its Closer, which is what puts
-// the final checkpoint and the write-ahead log's close AFTER the drain rather than
-// beside it: the server closes it only once no connection can still be writing.
-// WithQuiesce runs that close inside the same commit lock, so an in-flight commit
-// finishes before the writer is flushed and closed.
-func build(st *graphstore.Store, graphDir string) (*store.DB, *server.Server, error) {
+// A [shutdownCloser] over the composed store.DB is handed to the server as its
+// Closer, which is what puts the shutdown checkpoint and the write-ahead log's
+// close AFTER the drain rather than beside it: the server closes it only once no
+// connection can still be writing. WithQuiesce runs that close inside the same
+// commit lock, so an in-flight commit finishes before the writer is flushed and
+// closed.
+//
+// WithFinalCheckpoint is deliberately NOT set, and [shutdownCloser] takes that
+// checkpoint instead. The two run at the same instant and in the same order; what
+// differs is that the composed store discards the checkpoint's error into a
+// metric this project does not read, and shutdownCloser reports it. See there.
+func build(st *graphstore.Store, graphDir string) (*shutdownCloser, *server.Server, error) {
 	txnStore := st.Txn()
 	engine := st.Engine()
 
@@ -345,14 +351,89 @@ func build(st *graphstore.Store, graphDir string) (*store.DB, *server.Server, er
 
 	db := store.New(st.WAL(),
 		store.WithCheckpointer(cp),
-		store.WithFinalCheckpoint(),
 		store.WithQuiesce(txnStore.RunUnderCommitLock))
 
-	srv, err := server.NewServer(engine, serverOptions(db))
+	closer := &shutdownCloser{db: db, cp: cp}
+
+	srv, err := server.NewServer(engine, serverOptions(closer))
 	if err != nil {
-		return db, nil, fmt.Errorf("%w: graph server unavailable: %v", utils.ErrDatabase, err)
+		return closer, nil, fmt.Errorf("%w: graph server unavailable: %v", utils.ErrDatabase, err)
 	}
-	return db, srv, nil
+	return closer, srv, nil
+}
+
+// shutdownCloser is what the engine's server closes once its connections have
+// drained, and it is steps 4 and 5 of SPEC/GRAPH.md § Server Shutdown and the
+// Drain: checkpoint and truncate the write-ahead log, then close the store's
+// durability stack.
+//
+// # Why it exists rather than the composed store alone
+//
+// The composed store takes that checkpoint itself when it is constructed with a
+// final-checkpoint option, in the same place and in the same order. What it does
+// NOT do is report the outcome: its own documentation makes the final checkpoint
+// best-effort and its error is deliberately dropped into a metric, on the ground
+// that durability does not depend on it. That ground is correct — every
+// acknowledged commit is already durable in the write-ahead log, which is why
+// step 7 still exits 0 — and the conclusion drawn from it is not ours to draw:
+// SPEC/GRAPH.md § Durability and Checkpointing in a Long-Lived Process, rule 7,
+// and § Synchronous Checkpoint on Write's failure policy both require a
+// checkpoint failure to reach the reader as a diagnostic without changing the
+// exit code. A server that silently skipped its shutdown checkpoint left a
+// write-ahead log the next open replays in full and a snapshot older than the
+// graph, and nothing anywhere said so.
+//
+// So the checkpoint is requested here, where the error is in hand, and the
+// composed store is then closed for the two steps whose ordering it exists to
+// own: stop the checkpoint loop, then close the write-ahead log under the commit
+// lock. Requesting it before that close is not a choice either — a stopped
+// checkpointer refuses the request — and it is the same order the composed store
+// performs internally.
+//
+// # Why no error is exempted
+//
+// Every way this checkpoint can fail is worth a line. A refusal from a stopped
+// checkpointer cannot happen from here — this is the only caller, it runs once,
+// and it runs before the loop is stopped — so treating one as benign would
+// silence the one message that would tell us the assumption had broken. The
+// remaining failures are a write-ahead log the engine has poisoned, a capture
+// that could not reach a transaction boundary, and a snapshot the filesystem
+// refused; a reader can act on each of them and on none of them silently.
+//
+// Close is idempotent and returns the same result to every caller, which is what
+// the engine requires of it: the server closes it from whichever of its two
+// drained exit paths reaches the once-guard first, and Run closes it directly on
+// the startup paths where nothing was ever served.
+type shutdownCloser struct {
+	db   *store.DB
+	cp   *checkpoint.Checkpointer[string, float64]
+	err  error
+	once sync.Once
+}
+
+// Close performs the shutdown checkpoint and then closes the durability stack.
+//
+// The returned error is the composed store's — in practice the write-ahead log's
+// close — and never the checkpoint's, which is reported instead. That is the
+// division SPEC/GRAPH.md fixes: a failed close of the log is a teardown failure,
+// and a failed checkpoint after commits that are already durable is a diagnostic.
+func (c *shutdownCloser) Close() error {
+	c.once.Do(func() {
+		// Step 4. Unbounded on purpose: SPEC/GRAPH.md § Server Shutdown and the
+		// Drain does not bound the shutdown, and a deadline here would abandon a
+		// capture that is quiescing behind an undo replay rather than shorten it.
+		if err := c.cp.TriggerCtx(context.Background()); err != nil {
+			logger.Error("the graph server's shutdown checkpoint failed; every acknowledged "+
+				"commit is still durable in the write-ahead log and the next open recovers it, "+
+				"but the log was not folded into the snapshot and the next open replays it in full",
+				slog.String("err", err.Error()))
+		}
+		// Step 5, the store's half: stop the checkpoint loop, then close the
+		// write-ahead log inside the commit lock. Releasing the exclusive
+		// advisory hold is the other half and stays with the caller that took it.
+		c.err = c.db.Close()
+	})
+	return c.err
 }
 
 // serverOptions is every option Groadmap fixes on the engine's Bolt server, and
@@ -445,12 +526,14 @@ func serve(srv *server.Server, ln *serverListener, st *graphstore.Store, socketP
 		// it on its own exit path, after its connection drain.
 	}
 
-	// Steps 4 and 5 completed inside the engine's post-drain close: the composed
-	// store took its final checkpoint, stopped the checkpoint loop, and closed the
-	// write-ahead log. What is left is this package's half of step 5 — releasing
-	// the exclusive advisory hold — which Close performs whatever the write-ahead
-	// log reports. wal.ErrWriterClosed is that report's expected value here and
-	// is not a failure: the log was closed by the composed store a moment ago,
+	// Steps 4 and 5 completed inside the engine's post-drain close, which is where
+	// [shutdownCloser] runs: it took the checkpoint that folds the write-ahead log
+	// into the snapshot and truncates it, reported that checkpoint if it failed,
+	// stopped the checkpoint loop, and closed the write-ahead log. What is left is
+	// this package's half of step 5 — releasing the exclusive advisory hold —
+	// which Close performs whatever the write-ahead log reports.
+	// wal.ErrWriterClosed is that report's expected value here and is not a
+	// failure: the log was closed by the composed store a moment ago,
 	// deliberately, and this call is what releases the lock behind it.
 	if err := st.Close(); err != nil && !errors.Is(err, wal.ErrWriterClosed) {
 		logger.Error("graph store close failed", slog.String("err", err.Error()))

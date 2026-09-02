@@ -42,7 +42,6 @@ import (
 
 	"github.com/FlavioCFOliveira/GoGraph/bolt/server"
 	"github.com/FlavioCFOliveira/GoGraph/cypher/expr"
-	"github.com/FlavioCFOliveira/GoGraph/store"
 	"github.com/FlavioCFOliveira/Groadmap/internal/graphclient"
 	"github.com/FlavioCFOliveira/Groadmap/internal/graphstore"
 )
@@ -73,7 +72,7 @@ func startRealServer(t *testing.T) (socket string, stop func()) {
 		t.Fatalf("opening the graph store: %v", err)
 	}
 
-	db, srv, err := build(st, graphDir)
+	closer, srv, err := build(st, graphDir)
 	if err != nil {
 		t.Fatalf("building the server: %v", err)
 	}
@@ -92,7 +91,7 @@ func startRealServer(t *testing.T) (socket string, stop func()) {
 	waitUntilServed(t, socket)
 
 	return socket, func() {
-		teardown(t, srv, ln, st, db, serveErr)
+		teardown(t, srv, ln, st, closer, serveErr)
 	}
 }
 
@@ -116,7 +115,7 @@ func waitUntilServed(t *testing.T, socket string) {
 
 // teardown runs the shutdown sequence's steps in the order production runs them.
 func teardown(t *testing.T, srv *server.Server, ln *serverListener, st *graphstore.Store,
-	db *store.DB, serveErr <-chan error) {
+	closer *shutdownCloser, serveErr <-chan error) {
 	t.Helper()
 
 	ln.stopAccepting()
@@ -124,8 +123,8 @@ func teardown(t *testing.T, srv *server.Server, ln *serverListener, st *graphsto
 	_ = srv.Shutdown(context.Background()) //nolint:errcheck // the test's assertions are about the statements, not the teardown
 	_ = ln.Close()                         //nolint:errcheck // the wrapper's Close reports no error by construction
 	<-serveErr
-	_ = db.Close() //nolint:errcheck // the server closed it already; this is belt and braces
-	_ = st.Close() //nolint:errcheck // releases the advisory hold whatever the log reports
+	_ = closer.Close() //nolint:errcheck // the server closed it already; this is belt and braces
+	_ = st.Close()     //nolint:errcheck // releases the advisory hold whatever the log reports
 }
 
 // TestServer_TwoOverlappingWritersBothSucceed is the acceptance criterion.
