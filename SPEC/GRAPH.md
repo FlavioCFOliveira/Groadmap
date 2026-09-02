@@ -277,6 +277,22 @@ Mitigations required by this specification:
    is absorbed in one integration layer rather than spread across the codebase.
 3. Upgrading GoGraph is a change that MUST be re-validated against the acceptance
    criteria in this file before release.
+
+   **The re-validation MUST cover the relationship behaviours recorded in
+   [What Groadmap Does Not Check](#what-groadmap-does-not-check), and MUST cover
+   each of them in both directions.** Those items state measured properties of the
+   pinned engine rather than properties of Cypher, and items 4 and 8 each assert a
+   boundary that an upstream fix moves: an assertion that only checks the losing
+   side is satisfied by an engine in which the working side has regressed to match
+   it. For item 4: that a relationship property write through a pattern that walks
+   against the stored arrow is still dropped, **and** that a `DELETE` over the
+   same pattern still removes every relationship it matched. For item 8: that a
+   write over a relationship variable bound by a `CREATE` or `MERGE` clause is
+   still dropped, **and** that `ON CREATE SET` and `ON MATCH SET` still persist.
+   For item 5: the reads it names are still resolved correctly. Item 4's loss is
+   decided by the data rather than by the statement, so its fixture MUST fix the
+   stored orientation of every relationship it measures and read each one back;
+   a statement's shape does not tell the assertion what to expect.
 4. **An existing graph directory MUST remain readable across a GoGraph upgrade, and
    this MUST be demonstrated empirically rather than assumed.** Before an upgrade is
    released, a graph directory written under the previously pinned version MUST be
@@ -875,12 +891,18 @@ that a caller meets them in the specification rather than in the store.
 
 Item 5 is the exception and states the opposite of a hazard: a direction in which
 the engine is correct. It is here because it is the neighbour of item 4 and would
-otherwise be inferred from it — a reader told that a relationship cannot be
-written through an incoming or undirected pattern has every reason to assume it
-cannot be read through one either, and that assumption is false. Item 5 is a
-measured property of the pinned engine, not a property of Cypher, so it is
-re-measured whenever the pin moves (see
+otherwise be inferred from it — a reader told that a relationship property write
+may be dropped when the pattern walks against the stored arrow has every reason
+to assume the read is unreliable in the same way, and that assumption is false.
+Item 5 is a measured property of the pinned engine, not a property of Cypher, so
+it is re-measured whenever the pin moves (see
 [Dependency Maturity Risk](#dependency-maturity-risk), mitigation 3).
+
+Items 4 and 8 are two members of one family: a relationship property write
+dropped in silence, by two independent causes that share an outcome. They belong
+side by side and are numbered apart because these item numbers are cited from
+elsewhere in this specification and are not renumbered. Each of the two names the
+other, and neither one's workarounds are the other's.
 
 1. **A statement runs whatever it says.** There is no subcommand whose contract is
    "this cannot delete". A statement that deletes reaches the engine the same way
@@ -907,22 +929,82 @@ re-measured whenever the pin moves (see
    governs task and sprint fields (`MODELS.md § Task`) does not reach
    knowledge-graph property values.
 
-4. **A relationship written through an incoming or undirected pattern is not
-   written, and the statement reports success.** The engine writes a relationship
-   property by its endpoint pair, and it takes that pair from the columns the
-   expansion emitted. Those columns carry the relationship the way the **pattern**
-   walked it, not the way storage holds it, so for a relationship reached against
-   the stored arrow the pair is reversed, the write is addressed to a pair that
-   has no relationship, and the storage layer answers a write to an absent
-   relationship with a documented no-op. Nothing is written, no error is raised,
-   and the transaction still commits. The engine's own write-effect counters do not
-   reveal it either: a reverse-leg `SET` that wrote nothing still reports one
-   property set, because the counter is incremented above the layer that dropped
-   the write. `MATCH (v:Test {key:'…'})<-[e]-(s) SET e.last_commit = '…'` is such a
-   statement. The reach is unaffected: **every** relationship is writable through an
-   outgoing pattern, because an outgoing pattern may be anchored on either
-   endpoint, so `MATCH (s)-[e]->(v:Test {key:'…'}) SET e.last_commit = '…'` writes
-   what the reverse form did not.
+4. **A relationship property write persists only where the pattern walked the
+   relationship the way storage holds it, and where it does not the statement
+   still reports success.** The engine writes a relationship property by its
+   endpoint pair, and it takes that pair from the columns the expansion emitted.
+   Those columns carry the relationship the way the **pattern** walked it, not the
+   way storage holds it. A `SET e.k = …`, a `SET e = {…}`, a `SET e += {…}` and a
+   `REMOVE e.k` therefore persist, for each relationship the statement matched,
+   only where the node bound at the pattern's **left** position is that
+   relationship's stored source and the node bound at its **right** position is
+   its stored target. Every other matched relationship is addressed as the
+   reversed pair and lost. No error is raised, no notification is attached, and
+   the transaction still commits.
+
+   **The write is not refused; it is misfiled.** The engine holds relationship
+   properties in two stores, and the reversed pair defeats both — but only one of
+   them by declining to act. The per-pair store answers a write against a pair
+   that carries no relationship with a documented no-op. The by-handle store does
+   not test the pair at all: it records the property under the relationship's
+   correct handle in a bucket keyed by the reversed pair, and a read keys on the
+   pair the same way, so the value lands in a bucket no read consults. The write
+   happens and nothing can observe it.
+
+   **How much of a statement's write survives is decided by the data, not by the
+   statement.** The same statement over the same schema may write every
+   relationship it matched, some of them, or none, according to how those
+   relationships happen to be oriented in storage. An undirected pattern anchored
+   on one node writes both of two relationships that point at the anchor, writes
+   one of a pair with one pointing each way, and writes neither of two that point
+   away from the anchor — reporting `{"ok": true}` for a statement that changed
+   nothing. Moving the anchor to the pattern's other side writes the other
+   relationship instead. An **incoming** pattern is the extreme case of the rule
+   rather than a separate one: every relationship it binds is bound against its
+   stored arrow, so it loses the whole of its write, and
+   `MATCH (v:Test {key:'…'})<-[e]-(s) SET e.last_commit = '…'` writes nothing.
+
+   **The selective statement is the hazardous one and the sweeping statement is
+   safe**, which inverts the order a caller would triage in. An undirected pattern
+   with neither endpoint pinned writes **every** relationship it matches: with
+   nothing to prune the rows, the expansion emits each relationship twice, once
+   per direction, and one of the two rows is oriented the way storage holds it.
+   Any filter that narrows the match to one row per relationship — an inline key,
+   a `WHERE`, a bound second endpoint — can leave the reversed row as the
+   survivor.
+
+   **The engine's own write-effect counters do not reveal it.** A `SET` that wrote
+   nothing still reports one property set per matched row, because the counter is
+   incremented above the layer that dropped the write, so its number is the same
+   number the statement reports when every write lands. The counter for removals
+   is the one that reports what landed rather than what was attempted, and it is
+   not a detector either: a `REMOVE` whose only write was dropped reports zero,
+   and so does a `REMOVE` of a property that was genuinely absent, so the number
+   means something only to a caller who already knows how many relationships
+   carried the property. Groadmap surfaces no counter on any path.
+
+   **`DELETE` is unaffected, and not by accident.** A `DELETE` over an incoming or
+   undirected pattern removes every relationship it matched — through an anchor,
+   over parallel relationships, on a node pair joined both ways, and under a
+   predicate over `startNode(e)`. The engine's delete operator detects the
+   reversed pair and retries against the stored orientation; the property-write
+   operators were never given that step. The divergence is confined to property
+   writes, and that boundary is the part of this item an engine upgrade is most
+   likely to move (see [Dependency Maturity Risk](#dependency-maturity-risk),
+   mitigation 3).
+
+   **The reach is unaffected, and two forms write whatever they match.** Every
+   relationship is writable through an **outgoing** pattern, because an outgoing
+   pattern may be anchored on either endpoint, so
+   `MATCH (s)-[e]->(v:Test {key:'…'}) SET e.last_commit = '…'` writes what the
+   reverse form did not. A statement that must write without knowing the stored
+   direction may instead project the relationship before writing it — either
+   across a `WITH`,
+   `MATCH (a {key:'…'})-[e]-(b {key:'…'}) WITH e SET e.last_commit = '…'`, or
+   inside a `FOREACH` over the collected relationships. Both are measured to write
+   every relationship they match, whichever way the pattern walked it, because the
+   projected value carries storage's own endpoints. Neither workaround extends to
+   item 8, whose binding comes from a write clause rather than from a match.
 
 5. **A relationship read through an incoming or undirected fixed-length pattern
    is reported correctly, and this is measured rather than assumed.** The reach of
@@ -941,6 +1023,16 @@ re-measured whenever the pin moves (see
    leaves its sibling in place. The same holds for a **variable-length**
    relationship (`-[e*1..2]-`, and equally `-[e*1..1]-`), for a projected **named
    path** (`MATCH p=(a {key:'…'})-[e]-(b) RETURN p`), and for a bare `DELETE e`.
+
+   The line between this item and item 4 is the line between **reading** a
+   relationship and **addressing** it. A right-hand side or a `WHERE` that reads a
+   bound relationship sees the orientation storage holds; a write whose target is
+   that same relationship is governed by item 4 regardless. A statement may
+   therefore select exactly the relationship its author meant and write nothing to
+   it: in
+   `MATCH (n)-[e]-(m {key:'b'}) WHERE startNode(e).key = 'b' SET e.stamp = 'x'`,
+   the predicate is evaluated against the stored orientation and binds the one
+   relationship it names, correctly, and the `SET` behind it is dropped.
 
    This is a statement about GoGraph at the pinned tag and about nothing else.
    Groadmap does not verify it per statement, cannot repair it if a later engine
@@ -989,13 +1081,65 @@ re-measured whenever the pin moves (see
    general grammar rather than routed to the schema parser, and
    `CREATE INDEX ...` is not.
 
-**The divergence in item 4 is upstream in GoGraph and cannot be corrected from
-this repository.** Groadmap holds no position from which to repair it: the write
-is dropped below the engine's own accounting, so what reaches Groadmap is a
-committed transaction reporting one property set, which is indistinguishable from
-the same statement having written. Detecting it would require reading the
-relationship back and comparing, which is the caller's statement to write and not
-Groadmap's to insert.
+8. **A relationship property write whose target was bound by a `CREATE` or a
+   `MERGE` clause in the same statement does not persist at all, and the statement
+   reports success.** This is the second member of item 4's family and an
+   independent defect with the same outcome: there the relationship is identified
+   correctly and its endpoint pair is reversed; here the endpoint pair is right
+   and the identity is not. A relationship variable bound by a write clause
+   carries an identifier synthesised from its two endpoints rather than the stable
+   handle that names the relationship, so a write addressed by that identifier
+   names no relationship at all. Nothing is written, no error is raised, no
+   notification is attached, and the transaction still commits.
+
+   **It is the binding's origin that decides this, and nothing else.** Whether the
+   clause is `CREATE` or `MERGE` makes no difference; whether the relationship is
+   new or already existed makes no difference; and a relationship bound by a
+   `MATCH` still persists its write across an intervening `CREATE` or `MERGE`
+   clause, so a write clause standing between the binding and the `SET` is not
+   what does the damage.
+   `MATCH (a:Spec {key:'…'}), (b:Test {key:'…'}) CREATE (a)-[e:VERIFIED_BY]->(b) SET e.last_commit = '…'`
+   loses its write with no `MERGE` anywhere in it.
+
+   **Every property-write form over such a binding is lost**: `SET e.k = …`,
+   `SET e = {…}`, `SET e += {…}` and `REMOVE e.k`; each hop of a multi-hop `MERGE`
+   pattern; and the write however it is reached, whether directly, across a `WITH`
+   or inside a `FOREACH`. Item 4's two workarounds are precisely this item's
+   defect: projecting the relationship first does not rescue a binding whose
+   identity was wrong before the projection.
+
+   **`SET e = {…}` is the most deceptive of them**, because a `RETURN` in the same
+   statement echoes back the value the statement did not write, while a later
+   invocation reads the property absent. The scalar form reports the absence in
+   both places, so the shape that looks most confirmed is the one that persisted
+   least.
+
+   **`DELETE e` is unaffected**: the identifier is good enough to destroy the
+   relationship and not good enough to write one of its properties. Nor is
+   anything about the binding wrong to read — `type(e)`, `startNode(e)` and
+   `endNode(e)` all report what storage holds — so nothing observable about it
+   warns the caller.
+
+   **The idiomatic forms are sound, and that is what makes this avoidable.**
+   `ON CREATE SET` and `ON MATCH SET` both persist — on a relationship the `MERGE`
+   created, on one it matched, and on every hop of a multi-hop pattern — as do
+   inline pattern properties, `MERGE (a)-[e:VERIFIED_BY {last_commit:'…'}]->(b)`,
+   and re-binding the relationship with a `MATCH` after the write clause. A
+   statement that stamps a property on a relationship it is creating should be
+   written in one of those forms rather than with a trailing bare `SET`.
+
+**The divergences in items 4 and 8 are upstream in GoGraph and cannot be
+corrected from this repository.** Both are measured properties of the engine at
+the pinned tag, as item 5 is. Groadmap holds no position from which to repair
+either: the write is dropped below the engine's own accounting, so what reaches
+Groadmap is a committed transaction reporting the property set, which is
+indistinguishable from the same statement having written. Detecting either would
+require reading the relationship back and comparing, which is the caller's
+statement to write and not Groadmap's to insert. Recognising the statement shapes
+instead is what the paragraph below rules out, and for item 4 it would be unsound
+as well as forbidden: how much of a write survives is decided by the data, so a
+rule that refused the shapes which can lose a write would refuse the many
+statements of that shape which write every relationship they match.
 
 **None of the items above is a reason for Groadmap to inspect a statement.** A
 check for any one of them would introduce the coupling this specification does not
