@@ -33,10 +33,10 @@ change to SPEC/COMMANDS.md and test_55 together, and is reported rather than
 made here, because SPEC/ belongs to `specification-manager`. Each of the
 seven has its own test below, cross-referenced by the line's own name:
 
-  1. "already serving"   -- TestServeSocketErrorLines.test_already_serving_...
-  2. "cannot bind"        -- TestServeSocketErrorLines.test_cannot_bind_...
+  1. "already serving"   -- TestServeFlagsAndErrorCases.test_already_serving_...
+  2. "cannot bind"        -- TestServeFlagsAndErrorCases.test_cannot_bind_...
   3. "cannot take the graph store lock" (the LOCK line)
-                          -- TestServeSocketErrorLines.test_second_serve_...
+                          -- TestServeFlagsAndErrorCases.test_second_serve_...
   4. "no graph server is listening"
                           -- TestGraphClient.test_no_server_listening_... (x2:
                              a socket that never existed, and a stale one)
@@ -47,7 +47,7 @@ seven has its own test below, cross-referenced by the line's own name:
                              .test_connection_lost_after_statement_sent
   7. "did not answer within ... ; the statement's outcome is unknown"
                           -- TestServerConnectionFailureModes
-                             .test_server_unanswered_within_backstop_deadline
+                             .test_server_unanswered_within_the_backstop_deadline
 
 Every failure path below asserts the FULL published line (after substituting
 the one placeholder each carries -- the resolved socket path) AND the exit
