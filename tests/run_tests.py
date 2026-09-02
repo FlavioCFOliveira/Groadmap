@@ -82,6 +82,7 @@ TEST_MODULES = [
     "test_62_graph_stray_positional_order",
     "test_63_roadmap_name_refusal_parity",
     "test_64_graph_schema_management",
+    "test_65_graph_server_client_e2e",
 ]
 
 # Stress tests (run separately due to time/data volume)
