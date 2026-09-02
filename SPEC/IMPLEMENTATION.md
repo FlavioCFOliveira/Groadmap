@@ -467,28 +467,34 @@ how it *uses* the sequence; it does not acquire a copy of it.
    inside that timeout is the wait and the statement together, which
    `GRAPH.md § Lock Contention` states. The reasoning behind the single policy is
    there too.
-4. **Every holder of the lock that is not a long-lived server is bounded, and the
-   wait rests on that.** The variable part of a hold is the statement, and both
-   surfaces run their statement under one statement time budget: the web graph
-   data endpoint and `rmp graph execute` alike. `WEB.md § Graph Query Time Budget`
-   is canonical for the value and this rule does not restate it;
-   `GRAPH.md § Statement Time Budget` is canonical for what a cut statement leaves
-   behind. A hold therefore has a lawful maximum, which is the precondition
-   rule 3's sizing rests on, and a waiter contending with either surface is
-   served.
+4. **A holder whose statement is a read, or runs to completion, is bounded, and
+   the wait rests on that.** The variable part of a hold is the statement, and
+   both surfaces run their statement under one statement time budget: the web
+   graph data endpoint and `rmp graph execute` alike.
+   `WEB.md § Graph Query Time Budget` is canonical for the value and this rule
+   does not restate it; `GRAPH.md § Statement Time Budget` is canonical for what a
+   cut statement leaves behind and for how long a cut statement holds the lock.
+   Such a hold therefore has a lawful maximum, which is the precondition rule 3's
+   derivation rests on, and a waiter contending with one is served.
 
-   Two limits survive that, and neither is fixed by bounding the statement.
-   `GRAPH.md § Lock Contention` states both and is canonical for them, with the
-   measurements behind them:
+   Three limits survive that, and none is fixed by bounding the statement.
+   `GRAPH.md § Lock Contention` states all three and is canonical for them, with
+   the measurements behind them:
 
    - The allowance rule 3's wait budget reserves for the **fixed** part of a hold
      is a constant, while the quantity it covers grows linearly with the store's
      size on disk. On a large enough graph the allowance is exhausted and the
      no-starvation guarantee lapses, with no statement cost involved at all.
      Nothing in the implementation measures a graph's size or enforces that bound.
-   - A wait is sized against the maximum lawful hold, and a server that holds
-     the lock for its process lifetime has none, so no finite wait can be sized
-     against one. The wait-based policy bounds every holder except that one.
+   - A statement the budget cuts while it is **writing** overruns its deadline by
+     a factor the statement itself sets, with no ceiling established, so its hold
+     has no known upper bound and the wait does not cover one. A waiter can fail
+     against a holder that is inside every published budget, and one such
+     statement exceeds the web server's write timeout on its own.
+   - A finite wait can cover only a hold that has an upper bound, and a server
+     that holds the lock for its process lifetime has none, so no finite wait can
+     be derived from one. The wait-based policy bounds a read and a statement that
+     runs to completion; it bounds neither of the two holders above.
 5. Recovery on open is expected to be transparent for a consistently committed
    store. A corrupt or unreadable store surfaces as `utils.ErrDatabase` (exit code
    1); there is no automatic graph-store repair in this version.

@@ -1653,11 +1653,14 @@ budget does to an `rmp graph execute` invocation and for what a cut statement
 leaves behind. The value is one declaration that both surfaces read, so there is
 no second constant to drift from the first.
 
-The budget bounds the **variable** part of a hold on the graph store lock: the
-statement, whose cost the caller chooses. It does not bound the fixed part, which
-[Lock Contention](#lock-contention) accounts for separately. Bounding the
-variable part on this surface is what makes that section's wait sound against a
-CLI holder, and its residual limits are stated there.
+The budget bounds the **variable** part of a hold on the graph store lock — the
+statement, whose cost the caller chooses — for a read and for a statement that
+runs to completion. It does not bound a statement the deadline cuts while that
+statement is writing: the measurements at the end of this section show that such
+a hold has no known upper bound. It does not bound the fixed part either, which
+[Lock Contention](#lock-contention) accounts for separately. That section states
+what the wait derived from this budget covers, what it does not, and the residual
+limits that survive.
 
 1. **The deadline covers the execution of the statement and the walk over its
    result.** It starts when the invocation begins executing the statement. It
@@ -1700,15 +1703,74 @@ CLI holder, and its residual limits are stated there.
    end: a statement of 554 ms against one of roughly nine seconds. The published
    error line names that remedy for the same reason.
 
-**The deadline is honoured promptly, which is what makes it a real bound rather
-than a nominal one.** Measured against the largest real knowledge graph on the
-development machine, 44,906 nodes in 36 MB, the engine returned between 1.6 ms
-and 4.5 ms after the deadline on statements that otherwise run for minutes,
-including a three-way Cartesian product over 9.4 billion tuples that had not
-finished after 300 seconds. A statement cut mid-**write** costs more: it returned
-515 ms after its deadline, the excess being the rollback unwinding the write set
-it had accumulated. That 515 ms belongs to the fixed part of a hold rather than
-to the statement, and [Lock Contention](#lock-contention) accounts for it there.
+**On a cut read the deadline is honoured promptly, which is what makes it a real
+bound rather than a nominal one.** Measured against the largest real knowledge
+graph on the development machine, 44,906 nodes in 36 MB, the engine returned
+between 1.6 ms and 4.5 ms after the deadline on read statements that otherwise
+run for minutes, including a three-way Cartesian product over 9.4 billion tuples
+that had not finished after 300 seconds. A cut read is honoured at **1.000x** its
+deadline at every budget measured: 1, 2, 4 and 5 seconds.
+
+**A statement cut while it is writing does not return promptly, and its overrun
+is a property of the statement rather than a constant.** The forward pass is cut
+at the deadline exactly as a read's is. The transaction is then rolled back whole
+(rule 2), and the rollback undoes every mutation the statement had already
+applied, one inverse write per mutation. The excess over the deadline is
+therefore proportional to the number of rows the statement managed to write
+inside its budget — and a **cheaper** write per row is worse rather than better,
+because more rows fit inside the same budget. Measured over a 600-node store at a
+2-second budget, timing the whole hold and varying only the writing clause of
+`MATCH (a),(b),(c) ...`:
+
+| Writing clause | Hold, as a multiple of the budget |
+|----------------|----------------------------------:|
+| a clause whose `WHERE` matches no row, so nothing is written | 1.005x |
+| `REMOVE a.nosuch`, removing a property no node carries | 1.007x |
+| `SET a.touched = 1` | 1.06x |
+| `CREATE (:P {k:a.i})` | 2.09x |
+| `CREATE (a)-[:R]->(b)` | 2.36x |
+| `CREATE (:P)` | 3.80x |
+| `CREATE ()` | 6.08x |
+
+**At the budget in force the longest hold measured is 34.5 seconds.** The last
+shape above, `MATCH (a),(b),(c) CREATE ()`, over the same 600-node store, timed
+from the moment the lock is taken to the moment it is released:
+
+| Statement budget | Hold | Multiple of the budget |
+|-----------------:|-----:|-----------------------:|
+| 3 s | 19.9 s | 6.6x |
+| 4 s | 27.9 s | 7.0x |
+| 5 s, the budget in force | 34.5 s | 6.9x |
+
+**Nothing measured establishes a ceiling.** The ladder is monotone in how cheap
+the writing clause is, `CREATE ()` is merely the cheapest clause that was tried,
+and the corpus of shapes is not exhaustive. This specification therefore
+publishes a measured range and no upper bound, and
+[Lock Contention](#lock-contention) states what having no upper bound costs the
+wait that must cover such a hold.
+
+**The overrun is neither a fixed cost nor a function of the graph's size.** It is
+not part of the fixed part of a hold: it scales with the budget and with what the
+statement wrote, and a statement that writes nothing does not carry it — a
+write-routed statement whose `WHERE` matches no row is honoured at 1.005x, so it
+is not the routing to the write path that costs the time. It does not grow with
+the store either: the same `CREATE ()` at a 1-second budget over seeds of 300,
+600, 1200 and 2400 nodes held the lock 5.23, 5.15, 5.21 and 5.11 seconds. What
+governs it is write throughput, which is a different quantity from the
+per-megabyte cost of the fixed part that [Lock Contention](#lock-contention)
+measures.
+
+**The overrun cannot be cancelled once it has begun, and that is a limitation of
+the engine rather than a choice Groadmap makes.** The engine cuts the forward
+drain at the deadline, checking the context once per row, which is why a cut read
+returns at 1.000x. The rollback then runs inside the same engine call, before
+that call returns, and the undo replay takes no context at all: it observes no
+deadline and no cancellation. There is therefore no point at which the invocation
+can interrupt it, because the invocation is still inside the engine call, and the
+deadline — the one mechanism this specification gives a statement — has already
+done everything it can do. Bounding this hold at its source means threading a
+deadline into that undo replay in the engine, which would return the write path
+to the 1.000x the read path already achieves.
 
 ### Lock Contention
 
@@ -1718,9 +1780,9 @@ One lock mode carries one contention policy.
    exponential-backoff policy specified in
    `IMPLEMENTATION.md § Graph Store Concurrency`. It MUST NOT block indefinitely
    and MUST NOT fail on the first collision. The wait carries a budget of its
-   own, sized against the maximum lawful hold rather than against the fixed total
-   the SQLite layer waits; the sizing rule, and the 7.5 seconds it yields at the
-   statement budget in force, are stated below.
+   own, derived from the statement budget rather than from the fixed total the
+   SQLite layer waits; the derivation, the 7.5 seconds it yields at the statement
+   budget in force, and the holds it does not cover are stated below.
 2. If the lock is still unavailable when that bounded wait is exhausted, the
    invocation fails: with `utils.ErrDatabase` (exit code 1) for
    `rmp graph execute`, and as an internal read error (HTTP 500) for the web graph
@@ -1747,9 +1809,11 @@ interleave is the one [Concurrency and Recovery](#concurrency-and-recovery)
 fixes, and it is the wait that is sized to the hold, never the hold that is
 trimmed to the wait.
 
-**The wait is sized against the maximum lawful hold.** A finite wait can be sized
-against a hold only when that hold has an upper bound, so the budget is derived
-from one:
+**The wait is derived from the statement budget, which bounds some holds and not
+all of them.** A finite wait can cover a hold only when that hold has an upper
+bound. The statement budget is that bound for the variable part of the holds that
+have one — a read, and a statement that runs to completion — and the wait budget
+is derived from it:
 
 ```
 wait budget = statement budget + backoff total
@@ -1757,9 +1821,12 @@ wait budget = statement budget + backoff total
 
 - **Statement budget** is the deadline `WEB.md § Graph Query Time Budget` fixes
   for a caller-supplied statement, 5 seconds. It bounds the variable part of a
-  hold. It is a graph-store-wide quantity rather than a web-local one, because
-  the party that must wait for a hold has to know how long a hold may lawfully
-  last, and the waiter is not necessarily the web.
+  hold whose statement is a read or runs to completion. It does **not** bound the
+  variable part of a hold whose statement the deadline cuts while it is writing,
+  and the third residual below states what that costs. It is a graph-store-wide
+  quantity rather than a web-local one, because the party that must wait for a
+  hold has to know how long a hold may lawfully last, and the waiter is not
+  necessarily the web.
 - **Backoff total** is the worst-case total wait of the project's single retry
   policy, 2500 ms (see `IMPLEMENTATION.md § Retry Logic`), reused here as the
   allowance for the **fixed** part of a hold: the store open, the write-ahead-log
@@ -1791,20 +1858,19 @@ synthetic graph is markedly cheaper per byte, at 23 ms per megabyte, because its
 nodes are simpler and more uniform than a real graph's; there is therefore no
 single rate, and the real graphs are the ones the rate must be read from.
 
-A statement the time budget cuts adds one further term, because the transaction
-is rolled back before the lock is released. Measured, a cut **write** returned
-515 ms after its deadline, against 1.6 to 4.5 ms for a cut read (see
-[Statement Time Budget](#statement-time-budget)). A cut statement does not
-checkpoint, so on that path the fixed part is the open plus the rollback.
+A cut statement does not checkpoint, so on that path the fixed part is the store
+open alone. The rollback a cut **write** performs is not part of the fixed part:
+it is proportional to what that statement had already written, and therefore
+belongs to the statement, which is where
+[Statement Time Budget](#statement-time-budget) measures it.
 
 **The margin is stated on the largest real graph, where it needs no
 extrapolation, and the point at which it runs out is stated too.** At 36 MB the
-fixed part is 1286 ms on the ordinary path and 1470 ms on the cut path — a 955 ms
-open plus the 515 ms rollback, with no checkpoint — against the 2500 ms
-allowance. That is a margin of **1.9x and 1.7x** — a margin, and not an order of
-magnitude. The allowance is **exhausted at roughly 70 MB** for graphs shaped
-like the four real ones measured, and only at roughly 110 MB for the simpler
-synthetic shape.
+fixed part is 1286 ms on the ordinary path and 955 ms on the cut path, which is
+the store open with no checkpoint behind it, against the 2500 ms allowance. That
+is a margin of **1.9x and 2.6x** — a margin, and not an order of magnitude. The
+allowance is **exhausted at roughly 70 MB** for graphs shaped like the four real
+ones measured, and only at roughly 110 MB for the simpler synthetic shape.
 
 **Beyond that point the no-starvation guarantee lapses, and nothing in the
 product detects it.** A wait shorter than the fixed part of the hold it must
@@ -1837,25 +1903,49 @@ written, and a request that waits and then runs its statement to the end of its
 budget must still have its response written. The quantity to compare against the
 30-second `WriteTimeout` (see `WEB.md § HTTP Server Timeouts`) is therefore the
 sum of the two budgets: 5 seconds of statement budget plus 7.5 seconds of wait
-budget is 12.5 seconds, comfortably inside 30. It is the sum that must fit. A
-wait that is merely a small fraction of the write timeout is neither necessary
-nor sufficient, and sizing on that property alone is what admits a wait shorter
-than the hold it has to cover.
+budget is 12.5 seconds, inside 30. It is the sum that must fit. A wait that is
+merely a small fraction of the write timeout is neither necessary nor sufficient,
+and sizing on that property alone is what admits a wait shorter than the hold it
+has to cover.
 
-**The exclusive wait's guarantee holds against a CLI holder.** The statement
-budget that bounds the variable part of a hold binds both surfaces: the web graph
+**That invariant does not hold today on the cut-write path, and it is the
+statement term alone that breaks it.** The sum above is valid only where the
+statement term is bounded by the statement budget, and it is not bounded on a
+statement the deadline cuts while it is writing. The longest such hold measured,
+**34.5 seconds** (see [Statement Time Budget](#statement-time-budget)), exceeds
+the 30-second `WriteTimeout` on its own, before any wait is added to it, and the
+web graph data endpoint runs its statement through the same engine call under the
+same budget as the CLI. No value of the wait budget repairs this, because the
+term that exceeds the timeout is not the wait. It is stated here rather than
+papered over, and the residual below states the same fact from the waiter's
+side.
+
+**A statement cut mid-write has no known upper bound on its hold, so the wait
+does not cover one.** The statement budget binds both surfaces — the web graph
 data endpoint and `rmp graph execute` execute their statements under the same
-5-second deadline (see [Statement Time Budget](#statement-time-budget)). An
-`rmp graph execute` invocation therefore cannot lawfully hold the lock past its
-statement budget plus the fixed part of its hold, which is exactly the quantity
-this wait is derived from, and a waiter contending with one is served. The two
-limits on that guarantee are the two stated in this section: the fixed-part
-allowance above, which lapses on a graph past roughly 70 MB whatever the
-statement does, and the server below.
+5-second deadline (see [Statement Time Budget](#statement-time-budget)) — and a
+hold whose statement is a read, or a statement that runs to completion, therefore
+has a lawful maximum. The wait above is derived from that maximum, and a waiter
+contending with such a hold is served. A statement the deadline cuts while it is
+writing has no such maximum. Its hold is the budget multiplied by a factor the
+statement itself sets, measured from 1.005x to 6.97x with no ceiling established,
+so no finite wait is derived from it: the 7.5-second wait is exhausted against a
+holder that is behaving lawfully and is inside every budget this specification
+publishes, and the waiter fails while the holder is doing nothing it is not
+entitled to do. Groadmap does not bound that hold from its own side. The overrun
+runs inside the engine call and takes no cancellation (see
+[Statement Time Budget](#statement-time-budget)), and refusing in advance the
+statement shapes that provoke it would require examining the statement, which
+Groadmap does not do (see [Concurrency and Recovery](#concurrency-and-recovery)
+and [What Groadmap Does Not Check](#what-groadmap-does-not-check)). The bound has
+to come from the engine. This residual stands beside the fixed-part allowance
+above, which lapses on a graph past roughly 70 MB whatever the statement does,
+and the server below.
 
-**The wait-based policy does not extend to a server holder.** A wait is sized
-against the maximum lawful hold, and a hold that lasts a process lifetime has
-none, so no finite wait can be sized against one. The dedicated graph server that
+**The wait-based policy does not extend to a server holder.** A finite wait can
+cover only a hold that has an upper bound, and a hold that lasts a process
+lifetime has none, so no finite wait can be derived from one. The dedicated graph
+server that
 `ARCHITECTURE.md § 8. internal/graphstore/ and the graph store's lifecycle`
 anticipates is a holder of exactly that shape: it opens a roadmap's store once
 and holds the exclusive lock for as long as the process runs. What an
@@ -2223,9 +2313,12 @@ Groadmap's usage model and expectations:
     large enough, the two shapes measurement shows the budget cuts — exits **1**,
     writes zero bytes to stdout, and writes to stderr the budget line
     `COMMANDS.md § Graph Management` publishes, which is `rmp`'s own text
-    throughout and not an engine diagnostic. The invocation is asserted on
-    wall-clock time to return shortly after the budget rather than running to
-    completion. Where the cut statement was a **write**, the criterion MUST also
+    throughout and not an engine diagnostic. Where the statement was a **read**,
+    the invocation is asserted on wall-clock time to return shortly after the
+    budget rather than running to completion; a cut **write** carries no such
+    upper assertion, because its return time is not bounded by the budget (see
+    [Statement Time Budget](#statement-time-budget)). Where the cut statement was
+    a **write**, the criterion MUST also
     assert that nothing survived: in a **separate** invocation afterwards the
     graph holds none of the elements that statement was creating, `wal` is byte
     for byte what it was before, and every file under `snapshot/` is unchanged,
