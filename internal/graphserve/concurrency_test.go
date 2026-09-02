@@ -54,33 +54,57 @@ import (
 // fixes — stop accepting, drain, shut down, release the hold — so a test that
 // finished with work in flight tears down the way production does rather than by
 // abandoning goroutines.
-func startRealServer(t *testing.T) (socket string, stop func()) {
-	t.Helper()
+//
+// It takes a testing.TB rather than a *testing.T because the benchmarks of rmp
+// task #370 drive the same real server this test does. Measuring a re-assembly of
+// the startup sequence would measure the harness; measuring THIS one measures
+// what `rmp graph serve` runs.
+//
+// The cadence is a parameter for the reason [checkpointCadence] gives. A test
+// passes [productionCadence] so it runs what production runs; a benchmark that is
+// measuring the write-ahead log's growth passes a disabled cadence so no fold can
+// truncate the log underneath the measurement.
+func startRealServer(tb testing.TB, cadence checkpointCadence) (socket string, stop func()) {
+	tb.Helper()
+	socket, _, stop = startRealServerAt(tb, cadence)
+	return socket, stop
+}
 
-	root := t.TempDir()
-	graphDir := filepath.Join(root, "graph")
+// startRealServerAt is [startRealServer] and also reports the graph directory it
+// served.
+//
+// The directory is what a benchmark measuring the write-ahead log needs — the log
+// is graphDir/wal and its growth per write is the quantity the checkpoint cadence
+// decision is made from — and it is deliberately NOT folded into
+// startRealServer's own return: exactly one caller wants it, and every other
+// would carry a second return value it discards.
+func startRealServerAt(tb testing.TB, cadence checkpointCadence) (socket, graphDir string, stop func()) {
+	tb.Helper()
+
+	root := tb.TempDir()
+	graphDir = filepath.Join(root, "graph")
 	if err := os.MkdirAll(graphDir, 0700); err != nil {
-		t.Fatalf("creating %s: %v", graphDir, err)
+		tb.Fatalf("creating %s: %v", graphDir, err)
 	}
 
 	hold, err := graphstore.Acquire(graphDir)
 	if err != nil {
-		t.Fatalf("taking the graph store lock: %v", err)
+		tb.Fatalf("taking the graph store lock: %v", err)
 	}
 	st, err := hold.Open()
 	if err != nil {
-		t.Fatalf("opening the graph store: %v", err)
+		tb.Fatalf("opening the graph store: %v", err)
 	}
 
-	closer, srv, err := build(st, graphDir)
+	closer, srv, err := build(st, graphDir, cadence)
 	if err != nil {
-		t.Fatalf("building the server: %v", err)
+		tb.Fatalf("building the server: %v", err)
 	}
 
 	socket = filepath.Join(root, "graph.sock")
 	ln, err := bind(socket)
 	if err != nil {
-		t.Fatalf("binding %s: %v", socket, err)
+		tb.Fatalf("binding %s: %v", socket, err)
 	}
 
 	serveErr := make(chan error, 1)
@@ -88,17 +112,17 @@ func startRealServer(t *testing.T) (socket string, stop func()) {
 
 	// Wait for the socket to answer before returning, so a caller's first
 	// statement is not racing the accept loop.
-	waitUntilServed(t, socket)
+	waitUntilServed(tb, socket)
 
-	return socket, func() {
-		teardown(t, srv, ln, st, closer, serveErr)
+	return socket, graphDir, func() {
+		teardown(tb, srv, ln, st, closer, serveErr)
 	}
 }
 
 // waitUntilServed blocks until the socket answers the resolution probe, using the
 // one resolver every surface uses rather than a sleep somebody chose.
-func waitUntilServed(t *testing.T, socket string) {
-	t.Helper()
+func waitUntilServed(tb testing.TB, socket string) {
+	tb.Helper()
 
 	deadline := time.Now().Add(15 * time.Second)
 	for {
@@ -107,16 +131,16 @@ func waitUntilServed(t *testing.T, socket string) {
 			return
 		}
 		if time.Now().After(deadline) {
-			t.Fatalf("the server at %s did not answer within 15s (state %v)", socket, state)
+			tb.Fatalf("the server at %s did not answer within 15s (state %v)", socket, state)
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
 }
 
 // teardown runs the shutdown sequence's steps in the order production runs them.
-func teardown(t *testing.T, srv *server.Server, ln *serverListener, st *graphstore.Store,
+func teardown(tb testing.TB, srv *server.Server, ln *serverListener, st *graphstore.Store,
 	closer *shutdownCloser, serveErr <-chan error) {
-	t.Helper()
+	tb.Helper()
 
 	ln.stopAccepting()
 	drain(srv, ln)
@@ -139,7 +163,7 @@ func teardown(t *testing.T, srv *server.Server, ln *serverListener, st *graphsto
 // Two writers hammer the SAME node with many statements each, so the collision is
 // as likely as the test can make it, and every statement must ultimately succeed.
 func TestServer_TwoOverlappingWritersBothSucceed(t *testing.T) {
-	socket, stop := startRealServer(t)
+	socket, stop := startRealServer(t, productionCadence())
 	defer stop()
 
 	if _, err := graphclient.Send(context.Background(), socket,
