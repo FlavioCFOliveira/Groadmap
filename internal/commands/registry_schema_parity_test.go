@@ -354,6 +354,13 @@ func registrySchemaCases() []schemaCase {
 		// RETURN clause at all.
 		{"graph", "execute", "query result", graphQueryResult{}, quotedMembers(0)},
 		{"graph", "execute", "ok result", graphOKResult{}, quotedMembers(1)},
+		// `graph client` publishes the SAME pair, in the same order and from the
+		// same two structs, which is the contract half of
+		// SPEC/DATA_FORMATS.md § Graph Client Result: the bytes it writes are the
+		// bytes `graph execute` writes for the same statement, so a reader of the
+		// machine-readable contract must find one shape rather than two.
+		{"graph", "client", "query result", graphQueryResult{}, quotedMembers(0)},
+		{"graph", "client", "ok result", graphOKResult{}, quotedMembers(1)},
 		// `graph serve` publishes one envelope, written once at startup rather
 		// than per statement: the socket the server bound. It is read here rather
 		// than acknowledged as unguarded because a struct does back it, so the

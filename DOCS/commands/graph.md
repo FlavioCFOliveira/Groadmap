@@ -6,13 +6,16 @@ Operate a roadmap's knowledge graph: a free-form, queryable store of the project
 
 Each roadmap owns one graph, stored under that roadmap's home directory at `~/.roadmaps/<name>/graph/` (a directory, mode `0700`), created on first use of the `graph` command. The graph is free-form: Groadmap imposes no schema. It is independent of the roadmap's SQLite tasks and sprints data in this version.
 
-The graph is reached through two subcommands. `execute` accepts any Cypher statement the engine accepts and runs it against the roadmap's graph; `serve` runs no statement of its own and instead holds that graph open, answering statements over a Unix domain socket until it is stopped. Groadmap does not examine a statement and refuses none on the ground of what it does.
+The graph is reached through three subcommands. `execute` accepts any Cypher statement the engine accepts and runs it against the roadmap's graph; `serve` runs no statement of its own and instead holds that graph open, answering statements over a Unix domain socket until it is stopped; `client` sends a statement to a running server and prints what comes back. Groadmap does not examine a statement and refuses none on the ground of what it does.
+
+**A running server is used automatically, and only the socket is a choice.** When a server is serving the selected roadmap, `execute` sends its statement to that server instead of opening the store, with no flag and no configuration; with nothing listening it opens the store directly, as it always did. The statement, the result, the output shape and the exit code are the same either way. `client` resolves the same socket and has no second path: with nothing listening it fails. All three subcommands take `--socket <path>` and default it identically; the flag names which socket is looked at and neither forces a server nor forbids one.
 
 ## Synopsis
 
 ```
-rmp graph execute -r <roadmap> [--query <cypher>]
+rmp graph execute -r <roadmap> [--query <cypher>] [--socket <path>]
 rmp graph serve -r <roadmap> [--socket <path>]
+rmp graph client -r <roadmap> [--query <cypher>] [--socket <path>]
 ```
 
 ## Subcommands
@@ -29,13 +32,14 @@ Every class of statement runs through this one subcommand:
 - **schema DDL** — `CREATE INDEX`, `DROP INDEX`, `CREATE CONSTRAINT`, `DROP CONSTRAINT`;
 - **schema introspection** — `SHOW INDEXES`, `SHOW INDEX`, `SHOW CONSTRAINTS`, `SHOW CONSTRAINT`, each with an optional `YIELD` / `WHERE` / `RETURN` projection tail.
 
-**Usage:** `rmp graph execute -r <roadmap> [--query <cypher>]`
+**Usage:** `rmp graph execute -r <roadmap> [--query <cypher>] [--socket <path>]`
 
 **Flags:**
 | Short Flag | Long Flag | Type | Default | Description |
 |------------|-----------|------|---------|-------------|
 | `-r` | `--roadmap` | string | - | Roadmap name (required) |
 | `-q` | `--query` | string | - | Cypher statement. When absent, the statement is read from standard input |
+| | `--socket` | string | `~/.roadmaps/<name>/graph.sock` | Socket this invocation resolves. A server answering there takes the statement; an absent socket, or one that refuses the connection, sends the invocation to the store under the exclusive lock. Write it only when the server was started with the same flag |
 | `-h` | `--help` | bool | false | Show subcommand help |
 
 **Output:** `{"columns": [...], "rows": [[...], ...]}` when the statement produces result columns; `{"ok": true}` when it produces none. For a data statement the two cases are exactly "has a `RETURN` clause" and "has none". A schema-introspection command produces the listing and returns the `{columns, rows}` shape even though it carries no `RETURN` clause; a `CREATE INDEX`, `DROP INDEX`, `CREATE CONSTRAINT` or `DROP CONSTRAINT` produces no columns and returns `{"ok": true}`.
@@ -105,9 +109,51 @@ rmp graph serve -r backend-platform
 rmp graph serve -r backend-platform --socket /run/user/1000/backend-platform-graph.sock
 ```
 
+### client
+
+Sends exactly one Cypher statement to a running graph server over its Unix domain socket and prints the result. It reads and writes alike: the server does not examine the statement any more than `execute` does, so a statement that creates, changes, deletes or alters the schema is executed and committed. Every statement class listed under `execute` is accepted here unchanged.
+
+**It requires a server.** `client` resolves `~/.roadmaps/<name>/graph.sock`, or the `--socket` path when one is given, and with nothing listening there it fails with exit code `1`. It does **not** open the store. That is the whole difference between this subcommand and `execute`, which resolves the same socket and has a second path to fall back on: a subcommand that quietly became `execute` when no server answered would report a success that says nothing about whether a server was reached.
+
+**The output is `execute`'s output.** For the same statement against the same graph the bytes on stdout are byte for byte what `rmp graph execute` writes, so a caller may parse one shape and change nothing when a server is started or stopped.
+
+**A serialisation conflict is retried, not reported.** Two clients writing to the same nodes at the same time is an ordinary situation inside a server, and the store detects the collision rather than preventing it. The losing statement committed nothing, so the client re-sends it under the project's retry policy and reports a failure only when that policy or the statement time budget is exhausted.
+
+**The statement runs under the same 5-second time budget** `execute` runs under. The server is the end that enforces it; the client keeps a later deadline of its own purely as a backstop against a server that answers nothing, so a statement that committed just before the budget expired is never reported as one that wrote nothing.
+
+**Usage:** `rmp graph client -r <roadmap> [--query <cypher>] [--socket <path>]`
+
+**Flags:**
+| Short Flag | Long Flag | Type | Default | Description |
+|------------|-----------|------|---------|-------------|
+| `-r` | `--roadmap` | string | - | Roadmap name (required). It selects the graph the statement runs against and, unless `--socket` overrides it, the socket the statement is sent to |
+| `-q` | `--query` | string | - | Cypher statement. When absent, the statement is read from standard input |
+| | `--socket` | string | `~/.roadmaps/<name>/graph.sock` | Unix domain socket of the server, the same derivation `serve` uses. Write it when the server was started with the same flag |
+| `-h` | `--help` | bool | false | Show subcommand help |
+
+**Output:** `{"columns": [...], "rows": [[...], ...]}` when the statement produces result columns; `{"ok": true}` when it produces none — the same shapes, and the same bytes, `execute` writes.
+
+**Examples:**
+```bash
+# Read through a running server
+rmp graph client -r backend-platform \
+  --query "MATCH (s:Spec)-[:IMPLEMENTED_BY]->(c:Code) RETURN s.key, c.path"
+
+# Write through a running server
+rmp graph client -r backend-platform \
+  --query "MERGE (s:Spec {key:'rate-limiting'}) RETURN s"
+
+# Read the statement from standard input
+echo "MATCH (n) RETURN count(n)" | rmp graph client -r backend-platform
+
+# Reach a server started on a socket of its own
+rmp graph client -r backend-platform \
+  --socket /run/user/1000/backend-platform-graph.sock --query "SHOW INDEXES"
+```
+
 ## The Withdrawn Subcommand Names
 
-`create`, `query`, `update`, `delete` and `search` were subcommands of `rmp graph`. They are not any more, and `execute` and `serve` are the whole of the family. Each is an unresolved subcommand name and is answered as a dispatch failure: exit code `127`, the `graph` help on stderr, nothing on stdout. They are named here because an agent that has one of them in memory needs to be told that it will not resolve.
+`create`, `query`, `update`, `delete` and `search` were subcommands of `rmp graph`. They are not any more, and `execute`, `serve` and `client` are the whole of the family. Each is an unresolved subcommand name and is answered as a dispatch failure: exit code `127`, the `graph` help on stderr, nothing on stdout. They are named here because an agent that has one of them in memory needs to be told that it will not resolve.
 
 They existed to enforce an operation class, and that enforcement has been withdrawn. Nothing distinguished the five once it was gone, so they were replaced rather than kept as five names for one behaviour.
 

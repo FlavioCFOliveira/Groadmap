@@ -1,13 +1,15 @@
 // Package commands — the `graph` family's refusal of a stray positional
-// argument, read against every class of statement the one subcommand runs.
+// argument, read against every class of statement and every subcommand that
+// runs one.
 //
 // # What is pinned here
 //
 // SPEC/GRAPH.md § No Positional Query: A Stray Token Is Refused is canonical.
-// `graph execute` accepts no positional argument at all — the Cypher it runs
-// comes from `--query` or from standard input and from nowhere else — so a bare
-// query written on the command line is an excess positional argument and is
-// refused with exit code 2 and one published line:
+// `graph execute` and `graph client` accept no positional argument at all — the
+// Cypher each runs comes from `--query` or from standard input and from nowhere
+// else — so a bare query written on the command line is an excess positional
+// argument and is refused with exit code 2 and one published line, the SAME line
+// on both:
 //
 //	Error: invalid input: unexpected argument "X" (graph queries use --query or stdin)
 //
@@ -46,18 +48,24 @@
 //
 // # Why the family is still enumerated from the registry
 //
-// The table is checked against AppRegistry() rather than against a list written
-// out here: a second `graph` subcommand added tomorrow fails
-// TestGraphPositional_TableCoversTheWholeFamily instead of being silently left
-// out of every assertion in the file.
+// The subcommands driven below are read off AppRegistry() rather than written
+// out here: a further statement-reading `graph` subcommand is driven through
+// every assertion in this file the day it is registered, and one that publishes
+// the hinted refusal without reading a statement — or reads one without
+// publishing it — fails TestGraphPositional_TableCoversTheWholeFamily. Neither
+// can be silently left out.
 //
 // # Why each case carries a query that would otherwise succeed
 //
-// Every invocation driven below is one that would SUCCEED were the stray token
-// removed, and TestGraphPositional_EveryStatementClassRefusesWithOneWording
-// proves it by running each control first. Without that half, a case could be
-// passing on a missing-query refusal that happened to carry the right sentinel,
-// and the suite would be asserting nothing about the stray token at all.
+// Every invocation driven below is one whose outcome WITHOUT the stray token is
+// known and is not the refusal being asserted, and
+// TestGraphPositional_EveryStatementClassRefusesWithOneWording proves it by
+// running each control first. Without that half, a case could be passing on a
+// missing-query refusal that happened to carry the right sentinel, and the suite
+// would be asserting nothing about the stray token at all. What "known" means
+// differs by subcommand and graphControlExpectation is where that is decided:
+// `graph execute` must succeed, while `graph client` — which requires a server
+// no unit test starts — must fail with something that is not this refusal.
 //
 // Dispatch goes through Command.DispatchFamily, never through runGraphExecute
 // directly, because the shared arity enforcement point sits on that path and
@@ -73,8 +81,11 @@ import (
 	"github.com/FlavioCFOliveira/Groadmap/internal/utils"
 )
 
-// graphFamilyName is the family every case below dispatches through, and
-// graphSubcommandName is its one subcommand.
+// graphFamilyName is the family every case below dispatches through.
+// graphSubcommandName is the subcommand the SEEDS run through: seeding needs a
+// statement that reaches the store, which is the one thing `graph client` cannot
+// do without a server. The probes themselves are driven over every subcommand
+// that publishes the hinted refusal, read from the registry.
 const (
 	graphFamilyName     = "graph"
 	graphSubcommandName = "execute"
@@ -182,25 +193,37 @@ func registeredGraphSubcommands(t *testing.T) (hinted, canonical []string) {
 }
 
 // TestGraphPositional_TableCoversTheWholeFamily keeps this file honest against
-// the registry: every assertion below dispatches graphSubcommandName, so the
-// suite covers the hinted refusal only for as long as that name is the whole of
-// the class that publishes it.
+// the registry: every assertion below is driven over registeredGraphSubcommands'
+// HINTED half, so the suite covers the hinted refusal for the whole of the class
+// that publishes it rather than for one member of it.
 //
 // It is keyed on the CLASS and not on the family, because the family stopped
 // being the class when `rmp graph serve` was added: that subcommand reads no
 // statement, so the hint naming the two sources of one would be a hint about
 // something it does not have, and SPEC/COMMANDS.md § Positional Arguments gives
-// it the canonical line instead. A second statement-reading subcommand added
-// tomorrow — `graph client` is the one the specification already describes —
-// fails here rather than being silently left out of every assertion in the file,
-// which is the guarantee the five-name version of this test gave.
+// it the canonical line instead.
+//
+// What the gate asserts is the SPEC's own rule, in both directions rather than a
+// count: the hint is confined to "the subcommands that read a Cypher statement,
+// `graph execute` and `graph client`", so a subcommand publishes the hinted
+// refusal EXACTLY when it declares the flag through which such a statement is
+// supplied. A count would have had to be bumped when `graph client` landed; this
+// does not, and it fails just as loudly if a subcommand ever publishes the hint
+// without reading a statement, or reads one without publishing the hint.
 func TestGraphPositional_TableCoversTheWholeFamily(t *testing.T) {
 	hinted, canonical := registeredGraphSubcommands(t)
 
-	if len(hinted) != 1 || hinted[0] != graphSubcommandName {
-		t.Errorf("the registry declares the statement-reading graph subcommands %v, and every "+
-			"assertion in this file drives `graph %s` alone. A second one is a subcommand this suite "+
-			"no longer covers", hinted, graphSubcommandName)
+	for _, name := range hinted {
+		sub := AppRegistry().FindCommand(graphFamilyName).FindSubcommand(name)
+		if sub == nil {
+			t.Fatalf("graph %s vanished from the registry between two reads of it", name)
+		}
+		if !hasQueryFlag(sub) {
+			t.Errorf("graph %s publishes its own arity refusal but declares no --query flag, so the "+
+				"hinted line would name two statement sources it does not have. SPEC/COMMANDS.md "+
+				"§ Positional Arguments confines the hint to the subcommands that read a Cypher "+
+				"statement", name)
+		}
 	}
 	for _, name := range canonical {
 		sub := AppRegistry().FindCommand(graphFamilyName).FindSubcommand(name)
@@ -213,6 +236,14 @@ func TestGraphPositional_TableCoversTheWholeFamily(t *testing.T) {
 				"§ Positional Arguments gives the hinted line to the subcommands that read a Cypher "+
 				"statement; this one reads one and would not print it", name)
 		}
+	}
+
+	// Every hinted subcommand must be one this file knows how to CONTROL, or the
+	// probes driven over it would be asserting nothing. graphControlExpectation
+	// is the total function that decides which control a subcommand gets, and it
+	// fails rather than guessing for a name it has never seen.
+	for _, name := range hinted {
+		graphControlExpectation(t, name)
 	}
 
 	seen := make(map[string]bool, len(graphStrayCases()))
@@ -229,27 +260,110 @@ func TestGraphPositional_TableCoversTheWholeFamily(t *testing.T) {
 	}
 }
 
+// graphControlExpectation says what a CONTROL invocation of one hinted
+// subcommand — the same invocation without the stray token — must do, so that a
+// probe's refusal is known to be the stray token's doing and not a failure the
+// invocation was going to have anyway.
+//
+// The two subcommands need different controls, and the difference is their whole
+// contract rather than a testing convenience:
+//
+//   - `graph execute` runs the statement against the store when nothing is
+//     serving the roadmap, so its control SUCCEEDS and writes a result. That is
+//     the strongest control there is.
+//   - `graph client` requires a server and there is none in a unit test, so its
+//     control cannot succeed. What it must do instead is fail with something
+//     OTHER than the arity refusal — the no-server line, which is a different
+//     class and a different exit code — which establishes exactly what the strong
+//     control establishes: that the refusal the probe reads is caused by the
+//     stray token. Running a server here to make it succeed would make this file
+//     an end-to-end suite, which is rmp task #371's, not this one's.
+//
+// It is total by construction: a hinted subcommand it has no entry for fails,
+// rather than being driven with an expectation somebody guessed.
+func graphControlExpectation(t *testing.T, subcommand string) (mustSucceed bool) {
+	t.Helper()
+	switch subcommand {
+	case "execute":
+		return true
+	case "client":
+		return false
+	default:
+		t.Fatalf("graph %s publishes the hinted arity refusal and this file does not know what a "+
+			"control invocation of it must do. Add it to graphControlExpectation rather than "+
+			"leaving it driven with an expectation nobody chose", subcommand)
+		return false
+	}
+}
+
+// runGraphStrayControl drives one control invocation and holds it to whatever
+// graphControlExpectation says about that subcommand. It reports nothing on
+// success and fails the test otherwise, so a caller can read the probe below as
+// asserting the stray token's effect alone.
+func runGraphStrayControl(t *testing.T, subcommand, roadmap string, c graphStrayCase) {
+	t.Helper()
+
+	out, err := dispatchInvocation(t, graphFamilyName, subcommand, "-r", roadmap, "--query", c.query)
+	if graphControlExpectation(t, subcommand) {
+		if err != nil {
+			t.Fatalf("the control invocation of `graph %s` with the %s statement (acting on %s) "+
+				"failed with %v; the probe below would then be asserting nothing about the stray token",
+				subcommand, c.class, c.seeded, err)
+		}
+		if out == "" {
+			t.Fatalf("the control invocation of `graph %s` wrote nothing to stdout; it reports its "+
+				"result there whatever the statement, so %q did not run", subcommand, c.query)
+		}
+		return
+	}
+
+	// The weaker control: the invocation is expected to fail, but NOT with the
+	// refusal the probe is about. A control that already produced that refusal
+	// would make the probe vacuous, which is the one thing this half exists to
+	// rule out.
+	if err == nil {
+		t.Fatalf("the control invocation of `graph %s` with the %s statement succeeded, and this "+
+			"file was written expecting it to fail for want of a server. Give it the strong control "+
+			"in graphControlExpectation rather than leaving the weak one in place", subcommand, c.class)
+	}
+	if errors.Is(err, utils.ErrInvalidInput) {
+		t.Fatalf("the control invocation of `graph %s` with the %s statement already failed with "+
+			"utils.ErrInvalidInput (%v), so the probe below cannot tell the stray token's refusal "+
+			"from it", subcommand, c.class, err)
+	}
+	if out != "" {
+		t.Errorf("the control invocation of `graph %s` failed and still wrote to stdout: %q",
+			subcommand, out)
+	}
+}
+
 // TestGraphPositional_EveryStatementClassRefusesWithOneWording is acceptance
 // criterion 25 of SPEC/GRAPH.md.
 //
 // Two halves, and the suite needs both:
 //
 //   - the CONTROL, which runs each invocation without the stray token and
-//     requires it to succeed, so the refusal below is caused by the stray token
-//     and not by a query that was going to fail anyway;
+//     requires the outcome graphControlExpectation fixes for that subcommand, so
+//     the refusal below is caused by the stray token and not by a failure the
+//     invocation was going to have anyway;
 //   - the PROBE, which adds the stray token and requires the exact published
 //     line, the parenthetical included, exit code 2 through utils.ErrInvalidInput,
 //     and an empty stdout.
 //
-// The probe lines are then compared AGAINST EACH OTHER, across statement
-// classes. That comparison is what survives the collapse of the five
-// subcommands: `graph execute` holds no opinion about what a statement does, so
-// its refusal of a stray token must not vary with the statement either — a
-// refusal that named the class, or that reached a different branch for a write
-// than for a read, would be a class distinction reappearing in the one place the
-// family has left to put one.
+// The probe lines are then compared AGAINST EACH OTHER, across statement classes
+// AND across the subcommands that publish the hinted line. That comparison is
+// what survives the collapse of the five subcommands: `graph execute` holds no
+// opinion about what a statement does, so its refusal of a stray token must not
+// vary with the statement either — a refusal that named the class, or that
+// reached a different branch for a write than for a read, would be a class
+// distinction reappearing in the one place the family has left to put one. The
+// cross-SUBCOMMAND half is the same property one level up: `graph client` reads
+// its statement from the same two sources through the same reader, so a wording
+// that drifted on one of them would be the drift the five-subcommand version of
+// this file was written to catch.
 func TestGraphPositional_EveryStatementClassRefusesWithOneWording(t *testing.T) {
 	roadmap := seedGraphStrayRoadmap(t, "graph-stray-wording")
+	hinted, _ := registeredGraphSubcommands(t)
 
 	// The offending token is the same across the classes, so the lines differ
 	// only where the WORDING differs and the cross-comparison below reads as
@@ -262,49 +376,41 @@ func TestGraphPositional_EveryStatementClassRefusesWithOneWording(t *testing.T) 
 	// with (see SPEC/GRAPH.md acceptance criterion 60).
 	want := refusalLineWithToken(t, publishedGraphRefusalLine(t), stray)
 
-	// statement class -> the line it produced, so a drifting member can be named.
-	produced := make(map[string]string, len(graphStrayCases()))
+	// subcommand/statement class -> the line it produced, so a drifting member
+	// can be named.
+	produced := make(map[string]string, len(hinted)*len(graphStrayCases()))
 
-	for _, c := range graphStrayCases() {
-		t.Run(c.class, func(t *testing.T) {
-			controlOut, controlErr := dispatchInvocation(t, graphFamilyName,
-				graphSubcommandName, "-r", roadmap, "--query", c.query)
-			if controlErr != nil {
-				t.Fatalf("the control invocation of the %s statement (acting on %s) failed with %v; "+
-					"the probe below would then be asserting nothing about the stray token",
-					c.class, c.seeded, controlErr)
-			}
-			if controlOut == "" {
-				t.Fatalf("the control invocation wrote nothing to stdout; graph execute reports its "+
-					"result there whatever the statement, so %q did not run", c.query)
-			}
+	for _, subcommand := range hinted {
+		for _, c := range graphStrayCases() {
+			t.Run(subcommand+"/"+c.class, func(t *testing.T) {
+				runGraphStrayControl(t, subcommand, roadmap, c)
 
-			out, err := dispatchInvocation(t, graphFamilyName,
-				graphSubcommandName, "-r", roadmap, "--query", c.query, stray)
-			if err == nil {
-				t.Fatalf("a stray positional argument was accepted; stdout=%q", out)
-			}
-			if !errors.Is(err, utils.ErrInvalidInput) {
-				t.Errorf("error = %v, want it to wrap utils.ErrInvalidInput (exit 2)", err)
-			}
-			if got := errorLine(err); got != want {
-				t.Errorf("stderr line = %q,\n                want %q", got, want)
-			}
-			if out != "" {
-				t.Errorf("a refused invocation wrote to stdout: %q", out)
-			}
-			produced[c.class] = errorLine(err)
-		})
+				out, err := dispatchInvocation(t, graphFamilyName,
+					subcommand, "-r", roadmap, "--query", c.query, stray)
+				if err == nil {
+					t.Fatalf("a stray positional argument was accepted; stdout=%q", out)
+				}
+				if !errors.Is(err, utils.ErrInvalidInput) {
+					t.Errorf("error = %v, want it to wrap utils.ErrInvalidInput (exit 2)", err)
+				}
+				if got := errorLine(err); got != want {
+					t.Errorf("stderr line = %q,\n                want %q", got, want)
+				}
+				if out != "" {
+					t.Errorf("a refused invocation wrote to stdout: %q", out)
+				}
+				produced[subcommand+"/"+c.class] = errorLine(err)
+			})
+		}
 	}
 
 	distinct := make(map[string][]string)
-	for class, line := range produced {
-		distinct[line] = append(distinct[line], class)
+	for key, line := range produced {
+		distinct[line] = append(distinct[line], key)
 	}
 	if len(distinct) > 1 {
-		for line, classes := range distinct {
-			t.Errorf("the refusal no longer has one wording: the %v statement classes emit %q",
-				classes, line)
+		for line, keys := range distinct {
+			t.Errorf("the refusal no longer has one wording: %v emit %q", keys, line)
 		}
 	}
 }
@@ -366,40 +472,43 @@ func TestGraphPositional_HyphenPrefixedTokensAreClassifiedBothWays(t *testing.T)
 	}
 
 	graphLine := publishedGraphRefusalLine(t)
+	hinted, _ := registeredGraphSubcommands(t)
 
-	for _, c := range graphStrayCases() {
-		for _, tc := range cases {
-			t.Run(c.class+"/"+tc.token, func(t *testing.T) {
-				out, err := dispatchInvocation(t, graphFamilyName,
-					graphSubcommandName, "-r", roadmap, "--query", c.query, tc.token)
-				if err == nil {
-					t.Fatalf("the stray token %q was accepted; stdout=%q", tc.token, out)
-				}
-				if !errors.Is(err, utils.ErrInvalidInput) {
-					t.Errorf("error = %v, want it to wrap utils.ErrInvalidInput (exit 2)", err)
-				}
-				if out != "" {
-					t.Errorf("a refused invocation wrote to stdout: %q", out)
-				}
-
-				got := errorLine(err)
-				if tc.wantUnexpected {
-					want := refusalLineWithToken(t, graphLine, tc.token)
-					if got != want {
-						t.Errorf("%s: line = %q, want %q (%s)", tc.token, got, want, tc.why)
+	for _, subcommand := range hinted {
+		for _, c := range graphStrayCases() {
+			for _, tc := range cases {
+				t.Run(subcommand+"/"+c.class+"/"+tc.token, func(t *testing.T) {
+					out, err := dispatchInvocation(t, graphFamilyName,
+						subcommand, "-r", roadmap, "--query", c.query, tc.token)
+					if err == nil {
+						t.Fatalf("the stray token %q was accepted; stdout=%q", tc.token, out)
 					}
-					return
-				}
+					if !errors.Is(err, utils.ErrInvalidInput) {
+						t.Errorf("error = %v, want it to wrap utils.ErrInvalidInput (exit 2)", err)
+					}
+					if out != "" {
+						t.Errorf("a refused invocation wrote to stdout: %q", out)
+					}
 
-				wantFlag := "unknown flag: " + tc.token
-				if !strings.Contains(got, wantFlag) {
-					t.Errorf("%s: line = %q, want it to report %q (%s)", tc.token, got, wantFlag, tc.why)
-				}
-				if strings.Contains(got, "unexpected argument") {
-					t.Errorf("%s: line = %q, but a genuine flag must NOT be reported as a positional "+
-						"argument (%s)", tc.token, got, tc.why)
-				}
-			})
+					got := errorLine(err)
+					if tc.wantUnexpected {
+						want := refusalLineWithToken(t, graphLine, tc.token)
+						if got != want {
+							t.Errorf("%s: line = %q, want %q (%s)", tc.token, got, want, tc.why)
+						}
+						return
+					}
+
+					wantFlag := "unknown flag: " + tc.token
+					if !strings.Contains(got, wantFlag) {
+						t.Errorf("%s: line = %q, want it to report %q (%s)", tc.token, got, wantFlag, tc.why)
+					}
+					if strings.Contains(got, "unexpected argument") {
+						t.Errorf("%s: line = %q, but a genuine flag must NOT be reported as a positional "+
+							"argument (%s)", tc.token, got, tc.why)
+					}
+				})
+			}
 		}
 	}
 }
@@ -422,38 +531,41 @@ func TestGraphPositional_OnlyTheFirstStrayTokenIsNamed(t *testing.T) {
 
 	graphLine := publishedGraphRefusalLine(t)
 	want := refusalLineWithToken(t, graphLine, first)
+	hinted, _ := registeredGraphSubcommands(t)
 
-	for _, c := range graphStrayCases() {
-		layouts := []struct {
-			label string
-			args  []string
-		}{
-			{
-				label: "both strays after the flags",
-				args:  []string{graphSubcommandName, "-r", roadmap, "--query", c.query, first, second},
-			},
-			{
-				label: "the first stray written before the flags",
-				args:  []string{graphSubcommandName, first, "-r", roadmap, "--query", c.query, second},
-			},
-		}
-		for _, layout := range layouts {
-			t.Run(c.class+"/"+layout.label, func(t *testing.T) {
-				out, err := dispatchInvocation(t, graphFamilyName, layout.args...)
-				if err == nil {
-					t.Fatalf("two stray positional arguments were accepted; stdout=%q", out)
-				}
-				if got := errorLine(err); got != want {
-					t.Errorf("line = %q, want %q", got, want)
-				}
-				if strings.Contains(err.Error(), second) {
-					t.Errorf("the message names the second stray token %q as well: %q; only the first "+
-						"offending token may be named", second, err.Error())
-				}
-				if out != "" {
-					t.Errorf("a refused invocation wrote to stdout: %q", out)
-				}
-			})
+	for _, subcommand := range hinted {
+		for _, c := range graphStrayCases() {
+			layouts := []struct {
+				label string
+				args  []string
+			}{
+				{
+					label: "both strays after the flags",
+					args:  []string{subcommand, "-r", roadmap, "--query", c.query, first, second},
+				},
+				{
+					label: "the first stray written before the flags",
+					args:  []string{subcommand, first, "-r", roadmap, "--query", c.query, second},
+				},
+			}
+			for _, layout := range layouts {
+				t.Run(subcommand+"/"+c.class+"/"+layout.label, func(t *testing.T) {
+					out, err := dispatchInvocation(t, graphFamilyName, layout.args...)
+					if err == nil {
+						t.Fatalf("two stray positional arguments were accepted; stdout=%q", out)
+					}
+					if got := errorLine(err); got != want {
+						t.Errorf("line = %q, want %q", got, want)
+					}
+					if strings.Contains(err.Error(), second) {
+						t.Errorf("the message names the second stray token %q as well: %q; only the first "+
+							"offending token may be named", second, err.Error())
+					}
+					if out != "" {
+						t.Errorf("a refused invocation wrote to stdout: %q", out)
+					}
+				})
+			}
 		}
 	}
 }

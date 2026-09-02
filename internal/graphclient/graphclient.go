@@ -1,24 +1,22 @@
 // Package graphclient owns reaching a roadmap's graph server: deciding whether
 // one is listening, and speaking Bolt version 5 to it when one is.
 //
-// # What is here now, and what is not
+// # The two responsibilities, and why they share a package
 //
 // SPEC/ARCHITECTURE.md module 9 gives this package two responsibilities —
 // RESOLUTION (SPEC/GRAPH.md § Server Resolution) and the CLIENT
 // (SPEC/GRAPH.md § The Bolt Client) — and states that there is exactly one
-// realisation of each. Only the first is here today. The server (rmp task #367)
-// cannot start without it: SPEC/GRAPH.md § Server Startup, step 3, requires
-// `rmp graph serve` to refuse to start when a live server already answers on the
-// socket it resolved, and to probe "exactly as a resolver does". Writing that
-// probe inside the server would have been a SECOND resolution rule, which is the
-// arrangement module 9 exists to prevent, so the probe was written here and the
-// server calls it.
+// realisation of each. Both are here, in this file and in statement.go
+// respectively, because they are two halves of one exchange: resolution IS a
+// connection and a handshake, which is the opening of the exchange the client
+// then continues. Splitting them would have put the handshake's client half in
+// two packages, or made one import the other for it.
 //
-// The statement-sending half — the RUN/PULL exchange, the retry over a
-// serialisation conflict, and the mapping of protocol values onto
-// SPEC/DATA_FORMATS.md § Graph Client Result — belongs to rmp task #368, together
-// with the `rmp graph client` subcommand and the `--socket` flag on
-// `rmp graph execute`. Nothing here anticipates it beyond leaving room for it.
+// Three surfaces call them and none of them writes a second copy:
+// `rmp graph execute` and the web graph data endpoint resolve first and send only
+// when a server answers, `rmp graph client` resolves and never falls back, and
+// `rmp graph serve` resolves alone — it has a store to open rather than a
+// statement to send (SPEC/GRAPH.md § Server Startup, step 3).
 //
 // # Why the probe is a handshake and not a connect
 //
@@ -222,7 +220,7 @@ func Resolve(ctx context.Context, socketPath string) (State, error) {
 	}
 	defer conn.Close() //nolint:errcheck // the probe reads nothing it has not already got; a close error cannot change the verdict
 
-	if err := handshake(ctx, conn); err != nil {
+	if _, err := handshake(ctx, conn); err != nil {
 		return StateUnreachable, err
 	}
 	return StateServed, nil
@@ -242,8 +240,15 @@ func isConnectionRefused(err error) bool {
 	return errors.Is(err, syscall.ECONNREFUSED)
 }
 
-// handshake performs the CLIENT half of the Bolt handshake on conn and reports
-// whether a server answered it with a version both sides speak.
+// handshake performs the CLIENT half of the Bolt handshake on conn and returns
+// the version the server selected, or an error when no server answered it with a
+// version both sides speak.
+//
+// The negotiated version is RETURNED rather than discarded because the exchange
+// that follows it branches on it: Bolt 5.1 split authentication out of HELLO into
+// a dedicated LOGON message, so a client that assumed one form would either send
+// credentials a 5.1+ server ignores or omit a LOGON a 5.1+ server is waiting for.
+// [Resolve] has no exchange to follow and discards the value; [Send] does not.
 //
 // The pinned engine exports proto.Negotiate, which is the SERVER half: it reads
 // the 20-byte offer and writes the 4-byte answer. This is its counterpart, built
@@ -255,21 +260,21 @@ func isConnectionRefused(err error) bool {
 // [minor-minor_range, minor]. The answer is 4 bytes, [0x00, 0x00, minor, major],
 // and an answer of four zero bytes means the server shares no version with the
 // offer.
-func handshake(ctx context.Context, conn net.Conn) error {
+func handshake(ctx context.Context, conn net.Conn) (proto.Version, error) {
 	if deadline, ok := ctx.Deadline(); ok {
 		if err := conn.SetDeadline(deadline); err != nil {
-			return fmt.Errorf("setting the probe deadline: %w", err)
+			return proto.Version{}, fmt.Errorf("setting the probe deadline: %w", err)
 		}
 	}
 
 	offer := versionOffer()
 	if _, err := conn.Write(offer[:]); err != nil {
-		return fmt.Errorf("writing the handshake: %w", err)
+		return proto.Version{}, fmt.Errorf("writing the handshake: %w", err)
 	}
 
 	var answer [4]byte
 	if _, err := io.ReadFull(conn, answer[:]); err != nil {
-		return fmt.Errorf("reading the handshake: %w", err)
+		return proto.Version{}, fmt.Errorf("reading the handshake: %w", err)
 	}
 	if answer == [4]byte{} {
 		// A server answered, and rejected every version offered. That is an
@@ -278,9 +283,9 @@ func handshake(ctx context.Context, conn net.Conn) error {
 		// it. It is reported rather than swallowed, because the cause is a
 		// version skew between two halves of one product and the reader can act
 		// on nothing else.
-		return proto.ErrNoCommonVersion
+		return proto.Version{}, proto.ErrNoCommonVersion
 	}
-	return nil
+	return proto.Version{Major: answer[3], Minor: answer[2]}, nil
 }
 
 // versionOffer builds the 20-byte handshake offer from proto.SupportedVersions,

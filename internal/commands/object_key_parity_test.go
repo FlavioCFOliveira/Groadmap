@@ -418,18 +418,30 @@ func publishedKeyLists() []keyListCase {
 	return slices.Concat(modelSurfaces, graphKeyLists())
 }
 
-// graphKeyLists covers the graph family, whose two help surfaces — the family
-// help and the single subcommand's — publish the same two result envelopes.
+// graphKeyLists covers the graph family, whose three help surfaces that publish
+// a result envelope — the family help and the two subcommands that run a
+// statement — publish the same two.
 //
 // Each surface introduces them with its own wording, so the phrase is given per
 // surface. The family help sketches the pair by what a statement produces, and
-// `graph execute` names the same discriminator: "produces result columns" and
-// "carries a RETURN clause" coincide for a data statement but part company on
-// the schema statements this subcommand also runs, where SHOW INDEXES produces
-// columns while carrying no RETURN (DATA_FORMATS.md § Graph Write Result, "Why
-// the discriminator is the columns and not the RETURN clause"). There is no
-// longer any surface with only one envelope to publish: the read-only
-// subcommands that had no no-RETURN form are gone.
+// `graph execute` and `graph client` name the same discriminator: "produces
+// result columns" and "carries a RETURN clause" coincide for a data statement but
+// part company on the schema statements those subcommands also run, where
+// SHOW INDEXES produces columns while carrying no RETURN
+// (DATA_FORMATS.md § Graph Write Result, "Why the discriminator is the columns
+// and not the RETURN clause"). There is no surface with only one envelope to
+// publish: the read-only subcommands that had no no-RETURN form are gone.
+//
+// `graph client` is here for a reason beyond completeness.
+// SPEC/DATA_FORMATS.md § Graph Client Result requires the bytes it writes to be
+// the bytes `graph execute` writes for the same statement, so the two helps
+// publishing the same key set is the documented half of that identity — and
+// TestPublishedKeyLists_CoverEveryHelpThatPublishesOne is what would have caught
+// its omission had it been left out.
+//
+// `graph serve` publishes an envelope of its own — the startup object — and it is
+// not here, because it is not a result shape and no marker on this list reads it;
+// registry_schema_parity_test.go holds it against graphServeResult instead.
 func graphKeyLists() []keyListCase {
 	surfaces := []struct {
 		name          string
@@ -441,6 +453,8 @@ func graphKeyLists() []keyListCase {
 			"Statement that produces result columns:",
 			"Statement that produces none:"},
 		{"graph execute help", printGraphExecuteHelp,
+			"With result columns:", "Without result columns:"},
+		{"graph client help", printGraphClientHelp,
 			"With result columns:", "Without result columns:"},
 	}
 

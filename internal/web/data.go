@@ -19,6 +19,7 @@ import (
 	"github.com/FlavioCFOliveira/GoGraph/cypher/expr"
 
 	"github.com/FlavioCFOliveira/Groadmap/internal/db"
+	"github.com/FlavioCFOliveira/Groadmap/internal/graphclient"
 	"github.com/FlavioCFOliveira/Groadmap/internal/graphlock"
 	"github.com/FlavioCFOliveira/Groadmap/internal/graphstore"
 	"github.com/FlavioCFOliveira/Groadmap/internal/models"
@@ -1923,6 +1924,37 @@ func loadGraphView(ctx context.Context, name, rawQuery, rawLimit string) (graphV
 	}
 	graphDir := filepath.Join(roadmapDir, "graph")
 
+	// Resolution comes FIRST, before anything is opened and before any lock is
+	// taken (SPEC/WEB.md § Knowledge Graph from the GoGraph Store, rule 1;
+	// SPEC/GRAPH.md § Server Resolution, rule 3). A dedicated graph server holds
+	// the store's exclusive advisory lock for its whole process lifetime, and no
+	// finite wait can be sized against such a hold: a request that opened the
+	// store against a served roadmap would wait its whole wait budget and then
+	// answer 500, not intermittently and not under load but on every request, for
+	// as long as that server ran.
+	//
+	// The socket is the DERIVED one and nothing can point it elsewhere. The three
+	// rmp graph subcommands take a --socket flag; this endpoint takes none,
+	// accepts no request parameter carrying a path, and has no command line to
+	// receive one — rmp web serves every roadmap at once rather than one. A
+	// server started on a non-default socket is therefore invisible here, and
+	// SPEC/GRAPH.md § Serving on a Non-Default Socket is canonical for that
+	// boundary and states plainly that no flag closes it.
+	//
+	// The outcome is not cached, per rule 1: a cached one would act on a server
+	// that had since stopped.
+	served, err := resolveGraphServerForRequest(ctx, name)
+	if err != nil {
+		return graphView{}, err
+	}
+	if served != "" {
+		// The statement crosses unchanged apart from the node-LIMIT injection,
+		// which is applied here exactly as it is applied before a direct
+		// execution: resolution decides where a statement runs and changes
+		// nothing about what runs (SPEC/GRAPH.md § Server Resolution, rule 5).
+		return servedGraphView(ctx, served, applyGraphLimit(query, limit))
+	}
+
 	// The web interface creates no graph store. If the directory is absent the
 	// roadmap simply has no graph yet — return the empty shape. This holds for a
 	// statement that would have written, too: it is not executed, because there
@@ -2014,6 +2046,107 @@ func loadGraphView(ctx context.Context, name, rawQuery, rawLimit string) (graphV
 	}
 
 	return view, nil
+}
+
+// resolveGraphServerForRequest probes the roadmap's derived socket and reports
+// the socket path when a server is answering there, or the empty string when the
+// roadmap is not served.
+//
+// The rule and the probe are internal/graphclient's — the ONE realisation
+// SPEC/ARCHITECTURE.md module 9 fixes and the one every surface follows. What
+// this function adds is the outcome THIS surface reports for the one failing
+// state, because a status code is the web's own business: a socket that answers
+// and yields no server is an internal read error, HTTP 500, and is emphatically
+// not a reason to open the store — the socket may belong to a server holding the
+// lock (SPEC/WEB.md § Knowledge Graph from the GoGraph Store, rule 1).
+//
+// The two definite negatives — no socket, and a socket file a killed server left
+// behind — are the direct path, and the leftover file is neither an error nor
+// removed here.
+func resolveGraphServerForRequest(ctx context.Context, name string) (string, error) {
+	socket, err := graphclient.SocketPath(name)
+	if err != nil {
+		return "", err
+	}
+	state, probeErr := graphclient.Resolve(ctx, socket)
+	switch {
+	case state.Served():
+		return socket, nil
+	case state.NotServed():
+		return "", nil
+	default:
+		return "", fmt.Errorf("%w: graph server unreachable at %s: %v", utils.ErrDatabase, socket, probeErr)
+	}
+}
+
+// servedGraphView sends the statement to a running server and assembles the
+// Graph View Data shape from what comes back.
+//
+// It runs the SAME collector the direct path runs, over the same value model:
+// the shared Bolt client hands back expr.Value rather than JSON, precisely so
+// that the extraction, the deduplication, the orphan-edge dropping and the
+// property mapping are one implementation rather than two
+// (SPEC/DATA_FORMATS.md § Graph Client Result; SPEC/GRAPH.md § Server Resolution,
+// rule 6 — the result is the same result on both paths, and which path carried it
+// is not observable).
+//
+// Nothing is checkpointed here and no lock is released, because this process
+// opened nothing: a statement that wrote committed in the server, which
+// checkpoints on its own cadence and at its own shutdown
+// (SPEC/GRAPH.md § Durability and Checkpointing in a Long-Lived Process).
+func servedGraphView(ctx context.Context, socket, query string) (graphView, error) {
+	result, err := graphclient.Send(ctx, socket, query)
+	if err != nil {
+		return graphView{}, servedGraphError(ctx, socket, err)
+	}
+
+	c := newGraphCollector()
+	for _, row := range result.Rows {
+		for _, cell := range row {
+			c.walk(cell)
+		}
+	}
+	return c.view(), nil
+}
+
+// servedGraphError words a failure the shared Bolt client classified in the terms
+// this surface answers in.
+//
+// Two of the five outcomes are NOT execution failures and must not be answered
+// 400. A server that could not be reached is an internal read error, 500, the
+// status this endpoint already returns for a graph store it cannot open. Every
+// other outcome surfaced once the statement was running, which is where
+// SPEC/WEB.md § Query-Bar Error Handling, rule 6, already draws the boundary, so
+// each is the single execution kind and 400.
+//
+// A connection lost or unanswered after the statement was sent is NOT retried
+// against the store, and this function's job is to make that structural rather
+// than remembered: it returns an error, and the only caller returns it. The
+// statement may already have committed on the server — a commit is durable before
+// it is acknowledged — and the store may still be held
+// (SPEC/GRAPH.md § Server Resolution, rules 4 and 7).
+func servedGraphError(ctx context.Context, socket string, err error) error {
+	var sendErr *graphclient.SendError
+	if !errors.As(err, &sendErr) {
+		return fmt.Errorf("%w: graph store unavailable: %v", utils.ErrDatabase, err)
+	}
+
+	switch sendErr.Kind {
+	case graphclient.FailureUnreachable:
+		return fmt.Errorf("%w: graph server unreachable at %s: %v", utils.ErrDatabase, socket, sendErr.Cause)
+	case graphclient.FailureLost:
+		return newGraphQueryError(graphErrExecution,
+			"query failed to execute: the connection to the graph server was lost; the statement's outcome is unknown")
+	case graphclient.FailureUnanswered:
+		return newGraphQueryError(graphErrExecution,
+			"query failed to execute: the graph server did not answer; the statement's outcome is unknown")
+	case graphclient.FailureBudget:
+		// The budget line, produced by the one function that owns it, so the two
+		// paths report an exhausted budget in the same words.
+		return graphExecutionError(ctx, graphlock.StatementBudget, context.DeadlineExceeded)
+	default:
+		return newGraphQueryError(graphErrExecution, "query failed to execute: "+sendErr.Diagnostic)
+	}
 }
 
 // runGraphViewQuery executes the caller's statement through the engine's

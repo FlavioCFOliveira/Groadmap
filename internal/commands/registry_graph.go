@@ -26,7 +26,7 @@ func buildGraphCommand() Command {
 	return Command{
 		Name:          "graph",
 		Summary:       "Operate the roadmap knowledge graph by running Cypher statements against it.",
-		Description:   "Provides two subcommands. execute runs any Cypher statement the engine accepts against the roadmap graph and returns what it produces; serve makes that graph available over a Unix domain socket until it is stopped, so a caller pays one store open instead of one per invocation. rmp does not examine a statement and never refuses one for what it does, so a single subcommand covers reads, writes, deletions, schema DDL and schema introspection alike. The names create, query, update, delete and search are not subcommands of rmp graph and do not resolve. The graph is stored under ~/.roadmaps/<name>/graph/ and is created on first use by execute; serve creates none. Results are written as JSON to stdout.",
+		Description:   "Provides three subcommands. execute runs any Cypher statement the engine accepts against the roadmap graph and returns what it produces; serve makes that graph available over a Unix domain socket until it is stopped, so a caller pays one store open instead of one per invocation; client sends a statement to a running server and prints what comes back. execute and client take the same statement and produce the same bytes for it, and differ only in what an unanswered socket means: execute opens the store, client fails. When a server is serving the selected roadmap, execute sends its statement to that server automatically, with no flag and no configuration, and the result and the exit code are the same either way. rmp does not examine a statement and never refuses one for what it does, so a single subcommand covers reads, writes, deletions, schema DDL and schema introspection alike. The names create, query, update, delete and search are not subcommands of rmp graph and do not resolve. The graph is stored under ~/.roadmaps/<name>/graph/ and is created on first use by execute; serve and client create none. Results are written as JSON to stdout.",
 		HelpPrinter:   printGraphHelp,
 		HasSubcommand: true,
 		Prerequisites: []string{"An existing roadmap selected via -r/--roadmap."},
@@ -34,8 +34,8 @@ func buildGraphCommand() Command {
 			{
 				Name:        "execute",
 				Summary:     "Run one Cypher statement against the roadmap knowledge graph.",
-				Description: "Executes exactly one Cypher statement and prints what it returns. Every statement the engine accepts is accepted here: a read such as MATCH ... RETURN, including variable-length traversals; a write such as CREATE, MERGE, SET or REMOVE; a deletion such as DELETE or DETACH DELETE; schema DDL, namely CREATE INDEX [name] [IF NOT EXISTS] FOR (n:Label) ON (n.property) [OPTIONS {indexType:'hash'|'btree'}], DROP INDEX <name> [IF EXISTS], CREATE CONSTRAINT [name] [IF NOT EXISTS] FOR (n:Label) REQUIRE n.property IS UNIQUE (or IS NOT NULL) and DROP CONSTRAINT <name> [IF EXISTS]; and schema introspection, namely SHOW INDEXES and SHOW CONSTRAINTS with their singular aliases SHOW INDEX and SHOW CONSTRAINT, each optionally followed by a YIELD / WHERE / RETURN projection. rmp does not inspect the statement and refuses none on the ground of its operation class, so what a statement reads, writes or deletes is decided by its Cypher alone and by nothing rmp checks. A statement that changes the graph runs inside a single transaction and is durable before the process exits. Exactly one statement per invocation. Schema introspection returns the columns/rows listing rather than {\"ok\": true} even though it carries no RETURN clause. There is no ALTER INDEX; changing an index is a DROP INDEX followed by a CREATE INDEX, as two separate invocations, and the index is absent between them. An index or a constraint covers a single node property, removal is by name, and SHOW INDEXES is the authoritative report of the name an unnamed object was given. A schema statement the engine refuses — a duplicate create, a drop of an object that does not exist, an unsupported definition, or a constraint the data already in the graph does not satisfy — exits 1.",
-				Usage:       "rmp graph execute -r <roadmap> [--query <cypher>]",
+				Description: "Executes exactly one Cypher statement and prints what it returns. Every statement the engine accepts is accepted here: a read such as MATCH ... RETURN, including variable-length traversals; a write such as CREATE, MERGE, SET or REMOVE; a deletion such as DELETE or DETACH DELETE; schema DDL, namely CREATE INDEX [name] [IF NOT EXISTS] FOR (n:Label) ON (n.property) [OPTIONS {indexType:'hash'|'btree'}], DROP INDEX <name> [IF EXISTS], CREATE CONSTRAINT [name] [IF NOT EXISTS] FOR (n:Label) REQUIRE n.property IS UNIQUE (or IS NOT NULL) and DROP CONSTRAINT <name> [IF EXISTS]; and schema introspection, namely SHOW INDEXES and SHOW CONSTRAINTS with their singular aliases SHOW INDEX and SHOW CONSTRAINT, each optionally followed by a YIELD / WHERE / RETURN projection. rmp does not inspect the statement and refuses none on the ground of its operation class, so what a statement reads, writes or deletes is decided by its Cypher alone and by nothing rmp checks. A statement that changes the graph runs inside a single transaction and is durable before the process exits. Exactly one statement per invocation. Schema introspection returns the columns/rows listing rather than {\"ok\": true} even though it carries no RETURN clause. There is no ALTER INDEX; changing an index is a DROP INDEX followed by a CREATE INDEX, as two separate invocations, and the index is absent between them. An index or a constraint covers a single node property, removal is by name, and SHOW INDEXES is the authoritative report of the name an unnamed object was given. A schema statement the engine refuses — a duplicate create, a drop of an object that does not exist, an unsupported definition, or a constraint the data already in the graph does not satisfy — exits 1. Where the statement runs is resolved rather than chosen: when a graph server is serving the selected roadmap the statement is sent to that server instead of opening the store, automatically and with no flag, and the result, the output shape and the exit code are identical either way; with nothing listening, the store is opened directly under the exclusive lock as it always was. --socket names the socket the invocation resolves and neither forces nor forbids a server; it is written only when the server was started with the same flag.",
+				Usage:       "rmp graph execute -r <roadmap> [--query <cypher>] [--socket <path>]",
 				HelpPrinter: printGraphExecuteHelp,
 				Handler:     runGraphExecute,
 				// `graph` publishes its own refusal for an excess positional
@@ -49,6 +49,7 @@ func buildGraphCommand() Command {
 				Flags: []Flag{
 					sharedRoadmapFlag(),
 					queryFlag,
+					socketFlag,
 					helpFlag(),
 				},
 				Output: SuccessOutput{
@@ -58,8 +59,8 @@ func buildGraphCommand() Command {
 				},
 				SideEffects: SideEffects{
 					Database:   "Read-only (SQLite project.db not touched).",
-					Filesystem: "Writes to ~/.roadmaps/<name>/graph/wal when the statement writes; creates graph/ on first use (mode 0700).",
-					Network:    "None.",
+					Filesystem: "Writes to ~/.roadmaps/<name>/graph/wal when the statement writes; creates graph/ on first use (mode 0700). Neither happens when a server answers on the resolved socket: the statement runs in that server's store and this invocation opens nothing.",
+					Network:    "None. A statement sent to a running server crosses a Unix domain socket, not a network.",
 				},
 				Idempotent: false,
 				ExitCodes:  []int{0, 1, 2, 3, 4, 6},
@@ -140,6 +141,75 @@ func buildGraphCommand() Command {
 					{
 						Title:  "Roadmap not found",
 						Cmd:    "rmp graph serve -r missing",
+						Stderr: `Error: resource not found: roadmap "missing" not found`,
+						Exit:   4,
+					},
+				},
+			},
+			{
+				Name:        "client",
+				Summary:     "Send one Cypher statement to a running graph server and print its result.",
+				Description: "Sends exactly one Cypher statement to a graph server over its Unix domain socket and prints what comes back. It reads and writes alike: the server does not examine the statement any more than execute does, so a statement that creates, changes, deletes or alters the schema is executed and committed. Every statement source, every length rule and every statement class execute accepts is accepted here unchanged, and the stdout output is byte for byte what execute writes for the same statement against the same graph, so a caller may parse one shape and change nothing when a server is started or stopped. It requires a server: it resolves ~/.roadmaps/<name>/graph.sock, or the --socket path when one is given, and with nothing listening there it fails with exit code 1 rather than opening the store. That is the whole difference between this subcommand and execute, which resolves the same socket and has a second path to fall back on. A retriable serialisation conflict is not an error and is not printed: two clients writing to the same nodes at once is ordinary inside a server and the losing statement committed nothing, so it is re-sent under the retry policy and a failure is reported only once that policy or the statement time budget is exhausted. The statement runs under the same 5-second time budget execute runs under, enforced by the server, and this command keeps a later deadline of its own purely as a backstop against a server that answers nothing.",
+				Usage:       "rmp graph client -r <roadmap> [--query <cypher>] [--socket <path>]",
+				HelpPrinter: printGraphClientHelp,
+				Handler:     runGraphClient,
+				// `client` reads a Cypher statement from the same two sources
+				// `execute` reads one from, so it publishes the same refusal for
+				// an excess positional argument: the canonical line with the hint
+				// naming those two sources (SPEC/COMMANDS.md § Client Error
+				// Cases, the stray-positional row; § Positional Arguments).
+				PublishesOwnArityRefusal: true,
+				ReadsStdin:               true,
+				Flags: []Flag{
+					sharedRoadmapFlag(),
+					queryFlag,
+					socketFlag,
+					helpFlag(),
+				},
+				Output: SuccessOutput{
+					Kind:    "object",
+					Schema:  `{"columns": [...], "rows": [[...],...]} when the statement produces result columns; {"ok": true} when it produces none.`,
+					Example: `{"columns":["n.key"],"rows":[["auth"]]}`,
+				},
+				SideEffects: SideEffects{
+					Database:   "Read-only (SQLite project.db not touched).",
+					Filesystem: "None in this process. The statement runs in the server's store, which writes to that store's wal and snapshot/ on its behalf; this command opens no store, takes no lock, and creates no graph directory.",
+					Network:    "None. The statement crosses a Unix domain socket, not a network.",
+				},
+				Idempotent: false,
+				ExitCodes:  []int{0, 1, 2, 3, 4, 6},
+				Examples: []Example{
+					{
+						Title:  "Read the Spec nodes through a running server",
+						Cmd:    `rmp graph client -r myproject --query "MATCH (n:Spec) RETURN n.key"`,
+						Stdout: `{"columns":["n.key"],"rows":[["auth"]]}`,
+						Exit:   0,
+					},
+					{
+						Title:  "Write through a running server",
+						Cmd:    `rmp graph client -r myproject --query "CREATE (n:Spec {key:'auth'})"`,
+						Stdout: `{"ok":true}`,
+						Exit:   0,
+					},
+					{
+						Title: "Read the statement from standard input",
+						Cmd:   `echo "MATCH (n) RETURN count(n)" | rmp graph client -r myproject`,
+						Exit:  0,
+					},
+					{
+						Title: "Reach a server started on a socket of its own",
+						Cmd:   `rmp graph client -r myproject --socket /run/user/1000/myproject-graph.sock --query "SHOW INDEXES"`,
+						Exit:  0,
+					},
+					{
+						Title:  "No statement supplied",
+						Cmd:    `rmp graph client -r myproject`,
+						Stderr: "Error: required parameter missing: no query supplied",
+						Exit:   2,
+					},
+					{
+						Title:  "Roadmap not found",
+						Cmd:    `rmp graph client -r missing --query "MATCH (n) RETURN n"`,
 						Stderr: `Error: resource not found: roadmap "missing" not found`,
 						Exit:   4,
 					},

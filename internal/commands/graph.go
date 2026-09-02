@@ -80,14 +80,23 @@ func printGraphHelp() {
 	fmt.Fprint(helpDst(), `Usage: rmp graph <subcommand> -r <roadmap> [-q <cypher>]
 
 Operate the knowledge graph of a roadmap using Cypher. The graph is stored
-under ~/.roadmaps/<name>/graph/ and is created on first use. execute runs one
-statement against the roadmap graph; serve makes that graph available over a
-Unix domain socket until it is stopped. create, query, update, delete and
-search are not subcommand names of rmp graph and do not resolve. execute runs
-any statement the engine accepts -- a read, a write, a deletion, a schema
-change, a schema listing -- and rmp does not examine the statement or refuse
-it for what it does. The statement comes from --query, or from standard input
-when that flag is absent; supplying neither is an error.
+under ~/.roadmaps/<name>/graph/ and is created on first use. The three
+subcommands differ in one thing: execute runs a statement against the roadmap
+graph, serve makes that graph available over a socket until it is stopped, and
+client sends a statement to a running server. create, query, update, delete and
+search are not subcommand names of rmp graph and do not resolve.
+
+execute and client each run any statement the engine accepts -- a read, a write,
+a deletion, a schema change, a schema listing -- and rmp does not examine the
+statement or refuse it for what it does. The statement comes from --query, or
+from standard input when that flag is absent; supplying neither is an error.
+
+A running server is used automatically. When a server is serving the selected
+roadmap, execute sends its statement to that server instead of opening the
+store, with no flag and no configuration, and the result and the exit code are
+the same either way. client always requires one and fails when none answers;
+execute opens the store instead. --socket names the socket an invocation
+resolves and neither forces nor forbids a server.
 
 serve holds one roadmap graph open and answers Cypher statements over a Unix
 domain socket until it is stopped, so a caller pays one store open instead of
@@ -97,12 +106,14 @@ directory that does not already exist.
 Commands:
   execute   Run one Cypher statement against the roadmap knowledge graph
   serve     Serve the roadmap knowledge graph over a Unix domain socket
+  client    Send one Cypher statement to a running server and print its result
 
 Options:
   -r, --roadmap <name>    REQUIRED. Target roadmap
-  -q, --query <cypher>    execute only. Cypher statement; read from stdin when
-                          this flag is absent
-      --socket <path>     serve only. Socket to bind; default
+  -q, --query <cypher>    execute and client. Cypher statement; read from stdin
+                          when this flag is absent
+      --socket <path>     All three. Socket bound by serve and resolved by
+                          execute and client; default
                           ~/.roadmaps/<name>/graph.sock
   -h, --help              Show this help message
 
@@ -118,8 +129,11 @@ Exit codes:
   0   Success
   1   Graph store unavailable or Cypher parse/execution error; also a valid
       statement cancelled for running past the 5s statement time budget, which
-      writes nothing -- narrow the statement, or split it
-  2   No query supplied, or a positional argument was given
+      writes nothing -- narrow the statement, or split it; also, for client, no
+      server listening, and for any of the three a server that could not be
+      reached through the socket
+  2   No query supplied, --socket with an empty value, or a positional argument
+      was given
   3   No roadmap selected
   4   Roadmap not found
   6   Query longer than the maximum length of 1048576 bytes
@@ -130,24 +144,39 @@ Examples:
   rmp graph execute -r myproject --query "CREATE (n:Spec {key:'auth'})"
   echo "MATCH (n) RETURN count(n)" | rmp graph execute -r myproject
   rmp graph serve -r myproject
+  rmp graph client -r myproject --query "MATCH (n:Spec) RETURN n.key"
 `)
 }
 
-// printGraphExecuteHelp prints the help for rmp graph execute, the single
-// subcommand of the graph family.
+// printGraphExecuteHelp prints the help for rmp graph execute.
 //
-// The three graph-specific behaviours SPEC/HELP.md § Graph family help
-// specifics requires are all stated below: where the statement comes from, that
-// execute runs any statement without examining it, and that the schema DDL and
-// the schema listings run through this same subcommand. In particular the help
-// MUST NOT describe any statement as rejected before execution on the ground of
-// its operation class, because none is.
+// The graph-specific behaviours SPEC/HELP.md § Graph family help specifics
+// requires are all stated below: where the statement comes from, that execute
+// runs any statement without examining it, and that the schema DDL and the schema
+// listings run through this same subcommand. In particular the help MUST NOT
+// describe any statement as rejected before execution on the ground of its
+// operation class, because none is.
+//
+// Item 6 adds one more, and it is the one an agent cannot infer: a running server
+// takes the statement AUTOMATICALLY, with no flag and no configuration, and
+// --socket names the socket the invocation resolves rather than switching between
+// the two paths. The help states both halves deliberately. An agent told only
+// that it is automatic would have no way to reach a server on a non-default
+// socket; an agent told only that there is a flag would write it on every
+// invocation.
 func printGraphExecuteHelp() {
-	fmt.Fprint(helpDst(), `Usage: rmp graph execute -r <roadmap> [-q <cypher>]
+	fmt.Fprint(helpDst(), `Usage: rmp graph execute -r <roadmap> [-q <cypher>] [--socket <path>]
 
 Run one Cypher statement against the roadmap knowledge graph, and print what it
 returns. A statement that changes the graph runs inside a single transaction and
 is persisted durably before the process exits.
+
+Where the statement runs is resolved, not chosen. When a graph server is serving
+the selected roadmap, the statement is sent to that server instead of the store
+being opened -- automatically, with no flag and no configuration -- and the
+result, the output shape and the exit code are the same either way. With nothing
+listening, the store is opened directly under its exclusive lock, which is what
+every invocation did before a server existed.
 
 execute accepts every statement the engine accepts and runs it as given:
   - a read, such as MATCH ... RETURN, including variable-length traversals;
@@ -176,6 +205,13 @@ Required:
                           absent. Supplying neither is an error (exit code 2)
 
 Optional:
+      --socket <path>     Socket this invocation resolves. Default
+                          ~/.roadmaps/<name>/graph.sock, the same derivation
+                          graph serve and graph client use. It names which
+                          socket is looked at and nothing else: it does not
+                          force a server, does not forbid one, and does not
+                          select the store. Write it only when the server was
+                          started with the same flag
   -h, --help              Show this help message
 
 Output (stdout JSON):
@@ -194,9 +230,12 @@ Exit codes:
       the 5s statement time budget, where the Cypher was valid and the store
       healthy: the transaction rolls back and nothing is written, so the remedy
       is to narrow the statement -- add a label, an indexed property filter, or
-      a LIMIT -- or split it into smaller statements
-  2   No query supplied, or a positional argument was given: a bare Cypher
-      statement on the command line is refused, not executed
+      a LIMIT -- or split it into smaller statements. Also a socket that
+      answers but yields no server, and a connection lost or unanswered after
+      the statement was sent: neither falls back to the store
+  2   No query supplied, --socket given with an empty value, or a positional
+      argument was given: a bare Cypher statement on the command line is
+      refused, not executed
   3   No roadmap selected
   4   Roadmap not found
   6   Query longer than the maximum length of 1048576 bytes
@@ -206,6 +245,7 @@ Examples:
   rmp graph execute -r myproject --query "CREATE (n:Spec {key:'auth'})"
   rmp graph execute -r myproject --query "CREATE INDEX spec_key FOR (n:Spec) ON (n.key)"
   echo "MATCH (n) RETURN count(n)" | rmp graph execute -r myproject
+  rmp graph execute -r myproject --socket /run/user/1000/myproject-graph.sock -q "SHOW INDEXES"
 `)
 }
 
@@ -224,15 +264,30 @@ func openGraphStore(roadmapName string) (graphDir string, err error) {
 	if err != nil {
 		return "", err
 	}
+	if err := createGraphDir(graphDir); err != nil {
+		return "", err
+	}
+	return graphDir, nil
+}
 
+// createGraphDir brings the graph store directory into being at 0700, and is the
+// half of openGraphStore that a SERVED invocation must not perform.
+//
+// `rmp graph execute` creates the directory on first use because a statement has
+// to have somewhere to run. When a server answers, the statement runs in that
+// server's store and this process opens nothing, so creating a directory here
+// would leave an empty store beside a graph that is already open — and it would
+// do so in the one case where the store is guaranteed to exist already
+// (SPEC/GRAPH.md § Server Resolution: on the served path the caller does not open
+// the store).
+func createGraphDir(graphDir string) error {
 	if mkErr := os.MkdirAll(graphDir, 0700); mkErr != nil {
-		return "", fmt.Errorf("%w: creating graph directory: %v", utils.ErrDatabase, mkErr)
+		return fmt.Errorf("%w: creating graph directory: %v", utils.ErrDatabase, mkErr)
 	}
 	if chErr := os.Chmod(graphDir, 0700); chErr != nil { // #nosec G302 -- 0700 on a DIRECTORY is mandated by SPEC (CLAUDE.md §10: 0700 for the ~/.roadmaps tree); gosec G302 false-positives on directory permissions
-		return "", fmt.Errorf("%w: setting graph directory permissions: %v", utils.ErrDatabase, chErr)
+		return fmt.Errorf("%w: setting graph directory permissions: %v", utils.ErrDatabase, chErr)
 	}
-
-	return graphDir, nil
+	return nil
 }
 
 // resolveGraphDir validates roadmapName, confirms the roadmap exists, and
@@ -668,10 +723,19 @@ func graphStatementError(budget time.Duration, stage string, err error) error {
 	return fmt.Errorf("%w: %s: %v", utils.ErrDatabase, stage, err)
 }
 
-// runGraphExecute is the implementation of `rmp graph execute`, the whole of
-// the graph family. It opens the store under the exclusive advisory lock, runs
-// the statement it is given inside a transaction, serialises the result, and
-// checkpoints.
+// runGraphExecute is the implementation of `rmp graph execute`.
+//
+// It has TWO paths and resolves between them rather than choosing. When a server
+// answers on the socket in force, the statement is sent to it and this process
+// opens nothing and takes no lock; when nothing answers, it opens the store under
+// the exclusive advisory lock, runs the statement inside a transaction,
+// serialises the result, and checkpoints — which is what every invocation did
+// before a server existed. The statement, the result, the output shape and the
+// exit code are the same either way, and which path carried it is not observable
+// (SPEC/GRAPH.md § Server Resolution, rule 6). No flag chooses between them:
+// --socket names the socket that is looked at and decides nothing else.
+//
+// The paragraphs below describe the direct path.
 //
 // There is ONE execution path here, and it is the transactional one, because
 // nothing in Groadmap decides between two: Groadmap does not examine the
@@ -710,13 +774,60 @@ func runGraphExecute(args []string) error {
 		return err
 	}
 
+	// --socket is consumed BEFORE the statement is read, because readQuery
+	// refuses every token it does not recognise: the two flags are read in
+	// sequence rather than by one parser that knows both, so each keeps the
+	// refusal SPEC/COMMANDS.md publishes for it.
+	socketFlag, remaining, err := extractSocketFlag(remaining)
+	if err != nil {
+		return err
+	}
+
 	query, err := readQuery(remaining)
 	if err != nil {
 		return err
 	}
 
-	graphDir, err := openGraphStore(roadmapName)
+	// The roadmap's existence is checked on BOTH paths and before either is
+	// taken, so exit code 4 stays reachable for a roadmap that does not exist
+	// whatever answers on the socket. resolveGraphDir creates nothing: the
+	// directory is brought into being further down, on the direct path alone.
+	graphDir, err := resolveGraphDir(roadmapName)
 	if err != nil {
+		return err
+	}
+
+	// Resolution decides WHERE the statement runs, and it runs before any lock
+	// is taken and before any store is opened, so this invocation takes exactly
+	// one of the two paths and never both (SPEC/GRAPH.md § Server Resolution,
+	// rule 3). A server holds the store's exclusive lock for its whole process
+	// lifetime, and no finite wait can be sized against such a hold — resolving
+	// first is what stops a running server from disabling this subcommand
+	// against the roadmap it serves.
+	socket, err := graphSocketInForce(roadmapName, socketFlag)
+	if err != nil {
+		return err
+	}
+	state, err := resolveGraphServer(socket)
+	if err != nil {
+		// The socket answered and yielded no server. This is a FAILURE and not a
+		// fall back: the socket may belong to a server holding the lock, so
+		// opening the store here would wait the whole wait budget and then fail
+		// (rule 2).
+		return err
+	}
+	if state.Served() {
+		output, sendErr := runOnGraphServer(socket, query)
+		if sendErr != nil {
+			return sendErr
+		}
+		return utils.PrintJSON(output)
+	}
+
+	// Not served: the direct path, which is what every invocation did before a
+	// server existed. The graph directory is created here and not above, because
+	// a served invocation opens nothing and must bring no store into being.
+	if err := createGraphDir(graphDir); err != nil {
 		return err
 	}
 

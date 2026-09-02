@@ -11,10 +11,7 @@ package commands
 import (
 	"fmt"
 	"os"
-	"path/filepath"
-	"strings"
 
-	"github.com/FlavioCFOliveira/Groadmap/internal/graphclient"
 	"github.com/FlavioCFOliveira/Groadmap/internal/graphserve"
 	"github.com/FlavioCFOliveira/Groadmap/internal/utils"
 )
@@ -134,54 +131,17 @@ Examples:
 // never trimmed, because a path is not text a user reads back and a path may
 // legitimately end in a space.
 func readSocketFlag(args []string) (string, error) {
-	var value string
-	var found bool
-
-	for i := 0; i < len(args); i++ {
-		if args[i] == socketFlagLong {
-			if i+1 >= len(args) || isFlagLike(args[i+1]) {
-				return "", fmt.Errorf("%w: %s", utils.ErrRequired, socketFlagLong)
-			}
-			value = args[i+1]
-			found = true
-			i++
-			continue
-		}
-		if isFlagLike(args[i]) {
-			return "", fmt.Errorf("%w: unknown flag: %s", utils.ErrInvalidInput, args[i])
-		}
-		return "", fmt.Errorf("%w: unexpected argument %q", utils.ErrInvalidInput, args[i])
+	value, rest, err := extractSocketFlag(args)
+	if err != nil {
+		return "", err
 	}
-
-	if found && strings.TrimSpace(value) == "" {
-		return "", fmt.Errorf("%w: %s", utils.ErrRequired, socketFlagLong)
+	for _, token := range rest {
+		if isFlagLike(token) {
+			return "", fmt.Errorf("%w: unknown flag: %s", utils.ErrInvalidInput, token)
+		}
+		return "", fmt.Errorf("%w: unexpected argument %q", utils.ErrInvalidInput, token)
 	}
 	return value, nil
-}
-
-// resolveServeSocket returns the absolute path of the socket this invocation
-// binds: the value of --socket when one was given, and the path derived from the
-// roadmap otherwise.
-//
-// It is made absolute because the path is PUBLISHED — the startup object names
-// the socket the server bound, and SPEC/COMMANDS.md § Serve Output fixes that
-// value as the absolute path — and because a relative path in the object would
-// be meaningless to a reader who does not know the working directory the server
-// was started from.
-func resolveServeSocket(roadmapName, socketFlag string) (string, error) {
-	path := socketFlag
-	if path == "" {
-		derived, err := graphclient.SocketPath(roadmapName)
-		if err != nil {
-			return "", err
-		}
-		path = derived
-	}
-	abs, err := filepath.Abs(path)
-	if err != nil {
-		return "", fmt.Errorf("%w: cannot bind %s: %v", utils.ErrDatabase, path, err)
-	}
-	return abs, nil
 }
 
 // announceServeSocket writes the startup object. It is passed to
@@ -223,7 +183,7 @@ func runGraphServe(args []string) error {
 		return err
 	}
 
-	socketPath, err := resolveServeSocket(roadmapName, socketFlag)
+	socketPath, err := graphSocketInForce(roadmapName, socketFlag)
 	if err != nil {
 		return err
 	}

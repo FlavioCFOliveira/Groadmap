@@ -579,13 +579,39 @@ func stop(srv *server.Server, ln *serverListener, serveErr <-chan error) error {
 // server stops, where without it a client that had just committed would be told
 // nothing about a change that is already on disk.
 func drain(srv *server.Server, ln *serverListener) {
-	// The waiting is internal/backoff's, and the budget is internal/graphlock's,
-	// exactly as they are when an invocation waits for the store lock. Neither
-	// the loop nor the ladder is written out here: this is a bounded wait on a
-	// condition, which is the shape that package owns, and a second one of those
-	// is defect #294 with a different subject.
+	drainUntil(func() bool { return quiescent(ln.live.Load(), len(srv.Transactions())) })
+}
+
+// quiescent is the DECISION the drain waits for, separated from the waiting so
+// that it can be read, and tested, on its own.
+//
+// It is a conjunction and each half is load-bearing. A connection that has closed
+// has been answered — the engine writes a response before it reads the next
+// message, and a client that has gone has nothing outstanding — while a
+// transaction the engine still lists is in flight whatever its connection is
+// doing. Neither implies the other.
+//
+// What it is NOT is the signal the drain was first written around, and the
+// difference is the whole of FINDING #264 on rmp task #367: "every connection is
+// idle between messages" is vacuously satisfied here, because the engine gives
+// every connection a dedicated reader goroutine that reads the next message while
+// the message loop executes the previous one. A live connection is therefore not
+// quiescent even when it is blocked in a read, and that is exactly what this
+// function says.
+func quiescent(live int64, openTransactions int) bool {
+	return live == 0 && openTransactions == 0
+}
+
+// drainUntil waits for quiet to hold, bounded by the graph store's wait budget.
+//
+// The waiting is internal/backoff's, and the budget is internal/graphlock's,
+// exactly as they are when an invocation waits for the store lock. Neither the
+// loop nor the ladder is written out here: this is a bounded wait on a condition,
+// which is the shape that package owns, and a second one of those is defect #294
+// with a different subject.
+func drainUntil(quiet func() bool) {
 	_, _ = backoff.RetryWithin(graphlock.WaitBudget(), func() (struct{}, error) {
-		if ln.live.Load() == 0 && len(srv.Transactions()) == 0 {
+		if quiet() {
 			return struct{}{}, nil
 		}
 		return struct{}{}, errStillInFlight

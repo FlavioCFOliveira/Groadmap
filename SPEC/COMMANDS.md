@@ -200,6 +200,7 @@ The table publishes the declared maximum for every command in the CLI. It is can
 | `stats` | 0 | - |
 | `graph execute` | 0 | - |
 | `graph serve` | 0 | - |
+| `graph client` | 0 | - |
 | `web` | 0 | - |
 
 Three consequences of the table are worth stating, because each is a case a reader may expect to behave differently:
