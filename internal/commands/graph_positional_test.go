@@ -133,10 +133,28 @@ func seedGraphStrayRoadmap(t *testing.T, name string) string {
 }
 
 // registeredGraphSubcommands reads the family straight out of AppRegistry and
-// checks the two declarations every assertion below depends on: each subcommand
-// takes NO positional argument, and each publishes its own refusal wording so
-// the shared enforcement point defers to it.
-func registeredGraphSubcommands(t *testing.T) []string {
+// partitions it by the property this file is about: whether a subcommand
+// publishes the HINTED refusal or the canonical one.
+//
+// The partition is not a convenience. SPEC/COMMANDS.md § Positional Arguments
+// confines the hint — "(graph queries use --query or stdin)" — to the
+// subcommands that READ A CYPHER STATEMENT, "because it names the two sources
+// such a statement may come from and no other command has them", and says in the
+// same breath that `graph serve` "reads no statement and publishes the canonical
+// line of rule 1 instead". A family-wide rule would therefore have been wrong
+// about the family the moment it gained a subcommand that runs no statement.
+//
+// Both halves are checked, because both are declarations the assertions below
+// depend on:
+//
+//   - Every graph subcommand takes NO positional argument, statement-reading or
+//     not. That is what makes a stray token an excess one on all of them.
+//   - A statement-reading subcommand publishes its own refusal wording, so the
+//     shared enforcement point defers to it and the hinted line survives.
+//   - Every other one does NOT, so the shared point answers it with the
+//     canonical line. Asserting this direction is what stops the hint from
+//     spreading to a subcommand the specification does not give it to.
+func registeredGraphSubcommands(t *testing.T) (hinted, canonical []string) {
 	t.Helper()
 
 	cmd := AppRegistry().FindCommand(graphFamilyName)
@@ -144,40 +162,57 @@ func registeredGraphSubcommands(t *testing.T) []string {
 		t.Fatalf("family %q missing from the registry", graphFamilyName)
 	}
 
-	names := make([]string, 0, len(cmd.Subcommands))
 	for i := range cmd.Subcommands {
 		sub := &cmd.Subcommands[i]
 		if got := len(sub.Positional); got != 0 {
 			t.Errorf("graph %s declares %d positional argument(s); SPEC/GRAPH.md § No Positional Query "+
-				"gives graph execute a maximum of zero", sub.Name, got)
+				"gives every graph subcommand a maximum of zero", sub.Name, got)
 		}
-		if !sub.PublishesOwnArityRefusal {
-			t.Errorf("graph %s no longer sets PublishesOwnArityRefusal; the shared enforcement point "+
-				"would override this family's published line with the canonical one", sub.Name)
+		if sub.PublishesOwnArityRefusal {
+			hinted = append(hinted, sub.Name)
+			continue
 		}
-		names = append(names, sub.Name)
+		canonical = append(canonical, sub.Name)
 	}
-	if len(names) == 0 {
-		t.Fatalf("the registry lists no graph subcommand; every table in this file would be vacuous")
+	if len(hinted) == 0 {
+		t.Fatalf("no graph subcommand publishes its own arity refusal; every table in this file " +
+			"would be vacuous")
 	}
-	return names
+	return hinted, canonical
 }
 
 // TestGraphPositional_TableCoversTheWholeFamily keeps this file honest against
 // the registry: every assertion below dispatches graphSubcommandName, so the
-// suite is family-wide only for as long as that name IS the family.
+// suite covers the hinted refusal only for as long as that name is the whole of
+// the class that publishes it.
 //
-// A second `graph` subcommand added tomorrow fails here rather than being
-// silently left out of every assertion in the file, which is the same guarantee
-// the five-name version of this test gave.
+// It is keyed on the CLASS and not on the family, because the family stopped
+// being the class when `rmp graph serve` was added: that subcommand reads no
+// statement, so the hint naming the two sources of one would be a hint about
+// something it does not have, and SPEC/COMMANDS.md § Positional Arguments gives
+// it the canonical line instead. A second statement-reading subcommand added
+// tomorrow — `graph client` is the one the specification already describes —
+// fails here rather than being silently left out of every assertion in the file,
+// which is the guarantee the five-name version of this test gave.
 func TestGraphPositional_TableCoversTheWholeFamily(t *testing.T) {
-	registered := registeredGraphSubcommands(t)
+	hinted, canonical := registeredGraphSubcommands(t)
 
-	if len(registered) != 1 || registered[0] != graphSubcommandName {
-		t.Errorf("the registry declares the graph subcommands %v, and every assertion in this file "+
-			"drives `graph %s` alone. SPEC/COMMANDS.md § Graph Management publishes exactly one "+
-			"subcommand name; a family with another one is a family this suite no longer covers",
-			registered, graphSubcommandName)
+	if len(hinted) != 1 || hinted[0] != graphSubcommandName {
+		t.Errorf("the registry declares the statement-reading graph subcommands %v, and every "+
+			"assertion in this file drives `graph %s` alone. A second one is a subcommand this suite "+
+			"no longer covers", hinted, graphSubcommandName)
+	}
+	for _, name := range canonical {
+		sub := AppRegistry().FindCommand(graphFamilyName).FindSubcommand(name)
+		if sub == nil {
+			t.Fatalf("graph %s vanished from the registry between two reads of it", name)
+		}
+		if hasQueryFlag(sub) {
+			t.Errorf("graph %s takes a --query flag but does not publish its own arity refusal, so "+
+				"the shared enforcement point answers it with the canonical line. SPEC/COMMANDS.md "+
+				"§ Positional Arguments gives the hinted line to the subcommands that read a Cypher "+
+				"statement; this one reads one and would not print it", name)
+		}
 	}
 
 	seen := make(map[string]bool, len(graphStrayCases()))
@@ -421,4 +456,17 @@ func TestGraphPositional_OnlyTheFirstStrayTokenIsNamed(t *testing.T) {
 			})
 		}
 	}
+}
+
+// hasQueryFlag reports whether sub declares the flag through which a Cypher
+// statement is supplied. It is what tells a statement-reading subcommand apart
+// from one that runs no statement, read from the registry rather than from a
+// name written out here.
+func hasQueryFlag(sub *Subcommand) bool {
+	for i := range sub.Flags {
+		if sub.Flags[i].Long == "--query" {
+			return true
+		}
+	}
+	return false
 }

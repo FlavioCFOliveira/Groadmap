@@ -354,6 +354,12 @@ func registrySchemaCases() []schemaCase {
 		// RETURN clause at all.
 		{"graph", "execute", "query result", graphQueryResult{}, quotedMembers(0)},
 		{"graph", "execute", "ok result", graphOKResult{}, quotedMembers(1)},
+		// `graph serve` publishes one envelope, written once at startup rather
+		// than per statement: the socket the server bound. It is read here rather
+		// than acknowledged as unguarded because a struct does back it, so the
+		// published key and the emitted one can be compared instead of merely
+		// described.
+		{"graph", "serve", "startup object", graphServeResult{}, quotedMembers(0)},
 	}
 }
 

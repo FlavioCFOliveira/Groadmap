@@ -1663,9 +1663,10 @@ func TestExampleInvocations_OracleShape(t *testing.T) {
 
 	const (
 		wantCommands = 9
-		// 55, down from 59: the five `graph` subcommands collapsed onto one
+		// 56: 59 minus the five `graph` subcommands that collapsed onto one, plus
+		// `graph execute` itself, plus `graph serve`
 		// (SPEC/COMMANDS.md § Graph Management).
-		wantSubcommands = 55
+		wantSubcommands = 56
 	)
 	if len(oracle.commandOrder) != wantCommands {
 		t.Errorf("the contract declares %d command families, this gate was written against %d: %v",

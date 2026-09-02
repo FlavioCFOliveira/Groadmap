@@ -6,12 +6,13 @@ Operate a roadmap's knowledge graph: a free-form, queryable store of the project
 
 Each roadmap owns one graph, stored under that roadmap's home directory at `~/.roadmaps/<name>/graph/` (a directory, mode `0700`), created on first use of the `graph` command. The graph is free-form: Groadmap imposes no schema. It is independent of the roadmap's SQLite tasks and sprints data in this version.
 
-The graph is accessed through **one** subcommand, `execute`, which accepts any Cypher statement the engine accepts and runs it. Groadmap does not examine the statement and refuses none on the ground of what it does.
+The graph is reached through two subcommands. `execute` accepts any Cypher statement the engine accepts and runs it against the roadmap's graph; `serve` runs no statement of its own and instead holds that graph open, answering statements over a Unix domain socket until it is stopped. Groadmap does not examine a statement and refuses none on the ground of what it does.
 
 ## Synopsis
 
 ```
 rmp graph execute -r <roadmap> [--query <cypher>]
+rmp graph serve -r <roadmap> [--socket <path>]
 ```
 
 ## Subcommands
@@ -72,9 +73,41 @@ rmp graph execute -r backend-platform \
 rmp graph execute -r backend-platform --query "SHOW INDEXES"
 ```
 
-## One Subcommand, and What That Means
+### serve
 
-`create`, `query`, `update`, `delete` and `search` were subcommands of `rmp graph`. They are not any more. Each is an unresolved subcommand name and is answered as a dispatch failure: exit code `127`, the `graph` help on stderr, nothing on stdout. They are named here because an agent that has one of them in memory needs to be told that it will not resolve.
+Opens the roadmap's knowledge graph once, holds it and its exclusive advisory store lock for the life of the process, and answers Cypher statements over a Unix domain socket until it is stopped. The protocol is Bolt version 5, served by the graph engine's own server; Groadmap defines no protocol of its own.
+
+`serve` is **long-lived**. Unlike every other command except `rmp web`, it does not complete and exit: it runs until it receives `SIGINT` (`Ctrl+C`) or `SIGTERM`, then drains the work in flight, shuts the server down, checkpoints, releases the lock, removes its socket, and exits `0`.
+
+**One server per roadmap.** The roadmap's store lock is the interlock: a second `rmp graph serve` against the same roadmap cannot take it, fails with exit code `1`, and leaves the first server's socket untouched. It does not queue.
+
+`serve` runs no statement of its own, creates no graph directory that does not already exist, and never reads or writes a roadmap's `project.db`. It serves one roadmap; serving several means running several servers, one per roadmap, each on its own socket.
+
+**Access control is the filesystem, and there is no other.** The socket is created with mode `0600`, set explicitly rather than left to the process umask, inside a roadmap home directory that is `0700`. The server authenticates nobody: any caller able to open the socket can read, write, delete and change the schema of that roadmap's graph. Two warnings from the engine are expected on stderr at startup and are not failures — one for a server running without transport security, one for a server running without authentication.
+
+**Usage:** `rmp graph serve -r <roadmap> [--socket <path>]`
+
+**Flags:**
+| Short Flag | Long Flag | Type | Default | Description |
+|------------|-----------|------|---------|-------------|
+| `-r` | `--roadmap` | string | - | Roadmap name (required) |
+| | `--socket` | string | `~/.roadmaps/<name>/graph.sock` | Unix domain socket to bind. A non-default path is followed by the CLI through the same flag and by nothing else: the web interface has no way to receive one |
+| `-h` | `--help` | bool | false | Show subcommand help |
+
+**Output:** a single JSON object on stdout at startup, naming the absolute path of the socket the server bound, so a caller that supplied no `--socket` still learns the path: `{"socket": "/home/user/.roadmaps/backend-platform/graph.sock"}`. Per-statement results go to the client that asked for them, never to this command's stdout.
+
+**Examples:**
+```bash
+# Serve a roadmap's graph on the default socket, until Ctrl+C
+rmp graph serve -r backend-platform
+
+# Serve on a socket of your own choosing
+rmp graph serve -r backend-platform --socket /run/user/1000/backend-platform-graph.sock
+```
+
+## The Withdrawn Subcommand Names
+
+`create`, `query`, `update`, `delete` and `search` were subcommands of `rmp graph`. They are not any more, and `execute` and `serve` are the whole of the family. Each is an unresolved subcommand name and is answered as a dispatch failure: exit code `127`, the `graph` help on stderr, nothing on stdout. They are named here because an agent that has one of them in memory needs to be told that it will not resolve.
 
 They existed to enforce an operation class, and that enforcement has been withdrawn. Nothing distinguished the five once it was gone, so they were replaced rather than kept as five names for one behaviour.
 

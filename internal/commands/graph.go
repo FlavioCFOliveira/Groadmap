@@ -71,24 +71,39 @@ func queryTooLongError() error {
 }
 
 // printGraphHelp prints the family-level help for rmp graph.
+//
+// SPEC/HELP.md § Graph family help specifics, item 5, requires the family help to
+// list every subcommand with a verb-first description AND to make the distinction
+// between them explicit in one sentence rather than leaving it to be inferred
+// from the summaries. The sentence below is that one.
 func printGraphHelp() {
 	fmt.Fprint(helpDst(), `Usage: rmp graph <subcommand> -r <roadmap> [-q <cypher>]
 
 Operate the knowledge graph of a roadmap using Cypher. The graph is stored
-under ~/.roadmaps/<name>/graph/ and is created on first use. There is exactly
-one subcommand, execute; create, query, update, delete and search are not
-subcommand names of rmp graph and do not resolve. execute runs any statement
-the engine accepts -- a read, a write, a deletion, a schema change, a schema
-listing -- and rmp does not examine the statement or refuse it for what it
-does. The statement comes from --query, or from standard input when that flag
-is absent; supplying neither is an error.
+under ~/.roadmaps/<name>/graph/ and is created on first use. execute runs one
+statement against the roadmap graph; serve makes that graph available over a
+Unix domain socket until it is stopped. create, query, update, delete and
+search are not subcommand names of rmp graph and do not resolve. execute runs
+any statement the engine accepts -- a read, a write, a deletion, a schema
+change, a schema listing -- and rmp does not examine the statement or refuse
+it for what it does. The statement comes from --query, or from standard input
+when that flag is absent; supplying neither is an error.
+
+serve holds one roadmap graph open and answers Cypher statements over a Unix
+domain socket until it is stopped, so a caller pays one store open instead of
+one per invocation. It runs no statement of its own and creates no graph
+directory that does not already exist.
 
 Commands:
   execute   Run one Cypher statement against the roadmap knowledge graph
+  serve     Serve the roadmap knowledge graph over a Unix domain socket
 
 Options:
   -r, --roadmap <name>    REQUIRED. Target roadmap
-  -q, --query <cypher>    Cypher statement; read from stdin when this flag is absent
+  -q, --query <cypher>    execute only. Cypher statement; read from stdin when
+                          this flag is absent
+      --socket <path>     serve only. Socket to bind; default
+                          ~/.roadmaps/<name>/graph.sock
   -h, --help              Show this help message
 
 Output (stdout JSON):
@@ -96,6 +111,8 @@ Output (stdout JSON):
     {"columns": [...], "rows": [[...], ...]}
   Statement that produces none:
     {"ok": true}
+  Server startup:
+    {"socket": "<path>"}
 
 Exit codes:
   0   Success
@@ -112,6 +129,7 @@ Examples:
   rmp graph execute -r myproject --query "MATCH (n:Spec) RETURN n.key"
   rmp graph execute -r myproject --query "CREATE (n:Spec {key:'auth'})"
   echo "MATCH (n) RETURN count(n)" | rmp graph execute -r myproject
+  rmp graph serve -r myproject
 `)
 }
 
@@ -193,10 +211,37 @@ Examples:
 
 // openGraphStore validates that roadmapName exists, resolves the graph
 // directory, and creates it on first use with 0700 permissions. It
-// returns the graphDir path and a no-op cleanup func (reserved for
-// future use). The caller is responsible for opening the GoGraph store
-// after this call.
+// returns the graphDir path. The caller is responsible for opening the
+// GoGraph store after this call.
+//
+// Creating the directory is what makes `rmp graph execute` work against a
+// roadmap that has never had a graph. It is deliberately NOT shared with
+// `rmp graph serve`, which creates no graph directory that does not already
+// exist (SPEC/COMMANDS.md § Serve, "What the server does not do"); that
+// subcommand calls resolveGraphDir and stops at the resolution.
 func openGraphStore(roadmapName string) (graphDir string, err error) {
+	graphDir, err = resolveGraphDir(roadmapName)
+	if err != nil {
+		return "", err
+	}
+
+	if mkErr := os.MkdirAll(graphDir, 0700); mkErr != nil {
+		return "", fmt.Errorf("%w: creating graph directory: %v", utils.ErrDatabase, mkErr)
+	}
+	if chErr := os.Chmod(graphDir, 0700); chErr != nil { // #nosec G302 -- 0700 on a DIRECTORY is mandated by SPEC (CLAUDE.md §10: 0700 for the ~/.roadmaps tree); gosec G302 false-positives on directory permissions
+		return "", fmt.Errorf("%w: setting graph directory permissions: %v", utils.ErrDatabase, chErr)
+	}
+
+	return graphDir, nil
+}
+
+// resolveGraphDir validates roadmapName, confirms the roadmap exists, and
+// returns the path of its graph store directory WITHOUT creating anything.
+//
+// It is the half of openGraphStore that every graph surface needs, split out
+// because one of them must not perform the other half: `rmp graph serve` makes an
+// existing graph available and does not bring one into being.
+func resolveGraphDir(roadmapName string) (string, error) {
 	roadmapDir, valErr := utils.GetRoadmapDir(roadmapName)
 	if valErr != nil {
 		// A classification is stated once, by whoever owns the failure.
@@ -231,16 +276,7 @@ func openGraphStore(roadmapName string) (graphDir string, err error) {
 		return "", fmt.Errorf("%w: roadmap %q not found", utils.ErrNotFound, roadmapName)
 	}
 
-	graphDir = filepath.Join(roadmapDir, "graph")
-
-	if mkErr := os.MkdirAll(graphDir, 0700); mkErr != nil {
-		return "", fmt.Errorf("%w: creating graph directory: %v", utils.ErrDatabase, mkErr)
-	}
-	if chErr := os.Chmod(graphDir, 0700); chErr != nil { // #nosec G302 -- 0700 on a DIRECTORY is mandated by SPEC (CLAUDE.md §10: 0700 for the ~/.roadmaps tree); gosec G302 false-positives on directory permissions
-		return "", fmt.Errorf("%w: setting graph directory permissions: %v", utils.ErrDatabase, chErr)
-	}
-
-	return graphDir, nil
+	return filepath.Join(roadmapDir, "graph"), nil
 }
 
 // isFlagLike reports whether tok is a command-line flag rather than a query

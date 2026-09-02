@@ -191,7 +191,59 @@ type Store struct {
 // acquisition failure, which arrives already classified by internal/graphlock.
 // On any failure Open releases everything it had taken, so a caller that gets an
 // error holds nothing and must not call Close.
+//
+// It is [Acquire] followed immediately by [Hold.Open], and it is the entry point
+// of a surface that has nothing to do between the two. A surface that does —
+// today only the dedicated graph server, which binds its socket inside the hold
+// and before the open — calls the two halves itself.
 func Open(graphDir string) (*Store, error) {
+	h, err := Acquire(graphDir)
+	if err != nil {
+		return nil, err
+	}
+	return h.Open()
+}
+
+// Hold is the graph directory's exclusive advisory hold, taken WITHOUT the store
+// being opened inside it yet. It exists for one caller and one reason.
+//
+// SPEC/GRAPH.md § Server Startup fixes the order `rmp graph serve` performs, and
+// the order is load-bearing: the lock is taken (step 2), the socket is probed and
+// bound (steps 3 to 5), and only then is the store opened (step 6). Binding
+// first is deliberate — the open costs up to about a second on a large graph, and
+// a caller that resolved the roadmap during that second would find no socket,
+// conclude the roadmap is not served, and take the direct path into a lock this
+// process is already holding. [Open] cannot express that order, because it takes
+// the lock and opens the store in one call.
+//
+// Splitting the two is therefore the server's requirement and not a
+// generalisation offered on spec: everything between the lock and the open still
+// happens inside the one hold, and the sequence the open performs is still the
+// single one this package owns.
+//
+// A Hold is spent by [Hold.Open], whether that call succeeds or fails. After a
+// success the resulting Store owns the release and [Store.Close] performs it;
+// after a failure the hold has already been released. [Hold.Release] releases a
+// hold that was never opened, and is a no-op on a spent one, so a caller may
+// defer it unconditionally.
+//
+// A Hold is not safe for concurrent use.
+type Hold struct {
+	release func()
+	dir     string
+	spent   bool
+}
+
+// Acquire takes the graph directory's exclusive advisory lock under the bounded
+// wait internal/graphlock specifies, and returns the hold without opening
+// anything inside it.
+//
+// graphDir MUST already exist: the lock file is created inside it, and this
+// package creates no directory (see [Open]).
+//
+// A caller that has nothing to do between the lock and the open calls [Open]
+// instead; see [Hold] for the one caller that has.
+func Acquire(graphDir string) (*Hold, error) {
 	// The lock first, and before anything reads the directory: opening the store
 	// is not a read-only operation on disk, because recovery repairs an
 	// interrupted checkpoint before it loads anything (internal/graphlock).
@@ -199,6 +251,38 @@ func Open(graphDir string) (*Store, error) {
 	if err != nil {
 		return nil, err
 	}
+	return &Hold{release: release, dir: graphDir}, nil
+}
+
+// Dir returns the graph directory this hold covers.
+func (h *Hold) Dir() string { return h.dir }
+
+// Release drops a hold that was never opened. It is idempotent, and it is a
+// no-op once [Hold.Open] has been called: after a successful open the Store owns
+// the release, and after a failed one the release has already run.
+func (h *Hold) Release() {
+	if h.spent {
+		return
+	}
+	h.spent = true
+	h.release()
+}
+
+// Open opens the store inside this hold and constructs the engine over it,
+// returning a Store that owns the hold from here until Close.
+//
+// It spends the hold either way: on success the Store's Close releases it, and
+// on failure Open releases it before returning, so a caller that gets an error
+// holds nothing and must not call Close. Every failure is classified as
+// utils.ErrDatabase.
+func (h *Hold) Open() (*Store, error) {
+	if h.spent {
+		return nil, fmt.Errorf("%w: graph store hold already spent", utils.ErrDatabase)
+	}
+	h.spent = true
+
+	graphDir := h.dir
+	release := h.release
 
 	res, err := recovery.Open[string, float64](graphDir, openOpts)
 	if err != nil {
