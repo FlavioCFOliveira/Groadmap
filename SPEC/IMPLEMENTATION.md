@@ -353,18 +353,23 @@ mechanism. Reads observe a consistent committed snapshot. Independent write
 transactions are not excluded from one another inside a single process: a
 write-write collision is detected rather than prevented, on a first-updater-wins
 basis, and the losing transaction receives a retriable serialization-conflict
-error. Groadmap does not rely on that intra-process behaviour, because each
-`rmp graph execute` invocation and each web graph request runs exactly one
-transaction; that one-transaction-per-invocation model is why the conflict path is
-not reachable today. Groadmap likewise uses none of the engine's MVCC-specific
-entry points and issues no `MERGE` of its own, so the engine's concurrency
-semantics are not observable through the product as it stands.
+error. On the **direct** path Groadmap does not rely on that intra-process behaviour,
+because each `rmp graph execute` invocation and each web graph request runs
+exactly one transaction; that one-transaction-per-invocation model is why the
+conflict path is not reachable there. It **is** reachable inside
+`rmp graph serve`, which runs many transactions concurrently in one process, so a
+client of that server retries a serialisation conflict rather than surfacing it.
+`GRAPH.md § Concurrency Inside the Server` is canonical for that, and the retry
+uses the loop and the delay ladder of [Retry Logic](#retry-logic) like every other
+retry in this project.
 
 Groadmap does not depend on the engine to serialise access to the store. It
 serialises it itself, at the process level, on a lock file that Groadmap maintains
 in the roadmap's graph directory (`write.lock`). Every invocation and every web
-graph request takes that lock **exclusively** before the store is opened and holds
-it until after any checkpoint. There is one mode, because Groadmap does not examine
+graph request that opens the store takes that lock **exclusively** before opening
+it and holds it until after any checkpoint. A caller that reached a running graph
+server instead opens no store and takes no lock (`GRAPH.md § Server Resolution`),
+and `rmp graph serve` takes the lock once and holds it for its process lifetime. There is one mode, because Groadmap does not examine
 a statement and so cannot know before running one whether it will write. The
 operating system releases the lock when the holding process exits, so a crashed
 invocation does not strand it. This is the lock referred to throughout
@@ -407,10 +412,26 @@ one construction, in that package, reached by every surface — and `internal/te
 enforces both it and the matching rule for the snapshot write. A surface that needs
 the store behaves differently (a longer hold, a different checkpoint cadence) varies
 how it *uses* the sequence; it does not acquire a copy of it.
+`rmp graph serve` is that case rather than an exception to it: it holds the
+sequence open for its process lifetime and checkpoints on its own cadence
+(`GRAPH.md § Durability and Checkpointing in a Long-Lived Process`), through the
+same one realisation.
+
+The same reasoning applies a second time to the two things the graph server
+introduced. Deciding whether a roadmap is served, and speaking the protocol to a
+server that is, are implemented **once**, in `internal/graphclient`, and reached by
+`rmp graph client`, by `rmp graph execute`, and by `internal/web` alike. A second
+resolution rule fails in exactly the silent way the sequence above does: a probe
+that read an unanswered socket as "not served" still runs, still returns a result,
+and goes wrong only when a server is holding the lock it then waits on.
+`ARCHITECTURE.md § 9. internal/graphclient/ and reaching a graph server` records
+the boundary.
 
 ### Process Model
 
-1. The `rmp` CLI is a short-lived process. Each `rmp graph execute` invocation
+1. The `rmp` CLI is a short-lived process, with one exception: `rmp graph serve`
+   holds the store, its engine, and its lock for the life of the process
+   (`GRAPH.md § The Dedicated Graph Server`). Each `rmp graph execute` invocation
    opens the roadmap's graph store, runs exactly one statement, commits,
    checkpoints when that transaction wrote (see
    [Synchronous Checkpoint on Write](#synchronous-checkpoint-on-write)), closes the
@@ -491,10 +512,15 @@ how it *uses* the sequence; it does not acquire a copy of it.
      has no known upper bound and the wait does not cover one. A waiter can fail
      against a holder that is inside every published budget, and one such
      statement exceeds the web server's write timeout on its own.
-   - A finite wait can cover only a hold that has an upper bound, and a server
-     that holds the lock for its process lifetime has none, so no finite wait can
-     be derived from one. The wait-based policy bounds a read and a statement that
-     runs to completion; it bounds neither of the two holders above.
+   - A finite wait can cover only a hold that has an upper bound, and
+     `rmp graph serve` holds the lock for its process lifetime, which has none, so
+     no finite wait can be derived from it. That limit is not reached by bounding
+     the statement and is not meant to be: every caller resolves the roadmap's
+     socket before it takes the lock, and against a served roadmap it sends the
+     statement to the server and takes no lock at all
+     (`GRAPH.md § Server Resolution`). `GRAPH.md § Lock Contention` names the three
+     narrow windows in which a caller still meets a server on the lock, and each
+     ends in this rule's bounded wait and this section's rule 2.
 5. Recovery on open is expected to be transparent for a consistently committed
    store. A corrupt or unreadable store surfaces as `utils.ErrDatabase` (exit code
    1); there is no automatic graph-store repair in this version.

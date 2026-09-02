@@ -64,7 +64,13 @@ The SPEC is unversioned. Git is the source of truth for its evolution — recove
 | Audit result-set cap (`MaxAuditLimit`) | `DATABASE.md § Audit Result Limit` |
 | Migration idempotency (ALTER TABLE ADD COLUMN guard) | `DATABASE.md § Migration Idempotency (ALTER TABLE ADD COLUMN)` |
 | Migration idempotency (ALTER TABLE DROP COLUMN guard, what a drop preserves and discards) | `DATABASE.md § Migration Idempotency (ALTER TABLE DROP COLUMN)` |
-| `graph` command syntax / subcommands | `COMMANDS.md § Graph Management` |
+| `graph` command syntax / subcommands (`execute`, `serve`, `client`) | `COMMANDS.md § Graph Management` |
+| Dedicated graph server (`rmp graph serve`): socket, permissions, startup, drain, server options, and what it guarantees | `GRAPH.md § The Dedicated Graph Server` |
+| The rule every surface follows to decide whether a roadmap is served, its four states, and the exit code or HTTP status each produces | `GRAPH.md § Server Resolution` |
+| Bolt client (`rmp graph client`): what it shares with the resolution path and why it does not fall back to the store | `GRAPH.md § The Bolt Client` |
+| Graph client stdout shape, and the requirement that it be identical to `graph execute`'s | `DATA_FORMATS.md § Graph Client Result` |
+| Exit codes of `graph serve` and `graph client` | `ARCHITECTURE.md § Exit Codes of the Graph Server and Client` |
+| The exact stderr lines the graph socket failures publish | `COMMANDS.md § Graph Server Socket Error Lines` |
 | Graph query result JSON / property-type mapping | `DATA_FORMATS.md § Graph Query Result` |
 | Node `key` uniqueness in the knowledge graph (a convention the caller honours, judged on the NFC form, and the two-step audit that detects a violation) | `GRAPH.md § Node Key Uniqueness` |
 | Cypher input via flag or stdin | `GRAPH.md § Cypher Input Source and Precedence` |
@@ -133,7 +139,7 @@ The SPEC is unversioned. Git is the source of truth for its evolution — recove
 | `COMMANDS.md` | CLI commands, subcommands, flags, aliases |
 | `DATA_FORMATS.md` | JSON schemas, input/output formats |
 | `HELP.md` | CLI help skeleton and structure |
-| `GRAPH.md` | Knowledge graph feature: GoGraph integration, persistence, multi-layer conventions, the single `graph execute` surface |
+| `GRAPH.md` | Knowledge graph feature: GoGraph integration, persistence, multi-layer conventions, the `graph execute` statement surface, and the dedicated graph server and its client |
 | `WEB.md` | Web interface: `rmp web` server, server-rendered pages, interactive knowledge-graph visualisation, embedded assets |
 | `MODELS.md` | Structs, enums, memory layout |
 | `STATE_MACHINE.md` | Task and Sprint state transitions |
@@ -194,6 +200,7 @@ To prevent drift across SPEC files, the following topics have a single authorita
 | Vendored web assets / embedded Tabler framework and D3.js (with d3-sankey) | `BUILD.md § Vendored Web Assets` |
 | Graph store concurrency / store locking / recovery | `IMPLEMENTATION.md § Graph Store Concurrency` (contract in `GRAPH.md § Concurrency and Recovery`) |
 | Graph store lock file (`write.lock`) | `GRAPH.md § Concurrency and Recovery` (layout in `GRAPH.md § Persistence Layout`) |
+| Graph server socket (`graph.sock`), its mode, and what a leftover one means | `GRAPH.md § Socket Path and Permissions` (layout in `GRAPH.md § Persistence Layout`) |
 | Statement time budget (the single value both graph surfaces apply, and the evidence for it) | `WEB.md § Graph Query Time Budget` (its effect on an `rmp graph execute` invocation, and what a cut statement leaves behind, in `GRAPH.md § Statement Time Budget`) |
 | Cypher engine constructor (`cypher.NewEngineWithStoreAndRecovery` on the one path both the CLI and the web endpoint run on, carrying the recovered schema) | `GRAPH.md § Engine Constructor by Path` |
 | Minimum Go version and external dependencies | `BUILD.md § Go Toolchain` |
@@ -227,6 +234,7 @@ To prevent drift across SPEC files, the following topics have a single authorita
 - Individual roadmap databases: `~/.roadmaps/<name>/project.db` with permissions `0600`, created with mode `0600` from the outset (no umask-derived window) and re-applied and re-verified every time `rmp` opens the database. A database that cannot be brought to `0600` fails the command. The SQLite sidecars `project.db-wal` and `project.db-shm` live alongside and use the same `0600` permissions, restricted opportunistically rather than as a hard guarantee. See `ARCHITECTURE.md § Open-Time Permission Enforcement`.
 - Neither the data directory nor any roadmap home directory may be a symbolic link; `rmp` refuses to follow a symlink when creating, opening, or migrating a roadmap directory (CWE-59). See `ARCHITECTURE.md § Directory Structure` and `ARCHITECTURE.md § Security Guarantees`.
 - Per-roadmap knowledge graph store: `~/.roadmaps/<name>/graph/` (a directory) with permissions `0700`, created on first use of the `graph` command. See `GRAPH.md § Persistence Layout`.
+- Per-roadmap graph server socket: `~/.roadmaps/<name>/graph.sock` with permissions `0600`, present only while `rmp graph serve` is running for that roadmap. See `GRAPH.md § Socket Path and Permissions`.
 - Roadmaps in the legacy `~/.roadmaps/<name>.db` layout are migrated automatically to the current layout at startup. See `ARCHITECTURE.md § Filesystem Layout Migration`.
 
 ### Naming Conventions

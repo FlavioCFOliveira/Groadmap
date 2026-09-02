@@ -220,6 +220,8 @@ help text must match the command contract in `COMMANDS.md`.
 | Backlog | `rmp backlog [list \| show-next]` | `COMMANDS.md § Backlog Management` |
 | Stats | `rmp stats` | `COMMANDS.md § Statistics Command` |
 | Graph | `rmp graph execute` | `COMMANDS.md § Graph Management` |
+| Graph | `rmp graph serve` | `COMMANDS.md § Graph Management` |
+| Graph | `rmp graph client` | `COMMANDS.md § Graph Management` |
 | Web | `rmp web` | `COMMANDS.md § Web Interface` |
 
 Each subcommand in the inventory has its own dedicated help printer in
@@ -592,7 +594,9 @@ explicit, because a reader cannot infer them from the generic template:
 The `graph` family help and the `graph execute` help follow the same
 structure template as every other family but MUST additionally make four
 graph-specific behaviours explicit, because an agent cannot infer them
-from the generic template:
+from the generic template. Items 5 to 9 add the behaviours the graph
+server and its client introduce; items 1 to 4 continue to govern
+`execute`.
 
 1. **Query input.** State that the Cypher statement comes from the `-q` /
    `--query` flag or, when the flag is absent, from standard input, and that
@@ -622,6 +626,62 @@ from the generic template:
    statement, or split it — in the same terms as the published error line.
    It introduces no new exit code, so no line is added to the block. See
    `GRAPH.md § Statement Time Budget` and `COMMANDS.md § Graph Management`.
+5. **Three subcommands, and what each is for.** The family help MUST list
+   `execute`, `serve` and `client`, each with a verb-first description, and
+   MUST make the distinction between them explicit in one sentence rather
+   than leaving it to be inferred from three summaries: `execute` runs a
+   statement against the roadmap's graph, `serve` makes that graph available
+   over a socket until it is stopped, and `client` sends a statement to a
+   running server. See `COMMANDS.md § Graph Management`.
+6. **A running server is used automatically; the flag chooses the target, not
+   the path.** The `execute` help MUST state that when a server is serving the
+   selected roadmap the statement is sent to that server instead of opening
+   the store, that this happens with no flag and no configuration, and that
+   the result and the exit code are the same either way. It MUST additionally
+   document `--socket <path>` for what it is: the socket the invocation
+   resolves, defaulting to `~/.roadmaps/<name>/graph.sock`, written only when
+   the server was started with the same flag. The help MUST NOT present it as
+   a switch that forces or forbids a server, because it is neither. An agent
+   told only "it is automatic" would have no way to reach a server on a
+   non-default socket; an agent told only "there is a flag" would write it on
+   every invocation. See `GRAPH.md § Server Resolution` and
+   `GRAPH.md § Serving on a Non-Default Socket`.
+7. **`client` requires a server and does not fall back.** The `client` help
+   MUST state that a roadmap with no server listening is a failure (exit code
+   1) and not a fall back onto the store, and MUST name the socket it
+   resolves: `~/.roadmaps/<name>/graph.sock` unless `--socket` overrides it.
+   This is the one place the two Cypher-running subcommands differ — they take
+   the same statement sources and the same `--socket` flag, and differ only in
+   whether an unanswered socket is a fallback or a failure — so it is the one
+   an agent choosing between them needs. See `GRAPH.md § The Bolt Client`.
+8. **`serve` is long-lived, and it is the second such command.** The `serve`
+   help MUST state that the command does not complete and exit: it serves
+   until `Ctrl+C` (`SIGINT`) or `SIGTERM`, then drains, checkpoints and exits
+   0, exactly as `rmp web` does and unlike every other command. It MUST state
+   that it prints the bound socket path as JSON on startup, and that one
+   server runs per roadmap, a second against the same roadmap failing rather
+   than queuing. See `GRAPH.md § The Dedicated Graph Server`.
+9. **The socket's access model is stated, because it is the whole access
+   model.** The `serve` help MUST state that the socket is created with mode
+   `0600` inside the roadmap's `0700` home directory, that the server
+   authenticates nobody, and that any caller able to open the socket can read,
+   write, delete and change the schema of that roadmap's graph. Where the
+   `serve` help documents `--socket`, it MUST state the consequence a user
+   cannot infer: the CLI follows a non-default socket through the same flag,
+   and the web interface cannot follow it at all and fails against that
+   roadmap's graph for as long as the server runs
+   (`GRAPH.md § Serving on a Non-Default Socket`). It is the same
+   obligation item 2 of `Web command help specifics` places on `rmp web` for
+   the same reason: a surface with no authentication has to say so where the
+   reader is, not only in the specification. See
+   `GRAPH.md § Socket Path and Permissions`.
+
+The `graph serve` and `graph client` helps carry an `Exit codes:` block like
+every other subcommand help, listing only the codes each can emit;
+`ARCHITECTURE.md § Exit Codes of the Graph Server and Client` enumerates
+them, and `COMMANDS.md § Serve Exit Codes` and
+`COMMANDS.md § Client Exit Codes` are the command contract for them. Neither
+subcommand adds an exit code to the catalogue.
 
 ### Web command help specifics
 
@@ -646,7 +706,7 @@ or user cannot infer from the generic template:
    with the default-port ephemeral fallback. See `WEB.md`.
 3. **Long-lived process.** State that the command starts a server that keeps
    running until interrupted (`Ctrl+C` / `SIGINT` or `SIGTERM`), unlike every
-   other command, which completes and exits. On startup it prints the served
+   command except `rmp graph serve`, which completes and exits. On startup it prints the served
    URL; with `--no-open` it does not launch a browser.
 
 The skeleton (illustrative; the canonical contract is

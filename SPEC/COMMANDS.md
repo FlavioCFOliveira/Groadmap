@@ -64,6 +64,7 @@ Three consequences follow, and they hold for every table and every code block in
 | `<flag>` | A flag name, in its kebab-case spelling and without the leading dashes, which the string supplies. |
 | `<sentinel>` | The sentinel text of the failure class the surface reports, in the one published string whose sentinel varies by surface, resolved by `§ Entity Identifier Range (All Positional Ids and --entity-id)`. |
 | `<detail>`, `<engine diagnostic>` | Text produced by a component other than `rmp` — the operating system, or the Cypher engine. Not specified here. |
+| `<socket>` | The filesystem path of a graph server's Unix domain socket, as the invocation resolved it: the default derived from the roadmap, or the value of `--socket`. Resolved by `GRAPH.md § Socket Path and Permissions`. |
 | `<ids>` | One or more ids, space-separated, in the order the user supplied them, as Go renders a slice of integers. The square brackets that surround the list in the message are literal text and are shown outside the placeholder. |
 | `<absolute path of ~/.roadmaps>` | The resolved data-directory path. |
 
@@ -120,7 +121,7 @@ The rules are:
 2. **The first offending token is named, and only that one.** When several positional arguments exceed the maximum, the command names the first of them in command-line order and stops.
 3. **The position of the offending token does not matter.** What is refused is whatever positional arguments remain once the command's flags and their values have been consumed, not a particular slot on the command line. An extra token written between two flags and one written at the end of the line are the same error.
 4. **A comma-separated list is one positional argument.** Every command that takes a list of ids takes it as a single token, without spaces. `rmp task get -r <name> 12,13,14` supplies one positional argument and is within an arity of one; `rmp task get -r <name> 12 13 14` supplies three and is refused.
-5. **A token that begins with `-` is normally a flag, not a positional argument.** An unrecognised one is refused as an unknown flag — `Error: invalid input: unknown flag: --foo` — under the same exit code `2`. Two commands refine that classification and each states its own rule: the comment subcommands treat every `-`-prefixed token as a flag, digits included (`Comment Positional Argument Contract` below, rule 2), while `graph execute` treats a `-` followed by a digit or a decimal point as a numeric value rather than a flag (`GRAPH.md § Cypher Input Source and Precedence`, rule 4). A stray `-1` is therefore an excess positional argument on `graph execute` and an unknown flag on a comment subcommand.
+5. **A token that begins with `-` is normally a flag, not a positional argument.** An unrecognised one is refused as an unknown flag — `Error: invalid input: unknown flag: --foo` — under the same exit code `2`. Two commands refine that classification and each states its own rule: the comment subcommands treat every `-`-prefixed token as a flag, digits included (`Comment Positional Argument Contract` below, rule 2), while the two subcommands that read a Cypher statement, `graph execute` and `graph client`, treat a `-` followed by a digit or a decimal point as a numeric value rather than a flag (`GRAPH.md § Cypher Input Source and Precedence`, rule 4). A stray `-1` is therefore an excess positional argument on either of those two and an unknown flag on a comment subcommand.
 6. **The refusal precedes every side effect.** It happens while the arguments are parsed: before the roadmap database is opened, before the graph store is opened, and before standard input is read. A refused invocation therefore creates nothing, changes nothing, deletes nothing, writes no audit entry, and writes zero bytes to stdout. It is refused even when it also carries a value that would fail validation on its own with exit code `6`, and even when it names a roadmap, task, sprint, or comment that does not exist, which on its own would be exit code `4`.
 7. **No help follows the refusal.** An excess positional argument is not a dispatch failure, so stderr carries the error line and the AI-agent hint alone (`HELP.md § Error message format`).
 8. **The rule governs the maximum only.** A required positional argument that is absent is refused by the command's own contract, with the message that command's block publishes.
@@ -134,7 +135,7 @@ An unresolved command or subcommand name is resolved before any of this and stay
 | `rmp graph execute` | `Error: invalid input: unexpected argument "X" (graph queries use --query or stdin)` |
 | `rmp ai-help` | `Error: ai-help accepts no positional arguments or flags other than --help` |
 
-The `graph execute` line is the canonical line with a hint appended naming the two sources a Cypher query may come from; the exit code and the rest of the line are unchanged. **The hint is part of the published line and not an incidental remark**: a caller matching that line matches it in full, for the reason `§ Published Error Strings Are Exact` gives for every other error line. It stays confined to `graph execute`, because it names the two sources of a Cypher query and no other command has them. `GRAPH.md § No Positional Query: A Stray Token Is Refused` is canonical for that subcommand's whole rule — the line, the classification of a `-`-prefixed token, and where the refusal lands in its order. The `ai-help` line carries no sentinel and covers an unrecognised flag as well as a positional argument; `§ AI Help` is canonical for it. The third is `rmp web`, whose line writes the offending token after a colon and without quotes; `§ Web Interface` publishes it, in that command's own error table.
+The `graph execute` line is the canonical line with a hint appended naming the two sources a Cypher query may come from; the exit code and the rest of the line are unchanged. **The hint is part of the published line and not an incidental remark**: a caller matching that line matches it in full, for the reason `§ Published Error Strings Are Exact` gives for every other error line. It stays confined to the two subcommands that read a Cypher statement, `graph execute` and `graph client`, because it names the two sources such a statement may come from and no other command has them; `graph serve` reads no statement and publishes the canonical line of rule 1 instead. `GRAPH.md § No Positional Query: A Stray Token Is Refused` is canonical for those subcommands' whole rule — the line, the classification of a `-`-prefixed token, and where the refusal lands in its order. The `ai-help` line carries no sentinel and covers an unrecognised flag as well as a positional argument; `§ AI Help` is canonical for it. The third is `rmp web`, whose line writes the offending token after a colon and without quotes; `§ Web Interface` publishes it, in that command's own error table.
 
 ### Positional Arity by Command
 
@@ -3429,21 +3430,49 @@ Each roadmap owns one graph, stored under that roadmap's home directory at
 first use of the `graph` command. The graph is independent of the roadmap's
 SQLite tasks and sprints data in this version.
 
-`graph` has one subcommand, `execute`. It accepts any Cypher statement the engine
-accepts and runs it.
+`graph` has three subcommands. `execute` and `client` each accept any Cypher
+statement the engine accepts and run it; they differ only in where the statement
+runs. `serve` runs no statement of its own: it makes the graph available to the
+other two.
 
 | Subcommand | Operation | Accepts |
 |------------|-----------|---------|
-| `execute` | Run a Cypher statement | Any statement the engine accepts: reads, writes, deletions, schema DDL, and schema introspection alike |
+| `execute` | Run a Cypher statement against the roadmap's graph | Any statement the engine accepts: reads, writes, deletions, schema DDL, and schema introspection alike |
+| `serve` | Serve the roadmap's graph over a Unix domain socket until stopped | No statement. It takes a roadmap and, optionally, a socket path |
+| `client` | Send a Cypher statement to a running server and print its result | Any statement the engine accepts, exactly as `execute` does |
 
 **There is no operation-class check and there are no aliases.** `rmp graph`
-publishes exactly one subcommand name, `execute`. `create`, `query`, `update`,
-`delete`, and `search` are not subcommand names of `rmp graph`: each is an
-unresolved subcommand and is answered as a dispatch failure — exit code `127`, the
-`graph` help on stderr, nothing on stdout (see
+publishes exactly three subcommand names, `execute`, `serve` and `client`.
+`create`, `query`, `update`, `delete`, and `search` are not subcommand names of
+`rmp graph`: each is an unresolved subcommand and is answered as a dispatch
+failure — exit code `127`, the `graph` help on stderr, nothing on stdout (see
 `§ Dispatch Failures (Unresolved Command or Subcommand Names)`). They are named
 here because an agent that has one of them in memory needs to be told, in the
 specification, that it will not resolve.
+
+**A running server changes where a statement executes, and nothing else.** When a
+server is serving the selected roadmap, `rmp graph execute` sends its statement to
+that server instead of opening the store itself, and so does the web interface's
+graph data endpoint; with no server listening, both open the store directly, as
+they always have. The statement, the result, the output shape and the exit code
+are the same either way. `GRAPH.md § Server Resolution` fixes the rule, its four
+states, and the outcome each surface reports for each state. What a caller gains
+from starting a server is throughput and latency — one store open instead of one
+per invocation, and concurrent sessions the store's MVCC resolves — not a
+different contract.
+
+**No flag chooses between the two paths; one flag chooses which socket is
+looked at.** All three subcommands that reach a graph take `--socket <path>`, and
+all three default it to the same path derived from the roadmap. The flag names the
+socket the invocation resolves — it does not force a server, does not forbid one,
+and does not select the direct path. Whether the statement ends up at a server is
+decided by what answers on the path in force, and by nothing the caller writes.
+
+**`rmp graph client` is not `rmp graph execute` with a socket.** It speaks to a
+server and only to a server. Against a roadmap with no server listening it fails;
+it never falls back to opening the store, because a subcommand that did would
+report a success that says nothing about whether a server was reached (see
+`GRAPH.md § The Bolt Client`).
 
 **`execute` runs what it is given, and the caller owns what that does.** No
 subcommand's contract says that a statement cannot delete. A statement's effect is
@@ -3465,12 +3494,23 @@ valid its Cypher is and however healthy the store, and the remedy is to narrow i
 statements. `GRAPH.md § Statement Time Budget` is canonical for what a cut
 statement leaves behind, and `WEB.md § Graph Query Time Budget` for the value.
 
-### Options
+### Execute Options
 
 - `-r, --roadmap <name>` - REQUIRED. Target roadmap (see
   `COMMANDS.md § Roadmap Selection (Always Required)`).
 - `-q, --query <cypher>` - The Cypher statement to run. When omitted, the
   statement is read from standard input under a bound; it is not read to EOF.
+- `--socket <path>` - Path of the graph server socket this invocation resolves.
+  Default `~/.roadmaps/<name>/graph.sock`, derived from the selected roadmap and
+  identical to the derivation `graph serve` and `graph client` use. The flag
+  changes **which socket is looked at**, never what happens next: a server
+  answering there takes the statement, and a path that is absent or refuses the
+  connection sends the invocation to the store under the exclusive lock, exactly
+  as before the flag existed (see `GRAPH.md § Server Resolution`). Supplying the
+  flag with an empty value is a missing parameter (exit code 2). It is the flag
+  that lets the CLI follow a server started with `--socket`; the web graph data
+  endpoint has no equivalent and cannot (see
+  `GRAPH.md § Serving on a Non-Default Socket`).
 - `-h, --help` - Show the subcommand help.
 
 **Query input source and precedence.** The statement has exactly two sources,
@@ -3484,7 +3524,7 @@ does not restate those rules. It restated them once, and the copy contradicted t
 original the day the original changed, which is the outcome
 `README.md § 3. Canonical Sources` exists to prevent.
 
-### Output
+### Execute Output
 
 - On success the output mirrors what the executed statement returns. When the
   statement produces result columns, the output is the `{columns, rows}` shape
@@ -3514,21 +3554,30 @@ original the day the original changed, which is the outcome
   `GRAPH.md § Query Notifications as Diagnostics`).
 - Errors: plain text to stderr, with the standard AI-agent hint.
 
-### Exit Codes
+### Execute Exit Codes
 
 | Exit Code | Cause |
 |-----------|-------|
 | 0 | The statement executed successfully. |
 | 1 | Cypher failed to parse or execute, or the graph store could not be opened, read, or written (`utils.ErrDatabase`). A schema statement the engine refuses is in this class, including one whose keyword spacing the engine does not route to its schema parser. See `GRAPH.md § Schema Failure Classes`. |
 | 1 | The statement exhausted the 5-second statement time budget and was cancelled (`utils.ErrDatabase`). Nothing was written: the transaction rolled back, no snapshot was produced, and the write-ahead log was left unchanged. See `GRAPH.md § Statement Time Budget`. |
-| 2 | No statement supplied: `--query` absent and standard input empty, whitespace only, or a terminal; or `--query` present with an empty, whitespace-only, or absent value (`utils.ErrRequired`). |
+| 2 | No statement supplied: `--query` absent and standard input empty, whitespace only, or a terminal; or `--query` present with an empty, whitespace-only, or absent value; or `--socket` supplied with an empty value (`utils.ErrRequired`). |
 | 2 | A positional argument was supplied. `graph execute` accepts none, so a bare Cypher statement on the command line, or any other token that is neither a flag nor a flag's value, is refused (`utils.ErrInvalidInput`). See `GRAPH.md § No Positional Query: A Stray Token Is Refused`. |
 | 3 | No roadmap selected and none provided via `-r` (`utils.ErrNoRoadmap`). |
 | 4 | Selected roadmap does not exist (`utils.ErrNotFound`). |
 | 6 | The statement is longer than the maximum query length of 1 MiB (1048576 bytes), whether it arrived through `--query` or through standard input (`utils.ErrValidation`). See `GRAPH.md § Maximum Query Length`. This is the only cause of exit code 6 the command has. |
+| 1 | The roadmap's socket answers, but no server could be reached through it within the resolution probe, or the connection failed for a reason other than the socket being absent or refusing (`utils.ErrDatabase`). The store was not opened and no lock was taken. See `GRAPH.md § Server Resolution`. |
+| 1 | The connection to a server was lost after the statement had been sent (`utils.ErrDatabase`). Whether the statement committed is unknown, and the invocation does not retry it against the store. See `GRAPH.md § Server Resolution`, rule 4. |
+
+A socket file with nothing listening behind it is **not** in that table, because it
+is not a failure: the invocation reads the refused connection as evidence that the
+roadmap is not served, opens the store directly, and exits 0 (see
+`GRAPH.md § Server Resolution`, rule 1).
 
 The canonical exit-code catalogue is in `ARCHITECTURE.md § Exit Codes`; the graph
 feature introduces no new codes.
+`ARCHITECTURE.md § Exit Codes of the Graph Server and Client` enumerates the codes
+`serve` and `client` can return.
 
 ### Execute
 
@@ -3539,7 +3588,17 @@ echo "<cypher>" | rmp graph execute -r <name>
 
 **Description:** Runs one Cypher statement against the roadmap's knowledge graph
 and returns its result. A statement that changes the graph runs inside a single
-transaction and is persisted durably before the process exits.
+transaction and is persisted durably before the process exits — or, when a graph
+server is serving the roadmap, it is sent to that server and persisted there.
+
+**Where the statement runs is resolved, not chosen.** The invocation resolves the
+socket in force — the default derived from the roadmap, or the value of
+`--socket` — and sends the statement to whatever server answers there. With
+nothing answering, it opens the store itself under the exclusive lock, which is
+what every invocation did before a server existed, and the paragraphs below
+describe that path. `GRAPH.md § Server Resolution` is canonical for the rule.
+`--socket` is written only when the server was started with it; an ordinary
+invocation against an ordinary server needs no flag at all.
 
 **Reading:**
 
@@ -3599,22 +3658,312 @@ statements: which forms the engine accepts, how a schema object is named, why
 changing an index is two invocations rather than one, and how a schema failure
 surfaces.
 
-### Error Cases
+### Execute Error Cases
 
 | Scenario | Exit Code | stderr Output (illustrative) |
 |----------|-----------|------------------------------|
 | Roadmap not specified | 3 | "Error: no roadmap selected: use -r <name> or --roadmap <name>" |
 | Roadmap not found | 4 | "Error: resource not found: roadmap \"X\" not found" |
 | No statement supplied | 2 | "Error: required parameter missing: no query supplied" |
+| `--socket` supplied with an empty value | 2 | "Error: required parameter missing: --<flag>" |
 | Stray positional argument, such as a bare Cypher statement written without `--query` | 2 | "Error: invalid input: unexpected argument \"X\" (graph queries use --query or stdin)" |
 | Statement above the maximum length | 6 | "Error: validation error: query exceeds maximum length of 1048576 bytes" |
 | Cypher parse/execution error | 1 | "Error: database error: graph query failed: <engine diagnostic>" |
 | Statement cancelled for exhausting the 5-second statement time budget | 1 | "Error: database error: graph query exceeded the 5s statement time budget; nothing was written. Narrow the statement — add a label, an indexed property filter, or a LIMIT — or split it into smaller statements." |
 | Graph store open/read/write failure | 1 | "Error: database error: graph store unavailable: <detail>" |
+| A server could not be reached through a socket that answered | 1 | The unreachable line of `§ Graph Server Socket Error Lines` |
+| Connection to a server lost after the statement was sent | 1 | The lost-connection line of `§ Graph Server Socket Error Lines` |
+| A server did not answer within the caller's backstop deadline | 1 | The unanswered line of `§ Graph Server Socket Error Lines` |
+
+The last three rows arise only against a roadmap a graph server is serving; a
+socket file with nothing listening behind it produces none of them, because the
+invocation reads it as evidence that the roadmap is not served and opens the
+store.
 
 The parse/execution row and the store-failure row end in a diagnostic the Cypher engine produces, not `rmp`. The part `rmp` fixes is everything up to and including `graph query failed: ` and `graph store unavailable: `; what follows is the engine's own text and is not specified here.
 
 The budget row is not one of them: it carries no engine diagnostic and no placeholder, and every character of it is `rmp`'s own text, so it is compared in full. `5s` is the budget itself, rendered as a duration; it is a fixed value and not a value the binary interpolates from the invocation. The line says the three things a caller who has just lost a statement needs: what was exceeded, that nothing was written, and what to do next. `GRAPH.md § Statement Time Budget` is canonical for the behaviour it reports.
+
+### Graph Server Socket Error Lines
+
+Seven failure conditions belong to the socket rather than to the roadmap, the
+statement, or the store, and three of this section's error tables refer here for
+their exact lines instead of each publishing a copy. Every line is complete, as
+`§ Published Error Strings Are Exact` requires, and every one carries
+`utils.ErrDatabase` and exit code 1 (`GRAPH.md § Error Handling and Exit Codes`).
+`<socket>` is the resolved socket path and `<detail>` is the operating system's
+own diagnostic; the placeholder table under `§ Published Error Strings Are Exact`
+declares both.
+
+- **A live server already answers on the socket `graph serve` resolved.** The line
+  is `Error: database error: a graph server is already serving <socket>`. The
+  incumbent's socket is left exactly as it was found, and the incumbent keeps
+  serving (`GRAPH.md § Server Startup`, step 3).
+- **`graph serve` could not bind its socket.** The line is
+  `Error: database error: cannot bind <socket>: <detail>`. The part `rmp` fixes is
+  everything up to and including `cannot bind <socket>: `; the text after it is
+  the operating system's, exactly as it is on the two bind rows of
+  `§ Web Interface`.
+- **`graph serve` could not take the roadmap's graph store lock within the bounded
+  wait.** The line is
+  `Error: database error: cannot take the graph store lock for roadmap "X": another rmp graph serve may already be running for it`.
+  This is what refuses a second server against the same roadmap, and the line says
+  so rather than reporting an unavailable store, because a second server is the
+  overwhelmingly likely cause and the reader can act on it. It says "may": the
+  lock records no holder, so the invocation reports the likely cause and does not
+  assert it (`GRAPH.md § Server Startup`, step 2).
+- **`graph client` found no server listening.** The line is
+  `Error: database error: no graph server is listening on <socket>`. It covers
+  both the socket that does not exist and the socket file a killed server left
+  behind, because the two are one condition for this subcommand: there is nothing
+  to send the statement to. `graph client` does not open the store
+  (`GRAPH.md § The Bolt Client`).
+- **A server could not be reached through a socket that answered.** The line is
+  `Error: database error: graph server unreachable at <socket>: <detail>`. This is
+  the `Unreachable` state of `GRAPH.md § Server Resolution`: the connection was
+  accepted but the handshake did not complete inside the probe, or it failed for a
+  reason other than the socket being absent or refusing. `graph execute` reports
+  it and does **not** fall back to the store, because a socket that answers may
+  belong to a server holding the lock.
+- **The connection was lost after the statement had been sent.** The line is
+  `Error: database error: the connection to the graph server at <socket> was lost; the statement's outcome is unknown`.
+  It is deliberately not a claim that nothing was written: a commit is durable
+  before it is acknowledged, so a connection lost between the two leaves the
+  outcome genuinely unknown, and a line that said "nothing was written" would be
+  false in exactly the case a caller most needs the truth
+  (`GRAPH.md § Server Resolution`, rule 4).
+- **The server did not answer within the caller's backstop deadline.** The line is
+  `Error: database error: the graph server at <socket> did not answer within 7.5s; the statement's outcome is unknown`.
+  The connection is intact here and the server is alive; it is simply not
+  answering, which is what a statement the budget cut mid-write looks like from
+  outside, because the engine's undo replay runs past the deadline by a factor
+  nothing bounds (`GRAPH.md § Statement Time Budget`). The outcome is unknown for
+  the same reason the previous line's is, and the caller does not fall back to the
+  store. `7.5s` is the backstop itself rendered as a duration, a fixed value and
+  not one the binary interpolates (`GRAPH.md § Server Resolution`, rule 7).
+
+### Serve Options
+
+- `-r, --roadmap <name>` - REQUIRED. Target roadmap (see
+  `COMMANDS.md § Roadmap Selection (Always Required)`). The server serves this one
+  roadmap's graph and no other.
+- `--socket <path>` - Path of the Unix domain socket to bind. Default
+  `~/.roadmaps/<name>/graph.sock`, derived from the selected roadmap. Supplying
+  the flag with an empty value is a missing parameter (exit code 2); supplying a
+  path that cannot be bound is a bind failure (exit code 1). A non-default path is
+  followed by the two CLI subcommands that take the same flag, `graph execute` and
+  `graph client`, and by nothing else: the web graph data endpoint has no way to
+  receive it, resolves the default path, finds nothing there, and fails against
+  the running server's lock for as long as it runs.
+  `GRAPH.md § Serving on a Non-Default Socket` is canonical for that boundary.
+- `-h, --help` - Show the subcommand help.
+
+`rmp graph serve` accepts no positional argument; `§ Positional Arguments` is
+canonical for the refusal and for the line it writes. It takes no `--query`: it
+runs no statement of its own.
+
+The socket is created with mode `0600`, set explicitly rather than left to the
+process umask, and it sits inside a roadmap home directory that is `0700`. Access
+control is the filesystem and there is no other: the server authenticates nobody,
+so a caller that can open the socket can read, write, delete, and change the
+schema of that roadmap's graph. `GRAPH.md § Socket Path and Permissions` is
+canonical for the path, the mode, and the access model.
+
+### Serve Output
+
+- **On successful startup (stdout):** a single JSON object naming the socket the
+  server bound, so the path is machine-readable even when the caller supplied
+  none:
+
+  ```json
+  {"socket": "/home/user/.roadmaps/backend-platform/graph.sock"}
+  ```
+
+  The `socket` value is the absolute path actually bound, whether it came from the
+  default derivation or from `--socket`. The object is pretty-printed with
+  two-space indentation and a trailing newline, consistent with all other JSON
+  output (see `DATA_FORMATS.md § Implementation Notes`).
+- **While running:** the server answers Bolt sessions on the socket. Per-statement
+  results go to the client that asked for them, not to the command's stdout.
+- **Diagnostics (stderr):** plain text. Two warnings from the engine are expected
+  at startup and are not failures: one for a server running without transport
+  security, and one for a server running without authentication. Both are
+  accurate, and `GRAPH.md § Socket Path and Permissions` explains why both states
+  are the intended ones.
+- **Errors (stderr):** plain text, with the standard AI-agent hint, per
+  `HELP.md § Error message format`.
+
+### Serve Exit Codes
+
+These are the exit codes of the `rmp graph serve` **process**. A statement a
+client sends fails or succeeds inside a session and never changes them.
+
+| Exit Code | Cause |
+|-----------|-------|
+| 0 | The server started, served, and was stopped by `SIGINT` or `SIGTERM`. It drained, checkpointed, released the store lock, and removed its socket. |
+| 1 | The graph store could not be opened or recovered; or its exclusive lock could not be taken within the bounded wait, which is what refuses a second server against the same roadmap; or the socket could not be bound; or a live server already answers on the resolved socket (`utils.ErrDatabase`). |
+| 2 | Unknown flag, or an unexpected positional argument (`utils.ErrInvalidInput`); or `--socket` supplied with an empty value (`utils.ErrRequired`). |
+| 3 | No roadmap selected and none provided via `-r` (`utils.ErrNoRoadmap`). |
+| 4 | Selected roadmap does not exist (`utils.ErrNotFound`). |
+
+The canonical exit-code catalogue is in `ARCHITECTURE.md § Exit Codes`, and
+`ARCHITECTURE.md § Exit Codes of the Graph Server and Client` states why a
+graceful stop is 0 rather than 130. The graph server introduces no new codes.
+
+### Serve
+
+**Usage:** `rmp graph serve -r <name> [--socket <path>]`
+
+**Description:** Opens the roadmap's knowledge graph once, holds it and its
+advisory store lock for the life of the process, and answers Cypher statements
+over a Unix domain socket until it is stopped. The protocol is Bolt version 5,
+served by the engine's own server; Groadmap defines no protocol of its own.
+
+`rmp graph serve` is long-lived. It is one of two commands whose process keeps
+running rather than completing a single operation and exiting, the other being
+`rmp web`. Sending `SIGINT` (`Ctrl+C`) or `SIGTERM` drains the work in flight,
+shuts the server down, checkpoints, releases the lock, removes the socket, and
+exits 0. `GRAPH.md § Server Shutdown and the Drain` is canonical for what the
+drain guarantees and, as importantly, for what it does not.
+
+**One server per roadmap.** The roadmap's store lock is the interlock: a second
+`rmp graph serve` against the same roadmap cannot take it, fails, and leaves the
+first server's socket untouched. A server on a socket some *other* roadmap's
+server already owns is refused by the socket probe instead.
+`GRAPH.md § Server Startup` fixes the order in which the two checks run and why
+that order is the one that keeps the incumbent's socket safe.
+
+**What the server does not do.** It runs no statement of its own, it creates no
+graph directory that does not already exist, and it never reads or writes a
+roadmap's `project.db`. It serves one roadmap; serving several means running
+several servers, one per roadmap, each on its own socket.
+
+### Serve Error Cases
+
+| Scenario | Exit Code | stderr Output |
+|----------|-----------|---------------|
+| Roadmap not specified | 3 | "Error: no roadmap selected: use -r <name> or --roadmap <name>" |
+| Roadmap not found | 4 | "Error: resource not found: roadmap \"X\" not found" |
+| Unknown flag | 2 | "Error: invalid input: unknown flag: --foo" |
+| Unexpected positional argument | 2 | "Error: invalid input: unexpected argument \"X\"" |
+| `--socket` supplied with an empty value | 2 | "Error: required parameter missing: --<flag>" |
+| Graph store lock could not be taken within the bounded wait | 1 | The lock line of `§ Graph Server Socket Error Lines` |
+| A live server already answers on the resolved socket | 1 | The already-serving line of `§ Graph Server Socket Error Lines` |
+| Socket could not be bound | 1 | The bind line of `§ Graph Server Socket Error Lines` |
+| Graph store open/recovery failure | 1 | "Error: database error: graph store unavailable: <detail>" |
+
+### Client Options
+
+- `-r, --roadmap <name>` - REQUIRED. Target roadmap (see
+  `COMMANDS.md § Roadmap Selection (Always Required)`). It selects the graph the
+  statement runs against and, unless `--socket` overrides it, the socket the
+  statement is sent to.
+- `--socket <path>` - Path of the server's Unix domain socket. Default
+  `~/.roadmaps/<name>/graph.sock`, the same derivation `graph serve` uses.
+  Supplying the flag with an empty value is a missing parameter (exit code 2).
+- `-q, --query <cypher>` - The Cypher statement to send. When omitted, the
+  statement is read from standard input under a bound; it is not read to EOF.
+  There is no `--statement` flag: the statement reaches `client` through exactly
+  the two sources it reaches `execute` through.
+- `-h, --help` - Show the subcommand help.
+
+**Query input source and precedence.** The statement has the same two sources
+`execute` has, under the same rules, and
+`GRAPH.md § Cypher Input Source and Precedence` is canonical for every one of
+them: which source wins, the maximum query length and the bounded read that
+enforces it, what happens when no statement is supplied at all, and the refusal of
+a statement written as a positional argument instead of through either source.
+This section does not restate them.
+
+### Client Output
+
+- On success the output is byte-for-byte the output `rmp graph execute` produces
+  for the same statement against the same graph: the `{columns, rows}` shape when
+  the statement produces result columns, and exactly `{"ok": true}` when it
+  produces none. `DATA_FORMATS.md § Graph Client Result` is canonical for the
+  mapping that makes the two identical, and
+  `DATA_FORMATS.md § Graph Query Result` and
+  `DATA_FORMATS.md § Graph Write Result` remain canonical for the shapes
+  themselves.
+- Query notifications: the subcommand surfaces, as one plain-text diagnostic line
+  per notification on stderr, the advisory notifications the server returns for
+  the executed statement, exactly as `execute` surfaces the ones the engine
+  returns to it (see `GRAPH.md § Query Notifications as Diagnostics`).
+- A retriable serialisation conflict is **not** an error and is not printed. It is
+  retried, and only an exhausted retry policy or an exhausted statement budget
+  produces a failure (see `GRAPH.md § Concurrency Inside the Server`).
+- Errors: plain text to stderr, with the standard AI-agent hint.
+
+### Client Exit Codes
+
+| Exit Code | Cause |
+|-----------|-------|
+| 0 | The statement was sent to a server, ran, and its result was written to stdout. |
+| 1 | No server is listening for the roadmap; or a server could not be reached through the socket; or the connection was lost, or went unanswered, after the statement was sent; or the statement failed to parse or execute in the engine; or it exhausted the 5-second statement time budget; or a value the server returned could not be mapped onto the published result shape (`utils.ErrDatabase`, see `DATA_FORMATS.md § Graph Client Result`, rule 3). |
+| 2 | No statement supplied: `--query` absent and standard input empty, whitespace only, or a terminal; or `--query` present with an empty, whitespace-only, or absent value; or `--socket` supplied with an empty value (`utils.ErrRequired`). |
+| 2 | A positional argument was supplied. `graph client` accepts none, exactly as `graph execute` accepts none (`utils.ErrInvalidInput`). |
+| 3 | No roadmap selected and none provided via `-r` (`utils.ErrNoRoadmap`). |
+| 4 | Selected roadmap does not exist (`utils.ErrNotFound`). |
+| 6 | The statement is longer than the maximum query length of 1 MiB (1048576 bytes), whether it arrived through `--query` or through standard input (`utils.ErrValidation`). |
+
+The canonical exit-code catalogue is in `ARCHITECTURE.md § Exit Codes`, and
+`ARCHITECTURE.md § Exit Codes of the Graph Server and Client` states why a socket
+with nothing behind it is 1 rather than 4. The graph client introduces no new
+codes.
+
+### Client
+
+**Usage:** `rmp graph client -r <name> -q "<cypher>"`, or
+`rmp graph client -r <name>` with the statement on standard input. Add
+`--socket <path>` when the server was started with one.
+
+**Description:** Sends one Cypher statement to a running graph server over its
+Unix domain socket and prints the result. It reads and writes alike: the server
+does not examine the statement any more than `execute` does, so a statement that
+creates, changes, deletes, or alters the schema is executed and committed.
+
+**It requires a server.** With none listening, the invocation fails; it does not
+open the store. That is the whole difference between this subcommand and
+`execute`, which resolves the same socket but has a second path to fall back on
+(`GRAPH.md § The Bolt Client`).
+
+**A serialisation conflict is retried, not reported.** Two clients writing to the
+same nodes at the same time is an ordinary situation inside a server, and the
+store detects the collision rather than preventing it. The losing statement
+committed nothing, so the client re-sends it, under the project's retry policy,
+and reports a failure only when that policy or the statement budget is exhausted
+(`GRAPH.md § Concurrency Inside the Server`).
+
+**The statement runs under the same 5-second time budget** `execute` runs under.
+The server is the end that enforces it, and the client keeps a later deadline of
+its own purely as a backstop against a server that answers nothing, so that a
+statement which committed just before the budget expired is never reported as one
+that wrote nothing. A statement the budget genuinely cut fails with exit code 1
+and the budget line `§ Execute Error Cases` publishes;
+`GRAPH.md § Server Resolution`, rule 7, is canonical for the two deadlines and for
+why they differ.
+
+### Client Error Cases
+
+| Scenario | Exit Code | stderr Output |
+|----------|-----------|---------------|
+| Roadmap not specified | 3 | "Error: no roadmap selected: use -r <name> or --roadmap <name>" |
+| Roadmap not found | 4 | "Error: resource not found: roadmap \"X\" not found" |
+| No statement supplied | 2 | "Error: required parameter missing: no query supplied" |
+| `--socket` supplied with an empty value | 2 | "Error: required parameter missing: --<flag>" |
+| Stray positional argument, such as a bare Cypher statement written without `--query` | 2 | "Error: invalid input: unexpected argument \"X\" (graph queries use --query or stdin)" |
+| Statement above the maximum length | 6 | "Error: validation error: query exceeds maximum length of 1048576 bytes" |
+| No server listening on the resolved socket | 1 | The no-server line of `§ Graph Server Socket Error Lines` |
+| A server could not be reached through a socket that answered | 1 | The unreachable line of `§ Graph Server Socket Error Lines` |
+| Connection lost after the statement was sent | 1 | The lost-connection line of `§ Graph Server Socket Error Lines` |
+| The server did not answer within the backstop deadline | 1 | The unanswered line of `§ Graph Server Socket Error Lines` |
+| Cypher parse/execution error reported by the server, or a serialisation conflict every attempt of the retry policy collided on | 1 | "Error: database error: graph query failed: <engine diagnostic>" |
+| Statement cancelled for exhausting the 5-second statement time budget | 1 | "Error: database error: graph query exceeded the 5s statement time budget; nothing was written. Narrow the statement — add a label, an indexed property filter, or a LIMIT — or split it into smaller statements." |
+
+The parse/execution row carries the engine's own diagnostic after
+`graph query failed: `, exactly as the same row does under
+`§ Execute Error Cases`: the statement ran in the engine either way, and the
+diagnostic the caller reads is the engine's in both.
 
 ---
 
@@ -3701,10 +4050,11 @@ command writes for each.
 
 ### Lifecycle
 
-`rmp web` is long-lived: it serves until interrupted. It is the only `rmp` command
-whose process keeps running rather than completing a single operation and exiting.
-Sending `SIGINT` (`Ctrl+C`) or `SIGTERM` shuts the server down gracefully and the
-process exits 0 (see `WEB.md § Server Lifecycle`).
+`rmp web` is long-lived: it serves until interrupted. It is one of two `rmp`
+commands whose process keeps running rather than completing a single operation and
+exiting; the other is `rmp graph serve` (see `§ Serve`). Sending `SIGINT`
+(`Ctrl+C`) or `SIGTERM` shuts the server down gracefully and the process exits 0
+(see `WEB.md § Server Lifecycle`).
 
 ### Exit Codes
 

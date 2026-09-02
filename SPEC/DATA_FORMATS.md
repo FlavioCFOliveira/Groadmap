@@ -388,7 +388,8 @@ receives.
 ## Graph Query Result
 
 `rmp graph execute` returns the result of a Cypher statement that produces result
-columns as a single JSON object to stdout. The shape exposes the result's columns
+columns as a single JSON object to stdout, and `rmp graph client` returns the same
+object for the same statement (see [Graph Client Result](#graph-client-result)). The shape exposes the result's columns
 and its rows, mirroring the GoGraph engine result, which exposes the ordered
 column names (`Columns()`) and an iterable sequence of records. A statement that
 produces no columns returns the shape in [Graph Write Result](#graph-write-result)
@@ -478,8 +479,10 @@ Rules:
 
 ## Graph Write Result
 
-`rmp graph execute` mirrors what the executed statement returns. The discriminator
-is whether the statement produces **result columns**:
+`rmp graph execute` mirrors what the executed statement returns, and
+`rmp graph client` mirrors it identically (see
+[Graph Client Result](#graph-client-result)). The discriminator is whether the
+statement produces **result columns**:
 
 1. **The statement produces result columns:** the output is the standard
    read-result shape defined in [Graph Query Result](#graph-query-result) — a
@@ -539,6 +542,69 @@ A write query that ends with `RETURN n` (same shape as a read result):
   ]
 }
 ```
+
+---
+
+## Graph Client Result
+
+`rmp graph client` writes the result of the statement it sent to a running graph
+server as JSON to stdout. **The shape is not a new one: it is exactly the shape
+`rmp graph execute` writes for the same statement against the same graph**, and
+this section exists to fix that identity and the mapping that makes it hold, not
+to describe a second format.
+
+1. A statement that produces result columns returns the `{columns, rows}` shape of
+   [Graph Query Result](#graph-query-result).
+2. A statement that produces none returns exactly `{"ok": true}`, the shape of
+   [Graph Write Result](#graph-write-result).
+3. Both are pretty-printed with two-space indentation and a trailing newline,
+   consistent with all other JSON output (see
+   [Implementation Notes](#implementation-notes)).
+
+**The identity is a requirement, not an observation.** For any statement and any
+graph, the bytes `rmp graph client` writes to stdout are the bytes
+`rmp graph execute` writes for that statement against that graph. The same
+requirement binds `rmp graph execute` itself when it reaches a running server
+rather than the store, which it does whenever one is listening (see
+`GRAPH.md § Server Resolution`): the surface a statement was executed through is
+not observable in the JSON. A caller may therefore parse one shape and change
+nothing when a server is started or stopped.
+
+**What the requirement costs, and where the work is.** A result that crossed the
+protocol arrives as PackStream values rather than as the engine's Go values, so
+the client maps the protocol's encoding onto the same JSON representations the
+in-process mapping produces. The two mappings are stated once, in
+[Property-Type Mapping](#property-type-mapping) and
+[Graph element mapping](#graph-element-mapping), and the client's obligation is to
+land on them:
+
+| Value carried over the protocol | JSON it MUST produce |
+|---------------------------------|----------------------|
+| A string, an integer, a floating-point number, a boolean, or a null | The representation [Property-Type Mapping](#property-type-mapping) gives it, including that representation's treatment of a non-finite floating-point value as JSON `null` |
+| A byte string | A base64-standard-encoded JSON string, as [Property-Type Mapping](#property-type-mapping) requires |
+| A temporal value | An ISO 8601 UTC string with milliseconds and a `Z` suffix, identical to every other timestamp in Groadmap (see [Dates - ISO 8601 with UTC](#dates---iso-8601-with-utc)) |
+| A node | `{"id": <int>, "labels": [<string>, ...], "properties": {<object>}}` |
+| A relationship | `{"id": <int>, "type": "<string>", "startId": <int>, "endId": <int>, "properties": {<object>}}` |
+| A path | `{"nodes": [<node>, ...], "relationships": [<relationship>, ...]}` |
+| A list or a dictionary | A JSON array or object whose members are mapped by these same rules, recursively |
+
+Rules:
+
+1. **`id`, `startId`, and `endId` carry the same identifiers, and the same
+   caveat.** They are the engine's internal storage identifiers, emitted as JSON
+   numbers, ephemeral, and never to be persisted or used as long-lived references
+   (see [Graph element mapping](#graph-element-mapping), rule 4). A protocol node
+   may carry a second, string-shaped element identifier alongside the numeric one;
+   this shape does not publish it, because publishing it would make a result
+   depend on which path carried it.
+2. **A key the protocol's encoding adds is not added to the JSON.** The mapping is
+   defined by the table above and by the two sections it points at, and nothing
+   else appears. A field the protocol carries which those sections do not name is
+   dropped rather than passed through.
+3. **A value the mapping cannot represent is a failure of the statement, not a
+   silently different result.** The client does not substitute a placeholder for a
+   value it could not map; it fails with `utils.ErrDatabase` and exit code 1, so
+   that a caller never reads a result that is quietly not the one the graph holds.
 
 ---
 

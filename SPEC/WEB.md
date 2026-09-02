@@ -425,9 +425,10 @@ For an `rmp web` invocation the implementation:
    in-flight requests a brief bounded period to complete, closes any graph store
    or database handle it opened, and exits 0.
 
-The server is long-lived for the duration of the session. This is the only `rmp`
-command whose process is expected to keep running rather than complete a single
-operation and exit. Each incoming request opens the data it needs read-only,
+The server is long-lived for the duration of the session. It is one of two `rmp`
+commands whose process is expected to keep running rather than complete a single
+operation and exit; the other is `rmp graph serve`, whose lifecycle is specified
+in `GRAPH.md § The Dedicated Graph Server`. Each incoming request opens the data it needs read-only,
 serves the response, and releases the handle; the server does not hold a roadmap
 database or a graph store open across requests.
 
@@ -549,6 +550,14 @@ route. They bound the connection only. The work a handler performs once the
 request has been read is bounded separately, on the one route whose work a caller
 drives, by the budget specified next.
 
+**What must fit inside the `WriteTimeout` is the sum of every bounded term a
+graph data request may spend, not any one of them.** There are three: the
+resolution probe that decides whether a dedicated graph server is serving the
+roadmap, the wait for the graph store's exclusive lock on the direct path, and the
+query time budget below. `GRAPH.md § Lock Contention` is canonical for that
+invariant, for the value of each term, and for the one case in which the invariant
+does not hold; this section does not restate them.
+
 ### Graph Query Time Budget
 
 The three timeouts above bound the connection, not the work the server does for a
@@ -613,6 +622,18 @@ work with an explicit time budget.
    `GRAPH.md § Lock Contention` is canonical for that invariant, for the wait
    budget this value yields, and for the case in which the invariant does not
    hold. Changing this value changes that wait.
+
+   **The budget binds a statement sent to a graph server too, and the server is
+   the end that enforces it.** The server bounds the statement at this same value
+   (see `GRAPH.md § Server Options`), and the endpoint keeps a later deadline of
+   its own as a backstop against a server that answers nothing at all;
+   `GRAPH.md § Server Resolution`, rule 7, is canonical for the two deadlines and
+   for why they are not equal. A statement the budget cut is an execution failure
+   here, HTTP `400` with `kind` `execution`, exactly as rule 4 below requires of a
+   budget exhaustion on the direct path. Nothing about the value or the
+   classification changes with the path. The request's own context still cancels
+   the statement when the client disconnects, on either path, exactly as rule 2
+   requires.
 
    The rules below are this endpoint's own handling of the budget. What the same
    budget does to an `rmp graph execute` invocation is specified in
@@ -3094,7 +3115,9 @@ an internal read error, and what the body carries.
    to execute. A statement that the endpoint cancels because it exhausted the
    endpoint's 5-second query time budget is an execution failure of this same case
    and is surfaced with this same message; the budget is specified in
-   [Graph Query Time Budget](#graph-query-time-budget). The endpoint answers HTTP
+   [Graph Query Time Budget](#graph-query-time-budget). A statement sent to a
+   graph server that then stopped answering is an execution failure of this same
+   case too, for the reason rule 10 gives. The endpoint answers HTTP
    `400 Bad Request` with `kind` `execution` in every case of this rule.
 
 3. **In-place, non-fatal.** In both cases the message is shown in place on the
@@ -3182,8 +3205,9 @@ an internal read error, and what the body carries.
    cancellation rather than the budget, because the two have different causes and
    the budget must not be blamed for a caller that gave up. That answer reaches no
    one: the client that would have read it is gone. It is specified here because it
-   is a third reason the `execution` kind arises, and a contract naming only two
-   would be incomplete on the day it is written. It is not an outcome a connected
+   is a further reason the `execution` kind arises beyond the two case 2 names,
+   and a contract naming only those two would be incomplete on the day it is
+   written. Rule 10 names the fourth. It is not an outcome a connected
    client can observe, so no client-side test can assert it.
 
    **A cancelled statement may already have committed.** The endpoint runs the
@@ -3203,6 +3227,24 @@ an internal read error, and what the body carries.
    and the page shows an empty graph for each. The endpoint publishes no failure
    class that separates them, because they did not fail: each ran, and none
    produced an element the response shape can carry.
+
+10. **A graph server that stops answering mid-statement is an execution failure,
+    and the endpoint does not fall back.** When the roadmap is served, the
+    statement runs in the server rather than in this process (see
+    [Knowledge Graph from the GoGraph Store](#knowledge-graph-from-the-gograph-store),
+    rule 1). Two outcomes belong here: a connection lost after the statement was
+    sent, and a server that is still connected but has not answered within the
+    endpoint's backstop deadline, which is what a statement the budget cut
+    mid-write looks like from outside (`GRAPH.md § Server Resolution`, rule 7).
+    Each leaves the endpoint unable to say whether the statement committed,
+    because a commit is made durable before it is acknowledged. The endpoint
+    answers `400` with `kind` `execution`, and its `error` names the lost or silent
+    connection rather than the budget or an engine diagnostic, because the cause is
+    neither. It MUST NOT then open the store and run the statement a second time:
+    the statement may already have taken effect, and the store may still be held by
+    the server it was sent to. This is the fourth reason the `execution` kind
+    arises, after an engine failure, a budget exhaustion, and rule 8's abandoned
+    request, and it changes neither the status nor the kind set rule 4 enumerates.
 
 ### Graph Labels Sidebar
 
@@ -3418,8 +3460,18 @@ write.
   statement, does not inspect the patterns it binds, and does not inspect the
   values it would write. A statement carrying `CREATE`, `MERGE`, `SET`, `REMOVE`,
   `DELETE`, `DETACH DELETE`, or any schema DDL is executed and committed.
-- **The endpoint therefore runs on the transactional path.** It takes the graph
-  store's exclusive lock before the open, constructs the same store-backed engine
+- **The endpoint resolves a running graph server before it opens anything.** When
+  one is serving the roadmap, the statement is sent to that server and the store
+  is never opened and never locked; when none is, the endpoint opens the store
+  directly, exactly as it always has. The rule, its four states, and the status
+  this endpoint answers with in each are specified in
+  `GRAPH.md § Server Resolution` and in
+  [Knowledge Graph from the GoGraph Store](#knowledge-graph-from-the-gograph-store),
+  rule 1. No query parameter and no configuration selects between the two, and a
+  request's response is the same either way.
+- **On the direct path the endpoint runs on the transactional path.** It takes the
+  graph store's exclusive lock before the open, constructs the same store-backed
+  engine
   `rmp graph execute` constructs, runs the statement inside a transaction, and
   checkpoints and truncates the write-ahead log when that transaction wrote (see
   `GRAPH.md § Engine Constructor by Path`,
@@ -3923,18 +3975,64 @@ re-presents an earlier, now-stale response in its place.
 
 ### Knowledge Graph from the GoGraph Store
 
-1. For a graph page or graph data request, the server resolves the roadmap's
-   graph store at `~/.roadmaps/{name}/graph/` (see `GRAPH.md § Persistence
-   Layout`), opens it, and runs the statement the same way `rmp graph execute`
-   does (see `GRAPH.md § Engine Construction and Lifecycle`). There is one
-   execution path and the server is on it, so it opens a transactional store and a
+1. For a graph page or graph data request, the server first resolves whether that
+   roadmap is being served by a dedicated graph server, and only then decides what
+   to open. `GRAPH.md § Server Resolution` is canonical for that rule, for the
+   four states it distinguishes, and for the bounded probe that decides between
+   them; this section does not restate it and adds no rule of its own. What it
+   states is the outcome this endpoint produces in each state, because a status
+   code is this surface's own business:
+   - **A server is answering.** The endpoint sends the statement to that server
+     over the protocol and never opens the store. It takes **no** advisory lock,
+     so it neither waits for one nor contends with anything. A statement that runs
+     is answered HTTP `200` with the ordinary response shape.
+   - **No socket exists, or the socket refuses the connection.** The roadmap is
+     not served — a socket file a killed server left behind is exactly this
+     second case — and the endpoint opens the store directly under the exclusive
+     advisory lock, exactly as it did before a server existed. Everything from
+     rule 2 onwards describes that path.
+   - **A socket answers but no server can be reached through it.** This is not a
+     reason to open the store: the socket may belong to a server holding the lock
+     for its process lifetime. The request fails as an internal read error, HTTP
+     `500`, which is the status this endpoint already returns for a graph store it
+     cannot open (see [Routes and Pages](#routes-and-pages)).
+   - **The connection is lost after the statement has been sent, or the server
+     does not answer within the endpoint's backstop deadline.** The endpoint does
+     **not** retry against the store in either case: the statement may already
+     have committed on the server, and the store may still be held. The request is
+     an execution failure, HTTP `400` with the `execution` kind, because the
+     failure surfaced once the statement was running, which is where
+     [Query-Bar Error Handling](#query-bar-error-handling), rule 6, already draws
+     the boundary. No new status and no new kind is introduced.
+
+   Resolution runs once per request and its outcome is not cached: a cached
+   outcome would act on a server that had since stopped. It is spent before the
+   statement starts and before any lock is taken, so it consumes neither the
+   query time budget nor the lock wait.
+
+   **The socket this endpoint resolves is always the derived one, and nothing can
+   point it elsewhere.** The three `rmp graph` subcommands take a `--socket` flag;
+   this endpoint takes none, accepts no request parameter carrying a path, and has
+   no command line to receive one — `rmp web` serves every roadmap at once rather
+   than one. A server started on a non-default socket is therefore invisible here,
+   and every request for that roadmap's graph takes the direct path into the lock
+   that server is holding and is answered `500` for as long as it runs.
+   `GRAPH.md § Serving on a Non-Default Socket` is canonical for that boundary and
+   states plainly that no flag closes it.
+2. On the direct path the server resolves the roadmap's graph store at
+   `~/.roadmaps/{name}/graph/` (see `GRAPH.md § Persistence Layout`), opens it,
+   and runs the statement the same way `rmp graph execute` does (see
+   `GRAPH.md § Engine Construction and Lifecycle`). There is one execution path
+   and the server is on it, so it opens a transactional store and a
    write-ahead-log writer. Which constructor that is, is fixed by
    `GRAPH.md § Engine Constructor by Path`, and this specification does not
    restate it.
-2. The server runs the statement the request carries, or the default query when
+3. The server runs the statement the request carries, or the default query when
    the request carries none. It does not examine that statement, so the statement
-   may write.
-3. **The server therefore writes graph data when the statement it was given
+   may write. This holds on both paths: a statement sent to a graph server is the
+   statement the request carried, with the node-`LIMIT` injection already applied
+   and nothing else changed (see `GRAPH.md § Server Resolution`, rule 5).
+4. **The server therefore writes graph data when the statement it was given
    does.** The transaction commits, and the synchronous checkpoint and
    write-ahead-log truncation follow exactly as they do for a CLI invocation (see
    `GRAPH.md § Synchronous Checkpoint on Write` and
@@ -3944,8 +4042,9 @@ re-presents an earlier, now-stale response in its place.
    unchanged. The server writes no audit entry in either case, and it never writes
    to a roadmap's `project.db` outside the startup migration (see
    [Read-Only Data Flow](#read-only-data-flow)).
-4. A request that writes nothing is still **not** free of on-disk effect, and this
-   specification does not claim that it is. Opening the store runs GoGraph's
+5. A request that writes nothing is still **not** free of on-disk effect on the
+   direct path, and this specification does not claim that it is. Opening the
+   store runs GoGraph's
    recovery, which restores the last committed state from the snapshot and the
    write-ahead-log tail, and which first repairs an interrupted checkpoint: it
    removes a stale `snapshot.tmp` staging directory, and it promotes
@@ -3954,9 +4053,12 @@ re-presents an earlier, now-stale response in its place.
    structure without changing its data. The exhaustive list is
    `GRAPH.md § What a Statement That Writes Nothing Changes on Disk`, which is
    canonical and applies to this endpoint unchanged.
-5. The server takes the graph store's advisory lock **exclusively** before
-   opening the store, and holds it across the open, the statement, any commit, and
-   any checkpoint, exactly as `rmp graph execute` does. The lock, its single mode,
+6. On the direct path the server takes the graph store's advisory lock
+   **exclusively** before opening the store, and holds it across the open, the
+   statement, any commit, and any checkpoint, exactly as `rmp graph execute` does.
+   On the served path it takes no lock at all, which is the whole point of
+   resolving first: a dedicated graph server holds that lock for its process
+   lifetime, and no finite wait can be sized against such a hold. The lock, its single mode,
    and its contention policy are specified in `GRAPH.md § Concurrency and
    Recovery`; that section is canonical and this one adds no rule of its own.
    Three consequences are specific to the web interface and are stated here:
@@ -3972,22 +4074,25 @@ re-presents an earlier, now-stale response in its place.
      [HTTP Server Timeouts](#http-server-timeouts)): it is the two together that
      have to fit, not the wait alone. `GRAPH.md § Lock Contention` fixes the
      derivation and that invariant, and is canonical for the case in which the
-     invariant does not hold. Three limits remain, all stated in
+     invariant does not hold. Two limits remain, both stated in
      `GRAPH.md § Lock Contention` rather than here: the allowance for the fixed
-     part of a hold is exhausted on a large enough graph; a statement the budget
-     cuts while it is **writing** has no known upper bound on its hold, so the
-     wait does not cover one and a single such statement exceeds the write
-     timeout without any wait at all; and no finite wait can be derived from a
-     long-lived server that holds the lock for its process lifetime. When the
-     wait is exhausted for any of those reasons, the request is answered as the
-     next consequence describes. A request MUST NOT block indefinitely on the
-     lock.
+     part of a hold is exhausted on a large enough graph; and a statement the
+     budget cuts while it is **writing** has no known upper bound on its hold, so
+     the wait does not cover one and a single such statement exceeds the write
+     timeout without any wait at all. A third limit is no longer reached from
+     here: a dedicated graph server holds the lock for its process lifetime, and
+     no finite wait can be sized against that, which is precisely why this
+     endpoint resolves the roadmap's socket before it takes the lock at all (rule
+     1 above). `GRAPH.md § Lock Contention` names the three narrow windows in
+     which a request still meets a server on the lock. When the wait is exhausted
+     for any of these reasons, the request is answered as the next consequence
+     describes. A request MUST NOT block indefinitely on the lock.
    - A request that still cannot take the lock when the bounded wait is exhausted
      is answered HTTP `500`, the status this endpoint already returns for a graph
      store that cannot be opened (see [Routes and Pages](#routes-and-pages)). It is
      logged like any other `500` (see [Server Logging](#server-logging)).
-   - Serving a graph data request **does** block the CLI, and another graph data
-     request, for the duration of that request. The hold now spans the statement's
+   - On the direct path, serving a graph data request **does** block the CLI, and
+     another graph data request, for the duration of that request. The hold now spans the statement's
      own execution, so a slow statement submitted through the query bar delays
      every other statement against the same roadmap until it finishes, or until
      its time budget expires and the engine has finished undoing whatever that
@@ -3995,8 +4100,8 @@ re-presents an earlier, now-stale response in its place.
      graph pages open on the same roadmap serialise on this lock. This is a
      consequence of the single lock mode and is stated so that it is met here
      rather than in production.
-6. Each request opens the store, runs its statement, serves the result, releases
-   the lock, and closes the store. The server does not hold the graph store open,
+7. On the direct path each request opens the store, runs its statement, serves the
+   result, releases the lock, and closes the store. The server does not hold the graph store open,
    or its lock, across requests, consistent with the short-lived-access model in
    `IMPLEMENTATION.md § Graph Store Concurrency`. A graph store that is corrupt or
    unreadable surfaces as an internal read error (HTTP 500 on the affected route);
@@ -4796,9 +4901,10 @@ experience is the baseline that larger viewports enhance.
 
 ## Server Logging
 
-`rmp web` is the only long-lived `rmp` process. Every other command reports its
-failure on stderr and exits; the web server, by design, absorbs a per-request
-failure into an HTTP status and keeps serving (see
+`rmp web` is one of two long-lived `rmp` processes, the other being
+`rmp graph serve`. Every short-lived command reports its failure on stderr and
+exits; the web server, by design, absorbs a per-request failure into an HTTP
+status and keeps serving (see
 [Error Handling and Exit Codes](#error-handling-and-exit-codes), rule 4). The
 response body the browser receives is deliberately opaque — `internal server
 error` — so that a read failure, a corrupt graph store, or a template fault
@@ -5046,10 +5152,21 @@ Rules:
      to be discovered.
    - There is no undo. The graph store has no per-statement history a caller can
      roll back to, and `rmp` offers no graph restore command.
+   - **A dedicated graph server changes where the statement runs and nothing about
+     this rule.** When one is serving the roadmap, the endpoint sends the
+     statement to it over a Unix domain socket instead of opening the store (see
+     [Knowledge Graph from the GoGraph Store](#knowledge-graph-from-the-gograph-store),
+     rule 1). That server authenticates nobody either, and the socket's `0600`
+     mode protects nothing against `rmp web`, which runs as the same user that
+     owns it. The reachable set is still whatever the bind address admits, and
+     what it is granted is still write access to the knowledge graph.
 4. **Filesystem permission model is unchanged.** The web interface reads through
    the existing locations and respects the existing permission model: `0700` for
    `~/.roadmaps/` and each roadmap home directory, `0600` for `project.db`, and
    `0700` for each `graph/` store (see `ARCHITECTURE.md § Directory Structure`).
+   It creates no graph server socket and changes no socket's mode; it only
+   connects to one that a `rmp graph serve` process has already created with mode
+   `0600` (see `GRAPH.md § Socket Path and Permissions`).
    The web interface relaxes no permission, and it creates no roadmap database, no
    roadmap home directory, and no graph store directory: a roadmap that has no
    `graph/` directory is served as an empty graph rather than having one created
@@ -6823,6 +6940,28 @@ Rules:
     carries nodes and edges, not because the store's schema is empty, and the CLI
     read is what establishes the difference. Asserting that the endpoint reports the
     index row MUST fail this criterion.
+158. **The graph data endpoint routes through a running graph server, and the
+    status alone does not establish it.** With `rmp graph serve` running for a
+    roadmap, a `GET` of `/roadmaps/<roadmap>/graph/data` whose `q` carries
+    `CREATE (n:WebProbe {key:'w'})` is answered HTTP `200`, and the node is then
+    reported by `rmp graph client` against that same running server. The read-back
+    is what the criterion turns on: an endpoint that ignored the socket and opened
+    the store would have contended with the server's process-lifetime hold on the
+    exclusive lock, waited the whole wait budget, and answered HTTP `500`, so the
+    `200` alone separates nothing. With the server stopped, the identical request
+    is answered `200` on the direct path and a subsequent `rmp graph execute`
+    reports the node (see
+    [Knowledge Graph from the GoGraph Store](#knowledge-graph-from-the-gograph-store),
+    rule 1, and `GRAPH.md § Server Resolution`).
+159. **A socket file with nothing behind it does not fail a request and does not
+    make it wait.** With a socket file present at the roadmap's default socket
+    path and no process listening on it, a `GET` of
+    `/roadmaps/<roadmap>/graph/data` is answered HTTP `200` with the graph, and it
+    is answered promptly: the criterion is asserted on wall-clock time, because
+    the failure it exists against is a request that spends the whole wait budget
+    and then answers `500`. The leftover socket file is still present afterwards,
+    because a caller never removes one (see `GRAPH.md § Server Resolution`,
+    rule 1).
 
 ## See Also
 
@@ -6848,6 +6987,9 @@ Rules:
 - The same statement time budget applied by `rmp graph execute`, what a cut
   statement leaves on disk, and the exit code it reports →
   `GRAPH.md § Statement Time Budget`
+- The rule this endpoint follows to decide whether a roadmap is served, and the
+  server whose existence makes it necessary → `GRAPH.md § Server Resolution` and
+  `GRAPH.md § The Dedicated Graph Server`
 - The literal-aware masked normalization the endpoint's `LIMIT` decisions run on
   → `GRAPH.md § Literal-Aware Normalization`
 - What Groadmap does not check about a Cypher statement, on this endpoint as on
