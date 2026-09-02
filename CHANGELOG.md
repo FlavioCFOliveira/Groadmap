@@ -7,9 +7,88 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`rmp graph serve` turns a roadmap's knowledge graph into a service.** It opens
+  that roadmap's store once, holds it and its exclusive advisory lock for the life
+  of the process, and answers Cypher over a **Unix domain socket** until it is
+  stopped, printing the socket it bound as `{"socket": "<path>"}` on stdout. The
+  protocol is **Bolt version 5**, served by the graph engine's own server; Groadmap
+  defines no protocol of its own and binds no network port. It is the second
+  long-lived command, after `rmp web`: `SIGINT` or `SIGTERM` drains the work in
+  flight, shuts the server down, checkpoints, releases the lock, removes the socket
+  and exits `0`.
+  - **One server per roadmap**, enforced by the store lock: a second
+    `rmp graph serve` against the same roadmap fails with exit code `1` and leaves
+    the incumbent's socket untouched. A server asked to bind a socket another
+    roadmap's server owns is refused by a socket probe instead.
+  - **Access control is the filesystem and there is no other.** The socket is
+    created with mode `0600`, set explicitly rather than left to the umask, inside
+    a roadmap home that is `0700`. **The server authenticates nobody and uses no
+    transport security**, both deliberately, and the engine prints a warning for
+    each at startup. Any caller that can open the socket can read, write, delete
+    and change the schema of that roadmap's graph.
+  - **What it buys is measured, not asserted.** A caller pays one store open for a
+    whole session instead of one per invocation, and statements that used to
+    serialise on the store's exclusive lock run concurrently under the store's
+    MVCC. On an 8-core / 16-thread workstation, read throughput rises to roughly
+    seven to eight times the single-client rate and stops rising at about **16**
+    concurrent clients; past that knee another client buys under 5% more
+    throughput and multiplies the 99th-percentile latency nearly fivefold. The
+    server's connection ceiling is 128, set well above the knee because a refused
+    connection is dropped without a protocol answer and is not retried.
+
+- **`rmp graph client` sends one statement to a running server.** It resolves the
+  same socket `serve` binds, sends the statement, and writes **byte for byte** what
+  `rmp graph execute` writes for that statement against that graph. It reads and
+  writes alike, and it **requires** a server: with nothing listening it fails with
+  exit code `1` rather than opening the store, because a subcommand that quietly
+  became `execute` would report a success that says nothing about whether a server
+  was reached. A serialisation conflict — two clients writing the same nodes at
+  once, which is ordinary inside a server — is retried under the project's retry
+  policy rather than reported.
+
+- **`--socket <path>` on `graph execute`, `graph serve` and `graph client`.** All
+  three default it to `~/.roadmaps/<name>/graph.sock`, derived from the roadmap.
+  The flag names **which socket is looked at** and nothing else: it does not force
+  a server, does not forbid one, and does not select the store.
+
+### Changed
+
+- **`rmp graph execute` and the web graph data endpoint route through a running
+  server automatically.** Both now resolve the roadmap's socket before they open
+  anything. With a server answering there, the statement is sent to it and the
+  store is never opened locally; with nothing answering, the store is opened
+  directly under the exclusive lock exactly as before. **No flag and no
+  configuration selects this**, and the statement, the result, the output shape and
+  the exit code are the same either way.
+  - **Why it had to change.** A server holds the store's exclusive lock for its
+    whole process lifetime, and no finite wait can be sized against a hold with no
+    upper bound. Left on the direct path, both surfaces would have failed
+    deterministically — every invocation and every graph page request — for as long
+    as a server ran. Resolving the socket first is what stops a running server from
+    disabling the two surfaces that existed before it.
+  - **A leftover socket file is not an error.** A killed server leaves one behind;
+    the refused connection is read as evidence that the roadmap is not served, and
+    the caller proceeds on the direct path without removing the file.
+  - **A probe that answers but yields no server is a failure, not a fallback.**
+    Falling back there would send the caller at a lock a server may be holding, so
+    `graph execute` fails with exit code `1`, and the web endpoint answers HTTP
+    `500`. A connection lost after the statement was sent is likewise a failure and
+    is **not** retried against the store: a commit is durable before it is
+    acknowledged, so the statement's outcome is genuinely unknown and the error
+    line says exactly that.
+  - **The web interface cannot follow `--socket`, and the consequence is stated
+    rather than buried.** It is an HTTP handler with no command line, and no request
+    parameter carries a socket path. A server started with `--socket` therefore
+    leaves that roadmap's graph page answering HTTP `500` on every request for as
+    long as it runs. Start a server without the flag whenever the roadmap is also
+    browsed.
+
 ### Changed - BREAKING
 
-- **`rmp graph` has one subcommand, `execute`, and the five it had are gone.**
+- **`rmp graph`'s five original subcommands are gone, and `execute` replaces all
+  five.**
   `rmp graph create`, `rmp graph query`, `rmp graph update`, `rmp graph delete`
   and `rmp graph search` are **removed and are not aliases**: each is now an
   unresolved subcommand name and is answered as a dispatch failure — exit code
@@ -46,9 +125,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     checkpoint.** With every statement now on the transactional path, the
     checkpoint is gated on the log having grown, so an ordinary read leaves
     `snapshot/` and `wal` exactly as it found them.
-  - **The `--ai-help` contract changed shape**: the `graph` family publishes one
-    subcommand instead of five, and the `graph_guard_rail_mismatch` pitfall is
-    replaced by `graph_statement_is_not_checked`.
+  - **The `--ai-help` contract changed shape**: the `graph` family publishes
+    `execute`, `serve` and `client` where it published five, and the
+    `graph_guard_rail_mismatch` pitfall is replaced by
+    `graph_statement_is_not_checked`.
 
 - **The web graph data endpoint executes the statement it is given, writes
   included, over an unauthenticated `GET`.** `GET /roadmaps/{name}/graph/data`
@@ -94,6 +174,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - **`internal/graphlock` loses its shared mode.** `AcquireShared` had one
     caller left, this endpoint, and goes with it. There is one lock mode because
     there is one execution path.
+
+### Known Issues
+
+These were found and measured during this cycle and are **open**. They are listed
+so that nothing above is read as a promise the product does not keep.
+
+- **One statement can drive the process to 3.04 GB of resident memory.** Every
+  mutation a statement has applied is retained in an undo log until its rollback
+  finishes, and nothing bounds how many mutations it applies before the time budget
+  cuts it. Measured: `MATCH (a),(b),(c) CREATE ()` over a 600-node store of 1.3 MB
+  reached 3.04 GB at the 5-second budget, and the figure tracks the budget rather
+  than the size of the graph. A short-lived `rmp graph execute` returns that memory
+  by exiting; `rmp graph serve` and `rmp web` have no exit to return it at. The
+  server's connection ceiling bounds how many such statements run at once, not what
+  each of them costs, and no ceiling both preserves throughput and bounds the
+  product.
+- **A server's shutdown is not bounded.** A statement the budget cut while it was
+  writing is inside an undo replay that takes no cancellation, and the store cannot
+  close until it returns. The longest such hold measured is 34.5 seconds, with no
+  ceiling established.
+- **A `SET` on a relationship created by `MERGE` in the same statement is silently
+  discarded.** The invocation exits 0, creates the relationship, and writes none of
+  the properties; the identical `SET` as its own statement works, and the same
+  shape on a node is correct. Write the relationship first and set its properties
+  in a second statement.
+- **An undirected `SET` on a relationship reads both directions and writes one.**
+  The same pattern binds two relationships for a `RETURN` and one for a `SET`, and
+  the statement still reports `{"ok": true}`. Write through an outgoing pattern,
+  which can be anchored on either endpoint.
+- **About 1% of writers to a single hot node exhaust the client's retry ladder.**
+  Measured at 16 concurrent writers to one node through `rmp graph client`: the
+  raw transient-conflict diagnostic reaches the caller for a statement that was
+  correct against a healthy store, and nothing in the message separates contention
+  from a defective statement.
+- **`SPEC/DATA_FORMATS.md § Graph Client Result` states two requirements that
+  cannot both hold.** It requires the client's stdout to be byte-identical to
+  `rmp graph execute`'s and, in the same table, requires a temporal value to render
+  as an ISO 8601 UTC string with milliseconds — which is not what
+  `rmp graph execute` has ever rendered. The implementation chose identity, so a
+  temporal value crossing the socket renders exactly as it does on the direct path
+  and the temporal row is unsatisfied. No temporal formatting for graph values is
+  documented in `DOCS/` until the contradiction is settled.
 
 ## [1.15.2] - 2026-09-01
 
