@@ -19,6 +19,7 @@ import (
 
 	"github.com/FlavioCFOliveira/GoGraph/cypher"
 	"github.com/FlavioCFOliveira/GoGraph/cypher/expr"
+	"github.com/FlavioCFOliveira/Groadmap/internal/graphlock"
 	"github.com/FlavioCFOliveira/Groadmap/internal/graphstore"
 	"github.com/FlavioCFOliveira/Groadmap/internal/terminal"
 	"github.com/FlavioCFOliveira/Groadmap/internal/utils"
@@ -98,7 +99,9 @@ Output (stdout JSON):
 
 Exit codes:
   0   Success
-  1   Graph store unavailable or Cypher parse/execution error
+  1   Graph store unavailable or Cypher parse/execution error; also a valid
+      statement cancelled for running past the 5s statement time budget, which
+      writes nothing -- narrow the statement, or split it
   2   No query supplied, or a positional argument was given
   3   No roadmap selected
   4   Roadmap not found
@@ -169,7 +172,11 @@ Exit codes:
   1   Graph store unavailable, or a Cypher parse or execution error, including
       a schema statement the engine refused: a duplicate create, a drop of an
       object that does not exist, an unsupported definition, or a constraint
-      the data does not satisfy
+      the data does not satisfy. Also a statement cancelled for running past
+      the 5s statement time budget, where the Cypher was valid and the store
+      healthy: the transaction rolls back and nothing is written, so the remedy
+      is to narrow the statement -- add a label, an indexed property filter, or
+      a LIMIT -- or split it into smaller statements
   2   No query supplied, or a positional argument was given: a bare Cypher
       statement on the command line is refused, not executed
   3   No roadmap selected
@@ -582,6 +589,49 @@ func serializeGraphResult(result *cypher.Result) (graphQueryResult, error) {
 	return out, nil
 }
 
+// graphStatementError classifies a failure raised while the statement was
+// executing — whether it surfaced from the engine call, from the walk over the
+// result, or from the commit — and words it truthfully.
+//
+// Every case carries utils.ErrDatabase and exit code 1. Exhausting the
+// statement time budget is a database failure exactly as a statement the engine
+// refuses is: the graph feature introduces no new sentinel error and no new exit
+// code, and may not (SPEC/GRAPH.md § Constraints, rule 5; § Schema Failure
+// Classes, rule 6). Only the message differs.
+//
+// **All three arrival points are classified, and the walk is the one that
+// matters.** The engine streams a disconnected pattern's tuples as the result is
+// iterated, so a Cartesian product's cost is paid during result.Next() and the
+// engine call returns a nil error long before the deadline fires. Measured
+// against a 44,906-node graph: the run returned no error, the cancellation
+// arrived at result.Err() as context.DeadlineExceeded, and the commit path is
+// classified with them because a cut that lands there is the same failure
+// (SPEC/GRAPH.md § Statement Time Budget, rule 5).
+//
+// **Unlike the web endpoint, this classifier consults no parent context, and the
+// asymmetry is deliberate rather than an omission.** internal/web derives its
+// deadline from the REQUEST's context, so context.DeadlineExceeded there may be
+// the budget or a parent deadline the client's disconnect brought with it, and
+// that endpoint disambiguates by asking whether its parent is still live. A CLI
+// invocation's parent is context.Background(), which never carries a client, a
+// disconnect, or a deadline of its own, so the only deadline that can fire here
+// is the one derived above and errors.Is is sufficient
+// (SPEC/GRAPH.md § Statement Time Budget, rule 1).
+//
+// The budget is passed in rather than read again, so the value that produced the
+// deadline is the value the message reports; a test that moves the budget
+// therefore gets a truthful message, and in production it renders "5s" and
+// matches the line SPEC/COMMANDS.md § Graph Management publishes character for
+// character.
+func graphStatementError(budget time.Duration, stage string, err error) error {
+	if errors.Is(err, context.DeadlineExceeded) {
+		return fmt.Errorf("%w: graph query exceeded the %s statement time budget; nothing was "+
+			"written. Narrow the statement — add a label, an indexed property filter, or a "+
+			"LIMIT — or split it into smaller statements.", utils.ErrDatabase, budget)
+	}
+	return fmt.Errorf("%w: %s: %v", utils.ErrDatabase, stage, err)
+}
+
 // runGraphExecute is the implementation of `rmp graph execute`, the whole of
 // the graph family. It opens the store under the exclusive advisory lock, runs
 // the statement it is given inside a transaction, serialises the result, and
@@ -646,11 +696,36 @@ func runGraphExecute(args []string) error {
 	defer st.Close() //nolint:errcheck // the close error is moot once the commit has been reported
 
 	engine := st.Engine()
-	ctx := context.Background()
+
+	// The whole of the statement's execution runs under the graph store's
+	// statement time budget (SPEC/GRAPH.md § Statement Time Budget). The deadline
+	// is derived HERE, and not around the whole invocation, because rule 1
+	// defines the budget as covering exactly what follows — the run against the
+	// engine and the walk over the result that run produces — and nothing else:
+	// taking the lock, opening the store, the recovery repair the open performs,
+	// and the checkpoint below are not statement execution.
+	//
+	// The budget is graphlock.StatementBudget, and this call site READS it rather
+	// than declaring one of its own. It is the same declaration, carrying the
+	// same value, that the web graph data endpoint applies
+	// (internal/web.runGraphViewQuery), so the two surfaces cannot come to
+	// disagree and the CLI carries no second constant to drift from the first.
+	// It lives in the package that owns the lock because the same quantity bounds
+	// the VARIABLE part of a lock hold, and the party that has to know how long a
+	// hold may lawfully last is the one waiting for it (SPEC/GRAPH.md
+	// § Lock Contention).
+	//
+	// It is read ONCE, into a local, so that the deadline which fires and the
+	// message that reports it can never disagree.
+	budget := graphlock.StatementBudget
+	ctx, cancel := context.WithTimeout(context.Background(), budget)
+	// Releasing the timer here keeps the budget strictly per invocation; the
+	// checkpoint below does not run under it and is not cancelled by it.
+	defer cancel()
 
 	result, err := engine.RunAny(ctx, query, nil)
 	if err != nil {
-		return fmt.Errorf("%w: graph query failed: %v", utils.ErrDatabase, err)
+		return graphStatementError(budget, "graph query failed", err)
 	}
 
 	// Build the output value first by draining the result. The write
@@ -665,14 +740,14 @@ func runGraphExecute(args []string) error {
 		}
 		if iterErr := result.Err(); iterErr != nil {
 			_ = result.Close() //nolint:errcheck // roll back; commit error is moot on iteration failure
-			return fmt.Errorf("%w: graph query failed: %v", utils.ErrDatabase, iterErr)
+			return graphStatementError(budget, "graph query failed", iterErr)
 		}
 		output = graphOKResult{OK: true}
 	} else {
 		out, serErr := serializeGraphResult(result)
 		if serErr != nil {
 			_ = result.Close() //nolint:errcheck // roll back; commit error is moot on iteration failure
-			return fmt.Errorf("%w: graph query failed: %v", utils.ErrDatabase, serErr)
+			return graphStatementError(budget, "graph query failed", serErr)
 		}
 		output = out
 	}
@@ -689,7 +764,7 @@ func runGraphExecute(args []string) error {
 	// here is a normal write failure (SPEC FR7 §4): no checkpoint runs and
 	// the command fails with ErrDatabase (exit 1).
 	if cerr := result.Close(); cerr != nil {
-		return fmt.Errorf("%w: graph commit failed: %v", utils.ErrDatabase, cerr)
+		return graphStatementError(budget, "graph commit failed", cerr)
 	}
 
 	// The transaction has committed durably. Checkpoint synchronously: write a

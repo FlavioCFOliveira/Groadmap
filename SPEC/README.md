@@ -76,6 +76,7 @@ The SPEC is unversioned. Git is the source of truth for its evolution — recove
 | Graph query notifications on stderr (e.g. Cartesian-product warning) | `GRAPH.md § Query Notifications as Diagnostics` |
 | Graph store concurrency / recovery | `IMPLEMENTATION.md § Graph Store Concurrency` |
 | Graph store access lock (one exclusive mode for every statement), and what happens on contention | `GRAPH.md § Concurrency and Recovery` and `GRAPH.md § Lock Contention` |
+| Statement time budget on `rmp graph execute` (that it applies, what a cut statement leaves on disk, and the exit code it reports) | `GRAPH.md § Statement Time Budget`, with the value in `WEB.md § Graph Query Time Budget` |
 | What a statement that writes nothing does and does not change on disk (the recovery repair performed on open) | `GRAPH.md § What a Statement That Writes Nothing Changes on Disk` |
 | Go toolchain / external dependencies | `BUILD.md § Go Toolchain` |
 | Dependency version pins (the four direct modules — GoGraph, `golang.org/x/sys`, `golang.org/x/text`, `modernc.org/sqlite` — and the exact `modernc.org/libc` / `modernc.org/memory` versions the driver requires) | `BUILD.md § External Dependencies` |
@@ -193,6 +194,7 @@ To prevent drift across SPEC files, the following topics have a single authorita
 | Vendored web assets / embedded Tabler framework and D3.js (with d3-sankey) | `BUILD.md § Vendored Web Assets` |
 | Graph store concurrency / store locking / recovery | `IMPLEMENTATION.md § Graph Store Concurrency` (contract in `GRAPH.md § Concurrency and Recovery`) |
 | Graph store lock file (`write.lock`) | `GRAPH.md § Concurrency and Recovery` (layout in `GRAPH.md § Persistence Layout`) |
+| Statement time budget (the single value both graph surfaces apply, and the evidence for it) | `WEB.md § Graph Query Time Budget` (its effect on an `rmp graph execute` invocation, and what a cut statement leaves behind, in `GRAPH.md § Statement Time Budget`) |
 | Cypher engine constructor (`cypher.NewEngineWithStoreAndRecovery` on the one path both the CLI and the web endpoint run on, carrying the recovered schema) | `GRAPH.md § Engine Constructor by Path` |
 | Minimum Go version and external dependencies | `BUILD.md § Go Toolchain` |
 | Validation gate set and where it is enforced (local, CI, release) | `BUILD.md § Validation Gates` |

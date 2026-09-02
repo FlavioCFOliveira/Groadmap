@@ -560,29 +560,63 @@ query the caller writes (see [Graph Data Endpoint](#graph-data-endpoint) and
 [Graph Query Bar](#graph-query-bar)). That route MUST therefore bound its own
 work with an explicit time budget.
 
-1. **Budget: 5 seconds.** The graph data endpoint MUST execute the caller's query
-   under a deadline of 5 seconds. The deadline starts when the endpoint begins
-   executing the query and covers the endpoint's execution of it: the run against
-   the engine's read path and the walk over the result that run produces (see
-   [Graph Data Endpoint](#graph-data-endpoint)). The value sits well above the
-   slowest execution measured on a small store — a three-way Cartesian product
-   over a 252-node store spent 1.32 seconds of server time to return a single
-   aggregate row — and well below the 30-second `WriteTimeout`, so a query that
+1. **Budget: 5 seconds, and it governs both surfaces.** The graph data endpoint
+   MUST execute the caller's query under a deadline of 5 seconds. The deadline
+   starts when the endpoint begins executing the query and covers the endpoint's
+   execution of it: the run against the engine's read path and the walk over the
+   result that run produces (see [Graph Data Endpoint](#graph-data-endpoint)).
+   **This value is not the endpoint's own bound.** `rmp graph execute` executes
+   its statement under the same budget and the same value, so every caller of the
+   graph store that is not a long-lived server is bounded by it; this section is
+   canonical for the value on both surfaces, and
+   `GRAPH.md § Statement Time Budget` is canonical for what the budget does to a
+   CLI invocation and for what a cut statement leaves on disk. The two surfaces
+   read one declaration, so the value cannot drift between them, and changing it
+   here changes it for the CLI too.
+
+   **The value is justified against real graphs, because it has to carry the CLI
+   as well.** On a small store a three-way Cartesian product spent 1.32 seconds of
+   server time over 252 nodes to return a single aggregate row. That store is not
+   the scale at which the budget has to be generous, so the value is justified
+   against the largest real knowledge graph on the development machine as well,
+   44,906 nodes in 36 MB: the statement part of every realistic query and
+   every realistic write measured between **0 and 554 ms** there, and between
+   **6 and 870 ms** on a synthetic graph of 400,000 nodes in 122 MB. Five seconds
+   therefore clears the slowest realistic statement measured by roughly **5.7x**,
+   and graph growth puts the budget under no pressure — what growth does put under
+   pressure is the lock's fixed-part allowance, which
+   `GRAPH.md § Lock Contention` measures and bounds.
+
+   **What the budget cuts is measured too, and it is two query shapes.** On the
+   same 36 MB graph, whose store open alone costs 962 ms, an unbounded whole-graph
+   traversal (`MATCH (a)-[*1..3]->(b) RETURN count(*)`) costs **10.08 s** end to
+   end, and a Cartesian product over 325 million tuples costs **14.05 s**; a
+   three-way Cartesian product over 9.4 billion tuples had not finished after 300
+   seconds, and no finite budget admits it. Nothing else measured comes near five
+   seconds. A statement of either shape is narrowed rather than waited on: the
+   same traversal restricted to a label and a relationship type costs 1.52 s end
+   to end, a **554 ms** statement.
+
+   The value also sits well below the 30-second `WriteTimeout`, so a query that
    exhausts the budget is cancelled, and its failure is rendered, while the
-   response can still be written. This value is not the endpoint's own bound
-   alone. It is also the quantity the graph store lock's bounded wait is sized
-   against, because a waiter has to know how long a hold may lawfully last and
-   the hold spans the statement (see `GRAPH.md § Lock Contention`). The budget is
-   therefore a graph-store-wide quantity rather than a web-local one, and what
-   must fit inside the `WriteTimeout` is the wait and the statement together
-   rather than either of them alone; `GRAPH.md § Lock Contention` is canonical
-   for that invariant and for the wait budget this value yields. Changing this
-   value changes that wait.
+   response can still be written. It is additionally the quantity the graph store
+   lock's bounded wait is sized against, because a waiter has to know how long a
+   hold may lawfully last and the hold spans the statement (see
+   `GRAPH.md § Lock Contention`). What must fit inside the `WriteTimeout` is the
+   wait and the statement together rather than either of them alone;
+   `GRAPH.md § Lock Contention` is canonical for that invariant and for the wait
+   budget this value yields. Changing this value changes that wait.
+
+   The rules below are this endpoint's own handling of the budget. What the same
+   budget does to an `rmp graph execute` invocation is specified in
+   `GRAPH.md § Statement Time Budget`.
 2. **Derived from the request context.** The deadline MUST be derived from the
    request's own context, so the two sources of cancellation compose rather than
    replace one another: a client that disconnects still cancels the query
    immediately, exactly as it did before the budget existed, and a client that
-   stays connected can no longer hold the query running beyond the budget.
+   stays connected can no longer hold the query running beyond the budget. A CLI
+   invocation has no such second source, so on that surface the deadline is the
+   only thing that cancels a statement.
 3. **The budget bounds the work; the node limit bounds the result.** These are two
    different bounds, and neither substitutes for the other. The `LIMIT` clause the
    endpoint injects (see [Graph Data Endpoint](#graph-data-endpoint)) bounds the
@@ -626,9 +660,11 @@ work with an explicit time budget.
    the recovery repair that opening performed (see
    [Knowledge Graph from the GoGraph Store](#knowledge-graph-from-the-gograph-store)
    and `GRAPH.md § What a Statement That Writes Nothing Changes on Disk`).
-8. **The budget is the whole of the bound.** This version bounds the work of a
-   graph data request and nothing else. It introduces no request rate limit and no
-   new endpoint.
+8. **The budget is the whole of the bound this interface adds.** This version
+   bounds the work of a graph data request and adds nothing else to the web
+   interface: no request rate limit and no new endpoint. That the same budget also
+   binds `rmp graph execute` is a property of the value, not a second bound on
+   this endpoint (see rule 1 and `GRAPH.md § Statement Time Budget`).
 
 ## Security Headers
 
@@ -3927,11 +3963,16 @@ re-presents an earlier, now-stale response in its place.
      statement together stay well inside the server's write timeout (see
      [HTTP Server Timeouts](#http-server-timeouts)): it is the two together that
      have to fit, not the wait alone. `GRAPH.md § Lock Contention` fixes the
-     sizing rule and that invariant, and states the limit that comes with them —
-     an `rmp graph execute` statement runs under no time budget, so a hold of the
-     CLI's can still outlast the wait, and the request is then answered as the
-     next consequence describes. A request MUST NOT block indefinitely on the
-     lock.
+     sizing rule and that invariant. An `rmp graph execute` invocation is bounded
+     by the same statement budget this endpoint applies (see
+     `GRAPH.md § Statement Time Budget`), so a CLI hold cannot lawfully outlast
+     the wait either. Two limits remain, both stated in
+     `GRAPH.md § Lock Contention` rather than here: the allowance for the fixed
+     part of a hold is exhausted on a large enough graph, and no finite wait can
+     be sized against a long-lived server that holds the lock for its process
+     lifetime. When the wait is exhausted for either reason, the request is
+     answered as the next consequence describes. A request MUST NOT block
+     indefinitely on the lock.
    - A request that still cannot take the lock when the bounded wait is exhausted
      is answered HTTP `500`, the status this endpoint already returns for a graph
      store that cannot be opened (see [Routes and Pages](#routes-and-pages)). It is
@@ -6793,6 +6834,9 @@ Rules:
   `GRAPH.md § Concurrency and Recovery`,
   `GRAPH.md § What a Statement That Writes Nothing Changes on Disk`,
   and `GRAPH.md § Lock Contention`
+- The same statement time budget applied by `rmp graph execute`, what a cut
+  statement leaves on disk, and the exit code it reports →
+  `GRAPH.md § Statement Time Budget`
 - The literal-aware masked normalization the endpoint's `LIMIT` decisions run on
   → `GRAPH.md § Literal-Aware Normalization`
 - What Groadmap does not check about a Cypher statement, on this endpoint as on

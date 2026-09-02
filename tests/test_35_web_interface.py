@@ -5403,10 +5403,11 @@ class TestWebInterface:
         scenario alone, so the module's shared fixture stays two nodes and every
         other scenario stays fast.
 
-        That store is sized from measurement. Unbounded — through
-        `rmp graph execute`, which has no budget — the three-way Cartesian product
-        below costs 61.2s over these 799 nodes against a 5s budget: a twelvefold
-        margin, so the query still cannot finish inside the budget on hardware an
+        That store is sized from measurement. Unbounded — measured through
+        `rmp graph execute` while that surface still ran its statement under no
+        budget of its own, before rmp task #377 gave it the same 5s deadline this
+        endpoint applies — the three-way Cartesian product below costs 61.2s
+        over these 799 nodes against a 5s budget: a twelvefold margin, so the query still cannot finish inside the budget on hardware an
         order of magnitude faster than the machine this was measured on. The
         margin is free: the request is cut at the budget whatever the store size,
         so a larger store buys robustness and costs no wall time. A 399-node

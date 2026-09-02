@@ -590,7 +590,7 @@ explicit, because a reader cannot infer them from the generic template:
 ### Graph family help specifics
 
 The `graph` family help and the `graph execute` help follow the same
-structure template as every other family but MUST additionally make three
+structure template as every other family but MUST additionally make four
 graph-specific behaviours explicit, because an agent cannot infer them
 from the generic template:
 
@@ -610,6 +610,18 @@ from the generic template:
    `SHOW INDEX(ES)` / `SHOW CONSTRAINT(S)` commands run through this same
    subcommand, and name them, rather than leaving an agent to discover them
    by trial. See `GRAPH.md § Schema Management`.
+4. **The statement time budget.** The exit-codes block of this help
+   enumerates the causes of each code rather than naming the code alone
+   (see [Help structure template](#help-structure-template), block 8), and
+   the budget is a cause of exit code 1 that a caller cannot infer from
+   "a Cypher parse or execution error": the statement was valid and the
+   store was healthy. The exit-code-1 line MUST therefore name it, stating
+   that a statement running past the 5-second budget is cancelled and that
+   nothing is written. It is the one failure whose remedy is to rewrite a
+   working statement, so the help states the remedy too — narrow the
+   statement, or split it — in the same terms as the published error line.
+   It introduces no new exit code, so no line is added to the block. See
+   `GRAPH.md § Statement Time Budget` and `COMMANDS.md § Graph Management`.
 
 ### Web command help specifics
 

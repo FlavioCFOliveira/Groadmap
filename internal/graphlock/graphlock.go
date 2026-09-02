@@ -124,10 +124,12 @@ var StatementBudget = DefaultStatementBudget
 // is the allowance for the FIXED part: the store open, the write-ahead-log open,
 // the engine construction, the commit, and a full snapshot checkpoint with its
 // log truncation, plus scheduling. That allowance is REUSED rather than replaced
-// by a figure of its own, so the project keeps one set of timing numbers, and it
-// is generous rather than tight — the fixed part measures 19.2 ms on a 252-node
-// store and 22.7 ms under the race detector, against an allowance three orders
-// of magnitude above it (SPEC/GRAPH.md § Lock Contention).
+// by a figure of its own, so the project keeps one set of timing numbers. How
+// much of the quantity it covers depends on the size of the graph: the fixed
+// part measures 50.5 ms on this project's own 1.3 MB store but 1286 ms on a real
+// 36 MB one, and the allowance is exhausted at roughly 70 MB. It is a margin,
+// not an order of magnitude, and the limit that follows from that is stated on
+// AcquireExclusive below and in SPEC/GRAPH.md § Lock Contention.
 //
 // It is a function and not a constant because StatementBudget is a var: a test
 // that moves the budget must move the wait with it, or the two would describe
@@ -191,15 +193,32 @@ const LockFileName = "write.lock"
 // come out of the graph data endpoint's own query budget (SPEC/WEB.md § Graph
 // Query Time Budget).
 //
-// One hold carries no budget, and that residual is stated rather than hidden.
-// `rmp graph execute` runs its statement under no time budget at all, so its
-// hold has no lawful maximum and no finite wait can guarantee that a contender
-// is served: a CLI statement expensive enough will exhaust whatever budget the
-// waiter is given, and the waiter then fails exactly as rule 2 describes, with
-// utils.ErrDatabase for the CLI and HTTP 500 for the web graph data endpoint.
-// That outcome is the specified one and not corruption. Giving
-// `rmp graph execute` a statement budget of its own is not specified and remains
-// an open question (SPEC/GRAPH.md § Lock Contention).
+// Every holder that is not a long-lived server is bounded, and the wait rests on
+// that. Both surfaces run their statement under StatementBudget: the web graph
+// data endpoint (internal/web.runGraphViewQuery) and `rmp graph execute`
+// (internal/commands.runGraphExecute) alike, so a hold has a lawful maximum and
+// a contender is served (SPEC/GRAPH.md § Statement Time Budget). The CLI ran its
+// statement under context.Background() until rmp task #377, which is what made
+// the sizing above asymmetric: it was sound against a web holder and vacuous
+// against a CLI one.
+//
+// Two residuals survive that, stated rather than hidden, and SPEC/GRAPH.md
+// § Lock Contention is canonical for both with the measurements behind them:
+//
+//   - backoff.Total() stands in for the FIXED part of a hold, which is a
+//     constant standing for a quantity that grows linearly with the store's size
+//     on disk — 33 to 39 ms per megabyte across four real knowledge graphs, so
+//     1286 ms at 36 MB against the 2500 ms allowance. The allowance is exhausted
+//     at roughly 70 MB, beyond which a waiter can fail against a holder that is
+//     inside every budget, with no statement cost involved at all. Nothing here
+//     measures a graph's size or enforces that bound.
+//   - a wait is sized against the maximum lawful hold, and a server that holds
+//     this lock for its process lifetime has none, so no finite wait can be
+//     sized against one. The wait-based policy bounds every holder except that.
+//
+// When the wait is exhausted for either reason the waiter fails exactly as
+// rule 2 describes, with utils.ErrDatabase for the CLI and HTTP 500 for the web
+// graph data endpoint. That outcome is the specified one and not corruption.
 //
 // The operating system releases the lock when the holding process exits, so an
 // invocation that crashes does not strand it.

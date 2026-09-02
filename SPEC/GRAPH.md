@@ -30,6 +30,7 @@
 - [Error Handling and Exit Codes](#error-handling-and-exit-codes)
 - [Concurrency and Recovery](#concurrency-and-recovery)
   - [What a Statement That Writes Nothing Changes on Disk](#what-a-statement-that-writes-nothing-changes-on-disk)
+  - [Statement Time Budget](#statement-time-budget)
   - [Lock Contention](#lock-contention)
 - [Constraints](#constraints)
 - [Acceptance Criteria](#acceptance-criteria)
@@ -131,6 +132,14 @@ a decision about the response's size and refuses nothing (see
     does, how a schema object is named, why changing an index is two invocations
     rather than one, and how a schema failure surfaces are specified in
     [Schema Management](#schema-management).
+12. `rmp graph execute` executes its statement under a time budget: the same
+    budget, carrying the same value, that the web graph data endpoint applies. A
+    statement that exhausts it is cancelled, its transaction rolls back whole, no
+    checkpoint runs, and the invocation fails with `utils.ErrDatabase` (exit code
+    1); no new sentinel error and no new exit code is introduced. What the budget
+    does to an invocation is specified in
+    [Statement Time Budget](#statement-time-budget), and
+    `WEB.md § Graph Query Time Budget` is canonical for the value.
 
 ## Backing Engine: GoGraph
 
@@ -1501,6 +1510,7 @@ sentinel is introduced for the graph feature.
 | `graph execute` receives a positional argument, a bare Cypher query included; it accepts none (see [No Positional Query: A Stray Token Is Refused](#no-positional-query-a-stray-token-is-refused)) | `utils.ErrInvalidInput` | 2 |
 | Query longer than the maximum query length of 1 MiB, from either source (see [Maximum Query Length](#maximum-query-length)) | `utils.ErrValidation` | 6 |
 | Cypher fails to parse or execute in the engine, a schema statement included (see [Schema Failure Classes](#schema-failure-classes)) | `utils.ErrDatabase` | 1 |
+| The statement exhausts the statement time budget and is cancelled (see [Statement Time Budget](#statement-time-budget)) | `utils.ErrDatabase` | 1 |
 | Graph store cannot be opened, recovered, read, or written (I/O, corruption, lock) | `utils.ErrDatabase` | 1 |
 | Successful execution | — | 0 |
 
@@ -1538,6 +1548,14 @@ Rules:
    caller as a success, because that is what the engine reports. No exit code in
    the table above distinguishes them, and none is added to: an exit code that
    claimed to would require the inspection this specification does not perform.
+6. **A statement the time budget cuts fails in the same class and publishes a
+   line of its own.** It carries `utils.ErrDatabase` and exit code 1, as rule 2's
+   engine failures do, because the graph feature introduces no new sentinel and
+   no new exit code (see [Constraints](#constraints), rule 5). Its message is not
+   rule 2's message: the whole of it is `rmp`'s own text, it names the budget that
+   was exceeded, it states that nothing was written, and it says what to do about
+   it. `COMMANDS.md § Graph Management` publishes the exact line, and
+   [Statement Time Budget](#statement-time-budget) states the behaviour behind it.
 
 ## Concurrency and Recovery
 
@@ -1624,6 +1642,74 @@ nothing. What such a statement can change is the store directory's structure, an
 only by completing a repair that the next invocation to open the store would
 otherwise complete instead.
 
+### Statement Time Budget
+
+**Every statement runs under a deadline, and both surfaces use the same one.**
+`rmp graph execute` executes its statement under the time budget the web graph
+data endpoint applies, and under the same value: 5 seconds.
+`WEB.md § Graph Query Time Budget` fixes that value, states the evidence for it,
+and is canonical for it on both surfaces. This section is canonical for what the
+budget does to an `rmp graph execute` invocation and for what a cut statement
+leaves behind. The value is one declaration that both surfaces read, so there is
+no second constant to drift from the first.
+
+The budget bounds the **variable** part of a hold on the graph store lock: the
+statement, whose cost the caller chooses. It does not bound the fixed part, which
+[Lock Contention](#lock-contention) accounts for separately. Bounding the
+variable part on this surface is what makes that section's wait sound against a
+CLI holder, and its residual limits are stated there.
+
+1. **The deadline covers the execution of the statement and the walk over its
+   result.** It starts when the invocation begins executing the statement. It
+   does not cover taking the lock, opening the store, the recovery repair the
+   open performs, or the checkpoint. The deadline is the invocation's own and is
+   the only thing that cancels its statement: unlike the web graph data endpoint,
+   a CLI invocation has no request whose client can disconnect (see
+   `WEB.md § Graph Query Time Budget`, rule 2).
+2. **A cut statement rolls back whole.** There is no partial write to reconcile
+   and no torn state on disk. Measured: a writing statement over a Cartesian
+   product, cut two seconds into a run that would otherwise have made 4.4 million
+   writes, left **zero** of its nodes behind when the store was closed, reopened
+   from disk, and the survivors counted.
+3. **No checkpoint runs, and nothing on disk is rewritten.** A cut statement
+   committed no change, so it never checkpoints and never truncates the
+   write-ahead log. `snapshot/` and `wal` are left exactly as the statement found
+   them, which is what
+   [What a Statement That Writes Nothing Changes on Disk](#what-a-statement-that-writes-nothing-changes-on-disk)
+   requires of every statement that commits nothing. The recovery repair the open
+   already performed is neither undone nor repeated.
+4. **The invocation fails with `utils.ErrDatabase` (exit code 1).** The budget
+   introduces no new sentinel error and no new exit code, and may not:
+   [Constraints](#constraints), rule 5, forbids both. The exact line the user
+   reads is published in `COMMANDS.md § Graph Management`.
+5. **The cancellation arrives through the result iteration.** The engine's
+   statement call returns no error; the result's own error does, as
+   `context.DeadlineExceeded`. An implementation that classified only the call's
+   error would report a cut statement as an ordinary query failure and tell the
+   user nothing about the budget. This is the same arrival point the web graph
+   data endpoint already classifies, which is why one classification serves both
+   surfaces.
+6. **The budget is a limit on what a user may run, and it is published as one.**
+   A statement whose work takes longer than five seconds fails, however valid its
+   Cypher is and however healthy the store. The remedy is to narrow the statement,
+   and narrowing is effective rather than merely available. Measured on a
+   44,906-node graph whose store open alone costs 962 ms, an untargeted
+   whole-graph `MATCH (a)-[*1..3]->(b) RETURN count(*)`
+   costs 10.08 s end to end, while the targeted
+   `MATCH (a:Class)-[:DEPENDS_ON*1..3]->(b) RETURN count(*)` costs 1.52 s end to
+   end: a statement of 554 ms against one of roughly nine seconds. The published
+   error line names that remedy for the same reason.
+
+**The deadline is honoured promptly, which is what makes it a real bound rather
+than a nominal one.** Measured against the largest real knowledge graph on the
+development machine, 44,906 nodes in 36 MB, the engine returned between 1.6 ms
+and 4.5 ms after the deadline on statements that otherwise run for minutes,
+including a three-way Cartesian product over 9.4 billion tuples that had not
+finished after 300 seconds. A statement cut mid-**write** costs more: it returned
+515 ms after its deadline, the excess being the rollback unwinding the write set
+it had accumulated. That 515 ms belongs to the fixed part of a hold rather than
+to the statement, and [Lock Contention](#lock-contention) accounts for it there.
+
 ### Lock Contention
 
 One lock mode carries one contention policy.
@@ -1679,15 +1765,57 @@ wait budget = statement budget + backoff total
   allowance for the **fixed** part of a hold: the store open, the write-ahead-log
   open, the engine construction, the commit, and a full snapshot checkpoint with
   its log truncation, plus scheduling. It is reused rather than replaced by a
-  figure of its own so that the project keeps one set of timing numbers, and it
-  is generous rather than tight. The fixed part measures 19.2 ms on a 252-node
-  store and 22.7 ms under the race detector, which barely moves it, while a whole
-  read invocation against this project's own knowledge graph, 700 nodes and
-  1.3 MB, costs 29 ms. The allowance stands three orders of magnitude above the
-  quantity it covers.
+  figure of its own so that the project keeps one set of timing numbers. How much
+  of the quantity it actually covers depends on the size of the graph, and is
+  stated next.
 
 At the 5-second statement budget in force, the wait budget is therefore
 **7.5 seconds**.
+
+**The allowance for the fixed part is sized against a quantity that grows with
+the graph, and the allowance does not grow with it.** The fixed part of a hold is
+linear in the store's size on disk, at a rate that depends on the shape of the
+data. Measured by phase instrumentation, forcing a write so that the checkpoint
+executes:
+
+| Graph | Size on disk | Fixed part |
+|-------|-------------:|-----------:|
+| this project's own knowledge graph, 701 nodes | 1.3 MB | 50.5 ms |
+| a real knowledge graph, 20,665 nodes | 7.1 MB | 268 ms |
+| a real knowledge graph, 14,532 nodes | 11 MB | 367 ms |
+| the largest real knowledge graph on the development machine, 44,906 nodes | 36 MB | 1286 ms |
+| a synthetic graph of uniformly simple nodes, 400,000 nodes | 122 MB | 2784 ms |
+
+The four real knowledge graphs cluster between **33 and 39 ms per megabyte**. The
+synthetic graph is markedly cheaper per byte, at 23 ms per megabyte, because its
+nodes are simpler and more uniform than a real graph's; there is therefore no
+single rate, and the real graphs are the ones the rate must be read from.
+
+A statement the time budget cuts adds one further term, because the transaction
+is rolled back before the lock is released. Measured, a cut **write** returned
+515 ms after its deadline, against 1.6 to 4.5 ms for a cut read (see
+[Statement Time Budget](#statement-time-budget)). A cut statement does not
+checkpoint, so on that path the fixed part is the open plus the rollback.
+
+**The margin is stated on the largest real graph, where it needs no
+extrapolation, and the point at which it runs out is stated too.** At 36 MB the
+fixed part is 1286 ms on the ordinary path and 1470 ms on the cut path — a 955 ms
+open plus the 515 ms rollback, with no checkpoint — against the 2500 ms
+allowance. That is a margin of **1.9x and 1.7x** — a margin, and not an order of
+magnitude. The allowance is **exhausted at roughly 70 MB** for graphs shaped
+like the four real ones measured, and only at roughly 110 MB for the simpler
+synthetic shape.
+
+**Beyond that point the no-starvation guarantee lapses, and nothing in the
+product detects it.** A wait shorter than the fixed part of the hold it must
+cover cannot serve its waiter, so on a graph past roughly 70 MB a waiter can fail
+against a holder that is behaving lawfully and is inside every budget — with no
+statement cost involved at all. Groadmap does not measure a graph's size, does
+not warn on it, and does not refuse to open a store above it. This is a known
+limit of the sizing rule, stated here rather than hidden. Raising the allowance
+is not specified here because it lengthens the wait for every caller, including
+the web graph data endpoint, whose wait and statement must still fit inside the
+server's write timeout together.
 
 **A wait shorter than the hold it must cover starves the waiter.** A wait sized
 against the SQLite policy's fixed total would put two of this project's own
@@ -1696,9 +1824,12 @@ the whole 5-second statement budget, while the waiter would give up after
 2500 ms. The consequence is measured, not theoretical. With the race detector
 absent and the statement budget untouched, a holder whose statement ran 4.71
 seconds, lawfully and inside its own budget, starved a contending invocation,
-which failed after 2.5018 seconds. The statement dominates the hold it belongs
-to: 98.0% of a 951.86 ms hold without the race detector, and 99.84% of a
-14.26-second hold under it.
+which failed after 2.5018 seconds. On a small store the statement dominates the
+hold it belongs to: 98.0% of a 951.86 ms hold without the race detector, and
+99.84% of a 14.26-second hold under it. On a large one the balance inverts — at
+36 MB the open alone costs 955 ms while the statement part of every realistic
+query measures between 0 and 554 ms — which is why the two parts of the wait
+budget are sized separately and why the fixed part carries the limit above.
 
 **The invariant is that the statement and the wait fit inside the server's write
 timeout together.** A request that exhausts the wait must still have its `500`
@@ -1711,17 +1842,27 @@ wait that is merely a small fraction of the write timeout is neither necessary
 nor sufficient, and sizing on that property alone is what admits a wait shorter
 than the hold it has to cover.
 
-**The wait is sized against the budgeted hold, and one hold carries no budget.**
-The statement budget that bounds the variable part of a hold is the web graph
-data endpoint's. `rmp graph execute` runs its statement under no time budget at
-all, so its hold has no lawful maximum, and no finite wait can guarantee that a
-waiter contending with such an invocation is served: a CLI statement expensive
-enough will exhaust whatever budget the waiter is given. That outcome is the
-specified one and not corruption. The waiter fails exactly as rule 2 describes,
-with `utils.ErrDatabase` (exit code 1) for the CLI and HTTP 500 for the web graph
-data endpoint. It is a real limit of this policy and is stated here rather than
-hidden. Giving `rmp graph execute` a statement budget of its own is not specified,
-and remains an open question.
+**The exclusive wait's guarantee holds against a CLI holder.** The statement
+budget that bounds the variable part of a hold binds both surfaces: the web graph
+data endpoint and `rmp graph execute` execute their statements under the same
+5-second deadline (see [Statement Time Budget](#statement-time-budget)). An
+`rmp graph execute` invocation therefore cannot lawfully hold the lock past its
+statement budget plus the fixed part of its hold, which is exactly the quantity
+this wait is derived from, and a waiter contending with one is served. The two
+limits on that guarantee are the two stated in this section: the fixed-part
+allowance above, which lapses on a graph past roughly 70 MB whatever the
+statement does, and the server below.
+
+**The wait-based policy does not extend to a server holder.** A wait is sized
+against the maximum lawful hold, and a hold that lasts a process lifetime has
+none, so no finite wait can be sized against one. The dedicated graph server that
+`ARCHITECTURE.md § 8. internal/graphstore/ and the graph store's lifecycle`
+anticipates is a holder of exactly that shape: it opens a roadmap's store once
+and holds the exclusive lock for as long as the process runs. What an
+`rmp graph execute` invocation and a web graph request do against a roadmap such
+a server is holding is **not settled by this section**, and rule 2's outcome —
+wait, then fail — must not be read as the answer to it. The specification of that
+server settles it; until it does, this file makes no claim about that case.
 
 Groadmap's usage model and expectations:
 
@@ -2075,6 +2216,34 @@ Groadmap's usage model and expectations:
     stated in this direction — asserting the outcome rather than the absence of a
     check — because an absence cannot be tested and an outcome can (see
     [What Groadmap Does Not Check](#what-groadmap-does-not-check)).
+39. **A statement that exhausts the time budget is cut, and the criterion MUST
+    assert what it left behind and not only the exit code.** An
+    `rmp graph execute` whose statement cannot finish inside the budget — an
+    unbounded whole-graph traversal, or a multi-way Cartesian product over a graph
+    large enough, the two shapes measurement shows the budget cuts — exits **1**,
+    writes zero bytes to stdout, and writes to stderr the budget line
+    `COMMANDS.md § Graph Management` publishes, which is `rmp`'s own text
+    throughout and not an engine diagnostic. The invocation is asserted on
+    wall-clock time to return shortly after the budget rather than running to
+    completion. Where the cut statement was a **write**, the criterion MUST also
+    assert that nothing survived: in a **separate** invocation afterwards the
+    graph holds none of the elements that statement was creating, `wal` is byte
+    for byte what it was before, and every file under `snapshot/` is unchanged,
+    proving the transaction rolled back whole and that no checkpoint ran. An
+    implementation that classified the engine call's error and not the result's
+    passes an exit-code-only check while reporting an ordinary query failure,
+    which is the outcome this criterion exists to catch (see
+    [Statement Time Budget](#statement-time-budget)).
+40. **The budget is one value read by both surfaces, and an ordinary statement
+    does not notice it.** A regression test asserts that the deadline
+    `rmp graph execute` applies is the same declaration the web graph data
+    endpoint applies, so the CLI carries no second constant of its own, and
+    changing that one declaration changes the wait budget of
+    [Lock Contention](#lock-contention) with it. Every other graph criterion in
+    this file still passes unchanged: a statement that completes inside the budget
+    returns exactly the result its own Cypher produces, with nothing truncated, no
+    ordering changed, and no latency added. The budget is observable only to a
+    statement that would otherwise have run for longer than it.
 
 ## See Also
 
@@ -2085,5 +2254,6 @@ Groadmap's usage model and expectations:
 - GoGraph integration, directory layout, error handling → `ARCHITECTURE.md`
 - The required Go version, and the minor-version floor the GoGraph dependency contributes to it → `BUILD.md § Go Toolchain`
 - Store serialisation, recovery, lock contention, and the synchronous checkpoint trade-off → `IMPLEMENTATION.md § Graph Store Concurrency`
+- The value of the statement time budget, the evidence for it, and the web graph data endpoint's own handling of a statement it cuts → `WEB.md § Graph Query Time Budget`
 - Graph statements executed through the web interface, and the HTTP consequences of the store lock → `WEB.md § Knowledge Graph from the GoGraph Store`
 - Help skeleton and AI-help entry for `graph` → `HELP.md`

@@ -92,6 +92,7 @@ import re
 import sqlite3
 import subprocess
 import sys
+import time
 import uuid
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -2096,6 +2097,147 @@ class TestErrorStringParity:
             ["graph", "execute", "-r", r, "MATCH (n:Incident) RETURN n"], 2,
             subs={"X": "MATCH (n:Incident) RETURN n"},
             note="graph execute bare positional query",
+        )
+
+    def test_graph_statement_time_budget(self):
+        """The statement time budget line, driven rather than exempted
+        (SPEC/GRAPH.md § Statement Time Budget; SPEC/COMMANDS.md
+        § Graph Management; GRAPH.md acceptance criterion 39).
+
+        `rmp graph execute` runs its statement under a 5-second deadline. A
+        statement that exhausts it is cancelled, its transaction rolls back
+        whole, no checkpoint runs, and the invocation exits 1 with a line that
+        is rmp's own text from end to end -- no engine diagnostic, no
+        placeholder -- so it is compared in full, exactly as this module
+        compares every other published line.
+
+        **Driven, not exempted, and deliberately so.** The budget is provokable
+        through the binary, unlike the four strings EXEMPT_KEYS names, whose
+        tails are platform-dependent `net.OpError` renderings. An exemption
+        here would be this module declining to test the one thing the string
+        exists to report.
+
+        **How the budget is provoked, since it cannot be lowered.** No flag,
+        environment variable or any other knob reaches it (SPEC/WEB.md
+        § Graph Query Time Budget, rule 8), so the statement has to
+        genuinely cost more than five seconds. The shape is a three-way
+        Cartesian product: it returns a single aggregate row, so nothing about
+        the RESULT is large, while the engine must stream N**3 intermediate
+        tuples to produce it.
+
+        **The seed is grossly over budget, not marginally, and that is the
+        cheap direction here rather than the expensive one.** The cost of this
+        test is capped by the budget itself, not by the query, so a larger
+        store buys robustness against faster hardware and costs no wall time --
+        the opposite of the usual trade-off. Measured on the development
+        machine: seeding these 2000 nodes costs 70 ms, and the product over
+        them (8e9 tuples) was still running when killed at 30 s. A seed sized
+        only just over budget would not do: 400 nodes was measured at 6.04 s,
+        a 1.2x margin that any machine 1.2x faster would turn into a silent
+        false pass.
+
+        Three properties are asserted, and the wall clock carries two of them.
+        The FLOOR is what proves the failure was the deadline: an
+        implementation that refused the statement instantly for some unrelated
+        reason would satisfy a ceiling on its own. The CEILING is what proves
+        the deadline fired at all, and it is enforced as a subprocess timeout
+        rather than as an assertion after the fact, because an invocation with
+        no deadline does not finish in any time this suite could wait for.
+        """
+        r = self.roadmap
+        key = (
+            "Error: database error: graph query exceeded the 5s statement time "
+            "budget; nothing was written. Narrow the statement — add a label, "
+            "an indexed property filter, or a LIMIT — or split it into smaller "
+            "statements."
+        )
+        assert key in CORPUS, (
+            "the budget line is no longer published by SPEC/COMMANDS.md under "
+            f"this exact text: {key!r}"
+        )
+
+        # One UNWIND, one invocation: 2000 nodes for about 70 ms.
+        bulk = 2000
+        rc, out, err = self.run_stdin(
+            ["graph", "execute", "-r", r, "--query",
+             "UNWIND range(1," + str(bulk) + ") AS i CREATE (:Bulk {i:i})"]
+        )
+        assert rc == 0, f"seeding {bulk} nodes failed: rc={rc} stderr={err!r}"
+
+        # Ground truth read from the engine rather than assumed, so the size
+        # the margin rests on cannot silently drift with the seed.
+        rc, out, err = self.run_stdin(
+            ["graph", "execute", "-r", r, "--query", "MATCH (n) RETURN count(n)"]
+        )
+        assert rc == 0, f"counting the seed failed: rc={rc} stderr={err!r}"
+        seeded = json.loads(out)["rows"][0][0]
+        assert seeded == bulk, f"the seed produced {seeded} nodes, want {bulk}"
+
+        expensive = "MATCH (a),(b),(c) RETURN count(*)"
+        env = os.environ.copy()
+        env["HOME"] = str(self.test.home_dir)
+        started = time.monotonic()
+        try:
+            proc = subprocess.run(
+                [self.test.cli_path, "graph", "execute", "-r", r,
+                 "--query", expensive],
+                input="",
+                capture_output=True,
+                text=True,
+                env=env,
+                timeout=60,
+            )
+        except subprocess.TimeoutExpired:
+            raise AssertionError(
+                f"`graph execute` was still running 60s into a three-way "
+                f"Cartesian product over {seeded} nodes: the 5s statement time "
+                f"budget did not bound the work at all (SPEC/GRAPH.md "
+                f"§ Statement Time Budget)"
+            )
+        elapsed = time.monotonic() - started
+
+        # (i) The deadline is what ended it: the invocation cannot have
+        # returned before its own budget elapsed.
+        assert elapsed >= 4.9, (
+            f"the invocation returned after {elapsed:.2f}s, before its 5s "
+            f"budget could elapse: whatever failed, it was not the budget"
+        )
+        # (ii) It was cut promptly rather than run to completion.
+        assert elapsed < 30, (
+            f"the invocation took {elapsed:.2f}s under a 5s budget: the "
+            f"deadline was not honoured promptly"
+        )
+        # (iii) Exit code 1, nothing on stdout, and the published line on
+        # stderr -- compared character for character, first line, exactly as
+        # `check` compares every other string in this module.
+        assert proc.returncode == 1, (
+            f"exit code: expected 1, got {proc.returncode}\n"
+            f"  stdout: {proc.stdout!r}\n  stderr: {proc.stderr!r}"
+        )
+        assert proc.stdout == "", (
+            f"stdout: expected nothing from a cut statement, got {proc.stdout!r}"
+        )
+        actual_line = proc.stderr.splitlines()[0] if proc.stderr else ""
+        assert actual_line == key, (
+            "published string does not match the binary\n"
+            f"  file:      {SPEC_PATH} line(s) {CORPUS[key]}\n"
+            f"  published: {key!r}\n"
+            f"  captured:  {actual_line!r}\n"
+            f"  full stderr: {proc.stderr!r}"
+        )
+        REACHED.add(key)
+
+        # (iv) Nothing was written and nothing on disk was rewritten: the
+        # store still holds exactly the seed, read back through a fresh open
+        # in a separate invocation.
+        rc, out, err = self.run_stdin(
+            ["graph", "execute", "-r", r, "--query", "MATCH (n) RETURN count(n)"]
+        )
+        assert rc == 0, f"reading the store back failed: rc={rc} stderr={err!r}"
+        after = json.loads(out)["rows"][0][0]
+        assert after == bulk, (
+            f"the store holds {after} nodes after a cut statement, want the "
+            f"{bulk} seeded: the cut was not clean"
         )
 
     # ------------------------------------------------------------------

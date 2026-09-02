@@ -3452,6 +3452,19 @@ needs about a statement is a guarantee about the text it supplies.
 `GRAPH.md § What Groadmap Does Not Check` enumerates the hazards that follow, each
 of which reports success.
 
+**`execute` runs what it is given, but not for as long as it takes.** The
+statement runs under a time budget of **5 seconds** — the same budget, carrying
+the same value, that the web graph data endpoint applies. A statement that
+exhausts it is cancelled; its transaction rolls back whole, no snapshot is
+written, the write-ahead log is left as the statement found it, and the command
+fails with exit code 1 and the budget line this section's error table publishes.
+This is a limit on what a caller may run, and it is published here for that
+reason: a statement whose work takes longer than five seconds fails, however
+valid its Cypher is and however healthy the store, and the remedy is to narrow it
+— a label, an indexed property filter, or a `LIMIT` — or to split it into smaller
+statements. `GRAPH.md § Statement Time Budget` is canonical for what a cut
+statement leaves behind, and `WEB.md § Graph Query Time Budget` for the value.
+
 ### Options
 
 - `-r, --roadmap <name>` - REQUIRED. Target roadmap (see
@@ -3507,6 +3520,7 @@ original the day the original changed, which is the outcome
 |-----------|-------|
 | 0 | The statement executed successfully. |
 | 1 | Cypher failed to parse or execute, or the graph store could not be opened, read, or written (`utils.ErrDatabase`). A schema statement the engine refuses is in this class, including one whose keyword spacing the engine does not route to its schema parser. See `GRAPH.md § Schema Failure Classes`. |
+| 1 | The statement exhausted the 5-second statement time budget and was cancelled (`utils.ErrDatabase`). Nothing was written: the transaction rolled back, no snapshot was produced, and the write-ahead log was left unchanged. See `GRAPH.md § Statement Time Budget`. |
 | 2 | No statement supplied: `--query` absent and standard input empty, whitespace only, or a terminal; or `--query` present with an empty, whitespace-only, or absent value (`utils.ErrRequired`). |
 | 2 | A positional argument was supplied. `graph execute` accepts none, so a bare Cypher statement on the command line, or any other token that is neither a flag nor a flag's value, is refused (`utils.ErrInvalidInput`). See `GRAPH.md § No Positional Query: A Stray Token Is Refused`. |
 | 3 | No roadmap selected and none provided via `-r` (`utils.ErrNoRoadmap`). |
@@ -3595,9 +3609,12 @@ surfaces.
 | Stray positional argument, such as a bare Cypher statement written without `--query` | 2 | "Error: invalid input: unexpected argument \"X\" (graph queries use --query or stdin)" |
 | Statement above the maximum length | 6 | "Error: validation error: query exceeds maximum length of 1048576 bytes" |
 | Cypher parse/execution error | 1 | "Error: database error: graph query failed: <engine diagnostic>" |
+| Statement cancelled for exhausting the 5-second statement time budget | 1 | "Error: database error: graph query exceeded the 5s statement time budget; nothing was written. Narrow the statement — add a label, an indexed property filter, or a LIMIT — or split it into smaller statements." |
 | Graph store open/read/write failure | 1 | "Error: database error: graph store unavailable: <detail>" |
 
-The last two rows end in a diagnostic the Cypher engine produces, not `rmp`. The part `rmp` fixes is everything up to and including `graph query failed: ` and `graph store unavailable: `; what follows is the engine's own text and is not specified here.
+The parse/execution row and the store-failure row end in a diagnostic the Cypher engine produces, not `rmp`. The part `rmp` fixes is everything up to and including `graph query failed: ` and `graph store unavailable: `; what follows is the engine's own text and is not specified here.
+
+The budget row is not one of them: it carries no engine diagnostic and no placeholder, and every character of it is `rmp`'s own text, so it is compared in full. `5s` is the budget itself, rendered as a duration; it is a fixed value and not a value the binary interpolates from the invocation. The line says the three things a caller who has just lost a statement needs: what was exceeded, that nothing was written, and what to do next. `GRAPH.md § Statement Time Budget` is canonical for the behaviour it reports.
 
 ---
 
