@@ -433,7 +433,7 @@ Rules:
 
 ### Property-Type Mapping
 
-GoGraph property values carry Go types. Each maps to JSON as follows:
+GoGraph property values are typed. Each type maps to JSON as follows:
 
 | GoGraph value type | JSON representation | Notes |
 |--------------------|---------------------|-------|
@@ -441,9 +441,72 @@ GoGraph property values carry Go types. Each maps to JSON as follows:
 | `int64` | JSON number (integer) | Emitted without a decimal point. JSON numbers are IEEE-754 doubles in many consumers; values outside the safe integer range (beyond ±2^53) may lose precision on the consumer side. The CLI emits the exact integer; precision loss, if any, is the consumer's concern. |
 | `float64` | JSON number | Emitted in the standard Go float format. `NaN`, positive infinity, and negative infinity are not valid JSON numbers; when the engine produces any of them, they are emitted as JSON `null`. |
 | `bool` | JSON boolean | `true` / `false`. |
-| `time.Time` | JSON string | ISO 8601 UTC with milliseconds and a `Z` suffix, identical to every other timestamp in Groadmap (see [Dates - ISO 8601 with UTC](#dates---iso-8601-with-utc)). |
+| A temporal value | JSON string | One of six kinds, each written in the ISO 8601 form of **its own type** rather than as an instant in UTC. The six do not share one shape, and none of them is the timestamp format of [Dates - ISO 8601 with UTC](#dates---iso-8601-with-utc). See **Temporal values** below. |
 | `[]byte` | JSON string | Base64-standard-encoded (RFC 4648) so arbitrary bytes survive JSON transport. |
 | absent / null property | JSON `null` | A returned expression that has no value is `null`. |
+
+**Temporal values.** The engine's value model has six temporal kinds, and each is
+written in the ISO 8601 form of its own type. These are the renderings:
+
+| Temporal kind | Rendering | Examples |
+|---------------|-----------|----------|
+| Date | The calendar date alone. | `2026-03-05` |
+| Time | The time of day, followed by the offset the value itself carries. | `14:23:47+02:00`, `14:23:47.12+02:00`, `14:23:47Z` |
+| Local time | The time of day, with no offset. | `14:23:47`, `14:23:47.12` |
+| Date and time | Converted to UTC first, then written as the date, `T`, the time, and a `Z` suffix. | `2026-03-05T12:23:47.123456789Z`, `2026-03-05T14:23:47.12Z`, `2026-03-05T14:23:47Z` |
+| Local date and time | The date, `T`, and the time, with no offset. | `2026-03-05T14:23:47`, `2026-03-05T14:23:47.12` |
+| Duration | The ISO 8601 duration form. | `P1Y2M3DT4H5M6S`, `PT0S` |
+
+**Why the mapping is per kind rather than one shape.** A graph temporal is a value
+the caller's own statement produced, of one of six distinct types. It is not a
+Groadmap-generated instant, and the six do not share an instant's shape: writing
+them all as an instant in UTC is impossible for a duration, which is not an
+instant at all, and false for the three kinds that carry no offset. Rendering each
+kind in the ISO 8601 form of its own type is also what the query language's own
+string conversion of a temporal produces, so the published format follows the
+language rather than departing from it.
+
+Four consequences bind a consumer, and none may be assumed away:
+
+1. **The fractional second is variable-width, and it is often absent.** Every
+   kind that can carry one — a time, a local time, a date and time, and a local
+   date and time — writes it with between zero and nine digits: trailing zeros are
+   trimmed, and a whole second is written with no fraction and no dot at all. A
+   date and time of `2026-03-05T14:23:47.120Z` is published as
+   `2026-03-05T14:23:47.12Z`; the same value with a zero fraction is published as
+   `2026-03-05T14:23:47Z`; and one with nanosecond precision keeps all nine
+   digits. Nothing rounds and nothing pads: the width follows the value. A
+   consumer MUST parse the fraction as optional and of variable length, and MUST
+   NOT expect the three digits of
+   [Dates - ISO 8601 with UTC](#dates---iso-8601-with-utc). The variable width is
+   a hazard rather than a convenience — a consumer written against a fixed `.sss`
+   field parses the three-digit case and breaks on every other — and it is
+   published plainly here for that reason.
+2. **Three of the six kinds carry no offset, and none is written for them.** A
+   date, a local time, and a local date and time are zoneless by definition;
+   appending `Z` to any of them would assert an offset the value does not hold.
+3. **A time keeps its own offset; a date and time does not.** A date and time is
+   converted to UTC before it is written, so a value at `+02:00` is published with
+   a `Z` and a shifted clock reading. A time is written with the offset it
+   carries, so a value at `+02:00` is published with `+02:00` and an unshifted
+   clock reading. The mapping is not uniform across those two kinds, and a
+   consumer that reads an offset MUST read the one it is given rather than assume
+   UTC.
+4. **A duration is not an instant** and has no timestamp form at all. It is
+   written in the ISO 8601 duration form, which no timestamp parser accepts.
+
+**This is not the format Groadmap uses for its own timestamps.**
+[Dates - ISO 8601 with UTC](#dates---iso-8601-with-utc) fixes the shape of every
+timestamp Groadmap generates — a task's `created_at`, an audit entry's
+`timestamp` — and that shape is a fixed-width instant in UTC. A graph temporal is
+a caller's value carried through the engine and published as the kind it is. The
+two formats coincide only for a date and time whose fractional second happens to
+have exactly three significant digits.
+
+The renderings above govern every surface that publishes a graph value: the
+`{columns, rows}` shape of this section, the identical shape
+[Graph Client Result](#graph-client-result) requires of `rmp graph client`, and
+the node and edge properties of [Graph View Data](#graph-view-data).
 
 ### Graph element mapping
 
@@ -570,19 +633,28 @@ rather than the store, which it does whenever one is listening (see
 not observable in the JSON. A caller may therefore parse one shape and change
 nothing when a server is started or stopped.
 
-**What the requirement costs, and where the work is.** A result that crossed the
-protocol arrives as PackStream values rather than as the engine's Go values, so
-the client maps the protocol's encoding onto the same JSON representations the
-in-process mapping produces. The two mappings are stated once, in
-[Property-Type Mapping](#property-type-mapping) and
-[Graph element mapping](#graph-element-mapping), and the client's obligation is to
-land on them:
+**Why the identity holds, and where the work is.** A result that crossed the
+protocol arrives in the protocol's own encoding rather than as the engine's
+values, so something has to map it back. What it is mapped back onto is **the
+engine's value model, not JSON**: the client inverts the protocol encoding and
+hands its caller the same values an in-process engine would have handed it. The
+step from those values to the published JSON is then the one the surface already
+owns and runs unchanged, over one representation — which is what makes the
+identity above a property of the code rather than a coincidence that has to be
+policed. Mapping straight to JSON here instead would have created another copy of
+both mappings, free to drift from the ones that already exist, and the identity
+would then be an assertion rather than a consequence.
+
+The mapping this section fixes is therefore the protocol's encoding onto the
+values [Property-Type Mapping](#property-type-mapping) and
+[Graph element mapping](#graph-element-mapping) already govern. Those two sections
+state the JSON once; the client's obligation is to land on them:
 
 | Value carried over the protocol | JSON it MUST produce |
 |---------------------------------|----------------------|
 | A string, an integer, a floating-point number, a boolean, or a null | The representation [Property-Type Mapping](#property-type-mapping) gives it, including that representation's treatment of a non-finite floating-point value as JSON `null` |
 | A byte string | A base64-standard-encoded JSON string, as [Property-Type Mapping](#property-type-mapping) requires |
-| A temporal value | An ISO 8601 UTC string with milliseconds and a `Z` suffix, identical to every other timestamp in Groadmap (see [Dates - ISO 8601 with UTC](#dates---iso-8601-with-utc)) |
+| A temporal value | The string [Property-Type Mapping](#property-type-mapping) gives that temporal kind, under **Temporal values** — which is per kind, is not an instant in UTC, and has no fixed-width fractional second |
 | A node | `{"id": <int>, "labels": [<string>, ...], "properties": {<object>}}` |
 | A relationship | `{"id": <int>, "type": "<string>", "startId": <int>, "endId": <int>, "properties": {<object>}}` |
 | A path | `{"nodes": [<node>, ...], "relationships": [<relationship>, ...]}` |

@@ -413,9 +413,11 @@ For an `rmp web` invocation the implementation:
 4. Registers the read-only routes (see [Routes and Pages](#routes-and-pages)),
    configures the HTTP server timeouts (see
    [HTTP Server Timeouts](#http-server-timeouts)), and starts serving.
-5. Prints to stdout the URL the server is listening on, so the user can open it
-   manually if no browser is launched. The startup line is the single
-   machine-readable success object described in `COMMANDS.md § Web Interface`.
+5. Takes `SIGINT` and `SIGTERM` over, and then prints to stdout the URL the
+   server is listening on, so the user can open it manually if no browser is
+   launched. The startup line is the single machine-readable success object
+   described in `COMMANDS.md § Web Interface`. The order inside this step is
+   load-bearing, and the paragraph below states why.
 6. Unless `--no-open` is given, attempts to open the user's default browser at
    the served URL. A failure to launch a browser is **not** fatal: the server
    keeps running and the URL has already been printed.
@@ -423,7 +425,31 @@ For an `rmp web` invocation the implementation:
    example `Ctrl+C`) or a termination signal (`SIGTERM`). On either signal the
    server shuts down gracefully: it stops accepting new connections, allows
    in-flight requests a brief bounded period to complete, closes any graph store
-   or database handle it opened, and exits 0.
+   or database handle it opened, and exits 0. **This holds from step 5 onwards.** A
+   signal that arrives during steps 1 to 4 — the data-directory check, the schema
+   migration sweep, the bind, and the route registration — reaches an invocation
+   that has printed no URL and served nothing; it is an interruption and the
+   process exits `130` with no graceful shutdown (see
+   `ARCHITECTURE.md § Exit Codes`).
+
+**The take-over precedes the URL, and therefore precedes the browser launch.**
+Until step 5, `SIGINT` and `SIGTERM` carry the meaning they carry for every
+short-lived `rmp` invocation. From step 5 they carry the shutdown of step 7. The
+URL is what a caller uses to decide the server is up, so ordering the change of
+meaning ahead of it is what makes a reachable URL a promise that the process stops
+cleanly. It matters more here than the wording suggests: step 6 spawns a browser,
+and a process spawn is far slower than anything else between the URL and the
+accept loop, so a take-over placed after it would leave that whole span carrying
+the wrong meaning.
+
+**The take-over is a change of owner, not a re-registration, and the discipline is
+enforced.** One package owns the disposition of these two signals for the whole
+binary and never unregisters, so no interval of this process carries a meaning
+nobody owns; `internal/testenv` fails the build if any production file outside
+that package handles signals, or if either long-lived surface announces itself
+before taking the signals over. `rmp graph serve` is on the same discipline (see
+`GRAPH.md § Server Startup`), and
+`ARCHITECTURE.md § Modules and Responsibilities` is canonical for the package.
 
 The server is long-lived for the duration of the session. It is one of two `rmp`
 commands whose process is expected to keep running rather than complete a single

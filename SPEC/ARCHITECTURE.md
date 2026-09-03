@@ -327,6 +327,7 @@ Groadmap/
 │   ├── graphclient/       # Reaching a roadmap's graph server: resolution + Bolt v5 client
 │   │   └── graphclient.go # The ONE resolution rule and the ONE client; every surface calls it
 │   ├── graphserve/        # The graph server's lifecycle: listener, options, drain, shutdown
+│   ├── signals/           # The ONE registration for SIGINT and SIGTERM; every surface takes the action over
 │   ├── web/               # Embedded HTTP server (net/http)
 │   │   ├── server.go      # Server construction, routes, graceful shutdown
 │   │   ├── handlers.go    # Read-only route handlers (index, sprints, tasks, sprint, graph, data)
@@ -550,6 +551,36 @@ pinning requirements are in `BUILD.md § Go Toolchain`.
 - **What it deliberately does not own.** It does not read the statement, does not
   serialise a result, and does not choose an exit code; and it is not a client of
   itself — a caller that wants to reach a server uses `internal/graphclient`.
+
+### 11. internal/signals/ and the process's signal disposition
+
+- Owns what `SIGINT` and `SIGTERM` mean to the `rmp` process, for every command.
+  It registers for the two signals **once**, at the start of the process, and
+  never unregisters. What a caller changes is the action taken on delivery, not
+  the registration.
+- **No delivery is ever unowned.** A short-lived invocation leaves the default
+  action in place and is interrupted, exiting `130` (see
+  [Exit Codes](#exit-codes)). A long-lived surface — `rmp graph serve` and
+  `rmp web`, the only two — takes the action over for the length of its service
+  and hands it back for its teardown. Because the registration is never torn down
+  and rebuilt, there is no interval in which the process would be killed outright
+  by a signal it is supposed to handle, and none in which a signal already queued
+  would be delivered to nothing.
+- **A surface takes the action over before it announces itself.**
+  `rmp graph serve` takes over before it prints its socket
+  (`GRAPH.md § Server Startup`, step 7), and `rmp web` before it prints its URL
+  and therefore before it launches a browser (`WEB.md § Server Lifecycle`,
+  step 5). An announcement is what a caller uses to decide the server is up, so
+  ordering the take-over ahead of it is what makes a server that is up a server
+  that stops gracefully.
+- **Both properties are enforced rather than described.** `internal/testenv`
+  fails the build if any production file outside this package handles signals
+  itself, if this package's single registration is torn down or duplicated, if
+  this package stops handling signals at all, or if either long-lived surface
+  announces itself before taking the action over.
+- **What it deliberately does not own.** It chooses no exit code — the action a
+  caller installs does that — and it knows nothing about drains, stores, sockets,
+  or HTTP.
 
 ## Command Lifecycle
 
@@ -827,7 +858,7 @@ Groadmap follows standard Unix/Linux exit code conventions. Success output is JS
 Two remarks, because each is a place a reader could reasonably expect a different code:
 
 1. **A failure to reach a server is `1`, not `4`.** `utils.ErrNotFound` is the class of a roadmap, task, or sprint that does not exist. A socket with nothing behind it is a dependency that is unavailable, which is the class `utils.ErrDatabase` already carries for a graph store that cannot be opened, and treating it as `4` would make a shell script that branches on `4` act on the wrong condition.
-2. **A graceful stop is `0`, not `130`.** The catalogue reserves `130` for an interruption, and `rmp graph serve` interprets `SIGINT` as an instruction to stop rather than as an interruption of unfinished work: it drains, checkpoints, and exits successfully. This matches `rmp web`, which is the only other long-lived command, and the two are stated the same way for the same reason.
+2. **A graceful stop is `0`, not `130`, and the reading begins when the server takes the signals over.** The catalogue reserves `130` for an interruption, and `rmp graph serve` interprets `SIGINT` as an instruction to stop rather than as an interruption of unfinished work: it drains, checkpoints, and exits successfully. This matches `rmp web`, which is the only other long-lived command, and the two are stated the same way for the same reason. Both take the signals over immediately before they announce themselves (see the `internal/signals` entry under [Modules and Responsibilities](#modules-and-responsibilities)), so the `0` row of each table is conditioned on a server that started and served, exactly as it is worded. A signal that arrives during startup — before the socket or the URL is announced — reaches an invocation that has served nothing and owes no drain, and it is still an interruption: the process exits `130`. `GRAPH.md § Server Shutdown and the Drain` and `WEB.md § Server Lifecycle` state that boundary where a reader sizing a supervisor's grace period will meet it.
 
 ### Usage in Shell Scripts
 

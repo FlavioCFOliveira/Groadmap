@@ -1934,9 +1934,12 @@ each step is what makes a later one safe.
    constructed over a graph with no write-ahead log behind it accepts every write,
    acknowledges every commit, warns about nothing, and loses all of it when the
    process ends; the constructor that table fixes is the one that does not.
-7. **Serve, and report the socket on stdout.** The success output is a single JSON
-   object naming the socket the server bound, so a caller that supplied no
-   `--socket` still learns the path (see `COMMANDS.md § Serve Output`).
+7. **Take `SIGINT` and `SIGTERM` over, announce the socket on stdout, and serve —
+   in that order.** The announcement is a single JSON object naming the socket the
+   server bound, so a caller that supplied no `--socket` still learns the path (see
+   `COMMANDS.md § Serve Output`). The order inside this step is load-bearing in the
+   same way as the order of the steps around it, and the paragraph below states
+   why.
 
 **The listener is bound before the store is opened, deliberately.** Opening the
 store costs up to about a second on a large graph, and a caller that resolved the
@@ -1968,9 +1971,57 @@ resolution rule: the socket answered, so a server is starting there, and a calle
 that fell back would take the direct path into a lock this process is about to
 hold for its lifetime.
 
+**The signal take-over precedes the announcement, and that is what the
+announcement means.** Until step 7 runs, `SIGINT` and `SIGTERM` carry the meaning
+they carry for every short-lived `rmp` invocation: the process is interrupted and
+exits `130` (see `ARCHITECTURE.md § Exit Codes`). From step 7 they carry the drain
+of [Server Shutdown and the Drain](#server-shutdown-and-the-drain). Ordering the
+change of meaning ahead of the announcement is what makes the announced socket a
+promise rather than a path: a caller that has read it is talking to a process that
+drains. Announcing first would publish a server that could still be stopped the
+wrong way, for as long as the take-over took.
+
+**The take-over is a change of owner, not a re-registration, and the discipline is
+enforced.** One package owns the disposition of these two signals for the whole
+binary, registers for them once at the start of the process, and never
+unregisters; a surface that wants the drain replaces the action taken on delivery
+rather than registering for the signal itself. There is therefore no instant in
+which a delivery is unowned — an instant in which a signal would kill the process
+outright, or be delivered to nothing at all, instead of being drained or reported.
+`internal/testenv` enforces both halves: that no production file outside that one
+package handles signals, and that in each long-lived surface the take-over
+precedes the announcement. `rmp web` is on the same discipline (see
+`WEB.md § Server Lifecycle`), and
+`ARCHITECTURE.md § Modules and Responsibilities` is canonical for the package.
+
 ### Server Shutdown and the Drain
 
-`rmp graph serve` stops on `SIGINT` or `SIGTERM`, and it stops gracefully.
+`rmp graph serve` stops on `SIGINT` or `SIGTERM`, and it stops gracefully. The
+guarantee begins at the announcement.
+
+**Where the guarantee begins, stated rather than left to be discovered.** The
+server takes the two signals over at step 7 of
+[Server Startup](#server-startup), immediately before it announces its socket. A
+signal that arrives earlier — during the lock acquisition, the live-server probe,
+the stale-socket removal, the bind, or the store open of steps 2 to 6 — reaches an
+invocation that has served nothing, acknowledged nothing, and owes no drain. It is
+an interruption and it is treated as one: the process exits `130` (see
+`ARCHITECTURE.md § Exit Codes`) with no drain, no shutdown checkpoint, and no
+socket removal — and so, if the listener had already been bound, it leaves behind
+a socket file, which the next `rmp graph serve` finds dead and removes at step 4.
+That interval is a few milliseconds on a small graph, and it is dominated by the
+store open, which costs up to about a second on a large one
+([Server Startup](#server-startup)). A supervisor sizing a grace period is sizing
+it against the drain, and the drain begins at the announcement; a supervisor that
+stops a server by process identifier without waiting for the announcement must
+expect `130` rather than a graceful stop.
+
+**Taking the signals over earlier is deliberately not specified.** Arming the
+drain before the store is opened would hold an early signal until the accept loop
+was reached to receive it, so the process would appear to ignore `SIGTERM` for the
+whole of the store open — up to about a second, and longer on a graph larger than
+any measured. Trading a prompt, correct `130` for an unbounded silence is a
+different specified behaviour, not a correction of this one.
 
 **The drain is Groadmap's, because the engine has none.** The engine's own
 shutdown cuts sessions rather than draining them: measured, it returned
