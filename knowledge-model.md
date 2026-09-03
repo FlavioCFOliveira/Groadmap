@@ -106,15 +106,26 @@ A non-test source file authored by the project. Test sources are `Test` nodes, n
 `CodeFile`; vendored third-party files are `Component`s, never `CodeFile`.
 
 Build and deployment artefacts are `CodeFile`s on the same terms as program source. The
-`Makefile`, `install.sh`, the workflow files under `.github/workflows/`, and `.gitignore`
-are each a file the project authored and maintains, each realises a requirement the SPEC states, and
-each is verified by a test; nothing about them justifies a label of their own. Their
-`package` is the directory that owns them -- `.` for a repository-root file, and
+`Makefile`, `install.sh`, the workflow files under `.github/workflows/`, `.gitignore`, and
+`.gosec.yaml` are each a file the project authored and maintains, each realises a requirement
+the SPEC states, and each is verified by a test; nothing about them justifies a label of their
+own. Their `package` is the directory that owns them -- `.` for a repository-root file, and
 `.github/workflows` for a workflow -- rather than a Go import path, because `package` on
 this label means "the component this file belongs to" and not "a compilation unit". No
 `Component` node exists for either directory, and none is invented to satisfy a query: those
-five files therefore carry a `package` and no `PART_OF` edge, and they are the only
+six files therefore carry a `package` and no `PART_OF` edge, and they are the only
 `CodeFile`s that do.
+
+`.gosec.yaml` was labelled `Doc` until it was tested against `Doc`'s own definition, which is
+the definition that decides it: a `Doc` is prose whose PURPOSE is to explain the project to a
+reader. The register's purpose is not to explain but to DECLARE, in a format
+`internal/testenv/nosec_register_gate_test.go` parses strictly, every `#nosec` the module
+carries, so that the build fails when the declaration and the source disagree. A file whose
+content is normative input to a validation gate is machinery and not explanation, and it then
+meets the build-artefact terms above exactly: project-authored, realising a requirement
+`SPEC/BUILD.md` section Security Scan: gosec states, and verified by a test. That the file is
+almost entirely prose decided nothing, because the criterion `Doc` sets is purpose and not
+form.
 
 | Property | Required | Notes |
 |---|---|---|
