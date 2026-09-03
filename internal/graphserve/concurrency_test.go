@@ -158,7 +158,9 @@ func teardown(tb testing.TB, srv *server.Server, ln *serverListener, st *graphst
 	tb.Helper()
 
 	ln.stopAccepting()
+	ln.markWrites()
 	drain(srv, ln)
+	ln.cutBlockedWrites()
 	_ = srv.Shutdown(context.Background()) //nolint:errcheck // the test's assertions are about the statements, not the teardown
 	_ = ln.Close()                         //nolint:errcheck // the wrapper's Close reports no error by construction
 	<-serveErr

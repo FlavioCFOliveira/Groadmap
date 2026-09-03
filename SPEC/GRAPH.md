@@ -2047,8 +2047,10 @@ The sequence:
 1. Stop accepting new connections.
 2. Wait, under a bounded timeout, for the statements and explicit transactions
    already in flight to reach a quiescent point.
-3. Shut the Bolt server down. Whatever is still in flight at that moment is cut,
-   which is what the engine's shutdown does.
+3. Cut what the drain could not finish, and shut the Bolt server down. The
+   engine's shutdown cancels every connection's context, which is the whole of
+   the cut it can perform; a session parked in a socket write does not observe a
+   cancellation, so Groadmap closes that socket itself.
 4. Checkpoint and truncate the write-ahead log, if the log has grown since it was
    last folded (see
    [Durability and Checkpointing in a Long-Lived Process](#durability-and-checkpointing-in-a-long-lived-process),
@@ -2072,6 +2074,52 @@ the backoff total, 7.5 seconds at the values in force (see
 its own, so the project keeps one set of timing numbers. It is the right quantity
 because it is the one a waiter is already required to survive: the longest lawful
 hold of a statement that is a read or that runs to completion.
+
+**Step 3 reaches a session that no cancellation reaches, and it is a cut rather
+than a bound.** The engine holds its serve call behind every session goroutine
+and cannot tell one it is still working for from one that is stopped, so a peer
+that has stopped reading fills the socket buffer, parks a goroutine in a socket
+write, and holds the whole shutdown for as long as that write takes to fail.
+Groadmap separates the two cases by observation rather than by a deadline: a
+connection that had one socket write outstanding when the drain began and has
+that same write outstanding when the drain ends has been blocked for the whole
+drain, which is longer than the longest lawful statement, and its socket is
+closed. A session inside an engine call is not in a socket write at all, so it is
+never selected and is still waited for without limit. Measured against a peer
+that had stopped reading, the shutdown returned at 60.0 seconds without the cut
+and at 7.5 seconds with it, while the same cut against a server inside an undo
+replay moved nothing — 32.9 seconds against 34.3, inside the spread of the replay
+itself.
+
+**The cut releases a goroutine and abandons nothing, which is what makes it safe
+rather than merely fast.** Every step after it still runs, in the same order and
+through the same code: the engine's own drain completes, so steps 4 and 5 take
+the shutdown checkpoint and close the store on the ordinary path. That is why
+step 3 closes a socket instead of putting a deadline on the wait. A deadline
+cannot see why the wait is long, so the only deadline prompt enough to release a
+blocked peer would also abandon a session inside an undo replay — and the engine
+tears the durability stack down only from a fully drained exit, so abandoning
+that session leaves the store to be closed while a statement is still unwinding.
+Nothing acknowledged would be lost either way, but that is a race this shutdown
+does not have and a deadline is the only way to introduce it.
+
+**The shutdown says when it has cut, because the engine's account of the same
+event reads as something else.** A connection closed at step 3 produces a write
+error from the engine's end, and on its own that line reads as a network fault a
+client caused rather than as a choice the server made, which is the difference
+between an operator investigating and an operator moving on. The shutdown
+therefore writes its own record at `WARN`, carrying the number of connections it
+closed under a `connections` attribute — one record however many were closed, and
+no record at all when nothing was cut. Its absence therefore says that nothing
+was cut, and not that the shutdown was clean: a shutdown held open by an undo
+replay selects no connection and writes no record either. Its presence is the
+informative half, and what it means is that the shutdown closed something. It is
+a `log/slog` record like every other the server writes, through the same handler
+and the same sink, and
+[Server Diagnostics on Stderr](#server-diagnostics-on-stderr) governs it
+unchanged. It reports a count and not an identity because there is no identity to
+report: a connection over a Unix domain socket carries no client address, and the
+engine's own records of these same connections carry an empty one.
 
 **What the drain guarantees:**
 
@@ -2108,7 +2156,23 @@ hold of a statement that is a read or that runs to completion.
    store cannot close until that call has returned. Shutdown therefore lasts as
    long as that replay lasts whatever the drain's bound says, and the longest such
    hold measured is 35.6 seconds, with no ceiling established (see
-   [Statement Time Budget](#statement-time-budget)).
+   [Statement Time Budget](#statement-time-budget)). That replay is the only cause
+   of it left with no ceiling. A peer that stopped reading before the signal was a
+   second cause until step 3 began closing its socket, which took the same
+   shutdown from 60.0 seconds to 7.5. What remains of that cause is bounded rather
+   than removed, and the criterion that decides it is whether the peer's write is
+   already parked when the mark is taken. A write that parks **after** the mark is
+   not selected, because its counter has moved — the false-positive discipline
+   working rather than failing — and a session parked in a socket write never
+   reaches the row loop where the shutdown's cancellation would be observed. It is
+   released when the per-message write deadline expires, so the connection timeout
+   is its ceiling: 60 seconds at the values in force, measured end to end at
+   60.035 seconds (see [Server Options](#server-options)). Both a peer that stops
+   reading during the drain and one that reads just enough that each individual
+   write completes and the next one parks arrive at that case. A peer that never
+   parks does not: every write completes, so the row loop keeps turning, observes
+   the cancellation at the next row, and ends the stream after one more record's
+   write.
 
 ### Server Options
 
@@ -2141,14 +2205,16 @@ a caller with more work than fits splits it across transactions.
 
 **The connection timeout MUST sit well above the statement bound, and this is the
 one option whose default is actively wrong here.** The engine documents that
-timeout as the silent gap between messages, but it is armed as a read deadline on
-the socket while the message loop is busy executing the previous statement. A
-statement that runs longer than it destroys its own connection mid-flight,
-whatever the statement's own budget says. Measured, the cut tracks the connection
-timeout exactly and ignores a statement timeout four times its size. The engine's
-default for the connection timeout equals its default statement timeout, so a
-server left at both defaults is one whose slowest permitted statement is
-guaranteed to die as a transport error rather than as a typed failure.
+timeout as the silent gap between messages, but it reaches both directions of the
+socket and it reaches them while a statement is running. On the read side it is
+armed as a read deadline that stays in force while the message loop is busy
+executing the previous statement. A statement that runs longer than it destroys
+its own connection mid-flight, whatever the statement's own budget says.
+Measured, the cut tracks the connection timeout exactly and ignores a statement
+timeout four times its size. The engine's default for the connection timeout
+equals its default statement timeout, so a server left at both defaults is one
+whose slowest permitted statement is guaranteed to die as a transport error
+rather than as a typed failure.
 
 Groadmap therefore sets the connection timeout to **twelve times the statement
 budget**, which is 60 seconds at the budget in force. The multiple is derived
@@ -2173,6 +2239,24 @@ bounds a session that sends nothing, so a client that holds a session open witho
 using it loses it after 60 seconds and must reconnect. `rmp graph client` sends
 one statement per invocation and never meets this; a longer-lived client is
 expected to reconnect.
+
+**A write is bounded by the same value, and that is the arming a shutdown
+inherits.** The connection timeout is armed afresh before every response the
+server writes, every record of a streamed result included, so a client that asks
+for a large result and then stops reading it holds one write open until the
+deadline trips and loses its connection 60 seconds later. Until that socket is
+closed the write holds the session and the session holds the shutdown, because
+the engine's serve call waits for every session goroutine: measured end to end, a
+server whose peer had stopped reading took 60.035 seconds to stop, and the whole
+of that was this deadline.
+[Server Shutdown and the Drain](#server-shutdown-and-the-drain), step 3, closes
+that socket sooner, and sets out which sessions it reaches. Because the deadline
+is armed afresh before each response rather than once per session, a peer that
+goes on consuming — so that every write completes and none parks — never trips it
+at all, and needs nothing to trip it: a session whose writes complete reaches the
+next row of the result it is streaming, and that is where a shutdown's
+cancellation is observed and the stream ends. Only a session parked in a write
+inherits this value as its bound.
 
 **The inbound message bound MUST NOT sit below the maximum query length.** A
 statement `rmp graph execute` accepts is a statement the server must accept, so

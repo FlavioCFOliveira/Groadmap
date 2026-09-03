@@ -1159,21 +1159,68 @@ func serve(srv *server.Server, ln *serverListener, st *graphstore.Store, socketP
 //     its accept call, so the engine has not yet reached the cancellation its own
 //     exit path performs.
 //  2. Wait, bounded, for what is in flight to reach a quiescent point.
-//  3. Shut the engine's server down. Whatever is still in flight at that moment
-//     is cut, which is what the engine's shutdown does.
+//  3. Cut what the drain could not finish, and shut the engine's server down.
+//     The engine's shutdown cancels every connection's context, which is the
+//     whole of the cut it can perform; the socket close beside it is this
+//     package's half, and see [serverListener.cutBlockedWrites] for the one
+//     session it reaches that a cancellation does not.
 //
-// Shutdown is given a context with NO deadline of its own, deliberately. A
-// statement the budget cut while it was writing is inside an undo replay the
-// engine takes no cancellation for, and the store cannot close until that call
-// has returned, so the shutdown lasts as long as that replay lasts whatever any
-// bound says — 35.6 seconds is the longest measured, with no ceiling established,
-// and an earlier run of the same shape measured 34.5 seconds.
-// A deadline here would not shorten it; it would only abandon the connections and
-// leave the composed store to be closed by the engine's other exit path, which is
-// the same wait reached less directly.
+// Shutdown is given a context with NO deadline of its own, deliberately, and the
+// final wait on Serve is unbounded for the same reason. A statement the budget
+// cut while it was writing is inside an undo replay the engine takes no
+// cancellation for, and the store cannot close until that call has returned, so
+// the shutdown lasts as long as that replay lasts whatever any bound says — 35.6
+// seconds is the longest measured, with no ceiling established, and an earlier
+// run of the same shape measured 34.5 seconds. A deadline here would not shorten
+// it; it would only abandon the connections and leave the composed store to be
+// closed by the engine's other exit path, which is the same wait reached less
+// directly.
+//
+// # Why a cut and not a bound
+//
+// That reasoning covers a session the ENGINE is still working for and covers
+// nothing else, and until rmp task #396 this function drew no line between the
+// two. A session goroutine parked on a socket whose peer has stopped reading is
+// not slow, it is stopped, and waiting for it buys nothing — but the engine holds
+// Serve behind BOTH, because Serve is a WaitGroup over the connection goroutines
+// and cannot tell which is which.
+//
+// This package can. A blocked session is inside [drainConn.Write] and an engine
+// call is not, so the two are separated by an observation rather than by a
+// deadline, and only the first is cut. Nothing is abandoned: the store is still
+// closed by the engine from a fully drained exit path, the shutdown checkpoint is
+// still taken there, and a session the engine is still working for is still
+// waited for without limit. Measured on rmp task #396, against a peer that
+// stopped reading: Serve returned at 60.0 s without the cut and at 7.5 s with it,
+// while the same cut applied to a server inside an undo replay moved nothing
+// (34.3 s against 32.9 s, inside the spread of the replay itself).
 func stop(srv *server.Server, ln *serverListener, serveErr <-chan error) error {
 	ln.stopAccepting()
+	ln.markWrites()
 	drain(srv, ln)
+	if cut := ln.cutBlockedWrites(); cut > 0 {
+		// The record is the SHUTDOWN's and is emitted here rather than inside the
+		// cut, because what an operator needs to know is that the server chose
+		// this. The engine reports the same event from the other end — a
+		// `bolt: write error ... use of closed network connection` per closed
+		// socket — and on its own that line reads as a network fault a client
+		// caused, which is the difference between an operator investigating and
+		// an operator moving on.
+		//
+		// A COUNT and not an identity, because there is no identity to report: a
+		// Unix domain socket carries no client address, and the engine's own
+		// records of these same connections render it `remote=@`.
+		//
+		// It goes through the same queue every other record does, which is
+		// acceptable here for a reason that would not hold on the serving path:
+		// this is a shutdown event, it is emitted once, and Run empties the queue
+		// before the process returns (SPEC/GRAPH.md § Server Diagnostics on
+		// Stderr).
+		logger.Warn("the graph server's shutdown closed connections whose peer had stopped "+
+			"reading; each had held one socket write open for the whole drain, so nothing "+
+			"else would have ended those sessions before the connection timeout",
+			slog.Int("connections", cut))
+	}
 
 	shutdownErr := srv.Shutdown(context.Background())
 
@@ -1343,9 +1390,22 @@ type serverListener struct {
 	// from an error it did not.
 	stopped chan struct{}
 
+	// conns is every accepted connection that has not yet been closed, mapped to
+	// the write-sequence value markWrites last recorded for it. It is bounded by
+	// maxConnections, which is the one ceiling that bounds every per-connection
+	// cost this server holds. It sits beside the two channels above rather than
+	// beside the mutex that guards it because the pointer-bearing fields are kept
+	// together, which is what govet's field alignment asks for.
+	conns map[*drainConn]uint64
+
 	// live counts connections accepted and not yet closed. It is what the drain
 	// waits on; see drain for why nothing finer is observable from out here.
 	live atomic.Int64
+
+	// connsMu guards conns. It is taken once per accept, once per close, and
+	// twice for the whole of a shutdown — never on the path a statement takes —
+	// so it is a lock on the connection LIFECYCLE and not on the served work.
+	connsMu sync.Mutex
 
 	stopOnce    sync.Once
 	releaseOnce sync.Once
@@ -1357,6 +1417,7 @@ func newServerListener(ln net.Listener) *serverListener {
 		Listener: ln,
 		released: make(chan struct{}),
 		stopped:  make(chan struct{}),
+		conns:    make(map[*drainConn]uint64),
 	}
 }
 
@@ -1377,7 +1438,117 @@ func (l *serverListener) Accept() (net.Conn, error) {
 		return nil, err
 	}
 	l.live.Add(1)
-	return &drainConn{Conn: conn, owner: l}, nil
+	wrapped := &drainConn{Conn: conn, owner: l}
+	l.connsMu.Lock()
+	// Zero is the mark of a connection markWrites has never seen, and zero is
+	// even, so a connection accepted after the mark is never a candidate for the
+	// cut. That is the safe default and it is why the mark is not initialised
+	// from the counter here.
+	l.conns[wrapped] = 0
+	l.connsMu.Unlock()
+	return wrapped, nil
+}
+
+// markWrites records, for every connection now live, which write is outstanding
+// on it. It is the first half of [serverListener.cutBlockedWrites]; see there.
+func (l *serverListener) markWrites() {
+	l.connsMu.Lock()
+	defer l.connsMu.Unlock()
+	for conn := range l.conns {
+		l.conns[conn] = conn.writeSeq.Load()
+	}
+}
+
+// cutBlockedWrites closes the socket under every session that has had ONE write
+// outstanding since markWrites ran, and reports how many it closed.
+//
+// # What it separates, and why this is the line
+//
+// The engine's Serve returns only when every connection goroutine has, so
+// whatever holds one holds the whole shutdown. Two things can:
+//
+//   - a session inside an engine call the engine takes no cancellation for — an
+//     undo replay after a cut write, measured at 35.6 s with no ceiling
+//     established (rmp task #380). The store genuinely cannot close until it
+//     returns, so waiting is the only correct answer and stop waits.
+//   - a session parked in a socket write because the peer stopped reading. It is
+//     not slow, it is stopped, and it holds the shutdown for the engine's write
+//     deadline — ConnTimeout, 60 seconds here — which is longer than the grace
+//     period of two of the three commonest supervisors. Waiting for it buys
+//     nothing at all.
+//
+// The engine cannot tell them apart and neither can a deadline. This package can,
+// because the socket is its own: a blocked session is inside [drainConn.Write]
+// and a session inside an engine call is not.
+//
+// # The test, stated exactly, because "is writing" is not it
+//
+// [drainConn.writeSeq] is incremented once on entry to Write and once on return,
+// so it is ODD exactly while a write is outstanding and its value identifies THAT
+// write. A connection is cut only when the value is odd AND unchanged since the
+// mark — the same write, outstanding for the whole of the drain. The drain's
+// bound is the graph store's wait budget, which is longer than the longest lawful
+// statement, and a write to a peer that is reading completes in microseconds, so
+// a healthy connection cannot be caught by this test twice. Measured on rmp task
+// #396: against a peer that stopped reading it selected exactly 1 of 10 live
+// connections, and against a server inside an undo replay it selected 0 of 4
+// while one of them held the shutdown open for another 25 seconds.
+//
+// # The interval is the drain's, and it is always the whole of it
+//
+// The mark is taken one instant after step 1 and read when the drain returns, so
+// the interval is however long the drain ran. That is not a variable this test
+// has to survive: the drain returns early only when no connection is live, and a
+// connection leaves this registry before it stops being counted, so an early
+// drain leaves nothing here to cut. A cut is therefore reachable ONLY from a
+// drain that spent its whole budget — the graph store's wait budget, 7.5 s at the
+// values in force — and never from a shorter interval.
+//
+// # What it does not reach, stated rather than left to be discovered
+//
+// A write that PARKED AFTER THE MARK is not selected, because its counter moved.
+// So a peer that was reading when the signal arrived and stopped during the drain
+// still holds the shutdown, and so does one that trickles — reading just enough
+// that each individual write completes and the next one parks.
+//
+// The worst case is named rather than left as "longer": that shutdown lasts until
+// the engine's per-message write deadline expires, which is ConnTimeout — twelve
+// statement budgets, 60 seconds at the values in force — because the engine arms
+// it before every response it writes, streamed records included. Measured end to
+// end at 60.035 s (rmp task #396). It is the same 60 seconds either way; what the
+// cut removes is the case where the peer had already stopped before the signal,
+// which is the reachable one.
+//
+// Closing the residual would need a SECOND interval and a second constant, and it
+// would trade a bounded, named worst case for the risk of cutting a connection
+// that was still making progress — the false positive this selector holds at
+// zero. It is recorded rather than chased (rmp task #396, the owner's decision).
+//
+// # Why the underlying socket is closed rather than the wrapper
+//
+// [drainConn.Close] takes connsMu to unregister, and this runs under it. Closing
+// the socket underneath is also the more honest operation: it releases the write
+// and leaves the connection counted as live until the engine's own handler has
+// finished with it, which it has not.
+//
+// # Why nothing is reported from here
+//
+// The count is RETURNED and the record is the caller's, because the fact worth
+// publishing is that the SHUTDOWN closed those connections, and this function is
+// the mechanism rather than the decision. See stop for the record itself and for
+// why the engine's own `bolt: write error` is not a substitute for it.
+func (l *serverListener) cutBlockedWrites() int {
+	l.connsMu.Lock()
+	defer l.connsMu.Unlock()
+
+	cut := 0
+	for conn, mark := range l.conns {
+		if mark%2 == 1 && conn.writeSeq.Load() == mark {
+			_ = conn.Conn.Close() //nolint:errcheck // the socket is going away either way; a close error cannot be acted on
+			cut++
+		}
+	}
+	return cut
 }
 
 // Close stops accepting and releases a blocked Accept.
@@ -1401,22 +1572,60 @@ func (l *serverListener) stopAccepting() {
 }
 
 // drainConn is one accepted connection, counted by its listener so the drain
-// knows when the last of them has gone.
+// knows when the last of them has gone and instrumented so the shutdown can tell
+// a session the peer has stopped reading from one the engine is still working
+// for.
 //
-// It counts and does nothing else. An earlier version instrumented Read as well,
-// on the premise that a connection inside one is a connection the server has
-// finished answering; the engine's per-connection read-ahead makes that premise
-// false, and drain records the measurement that established it.
+// READ is deliberately NOT instrumented, and the asymmetry is measured rather
+// than aesthetic. An earlier version counted reads, on the premise that a
+// connection inside one is a connection the server has finished answering; the
+// engine's per-connection read-ahead makes that premise false, and drain records
+// the measurement that established it. A blocked read cannot hold the shutdown
+// either way: the engine's teardown closes the socket BEFORE it joins its reader
+// goroutine, so the read is released by the connection's own exit path.
 type drainConn struct {
 	net.Conn
-	owner     *serverListener
+	owner *serverListener
+
+	// writeSeq is an even/odd sequence counter over this connection's writes: it
+	// is incremented on entry to Write and again on return, so an ODD value means
+	// a write is outstanding and the value itself identifies WHICH write. One
+	// word, two atomic adds per write, no allocation and no lock — the write path
+	// is where a served result is streamed and it carries no more than that.
+	//
+	// It is single-writer by construction: the engine writes every response from
+	// the connection's own message loop, and its reader goroutine only reads.
+	writeSeq atomic.Uint64
+
 	closeOnce sync.Once
 }
 
-// Close drops this connection from its listener's count, once however many times
-// it is called.
+// Write records that a write is outstanding for as long as it is.
+//
+// See [serverListener.cutBlockedWrites] for what reads the counter and why the
+// increment cannot be folded into a boolean: the shutdown has to tell one write
+// from the next, not merely writing from not writing.
+func (c *drainConn) Write(b []byte) (int, error) {
+	c.writeSeq.Add(1)
+	n, err := c.Conn.Write(b)
+	c.writeSeq.Add(1)
+	return n, err
+}
+
+// Close drops this connection from its listener's count and registry, once
+// however many times it is called.
 func (c *drainConn) Close() error {
 	err := c.Conn.Close()
-	c.closeOnce.Do(func() { c.owner.live.Add(-1) })
+	c.closeOnce.Do(func() {
+		// The registry is left BEFORE the count is decremented, so that a drain
+		// which observes live == 0 can never then find this connection still
+		// registered. See [serverListener.cutBlockedWrites] for what that
+		// ordering buys: a cut is reachable only from a drain that exhausted its
+		// budget, never from one that finished early.
+		c.owner.connsMu.Lock()
+		delete(c.owner.conns, c)
+		c.owner.connsMu.Unlock()
+		c.owner.live.Add(-1)
+	})
 	return err
 }
