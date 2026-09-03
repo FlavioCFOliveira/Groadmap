@@ -42,10 +42,8 @@ import (
 	"log/slog"
 	"net"
 	"os"
-	"os/signal"
 	"sync"
 	"sync/atomic"
-	"syscall"
 	"time"
 
 	"github.com/FlavioCFOliveira/GoGraph/bolt/server"
@@ -56,6 +54,7 @@ import (
 	"github.com/FlavioCFOliveira/Groadmap/internal/graphclient"
 	"github.com/FlavioCFOliveira/Groadmap/internal/graphlock"
 	"github.com/FlavioCFOliveira/Groadmap/internal/graphstore"
+	"github.com/FlavioCFOliveira/Groadmap/internal/signals"
 	"github.com/FlavioCFOliveira/Groadmap/internal/utils"
 )
 
@@ -593,9 +592,29 @@ func Run(opts Options) error {
 		return err
 	}
 
-	// Step 7. Serve, and report the socket. The announcement precedes the accept
-	// loop, so a caller that reads stdout for the path has it before the first
-	// session can produce a diagnostic.
+	// Step 7. Take the signals over, and only then report the socket.
+	//
+	// The order is the load-bearing half of the repair for the defect rmp task
+	// #388 records, and it is stated here rather than left to the reader: what a
+	// SIGINT or a SIGTERM means to this process changes at this line, from the
+	// exit-130 that cmd/rmp/main.go declares for a short-lived invocation to the
+	// drain below. A caller learns this server exists from the announcement, so
+	// taking over AFTER it would publish a process that can still be stopped the
+	// wrong way, for as long as the take-over takes. Taking over first makes the
+	// announcement mean what it says: a server that is ready is a server that
+	// drains.
+	//
+	// Nothing is unprotected in between. internal/signals never unregisters, so
+	// this is a change of owner rather than a re-registration; a signal that
+	// arrives before this line runs the default action and exits 130, which is
+	// the right answer for a server that has not announced itself yet.
+	//
+	// The release restores that default for the teardown that follows serve.
+	sigCh, releaseSignals := signals.TakeOver()
+	defer releaseSignals()
+
+	// The announcement precedes the accept loop, so a caller that reads stdout
+	// for the path has it before the first session can produce a diagnostic.
 	if err := opts.Announce(opts.SocketPath); err != nil {
 		_ = closer.Close() //nolint:errcheck // the announcement failed, so nothing was served; the close error cannot be acted on
 		_ = st.Close()     //nolint:errcheck // idem
@@ -603,7 +622,7 @@ func Run(opts Options) error {
 		return err
 	}
 
-	return serve(srv, ln, st, opts.SocketPath)
+	return serve(srv, ln, st, opts.SocketPath, sigCh)
 }
 
 // lockRefusal words an exhausted wait for the graph store lock in the terms the
@@ -968,19 +987,18 @@ func serverOptions(closer io.Closer) server.Options {
 // serve runs the accept loop until a signal arrives, then performs the shutdown
 // sequence of SPEC/GRAPH.md § Server Shutdown and the Drain.
 //
-// The signals are taken over from the process-wide handler cmd/rmp/main.go
-// installs, which maps SIGINT and SIGTERM to os.Exit(130). For a long-lived
-// command that would skip the drain, the checkpoint and the lock release, and
-// report the wrong exit code: this command interprets a signal as an instruction
-// to stop rather than as an interruption of unfinished work, so it drains,
-// checkpoints and exits 0. `rmp web` takes the same signals over for the same
-// reason.
-func serve(srv *server.Server, ln *serverListener, st *graphstore.Store, socketPath string) error {
-	signal.Reset(syscall.SIGINT, syscall.SIGTERM)
-	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
-	defer signal.Stop(sigCh)
-
+// sigCh is the channel [Run] took the signals over on, one step before the
+// announcement. This command interprets a signal as an instruction to stop
+// rather than as an interruption of unfinished work, so it drains, checkpoints
+// and exits 0 where cmd/rmp/main.go's default action would exit 130 and skip the
+// drain, the checkpoint and the lock release. `rmp web` takes the same signals
+// over, through the same package, for the same reason.
+//
+// The channel arrives as a parameter rather than being registered here because
+// the take-over has to happen before the announcement and the announcement
+// happens in [Run]; see the comment at that line, and internal/signals for why
+// re-registering is what the defect was.
+func serve(srv *server.Server, ln *serverListener, st *graphstore.Store, socketPath string, sigCh <-chan os.Signal) error {
 	// The context is never cancelled. Cancelling it is one of the two ways to
 	// stop the engine's server, and both of them CUT: every connection's context
 	// derives from this one. The drain below is what stops it instead.

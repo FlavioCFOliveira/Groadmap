@@ -9,13 +9,12 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
-	"os/signal"
 	"runtime"
 	"strconv"
-	"syscall"
 	"time"
 
 	"github.com/FlavioCFOliveira/Groadmap/internal/db"
+	"github.com/FlavioCFOliveira/Groadmap/internal/signals"
 	"github.com/FlavioCFOliveira/Groadmap/internal/utils"
 )
 
@@ -73,6 +72,23 @@ func serve(opts options) error {
 			slog.String("hint", "use --host 127.0.0.1 to restrict to this machine"))
 	}
 
+	// Take the signals over BEFORE the URL is printed, and therefore before
+	// the browser launch that follows it.
+	//
+	// What SIGINT and SIGTERM mean to this process changes at this line, from
+	// the exit-130 cmd/rmp/main.go declares for a short-lived invocation to the
+	// graceful shutdown in runServer. Ordering it ahead of the announcement is
+	// what makes the printed URL mean "this server shuts down cleanly": a caller
+	// that has read the URL cannot signal a process that has not yet taken over.
+	//
+	// It matters more here than it looks. Step 5 below spawns a browser, and a
+	// process spawn is far slower than anything else between the URL and the
+	// server; taking over after it would leave that whole span disowned. See
+	// internal/signals for the interval this replaces and what was measured in
+	// it (rmp task #388).
+	sigCh, releaseSignals := signals.TakeOver()
+	defer releaseSignals()
+
 	if perr := utils.PrintJSON(map[string]string{"url": url}); perr != nil {
 		_ = ln.Close()
 		return perr
@@ -86,7 +102,7 @@ func serve(opts options) error {
 
 	// 6. Serve and wait for a termination signal, then shut down
 	//    gracefully.
-	return runServer(ln)
+	return runServer(ln, sigCh)
 }
 
 // migrateRoadmapsAtStartup brings every existing roadmap's SQLite schema up to
@@ -191,17 +207,17 @@ func newServer() *http.Server {
 // ErrDatabase when Serve fails for any reason other than the expected
 // http.ErrServerClosed.
 //
-// Signal handling gotcha: cmd/rmp/main.go installs a global SIGINT/SIGTERM
-// handler that calls os.Exit(130). For `rmp web` that would skip graceful
-// shutdown and report the wrong exit code, so we first Reset those signals
-// (removing main's handler) and then register our own, scoped to the
-// server's lifetime.
-func runServer(ln net.Listener) error {
-	signal.Reset(syscall.SIGINT, syscall.SIGTERM)
-	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
-	defer signal.Stop(sigCh)
-
+// sigCh is the channel [serve] took the signals over on, one step before the
+// URL was printed. cmd/rmp/main.go's default action for SIGINT and SIGTERM is
+// os.Exit(130), which for `rmp web` would skip the graceful shutdown and report
+// the wrong exit code; the take-over replaces that action for the server's
+// lifetime and releases it afterwards.
+//
+// The channel arrives as a parameter rather than being registered here because
+// the take-over has to precede the announcement, which happens in [serve]. It
+// used to be registered here with signal.Reset followed by signal.Notify, and
+// that pair is the defect rmp task #388 fixed: see internal/signals.
+func runServer(ln net.Listener, sigCh <-chan os.Signal) error {
 	srv := newServer()
 
 	serveErr := make(chan error, 1)

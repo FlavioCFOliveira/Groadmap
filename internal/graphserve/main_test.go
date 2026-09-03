@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"os"
 	"testing"
+
+	"github.com/FlavioCFOliveira/Groadmap/internal/signals"
 )
 
 // TestMain doubles as the entry point of the CHILD SERVER PROCESS the durability
@@ -58,6 +60,13 @@ const (
 	childSocketEnv = "GROADMAP_GRAPHSERVE_TEST_SOCKET"
 )
 
+// childInterruptedExitCode mirrors cmd/rmp's ExitSigint: what a signal means to
+// an invocation that has not taken the signals over. A child that exits with it
+// was stopped before Run reached its take-over, which for a server that has
+// already announced itself is a failure and is asserted against in
+// signalwindow_test.go.
+const childInterruptedExitCode = 130
+
 // childRoadmapName is the roadmap name the child reports in the lock refusal
 // line. Nothing in these tests resolves a roadmap — the graph directory and the
 // socket are passed as absolute paths, exactly as the CLI passes them after it
@@ -74,6 +83,15 @@ const childRoadmapName = "durability"
 // JSON would have to reach into a package this one does not import. The path is
 // what the parent checks, and it checks it against the path it asked for.
 func serveAsChild() int {
+	// The default disposition cmd/rmp/main.go declares, installed here for the
+	// same reason the child runs Run rather than a re-assembly of its steps: the
+	// signal handling is part of what these tests exercise, and half of it lives
+	// in main. Without it the child would carry no handler at all until Run takes
+	// the signals over, which is a state no `rmp` invocation is ever in and would
+	// make a signal delivered during startup kill the child where the real
+	// command exits 130 (see internal/signals).
+	signals.Install(func(os.Signal) { os.Exit(childInterruptedExitCode) })
+
 	err := Run(Options{
 		Announce: func(socket string) error {
 			_, printErr := fmt.Fprintln(os.Stdout, socket)

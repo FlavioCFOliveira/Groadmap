@@ -35,12 +35,11 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/signal"
 	"strings"
-	"syscall"
 
 	"github.com/FlavioCFOliveira/Groadmap/internal/aihelp"
 	"github.com/FlavioCFOliveira/Groadmap/internal/commands"
+	"github.com/FlavioCFOliveira/Groadmap/internal/signals"
 	"github.com/FlavioCFOliveira/Groadmap/internal/utils"
 )
 
@@ -67,13 +66,24 @@ const (
 // defined in SPEC/ARCHITECTURE.md § Exit Codes. Without an explicit handler
 // the Go runtime lets the kernel terminate the process by signal, which
 // produces a platform-dependent status that is not the documented 130.
+//
+// The registration itself belongs to internal/signals, which installs it once
+// here and never removes it. What this function contributes is the ACTION for
+// an invocation that has not taken the signals over: exit 130. The two
+// long-lived commands — `rmp graph serve` and `rmp web` — replace that action
+// with their own drain through signals.TakeOver, and they do so without
+// disturbing the registration. That is the whole point of routing this through
+// one package: the previous arrangement had each of them call signal.Reset to
+// displace a handler installed here, and Reset restores the DEFAULT
+// disposition, which left a measured 41-microsecond interval in which SIGTERM
+// killed the process outright (see the internal/signals package doc).
+//
+// Every other command reaches a delivery with no owner and therefore this
+// action, unchanged.
 func installSignalHandler() {
-	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
-	go func() {
-		<-sigCh
+	signals.Install(func(os.Signal) {
 		os.Exit(ExitSigint)
-	}()
+	})
 }
 
 func main() {
