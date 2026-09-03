@@ -3794,13 +3794,30 @@ canonical for the path, the mode, and the access model.
   output (see `DATA_FORMATS.md § Implementation Notes`).
 - **While running:** the server answers Bolt sessions on the socket. Per-statement
   results go to the client that asked for them, not to the command's stdout.
-- **Diagnostics (stderr):** plain text. Two warnings from the engine are expected
-  at startup and are not failures: one for a server running without transport
-  security, and one for a server running without authentication. Both are
-  accurate, and `GRAPH.md § Socket Path and Permissions` explains why both states
-  are the intended ones.
+- **Diagnostics (stderr):** structured records, and **not** the plain text this
+  command's own error line uses. Every diagnostic the running server writes is a
+  `log/slog` record rendered as a single line of `key=value` pairs, and every one
+  of them carries a `time` attribute in the project's canonical form,
+  `YYYY-MM-DDTHH:mm:ss.sssZ` — always UTC, three digits of milliseconds, an
+  explicit `Z`, whatever zone the machine is set to
+  (`DATA_FORMATS.md § Dates - ISO 8601 with UTC`). The records the engine
+  produces are written by this handler too, so they carry the same timestamp;
+  `rmp` does not merely relay them.
+  `GRAPH.md § Server Diagnostics on Stderr` is canonical for the whole stream:
+  what is fixed about a record, what is deliberately not, and the limit that
+  makes this a diagnostic stream rather than an audit log — under sustained load
+  the server drops records rather than block on a destination that has stopped
+  reading them, and reports how many it dropped.
+- **The two startup warnings (stderr):** one for a server running without
+  transport security and one for a server running without authentication. Both
+  are expected and neither is a failure; `GRAPH.md § Socket Path and Permissions`
+  explains why both states are the intended ones. Both are written **before** the
+  socket object appears on stdout, so a caller that reads the path and then reads
+  stderr finds them there.
 - **Errors (stderr):** plain text, with the standard AI-agent hint, per
-  `HELP.md § Error message format`.
+  `HELP.md § Error message format`. This is the invocation's own failure line
+  rather than a log record, and `§ Serve Error Cases` publishes the lines
+  themselves.
 
 ### Serve Exit Codes
 

@@ -120,6 +120,44 @@ YYYY-MM-DDTHH:mm:ss.sssZ
 3. **Z suffix**: Explicit UTC indicator
 4. **T separator**: Between date and time
 
+### Scope
+
+The format binds **every timestamp Groadmap generates**, wherever the product
+writes it — not only the ones that reach a JSON object on stdout. It governs a
+roadmap database's stored timestamps, an audit entry's `timestamp`, those same
+values rendered into JSON output, and the `time` attribute of every diagnostic
+record the two long-lived surfaces write to stderr: `rmp web` (see
+`WEB.md § Logger Configuration`, rule 5) and `rmp graph serve` (see
+`GRAPH.md § Server Diagnostics on Stderr`).
+
+It does **not** govern a temporal value that is data a caller stored in the
+knowledge graph. Those are the caller's values, of six distinct types, and each
+is rendered in the ISO 8601 form of its own type; see
+[Graph Query Result](#graph-query-result), **Temporal values**, which states that
+boundary in full.
+
+**A record whose message came from a dependency is inside this rule rather than
+outside it.** The graph server's stderr carries records the graph engine
+produces, and it is tempting to read those as output the product merely relays
+and is therefore not answerable for. That reading fails on the point that
+matters: the engine supplies the message and its attributes, and Groadmap's own
+handler supplies the timestamp, because `log/slog` builds the `time` attribute
+inside the handler rather than at the call site. Groadmap generates those
+timestamps, so this rule binds them. The narrower reading — that the rule covers
+only output whose **message** the product wrote — would also exempt the web
+server's records, which carry database and engine error text inside them and
+which `WEB.md` already requires to be UTC.
+
+**One realisation of the format, not the rule restated in each place.** Every
+surface that stamps a timestamp MUST use the project's single implementation of
+this format rather than expressing it again locally
+(`ARCHITECTURE.md § Modules and Responsibilities` names the module that owns date
+handling). Two expressions of one format is how two surfaces come to answer one
+question differently: one of them is corrected and the other is not, and nothing
+between them notices. A surface that expresses the rule locally satisfies it for
+itself and for nothing else, which is the failure this requirement exists
+against.
+
 ---
 
 ## Task Status State Machine

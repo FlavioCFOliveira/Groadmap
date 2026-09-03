@@ -66,6 +66,7 @@ The SPEC is unversioned. Git is the source of truth for its evolution — recove
 | Migration idempotency (ALTER TABLE DROP COLUMN guard, what a drop preserves and discards) | `DATABASE.md § Migration Idempotency (ALTER TABLE DROP COLUMN)` |
 | `graph` command syntax / subcommands (`execute`, `serve`, `client`) | `COMMANDS.md § Graph Management` |
 | Dedicated graph server (`rmp graph serve`): socket, permissions, startup, drain, server options, and what it guarantees | `GRAPH.md § The Dedicated Graph Server` |
+| What `rmp graph serve` writes to stderr (structured records rather than plain text, the timestamp every record carries, the ordering of the two startup warnings against the stdout announcement, and the records dropped when the stream stops being read) | `GRAPH.md § Server Diagnostics on Stderr` |
 | The rule every surface follows to decide whether a roadmap is served, its four states, and the exit code or HTTP status each produces | `GRAPH.md § Server Resolution` |
 | Bolt client (`rmp graph client`): what it shares with the resolution path and why it does not fall back to the store | `GRAPH.md § The Bolt Client` |
 | Graph client stdout shape, and the requirement that it be identical to `graph execute`'s | `DATA_FORMATS.md § Graph Client Result` |
@@ -160,6 +161,7 @@ To prevent drift across SPEC files, the following topics have a single authorita
 | Topic | Canonical Source |
 |-------|------------------|
 | Exit codes (numeric values and sentinel names) | `ARCHITECTURE.md § Exit Codes` |
+| Timestamp format, and the scope of the UTC rule (which output it binds, including a log record whose message came from a dependency, and the requirement that one realisation of the format serve every surface) | `DATA_FORMATS.md § Dates - ISO 8601 with UTC` |
 | Sentinel errors and wrapping rules | `ARCHITECTURE.md § Error Handling` |
 | Error output shape (stderr parts and their order, which error classes append help, stdout silence on failure) | `HELP.md § Error message format` |
 | Filesystem permission model (`0700` directories, `0600` database, when enforced, failure mode) | `ARCHITECTURE.md § Open-Time Permission Enforcement` |
@@ -219,13 +221,15 @@ To prevent drift across SPEC files, the following topics have a single authorita
 ### Dates and Timestamps
 
 - All dates and timestamps use ISO 8601 with UTC timezone.
-- Format example: `2026-05-12T14:30:00Z`.
-- This applies to: database columns, JSON output, audit log entries, version metadata.
+- Format example: `2026-05-12T14:30:00.000Z` — three digits of milliseconds and an explicit `Z`.
+- This applies to: database columns, JSON output, audit log entries, version metadata, and the `time` attribute of every log record the two long-lived servers write to stderr.
+- Canonical source, including the boundary against knowledge-graph temporal values: `DATA_FORMATS.md § Dates - ISO 8601 with UTC`.
 
 ### Process Output
 
 - Successful command output: JSON to stdout.
 - Error messages, help text, usage hints: plain text to stderr.
+- The two long-lived servers additionally write **structured** `log/slog` records to stderr, which are not the plain-text error form: see `WEB.md § Server Logging` and `GRAPH.md § Server Diagnostics on Stderr`.
 - Exit code conveys outcome class (canonical list in `ARCHITECTURE.md`).
 
 ### Filesystem

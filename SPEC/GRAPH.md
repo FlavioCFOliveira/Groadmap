@@ -33,6 +33,7 @@
   - [Server Startup](#server-startup)
   - [Server Shutdown and the Drain](#server-shutdown-and-the-drain)
   - [Server Options](#server-options)
+  - [Server Diagnostics on Stderr](#server-diagnostics-on-stderr)
   - [Concurrency Inside the Server](#concurrency-inside-the-server)
   - [Durability and Checkpointing in a Long-Lived Process](#durability-and-checkpointing-in-a-long-lived-process)
   - [Server Resolution](#server-resolution)
@@ -1884,12 +1885,19 @@ and not inside `graph/`: the contents of that directory belong to GoGraph, and
    can open the socket can read, write, delete, and change the schema of that
    roadmap's graph. This is the trust model the web graph data endpoint already
    has (see `WEB.md § Security and Constraints`), reached through a second door.
+   The declaration is announced as well as written down here: the engine emits a
+   warning for it at construction, which rule 6 covers together with the warning
+   for the absent transport security.
 6. **The connection is not encrypted, and the engine warns about both of these.**
    No transport security is configured, because the transport is a socket in the
    local filesystem and there is no network hop to protect. The engine emits a
    warning at construction for the absent transport security and a second for the
    permissive authentication handler. Both are expected, both are correct, and
-   neither is a failure.
+   neither is a failure. Both are structured `log/slog` records rather than
+   plain-text lines, and both reach stderr **before** the socket is announced on
+   stdout, so a caller that waits for the announcement and then reads stderr finds
+   them there. [Server Diagnostics on Stderr](#server-diagnostics-on-stderr) is
+   canonical for the form those records take and for that ordering.
 7. **The socket file belongs to the server and does not outlive it.** A server
    that stops removes it. A socket file left behind by a process that was killed
    is a **stale** socket: nothing is listening on it, the next server replaces it,
@@ -1934,12 +1942,17 @@ each step is what makes a later one safe.
    constructed over a graph with no write-ahead log behind it accepts every write,
    acknowledges every commit, warns about nothing, and loses all of it when the
    process ends; the constructor that table fixes is the one that does not.
-7. **Take `SIGINT` and `SIGTERM` over, announce the socket on stdout, and serve —
-   in that order.** The announcement is a single JSON object naming the socket the
-   server bound, so a caller that supplied no `--socket` still learns the path (see
-   `COMMANDS.md § Serve Output`). The order inside this step is load-bearing in the
-   same way as the order of the steps around it, and the paragraph below states
-   why.
+7. **Take `SIGINT` and `SIGTERM` over, flush the startup diagnostics to stderr,
+   announce the socket on stdout, and serve — in that order.** The announcement is
+   a single JSON object naming the socket the server bound, so a caller that
+   supplied no `--socket` still learns the path (see
+   `COMMANDS.md § Serve Output`). The flush is what puts the two warnings of rules
+   5 and 6 of [Socket Path and Permissions](#socket-path-and-permissions) on
+   stderr **before** that announcement, so a caller that reads stdout first and
+   stderr second finds them there rather than finding nothing (see
+   [Server Diagnostics on Stderr](#server-diagnostics-on-stderr)). The order inside
+   this step is load-bearing in the same way as the order of the steps around it,
+   and the paragraph below states why the take-over is first of the three.
 
 **The listener is bound before the store is opened, deliberately.** Opening the
 store costs up to about a second on a large graph, and a caller that resolved the
@@ -2044,6 +2057,15 @@ The sequence:
 6. Ensure the socket file is gone.
 7. Exit 0.
 
+**The queued diagnostics outlive every step of that sequence, deliberately.** The
+records this teardown writes — a store that failed to close, a shutdown
+checkpoint that failed — are the last account an operator has of what happened,
+and the sink that keeps a blocked stderr off the serving path is a queue, so
+those records could otherwise still be waiting in it when the process returned.
+They are delivered after every step above and before the process exits, under a
+bound of their own (see
+[Server Diagnostics on Stderr](#server-diagnostics-on-stderr)).
+
 **The drain's bound is the graph store's wait budget** — the statement budget plus
 the backoff total, 7.5 seconds at the values in force (see
 [Lock Contention](#lock-contention)) — reused rather than replaced by a figure of
@@ -2095,6 +2117,12 @@ leaves every other at the engine's own default. A value the engine owns is not
 restated here: restating it would give this specification a fact a dependency bump
 can falsify in silence, which is the hazard
 [Dependency Maturity Risk](#dependency-maturity-risk) describes.
+
+One of the options Groadmap fixes is the logger the engine's server reports
+through, and it is specified in
+[Server Diagnostics on Stderr](#server-diagnostics-on-stderr) rather than in the
+list below, because what it settles is the shape of published output rather than
+a bound on a session.
 
 **The statement bound is the graph store's, and it is the declaration the other
 two surfaces already read.** The server's default statement timeout is the
@@ -2200,6 +2228,140 @@ driver that speaks the routing form of the protocol would receive a path where i
 expects a host and a port and would fail to parse it. Groadmap neither supports
 such a driver nor works around the address: the transport is a socket, a socket
 has no host and no port, and a routing table over one describes nothing.
+
+### Server Diagnostics on Stderr
+
+The server's stderr carries two different kinds of line, and only one of them is
+the plain text the rest of this product writes.
+
+1. **Structured records.** Everything the running server reports is a `log/slog`
+   record rendered by a `slog.TextHandler` Groadmap configures: one record is one
+   line of `key=value` pairs, which reads on a terminal and needs no parsing
+   tool. The two startup warnings of
+   [Socket Path and Permissions](#socket-path-and-permissions), rules 5 and 6,
+   are records of this kind, and so is everything the engine reports while a
+   session is being served. It is the same handler type, configured the same way,
+   that `rmp web` uses for the same purpose (`WEB.md § Logger Configuration`); the
+   two long-lived surfaces MUST NOT answer this question differently.
+2. **The invocation's own error line.** A failure that ends the process is
+   reported in the project's plain-text error form — the `Error: ` prefix, the
+   sentinel, and the AI-agent hint — exactly as a short-lived `rmp` invocation
+   reports one (`HELP.md § Error message format`, and
+   `COMMANDS.md § Serve Error Cases` for the lines themselves). It is not a log
+   record.
+
+Beyond those two, nothing else reaches stderr while the server runs, and no
+record ever reaches stdout: stdout carries the socket announcement and nothing
+else, so a caller that reads it for the path is never disturbed by a diagnostic
+(`COMMANDS.md § Serve Output`). The subcommand's help, which `-h` writes and
+which no serving invocation writes at all, is the usual exception every command
+has.
+
+**The engine's records are this product's lines, and that is what puts them
+inside the rules below.** It is tempting to read them as the engine's output,
+relayed by `rmp` and therefore not `rmp`'s to answer for. That reading is false.
+The engine supplies a message and its attributes; the handler supplies everything
+else on the line, because `log/slog` builds the `time` attribute inside the
+handler rather than at the call site, and the handler is Groadmap's. `rmp` writes
+those lines. A scope that exempted them would have to be drawn around output
+whose **message** `rmp` wrote, and that same scope would exempt the web server's
+records, which carry database and engine error text inside them and which
+`WEB.md § Logger Configuration`, rule 5, already binds.
+
+**Every record's timestamp is the project's canonical one, and that is a
+contract.** The `time` attribute is always UTC, in the single format
+`YYYY-MM-DDTHH:mm:ss.sssZ` — exactly three digits of milliseconds and an explicit
+`Z` — for example `2026-09-03T15:28:27.652Z`. It is UTC whatever zone the
+machine is set to, so a server log line and a task's `created_at` are directly
+comparable and a log read in one time zone means the same instant as the same log
+read anywhere else. `slog.TextHandler` stamps records in the **local** zone with
+a numeric offset by default, which is neither UTC nor `Z`-suffixed, so the
+handler MUST replace that attribute rather than accept what the standard library
+produces. `DATA_FORMATS.md § Dates - ISO 8601 with UTC` is canonical for the
+format and for the scope of the rule; what this section adds is that the rule
+reaches every record the handler renders, the engine's included. Measured on a
+machine set one hour ahead of UTC, every one of the 205 records a server emitted
+under load carried the `Z` form, the two startup warnings among them; the same
+records without the replacement carry `+01:00`.
+
+**Publishing the timestamp is deliberately not publishing the line.** What is
+fixed here is the timestamp and the one-record-one-line property, and nothing
+further. The order of the attributes after `time`, the rendering of the level,
+and the quoting of a value that contains whitespace or a control character are
+`slog.TextHandler`'s, and they belong to the Go standard library rather than to
+this project; fixing them here would give this specification a fact a toolchain
+upgrade could falsify in silence, which is the hazard
+[Dependency Maturity Risk](#dependency-maturity-risk) states for the engine and
+which applies unchanged to the standard library. The one-line property is fixed
+because two other rules rest on it: a record is dropped whole or not at all, and
+a value carrying a newline cannot forge a second record on an operator's console
+(`WEB.md § Log Integrity` is canonical for the second).
+
+**The minimum enabled level is `INFO`, which is a load decision rather than a
+default accepted.** `DEBUG` records are not emitted. Measured, the engine emits
+two `DEBUG` records per connection — one when it is accepted and one when it is
+closed — and `rmp graph client` opens one connection per statement, so at `DEBUG`
+an idle, uncontended server writes of the order of ninety kilobytes of log per
+five hundred statements, where at `INFO` those same five hundred statements
+produce two records in total. The level is what keeps a server that is doing
+nothing wrong quiet, and it is the same level `rmp web` enables
+(`WEB.md § Logger Configuration`, rule 3).
+
+**The two startup warnings reach stderr before the socket reaches stdout, and
+that ordering is a guarantee.** The engine emits them when the Bolt server is
+constructed, after the store is opened at step 6 of
+[Server Startup](#server-startup) and before step 7; the queued records are then
+flushed at step 7, ahead of the announcement. A caller that waits
+for the announcement on stdout and then reads stderr therefore finds both
+warnings there. The guarantee has to be stated because the sink below is
+otherwise non-blocking and queued: without that flush the first complete line
+reaches a line-oriented reader **after** the announcement — measured at 5.1 ms,
+which is nothing to a person and everything to a program — and a caller reading
+the two streams in that order sees no warnings and concludes the server issued
+none. Those are the warnings that say every client is admitted without
+credentials and that Bolt credentials travel in cleartext, so a deployment gated
+on their presence would proceed on their absence. The flush is the one place the sink's
+non-blocking property is deliberately suspended, and it is safe there for a
+reason that does not hold later: at that instant no session exists, so nothing it
+waits on is a statement being served.
+
+**The stream is not a complete record of what happened, and it MUST NOT be read
+as an audit log.** The sink between the handler and the file descriptor is
+bounded and non-blocking. It holds a fixed number of rendered records, and when
+the destination stops accepting writes and that queue fills, records are
+**dropped** — oldest first — while the server goes on serving at full speed. This
+is a limit, and it is stated as one rather than dressed as a guarantee. It is
+deliberate for a reason that outranks completeness: a diagnostic channel MUST NOT
+be able to stop the server. An unbounded sink puts a diagnostic write back on the
+serving path, where a stderr that stops being read — a log shipper that dies, a
+supervisor that stops reading, a `| head` — blocks the goroutine serving a
+session, and through it the shutdown, because the engine's serve call waits for
+those goroutines. Measured against an undrained stderr under concurrent writers
+to one node, such a server answered fewer than half the statements it was sent
+and did not return from `SIGTERM` at all; bounded, it answers all of them at full
+speed and stops when it is told to. Oldest-first is deliberate too: the newest
+records survive, because an operator reading a log after the fact needs the
+outcome of an incident, and its beginning is usually the same flood repeated.
+
+**The loss is declared rather than silent.** Once the destination accepts writes
+again, the sink writes one record stating how many records were dropped since it
+last said so, so a gap in the stream is an announced gap rather than an
+unexplained one. Two consequences follow and neither is a defect. A destination
+that never recovers receives no report either — but it has received nothing at
+all, so a missing report is not a further loss on top of the missing records. And
+a record is dropped whole: the handler renders a record complete and writes it
+once, so a drop can never emit half a line. What survives is delivered in the
+order it was written — the queue drops records but never reorders them — because
+a log that is not an ordered account of what happened is not much of a log.
+
+**The queued records are delivered before the process exits.** Whatever path the
+process leaves by, the queue is emptied last — after the teardown of
+[Server Shutdown and the Drain](#server-shutdown-and-the-drain) has written its
+own final records, such as a store that failed to close or a shutdown checkpoint
+that failed. That wait is **bounded**, by the retry policy's own total rather
+than by a figure invented for it (`IMPLEMENTATION.md § Retry Logic`), because the
+sink being emptied may be the dead one and an unbounded wait at exit would
+reintroduce on the last line the hang the bound above exists to remove.
 
 ### Concurrency Inside the Server
 
@@ -3798,6 +3960,38 @@ Groadmap's usage model and expectations:
     invalid statement produces, which is the confusion this line was published to
     end (see
     [Concurrency Inside the Server](#concurrency-inside-the-server), rule 9).
+56. **Every record the server writes to stderr carries the project's canonical
+    timestamp, and the criterion MUST include records the engine produced.** With
+    the machine's local zone set to a non-zero offset, a server is started,
+    exercised and stopped; every record it emitted carries a `time` attribute of
+    the form `YYYY-MM-DDTHH:mm:ss.sssZ`, and the two startup warnings of
+    [Socket Path and Permissions](#socket-path-and-permissions), rules 5 and 6,
+    are among the records checked. The criterion MUST be driven under a non-UTC
+    local zone, because under UTC a handler that replaces nothing at all passes
+    it; and it MUST assert the **instant** as well as the shape, because a
+    handler that reformatted the local reading instead of converting it would
+    satisfy the shape while naming an instant hours away (see
+    [Server Diagnostics on Stderr](#server-diagnostics-on-stderr)).
+57. **The two startup warnings are on stderr before the socket is on stdout.** A
+    caller that starts a server, waits for the announcement object on stdout, and
+    only then reads stderr finds both warnings there: the one for the absent
+    authentication and the one for the absent transport security. The criterion
+    MUST read stderr the way a caller reads it, a complete line at a time, because
+    the defect it exists against left bytes on the stream but no complete line at
+    the moment of the announcement — so a check for readable bytes would have
+    passed while a line-oriented reader saw nothing (see
+    [Server Startup](#server-startup), step 7).
+58. **A server whose stderr has stopped being read keeps serving, still stops on a
+    signal, and accounts for what it lost.** Driven with nothing draining its
+    stderr and with enough records written to overflow the queue, the server
+    answers every statement it is sent, and `SIGINT` or `SIGTERM` still stops it.
+    Once the destination accepts writes again, the criterion MUST assert the
+    invariant rather than a literal count: every record written either arrived
+    whole or was counted in a dropped-record report, and the records that arrived
+    are in the order they were written. A literal count would assert a scheduling
+    accident; the invariant fails on a count that is short, on one that is
+    inflated, and on a record that vanished without being counted at all (see
+    [Server Diagnostics on Stderr](#server-diagnostics-on-stderr)).
 
 ## See Also
 
@@ -3815,3 +4009,5 @@ Groadmap's usage model and expectations:
 - The exit codes each of the two subcommands can return, and the packages that implement them → `ARCHITECTURE.md § Exit Codes of the Graph Server and Client`
 - The shape of the client's stdout, and the mapping that makes it identical to `graph execute`'s → `DATA_FORMATS.md § Graph Client Result`
 - How the web graph data endpoint resolves a running server → `WEB.md § Knowledge Graph from the GoGraph Store`
+- The timestamp every log record carries, and which output the UTC rule binds → `DATA_FORMATS.md § Dates - ISO 8601 with UTC`
+- The sibling long-lived surface's logger, on the same rule and the same handler → `WEB.md § Logger Configuration`

@@ -394,7 +394,9 @@ Each package implements:
 
 ### 5. internal/utils/
 - **json.go**: Consistent JSON output wrapper
-- **time.go**: UTC conversion, ISO 8601 formatting
+- **time.go**: UTC conversion, ISO 8601 formatting, and the `log/slog` hook that
+  stamps a server's log records in that same format, so the format has one
+  realisation rather than one per surface (`DATA_FORMATS.md § Dates - ISO 8601 with UTC`)
 - **path.go**: Cross-platform path resolution. Resolves the roadmap home
   directory and, for the graph feature, the per-roadmap `graph/` subdirectory.
 
@@ -548,6 +550,12 @@ pinning requirements are in `BUILD.md § Go Toolchain`.
 - The drain is this package's own work, because the engine has none: its shutdown
   cancels connection contexts rather than waiting for in-flight statements. See
   `GRAPH.md § Server Shutdown and the Drain`.
+- Owns the server's diagnostic channel: the handler its records are rendered by,
+  and the bounded, non-blocking sink that keeps a stderr nobody is reading off the
+  goroutines that serve sessions. `GRAPH.md § Server Diagnostics on Stderr` is
+  canonical for what that stream carries and for the limit it comes with. The
+  timestamp format the handler applies is not this package's: it installs the hook
+  `internal/utils` owns, which is the one `internal/web` installs too.
 - **What it deliberately does not own.** It does not read the statement, does not
   serialise a result, and does not choose an exit code; and it is not a client of
   itself — a caller that wants to reach a server uses `internal/graphclient`.

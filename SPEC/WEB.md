@@ -5033,7 +5033,10 @@ states explicitly.
    `slog.TextHandler` timestamps in the **local** zone with an offset by
    default, which satisfies neither rule; the handler MUST therefore replace the
    `time` attribute with the UTC value in that format rather than accept the
-   default.
+   default. `rmp graph serve` is bound by the same rule for the same reason (see
+   `GRAPH.md § Server Diagnostics on Stderr`), and the two surfaces MUST install
+   **one** realisation of the format rather than each carrying a copy of it (see
+   `DATA_FORMATS.md § Dates - ISO 8601 with UTC`, Scope).
 6. The logger is a single package-level instance, built once at package
    initialisation. It is replaceable, so that a test can capture the records and
    assert their content rather than merely their presence.
