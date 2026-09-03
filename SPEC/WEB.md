@@ -610,7 +610,7 @@ work with an explicit time budget.
    cuts while it is **reading** is cancelled, and its failure is rendered, while
    the response can still be written. A query the budget cuts while it is
    **writing** is not: the engine's rollback runs past the deadline by a factor
-   the statement itself sets, and the longest such run measured, 34.5 seconds,
+   the statement itself sets, and the longest such run measured, 35.6 seconds,
    exceeds the `WriteTimeout` on its own.
    `GRAPH.md § Statement Time Budget` measures that overrun and is canonical for
    it, and `GRAPH.md § Lock Contention` states what it costs the invariant below;
@@ -693,6 +693,19 @@ work with an explicit time budget.
    interface: no request rate limit and no new endpoint. That the same budget also
    binds `rmp graph execute` is a property of the value, not a second bound on
    this endpoint (see rule 1 and `GRAPH.md § Statement Time Budget`).
+9. **The budget bounds the work in time and not in memory, and on this surface the
+   memory is not returned.** A statement inside its budget can still cost gigabytes
+   of resident memory, and this server is a long-lived process with no exit to
+   return it at. Measured, one statement the budget cut while it was writing
+   reached **3088 MB** in `rmp web` against a 23 MB baseline, and all 3088 MB were
+   still resident 130 seconds later, because an otherwise idle process triggers no
+   collection; the request itself received an empty reply after 39.5 seconds, the
+   `WriteTimeout` closing the connection while the statement was still inside the
+   engine call. Nothing in this endpoint's configuration bounds that cost, and the
+   endpoint introduces no bound of its own: `GRAPH.md § Peak Resident Memory` is
+   canonical for what the memory is, for what would bound it, and for why none of
+   those levers is applied. The store on disk is untouched either way (see
+   `GRAPH.md § What a Statement That Writes Nothing Changes on Disk`).
 
 ## Security Headers
 

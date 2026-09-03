@@ -180,29 +180,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 These were found and measured during this cycle and are **open**. They are listed
 so that nothing above is read as a promise the product does not keep.
 
-- **One statement can drive the process to 3.04 GB of resident memory.** Every
-  mutation a statement has applied is retained in an undo log until its rollback
-  finishes, and nothing bounds how many mutations it applies before the time budget
-  cuts it. Measured: `MATCH (a),(b),(c) CREATE ()` over a 600-node store of 1.3 MB
-  reached 3.04 GB at the 5-second budget, and the figure tracks the budget rather
-  than the size of the graph. A short-lived `rmp graph execute` returns that memory
+- **One statement can drive the process to gigabytes of resident memory.** Every
+  mutation a statement has applied is retained until its rollback finishes, across
+  four accumulators — the write-ahead-log operation buffer, the applied graph
+  state, the undo log, and an index buffer — and nothing bounds how many mutations
+  it applies before the time budget cuts it. Measured: `MATCH (a),(b),(c) CREATE ()`
+  reached 3.3 GB at the 5-second budget, and the figure tracks the budget rather
+  than the size of the graph, which is flat across stores of 40 KB to 248 KB.
+  A pure read costs the same and has none of the shutdown cost, so the two are
+  distinct defects rather than one seen twice. There is a ceiling: given a budget
+  long enough, the engine's own row cap cuts the statement at roughly 20 GB. A short-lived `rmp graph execute` returns that memory
   by exiting; `rmp graph serve` and `rmp web` have no exit to return it at. The
   server's connection ceiling bounds how many such statements run at once, not what
   each of them costs, and no ceiling both preserves throughput and bounds the
   product.
 - **A server's shutdown is not bounded.** A statement the budget cut while it was
   writing is inside an undo replay that takes no cancellation, and the store cannot
-  close until it returns. The longest such hold measured is 34.5 seconds, with no
+  close until it returns. The longest such hold measured is 35.6 seconds — the largest measured rather than a maximum — with no
   ceiling established.
-- **A `SET` on a relationship created by `MERGE` in the same statement is silently
-  discarded.** The invocation exits 0, creates the relationship, and writes none of
-  the properties; the identical `SET` as its own statement works, and the same
-  shape on a node is correct. Write the relationship first and set its properties
-  in a second statement.
-- **An undirected `SET` on a relationship reads both directions and writes one.**
-  The same pattern binds two relationships for a `RETURN` and one for a `SET`, and
-  the statement still reports `{"ok": true}`. Write through an outgoing pattern,
-  which can be anchored on either endpoint.
+- **A `SET` on a relationship bound by `CREATE` or `MERGE` in the same statement is
+  silently discarded.** The invocation exits 0, creates the relationship, and writes
+  none of the properties. Binding origin is the only thing that matters: a plain
+  `CREATE` loses it too, so does a `MERGE` that matched a relationship which already
+  existed, and neither a `WITH` nor a `FOREACH` between the clauses rescues it.
+  `SET e = {...}` is worse still, because its `RETURN` echoes the value it did not
+  write. The same shape on a node is correct. Use `ON CREATE SET` or `ON MATCH SET`,
+  or inline the properties in the pattern, or set them after a fresh `MATCH`.
+- **An undirected `SET` on a relationship does not write every relationship it
+  matched, and how much it loses depends on the data.** A write persists only where
+  the row's left-hand node is the relationship's stored source and its right-hand
+  node the stored target, so the same statement may write all of what it matched,
+  some of it, or none — and it reports `{"ok": true}` either way. A selective
+  statement is the hazardous one and an unanchored sweep is safe, because each
+  relationship is then emitted twice and one of the two rows is correctly oriented.
+  Write through an outgoing pattern, which can be anchored on either endpoint.
+  `DELETE` is unaffected and removes everything it matched.
 - **About 1% of writers to a single hot node exhaust the client's retry ladder.**
   Measured at 16 concurrent writers to one node through `rmp graph client`: the
   raw transient-conflict diagnostic reaches the caller for a statement that was

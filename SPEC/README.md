@@ -83,6 +83,7 @@ The SPEC is unversioned. Git is the source of truth for its evolution — recove
 | Graph store concurrency / recovery | `IMPLEMENTATION.md § Graph Store Concurrency` |
 | Graph store access lock (one exclusive mode for every statement), and what happens on contention | `GRAPH.md § Concurrency and Recovery` and `GRAPH.md § Lock Contention` |
 | Statement time budget on `rmp graph execute` (that it applies, what a cut statement leaves on disk, and the exit code it reports) | `GRAPH.md § Statement Time Budget`, with the value in `WEB.md § Graph Query Time Budget` |
+| What one graph statement costs in resident memory, what that memory is made of, what happens when the cost cannot be served, and why no setting bounds it | `GRAPH.md § Peak Resident Memory` |
 | What a statement that writes nothing does and does not change on disk (the recovery repair performed on open) | `GRAPH.md § What a Statement That Writes Nothing Changes on Disk` |
 | Go toolchain / external dependencies | `BUILD.md § Go Toolchain` |
 | Dependency version pins (the four direct modules — GoGraph, `golang.org/x/sys`, `golang.org/x/text`, `modernc.org/sqlite` — and the exact `modernc.org/libc` / `modernc.org/memory` versions the driver requires) | `BUILD.md § External Dependencies` |

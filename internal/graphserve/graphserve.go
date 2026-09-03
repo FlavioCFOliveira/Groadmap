@@ -76,10 +76,13 @@ import (
 //
 // Twelve is derived and not picked. A statement the deadline cuts while it is
 // writing holds the engine call open for the budget multiplied by a factor the
-// statement itself sets, measured from 1.005x to 6.97x, and the longest such hold
-// measured at the budget in force is 34.5 seconds (rmp task #380). Sixty seconds
-// clears that by 1.7x, and it clears the longest statement the server actually
-// permits, 5 seconds, by twelve.
+// statement itself sets, measured from 1.005x to 7.13x, and the longest such hold
+// measured at the budget in force is 35.6 seconds (rmp task #380). That figure is
+// the largest measured and NOT a maximum: the same shape at the same budget over
+// the same store measured 34.5 seconds earlier and 35.6 seconds later, which is
+// itself the evidence that nothing establishes a ceiling. Sixty seconds clears the
+// largest measured by 1.7x, and it clears the longest statement the server
+// actually permits, 5 seconds, by twelve.
 //
 // The residual is stated rather than removed, because no multiple removes it:
 // nothing measured establishes a ceiling on that factor, so no finite connection
@@ -1051,7 +1054,8 @@ func serve(srv *server.Server, ln *serverListener, st *graphstore.Store, socketP
 // statement the budget cut while it was writing is inside an undo replay the
 // engine takes no cancellation for, and the store cannot close until that call
 // has returned, so the shutdown lasts as long as that replay lasts whatever any
-// bound says — 34.5 seconds is the longest measured, with no ceiling established.
+// bound says — 35.6 seconds is the longest measured, with no ceiling established,
+// and an earlier run of the same shape measured 34.5 seconds.
 // A deadline here would not shorten it; it would only abandon the connections and
 // leave the composed store to be closed by the engine's other exit path, which is
 // the same wait reached less directly.
