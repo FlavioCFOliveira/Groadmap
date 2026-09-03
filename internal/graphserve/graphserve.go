@@ -480,17 +480,79 @@ func productionCadence() checkpointCadence {
 	return checkpointCadence{maxAge: 5 * time.Minute, interval: 75 * time.Second}
 }
 
-// logger is the server's diagnostic channel. It writes to stderr, never stdout:
-// stdout carries the single startup object naming the bound socket, so a caller
-// that reads stdout for the path is never disturbed by a log record
-// (SPEC/COMMANDS.md § Serve Output).
+// stderrSink is the destination every record on this server's stderr passes
+// through, and the reason it is not os.Stderr directly is rmp task #389: a write
+// to a stderr that has stopped being read BLOCKS, and it was blocking the
+// goroutines serving the sessions. See [dropSink].
+//
+// It is a package-level value for the same reason [logger] is, and it starts no
+// goroutine until something is actually logged, so a short-lived `rmp` command
+// that merely links this package pays nothing for it.
+// logger is the server's diagnostic channel, and stderrSink is the non-blocking
+// buffer standing between it and the file descriptor.
+//
+// The logger writes to stderr, never stdout: stdout carries the single startup
+// object naming the bound socket, so a caller that reads stdout for the path is
+// never disturbed by a log record (SPEC/COMMANDS.md § Serve Output).
 //
 // It is handed to the engine as well as used here, so the two warnings the engine
 // emits at construction — one for a server running without transport security and
 // one for a server running without authentication — arrive on the same stream in
 // the same shape. Both are expected, both are accurate, and neither is a failure
 // (SPEC/GRAPH.md § Socket Path and Permissions, rule 6).
-var logger = slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
+//
+// They are package-level variables rather than constant constructions so a test
+// can redirect them and assert what was recorded, not merely that something was,
+// exactly as internal/web's logger is. They are declared TOGETHER, from the one
+// constructor below, so a test drives the assembly production runs rather than a
+// re-assembly of it: a change that took the sink back out of the path — rmp task
+// #389's defect returning — is therefore a change a test can object to.
+var logger, stderrSink = stderrLogger(os.Stderr)
+
+// stderrLogger builds what this server logs through: the canonical text handler
+// over the non-blocking sink, and the sink itself so the process can flush it
+// before it exits.
+//
+// The two are returned together because they are one decision. A logger built
+// over anything else would put a diagnostic write back on the serving path,
+// which is rmp task #389's defect; a sink nobody can reach could never be
+// flushed, which would lose the teardown's own last records.
+func stderrLogger(w io.Writer) (*slog.Logger, *dropSink) {
+	sink := newDropSink(w)
+	return newLogger(sink), sink
+}
+
+// newLogger builds the server's logger over w: a slog.TextHandler emitting one
+// line of key=value pairs per record, with DEBUG suppressed and every timestamp
+// rewritten to the project's canonical ISO 8601 UTC.
+//
+// # Why the level is part of the configuration and not an afterthought
+//
+// MEASURED (rmp task #389): at DEBUG the engine emits two records per statement
+// even with no contention at all — one when a connection is accepted and one
+// when it closes, and `rmp graph client` opens a connection per statement — so an
+// IDLE server would produce 93 KiB of log per 500 statements. At INFO the same
+// 500 statements produce two records in total, both of them the startup
+// warnings. The level is what keeps an uncontended server quiet.
+//
+// # Why the timestamp is replaced
+//
+// slog.TextHandler stamps records in the machine's LOCAL zone with a numeric
+// offset, which is neither UTC nor Z-suffixed and therefore not the format
+// SPEC/DATA_FORMATS.md § Dates - ISO 8601 with UTC requires of every Groadmap
+// timestamp. The hook is internal/utils' — the same one internal/web installs —
+// so the two long-lived surfaces stamp their records identically and neither
+// owns a private copy of the format (rmp task #386).
+//
+// The engine's own records pass through this handler too, and the handler builds
+// the time attribute rather than the caller, so they are stamped by this rule as
+// well: `rmp` does not merely relay those lines, it writes them.
+func newLogger(w io.Writer) *slog.Logger {
+	return slog.New(slog.NewTextHandler(w, &slog.HandlerOptions{
+		Level:       slog.LevelInfo,
+		ReplaceAttr: utils.SlogTimestampUTC,
+	}))
+}
 
 // Options is everything Run needs, resolved by the caller.
 //
@@ -545,6 +607,17 @@ type Options struct {
 // deterministic, and cleared by retrying (SPEC/GRAPH.md § Lock Contention, the
 // first of the three residual cases).
 func Run(opts Options) error {
+	// The diagnostic queue is emptied before this function returns, whatever it
+	// returns and by whichever path. It is registered FIRST so that it runs
+	// LAST: the final records this process writes are the teardown's own — a
+	// store that failed to close, a shutdown checkpoint that failed — and they
+	// are written after everything else has finished. Without this they could
+	// still be queued when the process exits, and a mechanism introduced to
+	// protect the server from a blocked stderr would have started losing the
+	// very diagnostics that say something went wrong. The flush is bounded; see
+	// [dropSink.Flush] for why it must be.
+	defer stderrSink.Flush()
+
 	// Step 2. The exclusive advisory hold, under the ordinary bounded wait. A
 	// server starting while a short-lived `rmp graph execute` invocation holds
 	// the lock waits for it rather than failing on the first collision.
@@ -584,7 +657,7 @@ func Run(opts Options) error {
 		return err
 	}
 
-	closer, srv, err := build(st, opts.GraphDir, productionCadence())
+	closer, srv, err := build(st, opts.GraphDir, productionCadence(), logger)
 	if err != nil {
 		_ = closer.Close() //nolint:errcheck // tearing down a server that never served; the close error cannot be acted on
 		_ = st.Close()     //nolint:errcheck // idem: the lock is released by this call whatever it returns
@@ -615,6 +688,27 @@ func Run(opts Options) error {
 
 	// The announcement precedes the accept loop, so a caller that reads stdout
 	// for the path has it before the first session can produce a diagnostic.
+	//
+	// The startup records are flushed FIRST, and that ordering is a guarantee
+	// rather than a tidiness. The engine emits its two warnings — no
+	// authentication, no transport security — while the server is being
+	// constructed, several steps above this line, and SPEC/GRAPH.md
+	// § Socket Path and Permissions rules 5 and 6 publish them as part of
+	// startup. Queued, they arrive a few milliseconds AFTER the announcement,
+	// so a caller that reads the path off stdout and then reads stderr sees no
+	// warnings and concludes there are none. Those two warnings are the ones
+	// that say every client is admitted without credentials and that Bolt
+	// credentials travel in cleartext, so a deployment gated on their presence
+	// would proceed on their absence. Measured before this flush existed: the
+	// first complete line reached a line-oriented reader 5.1 ms after the
+	// announcement, and the E2E case for those rules failed deterministically.
+	//
+	// This is the one place the sink's non-blocking property is deliberately
+	// suspended, and it is safe here for a reason that does not hold later: at
+	// this instant no session exists, so nothing the flush waits on is a
+	// statement being served. The wait is bounded either way.
+	stderrSink.Flush()
+
 	if err := opts.Announce(opts.SocketPath); err != nil {
 		_ = closer.Close() //nolint:errcheck // the announcement failed, so nothing was served; the close error cannot be acted on
 		_ = st.Close()     //nolint:errcheck // idem
@@ -735,7 +829,7 @@ func bind(path string) (*serverListener, error) {
 // observe, and a poller over a checkpointer that never fires would report on the
 // shutdown checkpoint alone — which [shutdownCloser] already reports itself, in
 // the words that fit it.
-func build(st *graphstore.Store, graphDir string, cadence checkpointCadence) (*shutdownCloser, *server.Server, error) {
+func build(st *graphstore.Store, graphDir string, cadence checkpointCadence, log *slog.Logger) (*shutdownCloser, *server.Server, error) {
 	txnStore := st.Txn()
 	engine := st.Engine()
 
@@ -768,11 +862,11 @@ func build(st *graphstore.Store, graphDir string, cadence checkpointCadence) (*s
 	// [checkpointWatch] for the sampling argument that fixes it at half the
 	// checkpointer's own interval.
 	if cadence.maxAge > 0 {
-		closer.watch = newCheckpointWatch(cp.Stats, watchPeriod(cadence), logger)
+		closer.watch = newCheckpointWatch(cp.Stats, watchPeriod(cadence), log)
 		closer.watch.start()
 	}
 
-	srv, err := server.NewServer(engine, serverOptions(closer))
+	srv, err := server.NewServer(engine, serverOptions(closer, log))
 	if err != nil {
 		return closer, nil, fmt.Errorf("%w: graph server unavailable: %v", utils.ErrDatabase, err)
 	}
@@ -970,12 +1064,12 @@ func (c *shutdownCloser) Close() error {
 //     surface rather than a tuning change.
 //   - The database name. A server serves one roadmap's graph and exposes exactly
 //     one database, under the engine's own default name.
-func serverOptions(closer io.Closer) server.Options {
+func serverOptions(closer io.Closer, log *slog.Logger) server.Options {
 	budget := graphlock.StatementBudget
 	return server.Options{
 		Auth:                    server.NoAuthHandler{},
 		Closer:                  closer,
-		Logger:                  logger,
+		Logger:                  log,
 		DefaultStatementTimeout: budget,
 		MaxStatementTimeout:     budget,
 		ConnTimeout:             connTimeoutMultiple * budget,

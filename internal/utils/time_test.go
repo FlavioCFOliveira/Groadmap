@@ -2,6 +2,7 @@ package utils
 
 import (
 	"errors"
+	"log/slog"
 	"testing"
 	"time"
 )
@@ -230,4 +231,60 @@ func TestErrorSentinels(t *testing.T) {
 	if ErrDateInFuture == nil {
 		t.Error("ErrDateInFuture should not be nil")
 	}
+}
+
+// TestSlogTimestampUTC covers the hook every Groadmap logger installs. The gate
+// in internal/testenv proves it is INSTALLED everywhere; this proves it is right.
+func TestSlogTimestampUTC(t *testing.T) {
+	// A fixed instant with a non-zero offset, so a hook that reformatted rather
+	// than converted would produce a visibly different reading.
+	east := time.FixedZone("TEST+09", 9*60*60)
+	instant := time.Date(2026, 9, 3, 20, 51, 5, 221000000, east)
+
+	t.Run("converts the built-in time attribute to UTC", func(t *testing.T) {
+		got := SlogTimestampUTC(nil, slog.Time(slog.TimeKey, instant))
+
+		if got.Value.Kind() != slog.KindString {
+			t.Fatalf("the rewritten value is a %v, want a string: the handler would fall back to "+
+				"its own rendering of a time value, which is the local form", got.Value.Kind())
+		}
+		const want = "2026-09-03T11:51:05.221Z"
+		if got.Value.String() != want {
+			t.Errorf("stamp = %q, want %q. A reading of 20:51 with a Z pasted on means the value was "+
+				"REFORMATTED rather than converted, and the instant is wrong by the machine's offset",
+				got.Value.String(), want)
+		}
+	})
+
+	t.Run("leaves a time attribute inside a group alone", func(t *testing.T) {
+		attr := slog.Time(slog.TimeKey, instant)
+		got := SlogTimestampUTC([]string{"request"}, attr)
+
+		if got.Value.Kind() != slog.KindTime {
+			t.Errorf("an attribute a caller named %q INSIDE a group was rewritten. Only the record's "+
+				"own built-in timestamp is the handler's to replace; rewriting a caller's attribute "+
+				"would silently change data the caller chose to log", slog.TimeKey)
+		}
+	})
+
+	t.Run("leaves an attribute that is not a time alone", func(t *testing.T) {
+		attr := slog.String(slog.TimeKey, "not a timestamp")
+		got := SlogTimestampUTC(nil, attr)
+
+		if got.Value.String() != "not a timestamp" {
+			t.Errorf("value = %q, want it untouched: an attribute keyed %q that is not a time is a "+
+				"caller's own string and is not the record's clock reading",
+				got.Value.String(), slog.TimeKey)
+		}
+	})
+
+	t.Run("leaves every other key alone", func(t *testing.T) {
+		attr := slog.Time("started_at", instant)
+		got := SlogTimestampUTC(nil, attr)
+
+		if got.Value.Kind() != slog.KindTime {
+			t.Errorf("an attribute keyed %q was rewritten; only %q is the record's own timestamp",
+				"started_at", slog.TimeKey)
+		}
+	})
 }

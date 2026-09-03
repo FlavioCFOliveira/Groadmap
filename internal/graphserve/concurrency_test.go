@@ -34,6 +34,7 @@ package graphserve
 
 import (
 	"context"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"sync"
@@ -80,6 +81,20 @@ func startRealServer(tb testing.TB, cadence checkpointCadence) (socket string, s
 // would carry a second return value it discards.
 func startRealServerAt(tb testing.TB, cadence checkpointCadence) (socket, graphDir string, stop func()) {
 	tb.Helper()
+	return startRealServerLogging(tb, cadence, logger)
+}
+
+// startRealServerLogging is [startRealServerAt] with the server's diagnostic
+// logger supplied by the caller.
+//
+// The logger is INJECTED rather than swapped into the package variable, for the
+// reason [syncBuffer] states: the variable is global mutable state and a test
+// that reassigned it would be testing its own bookkeeping as much as the server.
+// build already takes the logger for exactly this reason, and this is the seam
+// that reaches it — which is what lets rmp task #389's test give a real server a
+// destination that has stopped being read.
+func startRealServerLogging(tb testing.TB, cadence checkpointCadence, log *slog.Logger) (socket, graphDir string, stop func()) {
+	tb.Helper()
 
 	root := tb.TempDir()
 	graphDir = filepath.Join(root, "graph")
@@ -96,7 +111,7 @@ func startRealServerAt(tb testing.TB, cadence checkpointCadence) (socket, graphD
 		tb.Fatalf("opening the graph store: %v", err)
 	}
 
-	closer, srv, err := build(st, graphDir, cadence)
+	closer, srv, err := build(st, graphDir, cadence, log)
 	if err != nil {
 		tb.Fatalf("building the server: %v", err)
 	}

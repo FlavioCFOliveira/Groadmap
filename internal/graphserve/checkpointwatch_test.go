@@ -380,7 +380,7 @@ func buildOverAFreshStore(t *testing.T, cadence checkpointCadence) *shutdownClos
 		_ = st.Close() //nolint:errcheck // releases the advisory hold whatever the log reports
 	})
 
-	closer, _, err := build(st, graphDir, cadence)
+	closer, _, err := build(st, graphDir, cadence, logger)
 	t.Cleanup(func() {
 		_ = closer.Close() //nolint:errcheck // this test's assertions are about the watch, not the teardown
 	})
@@ -408,7 +408,7 @@ func buildOverAFreshStore(t *testing.T, cadence checkpointCadence) *shutdownClos
 // and negative both take the engine's 1024, which is eight times what this
 // package chose.
 func TestServerOptions_QuotasTransactionsAtTheConnectionCeiling(t *testing.T) {
-	opts := serverOptions(nil)
+	opts := serverOptions(nil, logger)
 
 	if opts.MaxConnections != maxConnections {
 		t.Errorf("MaxConnections = %d, want %d (SPEC/GRAPH.md § Server Options)",
