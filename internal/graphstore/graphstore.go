@@ -68,6 +68,15 @@
 // exported unit is [Store.Checkpoint], a method that DECIDES, holding its own
 // mark; a caller is never handed an offset to compare for itself.
 //
+// The DECISION is exported a second time, as [Store.CheckpointIfAppended], and
+// for the same reason rather than as a generalisation offered on spec. The
+// dedicated graph server folds through the engine's own checkpointer instead of
+// through this package's snapshot writer, because its capture has to hold the
+// store's commit lock while sessions are live — and that checkpointer has no gate
+// at all. Handing it the gate keeps ONE realisation of the rule under two folds;
+// the alternative was a copy of the comparison beside a copy of the mark, which
+// is the drift this package exists to prevent.
+//
 // # Why Open takes the lock and Close releases it
 //
 // internal/graphlock defines the exclusive hold as spanning "the whole open,
@@ -367,20 +376,9 @@ func (s *Store) Dir() string { return s.dir }
 // Checkpoint on Write — IF the write-ahead log has grown since this Store was
 // opened, or since the last checkpoint it took. It reports whether it ran.
 //
-// # The gate
-//
-// A transaction that appended nothing MUST NOT snapshot and MUST NOT truncate: it
-// would rewrite a full snapshot of the whole graph for every statement that read,
-// and it would shorten the history a later recovery replays (SPEC/GRAPH.md § What
-// a Statement That Writes Nothing Changes on Disk, rules 2 and 3). The log's own
-// durable offset is the answer to "did anything append", which is the question
-// the specification asks — not a guess made from the statement's text, which
-// Groadmap does not examine.
-//
-// The comparison lives in here rather than at the call sites, because it is the
-// rule and not the number that has to hold. wal.Writer.Truncate resets the
-// durable offset to zero, so the new mark is re-read from the writer after a
-// successful truncation rather than assumed.
+// The DECISION is [Store.CheckpointIfAppended]'s and the FOLD is this method's
+// own. They are separable because a second caller needs the first without the
+// second; see there.
 //
 // # What the snapshot must carry, and the order
 //
@@ -407,10 +405,100 @@ func (s *Store) Dir() string { return s.dir }
 // write reconciles the snapshot. Callers surface the error as a diagnostic and
 // keep their success (SPEC FR7).
 func (s *Store) Checkpoint() (bool, error) {
-	if s.wal.DurableOffset() <= s.mark {
+	return s.CheckpointIfAppended(s.writeSnapshotAndTruncate)
+}
+
+// CheckpointIfAppended runs fold — the caller's own realisation of a checkpoint —
+// if and only if the write-ahead log has grown since this Store was opened or
+// since the last checkpoint taken through this Store. It reports whether fold
+// ran, and returns fold's error unchanged.
+//
+// # The gate
+//
+// A transaction that appended nothing MUST NOT snapshot and MUST NOT truncate: it
+// would rewrite a full snapshot of the whole graph for every statement that read,
+// and it would shorten the history a later recovery replays (SPEC/GRAPH.md § What
+// a Statement That Writes Nothing Changes on Disk, rules 2 and 3). The log's own
+// durable offset is the answer to "did anything append", which is the question
+// the specification asks — not a guess made from the statement's text, which
+// Groadmap does not examine.
+//
+// The comparison lives in here rather than at the call sites, because it is the
+// rule and not the number that has to hold.
+//
+// # Why the decision is exported apart from the fold it usually guards
+//
+// Because a caller needs it that way, and because the alternative is a second
+// copy of the rule. The dedicated graph server does not write its snapshot
+// through this package: it composes the engine's own checkpointer, which holds
+// the store's commit lock across a capture the server may take while sessions are
+// live, and asks it to fold. That checkpointer has NO gate of its own — it
+// serialises the whole graph and rewrites the whole snapshot unconditionally —
+// and an ungated fold is not merely wasteful. A statement the budget cut and
+// rolled back leaves the key mapper's interned keys and the tombstone set behind
+// even though the graph is restored, so the fold PUBLISHES that residue: measured
+// on rmp task #380, ONE cut write served by `rmp graph serve` grew an 80 KB store
+// holding 600 nodes to 134 MB permanently, and a later `MATCH (n) RETURN count(*)`
+// over the same 600 nodes cost 1.48 s and 670 MB instead of 0.01 s and 21.6 MB.
+// The direct path was never exposed to it, for exactly one reason: this gate.
+//
+// So the server passes its own fold and gets this decision, rather than carrying
+// a copy of the comparison beside a copy of the mark (SPEC/ARCHITECTURE.md module
+// 8: this package is the single realisation of the store lifecycle).
+//
+// # A fold this Store did not perform
+//
+// A caller that composes the engine's checkpointer has a SECOND party truncating
+// the log: that checkpointer cuts the folded prefix with wal.Writer.TruncatePrefix
+// and the durable offset DROPS, without this Store's mark moving. Left
+// unaccounted for, the next comparison would read an offset below the mark, take
+// it for "nothing appended", and skip a fold that is owed — the log's surviving
+// suffix is precisely the part no snapshot covers.
+//
+// An offset BELOW the mark is therefore read as what it can only be: a fold
+// somebody else performed, which folded everything up to it and left the rest
+// unfolded. The mark drops to zero to say so, and whatever remains counts as
+// appended. The clause cannot fire on the direct path — nothing there truncates
+// but this Store — so the CLI and the web endpoint keep byte-for-byte the
+// behaviour they had.
+//
+// # Concurrency
+//
+// The mark is unsynchronised, like the rest of a Store's own bookkeeping, so a
+// caller that holds one Store across concurrent statements must serialise this
+// against [Store.Checkpoint] and [Store.Close] exactly as the type documents.
+func (s *Store) CheckpointIfAppended(fold func() error) (bool, error) {
+	if !s.appendedSinceMark() {
 		return false, nil
 	}
+	if err := fold(); err != nil {
+		return false, err
+	}
+	// Re-read rather than assume: a fold truncates, and this mark is what the
+	// next call compares against. wal.Writer.Truncate resets the durable offset
+	// to zero and wal.Writer.TruncatePrefix leaves the unfolded suffix, so the
+	// writer is the only party that can say which of the two just happened.
+	s.mark = s.wal.DurableOffset()
+	return true, nil
+}
 
+// appendedSinceMark reports whether the write-ahead log holds anything this Store
+// has not already accounted for, and repairs the mark when a fold outside this
+// Store has moved the log underneath it. See [Store.CheckpointIfAppended] for
+// both halves.
+func (s *Store) appendedSinceMark() bool {
+	off := s.wal.DurableOffset()
+	if off < s.mark {
+		s.mark = 0
+	}
+	return off > s.mark
+}
+
+// writeSnapshotAndTruncate is [Store.Checkpoint]'s own fold: publish a
+// self-sufficient full snapshot, then truncate the log it covers. It is called
+// only through the gate, and only after the write transaction has committed
+// durably; see [Store.Checkpoint] for the order and the failure policy.
+func (s *Store) writeSnapshotAndTruncate() error {
 	// A CSR view of the committed in-memory graph, for the snapshot.
 	cs := csr.BuildFromAdjList(s.graph.AdjList())
 
@@ -430,20 +518,17 @@ func (s *Store) Checkpoint() (bool, error) {
 	// truncation below then leaves nothing to recover it from.
 	if err := snapshot.WriteSnapshotFullWithMapperCodecConstraintsAndIndexDefs(
 		snapDir, cs, s.graph, txn.NewStringCodec(), constraints, indexDefs); err != nil {
-		return false, fmt.Errorf("snapshot write: %w", err)
+		return fmt.Errorf("snapshot write: %w", err)
 	}
 
 	// Flush the log, then truncate it to bound its growth. Truncation happens
 	// only after the snapshot is durable, so no committed data is lost.
 	if err := s.wal.Sync(); err != nil {
-		return false, fmt.Errorf("wal sync: %w", err)
+		return fmt.Errorf("wal sync: %w", err)
 	}
 	if _, err := s.wal.Truncate(); err != nil {
-		return false, fmt.Errorf("wal truncate: %w", err)
+		return fmt.Errorf("wal truncate: %w", err)
 	}
-	// Re-read rather than assume: Truncate documents that it resets the durable
-	// offset, and this mark is what the next call compares against.
-	s.mark = s.wal.DurableOffset()
 
 	// Keep the snapshot directory consistent with the 0700 the roadmap tree
 	// carries. Best-effort: a failure here does not invalidate the durable
@@ -452,7 +537,7 @@ func (s *Store) Checkpoint() (bool, error) {
 	// #nosec G302 G703 -- 0700 on a DIRECTORY is mandated by SPEC (CLAUDE.md §10: 0700 for the ~/.roadmaps tree), and gosec G302 false-positives on directory permissions; snapDir derives from the graph directory the caller resolved through utils.GetRoadmapDir, so no traversal is reachable
 	_ = os.Chmod(snapDir, 0700)
 
-	return true, nil
+	return nil
 }
 
 // Close releases everything Open took, in the one order that is safe: the

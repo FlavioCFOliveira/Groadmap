@@ -129,23 +129,103 @@ const connTimeoutMultiple = 12
 //
 // # The honest limit, stated rather than glossed
 //
-// It bounds a COUNT and not a COST. Peak resident memory is that count multiplied
-// by what one statement costs, and the second factor has no measured ceiling. A
-// statement the budget cuts while it is writing retains every mutation it had
-// applied in an undo log, and one such statement drove a short-lived
-// `rmp graph execute` process to 3.04 GB of resident memory over a store of
-// 1.3 MB (rmp task #380). Lowering 1024 to this value divides the multiplier by
-// eight; it does not bound the product, and nothing available in this
-// configuration does. The short-lived invocation returned that memory to the
-// operating system by exiting. A server has no exit to return it at.
+// It bounds a COUNT and not a COST, and it is NOT a lever over peak resident
+// memory. Peak resident memory is that count multiplied by what one statement
+// costs, and this number reaches only the first factor. Everything below was
+// measured on rmp task #380, on an AMD Ryzen 9 5900HX with 30 GB of RAM, against
+// this server over a store of 80 KB holding 600 nodes.
 //
-// Nor can the ceiling be lowered until it does bound the product. The smallest
-// ceiling that costs no throughput is 16 — the knee measured below — and sixteen
-// of those cut writes at 3.04 GB each is 48.6 GB, more than the 30 GB of RAM the
-// machine these numbers were taken on has. So there is no ceiling that
-// both preserves throughput and bounds peak resident memory: the two requirements
-// have no common value. This option is therefore set on what it CAN bound, and
-// the claim made for it is only that.
+// One statement the budget cuts while it is writing —
+// `MATCH (a),(b),(c) CREATE ()` at the 5-second budget — costs this server
+// 3618 to 3734 MB. The memory is not the graph's: the same statement over seeds
+// of 150, 600 and 2400 nodes costs 1892, 1900 and 1907 MB at a 3-second budget.
+// It is linear in how many rows the statement managed to apply, which is what the
+// budget decides.
+//
+// # What that memory actually is, because the attribution decides what can bound it
+//
+// FOUR accumulators, not one. Heap-profiled at the deadline with a forced
+// collection, on the statement above: the transactional store's in-memory
+// write-ahead-log op buffer 39%, the applied in-memory graph state 38%, THE UNDO
+// LOG 20%, everything else 3%. Across four statement shapes the undo log ranges
+// from 18% to 34% and cypher's exec.IndexBuffer reaches 19%.
+//
+// This matters here for one reason: the undo log is the accumulator a rollback
+// unwinds, and it is the minority. A repair that cancelled the unwinding — the fix
+// proposed for the LOCK HOLD on rmp task #378 — would not touch four fifths of
+// this memory, because four fifths of it is spent before the rollback begins.
+//
+// A pure READ makes the same point from the other side. `MATCH (a),(b),(c) RETURN a`
+// materialises 6.48 M node values, costs 3143 MB served, has no undo log, no
+// rollback and no overrun at all, and is honoured at 1.000x its deadline. Memory
+// and availability are two defects that overlap; neither contains the other.
+//
+// # What DOES bound it, and why none of the three is applied here
+//
+// There are three levers, and this option is none of them:
+//
+//  1. cypher.EngineOptions.MaxResultRows. It cuts during the FORWARD pass, so
+//     none of the four accumulators grows past it. It is already finite at
+//     10,000,000 and it already binds — see the ceiling below — and lowering it
+//     lowers peak resident memory in proportion on every shape measured: at a cap
+//     of 10,000 every write shape peaks under 80 MB and finishes under 3 s.
+//     DECLINED for this server on rmp task #380, on coherence rather than cost:
+//     `rmp graph execute` routes through a running server automatically and with
+//     byte-identical output (rmp task #368), so a ceiling that differed behind
+//     that routing would make the same statement pass or fail depending on whether
+//     a server happened to be running.
+//  2. GOMEMLIMIT. Measured 16,149 MB down to 3,429 MB at 1 GiB on eight concurrent
+//     served reads. DECLINED: on the WRITE path it buys memory with availability —
+//     the same cut write's hold rises from 35.6 s to 172.8 s, 4.9x — it still
+//     overshoots its own limit by 37% to 167%, and it silently narrows two engine
+//     budgets derived from it (GlobalMaxResultBytes to half, MaxInboundDecodeBytes
+//     to an eighth).
+//  3. The statement budget itself, which peak resident memory is linear in: 754,
+//     1456, 1966, 2481 and 3293 MB in process at 1, 2, 3, 4 and 5 seconds. It is
+//     fixed elsewhere and for other reasons (graphlock.StatementBudget).
+//
+// # The ceiling, which exists and is not a useful bound
+//
+// Given a budget long enough to reach it, cypher.DefaultMaxResultRows BINDS: over
+// the same 600-node store, `MATCH (a),(b),(c) CREATE ()` was cut by the row cap at
+// 20,000,002 mutations and 20,419 MB, holding the lock 470 s, and
+// `... SET a.touched = 1` at 20,000,002 mutations and 13,662 MB. So one statement
+// is bounded at roughly 20 GB rather than unbounded — two thirds of this machine's
+// memory, which is a published limit rather than a useful one.
+//
+// The cap is charged HALF of what a write with no RETURN applies. At an explicit
+// cap of N such a write applies 2N+2 mutations, while the same write with a RETURN
+// applies N+1; measured exactly at four caps on four shapes, with memory scaling
+// alongside. Groadmap's own writes carry no RETURN, so the form this product
+// produces is the form that costs twice the cap it is given. It is the engine's and
+// is recorded upstream.
+//
+// # Why the ceiling cannot be lowered to bound the product either
+//
+// The smallest connection ceiling that costs no throughput is 16 — the knee
+// measured below — and a quota bounds a count, so a quota of 16 admits sixteen
+// statements of an unbounded cost apiece. What it does NOT do is multiply, and an
+// earlier version of this comment asserted that it did: concurrent cut WRITES cost
+// 3618 MB at one client, 5515 MB at two and 5102 MB at four — lower at four than at
+// two — so the 48.6 GB this paragraph used to publish is a figure this product
+// cannot reach. Concurrent heavy READS do multiply, to a plateau of about
+// 16,100 MB at eight clients that sixteen does not exceed; the plateau is
+// repeatable and its cause is not established.
+//
+// The conclusion survives the arithmetic that was offered for it: no value of this
+// option both preserves throughput and bounds peak resident memory, because it
+// bounds a count and the cost it would multiply has a ceiling of 20 GB per
+// statement. This option is therefore set on what it CAN bound, and the claim made
+// for it is only that.
+//
+// # And the memory is not returned when the statement ends
+//
+// A short-lived `rmp graph execute` returns it by exiting. The two long-lived
+// surfaces do not. This server reached 3618 MB, held it for 38 seconds after the
+// response was written, and settled at a floor of 1064 MB — 58x its 18 MB
+// baseline — where it stayed for the remaining 105 seconds of observation. `rmp
+// web` is worse: 3088 MB reached, and 3088 MB still resident 130 seconds later,
+// because an idle process triggers no collection.
 //
 // # Why it does not cost throughput
 //
@@ -660,7 +740,7 @@ func build(st *graphstore.Store, graphDir string, cadence checkpointCadence) (*s
 		store.WithCheckpointer(cp),
 		store.WithQuiesce(txnStore.RunUnderCommitLock))
 
-	closer := &shutdownCloser{db: db, cp: cp}
+	closer := &shutdownCloser{db: db, cp: cp, st: st}
 
 	// The poll period is DERIVED from the cadence rather than picked; see
 	// [checkpointWatch] for the sampling argument that fixes it at half the
@@ -705,6 +785,40 @@ func build(st *graphstore.Store, graphDir string, cadence checkpointCadence) (*s
 // checkpointer refuses the request — and it is the same order the composed store
 // performs internally.
 //
+// # Why the checkpoint is GATED, and what an ungated one publishes
+//
+// It is taken through graphstore.Store.CheckpointIfAppended, which folds only if
+// the write-ahead log has grown since the store was opened or since the last fold
+// taken through it. The engine's checkpointer has no gate of its own — it
+// serialises the whole graph and rewrites the whole snapshot whenever it is asked
+// — and until rmp task #380 that was believed to cost nothing but a wasted write.
+//
+// It costs a permanent one. A statement the budget cuts while it is writing is
+// rolled back, and the rollback restores the LOGICAL graph and not the PHYSICAL
+// one: the key mapper keeps the interned key of every node the statement created
+// and the tombstone set keeps a tombstone for each. An ungated fold writes that
+// residue to disk, where nothing removes it. Measured end to end against this
+// server: ONE cut `MATCH (a),(b),(c) CREATE ()` over a store of 80 KB holding 600
+// nodes left the store at 134 MB — mapper.bin 80.2 MB, tombstones.bin 28.3 MB —
+// and a later `MATCH (n) RETURN count(*)` over the same 600 nodes then cost 1.48 s
+// and 670 MB against 0.01 s and 21.6 MB on a clean store. The control isolates it:
+// one cut READ over the same store left it at 80 KB.
+//
+// `rmp graph execute` and `rmp web` were never exposed to any of that, and the
+// gate is the whole of the difference — which is why this reuses theirs instead of
+// growing a second one here.
+//
+// # What the gate does NOT cover, stated because it is still reachable
+//
+// The IN-FLIGHT checkpointer publishes the same residue without any shutdown at
+// all: it folds 75 seconds into the process and every five minutes after that,
+// through the engine's own loop, which this package does not drive. Gating that
+// one means Groadmap driving the fold itself — new behaviour inside the server
+// process rather than a value — and rmp task #370, DECISION #302 declined it for
+// this sprint and recorded it as a backlog task. So a server that outlives its
+// first fold can still publish a residue this gate would have refused, and the
+// bound on how long that window is closed is the cadence, not this code.
+//
 // # Why no error is exempted
 //
 // Every way this checkpoint can fail is worth a line. A refusal from a stopped
@@ -722,6 +836,11 @@ func build(st *graphstore.Store, graphDir string, cadence checkpointCadence) (*s
 type shutdownCloser struct {
 	db *store.DB
 	cp *checkpoint.Checkpointer[string, float64]
+	// st is the open store, held for its checkpoint GATE and for nothing else:
+	// Close asks it whether the write-ahead log has grown, and folds through the
+	// checkpointer above only if it has. The store's own Close stays with Run,
+	// which took the hold (see [Close] and graphstore.Store.CheckpointIfAppended).
+	st *graphstore.Store
 	// watch is the in-flight checkpoint poller, or nil when the cadence is
 	// disabled and there is nothing in flight to observe. Close stops it before
 	// anything else; see there for why that ordering is load-bearing.
@@ -761,10 +880,17 @@ func (c *shutdownCloser) Close() error {
 			c.watch.stop()
 		}
 
-		// Step 4. Unbounded on purpose: SPEC/GRAPH.md § Server Shutdown and the
-		// Drain does not bound the shutdown, and a deadline here would abandon a
-		// capture that is quiescing behind an undo replay rather than shorten it.
-		if err := c.cp.TriggerCtx(context.Background()); err != nil {
+		// Step 4, under the graph store's own gate: fold ONLY if the write-ahead
+		// log has grown. See the type documentation for what an ungated fold
+		// publishes and why the gate is the store's rather than this package's.
+		//
+		// The trigger itself is unbounded on purpose: SPEC/GRAPH.md § Server
+		// Shutdown and the Drain does not bound the shutdown, and a deadline here
+		// would abandon a capture that is quiescing behind an undo replay rather
+		// than shorten it.
+		if _, err := c.st.CheckpointIfAppended(func() error {
+			return c.cp.TriggerCtx(context.Background())
+		}); err != nil {
 			logger.Error("the graph server's shutdown checkpoint failed; every acknowledged "+
 				"commit is still durable in the write-ahead log and the next open recovers it, "+
 				"but the log was not folded into the snapshot and the next open replays it in full",
