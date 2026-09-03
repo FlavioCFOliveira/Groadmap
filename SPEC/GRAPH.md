@@ -1736,6 +1736,7 @@ sentinel is introduced for the graph feature.
 | Query longer than the maximum query length of 1 MiB, from either source (see [Maximum Query Length](#maximum-query-length)) | `utils.ErrValidation` | 6 |
 | Cypher fails to parse or execute in the engine, a schema statement included (see [Schema Failure Classes](#schema-failure-classes)) | `utils.ErrDatabase` | 1 |
 | The statement exhausts the statement time budget and is cancelled (see [Statement Time Budget](#statement-time-budget)) | `utils.ErrDatabase` | 1 |
+| Every attempt of the client's retry policy loses a serialisation conflict against a graph server (see [Concurrency Inside the Server](#concurrency-inside-the-server), rule 9) | `utils.ErrDatabase` | 1 |
 | Graph store cannot be opened, recovered, read, or written (I/O, corruption, lock) | `utils.ErrDatabase` | 1 |
 | The roadmap's socket answers but no server can be reached through it, or the connection fails for a reason other than the socket being absent or refusing (see [Server Resolution](#server-resolution)) | `utils.ErrDatabase` | 1 |
 | The connection to a server is lost after the statement has been sent (see [Server Resolution](#server-resolution), rule 4) | `utils.ErrDatabase` | 1 |
@@ -1790,6 +1791,20 @@ Rules:
    was exceeded, it states that nothing was written, and it says what to do about
    it. `COMMANDS.md § Graph Management` publishes the exact line, and
    [Statement Time Budget](#statement-time-budget) states the behaviour behind it.
+7. **An exhausted serialisation retry fails in the same class and publishes a
+   line of its own too.** It carries `utils.ErrDatabase` and exit code 1, as rule
+   2's engine failures and rule 6's budget exhaustion do, and for the same
+   reason: the graph feature introduces no new sentinel and no new exit code. Its
+   message is neither rule 2's nor rule 6's. The whole of it is `rmp`'s own text;
+   it names the contention rather than the statement, it states that nothing was
+   written, and it names the remedy — run the statement again, and spread
+   concurrent writes across distinct nodes. It is reachable only for a statement
+   a graph server executed, because on the direct path one invocation runs one
+   transaction and the conflict path is unreachable there (see
+   [Concurrency and Recovery](#concurrency-and-recovery)).
+   `COMMANDS.md § Graph Management` publishes the exact line, and
+   [Concurrency Inside the Server](#concurrency-inside-the-server) states the
+   behaviour behind it.
 
 ## The Dedicated Graph Server
 
@@ -2156,9 +2171,14 @@ process. What that means is fixed by the engine and is not Groadmap's to choose:
 4. **That conflict is a normal outcome and MUST be retried.** It is not a fault,
    it does not indicate a defect in the statement, and it MUST NOT be surfaced to
    the caller on its first occurrence. Every client this product ships retries it,
-   under the loop and the delay ladder of the project's single retry policy (see
-   `IMPLEMENTATION.md § Retry Logic`), and reports a failure only when that policy
-   or the caller's own deadline is exhausted.
+   under the loop of the project's single retry policy and under that policy's
+   **full-jitter** delay shape rather than its fixed ladder (see
+   `IMPLEMENTATION.md § Retry Logic`, canonical for both shapes and for the
+   measurements that choose between them), and reports a failure only when that
+   policy or the caller's own deadline is exhausted. **The policy stays single.**
+   The shape is a second entry point of the one package that owns retrying,
+   selected by the caller; it is never a constant moved out of that package for
+   this caller's benefit, and never a loop the client keeps privately.
 5. **A retry is safe because the conflict is detected before anything is
    applied.** The losing transaction committed nothing, so re-running its
    statement runs it against a graph that never saw it. A statement that is not
@@ -2169,6 +2189,43 @@ process. What that means is fixed by the engine and is not Groadmap's to choose:
    quiesces writers for the instant in which it captures the graph. Neither is
    observable to a client as exclusion. Both are stated so that "MVCC is the only
    concurrency control" is not read as "nothing is ordered".
+7. **The delay before a retry is load shedding, and not a wait for the winner to
+   commit.** Rule 3 invites the opposite reading — the first updater has already
+   committed, so the loser has nothing left to wait for and should re-send at
+   once — and that reading is wrong by a wide margin rather than by a little.
+   Measured against a real server under identical load, a client that re-sent
+   immediately failed the great majority of its statements where the delaying
+   client failed a fraction of one percent. A loser that waits removes itself
+   from the contending set; a loser that re-sends at once keeps that set
+   saturated, so the conflict rate rises with the load the retries themselves
+   offer. `IMPLEMENTATION.md § Retry Logic` carries the figures and the shape
+   they produced.
+8. **The failure this retry exists against is a property of a single hot node
+   rather than of concurrency, and that is the most useful thing a caller can be
+   told.** Writers spread across distinct nodes barely collide; writers
+   converging on one node collide steadily however few of them there are.
+   Measured against a real server, holding the writer count at sixteen and
+   varying only the number of distinct nodes written: on **one** node the retry
+   policy was exhausted on 0.33% of 6,000 statements, at 474 statements per
+   second; on **four** nodes, on 0.03%; on **eight or more**, on none at all,
+   with throughput rising to 3,494 statements per second at sixty-four nodes. A
+   caller that meets this failure is therefore not being told to reduce its
+   concurrency. It is being told that all of its writers are landing on one
+   node — which is the shape this project produces itself when several agents
+   stamp provenance on the same node — and the remedy that removes the failure,
+   rather than moving the threshold at which it appears, is to spread those
+   writes across distinct nodes.
+9. **An exhausted retry is reported as itself, and is not left to be inferred
+   from the engine's diagnostic.** A caller that has spent the whole retry budget
+   losing conflicts has exactly one decision to make — run the statement again,
+   or correct it — and the two courses are opposite: treating contention as a bad
+   statement stops work that was right, and treating a bad statement as
+   contention re-runs a write that may not be idempotent. The failure therefore
+   carries a line of its own, whose text is `rmp`'s own from end to end: it names
+   the contention, states that nothing was written, and says what to do about it.
+   `COMMANDS.md § Graph Management` publishes the exact line, and
+   [Error Handling and Exit Codes](#error-handling-and-exit-codes), rule 7,
+   states the class it carries.
 
 ### Durability and Checkpointing in a Long-Lived Process
 
@@ -2366,14 +2423,35 @@ Rules:
    surfaced on its first occurrence.** It is a normal outcome (see
    [Concurrency Inside the Server](#concurrency-inside-the-server)), and a caller
    that surfaced it at once would report a defect where the store reported
-   ordinary concurrency. The retry runs under the loop and the delay ladder of the
-   project's single retry policy (see `IMPLEMENTATION.md § Retry Logic`) and is
-   bounded additionally by the caller's own deadline, whichever ends first. Two
-   outcomes follow, and each is reported as itself: a caller whose **retry policy**
-   is exhausted — every attempt having collided — fails with the engine's own
-   diagnostic, because at that point the conflict is the outcome and concealing it
-   would leave the caller with nothing to act on; a caller whose **deadline**
-   expires first fails as that deadline requires, under rule 7.
+   ordinary concurrency. The retry runs under the loop of the project's single
+   retry policy and under that policy's full-jitter delay shape (see
+   `IMPLEMENTATION.md § Retry Logic`) and is bounded additionally by the caller's
+   own deadline, whichever ends first. Two outcomes follow, and each is reported
+   as itself: a caller whose **retry policy** is exhausted — every attempt having
+   collided — fails with a line of its own that names the contention, states that
+   nothing was written, and says what to do about it, because at that point the
+   conflict is the outcome and a caller unable to tell it from an invalid
+   statement would have nothing to act on; `COMMANDS.md § Graph Management`
+   publishes that line. A caller whose **deadline** expires first fails as that
+   deadline requires, under rule 7.
+
+   **The retry gives up with most of the caller's deadline unspent, and that is
+   deliberate rather than an oversight.** The retry policy's total is 2500 ms and
+   the caller's deadline is the wait budget, 7.5 seconds, so an exhausted retry
+   reports its failure with roughly five seconds of that deadline still in hand.
+   The headroom is not the retry's to spend: it belongs to the statement, and it
+   exists so that a statement the server is still lawfully executing — for up to
+   the whole statement budget, and past it while the engine undoes a cut write —
+   is not cut short by the caller's own backstop, which is the whole of rule 7's
+   reasoning. Spending it on retries instead would make the wait budget's
+   published derivation false and would put a conflict within a second and a half
+   of being reported as a server that did not answer and a statement whose
+   outcome is unknown, which for a conflict whose loser provably committed
+   nothing would be false rather than merely cautious. The measurement confirms
+   the choice rather than only asserting it: lengthening the retry was measured
+   against reshaping it and is dominated on every axis (see
+   `IMPLEMENTATION.md § Retry Logic`), so the headroom would buy nothing the
+   shape has not already bought inside 2500 ms.
 9. **Resolution runs once per invocation and once per request, and its outcome is
    not cached.** A short-lived invocation has nothing to cache the outcome for, and
    a web request that cached one would act on a server that had since stopped.
@@ -3645,6 +3723,30 @@ Groadmap's usage model and expectations:
     MUST also assert that the statement was **cut** rather than refused — it failed
     no sooner than the deadline it was given, and it did not succeed — because a
     statement that applied nothing exercises none of what this criterion is for.
+54. **Every writer against one hot node ultimately succeeds, and the criterion
+    MUST drive the shape that used to fail rather than a milder one.** Sixteen
+    concurrent clients, each updating the **same** node through
+    `rmp graph client` against one running server, all succeed: every invocation
+    exits 0, and the node afterwards carries a value one of them wrote. The
+    criterion MUST assert the exit code of **every** invocation rather than of a
+    sample, because the failure it exists against is a fraction of one percent
+    and a sampled assertion would step over it. It MUST also be shown to fail
+    when the retry is put back on the fixed ladder, since a criterion that passes
+    under both shapes establishes nothing about either (see
+    [Concurrency Inside the Server](#concurrency-inside-the-server), rule 4, and
+    `IMPLEMENTATION.md § Retry Logic`).
+55. **An exhausted retry prints the published contention line, in full.** Driven
+    against a server that answers every statement with the serialisation
+    conflict, `rmp graph client` exits 1 once the retry policy's total is spent,
+    writes zero bytes to stdout, and writes on stderr exactly the line
+    `COMMANDS.md § Client Error Cases` publishes, compared character for
+    character. The criterion MUST compare the whole line rather than a prefix,
+    because the distinction it exists to establish — contention as against an
+    invalid statement — is carried entirely by text `rmp` chooses, and it MUST
+    assert that the caller does **not** read the `graph query failed: ` line an
+    invalid statement produces, which is the confusion this line was published to
+    end (see
+    [Concurrency Inside the Server](#concurrency-inside-the-server), rule 9).
 
 ## See Also
 

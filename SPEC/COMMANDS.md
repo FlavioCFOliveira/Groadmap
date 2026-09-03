@@ -3570,6 +3570,7 @@ original the day the original changed, which is the outcome
 | 6 | The statement is longer than the maximum query length of 1 MiB (1048576 bytes), whether it arrived through `--query` or through standard input (`utils.ErrValidation`). See `GRAPH.md § Maximum Query Length`. This is the only cause of exit code 6 the command has. |
 | 1 | The roadmap's socket answers, but no server could be reached through it within the resolution probe, or the connection failed for a reason other than the socket being absent or refusing (`utils.ErrDatabase`). The store was not opened and no lock was taken. See `GRAPH.md § Server Resolution`. |
 | 1 | The connection to a server was lost after the statement had been sent (`utils.ErrDatabase`). Whether the statement committed is unknown, and the invocation does not retry it against the store. See `GRAPH.md § Server Resolution`, rule 4. |
+| 1 | Every attempt of the retry policy lost a serialisation conflict against a server (`utils.ErrDatabase`). Nothing was written: a losing transaction commits nothing. The statement is valid and may be run again. See `GRAPH.md § Concurrency Inside the Server`. |
 
 A socket file with nothing listening behind it is **not** in that table, because it
 is not a failure: the invocation reads the refused connection as evidence that the
@@ -3676,15 +3677,21 @@ surfaces.
 | A server could not be reached through a socket that answered | 1 | The unreachable line of `§ Graph Server Socket Error Lines` |
 | Connection to a server lost after the statement was sent | 1 | The lost-connection line of `§ Graph Server Socket Error Lines` |
 | A server did not answer within the caller's backstop deadline | 1 | The unanswered line of `§ Graph Server Socket Error Lines` |
+| Every attempt of the retry policy lost a serialisation conflict on a served roadmap | 1 | "Error: database error: graph write conflict: another writer committed first on every attempt within the 2.5s retry budget; nothing was written. The statement is valid — run it again, and spread concurrent writes across distinct nodes." |
 
-The last three rows arise only against a roadmap a graph server is serving; a
+The last four rows arise only against a roadmap a graph server is serving; a
 socket file with nothing listening behind it produces none of them, because the
 invocation reads it as evidence that the roadmap is not served and opens the
-store.
+store. The conflict row is the one of the four that is not about the socket: it
+reports contention inside the server, which is unreachable on the direct path
+because a direct invocation runs exactly one transaction
+(`GRAPH.md § Concurrency Inside the Server`).
 
 The parse/execution row and the store-failure row end in a diagnostic the Cypher engine produces, not `rmp`. The part `rmp` fixes is everything up to and including `graph query failed: ` and `graph store unavailable: `; what follows is the engine's own text and is not specified here.
 
 The budget row is not one of them: it carries no engine diagnostic and no placeholder, and every character of it is `rmp`'s own text, so it is compared in full. `5s` is the budget itself, rendered as a duration; it is a fixed value and not a value the binary interpolates from the invocation. The line says the three things a caller who has just lost a statement needs: what was exceeded, that nothing was written, and what to do next. `GRAPH.md § Statement Time Budget` is canonical for the behaviour it reports.
+
+The conflict row is not one of them either, and for the same reason: it carries no engine diagnostic and no placeholder, every character of it is `rmp`'s own text, and it is compared in full. `2.5s` is the retry policy's total wait, rendered as a duration; it is a fixed value and not one the binary interpolates. The line exists because the condition it reports was otherwise indistinguishable from the parse/execution row above — both printed the same `graph query failed: ` text, and the only thing separating them was the engine's diagnostic tail, which the paragraph above deliberately declines to specify and which a caller therefore cannot lawfully match. The decision a caller must make on reading it is the opposite of the one an invalid statement calls for: run the statement again, rather than correct it. `GRAPH.md § Concurrency Inside the Server` is canonical for the behaviour it reports.
 
 ### Graph Server Socket Error Lines
 
@@ -3893,7 +3900,9 @@ This section does not restate them.
   returns to it (see `GRAPH.md § Query Notifications as Diagnostics`).
 - A retriable serialisation conflict is **not** an error and is not printed. It is
   retried, and only an exhausted retry policy or an exhausted statement budget
-  produces a failure (see `GRAPH.md § Concurrency Inside the Server`).
+  produces a failure (see `GRAPH.md § Concurrency Inside the Server`). Each of the
+  two failures prints its own line: `§ Client Error Cases` publishes both, and
+  neither is the parse/execution line.
 - Errors: plain text to stderr, with the standard AI-agent hint.
 
 ### Client Exit Codes
@@ -3901,7 +3910,7 @@ This section does not restate them.
 | Exit Code | Cause |
 |-----------|-------|
 | 0 | The statement was sent to a server, ran, and its result was written to stdout. |
-| 1 | No server is listening for the roadmap; or a server could not be reached through the socket; or the connection was lost, or went unanswered, after the statement was sent; or the statement failed to parse or execute in the engine; or it exhausted the 5-second statement time budget; or a value the server returned could not be mapped onto the published result shape (`utils.ErrDatabase`, see `DATA_FORMATS.md § Graph Client Result`, rule 3). |
+| 1 | No server is listening for the roadmap; or a server could not be reached through the socket; or the connection was lost, or went unanswered, after the statement was sent; or the statement failed to parse or execute in the engine; or it exhausted the 5-second statement time budget; or every attempt of the retry policy lost a serialisation conflict; or a value the server returned could not be mapped onto the published result shape (`utils.ErrDatabase`, see `DATA_FORMATS.md § Graph Client Result`, rule 3). |
 | 2 | No statement supplied: `--query` absent and standard input empty, whitespace only, or a terminal; or `--query` present with an empty, whitespace-only, or absent value; or `--socket` supplied with an empty value (`utils.ErrRequired`). |
 | 2 | A positional argument was supplied. `graph client` accepts none, exactly as `graph execute` accepts none (`utils.ErrInvalidInput`). |
 | 3 | No roadmap selected and none provided via `-r` (`utils.ErrNoRoadmap`). |
@@ -3936,6 +3945,16 @@ committed nothing, so the client re-sends it, under the project's retry policy,
 and reports a failure only when that policy or the statement budget is exhausted
 (`GRAPH.md § Concurrency Inside the Server`).
 
+**When the retry policy is exhausted, the failure says so in its own words.** The
+line `§ Client Error Cases` publishes for it is `rmp`'s own text from end to end:
+it names the contention, states that nothing was written, and names the remedy.
+That matters because the alternative was silence: an exhausted retry once printed
+the same `graph query failed: ` line as an invalid statement, and the caller's
+next move differs completely between the two. The remedy the line names is to run
+the statement again, and to spread concurrent writes across distinct nodes, which
+is what removes the collisions rather than moving the point at which they start
+(`GRAPH.md § Concurrency Inside the Server`, rule 8).
+
 **The statement runs under the same 5-second time budget** `execute` runs under.
 The server is the end that enforces it, and the client keeps a later deadline of
 its own purely as a backstop against a server that answers nothing, so that a
@@ -3959,13 +3978,24 @@ why they differ.
 | A server could not be reached through a socket that answered | 1 | The unreachable line of `§ Graph Server Socket Error Lines` |
 | Connection lost after the statement was sent | 1 | The lost-connection line of `§ Graph Server Socket Error Lines` |
 | The server did not answer within the backstop deadline | 1 | The unanswered line of `§ Graph Server Socket Error Lines` |
-| Cypher parse/execution error reported by the server, or a serialisation conflict every attempt of the retry policy collided on | 1 | "Error: database error: graph query failed: <engine diagnostic>" |
+| Cypher parse/execution error reported by the server | 1 | "Error: database error: graph query failed: <engine diagnostic>" |
 | Statement cancelled for exhausting the 5-second statement time budget | 1 | "Error: database error: graph query exceeded the 5s statement time budget; nothing was written. Narrow the statement — add a label, an indexed property filter, or a LIMIT — or split it into smaller statements." |
+| Every attempt of the retry policy lost a serialisation conflict | 1 | "Error: database error: graph write conflict: another writer committed first on every attempt within the 2.5s retry budget; nothing was written. The statement is valid — run it again, and spread concurrent writes across distinct nodes." |
 
 The parse/execution row carries the engine's own diagnostic after
 `graph query failed: `, exactly as the same row does under
 `§ Execute Error Cases`: the statement ran in the engine either way, and the
 diagnostic the caller reads is the engine's in both.
+
+The conflict row is the one that used to share it. A serialisation conflict
+whose every attempt collided was reported through the parse/execution row above,
+so the two conditions printed the same line and the only text separating them
+was the engine's diagnostic tail — which is outside this file's contract and
+which a caller therefore cannot match. It now has a line of its own, published
+identically here and under `§ Execute Error Cases`, because both subcommands
+reach it through the same client against the same server
+(`GRAPH.md § The Bolt Client`). Every character of that line is `rmp`'s own and
+it is compared in full.
 
 ---
 

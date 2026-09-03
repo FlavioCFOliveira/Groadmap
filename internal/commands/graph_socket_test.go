@@ -440,6 +440,15 @@ func TestGraphServerFailure_MapsEveryClientFailureOntoAPublishedLine(t *testing.
 			err:  &graphclient.SendError{Kind: graphclient.FailureUnanswered, Socket: socket},
 			want: errorLine(graphServerSilent(socket)),
 		},
+		{
+			name: "an exhausted serialisation retry carries a line of its own",
+			err: &graphclient.SendError{
+				Kind: graphclient.FailureConflict, Socket: socket,
+				Code:       "Neo.TransientError.Transaction.Outdated",
+				Diagnostic: "mvcc: serialization conflict in node properties",
+			},
+			want: errorLine(graphWriteConflict()),
+		},
 	}
 
 	for _, c := range cases {
@@ -481,6 +490,52 @@ func TestGraphServerFailure_MapsEveryClientFailureOntoAPublishedLine(t *testing.
 			t.Errorf("error = %q, want it to name the value it could not map", got.Error())
 		}
 	})
+}
+
+// TestGraphWriteConflict_MatchesThePublishedLineAndIsNotTheStatementLine pins
+// the contention line character for character against SPEC/COMMANDS.md, and pins
+// the ONE thing it was published to establish: that a caller reading it is not
+// reading the line an invalid statement produces.
+//
+// The second half is not decoration. Before this line existed, an exhausted
+// retry printed exactly the parse/execution line, and the only text separating
+// the two was the engine's diagnostic tail that SPEC/COMMANDS.md deliberately
+// declines to specify — so a caller could not lawfully tell "run it again" from
+// "correct it" (SPEC/GRAPH.md § Concurrency Inside the Server, rule 9). A future
+// edit that folded the conflict back onto graphStatementError would restore that
+// defect while still printing a line, and only an assertion about what the line
+// is NOT would notice.
+func TestGraphWriteConflict_MatchesThePublishedLineAndIsNotTheStatementLine(t *testing.T) {
+	const published = "Error: database error: graph write conflict: another writer committed first " +
+		"on every attempt within the 2.5s retry budget; nothing was written. The statement is " +
+		"valid — run it again, and spread concurrent writes across distinct nodes."
+
+	err := graphWriteConflict()
+
+	if got := errorLine(err); got != published {
+		t.Errorf("the contention line does not match SPEC/COMMANDS.md § Client Error Cases "+
+			"character for character:\n got %q\nwant %q", got, published)
+	}
+	if !errors.Is(err, utils.ErrDatabase) {
+		t.Errorf("error = %v, want it to wrap utils.ErrDatabase (exit code 1): the graph feature "+
+			"introduces no new sentinel and no new exit code "+
+			"(SPEC/GRAPH.md § Error Handling and Exit Codes, rule 7)", err)
+	}
+	if strings.Contains(err.Error(), "graph query failed: ") {
+		t.Error("the contention line carries the parse/execution prefix. That prefix is what an " +
+			"invalid statement prints, and the whole purpose of this line is that the two are " +
+			"distinguishable by text the contract fixes")
+	}
+
+	// The budget it names is the retry policy's own, read rather than written
+	// out, so a change to the policy cannot leave the line claiming a budget
+	// nothing spends. 2.5s is what the policy renders today and what
+	// SPEC/COMMANDS.md publishes.
+	if got, want := backoff.Total().String(), "2.5s"; got != want {
+		t.Errorf("backoff.Total() renders %q, but SPEC/COMMANDS.md publishes %q inside the "+
+			"contention line. Either the policy moved and the specification must follow, or the "+
+			"line has stopped naming the policy", got, want)
+	}
 }
 
 // budgetSelector is the value graphStatementError branches on to produce the

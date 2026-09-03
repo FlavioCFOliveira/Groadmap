@@ -321,14 +321,19 @@ func TestSend_RetriesASerialisationConflictAndDoesNotSurfaceIt(t *testing.T) {
 	}
 }
 
-// TestSend_AnExhaustedRetryPolicyReportsTheEnginesOwnDiagnostic is the other
-// outcome rule 8 names.
+// TestSend_AnExhaustedRetryPolicyReportsTheConflictAsItself is the other outcome
+// rule 8 names.
 //
 // Once every attempt has collided, the conflict IS the outcome and concealing it
-// would leave the caller with nothing to act on. The failure that reaches the
-// caller therefore carries the engine's own code and message, classified as a
-// statement failure rather than as a transport one.
-func TestSend_AnExhaustedRetryPolicyReportsTheEnginesOwnDiagnostic(t *testing.T) {
+// would leave the caller with nothing to act on. It reaches the caller under a
+// kind of its OWN — not FailureStatement, which is the kind of a statement that
+// will fail the same way every time — because the two demand opposite courses of
+// a caller and each surface publishes a different line for them
+// (SPEC/GRAPH.md § Concurrency Inside the Server, rule 9). The engine's code and
+// message travel with it regardless, so a surface that wants them still has
+// them; what changed is that no surface has to read them to find out what
+// happened.
+func TestSend_AnExhaustedRetryPolicyReportsTheConflictAsItself(t *testing.T) {
 	const diagnostic = "transaction has seen state which has been invalidated by applied updates"
 
 	server := startScriptedServer(t, func(request any, runCount int64) exchange {
@@ -349,9 +354,15 @@ func TestSend_AnExhaustedRetryPolicyReportsTheEnginesOwnDiagnostic(t *testing.T)
 	if !errors.As(err, &sendErr) {
 		t.Fatalf("error = %v (%T), want a *SendError", err, err)
 	}
-	if sendErr.Kind != FailureStatement {
-		t.Errorf("kind = %v, want FailureStatement: once retrying has stopped being the answer, "+
-			"the conflict is the outcome", sendErr.Kind)
+	if sendErr.Kind != FailureConflict {
+		t.Errorf("kind = %v, want FailureConflict: once retrying has stopped being the answer, "+
+			"the conflict is the outcome, and it is not the kind a statement the engine refused "+
+			"carries", sendErr.Kind)
+	}
+	if sendErr.Kind == FailureStatement {
+		t.Error("the conflict arrived as FailureStatement: that is the kind whose published line " +
+			"says a statement failed to parse or execute, and a caller reading it would correct " +
+			"a statement that was right")
 	}
 	if sendErr.Code != conflictCode {
 		t.Errorf("code = %q, want the engine's own %q", sendErr.Code, conflictCode)
@@ -360,10 +371,30 @@ func TestSend_AnExhaustedRetryPolicyReportsTheEnginesOwnDiagnostic(t *testing.T)
 		t.Errorf("diagnostic = %q, want the engine's own %q", sendErr.Diagnostic, diagnostic)
 	}
 
-	// The policy is the project's single one, so the attempt count is its own.
-	if got, want := server.runs.Load(), int64(backoff.Attempts); got != want {
-		t.Errorf("the server saw %d RUN message(s), want %d — one initial attempt plus the "+
-			"project's %d retries (internal/backoff)", got, want, backoff.Attempts)
+	// The policy is the project's single one and the SHAPE is its jittered one,
+	// so what can be asserted about the attempt count is the pair of bounds that
+	// shape fixes rather than one figure. Full jitter draws each wait
+	// independently, so how many attempts a 2500 ms budget pays for is not
+	// determined in advance — which is the point of it.
+	//
+	// The LOWER bound is what separates the two shapes, and it needs no
+	// randomness to hold: even if every draw came out at its ceiling, the first
+	// six sum to 315 ms and the budget pays for nine more at the 250 ms cap, so
+	// the walk cannot make fewer than sixteen attempts. Six would mean the call
+	// site had gone back to the fixed ladder, and this is the assertion that
+	// would catch it (rmp task #384; SPEC/IMPLEMENTATION.md § Retry Logic).
+	runs := server.runs.Load()
+	if runs > int64(backoff.JitterAttempts) {
+		t.Errorf("the server saw %d RUN message(s), want at most %d — one initial attempt plus "+
+			"the policy's %d jittered retries (internal/backoff)",
+			runs, backoff.JitterAttempts, backoff.JitterAttempts-1)
+	}
+	if runs <= int64(backoff.Attempts) {
+		t.Errorf("the server saw %d RUN message(s), want strictly more than the fixed ladder's "+
+			"%d. A conflict is retried under the policy's FULL-JITTER shape, not its ladder: "+
+			"the ladder's rungs are hundreds of milliseconds each, so it spends the same 2500 ms "+
+			"budget in six attempts where jitter spends it in sixteen to twenty",
+			runs, backoff.Attempts)
 	}
 }
 
@@ -1181,7 +1212,8 @@ func TestIsRetriable_OnlyASerialisationConflict(t *testing.T) {
 		err  error
 		want bool
 	}{
-		{"a serialisation conflict", &SendError{Kind: FailureStatement, Code: conflictCode, retriable: true}, true},
+		{"a serialisation conflict", &SendError{Kind: FailureConflict, Code: conflictCode, retriable: true}, true},
+		{"an exhausted serialisation conflict", &SendError{Kind: FailureConflict, Code: conflictCode}, false},
 		{"a statement failure", &SendError{Kind: FailureStatement, Code: "Neo.ClientError.Statement.SyntaxError"}, false},
 		{"a budget failure", &SendError{Kind: FailureBudget, Code: timeoutCode}, false},
 		{"a lost connection", &SendError{Kind: FailureLost}, false},

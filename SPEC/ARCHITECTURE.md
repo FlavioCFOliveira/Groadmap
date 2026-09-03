@@ -799,7 +799,7 @@ Groadmap follows standard Unix/Linux exit code conventions. Success output is JS
 
 `rmp graph serve` and `rmp graph client` introduce no new exit code and no new sentinel error. Every failure either can produce is carried by a sentinel the catalogue above already names, and this section enumerates which codes each subcommand can return so that the enumeration exists in one place. `COMMANDS.md § Graph Management` is canonical for the command-line contract, and `GRAPH.md § The Dedicated Graph Server` for the behaviour behind each row.
 
-`rmp graph execute` is not enumerated here, because the graph server changed which failures it can reach without changing its exit codes: it gained the same `--socket` flag the two subcommands below carry, and with it two failures of the server path — a socket that answers but yields no reachable server, and a connection lost or unanswered after the statement was sent — both `utils.ErrDatabase` and exit code 1, and an empty `--socket` value, `utils.ErrRequired` and exit code 2. All three land on codes that subcommand already returned. `COMMANDS.md § Execute Exit Codes` is canonical for its full set.
+`rmp graph execute` is not enumerated here, because the graph server changed which failures it can reach without changing its exit codes: it gained the same `--socket` flag the two subcommands below carry, and with it three failures of the server path — a socket that answers but yields no reachable server, a connection lost or unanswered after the statement was sent, and a serialisation conflict every attempt of the retry policy collided on — all three `utils.ErrDatabase` and exit code 1, and an empty `--socket` value, `utils.ErrRequired` and exit code 2. Every one of them lands on a code that subcommand already returned. `COMMANDS.md § Execute Exit Codes` is canonical for its full set.
 
 `rmp graph serve`:
 
@@ -817,7 +817,7 @@ Groadmap follows standard Unix/Linux exit code conventions. Success output is JS
 | Exit Code | Sentinel | Cause |
 |-----------|----------|-------|
 | `0` | — | The statement was sent to a server, ran, and its result was written to stdout. |
-| `1` | `utils.ErrDatabase` | No server is listening for the roadmap; or a server could not be reached through the socket; or the connection was lost, or went unanswered, after the statement was sent; or the statement failed to parse or execute in the engine; or it exhausted the statement time budget; or a value the server returned could not be mapped onto the published result shape. |
+| `1` | `utils.ErrDatabase` | No server is listening for the roadmap; or a server could not be reached through the socket; or the connection was lost, or went unanswered, after the statement was sent; or the statement failed to parse or execute in the engine; or it exhausted the statement time budget; or every attempt of its retry policy lost a serialisation conflict; or a value the server returned could not be mapped onto the published result shape. |
 | `2` | `utils.ErrRequired` | No statement supplied, or `--socket` supplied with an empty value. |
 | `2` | `utils.ErrInvalidInput` | An unknown flag, or a positional argument: the subcommand accepts none. |
 | `3` | `utils.ErrNoRoadmap` | No roadmap selected and none provided via `-r`. |

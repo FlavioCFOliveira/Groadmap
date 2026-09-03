@@ -111,11 +111,24 @@ const (
 	// outcome is unknown for FailureLost's reason.
 	FailureUnanswered
 
-	// FailureStatement is the server reporting that the statement failed:
-	// a parse error, an execution error, a schema refusal — or a serialisation
-	// conflict every attempt of the retry policy collided on, which reaches the
-	// caller as itself once retrying has stopped being the answer (rule 8).
+	// FailureStatement is the server reporting that the statement failed: a
+	// parse error, an execution error, a schema refusal. It is a statement that
+	// will fail the same way every time, which is what separates it from
+	// FailureConflict.
 	FailureStatement
+
+	// FailureConflict is a serialisation conflict every attempt of the retry
+	// policy collided on. It reaches the caller as itself once retrying has
+	// stopped being the answer (rule 8).
+	//
+	// It is kept apart from FailureStatement for the reason the separate line
+	// exists at all: the two demand OPPOSITE things of a caller. A statement the
+	// engine refused must be corrected; a statement that lost every conflict is
+	// valid and must be run again, and nothing distinguished the two while both
+	// arrived here as one kind carrying an engine diagnostic the contract
+	// deliberately declines to specify (SPEC/GRAPH.md § Concurrency Inside the
+	// Server, rule 9).
+	FailureConflict
 
 	// FailureBudget is the statement exhausting the time budget the server
 	// enforces. It is kept apart from FailureStatement because the two have
@@ -158,6 +171,8 @@ func (e *SendError) Error() string {
 		return "connection to the graph server at " + e.Socket + " lost: " + causeText(e.Cause)
 	case FailureUnanswered:
 		return "no answer from the graph server at " + e.Socket
+	case FailureConflict:
+		return "serialisation conflict on every attempt: " + e.Code + ": " + e.Diagnostic
 	case FailureBudget:
 		return "statement cut by the server's time budget: " + e.Diagnostic
 	case FailureMapping:
@@ -236,12 +251,30 @@ type Result struct {
 // losing transaction committed nothing (rule 5), and it is bounded by the policy
 // and by the deadline above, whichever ends first.
 //
-// The residual is stated rather than hidden: the policy's ladder sleeps in rungs
-// of up to a second, so a deadline that expires DURING a rung is observed at the
-// end of it rather than at the instant it fires. The published line names a fixed
-// duration rather than the elapsed time, so what a caller reads is unaffected;
-// what it costs is up to one rung of extra waiting on an invocation that was
-// going to fail.
+// # Which of the policy's two shapes, and why it is not the ladder
+//
+// Full jitter, backoff.RetryJitteredWithin, and not the fixed ladder every other
+// retry in this project walks (SPEC/IMPLEMENTATION.md § Retry Logic is canonical
+// for both shapes; SPEC/GRAPH.md § Concurrency Inside the Server, rule 4,
+// requires this one here). The conflict is not a wait for a resource somebody
+// holds: the winner committed before the loser learned it had lost, so there is
+// nothing left to wait for, and what the delay buys is the loser leaving the
+// contending set. That makes the conflict rate a function of the load the
+// retries themselves offer — measured, six immediate attempts exhaust on 79.9%
+// of statements where the fixed ladder exhausts on 0.15% — and it makes
+// identical ladders, walked by every loser at the same instant, the wrong shape:
+// they keep the contending set synchronised. Drawing each wait independently
+// spreads the losers out, and inside the SAME 2500 ms budget it removed the
+// failure entirely at sixteen writers on one node (0 in 18,000 against 0.15%)
+// with a worst case SHORTER than the ladder's (rmp task #384).
+//
+// The residual is stated rather than hidden: a deadline that expires DURING a
+// wait is observed at the end of it rather than at the instant it fires. Under
+// this shape the longest a wait can be is the 250 ms ceiling rather than the
+// ladder's second, so the residual is a quarter of what it was. The published
+// line names a fixed duration rather than the elapsed time, so what a caller
+// reads is unaffected; what it costs is that much extra waiting on an invocation
+// that was going to fail.
 func Send(ctx context.Context, socketPath, statement string) (*Result, error) {
 	ctx, cancel := context.WithTimeout(ctx, graphlock.WaitBudget())
 	defer cancel()
@@ -256,7 +289,7 @@ func Send(ctx context.Context, socketPath, statement string) (*Result, error) {
 		bound = remaining
 	}
 
-	return backoff.RetryWithin(bound, func() (*Result, error) {
+	return backoff.RetryJitteredWithin(bound, func() (*Result, error) {
 		return sendOnce(ctx, socketPath, statement)
 	}, isRetriable)
 }
@@ -506,11 +539,12 @@ func (s *session) responseFailure(ctx context.Context, response any) error {
 		}
 	case conflictCode:
 		return &SendError{
-			Kind: FailureStatement, Socket: s.socket,
+			Kind: FailureConflict, Socket: s.socket,
 			Code: failure.Code, Diagnostic: failure.Message,
 			// Retried while the policy and the deadline allow it. Once neither
-			// does, this same value reaches the caller as the ordinary statement
-			// failure it has become (SPEC/GRAPH.md § Server Resolution, rule 8).
+			// does, this same value reaches the caller as the contention it is,
+			// under a kind and a published line of its own
+			// (SPEC/GRAPH.md § Server Resolution, rule 8).
 			retriable: ctx.Err() == nil,
 		}
 	default:

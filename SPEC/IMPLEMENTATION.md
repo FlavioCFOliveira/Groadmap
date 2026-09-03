@@ -177,7 +177,30 @@ one-shot `Exec`; see [Where Each PRAGMA Is Applied](#where-each-pragma-is-applie
 
 ### Retry Logic
 
-Groadmap implements exponential backoff retry logic for database operations:
+**Groadmap has one retry policy, and one package owns the whole of it.** One
+loop, one worst-case total wait, and a classifier the calling site supplies. A
+caller never writes the loop, the sleep, or the attempt count out for itself:
+three subsystems once did, two of them read the retry count as an attempt count,
+and both waited four times where the policy promised five. The loop, and not the
+constants, is therefore what is shared.
+
+**What the policy does not have is a single delay shape.** It publishes two, and
+each caller selects one. The two conditions this project retries are not the same
+condition, and the delay that is right for one is measurably wrong for the other:
+
+| Shape | Delay before each retry | Retried under it |
+|-------|-------------------------|------------------|
+| **The fixed ladder** | The next rung of the ladder below, taken in order | A SQLite busy or locked error; a wait for the graph store's exclusive advisory lock |
+| **Full jitter** | A duration drawn uniformly at random between zero and a ceiling, the ceiling doubling from 5ms and then held at 250ms | A retriable serialisation conflict returned by a graph server |
+
+The two shapes share everything else: the loop, the wait ordering, the rule that
+a caller supplies the classifier and nothing more, and the **maximum total wait
+of 2500ms**. A shape is an entry point of the one package that owns retrying. It
+is never a constant moved out of that package for one caller's benefit, and never
+a private loop written beside it — a second loop is the defect that produced the
+single-policy rule in the first place.
+
+**The fixed ladder:**
 
 - **Initial delay**: 100ms
 - **Maximum delay**: 1000ms
@@ -197,7 +220,10 @@ disagree on without either of them contradicting the text.
 **Wait Ordering:**
 
 The implementation waits before each retry, and never after an attempt it does
-not retry:
+not retry. The ordering governs both shapes. Rules 1, 3 and 4 hold verbatim
+under either; rules 2 and 5 are written with the fixed ladder's values, and under
+full jitter the delay before each retry is the draw described below and the last
+attempt is the twentieth rather than the sixth:
 
 1. The first attempt runs immediately, with no preceding wait.
 2. Each retry is preceded by the next delay of the backoff pattern: 100ms before
@@ -214,6 +240,76 @@ not retry:
 **Retry Conditions:**
 - Only retry on SQLite busy/locked errors (`database is locked`, `SQLITE_BUSY`)
 - Do not retry on schema errors, constraint violations, syntax errors, or invalid input errors
+
+These conditions are the classifier of the SQLite caller. Every other caller
+supplies its own and takes nothing else from this one: the graph store lock
+retries on lock contention alone (see
+[Write Contention and Recovery](#write-contention-and-recovery), rule 3), and the
+graph client retries on the serialisation conflict alone
+(`GRAPH.md § Concurrency Inside the Server`).
+
+**Full jitter:**
+
+- **Delay before each retry**: a duration drawn uniformly at random from the
+  interval that runs from zero to the ceiling then in force. Zero is a possible
+  draw and the ceiling is a possible draw.
+- **Ceiling**: 5ms before the first retry, doubling before each subsequent one —
+  5, 10, 20, 40, 80, 160ms — and then held at 250ms for every retry after that.
+  The ceiling grows monotonically; the delay does not, because each one is drawn
+  independently, so a later delay may be shorter than an earlier one.
+- **Maximum attempts**: 20 — one initial attempt plus at most nineteen retries.
+  The cap is load-bearing rather than decorative: a draw may be near zero, so the
+  total wait alone does not bound how many times the loop turns.
+- **Maximum total wait**: 2500ms, the same total the fixed ladder spends. The
+  loop stops as soon as that total is spent, so the shape changes how the waiting
+  is distributed and never how long a caller can be made to wait.
+
+**Why a second shape exists, stated as the measurement that produced it rather
+than as a preference.** A first-updater-wins serialisation conflict invites the
+reading that no delay is needed at all — the winner has already committed, so the
+loser should succeed on its next attempt. Measured against a real server, that
+reading is not merely suboptimal, it is a congestion collapse: retrying
+immediately, six attempts, failed **79.9%** of statements where the fixed ladder,
+under the identical load in the same experiment, failed **0.15%**. A loser that
+waits removes itself from the contending set; a loser that retries at once keeps
+that set saturated. **The delay is load shedding, and the conflict rate is a
+function of the offered load the retries themselves create.**
+
+Once the delay is understood as load shedding, the shape follows from what sheds
+load best inside a fixed budget. Measured head to head under identical load on
+one server, with sixteen and then sixty-four concurrent writers all updating a
+single node:
+
+| Shape, all inside 2500ms | Exhausted, 16 writers | Exhausted, 64 writers | Worst observed wait | Attempts per statement |
+|--------------------------|----------------------|-----------------------|---------------------|------------------------|
+| The fixed ladder | 0.08-0.30% | 0.86-1.46% | 2.5s | 1.07-1.33 |
+| Full jitter, ceiling 5 to 250ms | 0.000% (0 in 18,000) | 0.07-0.22% | 1.6-2.5s | 2.19-3.48 |
+
+Full jitter removes the failure entirely at sixteen writers, cuts it by between
+four and thirteen times at sixty-four, holds a worst case **shorter** than the
+fixed ladder's rather than longer, halves the 99th-percentile wait at sixty-four
+writers, and raises throughput by 15-45%. What it costs is server work: about
+2.6 times the attempts per statement under contention, and nothing at all when
+there is no contention, because an uncontended statement never reaches a retry
+under either shape.
+
+**Two shapes that were measured and rejected, recorded so that they are not
+measured again.** Jitter with a ceiling that does not grow is adequate at sixteen
+writers (0.03-0.08%) and collapses at sixty-four (8.7-9.0%): a fixed cap of a few
+tens of milliseconds cannot shed enough load. A ceiling that grows but stops at
+100ms is **worse than the fixed ladder** at sixty-four writers (1.21-1.48%). The
+ceiling has to grow and it has to reach a few hundred milliseconds; the cap, and
+not the randomisation alone, is what sheds the load.
+
+**Lengthening the total instead of reshaping it was measured and is dominated.**
+Walking the fixed ladder for 6 seconds rather than 2500ms buys one decimal order
+of magnitude for five extra seconds of worst case, which is less than full jitter
+buys for none. It also collides with a published derivation: the graph store's
+wait budget is the statement budget plus this policy's total
+(`GRAPH.md § Lock Contention`), and a caller that waited 6 seconds on a conflict
+would sit within 1.5 seconds of the deadline at which its failure is reported as
+a server that did not answer and a statement whose outcome is unknown — which,
+for a conflict whose loser provably committed nothing, would be false.
 
 ### Safe Concurrent Patterns
 
@@ -359,9 +455,12 @@ exactly one transaction; that one-transaction-per-invocation model is why the
 conflict path is not reachable there. It **is** reachable inside
 `rmp graph serve`, which runs many transactions concurrently in one process, so a
 client of that server retries a serialisation conflict rather than surfacing it.
-`GRAPH.md § Concurrency Inside the Server` is canonical for that, and the retry
-uses the loop and the delay ladder of [Retry Logic](#retry-logic) like every other
-retry in this project.
+`GRAPH.md § Concurrency Inside the Server` is canonical for that. The retry runs
+under the loop of [Retry Logic](#retry-logic) like every other retry in this
+project, and under that policy's **full-jitter** delay shape rather than its fixed
+ladder, because a conflict is a contention failure whose rate is a function of the
+load the retries themselves offer; that section is canonical for both shapes and
+for the measurements that separate them.
 
 Groadmap does not depend on the engine to serialise access to the store. It
 serialises it itself, at the process level, on a lock file that Groadmap maintains
@@ -461,15 +560,16 @@ the boundary.
    web graph request, it surfaces as an internal read error (HTTP 500), the status
    that endpoint already returns for a graph store that cannot be opened.
 3. Every caller waits, and waits a bounded time. It retries the lock under the
-   **loop and the delay ladder** of the project's single retry policy, the one
-   specified for SQLite in [Retry Logic](#retry-logic): the first attempt is
-   immediate, each retry is preceded by the next delay of that ladder, and no
-   wait follows an attempt that is not retried. That section states the ladder
-   and the wait ordering, and this rule does not restate them, so the two cannot
-   diverge. What the graph store lock does **not** take from that section is its
-   total. This lock has a **wait budget of its own**, the statement budget plus
-   the backoff total, so the loop keeps retrying until that budget is exhausted
-   rather than stopping after the five retries the SQLite policy makes.
+   **loop and the fixed-ladder delay shape** of the project's single retry
+   policy, the one specified for SQLite in [Retry Logic](#retry-logic): the
+   first attempt is immediate, each retry is preceded by the next delay of that
+   ladder, and no wait follows an attempt that is not retried. That section
+   states the ladder and the wait ordering, and this rule does not restate them,
+   so the two cannot diverge. What the graph store lock does **not** take from
+   that section is its total. This lock has a **wait budget of its own**, the
+   statement budget plus the backoff total, so the loop keeps retrying until that
+   budget is exhausted rather than stopping after the five retries the SQLite
+   policy makes.
    `GRAPH.md § Lock Contention` is canonical for that sizing rule, for the figure
    it yields, and for the measurements behind it, and this rule does not restate
    those either. The SQLite total is not reused because the two locks do not

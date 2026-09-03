@@ -50,23 +50,23 @@
 #
 # TWO COUNTS, BOTH TRUE, MEASURING DIFFERENT THINGS.
 #
-#   54  RULES suppressed in the module, the number this register accounts for
+#   55  RULES suppressed in the module, the number this register accounts for
 #       and the number the gate sweeps. It counts rules, not directives: a
 #       directive naming two rules counts once under each, and the module has
 #       exactly one such directive — the `#nosec G302 G703` on
 #       internal/graphstore/graphstore.go's checkpoint chmod, which is both a
 #       directory-permission finding and a taint-analysis one. So the module
-#       carries 53 directives suppressing 54 rules. The gate reads comment
+#       carries 54 directives suppressing 55 rules. The gate reads comment
 #       groups the way gosec does, so the tag counts only where the scanner
 #       honours it.
-#   40  rules suppressed outside _test.go, across 39 directives. gosec does not
-#       scan _test.go files unless -tests is passed, and 14 of the 54 are in
-#       test files: 54 - 14 = 40. That the scanner does not read those 14 is an
+#   41  rules suppressed outside _test.go, across 40 directives. gosec does not
+#       scan _test.go files unless -tests is passed, and 14 of the 55 are in
+#       test files: 55 - 14 = 41. That the scanner does not read those 14 is an
 #       accepted gap, measured and reasoned in SPEC/BUILD.md § Security Scan;
 #       the register accounts for them anyway, so they stay reviewed even where
 #       the scanner is silent.
 #
-#       gosec's own summary prints `Nosec: 39`, and the difference is the
+#       gosec's own summary prints `Nosec: 40`, and the difference is the
 #       two-rule directive: gosec counts DIRECTIVES it honoured, this register
 #       counts RULES accepted. The two figures agreed while every directive
 #       named one rule, and the release notes quoted that agreement; they no
@@ -100,7 +100,7 @@
 # chmod, which is both a directory-permission finding and a taint-analysis one —
 # so the totals below are the number of directives plus one.
 #
-# totals: 54 suppressions, 40 outside _test.go
+# totals: 55 suppressions, 41 outside _test.go
 #
 # G104 Audit errors not checked (CWE-703)  [11]
 #   internal/db/connection.go                          6
@@ -222,11 +222,21 @@
 #     Writing them at 0600 would make the assertion vacuous. Test-only; no
 #     production path writes a file at this mode.
 #
-# G404 Insecure random number source (CWE-338)  [1]
+# G404 Insecure random number source (CWE-338)  [2]
+#   internal/backoff/backoff.go                        1
 #   internal/models/comment_read_test.go               1
-#   Reason: math/rand builds a differential-test corpus from a fixed seed so a
-#     failure is reproducible. No key, token, identifier or security decision
-#     derives from it.
+#   Reason: Neither draw is a secret and neither feeds a security decision. The
+#     internal/backoff one is the full-jitter retry delay: math/rand/v2 draws the
+#     wait before each retry uniformly between zero and the ceiling then in force
+#     (SPEC/IMPLEMENTATION.md § Retry Logic). What that shape needs is draws
+#     INDEPENDENT of one another, so that concurrent losers of a serialisation
+#     conflict do not re-send in step and keep the contending set saturated; it
+#     does not need draws an adversary cannot predict, and an adversary who could
+#     predict one would learn only how long a retry slept. crypto/rand would make
+#     every retry in the binary depend on the entropy pool and would buy nothing.
+#     The internal/models one builds a differential-test corpus from a fixed seed
+#     so a failure is reproducible. No key, token, identifier or security decision
+#     derives from either.
 #
 # G703 Path traversal via taint analysis (CWE-22)  [2]
 #   internal/graphstore/graphstore.go                  1

@@ -18,6 +18,7 @@ import (
 	"github.com/FlavioCFOliveira/GoGraph/cypher"
 	"github.com/FlavioCFOliveira/GoGraph/cypher/expr"
 
+	"github.com/FlavioCFOliveira/Groadmap/internal/backoff"
 	"github.com/FlavioCFOliveira/Groadmap/internal/db"
 	"github.com/FlavioCFOliveira/Groadmap/internal/graphclient"
 	"github.com/FlavioCFOliveira/Groadmap/internal/graphlock"
@@ -2112,7 +2113,7 @@ func servedGraphView(ctx context.Context, socket, query string) (graphView, erro
 // servedGraphError words a failure the shared Bolt client classified in the terms
 // this surface answers in.
 //
-// Two of the five outcomes are NOT execution failures and must not be answered
+// One of the six outcomes is NOT an execution failure and must not be answered
 // 400. A server that could not be reached is an internal read error, 500, the
 // status this endpoint already returns for a graph store it cannot open. Every
 // other outcome surfaced once the statement was running, which is where
@@ -2140,6 +2141,31 @@ func servedGraphError(ctx context.Context, socket string, err error) error {
 	case graphclient.FailureUnanswered:
 		return newGraphQueryError(graphErrExecution,
 			"query failed to execute: the graph server did not answer; the statement's outcome is unknown")
+	case graphclient.FailureConflict:
+		// Contention inside the server, and the one execution failure whose text
+		// is `rmp`'s rather than an engine's — because the whole reason the line
+		// exists is that the engine's diagnostic is what a reader cannot tell
+		// apart from an invalid statement, and the query bar's user faces exactly
+		// the decision the CLI's user faces: run it again, or correct it
+		// (SPEC/WEB.md § Query-Bar Error Handling, rule 11).
+		//
+		// It is a 400 with the execution kind like every other failure that
+		// surfaced once the statement was running (rule 6), and rule 4 weighs and
+		// refuses the alternatives: 409 describes a conflict of state that
+		// survives for the user to resolve, and by the time this is answered the
+		// loser has rolled back whole and no such conflict is left; 503 would
+		// announce a service that is unavailable, which a server that ran the
+		// statement and went on serving is not.
+		//
+		// The store is NOT opened and the statement is NOT re-run here. A caller
+		// that resolved a server and then failed does not take the direct path
+		// (SPEC/GRAPH.md § Server Resolution, rule 3), and the store is in any
+		// case still held by the server it was sent to.
+		return newGraphQueryError(graphErrExecution,
+			"query failed to execute: graph write conflict: another writer committed first on "+
+				"every attempt within the "+backoff.Total().String()+" retry budget; nothing was "+
+				"written. The statement is valid — run it again, and spread concurrent writes "+
+				"across distinct nodes.")
 	case graphclient.FailureBudget:
 		// The budget line, produced by the one function that owns it, so the two
 		// paths report an exhausted budget in the same words.

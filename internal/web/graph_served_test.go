@@ -32,11 +32,13 @@ import (
 	"errors"
 	"net"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/FlavioCFOliveira/GoGraph/bolt/packstream"
 	"github.com/FlavioCFOliveira/GoGraph/bolt/proto"
+	"github.com/FlavioCFOliveira/Groadmap/internal/backoff"
 	"github.com/FlavioCFOliveira/Groadmap/internal/graphclient"
 	"github.com/FlavioCFOliveira/Groadmap/internal/graphlock"
 	"github.com/FlavioCFOliveira/Groadmap/internal/utils"
@@ -397,6 +399,10 @@ func TestServedGraphError_SeparatesTheInternalErrorFromTheExecutionFailures(t *t
 			name: "a value could not be mapped", kind: graphclient.FailureMapping,
 			diagnostic: "unsupported protocol structure tag 0x7A", wantExecution: true,
 		},
+		{
+			name: "every attempt lost a serialisation conflict", kind: graphclient.FailureConflict,
+			diagnostic: "mvcc: serialization conflict in node properties", wantExecution: true,
+		},
 	}
 
 	for _, c := range cases {
@@ -455,6 +461,67 @@ func TestServedGraphError_TheBudgetLineIsTheDirectPathsOwn(t *testing.T) {
 	}
 	if servedErr.Kind != direct.Kind {
 		t.Errorf("kind = %q, want the direct path's %q", servedErr.Kind, direct.Kind)
+	}
+}
+
+// TestServedGraphError_TheContentionLineIsRmpsOwnAndNotTheEngines pins
+// SPEC/WEB.md § Query-Bar Error Handling, rule 11, in the two halves that make
+// it a rule rather than a preference.
+//
+// **The status and the kind are unchanged.** An exhausted retry is an execution
+// failure, HTTP 400 with kind `execution`, because it surfaced once the
+// statement was running, which is where rule 6 draws the boundary. Rule 4 weighs
+// and refuses the alternatives — 409 describes a conflict of state that survives
+// for the user to resolve, and by the time the endpoint answers, the loser has
+// rolled back whole; 503 would announce a service that is unavailable, which a
+// server that ran the statement and went on serving is not.
+//
+// **The `error` is `rmp`'s own text and carries no engine diagnostic.** That is
+// the exception rule 7 names, and it exists because the engine's diagnostic is
+// precisely what a reader cannot tell apart from an invalid statement. A page
+// that showed the engine's text here would put the query bar's user in front of
+// the decision the CLI's user was rescued from.
+func TestServedGraphError_TheContentionLineIsRmpsOwnAndNotTheEngines(t *testing.T) {
+	const engineDiagnostic = "mvcc: serialization conflict in node properties: id 41"
+
+	err := servedGraphError(context.Background(), "/tmp/graph.sock", &graphclient.SendError{
+		Kind: graphclient.FailureConflict,
+		Code: "Neo.TransientError.Transaction.Outdated", Diagnostic: engineDiagnostic,
+	})
+
+	queryErr, ok := asGraphQueryError(err)
+	if !ok {
+		t.Fatalf("the served conflict is %T, want a query-bar failure answered 400", err)
+	}
+	if queryErr.Kind != graphErrExecution {
+		t.Errorf("kind = %q, want %q: an exhausted retry is the fifth reason the execution kind "+
+			"arises and it changes neither the status nor the kind set", queryErr.Kind, graphErrExecution)
+	}
+	if strings.Contains(queryErr.Reason, engineDiagnostic) {
+		t.Errorf("the error carries the engine's diagnostic %q. Rule 11 requires `rmp`'s own line: "+
+			"the engine's text is what a reader cannot tell apart from an invalid statement, which "+
+			"is the whole reason this line exists. Got %q", engineDiagnostic, queryErr.Reason)
+	}
+	for _, fragment := range []string{
+		"graph write conflict: another writer committed first on every attempt within the " +
+			backoff.Total().String() + " retry budget",
+		"nothing was written",
+		"run it again, and spread concurrent writes across distinct nodes",
+	} {
+		if !strings.Contains(queryErr.Reason, fragment) {
+			t.Errorf("the error does not say %q. The line must name the contention, state that "+
+				"nothing was written, and name the remedy; got %q", fragment, queryErr.Reason)
+		}
+	}
+
+	// The CLI prints the same words for the same condition, modulo this
+	// endpoint's own "query failed to execute: " prefix and the socket path a
+	// browser has no use for. Comparing the two would need internal/commands,
+	// which this package cannot import, so what is asserted here is the half
+	// that lives on this side: the sentence after the prefix.
+	if !strings.HasPrefix(queryErr.Reason, "query failed to execute: ") {
+		t.Errorf("the error does not carry the prefix every execution failure on this endpoint "+
+			"carries; got %q", queryErr.Reason)
 	}
 }
 

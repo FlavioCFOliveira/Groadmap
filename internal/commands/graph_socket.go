@@ -28,6 +28,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/FlavioCFOliveira/Groadmap/internal/backoff"
 	"github.com/FlavioCFOliveira/Groadmap/internal/graphclient"
 	"github.com/FlavioCFOliveira/Groadmap/internal/graphlock"
 	"github.com/FlavioCFOliveira/Groadmap/internal/utils"
@@ -169,6 +170,41 @@ func graphConnectionLost(socket string) error {
 		"the statement's outcome is unknown", utils.ErrDatabase, socket)
 }
 
+// graphWriteConflict is the published line for a statement that lost a
+// serialisation conflict on every attempt of the retry policy.
+//
+// It is `rmp`'s own text from end to end, and that is the whole point of it. A
+// conflict used to arrive on the parse/execution line, so contention and an
+// invalid statement printed the same words and the only thing separating them
+// was the engine's diagnostic tail — which SPEC/COMMANDS.md deliberately declines
+// to specify and a caller therefore cannot lawfully match. The two conditions
+// demand opposite courses: run it again, or correct it. Treating contention as a
+// bad statement stops work that was right; treating a bad statement as contention
+// re-runs a write that may not be idempotent
+// (SPEC/GRAPH.md § Concurrency Inside the Server, rule 9).
+//
+// It DOES claim that nothing was written, unlike graphConnectionLost, and the
+// claim is true rather than optimistic: the conflict is detected before anything
+// is applied, so the losing transaction committed nothing (rule 5).
+//
+// The remedy it names is the measured one. Spreading writes across distinct
+// nodes REMOVES the failure rather than moving the threshold at which it starts:
+// holding sixteen writers and varying only the number of nodes they touch, the
+// policy was exhausted on 0.33% of statements against one node, 0.03% against
+// four, and none at all against eight or more (rule 8).
+// The budget it names is read from the policy rather than written out. It
+// renders "2.5s", the figure SPEC/COMMANDS.md publishes, and it is a FIXED value
+// in the sense that section requires — nothing about an invocation can move it,
+// because backoff.Total() sums constants — so the line is the same characters on
+// every path and is comparable in full. Reading it keeps this line and
+// internal/web's, which renders the same quantity the same way, from claiming a
+// budget the policy does not spend.
+func graphWriteConflict() error {
+	return fmt.Errorf("%w: graph write conflict: another writer committed first on every attempt "+
+		"within the %s retry budget; nothing was written. The statement is valid — run it again, "+
+		"and spread concurrent writes across distinct nodes.", utils.ErrDatabase, backoff.Total())
+}
+
 // graphServerSilent is the published line for a server that stayed connected and
 // did not answer inside the caller's backstop deadline.
 //
@@ -239,6 +275,11 @@ func runOnGraphServer(socket, query string) (any, error) {
 // in a server, and SPEC/COMMANDS.md publishes one line for each across both
 // subcommands. The three that are the CONNECTION's have lines of their own, which
 // this file holds.
+//
+// The exhausted serialisation retry is the fourth line this file holds, and it is
+// the one that is neither the connection's nor shared with the direct path: it
+// reports contention INSIDE a server, which one invocation running one
+// transaction cannot produce (SPEC/COMMANDS.md § Execute Error Cases).
 func graphServerFailure(socket string, err error) error {
 	var sendErr *graphclient.SendError
 	if !errors.As(err, &sendErr) {
@@ -256,6 +297,12 @@ func graphServerFailure(socket string, err error) error {
 		return graphConnectionLost(socket)
 	case graphclient.FailureUnanswered:
 		return graphServerSilent(socket)
+	case graphclient.FailureConflict:
+		// Contention, not a bad statement. It is worded here rather than by the
+		// direct path's helper because the direct path cannot reach it: one
+		// invocation runs one transaction, so there is nothing for it to collide
+		// with (SPEC/IMPLEMENTATION.md § Graph Store Concurrency).
+		return graphWriteConflict()
 	case graphclient.FailureBudget:
 		// The published budget line, produced by the one function that owns it.
 		// context.DeadlineExceeded is the value that selects it, and it is the

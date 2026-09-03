@@ -1502,6 +1502,150 @@ class TestConcurrentClients(GraphServerTestBase):
         server.stop(signal.SIGINT)
 
 
+class TestHotNodeContention(GraphServerTestBase):
+    """SPEC/GRAPH.md acceptance criterion 54 (rmp task #384).
+
+    The defect this exists against: under concurrent writers converging on a
+    SINGLE node, a fraction of statements exhausted the client's retry ladder
+    and failed, although each was valid and the store healthy. The fix was to
+    retry a serialisation conflict under the project's FULL-JITTER delay
+    shape rather than its fixed ladder (SPEC/IMPLEMENTATION.md "Retry Logic";
+    SPEC/GRAPH.md "Concurrency Inside the Server", rule 4).
+
+    Why the shape matters more at THIS boundary than inside a process. Sixteen
+    processes launched together, each walking the same fixed ladder, re-collide
+    in lockstep: a herd that loses together sleeps the same 100ms and re-sends
+    together. Writers inside one process are desynchronised for free by their
+    own varying completion times. Measured here, at this exact load: the fixed
+    ladder exhausts on 2.81%-3.44% of invocations, in every repetition, where
+    the same load measured in-process exhausted on 0.18%-0.43%. Full jitter
+    exhausted on none of 7,040.
+
+    Why every exit code is asserted rather than a sample. The criterion says
+    so, and the reason is arithmetic: the failure is a few percent of
+    invocations at worst and was under one percent when it was first reported,
+    so a sampled assertion steps straight over it.
+
+    Why 320 invocations rather than 16. One statement per client would meet
+    the words of the criterion and establish nothing: at a three-percent
+    failure rate, sixteen statements go green about six times in ten under the
+    very shape the criterion exists to reject. Sixteen clients each driving
+    twenty sequential invocations puts the ladder's expected failure count at
+    about ten, so reverting the shape fails this test with near-certainty --
+    and it costs under a second under the shape that passes.
+    """
+
+    WRITERS = 16
+    ROUNDS = 20
+
+    def test_sixteen_clients_writing_one_hot_node_all_exit_zero(self):
+        # One node, one property, and every writer stamping the same property
+        # on it -- which is the shape this project produces itself when
+        # several agents stamp provenance on one knowledge-graph node
+        # (GRAPH.md "Concurrency Inside the Server", rule 8).
+        roadmap = self.seeded_roadmap(
+            "provenance-stamp",
+            "CREATE (:Component {key:'internal/backoff', stamped_by:'seed'})",
+        )
+        server = self.start_server(roadmap)
+
+        total = self.WRITERS * self.ROUNDS
+        outcomes = [None] * total
+
+        def stamp(writer_index):
+            for round_index in range(self.ROUNDS):
+                value = f"agent-{writer_index}-round-{round_index}"
+                started = time.monotonic()
+                rc, out, err = self.run_cli(
+                    ["graph", "client", "-r", roadmap, "--query",
+                     "MATCH (n:Component {key:'internal/backoff'}) "
+                     f"SET n.stamped_by = '{value}'"],
+                    timeout=40.0,
+                )
+                outcomes[writer_index * self.ROUNDS + round_index] = (
+                    value, rc, out.strip(), (err.splitlines()[0] if err else ""),
+                    time.monotonic() - started,
+                )
+
+        threads = [threading.Thread(target=stamp, args=(w,))
+                   for w in range(self.WRITERS)]
+        wall_start = time.monotonic()
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=300.0)
+        elapsed = time.monotonic() - wall_start
+
+        # Nothing is allowed to be missing. A writer thread that died or hung
+        # would otherwise leave holes that the exit-code sweep below would
+        # skip over, and the test would pass having asserted less than it
+        # claims.
+        missing = [i for i, o in enumerate(outcomes) if o is None]
+        assert not missing, (
+            f"{len(missing)} of {total} invocations never recorded an outcome "
+            f"(indices {missing[:8]}...): a writer thread did not finish, so "
+            f"the assertions below would have skipped them"
+        )
+
+        # EVERY exit code, not a sample.
+        failed = [o for o in outcomes if o[1] != EXIT_OK]
+        assert not failed, (
+            f"{len(failed)} of {total} invocations failed under "
+            f"{self.WRITERS} concurrent clients writing ONE node in "
+            f"{elapsed:.2f}s ({total / elapsed:.0f} invocations/s). Every one "
+            f"was a valid statement against a healthy store, so every one had "
+            f"to succeed: a serialisation conflict is a normal outcome and is "
+            f"retried, under the full-jitter shape of the project's single "
+            f"retry policy (SPEC/IMPLEMENTATION.md 'Retry Logic'). Reverting "
+            f"that shape to the fixed ladder is what this failure looks "
+            f"like.\n  first failures: "
+            + "\n    ".join(f"{v}: exit={rc} {msg}" for v, rc, _out, msg, _t in failed[:5])
+        )
+
+        # A write that reports success must have reported the write shape.
+        wrong_shape = [o for o in outcomes if json.loads(o[2]) != {"ok": True}]
+        assert not wrong_shape, (
+            f"{len(wrong_shape)} invocation(s) exited 0 without the write "
+            f"result shape; first: {wrong_shape[0][2]!r}"
+        )
+
+        # The criterion's own non-vacuity guard, and it is not a formality: a
+        # MATCH that matched NOTHING would make every SET above a no-op, every
+        # invocation would exit 0 with {"ok": true}, and nothing would ever
+        # have contended. Reading the node back proves the statements found it
+        # and applied to it -- and that they all found the SAME one.
+        rc, out, err = self.run_cli(
+            ["graph", "client", "-r", roadmap, "--query",
+             "MATCH (n:Component {key:'internal/backoff'}) RETURN n.stamped_by"]
+        )
+        assert rc == EXIT_OK, f"reading the hot node back failed: {err!r}"
+        read_back = json.loads(out)
+        assert read_back["columns"] == ["n.stamped_by"], read_back
+        assert len(read_back["rows"]) == 1, (
+            f"the writers were meant to converge on ONE node; the graph holds "
+            f"{len(read_back['rows'])} matching it, so they did not contend "
+            f"for anything: {read_back!r}"
+        )
+
+        final = read_back["rows"][0][0]
+        assert final != "seed", (
+            "the node still carries the seeded value: not one of the 320 "
+            "writes landed, so the statements matched nothing and this test "
+            "asserted nothing"
+        )
+        # Each client writes its rounds in order and blocks on each, so the
+        # LAST value to commit is necessarily some client's final round.
+        last_round = {f"agent-{w}-round-{self.ROUNDS - 1}" for w in range(self.WRITERS)}
+        assert final in last_round, (
+            f"the node carries {final!r}, which is not the final round of any "
+            f"client. Each client blocks on every invocation and issues its "
+            f"rounds in order, so the last write to commit must be some "
+            f"client's last"
+        )
+
+        server.stop(signal.SIGINT)
+
+
 def _run_all():
     """Discover and run every Test* class defined in this module.
 

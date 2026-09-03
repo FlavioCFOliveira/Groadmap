@@ -3170,6 +3170,31 @@ an internal read error, and what the body carries.
    statement. `400` states that; the two 5xx codes state something else that is not
    the case here.
 
+   **A request whose serialisation retry is exhausted carries this same `400` and
+   this same `execution` kind, and the objection that invites is answered here
+   rather than left standing.** Contention against a healthy store is not
+   obviously "something that is perceived to be a client error", so the
+   alternatives are weighed rather than dismissed, and each of the three states
+   something that is not the case. RFC 9110, Section 15.5.10, defines `409` for a
+   request that "could not be completed due to a conflict with the current state
+   of the target resource", in situations "where the user might be able to resolve
+   the conflict and resubmit the request": by the time the endpoint answers, the
+   winning transaction has committed and the losing one has rolled back whole
+   (see `GRAPH.md § Concurrency Inside the Server`), so no conflict of state
+   survives for the user to resolve — and `409` is a 4xx in any case, so it does
+   not answer the objection it would be reached for. `503` announces that the
+   service is unavailable through a temporary overload or scheduled maintenance:
+   this server ran the statement, went on serving every other request while it
+   did, and would have served the same statement against a different node, so the
+   announcement would be false; `503` also invites a `Retry-After` this endpoint
+   cannot compute, because nothing in the product knows when the contending writer
+   will stop. `504` is refused for the reason it is refused above: this server is
+   not a gateway or a proxy. What is true of an exhausted retry is what rule 6
+   fixes — the failure surfaced once the statement was running — and that is the
+   boundary this endpoint classifies by. The distinction the caller needs is
+   carried in the body, by an `error` that names the contention (rule 11), and not
+   by a status that would have to assert something else in order to carry it.
+
 5. **The `limit` is resolved before the statement runs, so the two kinds cannot
    both apply.** One request can carry an invalid `limit` and an unexecutable
    statement at once. The endpoint resolves the `limit` first and refuses the
@@ -3207,7 +3232,12 @@ an internal read error, and what the body carries.
    text, so the user reads for a given statement the same diagnostic the CLI prints
    for it (see `GRAPH.md § Error Handling and Exit Codes`, rule 2) and can act on
    it; the `error` of an invalid limit names the rejected value, which is what
-   case 1's message requires. The `500` of an internal read error does not carry
+   case 1's message requires. Two execution failures are the exception, and in
+   both of them the CLI prints its own text too, so the rule that the two surfaces
+   read alike is kept rather than broken: a lost or silent server connection
+   (rule 10) and an exhausted serialisation retry (rule 11) carry `rmp`'s own
+   line, because no engine produced either failure and there is no engine
+   diagnostic to carry. The `500` of an internal read error does not carry
    this shape: it is answered as every other route's internal read error is.
 
 8. **A request the caller abandoned is answered, but nobody reads the answer.** A
@@ -3220,8 +3250,8 @@ an internal read error, and what the body carries.
    one: the client that would have read it is gone. It is specified here because it
    is a further reason the `execution` kind arises beyond the two case 2 names,
    and a contract naming only those two would be incomplete on the day it is
-   written. Rule 10 names the fourth. It is not an outcome a connected
-   client can observe, so no client-side test can assert it.
+   written. Rule 10 names the fourth and rule 11 the fifth. It is not an outcome
+   a connected client can observe, so no client-side test can assert it.
 
    **A cancelled statement may already have committed.** The endpoint runs the
    caller's statement on the transactional path, so a disconnect that arrives after
@@ -3258,6 +3288,29 @@ an internal read error, and what the body carries.
     the server it was sent to. This is the fourth reason the `execution` kind
     arises, after an engine failure, a budget exhaustion, and rule 8's abandoned
     request, and it changes neither the status nor the kind set rule 4 enumerates.
+
+11. **An exhausted serialisation retry is an execution failure, and its `error`
+    names the contention rather than the engine.** When the roadmap is served,
+    two writers whose statements touch the same node collide inside the server.
+    The losing transaction commits nothing, and the client this endpoint shares
+    with the CLI re-sends the statement under the project's retry policy
+    (`GRAPH.md § Concurrency Inside the Server`). Nothing of that reaches the
+    page: a conflict is not surfaced on its first occurrence, and a request whose
+    retry eventually succeeds is answered HTTP `200` like any other. Only when
+    every attempt of the policy has collided does the request fail. It then fails
+    as an execution failure, HTTP `400` with `kind` `execution` — the status rule
+    4 settles — carrying as its `error` the same contention line `rmp` prints for
+    the same condition (`COMMANDS.md § Client Error Cases`). That `error` is
+    `rmp`'s own text rather than an engine diagnostic, because the whole reason
+    the line exists is that the engine's diagnostic is what a reader cannot tell
+    apart from an invalid statement, and the query bar's user faces exactly the
+    decision the CLI's user faces: run the statement again, or correct it. The
+    endpoint MUST NOT then open the store and run the statement itself, because a
+    caller that resolved a server and then failed does not take the direct path
+    (`GRAPH.md § Server Resolution`, rule 3) and the store is in any case still
+    held by the server it was sent to. This is the fifth reason the `execution`
+    kind arises, and it changes neither the status nor the kind set rule 4
+    enumerates.
 
 ### Graph Labels Sidebar
 
