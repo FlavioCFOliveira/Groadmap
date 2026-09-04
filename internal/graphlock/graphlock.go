@@ -11,29 +11,38 @@
 // delete the staging directory a concurrent writer was assembling its snapshot
 // in, or interleave with that writer's publish sequence.
 //
-// There is exactly ONE lock file, `write.lock`, and it is taken in two modes
-// (SPEC/GRAPH.md § Concurrency and Recovery):
+// There is exactly ONE lock file, `write.lock`, and SPEC/GRAPH.md § Concurrency
+// and Recovery now gives it exactly ONE mode:
 //
-//   - AcquireExclusive — for a write invocation. Held across the whole open,
-//     commit, checkpoint, and write-ahead-log truncation sequence. Non-blocking:
-//     a writer that finds the lock held fails at once rather than waiting.
-//   - AcquireShared — for a read invocation. Held across the STORE OPEN ALONE
-//     and released as soon as the open returns; the query then runs against the
-//     fully materialised in-memory graph with no lock held. Readers do not
-//     exclude one another, and a reader that collides with a writer waits under
-//     a bounded backoff before failing.
+//   - AcquireExclusive — for every `rmp graph execute` invocation. Held across
+//     the whole open, execution, commit, checkpoint, and write-ahead-log
+//     truncation sequence. An invocation that finds it held WAITS, under the
+//     project's bounded backoff policy, and fails only once that wait is
+//     exhausted.
 //
-// The narrowness of the reader's hold is deliberate and load-bearing, not an
-// oversight: every on-disk action a read performs happens inside the open, so
-// holding the lock past it would protect nothing while blocking writers for as
-// long as the query takes. SPEC/GRAPH.md § Concurrency and Recovery states the
-// anti-widening clause that governs it — a change that makes any part of a read
-// touch the store AFTER the open (a lazily loaded component, a memory-mapped
-// snapshot, a handle kept open past recovery, or a re-read during iteration)
-// invalidates that reasoning and REQUIRES the hold to be widened.
+// One mode, because there is one execution path. Groadmap does not examine a
+// statement, so it cannot learn from it whether the statement will write, and a
+// lock mode chosen on that guess would be a shared lock held while a statement
+// committed. The exclusive mode is the mode that is correct for every statement.
+// The cost is stated rather than hidden: two statements against the same roadmap
+// serialise even when neither of them writes.
+//
+// The wait is not a courtesy either. Every caller is now a possible reader, so a
+// policy that failed on the first collision would make ordinary statements
+// intermittently unavailable, and one of the two callers is an HTTP request
+// handler for which an unbounded block would hang a GET until the server's write
+// timeout fired (SPEC/GRAPH.md § Lock Contention).
+//
+// There is no second mode. A shared hold existed while `graph query` and
+// `graph search` had a read path of their own, and it outlived them by one task
+// as internal/web's only remaining caller; the web graph data endpoint now runs
+// its statement on the transactional path and takes the exclusive hold across it
+// (rmp task #364), so the shared mode has no caller and is gone. Reintroducing
+// one would be a shared lock held while a statement committed, which is the
+// lost-write corruption AcquireExclusive documents.
 //
 // The package exists as its own package rather than inside internal/commands
-// because both graph readers need it and they sit on opposite sides of an
+// because both graph callers need it and they sit on opposite sides of an
 // import edge: internal/commands imports internal/web, so internal/web cannot
 // import internal/commands back. Duplicating the primitive would put two
 // implementations of the same lock file in the binary.
@@ -44,21 +53,98 @@
 // them everywhere; they live in graphlock_unix.go (flock(2)) and
 // graphlock_windows.go (LockFileEx / UnlockFileEx).
 //
-// What this file does NOT own is the bounded wait a reader performs. That is
-// the project's single retry policy; it lives in internal/backoff and this
-// package consumes it. It used to be restated here, in constants and prose of
-// this package's own, which is how two other copies of the same policy drifted
-// unnoticed (task #294).
+// What this file does NOT own is the LOOP or the LADDER of the bounded wait.
+// Those are the project's single retry policy; they live in internal/backoff and
+// this package consumes them. They used to be restated here, in constants and
+// prose of this package's own, which is how two other copies of the same policy
+// drifted unnoticed (task #294).
+//
+// What this file DOES own is the BUDGET that loop runs against, and the division
+// is the whole point. How long to wait for this lock is a question about how
+// long this lock may be HELD, and that is a fact about the graph store rather
+// than about retrying: the hold spans a statement whose cost the caller chooses,
+// so the wait has to be sized against the longest statement that is lawful. Only
+// this package is in a position to know that, so DefaultStatementBudget and
+// WaitBudget live here and internal/backoff is handed a duration — never a loop,
+// never a ladder, never a retry count (SPEC/GRAPH.md § Lock Contention;
+// SPEC/IMPLEMENTATION.md § Graph Store Concurrency, "Write Contention and
+// Recovery" rule 3).
+//
+// The statement budget lives here for the same reason this package does. It is
+// SPEC/WEB.md § Graph Query Time Budget that fixes the figure, and the web graph
+// data endpoint that applies it as a deadline, but a waiter has to know how long
+// a hold may lawfully last and the waiter is not necessarily the web:
+// internal/web and internal/commands both import this package, and this package
+// can import neither back. Leaving the figure in internal/web would point the
+// import edge the wrong way for the CLI, and copying it into both would be the
+// drift of #294 with a different constant.
 package graphlock
 
 import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/FlavioCFOliveira/Groadmap/internal/backoff"
 	"github.com/FlavioCFOliveira/Groadmap/internal/utils"
 )
+
+// DefaultStatementBudget is the longest a caller-supplied statement may lawfully
+// run while this lock is held: the deadline SPEC/WEB.md § Graph Query Time
+// Budget rule 1 fixes, 5 seconds.
+//
+// It is a graph-store-wide quantity rather than a web-local one, per
+// SPEC/GRAPH.md § Lock Contention. The web graph data endpoint is where it is
+// applied, as that endpoint's own per-request deadline, but the reason it is
+// declared HERE is that it also bounds the variable part of a hold, and the
+// party that has to know how long a hold may last is the party waiting for it.
+// Changing this value changes the wait every caller of this lock performs.
+const DefaultStatementBudget = 5 * time.Second
+
+// StatementBudget is the budget actually in force, and the value WaitBudget
+// derives from. It is a var rather than a const for exactly one reason: tests
+// move it — down, so that an exhaustion test need not spend the whole wait, and
+// up, so that a deliberately slow statement is not cancelled mid-test.
+//
+// Production never reassigns it. It is initialised from DefaultStatementBudget
+// and no flag, environment variable, request parameter, or any other
+// user-facing knob reaches it, so every statement the server runs is bounded by
+// the 5 seconds above (SPEC/WEB.md § Graph Query Time Budget, rules 1 and 8).
+var StatementBudget = DefaultStatementBudget
+
+// WaitBudget is how long AcquireExclusive waits for a current holder before it
+// gives up:
+//
+//	wait budget = statement budget + backoff total
+//
+// A finite wait can be sized against a hold only when that hold has an upper
+// bound, and this is that bound, term by term. StatementBudget covers the
+// VARIABLE part of a hold, the statement the invocation carries. backoff.Total
+// is the allowance for the FIXED part: the store open, the write-ahead-log open,
+// the engine construction, the commit, and a full snapshot checkpoint with its
+// log truncation, plus scheduling. That allowance is REUSED rather than replaced
+// by a figure of its own, so the project keeps one set of timing numbers. How
+// much of the quantity it covers depends on the size of the graph: the fixed
+// part measures 50.5 ms on this project's own 1.3 MB store but 1286 ms on a real
+// 36 MB one, and the allowance is exhausted at roughly 70 MB. It is a margin,
+// not an order of magnitude, and the limit that follows from that is stated on
+// AcquireExclusive below and in SPEC/GRAPH.md § Lock Contention.
+//
+// It is a function and not a constant because StatementBudget is a var: a test
+// that moves the budget must move the wait with it, or the two would describe
+// different policies within one process. Exporting it also lets a test assert
+// the DERIVATION rather than restate the 7.5 seconds it currently yields, which
+// is the mistake that put a figure of this package's own beside the shared
+// policy before #294.
+//
+// The invariant it has to satisfy is not about this quantity alone. A request
+// that exhausts the wait must still have its 500 written, and a request that
+// waits and then runs its statement to the end of its budget must still have its
+// response written, so what must fit inside the web server's 30 s WriteTimeout
+// is StatementBudget and WaitBudget TOGETHER: 12.5 s of 30 s at the budget in
+// force.
+func WaitBudget() time.Duration { return StatementBudget + backoff.Total() }
 
 // LockFileName is the basename of the advisory lock file inside a roadmap's
 // graph directory. GoGraph knows nothing about it: Groadmap creates and
@@ -66,82 +152,99 @@ import (
 // lock on it carries meaning (SPEC/GRAPH.md § Persistence Layout, rule 5).
 const LockFileName = "write.lock"
 
-// AcquireExclusive takes an exclusive, non-blocking advisory lock on the graph
-// store for the duration of a write, and returns a closure that releases it.
+// AcquireExclusive takes the graph store's advisory lock exclusively for the
+// duration of one `rmp graph execute` invocation, waiting a bounded time for a
+// current holder, and returns a closure that releases it.
 //
-// Two concurrent `rmp graph` writers must NOT interleave their
-// open -> commit -> checkpoint -> WAL-truncate sequences: a second writer that
-// loaded the graph before the first's commit would, on checkpoint, write a FULL
-// snapshot of its own (stale) in-memory graph — missing the first writer's
-// committed change — and then truncate the write-ahead log that still held it,
-// silently losing an acknowledged write. Because the sequence that must not
-// interleave is wider than a transaction, no engine-level writer exclusion
-// would have covered it.
+// The caller MUST hold it across the whole open -> execute -> commit ->
+// checkpoint -> WAL-truncate sequence. Two invocations must NOT interleave those
+// sequences: a second one that loaded the graph before the first's commit would,
+// on checkpoint, write a FULL snapshot of its own (stale) in-memory graph —
+// missing the first's committed change — and then truncate the write-ahead log
+// that still held it, silently losing an acknowledged write. Because the
+// sequence that must not interleave is wider than a transaction, no
+// engine-level writer exclusion would have covered it.
 //
-// Per SPEC/GRAPH.md § Lock Contention rule 1 a writer does not wait: it fails on
-// the first collision, with any holder, and the failure surfaces as
-// utils.ErrDatabase (exit 1) rather than corrupting the store or hanging. The
-// operating system releases the lock when the holding process exits, so an
+// Per SPEC/GRAPH.md § Lock Contention rule 1 an invocation that finds the lock
+// held does NOT fail on the first collision and does NOT block indefinitely: it
+// retries on internal/backoff's loop and ladder for as long as WaitBudget
+// allows, and only then fails with utils.ErrDatabase. Callers map that to exit
+// code 1 for the CLI and HTTP 500 for the web graph data endpoint.
+// SPEC/IMPLEMENTATION.md § Graph Store Concurrency, "Write Contention and
+// Recovery" rule 3 is the governing rule, and it is deliberately not the SQLite
+// policy wholesale: the loop and the ladder come from there, the total does not.
+//
+// It used to fail on the first collision, and the asymmetry that justified it —
+// a rare writer against frequent readers that waited — is gone: the read mode
+// went with the five subcommands, so every caller is now a possible reader and
+// failing one fast would make ordinary statements intermittently unavailable.
+// The wait is sized against a holder whose critical section spans a full
+// snapshot rewrite AND the execution of a statement whose cost the caller
+// chooses, which is why it is WaitBudget and not backoff.Total. A wait of
+// 2500 ms put two of this project's own constants in a two-to-one ratio in the
+// holder's favour, and the consequence was measured rather than feared: a holder
+// whose statement ran 4.71 seconds, lawfully and inside its own budget, starved a
+// contender that gave up after 2.5018 seconds. What must fit inside the web
+// server's 30 s WriteTimeout is the statement and the wait together, 12.5 s of
+// 30 s; a wait that is merely a small fraction of that timeout is neither
+// necessary nor sufficient, and sizing on that property alone is exactly what
+// admitted a wait shorter than the hold it had to cover (SPEC/GRAPH.md § Lock
+// Contention). The wait is spent before the statement starts, so it does not
+// come out of the graph data endpoint's own query budget (SPEC/WEB.md § Graph
+// Query Time Budget).
+//
+// Every holder that is not a long-lived server is bounded, and the wait rests on
+// that. Both surfaces run their statement under StatementBudget: the web graph
+// data endpoint (internal/web.runGraphViewQuery) and `rmp graph execute`
+// (internal/commands.runGraphExecute) alike, so a hold has a lawful maximum and
+// a contender is served (SPEC/GRAPH.md § Statement Time Budget). The CLI ran its
+// statement under context.Background() until rmp task #377, which is what made
+// the sizing above asymmetric: it was sound against a web holder and vacuous
+// against a CLI one.
+//
+// Two residuals survive that, stated rather than hidden, and SPEC/GRAPH.md
+// § Lock Contention is canonical for both with the measurements behind them:
+//
+//   - backoff.Total() stands in for the FIXED part of a hold, which is a
+//     constant standing for a quantity that grows linearly with the store's size
+//     on disk — 33 to 39 ms per megabyte across four real knowledge graphs, so
+//     1286 ms at 36 MB against the 2500 ms allowance. The allowance is exhausted
+//     at roughly 70 MB, beyond which a waiter can fail against a holder that is
+//     inside every budget, with no statement cost involved at all. Nothing here
+//     measures a graph's size or enforces that bound.
+//   - a wait is sized against the maximum lawful hold, and a server that holds
+//     this lock for its process lifetime has none, so no finite wait can be
+//     sized against one. The wait-based policy bounds every holder except that.
+//
+// When the wait is exhausted for either reason the waiter fails exactly as
+// rule 2 describes, with utils.ErrDatabase for the CLI and HTTP 500 for the web
+// graph data endpoint. That outcome is the specified one and not corruption.
+//
+// The operating system releases the lock when the holding process exits, so an
 // invocation that crashes does not strand it.
 func AcquireExclusive(graphDir string) (func(), error) {
 	f, err := openLockFile(graphDir)
 	if err != nil {
 		return nil, err
 	}
-	if lockErr := lockExclusiveNB(f); lockErr != nil {
-		// Close before returning: the handle must not leak on the contention
-		// path, which is the path taken most often.
-		_ = f.Close()
-		return nil, fmt.Errorf("%w: graph store is busy: a concurrent write is in progress", utils.ErrDatabase)
-	}
-	return releaseFunc(f), nil
-}
-
-// AcquireShared takes a shared advisory lock on the graph store, waiting a
-// bounded time for a conflicting writer, and returns a closure that releases it.
-//
-// The caller MUST hold it across the store open ALONE and release it as soon as
-// the open returns — not with defer, and never across the query. See the
-// package comment for why that narrowness is load-bearing.
-//
-// Several readers may hold the shared lock at the same time, so reads never
-// serialise against one another; only a writer's exclusive hold conflicts. Per
-// SPEC/GRAPH.md § Lock Contention rule 2 a read does not fail on the first
-// collision and does not block indefinitely: it retries under the project's
-// bounded backoff policy (internal/backoff, specified by
-// SPEC/IMPLEMENTATION.md § Graph Store Concurrency rule 4, which reuses the
-// SQLite policy verbatim) and then fails with utils.ErrDatabase. Callers map
-// that to exit code 1 for the CLI and HTTP 500 for the web graph data endpoint.
-//
-// A read waits where a write fails at once because the two are not symmetrical.
-// What a read waits for is a writer's hold, which spans a whole checkpoint; and
-// reads are by far the more frequent operation, so failing one on the first
-// collision would make ordinary reads intermittently unavailable. The wait is
-// therefore sized against the WRITER's hold, whose cost grows with the live
-// graph size, not against the reader's own — which is why narrowing the reader's
-// hold does not narrow the wait a reader may face. Its worst case stays a small
-// fraction of the web server's 30 s write timeout, and is spent before the query
-// starts rather than inside the graph data endpoint's own query budget
-// (SPEC/WEB.md § Graph Query Time Budget).
-func AcquireShared(graphDir string) (func(), error) {
-	f, err := openLockFile(graphDir)
-	if err != nil {
-		return nil, err
-	}
 
 	// The lock is taken NON-BLOCKING on every attempt, so the wait is
-	// backoff.Retry's — bounded, observable, and identical to the wait the
-	// SQLite layer performs — rather than the kernel's, which is unbounded.
-	// Every failure of lockSharedNB is contention, so every one is retried.
-	release, err := backoff.Retry(func() (func(), error) {
-		if lockErr := lockSharedNB(f); lockErr != nil {
+	// backoff.RetryWithin's — bounded, observable, and climbing the very ladder
+	// the SQLite layer climbs — rather than the kernel's, which is unbounded.
+	// Only the BUDGET is this package's, because only this package knows how
+	// long a holder of this lock may lawfully keep it. Every failure of
+	// lockExclusiveNB is contention, so every one is retried.
+	release, err := backoff.RetryWithin(WaitBudget(), func() (func(), error) {
+		if lockErr := lockExclusiveNB(f); lockErr != nil {
 			return nil, lockErr
 		}
 		return releaseFunc(f), nil
 	}, backoff.Always)
 	if err != nil {
+		// Close before returning: the handle must not leak on the contention
+		// path.
 		_ = f.Close()
-		return nil, fmt.Errorf("%w: graph store is busy: a concurrent write is still in progress after the bounded wait", utils.ErrDatabase)
+		return nil, fmt.Errorf("%w: graph store is busy: another invocation still holds it after the bounded wait", utils.ErrDatabase)
 	}
 	return release, nil
 }

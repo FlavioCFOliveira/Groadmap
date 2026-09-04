@@ -17,7 +17,7 @@ import (
 // The defect: three subsystems each wrote out the project's bounded
 // exponential-backoff retry loop for themselves — internal/db's
 // retryWithBackoff, internal/commands's openWALWriter and internal/graphlock's
-// AcquireShared. Two of them read the specification's "Maximum retries: 5" as
+// acquisition. Two of them read the specification's "Maximum retries: 5" as
 // five ATTEMPTS and guarded their sleep with `attempt < N-1`, so they waited
 // four times for 1500 ms where the specification, their own comments and the
 // third site all promised five waits for 2500 ms. The three loops were only
@@ -51,10 +51,10 @@ import (
 //   - It sees production files only. Test files sleep freely — several
 //     coordinate goroutines that way — and holding them to this rule would say
 //     nothing about the binary's behaviour.
-//   - It proves that only one package waits, not that the three call sites route
+//   - It proves that only one package waits, not that the call sites route
 //     through it. That is what the measured tests in internal/db,
-//     internal/commands and internal/graphlock establish, each against
-//     backoff.Total() rather than against a figure of its own.
+//     internal/commands, internal/graphlock and internal/web establish, each
+//     against backoff.Total() rather than against a figure of its own.
 
 // backoffPkgDir is the one package allowed to block on time in production code:
 // the home of the project's single retry policy.
@@ -72,6 +72,31 @@ var blockingTimeFuncs = map[string]bool{
 	"NewTicker": true,
 }
 
+// exemptWaits are the production call sites that block on time and are NOT a
+// second opinion about the retry policy, keyed by "<path>: <expression>" — the
+// evidence line without its line number, so an exemption survives an edit above
+// it and does not survive the site being moved to another file.
+//
+// The gate exists to force a REVIEW, not to forbid every delay: its own doc
+// comment says as much, and an exemption is what that review concludes when the
+// answer is "this is not a retry". Each entry therefore carries the reason, and
+// a reason is a claim about the site rather than a note about the gate.
+//
+// The test asserts both directions. An exempt site does not fail the gate, and an
+// entry that matches NOTHING fails it: an exemption whose call site has gone is a
+// hole left open in a gate that is meant to be closed, and it would silently
+// admit the next delay somebody wrote at the same path.
+var exemptWaits = map[string]string{
+	"internal/graphserve/checkpointwatch.go: time.NewTicker": "the in-flight checkpoint watch's poll " +
+		"period. It is a SAMPLER and not a retry: it has no attempt count, no delay ladder and no " +
+		"terminal failure — it takes one reading of checkpoint.Stats() per tick for the whole life " +
+		"of the server, and its period is DERIVED from the checkpointer's own cadence (half of it, " +
+		"because the level it samples persists for exactly one attempt cycle) rather than chosen. " +
+		"internal/backoff owns how many times and how long to wait before giving up, and neither " +
+		"quantity exists here: routing this through it would mean asking a bounded retry ladder to " +
+		"express an unbounded fixed-period poll",
+}
+
 // TestOnlyTheBackoffPackageWaits asserts that internal/backoff is the only
 // production package in the module that blocks on a duration, so the bounded
 // retry policy cannot be written out a second time.
@@ -83,6 +108,7 @@ func TestOnlyTheBackoffPackageWaits(t *testing.T) {
 	root := repoRoot(t)
 
 	waits := map[string][]string{} // package dir -> "file:line: expression"
+	exempted := map[string]bool{}  // exemption key -> seen at least once
 
 	fset := token.NewFileSet()
 	err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, err error) error {
@@ -131,9 +157,15 @@ func TestOnlyTheBackoffPackageWaits(t *testing.T) {
 				return true
 			}
 
+			expression := qualifier.Name + "." + selector.Sel.Name
+			if _, exempt := exemptWaits[rel+": "+expression]; exempt {
+				exempted[rel+": "+expression] = true
+				return true
+			}
+
 			position := fset.Position(call.Pos())
 			waits[pkgDir] = append(waits[pkgDir],
-				rel+":"+itoa(position.Line)+": "+qualifier.Name+"."+selector.Sel.Name)
+				rel+":"+itoa(position.Line)+": "+expression)
 			return true
 		})
 		return nil
@@ -149,6 +181,21 @@ func TestOnlyTheBackoffPackageWaits(t *testing.T) {
 		t.Errorf("no production file in %s blocks on time; the shared bounded backoff must live there "+
 			"(SPEC/IMPLEMENTATION.md § Retry Logic). If the policy moved, move this gate with it",
 			backoffPkgDir)
+	}
+
+	// An exemption that matches nothing is a hole left open in a closed gate.
+	stale := make([]string, 0, len(exemptWaits))
+	for site := range exemptWaits {
+		if !exempted[site] {
+			stale = append(stale, site)
+		}
+	}
+	sort.Strings(stale)
+	for _, site := range stale {
+		t.Errorf("the exemption for %q matches no call site any more. An exemption outlives the "+
+			"delay it was written for as an open hole: the next delay written at that path would "+
+			"pass this gate without the review it exists to force. Remove the entry, or correct "+
+			"it to name where the call site went", site)
 	}
 
 	offenders := make([]string, 0, len(waits))

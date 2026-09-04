@@ -227,8 +227,24 @@ func TestHelpContent_SprintTasksDocumentsStatusShortForm(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 // TestHelpContent_GraphSubcommandsOutputAndQueryShortForm verifies that
-// every graph subcommand help contains an "Output (stdout JSON):" block
-// and documents the -q short form of --query.
+// every graph subcommand help contains an "Output (stdout JSON):" block, and
+// that each one documents --query and its -q short form WHERE THE REGISTRY
+// DECLARES THAT FLAG.
+//
+// The list is read off the registry rather than written out, so it follows the
+// family: it held five names until they collapsed onto `execute`
+// (SPEC/COMMANDS.md § Graph Management), and a list spelled here would have
+// needed editing to stay true instead of failing when it stopped being.
+//
+// The --query half is keyed on the flag and not on the family for the same
+// reason, one step further on. `rmp graph serve` runs no statement of its own
+// and declares no --query, so a family-wide assertion would demand that its help
+// document a flag it does not have — which is the opposite of what a help gate
+// is for. Reading the flag off the same registry entry the help is generated
+// against keeps the two sides comparing: a subcommand that GAINS --query gains
+// the obligation with it, and one that never had it is never asked for it.
+// The anchor against vacuity is below: at least one graph subcommand must
+// declare the flag, or the whole clause is checking nothing.
 func TestHelpContent_GraphSubcommandsOutputAndQueryShortForm(t *testing.T) {
 	reg := AppRegistry()
 	graphCmd := reg.FindCommand("graph")
@@ -236,8 +252,20 @@ func TestHelpContent_GraphSubcommandsOutputAndQueryShortForm(t *testing.T) {
 		t.Fatal("graph command missing from registry")
 	}
 
-	for _, subName := range []string{"create", "query", "update", "delete", "search"} {
-		subName := subName
+	if len(graphCmd.Subcommands) == 0 {
+		t.Fatal("the graph command declares no subcommand, so this test would check nothing")
+	}
+
+	withQuery := 0
+	for _, sub := range graphCmd.Subcommands {
+		subName := sub.Name
+		declaresQuery := false
+		for i := range sub.Flags {
+			if sub.Flags[i].Long == "--query" {
+				declaresQuery = true
+				withQuery++
+			}
+		}
 		t.Run(subName, func(t *testing.T) {
 			out := captureStdout(t, func() {
 				_ = graphCmd.DispatchFamily([]string{subName, "--help"})
@@ -247,6 +275,9 @@ func TestHelpContent_GraphSubcommandsOutputAndQueryShortForm(t *testing.T) {
 			if !strings.Contains(lower, "output (stdout json)") {
 				t.Errorf("graph %s --help: missing 'Output (stdout JSON):' block", subName)
 			}
+			if !declaresQuery {
+				return
+			}
 			if !strings.Contains(out, "-q") {
 				t.Errorf("graph %s --help: missing -q short form for --query", subName)
 			}
@@ -254,6 +285,11 @@ func TestHelpContent_GraphSubcommandsOutputAndQueryShortForm(t *testing.T) {
 				t.Errorf("graph %s --help: missing --query flag", subName)
 			}
 		})
+	}
+	if withQuery == 0 {
+		t.Error("no graph subcommand declares --query, so the flag half of this gate checked nothing. " +
+			"`graph execute` takes it (SPEC/COMMANDS.md § Execute Options); if it has moved, move this " +
+			"gate with it rather than leaving a clause nothing can violate")
 	}
 }
 

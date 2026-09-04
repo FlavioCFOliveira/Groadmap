@@ -26,7 +26,7 @@ import (
 // that can carry no LIMIT clause at all — a schema-introspection command and a
 // standalone procedure call. Both failed in the PARSER instead of running, so
 // the endpoint was stricter than the contract it publishes and stricter than
-// `rmp graph query`, which runs both.
+// `rmp graph execute`, which runs both.
 
 // distinctLabelCount is the number of extra single-node labels the suppression
 // tests seed. It must exceed the smallest allowed node limit (50) so a projected
@@ -174,13 +174,24 @@ func TestApplyGraphLimit_SuppressedForNonLimitableForms(t *testing.T) {
 			want:  unchanged,
 		},
 		{
-			// The class is NOT widened: every other SHOW is outside it, and the
-			// engine rejects those at the parser with or without a LIMIT, so the
-			// endpoint must not quietly adopt them here.
+			// The introspection class is NOT widened: every other SHOW family is
+			// outside it. Projected through a RETURN, such a statement is an
+			// ordinary limitable query and receives the injection, which is what
+			// distinguishes "outside the class" from "suppressed anyway". The
+			// engine rejects the statement either way; what is pinned here is
+			// that reIntrospect did not claim it.
 			name:  "SHOW DATABASES is not the introspection class",
+			query: "SHOW DATABASES YIELD name RETURN name",
+			limit: 100,
+			want:  "SHOW DATABASES YIELD name RETURN name\nLIMIT 100",
+		},
+		{
+			// The same statement WITHOUT a projection is suppressed — by rule 1,
+			// for the missing RETURN, and not by the introspection matcher.
+			name:  "SHOW DATABASES with no projection is suppressed for the missing RETURN",
 			query: "SHOW DATABASES",
 			limit: 100,
-			want:  "SHOW DATABASES\nLIMIT 100",
+			want:  unchanged,
 		},
 
 		// ── Suppression 2 (ii): a standalone procedure call ───────────────────
@@ -269,15 +280,59 @@ func TestApplyGraphLimit_SuppressedForNonLimitableForms(t *testing.T) {
 			want:  "MATCH (n) CALL db.labels() YIELD label RETURN n, label\nLIMIT 50",
 		},
 		{
-			// The anchor, isolated: a mid-query CALL with no RETURN at all. The
-			// engine rejects this query for its missing RETURN, but the case pins
-			// the anchoring the spec requires independently of the RETURN check,
-			// so dropping \A from the recogniser is caught here rather than by
-			// whichever real query happens to trip over it later.
-			name:  "a mid-query CALL is not standalone even with no RETURN",
+			// A mid-query CALL with no RETURN at all. It is suppressed, and the
+			// reason matters: not because a CALL appears in it — the projected
+			// nested CALL above receives the injection — but because it carries
+			// no top-level projection for a LIMIT to attach to.
+			name:  "a mid-query CALL with no RETURN is suppressed for the missing projection",
 			query: "MATCH (n) CALL db.labels() YIELD label",
 			limit: 100,
-			want:  "MATCH (n) CALL db.labels() YIELD label\nLIMIT 100",
+			want:  unchanged,
+		},
+
+		// ── Suppression 2 (i) generalised: no top-level projection ────────────
+		{
+			// The case the endpoint could not execute while it injected into
+			// one: a write with no RETURN (SPEC/WEB.md Acceptance Criterion 47).
+			name:  "a CREATE with no RETURN admits no LIMIT",
+			query: "CREATE (n:Probe {key:'p'})",
+			limit: 100,
+			want:  unchanged,
+		},
+		{
+			name:  "a DETACH DELETE with no RETURN admits no LIMIT",
+			query: "MATCH (n) DETACH DELETE n",
+			limit: 50,
+			want:  unchanged,
+		},
+		{
+			name:  "a SET with no RETURN admits no LIMIT",
+			query: "MATCH (n:Spec) SET n.status = 'done'",
+			limit: 250,
+			want:  unchanged,
+		},
+		{
+			name:  "schema DDL admits no LIMIT",
+			query: "CREATE INDEX spec_key FOR (n:Spec) ON (n.key)",
+			limit: 100,
+			want:  unchanged,
+		},
+		{
+			// The same write PROJECTED is limitable and receives the injection,
+			// which is what keeps the rule a question about the projection and
+			// not a classification of what the statement does.
+			name:  "a write projected through RETURN receives the injection",
+			query: "MATCH (n:Spec) SET n.status = 'done' RETURN n",
+			limit: 50,
+			want:  "MATCH (n:Spec) SET n.status = 'done' RETURN n\nLIMIT 50",
+		},
+		{
+			// Masking on the general rule: the only RETURN is inside a literal,
+			// so the statement still carries no projection.
+			name:  "RETURN only inside a string literal does not make a write limitable",
+			query: `CREATE (n:Probe {key:'RETURN n'})`,
+			limit: 100,
+			want:  unchanged,
 		},
 		{
 			// Suppression 1 still wins over everything: the caller's own LIMIT is
@@ -457,21 +512,22 @@ func TestHandleGraphData_NonLimitableFormsRunThroughTheEndpoint(t *testing.T) {
 	}
 }
 
-// TestHandleGraphData_SchemaIntrospectionNeverReachesTheInjectionDecision is the
-// other half of Suppression 2's boundary, and the reason the SHOW forms left the
-// list above.
+// TestHandleGraphData_SchemaIntrospectionIsSuppressedAndExecuted is the other
+// half of Suppression 2's boundary.
 //
-// The schema-introspection command admits no LIMIT clause, so before rmp task
-// #344 it was suppressed here and executed. The endpoint now refuses the class
-// outright, BEFORE the injection decision is taken, so the question of injecting
-// into one never arises (SPEC/WEB.md § Graph Data Endpoint, Suppression 2, third
-// bullet; § Query-Bar Error Handling, case 10).
+// A schema-introspection command admits no LIMIT clause, so appending one makes
+// it fail in the PARSER rather than bounding it. The endpoint therefore injects
+// nothing and executes the statement as written, which the engine answers with
+// tabular rows the response shape cannot carry — HTTP 200 and an empty graph
+// (SPEC/WEB.md § Graph Data Endpoint, Suppression 2; Acceptance Criteria 111 and
+// 156).
 //
-// This test is what keeps the two rules consistent: it fails both if the refusal
-// is lost (the form would come back 200) and if the refusal were moved AFTER the
-// injection (the form would come back 400 with kind execution, carrying the
-// engine's parse diagnostic for the appended LIMIT).
-func TestHandleGraphData_SchemaIntrospectionNeverReachesTheInjectionDecision(t *testing.T) {
+// This test fails both ways round. If the suppression is lost, the injected
+// LIMIT reaches the engine and the form comes back 400 with `kind` `execution`
+// carrying a parse diagnostic. If a refusal is reintroduced, the form comes back
+// 400 with a kind of its own, which Acceptance Criterion 111 states MUST fail:
+// "asserting that either form is refused MUST fail this criterion".
+func TestHandleGraphData_SchemaIntrospectionIsSuppressedAndExecuted(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	name := seedRoadmap(t, "web-ui-rollout")
 	seedLabelledGraph(t, name)
@@ -484,19 +540,23 @@ func TestHandleGraphData_SchemaIntrospectionNeverReachesTheInjectionDecision(t *
 	} {
 		t.Run(q, func(t *testing.T) {
 			rec := doGraphData(t, name, url.Values{"q": {q}, "limit": {"100"}})
-			if rec.Code != http.StatusBadRequest {
-				t.Fatalf("status = %d, want 400: the endpoint refuses this class before the injection decision; body=%q", rec.Code, rec.Body.String())
+			if rec.Code != http.StatusOK {
+				kind, reason := decodeQueryError(t, rec.Body.Bytes())
+				if strings.Contains(reason, "LIMIT") {
+					t.Fatalf("the endpoint injected a LIMIT into a form that cannot carry one, and the "+
+						"engine rejected it: kind=%q, reason=%q", kind, reason)
+				}
+				t.Fatalf("status = %d, want 200: the form is executed as written (kind=%q, reason=%q)",
+					rec.Code, kind, reason)
 			}
-			kind, reason := decodeQueryError(t, rec.Body.Bytes())
-			if kind != graphErrSchemaIntrospection {
-				t.Errorf("kind = %q, want %q; reason=%q", kind, graphErrSchemaIntrospection, reason)
+			var body map[string]json.RawMessage
+			if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+				t.Fatalf("decoding body: %v; body=%q", err, rec.Body.String())
 			}
-			// Not an execution failure: the statement never reached the engine,
-			// so no engine diagnostic can appear in the message. That is what
-			// distinguishes "refused before the injection" from "injected, then
-			// failed in the parser".
-			if strings.Contains(reason, "cypher:") || strings.Contains(reason, "LIMIT") {
-				t.Errorf("error = %q, want no engine diagnostic and no mention of LIMIT: the statement never reached the engine", reason)
+			for _, key := range []string{"nodes", "edges"} {
+				if string(body[key]) != "[]" {
+					t.Errorf("%s = %s, want []: tabular rows carry no graph elements", key, body[key])
+				}
 			}
 		})
 	}

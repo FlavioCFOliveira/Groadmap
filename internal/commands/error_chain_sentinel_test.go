@@ -168,13 +168,15 @@ type roadmapEntryPoint struct {
 // while task, sprint, backlog and audit reach it through db.OpenExisting. Both
 // routes refuse the name before touching the filesystem, so these invocations
 // create nothing and need no roadmap to exist.
+//
+// The graph family contributes ONE entry, not two: `graph query` and
+// `graph search` used to be listed beside each other and are no longer
+// subcommand names at all — `rmp graph execute` is the whole family
+// (SPEC/COMMANDS.md § Graph Management).
 func roadmapNameEntryPoints() []roadmapEntryPoint {
 	return []roadmapEntryPoint{
-		{"graph query", func(r string) error {
-			return runGraphQuery([]string{"-r", r, "--query", "MATCH (n) RETURN n"})
-		}},
-		{"graph search", func(r string) error {
-			return runGraphSearch([]string{"-r", r, "--query", "MATCH p=(a)-[*1..3]-(b) RETURN p"})
+		{"graph execute", func(r string) error {
+			return runGraphExecute([]string{"-r", r, "--query", "MATCH (n) RETURN n"})
 		}},
 		{"task list", func(r string) error { return HandleTask([]string{"list", "-r", r}) }},
 		{"sprint list", func(r string) error { return HandleSprint([]string{"list", "-r", r}) }},
@@ -223,7 +225,7 @@ func TestGraphStoreRejectionCarriesRoadmapNameSentinel(t *testing.T) {
 // #325.
 //
 // The defect: openGraphStore restated utils.ErrValidation over an error
-// utils.GetRoadmapDir had already classified, so `rmp graph query -r CON` read
+// utils.GetRoadmapDir had already classified, so `rmp graph execute -r CON` read
 //
 //	Error: validation error: validation error: "CON": roadmap name is a reserved system name
 //
@@ -379,25 +381,19 @@ func TestRefusalsStateTheirClassificationOnce(t *testing.T) {
 // fail; the sweep asserts that, so a case that silently starts succeeding is a
 // test failure rather than a hole.
 //
-// Nothing here writes: the graph entries are refused by the clause guard rail
-// before the store is opened, and the rest fail on missing or unresolvable
-// arguments. No entry reads standard input.
+// Nothing here writes: the graph entry is refused while its flags are still
+// being read, and the rest fail on missing or unresolvable arguments. No entry
+// reads standard input.
+//
+// Four graph entries used to sit here, one per operation-class mismatch. They
+// are gone because the mismatch is gone: `rmp graph` runs the statement it is
+// handed and holds no opinion about its class (SPEC/GRAPH.md § What Groadmap
+// Does Not Check), so each of the four now EXECUTES — two of them writing to the
+// store, which is also what would have broken this corpus's no-write property.
 func crossFamilyRefusalCases() []enumRejection {
 	return []enumRejection{
-		{name: "graph create given a read query", run: func(r string) error {
-			return runGraphCreate([]string{"-r", r, "--query", "MATCH (n) RETURN n"})
-		}},
-		{name: "graph query given a write query", run: func(r string) error {
-			return runGraphQuery([]string{"-r", r, "--query", "CREATE (s:Spec {key: 'SPEC/GRAPH.md'})"})
-		}},
-		{name: "graph update given a delete query", run: func(r string) error {
-			return runGraphUpdate([]string{"-r", r, "--query", "MATCH (s:Spec) DELETE s"})
-		}},
-		{name: "graph delete given a set query", run: func(r string) error {
-			return runGraphDelete([]string{"-r", r, "--query", "MATCH (s:Spec) SET s.key = 'x'"})
-		}},
-		{name: "graph query with an unknown flag", run: func(r string) error {
-			return runGraphQuery([]string{"-r", r, "--depth", "3", "--query", "MATCH (n) RETURN n"})
+		{name: "graph execute with an unknown flag", run: func(r string) error {
+			return runGraphExecute([]string{"-r", r, "--depth", "3", "--query", "MATCH (n) RETURN n"})
 		}},
 		{name: "task get with no id", run: func(r string) error {
 			return HandleTask([]string{"get", "-r", r})

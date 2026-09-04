@@ -346,17 +346,27 @@ func registrySchemaCases() []schemaCase {
 
 		// --- quoted JSON sketches ----------------------------------------------
 		//
-		// A graph subcommand that can carry a RETURN clause publishes both result
-		// envelopes in one string, the no-RETURN form first; a read-only one
-		// publishes the query result alone.
-		{"graph", "query", "query result", graphQueryResult{}, quotedMembers(0)},
-		{"graph", "search", "query result", graphQueryResult{}, quotedMembers(0)},
-		{"graph", "create", "ok result", graphOKResult{}, quotedMembers(0)},
-		{"graph", "create", "query result", graphQueryResult{}, quotedMembers(1)},
-		{"graph", "update", "ok result", graphOKResult{}, quotedMembers(0)},
-		{"graph", "update", "query result", graphQueryResult{}, quotedMembers(1)},
-		{"graph", "delete", "ok result", graphOKResult{}, quotedMembers(0)},
-		{"graph", "delete", "query result", graphQueryResult{}, quotedMembers(1)},
+		// `graph execute` publishes both result envelopes in one string, the
+		// with-columns form first. There is one graph subcommand and it can
+		// produce either envelope, so both are read off the same schema; the
+		// five-subcommand table this replaces had a row per subcommand and a
+		// group order that varied with whether the subcommand could carry a
+		// RETURN clause at all.
+		{"graph", "execute", "query result", graphQueryResult{}, quotedMembers(0)},
+		{"graph", "execute", "ok result", graphOKResult{}, quotedMembers(1)},
+		// `graph client` publishes the SAME pair, in the same order and from the
+		// same two structs, which is the contract half of
+		// SPEC/DATA_FORMATS.md § Graph Client Result: the bytes it writes are the
+		// bytes `graph execute` writes for the same statement, so a reader of the
+		// machine-readable contract must find one shape rather than two.
+		{"graph", "client", "query result", graphQueryResult{}, quotedMembers(0)},
+		{"graph", "client", "ok result", graphOKResult{}, quotedMembers(1)},
+		// `graph serve` publishes one envelope, written once at startup rather
+		// than per statement: the socket the server bound. It is read here rather
+		// than acknowledged as unguarded because a struct does back it, so the
+		// published key and the emitted one can be compared instead of merely
+		// described.
+		{"graph", "serve", "startup object", graphServeResult{}, quotedMembers(0)},
 	}
 }
 

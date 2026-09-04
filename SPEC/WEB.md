@@ -55,16 +55,26 @@
 
 ## Overview
 
-The web interface is a read-only, browser-based presentation of the data that
-the `rmp` CLI manages. A user starts it with the `rmp web` command, which runs an
-HTTP server embedded in the `rmp` binary, opens a local browser to it, and
-navigates the roadmaps found under `~/.roadmaps/` from there.
+The web interface is a browser-based presentation of the data that the `rmp` CLI
+manages. A user starts it with the `rmp web` command, which runs an HTTP server
+embedded in the `rmp` binary, opens a local browser to it, and navigates the
+roadmaps found under `~/.roadmaps/` from there.
 
-The web interface presents data; it never changes it. The `rmp` CLI remains the
-sole write path for all roadmap data, tasks, sprints, and knowledge graphs. The
-web interface in this version provides no create, edit, or delete action of any
-kind. It reads the same on-disk data the CLI reads, in the same locations, and
-serves it as server-rendered HTML.
+Every page the interface renders is read-only, and no roadmap's `project.db` is
+ever written through a request. **The knowledge-graph query bar is the
+exception.** The Cypher statement it submits is executed as written, so a request
+to the graph data endpoint can create, change, and delete graph data and can
+change the graph's schema. The endpoint is not authenticated and the server offers
+no authentication of any kind (see
+[Security and Constraints](#security-and-constraints)).
+
+The web interface presents roadmap data and never changes it. The `rmp` CLI is
+the sole write path for roadmaps, tasks, sprints, and audit entries, and the
+interface provides no create, edit, or delete action over any of them. It reads
+the same on-disk data the CLI reads, in the same locations, and serves it as
+server-rendered HTML. The knowledge graph is outside that statement, on the terms
+above: a statement submitted through the query bar reaches the graph store the way
+`rmp graph execute` reaches it.
 
 The server is built only from Go's standard library (`net/http`) and assets
 embedded into the binary at build time. It requires no external runtime
@@ -157,10 +167,16 @@ task detail modal that displays all of the task's fields (see
    one of them from the index page. This is the one user-facing command that
    operates across all roadmaps rather than a single selected roadmap (see
    [Command Surface](#command-surface)).
-4. The web interface is **read-only**. It serves `GET` (and `HEAD`) requests
-   only; it exposes no route that creates, edits, or deletes any roadmap, task,
-   sprint, audit entry, or graph element. Any non-read HTTP method on any route
-   is answered with HTTP `405 Method Not Allowed`.
+4. The web interface serves `GET` (and `HEAD`) requests only. Any other HTTP
+   method on any route is answered with HTTP `405 Method Not Allowed`. It exposes
+   no route that creates, edits, or deletes a roadmap, a task, a sprint, or an
+   audit entry. **It does expose one route that changes graph data**: the graph
+   data endpoint runs the caller's Cypher, and a `GET` of it may therefore create,
+   change, or delete nodes, relationships, properties, and schema objects (see
+   [Graph Data Endpoint](#graph-data-endpoint) and
+   [Security and Constraints](#security-and-constraints)). A `GET` that changes
+   state is a departure from the safe-method semantics of RFC 9110, Section 9.2.1,
+   and it is stated here rather than left to be discovered from behaviour.
 5. The roadmap index page lists every roadmap discovered under `~/.roadmaps/`,
    using the same roadmap-discovery rule the CLI uses (see
    [Roadmap Index Page](#roadmap-index-page)).
@@ -253,9 +269,8 @@ task detail modal that displays all of the task's fields (see
    [Task Detail Endpoint](#task-detail-endpoint)).
 12. The roadmap knowledge-graph page shows the selected roadmap's knowledge graph
    as an interactive node-link visualisation rendered with **D3.js**, read from
-   that roadmap's GoGraph store, opened through the engine's read path exactly as
-   the `graph query` and `graph search` subcommands open it, and under the same
-   shared lock, held across that open alone (see
+   that roadmap's GoGraph store, opened exactly as `rmp graph execute` opens it,
+   and under the same exclusive lock (see
    [Knowledge Graph from the GoGraph Store](#knowledge-graph-from-the-gograph-store)).
    The page offers the complete set of
    "Networks"-section D3 gallery layouts — Force-directed graph,
@@ -267,9 +282,8 @@ task detail modal that displays all of the task's fields (see
    every node label and every edge type in the graph with a count for each and
    lets the user highlight the matching elements without removing the rest. At the
    top of the page a query bar lets the user drive the graph from a single editable
-   Cypher query, with a Search button and a node-limit dropdown; the query is
-   validated as read-only before execution, reusing the graph guard-rail, and a
-   writing or DDL query is rejected and not executed (see
+   Cypher statement, with a Search button and a node-limit dropdown; the statement
+   is executed as written, whatever it does (see
    [Roadmap Knowledge-Graph Page](#roadmap-knowledge-graph-page),
    [Graph Query Bar](#graph-query-bar),
    [Graph Data Endpoint](#graph-data-endpoint),
@@ -277,16 +291,18 @@ task detail modal that displays all of the task's fields (see
    [Knowledge-Graph Visualisation Library](#knowledge-graph-visualisation-library),
    and
    [Knowledge Graph from the GoGraph Store](#knowledge-graph-from-the-gograph-store)).
-13. Read access to a knowledge graph through the web interface MUST NOT write
-    graph data and MUST NOT trigger the synchronous checkpoint or write-ahead-log
-    truncation that write subcommands perform. It is not, however, without on-disk
-    effect: opening the store runs the engine's recovery, which repairs an
-    interrupted checkpoint, so a web read takes the store's shared lock across
-    that open and may change the store directory's structure without ever
-    changing its data (see
+13. A knowledge graph is reached through the web interface exactly as
+    `rmp graph execute` reaches it: the store's exclusive lock is taken before the
+    open, the same transactional engine is constructed, the statement is executed,
+    and the synchronous checkpoint and write-ahead-log truncation follow when that
+    statement's transaction wrote. A statement that wrote nothing leaves the
+    store's data untouched and may still change the store directory's structure,
+    because opening the store runs the engine's recovery, which repairs an
+    interrupted checkpoint (see
     [Security and Constraints](#security-and-constraints),
     [Knowledge Graph from the GoGraph Store](#knowledge-graph-from-the-gograph-store),
-    `GRAPH.md § What a Read Changes on Disk`, and
+    `GRAPH.md § Engine Constructor by Path`,
+    `GRAPH.md § What a Statement That Writes Nothing Changes on Disk`, and
     `GRAPH.md § Synchronous Checkpoint on Write`).
 14. **The deliverable is fully self-contained.** The shipped `rmp` binary MUST
    embed every component required to render and operate the web interface, with
@@ -397,9 +413,11 @@ For an `rmp web` invocation the implementation:
 4. Registers the read-only routes (see [Routes and Pages](#routes-and-pages)),
    configures the HTTP server timeouts (see
    [HTTP Server Timeouts](#http-server-timeouts)), and starts serving.
-5. Prints to stdout the URL the server is listening on, so the user can open it
-   manually if no browser is launched. The startup line is the single
-   machine-readable success object described in `COMMANDS.md § Web Interface`.
+5. Takes `SIGINT` and `SIGTERM` over, and then prints to stdout the URL the
+   server is listening on, so the user can open it manually if no browser is
+   launched. The startup line is the single machine-readable success object
+   described in `COMMANDS.md § Web Interface`. The order inside this step is
+   load-bearing, and the paragraph below states why.
 6. Unless `--no-open` is given, attempts to open the user's default browser at
    the served URL. A failure to launch a browser is **not** fatal: the server
    keeps running and the URL has already been printed.
@@ -407,11 +425,36 @@ For an `rmp web` invocation the implementation:
    example `Ctrl+C`) or a termination signal (`SIGTERM`). On either signal the
    server shuts down gracefully: it stops accepting new connections, allows
    in-flight requests a brief bounded period to complete, closes any graph store
-   or database handle it opened, and exits 0.
+   or database handle it opened, and exits 0. **This holds from step 5 onwards.** A
+   signal that arrives during steps 1 to 4 — the data-directory check, the schema
+   migration sweep, the bind, and the route registration — reaches an invocation
+   that has printed no URL and served nothing; it is an interruption and the
+   process exits `130` with no graceful shutdown (see
+   `ARCHITECTURE.md § Exit Codes`).
 
-The server is long-lived for the duration of the session. This is the only `rmp`
-command whose process is expected to keep running rather than complete a single
-operation and exit. Each incoming request opens the data it needs read-only,
+**The take-over precedes the URL, and therefore precedes the browser launch.**
+Until step 5, `SIGINT` and `SIGTERM` carry the meaning they carry for every
+short-lived `rmp` invocation. From step 5 they carry the shutdown of step 7. The
+URL is what a caller uses to decide the server is up, so ordering the change of
+meaning ahead of it is what makes a reachable URL a promise that the process stops
+cleanly. It matters more here than the wording suggests: step 6 spawns a browser,
+and a process spawn is far slower than anything else between the URL and the
+accept loop, so a take-over placed after it would leave that whole span carrying
+the wrong meaning.
+
+**The take-over is a change of owner, not a re-registration, and the discipline is
+enforced.** One package owns the disposition of these two signals for the whole
+binary and never unregisters, so no interval of this process carries a meaning
+nobody owns; `internal/testenv` fails the build if any production file outside
+that package handles signals, or if either long-lived surface announces itself
+before taking the signals over. `rmp graph serve` is on the same discipline (see
+`GRAPH.md § Server Startup`), and
+`ARCHITECTURE.md § Modules and Responsibilities` is canonical for the package.
+
+The server is long-lived for the duration of the session. It is one of two `rmp`
+commands whose process is expected to keep running rather than complete a single
+operation and exit; the other is `rmp graph serve`, whose lifecycle is specified
+in `GRAPH.md § The Dedicated Graph Server`. Each incoming request opens the data it needs read-only,
 serves the response, and releases the handle; the server does not hold a roadmap
 database or a graph store open across requests.
 
@@ -533,6 +576,14 @@ route. They bound the connection only. The work a handler performs once the
 request has been read is bounded separately, on the one route whose work a caller
 drives, by the budget specified next.
 
+**What must fit inside the `WriteTimeout` is the sum of every bounded term a
+graph data request may spend, not any one of them.** There are three: the
+resolution probe that decides whether a dedicated graph server is serving the
+roadmap, the wait for the graph store's exclusive lock on the direct path, and the
+query time budget below. `GRAPH.md § Lock Contention` is canonical for that
+invariant, for the value of each term, and for the one case in which the invariant
+does not hold; this section does not restate them.
+
 ### Graph Query Time Budget
 
 The three timeouts above bound the connection, not the work the server does for a
@@ -544,21 +595,82 @@ query the caller writes (see [Graph Data Endpoint](#graph-data-endpoint) and
 [Graph Query Bar](#graph-query-bar)). That route MUST therefore bound its own
 work with an explicit time budget.
 
-1. **Budget: 5 seconds.** The graph data endpoint MUST execute the caller's query
-   under a deadline of 5 seconds. The deadline starts when the endpoint begins
-   executing the query and covers the endpoint's execution of it: the run against
-   the engine's read path and the walk over the result that run produces (see
-   [Graph Data Endpoint](#graph-data-endpoint)). The value sits well above the
-   slowest execution measured on a small store — a three-way Cartesian product
-   over a 252-node store spent 1.32 seconds of server time to return a single
-   aggregate row — and well below the 30-second `WriteTimeout`, so a query that
-   exhausts the budget is cancelled, and its failure is rendered, while the
-   response can still be written.
+1. **Budget: 5 seconds, and it governs both surfaces.** The graph data endpoint
+   MUST execute the caller's query under a deadline of 5 seconds. The deadline
+   starts when the endpoint begins executing the query and covers the endpoint's
+   execution of it: the run against the engine's read path and the walk over the
+   result that run produces (see [Graph Data Endpoint](#graph-data-endpoint)).
+   **This value is not the endpoint's own bound.** `rmp graph execute` executes
+   its statement under the same budget and the same value, so every caller of the
+   graph store that is not a long-lived server is bounded by it; this section is
+   canonical for the value on both surfaces, and
+   `GRAPH.md § Statement Time Budget` is canonical for what the budget does to a
+   CLI invocation and for what a cut statement leaves on disk. The two surfaces
+   read one declaration, so the value cannot drift between them, and changing it
+   here changes it for the CLI too.
+
+   **The value is justified against real graphs, because it has to carry the CLI
+   as well.** On a small store a three-way Cartesian product spent 1.32 seconds of
+   server time over 252 nodes to return a single aggregate row. That store is not
+   the scale at which the budget has to be generous, so the value is justified
+   against the largest real knowledge graph on the development machine as well,
+   44,906 nodes in 36 MB: the statement part of every realistic query and
+   every realistic write measured between **0 and 554 ms** there, and between
+   **6 and 870 ms** on a synthetic graph of 400,000 nodes in 122 MB. Five seconds
+   therefore clears the slowest realistic statement measured by roughly **5.7x**,
+   and graph growth puts the budget under no pressure — what growth does put under
+   pressure is the lock's fixed-part allowance, which
+   `GRAPH.md § Lock Contention` measures and bounds.
+
+   **What the budget cuts is measured too, and it is two query shapes.** On the
+   same 36 MB graph, whose store open alone costs 962 ms, an unbounded whole-graph
+   traversal (`MATCH (a)-[*1..3]->(b) RETURN count(*)`) costs **10.08 s** end to
+   end, and a Cartesian product over 325 million tuples costs **14.05 s**; a
+   three-way Cartesian product over 9.4 billion tuples had not finished after 300
+   seconds, and no finite budget admits it. Nothing else measured comes near five
+   seconds. A statement of either shape is narrowed rather than waited on: the
+   same traversal restricted to a label and a relationship type costs 1.52 s end
+   to end, a **554 ms** statement.
+
+   The value sits well below the 30-second `WriteTimeout`, so a query the budget
+   cuts while it is **reading** is cancelled, and its failure is rendered, while
+   the response can still be written. A query the budget cuts while it is
+   **writing** is not: the engine's rollback runs past the deadline by a factor
+   the statement itself sets, and the longest such run measured, 35.6 seconds,
+   exceeds the `WriteTimeout` on its own.
+   `GRAPH.md § Statement Time Budget` measures that overrun and is canonical for
+   it, and `GRAPH.md § Lock Contention` states what it costs the invariant below;
+   neither is restated here. The budget is additionally the quantity the graph
+   store lock's bounded wait is derived from, because a waiter has to know how
+   long a hold may lawfully last and the hold spans the statement (see
+   `GRAPH.md § Lock Contention`). What must fit inside the `WriteTimeout` is the
+   wait and the statement together rather than either of them alone;
+   `GRAPH.md § Lock Contention` is canonical for that invariant, for the wait
+   budget this value yields, and for the case in which the invariant does not
+   hold. Changing this value changes that wait.
+
+   **The budget binds a statement sent to a graph server too, and the server is
+   the end that enforces it.** The server bounds the statement at this same value
+   (see `GRAPH.md § Server Options`), and the endpoint keeps a later deadline of
+   its own as a backstop against a server that answers nothing at all;
+   `GRAPH.md § Server Resolution`, rule 7, is canonical for the two deadlines and
+   for why they are not equal. A statement the budget cut is an execution failure
+   here, HTTP `400` with `kind` `execution`, exactly as rule 4 below requires of a
+   budget exhaustion on the direct path. Nothing about the value or the
+   classification changes with the path. The request's own context still cancels
+   the statement when the client disconnects, on either path, exactly as rule 2
+   requires.
+
+   The rules below are this endpoint's own handling of the budget. What the same
+   budget does to an `rmp graph execute` invocation is specified in
+   `GRAPH.md § Statement Time Budget`.
 2. **Derived from the request context.** The deadline MUST be derived from the
    request's own context, so the two sources of cancellation compose rather than
    replace one another: a client that disconnects still cancels the query
    immediately, exactly as it did before the budget existed, and a client that
-   stays connected can no longer hold the query running beyond the budget.
+   stays connected can no longer hold the query running beyond the budget. A CLI
+   invocation has no such second source, so on that surface the deadline is the
+   only thing that cancels a statement.
 3. **The budget bounds the work; the node limit bounds the result.** These are two
    different bounds, and neither substitutes for the other. The `LIMIT` clause the
    endpoint injects (see [Graph Data Endpoint](#graph-data-endpoint)) bounds the
@@ -568,12 +680,12 @@ work with an explicit time budget.
    scans the whole product before any limit applies: its cost grows with the size
    of the store while its response stays a few bytes long. The time budget is the
    only bound on that work.
-4. **Exceeding the budget is a query execution failure.** When the budget is
-   exhausted, the endpoint cancels the query and reports the request as a **query
-   execution failure** — case 3 of
+4. **Exceeding the budget is an execution failure.** When the budget is
+   exhausted, the endpoint cancels the statement and reports the request as an
+   **execution failure** — case 2 of
    [Query-Bar Error Handling](#query-bar-error-handling), the same classification
-   a query that fails in the engine receives, and distinct from the read-only
-   guard-rail rejection of case 1 and from the invalid limit of case 2. The page
+   a statement that fails in the engine receives, and distinct from the invalid
+   limit of case 1. The page
    surfaces the existing "query failed to execute" message in place: the page does
    not crash, the failure triggers no write and no navigation, the graph already
    shown is left as it is, and the user can edit the query, lower the node limit,
@@ -583,7 +695,7 @@ work with an explicit time budget.
    query exceeded the budget is answered exactly as any other query execution
    failure is answered — HTTP `400 Bad Request` with `kind` `execution`, the
    status and the kind the execution-failure class already carries (see
-   [Query-Bar Error Handling](#query-bar-error-handling), rules 3 and 5) — so the
+   [Query-Bar Error Handling](#query-bar-error-handling), rules 3 and 4) — so the
    budget adds no row to the HTTP status mapping in
    [Routes and Pages](#routes-and-pages) and leaves the exit-code mapping in
    [Error Handling and Exit Codes](#error-handling-and-exit-codes) unchanged.
@@ -593,20 +705,33 @@ work with an explicit time budget.
    and edges, in the same response shape, with nothing truncated, no ordering
    changed, and no latency added. The budget is observable only to a query that
    would otherwise have run for longer than it.
-7. **Per request, and cancellation writes nothing.** Each graph data request gets
-   its own budget; requests do not share one, and one request's budget is
-   unaffected by any other request in flight. Cancelling a query changes nothing
-   on disk beyond what opening the store had already done before the query
-   started: an abandoned query writes no graph data, runs no checkpoint, and
-   truncates no write-ahead log, exactly as a completed one does. The budget
-   governs query execution only; the store is already open by the time it starts,
-   so cancellation neither causes nor undoes the recovery repair that opening
-   performed (see
+7. **Per request, and a cancelled statement commits nothing it had not already
+   committed.** Each graph data request gets its own budget; requests do not share
+   one, and one request's budget is unaffected by any other request in flight. A
+   statement cancelled before its transaction committed leaves the graph unchanged
+   and runs no checkpoint. The budget governs statement execution only; the store
+   is already open by the time it starts, so cancellation neither causes nor undoes
+   the recovery repair that opening performed (see
    [Knowledge Graph from the GoGraph Store](#knowledge-graph-from-the-gograph-store)
-   and `GRAPH.md § What a Read Changes on Disk`).
-8. **The budget is the whole of the bound.** This version bounds the work of a
-   graph data request and nothing else. It introduces no request rate limit and no
-   new endpoint.
+   and `GRAPH.md § What a Statement That Writes Nothing Changes on Disk`).
+8. **The budget is the whole of the bound this interface adds.** This version
+   bounds the work of a graph data request and adds nothing else to the web
+   interface: no request rate limit and no new endpoint. That the same budget also
+   binds `rmp graph execute` is a property of the value, not a second bound on
+   this endpoint (see rule 1 and `GRAPH.md § Statement Time Budget`).
+9. **The budget bounds the work in time and not in memory, and on this surface the
+   memory is not returned.** A statement inside its budget can still cost gigabytes
+   of resident memory, and this server is a long-lived process with no exit to
+   return it at. Measured, one statement the budget cut while it was writing
+   reached **3088 MB** in `rmp web` against a 23 MB baseline, and all 3088 MB were
+   still resident 130 seconds later, because an otherwise idle process triggers no
+   collection; the request itself received an empty reply after 39.5 seconds, the
+   `WriteTimeout` closing the connection while the statement was still inside the
+   engine call. Nothing in this endpoint's configuration bounds that cost, and the
+   endpoint introduces no bound of its own: `GRAPH.md § Peak Resident Memory` is
+   canonical for what the memory is, for what would bound it, and for why none of
+   those levers is applied. The store on disk is untouched either way (see
+   `GRAPH.md § What a Statement That Writes Nothing Changes on Disk`).
 
 ## Security Headers
 
@@ -749,10 +874,7 @@ HTTP status mapping for page and data routes:
 | Audit `page` parameter out of range, non-integer, or garbage | 200 (clamped to nearest valid page; see [Roadmap Audit Log Page](#roadmap-audit-log-page)) |
 | Tasks `q` search parameter absent, empty, unmatched, or undecodable | 200 (never an error; see [Roadmap Tasks Page](#roadmap-tasks-page)) |
 | Tasks `type`, `priority`, or `severity` filter parameter absent, unknown, malformed, or undecodable | 200 (never an error; the dimension applies no filter; see [Roadmap Tasks Page](#roadmap-tasks-page)) |
-| Graph data `q` rejected by the read-only guard-rail | 400 (`kind` `not_read_only`; the query is not executed; see [Query-Bar Error Handling](#query-bar-error-handling)) |
 | Graph data `limit` not one of the six allowed values | 400 (`kind` `invalid_limit`; the query is not executed; see [Query-Bar Error Handling](#query-bar-error-handling)) |
-| Graph data `q` is a schema-introspection command, at any keyword spacing | 400 (`kind` `schema_introspection`; the query is not executed; see [Query-Bar Error Handling](#query-bar-error-handling)) |
-| Graph data `q` reads a relationship bound by an incoming or undirected fixed-length pattern | 400 (`kind` `relationship_read_direction`; the query is not executed; see [Query-Bar Error Handling](#query-bar-error-handling) and `GRAPH.md § Relationship Read Direction`) |
 | Graph data query fails once running, a query cancelled for exhausting the time budget included | 400 (`kind` `execution`; see [Query-Bar Error Handling](#query-bar-error-handling)) |
 | Non-read HTTP method on any route | 405 |
 | Unhandled internal error reading data (I/O, corrupt store), a graph store that fails to open included | 500 |
@@ -2886,20 +3008,24 @@ shows sprints as compact cards through the shared sprint-card partial instead (s
   response shape nor the read-only behaviour of the page.
 - **Empty graph.** A roadmap that has never used the `graph` command, or whose
   graph is empty, renders successfully and shows an empty-graph state. Reading a
-  roadmap that has no graph yet behaves the same way the read subcommands do: it
-  is not an error (see `GRAPH.md § Persistence Layout`, rule 2). Because this is a
-  read, the web interface MUST open the graph store read-only and MUST NOT cause a
-  write or a checkpoint, so reading an empty graph through the web interface does
-  not create snapshot files.
+  roadmap that has no graph yet is not an error (see
+  `GRAPH.md § Persistence Layout`, rule 2), and the default query writes nothing,
+  so the request produces no snapshot files.
 
 ### Graph Query Bar
 
 The query bar is a control rendered at the top of the knowledge-graph page, above
 the graph card (see [Roadmap Knowledge-Graph Page](#roadmap-knowledge-graph-page)).
-It lets the user drive the visualisation from a single editable Cypher query
-instead of a fixed full-graph read, while keeping the page and the server strictly
-read-only. The query bar reads from, and re-renders, the same graph data the page
-already consumes; it adds no new endpoint and no write path.
+It lets the user drive the visualisation from a single editable Cypher statement
+instead of a fixed full-graph read. The query bar drives, and re-renders from, the
+same graph data endpoint the page already consumes; it adds no new endpoint.
+
+**The statement is executed as written.** The endpoint does not examine it, so a
+statement typed into the query bar may create, change, or delete graph data and
+may change the graph's schema, exactly as the same statement would under
+`rmp graph execute`. Nothing in the page or the server prevents that, and nothing
+authenticates the request (see
+[Security and Constraints](#security-and-constraints)).
 
 1. **One editable query drives the graph.** The page renders the graph from one
    Cypher query. This replaces the previous fixed pair of reads
@@ -2944,8 +3070,8 @@ already consumes; it adds no new endpoint and no write path.
    does: the same fetch to the graph data endpoint
    (`GET /roadmaps/{name}/graph/data`) with the current query box text as the `q`
    parameter and the current dropdown value as the `limit` parameter, the same
-   read-only guard-rail and limit validation, the same re-render of the graph in the
-   currently selected layout, and the same in-place error surfacing on failure (see
+   limit validation, the same re-render of the graph in the currently selected
+   layout, and the same in-place error surfacing on failure (see
    rule 4, [Graph Data Endpoint](#graph-data-endpoint), and
    [Query-Bar Error Handling](#query-bar-error-handling)). Ctrl+Enter is an
    accelerator for the existing Search action and introduces no other behaviour.
@@ -2955,36 +3081,32 @@ already consumes; it adds no new endpoint and no write path.
 6. **Node limit applied by the endpoint.** The dropdown value is the `limit`
    parameter sent on the request. The endpoint applies it as a `LIMIT` clause only
    when the user's query both lacks a top-level `LIMIT` of its own and is a
-   statement form that admits a `LIMIT` clause. A user who writes their own `LIMIT`
-   keeps it and the dropdown value is not applied; a standalone procedure call
-   admits no `LIMIT` at all, so the dropdown value does not apply to it either and
-   the query runs as written rather than failing in the parser. A
-   schema-introspection command likewise admits no `LIMIT`, but the endpoint
-   refuses that class outright, so the injection decision is never reached for it
-   (see [Query-Bar Error Handling](#query-bar-error-handling), case 10). The
-   injection, precedence, and suppression rules are specified in
-   [Graph Data Endpoint](#graph-data-endpoint).
+   statement that admits a `LIMIT` clause. A user who writes their own `LIMIT`
+   keeps it and the dropdown value is not applied. A statement with no top-level
+   `RETURN` admits no `LIMIT` at all — a standalone procedure call, and every write
+   that projects nothing, which is what rule 7 below depends on — so the dropdown
+   value does not apply to it either and the statement runs as written rather than
+   failing in the parser. A schema-introspection command admits none despite
+   carrying a projection, and is treated the same way. The injection, precedence,
+   and suppression rules are specified in
+   [Graph Data Endpoint](#graph-data-endpoint), which is canonical for them.
 
-7. **Read-only.** The query bar submits only read-only Cypher. A query containing
-   a writing clause or a DDL clause is rejected by the endpoint's read-only
-   guard-rail before execution and never runs (see
-   [Graph Data Endpoint](#graph-data-endpoint) and
-   [Query-Bar Error Handling](#query-bar-error-handling)). The query bar offers no
-   create, edit, or delete affordance; executing a query through it never writes
-   graph data, never checkpoints, and never truncates the write-ahead log,
-   consistent with the read-only contract of the whole interface (see
-   [Security and Constraints](#security-and-constraints) and
+7. **The bar submits whatever is typed into it.** The query box offers no create,
+   edit, or delete affordance of its own — there is no button that writes — but
+   the statement it submits is not examined, so a `CREATE`, a `SET`, a
+   `DETACH DELETE`, or a `DROP CONSTRAINT` typed into the box is executed and
+   committed, and the invocation checkpoints exactly as `rmp graph execute` does
+   (see [Graph Data Endpoint](#graph-data-endpoint),
+   [Security and Constraints](#security-and-constraints), and
    [Knowledge Graph from the GoGraph Store](#knowledge-graph-from-the-gograph-store)).
+   The page shows no confirmation and asks for no credential before running one.
 
-8. **Error surfacing.** When a search fails — because the query is rejected as not
-   read-only, because the limit is invalid, because the query is a
-   schema-introspection command this endpoint does not render, because the query
-   reads a relationship bound by an incoming or undirected fixed-length pattern,
-   or because the query fails to execute,
-   which includes exhausting the endpoint's query time budget (see
-   [Graph Query Time Budget](#graph-query-time-budget)) — the page shows a clear,
-   read-only message in place and does not crash, exactly as the layout
-   degradation does; the distinct cases are specified in
+8. **Error surfacing.** When a search fails — because the limit is invalid, or
+   because the statement fails to execute, which includes exhausting the
+   endpoint's query time budget (see
+   [Graph Query Time Budget](#graph-query-time-budget)) — the page shows a clear
+   message in place and does not crash, exactly as the layout degradation does;
+   the two cases are specified in
    [Query-Bar Error Handling](#query-bar-error-handling).
 
 9. **Coexistence with the other graph controls.** The query bar coexists with the
@@ -3004,345 +3126,217 @@ already consumes; it adds no new endpoint and no write path.
 
 ### Query-Bar Error Handling
 
-A search driven by the query bar can fail for distinct reasons, and the page MUST
-surface each clearly and in place without crashing, consistent with the graceful
-layout degradation already specified (see
+A search driven by the query bar can fail for two distinct reasons, and the page
+MUST surface each clearly and in place without crashing, consistent with the
+graceful layout degradation already specified (see
 [Knowledge-Graph Visualisation Library](#knowledge-graph-visualisation-library),
-rule 5). The failure modes are kept distinct so the user understands what to fix.
+rule 5). The two are kept distinct so the user understands what to fix.
 
-The endpoint answers each of the five — cases 1, 2 and 3 below, and the
-guard-rail rejections of cases 10 and 11 — with HTTP `400 Bad Request` and a
-JSON body that names the failure's class in a `kind` field, in the shape specified
-in `DATA_FORMATS.md § Graph View Data`, **Error Shape**. Rules 5 to 9 below fix the
-status, the precedence between the five, the boundary against the `500` of an
-internal read error, and what the body carries.
+The endpoint answers both with HTTP `400 Bad Request` and a JSON body that names
+the failure's class in a `kind` field, in the shape specified in
+`DATA_FORMATS.md § Graph View Data`, **Error Shape**. Rules 3 to 7 below fix the
+status, the order in which the two are decided, the boundary against the `500` of
+an internal read error, and what the body carries.
 
-1. **Query rejected: not read-only.** When the submitted query contains a writing
-   clause or a DDL clause, the endpoint's read-only guard-rail rejects it before
-   execution (see [Graph Data Endpoint](#graph-data-endpoint)) and the query is
-   never run. The page surfaces a clear message stating that the query was rejected
-   because it is not read-only, distinct from an execution failure. The graph
-   already shown is left in place; the rejection changes nothing in the store. The
-   endpoint answers HTTP `400 Bad Request` with `kind` `not_read_only`.
-
-2. **Invalid limit.** When the `limit` parameter is not one of the six allowed
+1. **Invalid limit.** When the `limit` parameter is not one of the six allowed
    values (`50`, `100`, `250`, `500`, `1000`, `3000`), the endpoint rejects the
-   request as an invalid limit and does not execute the query; the page surfaces a
-   clear message naming the invalid limit. Because the limit values originate from
-   the page's own dropdown, this state is normally only reachable by a crafted
-   request, but the endpoint rejects it rather than guessing a value. The endpoint
-   answers HTTP `400 Bad Request` with `kind` `invalid_limit`.
+   request as an invalid limit and does not execute the statement; the page
+   surfaces a clear message naming the invalid limit. Because the limit values
+   originate from the page's own dropdown, this state is normally only reachable by
+   a crafted request, but the endpoint rejects it rather than guessing a value. The
+   endpoint answers HTTP `400 Bad Request` with `kind` `invalid_limit`. The
+   rejection is decided before the graph store is opened, so it opens nothing,
+   reads nothing, and writes nothing.
 
-3. **Query failed to execute.** When the submitted query is accepted as read-only
-   but then fails in the engine — for example, invalid Cypher syntax — the page
-   surfaces a clear message stating that the query failed to execute, distinct from
-   the read-only rejection in case 1. A syntactically invalid read-only query is an
-   execution failure, not a guard-rail rejection, mirroring the CLI behaviour where
-   a query that passes the clause check is still rejected by the engine at execution
-   time (see `GRAPH.md § Per-Subcommand Validation Rules`, note 3). A query that
-   the endpoint cancels because it exhausted the endpoint's 5-second query time
-   budget is an execution failure of this same case and is surfaced with this same
-   message; the budget is specified in
-   [Graph Query Time Budget](#graph-query-time-budget). The endpoint answers HTTP
+2. **The statement failed to execute.** When the submitted statement fails in the
+   engine — invalid Cypher syntax, for example, or a schema statement the engine
+   refuses — the page surfaces a clear message stating that the statement failed
+   to execute. A statement that the endpoint cancels because it exhausted the
+   endpoint's 5-second query time budget is an execution failure of this same case
+   and is surfaced with this same message; the budget is specified in
+   [Graph Query Time Budget](#graph-query-time-budget). A statement sent to a
+   graph server that then stopped answering is an execution failure of this same
+   case too, for the reason rule 10 gives. The endpoint answers HTTP
    `400 Bad Request` with `kind` `execution` in every case of this rule.
 
-4. **In-place, read-only, non-fatal.** In every case the message is shown in place
-   on the page, the page does not crash, and the failure triggers no write and no
-   navigation, exactly as the layout-degradation message does. The user can edit
-   the query or change the limit and search again.
+3. **In-place, non-fatal.** In both cases the message is shown in place on the
+   page, the page does not crash, and the failure triggers no navigation, exactly
+   as the layout-degradation message does. The user can edit the statement or
+   change the limit and search again. The graph already shown is left in place.
 
-5. **One status, five kinds — and this rule is the one place the set is
-   enumerated.** The endpoint's `kind` takes exactly these five values and no
-   others: `not_read_only`, `invalid_limit`, `schema_introspection`,
-   `relationship_read_direction`, and `execution`. Every other statement of the
-   set in this specification refers here rather than repeating it, so the
-   count and the list cannot drift apart across sections; a value is added or
-   removed here first. All five failures carry HTTP `400 Bad Request`,
-   and the body's `kind` field is what distinguishes them. One status fits all
-   five because in each of them the server is able to serve the route and refuses
-   the request the caller made: the query carries a clause the endpoint's contract
-   forbids, the `limit` falls outside the closed set the endpoint publishes, the
-   query is a schema-introspection command and this endpoint renders no schema
-   listing, the query reads
-   a relationship through a pattern the engine does not resolve reliably, or the
-   query the caller wrote cannot be executed. RFC 9110,
-   Section 15.5.1, defines `400` as the status for a request the server "cannot or
-   will not process ... due to something that is perceived to be a client error",
-   and RFC 9110, Section
-   15.5, puts the explanation of the error in the response representation, which is
-   exactly what the `kind` and `error` fields are. A relationship-read-direction
-   rejection is the "will not process" half of that definition rather than the
-   "cannot": the endpoint is able to run the query and refuses to, because the
-   answer it would return is wrong. A schema-introspection rejection is that same
-   half for a different reason: the endpoint is able to run the statement and
-   refuses to, because its response carries nodes and edges and a schema listing is
-   neither, so running it would produce a result this endpoint has no shape to
-   return. Splitting the five across
+4. **One status, two kinds — and this rule is the one place the set is
+   enumerated.** The endpoint's `kind` takes exactly these two values and no
+   others: `invalid_limit` and `execution`. Every other statement of the set in
+   this specification refers here rather than repeating it, so the count and the
+   list cannot drift apart across sections; a value is added or removed here
+   first. Both failures carry HTTP `400 Bad Request`, and the body's `kind` field
+   is what distinguishes them. One status fits both because in each of them the
+   server is able to serve the route and refuses the request the caller made: the
+   `limit` falls outside the closed set the endpoint publishes, or the statement
+   the caller wrote cannot be executed. RFC 9110, Section 15.5.1, defines `400` as
+   the status for a request the server "cannot or will not process ... due to
+   something that is perceived to be a client error", and RFC 9110, Section 15.5,
+   puts the explanation of the error in the response representation, which is
+   exactly what the `kind` and `error` fields are. Splitting the two across
    different statuses would assert a distinction HTTP does not carry, while the
    body already carries it precisely.
 
-   A query cancelled for exhausting the time budget carries this same `400` and
-   this same `execution` kind. It is neither a `503` nor a `504`. RFC 9110, Section
-   15.6.4, defines `503` as a temporary overload or scheduled maintenance "which
-   will likely be alleviated after some delay": this server is neither overloaded
-   nor under maintenance, it keeps serving every other request, and delay
-   alleviates nothing, because the same query over the same store exhausts the same
-   budget again. RFC 9110, Section 15.6.5, defines `504` for a server "acting as a
-   gateway or proxy" that did not receive a timely response "from an upstream
-   server": this server is neither, and the engine it runs the query on is
-   in-process, not an upstream server. What is true of a budget exhaustion is that
-   the caller asked this endpoint for more work than it spends on one request, and
-   that the caller changes the outcome by writing a cheaper query. `400` states
-   that; the two 5xx codes state something else that is not the case here.
+   A statement cancelled for exhausting the time budget carries this same `400`
+   and this same `execution` kind. It is neither a `503` nor a `504`. RFC 9110,
+   Section 15.6.4, defines `503` as a temporary overload or scheduled maintenance
+   "which will likely be alleviated after some delay": this server is neither
+   overloaded nor under maintenance, it keeps serving every other request, and
+   delay alleviates nothing, because the same statement over the same store
+   exhausts the same budget again. RFC 9110, Section 15.6.5, defines `504` for a
+   server "acting as a gateway or proxy" that did not receive a timely response
+   "from an upstream server": this server is neither, and the engine it runs the
+   statement on is in-process, not an upstream server. What is true of a budget
+   exhaustion is that the caller asked this endpoint for more work than it spends
+   on one request, and that the caller changes the outcome by writing a cheaper
+   statement. `400` states that; the two 5xx codes state something else that is not
+   the case here.
 
-6. **Precedence: the `limit` is resolved before the guard rail runs.** One request
-   can be wrong in more than one way at once. The endpoint resolves the `limit`
-   first and validates the query as read-only second, so a request carrying both an
-   invalid `limit` and a query that is not read-only is answered `invalid_limit`,
-   not `not_read_only`. The schema-introspection rejection of case 10 is third, and
-   the relationship-read-direction rejection of case 11 is fourth and last, because
-   every earlier objection outranks it: a query that writes must be told that it
-   writes, and a schema-introspection command carries no pattern to orient. The
-   full order is therefore `invalid_limit`, then `not_read_only`, then
-   `schema_introspection`, then `relationship_read_direction`, and its first two
-   places match the CLI, where the operation-class objection is likewise decided
-   first (see `GRAPH.md § Relationship Read Direction`).
+   **A request whose serialisation retry is exhausted carries this same `400` and
+   this same `execution` kind, and the objection that invites is answered here
+   rather than left standing.** Contention against a healthy store is not
+   obviously "something that is perceived to be a client error", so the
+   alternatives are weighed rather than dismissed, and each of the three states
+   something that is not the case. RFC 9110, Section 15.5.10, defines `409` for a
+   request that "could not be completed due to a conflict with the current state
+   of the target resource", in situations "where the user might be able to resolve
+   the conflict and resubmit the request": by the time the endpoint answers, the
+   winning transaction has committed and the losing one has rolled back whole
+   (see `GRAPH.md § Concurrency Inside the Server`), so no conflict of state
+   survives for the user to resolve — and `409` is a 4xx in any case, so it does
+   not answer the objection it would be reached for. `503` announces that the
+   service is unavailable through a temporary overload or scheduled maintenance:
+   this server ran the statement, went on serving every other request while it
+   did, and would have served the same statement against a different node, so the
+   announcement would be false; `503` also invites a `Retry-After` this endpoint
+   cannot compute, because nothing in the product knows when the contending writer
+   will stop. `504` is refused for the reason it is refused above: this server is
+   not a gateway or a proxy. What is true of an exhausted retry is what rule 6
+   fixes — the failure surfaced once the statement was running — and that is the
+   boundary this endpoint classifies by. The distinction the caller needs is
+   carried in the body, by an `error` that names the contention (rule 11), and not
+   by a status that would have to assert something else in order to carry it.
 
-   **The two objections that outrank the schema-introspection rejection, in both
-   directions.** A request carrying an invalid `limit` and `SHOW INDEXES` is
-   answered `invalid_limit`, because the `limit` is resolved before the guard rail
-   runs at all; the same statement under an allowed `limit` is answered
-   `schema_introspection`. And a statement that is **both** an introspection
-   command and not read-only is answered `not_read_only`:
-   `SHOW INDEXES YIELD name CREATE INDEX audit_key FOR (n:Audit) ON (n.key)` is
-   such a statement, because the guard rail's clause classes are independent and
-   this one carries a DDL clause as well as the `SHOW` prefix; the same statement
-   without its DDL tail is answered `schema_introspection`. That is the CLI's order
-   too, where such a statement is refused on its DDL clause rather than admitted on
-   its `SHOW` prefix (see `GRAPH.md § Per-Subcommand Validation Rules`). A
-   **data-writing** tail does not produce this overlap and MUST NOT be used to
-   assert it: the engine reports a statement on which its own DDL predicate is true
-   as carrying no writing clause, so `SHOW INDEXES YIELD name CREATE (n:Audit)` is
-   classified read-only and is answered `schema_introspection`, not
-   `not_read_only`. A DDL tail is the one construction that exercises this pair.
+5. **The `limit` is resolved before the statement runs, so the two kinds cannot
+   both apply.** One request can carry an invalid `limit` and an unexecutable
+   statement at once. The endpoint resolves the `limit` first and refuses the
+   request there, so such a request is answered `invalid_limit` and the statement
+   is never executed. There is no further precedence question: `execution` is
+   reached only by a request whose `limit` was accepted.
 
-   **Keyword spacing decides nothing on this endpoint.** A badly spaced
-   `SHOW  INDEXES` and a well-spaced `SHOW INDEXES` receive the **same** status and
-   the **same** `kind`, because case 10 refuses the whole family, so the two are
-   indistinguishable in the response and there is no precedence question between
-   them. This endpoint publishes no keyword-spacing class; the CLI still does, and
-   `GRAPH.md § Keyword Spacing in a Schema-Introspection Command` is canonical for
-   that difference and for why it is deliberate.
-
-   **The fourth place is not reachable against the third.** A schema-introspection
-   command carries no relationship pattern the direction rule can read, so no
-   request is both a `schema_introspection` and a `relationship_read_direction`
-   rejection. The ordinal is published for completeness and MUST NOT be asserted by
-   a test, which could only assert it with a request that does not exist.
-
-   The order in
-   which cases 1 to 3 and cases 10 and 11 appear above is the order in which they are
-   easiest to explain and is **not** an order of precedence; this rule is the order
-   of precedence and is the one to implement. The two orders
-   differ in nothing else: under either, the request is rejected before the query
-   runs and before the graph store is opened, so neither reads nor writes anything.
-   The case is in practice reachable only by a crafted request, because the page's
-   dropdown offers only the six allowed values (see
-   [Graph Query Bar](#graph-query-bar), rule 3).
-
-7. **The boundary against the internal read error is drawn at when the failure
+6. **The boundary against the internal read error is drawn at when the failure
    surfaces, not at what the failure is.** This endpoint answers an internal read
    error with `500`, exactly as every other route does (see
    [Routes and Pages](#routes-and-pages) and
    [Knowledge Graph from the GoGraph Store](#knowledge-graph-from-the-gograph-store),
-   rule 5). What separates that `500` from the `400` of case 3 is the moment the
-   failure surfaces: a failure to open the roadmap's graph store is an internal read
-   error and is answered `500`, while a failure that surfaces once the query is
-   running — from the run itself, or from the walk over the result it produces — is
-   a query execution failure and is answered `400`.
+   rule 5). What separates that `500` from the `400` of case 2 is the moment the
+   failure surfaces: a failure to open the roadmap's graph store, or to take its
+   lock within the bounded wait, is an internal read error and is answered `500`,
+   while a failure that surfaces once the statement is running — from the run
+   itself, from the commit, or from the walk over the result it produces — is an
+   execution failure and is answered `400`.
 
    The boundary is a rule about timing, and it is deliberately not a claim about
-   what the failure is. A store corruption that a scan discovers while the query is
-   already running surfaces as a query execution failure and is therefore reported
-   as one, with `400` and `kind` `execution`, even though its cause is the store and
-   not the query. The endpoint classifies the engine's failures no further than
-   this. Drawing the boundary at the moment of surfacing keeps it verifiable from
-   outside the server, where drawing it at the cause would make the contract depend
-   on which failures the engine happens to tell apart.
+   what the failure is. A store corruption that a scan discovers while the
+   statement is already running surfaces as an execution failure and is therefore
+   reported as one, with `400` and `kind` `execution`, even though its cause is the
+   store and not the statement. The endpoint classifies the engine's failures no
+   further than this. Drawing the boundary at the moment of surfacing keeps it
+   verifiable from outside the server, where drawing it at the cause would make the
+   contract depend on which failures the engine happens to tell apart.
 
-8. **The response body.** Each of the five failures carries a JSON body of exactly
+7. **The response body.** Each of the two failures carries a JSON body of exactly
    two string fields, `error` and `kind`, in the shape specified in
    `DATA_FORMATS.md § Graph View Data`, **Error Shape**, which is canonical for it.
-   `kind` is the machine-readable class; rule 5 above enumerates its value set and
+   `kind` is the machine-readable class; rule 4 above enumerates its value set and
    is canonical for it. `error` is the human-readable reason the page shows in
-   place.
-   The `error` of an execution failure carries the engine's own diagnostic text, so
-   the user reads for a given query the same diagnostic the CLI prints for it (see
-   `GRAPH.md § Error Handling and Exit Codes`, rule 2) and can act on it; the
-   `error` of an invalid limit names the rejected value, which is what case 2's
-   message requires; the `error` of a schema-introspection rejection states that
-   this page draws graphs and names `rmp graph query` as where a schema listing is
-   obtained, without naming the keyword spacing, which is what case 10's message
-   requires; and the `error` of a relationship-read-direction rejection names the
-   relationship variable, the direction of the pattern that bound it, and the
-   outgoing rewrite, which is what case 11's message requires. The `500` of an
-   internal read error does not carry this shape: it is answered as every other
-   route's internal read error is.
+   place. The `error` of an execution failure carries the engine's own diagnostic
+   text, so the user reads for a given statement the same diagnostic the CLI prints
+   for it (see `GRAPH.md § Error Handling and Exit Codes`, rule 2) and can act on
+   it; the `error` of an invalid limit names the rejected value, which is what
+   case 1's message requires. Two execution failures are the exception, and in
+   both of them the CLI prints its own text too, so the rule that the two surfaces
+   read alike is kept rather than broken: a lost or silent server connection
+   (rule 10) and an exhausted serialisation retry (rule 11) carry `rmp`'s own
+   line, because no engine produced either failure and there is no engine
+   diagnostic to carry. The `500` of an internal read error does not carry
+   this shape: it is answered as every other route's internal read error is.
 
-9. **A request the caller abandoned is answered, but nobody reads the answer.** A
-   client that disconnects mid-query cancels the query immediately (see
+8. **A request the caller abandoned is answered, but nobody reads the answer.** A
+   client that disconnects mid-statement cancels it immediately (see
    [Graph Query Time Budget](#graph-query-time-budget), rule 2). The endpoint
-   treats that cancellation as a query execution failure like any other and answers
-   it with the same `400` and the same `execution` kind, with an `error` naming the
+   treats that cancellation as an execution failure like any other and answers it
+   with the same `400` and the same `execution` kind, with an `error` naming the
    cancellation rather than the budget, because the two have different causes and
    the budget must not be blamed for a caller that gave up. That answer reaches no
    one: the client that would have read it is gone. It is specified here because it
-   is a third reason the `execution` kind arises, and a contract naming only two
-   would be incomplete on the day it is written. It is not an outcome a connected
-   client can observe, so no client-side test can assert it.
+   is a further reason the `execution` kind arises beyond the two case 2 names,
+   and a contract naming only those two would be incomplete on the day it is
+   written. Rule 10 names the fourth and rule 11 the fifth. It is not an outcome
+   a connected client can observe, so no client-side test can assert it.
 
-10. **Query rejected: a schema listing is not a graph.** When the submitted query
-    is a schema-introspection command — `SHOW INDEXES`, `SHOW INDEX`,
-    `SHOW CONSTRAINTS`, `SHOW CONSTRAINT`, with or without a `YIELD`, `WHERE`, or
-    `RETURN` tail — the shared guard rail rejects it before execution and the query
-    is never run. The endpoint answers HTTP `400 Bad Request` with `kind`
-    `schema_introspection`, and the page surfaces a clear message in place. The
-    graph already shown is left in place; the rejection changes nothing in the
-    store.
+   **A cancelled statement may already have committed.** The endpoint runs the
+   caller's statement on the transactional path, so a disconnect that arrives after
+   the commit and before the response cancels nothing that matters: the change is
+   durable, and the checkpoint that follows it runs to completion. A disconnect
+   that arrives before the commit leaves the transaction uncommitted and the graph
+   unchanged. Which of the two happened is not reported to anyone, because the
+   caller is gone.
 
-    **The refusal covers the whole family, at every keyword spacing.** It reaches
-    the statement written with exactly one space between the two keywords — the
-    spelling the engine routes to its introspection parser — and equally the
-    statement written with two spaces, a tab, a line break, or a comment there. The
-    endpoint answers **one** `kind` for both, because on this surface both have the
-    **same** cause and the **same** fix (see
-    `GRAPH.md § Keyword Spacing in a Schema-Introspection Command`, which is
-    canonical for the spacing rule and for the CLI surfaces the rule still binds).
+9. **A statement that returns no node and no edge is a success, not a failure.**
+   The endpoint answers it HTTP `200` with `{"nodes": [], "edges": []}`. This is
+   the answer to `MATCH (n:Absent) RETURN n`, which matched nothing; to
+   `MATCH (n) RETURN count(n)`, which returned a number; to `SHOW INDEXES`, which
+   returned tabular rows; and to `CREATE (n:Spec {key:'k'})`, which created a node
+   and returned no columns at all. The four are indistinguishable in the response,
+   and the page shows an empty graph for each. The endpoint publishes no failure
+   class that separates them, because they did not fail: each ran, and none
+   produced an element the response shape can carry.
 
-    **What the message MUST say.** It MUST state that this page draws a graph of
-    nodes and edges and cannot show a schema listing, and it MUST name
-    `rmp graph query` as the command that reports the schema. A message that only
-    refused, without naming where the answer is obtained, would leave the caller
-    with a correct refusal and no way forward; the statement the caller wrote is
-    valid, supported, and answered in full by the CLI, so the endpoint owes them
-    that pointer. The exact wording is not fixed here, but the presence of
-    `rmp graph query` in the `error` is part of the contract and is testable. The
-    message MUST NOT name the keyword spacing, and MUST NOT invite the caller to
-    correct it: on this endpoint the spacing is not what is wrong.
+10. **A graph server that stops answering mid-statement is an execution failure,
+    and the endpoint does not fall back.** When the roadmap is served, the
+    statement runs in the server rather than in this process (see
+    [Knowledge Graph from the GoGraph Store](#knowledge-graph-from-the-gograph-store),
+    rule 1). Two outcomes belong here: a connection lost after the statement was
+    sent, and a server that is still connected but has not answered within the
+    endpoint's backstop deadline, which is what a statement the budget cut
+    mid-write looks like from outside (`GRAPH.md § Server Resolution`, rule 7).
+    Each leaves the endpoint unable to say whether the statement committed,
+    because a commit is made durable before it is acknowledged. The endpoint
+    answers `400` with `kind` `execution`, and its `error` names the lost or silent
+    connection rather than the budget or an engine diagnostic, because the cause is
+    neither. It MUST NOT then open the store and run the statement a second time:
+    the statement may already have taken effect, and the store may still be held by
+    the server it was sent to. This is the fourth reason the `execution` kind
+    arises, after an engine failure, a budget exhaustion, and rule 8's abandoned
+    request, and it changes neither the status nor the kind set rule 4 enumerates.
 
-    **Why the class is refused rather than executed.** This endpoint's response
-    carries nodes and edges and nothing else (`DATA_FORMATS.md § Graph View Data`).
-    A schema-introspection command returns **tabular rows** — an index or
-    constraint name, its entity type, its properties — and no node and no edge. The
-    endpoint therefore has nowhere to put the result: executing the statement and
-    walking its result collects zero nodes and zero relationships, and the caller
-    receives `{"nodes": [], "edges": []}` with HTTP `200`, which is
-    **indistinguishable from a query that genuinely matched nothing**. An empty
-    graph presented as the answer is worse than a refusal, because it reports
-    success and states something false about the store: it says the schema is
-    empty when the store holds indexes. Refusing the class is what makes the
-    endpoint's answer honest.
-
-    **Why one kind and not two.** A kind exists per distinct **fix** the caller
-    must make. Because this endpoint refuses the class outright, correcting the
-    keyword spacing changes nothing here — the corrected statement is refused too,
-    for the same reason. Answering a badly spaced statement with a spacing
-    complaint would therefore name a correction that does not work, and would send
-    the caller round a loop that ends in this same refusal; the single fix, for
-    every spelling, is to ask `rmp graph query` instead. That is why this endpoint
-    publishes no `invalid_keyword_spacing` class at all.
-
-    **This is a deliberate divergence from the CLI, and the only one.** `graph
-    query`, `graph search` and `graph update` **accept** the schema-introspection
-    class, so on those surfaces the spacing genuinely is the whole objection to a
-    badly spaced statement, and they keep rejecting it with a message that names
-    the spacing and the accepted spelling, exactly as
-    `GRAPH.md § Keyword Spacing in a Schema-Introspection Command` specifies. That
-    rule is unchanged and MUST NOT be relaxed on the CLI to match this endpoint.
-    The two surfaces diverge because they differ in what they can return, not in
-    how they classify: **recognition is shared and identical** — the same start
-    anchoring, the same masked normalization, the same two spellings told apart —
-    and only the **verdict** differs, because a surface that answers the class owes
-    the caller a working spelling while a surface that refuses the class does not.
-
-    **Why this is a kind of its own and not `not_read_only`.** A
-    schema-introspection command reads the registered schema and writes nothing, so
-    answering `not_read_only` would publish a classification the message printed
-    beside it contradicts, and would tell a client the query writes when it does
-    not. It is not `execution` either: the statement does not fail in the engine,
-    and it never reaches the engine at all, so an `execution` answer would promise
-    an engine diagnostic that does not exist. The fix the caller must make is
-    distinct from every other case's — not to stop writing, not to reorient a
-    pattern, but to ask a different surface — and a machine-readable class exists
-    to tell such cases apart.
-
-    **Decided before the store is opened.** Like the rejections of cases 1, 2 and
-    11, this one is decided before the roadmap's graph store is opened and before
-    the endpoint injects its node `LIMIT`, so a rejected request opens nothing,
-    reads nothing, and writes nothing. Because the refusal precedes the injection
-    decision, the question of whether the statement admits a `LIMIT` clause is
-    never reached for it (see [Graph Data Endpoint](#graph-data-endpoint),
-    Suppression 2).
-
-    This case is a guard-rail rejection of the same nature as case 1 and shares its
-    precedence rule (rule 6). It is numbered after the rules, rather than inserted
-    beside case 1, so that the case and rule numbers this section publishes — and
-    that other sections, tests, and code comments cite — keep the meaning they
-    already have.
-
-11. **Query rejected: a relationship read through an incoming or undirected
-    pattern.** When the submitted query uses a relationship variable in an
-    expression while that variable is bound by a fixed-length **incoming**
-    (`<-[e]-`) or **undirected** (`-[e]-`) relationship pattern, the shared guard
-    rail rejects it before execution and the query is never run. The endpoint
-    answers HTTP `400 Bad Request` with `kind` `relationship_read_direction`, and
-    the page surfaces a clear message naming the relationship variable, the
-    direction of the pattern that bound it, and the outgoing rewrite — including
-    the `UNION ALL` of the two outgoing legs that recovers an undirected traversal
-    in one query. The graph already shown is left in place; the rejection changes
-    nothing in the store.
-
-    `GRAPH.md § Relationship Read Direction` is canonical for the rule: for what
-    counts as an expression use, for the shapes the rule does not reach, and for
-    why the engine's answer cannot be trusted for the shapes it does reach. This
-    section does not restate any of it and fixes only what this endpoint does with
-    it.
-
-    **The endpoint applies the same classification the CLI applies.** The query bar
-    executes caller-supplied Cypher through this server's own engine instance, so
-    the misresolved read is reachable here by exactly the query the CLI
-    subcommands refuse. The endpoint therefore reuses the one classification of
-    pattern direction this project has, rather than carrying a second copy of it
-    that could drift; a surface that omitted it would leave the defect reachable
-    from the page after the CLI had been closed off. The two messages are worded
-    differently — this one is read in a query bar, the CLI's in a terminal — and
-    the classification behind them is the same.
-
-    **The check reads the caller's query.** It runs on the query as submitted,
-    before the endpoint injects its node `LIMIT` (see
-    [Graph Data Endpoint](#graph-data-endpoint)), because injecting a `LIMIT`
-    changes no relationship pattern and the injection must not be able to change
-    what the check reads. Like the rejections of cases 1, 2 and 10, it is decided
-    before the graph store is opened, so a rejected query opens nothing, reads
-    nothing, and writes nothing.
-
-    **Why this is a kind of its own and not `not_read_only`.** Such a query is
-    read-only and is well formed: it carries no writing clause and no DDL clause,
-    and the engine would run it and return rows. What is refused is the orientation
-    of the pattern that binds the relationship being read, and the fix the caller
-    must make is to rewrite the traversal as outgoing, not to stop writing.
-    Answering `not_read_only` would publish a classification the message printed
-    beside it contradicts, and would tell a client the query writes when it does
-    not. A machine-readable class exists to tell such cases apart. Adding a value
-    widens the published contract, so a client that switches exhaustively over
-    `kind` sees a value it did not have before; that cost is accepted here for the
-    same reason it was accepted for case 10.
-
-    This case is a guard-rail rejection of the same nature as cases 1 and 10 and
-    shares its precedence rule (rule 6), where it is last. It is numbered after
-    case 10, rather than inserted beside case 1, for the reason case 10 gives: the
-    case and rule numbers this section publishes — and that other sections, tests,
-    and code comments cite — keep the meaning they already have.
+11. **An exhausted serialisation retry is an execution failure, and its `error`
+    names the contention rather than the engine.** When the roadmap is served,
+    two writers whose statements touch the same node collide inside the server.
+    The losing transaction commits nothing, and the client this endpoint shares
+    with the CLI re-sends the statement under the project's retry policy
+    (`GRAPH.md § Concurrency Inside the Server`). Nothing of that reaches the
+    page: a conflict is not surfaced on its first occurrence, and a request whose
+    retry eventually succeeds is answered HTTP `200` like any other. Only when
+    every attempt of the policy has collided does the request fail. It then fails
+    as an execution failure, HTTP `400` with `kind` `execution` — the status rule
+    4 settles — carrying as its `error` the same contention line `rmp` prints for
+    the same condition (`COMMANDS.md § Client Error Cases`). That `error` is
+    `rmp`'s own text rather than an engine diagnostic, because the whole reason
+    the line exists is that the engine's diagnostic is what a reader cannot tell
+    apart from an invalid statement, and the query bar's user faces exactly the
+    decision the CLI's user faces: run the statement again, or correct it. The
+    endpoint MUST NOT then open the store and run the statement itself, because a
+    caller that resolved a server and then failed does not take the direct path
+    (`GRAPH.md § Server Resolution`, rule 3) and the store is in any case still
+    held by the server it was sent to. This is the fifth reason the `execution`
+    kind arises, and it changes neither the status nor the kind set rule 4
+    enumerates.
 
 ### Graph Labels Sidebar
 
@@ -3522,24 +3516,23 @@ write.
   and the property-type-to-JSON mapping) rather than inventing a new element
   encoding. A request that fails carries the error object instead, specified in
   the same file (see the next bullet).
-- **Failure responses.** The five ways a request to this endpoint fails — the
-  read-only guard-rail rejection, an invalid `limit`, the guard-rail rejection of a
-  schema-introspection command, the guard-rail rejection of a query that reads a
-  relationship bound by an incoming or undirected fixed-length pattern, and a query
-  execution failure — are
-  each answered with HTTP `400 Bad Request` and
-  a JSON body naming the failure's class in a `kind` field, in the shape specified
-  in `DATA_FORMATS.md § Graph View Data`, **Error Shape**. The status, the `kind`
-  values, the precedence between the five, and the boundary against the `500` of
-  an internal read error are specified in
-  [Query-Bar Error Handling](#query-bar-error-handling); this section does not
-  restate them.
+- **Failure responses.** The two ways a request to this endpoint fails — an
+  invalid `limit`, and a statement that fails to execute — are each answered with
+  HTTP `400 Bad Request` and a JSON body naming the failure's class in a `kind`
+  field, in the shape specified in `DATA_FORMATS.md § Graph View Data`,
+  **Error Shape**. The status, the `kind` values, the order in which the two are
+  decided, and the boundary against the `500` of an internal read error are
+  specified in [Query-Bar Error Handling](#query-bar-error-handling); this section
+  does not restate them.
 - **Query parameters.** The endpoint accepts two optional URL query parameters
   that the graph page's query bar (see
   [Graph Query Bar](#graph-query-bar)) sends, and that drive which Cypher query
   runs and how many results it returns:
-  - `q` — the Cypher query to run, URL-encoded. When `q` is absent or empty, the
-    endpoint runs the **default query**
+  - `q` — the Cypher statement to run, URL-encoded. It is executed as written:
+    the endpoint does not examine it and refuses nothing on the ground of what it
+    does, so a statement that writes, deletes, or changes the schema is executed
+    and committed like any other. When `q` is absent or empty, the endpoint runs
+    the **default query**
     `MATCH (n) OPTIONAL MATCH (n)-[r]->(m) RETURN n, r, m`, which produces the same
     full-graph view (all nodes, plus all relationships, subject to the limit) the
     endpoint produced before the query bar existed. The endpoint is therefore
@@ -3553,31 +3546,38 @@ write.
     [Query-Bar Error Handling](#query-bar-error-handling)); the endpoint does not
     clamp an out-of-range value to the nearest allowed value, and the query is not
     executed.
-- **Read-only guard-rail (security-critical).** Before it executes any
-  user-supplied `q`, the endpoint MUST validate that the query is **read-only**,
-  reusing the exact guard-rail mechanism that the read subcommands `rmp graph
-  query` and `rmp graph search` use (see
-  `GRAPH.md § Subcommands and Guard-Rail Validation` and
-  `GRAPH.md § Literal-Aware Normalization`). The validation runs on the
-  **masked normalization** of the query (literal-aware masking via
-  `maskCypherLiterals` followed by `cypher.QueryHasWritingClause`, plus the
-  independent DDL rejection), never on the raw query string, exactly as the CLI
-  guard-rail does. A query is rejected, and **not executed**, when its masked
-  normalization contains any writing clause (`CREATE`, `MERGE`, `SET`, `REMOVE`,
-  `DELETE`, or `DETACH DELETE`) or any DDL clause (`CREATE INDEX`, `DROP INDEX`,
-  `CREATE CONSTRAINT`, or `DROP CONSTRAINT`). Because validation runs on the
-  masked normalization, a write or DDL keyword that appears only inside a string
-  literal, a comment, or a backtick-quoted identifier neither falsely trips the
-  rejection nor falsely passes a real writing clause: a query such as
-  `MATCH (m) WHERE m.title = "mentions delete and set" RETURN m` is accepted as
-  read-only, while `MATCH (n) DELETE n` is rejected. The query actually executed
-  against the store is the original, unmodified query; masking affects validation
-  only. The endpoint runs the accepted query through the engine's read path,
-  exactly as `graph query` and `graph search` do (see
-  `GRAPH.md § Engine Construction and Lifecycle`); it MUST NOT run any writing
-  clause, MUST NOT checkpoint or truncate the write-ahead log, MUST NOT write an
-  audit entry, and follows no write path. The page and the server stay strictly
-  read-only.
+- **The statement is executed as written (security-critical).** The endpoint
+  performs no validation of `q` beyond the maximum query length that binds every
+  Cypher statement (`GRAPH.md § Maximum Query Length`). It does not classify the
+  statement, does not inspect the patterns it binds, and does not inspect the
+  values it would write. A statement carrying `CREATE`, `MERGE`, `SET`, `REMOVE`,
+  `DELETE`, `DETACH DELETE`, or any schema DDL is executed and committed.
+- **The endpoint resolves a running graph server before it opens anything.** When
+  one is serving the roadmap, the statement is sent to that server and the store
+  is never opened and never locked; when none is, the endpoint opens the store
+  directly, exactly as it always has. The rule, its four states, and the status
+  this endpoint answers with in each are specified in
+  `GRAPH.md § Server Resolution` and in
+  [Knowledge Graph from the GoGraph Store](#knowledge-graph-from-the-gograph-store),
+  rule 1. No query parameter and no configuration selects between the two, and a
+  request's response is the same either way.
+- **On the direct path the endpoint runs on the transactional path.** It takes the
+  graph store's exclusive lock before the open, constructs the same store-backed
+  engine
+  `rmp graph execute` constructs, runs the statement inside a transaction, and
+  checkpoints and truncates the write-ahead log when that transaction wrote (see
+  `GRAPH.md § Engine Constructor by Path`,
+  `GRAPH.md § Synchronous Checkpoint on Write`, and
+  `GRAPH.md § Concurrency and Recovery`). This is what makes a write submitted
+  through the query bar real: an endpoint constructed without a transactional
+  store would execute the same statement against the request's own in-memory
+  graph, discard it when the request ended, and still answer `200`. The endpoint
+  writes no audit entry and never touches a roadmap's `project.db`; the write path
+  it now has reaches the graph store and nothing else.
+- **No authentication stands between a caller and this behaviour.** The server
+  authenticates nothing, and this endpoint is reachable by any client that can
+  reach the bound address. `§ Security and Constraints` states the consequence in
+  full and is canonical for it.
 - **Node-limit injection.** The endpoint applies the resolved `limit` (the
   parameter value, or the default `100` when absent) by appending a top-level
   `LIMIT <n>` clause to the query. Injection is **suppressed** in exactly the two
@@ -3591,45 +3591,81 @@ write.
     `GRAPH.md § Literal-Aware Normalization`), so a `LIMIT` keyword that appears
     only inside a string literal, a comment, or a backtick-quoted identifier does
     not count as an existing top-level `LIMIT` and does not suppress injection.
-  - **Suppression 2: the query is a statement form that admits no `LIMIT`
-    clause.** Not every read the guard rail admits can carry a `LIMIT` clause.
-    Appending one to a statement that cannot carry it bounds nothing: it makes the
-    statement fail in the **parser**, so a read form the guard rail accepts, and
-    that `rmp graph query` runs, would be unusable through this endpoint and the
-    endpoint would be stricter than the contract it publishes. The endpoint MUST
-    therefore inject nothing into the form below, and MUST execute it as the caller
-    wrote it.
-    - **A standalone procedure call.** A statement whose first clause is `CALL`
-      and that has **no top-level `RETURN`**. The call's result is not projected,
-      and the unprojected form admits no `LIMIT` clause. A `CALL` that **is**
-      projected through a top-level `RETURN` — the `CALL ... YIELD ... RETURN ...`
-      form — is an ordinary reading query for this rule: it admits a `LIMIT`, and
-      the endpoint injects the resolved limit into it exactly as it does into a
-      `MATCH ... RETURN` query. The presence of a top-level `RETURN` is the whole
-      of the boundary: a `LIMIT` clause attaches only to a `RETURN` or a `WITH`
-      projection, so a call carrying a `YIELD` but no top-level `RETURN` admits no
-      `LIMIT` either, and is a standalone call for this rule.
-  - **The schema-introspection command is the other form that admits no `LIMIT`,
-    and this rule never reaches it.** The `SHOW INDEXES`, `SHOW INDEX`,
-    `SHOW CONSTRAINTS`, and `SHOW CONSTRAINT` forms admit no `LIMIT` clause either,
-    whole class and tails included. They are not listed above because the endpoint
-    refuses the class outright, before the injection decision is taken (see
-    [Query-Bar Error Handling](#query-bar-error-handling), case 10), so no such
-    statement ever reaches this rule and the question of injecting into one never
-    arises. The fact is recorded here rather than omitted, because the reason the
-    form is absent from the list is a refusal elsewhere and not an oversight.
-  - **Recognising the non-limitable form.** It is recognised on the
-    **masked normalization** of the query, exactly as Suppression 1 and the
-    read-only guard-rail are (see `GRAPH.md § Literal-Aware Normalization`), so a
-    `CALL` or `RETURN` keyword that appears only inside a string literal,
-    a comment, or a backtick-quoted identifier does not affect the decision.
-    Recognition is **anchored to the start of the statement**, the same anchoring
-    `GRAPH.md § Schema Introspection` requires of the introspection class: a `CALL`
-    that appears inside a larger query, and an identifier, label, or property named
-    `call`, do not make the statement this form. Suppression 2
-    changes no operation class: the form is read-only before this rule and
-    after it, and the guard rail of the preceding bullet still runs on it first
-    and still decides, alone, whether it executes at all.
+  - **Suppression 2: the statement admits no `LIMIT` clause.** Not every statement
+    the engine accepts can carry a `LIMIT` clause, and which ones can is decided by
+    the grammar rather than by a list. **A `LIMIT` attaches only to a top-level
+    projection, and only a `RETURN` or a `WITH` carries one, so a statement with no
+    top-level `RETURN` admits no `LIMIT`.** That is the rule. The endpoint MUST
+    inject nothing into such a statement and MUST execute it as the caller wrote
+    it.
+
+    The rule is stated as a rule and not as an enumeration of forms, because an
+    enumeration is answerable only for the statements someone thought of. It
+    reaches, among others, a **standalone procedure call**; and every **write with
+    no projection** — a `CREATE`, a `MERGE`, a `SET`, a `REMOVE`, a `DELETE` or
+    `DETACH DELETE`, and a schema DDL statement — which is the class an enumeration
+    left out and which the endpoint could not execute at all while it injected into
+    one. It reaches a form a future engine accepts on the same terms, without that
+    form having to be foreseen here.
+
+    **The boundary is the projection and nothing else.** A `CALL` projected through
+    a top-level `RETURN` — the `CALL ... YIELD ... RETURN ...` form — is an
+    ordinary reading query for this rule: it admits a `LIMIT` and receives the
+    injection exactly as a `MATCH ... RETURN` does. A call carrying a `YIELD` but
+    no top-level `RETURN` admits none. A write projected through a top-level
+    `RETURN` receives the injection; the same write without one does not. The
+    decision turns on the projection, never on what the statement does.
+
+    **One class carries a top-level projection and still admits no `LIMIT`, so the
+    rule above does not reach it and it is named here: a schema-introspection
+    command.** `SHOW INDEXES`, `SHOW INDEX`, `SHOW CONSTRAINTS`, and
+    `SHOW CONSTRAINT`, with or without a `YIELD`, `WHERE`, or `RETURN` tail, are
+    refused a `LIMIT` by the engine's schema parser on every one of those forms, so
+    a tail does not make one limitable. The endpoint executes such a statement like
+    any other and returns its result through the same walk, which collects no node
+    and no edge from it, so the response is `{"nodes": [], "edges": []}` with HTTP
+    `200` (see [Query-Bar Error Handling](#query-bar-error-handling), rule 9). A
+    schema listing is read from `rmp graph execute`, which returns the rows.
+
+    **Why the suppression is required, and why it costs nothing.** Appending a
+    `LIMIT` to a statement that admits none bounds nothing, and has one of two
+    outcomes. Usually the statement fails in the **parser**, so a form that
+    `rmp graph execute` runs would be unusable through this endpoint and the
+    endpoint would be stricter than the contract it publishes. For a schema DDL
+    statement it does not fail: the engine's schema parser stops when its grammar
+    is satisfied and discards the appended clause silently
+    (`GRAPH.md § What Groadmap Does Not Check`, item 6), so the statement runs and
+    the injection vanishes. Neither outcome is one to rely on — the first breaks
+    the statement and the second leaves the endpoint depending on a documented
+    hazard to save it. Suppressing costs nothing in return: the node limit bounds
+    the **result**, and a statement that projects nothing returns no row and
+    contributes no node and no edge to the response, so there is nothing for a
+    limit to bound.
+  - **Recognising a statement that admits no `LIMIT`.** Both parts of the decision
+    run on the **masked normalization** of the statement, exactly as Suppression 1
+    does (see `GRAPH.md § Literal-Aware Normalization`), so a `RETURN` or `SHOW`
+    keyword that appears only inside a string literal, a comment, or a
+    backtick-quoted identifier does not affect it: a write whose only `RETURN` sits
+    inside a property value is still a write with no projection.
+
+    The general rule is decided by the **presence** of a `RETURN`, not by a parse,
+    and it errs deliberately towards judging a statement limitable. A statement
+    wrongly judged limitable keeps the node cap it would otherwise escape, and
+    fails in the parser only in the exotic case where the `RETURN` it carries is
+    confined to a subquery and the statement has no top-level projection of its
+    own. Erring the other way would silently withdraw the cap from ordinary
+    queries, which is the outcome the cap exists to prevent.
+
+    The schema-introspection class is recognised **anchored to the start of the
+    statement**, so a `SHOW` appearing inside a larger statement, and an
+    identifier, label, or property named `show`, do not make a statement one of
+    that class. Recognition there follows the engine's own routing, which admits
+    exactly one space between the two keywords
+    (`GRAPH.md § What Groadmap Does Not Check`, item 7): a statement written with
+    any other separator is not routed to the engine's schema parser and will fail
+    there as a syntax error, so injecting into it changes nothing about its
+    outcome. This suppression refuses nothing; it decides only whether a `LIMIT`
+    is appended.
   - **Separator: the injected clause begins on a new line.** When the endpoint does
     inject, it MUST separate the injected `LIMIT <n>` from the query with a
     **newline**, never with a space. A query whose last line ends in a line comment
@@ -3640,10 +3676,10 @@ write.
     injected clause is always top-level and always applies. Cypher treats the
     newline as ordinary whitespace, so every query that worked before is
     unaffected.
-  - **A suppressed query is not bounded by the node limit.** Suppression means no
-    `LIMIT` is applied, so the resolved limit does not cap these queries and the
-    dropdown value has no effect on them. What still bounds them is the
-    per-request time budget, which applies to every query the endpoint executes,
+  - **A suppressed statement is not bounded by the node limit.** Suppression means
+    no `LIMIT` is applied, so the resolved limit does not cap these statements and
+    the dropdown value has no effect on them. What still bounds them is the
+    per-request time budget, which applies to every statement the endpoint executes,
     injected or not (see [Graph Query Time Budget](#graph-query-time-budget)): the
     budget bounds the **work**, the node limit bounds the **result**, and only the
     second is suppressed here.
@@ -3652,9 +3688,9 @@ write.
   for longer is cancelled instead of holding the server for as long as it takes to
   finish. The budget bounds the **work** the query causes; the injected `LIMIT`
   bounds only the **result** it returns, and neither substitutes for the other. A
-  query cancelled for exceeding the budget is a query execution failure and is
+  statement cancelled for exceeding the budget is an execution failure and is
   surfaced as one (see
-  [Query-Bar Error Handling](#query-bar-error-handling), case 3). The rule,
+  [Query-Bar Error Handling](#query-bar-error-handling), case 2). The rule,
   including the reason for the value, is specified in
   [Graph Query Time Budget](#graph-query-time-budget).
 - **Result-to-graph extraction.** The endpoint builds the
@@ -4031,67 +4067,134 @@ re-presents an earlier, now-stale response in its place.
 
 ### Knowledge Graph from the GoGraph Store
 
-1. For a graph page or graph data request, the server resolves the roadmap's
-   graph store at `~/.roadmaps/{name}/graph/` (see `GRAPH.md § Persistence
-   Layout`), opens it, and runs the query through the engine's read path, the
-   same way `graph query` and `graph search` do (see `GRAPH.md § Engine
-   Construction and Lifecycle`). The server is on the read path, so it constructs
-   the engine without a transactional store and without a write-ahead-log writer.
-   Which constructor that is, is fixed by
+1. For a graph page or graph data request, the server first resolves whether that
+   roadmap is being served by a dedicated graph server, and only then decides what
+   to open. `GRAPH.md § Server Resolution` is canonical for that rule, for the
+   four states it distinguishes, and for the bounded probe that decides between
+   them; this section does not restate it and adds no rule of its own. What it
+   states is the outcome this endpoint produces in each state, because a status
+   code is this surface's own business:
+   - **A server is answering.** The endpoint sends the statement to that server
+     over the protocol and never opens the store. It takes **no** advisory lock,
+     so it neither waits for one nor contends with anything. A statement that runs
+     is answered HTTP `200` with the ordinary response shape.
+   - **No socket exists, or the socket refuses the connection.** The roadmap is
+     not served — a socket file a killed server left behind is exactly this
+     second case — and the endpoint opens the store directly under the exclusive
+     advisory lock, exactly as it did before a server existed. Everything from
+     rule 2 onwards describes that path.
+   - **A socket answers but no server can be reached through it.** This is not a
+     reason to open the store: the socket may belong to a server holding the lock
+     for its process lifetime. The request fails as an internal read error, HTTP
+     `500`, which is the status this endpoint already returns for a graph store it
+     cannot open (see [Routes and Pages](#routes-and-pages)).
+   - **The connection is lost after the statement has been sent, or the server
+     does not answer within the endpoint's backstop deadline.** The endpoint does
+     **not** retry against the store in either case: the statement may already
+     have committed on the server, and the store may still be held. The request is
+     an execution failure, HTTP `400` with the `execution` kind, because the
+     failure surfaced once the statement was running, which is where
+     [Query-Bar Error Handling](#query-bar-error-handling), rule 6, already draws
+     the boundary. No new status and no new kind is introduced.
+
+   Resolution runs once per request and its outcome is not cached: a cached
+   outcome would act on a server that had since stopped. It is spent before the
+   statement starts and before any lock is taken, so it consumes neither the
+   query time budget nor the lock wait.
+
+   **The socket this endpoint resolves is always the derived one, and nothing can
+   point it elsewhere.** The three `rmp graph` subcommands take a `--socket` flag;
+   this endpoint takes none, accepts no request parameter carrying a path, and has
+   no command line to receive one — `rmp web` serves every roadmap at once rather
+   than one. A server started on a non-default socket is therefore invisible here,
+   and every request for that roadmap's graph takes the direct path into the lock
+   that server is holding and is answered `500` for as long as it runs.
+   `GRAPH.md § Serving on a Non-Default Socket` is canonical for that boundary and
+   states plainly that no flag closes it.
+2. On the direct path the server resolves the roadmap's graph store at
+   `~/.roadmaps/{name}/graph/` (see `GRAPH.md § Persistence Layout`), opens it,
+   and runs the statement the same way `rmp graph execute` does (see
+   `GRAPH.md § Engine Construction and Lifecycle`). There is one execution path
+   and the server is on it, so it opens a transactional store and a
+   write-ahead-log writer. Which constructor that is, is fixed by
    `GRAPH.md § Engine Constructor by Path`, and this specification does not
    restate it.
-2. The server runs a **read-only** Cypher query to retrieve the nodes and edges
-   to visualise. The query contains no writing clause; it is the same class of
-   query the read subcommands accept under the guard rail in
-   `GRAPH.md § Subcommands and Guard-Rail Validation`.
-3. The server MUST NOT write graph data, MUST NOT run any writing or DDL clause,
-   and MUST NOT trigger the synchronous checkpoint or write-ahead-log truncation
-   that write subcommands perform after a commit (see
+3. The server runs the statement the request carries, or the default query when
+   the request carries none. It does not examine that statement, so the statement
+   may write. This holds on both paths: a statement sent to a graph server is the
+   statement the request carried, with the node-`LIMIT` injection already applied
+   and nothing else changed (see `GRAPH.md § Server Resolution`, rule 5).
+4. **The server therefore writes graph data when the statement it was given
+   does.** The transaction commits, and the synchronous checkpoint and
+   write-ahead-log truncation follow exactly as they do for a CLI invocation (see
    `GRAPH.md § Synchronous Checkpoint on Write` and
-   `IMPLEMENTATION.md § Graph Store Concurrency`). The write-ahead log is opened
-   for reading only and is left byte for byte as the request found it, and the
-   contents of `snapshot/` are left unchanged. A read through the web interface
-   changes no graph data, exactly as a `graph query` invocation changes none.
-4. A web read is **not**, however, free of on-disk effect, and this specification
-   does not claim that it is. Opening the store runs GoGraph's recovery, which
-   restores the last committed state from the snapshot and the write-ahead-log
-   tail, and which first repairs an interrupted checkpoint: it removes a stale
-   `snapshot.tmp` staging directory, and it promotes `snapshot.bak` to `snapshot`
-   when the live snapshot directory carries no manifest. A graph data request can
-   therefore change the store directory's structure, though never its data. The
-   exhaustive list of what a read may and may not change is
-   `GRAPH.md § What a Read Changes on Disk`, which is canonical and applies to
-   this endpoint unchanged.
-5. Because that repair is a write to the directory a checkpoint publishes into,
-   the server takes the graph store's advisory lock in **shared** mode before
-   opening the store, and releases it as soon as the open returns, exactly as a
-   CLI read subcommand does. The query then executes with no lock held. The lock,
-   its two modes, the reason the narrow hold is sufficient, and their mutual
-   exclusion are specified in `GRAPH.md § Concurrency and Recovery`; that section
-   is canonical and this one adds no rule of its own. Three consequences are
-   specific to the web interface and are stated here:
-   - A graph data request may **wait** for an in-flight `rmp graph` write against
-     the same roadmap. The wait is bounded (see `GRAPH.md § Lock Contention`), it
-     is spent before the query starts and so does not consume the endpoint's query
-     time budget (see [Graph Query Time Budget](#graph-query-time-budget)), and
-     the worst case stays well inside the server's write timeout (see
-     [HTTP Server Timeouts](#http-server-timeouts)). A request MUST NOT block
-     indefinitely on the lock.
-   - A request that still cannot take the shared lock when the bounded wait is
-     exhausted is answered HTTP `500`, the status this endpoint already returns
-     for a graph store that cannot be opened (see
-     [Routes and Pages](#routes-and-pages)). It is logged like any other `500`
-     (see [Server Logging](#server-logging)).
-   - Serving a graph data request does **not** block the CLI for the duration of
-     the request. The server holds the lock only while opening the store, so a
-     concurrent `rmp graph` write can start, commit, and checkpoint while the
-     request is still executing its query or writing its response. Only a write
-     that collides with the request's store open, a window measured in the cost
-     of loading the graph rather than of running the query, fails fast. A slow or
-     expensive graph query therefore cannot fail a concurrent CLI write.
-6. Each request opens the store, reads, serves the result, releases the shared
-   lock, and closes the store. The server does not hold the graph store open, or
-   its lock, across requests, consistent with the short-lived-access model in
+   `IMPLEMENTATION.md § Graph Store Concurrency`). When the statement's
+   transaction appended nothing to the write-ahead log, the log is left byte for
+   byte as the request found it and the contents of `snapshot/` are left
+   unchanged. The server writes no audit entry in either case, and it never writes
+   to a roadmap's `project.db` outside the startup migration (see
+   [Read-Only Data Flow](#read-only-data-flow)).
+5. A request that writes nothing is still **not** free of on-disk effect on the
+   direct path, and this specification does not claim that it is. Opening the
+   store runs GoGraph's
+   recovery, which restores the last committed state from the snapshot and the
+   write-ahead-log tail, and which first repairs an interrupted checkpoint: it
+   removes a stale `snapshot.tmp` staging directory, and it promotes
+   `snapshot.bak` to `snapshot` when the live snapshot directory carries no
+   manifest. A graph data request can therefore change the store directory's
+   structure without changing its data. The exhaustive list is
+   `GRAPH.md § What a Statement That Writes Nothing Changes on Disk`, which is
+   canonical and applies to this endpoint unchanged.
+6. On the direct path the server takes the graph store's advisory lock
+   **exclusively** before opening the store, and holds it across the open, the
+   statement, any commit, and any checkpoint, exactly as `rmp graph execute` does.
+   On the served path it takes no lock at all, which is the whole point of
+   resolving first: a dedicated graph server holds that lock for its process
+   lifetime, and no finite wait can be sized against such a hold. The lock, its single mode,
+   and its contention policy are specified in `GRAPH.md § Concurrency and
+   Recovery`; that section is canonical and this one adds no rule of its own.
+   Three consequences are specific to the web interface and are stated here:
+   - A graph data request may **wait** for an in-flight `rmp graph execute`
+     invocation, or for another graph data request, against the same roadmap. The
+     wait is bounded (see `GRAPH.md § Lock Contention`), and it is spent before
+     the statement starts and so does not consume the endpoint's query time
+     budget (see [Graph Query Time Budget](#graph-query-time-budget)). It is
+     derived from the longest hold this endpoint takes when its statement is a
+     read or runs to completion, one whose statement runs to the end of that
+     query time budget, so that wait and that statement together stay well
+     inside the server's write timeout (see
+     [HTTP Server Timeouts](#http-server-timeouts)): it is the two together that
+     have to fit, not the wait alone. `GRAPH.md § Lock Contention` fixes the
+     derivation and that invariant, and is canonical for the case in which the
+     invariant does not hold. Two limits remain, both stated in
+     `GRAPH.md § Lock Contention` rather than here: the allowance for the fixed
+     part of a hold is exhausted on a large enough graph; and a statement the
+     budget cuts while it is **writing** has no known upper bound on its hold, so
+     the wait does not cover one and a single such statement exceeds the write
+     timeout without any wait at all. A third limit is no longer reached from
+     here: a dedicated graph server holds the lock for its process lifetime, and
+     no finite wait can be sized against that, which is precisely why this
+     endpoint resolves the roadmap's socket before it takes the lock at all (rule
+     1 above). `GRAPH.md § Lock Contention` names the three narrow windows in
+     which a request still meets a server on the lock. When the wait is exhausted
+     for any of these reasons, the request is answered as the next consequence
+     describes. A request MUST NOT block indefinitely on the lock.
+   - A request that still cannot take the lock when the bounded wait is exhausted
+     is answered HTTP `500`, the status this endpoint already returns for a graph
+     store that cannot be opened (see [Routes and Pages](#routes-and-pages)). It is
+     logged like any other `500` (see [Server Logging](#server-logging)).
+   - On the direct path, serving a graph data request **does** block the CLI, and
+     another graph data request, for the duration of that request. The hold now spans the statement's
+     own execution, so a slow statement submitted through the query bar delays
+     every other statement against the same roadmap until it finishes, or until
+     its time budget expires and the engine has finished undoing whatever that
+     statement had already written (see `GRAPH.md § Statement Time Budget`). Two
+     graph pages open on the same roadmap serialise on this lock. This is a
+     consequence of the single lock mode and is stated so that it is met here
+     rather than in production.
+7. On the direct path each request opens the store, runs its statement, serves the
+   result, releases the lock, and closes the store. The server does not hold the graph store open,
+   or its lock, across requests, consistent with the short-lived-access model in
    `IMPLEMENTATION.md § Graph Store Concurrency`. A graph store that is corrupt or
    unreadable surfaces as an internal read error (HTTP 500 on the affected route);
    there is no automatic graph-store repair.
@@ -4890,9 +4993,10 @@ experience is the baseline that larger viewports enhance.
 
 ## Server Logging
 
-`rmp web` is the only long-lived `rmp` process. Every other command reports its
-failure on stderr and exits; the web server, by design, absorbs a per-request
-failure into an HTTP status and keeps serving (see
+`rmp web` is one of two long-lived `rmp` processes, the other being
+`rmp graph serve`. Every short-lived command reports its failure on stderr and
+exits; the web server, by design, absorbs a per-request failure into an HTTP
+status and keeps serving (see
 [Error Handling and Exit Codes](#error-handling-and-exit-codes), rule 4). The
 response body the browser receives is deliberately opaque — `internal server
 error` — so that a read failure, a corrupt graph store, or a template fault
@@ -4929,17 +5033,34 @@ states explicitly.
    `slog.TextHandler` timestamps in the **local** zone with an offset by
    default, which satisfies neither rule; the handler MUST therefore replace the
    `time` attribute with the UTC value in that format rather than accept the
-   default.
+   default. `rmp graph serve` is bound by the same rule for the same reason (see
+   `GRAPH.md § Server Diagnostics on Stderr`), and the two surfaces MUST install
+   **one** realisation of the format rather than each carrying a copy of it (see
+   `DATA_FORMATS.md § Dates - ISO 8601 with UTC`, Scope).
 6. The logger is a single package-level instance, built once at package
    initialisation. It is replaceable, so that a test can capture the records and
    assert their content rather than merely their presence.
+7. The handler writes to that destination **directly**: nothing stands between a
+   record and stderr. There is no queue, so no record is held back to be written
+   later and none is dropped to make room for a newer one. What the arrangement
+   costs is paid by the writer rather than by the server. A destination that has
+   stopped being read — a pipe with no reader draining it — blocks the goroutine
+   making the write, which for a per-request record is the goroutine serving that
+   one request and for a startup record is startup itself. It blocks nothing
+   else: every other request is served on its own goroutine, and the graceful
+   shutdown of [Server Lifecycle](#server-lifecycle), step 7, stays bounded.
+   `rmp graph serve` answers this question differently and MUST NOT be read
+   across to this surface. Its records leave the goroutine that serves every
+   statement, where a blocked write stops the server itself, so it interposes a
+   bounded sink that drops records rather than block. That limit is that server's
+   alone; this server declares none (`GRAPH.md § Server Diagnostics on Stderr`).
 
 ### Levels
 
 | Level | Meaning | Examples |
 |-------|---------|----------|
 | `ERROR` | The server failed. The condition is answered with HTTP 500 and is a fault of the server or of the environment it cannot recover from. | A roadmap's database cannot be read; a page template fails to execute; a response body fails to encode; the knowledge-graph store cannot be opened. |
-| `WARN` | The server did not fail, but an operator needs to know what happened. The condition is caused by the client or by the environment and leaves the server serving. | A query-bar query rejected by the guard rail or failing in the engine (HTTP 400); a roadmap skipped by the startup schema migration; the interface bound to a non-loopback address. |
+| `WARN` | The server did not fail, but an operator needs to know what happened. The condition is caused by the client or by the environment and leaves the server serving. | A query-bar statement refused for an invalid limit or failing in the engine (HTTP 400); a roadmap skipped by the startup schema migration; the interface bound to a non-loopback address. |
 | `INFO` | Enabled, but unused in this version: a successful request and a successful startup write no record. | — |
 
 ### What Is Logged
@@ -4975,7 +5096,7 @@ HTTP 400 the graph data endpoint produces by exactly one `WARN` record.
 | `GET /roadmaps/{name}/tasks/{id}/data` | the task detail cannot be loaded for a reason other than not-found | `ERROR` | 500 |
 | `GET /roadmaps/{name}/audit` | the audit page cannot be loaded | `ERROR` | 500 |
 | `GET /roadmaps/{name}/sprints/{id}` | the sprint cannot be loaded for a reason other than not-found | `ERROR` | 500 |
-| `GET /roadmaps/{name}/graph/data` | the query bar's query was rejected as not read-only, its limit was invalid, it was a schema-introspection command this endpoint does not render, it read a relationship bound by an incoming or undirected pattern, or the accepted query failed in the engine | `WARN` | 400 |
+| `GET /roadmaps/{name}/graph/data` | the request's limit was invalid, or its statement failed in the engine | `WARN` | 400 |
 | `GET /roadmaps/{name}/graph/data` | the graph cannot be read for any other reason | `ERROR` | 500 |
 | HTML rendering | the page template fails to execute | `ERROR` | 500 |
 | JSON rendering | the response body fails to encode | `ERROR` | 500 |
@@ -5095,55 +5216,73 @@ Rules:
 ## Security and Constraints
 
 1. **Loopback by default; network exposure is opt-in.** The server binds the
-   loopback interface (`127.0.0.1`) by default, so the read-only interface is
-   reachable only from the local machine. Exposing the interface on the network is
-   the explicit opt-in `--host 0.0.0.0` (all interfaces), or any other non-loopback
-   address. When a non-loopback host is bound, the server prints a warning to
-   stderr that the interface is reachable from the network (see
-   [Bind Address and Port Selection](#bind-address-and-port-selection)). The
-   interface remains read-only regardless of bind address; exposing read access to
-   the network is an explicit user choice and the user's responsibility.
-2. **Read-only.** The interface never writes. It exposes no route that creates,
-   edits, or deletes roadmap data, tasks, sprints, audit entries, or graph
-   elements. The server accepts only `GET` and `HEAD`; every other method returns
-   HTTP `405`. A web read never writes graph data and never triggers a checkpoint
-   or write-ahead-log truncation. Opening the graph store is nonetheless not a
-   read-only operation on disk — the engine's recovery repairs an interrupted
-   checkpoint on open — so the server takes the store's shared lock across that
-   open and may change the store directory's structure, never its data (see
+   loopback interface (`127.0.0.1`) by default, so the interface is reachable only
+   from the local machine. Exposing the interface on the network is the explicit
+   opt-in `--host 0.0.0.0` (all interfaces), or any other non-loopback address.
+   When a non-loopback host is bound, the server prints a warning to stderr that
+   the interface is reachable from the network (see
+   [Bind Address and Port Selection](#bind-address-and-port-selection)). What is
+   exposed by that choice is not read access alone; rule 3 states what else it is.
+2. **Pages are read-only; one endpoint is not.** The server accepts only `GET` and
+   `HEAD`; every other method returns HTTP `405`. It exposes no route that creates,
+   edits, or deletes a roadmap, a task, a sprint, or an audit entry, and it writes
+   no row and no audit entry to any `project.db` outside the startup migration.
+   **The graph data endpoint is outside this rule**: it executes the statement the
+   request carries, so it writes graph data whenever that statement does, and it
+   checkpoints and truncates the write-ahead log after a transaction that wrote.
+   Even a statement that writes nothing is not free of on-disk effect, because the
+   engine's recovery repairs an interrupted checkpoint on open (see
    [Knowledge Graph from the GoGraph Store](#knowledge-graph-from-the-gograph-store)
-   and `GRAPH.md § What a Read Changes on Disk`).
-   SQLite reads write no rows and produce no audit-log entry.
-3. **User-supplied Cypher is validated read-only before execution.** The graph
-   page's query bar lets the user submit an editable Cypher query to the graph
-   data endpoint as the `q` parameter (see [Graph Query Bar](#graph-query-bar) and
-   [Graph Data Endpoint](#graph-data-endpoint)). The endpoint MUST validate that
-   query as **read-only** before executing it, reusing the exact guard-rail the
-   read subcommands `rmp graph query` and `rmp graph search` use: the literal-aware
-   masked normalization (`maskCypherLiterals` then `cypher.QueryHasWritingClause`)
-   plus the independent DDL rejection (see
-   `GRAPH.md § Subcommands and Guard-Rail Validation` and
-   `GRAPH.md § Literal-Aware Normalization`). Validation runs on the masked
-   normalization, never on the raw string, so a write or DDL keyword inside a
-   string literal, comment, or backtick-quoted identifier neither falsely trips nor
-   falsely passes. A query containing any writing clause (`CREATE`, `MERGE`, `SET`,
-   `REMOVE`, `DELETE`, `DETACH DELETE`) or any DDL clause (`CREATE`/`DROP`
-   `INDEX`/`CONSTRAINT`) is rejected and **not executed**, and the page surfaces the
-   rejection (see [Query-Bar Error Handling](#query-bar-error-handling)). The query
-   bar opens no write path: an accepted query runs through the engine's read path
-   only, and never checkpoints or truncates the write-ahead log. No query the user
-   can submit changes what opening the store does; the guard rail runs before the
-   store is opened, so a rejected query never reaches it at all.
+   and `GRAPH.md § What a Statement That Writes Nothing Changes on Disk`).
+3. **User-supplied Cypher is executed as written, and this is the interface's
+   principal security property.** The graph page's query bar submits an editable
+   Cypher statement to the graph data endpoint as the `q` parameter (see
+   [Graph Query Bar](#graph-query-bar) and
+   [Graph Data Endpoint](#graph-data-endpoint)). The endpoint does not classify it,
+   does not refuse it on the ground of what it does, and executes it on the
+   transactional path. The consequences are stated plainly:
+   - A `GET` of that endpoint can create, change, and delete nodes, relationships,
+     properties, and labels, and can create and drop indexes and constraints.
+     `MATCH (n) DETACH DELETE n` submitted through the query bar empties the
+     roadmap's knowledge graph, commits, and checkpoints.
+   - **No authentication stands in the way.** The server has no login, no token, no
+     session, and no per-route authorisation. Any client that can open the bound
+     address can issue that request.
+   - **The only access control is the bind address.** On the default loopback bind,
+     the reachable set is the local machine's own processes. `--host 0.0.0.0`, or
+     any other non-loopback address, extends that set to everything that can route
+     to the host, and it is a **write** grant over every roadmap's knowledge graph,
+     not a read grant. A user binding a non-loopback address is making that choice.
+   - **A `GET` with side effects departs from RFC 9110, Section 9.2.1**, which
+     defines `GET` as a safe method. An intermediary, a browser prefetch, a crawler,
+     or a repeated history entry may therefore re-execute a destructive statement
+     without the user asking again. The endpoint stays `GET`-only because the query
+     bar's contract is a URL, and the departure is recorded here rather than left
+     to be discovered.
+   - There is no undo. The graph store has no per-statement history a caller can
+     roll back to, and `rmp` offers no graph restore command.
+   - **A dedicated graph server changes where the statement runs and nothing about
+     this rule.** When one is serving the roadmap, the endpoint sends the
+     statement to it over a Unix domain socket instead of opening the store (see
+     [Knowledge Graph from the GoGraph Store](#knowledge-graph-from-the-gograph-store),
+     rule 1). That server authenticates nobody either, and the socket's `0600`
+     mode protects nothing against `rmp web`, which runs as the same user that
+     owns it. The reachable set is still whatever the bind address admits, and
+     what it is granted is still write access to the knowledge graph.
 4. **Filesystem permission model is unchanged.** The web interface reads through
    the existing locations and respects the existing permission model: `0700` for
    `~/.roadmaps/` and each roadmap home directory, `0600` for `project.db`, and
    `0700` for each `graph/` store (see `ARCHITECTURE.md § Directory Structure`).
+   It creates no graph server socket and changes no socket's mode; it only
+   connects to one that a `rmp graph serve` process has already created with mode
+   `0600` (see `GRAPH.md § Socket Path and Permissions`).
    The web interface relaxes no permission, and it creates no roadmap database, no
    roadmap home directory, and no graph store directory: a roadmap that has no
    `graph/` directory is served as an empty graph rather than having one created
-   for it. The one artefact a graph read may create is the graph store's lock file
-   `write.lock`, inside a `graph/` directory that already exists, when no previous
-   invocation has created it (see `GRAPH.md § What a Read Changes on Disk`).
+   for it. The one artefact a graph request may create outside the store's own
+   contents is the lock file `write.lock`, inside a `graph/` directory that already
+   exists, when no previous invocation has created it (see
+   `GRAPH.md § What a Statement That Writes Nothing Changes on Disk`).
 5. **No arbitrary filesystem serving; path-traversal guard.** The static handler
    serves only assets from the embedded asset set, never an arbitrary host
    filesystem path. Roadmap names taken from the URL path are validated against
@@ -5210,9 +5349,14 @@ Rules:
    state that no longer matches the database or store. Embedded `/static/...`
    assets are immutable and are excluded from this rule, remaining cacheable (see
    [Cache Policy](#cache-policy)).
-12. **No new write path.** The web interface does not become a second source of
-   truth. The CLI and its SQLite databases and GoGraph stores remain the sole
-   source of truth and the sole write path; the web interface is a view over them.
+12. **No second source of truth.** The web interface stores nothing of its own.
+   The CLI's SQLite databases and GoGraph stores remain the single source of
+   truth, and the interface holds no cache, no index, and no derived copy of them.
+   The CLI is the sole write path for roadmap data. It is **not** the sole write path
+   for a knowledge graph: the graph data endpoint writes into the same GoGraph
+   store the CLI writes into, through the same engine and under the same lock, so
+   the store stays the one place a graph lives (see
+   [Security and Constraints](#security-and-constraints), rule 3).
 
 ## Acceptance Criteria
 
@@ -5344,16 +5488,16 @@ Rules:
     a clear, read-only in-place message instead of erroring, and the user can select
     a different layout; touch usability is preserved across all layouts.
 18. `GET /roadmaps/{name}/graph/data` returns HTTP 200 and JSON in the shape
-    defined in `DATA_FORMATS.md § Graph View Data`, populated from a read-only
-    query against the roadmap's GoGraph store.
-19. After serving any number of graph page and graph data requests for a roadmap
-    that has never been written, no `snapshot/` subdirectory exists and no
-    checkpoint has run, proving the web read path never checkpoints (see
-    `GRAPH.md § Synchronous Checkpoint on Write`). For a roadmap that **has** been
-    written, serving any number of those requests leaves the `wal` file byte for
-    byte unchanged and every file under `snapshot/` unchanged, proving the read
-    path writes no graph data and truncates no log (see
-    `GRAPH.md § What a Read Changes on Disk`).
+    defined in `DATA_FORMATS.md § Graph View Data`, populated from a statement run
+    against the roadmap's GoGraph store.
+19. After serving any number of graph page and graph data requests that carry no
+    `q`, or a `q` that writes nothing, for a roadmap that has never been written,
+    no `snapshot/` subdirectory exists and no checkpoint has run. For a roadmap
+    that **has** been written, serving any number of those requests leaves the
+    `wal` file byte for byte unchanged and every file under `snapshot/` unchanged,
+    proving that a statement which wrote nothing neither checkpointed nor truncated
+    the log (see `GRAPH.md § Synchronous Checkpoint on Write` and
+    `GRAPH.md § What a Statement That Writes Nothing Changes on Disk`).
 20. Serving roadmap sprints pages, roadmap tasks pages, roadmap sprint pages, and
     roadmap audit log pages
     produces **no** new audit-log entry in the roadmap's `project.db` (a read is
@@ -5543,24 +5687,23 @@ Rules:
     used. A request to `GET /roadmaps/{name}/graph/data` with **no** `q` parameter
     runs the default query and returns the full-graph view, exactly as the endpoint
     behaved before the query bar existed (backward compatible).
-47. A query submitted through the query bar that contains a writing clause
-    (`CREATE`, `MERGE`, `SET`, `REMOVE`, `DELETE`, or `DETACH DELETE`) or a DDL
-    clause (`CREATE INDEX`, `DROP INDEX`, `CREATE CONSTRAINT`, or `DROP CONSTRAINT`)
-    is rejected by the endpoint's read-only guard-rail **before execution** and is
-    **not executed**; the store is not modified, no checkpoint runs, and no
-    write-ahead-log truncation occurs, and the page surfaces a clear "query
-    rejected: not read-only" message distinct from an execution failure. The
-    guard-rail runs on the masked normalization of the query (literal-aware masking
-    plus `cypher.QueryHasWritingClause` and the DDL rejection), so a write or DDL
-    keyword that appears only inside a string literal, a comment, or a
-    backtick-quoted identifier does not trip the rejection: for example
-    `MATCH (m) WHERE m.title = "mentions delete and set" RETURN m` is accepted as
-    read-only and executes, while `MATCH (n) DELETE n` is rejected and does not
-    execute. The rejected request is answered HTTP `400 Bad Request` with a JSON
-    body whose `kind` is `not_read_only` (see
-    [Graph Data Endpoint](#graph-data-endpoint),
-    [Query-Bar Error Handling](#query-bar-error-handling), and
-    `GRAPH.md § Literal-Aware Normalization`).
+47. **A statement submitted through the query bar is executed whatever it does,
+    and the response status alone does not establish this criterion.** A request
+    whose `q` is `CREATE (n:WebProbe {key:'p'})` is answered HTTP `200`, and a
+    `rmp graph execute` invocation in a separate process afterwards reports the
+    `WebProbe` node present; a request whose `q` is
+    `MATCH (n:WebProbe) DETACH DELETE n` is answered HTTP `200`, and the same
+    read-back afterwards reports it gone. Each of the two leaves the store
+    checkpointed: `snapshot/manifest.json` exists and the `wal` file is truncated.
+    Neither statement carries a top-level `RETURN`, so neither is injected into,
+    which is what makes this criterion reachable at all: an endpoint that appended
+    the node `LIMIT` to either would hand the engine a statement that fails in the
+    parser and would answer `400` (Suppression 2 of
+    [Graph Data Endpoint](#graph-data-endpoint), and Acceptance Criterion 111). An
+    endpoint that refused either request, and an endpoint that answered `200` while
+    storing nothing, both fail this criterion — the second is why the read-back is
+    required (see [Graph Data Endpoint](#graph-data-endpoint) and
+    `GRAPH.md § Engine Constructor by Path`).
 48. The endpoint applies the node limit by appending `LIMIT <n>` only when the
     user's query both lacks a top-level `LIMIT` of its own and is a statement form
     that admits a `LIMIT` clause (Acceptance Criterion 111 covers the forms that do
@@ -5591,18 +5734,14 @@ Rules:
     `startId` and `endId` in the returned `edges` references a node present in the
     returned `nodes` (see [Graph Data Endpoint](#graph-data-endpoint) and
     `DATA_FORMATS.md § Graph View Data`, rule 3).
-50. A query submitted through the query bar that is accepted as read-only but then
-    fails in the engine (for example, invalid Cypher syntax) surfaces a clear
-    "query failed to execute" message on the page, distinct from the "query
-    rejected: not read-only" message. In every query-bar failure case — read-only
-    rejection, invalid limit, or execution failure — the message is shown in place,
-    the page does not crash, and the failure triggers no write and no navigation,
-    consistent with the graceful layout degradation; the user can edit the query or
-    change the limit and search again. The same holds for the schema-introspection
-    rejection of Acceptance Criteria 157 and 151, and for the
-    relationship-read-direction rejection of Acceptance Criterion 156. All five
-    failures are answered HTTP
-    `400 Bad Request`, and the body's `kind` is what tells them apart
+50. A statement submitted through the query bar that fails in the engine (for
+    example, invalid Cypher syntax) surfaces a clear "query failed to execute"
+    message on the page, distinct from the invalid-limit message. In both
+    query-bar failure cases — invalid limit and execution failure — the message is
+    shown in place, the page does not crash, and the failure triggers no
+    navigation, consistent with the graceful layout degradation; the user can edit
+    the statement or change the limit and search again. Both failures are answered
+    HTTP `400 Bad Request`, and the body's `kind` is what tells them apart
     (Acceptance Criterion 123; see
     [Query-Bar Error Handling](#query-bar-error-handling)).
 51. The labels sidebar shows an absolute total in each section header, derived
@@ -5633,7 +5772,7 @@ Rules:
     selecting the Search button does: it issues the same GET request to
     `GET /roadmaps/{name}/graph/data` with the current query box text as the `q`
     parameter and the current dropdown value as the `limit` parameter, applies the
-    same read-only guard-rail and limit validation, re-renders the graph in the
+    same limit validation, re-renders the graph in the
     currently selected layout on success, and surfaces the same in-place error
     messages on failure (see criterion 46). Ctrl+Enter is a keyboard accelerator for
     the existing Search action and changes no other behaviour. Plain Enter in the
@@ -6187,35 +6326,43 @@ Rules:
     request writes nothing: the store is unchanged, no checkpoint runs, no
     write-ahead log is truncated, and the server keeps serving later requests (see
     [Graph Query Time Budget](#graph-query-time-budget)).
-111. `GET /roadmaps/{name}/graph/data` injects no node `LIMIT` into a statement form
-    that admits no `LIMIT` clause, and runs that form instead of failing it in the
-    parser. The form this criterion reaches is a standalone procedure call (a
-    statement whose first clause is `CALL` and that has no top-level `RETURN`). A
-    request whose `q` is that form executes and succeeds; it is not answered with
-    the parse failure that appending a `LIMIT` to it produces. It is classified
-    read-only by the guard rail and runs from `rmp graph query`, so the endpoint
-    is no stricter than the contract it publishes (see
-    [Graph Data Endpoint](#graph-data-endpoint)). The **schema-introspection
-    command** (`SHOW INDEXES`, `SHOW INDEX`, `SHOW CONSTRAINTS`, or
-    `SHOW CONSTRAINT`, with or without a `YIELD`, `WHERE`, or `RETURN` tail) admits
-    no `LIMIT` clause either, but it does **not** execute here: the endpoint refuses
-    the class before the injection decision is taken, so this criterion never
-    reaches it and an assertion that it returns HTTP 200 contradicts Acceptance
-    Criterion 157 (see `GRAPH.md § Schema Introspection` for the class and
-    [Query-Bar Error Handling](#query-bar-error-handling), case 10, for the
-    refusal). A `CALL` projected through a top-level
-    `RETURN` (`CALL ... YIELD ... RETURN ...`) is **not** a standalone call: it
-    admits a `LIMIT`, receives the injection, and returns at most the resolved
-    limit's worth of rows. The form is recognised on the masked
-    normalization and anchored to the start of the statement, so a `CALL`
-    or `RETURN` keyword inside a string literal, a comment, or a backtick-quoted
-    identifier, and a `CALL` nested inside a larger query, do not trigger
-    suppression. Every ordinary reading query is unaffected and keeps the behaviour
-    of Acceptance Criterion 48: a query with no top-level `LIMIT` still receives the
-    injection, a query with its own top-level `LIMIT` still keeps it, and a query
-    whose last line ends in a line comment still has the injected clause applied on
-    a new line. A suppressed query is not bounded by the node limit; it remains
-    bounded by the 5-second query time budget (see Acceptance Criterion 110 and
+111. `GET /roadmaps/{name}/graph/data` injects no node `LIMIT` into a statement
+    that admits no `LIMIT` clause, and runs it instead of failing it in the parser.
+    The criterion is over the **rule**, not over a list of forms, so it MUST assert
+    the general case and both of the classes below rather than any single statement.
+
+    **A statement with no top-level `RETURN` is not injected into.** A request whose
+    `q` is a **standalone procedure call** executes and succeeds, and is not
+    answered with the parse failure that appending a `LIMIT` to it produces. So does
+    a request whose `q` is a **write with no projection**: a `CREATE`, a `SET`, a
+    `DETACH DELETE`, and a schema DDL statement MUST each be asserted, because the
+    write class is the one an enumeration of forms omitted, and each of the first
+    three fails in the parser when injected into (Acceptance Criteria 47 and 156
+    depend on this half). A `RETURN` appearing only inside a string literal, a
+    comment, or a backtick-quoted identifier does not make such a statement
+    limitable, and MUST be asserted not to.
+
+    **A schema-introspection command is not injected into either**, although it does
+    carry a projection: `SHOW INDEXES`, `SHOW INDEX`, `SHOW CONSTRAINTS`, or
+    `SHOW CONSTRAINT`, with or without a `YIELD`, `WHERE`, or `RETURN` tail, written
+    with exactly one space between its two keywords. It executes and is answered
+    HTTP `200` with `{"nodes": [], "edges": []}`, because its rows carry no node and
+    no edge. Recognition of this class is anchored to the start of the statement, so
+    a `SHOW` nested inside a larger query does not trigger suppression.
+
+    **The complementary half MUST be asserted too, or the criterion is satisfied by
+    an endpoint that injects nothing at all.** A `CALL` projected through a
+    top-level `RETURN` (`CALL ... YIELD ... RETURN ...`) admits a `LIMIT`, receives
+    the injection, and returns at most the resolved limit's worth of rows; so does a
+    write projected through a top-level `RETURN`. Every ordinary reading query is
+    unaffected and keeps the behaviour of Acceptance Criterion 48: a query with no
+    top-level `LIMIT` still receives the injection, a query with its own top-level
+    `LIMIT` still keeps it, and a query whose last line ends in a line comment still
+    has the injected clause applied on a new line.
+
+    Asserting that any suppressed statement is refused MUST fail this criterion. A
+    suppressed query is not bounded by the node limit; it remains bounded by the
+    5-second query time budget (see Acceptance Criterion 110 and
     [Graph Query Time Budget](#graph-query-time-budget)).
 
 112. The roadmap tasks page header carries, beside the search input, exactly three
@@ -6389,44 +6536,27 @@ Rules:
 123. Every query-bar failure of `GET /roadmaps/{name}/graph/data` is answered with
     HTTP `400 Bad Request` and a JSON body of exactly two string fields, `error`
     and `kind`, and never with HTTP 200 and never with the
-    `{"nodes": ..., "edges": ...}` shape. `kind` takes exactly five values, the
-    set [Query-Bar Error Handling](#query-bar-error-handling), rule 5, enumerates
-    and is canonical for:
-    `not_read_only` for a query the read-only guard-rail rejected (Acceptance
-    Criterion 47), `invalid_limit` for a `limit` outside the six allowed values
-    (Acceptance Criterion 48),
-    `relationship_read_direction` for a query that reads a relationship bound
-    by an incoming or undirected fixed-length pattern (Acceptance Criterion 156),
-    `schema_introspection` for a schema-introspection command at any keyword
-    spacing (Acceptance Criteria 157 and 151),
-    and `execution` for a query that failed once running, which includes a
-    query cancelled for exhausting the 5-second time budget (Acceptance Criterion
-    110). One status serves all five and the `kind` is what distinguishes them.
-    There is **no** `invalid_keyword_spacing` value on this endpoint: a body
-    carrying one MUST fail this criterion. The
-    precedence is fixed and testable: a request carrying both an invalid `limit` and
-    a query that is not read-only is answered `invalid_limit`, because the endpoint
-    resolves the limit before it runs the guard rail, a query that is not
-    read-only is answered `not_read_only` even when it also carries a badly spaced
-    `SHOW`, a query that both writes and reads a relationship through an
-    incoming or undirected pattern is answered `not_read_only` rather than
-    `relationship_read_direction`, a request carrying both an invalid `limit` and
-    `SHOW INDEXES` is answered `invalid_limit` rather than `schema_introspection`,
-    and a schema-introspection command carrying a DDL tail
-    (`SHOW INDEXES YIELD name CREATE INDEX audit_key FOR (n:Audit) ON (n.key)`) is
-    answered `not_read_only` rather than `schema_introspection`, while the same
-    statement without that tail is answered `schema_introspection`. One ordinal
-    this specification publishes is **not** assertable and MUST NOT be tested,
-    because no request can exhibit it: `relationship_read_direction` against
-    `schema_introspection`, because an introspection command carries no
-    relationship pattern to orient. The boundary against the internal read error is
-    drawn at the moment the failure surfaces: a graph store that fails to open is
-    answered HTTP 500,
-    while a failure surfacing once the query is running is answered HTTP 400 with
-    `kind` `execution`, a store corruption a scan discovers mid-query included. The
-    `error` of an execution failure carries the engine's diagnostic and the page
-    renders it in place; the `error` of an invalid limit names the rejected value
-    (see [Query-Bar Error Handling](#query-bar-error-handling) and
+    `{"nodes": ..., "edges": ...}` shape. `kind` takes exactly two values, the set
+    [Query-Bar Error Handling](#query-bar-error-handling), rule 4, enumerates and
+    is canonical for: `invalid_limit` for a `limit` outside the six allowed values
+    (Acceptance Criterion 48), and `execution` for a statement that failed once
+    running, which includes one cancelled for exhausting the 5-second time budget
+    (Acceptance Criterion 110). One status serves both and the `kind` is what
+    distinguishes them. **A body carrying any other `kind` MUST fail this
+    criterion**, and the criterion MUST assert the closed set rather than only the
+    two members, because a third value is exactly what an endpoint that started
+    refusing statements again would publish. The order is fixed and testable: a
+    request carrying both an invalid `limit` and an unexecutable statement is
+    answered `invalid_limit`, because the endpoint resolves the limit before the
+    statement runs, and the statement is not executed. The boundary against the
+    internal read error is drawn at the moment the failure surfaces: a graph store
+    that fails to open, or a lock that cannot be taken within the bounded wait, is
+    answered HTTP 500, while a failure surfacing once the statement is running is
+    answered HTTP 400 with `kind` `execution`, a store corruption a scan discovers
+    mid-statement included. The `error` of an execution failure carries the
+    engine's diagnostic and the page renders it in place; the `error` of an invalid
+    limit names the rejected value (see
+    [Query-Bar Error Handling](#query-bar-error-handling) and
     `DATA_FORMATS.md § Graph View Data`, **Error Shape**).
 124. Each full-height page region — the Kanban board of the roadmap tasks page and
     the graph card of the knowledge-graph page — satisfies **both** edges of
@@ -6782,47 +6912,38 @@ Rules:
     still exits 0 on a graceful shutdown. The non-loopback record still states
     that the interface is reachable from the network and still names the bound
     host.
-147. A graph data request takes the graph store's shared lock while it opens the
-    store. While an `rmp graph` write against the same roadmap holds the store's
-    exclusive lock, a `GET /roadmaps/{name}/graph/data` for that roadmap does
-    **not** fail on the first collision: it waits and is served once the writer
-    releases the lock (see `GRAPH.md § Lock Contention`).
-148. The server releases the shared lock when the open returns, and this is
-    observable: an `rmp graph create` against the same roadmap, issued while a
-    slow graph data request is still executing its query, succeeds and exits 0.
-    Serving a graph read never fails a CLI write for the duration of the request.
-149. A graph data request never blocks indefinitely on the lock. When the shared
-    lock cannot be taken within the bounded wait, the request is answered HTTP 500
+147. A graph data request takes the graph store's exclusive lock before it opens
+    the store, and holds it until the request's statement, its commit, and any
+    checkpoint have completed. While an `rmp graph execute` invocation against the
+    same roadmap holds that lock, a `GET /roadmaps/{name}/graph/data` for that
+    roadmap does **not** fail on the first collision: it waits and is served once
+    the invocation releases the lock (see `GRAPH.md § Lock Contention`).
+148. The hold spans the statement, and this is observable in both directions: an
+    `rmp graph execute` against the same roadmap, issued while a slow graph data
+    request is still executing its statement, **waits** for that request rather
+    than proceeding beside it, and succeeds once the request completes. Two
+    concurrent graph data requests against one roadmap likewise serialise, and both
+    are served. An implementation in which the two overlap fails this criterion.
+149. A graph data request never blocks indefinitely on the lock. When the lock
+    cannot be taken within the bounded wait, the request is answered HTTP 500
     with the opaque error body every other 500 carries, accompanied by exactly one
     `ERROR` log record, and the server keeps serving other requests throughout.
 150. A graph data request against a store left with a stale `snapshot.tmp` staging
     directory, or with `snapshot/` absent and `snapshot.bak/` carrying a manifest,
     is served correctly: the response carries the committed graph, and the
     recovery repair those two states require is expected behaviour, not a defect
-    (see `GRAPH.md § What a Read Changes on Disk`).
-151. Keyword spacing changes nothing about what the graph data endpoint answers.
-    A request whose `q` is a schema-introspection command written with two spaces,
-    with a tab, or with a line break between `SHOW` and its target keyword is
-    answered exactly as the same command written with one space is: HTTP
-    `400 Bad Request`, `kind` `schema_introspection`, and the message Acceptance
-    Criterion 157 requires. The status, the `kind`, and the `error` MUST be equal
-    across the spellings, asserted by comparing the two responses rather than by
-    checking each against a literal. The `error` MUST NOT name the keyword spacing
-    and MUST NOT offer the one-space spelling as a correction, because on this
-    endpoint correcting it changes nothing; and the body MUST NOT carry `kind`
-    `invalid_keyword_spacing`, a value this endpoint does not publish
-    (Acceptance Criterion 123).
-    **The CLI is unaffected, and this criterion pins that too.** The same badly
-    spaced statement given to `rmp graph query`, `rmp graph search` and
-    `rmp graph update` still exits **6** with a message naming the keyword spacing
-    and the accepted spelling, exactly as `GRAPH.md` Acceptance Criterion 39
-    requires. The divergence is deliberate: the CLI answers the class, so a working
-    spelling is owed there, while this endpoint refuses the class, so no spelling
-    works here. A change that made the endpoint report the spacing again, or that
-    relaxed the CLI's spacing rejection to match the endpoint, MUST fail this
-    criterion (see
-    `GRAPH.md § Keyword Spacing in a Schema-Introspection Command` and
-    [Query-Bar Error Handling](#query-bar-error-handling), case 10).
+    (see `GRAPH.md § What a Statement That Writes Nothing Changes on Disk`).
+151. A schema-introspection command written with anything but a single space
+    between its two keywords is answered as the engine's own parse failure: HTTP
+    `400 Bad Request` with `kind` `execution` and the engine's diagnostic in
+    `error`. The endpoint neither refuses it before execution nor repairs the
+    spacing, and it publishes no class of its own for it. The same statement
+    written with one space is answered HTTP `200` with `{"nodes": [], "edges": []}`
+    (Acceptance Criterion 156), so the two spellings differ in the response, and
+    the difference is the engine's routing rather than a rule of this endpoint's
+    (see `GRAPH.md § What Groadmap Does Not Check`, item 7). A body carrying any
+    `kind` other than the two of Acceptance Criterion 123 MUST fail this
+    criterion.
 152. A term and a task's searchable text are normalised to Unicode's **Normalization
     Form C** before they are folded, and the pipeline for a term is trim, then NFC,
     then fold, then NFC, in that order, on both paths. The normalisation is for
@@ -6896,69 +7017,60 @@ Rules:
     [Roadmap Tasks Page](#roadmap-tasks-page), **One rule, and only one
     implementation of it**, and **What keeps the shipped rule equal to the
     server's**).
-156. A graph data request whose `q` uses a relationship variable in an expression
-    while that variable is bound by a fixed-length incoming (`<-[e]-`) or
-    undirected (`-[e]-`) pattern is answered HTTP `400 Bad Request` with a JSON
-    body whose `kind` is `relationship_read_direction`, and the query is never
-    executed: the body carries no `nodes` and no `edges`, and the `error` names the
-    relationship variable, the direction of the pattern that bound it, and the
-    outgoing rewrite, rather than describing the query as not read-only. The same
-    read written through an outgoing pattern returns the normal
-    `{"nodes": ..., "edges": ...}` shape with HTTP 200, so the two requests differ
-    only in the direction of the arrow. The rejection is the guard rail's, not the
-    engine's: the response is not `kind` `execution` and carries no engine parse
-    diagnostic, and the graph store is never opened. A request that carries such a
-    read together with a `limit` outside the six allowed values is answered
-    `invalid_limit`, and a query that both writes and carries such a read is
-    answered `not_read_only`, which places this kind below both in the precedence
-    of [Query-Bar Error Handling](#query-bar-error-handling), rule 6. The shapes
-    the rule does not reach are served normally: a pattern that
-    binds no relationship variable, a variable-length relationship, a projected
-    named path, and a `WITH *` that only carries the binding forward each return
-    HTTP 200 and the ordinary node-and-edge shape. This is the web surface of
-    `GRAPH.md § Relationship Read Direction`, which is canonical for the rule and
-    for those exclusions (notes 1, 2 and 5), and of that file's Acceptance Criteria
-    42 to 44, which fix the same rule on the CLI's read subcommands (see
-    [Query-Bar Error Handling](#query-bar-error-handling), case 11).
-157. A graph data request whose `q` is a schema-introspection command is refused
-    with an explanation, and is never executed. Against a store that holds at least
-    one index and one constraint — the store of `GRAPH.md` Acceptance Criterion 62
-    — each of `SHOW INDEXES`, `SHOW INDEX`, `SHOW CONSTRAINTS` and
-    `SHOW CONSTRAINT` submitted as `q` is answered HTTP `400 Bad Request` with a
-    JSON body whose `kind` is `schema_introspection`, whose `error` states that
-    this page draws a graph and names `rmp graph query` as where a schema listing
-    is obtained, and which carries neither `nodes` nor `edges`. The same holds for
-    a command carrying a `YIELD`, `WHERE`, or `RETURN` tail, and at any keyword
-    spacing (Acceptance Criterion 151). Answering HTTP 200 with
-    `{"nodes": [], "edges": []}` MUST
-    fail this criterion, and the status alone MUST NOT be the only assertion: an empty
-    graph reports success while stating something false about a store that does
-    hold a schema, and is indistinguishable from a query that genuinely matched
-    nothing.
-    **The control, without which the refusal is not shown to be narrow:** a request
-    whose `q` is `MATCH (n) OPTIONAL MATCH (n)-[r]->(m) RETURN n, r, m` returns
-    HTTP 200 and the ordinary `{"nodes": ..., "edges": ...}` shape against the same
-    store, so what the endpoint refuses is a class and not queries in general.
-    **The refusal precedes the store open**, on the same terms as the guard-rail
-    rejections of Acceptance Criteria 47 and 156: a request rejected under this
-    criterion opens no graph store, runs no checkpoint, truncates no write-ahead
-    log, and leaves the store's files unmodified.
-    **The precedence is asserted in both directions** (Acceptance Criterion 123): a
-    request carrying `SHOW INDEXES` with a `limit` of `7` is answered
-    `invalid_limit`, while the same query under an allowed `limit` is answered
-    `schema_introspection`; and a request whose `q` is
-    `SHOW INDEXES YIELD name CREATE INDEX audit_key FOR (n:Audit) ON (n.key)` is
-    answered `not_read_only`, while the same statement without that DDL tail is
-    answered `schema_introspection`. A **data-writing** tail MUST NOT be used to
-    assert that second pair, and a test that uses one asserts nothing: the engine
-    reports a statement its own DDL predicate accepts as carrying no writing
-    clause, so `SHOW INDEXES YIELD name CREATE (n:Audit)` classifies as read-only
-    and is itself answered `schema_introspection`. The `error` is HTML-escaped as
-    every other response of this endpoint is (Acceptance Criterion 35). This is the
-    web surface of `GRAPH.md § Recovered Schema on Both Paths`, whose three CLI
-    surfaces answer the same statement with the schema the store holds
-    (`GRAPH.md` Acceptance Criterion 64); see
-    [Query-Bar Error Handling](#query-bar-error-handling), case 10.
+156. **A statement that produces no node and no edge is answered HTTP `200` with
+    an empty graph, and this is a success rather than a failure.** Against a store
+    that holds at least one index and at least one node, each of the following
+    submitted as `q` is answered HTTP `200` with exactly
+    `{"nodes": [], "edges": []}`: `MATCH (n:Absent) RETURN n`, which matched
+    nothing; `MATCH (n) RETURN count(n)`, which returned a number; `SHOW INDEXES`,
+    which returned tabular rows the response shape cannot carry; and
+    `CREATE (n:Probe {key:'p'})`, which created a node and returned no columns at
+    all. The last two reach this criterion only because neither is injected into:
+    the `CREATE` carries no top-level `RETURN` and the `SHOW` is a
+    schema-introspection command, so both are suppressed under Suppression 2 of
+    [Graph Data Endpoint](#graph-data-endpoint), and an endpoint that appended the
+    node `LIMIT` to either would answer `400` instead. The four responses MUST be
+    compared against one another and found equal, because the endpoint publishes no
+    class that separates them. The criterion also
+    requires the control that keeps it narrow: `MATCH (n) OPTIONAL MATCH (n)-[r]->(m)
+    RETURN n, r, m` against the same store returns HTTP `200` and a non-empty
+    `nodes` array, so an empty answer is a property of the statement and not of the
+    endpoint. Answering any of the four with HTTP `400`, or with a `kind` of any
+    value, MUST fail this criterion (see
+    [Query-Bar Error Handling](#query-bar-error-handling), rule 9).
+157. **A schema listing is read from the CLI, and the endpoint says nothing false
+    about it.** Against a store that holds at least one index and one constraint —
+    the store of `GRAPH.md` Acceptance Criterion 32 — a request whose `q` is
+    `SHOW INDEXES` is answered HTTP `200` with `{"nodes": [], "edges": []}`
+    (Acceptance Criterion 156), and `rmp graph execute` against that same store
+    answers the identical statement with the rows, naming the index the caller
+    declared (`GRAPH.md` Acceptance Criterion 34). The criterion MUST assert both
+    halves together: the endpoint's answer is empty because its response shape
+    carries nodes and edges, not because the store's schema is empty, and the CLI
+    read is what establishes the difference. Asserting that the endpoint reports the
+    index row MUST fail this criterion.
+158. **The graph data endpoint routes through a running graph server, and the
+    status alone does not establish it.** With `rmp graph serve` running for a
+    roadmap, a `GET` of `/roadmaps/<roadmap>/graph/data` whose `q` carries
+    `CREATE (n:WebProbe {key:'w'})` is answered HTTP `200`, and the node is then
+    reported by `rmp graph client` against that same running server. The read-back
+    is what the criterion turns on: an endpoint that ignored the socket and opened
+    the store would have contended with the server's process-lifetime hold on the
+    exclusive lock, waited the whole wait budget, and answered HTTP `500`, so the
+    `200` alone separates nothing. With the server stopped, the identical request
+    is answered `200` on the direct path and a subsequent `rmp graph execute`
+    reports the node (see
+    [Knowledge Graph from the GoGraph Store](#knowledge-graph-from-the-gograph-store),
+    rule 1, and `GRAPH.md § Server Resolution`).
+159. **A socket file with nothing behind it does not fail a request and does not
+    make it wait.** With a socket file present at the roadmap's default socket
+    path and no process listening on it, a `GET` of
+    `/roadmaps/<roadmap>/graph/data` is answered HTTP `200` with the graph, and it
+    is answered promptly: the criterion is asserted on wall-clock time, because
+    the failure it exists against is a request that spends the whole wait budget
+    and then answers `500`. The leftover socket file is still present afterwards,
+    because a caller never removes one (see `GRAPH.md § Server Resolution`,
+    rule 1).
 
 ## See Also
 
@@ -6973,19 +7085,24 @@ Rules:
 - Graph view data JSON shape → `DATA_FORMATS.md § Graph View Data`
 - Graph element and property-type JSON mapping reused by the graph data endpoint
   → `DATA_FORMATS.md § Graph Query Result`
-- Read-only graph access, recovery, and the checkpoint that web reads must avoid
-  → `GRAPH.md § Engine Construction and Lifecycle` and
+- Graph access, recovery, and the checkpoint the endpoint runs after a statement
+  that wrote → `GRAPH.md § Engine Construction and Lifecycle` and
   `GRAPH.md § Synchronous Checkpoint on Write`
-- The store access lock a web graph read takes, its contention rules, and the
-  exhaustive list of what a read changes on disk →
-  `GRAPH.md § Concurrency and Recovery`, `GRAPH.md § What a Read Changes on Disk`,
+- The store access lock a web graph request takes, its contention rules, and the
+  exhaustive list of what a statement that writes nothing changes on disk →
+  `GRAPH.md § Concurrency and Recovery`,
+  `GRAPH.md § What a Statement That Writes Nothing Changes on Disk`,
   and `GRAPH.md § Lock Contention`
-- Read-only guard-rail and literal-aware masked normalization reused to validate
-  the query bar's user-supplied Cypher →
-  `GRAPH.md § Subcommands and Guard-Rail Validation` and
-  `GRAPH.md § Literal-Aware Normalization`
-- Schema-introspection commands, the read-only class the CLI read subcommands
-  answer and the graph data endpoint refuses → `GRAPH.md § Schema Introspection`
+- The same statement time budget applied by `rmp graph execute`, what a cut
+  statement leaves on disk, and the exit code it reports →
+  `GRAPH.md § Statement Time Budget`
+- The rule this endpoint follows to decide whether a roadmap is served, and the
+  server whose existence makes it necessary → `GRAPH.md § Server Resolution` and
+  `GRAPH.md § The Dedicated Graph Server`
+- The literal-aware masked normalization the endpoint's `LIMIT` decisions run on
+  → `GRAPH.md § Literal-Aware Normalization`
+- What Groadmap does not check about a Cypher statement, on this endpoint as on
+  the CLI → `GRAPH.md § What Groadmap Does Not Check`
 - Roadmap discovery, data directory layout, and permissions →
   `ARCHITECTURE.md § Directory Structure`
 - SQLite schema migrations the startup step runs, and their idempotency →

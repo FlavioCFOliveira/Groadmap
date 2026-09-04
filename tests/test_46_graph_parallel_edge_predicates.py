@@ -117,60 +117,60 @@ class TestGraphParallelEdgePredicates:
 
     # ---- helpers -----------------------------------------------------
 
-    def write(self, subcmd, query):
-        result = self.test.run_cmd_json(["graph", subcmd, "-r", self.roadmap, "--query", query])
+    # `write` and `read` name what the caller is doing. `rmp graph` has one
+    # subcommand and it runs both (SPEC/COMMANDS.md section "Graph Management");
+    # the two helpers survive because they assert different things.
+
+    def write(self, query):
+        result = self.test.run_cmd_json(["graph", "execute", "-r", self.roadmap, "--query", query])
         assert result == {"ok": True}, (
-            f"write without RETURN must emit {{'ok': true}}; {subcmd} {query!r} -> {result!r}")
+            f"write without RETURN must emit {{'ok': true}}; {query!r} -> {result!r}")
 
-    def read(self, query, subcmd="query"):
-        return self.test.run_cmd_json(["graph", subcmd, "-r", self.roadmap, "--query", query])
+    def read(self, query):
+        return self.test.run_cmd_json(["graph", "execute", "-r", self.roadmap, "--query", query])
 
-    def col_list(self, query, col, subcmd="query"):
+    def col_list(self, query, col):
         """Ordered list of one column's values — the actual rows returned."""
-        result = self.read(query, subcmd=subcmd)
+        result = self.read(query)
         idx = result["columns"].index(col)
         return [row[idx] for row in result["rows"]]
 
-    def col_set(self, query, col, subcmd="query"):
-        return set(self.col_list(query, col, subcmd=subcmd))
+    def col_set(self, query, col):
+        return set(self.col_list(query, col))
 
     # ---- fixture -----------------------------------------------------
 
     def _seed_knowledge_graph(self):
         """A faithful slice of this project's own knowledge graph, including
         the parallel edges that the real graph contains."""
-        self.write("create", f"CREATE (p:Package {{key:'{DB_PACKAGE}', layer:'persistence'}})")
-        self.write("create", f"CREATE (p:Package {{key:'{UTILS_PACKAGE}', layer:'support'}})")
-        self.write("create", f"CREATE (f:File {{key:'{SOURCE_FILE}', language:'go'}})")
-        self.write("create", f"CREATE (f:File {{key:'{UTILS_FILE}', language:'go'}})")
-        self.write("create", f"CREATE (t:Test {{key:'{TEST_FILE}', kind:'unit'}})")
-        self.write("create", f"CREATE (s:Spec {{key:'{DATABASE_SPEC}', status:'approved'}})")
+        self.write(f"CREATE (p:Package {{key:'{DB_PACKAGE}', layer:'persistence'}})")
+        self.write(f"CREATE (p:Package {{key:'{UTILS_PACKAGE}', layer:'support'}})")
+        self.write(f"CREATE (f:File {{key:'{SOURCE_FILE}', language:'go'}})")
+        self.write(f"CREATE (f:File {{key:'{UTILS_FILE}', language:'go'}})")
+        self.write(f"CREATE (t:Test {{key:'{TEST_FILE}', kind:'unit'}})")
+        self.write(f"CREATE (s:Spec {{key:'{DATABASE_SPEC}', status:'approved'}})")
 
         # Parallel edges, ordered pair (Test) -> (File): the test file tests
         # the schema, covers it, and depends on it. Stored in this exact order;
         # TESTS is first, so only COVERS and DEPENDS_ON exercise the defect.
         for etype in TEST_TO_FILE_TYPES:
-            self.write("create",
-                       f"MATCH (t:Test {{key:'{TEST_FILE}'}}), (f:File {{key:'{SOURCE_FILE}'}}) "
+            self.write(f"MATCH (t:Test {{key:'{TEST_FILE}'}}), (f:File {{key:'{SOURCE_FILE}'}}) "
                        f"CREATE (t)-[:{etype}]->(f)")
 
         # Parallel edges, ordered pair (File) -> (Package).
         for etype in FILE_TO_PACKAGE_TYPES:
-            self.write("create",
-                       f"MATCH (f:File {{key:'{SOURCE_FILE}'}}), (p:Package {{key:'{DB_PACKAGE}'}}) "
+            self.write(f"MATCH (f:File {{key:'{SOURCE_FILE}'}}), (p:Package {{key:'{DB_PACKAGE}'}}) "
                        f"CREATE (f)-[:{etype}]->(p)")
 
         # The utils file is deliberately INCOMPLETE: it only BELONGS_TO its
         # package and has no DECLARED_IN edge. It is the one true gap that the
         # audit query in test_kg_gap_audit_over_parallel_edges must find.
-        self.write("create",
-                   f"MATCH (f:File {{key:'{UTILS_FILE}'}}), (p:Package {{key:'{UTILS_PACKAGE}'}}) "
+        self.write(f"MATCH (f:File {{key:'{UTILS_FILE}'}}), (p:Package {{key:'{UTILS_PACKAGE}'}}) "
                    f"CREATE (f)-[:BELONGS_TO]->(p)")
 
         # A plain, non-parallel edge: the control that the multigraph fix did
         # not break the ordinary single-edge case.
-        self.write("create",
-                   f"MATCH (f:File {{key:'{SOURCE_FILE}'}}), (s:Spec {{key:'{DATABASE_SPEC}'}}) "
+        self.write(f"MATCH (f:File {{key:'{SOURCE_FILE}'}}), (s:Spec {{key:'{DATABASE_SPEC}'}}) "
                    f"CREATE (f)-[:IMPLEMENTS]->(s)")
 
     # ================================================================

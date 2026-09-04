@@ -4,6 +4,7 @@ package utils
 import (
 	"errors"
 	"fmt"
+	"log/slog"
 	"time"
 )
 
@@ -33,6 +34,37 @@ func FormatISO8601(t time.Time) string {
 		return ""
 	}
 	return t.UTC().Format(ISO8601Format)
+}
+
+// SlogTimestampUTC is the `ReplaceAttr` hook that makes a `log/slog` handler
+// stamp its records in the project's one canonical timestamp format.
+//
+// It exists because slog does NOT produce that format on its own:
+// slog.TextHandler builds the `time` attribute itself, from the record's clock
+// reading, and renders it in the machine's LOCAL zone with a numeric offset —
+// `2026-09-03T11:51:05.221+01:00`. That satisfies neither the "always UTC" rule
+// nor the "Z suffix" rule of DATA_FORMATS.md § Dates - ISO 8601 with UTC, so a
+// handler that accepts the default emits, on the product's own stderr, a
+// timestamp shape the product's own specification forbids.
+//
+// Passing it as slog.HandlerOptions.ReplaceAttr rewrites that attribute for
+// EVERY record the handler renders, whoever produced it. That is the property
+// the graph server depends on: the two startup warnings on its stderr are the
+// engine's records, and the engine supplies no timestamp of its own, so the
+// stamp on them is this hook's and the format is this project's.
+//
+// It converts rather than reformats. [FormatISO8601] applies UTC() first, so a
+// record made in any zone is published as the same instant everywhere, and a log
+// line can be compared directly against a task's created_at.
+//
+// It touches only the built-in top-level time attribute (len(groups) == 0 and
+// the key slog is documented to use), so an attribute a caller happens to name
+// "time" inside a group is left exactly as it was.
+func SlogTimestampUTC(groups []string, a slog.Attr) slog.Attr {
+	if len(groups) == 0 && a.Key == slog.TimeKey && a.Value.Kind() == slog.KindTime {
+		a.Value = slog.StringValue(FormatISO8601(a.Value.Time()))
+	}
+	return a
 }
 
 // ParseISO8601 parses an ISO 8601 UTC string to time.Time.

@@ -14,6 +14,7 @@
   - [Error Reuse Policy (Mandatory)](#error-reuse-policy-mandatory)
 - [Exit Codes](#exit-codes)
   - [Exit Code Standards](#exit-code-standards)
+  - [Exit Codes of the Graph Server and Client](#exit-codes-of-the-graph-server-and-client)
 - [AI Agent Contract Generation](#ai-agent-contract-generation)
 - [See Also](#see-also)
 
@@ -62,6 +63,7 @@ transactions, or locks. The graph layer is specified in `GRAPH.md`.
 │   ├── project.db            # Individual roadmap (SQLite)
 │   ├── project.db-wal        # SQLite write-ahead log sidecar (when present)
 │   ├── project.db-shm        # SQLite shared-memory sidecar (when present)
+│   ├── graph.sock            # Graph server socket (present only while rmp graph serve runs)
 │   └── graph/                # Knowledge graph store (GoGraph), when present
 ├── project2/
 │   └── project.db
@@ -76,10 +78,11 @@ transactions, or locks. The graph layer is specified in `GRAPH.md`.
 4. Each roadmap has its own **home directory** at `~/.roadmaps/<name>/`. The directory name is the roadmap name. This directory is the container for every file the `rmp` application uses for that roadmap.
 5. Each roadmap home directory is created if absent, is owned by the user only, and uses the same `0700` permissions as the data directory; its permissions are verified on access.
 6. The roadmap's SQLite database lives inside the roadmap home directory at `~/.roadmaps/<name>/project.db` with `0600` permissions, applied and verified every time `rmp` opens the database and not only when it creates it (see `ARCHITECTURE.md § Open-Time Permission Enforcement`). Its SQLite sidecars (`project.db-wal`, `project.db-shm`) live alongside it.
-7. A roadmap home directory holds the SQLite database and its sidecars, and, once the knowledge graph is used, the `graph/` subdirectory. The directory is the designated location for per-roadmap artefacts; additional file types may be added without changing this layout.
-8. The knowledge graph for a roadmap is stored in the subdirectory `~/.roadmaps/<name>/graph/` (mode `0700`), created on first use of any `rmp graph` subcommand. It is a directory because the GoGraph backing store persists through an on-disk snapshot plus a write-ahead log; after the first successful write subcommand the directory also contains a `snapshot/` subdirectory, produced by the synchronous checkpoint that runs after each write (see `GRAPH.md § Synchronous Checkpoint on Write`). The directory also holds `write.lock`, the advisory lock file Groadmap itself maintains to serialise access to the store (see `GRAPH.md § Concurrency and Recovery`). Apart from that lock file, the internal layout is owned by GoGraph and is opaque to Groadmap. The graph store is the canonical subject of `GRAPH.md`; see `GRAPH.md § Persistence Layout`.
-9. Roadmap enumeration considers the immediate **subdirectories** of `~/.roadmaps/` (one directory per roadmap), not files at the top level. A roadmap is identified by the presence of `project.db`; the optional `graph/` subdirectory does not by itself constitute a roadmap.
+7. A roadmap home directory holds the SQLite database and its sidecars, and, once the knowledge graph is used, the `graph/` subdirectory. While a dedicated graph server is running for the roadmap it also holds that server's socket, `graph.sock` (see rule 11). The directory is the designated location for per-roadmap artefacts; additional file types may be added without changing this layout.
+8. The knowledge graph for a roadmap is stored in the subdirectory `~/.roadmaps/<name>/graph/` (mode `0700`), created on first use of `rmp graph execute`. It is a directory because the GoGraph backing store persists through an on-disk snapshot plus a write-ahead log; after the first statement that wrote, the directory also contains a `snapshot/` subdirectory, produced by the synchronous checkpoint that follows a transaction that wrote (see `GRAPH.md § Synchronous Checkpoint on Write`). The directory also holds `write.lock`, the advisory lock file Groadmap itself maintains to serialise access to the store (see `GRAPH.md § Concurrency and Recovery`). Apart from that lock file, the internal layout is owned by GoGraph and is opaque to Groadmap. The graph store is the canonical subject of `GRAPH.md`; see `GRAPH.md § Persistence Layout`.
+9. Roadmap enumeration considers the immediate **subdirectories** of `~/.roadmaps/` (one directory per roadmap), not files at the top level. A roadmap is identified by the presence of `project.db`; neither the optional `graph/` subdirectory nor the optional `graph.sock` socket constitutes a roadmap on its own.
 10. **No symbolic links for the data directory or a roadmap home directory.** Neither the data directory `~/.roadmaps/` nor any roadmap home directory `~/.roadmaps/<name>/` may be a symbolic link. When creating, opening, or migrating a roadmap directory, `rmp` MUST refuse to follow a symbolic link: if `~/.roadmaps/` is a symlink, or if the resolved `~/.roadmaps/<name>/` path is a symlink (rather than a real directory), the operation fails with an error (`utils.ErrDatabase`, exit code 1) instead of following the link. This prevents an attacker from redirecting `project.db` writes outside the data directory and prevents `rmp` from applying its `0700`/`0600` permission changes to a directory or file outside `~/.roadmaps/` reached through a link (CWE-59, link following). The startup layout-migration sweep applies the same rule: a `.db`-named top-level symbolic link is never a migration candidate and is left untouched (see `ARCHITECTURE.md § Filesystem Layout Migration`, Edge Cases).
+11. The dedicated graph server started by `rmp graph serve` binds a Unix domain socket at `~/.roadmaps/<name>/graph.sock` with mode `0600`, unless `--socket` names another path. The socket is not part of the graph store and carries no data: it exists while a server runs, is removed when that server stops, and a copy left behind by a killed server is stale and is replaced by the next one. Because the roadmap home directory is `0700`, a socket at the default path is unreachable by another user whatever its own mode is; the socket's own mode is the fence that still holds when `--socket` places it elsewhere. `GRAPH.md § Socket Path and Permissions` is canonical for the path, the mode, and the access model.
 
 ## Security Guarantees
 
@@ -250,8 +253,9 @@ the same rule, with the sequence in step **B** followed exactly as written:
   permission and creates no roadmap database, roadmap home directory, or graph
   store directory for a read; restricting a file that is more permissive than
   `0600` is consistent with both statements. This bullet is about the roadmap
-  database only: the graph store has its own read-path rules, and what a graph
-  read may change on disk is `GRAPH.md § What a Read Changes on Disk`.
+  database only: the graph store has its own rules, and what a graph statement
+  that writes nothing may change on disk is
+  `GRAPH.md § What a Statement That Writes Nothing Changes on Disk`.
 - The read-only path does not create, modify, or verify directories. The
   directory rule in step **A** is enforced by the writable open path and by the
   web server's startup sequence, which verifies `0700` on `~/.roadmaps/` before
@@ -318,7 +322,14 @@ Groadmap/
 │   │   ├── comment.go     # Comment subcommands of the task and sprint families
 │   │   ├── graph.go       # Graph subcommands (GoGraph integration)
 │   │   └── web.go         # web command (starts the embedded HTTP server)
-│   ├── web/               # Embedded read-only HTTP server (net/http)
+│   ├── graphstore/        # The graph store's lifecycle: open, checkpoint, close
+│   │   └── graphstore.go  # The ONE open/checkpoint sequence; every surface calls it
+│   ├── graphclient/       # Reaching a roadmap's graph server: resolution + Bolt v5 client
+│   │   └── graphclient.go # The ONE resolution rule and the ONE client; every surface calls it
+│   ├── graphjson/         # The ONE mapping from an engine value to published JSON; every surface calls it
+│   ├── graphserve/        # The graph server's lifecycle: listener, options, drain, shutdown
+│   ├── signals/           # The ONE registration for SIGINT and SIGTERM; every surface takes the action over
+│   ├── web/               # Embedded HTTP server (net/http)
 │   │   ├── server.go      # Server construction, routes, graceful shutdown
 │   │   ├── handlers.go    # Read-only route handlers (index, sprints, tasks, sprint, graph, data)
 │   │   ├── templates/     # Embedded html/template files (go:embed)
@@ -384,22 +395,55 @@ Each package implements:
 
 ### 5. internal/utils/
 - **json.go**: Consistent JSON output wrapper
-- **time.go**: UTC conversion, ISO 8601 formatting
+- **time.go**: UTC conversion, ISO 8601 formatting, and the `log/slog` hook that
+  stamps a server's log records in that same format, so the format has one
+  realisation rather than one per surface (`DATA_FORMATS.md § Dates - ISO 8601 with UTC`)
 - **path.go**: Cross-platform path resolution. Resolves the roadmap home
   directory and, for the graph feature, the per-roadmap `graph/` subdirectory.
 
 ### 6. internal/commands/graph.go and the GoGraph dependency
-- Implements the `graph` command and its five subcommands.
+- Implements the `graph` command and its three subcommands, `execute`, `serve`
+  and `client`.
 - Integrates the external module `github.com/FlavioCFOliveira/GoGraph`, which
   supplies the labelled property graph, the Cypher engine, and the durable
   directory-based store. The integration boundary is contained in this one
   package so that an upstream API change is absorbed in a single place.
-- Owns the guard-rail validation that maps each subcommand to the Cypher
-  operation classes it accepts, the `--query`/stdin input handling, the JSON
-  serialisation of results, and the mapping of engine failures onto Groadmap's
-  sentinel errors. Four subcommands accept one class each; `graph update` accepts
-  three, because it is also the schema subcommand (see
-  `GRAPH.md § Schema Management`).
+- Owns the `--query`/stdin input handling, the JSON serialisation of results,
+  and the mapping of engine failures onto Groadmap's sentinel errors. It owns no
+  validation of the statement's content beyond its length: the statement is
+  handed to the engine as written, whatever it does (see
+  `GRAPH.md § What Groadmap Does Not Check`).
+- It does **not** own the graph store's lifecycle. Opening the store, holding its
+  lock, building the engine and taking the checkpoint belong to
+  `internal/graphstore` (module 8 below); this package calls it and then does
+  what only a CLI does — reads the statement, serialises the result, prints the
+  diagnostics, and chooses the exit code.
+- It owns neither of the two things the graph server introduced. Deciding whether
+  a roadmap is served, and speaking the protocol to a server that is, belong to
+  `internal/graphclient` (module 9); running a server belongs to
+  `internal/graphserve` (module 10). This package calls both, exactly as it calls
+  `internal/graphstore`, and keeps the CLI's own half: the flags, the statement's
+  source, the JSON on stdout, the diagnostics on stderr, and the exit code.
+- **It does not own the mapping from an engine value to published JSON either.**
+  That mapping has one realisation, in `internal/graphjson`, and this package
+  calls it. `DATA_FORMATS.md § One Realisation of the Mapping` is canonical for
+  the rule, for which surfaces it binds, and for what each of them still owns.
+  What stays here is the part that is only the CLI's: the `{columns, rows}`
+  document the mapped values are placed in, and the Path rendering, which no
+  other surface publishes.
+- **Why that mapping is a package and not a section of this one.**
+  `internal/commands` imports `internal/web`, so the dependency cannot run the
+  other way, and a mapping from an engine value to published JSON is neither a
+  CLI concern nor an HTTP one — the same reasoning module 8 gives below. That
+  reasoning is what makes it a separate package; it is not what would make it a
+  numbered module here. `internal/graphjson` has no section of its own for the
+  reason `internal/graphlock` and `internal/backoff` have none: what modules 8 to
+  11 own is a lifecycle or a process-wide disposition, whose steps can be ordered
+  wrongly and fail silently, and a mapping has none — no state, no ordering, no
+  resource, and no behaviour that `DATA_FORMATS.md` does not already fix. Its
+  single-realisation rule therefore lives beside the mapping it governs, exactly
+  as the one for the timestamp format lives in
+  `DATA_FORMATS.md § Dates - ISO 8601 with UTC` rather than in module 5.
 - The behaviour is specified in `GRAPH.md`; the CLI contract is in
   `COMMANDS.md § Graph Management`; the result JSON is in
   `DATA_FORMATS.md § Graph Query Result`.
@@ -413,9 +457,8 @@ pinning requirements are in `BUILD.md § Go Toolchain`.
 
 ### 7. internal/web/ and the embedded HTTP server
 
-- Implements the read-only web interface started by `rmp web`. The command entry
-  point is `internal/commands/web.go`; the server itself lives in
-  `internal/web/`.
+- Implements the web interface started by `rmp web`. The command entry point is
+  `internal/commands/web.go`; the server itself lives in `internal/web/`.
 - Built on Go's standard-library `net/http` only. It introduces no third-party
   web framework and no external runtime dependency.
 - Serves server-rendered HTML produced from `html/template`, presented in the
@@ -428,15 +471,18 @@ pinning requirements are in `BUILD.md § Go Toolchain`.
   `BUILD.md § Vendored Web Assets`.
 - Reads the same on-disk data the CLI reads: tasks and sprints from each
   roadmap's `project.db` (via the existing read queries in `DATABASE.md`) and the
-  knowledge graph from each roadmap's `graph/` store (via the GoGraph engine's
-  read path, exactly as `graph query`/`search` open it, and under the same shared
-  lock, held across the open alone). Every per-request handler opens its data
-  **read-only**: it performs **no** write to a roadmap database, no audit entry,
-  no schema change, no write of
-  graph data, and triggers **no** graph checkpoint. Opening the graph store is the
-  one exception to "read-only" at the filesystem level: the engine's recovery
-  repairs an interrupted checkpoint on open, which is why a graph read takes a
-  lock. The exhaustive rule is `GRAPH.md § What a Read Changes on Disk`.
+  knowledge graph from each roadmap's `graph/` store. Every per-request handler
+  opens a roadmap database **read-only**: it performs no write to it and writes no
+  audit entry.
+- **The graph store is opened the way the CLI opens it, and that includes
+  writing.** The graph data endpoint executes the caller's Cypher without
+  examining it, so it takes the store's exclusive lock, constructs the same
+  transactional engine `graph execute` constructs, and checkpoints when the
+  transaction it ran wrote (see `GRAPH.md § Engine Constructor by Path` and
+  `GRAPH.md § Concurrency and Recovery`). A request to that endpoint can therefore
+  create, change, and delete graph data, and can change the graph's schema, with
+  no authentication. What a statement that writes nothing leaves untouched is the
+  exhaustive rule `GRAPH.md § What a Statement That Writes Nothing Changes on Disk`.
 - Performs one writing step, at startup only: before binding the listener it opens
   each existing roadmap's `project.db` through the normal writable open path to run
   the SQLite schema migrations (idempotent; automatic; no user input), then closes
@@ -444,6 +490,14 @@ pinning requirements are in `BUILD.md § Go Toolchain`.
   database. The startup migration is the only path on which `rmp web` writes to a
   roadmap database, and it precedes any read-only connection (see
   `WEB.md § Startup Schema Migration` and `VERSION.md § Migrations`).
+- **It holds no copy of the graph value mapping.** The node and edge objects it
+  publishes, and every property value inside them, go through the one realisation
+  in `internal/graphjson` that `rmp graph execute` and `rmp graph client` go
+  through (`DATA_FORMATS.md § One Realisation of the Mapping`). What remains this
+  package's own is the node-link document those objects are placed in: collecting
+  each element once, dropping an edge whose endpoint was not collected, and
+  decomposing a path into the elements it contains rather than publishing a path
+  object at all.
 - Validates roadmap names taken from the URL path against the central
   roadmap-name rules before using them to resolve any filesystem path, so a
   crafted path cannot traverse outside `~/.roadmaps/` (see Security Guarantees).
@@ -451,6 +505,119 @@ pinning requirements are in `BUILD.md § Go Toolchain`.
   `COMMANDS.md § Web Interface`; the graph data JSON shape is in
   `DATA_FORMATS.md § Graph View Data`; the embedded-asset bundling is in
   `BUILD.md § Vendored Web Assets`.
+
+
+### 8. internal/graphstore/ and the graph store's lifecycle
+
+- Owns the lifecycle of a roadmap's GoGraph store, and only that: taking the
+  directory's exclusive advisory lock, opening the store through recovery, opening
+  the write-ahead-log writer, wrapping both in the transactional store,
+  constructing the Cypher engine over it, taking the synchronous checkpoint, and
+  releasing everything in the one safe order. The behaviour is specified in
+  `GRAPH.md § Concurrency and Recovery`, `GRAPH.md § Engine Constructor by Path`
+  and `GRAPH.md § Synchronous Checkpoint on Write`, all of which remain canonical.
+- **There is exactly one realisation of that sequence, and every surface calls
+  it.** `graph execute` and the web graph data endpoint are both on it, and the
+  dedicated graph server will be. `GRAPH.md § Engine Constructor by Path` states
+  the single-construction rule and `internal/testenv` enforces it: one engine
+  construction and one snapshot write in the whole of production source.
+- The package exists as its own package rather than inside either caller because
+  `internal/commands` imports `internal/web`, so the dependency cannot run the
+  other way, and because a store's lifecycle is neither a CLI concern nor an HTTP
+  one. It is the same reasoning that gave `internal/graphlock` and
+  `internal/backoff` packages of their own.
+- **What it deliberately does not own.** It does not create the graph directory:
+  the CLI creates it, and the web interface is forbidden to (`WEB.md § Security
+  and Constraints`). And it does not execute statements, drain results, or
+  classify failures — those differ by surface (a CLI exit code, an HTTP status, a
+  Bolt session), and a boundary drawn around them would fit two callers and not
+  the third.
+
+### 9. internal/graphclient/ and reaching a graph server
+
+- Owns two things and only those two: deciding whether a roadmap is currently
+  served, and speaking Bolt version 5 to the server when it is. The behaviour of
+  both is specified in `GRAPH.md § Server Resolution` and
+  `GRAPH.md § The Bolt Client`, which remain canonical.
+- **There is exactly one realisation of each, and every surface calls it.**
+  `rmp graph client` is a thin command-line wrapper over this package;
+  `rmp graph execute` and the web graph data endpoint call it to resolve, and
+  then either call it to send the statement or call `internal/graphstore` to open
+  the store. A second client, or a second resolution rule, would be a second set
+  of answers to the questions `GRAPH.md § Server Resolution` settles, and the two
+  copies would diverge silently: a resolution that treated an unanswered probe as
+  "not served" still runs, and still returns a result, right up to the moment a
+  server is holding the lock it then waits on.
+- The package exists as its own package for the same reason `internal/graphstore`
+  does: `internal/commands` imports `internal/web`, so the dependency cannot run
+  the other way, and reaching a server is neither a CLI concern nor an HTTP one.
+- It builds its client on the pinned engine's exported protocol primitives — the
+  handshake, the request encoding and decoding, the chunked framing, and the
+  PackStream codec — rather than on a third-party driver. It maps the values it
+  decodes onto the JSON representations `DATA_FORMATS.md § Graph Client Result`
+  fixes, so a result is the same whichever path carried it.
+- **What it deliberately does not own.** It does not open the graph store, does
+  not take the advisory lock, and does not decide what a failure means to a
+  caller: a resolution outcome becomes an exit code in `internal/commands` and an
+  HTTP status in `internal/web`, and those two answers differ.
+
+### 10. internal/graphserve/ and the dedicated graph server
+
+- Owns the lifecycle of the server `rmp graph serve` runs: the Unix domain socket
+  listener, the options the engine's Bolt server is constructed with, the drain
+  that precedes shutdown, and the ordered teardown. The behaviour is specified in
+  `GRAPH.md § The Dedicated Graph Server`, which remains canonical.
+- It constructs no engine of its own. It calls `internal/graphstore` for the
+  store, the lock, the engine, and the checkpoint, exactly as the other surfaces
+  do, so the single construction `GRAPH.md § Engine Constructor by Path` fixes
+  stays single.
+- It uses the engine's own Bolt server rather than a protocol of Groadmap's. The
+  engine's convenience entry point that both listens and serves is unusable here
+  because it binds a network address, so this package builds the `unix` listener
+  itself and hands it to the serve call. The serve call closes that listener
+  itself, so this package must not treat itself as its owner.
+- The drain is this package's own work, because the engine has none: its shutdown
+  cancels connection contexts rather than waiting for in-flight statements. See
+  `GRAPH.md § Server Shutdown and the Drain`.
+- Owns the server's diagnostic channel: the handler its records are rendered by,
+  and the bounded, non-blocking sink that keeps a stderr nobody is reading off the
+  goroutines that serve sessions. `GRAPH.md § Server Diagnostics on Stderr` is
+  canonical for what that stream carries and for the limit it comes with. The
+  timestamp format the handler applies is not this package's: it installs the hook
+  `internal/utils` owns, which is the one `internal/web` installs too.
+- **What it deliberately does not own.** It does not read the statement, does not
+  serialise a result, and does not choose an exit code; and it is not a client of
+  itself — a caller that wants to reach a server uses `internal/graphclient`.
+
+### 11. internal/signals/ and the process's signal disposition
+
+- Owns what `SIGINT` and `SIGTERM` mean to the `rmp` process, for every command.
+  It registers for the two signals **once**, at the start of the process, and
+  never unregisters. What a caller changes is the action taken on delivery, not
+  the registration.
+- **No delivery is ever unowned.** A short-lived invocation leaves the default
+  action in place and is interrupted, exiting `130` (see
+  [Exit Codes](#exit-codes)). A long-lived surface — `rmp graph serve` and
+  `rmp web`, the only two — takes the action over for the length of its service
+  and hands it back for its teardown. Because the registration is never torn down
+  and rebuilt, there is no interval in which the process would be killed outright
+  by a signal it is supposed to handle, and none in which a signal already queued
+  would be delivered to nothing.
+- **A surface takes the action over before it announces itself.**
+  `rmp graph serve` takes over before it prints its socket
+  (`GRAPH.md § Server Startup`, step 7), and `rmp web` before it prints its URL
+  and therefore before it launches a browser (`WEB.md § Server Lifecycle`,
+  step 5). An announcement is what a caller uses to decide the server is up, so
+  ordering the take-over ahead of it is what makes a server that is up a server
+  that stops gracefully.
+- **Both properties are enforced rather than described.** `internal/testenv`
+  fails the build if any production file outside this package handles signals
+  itself, if this package's single registration is torn down or duplicated, if
+  this package stops handling signals at all, or if either long-lived surface
+  announces itself before taking the action over.
+- **What it deliberately does not own.** It chooses no exit code — the action a
+  caller installs does that — and it knows nothing about drains, stores, sockets,
+  or HTTP.
 
 ## Command Lifecycle
 
@@ -466,7 +633,11 @@ pinning requirements are in `BUILD.md § Go Toolchain`.
 
 The startup sweep runs before routing on every `rmp` invocation, so all handlers (including `roadmap list` and `roadmap open`) observe the current filesystem layout.
 
-Most commands complete a single operation and exit. The one exception is `rmp web`, whose handler does not return after step 5: it starts the embedded HTTP server and serves read-only requests until it receives an interrupt or termination signal, then shuts down gracefully and exits 0. Each request the server handles opens the data it needs read-only, renders the response, and releases the handle; the server holds no roadmap database or graph store open across requests. The `web` lifecycle is specified in `WEB.md § Server Lifecycle`.
+Most commands complete a single operation and exit. Two do not, and their handlers do not return after step 5.
+
+`rmp web` starts the embedded HTTP server and serves requests until it receives an interrupt or termination signal, then shuts down gracefully and exits 0. Each request the server handles opens the data it needs, renders the response, and releases the handle; the server holds no roadmap database or graph store open across requests. A roadmap database is always opened read-only. The graph store is opened the way `graph execute` opens it — but only when the roadmap is not being served, because a graph data request resolves the roadmap's socket first and sends its statement to a running server instead (see `GRAPH.md § Server Resolution`); when it does open the store, a request to that endpoint may write to it. The `web` lifecycle is specified in `WEB.md § Server Lifecycle`.
+
+`rmp graph serve` opens one roadmap's graph store, holds it and its advisory lock for the life of the process, and answers Cypher statements over a Unix domain socket until it receives an interrupt or termination signal. It then drains the work in flight, shuts the protocol server down, checkpoints, releases the lock, removes the socket, and exits 0. Unlike `rmp web`, it holds the store open across requests: that is the point of it. The lifecycle is specified in `GRAPH.md § The Dedicated Graph Server`.
 
 ## Filesystem Layout Migration
 
@@ -692,6 +863,40 @@ Groadmap follows standard Unix/Linux exit code conventions. Success output is JS
 | `127` | `EXIT_CMD_NOT_FOUND` | Command not found | Dispatch failure: an unresolved command name or an unresolved subcommand name |
 | `130` | `EXIT_SIGINT` | Interrupted by Ctrl+C | SIGINT received |
 
+### Exit Codes of the Graph Server and Client
+
+`rmp graph serve` and `rmp graph client` introduce no new exit code and no new sentinel error. Every failure either can produce is carried by a sentinel the catalogue above already names, and this section enumerates which codes each subcommand can return so that the enumeration exists in one place. `COMMANDS.md § Graph Management` is canonical for the command-line contract, and `GRAPH.md § The Dedicated Graph Server` for the behaviour behind each row.
+
+`rmp graph execute` is not enumerated here, because the graph server changed which failures it can reach without changing its exit codes: it gained the same `--socket` flag the two subcommands below carry, and with it three failures of the server path — a socket that answers but yields no reachable server, a connection lost or unanswered after the statement was sent, and a serialisation conflict every attempt of the retry policy collided on — all three `utils.ErrDatabase` and exit code 1, and an empty `--socket` value, `utils.ErrRequired` and exit code 2. Every one of them lands on a code that subcommand already returned. `COMMANDS.md § Execute Exit Codes` is canonical for its full set.
+
+`rmp graph serve`:
+
+| Exit Code | Sentinel | Cause |
+|-----------|----------|-------|
+| `0` | — | The server started, served, and was stopped by `SIGINT` or `SIGTERM`. The drain completed or its bound expired; in both cases every acknowledged commit is durable. |
+| `1` | `utils.ErrDatabase` | The store could not be opened or recovered; or its exclusive advisory lock could not be taken within the bounded wait, which is what refuses a second server against the same roadmap; or the socket could not be bound; or a live server already answers on the resolved socket. |
+| `2` | `utils.ErrInvalidInput` | An unknown flag, or a positional argument: the subcommand accepts none. |
+| `2` | `utils.ErrRequired` | `--socket` was supplied with an empty value. |
+| `3` | `utils.ErrNoRoadmap` | No roadmap selected and none provided via `-r`. |
+| `4` | `utils.ErrNotFound` | The selected roadmap does not exist. |
+
+`rmp graph client`:
+
+| Exit Code | Sentinel | Cause |
+|-----------|----------|-------|
+| `0` | — | The statement was sent to a server, ran, and its result was written to stdout. |
+| `1` | `utils.ErrDatabase` | No server is listening for the roadmap; or a server could not be reached through the socket; or the connection was lost, or went unanswered, after the statement was sent; or the statement failed to parse or execute in the engine; or it exhausted the statement time budget; or every attempt of its retry policy lost a serialisation conflict; or a value the server returned could not be mapped onto the published result shape. |
+| `2` | `utils.ErrRequired` | No statement supplied, or `--socket` supplied with an empty value. |
+| `2` | `utils.ErrInvalidInput` | An unknown flag, or a positional argument: the subcommand accepts none. |
+| `3` | `utils.ErrNoRoadmap` | No roadmap selected and none provided via `-r`. |
+| `4` | `utils.ErrNotFound` | The selected roadmap does not exist. |
+| `6` | `utils.ErrValidation` | The statement is longer than the maximum query length. |
+
+Two remarks, because each is a place a reader could reasonably expect a different code:
+
+1. **A failure to reach a server is `1`, not `4`.** `utils.ErrNotFound` is the class of a roadmap, task, or sprint that does not exist. A socket with nothing behind it is a dependency that is unavailable, which is the class `utils.ErrDatabase` already carries for a graph store that cannot be opened, and treating it as `4` would make a shell script that branches on `4` act on the wrong condition.
+2. **A graceful stop is `0`, not `130`, and the reading begins when the server takes the signals over.** The catalogue reserves `130` for an interruption, and `rmp graph serve` interprets `SIGINT` as an instruction to stop rather than as an interruption of unfinished work: it drains, checkpoints, and exits successfully. This matches `rmp web`, which is the only other long-lived command, and the two are stated the same way for the same reason. Both take the signals over immediately before they announce themselves (see the `internal/signals` entry under [Modules and Responsibilities](#modules-and-responsibilities)), so the `0` row of each table is conditioned on a server that started and served, exactly as it is worded. A signal that arrives during startup — before the socket or the URL is announced — reaches an invocation that has served nothing and owes no drain, and it is still an interruption: the process exits `130`. `GRAPH.md § Server Shutdown and the Drain` and `WEB.md § Server Lifecycle` state that boundary where a reader sizing a supervisor's grace period will meet it.
+
 ### Usage in Shell Scripts
 
 ```bash
@@ -786,3 +991,5 @@ being dispatched, so an unusable selector is an invalid argument to
 - Database schema and queries → `DATABASE.md`
 - AI Agent Contract schema → `DATA_FORMATS.md § AI Agent Contract`
 - AI Agent Contract CLI surface → `COMMANDS.md § AI Help`
+- The dedicated graph server, its socket, its options, and the rule that decides whether a roadmap is served → `GRAPH.md § The Dedicated Graph Server`
+- The resolution rule every surface follows before it opens a graph store → `GRAPH.md § Server Resolution`

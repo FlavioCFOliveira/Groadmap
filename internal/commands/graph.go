@@ -11,7 +11,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -19,15 +18,9 @@ import (
 
 	"github.com/FlavioCFOliveira/GoGraph/cypher"
 	"github.com/FlavioCFOliveira/GoGraph/cypher/expr"
-	"github.com/FlavioCFOliveira/GoGraph/graph/csr"
-	"github.com/FlavioCFOliveira/GoGraph/graph/lpg"
-	"github.com/FlavioCFOliveira/GoGraph/store/recovery"
-	"github.com/FlavioCFOliveira/GoGraph/store/snapshot"
-	"github.com/FlavioCFOliveira/GoGraph/store/txn"
-	"github.com/FlavioCFOliveira/GoGraph/store/wal"
-	"github.com/FlavioCFOliveira/Groadmap/internal/backoff"
-	"github.com/FlavioCFOliveira/Groadmap/internal/cypherguard"
+	"github.com/FlavioCFOliveira/Groadmap/internal/graphjson"
 	"github.com/FlavioCFOliveira/Groadmap/internal/graphlock"
+	"github.com/FlavioCFOliveira/Groadmap/internal/graphstore"
 	"github.com/FlavioCFOliveira/Groadmap/internal/terminal"
 	"github.com/FlavioCFOliveira/Groadmap/internal/utils"
 )
@@ -78,135 +71,145 @@ func queryTooLongError() error {
 }
 
 // printGraphHelp prints the family-level help for rmp graph.
+//
+// SPEC/HELP.md § Graph family help specifics, item 5, requires the family help to
+// list every subcommand with a verb-first description AND to make the distinction
+// between them explicit in one sentence rather than leaving it to be inferred
+// from the summaries. The sentence below is that one.
 func printGraphHelp() {
 	fmt.Fprint(helpDst(), `Usage: rmp graph <subcommand> -r <roadmap> [-q <cypher>]
 
-Manage the knowledge graph for a roadmap using Cypher queries.
-Each subcommand validates that the supplied query matches its operation class
-before executing it (guard-rail enforcement). When --query is absent the query
-is read from standard input.
+Operate the knowledge graph of a roadmap using Cypher. The graph is stored
+under ~/.roadmaps/<name>/graph/ and is created on first use. The three
+subcommands differ in one thing: execute runs a statement against the roadmap
+graph, serve makes that graph available over a socket until it is stopped, and
+client sends a statement to a running server. create, query, update, delete and
+search are not subcommand names of rmp graph and do not resolve.
 
-Subcommands:
-  create   Execute a CREATE / MERGE query (adds nodes or edges)
-  query    Execute a read-only MATCH ... RETURN or SHOW query
-  update   Execute a SET / REMOVE query (mutates existing elements), or
-           manage the schema (CREATE/DROP INDEX, CREATE/DROP CONSTRAINT,
-           SHOW INDEXES / SHOW CONSTRAINTS)
-  delete   Execute a DELETE / DETACH DELETE query (removes nodes or edges)
-  search   Execute a read-only traversal query (variable-length paths, etc.)
+execute and client each run any statement the engine accepts -- a read, a write,
+a deletion, a schema change, a schema listing -- and rmp does not examine the
+statement or refuse it for what it does. The statement comes from --query, or
+from standard input when that flag is absent; supplying neither is an error.
+
+A running server is used automatically. When a server is serving the selected
+roadmap, execute sends its statement to that server instead of opening the
+store, with no flag and no configuration, and the result and the exit code are
+the same either way. client always requires one and fails when none answers;
+execute opens the store instead. --socket names the socket an invocation
+resolves and neither forces nor forbids a server.
+
+serve holds one roadmap graph open and answers Cypher statements over a Unix
+domain socket until it is stopped, so a caller pays one store open instead of
+one per invocation. It runs no statement of its own and creates no graph
+directory that does not already exist.
+
+Commands:
+  execute   Run one Cypher statement against the roadmap knowledge graph
+  serve     Serve the roadmap knowledge graph over a Unix domain socket
+  client    Send one Cypher statement to a running server and print its result
 
 Options:
-  -r, --roadmap <name>    Target roadmap (required)
-  -q, --query <cypher>    Cypher query string; reads stdin when absent
+  -r, --roadmap <name>    REQUIRED. Target roadmap
+  -q, --query <cypher>    execute and client. Cypher statement; read from stdin
+                          when this flag is absent
+      --socket <path>     All three. Socket bound by serve and resolved by
+                          execute and client; default
+                          ~/.roadmaps/<name>/graph.sock
   -h, --help              Show this help message
 
 Output (stdout JSON):
-  Read subcommands and write subcommands with RETURN:
+  Statement that produces result columns:
     {"columns": [...], "rows": [[...], ...]}
-  Write subcommands without RETURN:
+  Statement that produces none:
     {"ok": true}
+  Server startup:
+    {"socket": "<path>"}
 
 Exit codes:
   0   Success
-  1   Graph store unavailable or Cypher execution error
-  2   No query supplied
+  1   Graph store unavailable or Cypher parse/execution error; also a valid
+      statement cancelled for running past the 5s statement time budget, which
+      writes nothing -- narrow the statement, or split it; also, for client, no
+      server listening, and for any of the three a server that could not be
+      reached through the socket
+  2   No query supplied, --socket with an empty value, or a positional argument
+      was given
   3   No roadmap selected
   4   Roadmap not found
-  6   Query's operation class does not match the subcommand
+  6   Query longer than the maximum length of 1048576 bytes
   127 Unknown subcommand
 
 Examples:
-  rmp graph create -r myproject --query "CREATE (n:Spec {key:'auth'})"
-  rmp graph query  -r myproject --query "MATCH (n:Spec) RETURN n.key"
-  echo "MATCH (n) RETURN count(n)" | rmp graph query -r myproject
+  rmp graph execute -r myproject --query "MATCH (n:Spec) RETURN n.key"
+  rmp graph execute -r myproject --query "CREATE (n:Spec {key:'auth'})"
+  echo "MATCH (n) RETURN count(n)" | rmp graph execute -r myproject
+  rmp graph serve -r myproject
+  rmp graph client -r myproject --query "MATCH (n:Spec) RETURN n.key"
 `)
 }
 
-func printGraphCreateHelp() {
-	fmt.Fprint(helpDst(), `Usage: rmp graph create -r <roadmap> [-q <cypher>]
+// printGraphExecuteHelp prints the help for rmp graph execute.
+//
+// The graph-specific behaviours SPEC/HELP.md § Graph family help specifics
+// requires are all stated below: where the statement comes from, that execute
+// runs any statement without examining it, and that the schema DDL and the schema
+// listings run through this same subcommand. In particular the help MUST NOT
+// describe any statement as rejected before execution on the ground of its
+// operation class, because none is.
+//
+// Item 6 adds one more, and it is the one an agent cannot infer: a running server
+// takes the statement AUTOMATICALLY, with no flag and no configuration, and
+// --socket names the socket the invocation resolves rather than switching between
+// the two paths. The help states both halves deliberately. An agent told only
+// that it is automatic would have no way to reach a server on a non-default
+// socket; an agent told only that there is a flag would write it on every
+// invocation.
+//
+// Item 10 adds the second cause of exit code 1 that "a Cypher parse or execution
+// error" does not cover, and it sits beside the statement budget of item 4 for
+// that reason: an exhausted serialisation conflict is a valid statement against a
+// healthy store, so the exit-code-1 line names it, states that nothing was
+// written, and states the remedy in the published error line's own terms. It is
+// the one cause in the block whose remedy is to run the SAME statement again —
+// the budget asks the caller to rewrite a working statement, a parse error to
+// correct a broken one, and this asks it to change nothing — which is why the
+// clause says so rather than leaving "run it again" to be read as "try
+// something else".
+//
+// The clause does NOT write the retry budget's figure. graphWriteConflict
+// renders it from backoff.Total() so that one quantity keeps one expression, and
+// a figure spelled out here would be a second expression of it that disagreed
+// with the policy silently the moment the policy moved. Nothing the caller
+// decides needs the figure, and the error line carries it at the moment it is
+// relevant.
+func printGraphExecuteHelp() {
+	fmt.Fprint(helpDst(), `Usage: rmp graph execute -r <roadmap> [-q <cypher>] [--socket <path>]
 
-Execute a CREATE or MERGE query against the roadmap's knowledge graph.
-The query MUST contain CREATE and/or MERGE clauses and MUST NOT contain
-SET, REMOVE, DELETE, or DETACH DELETE.
+Run one Cypher statement against the roadmap knowledge graph, and print what it
+returns. A statement that changes the graph runs inside a single transaction and
+is persisted durably before the process exits.
 
-Required:
-  -r, --roadmap <name>    Target roadmap
-  -q, --query <cypher>    Cypher query; read from stdin when this flag is absent
+Where the statement runs is resolved, not chosen. When a graph server is serving
+the selected roadmap, the statement is sent to that server instead of the store
+being opened -- automatically, with no flag and no configuration -- and the
+result, the output shape and the exit code are the same either way. With nothing
+listening, the store is opened directly under its exclusive lock, which is what
+every invocation did before a server existed.
 
-Optional:
-  -h, --help              Show this help message
+execute accepts every statement the engine accepts and runs it as given:
+  - a read, such as MATCH ... RETURN, including variable-length traversals;
+  - a write, such as CREATE, MERGE, SET or REMOVE;
+  - a deletion, such as DELETE or DETACH DELETE;
+  - schema DDL: CREATE INDEX [name] [IF NOT EXISTS] FOR (n:Label) ON (n.property)
+    [OPTIONS {indexType:'hash'|'btree'}], DROP INDEX <name> [IF EXISTS],
+    CREATE CONSTRAINT [name] [IF NOT EXISTS] FOR (n:Label)
+    REQUIRE n.property IS UNIQUE | IS NOT NULL, DROP CONSTRAINT <name> [IF EXISTS];
+  - schema introspection: SHOW INDEXES and SHOW CONSTRAINTS, and their singular
+    aliases, each optionally followed by a YIELD / WHERE / RETURN projection.
 
-Output (stdout JSON):
-  Without a RETURN clause:  {"ok": true}
-  With a RETURN clause:     {"columns": [...], "rows": [[...], ...]}
-
-Exit codes:
-  0   Success
-  1   Graph store unavailable or Cypher execution error
-  2   No query supplied
-  3   No roadmap selected
-  4   Roadmap not found
-  6   Query class mismatch (guard-rail rejection)
-
-Examples:
-  rmp graph create -r myproject --query "CREATE (n:Spec {key:'auth'})"
-  rmp graph create -r myproject --query "CREATE (n:Spec {key:'auth'}) RETURN n"
-`)
-}
-
-func printGraphQueryHelp() {
-	fmt.Fprint(helpDst(), `Usage: rmp graph query -r <roadmap> [-q <cypher>]
-
-Execute a read-only MATCH ... RETURN query against the roadmap's knowledge
-graph. The query MUST NOT contain any writing clause.
-
-Schema introspection is also accepted: SHOW INDEXES and SHOW CONSTRAINTS (and
-their singular aliases), optionally followed by a YIELD / WHERE / RETURN
-projection. They list the registered schema and change nothing.
-
-Required:
-  -r, --roadmap <name>    Target roadmap
-  -q, --query <cypher>    Cypher query; read from stdin when this flag is absent
-
-Optional:
-  -h, --help              Show this help message
-
-Output (stdout JSON):
-  {"columns": [...], "rows": [[...], ...]}
-
-Exit codes:
-  0   Success
-  1   Graph store unavailable or Cypher execution error
-  2   No query supplied
-  3   No roadmap selected
-  4   Roadmap not found
-  6   Query contains a writing clause (guard-rail rejection)
-
-Examples:
-  rmp graph query -r myproject --query "MATCH (n:Spec) RETURN n.key"
-  rmp graph query -r myproject --query "SHOW INDEXES"
-  echo "MATCH (n) RETURN count(n)" | rmp graph query -r myproject
-`)
-}
-
-func printGraphUpdateHelp() {
-	fmt.Fprint(helpDst(), `Usage: rmp graph update -r <roadmap> [-q <cypher>]
-
-Mutate existing graph elements, and manage the graph's schema. This is the
-only subcommand that accepts more than one operation class; it accepts three:
-
-  1. A SET and/or REMOVE query, which runs as a single transaction. It MUST
-     NOT contain CREATE, MERGE, DELETE, or DETACH DELETE.
-  2. Schema DDL, which the engine runs outside the transaction:
-       CREATE INDEX [name] [IF NOT EXISTS] FOR (n:Label) ON (n.property)
-                                           [OPTIONS {indexType:'hash'|'btree'}]
-       DROP INDEX <name> [IF EXISTS]
-       CREATE CONSTRAINT [name] [IF NOT EXISTS] FOR (n:Label)
-                                REQUIRE n.property IS UNIQUE | IS NOT NULL
-       DROP CONSTRAINT <name> [IF EXISTS]
-  3. Schema introspection: SHOW INDEXES and SHOW CONSTRAINTS (and their
-     singular aliases), optionally followed by a YIELD / WHERE / RETURN
-     projection. They list the registered schema and change nothing.
+rmp does not examine the statement and refuses none for what it does: what a
+statement reads, writes or deletes is decided by its Cypher alone, so the
+guarantee you need about a statement is a guarantee about the text you supply.
 
 One statement per invocation. There is no ALTER INDEX: changing an index is a
 DROP INDEX followed by a CREATE INDEX, as two separate invocations, and the
@@ -216,112 +219,107 @@ object was given.
 
 Required:
   -r, --roadmap <name>    Target roadmap
-  -q, --query <cypher>    Cypher query; read from stdin when this flag is absent
+  -q, --query <cypher>    Cypher statement; read from stdin when this flag is
+                          absent. Supplying neither is an error (exit code 2)
 
 Optional:
+      --socket <path>     Socket this invocation resolves. Default
+                          ~/.roadmaps/<name>/graph.sock, the same derivation
+                          graph serve and graph client use. It names which
+                          socket is looked at and nothing else: it does not
+                          force a server, does not forbid one, and does not
+                          select the store. Write it only when the server was
+                          started with the same flag
   -h, --help              Show this help message
 
 Output (stdout JSON):
-  Without result columns:   {"ok": true}
   With result columns:      {"columns": [...], "rows": [[...], ...]}
-  A schema-mutating statement returns {"ok": true}; SHOW INDEXES and
-  SHOW CONSTRAINTS return the listing, though they carry no RETURN clause.
+  Without result columns:   {"ok": true}
+  A statement carrying a RETURN clause produces columns and one without it does
+  not; SHOW INDEXES and SHOW CONSTRAINTS produce columns although they carry no
+  RETURN clause.
 
 Exit codes:
   0   Success
-  1   Graph store unavailable, Cypher execution error, or a schema statement
-      the engine refused: a duplicate create, a drop of an object that does
-      not exist, an unsupported definition, or a constraint the data does
-      not satisfy
-  2   No query supplied
+  1   Graph store unavailable, or a Cypher parse or execution error, including
+      a schema statement the engine refused: a duplicate create, a drop of an
+      object that does not exist, an unsupported definition, or a constraint
+      the data does not satisfy. Also a statement cancelled for running past
+      the 5s statement time budget, where the Cypher was valid and the store
+      healthy: the transaction rolls back and nothing is written, so the remedy
+      is to narrow the statement -- add a label, an indexed property filter, or
+      a LIMIT -- or split it into smaller statements. Also a statement on which
+      every attempt of the retry policy lost a serialisation conflict against a
+      server, the Cypher again valid and the store again healthy: the losing
+      transaction commits nothing and nothing is written, so the remedy is to
+      run the same statement again -- it needs no change -- and to spread
+      concurrent writes across distinct nodes. Also a socket that answers but
+      yields no server, and a connection lost or unanswered after the statement
+      was sent: neither falls back to the store
+  2   No query supplied, --socket given with an empty value, or a positional
+      argument was given: a bare Cypher statement on the command line is
+      refused, not executed
   3   No roadmap selected
   4   Roadmap not found
-  6   Query class mismatch, keyword spacing, or a second clause after a
-      schema statement (guard-rail rejection)
+  6   Query longer than the maximum length of 1048576 bytes
 
 Examples:
-  rmp graph update -r myproject --query "MATCH (n:Spec {key:'auth'}) SET n.status='done'"
-  echo "MATCH (n:Spec {key:'auth'}) REMOVE n.status" | rmp graph update -r myproject
-  rmp graph update -r myproject --query "CREATE INDEX spec_key FOR (n:Spec) ON (n.key)"
-  rmp graph update -r myproject --query "SHOW INDEXES"
-  rmp graph update -r myproject --query "DROP INDEX spec_key"
-`)
-}
-
-func printGraphDeleteHelp() {
-	fmt.Fprint(helpDst(), `Usage: rmp graph delete -r <roadmap> [-q <cypher>]
-
-Execute a DELETE or DETACH DELETE query against the roadmap's knowledge
-graph. The query MUST contain DELETE and/or DETACH DELETE and MUST NOT
-contain CREATE, MERGE, SET, or REMOVE.
-
-Required:
-  -r, --roadmap <name>    Target roadmap
-  -q, --query <cypher>    Cypher query; read from stdin when this flag is absent
-
-Optional:
-  -h, --help              Show this help message
-
-Output (stdout JSON):
-  Without a RETURN clause:  {"ok": true}
-  With a RETURN clause:     {"columns": [...], "rows": [[...], ...]}
-
-Exit codes:
-  0   Success
-  1   Graph store unavailable or Cypher execution error
-  2   No query supplied
-  3   No roadmap selected
-  4   Roadmap not found
-  6   Query class mismatch (guard-rail rejection)
-
-Examples:
-  rmp graph delete -r myproject --query "MATCH (n:Spec {key:'auth'}) DETACH DELETE n"
-  rmp graph delete -r myproject --query "MATCH (:Spec)-[r:DEPENDS_ON]->(:Spec) DELETE r"
-`)
-}
-
-func printGraphSearchHelp() {
-	fmt.Fprint(helpDst(), `Usage: rmp graph search -r <roadmap> [-q <cypher>]
-
-Execute a read-only traversal query against the roadmap's knowledge graph.
-Variable-length path patterns (e.g. -[*1..3]-) are supported. The query
-MUST NOT contain any writing clause.
-
-Schema introspection is also accepted: SHOW INDEXES and SHOW CONSTRAINTS (and
-their singular aliases), optionally followed by a YIELD / WHERE / RETURN
-projection. They list the registered schema and change nothing.
-
-Required:
-  -r, --roadmap <name>    Target roadmap
-  -q, --query <cypher>    Cypher query; read from stdin when this flag is absent
-
-Optional:
-  -h, --help              Show this help message
-
-Output (stdout JSON):
-  {"columns": [...], "rows": [[...], ...]}
-
-Exit codes:
-  0   Success
-  1   Graph store unavailable or Cypher execution error
-  2   No query supplied
-  3   No roadmap selected
-  4   Roadmap not found
-  6   Query contains a writing clause (guard-rail rejection)
-
-Examples:
-  rmp graph search -r myproject --query "MATCH p=(a)-[*1..3]-(b) RETURN p"
-  rmp graph search -r myproject --query "MATCH p=(s:Spec)-[:DEPENDS_ON*1..3]->(d:Spec) RETURN p"
-  rmp graph search -r myproject --query "SHOW CONSTRAINTS YIELD name RETURN name"
+  rmp graph execute -r myproject --query "MATCH (n:Spec) RETURN n.key"
+  rmp graph execute -r myproject --query "CREATE (n:Spec {key:'auth'})"
+  rmp graph execute -r myproject --query "CREATE INDEX spec_key FOR (n:Spec) ON (n.key)"
+  echo "MATCH (n) RETURN count(n)" | rmp graph execute -r myproject
+  rmp graph execute -r myproject --socket /run/user/1000/myproject-graph.sock -q "SHOW INDEXES"
 `)
 }
 
 // openGraphStore validates that roadmapName exists, resolves the graph
 // directory, and creates it on first use with 0700 permissions. It
-// returns the graphDir path and a no-op cleanup func (reserved for
-// future use). The caller is responsible for opening the GoGraph store
-// after this call.
+// returns the graphDir path. The caller is responsible for opening the
+// GoGraph store after this call.
+//
+// Creating the directory is what makes `rmp graph execute` work against a
+// roadmap that has never had a graph. It is deliberately NOT shared with
+// `rmp graph serve`, which creates no graph directory that does not already
+// exist (SPEC/COMMANDS.md § Serve, "What the server does not do"); that
+// subcommand calls resolveGraphDir and stops at the resolution.
 func openGraphStore(roadmapName string) (graphDir string, err error) {
+	graphDir, err = resolveGraphDir(roadmapName)
+	if err != nil {
+		return "", err
+	}
+	if err := createGraphDir(graphDir); err != nil {
+		return "", err
+	}
+	return graphDir, nil
+}
+
+// createGraphDir brings the graph store directory into being at 0700, and is the
+// half of openGraphStore that a SERVED invocation must not perform.
+//
+// `rmp graph execute` creates the directory on first use because a statement has
+// to have somewhere to run. When a server answers, the statement runs in that
+// server's store and this process opens nothing, so creating a directory here
+// would leave an empty store beside a graph that is already open — and it would
+// do so in the one case where the store is guaranteed to exist already
+// (SPEC/GRAPH.md § Server Resolution: on the served path the caller does not open
+// the store).
+func createGraphDir(graphDir string) error {
+	if mkErr := os.MkdirAll(graphDir, 0700); mkErr != nil {
+		return fmt.Errorf("%w: creating graph directory: %v", utils.ErrDatabase, mkErr)
+	}
+	if chErr := os.Chmod(graphDir, 0700); chErr != nil { // #nosec G302 -- 0700 on a DIRECTORY is mandated by SPEC (CLAUDE.md §10: 0700 for the ~/.roadmaps tree); gosec G302 false-positives on directory permissions
+		return fmt.Errorf("%w: setting graph directory permissions: %v", utils.ErrDatabase, chErr)
+	}
+	return nil
+}
+
+// resolveGraphDir validates roadmapName, confirms the roadmap exists, and
+// returns the path of its graph store directory WITHOUT creating anything.
+//
+// It is the half of openGraphStore that every graph surface needs, split out
+// because one of them must not perform the other half: `rmp graph serve` makes an
+// existing graph available and does not bring one into being.
+func resolveGraphDir(roadmapName string) (string, error) {
 	roadmapDir, valErr := utils.GetRoadmapDir(roadmapName)
 	if valErr != nil {
 		// A classification is stated once, by whoever owns the failure.
@@ -331,7 +329,7 @@ func openGraphStore(roadmapName string) (graphDir string, err error) {
 		// together with the sentinel naming WHICH rule the name broke
 		// (reserved, hyphen-leading, too long, bad characters). Restating the
 		// classification here therefore added nothing to the chain and cost the
-		// reader a second prefix: `rmp graph query -r CON` rendered
+		// reader a second prefix: `rmp graph execute -r CON` rendered
 		// "validation error: validation error: ...", and the roadmap-name
 		// messages SPEC/COMMANDS.md § Roadmap Name Validation publishes WITHOUT
 		// a sentinel gained one on the graph paths alone. Every other command
@@ -356,16 +354,7 @@ func openGraphStore(roadmapName string) (graphDir string, err error) {
 		return "", fmt.Errorf("%w: roadmap %q not found", utils.ErrNotFound, roadmapName)
 	}
 
-	graphDir = filepath.Join(roadmapDir, "graph")
-
-	if mkErr := os.MkdirAll(graphDir, 0700); mkErr != nil {
-		return "", fmt.Errorf("%w: creating graph directory: %v", utils.ErrDatabase, mkErr)
-	}
-	if chErr := os.Chmod(graphDir, 0700); chErr != nil { // #nosec G302 -- 0700 on a DIRECTORY is mandated by SPEC (CLAUDE.md §10: 0700 for the ~/.roadmaps tree); gosec G302 false-positives on directory permissions
-		return "", fmt.Errorf("%w: setting graph directory permissions: %v", utils.ErrDatabase, chErr)
-	}
-
-	return graphDir, nil
+	return filepath.Join(roadmapDir, "graph"), nil
 }
 
 // isFlagLike reports whether tok is a command-line flag rather than a query
@@ -397,9 +386,10 @@ func isFlagLike(tok string) bool {
 // as ErrRequired.
 //
 // Both sources are subject to maxQueryBytes, and the check happens here rather
-// than deeper in: an over-long query is never masked, never classified by the
-// guard rail, never handed to the engine, and never reaches an opened store
-// (SPEC/GRAPH.md § Maximum Query Length rule 3).
+// than deeper in: an over-long query is never handed to the engine and never
+// reaches an opened store (SPEC/GRAPH.md § Maximum Query Length rule 3). It is
+// the ONLY condition on which Groadmap refuses a statement's content
+// (SPEC/GRAPH.md § Error Handling and Exit Codes, rule 1).
 func readQuery(args []string) (string, error) {
 	var queryVal string
 	var queryFound bool
@@ -493,10 +483,10 @@ func readQueryStdin(src *os.File) (string, error) {
 //
 // The previous implementation drained the stream to EOF, so a hostile or runaway
 // writer decided how much this process buffered: 256 MiB offered to
-// `rmp graph query` produced 867 MB of peak resident memory and 15.9 s of wall
+// `rmp graph execute` produced 867 MB of peak resident memory and 15.9 s of wall
 // time, all of it spent on a "query" that was never going to be accepted (the
-// time went into the guard rail's masking pass and the engine's parse attempt,
-// both run over 256 MB of input). That is CWE-400 / CWE-789 — an allocation
+// time went into the engine's parse attempt over 256 MB of input; a literal-
+// masking pass that no longer exists took the rest). That is CWE-400 / CWE-789 — an allocation
 // sized by whoever is writing — against a command whose largest acceptable input
 // is 1 MiB.
 //
@@ -550,607 +540,53 @@ func readQueryStream(src io.Reader) (string, error) {
 	return q, nil
 }
 
-// maskCypherLiterals returns a copy of query with the interior characters of
-// Cypher string literals, comments, and backtick-quoted identifiers neutralized
-// to spaces, used solely for operation-class classification (SPEC/GRAPH.md
-// § Literal-Aware Normalization). It delegates to the shared guard-rail package
-// so the CLI and the read-only web endpoint mask identically; see
-// cypherguard.MaskLiterals for the full contract.
-func maskCypherLiterals(query string) string {
-	return cypherguard.MaskLiterals(query)
-}
-
-// updateClassRefusal is the message `graph update` publishes when a query's
-// operation class is outside every class it accepts. It names all three, because
-// `graph update` is the one subcommand that accepts more than one and a message
-// naming only the first would send a caller looking for a schema subcommand that
-// does not exist.
-//
-// It is a constant because SPEC/COMMANDS.md § Graph Management publishes it
-// verbatim as the refusal for an operation-class mismatch on this subcommand,
-// and tests/test_55_error_string_parity drives the published corpus against the
-// binary: the string here and the string there are one contract.
-const updateClassRefusal = "graph update accepts only SET/REMOVE, index/constraint DDL, and schema-introspection queries"
-
-// validateGuardRail checks that query matches the operation class required by
-// subcmd. It returns ErrValidation when the class does not match, with a
-// message that names the subcommand and the expected class.
-//
-// Four subcommands accept one class each. `graph update` accepts THREE, because
-// it is also the schema subcommand: a mutating SET/REMOVE write, a
-// schema-mutating DDL statement, and a schema-introspection command
-// (SPEC/GRAPH.md § Per-Subcommand Validation Rules; § Schema Management). The
-// other four keep rejecting DDL at every spacing, which is what lets one
-// subcommand be given the class without the rest losing the refusal that
-// protects them.
-//
-// Every subcommand that ACCEPTS the schema-introspection class carries one
-// further acceptance rule, applied after the class rule: such a command is
-// accepted only in the keyword spelling the engine routes to its introspection
-// parser (SPEC/GRAPH.md § Keyword Spacing in a Schema-Introspection Command).
-// That is the two read subcommands and `graph update`. It is a rule about which
-// statements the introspection class covers, which is why it belongs to the
-// guard rail rather than beside it.
-//
-// Classification runs on the literal-masked normalization of the query, never
-// on the raw string (SPEC/GRAPH.md § Literal-Aware Normalization): a clause
-// keyword appearing only inside a string literal, comment, or backtick
-// identifier must not affect the guard rail. The original query is still what
-// executes against the store. The masking and clause-class detection are owned
-// by the shared cypherguard package, so the CLI guard rail and the read-only
-// web graph data endpoint apply the exact same classification.
-func validateGuardRail(subcmd, allowed, query string) error {
-	c := cypherguard.Classify(query)
-
-	// DDL (CREATE INDEX, DROP INDEX, CREATE CONSTRAINT, DROP CONSTRAINT) is a
-	// schema-mutating clause class that is outside the accepted class of every
-	// subcommand BUT `graph update` (SPEC/GRAPH.md § Per-Subcommand Validation
-	// Rules note 5): the read subcommands accept only read-only queries and DDL
-	// is not read-only, and `graph create` and `graph delete` each accept only
-	// their own data-writing clause. QueryHasWritingClause does not flag DDL
-	// (and the two-word CREATE INDEX / CREATE CONSTRAINT forms would otherwise
-	// satisfy the create accept check), so DDL is rejected up front for those
-	// four, with the per-subcommand message that names the class each one does
-	// accept.
-	//
-	// `graph update` is deliberately absent from this block rather than absent
-	// by oversight: it is the subcommand through which the graph's schema is
-	// managed, so it is the single subcommand that accepts the class, and its
-	// own branch below decides the statement. Adding a subcommand back to this
-	// block, or removing one from it, is a change to that table before it is a
-	// change to this code.
-	if c.DDL {
-		switch subcmd {
-		case "query", "search":
-			return fmt.Errorf("%w: graph %s accepts only %s queries", utils.ErrValidation, subcmd, allowed)
-		case "create":
-			return fmt.Errorf("%w: graph create accepts only CREATE/MERGE queries", utils.ErrValidation)
-		case "delete":
-			return fmt.Errorf("%w: graph delete accepts only DELETE/DETACH DELETE queries", utils.ErrValidation)
-		}
-	}
-
-	switch subcmd {
-	case "create":
-		// Must be write, must have CREATE/MERGE, must not have SET/REMOVE/DELETE.
-		if !c.Write || !c.Create || c.Mutate || c.Delete {
-			return fmt.Errorf("%w: graph create accepts only CREATE/MERGE queries", utils.ErrValidation)
-		}
-	case "query", "search":
-		// Must be read-only.
-		if c.Write {
-			return fmt.Errorf("%w: graph %s accepts only %s queries", utils.ErrValidation, subcmd, allowed)
-		}
-		// Schema introspection is accepted only in the spelling the engine routes
-		// to its introspection parser: exactly one space between SHOW and the
-		// target keyword. Any other separator is refused HERE, with the guard
-		// rail's own message, instead of being admitted and left to die in the
-		// engine's parser under a diagnostic that lists every clause keyword
-		// except SHOW and so reads as though schema introspection were
-		// unsupported (SPEC/GRAPH.md § Keyword Spacing in a Schema-Introspection
-		// Command; § Per-Subcommand Validation Rules note 8).
-		//
-		// Placement carries two contracts. It is decided AFTER the class
-		// objections above, so a query that both writes and carries a badly
-		// spaced SHOW is rejected on its class, matching the precedence the web
-		// endpoint applies. And it is confined to this branch, so the write
-		// subcommands keep rejecting a SHOW on its class at any spacing (note 6)
-		// — their objection is that it carries none of the clauses they accept,
-		// which holds for the well-formed spelling too.
-		if reason, misspaced := cypherguard.IntrospectSpacingRejection(query); misspaced {
-			return fmt.Errorf("%w: graph %s: %s", utils.ErrValidation, subcmd, reason)
-		}
-	case "update":
-		// Three accepted classes, decided in an order the classification forces.
-		//
-		// Schema-mutating DDL comes FIRST because the two-word CREATE INDEX and
-		// CREATE CONSTRAINT forms also satisfy the CREATE discriminator: read in
-		// the other order, every index creation would be refused as the
-		// data-writing CREATE this subcommand does not accept. Deciding it here
-		// is also what admits a DDL statement whose two keywords are separated
-		// by something other than a single space. The engine will not route that
-		// statement to its schema parser and refuses it at the grammar with exit
-		// code 1, which is the cost the DDL matcher's deliberate whitespace
-		// tolerance carries and which SPEC/GRAPH.md § Keyword Spacing in a
-		// Schema-Introspection Command fixes as a misleading diagnostic and
-		// nothing more: the statement is refused while it is being built, so
-		// nothing is created and the graph is byte-identical afterwards.
-		if c.DDL {
-			return nil
-		}
-		// A data-writing CREATE, MERGE, DELETE or DETACH DELETE is outside both
-		// remaining classes, so it is refused before either is considered. This
-		// is reached only when the query is NOT DDL, so the CREATE it names here
-		// is a data-writing one.
-		if c.Create || c.Delete {
-			return fmt.Errorf("%w: %s", utils.ErrValidation, updateClassRefusal)
-		}
-		// Schema introspection: accepted because this subcommand owns the
-		// schema, so reporting a schema belongs with changing it. Accepting the
-		// class carries the spacing rule with it — the well-spaced spelling runs
-		// here, so the badly spaced one must be refused with the spacing named
-		// rather than on a class objection that is no longer true
-		// (SPEC/GRAPH.md § Per-Subcommand Validation Rules note 8).
-		if c.Introspect {
-			return nil
-		}
-		if reason, misspaced := cypherguard.IntrospectSpacingRejection(query); misspaced {
-			return fmt.Errorf("%w: graph %s: %s", utils.ErrValidation, subcmd, reason)
-		}
-		// The original class: a writing query whose writing clauses are SET
-		// and/or REMOVE.
-		if !c.Write || !c.Mutate {
-			return fmt.Errorf("%w: %s", utils.ErrValidation, updateClassRefusal)
-		}
-	case "delete":
-		// Must be write, must have DELETE/DETACH, must not have CREATE/MERGE/SET/REMOVE.
-		if !c.Write || !c.Delete || c.Create || c.Mutate {
-			return fmt.Errorf("%w: graph delete accepts only DELETE/DETACH DELETE queries", utils.ErrValidation)
-		}
-	}
-	return nil
-}
-
-// maxNamedTrailingClause bounds how much of a refused statement's trailing text
-// the refusal quotes back. A query may be a megabyte long (see maxQueryBytes),
-// and a refusal that echoed all of it would bury its own explanation; the point
-// of quoting the tail is to let the caller SEE which part of what they wrote was
-// going to be dropped, and the opening of it identifies that unambiguously.
-const maxNamedTrailingClause = 160
-
-// validateSingleSchemaStatement rejects a `graph update` query that carries a
-// further clause after a schema-mutating DDL statement (SPEC/GRAPH.md § One
-// Statement per Invocation; Acceptance Criterion 67).
-//
-// # Why Groadmap refuses this instead of the engine
-//
-// The engine's schema parser stops as soon as its grammar is satisfied and
-// discards the rest of the statement with no error, no notification, and no
-// other trace. Handed
-//
-//	CREATE INDEX spec_key FOR (n:Spec) ON (n.key) MATCH (m) SET m.reviewed = true
-//
-// it creates the index, drops the MATCH ... SET, and returns success — so
-// unrefused, `graph update` would print {"ok": true} and exit 0 for a statement
-// half of which never ran. That is the same failure shape as the silent
-// non-deletion validateRelationshipReadDirection refuses, and it is refused for
-// the same reason: a command that reports success gives the caller no reason to
-// check.
-//
-// # Why only `update`, and only the DDL class
-//
-// Only `graph update` accepts the DDL class at all; the other four refuse it on
-// its class before this rule could apply. And within that class the rule covers
-// the four schema-MUTATING forms alone: a SHOW schema-introspection command
-// carrying a further clause is already refused by the engine, which names the
-// unsupported clause instead of discarding it, so extending the rule there would
-// change what `graph query`, `graph search` and the web graph data endpoint do
-// with such a statement today.
-//
-// The detection is structural — it walks the engine's own DDL grammar to find
-// where the statement ends — and never a search of the query's text for clause
-// keywords, because a schema object may legitimately be NAMED after a clause:
-// `CREATE INDEX spec_set FOR (n:Spec) ON (n.set)` is a valid index on a property
-// called `set` and must be accepted. See
-// cypherguard.TrailingClauseAfterSchemaStatement for the mechanism and for the
-// engine-backed proof it takes before any statement is refused.
-func validateSingleSchemaStatement(subcmd, query string) error {
-	if subcmd != "update" {
-		return nil
-	}
-	tail, found := cypherguard.TrailingClauseAfterSchemaStatement(query)
-	if !found {
-		return nil
-	}
-	return fmt.Errorf("%w: graph update accepts one schema statement per invocation, and this query carries "+
-		"%q after it. The engine's schema parser stops when its grammar is satisfied and discards whatever "+
-		"follows, without an error and without a notification, so running this would report success for a "+
-		"statement that clause never ran in. Issue it as a separate rmp graph invocation.",
-		utils.ErrValidation, truncateForMessage(tail, maxNamedTrailingClause))
-}
-
-// truncateForMessage shortens s to at most maxRunes runes, marking the cut with
-// an ellipsis so a reader can tell a quoted fragment from a quoted whole. It
-// counts runes rather than bytes so a multi-byte character is never split into
-// an invalid sequence.
-func truncateForMessage(s string, maxRunes int) string {
-	r := []rune(s)
-	if len(r) <= maxRunes {
-		return s
-	}
-	return string(r[:maxRunes]) + "..."
-}
-
-// validateRelationshipWriteDirection rejects a `graph update` query whose SET or
-// REMOVE targets a relationship the engine would not write (SPEC/GRAPH.md
-// § Relationship Write Direction).
-//
-// It is a SEPARATE contract from the clause-class guard rail above, not another
-// class rule: the query's operation class is already correct — it is a mutating
-// write under the subcommand that accepts mutating writes — and what is wrong is
-// the ORIENTATION of the pattern that binds the relationship being written. The
-// two checks are kept apart so the clause-class classification, which the
-// read-only web endpoint shares, is untouched by this write-path-only rule.
-//
-// Only `update` is checked. `delete` is unaffected: DELETE resolves the edge
-// itself rather than through the endpoint columns, and removes a relationship
-// bound by a reverse traversal correctly. `create` cannot reach the condition,
-// because the clause-class rule above already rejects any CREATE/MERGE query
-// that contains SET or REMOVE (so `MERGE … ON MATCH SET …` is not admitted by
-// this CLI at all).
-//
-// Detection runs on the parsed query rather than on the masked text, so a
-// relationship arrow inside a string literal or a comment cannot trip it: the
-// parser never sees those characters as pattern syntax.
-func validateRelationshipWriteDirection(subcmd, query string) error {
-	if subcmd != "update" {
-		return nil
-	}
-	unwritable := cypherguard.UnwritableRelationshipTargets(query)
-	if len(unwritable) == 0 {
-		return nil
-	}
-	t := unwritable[0]
-	return fmt.Errorf(
-		"%w: graph update cannot write relationship %q: it is bound by an %s pattern, "+
-			"and the engine writes a relationship property only through an outgoing pattern, "+
-			"so %s would be skipped while the command still reported success. "+
-			"Rewrite the traversal as outgoing: MATCH (source)-[%s]->(target) ... SET %s.<key> = <value>. "+
-			"To reach the edges arriving AT a node, anchor the outgoing pattern on that node "+
-			"instead of reversing the arrow: MATCH (other)-[%s]->(target {key:'...'}) ... SET %s.<key> = <value>",
-		utils.ErrValidation,
-		t.Variable, t.Direction, skippedLegOf(t.Direction),
-		t.Variable, t.Variable, t.Variable, t.Variable,
-	)
-}
-
-// skippedLegOf names the edges the engine would drop, for the message
-// validateRelationshipWriteDirection builds. An incoming pattern drops every
-// edge it matches; an undirected pattern drops only the ones it reaches against
-// the stored arrow, which is the incoming half of the traversal.
-func skippedLegOf(d cypherguard.Direction) string {
-	if d == cypherguard.DirectionUndirected {
-		return "the incoming half of that traversal"
-	}
-	return "the incoming direction"
-}
-
-// validateQueryEncoding rejects a query carrying a byte that begins no valid
-// UTF-8 sequence, on EVERY graph subcommand (SPEC/GRAPH.md § Cypher Query and
-// Property Value Content Rules; SPEC/MODELS.md § Free-Text UTF-8 Encoding
-// Constraint, which defines the rule).
-//
-// It takes no subcommand filter because the rule has none. The engine decodes
-// the query to runes before its grammar runs and replaces every byte that
-// decodes to no character with U+FFFD, so the statement it executes is not the
-// statement the caller wrote — a fact about the QUERY, indifferent to what the
-// statement then does. `create` and `update` store a value that was never
-// supplied; `query` and `search` compare against a literal that was never
-// supplied and report success having matched nothing; and `delete` gated by such
-// a literal removes nothing and still reports success. That last one is the
-// worst of the three and is why the rule is not confined to the writers: a
-// destructive command reporting success having removed nothing is the failure
-// shape the caller has no reason to check.
-//
-// The refusal names the byte and its offset rather than echoing any of the
-// query, because the bytes at fault are exactly the ones that must not be
-// emitted. Where the byte falls inside a value the query WRITES, it also names
-// the property; where it does not — which is always the case for a subcommand
-// that writes none — it says so, rather than withholding the naming in silence.
-func validateQueryEncoding(subcmd, query string) error {
-	r, refused := cypherguard.RefusedQueryEncoding(query)
-	if !refused {
-		return nil
-	}
-
-	const cause = ". The byte %#02x at offset %d of the query begins no valid UTF-8 sequence, " +
-		"and the engine replaces every such byte with U+FFFD before it parses the query, so %s"
-	if r.Attributed() {
-		return fmt.Errorf(
-			"%w: graph %s cannot write property %q: %s"+cause+". Supply the query as well-formed UTF-8",
-			utils.ErrValidation, subcmd, r.Property, r.Violation.Reason(),
-			r.Byte, r.Offset, encodingConsequenceOf(subcmd))
-	}
-	return fmt.Errorf(
-		"%w: graph %s cannot run this query: %s"+cause+". %s. Supply the query as well-formed UTF-8",
-		utils.ErrValidation, subcmd, r.Violation.Reason(),
-		r.Byte, r.Offset, encodingConsequenceOf(subcmd), unattributedReasonOf(subcmd))
-}
-
-// encodingConsequenceOf names what the engine would do with the rewritten
-// statement, for the message validateQueryEncoding builds. The consequence is
-// what makes the objection concrete, and it differs by subcommand even though
-// the rule does not.
-func encodingConsequenceOf(subcmd string) string {
-	switch subcmd {
-	case "delete":
-		return "the statement would match on a literal that was never supplied and would report " +
-			"success having deleted nothing"
-	case "query", "search":
-		return "the statement would match on a literal that was never supplied and would report " +
-			"success having found nothing"
-	default:
-		return "the store would hold a value different from the one supplied while the command " +
-			"still reported success"
-	}
-}
-
-// unattributedReasonOf explains why no property is named, in the terms that are
-// true for the subcommand at hand. For a subcommand that writes no property
-// value there is simply none to name, and saying so is more useful than the
-// writer's explanation, which would imply the query had written values the byte
-// merely missed.
-func unattributedReasonOf(subcmd string) string {
-	if writesPropertyValues(subcmd) {
-		return "No property value could be attributed to that byte: it falls outside the values " +
-			"this query writes, or the query does not parse"
-	}
-	return "This subcommand writes no property value, so there is no property to name: the byte " +
-		"corrupts the literal the query matches on"
-}
-
-// writesPropertyValues reports whether subcmd is one of the two that write
-// property values, and therefore whether the control-character rule reaches it.
-// It is one predicate rather than a condition spelled at each site, so the two
-// rules cannot drift apart on which subcommands write.
-func writesPropertyValues(subcmd string) bool {
-	return subcmd == "create" || subcmd == "update"
-}
-
-// validateWrittenPropertyValues rejects a `graph create` or `graph update` query
-// that would write a property value carrying a forbidden control character
-// (SPEC/GRAPH.md § Cypher Query and Property Value Content Rules;
-// SPEC/MODELS.md § Free-Text Control-Character Constraint, which defines it).
-//
-// # Why this rule stops where validateQueryEncoding does not
-//
-// The asymmetry is deliberate. The encoding rule objects to a query the engine
-// would silently REWRITE, which is a fact about the statement. This one objects
-// to a value that would be STORED, and only a write stores one.
-//
-// The substantive reason is about READS. A control character in a read literal
-// is compared against what the graph already holds, and the store can
-// legitimately hold one — everything written before this rule existed, and
-// anything a computed expression produces, which is outside what any of this can
-// see. Refusing such a read would leave that data unreadable rather than merely
-// unwritable, which is a loss of reach the rule was never meant to impose.
-// `graph delete` is on the same side: it removes nodes and edges, it stores no
-// value, and a predicate that names a control character is how an operator
-// reaches the entry that carries one.
-//
-// # The subcommand filter is a SECOND line, and is deliberately redundant today
-//
-// cypherguard.RefusedWrittenPropertyValue already walks only the positions a
-// query WRITES, so on a read or a delete it finds nothing and would refuse
-// nothing even without the filter below — the clause-class guard rail admits no
-// CREATE/MERGE/SET to any of those three subcommands in the first place. Removing
-// the filter would therefore change no behaviour today, which is exactly why it
-// is kept and why that is stated here rather than left for someone to discover:
-// it puts the boundary on record as a DECISION at the site that enforces it,
-// instead of leaving it as a consequence of two other rules that could each
-// change on their own. writesPropertyValues is pinned directly by
-// TestWritesPropertyValuesNamesOnlyTheTwoWritingSubcommands, so it cannot be
-// deleted as dead code without that test being confronted.
-//
-// The refusal NAMES the offending value by the property it is assigned to, and
-// says which rule it breaks in the words every other value in the application is
-// refused with — the wording comes from internal/utils, which owns it, rather
-// than being spelled again here. The offending bytes are never echoed: the
-// refusal names the CODE POINT, which is bounded and safe to print, because
-// printing the character itself would emit it into the terminal the rule exists
-// to protect.
-//
-// The caller applies validateQueryEncoding FIRST. That is the order
-// SPEC/MODELS.md fixes for the pair and it is not a preference: an invalid byte
-// decodes to U+FFFD, which is not a forbidden code point, so this rule would
-// answer "fine" for a value the encoding rule refuses.
-func validateWrittenPropertyValues(subcmd, query string) error {
-	if !writesPropertyValues(subcmd) {
-		return nil
-	}
-	r, refused := cypherguard.RefusedWrittenPropertyValue(query)
-	if !refused {
-		return nil
-	}
-	return fmt.Errorf(
-		"%w: graph %s cannot write property %q: %s. The value carries %s, which the store would "+
-			"hold verbatim and every surface that renders it would carry unchanged - the terminal "+
-			"escape-sequence injection (CWE-150) and Trojan Source (CVE-2021-42574) exposure the "+
-			"free-text rules close for every other value Groadmap stores, and a Cypher property "+
-			"value is subject to the same two rules. Note that the query text alone does not show "+
-			"it: Cypher decodes \\b, \\f and \\uXXXX inside a string literal, so a value written "+
-			"with an escape carries the character even though the query is pure ASCII. Remove the "+
-			"character from the value",
-		utils.ErrValidation, subcmd, r.Property, r.Violation.Reason(), r.CodePoint)
-}
-
-// validateRelationshipReadDirection rejects a query that READS the value of a
-// relationship variable bound by a pattern the engine does not resolve reliably
-// (SPEC/GRAPH.md § Relationship Read Direction).
-//
-// It is the read-side counterpart of validateRelationshipWriteDirection above,
-// and the two share one doctrine: whether an undirected or incoming pattern
-// behaves correctly depends on the data it meets, not on the query, and that
-// cannot be the guarantee. The engine recovers a bound relationship's type and
-// endpoints by probing the stored topology, so on a node pair carrying edges in
-// BOTH directions the reverse leg of the traversal is hydrated from the forward
-// pair — reporting the wrong type, the reversed orientation, dropping rows whose
-// WHERE predicate reads that type, and persisting the wrong value when a node
-// write derives from it.
-//
-// It applies to EVERY graph subcommand, because the corrupted value is harmful
-// wherever it is read: `query` and `search` deliver it to the caller, `update`'s
-// SET right-hand side persists it, and a `delete` whose WHERE predicate reads it
-// removes the wrong edges — or, as measured, none at all while reporting
-// success.
-//
-// The exemption is of the DELETE CLAUSE, not of the delete COMMAND. A bare
-// `DELETE e` names the relationship as a delete target rather than as an
-// expression, and the engine resolves that edge itself rather than through the
-// endpoint columns, so it removes the right one and stays accepted. The moment a
-// predicate over `type(e)` decides WHICH edges are deleted, the engine evaluates
-// the corrupted type, drops the row, and the destructive command reports
-// `{"ok": true}` having removed nothing — the worst symptom in this family,
-// because the caller has no reason to check. That case is an ordinary expression
-// use and is refused like any other; cypherguard draws the line by clause.
-//
-// Detection runs on the parsed query rather than on the masked text, so a
-// relationship arrow inside a string literal or a comment cannot trip it, and
-// the refusal happens before the graph store is opened.
-func validateRelationshipReadDirection(subcmd, query string) error {
-	misread := cypherguard.MisreadRelationshipReferences(query)
-	if len(misread) == 0 {
-		return nil
-	}
-	v := misread[0].Variable
-	return fmt.Errorf(
-		"%w: graph %s cannot read relationship %q: it is bound by an %s pattern, and the engine "+
-			"resolves a relationship's type and endpoints by probing the stored direction, so on a "+
-			"node pair that carries edges in BOTH directions it reports the forward edge's type and "+
-			"orientation for the reverse one: type(%s) names the wrong relationship, "+
-			"startNode(%s)/endNode(%s) reverse it, and a predicate over either silently drops the row. "+
-			"Rewrite the traversal as outgoing, which resolves correctly whatever the data: anchor it "+
-			"on the source with MATCH (source)-[%s]->(target) ... RETURN type(%s), or, to reach the "+
-			"edges arriving AT a node, on that node with MATCH (other)-[%s]->(target {key:'...'}) ... "+
-			"RETURN type(%s) - do not reverse the arrow. To cover both directions in one read, take "+
-			"the union of the two outgoing legs: MATCH (a {key:'...'})-[%s]->(x) RETURN type(%s) AS t, "+
-			"x.key AS k UNION ALL MATCH (x)-[%s]->(a {key:'...'}) RETURN type(%s) AS t, x.key AS k",
-		utils.ErrValidation, subcmd, v, misread[0].Direction,
-		v, v, v, v, v, v, v, v, v, v, v,
-	)
-}
-
 // serializeValue converts a single expr.Value into a JSON-compatible
 // Go value for inclusion in a graphQueryResult row.
+//
+// The mapping itself is not here. It has ONE realisation, in
+// internal/graphjson, and every surface that publishes a graph value calls it
+// (SPEC/DATA_FORMATS.md § One Realisation of the Mapping). What stays in this
+// package is the part that is only the CLI's: the {columns, rows} document the
+// mapped values are placed in, which serializeGraphResult builds, and the Path
+// rendering below, which no other surface publishes.
 func serializeValue(v expr.Value) any {
-	if v == nil {
-		return nil
-	}
+	return graphjson.Value(v, serializePath)
+}
+
+// serializePath renders a path as SPEC/DATA_FORMATS.md § Graph element mapping
+// requires: an object carrying the nodes it visits and the relationships it
+// traverses, each rendered as the element object that same section fixes.
+//
+// It is the CLI's own row rather than a shared one because the CLI is the only
+// surface that publishes a path. The graph data endpoint decomposes a path into
+// the elements it contains and publishes no path object at all
+// (SPEC/DATA_FORMATS.md § Graph View Data, rule 3), so the Path rendering
+// already has one realisation by having one producer; moving it into the shared
+// package would buy no identity and would give the endpoint a row it can never
+// reach.
+//
+// It is handed to internal/graphjson as its graphjson.Unmapped, so a path nested
+// inside a returned list, map or property bag is rendered here exactly as one
+// returned in its own column is. A value of any OTHER kind the shared mapping
+// carries no row for is not a path, and falls back to the engine's own string
+// form — which is what this command published for such a value before the
+// mapping was shared.
+func serializePath(v expr.Value) any {
 	switch v.Kind() {
-	case expr.KindNull:
-		return nil
-
-	case expr.KindInteger:
-		iv, _ := v.(expr.IntegerValue)
-		return int64(iv)
-
-	case expr.KindFloat:
-		fv, _ := v.(expr.FloatValue)
-		f := float64(fv)
-		if math.IsNaN(f) || math.IsInf(f, 0) {
-			return nil
-		}
-		return f
-
-	case expr.KindString:
-		sv, _ := v.(expr.StringValue)
-		return string(sv)
-
-	case expr.KindBool:
-		bv, _ := v.(expr.BoolValue)
-		return bool(bv)
-
-	case expr.KindDate:
-		dv, _ := v.(expr.DateValue)
-		return dv.ToTime().UTC().Format("2006-01-02")
-
-	case expr.KindDateTime:
-		dtv, _ := v.(expr.DateTimeValue)
-		return dtv.T.UTC().Format(time.RFC3339Nano)
-
-	case expr.KindLocalDateTime:
-		ldtv, _ := v.(expr.LocalDateTimeValue)
-		return ldtv.T.Format("2006-01-02T15:04:05.999999999")
-
-	case expr.KindLocalTime:
-		ltv, _ := v.(expr.LocalTimeValue)
-		return ltv.String()
-
-	case expr.KindTime:
-		tv, _ := v.(expr.TimeValue)
-		return tv.String()
-
-	case expr.KindDuration:
-		durv, _ := v.(expr.DurationValue)
-		return durv.String()
-
-	case expr.KindList:
-		lv, _ := v.(expr.ListValue)
-		out := make([]any, len(lv))
-		for i, elem := range lv {
-			out[i] = serializeValue(elem)
-		}
-		return out
-
-	case expr.KindMap:
-		mv, _ := v.(expr.MapValue)
-		out := make(map[string]any, len(mv))
-		for k, val := range mv {
-			out[k] = serializeValue(val)
-		}
-		return out
-
-	case expr.KindNode:
-		nv, _ := v.(expr.NodeValue)
-		props := make(map[string]any, len(nv.Properties))
-		for k, val := range nv.Properties {
-			props[k] = serializeValue(val)
-		}
-		return map[string]any{
-			"id":         nv.ID,
-			"labels":     nv.Labels,
-			"properties": props,
-		}
-
-	case expr.KindRelationship:
-		rv, _ := v.(expr.RelationshipValue)
-		props := make(map[string]any, len(rv.Properties))
-		for k, val := range rv.Properties {
-			props[k] = serializeValue(val)
-		}
-		return map[string]any{
-			"id":         rv.ID,
-			"type":       rv.Type,
-			"startId":    rv.StartID,
-			"endId":      rv.EndID,
-			"properties": props,
-		}
-
 	case expr.KindPath:
 		pv, _ := v.(expr.PathValue)
 		nodes := make([]any, len(pv.Nodes))
-		for i, n := range pv.Nodes {
-			nodes[i] = serializeValue(n)
+		for i := range pv.Nodes {
+			nodes[i] = graphjson.Node(pv.Nodes[i], serializePath)
 		}
 		rels := make([]any, len(pv.Relationships))
-		for i, r := range pv.Relationships {
-			rels[i] = serializeValue(r)
+		for i := range pv.Relationships {
+			rels[i] = graphjson.Relationship(pv.Relationships[i], serializePath)
 		}
 		return map[string]any{
 			"nodes":         nodes,
 			"relationships": rels,
 		}
-
 	default:
 		return v.String()
 	}
@@ -1203,70 +639,105 @@ func serializeGraphResult(result *cypher.Result) (graphQueryResult, error) {
 	return out, nil
 }
 
-// graphReadOpts carries the recovery.Options value used for every
-// graph store open. Defined once to avoid repeating the codec wiring.
-var graphReadOpts = recovery.Options[string, float64]{
-	Codec:       txn.NewStringCodec(),
-	WeightCodec: txn.NewFloat64WeightCodec(),
-}
-
-// openWALWriter opens the WAL writer at walPath under the project's single
-// bounded backoff policy (internal/backoff), which owns the attempt count and
-// the delay ladder. This site used to keep its own constants and its own loop,
-// and the loop disagreed with them; it now has neither.
+// graphStatementError classifies a failure raised while the statement was
+// executing — whether it surfaced from the engine call, from the walk over the
+// result, or from the commit — and words it truthfully.
 //
-// Every failure is waited on, because the one this retry exists for is
-// contention — another process holding the WAL directory lock — and a WAL that
-// cannot be opened for any other reason is not distinguishable here anyway. A
-// persistent failure is returned as ErrDatabase; callers must close the
-// returned Writer.
-func openWALWriter(walPath string) (*wal.Writer, error) {
-	w, err := backoff.Retry(func() (*wal.Writer, error) { return wal.Open(walPath) }, backoff.Always)
-	if err != nil {
-		return nil, fmt.Errorf("%w: graph store unavailable: %v", utils.ErrDatabase, err)
+// Every case carries utils.ErrDatabase and exit code 1. Exhausting the
+// statement time budget is a database failure exactly as a statement the engine
+// refuses is: the graph feature introduces no new sentinel error and no new exit
+// code, and may not (SPEC/GRAPH.md § Constraints, rule 5; § Schema Failure
+// Classes, rule 6). Only the message differs.
+//
+// **All three arrival points are classified, and the walk is the one that
+// matters.** The engine streams a disconnected pattern's tuples as the result is
+// iterated, so a Cartesian product's cost is paid during result.Next() and the
+// engine call returns a nil error long before the deadline fires. Measured
+// against a 44,906-node graph: the run returned no error, the cancellation
+// arrived at result.Err() as context.DeadlineExceeded, and the commit path is
+// classified with them because a cut that lands there is the same failure
+// (SPEC/GRAPH.md § Statement Time Budget, rule 5).
+//
+// **Unlike the web endpoint, this classifier consults no parent context, and the
+// asymmetry is deliberate rather than an omission.** internal/web derives its
+// deadline from the REQUEST's context, so context.DeadlineExceeded there may be
+// the budget or a parent deadline the client's disconnect brought with it, and
+// that endpoint disambiguates by asking whether its parent is still live. A CLI
+// invocation's parent is context.Background(), which never carries a client, a
+// disconnect, or a deadline of its own, so the only deadline that can fire here
+// is the one derived above and errors.Is is sufficient
+// (SPEC/GRAPH.md § Statement Time Budget, rule 1).
+//
+// The budget is passed in rather than read again, so the value that produced the
+// deadline is the value the message reports; a test that moves the budget
+// therefore gets a truthful message, and in production it renders "5s" and
+// matches the line SPEC/COMMANDS.md § Graph Management publishes character for
+// character.
+func graphStatementError(budget time.Duration, stage string, err error) error {
+	if errors.Is(err, context.DeadlineExceeded) {
+		return fmt.Errorf("%w: graph query exceeded the %s statement time budget; nothing was "+
+			"written. Narrow the statement — add a label, an indexed property filter, or a "+
+			"LIMIT — or split it into smaller statements.", utils.ErrDatabase, budget)
 	}
-	return w, nil
+	return fmt.Errorf("%w: %s: %v", utils.ErrDatabase, stage, err)
 }
 
-// runGraphCreate executes a CREATE/MERGE Cypher query.
-func runGraphCreate(args []string) error {
-	return runGraphWrite("create", "CREATE/MERGE", args)
-}
-
-// runGraphQuery executes a read-only Cypher query.
-func runGraphQuery(args []string) error {
-	return runGraphRead("query", "read-only", args)
-}
-
-// runGraphUpdate executes a SET/REMOVE Cypher query.
-func runGraphUpdate(args []string) error {
-	return runGraphWrite("update", "SET/REMOVE", args)
-}
-
-// runGraphDelete executes a DELETE/DETACH DELETE Cypher query.
-func runGraphDelete(args []string) error {
-	return runGraphWrite("delete", "DELETE/DETACH DELETE", args)
-}
-
-// runGraphSearch executes a read-only traversal Cypher query.
-func runGraphSearch(args []string) error {
-	return runGraphRead("search", "read-only", args)
-}
-
-// runGraphRead is the shared implementation for read subcommands
-// (query and search). It opens the store under the shared store lock, releases
-// that lock the moment the open returns, then runs the query against the
-// in-memory graph the open produced and serialises the result.
+// runGraphExecute is the implementation of `rmp graph execute`.
 //
-// The lock is taken because opening the store is not a read-only operation on
-// disk: recovery repairs an interrupted checkpoint before it loads anything, so
-// an unlocked read could delete or race the staging directory a concurrent
-// writer is publishing its snapshot from (SPEC/GRAPH.md § What a Read Changes on
-// Disk). It is released at the open because that is the whole of what a read
-// touches on disk — see graphlock's package comment for the anti-widening
-// clause that governs this.
-func runGraphRead(subcmd, allowed string, args []string) error {
+// It has TWO paths and resolves between them rather than choosing. When a server
+// answers on the socket in force, the statement is sent to it and this process
+// opens nothing and takes no lock; when nothing answers, it opens the store under
+// the exclusive advisory lock, runs the statement inside a transaction,
+// serialises the result, and checkpoints — which is what every invocation did
+// before a server existed. The statement, the result, the output shape and the
+// exit code are the same either way, and which path carried it is not observable
+// (SPEC/GRAPH.md § Server Resolution, rule 6). No flag chooses between them:
+// --socket names the socket that is looked at and decides nothing else.
+//
+// The paragraphs below describe the direct path.
+//
+// There is ONE execution path here, and it is the transactional one, because
+// nothing in Groadmap decides between two: Groadmap does not examine the
+// statement, so it cannot learn from it whether it reads or writes
+// (SPEC/GRAPH.md § Engine Construction and Lifecycle). Every statement goes to
+// the same store-backed engine, built with a transactional store over a
+// write-ahead-log writer, which is what the hazard the specification names
+// requires — a writing statement run on an engine built WITHOUT a transactional
+// store executes against the recovered in-memory graph, commits nothing, and
+// still reports success, so the write is lost in silence.
+//
+// A read-only path used to exist beside this one and was reachable through
+// `graph query` and `graph search`. It went with the five subcommand names,
+// because the operation-class check was the only thing that could route a
+// statement to it (SPEC/COMMANDS.md § Graph Management).
+//
+// The single engine call is RunAny, and the choice is measured rather than
+// stylistic. RunAny is the engine's OWN transactional dispatcher: it routes a
+// statement carrying a writing clause to RunInTx and every other statement to
+// Run, so a write is still committed atomically through exactly the call the
+// specification names, and Groadmap still makes one call for every statement.
+// Calling RunInTx directly for everything was tried first and loses a published
+// behaviour: at the pinned engine, a Result produced by RunInTx carries NO
+// plan-time notifications, while the same statement through Run or RunAny
+// carries the Cartesian-product advisory. Measured on GoGraph v0.12.0, against
+// this project's own store, with `MATCH (a:Spec), (b:Task) RETURN a.key, b.key`:
+// Run and RunAny each returned one notification, RunInTx returned nil. Groadmap
+// surfaces exactly what the engine attaches (SPEC/GRAPH.md § Query Notifications
+// as Diagnostics), so RunInTx-for-everything would silently withdraw the
+// stderr diagnostic that acceptance criterion 21 requires. The specification
+// fixes the behaviour and leaves the Go API to the implementation, which is what
+// this comment is spending its words on.
+func runGraphExecute(args []string) error {
 	roadmapName, remaining, err := requireRoadmap(args)
+	if err != nil {
+		return err
+	}
+
+	// --socket is consumed BEFORE the statement is read, because readQuery
+	// refuses every token it does not recognise: the two flags are read in
+	// sequence rather than by one parser that knows both, so each keeps the
+	// refusal SPEC/COMMANDS.md publishes for it.
+	socketFlag, remaining, err := extractSocketFlag(remaining)
 	if err != nil {
 		return err
 	}
@@ -1276,268 +747,91 @@ func runGraphRead(subcmd, allowed string, args []string) error {
 		return err
 	}
 
-	if err := validateGuardRail(subcmd, allowed, query); err != nil {
+	// The roadmap's existence is checked on BOTH paths and before either is
+	// taken, so exit code 4 stays reachable for a roadmap that does not exist
+	// whatever answers on the socket. resolveGraphDir creates nothing: the
+	// directory is brought into being further down, on the direct path alone.
+	graphDir, err := resolveGraphDir(roadmapName)
+	if err != nil {
 		return err
 	}
 
-	// Refused before the store is opened, like the clause-class guard rail and
-	// its write-side sibling, so a rejected query never reaches the graph
-	// (SPEC/GRAPH.md § Relationship Read Direction).
-	if err := validateRelationshipReadDirection(subcmd, query); err != nil {
+	// Resolution decides WHERE the statement runs, and it runs before any lock
+	// is taken and before any store is opened, so this invocation takes exactly
+	// one of the two paths and never both (SPEC/GRAPH.md § Server Resolution,
+	// rule 3). A server holds the store's exclusive lock for its whole process
+	// lifetime, and no finite wait can be sized against such a hold — resolving
+	// first is what stops a running server from disabling this subcommand
+	// against the roadmap it serves.
+	socket, err := graphSocketInForce(roadmapName, socketFlag)
+	if err != nil {
+		return err
+	}
+	state, err := resolveGraphServer(socket)
+	if err != nil {
+		// The socket answered and yielded no server. This is a FAILURE and not a
+		// fall back: the socket may belong to a server holding the lock, so
+		// opening the store here would wait the whole wait budget and then fail
+		// (rule 2).
+		return err
+	}
+	if state.Served() {
+		output, sendErr := runOnGraphServer(socket, query)
+		if sendErr != nil {
+			return sendErr
+		}
+		return utils.PrintJSON(output)
+	}
+
+	// Not served: the direct path, which is what every invocation did before a
+	// server existed. The graph directory is created here and not above, because
+	// a served invocation opens nothing and must bring no store into being.
+	if err := createGraphDir(graphDir); err != nil {
 		return err
 	}
 
-	// The encoding rule, which binds the reading subcommands exactly as it binds
-	// the writing ones (SPEC/GRAPH.md § Cypher Query and Property Value Content
-	// Rules). A byte the engine replaces with U+FFFD changes the statement, not
-	// only a value it stores: the literal this query matches on is not the
-	// literal supplied, so the row that should have matched does not and the
-	// command reports success having found nothing.
+	// The store's whole lifecycle — the exclusive advisory hold, the recovery
+	// open, the write-ahead-log writer, the transactional store, the engine over
+	// them, and the checkpoint below — belongs to internal/graphstore, which owns
+	// the one copy of it. Close releases the log and then the lock, in that
+	// order, so the log is never closed outside the hold that covers this store.
+	st, err := graphstore.Open(graphDir)
+	if err != nil {
+		return err
+	}
+	defer st.Close() //nolint:errcheck // the close error is moot once the commit has been reported
+
+	engine := st.Engine()
+
+	// The whole of the statement's execution runs under the graph store's
+	// statement time budget (SPEC/GRAPH.md § Statement Time Budget). The deadline
+	// is derived HERE, and not around the whole invocation, because rule 1
+	// defines the budget as covering exactly what follows — the run against the
+	// engine and the walk over the result that run produces — and nothing else:
+	// taking the lock, opening the store, the recovery repair the open performs,
+	// and the checkpoint below are not statement execution.
 	//
-	// The control-character rule is deliberately NOT applied here. It governs
-	// values that are STORED, and a read stores none; refusing a read that names
-	// a control character would deny reach to data the store legitimately holds.
-	// See validateWrittenPropertyValues for the whole of that reasoning.
-	if err := validateQueryEncoding(subcmd, query); err != nil {
-		return err
-	}
-
-	graphDir, err := openGraphStore(roadmapName)
-	if err != nil {
-		return err
-	}
-
-	// Shared lock, held across the store open ALONE. Released with an explicit
-	// call rather than a defer, on both the success and the failure path, so
-	// the hold cannot be silently widened to the query by a later edit.
-	releaseLock, err := graphlock.AcquireShared(graphDir)
-	if err != nil {
-		return err
-	}
-	res, openErr := recovery.Open[string, float64](graphDir, graphReadOpts)
-	releaseLock()
-	if openErr != nil {
-		return fmt.Errorf("%w: graph store unavailable: %v", utils.ErrDatabase, openErr)
-	}
-
-	// The recovered schema travels in the engine's options, which open no file
-	// and take no write-ahead-log writer: the read path's guarantee that it
-	// constructs neither a transactional store nor a WAL writer is unchanged by
-	// this (SPEC/GRAPH.md § Engine Constructor by Path). Without the recovered
-	// constraints and indexes the engine reports an EMPTY schema whatever the
-	// store holds, so `SHOW INDEXES` and `SHOW CONSTRAINTS` — which this path
-	// accepts — would answer zero rows and exit 0, which is the shape of the
-	// defect rather than of an error (SPEC/GRAPH.md § Recovered Schema on Both
-	// Paths).
-	engine := cypher.NewEngineWithOptions(res.Graph, cypher.EngineOptions{
-		RecoveredConstraints: cypher.ConstraintDefsFromRecovery(res.Constraints),
-		RecoveredIndexes:     cypher.IndexDefsFromRecovery(res.Indexes),
-	})
-	ctx := context.Background()
-	result, err := engine.Run(ctx, query, nil)
-	if err != nil {
-		return fmt.Errorf("%w: graph %s failed: %v", utils.ErrDatabase, subcmd, err)
-	}
-	defer result.Close() //nolint:errcheck
-
-	out, err := serializeGraphResult(result)
-	if err != nil {
-		return fmt.Errorf("%w: graph %s failed: %v", utils.ErrDatabase, subcmd, err)
-	}
-
-	// Surface any advisory notifications attached to the result as stderr
-	// diagnostics. The result is still open here (the deferred Close runs at
-	// return), so its notifications are available. Notifications never change
-	// the stdout success output or the exit code (SPEC FR10).
-	printGraphNotifications(result)
-
-	return utils.PrintJSON(out)
-}
-
-// checkpointGraph performs the synchronous post-commit checkpoint
-// (SPEC/GRAPH.md § Synchronous Checkpoint on Write). It writes a
-// self-sufficient full snapshot of the committed graph state under
-// graphDir/snapshot/ and then truncates the write-ahead log so the log
-// holds only post-snapshot transactions. The snapshot carries the
-// node-key mapping (mapper.bin) for string keys AND the registered schema
-// (constraints.bin, indexdefs.bin), so snapshot + WAL tail is enough for
-// recovery to reconstruct both the graph and the schema declared over it.
-//
-// It takes the engine that just executed the statement because the
-// specification requires the snapshot to carry "the schema the engine holds
-// registered at the moment of the checkpoint", and forbids Groadmap keeping a
-// record of its own beside it: the engine is the only party that knows what is
-// registered after a statement has run. The engine is therefore a parameter
-// rather than the two spec slices, so this function reads them itself, at the
-// one moment they are correct, and no caller can hand it a set assembled
-// earlier or elsewhere. The committed graph stays a separate parameter because
-// the engine exposes no accessor for it, and because the snapshot's subject is
-// the graph the store open recovered and the transaction then committed into —
-// which is what the caller holds.
-//
-// The order below is load-bearing. The specs are read, and the snapshot they
-// go into is made durable, BEFORE the write-ahead log is truncated: until that
-// snapshot exists, the log holds the only record of every CREATE INDEX and
-// CREATE CONSTRAINT the graph has seen, and truncating first would destroy the
-// schema outright (SPEC/GRAPH.md § Synchronous Checkpoint on Write, step 2).
-//
-// It MUST be called only after the write transaction has committed
-// durably; the caller treats any error here as non-fatal (see FR7).
-func checkpointGraph(engine *cypher.Engine, g *lpg.Graph[string, float64], w *wal.Writer, graphDir string) error {
-	// Build a CSR view of the committed in-memory graph for the snapshot.
-	cs := csr.BuildFromAdjList(g.AdjList())
-
-	// The registered schema, read from the engine that ran the statement and
-	// while the write-ahead log is still intact. Either slice may be empty —
-	// the common case, a graph with no schema declared over it — and the
-	// writer then simply omits the corresponding snapshot component.
-	constraints := engine.ConstraintSpecsForSnapshot()
-	indexDefs := engine.IndexSpecsForSnapshot()
-
-	snapDir := filepath.Join(graphDir, "snapshot")
-	// WriteSnapshotFullWithMapperCodecConstraintsAndIndexDefs assembles in
-	// snapDir+".tmp" and renames atomically into snapDir; the codec emits
-	// mapper.bin so the snapshot is self-sufficient for string keys, and the
-	// two spec slices are what make it self-sufficient for the schema. The
-	// plain WriteSnapshotFullWithMapperCodec persists no schema at all, and
-	// the truncation below then leaves nothing to recover it from.
-	if err := snapshot.WriteSnapshotFullWithMapperCodecConstraintsAndIndexDefs(
-		snapDir, cs, g, txn.NewStringCodec(), constraints, indexDefs); err != nil {
-		return fmt.Errorf("snapshot write: %w", err)
-	}
-
-	// Flush the WAL, then truncate it to bound its growth. Truncation
-	// happens only after the snapshot is durable, so no committed data is
-	// lost.
-	if err := w.Sync(); err != nil {
-		return fmt.Errorf("wal sync: %w", err)
-	}
-	if _, err := w.Truncate(); err != nil {
-		return fmt.Errorf("wal truncate: %w", err)
-	}
-
-	// Keep the snapshot directory consistent with the 0700 graphDir
-	// permissions set in openGraphStore. Best-effort: a failure here does
-	// not invalidate the durable snapshot.
-	_ = os.Chmod(snapDir, 0700) // #nosec G302 -- 0700 on a DIRECTORY is mandated by SPEC (CLAUDE.md §10: 0700 for the ~/.roadmaps tree); gosec G302 false-positives on directory permissions
-	return nil
-}
-
-// runGraphWrite is the shared implementation for write subcommands
-// (create, update, delete). It opens the WAL store with retry,
-// runs the query in a transaction, and serialises the result.
-func runGraphWrite(subcmd, allowed string, args []string) error {
-	roadmapName, remaining, err := requireRoadmap(args)
-	if err != nil {
-		return err
-	}
-
-	query, err := readQuery(remaining)
-	if err != nil {
-		return err
-	}
-
-	if err := validateGuardRail(subcmd, allowed, query); err != nil {
-		return err
-	}
-
-	// Decided immediately after the class rule and before the store is opened,
-	// because it objects to a statement whose class is already correct: a schema
-	// statement under the subcommand that accepts schema statements, carrying a
-	// second clause the engine would silently discard (SPEC/GRAPH.md § One
-	// Statement per Invocation). Ordered ahead of the relationship rules because
-	// those read the statement as a data write, which a schema statement is not.
-	if err := validateSingleSchemaStatement(subcmd, query); err != nil {
-		return err
-	}
-
-	// Refused before the store is opened, like the clause-class guard rail, so
-	// a rejected query never reaches the graph (SPEC/GRAPH.md
-	// § Relationship Write Direction).
-	if err := validateRelationshipWriteDirection(subcmd, query); err != nil {
-		return err
-	}
-
-	// The write-direction rule owns the SET/REMOVE TARGET; this one owns every
-	// relationship VALUE the statement reads — a SET right-hand side such as
-	// `SET n.p = type(e)`, which would otherwise persist a misresolved type, and
-	// a DELETE gated by `WHERE type(e) = ...`, which would otherwise delete the
-	// wrong edges or silently none. Ordered after the write rule so a query that
-	// trips both keeps the write-side message, which names the write the caller
-	// actually asked for.
-	if err := validateRelationshipReadDirection(subcmd, query); err != nil {
-		return err
-	}
-
-	// Content, decided last among the guard-rail rules and still before the store
-	// is opened, so a refused query writes nothing. It is last because the
-	// objections above are about what the query IS - its clause class, and the
-	// orientation of the patterns it binds - while these are about what the query
-	// or a value it carries CONTAINS, which only matters once the statement is
-	// otherwise one this subcommand would run (SPEC/GRAPH.md § Cypher Query and
-	// Property Value Content Rules).
+	// The budget is graphlock.StatementBudget, and this call site READS it rather
+	// than declaring one of its own. It is the same declaration, carrying the
+	// same value, that the web graph data endpoint applies
+	// (internal/web.runGraphViewQuery), so the two surfaces cannot come to
+	// disagree and the CLI carries no second constant to drift from the first.
+	// It lives in the package that owns the lock because the same quantity bounds
+	// the VARIABLE part of a lock hold, and the party that has to know how long a
+	// hold may lawfully last is the one waiting for it (SPEC/GRAPH.md
+	// § Lock Contention).
 	//
-	// The two calls are in the order SPEC/MODELS.md fixes for the pair, and the
-	// order is load-bearing: an invalid byte decodes to U+FFFD, which is not a
-	// forbidden code point, so the control-character rule would answer "fine" for
-	// a value the encoding rule refuses. They are two calls rather than one
-	// because their REACH differs - the encoding rule binds all three write
-	// subcommands including `delete`, the control-character rule only the two
-	// that write property values - and separate calls put each reach where it is
-	// enforced instead of inside a shared helper.
-	if err := validateQueryEncoding(subcmd, query); err != nil {
-		return err
-	}
-	if err := validateWrittenPropertyValues(subcmd, query); err != nil {
-		return err
-	}
+	// It is read ONCE, into a local, so that the deadline which fires and the
+	// message that reports it can never disagree.
+	budget := graphlock.StatementBudget
+	ctx, cancel := context.WithTimeout(context.Background(), budget)
+	// Releasing the timer here keeps the budget strictly per invocation; the
+	// checkpoint below does not run under it and is not cancelled by it.
+	defer cancel()
 
-	graphDir, err := openGraphStore(roadmapName)
+	result, err := engine.RunAny(ctx, query, nil)
 	if err != nil {
-		return err
-	}
-
-	// Serialise concurrent writers to prevent the lost-write corruption
-	// described in graphlock.AcquireExclusive, and shut out a reader that would
-	// otherwise run its recovery repair over this writer's checkpoint. Held for
-	// the whole sequence, until after the checkpoint.
-	releaseLock, err := graphlock.AcquireExclusive(graphDir)
-	if err != nil {
-		return err
-	}
-	defer releaseLock()
-
-	res, err := recovery.Open[string, float64](graphDir, graphReadOpts)
-	if err != nil {
-		return fmt.Errorf("%w: graph store unavailable: %v", utils.ErrDatabase, err)
-	}
-
-	walPath := filepath.Join(graphDir, "wal")
-	w, err := openWALWriter(walPath)
-	if err != nil {
-		return err
-	}
-	defer w.Close() //nolint:errcheck
-
-	store := txn.NewStoreWithOptions[string, float64](res.Graph, w, txn.Options[string, float64]{
-		Codec:       txn.NewStringCodec(),
-		WeightCodec: txn.NewFloat64WeightCodec(),
-	})
-
-	// The whole recovery result, not extracted fields: this constructor
-	// re-registers the recovered constraints and index definitions AND hydrates
-	// each index from the snapshot payload the same open returned, instead of
-	// rebuilding it by a full scan of the graph. `rmp` opens the store, runs one
-	// statement and exits, so a rebuild would be paid once per command rather
-	// than once per process lifetime (SPEC/GRAPH.md § Engine Constructor by
-	// Path). res MUST be the result of the open that produced this store, a few
-	// lines above: a result from any other open would describe a different graph
-	// and neither the engine nor the store could detect the substitution.
-	engine := cypher.NewEngineWithStoreAndRecovery(store, res)
-	ctx := context.Background()
-	result, err := engine.RunInTx(ctx, query, nil)
-	if err != nil {
-		return fmt.Errorf("%w: graph %s failed: %v", utils.ErrDatabase, subcmd, err)
+		return graphStatementError(budget, "graph query failed", err)
 	}
 
 	// Build the output value first by draining the result. The write
@@ -1552,14 +846,14 @@ func runGraphWrite(subcmd, allowed string, args []string) error {
 		}
 		if iterErr := result.Err(); iterErr != nil {
 			_ = result.Close() //nolint:errcheck // roll back; commit error is moot on iteration failure
-			return fmt.Errorf("%w: graph %s failed: %v", utils.ErrDatabase, subcmd, iterErr)
+			return graphStatementError(budget, "graph query failed", iterErr)
 		}
 		output = graphOKResult{OK: true}
 	} else {
 		out, serErr := serializeGraphResult(result)
 		if serErr != nil {
 			_ = result.Close() //nolint:errcheck // roll back; commit error is moot on iteration failure
-			return fmt.Errorf("%w: graph %s failed: %v", utils.ErrDatabase, subcmd, serErr)
+			return graphStatementError(budget, "graph query failed", serErr)
 		}
 		output = out
 	}
@@ -1576,16 +870,22 @@ func runGraphWrite(subcmd, allowed string, args []string) error {
 	// here is a normal write failure (SPEC FR7 §4): no checkpoint runs and
 	// the command fails with ErrDatabase (exit 1).
 	if cerr := result.Close(); cerr != nil {
-		return fmt.Errorf("%w: graph %s commit failed: %v", utils.ErrDatabase, subcmd, cerr)
+		return graphStatementError(budget, "graph commit failed", cerr)
 	}
 
-	// The transaction has committed durably; res.Graph now reflects the new
-	// state. Checkpoint synchronously: write a self-sufficient snapshot and
-	// truncate the WAL. Per SPEC FR7, a checkpoint failure AFTER a durable
-	// commit MUST NOT fail the write: the WAL is intact, recovery still
-	// works, and the next write reconciles the snapshot. Surface the failure
-	// as a diagnostic on stderr but return success with exit code 0.
-	if cperr := checkpointGraph(engine, res.Graph, w, graphDir); cperr != nil {
+	// The transaction has committed durably. Checkpoint synchronously: write a
+	// self-sufficient snapshot and truncate the WAL. Per SPEC FR7, a checkpoint
+	// failure AFTER a durable commit MUST NOT fail the write: the WAL is intact,
+	// recovery still works, and the next write reconciles the snapshot. Surface
+	// the failure as a diagnostic on stderr but return success with exit code 0.
+	//
+	// Store.Checkpoint carries the gate: a statement whose transaction appended
+	// nothing leaves `snapshot/` and `wal` exactly as it found them, which is what
+	// makes an ordinary read cost no snapshot rewrite now that every statement
+	// runs here. The decision is the store's, not this call site's, so the two
+	// surfaces that take this checkpoint cannot come to disagree about when it
+	// runs.
+	if _, cperr := st.Checkpoint(); cperr != nil {
 		fmt.Fprintf(os.Stderr, "Warning: graph checkpoint failed: %v\n", cperr)
 	}
 

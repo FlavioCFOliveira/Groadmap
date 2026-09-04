@@ -497,7 +497,7 @@ class TestPositionalArityAlreadyCompliantFamilies:
 
     def test_graph_keeps_its_parenthetical_hint(self):
         code, stdout, stderr = self.test.run_cmd(
-            ["graph", "query", "-r", self.roadmap, "MATCH (n:Incident) RETURN n"], check=False)
+            ["graph", "execute", "-r", self.roadmap, "MATCH (n:Incident) RETURN n"], check=False)
         assert code == 2, f"exit={code}, want 2; stderr={stderr!r}"
         assert stderr.splitlines()[0] == (
             'Error: invalid input: unexpected argument "MATCH (n:Incident) RETURN n" '

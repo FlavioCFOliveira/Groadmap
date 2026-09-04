@@ -94,7 +94,9 @@ func TestRunServer_ServeErrorPropagates(t *testing.T) {
 		t.Fatalf("closing listener: %v", cerr)
 	}
 
-	rerr := runServer(ln)
+	// A nil signal channel is the "no signal arrives" case: a receive on a
+	// nil channel blocks forever, so the select can only land on serveErr.
+	rerr := runServer(ln, nil)
 	if rerr == nil {
 		t.Fatalf("runServer on a closed listener = nil, want a wrapped serve error")
 	}

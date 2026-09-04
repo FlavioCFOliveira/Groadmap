@@ -58,7 +58,6 @@ TEST_MODULES = [
     "test_36_query_commands_correctness",
     "test_37_write_persistence_fidelity",
     "test_38_task_list_date_filters",
-    "test_39_graph_guardrail_literals",
     "test_40_graph_notifications",
     "test_41_graph_concurrency_input",
     "test_42_security_audit",
@@ -67,7 +66,6 @@ TEST_MODULES = [
     "test_45_audit_stats_keys",
     "test_46_graph_parallel_edge_predicates",
     "test_47_install_script_extraction",
-    "test_48_graph_clause_surface",
     "test_49_install_platform_guards",
     "test_50_task_and_sprint_comments",
     "test_51_specialists_field_removal",
@@ -84,6 +82,7 @@ TEST_MODULES = [
     "test_62_graph_stray_positional_order",
     "test_63_roadmap_name_refusal_parity",
     "test_64_graph_schema_management",
+    "test_65_graph_server_client_e2e",
 ]
 
 # Stress tests (run separately due to time/data volume)
@@ -114,7 +113,7 @@ def assert_no_dormant_modules() -> list[str]:
 # called from inside the module itself), filtered down to classes with
 # `isinstance(obj, type)` / `inspect.isclass`. A runner built on either idiom
 # picks up a class the moment it is defined, so it cannot go stale the way
-# rmp task #303 describes -- see test_48_graph_clause_surface.py's `_run_all`
+# rmp task #303 describes -- see test_64_graph_schema_management.py's `_run_all`
 # for the canonical shape.
 _DISCOVERY_NAMESPACE_MARKERS = ("sys.modules[__name__]", "globals()")
 _DISCOVERY_CLASS_FILTER_MARKERS = ("isinstance(obj, type)", "inspect.isclass")
@@ -166,9 +165,10 @@ def assert_no_class_shortfall() -> list[str]:
     """Guard against a module executing fewer test classes than it defines
     (rmp task #303): a `Test*`/`*Tests` class appended to a registered module
     without also being wired into that module's runner never runs, yet the
-    module still exits 0 with a smaller, misleadingly "passing" count -- see
-    test_48_graph_clause_surface.py's docstring for the measured example (32
-    passed before the fix, 39 after, with 7 tests that had never run before).
+    module still exits 0 with a smaller, misleadingly "passing" count -- the
+    measured example was test_48_graph_clause_surface.py: 32 passed before the
+    fix, 39 after, with 7 tests that had never run before. That module was
+    retired with the guard rail it pinned; the guarantee it motivated is not.
 
     A module built on the dynamic-discovery idiom (see
     `_module_defines_dynamic_class_discovery`) is exempt: it has no fixed list
@@ -372,7 +372,7 @@ def main():
             print(f"  - {entry}")
         print("Wire every Test*/*Tests class into the module's runner, or switch the")
         print("runner to introspect its own module's namespace (see")
-        print("test_48_graph_clause_surface.py's _run_all for the model).")
+        print("test_64_graph_schema_management.py's _run_all for the model).")
         print("=" * 60)
         return False
 

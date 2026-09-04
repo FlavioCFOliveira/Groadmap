@@ -1,14 +1,29 @@
 // Contract tests for the graph store's advisory lock
 // (SPEC/GRAPH.md § Concurrency and Recovery; § Lock Contention; Acceptance
-// Criteria 33, 36, 37).
+// Criteria 19 and 20).
 //
-// The lock has two modes over one file, and every property below is one half of
-// a pair that a platform port, or a refactor, is liable to break in isolation:
+// SPEC/GRAPH.md gives the store ONE lock mode, exclusive, with ONE contention
+// policy, the bounded wait. AcquireExclusive used to fail on the first
+// collision, and the asymmetry that justified it — a rare writer against
+// frequent readers that waited — went with the five graph subcommands: every
+// caller is a possible reader now, so failing one fast would make ordinary
+// statements intermittently unavailable.
 //
-//   - exclusive excludes exclusive, and fails immediately rather than waiting;
-//   - shared does NOT exclude shared, so reads never serialise on one another;
-//   - shared and exclusive exclude each other, in both directions;
-//   - a shared acquisition WAITS for a writer, bounded, and then fails;
+// A shared mode existed beside it and is gone. Its last caller was the web graph
+// data endpoint, which took a shared hold across the store open alone because it
+// could not write; that endpoint now runs its statement on the transactional
+// path and holds the exclusive lock across the whole sequence (rmp task #364).
+// The shared-mode tests went with the mode: a test for a function nothing calls
+// asserts the behaviour of dead code.
+//
+// Every property below is one half of a pair that a platform port, or a
+// refactor, is liable to break in isolation:
+//
+//   - exclusive excludes exclusive, and WAITS, bounded, before it fails;
+//   - the wait ENDS, with utils.ErrDatabase, rather than blocking indefinitely;
+//   - the wait is sized against the longest LAWFUL hold rather than against the
+//     SQLite policy's total, so a holder that stays inside its own statement
+//     budget cannot starve a waiter;
 //   - the contended acquisition path does not leak a file descriptor.
 //
 // The tests use two distinct file descriptors on the same lock file from the
@@ -20,6 +35,8 @@ package graphlock
 
 import (
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -28,66 +45,194 @@ import (
 	"github.com/FlavioCFOliveira/Groadmap/internal/utils"
 )
 
-// busyWriteMessage is the contention diagnostic AcquireExclusive must produce on
-// every platform. SPEC/GRAPH.md § Lock Contention rule 1 and
-// SPEC/IMPLEMENTATION.md § Graph Store Concurrency require a second writer to
-// fail with this outcome rather than wait, so the text is part of the contract
-// that the Unix and Windows lock primitives share.
-const busyWriteMessage = "graph store is busy: a concurrent write is in progress"
-
-// busyReadMessage is the diagnostic AcquireShared must produce once its bounded
-// wait is exhausted (SPEC/GRAPH.md § Lock Contention rule 2).
-const busyReadMessage = "graph store is busy: a concurrent write is still in progress after the bounded wait"
-
-// boundedWait is the worst-case total sleep AcquireShared performs. It is the
-// project-wide policy's own figure, not a local restatement of it: this package
-// used to derive it from three constants of its own, and those constants agreed
-// with the SPEC while two other copies of the same policy quietly did not
-// (task #294). The figures themselves are asserted once, in
-// internal/backoff's TestPolicyMatchesTheSpecification.
-var boundedWait = backoff.Total()
+// busyExclusiveMessage is the diagnostic AcquireExclusive must produce on every
+// platform once its bounded wait is exhausted (SPEC/GRAPH.md § Lock Contention
+// rule 2). It names no operation class, because the holder may not have been
+// writing: one mode carries one message, and it says only that the store is held.
+const busyExclusiveMessage = "graph store is busy: another invocation still holds it after the bounded wait"
 
 // firstRung is the ladder's first delay, used by the assertions that an
-// acquisition did NOT wait. Like boundedWait it comes from the policy, so no
-// test in this package names a figure of the policy's own.
+// acquisition did NOT wait. It comes from the shared policy, so no test in this
+// package names a figure of the policy's own; the figures themselves are
+// asserted once, in internal/backoff's TestPolicyMatchesTheSpecification.
 const firstRung = backoff.FirstDelay
 
-// TestReaderWaitIsTheProjectPolicy pins the reader's wait budget to the shared
-// policy rather than to a number. SPEC/IMPLEMENTATION.md § Graph Store
-// Concurrency rule 4 says the graph read lock retries under the SAME policy
-// specified for SQLite in § Concurrency Model, so the only thing this package
-// can get wrong is using a different one — which is what this asserts.
+// budgetlessHold is the statement budget the three exhaustion tests below run
+// under, and zero is the honest value rather than merely the cheap one: the
+// holder they contend with is a bare lock hold with no statement behind it, so
+// the variable part of the hold their wait must cover really is nothing, and the
+// wait collapses to the fixed-cost allowance alone.
 //
-// SPEC/WEB.md § Knowledge Graph from the GoGraph Store rule 5 relies on the
-// resulting worst case staying well inside the server's 30 s write timeout, so
-// the headroom is checked here too: it is this package's caller that depends on
-// it, not internal/backoff's.
-func TestReaderWaitIsTheProjectPolicy(t *testing.T) {
-	if boundedWait != backoff.Total() {
-		t.Errorf("the reader's bounded wait is %v but the project policy is %v; "+
-			"this package must consume the shared policy, never restate it", boundedWait, backoff.Total())
+// It is a test-time cost control and not a weakening. What matters about the
+// value in force is fenced independently of it: the derivation by
+// TestWaitBudgetIsDerivedFromTheStatementBudget, and the fact that the wait
+// genuinely tracks the budget — on the wall clock, against a lawful hold — by
+// TestAcquireExclusive_WaitsTheDerivedBudgetNotTheSQLiteTotal. At the production
+// budget each of these acquisitions would spend 7.5 s instead of 2.5 s and prove
+// nothing extra.
+const budgetlessHold time.Duration = 0
+
+// setStatementBudget installs a statement budget for the duration of one test
+// and restores the previous value when the test ends. Production never
+// reassigns StatementBudget; this is the only writer, and t.Cleanup makes nested
+// use safe because cleanups unwind LIFO.
+func setStatementBudget(t *testing.T, d time.Duration) {
+	t.Helper()
+	previous := StatementBudget
+	t.Cleanup(func() { StatementBudget = previous })
+	StatementBudget = d
+}
+
+// TestWaitBudgetIsDerivedFromTheStatementBudget pins the DERIVATION rather than
+// the 7.5 seconds it currently yields, which is the only form of the assertion
+// that survives a change to either term.
+//
+// This test used to say something else, and what it said was wrong twice over.
+// It asserted that the lock's wait WAS backoff.Total, and that the wait stayed
+// under a tenth of the web server's 30 s write timeout. Both were satisfied,
+// comfortably, by the sizing that let a lawful 4.71-second holder starve a
+// contender which gave up after 2.5018 seconds:
+//
+//   - equality with backoff.Total is exactly the defect. The SQLite total is the
+//     allowance for the FIXED part of a hold; a hold here also spans a statement
+//     whose cost the caller chooses, and SPEC/IMPLEMENTATION.md § Graph Store
+//     Concurrency, "Write Contention and Recovery" rule 3 takes the loop and the
+//     ladder from that policy while deliberately not taking its total;
+//   - "a small fraction of the write timeout" is neither necessary nor
+//     sufficient. It says nothing about whether the wait outlasts the hold it
+//     has to cover, and what must fit inside that timeout is the statement and
+//     the wait TOGETHER — asserted where both terms are visible, in
+//     internal/web's TestGraphQueryBudget_StatementAndWaitFitTheWriteTimeout.
+//
+// What is asserted instead is the sizing rule SPEC/GRAPH.md § Lock Contention
+// states — wait budget = statement budget + backoff total — and the property
+// that rule exists to deliver: the wait STRICTLY outlasts the longest lawful
+// statement, with the fixed-cost allowance as the margin.
+func TestWaitBudgetIsDerivedFromTheStatementBudget(t *testing.T) {
+	assert := func(t *testing.T, when string) {
+		t.Helper()
+		if got, want := WaitBudget(), StatementBudget+backoff.Total(); got != want {
+			t.Errorf("%s: WaitBudget() = %v, want the statement budget %v plus the backoff total %v "+
+				"= %v (SPEC/GRAPH.md § Lock Contention)", when, got, StatementBudget, backoff.Total(), want)
+		}
+		if WaitBudget() <= StatementBudget {
+			t.Errorf("%s: the wait budget is %v and a statement may lawfully hold the lock for %v, "+
+				"so a holder inside its own budget outlasts the waiter and starves it. The wait must "+
+				"strictly exceed the longest lawful hold (SPEC/GRAPH.md § Lock Contention)",
+				when, WaitBudget(), StatementBudget)
+		}
 	}
-	if const30s := 30 * time.Second; boundedWait >= const30s/10 {
-		t.Errorf("the reader's bounded wait is %v, which is no longer a small fraction of the "+
-			"web server's %v write timeout (SPEC/WEB.md § HTTP Server Timeouts)", boundedWait, const30s)
+
+	assert(t, "at the production budget")
+
+	// And it must TRACK the budget rather than have been computed once: the two
+	// would otherwise describe different policies inside one process the moment
+	// a caller moved the budget.
+	setStatementBudget(t, 3*time.Second)
+	assert(t, "after the statement budget moved")
+	if got, want := WaitBudget(), 3*time.Second+backoff.Total(); got != want {
+		t.Errorf("WaitBudget() = %v after the statement budget was set to 3s, want %v: the wait must "+
+			"be derived on each call, not frozen at initialisation", got, want)
+	}
+}
+
+// TestAcquireExclusive_WaitsTheDerivedBudgetNotTheSQLiteTotal is the regression
+// fence for the defect itself, measured on the wall clock rather than computed
+// from the constants.
+//
+// The arithmetic above cannot catch this one. A build that derived WaitBudget
+// correctly and then went on calling backoff.Retry — the fixed 2500 ms — would
+// satisfy every assertion in this file except this one, and would starve exactly
+// the waiter the budget exists to protect. So the acquisition is timed against a
+// held lock and required to have waited the DERIVED budget.
+//
+// The statement budget is set to the fixed-cost allowance itself, which puts the
+// two candidate sizings a clean factor of two apart on the clock: 5 s if the
+// budget is honoured, 2.5 s if the SQLite total is used instead. No scheduling
+// noise closes a gap that wide, and the cost is one acquisition.
+func TestAcquireExclusive_WaitsTheDerivedBudgetNotTheSQLiteTotal(t *testing.T) {
+	dir := t.TempDir()
+
+	setStatementBudget(t, backoff.Total())
+
+	release, err := AcquireExclusive(dir)
+	if err != nil {
+		t.Fatalf("first lock acquisition failed: %v", err)
+	}
+	defer release()
+
+	type attempt struct {
+		release func()
+		err     error
+		elapsed time.Duration
+	}
+	done := make(chan attempt, 1)
+	go func() {
+		start := time.Now()
+		r, acqErr := AcquireExclusive(dir)
+		done <- attempt{release: r, err: acqErr, elapsed: time.Since(start)}
+	}()
+
+	select {
+	case got := <-done:
+		if got.err == nil {
+			got.release()
+			t.Fatal("contended acquisition succeeded; the lock is not exclusive")
+		}
+		if !errors.Is(got.err, utils.ErrDatabase) {
+			t.Errorf("contention must surface as utils.ErrDatabase (exit 1), got: %v", got.err)
+		}
+		// The regression, named: a wait sized on the SQLite total alone would
+		// have given up here, while a statement running the whole budget in force
+		// would still have been holding the lock.
+		//
+		// The threshold clears backoff.Total by a tenth rather than testing
+		// against it exactly, because an exhausted 2500 ms ladder lands a few
+		// milliseconds PAST 2500 ms — the sleeps guarantee a minimum and the
+		// clock is read around the whole loop. Measured, the reverted
+		// implementation returns at 2.5029 s, which a strict comparison against
+		// 2.5 s would let through. The derived budget in force here is twice the
+		// total, so the two sizings stay unambiguously apart.
+		if outlasted := backoff.Total() + backoff.Total()/10; got.elapsed < outlasted {
+			t.Errorf("the contended acquisition gave up after %v, no meaningfully longer than the "+
+				"SQLite policy's total of %v, while the statement budget in force is %v and the "+
+				"derived wait is %v. The wait is sized on backoff.Total again, so a holder that stays "+
+				"inside its own budget starves the waiter (SPEC/GRAPH.md § Lock Contention)",
+				got.elapsed, backoff.Total(), StatementBudget, WaitBudget())
+		}
+		// A little slack below the nominal figure: time.Sleep guarantees a
+		// minimum, but the comparison is against a clock read taken around the
+		// whole loop, and coarse timer resolution can shave a fraction off.
+		if floor := WaitBudget() - WaitBudget()/10; got.elapsed < floor {
+			t.Errorf("the contended acquisition waited %v, less than the derived budget of %v",
+				got.elapsed, WaitBudget())
+		}
+	case <-time.After(4 * WaitBudget()):
+		t.Fatalf("contended acquisition still blocked after %v; the wait must be BOUNDED "+
+			"(SPEC/GRAPH.md § Lock Contention rule 2)", 4*WaitBudget())
 	}
 }
 
 // TestAcquireExclusive_MutualExclusion is a regression gate for finding #39:
-// the exclusive graph store lock must prevent two writers from holding it at
-// once, and contention must surface as utils.ErrDatabase (exit 1) — never a
-// silent overlap that would let a stale-snapshot checkpoint drop a committed
+// the exclusive graph store lock must prevent two invocations from holding it at
+// once, and an exhausted wait must surface as utils.ErrDatabase (exit 1) — never
+// a silent overlap that would let a stale-snapshot checkpoint drop a committed
 // write. Releasing the lock must make it acquirable again.
 func TestAcquireExclusive_MutualExclusion(t *testing.T) {
 	dir := t.TempDir()
+
+	setStatementBudget(t, budgetlessHold)
 
 	release1, err := AcquireExclusive(dir)
 	if err != nil {
 		t.Fatalf("first lock acquisition failed: %v", err)
 	}
 
-	// A second acquisition while the first is held must fail with ErrDatabase.
+	// A second acquisition while the first is held must not succeed, and must
+	// fail only after the bounded wait rather than on the first collision.
+	start := time.Now()
 	release2, err := AcquireExclusive(dir)
+	elapsed := time.Since(start)
 	if err == nil {
 		release2()
 		release1()
@@ -96,8 +241,13 @@ func TestAcquireExclusive_MutualExclusion(t *testing.T) {
 	if !errors.Is(err, utils.ErrDatabase) {
 		t.Errorf("contention must surface as utils.ErrDatabase (exit 1), got: %v", err)
 	}
-	if !strings.Contains(err.Error(), busyWriteMessage) {
-		t.Errorf("contention message = %q, want it to contain %q", err.Error(), busyWriteMessage)
+	if !strings.Contains(err.Error(), busyExclusiveMessage) {
+		t.Errorf("contention message = %q, want it to contain %q", err.Error(), busyExclusiveMessage)
+	}
+	if elapsed < firstRung {
+		t.Errorf("the second acquisition failed after %v, which is less than the ladder's first "+
+			"delay of %v: it failed on the first collision instead of waiting "+
+			"(SPEC/GRAPH.md § Lock Contention rule 1)", elapsed, firstRung)
 	}
 
 	// After releasing the first lock, it must be acquirable again.
@@ -109,23 +259,29 @@ func TestAcquireExclusive_MutualExclusion(t *testing.T) {
 	release3()
 }
 
-// TestAcquireExclusive_ContentionFailsFast pins the half of the write-lock
-// contract that a port is most likely to get wrong: the exclusive lock is
-// NON-BLOCKING, so a second writer fails immediately instead of waiting for the
-// first to finish. flock(2) only behaves that way because of LOCK_NB, and
-// LockFileEx only because of LOCKFILE_FAIL_IMMEDIATELY — both are opt-in, and
-// dropping either one turns a fast, well-diagnosed failure into a hang that no
-// assertion on the returned error would ever catch.
+// TestAcquireExclusive_ContentionWaitsThenFails covers SPEC/GRAPH.md acceptance
+// criterion 20 for the exclusive mode, and pins BOTH halves of the contention
+// policy, because each half on its own is satisfied by a broken implementation:
 //
-// It also guards against the writer inheriting the reader's retry loop: a
-// writer that waited would take at least the bounded wait to fail, so the
-// elapsed-time bound below fails in that case too.
+//   - the contended acquisition must take AT LEAST the bounded wait, or it is
+//     failing on the first collision and every statement against a busy roadmap
+//     becomes intermittently unavailable;
+//   - it must RETURN, and with utils.ErrDatabase, or an invocation hangs — and
+//     one of the two callers of this lock is an HTTP request handler.
+//
+// The lower bound is what would have caught the pre-collapse behaviour, in
+// which a second acquisition failed at once; the upper bound is what catches a
+// port that drops LOCK_NB or LOCKFILE_FAIL_IMMEDIATELY, since either turns the
+// bounded Go-side wait into an unbounded kernel block that no assertion on the
+// returned error could ever see.
 //
 // The contended call is made on a separate goroutine so that a blocking
 // implementation fails this test with a clear diagnostic rather than
 // deadlocking until the whole test binary times out.
-func TestAcquireExclusive_ContentionFailsFast(t *testing.T) {
+func TestAcquireExclusive_ContentionWaitsThenFails(t *testing.T) {
 	dir := t.TempDir()
+
+	setStatementBudget(t, budgetlessHold)
 
 	release, err := AcquireExclusive(dir)
 	if err != nil {
@@ -145,9 +301,9 @@ func TestAcquireExclusive_ContentionFailsFast(t *testing.T) {
 		done <- attempt{release: r, err: err, elapsed: time.Since(start)}
 	}()
 
-	// The bound is generous: the point is to distinguish "returned promptly"
-	// from "waited for the holder", not to measure the syscall.
-	const bound = 30 * time.Second
+	// Generously larger than the bounded wait: this ceiling only distinguishes
+	// "returned" from "blocked forever".
+	ceiling := 4 * WaitBudget()
 	select {
 	case got := <-done:
 		if got.err == nil {
@@ -157,17 +313,41 @@ func TestAcquireExclusive_ContentionFailsFast(t *testing.T) {
 		if !errors.Is(got.err, utils.ErrDatabase) {
 			t.Errorf("contention must surface as utils.ErrDatabase (exit 1), got: %v", got.err)
 		}
-		if !strings.Contains(got.err.Error(), busyWriteMessage) {
-			t.Errorf("contention message = %q, want it to contain %q", got.err.Error(), busyWriteMessage)
+		if !strings.Contains(got.err.Error(), busyExclusiveMessage) {
+			t.Errorf("contention message = %q, want it to contain %q", got.err.Error(), busyExclusiveMessage)
 		}
-		if got.elapsed >= boundedWait {
-			t.Errorf("contended write waited %v; a writer must fail on the FIRST collision, "+
-				"never retry like a reader (SPEC/GRAPH.md § Lock Contention rule 1)", got.elapsed)
+		// A little slack below the nominal figure: time.Sleep guarantees a
+		// minimum, but the comparison is against a clock read taken around the
+		// whole loop, and coarse timer resolution can shave a fraction off.
+		if floor := WaitBudget() - WaitBudget()/10; got.elapsed < floor {
+			t.Errorf("the contended acquisition gave up after %v; it must wait the derived budget "+
+				"(about %v) before failing (SPEC/GRAPH.md § Lock Contention rule 1)", got.elapsed, WaitBudget())
 		}
-	case <-time.After(bound):
-		t.Fatalf("contended acquisition still blocked after %s; the write lock must fail immediately, "+
-			"never wait (SPEC/GRAPH.md § Lock Contention rule 1)", bound)
+	case <-time.After(ceiling):
+		t.Fatalf("contended acquisition still blocked after %v; the wait must be BOUNDED and end in "+
+			"a failure, never an indefinite block (SPEC/GRAPH.md § Lock Contention rule 2)", ceiling)
 	}
+}
+
+// descriptorProbe opens the lock file, records the descriptor value the runtime
+// handed out, and closes it again. Where descriptors are allocated
+// lowest-free-first — flock(2)'s platforms, which is where this lock's Unix half
+// lives — the value climbs by exactly one for every descriptor the process is
+// still holding, which makes it a cheap open-handle counter.
+//
+// It opens the same file, with the same flags, that openLockFile opens, so it
+// costs nothing that the code under test does not already cost.
+func descriptorProbe(t *testing.T, dir string) uintptr {
+	t.Helper()
+	f, err := os.OpenFile(filepath.Join(dir, LockFileName), os.O_CREATE|os.O_RDWR, 0600)
+	if err != nil {
+		t.Fatalf("probing the descriptor table: %v", err)
+	}
+	fd := f.Fd()
+	if closeErr := f.Close(); closeErr != nil {
+		t.Fatalf("closing the probe handle: %v", closeErr)
+	}
+	return fd
 }
 
 // TestAcquireExclusive_ContentionDoesNotLeakHandles guards the failure path's
@@ -176,14 +356,20 @@ func TestAcquireExclusive_ContentionFailsFast(t *testing.T) {
 // descriptor per attempt.
 //
 // The check is indirect by necessity — Go exposes no portable open-descriptor
-// count — so it works by exhaustion: with a leak, a process whose descriptor
-// limit is the common 1024 stops being able to open the lock file part-way
-// through, and the reported error changes from the contention diagnostic to an
-// open failure. On a host with a very high limit the loop cannot prove the
-// absence of a leak, but it still costs almost nothing and it fails loudly
-// wherever the limit is ordinary.
+// count. It used to work by exhaustion, running 2048 contended attempts until a
+// leak ran the process out of descriptors. That stopped being affordable when
+// AcquireExclusive started WAITING on contention: each attempt now costs the
+// full bounded wait, so the old loop would have taken over an hour.
+//
+// What replaces it is a descriptor-number probe, and its own non-vacuity is
+// established inside the test rather than assumed: the probe is first shown to
+// MOVE when handles really are held, and to come back when they are closed. A
+// platform on which that demonstration fails reports so and the leak assertion
+// is not silently reduced to decoration.
 func TestAcquireExclusive_ContentionDoesNotLeakHandles(t *testing.T) {
 	dir := t.TempDir()
+
+	setStatementBudget(t, budgetlessHold)
 
 	release, err := AcquireExclusive(dir)
 	if err != nil {
@@ -191,203 +377,55 @@ func TestAcquireExclusive_ContentionDoesNotLeakHandles(t *testing.T) {
 	}
 	defer release()
 
-	const attempts = 2048
+	baseline := descriptorProbe(t, dir)
+
+	// Non-vacuity: the probe must be able to see held handles at all. Without
+	// this, a platform whose descriptor values are not allocated lowest-free
+	// would make the assertion below pass unconditionally.
+	const held = 4
+	handles := make([]*os.File, 0, held)
+	for i := range held {
+		f, openErr := os.OpenFile(filepath.Join(dir, LockFileName), os.O_CREATE|os.O_RDWR, 0600)
+		if openErr != nil {
+			t.Fatalf("opening decoy handle %d: %v", i, openErr)
+		}
+		handles = append(handles, f)
+	}
+	withHandles := descriptorProbe(t, dir)
+	for _, f := range handles {
+		_ = f.Close()
+	}
+	if withHandles <= baseline {
+		t.Fatalf("the descriptor probe read %d with %d extra handles open and %d with none, so it "+
+			"cannot see a held handle on this platform. The leak assertion below would pass "+
+			"whatever the contention path did, and must not be reported as if it had checked "+
+			"anything", withHandles, held, baseline)
+	}
+	if restored := descriptorProbe(t, dir); restored != baseline {
+		t.Fatalf("the descriptor probe read %d after the decoy handles were closed and %d before "+
+			"they were opened; the probe is not stable, so a difference it reports below would not "+
+			"mean a leak", restored, baseline)
+	}
+
+	// The path under test. Each attempt costs the bounded wait, so the count is
+	// small; the probe reports a leak of ONE, so a small count is enough.
+	const attempts = 3
 	for i := range attempts {
-		r, err := AcquireExclusive(dir)
-		if err == nil {
+		r, attemptErr := AcquireExclusive(dir)
+		if attemptErr == nil {
 			r()
 			t.Fatalf("attempt %d acquired a held lock; the lock is not exclusive", i)
 		}
-		if !strings.Contains(err.Error(), busyWriteMessage) {
-			t.Fatalf("attempt %d failed for the wrong reason (descriptor leak on the contention path?): %v", i, err)
+		if !strings.Contains(attemptErr.Error(), busyExclusiveMessage) {
+			t.Fatalf("attempt %d failed for the wrong reason: %v", i, attemptErr)
 		}
 	}
-}
 
-// TestAcquireShared_ReadersDoNotExcludeReaders covers SPEC/GRAPH.md acceptance
-// criterion 37: several readers may hold the lock at the same time, so reads
-// never serialise on one another. A shared mode implemented as an exclusive one
-// — the easiest way to get this wrong, since the exclusive primitive already
-// existed — would make the second acquisition wait the full bounded wait and
-// then fail, so the elapsed-time bound is asserted as well as the success.
-func TestAcquireShared_ReadersDoNotExcludeReaders(t *testing.T) {
-	dir := t.TempDir()
-
-	release1, err := AcquireShared(dir)
-	if err != nil {
-		t.Fatalf("first shared acquisition failed: %v", err)
-	}
-	defer release1()
-
-	start := time.Now()
-	release2, err := AcquireShared(dir)
-	elapsed := time.Since(start)
-	if err != nil {
-		t.Fatalf("second shared acquisition failed; readers must not exclude one another: %v", err)
-	}
-	defer release2()
-
-	if elapsed >= firstRung {
-		t.Errorf("second shared acquisition took %v; it must succeed at once, not after a retry, "+
-			"which would mean the shared mode is really exclusive", elapsed)
-	}
-
-	// A third one, to make it clear the coexistence is not limited to a pair.
-	release3, err := AcquireShared(dir)
-	if err != nil {
-		t.Fatalf("third shared acquisition failed: %v", err)
-	}
-	release3()
-}
-
-// TestAcquireShared_ExcludedByAWriter covers the reader half of the mutual
-// exclusion: while a writer holds the lock exclusively, no reader can take it.
-// This is the property that makes the read path safe at all — an unlocked read
-// runs GoGraph's recovery repair, which removes snapshot.tmp and can promote
-// snapshot.bak, over the very directory the writer's checkpoint is publishing
-// into.
-//
-// The reader must not fail on the first collision (SPEC/GRAPH.md § Lock
-// Contention rule 2): it must still be trying after the first retry delay.
-func TestAcquireShared_ExcludedByAWriter(t *testing.T) {
-	dir := t.TempDir()
-
-	releaseWriter, err := AcquireExclusive(dir)
-	if err != nil {
-		t.Fatalf("writer lock acquisition failed: %v", err)
-	}
-
-	type attempt struct {
-		release func()
-		err     error
-	}
-	done := make(chan attempt, 1)
-	go func() {
-		r, err := AcquireShared(dir)
-		done <- attempt{release: r, err: err}
-	}()
-
-	// Still retrying after the first delay proves the reader did not fail fast.
-	select {
-	case got := <-done:
-		if got.err == nil {
-			got.release()
-			releaseWriter()
-			t.Fatal("a reader took the shared lock while a writer held it exclusively; " +
-				"an unlocked read can race a writer's checkpoint")
-		}
-		releaseWriter()
-		t.Fatalf("the reader gave up after the first collision; it must retry under the "+
-			"bounded backoff (SPEC/GRAPH.md § Lock Contention rule 2), got: %v", got.err)
-	case <-time.After(firstRung + firstRung/2):
-	}
-
-	releaseWriter()
-
-	select {
-	case got := <-done:
-		if got.err != nil {
-			t.Fatalf("the reader must succeed once the writer releases the lock, got: %v", got.err)
-		}
-		got.release()
-	case <-time.After(boundedWait):
-		t.Fatalf("the reader did not acquire the shared lock within %v of the writer releasing it", boundedWait)
-	}
-}
-
-// TestAcquireExclusive_ExcludedByAReader covers the other direction of the same
-// exclusion, and it is the direction a shared-mode port is most likely to drop:
-// a shared lock that was in fact a no-op would pass every reader-side test
-// above and still let a writer's checkpoint run underneath a reader's recovery
-// repair. A writer that collides with a reader fails fast, exactly as it does
-// against another writer (SPEC/GRAPH.md § Lock Contention rule 1).
-func TestAcquireExclusive_ExcludedByAReader(t *testing.T) {
-	dir := t.TempDir()
-
-	releaseReader, err := AcquireShared(dir)
-	if err != nil {
-		t.Fatalf("shared acquisition failed: %v", err)
-	}
-
-	start := time.Now()
-	release, err := AcquireExclusive(dir)
-	elapsed := time.Since(start)
-	if err == nil {
-		release()
-		releaseReader()
-		t.Fatal("a writer took the exclusive lock while a reader held the shared lock; " +
-			"the shared mode is not excluding anything")
-	}
-	if !errors.Is(err, utils.ErrDatabase) {
-		t.Errorf("contention must surface as utils.ErrDatabase (exit 1), got: %v", err)
-	}
-	if elapsed >= boundedWait {
-		t.Errorf("the writer waited %v for the reader; a writer must fail on the first collision", elapsed)
-	}
-
-	releaseReader()
-	release, err = AcquireExclusive(dir)
-	if err != nil {
-		t.Fatalf("the writer must succeed once the reader releases the lock, got: %v", err)
-	}
-	release()
-}
-
-// TestAcquireShared_BoundedWaitThenFails covers SPEC/GRAPH.md acceptance
-// criterion 36 and SPEC/WEB.md rule 149: a reader that never gets the lock must
-// fail rather than hang. Both halves are asserted, because each on its own is
-// satisfied by a broken implementation:
-//
-//   - it must take AT LEAST the bounded wait, or the reader is failing fast and
-//     ordinary reads would be intermittently unavailable beside a writer;
-//   - it must RETURN, and with utils.ErrDatabase, or a web request would block
-//     until the server's write timeout fired.
-func TestAcquireShared_BoundedWaitThenFails(t *testing.T) {
-	dir := t.TempDir()
-
-	releaseWriter, err := AcquireExclusive(dir)
-	if err != nil {
-		t.Fatalf("writer lock acquisition failed: %v", err)
-	}
-	defer releaseWriter()
-
-	type attempt struct {
-		release func()
-		err     error
-		elapsed time.Duration
-	}
-	done := make(chan attempt, 1)
-	go func() {
-		start := time.Now()
-		r, err := AcquireShared(dir)
-		done <- attempt{release: r, err: err, elapsed: time.Since(start)}
-	}()
-
-	// Generously larger than the bounded wait: this bound only distinguishes
-	// "returned" from "blocked forever".
-	ceiling := 4 * boundedWait
-	select {
-	case got := <-done:
-		if got.err == nil {
-			got.release()
-			t.Fatal("the reader took the shared lock while a writer held it exclusively")
-		}
-		if !errors.Is(got.err, utils.ErrDatabase) {
-			t.Errorf("an exhausted wait must surface as utils.ErrDatabase (exit 1 / HTTP 500), got: %v", got.err)
-		}
-		if !strings.Contains(got.err.Error(), busyReadMessage) {
-			t.Errorf("exhausted-wait message = %q, want it to contain %q", got.err.Error(), busyReadMessage)
-		}
-		// A little slack below the nominal figure: time.Sleep guarantees a
-		// minimum, but the comparison is against a clock read taken around the
-		// whole loop, and coarse timer resolution can shave a fraction off.
-		if floor := boundedWait - boundedWait/10; got.elapsed < floor {
-			t.Errorf("the reader gave up after %v; it must wait the bounded backoff (about %v) "+
-				"before failing (SPEC/GRAPH.md § Lock Contention rule 2)", got.elapsed, boundedWait)
-		}
-	case <-time.After(ceiling):
-		t.Fatalf("the reader was still blocked after %v; the wait must be BOUNDED and end in a "+
-			"failure, never an indefinite block (SPEC/GRAPH.md § Lock Contention rule 2)", ceiling)
+	if after := descriptorProbe(t, dir); after != baseline {
+		t.Errorf("the descriptor probe read %d after %d contended acquisitions and %d before them: "+
+			"the contention path is leaking about %d handle(s), one per attempt. AcquireExclusive "+
+			"opens the lock file before it locks it and MUST close it when the bounded wait is "+
+			"exhausted", after, attempts, baseline, int(after)-int(baseline))
 	}
 }
 

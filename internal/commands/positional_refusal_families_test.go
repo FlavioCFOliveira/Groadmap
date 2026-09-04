@@ -2,8 +2,8 @@
 //
 // # The criterion
 //
-// SPEC/GRAPH.md acceptance criterion 60: "The rule is one rule across the two
-// families that publish it. The line the `graph` subcommands emit is the line
+// SPEC/GRAPH.md acceptance criterion 28: "The rule is one rule across the two
+// families that publish it. The line `graph execute` emits is the line
 // COMMANDS.md § Positional Arguments publishes for the whole CLI with this
 // family's hint appended, and the line the comment subcommands emit is that same
 // line without a hint (COMMANDS.md § Comment Positional Argument Contract). A
@@ -87,7 +87,7 @@ const (
 const (
 	positionalArgumentsHeading = "## Positional Arguments"
 	commentContractHeading     = "### Comment Positional Argument Contract"
-	noPositionalQueryHeading   = "#### No Positional Query: A Stray Token Is Refused"
+	noPositionalQueryHeading   = "### No Positional Query: A Stray Token Is Refused"
 	errorLineHeading           = "### Error line"
 )
 
@@ -261,7 +261,7 @@ func publishedPair(t *testing.T, where string, published []string) (canonical, e
 	if shorter == longer || !strings.HasPrefix(longer, shorter) {
 		t.Fatalf("%s publishes two refusals that are not one built from the other:\n"+
 			"  %q\n  %q\n"+
-			"SPEC/GRAPH.md acceptance criterion 60 requires the `graph` line to be the canonical "+
+			"SPEC/GRAPH.md acceptance criterion 28 requires the `graph` line to be the canonical "+
 			"CLI-wide line with this family's hint APPENDED, so the shared half must be shared "+
 			"character for character", where, shorter, longer)
 	}
@@ -347,7 +347,7 @@ func TestPositionalRefusal_TheErrorLinePrefixIsTheOneTheSpecPublishes(t *testing
 // ---------------------------------------------------------------------------
 
 // TestPositionalRefusal_TheGraphLineIsTheCanonicalLinePlusThisFamilysHint is
-// acceptance criterion 60 read against the SPEC alone.
+// acceptance criterion 28 read against the SPEC alone.
 //
 // It asserts the relation and never the content: that § Positional Arguments
 // publishes exactly two template refusals, that one is a proper prefix of the
@@ -414,7 +414,7 @@ func TestPositionalRefusal_TheGraphLineIsTheCanonicalLinePlusThisFamilysHint(t *
 // ---------------------------------------------------------------------------
 
 // TestPositionalRefusal_TheCommentContractPublishesTheCanonicalLineAndCitesTheGraphOne
-// is the other half of criterion 60 on the SPEC side.
+// is the other half of criterion 28 on the SPEC side.
 //
 // § Comment Positional Argument Contract must publish exactly two template
 // refusals as well, and they must be the SAME two: the canonical line, which is
@@ -512,9 +512,9 @@ func TestPositionalRefusal_TheThreeProducersStandInThePublishedRelation(t *testi
 	// --- the graph producer -----------------------------------------------
 
 	for _, c := range graphStrayCases() {
-		t.Run("graph/"+c.subcommand, func(t *testing.T) {
+		t.Run("graph/"+c.class, func(t *testing.T) {
 			out, err := dispatchInvocation(t, graphFamilyName,
-				c.subcommand, "-r", graphRoadmap, "--query", c.query, stray)
+				graphSubcommandName, "-r", graphRoadmap, "--query", c.query, stray)
 			if err == nil {
 				t.Fatalf("a stray positional argument was accepted; stdout=%q", out)
 			}
@@ -524,13 +524,14 @@ func TestPositionalRefusal_TheThreeProducersStandInThePublishedRelation(t *testi
 
 			got := errorLine(err)
 			if got != canonicalLive+hint {
-				t.Errorf("`graph %s` emits\n  %q\nbut the canonical line plus this family's hint is\n  %q\n"+
-					"SPEC/GRAPH.md acceptance criterion 60 makes the `graph` line the canonical "+
-					"CLI-wide line with the hint appended, so the shared half must be the shared half",
-					c.subcommand, got, canonicalLive+hint)
+				t.Errorf("`graph execute` given a %s statement emits\n  %q\nbut the canonical line plus "+
+					"this family's hint is\n  %q\nSPEC/GRAPH.md acceptance criterion 28 makes the "+
+					"`graph` line the canonical CLI-wide line with the hint appended, so the shared "+
+					"half must be the shared half", c.class, got, canonicalLive+hint)
 			}
 			if got != wantGraph {
-				t.Errorf("`graph %s` emits %q; %s publishes %q", c.subcommand, got, commandsSpecPath, wantGraph)
+				t.Errorf("`graph execute` given a %s statement emits %q; %s publishes %q",
+					c.class, got, commandsSpecPath, wantGraph)
 			}
 		})
 	}
@@ -578,7 +579,7 @@ func TestPositionalRefusal_TheThreeProducersStandInThePublishedRelation(t *testi
 var citationScanRoots = []string{".", "../../cmd/rmp", "../../tests"}
 
 // TestPositionalRefusal_APinOfOneFamilysWordingCitesTheOther enforces the
-// closing sentence of acceptance criterion 60 over the test suite itself: a
+// closing sentence of acceptance criterion 28 over the test suite itself: a
 // test that asserts one family's wording must cite the other's.
 //
 // The detection is deliberately coarse. It is a FLOOR, not a proof: the four
@@ -651,7 +652,7 @@ func TestPositionalRefusal_APinOfOneFamilysWordingCitesTheOther(t *testing.T) {
 				if !mentions(body, commentMentions) {
 					t.Errorf("%s pins the `graph` family's refusal line and never names the comment "+
 						"subcommands, which publish the same line without this family's hint. "+
-						"SPEC/GRAPH.md acceptance criterion 60 requires a test that asserts one "+
+						"SPEC/GRAPH.md acceptance criterion 28 requires a test that asserts one "+
 						"family's wording to cite the other's, so the shared half is never reworded "+
 						"by copying.", path)
 				}

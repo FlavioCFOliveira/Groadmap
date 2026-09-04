@@ -26,7 +26,7 @@ Before extracting anything, the script verifies the downloaded archive against t
 - **Audit Trail**: Automatic, append-only logging of every change to a task or a sprint, across a catalogue of 43 operations. Each entry names the operation, the entity it belongs to and when it happened, and, where the operation has one, the counterpart entity involved and the git commit that bracketed the work
 - **State Machine**: Validated task and sprint status transitions with automatic date tracking
 - **Bulk Operations**: Support for multiple task IDs in single commands
-- **Knowledge Graph**: Per-roadmap queryable graph (nodes, edges, Cypher) for capturing project elements and their relationships
+- **Knowledge Graph**: Per-roadmap queryable graph (nodes, edges, Cypher) for capturing project elements and their relationships, optionally held open by a dedicated server (`rmp graph serve`) that answers Cypher over a Unix domain socket
 - **Web Interface**: Read-only, self-contained, mobile-first browser view of all roadmaps, their sprints, their tasks on a searchable and filterable Kanban board, and an interactive knowledge-graph visualisation, built on the Tabler admin-shell UI in a dark theme (`rmp web`)
 
 ## Roadmap Selection (Always Required)
@@ -49,7 +49,7 @@ The only commands that do **not** take `-r` are:
 | `backlog` | Backlog planning views (list and show-next) | [DOCS/commands/backlog.md](DOCS/commands/backlog.md) |
 | `stats` | Roadmap-wide statistics and velocity | [DOCS/commands/stats.md](DOCS/commands/stats.md) |
 | `audit` | Audit log and entity history | [DOCS/commands/audit.md](DOCS/commands/audit.md) |
-| `graph` | Knowledge graph management (create, query, update, delete, search via Cypher) | [DOCS/commands/graph.md](DOCS/commands/graph.md) |
+| `graph` | Knowledge graph: run one Cypher statement (`execute`), serve the graph over a Unix domain socket (`serve`), or send a statement to a running server (`client`) | [DOCS/commands/graph.md](DOCS/commands/graph.md) |
 | `web` | Read-only, self-contained web interface for all roadmaps and their knowledge graphs | [DOCS/commands/web.md](DOCS/commands/web.md) |
 | `ai-help` | Emit the AI Agent Contract (machine-readable JSON for automated callers) | [DOCS/commands/ai-help.md](DOCS/commands/ai-help.md) |
 
@@ -115,12 +115,16 @@ rmp sprint reorder -r myproject 1 3,1,2
 rmp sprint show -r myproject 1
 
 # Record project knowledge in the roadmap's graph
-rmp graph create -r myproject \
+rmp graph execute -r myproject \
   --query "MERGE (s:Spec {key:'user-authentication'}) MERGE (c:Code {path:'internal/auth/jwt.go'}) MERGE (s)-[:IMPLEMENTED_BY]->(c)"
 
-# Query the graph
-rmp graph query -r myproject \
+# Read the graph
+rmp graph execute -r myproject \
   --query "MATCH (s:Spec)-[:IMPLEMENTED_BY]->(c:Code) RETURN s.key, c.path"
+
+# Optional: hold the graph open for a working session (Ctrl+C stops it).
+# While it runs, the two commands above go through it automatically.
+rmp graph serve -r myproject
 ```
 
 ## Project Structure
@@ -147,7 +151,7 @@ rmp graph query -r myproject \
 - **Dates**: ISO 8601 UTC (with milliseconds, suffix `Z`)
 - **List arguments**: comma-separated, no spaces (e.g. `1,2,3`)
 - **Roadmaps**: Each roadmap is a directory `~/.roadmaps/<name>/` (permissions `0700`) holding its SQLite database `project.db` (permissions `0600`)
-- **Knowledge graph**: Each roadmap may hold a graph store under `~/.roadmaps/<name>/graph/` (a directory, permissions `0700`), created on first use of the `graph` command
+- **Knowledge graph**: Each roadmap may hold a graph store under `~/.roadmaps/<name>/graph/` (a directory, permissions `0700`), created on first use of the `graph` command. While `rmp graph serve` is running for that roadmap, its socket sits beside the store at `~/.roadmaps/<name>/graph.sock` (permissions `0600`) and is removed when the server stops
 
 ## Exit Codes
 
@@ -173,7 +177,7 @@ See the `SPEC/` folder for detailed technical documentation:
 - `SPEC/DATABASE.md` - SQLite schema and migrations
 - `SPEC/DATA_FORMATS.md` - JSON output schema and the AI Agent Contract
 - `SPEC/DEPLOY.md` - Installation, deployment, and platform detection
-- `SPEC/GRAPH.md` - Knowledge graph feature: GoGraph integration, persistence, guard rails
+- `SPEC/GRAPH.md` - Knowledge graph feature: GoGraph integration, persistence, concurrency, the dedicated graph server and its client
 - `SPEC/HELP.md` - Help skeleton and error message format
 - `SPEC/IMPLEMENTATION.md` - Concurrency, caching, and performance strategies
 - `SPEC/MODELS.md` - Model definitions
@@ -559,45 +563,62 @@ Each roadmap owns one free-form, queryable graph backed by GoGraph. It captures 
 
 **How do I record knowledge in the graph?**
 ```bash
-rmp graph create -r myproject \
+rmp graph execute -r myproject \
   --query "MERGE (s:Spec {key:'user-authentication'}) MERGE (c:Code {path:'internal/auth/jwt.go'}) MERGE (s)-[:IMPLEMENTED_BY]->(c)"
 ```
 
 **How do I read or traverse the graph?**
 ```bash
-rmp graph query -r myproject \
+rmp graph execute -r myproject \
   --query "MATCH (s:Spec)-[:IMPLEMENTED_BY]->(c:Code) RETURN s.key, c.path"
-rmp graph search -r myproject \
+rmp graph execute -r myproject \
   --query "MATCH path = (s:Spec {key:'user-authentication'})-[:DEPENDS_ON*1..3]->(d:Dependency) RETURN path"
 ```
 
 **How do I update or delete graph elements?**
 ```bash
-rmp graph update -r myproject \
+rmp graph execute -r myproject \
   --query "MATCH (s:Spec {key:'user-authentication'}) SET s.status = 'implemented'"
-rmp graph delete -r myproject \
+rmp graph execute -r myproject \
   --query "MATCH (d:Decision {key:'use-sessions'}) DETACH DELETE d"
 ```
 
-**What are the five graph subcommands?**
+**How many graph subcommands are there?**
 
-Each subcommand is a guard rail that accepts only Cypher whose operation class matches it, rejecting everything else (exit code 6) before execution:
-- `create` — add nodes/edges (`CREATE` / `MERGE`)
-- `query` — read (`MATCH ... RETURN`, read-only); also accepts schema introspection (`SHOW INDEXES` / `SHOW CONSTRAINTS`)
-- `update` — mutate existing elements (`SET` / `REMOVE`); also the schema subcommand, accepting index and constraint DDL (`CREATE INDEX`, `DROP INDEX`, `CREATE CONSTRAINT`, `DROP CONSTRAINT`) and schema introspection
-- `delete` — remove nodes/edges (`DELETE` / `DETACH DELETE`)
-- `search` — read-only traversal, including variable-length paths (e.g. `-[*1..3]-`); schema introspection is likewise accepted
+Three: `execute`, `serve` and `client`. `execute` and `client` each run any Cypher statement the engine accepts — a read, a write, a deletion, index and constraint DDL, and the `SHOW INDEXES` / `SHOW CONSTRAINTS` listings — and differ only in where the statement runs. `serve` runs no statement of its own: it makes the graph available to the other two.
 
-**Can I pipe a query instead of using `--query`?**
+`create`, `query`, `update`, `delete` and `search` were subcommands of `rmp graph` and are not any more: each is now an unresolved subcommand name and exits 127. They existed to enforce an operation class, and once that enforcement was withdrawn nothing distinguished them.
+
+Because nothing is checked, the effect of a statement is decided by its Cypher alone. There is no subcommand whose contract is "this cannot delete", so the guarantee you need about a statement is a guarantee about the text you supply.
+
+**What does `rmp graph serve` do, and do I need it?**
+
+You do not need it: everything the graph can do works without one. `rmp graph serve` opens a roadmap's graph once and answers Cypher over a Unix domain socket until you stop it, so a caller pays one store open for the whole session instead of one per invocation, and statements that would otherwise serialise on the store's exclusive lock run concurrently under the store's MVCC instead.
+
 ```bash
-echo "MATCH (n) RETURN count(n)" | rmp graph query -r myproject
-cat query.cypher | rmp graph search -r myproject
+# Hold the graph open until Ctrl+C; it prints the socket it bound
+rmp graph serve -r myproject
+
+# Send a statement to that server explicitly
+rmp graph client -r myproject --query "MATCH (n:Spec) RETURN n.key"
 ```
-When `--query` is absent, the entire standard input is read as the query. See [DOCS/commands/graph.md](DOCS/commands/graph.md) for full details.
+
+**A running server is used automatically.** With one serving `myproject`, an ordinary `rmp graph execute -r myproject ...` sends its statement to that server instead of opening the store, with no flag and no configuration, and so does the web interface's graph page. The result, the output shape and the exit code are the same either way. `rmp graph client` is the one that *requires* a server and fails when none answers, which is what makes it useful in a script that must know a server was reached.
+
+**Access control is the filesystem and nothing else.** The socket is mode `0600` inside a roadmap home that is `0700`, there is no authentication and no transport security (the server prints a warning for each at startup), and any caller that can open the socket can read, write, delete and change the schema of that roadmap's graph.
+
+**One caution.** `--socket` moves the socket off the default path, and the web interface cannot follow it: a server started with `--socket` leaves that roadmap's graph page failing with HTTP 500 for as long as it runs. Start a server without the flag whenever the same roadmap is also browsed. See [DOCS/commands/graph.md](DOCS/commands/graph.md#running-a-graph-server).
+
+**Can I pipe a statement instead of using `--query`?**
+```bash
+echo "MATCH (n) RETURN count(n)" | rmp graph execute -r myproject
+cat query.cypher | rmp graph execute -r myproject
+```
+When `--query` is absent, the statement is read from standard input under a bound. See [DOCS/commands/graph.md](DOCS/commands/graph.md) for full details.
 
 **Where is the graph stored?**
 
-Under the roadmap's home directory at `~/.roadmaps/<name>/graph/` (a directory, permissions `0700`), created on first use of any `graph` subcommand. Removing the roadmap deletes its graph along with the rest of the home directory.
+Under the roadmap's home directory at `~/.roadmaps/<name>/graph/` (a directory, permissions `0700`), created on first use of `rmp graph execute`. Removing the roadmap deletes its graph along with the rest of the home directory.
 
 ---
 
@@ -605,7 +626,9 @@ Under the roadmap's home directory at `~/.roadmaps/<name>/graph/` (a directory, 
 
 **What is `rmp web`?**
 
-A read-only, browser-based view of everything the CLI manages. It starts an HTTP server embedded in the `rmp` binary that lists every roadmap under `~/.roadmaps/`. Selecting a roadmap lands you on its sprints page with the current sprint selected; from there a separate page shows every task of the roadmap on a Kanban board, another shows the roadmap's full audit log (paginated, most recent first), and another shows an interactive visualisation of its knowledge graph. It only presents data; the CLI remains the sole write path.
+A browser-based view of everything the CLI manages. It starts an HTTP server embedded in the `rmp` binary that lists every roadmap under `~/.roadmaps/`. Selecting a roadmap lands you on its sprints page with the current sprint selected; from there a separate page shows every task of the roadmap on a Kanban board, another shows the roadmap's full audit log (paginated, most recent first), and another shows an interactive visualisation of its knowledge graph.
+
+Every page is read-only and the CLI remains the sole write path for roadmaps, tasks, sprints, comments and the audit log. **The knowledge-graph page's query bar is the one exception**: it submits a Cypher statement that the server executes as written, so a statement that creates, changes or deletes graph data does so, over a `GET` that nothing authenticates.
 
 ```bash
 # Start on the default host (loopback) and port and open the browser
@@ -623,16 +646,16 @@ On startup the served URL is printed as JSON (`{"url": "http://127.0.0.1:8787"}`
 
 **What makes it different from every other command?**
 
-- **Read-only.** No route creates, edits, or deletes anything; serving a page writes no rows, no audit-log entry, and never checkpoints the graph store. Only `GET`/`HEAD` are accepted (any other method returns HTTP 405).
+- **Read-only, with one exception.** No route creates, edits or deletes a roadmap, task, sprint, comment or audit entry, and serving a page writes no rows and no audit-log entry. Only `GET`/`HEAD` are accepted (any other method returns HTTP 405). The exception is the graph data endpoint: it runs the statement the query bar gives it, so a statement that writes is committed and checkpointed against the roadmap's knowledge graph. A page load that runs no write leaves the graph store byte for byte as it found it.
 - **No `-r` flag.** It is the one command exempt from the always-required-roadmap rule; it lists all roadmaps and you pick one in the browser.
 - **Long-lived.** It keeps serving until interrupted; `Ctrl+C` (`SIGINT`) or `SIGTERM` shuts it down gracefully (exit 0).
 - **It tells you what went wrong.** Because a per-request failure never stops the server, the browser is given a deliberately opaque `internal server error` and the detail goes to the console instead: one structured `log/slog` line on stderr per failure, naming the request, the status, and the underlying error, with UTC timestamps. A rejected query-bar query is a `WARN`; a server failure is an `ERROR`. Successful requests, 404s and 405s stay silent, and stdout still carries only the URL object. See [DOCS/commands/web.md](DOCS/commands/web.md#console-log).
 - **A Kanban tasks board.** The Tasks page lays every task of the roadmap out on a board of five fixed status columns - `BACKLOG`, `SPRINT`, `DOING`, `TESTING`, `COMPLETED` - each with a count badge, all five always present whatever the data holds. There is no pagination: whatever the roadmap holds, the board shows. Each card carries the task's `#id` and type, its title, its priority and severity badges, and only the metadata it actually has (sprint, subtask, dependency and comment counts); clicking a card opens the read-only task detail modal.
 - **The board's header controls.** A search box matches the task title and the `#id` reference, and three dropdowns filter by type (an equality over the ten task types), by minimum priority and by minimum severity (both thresholds, `>= n`, exactly as the `rmp task list` flags of the same names). They combine conjunctively, and each is a URL query parameter (`q`, `type`, `priority`, `severity`), so a narrowed board is a link you can share and opening it cold renders the same board the live controls produced. An unknown value simply applies no filter on its dimension. There is no status filter, because the columns already are the status.
-- **A graph query bar with a time budget.** The knowledge-graph page is driven by an editable read-only Cypher query with a node-limit dropdown. The data endpoint executes each query under a 5-second budget: the budget bounds the **work** the query causes, while the node limit bounds only the **result** it returns, so a query that scans a Cartesian product is stopped even though its response would be tiny. A cancelled or failed query is reported in place and the page keeps working.
+- **A graph query bar with a time budget.** The knowledge-graph page is driven by an editable Cypher statement with a node-limit dropdown. The statement is executed as written — the endpoint does not examine it, so a `CREATE`, a `SET` or a `DETACH DELETE` typed into the box is executed and committed against the roadmap's knowledge graph. Each statement runs under a 5-second budget: the budget bounds the **work** the statement causes, while the node limit bounds only the **result** it returns, so a query that scans a Cartesian product is stopped even though its response would be tiny. A cancelled or failed statement is reported in place and the page keeps working. When `rmp graph serve` is running for that roadmap on its default socket, the endpoint sends the statement to that server instead of opening the store; a server started with `--socket` cannot be reached from here at all, and leaves the page failing for as long as it runs.
 - **Tabler dark-theme UI.** The interface is built on the vendored Tabler admin-dashboard framework in its dark theme: a navigation sidebar (which collapses to a hamburger menu on small viewports), a top navbar naming the selected roadmap, page headers whose title names the view you are on (Sprints, Tasks, Audit, Knowledge graph), and Tabler cards, tables, and badges. On the Sprints page each of the three tabs carries a count badge in the colour of the sprint status that tab groups.
 - **Self-contained and offline.** Every asset (HTML, CSS, JavaScript, the vendored Tabler framework and D3.js graph library with the d3-sankey plugin, the Tabler Icons webfont, and the Inter font) is embedded in the binary via `go:embed` and served only from `/static/`; no page references a CDN, a remote font host, or any other remote origin, and the server makes no outbound request.
-- **Loopback by default.** It binds the loopback interface (`127.0.0.1`), so the read-only interface is reachable only from the local machine. Exposing it on the network is the explicit opt-in via `--host 0.0.0.0` (or any other non-loopback address), which also prints a network-exposure warning to stderr. Roadmap names from the URL are validated before any filesystem path is built (path-traversal guard).
+- **Loopback by default, and that bind is the only access control.** It binds the loopback interface (`127.0.0.1`), so the interface is reachable only from the local machine. Exposing it on the network is the explicit opt-in via `--host 0.0.0.0` (or any other non-loopback address), which also prints a network-exposure warning to stderr. Because the graph data endpoint executes the statement it is given, that opt-in is a **write** grant over every roadmap's knowledge graph and not a read grant: the server has no login, no token and no session. Roadmap names from the URL are validated before any filesystem path is built (path-traversal guard).
 - **Responsive, mobile-first.** Every page, including the graph visualisation, adapts to small touch viewports.
 - **Comments are visible.** Opening a task shows its comments as a chronological timeline in the read-only task detail modal, and a sprint's own page carries a Comments card with the sprint's log. Both are oldest first and read-only: comments are displayed, never written, from the browser.
 

@@ -6,7 +6,10 @@ exist in one and not in the other. Whenever the graph gains a new label, edge ty
 property, this file is updated in the same commit.
 
 The graph is a Label Property Graph stored by GoGraph at `~/.roadmaps/groadmap/graph/` and
-is reached only through `rmp graph` (`query`, `search`, `create`, `update`, `delete`).
+is reached only through `rmp graph` (`execute`, `serve`, `client`). The five subcommands
+`query`, `search`, `create`, `update` and `delete` were removed at commit 40d1b37 and exit 127;
+`rmp graph execute -r <roadmap> [-q <cypher>]` replaces all of them and reads the statement from
+standard input when `-q` is absent.
 Groadmap models itself: the project described by the graph is this repository.
 
 ## Conventions
@@ -39,8 +42,11 @@ confirmed to be true:
 | `last_commit` | string | Full 40-character SHA of the commit at which the element was last confirmed. |
 | `last_commit_date` | string | Calendar date of that commit, ISO 8601, `YYYY-MM-DD`. |
 
-For nodes backed by a file (`CodeFile`, `Test`, `Spec`) the confirmed commit is the last
-commit that touched the file, as reported by `git log -1 -- <path>`. For `Component` it is
+For nodes backed by a file (`CodeFile`, `Test`, `Spec`, `Doc`) the confirmed commit is the
+LAST commit that touched the file, as reported by `git log -1 -- <path>` -- which is why
+backfilling a commit that was never recorded does not mean writing that commit onto every
+node it touched: where a later commit has since touched the same file, the later one is the
+answer, and writing the older one would move provenance backwards. For `Component` it is
 the last commit that touched the package directory. For `Requirement` it is the most recent
 commit among the artefacts the requirement is linked to. For an edge it is the commit at
 which the relationship itself was last verified to hold.
@@ -54,11 +60,20 @@ A stamp is a claim, not a formality: it asserts that somebody confirmed the elem
 the repository at that commit. It follows that an element whose truth could not be
 established MUST be left unstamped rather than given a plausible commit. **An absent
 `last_commit` therefore means UNVERIFIED, and never "overlooked"**: it is the one honest
-way the graph can say it does not know. Every node carries provenance; an edge may lack it,
-and where one does, the reason is recorded in a `Memory` so the gap is a decision a reader
-can find rather than a silence. Never bulk-stamp elements to make a completeness query come
-out clean: that converts an admission of ignorance into a false assertion, which is worse
-than the gap it hides.
+way the graph can say it does not know. A node or an edge may therefore lack a stamp -- the
+rule above licences it and this file must not contradict it by also promising that every node
+carries one. Never bulk-stamp elements to make a completeness query come out clean: that
+converts an admission of ignorance into a false assertion, which is worse than the gap it
+hides.
+
+Two corollaries the maintenance pass keeps running into. A stamp is written in FULL: an
+abbreviated SHA is not a shorter spelling of the same value but a different string, which no
+`last_commit = '<full sha>'` predicate matches and which a later reader cannot tell from a
+typo. And a stamp is not a means of reconciliation: bringing a node into conformance with
+this file -- filling a required property, renaming one, normalising a vocabulary -- changes
+nothing about when the node's claims were last checked against the code, so `last_commit`
+stays where it was. A stale claim carrying a fresh stamp is worse than one carrying an old
+stamp, because it asserts a verification that did not happen.
 
 ## Node labels
 
@@ -72,7 +87,7 @@ depends on, or a third-party web asset vendored into the binary.
 | `key` | yes | Package path (`internal/db`), module path (`github.com/FlavioCFOliveira/GoGraph`), or vendored-project name (`tabler`). |
 | `path` | yes | Package path, module path, or the repository path of the vendored asset. |
 | `kind` | yes | `package` or `external-dependency`. |
-| `language` | yes | `Go` for packages and Go modules; for vendored web assets, the comma-separated languages they ship (`CSS,JavaScript`, `CSS,Webfont`, `JavaScript`). |
+| `language` | yes | `Go` for Go packages and Go modules, `Python` for the `tests` harness package; for vendored web assets, the comma-separated languages they ship (`CSS,JavaScript`, `CSS,Webfont`, `JavaScript`). |
 | `version` | no | Pinned version. Omitted when upstream declares none, as the Inter webfont does; never inferred. |
 | `licence` | no | Upstream licence of an `external-dependency`, as recorded in `internal/web/static/vendor/LICENSES.md`. |
 | `summary` | no | What the component is and what it owns. |
@@ -91,12 +106,26 @@ A non-test source file authored by the project. Test sources are `Test` nodes, n
 `CodeFile`; vendored third-party files are `Component`s, never `CodeFile`.
 
 Build and deployment artefacts are `CodeFile`s on the same terms as program source. The
-`Makefile`, `install.sh`, the workflow files under `.github/workflows/`, and `.gitignore`
-are each a file the project authored and maintains, each realises a requirement the SPEC states, and
-each is verified by a test; nothing about them justifies a label of their own. Their
-`package` is the directory that owns them -- `.` for a repository-root file, and
+`Makefile`, `install.sh`, the workflow files under `.github/workflows/`, `.gitignore`, and
+`.gosec.yaml` are each a file the project authored and maintains, each realises a requirement
+the SPEC states, and each is verified by a test; nothing about them justifies a label of their
+own. Their `package` is the directory that owns them -- `.` for a repository-root file, and
 `.github/workflows` for a workflow -- rather than a Go import path, because `package` on
-this label means "the component this file belongs to" and not "a compilation unit".
+this label means "the component this file belongs to" and not "a compilation unit". No
+`Component` node exists for either directory, and none is invented to satisfy a query: those
+six files therefore carry a `package` and no `PART_OF` edge, and they are the only
+`CodeFile`s that do.
+
+`.gosec.yaml` was labelled `Doc` until it was tested against `Doc`'s own definition, which is
+the definition that decides it: a `Doc` is prose whose PURPOSE is to explain the project to a
+reader. The register's purpose is not to explain but to DECLARE, in a format
+`internal/testenv/nosec_register_gate_test.go` parses strictly, every `#nosec` the module
+carries, so that the build fails when the declaration and the source disagree. A file whose
+content is normative input to a validation gate is machinery and not explanation, and it then
+meets the build-artefact terms above exactly: project-authored, realising a requirement
+`SPEC/BUILD.md` section Security Scan: gosec states, and verified by a test. That the file is
+almost entirely prose decided nothing, because the criterion `Doc` sets is purpose and not
+form.
 
 | Property | Required | Notes |
 |---|---|---|
@@ -127,7 +156,7 @@ enforces.
 | Property | Required | Notes |
 |---|---|---|
 | `key` | yes | Repository-relative path, or a slug for a contract test. |
-| `kind` | yes | `unit` (Go `*_test.go`), `e2e` (Python module under `tests/`), or `contract` (a named invariant enforced across several checks). |
+| `kind` | yes | `unit` (Go `*_test.go`), `e2e` (Python module under `tests/`), `benchmark` (a Go `*_test.go` whose subject is a `Benchmark*` measurement rather than a pass/fail assertion), or `contract` (a named invariant enforced across several checks). |
 | `path` | no | Present for file-backed tests; absent for `contract` tests. |
 | `name` | no | Base name, for file-backed tests. |
 | `summary` | no | What the test asserts. Expected on `contract` tests, which have no file to read. |
@@ -139,14 +168,25 @@ enforces.
 A capability the project provides. Requirements are the hinge of traceability: they are
 specified by a `Spec`, implemented by `CodeFile`s and verified by `Test`s.
 
+A capability the binary loses is marked `superseded` and kept, never deleted and never left
+asserting itself. Deleting it destroys the record that the capability once existed and why
+it was withdrawn, which is exactly what anyone proposing to reintroduce it needs; leaving it
+`implemented` makes the graph assert something the code no longer does. The `superseded_note`
+carries the evidence, and the node is NOT restamped: `last_commit` goes on naming the commit
+at which the capability was last confirmed to work, because a fresh stamp on a withdrawn
+capability would assert a verification that did not happen.
+
 | Property | Required | Notes |
 |---|---|---|
 | `key` | yes | Slug, e.g. `graph-guardrail`. |
 | `title` | yes | Human-readable name of the capability. |
-| `status` | yes | `implemented` or `planned`. |
-| `area` | no | Functional area, matching a `Spec.area`. |
+| `status` | yes | `implemented`, `planned` or `superseded`. Lower-case, always: the value is compared literally, and an upper-case spelling is a different value that every status query silently misses. |
+| `area` | no | Functional area. When present it MUST be one of the values `Spec.area` uses, so that a requirement joins to the document that owns it. |
 | `summary` | no | Longer description of the capability. |
+| `note` | no | A caveat about the requirement's own wording -- typically that part of its rationale describes something the project no longer has -- kept out of `summary` so the summary stays the statement of the capability. |
+| `superseded_note` | no | Required companion to `status: superseded`: why the capability went away, at which commit, what was measured to establish that it is gone, and why the node is kept rather than deleted. |
 | `rmp_task` | no | Integer id of the `rmp` task that delivered the capability. The task itself lives in the roadmap database, not in the graph. |
+| `rmp_task_verified_by` | no | Integer id of a later `rmp` task that re-established the capability against the code, where that is a different task from the one that delivered it. |
 | `last_commit`, `last_commit_date` | yes | Provenance. |
 
 ### Release
@@ -208,9 +248,11 @@ rediscovered. Per CLAUDE.md section 5 this layer is the only memory the project 
 
 ## Edge types
 
-Every edge carries `last_commit` and `last_commit_date`, except where the relationship could
-not be verified; see Provenance above, where an absent stamp means unverified and its
-reason is recorded in a `Memory`.
+An edge carries `last_commit` and `last_commit_date` once the relationship has been verified
+to hold; see Provenance above, where an absent stamp means unverified. Many edges predate the
+practice and carry none, and that backlog is a known gap rather than a per-edge decision: only
+where an edge was DELIBERATELY left unstamped, having been looked at and not confirmed, is the
+reason recorded in a `Memory`.
 
 | Edge | From | To | Meaning |
 |---|---|---|---|
@@ -219,13 +261,16 @@ reason is recorded in a `Memory`.
 | `DEPENDS_ON` | `Requirement` | `Requirement` | The capability cannot work without the other. |
 | `TESTS` | `Test` | `Component` | The test exercises the component. A `unit` test exercises the component it belongs to; an `e2e` test belongs to the `tests` harness component but exercises `cmd/rmp`, the binary it drives as a black box. |
 | `SPECIFIES` | `Spec` | `Requirement` | The document specifies the capability. This is the single canonical direction: there is deliberately no inverse edge type, so a query never has to test both ways round. |
-| `IMPLEMENTED_BY` | `Requirement` | `CodeFile`, `Doc` | The artefact implements the capability. |
+| `IMPLEMENTED_BY` | `Requirement` | `CodeFile`, `Doc`, `Spec` | The artefact implements the capability. A `Spec` target is the narrow case of a requirement whose subject IS the specification's own content -- the tree in `ARCHITECTURE.md` naming exactly the files `SPEC/` holds, for instance -- where the document is the artefact that realises the capability rather than the one that states it. Such a requirement carries both a `SPECIFIES` edge from the document that states the rule and an `IMPLEMENTED_BY` edge to the document that must satisfy it, and those are usually different documents. |
 | `VERIFIED_BY` | `Requirement` | `Test` | The test verifies the capability. |
+| `VERIFIES` | `Test` | `Spec`, `Doc` | The test checks the CONTENT of a document against the code, so the document is the thing under test rather than the thing describing it. The inverse of `IMPLEMENTED_BY`'s `Spec` case and distinct from `VERIFIED_BY`, whose subject is a capability: here the subject is a document, and no requirement need stand between them. |
 | `FULFILS` | `Requirement` | `Memory` | The capability is the subject of the recorded memory. |
 | `INCLUDES` | `Release` | `Memory` | The release is the subject of the recorded memory. |
 | `NEXT_RELEASE` | `Release` | `Release` | Chronological succession of releases. |
-| `SEE_ALSO` | `Memory` | `Memory`, `Spec`, `Component` | Cross-reference from a memory to related knowledge. A `Component` target records that the memory carries knowledge about that component which the component's own properties cannot hold, such as a pinning constraint no validation gate can check. |
-| `SEE_ALSO` | `Requirement` | `Requirement` | Cross-reference between two capabilities that meet on the same surface, so that reading about one should lead to the other. It asserts no necessity: that is `DEPENDS_ON`, which states that a capability cannot work without the other, and the two must not be conflated. It is also not derivable from a shared `IMPLEMENTED_BY` target, because the shared artefacts are the large ones, and a join on them relates every capability that happens to touch the same file. |
+| `SEE_ALSO` | `Memory` | `Memory`, `Spec`, `Component`, `CodeFile`, `Test`, `Requirement` | Cross-reference from a memory to related knowledge. A `Component` target records that the memory carries knowledge about that component which the component's own properties cannot hold, such as a pinning constraint no validation gate can check; a `CodeFile` or `Test` target does the same for one file, where the fact is about that file alone and not the whole package; a `Requirement` target points at the capability the memory bears on without asserting that the capability is the memory's subject, which is `FULFILS`. |
+| `SEE_ALSO` | `Requirement` | `Requirement`, `Memory` | Cross-reference between two capabilities that meet on the same surface, so that reading about one should lead to the other. It asserts no necessity: that is `DEPENDS_ON`, which states that a capability cannot work without the other, and the two must not be conflated. It is also not derivable from a shared `IMPLEMENTED_BY` target, because the shared artefacts are the large ones, and a join on them relates every capability that happens to touch the same file. A `Memory` target is the same cross-reference reaching a memory the requirement does not own; when the memory IS the requirement's subject the edge is `FULFILS`. |
+| `SEE_ALSO` | `Doc` | `Memory` | Cross-reference from a prose document to a memory a reader of that document needs, such as this file pointing at the memory that records the graph's maintenance debt. |
+| `SEE_ALSO` | `Test` | `Test` | Cross-reference between two checks that ask the same question of different surfaces, so that changing one is known to bear on the other. |
 
 ## Core traceability chain
 

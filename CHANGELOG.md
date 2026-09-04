@@ -7,6 +7,228 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`rmp graph serve` turns a roadmap's knowledge graph into a service.** It opens
+  that roadmap's store once, holds it and its exclusive advisory lock for the life
+  of the process, and answers Cypher over a **Unix domain socket** until it is
+  stopped, printing the socket it bound as `{"socket": "<path>"}` on stdout. The
+  protocol is **Bolt version 5**, served by the graph engine's own server; Groadmap
+  defines no protocol of its own and binds no network port. It is the second
+  long-lived command, after `rmp web`: `SIGINT` or `SIGTERM` drains the work in
+  flight, shuts the server down, checkpoints, releases the lock, removes the socket
+  and exits `0`.
+  - **One server per roadmap**, enforced by the store lock: a second
+    `rmp graph serve` against the same roadmap fails with exit code `1` and leaves
+    the incumbent's socket untouched. A server asked to bind a socket another
+    roadmap's server owns is refused by a socket probe instead.
+  - **Access control is the filesystem and there is no other.** The socket is
+    created with mode `0600`, set explicitly rather than left to the umask, inside
+    a roadmap home that is `0700`. **The server authenticates nobody and uses no
+    transport security**, both deliberately, and the engine prints a warning for
+    each at startup. Any caller that can open the socket can read, write, delete
+    and change the schema of that roadmap's graph.
+  - **What it buys is measured, not asserted.** A caller pays one store open for a
+    whole session instead of one per invocation, and statements that used to
+    serialise on the store's exclusive lock run concurrently under the store's
+    MVCC. On an 8-core / 16-thread workstation, read throughput rises to roughly
+    seven to eight times the single-client rate and stops rising at about **16**
+    concurrent clients; past that knee another client buys under 5% more
+    throughput and multiplies the 99th-percentile latency nearly fivefold. The
+    server's connection ceiling is 128, set well above the knee because a refused
+    connection is dropped without a protocol answer and is not retried.
+
+- **`rmp graph client` sends one statement to a running server.** It resolves the
+  same socket `serve` binds, sends the statement, and writes **byte for byte** what
+  `rmp graph execute` writes for that statement against that graph. It reads and
+  writes alike, and it **requires** a server: with nothing listening it fails with
+  exit code `1` rather than opening the store, because a subcommand that quietly
+  became `execute` would report a success that says nothing about whether a server
+  was reached. A serialisation conflict — two clients writing the same nodes at
+  once, which is ordinary inside a server — is retried under the project's retry
+  policy rather than reported.
+
+- **`--socket <path>` on `graph execute`, `graph serve` and `graph client`.** All
+  three default it to `~/.roadmaps/<name>/graph.sock`, derived from the roadmap.
+  The flag names **which socket is looked at** and nothing else: it does not force
+  a server, does not forbid one, and does not select the store.
+
+### Changed
+
+- **`rmp graph execute` and the web graph data endpoint route through a running
+  server automatically.** Both now resolve the roadmap's socket before they open
+  anything. With a server answering there, the statement is sent to it and the
+  store is never opened locally; with nothing answering, the store is opened
+  directly under the exclusive lock exactly as before. **No flag and no
+  configuration selects this**, and the statement, the result, the output shape and
+  the exit code are the same either way.
+  - **Why it had to change.** A server holds the store's exclusive lock for its
+    whole process lifetime, and no finite wait can be sized against a hold with no
+    upper bound. Left on the direct path, both surfaces would have failed
+    deterministically — every invocation and every graph page request — for as long
+    as a server ran. Resolving the socket first is what stops a running server from
+    disabling the two surfaces that existed before it.
+  - **A leftover socket file is not an error.** A killed server leaves one behind;
+    the refused connection is read as evidence that the roadmap is not served, and
+    the caller proceeds on the direct path without removing the file.
+  - **A probe that answers but yields no server is a failure, not a fallback.**
+    Falling back there would send the caller at a lock a server may be holding, so
+    `graph execute` fails with exit code `1`, and the web endpoint answers HTTP
+    `500`. A connection lost after the statement was sent is likewise a failure and
+    is **not** retried against the store: a commit is durable before it is
+    acknowledged, so the statement's outcome is genuinely unknown and the error
+    line says exactly that.
+  - **The web interface cannot follow `--socket`, and the consequence is stated
+    rather than buried.** It is an HTTP handler with no command line, and no request
+    parameter carries a socket path. A server started with `--socket` therefore
+    leaves that roadmap's graph page answering HTTP `500` on every request for as
+    long as it runs. Start a server without the flag whenever the roadmap is also
+    browsed.
+
+### Changed - BREAKING
+
+- **`rmp graph`'s five original subcommands are gone, and `execute` replaces all
+  five.**
+  `rmp graph create`, `rmp graph query`, `rmp graph update`, `rmp graph delete`
+  and `rmp graph search` are **removed and are not aliases**: each is now an
+  unresolved subcommand name and is answered as a dispatch failure — exit code
+  `127`, the `graph` help on stderr, nothing on stdout. Every script, agent
+  prompt and stored recipe that names one of them stops working, and the
+  replacement is textual: `rmp graph execute` runs what any of the five ran.
+  - **Why they could not survive as aliases.** The five differed in exactly one
+    thing: the operation class each accepted, enforced before execution. That
+    enforcement was withdrawn in this same cycle, and with it the only
+    distinction between them — five names for one behaviour is a difference the
+    CLI can no longer honour, and keeping them would have published a choice
+    that no longer decides anything.
+  - **`execute` runs what it is given, and the caller owns what that does.** No
+    subcommand's contract says a statement cannot delete. Groadmap checks the
+    statement's length and nothing else about its content, so a statement's
+    effect is decided by its Cypher alone. `SPEC/GRAPH.md § What Groadmap Does
+    Not Check` enumerates the hazards that follow, each of which reports
+    success.
+  - **Exit code `6` no longer means an operation-class mismatch.** On
+    `graph execute` its only cause is a statement longer than the maximum query
+    length of 1 MiB. The five refusal lines the classes published —
+    `graph create accepts only CREATE/MERGE queries` and its four siblings — are
+    withdrawn with them.
+  - **The store lock collapses to one mode with one contention policy.**
+    Groadmap cannot know before running a statement whether it will write, so
+    every invocation takes the advisory lock **exclusively**, across the whole
+    open, execution, commit, checkpoint and write-ahead-log truncation sequence,
+    and an invocation that finds it held now **waits** under the project's
+    bounded backoff instead of failing on the first collision. The cost is
+    stated rather than hidden: two statements against the same roadmap serialise
+    even when neither of them writes, where a shared reader hold let them
+    overlap.
+  - **A statement that appends nothing to the write-ahead log does not
+    checkpoint.** With every statement now on the transactional path, the
+    checkpoint is gated on the log having grown, so an ordinary read leaves
+    `snapshot/` and `wal` exactly as it found them.
+  - **The `--ai-help` contract changed shape**: the `graph` family publishes
+    `execute`, `serve` and `client` where it published five, and the
+    `graph_guard_rail_mismatch` pitfall is replaced by
+    `graph_statement_is_not_checked`.
+
+- **The web graph data endpoint executes the statement it is given, writes
+  included, over an unauthenticated `GET`.** `GET /roadmaps/{name}/graph/data`
+  no longer validates the `q` parameter. A `CREATE`, a `SET`, a `DETACH DELETE`
+  or a schema `CREATE INDEX` submitted through the knowledge-graph page's query
+  bar is executed, committed and checkpointed, exactly as `rmp graph execute`
+  would run it. `?q=MATCH (n) DETACH DELETE n` empties the roadmap's knowledge
+  graph. **This is an owner decision taken with the consequence stated**, and it
+  is recorded in full in `SPEC/WEB.md § Security and Constraints`, rule 3: the
+  server has no login, no token and no session, so the only access control is
+  the bind address, and `--host 0.0.0.0` is now a **write** grant over every
+  roadmap's knowledge graph rather than a read grant.
+  - **The endpoint moved onto the transactional path**, which is what makes the
+    write real rather than merely permitted. It now takes the store's exclusive
+    lock before the open and holds it across the statement, the commit and the
+    checkpoint, opens a write-ahead-log writer, and constructs the engine
+    through `cypher.NewEngineWithStoreAndRecovery` — the same construction
+    `rmp graph execute` performs. Without it, withdrawing the guard rail would
+    have replaced one refusal with another: the read-path engine answers a write
+    with `Run does not execute write or DDL statements`.
+  - **A slow statement through the query bar now blocks the CLI**, and two graph
+    pages open on the same roadmap serialise. The hold spans the statement, so
+    an `rmp graph execute` against the same roadmap waits for it, bounded, and
+    fails with exit code 1 when that wait is exhausted.
+  - **The published `kind` set drops from five values to two.**
+    `not_read_only`, `schema_introspection` and `relationship_read_direction`
+    are **removed**, along with the four-deep precedence rule between them. What
+    remains is `invalid_limit` and `execution`, and the only ordering left is
+    that the `limit` is resolved before the statement runs.
+  - **`SHOW INDEXES` is answered `200` with `{"nodes": [], "edges": []}`** —
+    executed, not refused — because the rows it returns carry no node and no
+    edge. The schema listing itself is read from `rmp graph execute`. A
+    schema-introspection command written with anything but a single space
+    between its two keywords is not routed to the engine's schema parser and
+    fails there: `400` with `kind` `execution` and the engine's own diagnostic.
+    The endpoint states no spacing correction of its own.
+  - **A statement that writes nothing still changes nothing on disk.** The
+    checkpoint is gated on the write-ahead log having grown, so an ordinary page
+    load leaves `snapshot/` and `wal` byte for byte as it found them, and a
+    roadmap with no `graph/` directory is still served as an empty graph without
+    one being created — for a statement that would have written as much as for a
+    read.
+  - **`internal/graphlock` loses its shared mode.** `AcquireShared` had one
+    caller left, this endpoint, and goes with it. There is one lock mode because
+    there is one execution path.
+
+### Known Issues
+
+These were found and measured during this cycle and are **open**. They are listed
+so that nothing above is read as a promise the product does not keep.
+
+- **One statement can drive the process to gigabytes of resident memory.** Every
+  mutation a statement has applied is retained until its rollback finishes, across
+  four accumulators — the write-ahead-log operation buffer, the applied graph
+  state, the undo log, and an index buffer — and nothing bounds how many mutations
+  it applies before the time budget cuts it. Measured: `MATCH (a),(b),(c) CREATE ()`
+  reached 3.3 GB at the 5-second budget, and the figure tracks the budget rather
+  than the size of the graph, which is flat across stores of 40 KB to 248 KB.
+  A pure read costs the same and has none of the shutdown cost, so the two are
+  distinct defects rather than one seen twice. There is a ceiling: given a budget
+  long enough, the engine's own row cap cuts the statement at roughly 20 GB. A short-lived `rmp graph execute` returns that memory
+  by exiting; `rmp graph serve` and `rmp web` have no exit to return it at. The
+  server's connection ceiling bounds how many such statements run at once, not what
+  each of them costs, and no ceiling both preserves throughput and bounds the
+  product.
+- **A server's shutdown is not bounded.** A statement the budget cut while it was
+  writing is inside an undo replay that takes no cancellation, and the store cannot
+  close until it returns. The longest such hold measured is 35.6 seconds — the largest measured rather than a maximum — with no
+  ceiling established.
+- **A `SET` on a relationship bound by `CREATE` or `MERGE` in the same statement is
+  silently discarded.** The invocation exits 0, creates the relationship, and writes
+  none of the properties. Binding origin is the only thing that matters: a plain
+  `CREATE` loses it too, so does a `MERGE` that matched a relationship which already
+  existed, and neither a `WITH` nor a `FOREACH` between the clauses rescues it.
+  `SET e = {...}` is worse still, because its `RETURN` echoes the value it did not
+  write. The same shape on a node is correct. Use `ON CREATE SET` or `ON MATCH SET`,
+  or inline the properties in the pattern, or set them after a fresh `MATCH`.
+- **An undirected `SET` on a relationship does not write every relationship it
+  matched, and how much it loses depends on the data.** A write persists only where
+  the row's left-hand node is the relationship's stored source and its right-hand
+  node the stored target, so the same statement may write all of what it matched,
+  some of it, or none — and it reports `{"ok": true}` either way. A selective
+  statement is the hazardous one and an unanchored sweep is safe, because each
+  relationship is then emitted twice and one of the two rows is correctly oriented.
+  Write through an outgoing pattern, which can be anchored on either endpoint.
+  `DELETE` is unaffected and removes everything it matched.
+- **About 1% of writers to a single hot node exhaust the client's retry ladder.**
+  Measured at 16 concurrent writers to one node through `rmp graph client`: the
+  raw transient-conflict diagnostic reaches the caller for a statement that was
+  correct against a healthy store, and nothing in the message separates contention
+  from a defective statement.
+- **`SPEC/DATA_FORMATS.md § Graph Client Result` states two requirements that
+  cannot both hold.** It requires the client's stdout to be byte-identical to
+  `rmp graph execute`'s and, in the same table, requires a temporal value to render
+  as an ISO 8601 UTC string with milliseconds — which is not what
+  `rmp graph execute` has ever rendered. The implementation chose identity, so a
+  temporal value crossing the socket renders exactly as it does on the direct path
+  and the temporal row is unsatisfied. No temporal formatting for graph values is
+  documented in `DOCS/` until the contradiction is settled.
+
 ## [1.15.2] - 2026-09-01
 
 **The release in which the knowledge graph gains a schema.** `rmp graph update` becomes
