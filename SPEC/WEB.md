@@ -5040,6 +5040,20 @@ states explicitly.
 6. The logger is a single package-level instance, built once at package
    initialisation. It is replaceable, so that a test can capture the records and
    assert their content rather than merely their presence.
+7. The handler writes to that destination **directly**: nothing stands between a
+   record and stderr. There is no queue, so no record is held back to be written
+   later and none is dropped to make room for a newer one. What the arrangement
+   costs is paid by the writer rather than by the server. A destination that has
+   stopped being read — a pipe with no reader draining it — blocks the goroutine
+   making the write, which for a per-request record is the goroutine serving that
+   one request and for a startup record is startup itself. It blocks nothing
+   else: every other request is served on its own goroutine, and the graceful
+   shutdown of [Server Lifecycle](#server-lifecycle), step 7, stays bounded.
+   `rmp graph serve` answers this question differently and MUST NOT be read
+   across to this surface. Its records leave the goroutine that serves every
+   statement, where a blocked write stops the server itself, so it interposes a
+   bounded sink that drops records rather than block. That limit is that server's
+   alone; this server declares none (`GRAPH.md § Server Diagnostics on Stderr`).
 
 ### Levels
 

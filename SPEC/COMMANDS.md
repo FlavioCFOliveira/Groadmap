@@ -4094,8 +4094,25 @@ command writes for each.
 - **While running:** the server serves HTML pages and a JSON graph data endpoint
   per `WEB.md § Routes and Pages`. Per-request responses are HTTP responses from
   the server, not stdout output of the command.
+- **Diagnostics (stderr):** structured records, and **not** the plain text this
+  command's own error line uses. Every condition `WEB.md § What Is Logged` lists
+  — the startup warnings, the failure behind every HTTP 500, and every query-bar
+  statement the graph data endpoint refuses — is reported as a `log/slog` record
+  written through the handler `WEB.md § Logger Configuration` fixes, rather than
+  as a line of prose.
+  `WEB.md § Server Logging` is canonical for the whole stream: which conditions
+  are recorded and at which level, what a record carries, what is deliberately
+  never recorded, and the one-record-one-line property that keeps a crafted
+  request from forging a record on an operator's console. It is canonical too for
+  what the stream costs, and that answer is not the other long-lived command's:
+  this handler writes to stderr directly, with no queue in front of it, so no
+  record is dropped to make room for a newer one, and a destination that has
+  stopped being read blocks the single request whose record is being written
+  rather than the server. `§ Serve Output` publishes the other answer, and its
+  limit is that server's alone.
 - **Errors (stderr):** plain text, with the standard AI-agent hint, per
-  `HELP.md § Error message format`.
+  `HELP.md § Error message format`. This is the invocation's own failure line
+  rather than a log record, and `§ Error Cases` publishes the lines themselves.
 
 ### Lifecycle
 
