@@ -53,20 +53,31 @@ Every failure path below asserts the FULL published line (after substituting
 the one placeholder each carries -- the resolved socket path) AND the exit
 code, never the code alone, per this task's acceptance criteria.
 
-## The two expensive, timing-calibrated reproductions
+## The two expensive reproductions, and the one calibration that survives
 
-Lines 6 and 7 require a statement whose SERVER-side cut-and-undo genuinely
-outlasts the caller's own 7.5s backstop -- and SPEC/GRAPH.md "Statement Time
-Budget" is explicit that the multiplier over the budget is a property of the
-statement and the machine, with "nothing measured establishes a ceiling".
-Calibrated by hand against this repository's own dev machine before being
-encoded here (a slower or faster machine would need different numbers, which
-is precisely the residual the specification names): a 3000-node cartesian
-product hit by a bare `CREATE ()` reliably exceeds the 7.5s backstop while
-the server stays alive to answer eventually; a 300-node one hit by a heavier
-per-row write (`CREATE (:Anomaly {...})`) reliably still runs one second
-after being launched, which is what "the connection lost after send" test
-needs a window for.
+Lines 6 and 7 both need a statement that is still running on the server when
+the test acts on that server, which a cartesian-product write against a seeded
+store supplies.
+
+Line 6 needs no more than that, and its number IS a calibration against this
+repository's own dev machine: a 300-node product hit by a per-row write
+(`CREATE (:Anomaly {...})`) reliably still runs one second after being
+launched, which is the window the kill needs. A much slower or faster machine
+would want a different number, which is precisely the residual SPEC/GRAPH.md
+"Statement Time Budget" names.
+
+Line 7 used to be reached the same way, by requiring the SERVER-side cut-and-undo
+of a 3000-node product to outlast the caller's own 7.5s backstop. It no longer
+is. That overrun is a quantity the specification bounds in NEITHER direction --
+"a property of the statement rather than a constant", with "nothing measured
+establishes a ceiling" and no floor established either -- and measured 48 times
+on this machine it landed on both sides of the backstop, failing the case in 16
+of those runs (rmp task #404; the distribution is recorded at
+BACKSTOP_FREEZE_DELAYS_S). The case now freezes the server with SIGSTOP while
+the statement is in flight: the signal is uncatchable, so the server provably
+cannot answer, while the connection, the session and the socket are all left
+intact -- which is the state rule 7 actually specifies for that line, reached by
+a mechanism with margins in seconds instead of a race decided in tenths.
 
 ## What this module deliberately does not chase
 
@@ -113,6 +124,58 @@ PROBE_DEADLINE_S = 2.5
 # plus backoff total (2.5s).
 WAIT_BUDGET_S = 7.5
 STATEMENT_BUDGET_S = 5.0
+
+# The three points, in seconds after the client is launched, at which the
+# in-flight server is frozen so that the caller's own backstop is the thing that
+# answers. Used by
+# TestServerConnectionFailureModes.test_server_unanswered_within_the_backstop_deadline.
+#
+# WHAT THE OLD SHAPE MEASURED, and why it had to go. Before rmp task #404 that
+# case required the server's own undo replay to outlast the 7.5s backstop
+# unaided. Driven 48 times on this machine against the binary at 77d51de, with
+# nothing changed between runs, the server answered inside the backstop -- at
+# 7.22s to 7.38s, so the case FAILED -- 16 times, and after it in the other 32,
+# by no more than 0.16s to 0.77s. The whole distribution fits inside a band about
+# one second wide with the 7.5s boundary in the middle of it, and which side a
+# run lands on is decided by the ambient state of the machine rather than by
+# anything the case controls: two batches minutes apart, at the same load
+# average, produced 16 failures in 18 and then 0 in 12.
+#
+# WHY A HEAVIER SEED WAS NOT THE ANSWER. The seed is the only knob that moves the
+# replay at all, and it moves it slowly: the same statement was answered at
+# 5.94-6.11s over 600 seed nodes, 6.52-6.90s over 1500, 7.22-8.27s over 3000,
+# 8.27-9.07s over 6000 and 10.08-11.09s over 12000, while widening the product to
+# four dimensions over 3000 nodes moved nothing at all (7.36-7.66s, still astride
+# the boundary). A bigger seed therefore buys a MEASURED margin on THIS machine
+# for a quantity SPEC/GRAPH.md "Statement Time Budget" refuses to bound -- the
+# overrun is "a property of the statement rather than a constant", "nothing
+# measured establishes a ceiling", and nothing establishes a floor either, which
+# is the half a case asserting the backstop needs. It would move the boundary,
+# not remove it.
+#
+# WHAT THE FREEZE GUARANTEES INSTEAD. SIGSTOP is uncatchable, so from the instant
+# it is delivered the server cannot answer, and neither margin is a measurement
+# of an unbounded quantity any more. On the LATE side the server cannot answer
+# before its own statement budget cuts the write, 5s by SPEC/GRAPH.md "Statement
+# Time Budget", and the earliest answer observed for this statement across those
+# 48 runs was 7.22s: freezing at 2.0s leaves 3.0s of specified margin and 5.2s of
+# measured margin. On the EARLY side the statement has to have been SENT, and a
+# whole first `rmp graph client` round trip against a freshly started server --
+# process spawn, roadmap open, socket resolution, connect, handshake, RUN,
+# answer -- measured 8.0ms to 9.1ms over 10 runs: freezing at 0.4s leaves about
+# forty times that. The early side is self-proving as well, because a freeze that
+# landed before the RUN was written would produce the "unreachable" line rather
+# than the one asserted here.
+#
+# WHAT THE REPETITION IS FOR. Not a rate: there is no longer one to sample. The
+# three delays sample the WINDOW -- at its start, at its middle, and at a point
+# where the forward pass has written enough that the undo replay after the resume
+# is the longest of the three -- so a change that narrowed that window from
+# either end fails the case instead of quietly shrinking a margin nobody reads.
+# COST IS MEASURED RATHER THAN FEARED: one iteration is a real server, a real
+# 7.5s wait, a real resumed undo and a real drain, and the three cost 8.4s, 9.2s
+# and 9.2s.
+BACKSTOP_FREEZE_DELAYS_S = (0.4, 1.0, 2.0)
 
 # A Unix domain socket path is capped at 108 bytes on Linux -- sun_path's
 # size -- and a HOME rooted under a long build/session directory blows past
@@ -332,6 +395,71 @@ class GraphServeProcess:
             self.proc.kill()
         self.proc.wait(timeout=timeout)
         return self.proc.returncode
+
+    def pause(self, timeout: float = 5.0) -> str:
+        """SIGSTOP the server, wait for the stop to be OBSERVABLE, and return
+        the process state last seen.
+
+        The signal is uncatchable and unmaskable, so the process leaves the run
+        queue wherever it happens to be -- including inside an engine call --
+        and cannot answer anything at all until it is resumed. What it does NOT
+        touch is the connection: nothing is closed, no FIN or RST reaches the
+        peer, and the kernel goes on holding both ends of the socket. That is
+        the difference between "the server is alive and not answering" and "the
+        connection was lost", and it is the difference the two published lines
+        for those two states are told apart by.
+
+        DELIVERY IS NOT ARRIVAL, and reading the state once is not enough. The
+        kernel marks the signal pending and the thread group leaves the run
+        queue when its threads are next scheduled, so /proc still reports 'R'
+        for a short while after os.kill returns: measured against a server busy
+        executing the write below, the stop became observable between 0.108 ms
+        and 2.183 ms later (median 0.146 ms, 30 samples), and reading the state
+        once instead of polling for it reported 'R' on two of the first three
+        runs of that case. Polling until 'T' is what turns "the signal was
+        sent" into "the process is stopped", which is the property a caller
+        asserting on a server that cannot answer actually needs. The wait is
+        bounded so that a server which never stops fails the caller's assertion
+        with the state it was really in, rather than hanging here.
+        """
+        assert self.proc is not None, "start() was never called"
+        assert self.is_alive(), (
+            f"rmp graph serve -r {self.roadmap} had already exited "
+            f"({self.proc.returncode}) before it could be frozen; "
+            f"stderr={self.stderr_text()!r}"
+        )
+        os.kill(self.proc.pid, signal.SIGSTOP)
+        deadline = time.monotonic() + timeout
+        while True:
+            state = self.state()
+            if state == "T" or time.monotonic() >= deadline:
+                return state
+            time.sleep(0.001)
+
+    def resume(self) -> str:
+        """SIGCONT a frozen server, putting it back on the run queue with its
+        statement, its session and its socket exactly as it left them.
+        """
+        assert self.proc is not None, "start() was never called"
+        os.kill(self.proc.pid, signal.SIGCONT)
+        return self.state()
+
+    def state(self) -> str:
+        """The process state character Linux publishes as field 3 of
+        /proc/<pid>/stat: 'R' running, 'S' sleeping, 'D' in uninterruptible
+        sleep, 'T' stopped by a signal, 'Z' exited and not yet reaped.
+
+        Read from the LAST ')' rather than by splitting the whole line, because
+        field 2 is the executable name in parentheses and a name may itself
+        contain a space or a ')'. Returns 'Z' for a process that has exited and
+        whose entry Popen has not yet collected, and raises FileNotFoundError
+        for one that has been reaped -- both of which are states a caller here
+        wants to see fail loudly rather than be smoothed over.
+        """
+        assert self.proc is not None, "start() was never called"
+        with open(f"/proc/{self.proc.pid}/stat", "rb") as fh:
+            raw = fh.read()
+        return raw[raw.rindex(b")") + 2:].split(b" ", 1)[0].decode()
 
     def is_alive(self) -> bool:
         return self.proc is not None and self.proc.poll() is None
@@ -1256,64 +1384,159 @@ class TestServerConnectionFailureModes(GraphServerTestBase):
         )
 
     def test_server_unanswered_within_the_backstop_deadline(self):
-        """A write large enough that its forward pass is still running when
-        the server's own 5s statement budget cuts it, and whose undo replay
-        (SPEC/GRAPH.md "Statement Time Budget": "a statement cut while it is
-        writing does not return promptly... nothing measured establishes a
-        ceiling") outlasts the caller's 7.5s backstop while the CONNECTION
-        stays intact and the server stays alive.
+        """The seventh published socket line, driven by a server that provably
+        cannot answer rather than by one that is merely expected to answer late.
+
+        A cartesian-product write is sent to a real server and left in flight,
+        and the server is then frozen with SIGSTOP. The signal is uncatchable,
+        so from that instant the process cannot answer anything -- while its
+        session, its connection and its socket are left exactly as they were:
+        nothing is closed, no FIN or RST reaches the peer, and the kernel holds
+        both ends of the socket open throughout. That is the antecedent
+        SPEC/GRAPH.md "Server Resolution" rule 7 states for this line in so many
+        words -- "the connection is intact, the server is alive, and the
+        statement's outcome is unknown" -- and it is the process-level twin of
+        internal/graphclient's own TestSend_ClassifiesAServerThatDoesNotAnswer,
+        which reaches the same classification in process with a scripted server
+        that stays silent on RUN.
+
+        WHAT THIS CASE DELIBERATELY NO LONGER DEPENDS ON. Until rmp task #404 it
+        required the server's own undo replay to outlast the caller's 7.5s
+        backstop unaided, and the specification refuses to promise that in
+        either direction. It asserts nothing here about how long that replay
+        takes, and it would still hold if the engine returned the write path to
+        the 1.000x the read path already achieves. The measurements that
+        condemned the old shape, and the margins this one has instead, are
+        recorded at BACKSTOP_FREEZE_DELAYS_S.
+
+        WHAT IT ASSERTS, and what guarantees each:
+
+        * The client fails with exit code 1 on the published unanswered line,
+          character for character (SPEC/COMMANDS.md "Graph Server Socket Error
+          Lines" for the line, and "Graph Management" for the code every socket
+          failure carries).
+        * The failure is the caller's OWN backstop rather than an earlier
+          deadline: it takes at least the wait budget, which rule 7 fixes as
+          "the statement budget plus the backoff total, and never the statement
+          budget itself".
+        * The connection was intact when that backstop fired. This is asserted
+          BY the line rather than beside it: internal/graphclient classifies a
+          transport failure after the send by what ended the wait, so a
+          connection that had been lost produces the sixth line instead of the
+          seventh, and a freeze that landed before the RUN was written produces
+          the "unreachable" line. Only an intact connection whose own deadline
+          expired produces this one.
+        * The server is alive: still frozen ('T' in /proc) at the instant the
+          client gives up, and it resumes, finishes and stops afterwards.
+        * The stop is clean: exit 0 with the socket file gone (SPEC/GRAPH.md
+          "Server Shutdown and the Drain", steps 6 and 7).
+        * The cut write rolled back whole: not one of the nodes it was creating
+          survives into a later invocation (SPEC/GRAPH.md "Statement Time
+          Budget", rule 2 -- "A cut statement rolls back whole. There is no
+          partial write to reconcile and no torn state on disk").
         """
         roadmap = self.seeded_roadmap(
             "observability-platform-5", self._seed_bulk(3000),
         )
-        server = self.start_server(roadmap)
-        socket_path = server.socket
+        total = len(BACKSTOP_FREEZE_DELAYS_S)
 
-        started = time.monotonic()
-        rc, out, err = self.run_cli(
-            ["graph", "client", "-r", roadmap, "--query",
-             "MATCH (a:MetricSample),(b:MetricSample),(c:MetricSample) CREATE ()"],
-            timeout=WAIT_BUDGET_S + 20,
-        )
-        elapsed = time.monotonic() - started
+        for run_index, freeze_after in enumerate(BACKSTOP_FREEZE_DELAYS_S, start=1):
+            label = (
+                f"run {run_index} of {total}, the server frozen {freeze_after}s "
+                f"after the client was launched"
+            )
+            server = self.start_server(roadmap)
+            socket_path = server.socket
 
-        assert rc == EXIT_DATABASE, f"got {rc}, stderr={err!r}"
-        expected = (
-            f"Error: database error: the graph server at {socket_path} did "
-            f"not answer within {WAIT_BUDGET_S}s; the statement's outcome is "
-            f"unknown"
-        )
-        assert err.splitlines()[0] == expected, err
-        assert out == ""
-        assert elapsed >= WAIT_BUDGET_S - 0.5, (
-            f"the failure must come from the caller's OWN backstop, not an "
-            f"earlier one; took {elapsed:.2f}s"
-        )
+            started = time.monotonic()
+            client = self.run_cli_async(
+                ["graph", "client", "-r", roadmap, "--query",
+                 "MATCH (a:MetricSample),(b:MetricSample),(c:MetricSample) CREATE ()"]
+            )
+            time.sleep(freeze_after)
+            assert client.poll() is None, (
+                f"{label}: the client had already finished before the server "
+                f"was frozen, so nothing below is driving a server that cannot "
+                f"answer"
+            )
+            frozen = server.pause()
+            assert frozen == "T", (
+                f"{label}: SIGSTOP left the server in state {frozen!r} rather "
+                f"than 'T'. A server that is still running is not provably "
+                f"unable to answer, and this case would be a race again"
+            )
 
-        assert server.is_alive(), (
-            "the server must still be alive: this line is specified as "
-            "\"the connection is intact... the server is alive\", which is "
-            "what distinguishes it from a lost connection"
-        )
+            try:
+                out, err = client.communicate(timeout=WAIT_BUDGET_S + 10)
+            except subprocess.TimeoutExpired:
+                server.resume()
+                client.kill()
+                client.communicate()
+                assert False, (
+                    f"{label}: the client never gave up on a server that could "
+                    f"not answer. Its backstop is {WAIT_BUDGET_S}s and nothing "
+                    f"else was ever going to end that wait"
+                )
+            elapsed = time.monotonic() - started
 
-        # Let the still-running undo finish and the server return to
-        # quiescence before a clean stop, rather than compounding this test
-        # with the separate (and separately tested) shutdown-under-load path.
-        rc2 = server.stop(signal.SIGINT, timeout=60.0)
-        assert rc2 == EXIT_OK, (
-            f"the server must still shut down cleanly once the slow "
-            f"statement finally finishes; got {rc2}"
-        )
+            assert client.returncode == EXIT_DATABASE, (
+                f"{label}: got {client.returncode}, stderr={err!r}"
+            )
+            expected = (
+                f"Error: database error: the graph server at {socket_path} did "
+                f"not answer within {WAIT_BUDGET_S}s; the statement's outcome is "
+                f"unknown"
+            )
+            assert err.splitlines()[0] == expected, f"{label}: {err!r}"
+            assert out == "", (
+                f"{label}: a statement that failed must write nothing to "
+                f"stdout; got {out!r}"
+            )
+            assert elapsed >= WAIT_BUDGET_S - 0.5, (
+                f"{label}: the failure must come from the caller's OWN "
+                f"backstop, not an earlier one; took {elapsed:.2f}s"
+            )
 
-        # The cut write rolled back whole and left no checkpoint behind it.
-        rc3, out3, err3 = self.run_cli(
-            ["graph", "execute", "-r", roadmap, "--query",
-             "MATCH (n) WHERE NOT n:MetricSample RETURN count(n)"]
-        )
-        assert rc3 == EXIT_OK, err3
-        assert json.loads(out3) == {"columns": ["count(n)"], "rows": [[0]]}, (
-            f"the cut CREATE() must have written nothing durable; got {out3!r}"
-        )
+            still_frozen = server.state()
+            assert still_frozen == "T", (
+                f"{label}: the server must still be alive -- and, having been "
+                f"frozen throughout, must still be in state 'T' rather than "
+                f"{still_frozen!r} -- at the instant the client gave up. This "
+                f"line is specified as \"the connection is intact... the server "
+                f"is alive\", which is what distinguishes it from a lost "
+                f"connection"
+            )
+
+            server.resume()
+            assert server.is_alive(), (
+                f"{label}: the server must survive the statement it was frozen "
+                f"in the middle of; stderr={server.stderr_text()!r}"
+            )
+
+            # Let the resumed statement be cut by its own budget, undone, and
+            # the server return to quiescence before a clean stop, rather than
+            # compounding this case with the separate (and separately tested)
+            # shutdown-under-load path.
+            rc2 = server.stop(signal.SIGINT, timeout=60.0)
+            assert rc2 == EXIT_OK, (
+                f"{label}: the server must still shut down cleanly once the "
+                f"resumed statement finishes; got {rc2}, "
+                f"stderr={server.stderr_text()!r}"
+            )
+            assert not os.path.exists(socket_path), (
+                f"{label}: the socket must be removed on exit"
+            )
+
+            # The cut write rolled back whole and left no checkpoint behind it.
+            rc3, out3, err3 = self.run_cli(
+                ["graph", "execute", "-r", roadmap, "--query",
+                 "MATCH (n) WHERE NOT n:MetricSample RETURN count(n)"]
+            )
+            assert rc3 == EXIT_OK, f"{label}: {err3}"
+            assert json.loads(out3) == {"columns": ["count(n)"], "rows": [[0]]}, (
+                f"{label}: the cut CREATE() must have written nothing durable; "
+                f"got {out3!r}"
+            )
 
 
 class TestShutdownDrainsAStatementInFlight(GraphServerTestBase):
