@@ -42,6 +42,7 @@ import (
 	"github.com/FlavioCFOliveira/GoGraph/store/txn"
 	"github.com/FlavioCFOliveira/GoGraph/store/wal"
 
+	"github.com/FlavioCFOliveira/Groadmap/internal/graphjson"
 	"github.com/FlavioCFOliveira/Groadmap/internal/utils"
 )
 
@@ -146,10 +147,11 @@ func schemaNamesOnTheStore(t *testing.T, name, query string) []string {
 
 	var names []string
 	for result.Next() {
-		// serializeGraphValue is the endpoint's OWN value mapping, reused here
-		// rather than reimplemented, so the helper reads a value exactly as the
-		// response would have rendered it.
-		if s, ok := serializeGraphValue(result.ValueAt(nameCol)).(string); ok {
+		// graphjson.Value is the ONE value mapping the endpoint publishes
+		// through, reused here rather than reimplemented, so the helper reads a
+		// value exactly as the response would have rendered it. The nil
+		// graphjson.Unmapped matches what the endpoint passes.
+		if s, ok := graphjson.Value(result.ValueAt(nameCol), nil).(string); ok {
 			names = append(names, s)
 		}
 	}

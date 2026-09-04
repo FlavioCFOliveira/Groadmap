@@ -11,7 +11,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -19,6 +18,7 @@ import (
 
 	"github.com/FlavioCFOliveira/GoGraph/cypher"
 	"github.com/FlavioCFOliveira/GoGraph/cypher/expr"
+	"github.com/FlavioCFOliveira/Groadmap/internal/graphjson"
 	"github.com/FlavioCFOliveira/Groadmap/internal/graphlock"
 	"github.com/FlavioCFOliveira/Groadmap/internal/graphstore"
 	"github.com/FlavioCFOliveira/Groadmap/internal/terminal"
@@ -542,115 +542,51 @@ func readQueryStream(src io.Reader) (string, error) {
 
 // serializeValue converts a single expr.Value into a JSON-compatible
 // Go value for inclusion in a graphQueryResult row.
+//
+// The mapping itself is not here. It has ONE realisation, in
+// internal/graphjson, and every surface that publishes a graph value calls it
+// (SPEC/DATA_FORMATS.md § One Realisation of the Mapping). What stays in this
+// package is the part that is only the CLI's: the {columns, rows} document the
+// mapped values are placed in, which serializeGraphResult builds, and the Path
+// rendering below, which no other surface publishes.
 func serializeValue(v expr.Value) any {
-	if v == nil {
-		return nil
-	}
+	return graphjson.Value(v, serializePath)
+}
+
+// serializePath renders a path as SPEC/DATA_FORMATS.md § Graph element mapping
+// requires: an object carrying the nodes it visits and the relationships it
+// traverses, each rendered as the element object that same section fixes.
+//
+// It is the CLI's own row rather than a shared one because the CLI is the only
+// surface that publishes a path. The graph data endpoint decomposes a path into
+// the elements it contains and publishes no path object at all
+// (SPEC/DATA_FORMATS.md § Graph View Data, rule 3), so the Path rendering
+// already has one realisation by having one producer; moving it into the shared
+// package would buy no identity and would give the endpoint a row it can never
+// reach.
+//
+// It is handed to internal/graphjson as its graphjson.Unmapped, so a path nested
+// inside a returned list, map or property bag is rendered here exactly as one
+// returned in its own column is. A value of any OTHER kind the shared mapping
+// carries no row for is not a path, and falls back to the engine's own string
+// form — which is what this command published for such a value before the
+// mapping was shared.
+func serializePath(v expr.Value) any {
 	switch v.Kind() {
-	case expr.KindNull:
-		return nil
-
-	case expr.KindInteger:
-		iv, _ := v.(expr.IntegerValue)
-		return int64(iv)
-
-	case expr.KindFloat:
-		fv, _ := v.(expr.FloatValue)
-		f := float64(fv)
-		if math.IsNaN(f) || math.IsInf(f, 0) {
-			return nil
-		}
-		return f
-
-	case expr.KindString:
-		sv, _ := v.(expr.StringValue)
-		return string(sv)
-
-	case expr.KindBool:
-		bv, _ := v.(expr.BoolValue)
-		return bool(bv)
-
-	case expr.KindDate:
-		dv, _ := v.(expr.DateValue)
-		return dv.ToTime().UTC().Format("2006-01-02")
-
-	case expr.KindDateTime:
-		dtv, _ := v.(expr.DateTimeValue)
-		return dtv.T.UTC().Format(time.RFC3339Nano)
-
-	case expr.KindLocalDateTime:
-		ldtv, _ := v.(expr.LocalDateTimeValue)
-		return ldtv.T.Format("2006-01-02T15:04:05.999999999")
-
-	case expr.KindLocalTime:
-		ltv, _ := v.(expr.LocalTimeValue)
-		return ltv.String()
-
-	case expr.KindTime:
-		tv, _ := v.(expr.TimeValue)
-		return tv.String()
-
-	case expr.KindDuration:
-		durv, _ := v.(expr.DurationValue)
-		return durv.String()
-
-	case expr.KindList:
-		lv, _ := v.(expr.ListValue)
-		out := make([]any, len(lv))
-		for i, elem := range lv {
-			out[i] = serializeValue(elem)
-		}
-		return out
-
-	case expr.KindMap:
-		mv, _ := v.(expr.MapValue)
-		out := make(map[string]any, len(mv))
-		for k, val := range mv {
-			out[k] = serializeValue(val)
-		}
-		return out
-
-	case expr.KindNode:
-		nv, _ := v.(expr.NodeValue)
-		props := make(map[string]any, len(nv.Properties))
-		for k, val := range nv.Properties {
-			props[k] = serializeValue(val)
-		}
-		return map[string]any{
-			"id":         nv.ID,
-			"labels":     nv.Labels,
-			"properties": props,
-		}
-
-	case expr.KindRelationship:
-		rv, _ := v.(expr.RelationshipValue)
-		props := make(map[string]any, len(rv.Properties))
-		for k, val := range rv.Properties {
-			props[k] = serializeValue(val)
-		}
-		return map[string]any{
-			"id":         rv.ID,
-			"type":       rv.Type,
-			"startId":    rv.StartID,
-			"endId":      rv.EndID,
-			"properties": props,
-		}
-
 	case expr.KindPath:
 		pv, _ := v.(expr.PathValue)
 		nodes := make([]any, len(pv.Nodes))
-		for i, n := range pv.Nodes {
-			nodes[i] = serializeValue(n)
+		for i := range pv.Nodes {
+			nodes[i] = graphjson.Node(pv.Nodes[i], serializePath)
 		}
 		rels := make([]any, len(pv.Relationships))
-		for i, r := range pv.Relationships {
-			rels[i] = serializeValue(r)
+		for i := range pv.Relationships {
+			rels[i] = graphjson.Relationship(pv.Relationships[i], serializePath)
 		}
 		return map[string]any{
 			"nodes":         nodes,
 			"relationships": rels,
 		}
-
 	default:
 		return v.String()
 	}

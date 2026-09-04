@@ -16,14 +16,20 @@
 // That choice is what makes SPEC/DATA_FORMATS.md § Graph Client Result's central
 // requirement — that the bytes `rmp graph client` writes are the bytes
 // `rmp graph execute` writes for the same statement — hold by construction rather
-// than by inspection. Both callers already own a serialiser from expr.Value to
-// the published JSON, and both keep it: the CLI's serializeValue and the web
-// endpoint's graph collector run over a served result exactly as they run over a
-// result the engine handed them in-process. Mapping to JSON here instead would
-// have created a THIRD copy of the property-type mapping and a fourth of the
-// element mapping, each free to drift from the two that already exist, and the
-// identity would then be an assertion in a test rather than a property of the
+// than by inspection. The step from those values to the published JSON is the ONE
+// realisation every surface shares, internal/graphjson, and each caller runs it
+// over a served result exactly as it runs it over a result the engine handed it
+// in-process (SPEC/DATA_FORMATS.md § One Realisation of the Mapping). Mapping to
+// JSON here instead would have created another copy of the property-type mapping
+// and of the element mapping, free to drift from the one that already exists, and
+// the identity would then be an assertion in a test rather than a property of the
 // code.
+//
+// This paragraph used to say a copy here would be the THIRD of one mapping and
+// the FOURTH of the other, because at the time it was written the mapping really
+// was expressed twice and the element rows three times. Declining to add another
+// was right and it left the ones that existed; rmp task #394 collapsed them, and
+// internal/testenv now fails the build if a second appears.
 //
 // The mapping this file does own is therefore the protocol's encoding back onto
 // expr.Value, and it is exact in both directions for everything the engine can

@@ -326,6 +326,7 @@ Groadmap/
 │   │   └── graphstore.go  # The ONE open/checkpoint sequence; every surface calls it
 │   ├── graphclient/       # Reaching a roadmap's graph server: resolution + Bolt v5 client
 │   │   └── graphclient.go # The ONE resolution rule and the ONE client; every surface calls it
+│   ├── graphjson/         # The ONE mapping from an engine value to published JSON; every surface calls it
 │   ├── graphserve/        # The graph server's lifecycle: listener, options, drain, shutdown
 │   ├── signals/           # The ONE registration for SIGINT and SIGTERM; every surface takes the action over
 │   ├── web/               # Embedded HTTP server (net/http)
@@ -423,6 +424,26 @@ Each package implements:
   `internal/graphserve` (module 10). This package calls both, exactly as it calls
   `internal/graphstore`, and keeps the CLI's own half: the flags, the statement's
   source, the JSON on stdout, the diagnostics on stderr, and the exit code.
+- **It does not own the mapping from an engine value to published JSON either.**
+  That mapping has one realisation, in `internal/graphjson`, and this package
+  calls it. `DATA_FORMATS.md § One Realisation of the Mapping` is canonical for
+  the rule, for which surfaces it binds, and for what each of them still owns.
+  What stays here is the part that is only the CLI's: the `{columns, rows}`
+  document the mapped values are placed in, and the Path rendering, which no
+  other surface publishes.
+- **Why that mapping is a package and not a section of this one.**
+  `internal/commands` imports `internal/web`, so the dependency cannot run the
+  other way, and a mapping from an engine value to published JSON is neither a
+  CLI concern nor an HTTP one — the same reasoning module 8 gives below. That
+  reasoning is what makes it a separate package; it is not what would make it a
+  numbered module here. `internal/graphjson` has no section of its own for the
+  reason `internal/graphlock` and `internal/backoff` have none: what modules 8 to
+  11 own is a lifecycle or a process-wide disposition, whose steps can be ordered
+  wrongly and fail silently, and a mapping has none — no state, no ordering, no
+  resource, and no behaviour that `DATA_FORMATS.md` does not already fix. Its
+  single-realisation rule therefore lives beside the mapping it governs, exactly
+  as the one for the timestamp format lives in
+  `DATA_FORMATS.md § Dates - ISO 8601 with UTC` rather than in module 5.
 - The behaviour is specified in `GRAPH.md`; the CLI contract is in
   `COMMANDS.md § Graph Management`; the result JSON is in
   `DATA_FORMATS.md § Graph Query Result`.
@@ -469,6 +490,14 @@ pinning requirements are in `BUILD.md § Go Toolchain`.
   database. The startup migration is the only path on which `rmp web` writes to a
   roadmap database, and it precedes any read-only connection (see
   `WEB.md § Startup Schema Migration` and `VERSION.md § Migrations`).
+- **It holds no copy of the graph value mapping.** The node and edge objects it
+  publishes, and every property value inside them, go through the one realisation
+  in `internal/graphjson` that `rmp graph execute` and `rmp graph client` go
+  through (`DATA_FORMATS.md § One Realisation of the Mapping`). What remains this
+  package's own is the node-link document those objects are placed in: collecting
+  each element once, dropping an edge whose endpoint was not collected, and
+  decomposing a path into the elements it contains rather than publishing a path
+  object at all.
 - Validates roadmap names taken from the URL path against the central
   roadmap-name rules before using them to resolve any filesystem path, so a
   crafted path cannot traverse outside `~/.roadmaps/` (see Security Guarantees).

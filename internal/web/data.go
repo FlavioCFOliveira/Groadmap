@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"math"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -21,6 +20,7 @@ import (
 	"github.com/FlavioCFOliveira/Groadmap/internal/backoff"
 	"github.com/FlavioCFOliveira/Groadmap/internal/db"
 	"github.com/FlavioCFOliveira/Groadmap/internal/graphclient"
+	"github.com/FlavioCFOliveira/Groadmap/internal/graphjson"
 	"github.com/FlavioCFOliveira/Groadmap/internal/graphlock"
 	"github.com/FlavioCFOliveira/Groadmap/internal/graphstore"
 	"github.com/FlavioCFOliveira/Groadmap/internal/models"
@@ -2381,20 +2381,29 @@ func (c *graphCollector) walk(v expr.Value) {
 }
 
 // addNode collects a node once, deduplicated by id.
+//
+// The element object itself is built by internal/graphjson, the one realisation
+// of the mapping every surface that publishes a graph value shares
+// (SPEC/DATA_FORMATS.md § One Realisation of the Mapping). This endpoint owns
+// the document those objects are placed in — collecting each element once,
+// dropping an orphan edge, decomposing a path — and no part of the mapping
+// inside them.
+//
+// The graphjson.Unmapped seam is nil because this endpoint publishes no path
+// object: walk decomposes a path into its elements before anything is mapped,
+// and a property value is never a graph element, so no value reaching the shared
+// mapping from here can be of a kind it carries no row for.
 func (c *graphCollector) addNode(nv expr.NodeValue) {
 	if _, seen := c.nodeSet[nv.ID]; seen {
 		return
 	}
 	c.nodeSet[nv.ID] = struct{}{}
-	c.nodes = append(c.nodes, map[string]any{
-		"id":         nv.ID,
-		"labels":     nv.Labels,
-		"properties": serializeProps(nv.Properties),
-	})
+	c.nodes = append(c.nodes, graphjson.Node(nv, nil))
 }
 
 // addRel collects a relationship once, deduplicated by id. The endpoint ids are
 // kept so view() can drop the edge if either endpoint node was not collected.
+// The element object comes from internal/graphjson; see addNode.
 func (c *graphCollector) addRel(rv expr.RelationshipValue) {
 	if _, seen := c.edgeSet[rv.ID]; seen {
 		return
@@ -2403,13 +2412,7 @@ func (c *graphCollector) addRel(rv expr.RelationshipValue) {
 	c.edges = append(c.edges, relCandidate{
 		startID: rv.StartID,
 		endID:   rv.EndID,
-		obj: map[string]any{
-			"id":         rv.ID,
-			"type":       rv.Type,
-			"startId":    rv.StartID,
-			"endId":      rv.EndID,
-			"properties": serializeProps(rv.Properties),
-		},
+		obj:     graphjson.Relationship(rv, nil),
 	})
 }
 
@@ -2442,115 +2445,4 @@ func asGraphQueryError(err error) (*graphQueryError, bool) {
 		return qe, true
 	}
 	return nil, false
-}
-
-// serializeGraphValue converts an expr.Value into a JSON-compatible Go
-// value following SPEC/DATA_FORMATS.md § Graph Query Result property-type
-// and element mapping.
-//
-// This intentionally duplicates a subset of commands.serializeValue across
-// the package boundary: serializeValue is unexported in package commands and
-// the web package must not depend on commands (the dependency runs
-// commands -> web, not the reverse). The mapping is small and stable; the
-// duplication is documented here and accepted per the task brief.
-func serializeGraphValue(v expr.Value) any {
-	if v == nil {
-		return nil
-	}
-	switch v.Kind() {
-	case expr.KindNull:
-		return nil
-
-	case expr.KindInteger:
-		iv, _ := v.(expr.IntegerValue)
-		return int64(iv)
-
-	case expr.KindFloat:
-		fv, _ := v.(expr.FloatValue)
-		f := float64(fv)
-		if math.IsNaN(f) || math.IsInf(f, 0) {
-			return nil
-		}
-		return f
-
-	case expr.KindString:
-		sv, _ := v.(expr.StringValue)
-		return string(sv)
-
-	case expr.KindBool:
-		bv, _ := v.(expr.BoolValue)
-		return bool(bv)
-
-	case expr.KindDate:
-		dv, _ := v.(expr.DateValue)
-		return dv.ToTime().UTC().Format("2006-01-02")
-
-	case expr.KindDateTime:
-		dtv, _ := v.(expr.DateTimeValue)
-		return dtv.T.UTC().Format(time.RFC3339Nano)
-
-	case expr.KindLocalDateTime:
-		ldtv, _ := v.(expr.LocalDateTimeValue)
-		return ldtv.T.Format("2006-01-02T15:04:05.999999999")
-
-	case expr.KindLocalTime:
-		ltv, _ := v.(expr.LocalTimeValue)
-		return ltv.String()
-
-	case expr.KindTime:
-		tv, _ := v.(expr.TimeValue)
-		return tv.String()
-
-	case expr.KindDuration:
-		durv, _ := v.(expr.DurationValue)
-		return durv.String()
-
-	case expr.KindList:
-		lv, _ := v.(expr.ListValue)
-		out := make([]any, len(lv))
-		for i, elem := range lv {
-			out[i] = serializeGraphValue(elem)
-		}
-		return out
-
-	case expr.KindMap:
-		mv, _ := v.(expr.MapValue)
-		out := make(map[string]any, len(mv))
-		for k, val := range mv {
-			out[k] = serializeGraphValue(val)
-		}
-		return out
-
-	case expr.KindNode:
-		nv, _ := v.(expr.NodeValue)
-		return map[string]any{
-			"id":         nv.ID,
-			"labels":     nv.Labels,
-			"properties": serializeProps(nv.Properties),
-		}
-
-	case expr.KindRelationship:
-		rv, _ := v.(expr.RelationshipValue)
-		return map[string]any{
-			"id":         rv.ID,
-			"type":       rv.Type,
-			"startId":    rv.StartID,
-			"endId":      rv.EndID,
-			"properties": serializeProps(rv.Properties),
-		}
-
-	default:
-		return v.String()
-	}
-}
-
-// serializeProps maps a property bag's values recursively through
-// serializeGraphValue, producing a non-nil map (empty for no properties) so
-// the JSON renders as {} rather than null.
-func serializeProps(props map[string]expr.Value) map[string]any {
-	out := make(map[string]any, len(props))
-	for k, val := range props {
-		out[k] = serializeGraphValue(val)
-	}
-	return out
 }

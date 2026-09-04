@@ -578,6 +578,99 @@ Rules:
    `name`) for stable identity, following the conventions in
    `GRAPH.md § Multi-Layer Modelling Conventions`.
 
+### One Realisation of the Mapping
+
+The two sections above are canonical for **what** the mapping produces, and this
+section changes none of it. It fixes the question they do not answer: **how many
+times the mapping may be written**. The answer is once.
+
+**One realisation of the mapping, not the mapping restated per surface.** Every
+surface that turns an engine value into published JSON MUST use the project's
+single implementation of [Property-Type Mapping](#property-type-mapping), and of
+the Node and Relationship rows of
+[Graph element mapping](#graph-element-mapping), rather than expressing either
+again locally. Three surfaces are bound by the rule: `rmp graph execute`,
+`rmp graph client` (see [Graph Client Result](#graph-client-result)), and the web
+interface's graph data endpoint (see [Graph View Data](#graph-view-data)).
+`ARCHITECTURE.md § Modules and Responsibilities` is canonical for the package
+that holds the realisation and for why it is a package rather than a function
+inside one of its callers.
+
+Two expressions of one mapping is how two surfaces come to answer one question
+differently: one of them is corrected and the other is not, and nothing between
+them notices. Every side a test normally watches stays quiet while it happens.
+Both copies keep compiling, because neither calls the other; both keep passing,
+because each is exercised against itself where it is exercised at all; and the
+divergence becomes visible only to a reader holding a CLI row and a web node's
+properties side by side. A surface that expresses the mapping locally satisfies
+this specification for itself and for nothing else, which is the failure this
+requirement exists against.
+
+**The rule is enforced rather than described.** `internal/testenv` fails the
+build if a second realisation of either mapping appears anywhere in production
+source, in the way it already fails the build for a second engine construction
+and a second snapshot write (`ARCHITECTURE.md § Modules and Responsibilities`,
+module 8). A static gate is the instrument this class of rule takes in this
+project, and it is the right instrument here rather than a test that compares two
+implementations and asserts they agree: once the second copy is gone there is
+nothing left to compare, and what remains to be prevented is a third copy
+appearing later.
+
+**What each surface still owns.** The rule binds the mapping from a value to its
+JSON. It does not bind the document that JSON is placed in, and the two documents
+are not the same one.
+
+| Surface | The document it publishes | What it takes from the single realisation |
+|---------|---------------------------|-------------------------------------------|
+| `rmp graph execute` and `rmp graph client` | The `{columns, rows}` object of [Graph Query Result](#graph-query-result) | Every top-level result cell, of whatever kind, and everything nested inside one |
+| The graph data endpoint | The node-and-edge object of [Graph View Data](#graph-view-data) | The Node and Relationship shapes, and the `properties` object inside each |
+
+**Only the CLI publishes a path, so the Path row is not shared.** The graph data
+endpoint publishes no path object at all: a path in a result is decomposed into
+the nodes and relationships it contains, each collected once and placed in the
+node and edge arrays (see [Graph View Data](#graph-view-data), rule 3). The Path
+rendering of [Graph element mapping](#graph-element-mapping) therefore already
+has one realisation, because one surface produces it, and it stays with the
+surface that does.
+
+**A property value is never a graph element, and sharing the mapping does not
+make it one.** Two independent grounds establish it, and the conclusion needs
+only one of them. The storage boundary: the store's property representation has
+no encoding for a node, a relationship, a path, or a map, and the conversion back
+from it cannot construct one, so a property read back is never one of the four
+whatever a statement attempted to write. And measurement: a statement that
+assigns a node, a relationship, or a path to a property leaves that key absent
+from the entity when a later process reads it.
+
+**Do not read that as a uniform refusal.** How the attempt is turned away depends
+on the form of the statement rather than on the value: on some write paths the
+engine raises `InvalidPropertyType`, and on others the statement is accepted,
+reports success, and stores nothing. Which paths do which is engine behaviour of
+the class `GRAPH.md § What Groadmap Does Not Check` exists to catalogue; this
+section neither settles it nor rests on it, because the conclusion above holds on
+every path either way. What this section settles is that conclusion alone: the
+element rows of the shared realisation are reached from a top-level result cell
+and from nowhere else.
+
+Giving a surface that only ever maps property bags a realisation which also
+carries those rows therefore widens neither what that surface can publish nor any
+JSON a request can produce. It changes exactly one thing, and only in a case no
+input can construct: an element found where a property belongs is rendered as the
+object this specification requires, instead of as whatever a surface that never
+expected one fell back to.
+
+**What preserves the byte identity.**
+[Graph Client Result](#graph-client-result) requires the bytes `rmp graph client`
+writes to be the bytes `rmp graph execute` writes for the same statement, and
+that identity holds by construction rather than by inspection: a result that
+crossed the protocol is mapped back onto the engine's value model rather than
+onto JSON, so both paths run one serialiser over one representation. The single
+realisation gives the third surface the same standing. What the graph data
+endpoint must match is not a whole document — it publishes a different one — but
+every value and every element object inside it, and under this rule those match
+because one piece of code produced them, not because two pieces were compared and
+found to agree.
+
 ## Graph Write Result
 
 `rmp graph execute` mirrors what the executed statement returns, and
@@ -676,12 +769,14 @@ protocol arrives in the protocol's own encoding rather than as the engine's
 values, so something has to map it back. What it is mapped back onto is **the
 engine's value model, not JSON**: the client inverts the protocol encoding and
 hands its caller the same values an in-process engine would have handed it. The
-step from those values to the published JSON is then the one the surface already
-owns and runs unchanged, over one representation — which is what makes the
-identity above a property of the code rather than a coincidence that has to be
-policed. Mapping straight to JSON here instead would have created another copy of
-both mappings, free to drift from the ones that already exist, and the identity
-would then be an assertion rather than a consequence.
+step from those values to the published JSON is then the one realisation every
+surface shares (see
+[One Realisation of the Mapping](#one-realisation-of-the-mapping)), run unchanged
+over one representation — which is what makes the identity above a property of the
+code rather than a coincidence that has to be policed. Mapping straight to JSON
+here instead would have created another copy of both mappings, free to drift from
+the one that already exists, and the identity would then be an assertion rather
+than a consequence.
 
 The mapping this section fixes is therefore the protocol's encoding onto the
 values [Property-Type Mapping](#property-type-mapping) and
@@ -745,7 +840,9 @@ behaviour that selects between them.
 This is the canonical specification of the graph view-data shape. It **reuses**
 the graph-element and property-type conventions already defined in
 [Graph Query Result](#graph-query-result); it does not introduce a new element
-encoding.
+encoding. The reuse binds the code as well as the page: the endpoint calls the one
+realisation of that mapping rather than holding a copy of it (see
+[One Realisation of the Mapping](#one-realisation-of-the-mapping)).
 
 ### Shape
 
