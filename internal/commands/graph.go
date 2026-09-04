@@ -164,6 +164,24 @@ Examples:
 // that it is automatic would have no way to reach a server on a non-default
 // socket; an agent told only that there is a flag would write it on every
 // invocation.
+//
+// Item 10 adds the second cause of exit code 1 that "a Cypher parse or execution
+// error" does not cover, and it sits beside the statement budget of item 4 for
+// that reason: an exhausted serialisation conflict is a valid statement against a
+// healthy store, so the exit-code-1 line names it, states that nothing was
+// written, and states the remedy in the published error line's own terms. It is
+// the one cause in the block whose remedy is to run the SAME statement again —
+// the budget asks the caller to rewrite a working statement, a parse error to
+// correct a broken one, and this asks it to change nothing — which is why the
+// clause says so rather than leaving "run it again" to be read as "try
+// something else".
+//
+// The clause does NOT write the retry budget's figure. graphWriteConflict
+// renders it from backoff.Total() so that one quantity keeps one expression, and
+// a figure spelled out here would be a second expression of it that disagreed
+// with the policy silently the moment the policy moved. Nothing the caller
+// decides needs the figure, and the error line carries it at the moment it is
+// relevant.
 func printGraphExecuteHelp() {
 	fmt.Fprint(helpDst(), `Usage: rmp graph execute -r <roadmap> [-q <cypher>] [--socket <path>]
 
@@ -230,9 +248,14 @@ Exit codes:
       the 5s statement time budget, where the Cypher was valid and the store
       healthy: the transaction rolls back and nothing is written, so the remedy
       is to narrow the statement -- add a label, an indexed property filter, or
-      a LIMIT -- or split it into smaller statements. Also a socket that
-      answers but yields no server, and a connection lost or unanswered after
-      the statement was sent: neither falls back to the store
+      a LIMIT -- or split it into smaller statements. Also a statement on which
+      every attempt of the retry policy lost a serialisation conflict against a
+      server, the Cypher again valid and the store again healthy: the losing
+      transaction commits nothing and nothing is written, so the remedy is to
+      run the same statement again -- it needs no change -- and to spread
+      concurrent writes across distinct nodes. Also a socket that answers but
+      yields no server, and a connection lost or unanswered after the statement
+      was sent: neither falls back to the store
   2   No query supplied, --socket given with an empty value, or a positional
       argument was given: a bare Cypher statement on the command line is
       refused, not executed

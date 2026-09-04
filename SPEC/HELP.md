@@ -594,7 +594,7 @@ explicit, because a reader cannot infer them from the generic template:
 The `graph` family help and the `graph execute` help follow the same
 structure template as every other family but MUST additionally make four
 graph-specific behaviours explicit, because an agent cannot infer them
-from the generic template. Items 5 to 9 add the behaviours the graph
+from the generic template. Items 5 to 10 add the behaviours the graph
 server and its client introduce; items 1 to 4 continue to govern
 `execute`.
 
@@ -675,6 +675,52 @@ server and its client introduce; items 1 to 4 continue to govern
    the same reason: a surface with no authentication has to say so where the
    reader is, not only in the specification. See
    `GRAPH.md § Socket Path and Permissions`.
+10. **The exhausted serialisation conflict, for item 4's reason and with more
+    force.** It is a second cause of exit code 1 that a caller cannot infer
+    from "a Cypher parse or execution error": the statement was valid and the
+    store was healthy, and the failure is contention between writers. The
+    exit-code-1 line of the `execute` help and of the `client` help MUST
+    therefore name it, stating that every attempt of the retry policy lost a
+    serialisation conflict against a server and that nothing was written — a
+    fact rather than a hope, because the conflict is detected before anything
+    is applied. Both helps carry it because both subcommands have the cause:
+    `client` always reaches a server, and `execute` reaches one whenever the
+    roadmap is served. The prose paragraph the `client` help already carries
+    about contention does not discharge this obligation, because the
+    exit-codes block is where a caller goes to learn why a command exited 1.
+
+    **It is the one cause of exit code 1 whose remedy is to run the SAME
+    statement again**, and the help MUST state that, because it is what
+    separates this cause from every other one in the block: a parse or
+    execution error asks the caller to correct a broken statement, the
+    statement time budget of item 4 asks it to rewrite a working one, and this
+    cause asks it to change nothing. The help states the second half of the
+    remedy too — spread concurrent writes across distinct nodes — in the same
+    terms as the published error line, that being the measure which removes the
+    failure rather than moving the point at which it appears.
+
+    **The help MUST NOT write the retry budget's figure into its own text.**
+    The published error line renders that figure from the retry policy instead
+    of spelling it out, so that one quantity keeps one expression; a figure
+    written into a help string would be a second expression of it, and would
+    disagree with the policy silently the moment the policy changed. Where a
+    help names the budget at all, it MUST render it from the same policy the
+    error line reads. Nothing the caller decides needs the figure: the cause,
+    the fact that nothing was written, and the remedy are what the block owes,
+    and the error line carries the figure at the moment it is relevant. This is
+    rule 2 of `Audit operation entity-type classification` applied to a
+    duration, and behind it `ARCHITECTURE.md § AI Agent Contract Generation`.
+
+    It introduces no new exit code, so no line is added to either block — the
+    exit-code-1 line gains a clause, exactly as item 4's cause does. The
+    command contract already states the cause: a row of its own in
+    `COMMANDS.md § Execute Exit Codes`, and a clause of the single
+    exit-code-1 row in `COMMANDS.md § Client Exit Codes`. What this item
+    closes is therefore a divergence between the contract and the published
+    help rather than an unspecified behaviour. See
+    `GRAPH.md § Concurrency Inside the Server`, canonical for the mechanism and
+    for the measured remedy, and `IMPLEMENTATION.md § Retry Logic`, canonical
+    for the policy whose exhaustion this reports.
 
 The `graph serve` and `graph client` helps carry an `Exit codes:` block like
 every other subcommand help, listing only the codes each can emit;

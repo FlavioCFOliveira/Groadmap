@@ -25,6 +25,20 @@ import (
 // statement sources and the same --socket flag and differ only in whether an
 // unanswered socket is a fallback or a failure, so that is the one thing an agent
 // choosing between them needs told.
+//
+// Item 10 places a second, and it is the one this help is most at risk of
+// thinking it has already discharged. The prose paragraph below states that a
+// serialisation conflict is retried rather than reported — true, and not the
+// obligation: the exit-codes block is where a caller goes to learn why a command
+// exited 1, so the exit-code-1 line itself names the exhausted conflict, states
+// that nothing was written, and gives the remedy in the published error line's
+// own terms. It is the one cause in that line whose remedy is to run the SAME
+// statement again rather than to rewrite it or correct it.
+//
+// The clause does NOT write the retry budget's figure. graphWriteConflict
+// renders it from backoff.Total() so that one quantity keeps one expression, and
+// a figure spelled out here would be a second expression of it that disagreed
+// with the policy silently the moment the policy moved.
 func printGraphClientHelp() {
 	fmt.Fprint(helpDst(), `Usage: rmp graph client -r <roadmap> [-q <cypher>] [--socket <path>]
 
@@ -82,8 +96,13 @@ Exit codes:
       the engine; or it exhausted the 5s statement time budget, where the
       Cypher was valid and the store healthy: nothing was written, so the
       remedy is to narrow the statement -- add a label, an indexed property
-      filter, or a LIMIT -- or split it into smaller statements; or a value the
-      server returned could not be mapped onto the published result shape
+      filter, or a LIMIT -- or split it into smaller statements; or every
+      attempt of the retry policy lost a serialisation conflict against the
+      server, the Cypher again valid and the store again healthy: nothing was
+      written, so the remedy is to run the same statement again -- it needs no
+      change -- and to spread concurrent writes across distinct nodes; or a
+      value the server returned could not be mapped onto the published result
+      shape
   2   No query supplied, --socket given with an empty value, or a positional
       argument was given
   3   No roadmap selected
