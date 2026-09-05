@@ -104,7 +104,7 @@ this section, and so is a row naming a module that block does not require.
 | GoGraph | `github.com/FlavioCFOliveira/GoGraph` | Exact tag **v0.12.0** | Labelled property graph, Cypher engine, and durable store backing the `graph` command. See `GRAPH.md`. |
 | System calls | `golang.org/x/sys` | Exact version **v0.47.0** | The operating-system calls the Go standard library does not publish. Groadmap imports the module at four sites, and each of the four compiles for one platform family only. `golang.org/x/sys/unix` is imported by `internal/terminal/terminal_unix.go`, for the `TIOCGWINSZ` ioctl that decides whether a stream is a terminal, and by `internal/testenv/pty_linux.go`, for the `/dev/ptmx` sequence that opens a pseudo-terminal pair. `golang.org/x/sys/windows` is imported by `internal/terminal/terminal_windows.go`, for the `GetConsoleMode` call that asks the console subsystem that same terminal question, and by `internal/graphlock/graphlock_windows.go`, for the `LockFileEx` and `UnlockFileEx` calls that are the graph store's mutual exclusion on that platform. See `GRAPH.md § Concurrency and Recovery` for the lock the last of those four implements. |
 | Unicode data | `golang.org/x/text` | Exact version **v0.41.0** | The Unicode character data the roadmap tasks board's search normalises a term and a task's searchable text by. `internal/unicodenorm` imports `golang.org/x/text/unicode/norm` — the Go project's own implementation of the normalisation forms UAX #15 defines — and no other package of the module. See `WEB.md § Roadmap Tasks Page` for the rule that normalisation serves and for the check that holds the client's copy of it equal to the server's. |
-| SQLite driver | `modernc.org/sqlite` | Exact version **v1.57.0** | Pure-Go SQLite driver backing every roadmap database (`~/.roadmaps/<name>/project.db`). It is the storage engine for all task, sprint, and audit data: `internal/db` registers it under the driver name `sqlite` and opens every database connection through it. Being pure Go, it needs no C toolchain and builds under `CGO_ENABLED=0`. See `DATABASE.md` for the schema it stores, `ARCHITECTURE.md § 3. internal/db/` for the layer that opens it, and `IMPLEMENTATION.md § Database Connections` for the entry point and DSN form that layer must use. |
+| SQLite driver | `modernc.org/sqlite` | Exact version **v1.58.0** | Pure-Go SQLite driver backing every roadmap database (`~/.roadmaps/<name>/project.db`). It is the storage engine for all task, sprint, and audit data: `internal/db` registers it under the driver name `sqlite` and opens every database connection through it. Being pure Go, it needs no C toolchain and builds under `CGO_ENABLED=0`. See `DATABASE.md` for the schema it stores, `ARCHITECTURE.md § 3. internal/db/` for the layer that opens it, and `IMPLEMENTATION.md § Database Connections` for the entry point and DSN form that layer must use. |
 
 #### GoGraph Rules
 
@@ -375,13 +375,13 @@ this section, and so is a row naming a module that block does not require.
 1. `modernc.org/sqlite` MUST be pinned to an exact, immutable version in `go.mod`,
    not a floating reference, so that builds are reproducible and every build of a
    given commit runs the same storage engine against the same on-disk database
-   format. The driver is consumed at the exact version **v1.57.0**. `go.sum` MUST
+   format. The driver is consumed at the exact version **v1.58.0**. `go.sum` MUST
    record the checksum of that version, and the build MUST fail if the checksum
    does not match.
 2. **`modernc.org/libc` and `modernc.org/memory` MUST be pinned to exactly the
    versions that `modernc.org/sqlite`'s own `go.mod` requires, and never to a later
    release.** For the pinned driver version, those versions are
-   `modernc.org/libc v1.74.4` and `modernc.org/memory v1.11.0`. Both modules are
+   `modernc.org/libc v1.75.6` and `modernc.org/memory v1.12.1`. Both modules are
    indirect dependencies of Groadmap, but their versions are not free to float:
    pinning them to the driver's own required versions is a standing instruction
    from the driver's author, restated in its release notes and tracked upstream as

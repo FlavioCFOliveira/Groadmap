@@ -175,6 +175,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     caller left, this endpoint, and goes with it. There is one lock mode because
     there is one execution path.
 
+### Changed — toolchain and dependencies
+
+- **`modernc.org/sqlite` moves from v1.57.0 to v1.58.0, and its coupling moves with
+  it.** The new driver requires `modernc.org/libc` v1.75.6 and `modernc.org/memory`
+  v1.12.1, and both pins were set to exactly those — read from the driver's own
+  `go.mod` inside the module cache, which `SPEC/BUILD.md § SQLite Driver Rules` Rule 4
+  names as the authority, rather than floated by a `go get -u`. `modernc.org/libc` has a **newer**
+  release, v1.75.7, which Rule 2 forbids adopting, and the driver's own changelog
+  restates that instruction upstream. No gate can detect a mismatch here, which is why
+  the two pins were read back out of that file after the fact rather than assumed.
+
+  The release carries **SQLite 3.53.4** and drops the local super-journal patch that
+  v1.56.0 had added, because upstream shipped its own fix for the journal-rollback
+  data-corruption bug that patch worked around; recovery behaviour is unchanged. It
+  also adds Linux **OFD locking**, which Groadmap does **not** enable: the mode is
+  opt-in through `MODERNC_SQLITE_OFD_LOCK` or `OFDLocking(true)`, and with neither set
+  the locking behaviour is byte for byte that of previous releases.
+
+- **`github.com/RoaringBitmap/roaring/v2` moves from v2.26.0 to v2.27.0**, reached
+  through `GoGraph/cypher`. The release carries a single change and it is additive — a
+  portable 64-bit serialization API in `roaring64` — so nothing the dependency chain
+  calls was removed or renamed.
+
+- **`golang.org/x/exp` moves to v0.0.0-20260824195058-e88cd73687aa**, reached through
+  `GoGraph/cypher/parser` and `antlr4-go/antlr/v4`, which imports `x/exp/slices`.
+
+  GoGraph v0.12.0, `golang.org/x/sys` v0.47.0 and `golang.org/x/text` v0.41.0 were
+  checked and are already at their latest published versions, so they did not move. The
+  modules that only a dependency's own test binary reaches — `klauspost/compress`,
+  `neo4j-go-driver/v5`, `testify`, `go-cmp`, `pprof`, `golang.org/x/mod`, and
+  `modernc.org/cc`, `ccgo` and `gc` — are in the module graph but in neither the build
+  nor `go.mod`, and did not move either.
+
 ### Known Issues
 
 These were found and measured during this cycle and are **open**. They are listed
