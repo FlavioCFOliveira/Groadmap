@@ -201,11 +201,11 @@ module path `github.com/FlavioCFOliveira/GoGraph`. GoGraph provides:
 - A durable, directory-based store combining a write-ahead log, atomic on-disk
   snapshots, and recovery on open (see [Concurrency and Recovery](#concurrency-and-recovery)).
 
-GoGraph requires Go 1.26: its `go.mod` declares `go 1.26` with `toolchain
-go1.26.5`. Adopting the graph feature therefore sets Groadmap's minor-version
-floor at Go 1.26. Groadmap's own required Go version is higher than GoGraph's
-minimum and is set independently of GoGraph. `BUILD.md § Go Toolchain` is the
-authoritative statement of the required Go version and of the build implications.
+GoGraph requires Go 1.26: its `go.mod` declares `go 1.26`. Adopting the graph
+feature therefore sets Groadmap's minor-version floor at Go 1.26. Groadmap's own
+required Go version is higher than GoGraph's minimum and is set independently of
+GoGraph. `BUILD.md § Go Toolchain` is the authoritative statement of the required
+Go version and of the build implications.
 
 ### Dependency Maturity Risk
 
