@@ -50,6 +50,7 @@ import (
 
 	"github.com/FlavioCFOliveira/GoGraph/bolt/packstream"
 	"github.com/FlavioCFOliveira/GoGraph/bolt/proto"
+	"github.com/FlavioCFOliveira/GoGraph/cypher/exec"
 	"github.com/FlavioCFOliveira/GoGraph/cypher/expr"
 	"github.com/FlavioCFOliveira/Groadmap/internal/backoff"
 	"github.com/FlavioCFOliveira/Groadmap/internal/graphlock"
@@ -219,6 +220,25 @@ type Notification struct {
 // Rows is never nil: a statement that matched nothing carries its columns and no
 // rows, which the published shape renders as [] rather than null.
 type Result struct {
+	// The two plan pointers lead the struct because the fieldalignment linter
+	// requires the pointer prefix to be as short as the fields allow, and this is
+	// an internal type with no published field order to preserve. The published
+	// key order lives on graphQueryResult, which is a different struct for
+	// exactly that reason.
+	//
+	// Plan is the ESTIMATED plan of a statement written with the EXPLAIN prefix
+	// and Profile the MEASURED plan of one written with PROFILE. At most one is
+	// ever non-nil, and both are nil for an unprefixed statement, which is what
+	// keeps an estimate from being read as a measurement
+	// (SPEC/GRAPH.md § Query Plans: The EXPLAIN and PROFILE Prefixes).
+	//
+	// They are the engine's own representation rather than published JSON,
+	// deliberately: the step from here to the JSON is the one realisation every
+	// surface shares, so this surface adds no second opinion about it
+	// (SPEC/DATA_FORMATS.md § Graph Client Result).
+	Plan    *exec.PlanNode
+	Profile *exec.PlanNode
+
 	Columns       []string
 	Rows          [][]expr.Value
 	Notifications []Notification
@@ -496,6 +516,11 @@ func (s *session) run(ctx context.Context, statement string) (*Result, error) {
 			result.Rows = append(result.Rows, row)
 		case *proto.Success:
 			result.Notifications = notificationsOf(m.Metadata)
+			// The plan travels in the SUCCESS that terminates the stream, beside
+			// the notifications, because it is complete only once the statement
+			// is. At most one of the two keys is ever written.
+			result.Plan = planOf(m.Metadata, "plan")
+			result.Profile = planOf(m.Metadata, "profile")
 			return result, nil
 		default:
 			return nil, s.responseFailure(ctx, response)

@@ -81,6 +81,7 @@ The SPEC is unversioned. Git is the source of truth for its evolution — recove
 | Knowledge-graph schema management through `rmp graph execute` (which index and constraint statements the engine accepts, how a schema object is named, why changing an index is two invocations, and how a schema failure surfaces) | `GRAPH.md § Schema Management` |
 | Which Cypher engine constructor the graph path uses, and why the web endpoint is on it too | `GRAPH.md § Engine Constructor by Path` |
 | Graph query notifications on stderr (e.g. Cartesian-product warning) | `GRAPH.md § Query Notifications as Diagnostics` |
+| Query plans on `rmp graph execute` and `rmp graph client` (the `EXPLAIN` and `PROFILE` prefixes, which statements each admits, and the rules under which a figure is omitted rather than published as zero) | `GRAPH.md § Query Plans: The EXPLAIN and PROFILE Prefixes`, with the JSON in `DATA_FORMATS.md § Graph Plan Node` |
 | Graph store concurrency / recovery | `IMPLEMENTATION.md § Graph Store Concurrency` |
 | Graph store access lock (one exclusive mode for every statement), and what happens on contention | `GRAPH.md § Concurrency and Recovery` and `GRAPH.md § Lock Contention` |
 | Statement time budget on `rmp graph execute` (that it applies, what a cut statement leaves on disk, and the exit code it reports) | `GRAPH.md § Statement Time Budget`, with the value in `WEB.md § Graph Query Time Budget` |
@@ -197,6 +198,7 @@ To prevent drift across SPEC files, the following topics have a single authorita
 | Web interface (server behaviour, routes, pages, security model) | `WEB.md` |
 | Graph store directory (`graph/` subdir) | `GRAPH.md § Persistence Layout` (layout referenced from `ARCHITECTURE.md § Directory Structure`) |
 | Graph query result JSON and property-type mapping | `DATA_FORMATS.md § Graph Query Result` |
+| Query plan JSON (the recursive plan node, and which of its figures an `EXPLAIN` and a `PROFILE` each publish) | `DATA_FORMATS.md § Graph Plan Node` |
 | Web graph view-data JSON shape | `DATA_FORMATS.md § Graph View Data` |
 | One realisation of the graph value mapping (which surfaces are bound, what each still owns, why the Path rendering is not shared, and what preserves the byte identity) | `DATA_FORMATS.md § One Realisation of the Mapping` |
 | Board search text preparation (the trim, normalisation, and folding rules; the single implementation of each; the tables shipped to the browser) | `WEB.md § Roadmap Tasks Page` |

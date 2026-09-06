@@ -27,9 +27,27 @@ import (
 
 // graphQueryResult is the JSON shape returned by read subcommands and
 // by write subcommands whose query contains a RETURN clause.
+// The field order here is the JSON KEY order: encoding/json emits struct fields
+// as declared, and SPEC/DATA_FORMATS.md § Graph Query Result publishes the shape
+// with columns and rows first and the plan last, which is the order a reader
+// needs -- the plan describes a result, so it follows it. fieldalignment would
+// have the two pointers lead, saving 16 bytes of pointer-scan prefix on a struct
+// built once per invocation and discarded; the published order is worth more
+// than that, and the saving is claimed on graphclient.Result instead, which has
+// no published order to give up.
+//
+//nolint:govet // fieldalignment: field order is the published JSON key order.
 type graphQueryResult struct {
 	Columns []string `json:"columns"`
 	Rows    [][]any  `json:"rows"`
+
+	// Plan carries the ESTIMATED plan of a statement written with the EXPLAIN
+	// prefix and Profile the MEASURED plan of one written with PROFILE. At most
+	// one is ever non-nil and both are nil for an unprefixed statement, whose
+	// output is therefore unchanged byte for byte
+	// (SPEC/DATA_FORMATS.md § Graph Query Result, SPEC/GRAPH.md § Query Plans).
+	Plan    *graphjson.PlanNode `json:"plan,omitempty"`
+	Profile *graphjson.PlanNode `json:"profile,omitempty"`
 }
 
 // graphOKResult is the JSON shape returned by write subcommands whose
@@ -119,11 +137,16 @@ Options:
 
 Output (stdout JSON):
   Statement that produces result columns:
-    {"columns": [...], "rows": [[...], ...]}
+    {"columns": [...], "rows": [[...], ...], "plan": <plan node, EXPLAIN only>, "profile": <plan node, PROFILE only>}
   Statement that produces none:
     {"ok": true}
   Server startup:
     {"socket": "<path>"}
+
+  A statement written with the EXPLAIN or PROFILE prefix carries its plan and
+  always produces the columns shape, whether or not it declares a column.
+  EXPLAIN executes nothing and reports the plan the engine would run; PROFILE
+  runs the statement and reports what the run measured.
 
 Exit codes:
   0   Success
@@ -233,11 +256,13 @@ Optional:
   -h, --help              Show this help message
 
 Output (stdout JSON):
-  With result columns:      {"columns": [...], "rows": [[...], ...]}
+  With result columns:      {"columns": [...], "rows": [[...], ...], "plan": <plan node, EXPLAIN only>, "profile": <plan node, PROFILE only>}
   Without result columns:   {"ok": true}
   A statement carrying a RETURN clause produces columns and one without it does
   not; SHOW INDEXES and SHOW CONSTRAINTS produce columns although they carry no
   RETURN clause.
+  A statement written with the EXPLAIN or PROFILE prefix always produces the
+  columns shape so that it can carry its plan, even with no column of its own.
 
 Exit codes:
   0   Success
@@ -616,6 +641,13 @@ func printGraphNotifications(result *cypher.Result) {
 // caller must close the result after this function returns.
 func serializeGraphResult(result *cypher.Result) (graphQueryResult, error) {
 	cols := result.Columns()
+	if cols == nil {
+		// A prefixed statement that declares no result column reaches here, and
+		// the published shape is an empty array rather than null: the envelope
+		// says the statement produced no columns, not that the key is absent
+		// (SPEC/DATA_FORMATS.md § Graph Query Result, rule 6).
+		cols = []string{}
+	}
 	out := graphQueryResult{
 		Columns: cols,
 		Rows:    [][]any{},
@@ -636,6 +668,11 @@ func serializeGraphResult(result *cypher.Result) (graphQueryResult, error) {
 	if err := result.Err(); err != nil {
 		return graphQueryResult{}, err
 	}
+	// The plan is read after the rows are drained: for a PROFILE the tree is the
+	// measurement of the run that just finished. At most one accessor is ever
+	// non-nil, so an estimate can never be published as a measurement.
+	out.Plan = graphjson.Plan(result.Plan(), false)
+	out.Profile = graphjson.Plan(result.Profile(), true)
 	return out, nil
 }
 
@@ -840,7 +877,13 @@ func runGraphExecute(args []string) error {
 	// and serialised BEFORE Close, not via a deferred Close.
 	var output any
 	cols := result.Columns()
-	if len(cols) == 0 {
+	// A prefixed statement always publishes the columns/rows envelope so that it
+	// can carry its plan, even when it declares no result column. Without this
+	// the columns discriminator would route `EXPLAIN CREATE (n:X)` to
+	// {"ok": true} -- byte-identical to a real committed write, over a statement
+	// that wrote nothing (SPEC/GRAPH.md § Query Plans, rule 8).
+	prefixed := result.Plan() != nil || result.Profile() != nil
+	if len(cols) == 0 && !prefixed {
 		// No RETURN clause: drain to allow the commit and emit {"ok": true}.
 		for result.Next() {
 		}

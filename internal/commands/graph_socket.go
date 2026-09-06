@@ -30,6 +30,7 @@ import (
 
 	"github.com/FlavioCFOliveira/Groadmap/internal/backoff"
 	"github.com/FlavioCFOliveira/Groadmap/internal/graphclient"
+	"github.com/FlavioCFOliveira/Groadmap/internal/graphjson"
 	"github.com/FlavioCFOliveira/Groadmap/internal/graphlock"
 	"github.com/FlavioCFOliveira/Groadmap/internal/utils"
 )
@@ -250,12 +251,23 @@ func runOnGraphServer(socket, query string) (any, error) {
 
 	// The discriminator is the columns and not the RETURN clause, which is what
 	// lets a schema introspection produce the listing while a CREATE INDEX
-	// produces {"ok": true} (SPEC/DATA_FORMATS.md § Graph Write Result).
-	if len(result.Columns) == 0 {
+	// produces {"ok": true} (SPEC/DATA_FORMATS.md § Graph Write Result). A
+	// prefixed statement departs from it for the reason the direct path departs
+	// from it: it has a plan to carry, and {"ok": true} has nowhere to put one
+	// and would report a write that never happened
+	// (SPEC/GRAPH.md § Query Plans, rule 8).
+	prefixed := result.Plan != nil || result.Profile != nil
+	if len(result.Columns) == 0 && !prefixed {
 		return graphOKResult{OK: true}, nil
 	}
 
-	out := graphQueryResult{Columns: result.Columns, Rows: make([][]any, 0, len(result.Rows))}
+	columns := result.Columns
+	if columns == nil {
+		// See the direct path: a prefixed statement with no result column
+		// publishes an empty array, never null.
+		columns = []string{}
+	}
+	out := graphQueryResult{Columns: columns, Rows: make([][]any, 0, len(result.Rows))}
 	for _, row := range result.Rows {
 		cells := make([]any, len(row))
 		for i, v := range row {
@@ -263,6 +275,12 @@ func runOnGraphServer(socket, query string) (any, error) {
 		}
 		out.Rows = append(out.Rows, cells)
 	}
+	// The same mapping the direct path runs, over the same representation: the
+	// client inverted the protocol encoding onto the engine's plan node, so this
+	// step is shared rather than reimplemented, and the byte identity
+	// SPEC/DATA_FORMATS.md § Graph Client Result requires holds by construction.
+	out.Plan = graphjson.Plan(result.Plan, false)
+	out.Profile = graphjson.Plan(result.Profile, true)
 	return out, nil
 }
 

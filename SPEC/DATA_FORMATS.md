@@ -431,7 +431,14 @@ object for the same statement (see [Graph Client Result](#graph-client-result)).
 and its rows, mirroring the GoGraph engine result, which exposes the ordered
 column names (`Columns()`) and an iterable sequence of records. A statement that
 produces no columns returns the shape in [Graph Write Result](#graph-write-result)
-instead.
+instead, unless it was written with an `EXPLAIN` or `PROFILE` prefix, which
+always returns this shape.
+
+A statement written with one of those two prefixes adds exactly one member to
+this object: `plan` for an `EXPLAIN`, `profile` for a `PROFILE`. Both are
+optional, at most one is ever present, and each holds the recursive object
+[Graph Plan Node](#graph-plan-node) defines. A statement written with neither
+prefix carries neither key, and its object is unchanged in every byte.
 
 This is the canonical specification of the graph read-result shape. The command
 contract that references it is `COMMANDS.md § Graph Management`; the feature
@@ -449,12 +456,30 @@ design is in `GRAPH.md`.
 }
 ```
 
+The same statement written with an `EXPLAIN` prefix, which executes nothing and
+so returns the declared columns with no rows:
+
+```json
+{
+  "columns": ["s.key", "c.path"],
+  "rows": [],
+  "plan": {
+    "operator": "Project",
+    "detail": "s.key, c.path",
+    "estimatedRows": 12,
+    "estimatedRowsSource": "stats"
+  }
+}
+```
+
 Field reference:
 
 | Field | Type | Description |
 |-------|------|-------------|
 | `columns` | array of string | The ordered return-column names of the query (the engine's `Columns()`). One entry per returned expression, in the order the query declares them. |
 | `rows` | array of array | One inner array per record, in the order the engine yields records. Each inner array has exactly `columns.length` cells, positionally aligned with `columns`. |
+| `plan` | object, omitted unless present | The plan the engine built for a statement written with an `EXPLAIN` prefix, as [Graph Plan Node](#graph-plan-node) defines it. Its figures are the planner's **estimates**: the statement was not executed. |
+| `profile` | object, omitted unless present | The plan the engine ran for a statement written with a `PROFILE` prefix, as [Graph Plan Node](#graph-plan-node) defines it. Its figures are **measurements** of that run. |
 
 Rules:
 
@@ -463,11 +488,25 @@ Rules:
 2. A statement that returns no columns does not produce this shape at all; it
    produces the `{"ok": true}` object of
    [Graph Write Result](#graph-write-result). This shape is the answer to a
-   statement that declares at least one result column.
+   statement that declares at least one result column. The one exception is a
+   statement written with an `EXPLAIN` or `PROFILE` prefix, which produces this
+   shape whether or not it declares a column: rule 6 below.
 3. Each row cell is a JSON value produced by the property-type mapping below.
 4. The result is pretty-printed with two-space indentation and a trailing
    newline, consistent with all other JSON output (see
    [Implementation Notes](#implementation-notes)).
+5. `plan` and `profile` are mutually exclusive and both are optional. At most one
+   appears in any object, and neither appears for a statement written with no
+   prefix. A consumer decides which kind of figure it is holding by **which key
+   carried the tree**, and by nothing inside the tree: an estimate and a
+   measurement are otherwise written identically, and the two keys are what keep
+   them apart (see
+   `GRAPH.md § Query Plans: The EXPLAIN and PROFILE Prefixes`, rule 7).
+6. A prefixed statement that declares no result columns publishes `columns` and
+   `rows` as empty arrays alongside its plan, rather than the `{"ok": true}`
+   object. `EXPLAIN CREATE (n:Spec {key:'auth'})` is the case that arises: it
+   executes nothing, so `{"ok": true}` would report a success identical to the
+   one a committed `CREATE` reports.
 
 ### Property-Type Mapping
 
@@ -661,8 +700,10 @@ expected one fell back to.
 
 **What preserves the byte identity.**
 [Graph Client Result](#graph-client-result) requires the bytes `rmp graph client`
-writes to be the bytes `rmp graph execute` writes for the same statement, and
-that identity holds by construction rather than by inspection: a result that
+writes to be the bytes `rmp graph execute` writes for the same statement — bar
+the one measured duration named in that section's rule 5, which is a property of
+the execution rather than of the mapping — and that identity holds by
+construction rather than by inspection: a result that
 crossed the protocol is mapped back onto the engine's value model rather than
 onto JSON, so both paths run one serialiser over one representation. The single
 realisation gives the third surface the same standing. What the graph data
@@ -670,6 +711,160 @@ endpoint must match is not a whole document — it publishes a different one —
 every value and every element object inside it, and under this rule those match
 because one piece of code produced them, not because two pieces were compared and
 found to agree.
+
+## Graph Plan Node
+
+A plan node is the recursive object that the `plan` and `profile` members of
+[Graph Query Result](#graph-query-result) carry. It is one operator of the query
+plan the engine built, together with the operators that feed it. The same shape
+serves both members: what differs between an `EXPLAIN` and a `PROFILE` is which
+keys are present, never what a present key means.
+
+This is the canonical specification of the plan-node shape. The behaviour that
+produces it — what each prefix does, which statements each admits, and why the
+two members are two rather than one — is in
+`GRAPH.md § Query Plans: The EXPLAIN and PROFILE Prefixes`; the command contract
+is `COMMANDS.md § Graph Management`.
+
+### Shape
+
+A `profile` tree, which carries every key the shape defines:
+
+```json
+{
+  "operator": "Project",
+  "detail": "s.key",
+  "estimatedRows": 12,
+  "estimatedRowsSource": "stats",
+  "rows": 9,
+  "timeNs": 1482310,
+  "children": [
+    {
+      "operator": "Filter",
+      "detail": "s.status = 'implemented'",
+      "estimatedRows": 12,
+      "estimatedRowsSource": "heuristic",
+      "rows": 9,
+      "timeNs": 1104986,
+      "rowsRemovedByFilter": 35,
+      "children": [
+        {
+          "operator": "NodeByLabelScan",
+          "detail": "s:Spec",
+          "estimatedRows": 44,
+          "estimatedRowsSource": "exact",
+          "rows": 44,
+          "timeNs": 815402,
+          "dbHits": 44
+        }
+      ]
+    }
+  ]
+}
+```
+
+### Field reference
+
+| Field | Type | Presence | Description |
+|-------|------|----------|-------------|
+| `operator` | string | Always | The operator's type name, for example `NodeByLabelScan` or `HashJoin`. It is the name of the operator that actually runs, taken from the operator itself rather than reconstructed from the planner's decisions. |
+| `detail` | string | Omitted when empty | The physical decision the operator took, worth reading beside its name: the label it scans, the index it seeks, the pattern it expands. An operator with nothing to add carries no key. |
+| `children` | array of plan node | Omitted when empty | The operators this one draws its rows from, in **execution** order. For an asymmetric operator that is the order that explains the cost: a join's build side before its probe side, an apply's outer before its inner. A leaf carries no key. |
+| `estimatedRows` | integer | Present only with `estimatedRowsSource` | The planner's predicted row count for this operator. It is a prediction made before anything ran, and it is the only figure an `EXPLAIN` has. |
+| `estimatedRowsSource` | string | Present only with `estimatedRows` | Where the estimate came from, and therefore how far it may be trusted. Exactly one of `exact`, `stats`, `heuristic`. |
+| `rows` | integer | `profile` only | The number of rows the operator emitted. Measured. |
+| `timeNs` | integer | `profile` only | The wall-clock time attributed to the operator, in whole nanoseconds. Measured, and **inclusive of the operator's children**. |
+| `dbHits` | integer | `profile` only, and omitted when the figure was not counted | The number of storage record accesses charged to the operator. |
+| `rowsRemovedByFilter` | integer | `profile` only, and omitted when the operator has no rejection mechanism | The number of candidate rows the operator read and then discarded because a predicate said no. |
+
+### Rules
+
+1. **`operator` is always present and is never empty.** Every other key may be
+   absent, and a consumer must treat every other key as optional.
+2. **No key beyond the nine above appears.** The engine's plan node carries
+   information this shape does not publish, and the protocol carries fields of
+   its own; neither is passed through. A consumer may rely on the key set being
+   closed, and an addition to it is a change to this section.
+3. **`children` is ordered and the order is meaningful.** It is execution order,
+   not an arbitrary traversal, and a consumer that reorders it destroys the one
+   thing the order was carrying.
+4. **`estimatedRows` and `estimatedRowsSource` appear together or not at all.**
+   An estimate with no provenance is a bare number a reader cannot weigh, and a
+   provenance with no number says nothing; the pair is written as a pair.
+5. **An absent estimate is an absent estimate, not a zero.** An operator the
+   planner attributed no estimate to, and an operator whose backing statistic was
+   absent or stale, both omit the pair. Publishing a number for either would
+   fabricate one. A genuine estimate of zero is published as `0`.
+6. **`estimatedRows` is published for an `EXPLAIN` as well as for a `PROFILE`,
+   and it is the same number in both.** It is what the planner predicted, and the
+   planner predicted it before either statement ran. Placing it beside the
+   measured `rows` of a `profile` tree is the point: the two are readable against
+   each other in one object, which is what makes a bad estimate visible.
+7. **`rows`, `timeNs`, `dbHits` and `rowsRemovedByFilter` never appear in a
+   `plan` tree.** An `EXPLAIN` executes nothing, so it measured nothing; a `rows`
+   of `0` on an operator that never ran would read as an operator that produced
+   no rows. The four keys are the measured figures, and only a `profile` tree has
+   any.
+8. **`dbHits` is omitted when the figure was never counted, and is never
+   published as `0` in its place.** The engine distinguishes an operator whose
+   accesses were counted and came to zero — which publishes `0` — from an
+   operator whose accesses nobody counted, which publishes no key. A reader must
+   read an absent `dbHits` as "not counted" and never as "none". This is the
+   distinction the engine's own text rendering draws by printing `?`, and
+   collapsing it here would give a caller a measurement that was never taken.
+9. **`dbHits` counts access-path record reads and never property reads.** This
+   diverges from Neo4j, which additionally charges one hit per property read, and
+   the divergence is published because a caller comparing figures across the two
+   products otherwise concludes this one is wrong. It is not: it counts a
+   different quantity, and it counts that quantity exactly. A present `dbHits` is
+   in some cases counted by the operator and in others derived from the rows it
+   emitted, under a contract that asserts one record read per row; the published
+   key does not say which, and a consumer must not infer it. The distinction the
+   key does carry is the one rule 8 fixes — present against absent — and that is
+   the distinction a reader acts on.
+10. **`rowsRemovedByFilter` is published as `0` when the operator rejected
+    nothing, and is omitted only when the operator has no rejection mechanism at
+    all.** The asymmetry against rule 8 is deliberate and must not be
+    "harmonised". There, an absent key admits a figure exists and was not
+    counted. Here, an absent key states there is no figure to have — and a
+    present `0` is a finding in its own right, because a filter that rejected
+    nothing is exactly what a reader of a slow plan wants to see.
+11. **`timeNs` is inclusive of the node's children.** An operator's figure covers
+    everything it drew from the operators beneath it. Summing the `timeNs` of a
+    tree's nodes double-counts every level; the root's figure is the one that
+    describes the statement.
+12. **`timeNs` publishes the engine's whole-nanosecond figure and derives
+    nothing from it.** The engine measures a duration in nanoseconds and the
+    protocol carries that same integer, so both surfaces that publish this key
+    already hold one identical whole number, and publishing it unchanged makes
+    the byte identity
+    [Graph Client Result](#graph-client-result) requires **exact by
+    construction**. A millisecond value would have been friendlier to read and
+    would have put that guarantee at the mercy of two floating-point formatters
+    agreeing on a last digit — a guarantee the specification would then be
+    asserting rather than holding. A consumer that wants milliseconds divides;
+    the division is a consumer's rounding decision, and it is not one this
+    format takes on its behalf.
+13. **A logical plan node carries `operator` and `children` and nothing else.**
+    A writing statement has no physical operator tree outside a transaction, so
+    `EXPLAIN` captures its logical plan instead
+    (`GRAPH.md § Query Plans: The EXPLAIN and PROFILE Prefixes`, rule 5). In such
+    a tree `operator` is the plan line as the engine writes it, with any detail
+    already inside that string, and neither `detail` nor the estimate pair is
+    present. A consumer that parses `operator` as a bare operator type name is
+    correct for every reading statement and wrong for this one, which is why the
+    case is published here rather than left to be discovered.
+14. **The tree has one realisation, shared by `rmp graph execute` and
+    `rmp graph client`.** A plan that crossed the protocol is mapped back onto
+    the engine's own plan representation and then serialised by the same code
+    that serialises a plan captured in process — the same construction, and for
+    the same reason, that
+    [One Realisation of the Mapping](#one-realisation-of-the-mapping) applies to
+    values. The byte identity
+    [Graph Client Result](#graph-client-result) requires is therefore a property
+    of the code rather than an assertion policed by comparison. Mapping the
+    protocol's own plan encoding straight to JSON would create a second
+    realisation of this section, free to drift from the first.
 
 ## Graph Write Result
 
@@ -704,6 +899,21 @@ when, it carries a `RETURN` clause. They part company on the schema statements
 clause, so it returns the `{columns, rows}` shape. A schema-mutating statement —
 `CREATE INDEX`, `DROP INDEX`, `CREATE CONSTRAINT`, `DROP CONSTRAINT` — produces no
 columns and returns `{"ok": true}`.
+
+**A statement written with an `EXPLAIN` or `PROFILE` prefix never produces this
+shape.** It is the one statement class the discriminator above does not govern:
+whatever it declares, it returns the shape of
+[Graph Query Result](#graph-query-result) carrying its plan, with `columns` and
+`rows` empty where it declares no column. The reason is that `{"ok": true}` is a
+claim, not a placeholder — it says a statement succeeded in committing what it
+was asked to commit — and an `EXPLAIN` commits nothing and was not asked to.
+Publishing it here would make `EXPLAIN CREATE (n:Spec)` indistinguishable on
+stdout from the `CREATE` that ran, which is the confusion the prefix exists to
+prevent. The exception costs nothing in compatibility, because the output of a
+prefixed statement has no earlier contract to break while an unprefixed
+statement's output is unchanged byte for byte;
+`GRAPH.md § Query Plans: The EXPLAIN and PROFILE Prefixes`, rules 8 and 9, is
+canonical for that reasoning and this section does not restate it.
 
 Field reference (no-columns case):
 
@@ -751,18 +961,49 @@ to describe a second format.
    [Graph Query Result](#graph-query-result).
 2. A statement that produces none returns exactly `{"ok": true}`, the shape of
    [Graph Write Result](#graph-write-result).
-3. Both are pretty-printed with two-space indentation and a trailing newline,
+3. A statement written with an `EXPLAIN` or `PROFILE` prefix returns the shape of
+   [Graph Query Result](#graph-query-result) carrying its `plan` or `profile`
+   member, whether or not it declares a result column.
+4. All three are pretty-printed with two-space indentation and a trailing newline,
    consistent with all other JSON output (see
    [Implementation Notes](#implementation-notes)).
 
 **The identity is a requirement, not an observation.** For any statement and any
 graph, the bytes `rmp graph client` writes to stdout are the bytes
-`rmp graph execute` writes for that statement against that graph. The same
-requirement binds `rmp graph execute` itself when it reaches a running server
-rather than the store, which it does whenever one is listening (see
-`GRAPH.md § Server Resolution`): the surface a statement was executed through is
-not observable in the JSON. A caller may therefore parse one shape and change
-nothing when a server is started or stopped.
+`rmp graph execute` writes for that statement against that graph, with the single
+exception rule 5 below states. The same requirement binds `rmp graph execute`
+itself when it reaches a running server rather than the store, which it does
+whenever one is listening (see `GRAPH.md § Server Resolution`): the surface a
+statement was executed through is not observable in the JSON. A caller may
+therefore parse one shape and change nothing when a server is started or stopped.
+
+5. **The identity binds every value that is a property of the statement and the
+   graph. It does not bind `timeNs`, and no implementation could make it.** That
+   key is a wall-clock measurement of the execution that produced it (see
+   [Graph Plan Node](#graph-plan-node), rules 11 and 12). `rmp graph execute` and
+   `rmp graph client` are two executions, so they measure two durations, and two
+   correct measurements of two runs are not obliged to agree. A figure that
+   differs between them is not a defect in either: it is the key doing what it
+   exists to do.
+
+   **What a caller may rely on is therefore everything but the clock.** For any
+   statement, the two surfaces publish the same key set, the same structure, the
+   same member order, the same plan-tree shape, and the same value under every
+   key other than `timeNs` — including `rows`, `dbHits`, `rowsRemovedByFilter`
+   and the estimate pair, each of which describes the statement and the graph
+   rather than the run's duration. A consumer comparing the two surfaces compares
+   everything except the clock, and a statement carrying neither prefix, or
+   carrying `EXPLAIN`, has no `timeNs` at all and is therefore identical in every
+   byte.
+
+   **This is narrower than the guarantee stated in the paragraph above, and it is
+   narrow on purpose.** A wider claim would be one the specification could not
+   hold: a test written against it verbatim would compare two clocks and fail
+   whenever they disagreed, which is a flaky test asserting a false requirement
+   rather than a real one going unchecked. What is genuinely identical is the
+   **mapping** — one realisation over one representation, as the paragraphs below
+   establish — and the mapping is exactly what governs every key the exception
+   does not name.
 
 **Why the identity holds, and where the work is.** A result that crossed the
 protocol arrives in the protocol's own encoding rather than as the engine's
@@ -810,6 +1051,30 @@ Rules:
    silently different result.** The client does not substitute a placeholder for a
    value it could not map; it fails with `utils.ErrDatabase` and exit code 1, so
    that a caller never reads a result that is quietly not the one the graph holds.
+
+**The query plan crosses the protocol the same way, and lands the same way.** A
+statement written with an `EXPLAIN` or `PROFILE` prefix comes back with its plan
+in the protocol's own summary metadata — one field for a plan and a second for a
+profile, which is where a Bolt driver already looks for them — rather than as
+rows. The client inverts that encoding onto **the engine's plan representation,
+not onto JSON**, and the step from there to the published object is the one
+[Graph Plan Node](#graph-plan-node) fixes, run by the same code the direct path
+runs. Three consequences follow, and each is a requirement:
+
+1. **Which member the object carries is decided by which metadata field carried
+   the tree**, so a plan reported over the protocol cannot arrive under the key a
+   measurement belongs to, or the reverse.
+2. **A key the protocol's plan encoding adds is not added to the JSON**, exactly
+   as rule 2 above requires of a value. The protocol nests some of the plan's
+   figures inside its own argument map and names them in its own spelling; the
+   published object names the nine keys of [Graph Plan Node](#graph-plan-node)
+   and no others.
+3. **An absent figure stays absent.** The protocol omits a storage-access count
+   nobody measured rather than sending a zero, and the client MUST carry that
+   omission through instead of reading the missing field as `0`. A client that
+   defaults it would publish a measurement the graph never took, and would break
+   the byte identity against the direct path in the same stroke (see
+   [Graph Plan Node](#graph-plan-node), rule 8).
 
 ---
 

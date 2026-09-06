@@ -27,6 +27,7 @@
   - [Schema Failure Classes](#schema-failure-classes)
   - [Recovered Schema on Every Surface](#recovered-schema-on-every-surface)
 - [Query Notifications as Diagnostics](#query-notifications-as-diagnostics)
+- [Query Plans: The EXPLAIN and PROFILE Prefixes](#query-plans-the-explain-and-profile-prefixes)
 - [Error Handling and Exit Codes](#error-handling-and-exit-codes)
 - [The Dedicated Graph Server](#the-dedicated-graph-server)
   - [Socket Path and Permissions](#socket-path-and-permissions)
@@ -116,7 +117,11 @@ a decision about the response's size and refuses nothing (see
    the shape defined in `DATA_FORMATS.md § Graph Query Result`; a statement that
    produces none returns `{"ok": true}` (see
    `DATA_FORMATS.md § Graph Write Result`). The engine reports no
-   affected-element count, so the result carries no such field.
+   affected-element count, so the result carries no such field. A statement
+   written with an `EXPLAIN` or `PROFILE` prefix is the single exception to that
+   discriminator: it always returns the columns-and-rows shape, carrying the
+   captured plan, and never `{"ok": true}` (see
+   [Query Plans: The EXPLAIN and PROFILE Prefixes](#query-plans-the-explain-and-profile-prefixes)).
 5. Every statement runs inside a single transaction on the transactional
    execution path, and a statement that changes the graph persists that change
    durably before the process exits (see
@@ -185,7 +190,20 @@ a decision about the response's size and refuses nothing (see
     each state are specified once in [Server Resolution](#server-resolution).
 16. A statement executed through a server produces the same result, the same
     output shape, and the same exit code it produces on the direct path. Which
-    path carried a statement is not observable in its result.
+    path carried a statement is not observable in its result. The one value that
+    may legitimately differ between the two paths is a query plan's measured
+    duration, which describes the execution rather than the result and which two
+    executions measure independently; `DATA_FORMATS.md § Graph Client Result`,
+    rule 5, is canonical for that boundary.
+17. `rmp graph execute` and `rmp graph client` publish the query plan the engine
+    captured for a statement written with an `EXPLAIN` or a `PROFILE` prefix,
+    rather than discarding it. The plan appears under `plan` for an `EXPLAIN` and
+    under `profile` for a `PROFILE`, never under both, and a statement carrying
+    neither prefix produces the output it produced before, byte for byte. What
+    each prefix does, which statements each admits, and the rules under which the
+    plan's figures are published are specified in
+    [Query Plans: The EXPLAIN and PROFILE Prefixes](#query-plans-the-explain-and-profile-prefixes);
+    the JSON is fixed in `DATA_FORMATS.md § Graph Plan Node`.
 
 ## Backing Engine: GoGraph
 
@@ -213,7 +231,9 @@ GoGraph is consumed at the exact tag **v0.14.0**. Because
 v0.14.0 is a v0 (pre-1.0) version, it is consumable directly at the bare module path
 `github.com/FlavioCFOliveira/GoGraph`, and `go.mod` pins the clean exact tag `v0.14.0`.
 This exact-tag pin satisfies the pinning mitigation below directly. The pinned version
-is recorded in `BUILD.md § Go Toolchain`.
+is recorded in `BUILD.md § External Dependencies`, which is the table that carries it;
+`BUILD.md § Go Toolchain` records the Go minor-version floor GoGraph imposes, which is
+a different fact about the same dependency.
 
 As a `0.y.z` release, v0.14.0 signals under Semantic Versioning that GoGraph's public
 API is not yet stable: it may change while the module matures toward `1.0.0`, and such
@@ -1697,10 +1717,13 @@ Behaviour:
    Cartesian-product warning reads:
    `INFORMATION Neo.ClientNotification.Statement.CartesianProductWarning: this query builds a cartesian product between disconnected patterns.`
 4. Notifications are advisory and never change the outcome of the command. The
-   stdout output is exactly the existing success output, unchanged: the
-   `columns`/`rows` shape for a statement that produces columns, or
-   `{"ok": true}` for one that produces none (see
-   `DATA_FORMATS.md § Graph Query Result` and `DATA_FORMATS.md § Graph Write Result`).
+   stdout output is exactly the existing success output for that statement,
+   unchanged, whichever of the published shapes it is: the `columns`/`rows` shape
+   for a statement that produces columns, `{"ok": true}` for one that produces
+   none, and the plan-bearing `columns`/`rows` shape for one written with an
+   `EXPLAIN` or `PROFILE` prefix (see `DATA_FORMATS.md § Graph Query Result`,
+   `DATA_FORMATS.md § Graph Write Result`, and
+   [Query Plans: The EXPLAIN and PROFILE Prefixes](#query-plans-the-explain-and-profile-prefixes)).
    The exit code is unaffected and remains 0 on success.
 5. A query that produces no notifications writes nothing extra to stderr.
 
@@ -1721,6 +1744,184 @@ Groadmap's contract is to surface exactly what the engine returns for the
 statement it executed. Whether a notification appears for a given statement
 therefore follows the engine's behaviour, and this specification does not promise
 that any particular statement will produce one.
+
+## Query Plans: The EXPLAIN and PROFILE Prefixes
+
+A Cypher statement may be written with an `EXPLAIN` or a `PROFILE` prefix. The
+engine then captures the query plan it built and carries it beside the ordinary
+result, and `rmp graph execute` and `rmp graph client` publish it. A statement
+written with neither prefix is unaffected in every respect, and the shape it
+produces does not change by one byte.
+
+The two prefixes answer two different questions, and the difference between them
+is the whole reason both exist:
+
+| Prefix | What it does | What it returns |
+|--------|--------------|-----------------|
+| `EXPLAIN` | Plans the statement and executes **nothing** | The statement's own column signature, zero rows, and the plan the engine would have run, carrying the planner's **estimates** |
+| `PROFILE` | Executes the statement | The statement's real rows, and the same plan carrying what each operator actually **cost** |
+
+### What each prefix does
+
+1. **`EXPLAIN` executes nothing, and that is a safety property before it is a
+   diagnostic one.** `EXPLAIN MATCH (n:Spec) DETACH DELETE n` deletes no node,
+   writes no relationship, and appends nothing to the write-ahead log. A caller
+   may reach for the prefix to inspect a statement it is unsure of, which is
+   exactly the case in which executing the statement would be the worst possible
+   answer.
+2. **`PROFILE` executes the statement in full**, because a measurement of a run
+   that did not happen is not a measurement. Its rows are the statement's own
+   rows, unchanged and complete: a caller that prefixed a statement with
+   `PROFILE` still asked for its answer.
+3. **Both prefixes are recognised without regard to case.** `EXPLAIN` and
+   `explain` select the same behaviour, and so does any other mixture of cases;
+   the same holds for `PROFILE`. The prefix is part of the engine's grammar
+   rather than a token `rmp` scans for, and `rmp` does not inspect the statement
+   here any more than it does anywhere else (see
+   [What Groadmap Does Not Check](#what-groadmap-does-not-check)).
+4. **`PROFILE` refuses a statement that writes.** Measuring a write would mean
+   performing it, and the engine refuses the statement rather than perform a
+   write a caller asked only to have measured. The
+   invocation fails with `utils.ErrDatabase` and exit code 1, through the same
+   parse-and-execution failure class every other engine refusal uses, and the
+   engine's own diagnostic names the remedy: use `EXPLAIN` for the statement's
+   plan, or run the statement with no prefix to execute it. No new sentinel and
+   no new exit code is introduced (see
+   [Error Handling and Exit Codes](#error-handling-and-exit-codes)).
+5. **A writing statement's plan is a logical plan, and it is published as one.**
+   A write's operators bind to an open transaction, so there is no physical
+   operator tree to walk outside one, and opening one is precisely what `EXPLAIN`
+   must not do. `EXPLAIN` therefore captures the logical plan for a writing
+   statement and the physical plan for every other. The consequence is visible in
+   the published JSON and is specified with the shape rather than hidden: a
+   logical plan node names its operator as the plan line reads, with any detail
+   already inside that name, and carries neither a separate detail nor an
+   estimate (see `DATA_FORMATS.md § Graph Plan Node`).
+6. **Neither prefix is accepted on a schema statement.** `CREATE INDEX`,
+   `DROP INDEX`, `CREATE CONSTRAINT`, `DROP CONSTRAINT`, `SHOW INDEXES` and
+   `SHOW CONSTRAINTS` are not statements the prefix grammar admits, and a
+   prefixed one fails to parse. The invocation reports the engine's parse
+   diagnostic with `utils.ErrDatabase` and exit code 1, exactly as any other
+   statement the engine will not parse does (see
+   [Schema Failure Classes](#schema-failure-classes)).
+
+### What the two subcommands publish
+
+7. **The plan is published under one of two keys, and never under both.** An
+   `EXPLAIN` publishes `plan`; a `PROFILE` publishes `profile`. The split is not
+   a stylistic choice and must not be collapsed into one key with a mode flag
+   beside it: it mirrors the engine's own two accessors and the two fields the
+   Bolt protocol carries for the same purpose, and its effect is that **no reader
+   can mistake an estimate for a measurement**. A figure under `plan` is what the
+   planner predicted before anything ran. A figure under `profile` is what a run
+   cost. A single key would have made the two indistinguishable at exactly the
+   moment a reader is deciding whether to trust a number.
+8. **A statement carrying either prefix always returns the columns-and-rows
+   envelope, and never `{"ok": true}`.** This is the one point at which the
+   prefixes depart from the discriminator every other statement obeys. That
+   discriminator is whether the statement produces result columns (see
+   `DATA_FORMATS.md § Graph Write Result`), and a writing statement that carries
+   no `RETURN` clause produces none — so an `EXPLAIN` of one would otherwise
+   publish `{"ok": true}`, which is
+   the exact object a real, committed write publishes. A caller reading it would
+   be told that a statement succeeded in doing something, when the statement did
+   nothing at all and the plan it was asked for had been discarded. A prefixed
+   statement that declares no result columns therefore publishes an empty
+   `columns` array, an empty `rows` array, and its plan.
+
+   **The departure costs nothing in compatibility, and the reason is recorded
+   here so that it is not reasoned through again.** The output of a prefixed
+   statement has no earlier contract to break: this specification is the only
+   place a shape for one is fixed, and the prefixes are admitted by the engine
+   the project pins rather than by anything a caller could have relied on
+   before. What a consumer may have built against is the output of an
+   *unprefixed* statement, and rule 9 leaves that untouched. So the discriminator
+   is departed from exactly where no consumer exists, and honoured everywhere one
+   might.
+9. **A statement carrying neither prefix keeps its current output byte for
+   byte.** Neither key appears, and no other member is added, removed, or
+   reordered. An existing consumer of `rmp graph execute` or `rmp graph client`
+   parses exactly what it parsed before and requires no change. This is the
+   guarantee rule 8's departure is bounded by, and it is not a courtesy: it is
+   what makes the departure safe.
+10. **`rmp graph execute` and `rmp graph client` publish identical bytes for a
+    prefixed statement, save for the one figure that measures the run itself.**
+    The identity that `DATA_FORMATS.md § Graph Client Result` requires is not
+    weakened by the plan and is not re-established for it by inspection: the plan
+    a client receives over the protocol is mapped back onto the engine's own plan
+    representation, exactly as a value crossing the protocol is mapped back onto
+    the engine's value model, and one serialisation then produces the JSON on
+    both paths. Every key the mapping decides is therefore identical.
+
+    The exception is a `profile` tree's `timeNs`, and it is an exception no
+    implementation could remove. The two subcommands are two executions, so they
+    measure two durations, and both figures are correct. An `EXPLAIN` publishes
+    no `timeNs` at all and is identical in every byte, as is any statement
+    carrying neither prefix. `DATA_FORMATS.md § Graph Client Result`, rule 5, is
+    canonical for the boundary and for what a caller may rely on across it.
+
+    Which path carried a statement remains unobservable in its result: a duration
+    is not a mark of the surface that produced it, and one result read on its own
+    identifies neither (functional requirement 16).
+
+### The four honesty rules a reader must not get wrong
+
+The plan's numbers are published under rules that exist because the alternative
+in each case is a figure a reader would act on and should not. Each rule is
+stated here because it is a property of the diagnostic, not of the encoding;
+`DATA_FORMATS.md § Graph Plan Node` fixes which key each rule governs.
+
+11. **A figure nobody counted is omitted, never published as zero.** The engine
+    distinguishes an operator whose storage accesses were counted and came to
+    zero from an operator whose accesses nobody counted at all, and the published
+    JSON keeps that distinction by omitting the key in the second case. A zero
+    would be a measurement claim, and the second case has no measurement to
+    claim. The engine's own text rendering prints `?` for the same state, for the
+    same reason.
+12. **A rejection count of zero is published, and its absence means something
+    else.** An operator that has a rejection mechanism and rejected nothing
+    reports zero, deliberately: a filter that rejected nothing is precisely the
+    finding a reader of a slow plan is looking for. Only an operator with no
+    rejection mechanism at all omits the key. The asymmetry against rule 11 is
+    intended — there, an absent key admits that a figure exists and was not
+    counted; here, an absent key states that there is no figure to have.
+13. **An operator's time is inclusive of its children.** The figure is the
+    wall-clock time attributed to the operator including everything it drew from
+    the operators beneath it. A reader who sums the times of a plan's nodes
+    double-counts every level of the tree; the root's figure is the one that
+    describes the statement. It is published as a whole number of nanoseconds
+    rather than as a millisecond value, so that the two subcommands publish the
+    one integer both already hold and the byte identity rule 10 states holds by
+    construction rather than by two formatters agreeing (see
+    `DATA_FORMATS.md § Graph Plan Node`, rule 12).
+14. **The storage-access count is a count of access-path record reads and never
+    of property reads.** This is a deliberate divergence from Neo4j, which
+    additionally charges one hit per property read, and it is published because a
+    caller comparing the two products otherwise concludes that the figure is
+    wrong. It is not: it counts a different thing, and it counts that thing
+    exactly.
+
+### What is unchanged by a prefix
+
+15. **Notifications are surfaced for a prefixed statement exactly as for any
+    other**, and this is one of the things `EXPLAIN` is for: the
+    Cartesian-product warning for a disconnected multi-pattern `MATCH` reaches
+    stderr without the statement ever running. Notifications remain advisory and
+    change neither the stdout output nor the exit code (see
+    [Query Notifications as Diagnostics](#query-notifications-as-diagnostics)).
+16. **The statement time budget applies unchanged.** A `PROFILE` executes, so it
+    can exhaust the budget and be cut like any other statement; an `EXPLAIN`
+    plans only, and the budget bounds the planning (see
+    [Statement Time Budget](#statement-time-budget)).
+17. **An `EXPLAIN` changes nothing on disk beyond what any statement that writes
+    nothing changes.** It appends nothing to the write-ahead log, so no
+    checkpoint runs and no snapshot is written, which is the rule functional
+    requirement 6 already states for every such statement (see
+    [What a Statement That Writes Nothing Changes on Disk](#what-a-statement-that-writes-nothing-changes-on-disk)).
+18. **The prefix introduces no flag, no subcommand, no sentinel error, and no
+    exit code.** It is part of the statement text a caller already supplies
+    through `--query` or standard input, and it reaches the engine through the
+    path every statement reaches it through.
 
 ## Error Handling and Exit Codes
 
@@ -4076,11 +4277,41 @@ Groadmap's usage model and expectations:
     accident; the invariant fails on a count that is short, on one that is
     inflated, and on a record that vanished without being counted at all (see
     [Server Diagnostics on Stderr](#server-diagnostics-on-stderr)).
+59. **A prefixed statement returns its plan, an unprefixed one is untouched, and
+    the criterion MUST assert all three parts together.** Against one roadmap:
+    `EXPLAIN MATCH (n:Spec) RETURN n.key` returns the statement's declared
+    columns, an empty `rows` array, and a `plan` object with no `profile` key,
+    and creates, changes and deletes nothing; `PROFILE MATCH (n:Spec) RETURN n.key`
+    returns the same columns, the statement's real rows, and a `profile` object
+    with no `plan` key; and the same statement with no prefix returns bytes
+    identical to those it returned before the prefixes were published, carrying
+    neither key. The third part is the one that cannot be dropped: it is the
+    guarantee an existing consumer depends on, and it is the part a change to the
+    result envelope breaks silently (see
+    [Query Plans: The EXPLAIN and PROFILE Prefixes](#query-plans-the-explain-and-profile-prefixes),
+    rules 7 to 9).
+60. **The two subcommands publish the same bytes for a prefixed statement, and
+    the criterion MUST compare them — everything except the clock.** With a server
+    serving the roadmap, the stdout of `rmp graph client` for an `EXPLAIN`
+    statement is byte for byte the stdout `rmp graph execute` writes for it, plan
+    included, and the criterion MUST compare complete stdout: the identity is over
+    every figure in the tree and over the order the members are written in, and a
+    check that merely finds a plan on both sides passes on two trees that
+    disagree about both. For a `PROFILE` statement the criterion MUST compare
+    complete stdout **with every `timeNs` excluded**, and MUST NOT compare the
+    durations themselves. That key measures the execution rather than the result,
+    the two subcommands are two executions, and a criterion that compared their
+    clocks would fail whenever two correct measurements disagreed — a flaky test
+    asserting a requirement the specification does not make. It MUST still assert
+    that `timeNs` is **present** on both sides wherever the shape requires it, so
+    that excluding the value does not quietly excuse a missing key (see
+    `DATA_FORMATS.md § Graph Client Result`, rule 5).
 
 ## See Also
 
 - CLI command contract for `graph` → `COMMANDS.md § Graph Management`
 - Graph query result JSON and property-type mapping → `DATA_FORMATS.md § Graph Query Result`
+- Query plan JSON for a statement written with an `EXPLAIN` or `PROFILE` prefix → `DATA_FORMATS.md § Graph Plan Node`
 - Standard input as a Cypher source → `DATA_FORMATS.md § Input`
 - The sibling standard-input rule for the comment body, whose cap counts characters rather than bytes → `COMMANDS.md § Comment Body Input Source and Precedence`
 - GoGraph integration, directory layout, error handling → `ARCHITECTURE.md`

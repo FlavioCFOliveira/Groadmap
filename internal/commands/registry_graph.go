@@ -54,7 +54,7 @@ func buildGraphCommand() Command {
 				},
 				Output: SuccessOutput{
 					Kind:    "object",
-					Schema:  `{"columns": [...], "rows": [[...],...]} when the statement produces result columns; {"ok": true} when it produces none.`,
+					Schema:  `{"columns": [...], "rows": [[...],...], "plan": {...} with EXPLAIN, "profile": {...} with PROFILE (never both)} when the statement produces result columns or carries either prefix; {"ok": true} when it produces none.`,
 					Example: `{"columns":["n.key"],"rows":[["auth"]]}`,
 				},
 				SideEffects: SideEffects{
@@ -168,7 +168,7 @@ func buildGraphCommand() Command {
 				},
 				Output: SuccessOutput{
 					Kind:    "object",
-					Schema:  `{"columns": [...], "rows": [[...],...]} when the statement produces result columns; {"ok": true} when it produces none.`,
+					Schema:  `{"columns": [...], "rows": [[...],...], "plan": {...} with EXPLAIN, "profile": {...} with PROFILE (never both)} when the statement produces result columns or carries either prefix; {"ok": true} when it produces none.`,
 					Example: `{"columns":["n.key"],"rows":[["auth"]]}`,
 				},
 				SideEffects: SideEffects{

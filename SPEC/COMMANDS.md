@@ -3496,6 +3496,19 @@ valid its Cypher is and however healthy the store, and the remedy is to narrow i
 statements. `GRAPH.md § Statement Time Budget` is canonical for what a cut
 statement leaves behind, and `WEB.md § Graph Query Time Budget` for the value.
 
+**A statement may ask for its plan instead of, or as well as, its answer.**
+Written with an `EXPLAIN` prefix, a statement is planned and **not executed**, and
+`execute` and `client` return its declared columns, no rows, and the plan under a
+`plan` member. Written with a `PROFILE` prefix, it is executed and returns its
+real rows together with what each operator cost, under a `profile` member. The
+two members are never both present, which is what keeps an estimate from being
+read as a measurement. A statement written with neither prefix produces exactly
+the bytes it produced before, so no existing caller is affected.
+`GRAPH.md § Query Plans: The EXPLAIN and PROFILE Prefixes` is canonical for what
+each prefix does and which statements each admits — a `PROFILE` of a writing
+statement is refused, and neither prefix is accepted on a schema statement — and
+`DATA_FORMATS.md § Graph Plan Node` for the published shape.
+
 ### Execute Options
 
 - `-r, --roadmap <name>` - REQUIRED. Target roadmap (see
@@ -3538,6 +3551,16 @@ original the day the original changed, which is the outcome
   `DROP CONSTRAINT` produces no columns and returns `{"ok": true}`. There is no
   affected-element count, because the engine reports none. Exit code 0. The shape
   is fixed in `DATA_FORMATS.md § Graph Write Result`.
+- On success for a statement written with an `EXPLAIN` or `PROFILE` prefix, the
+  output is the `{columns, rows}` shape carrying one further member: `plan` for an
+  `EXPLAIN`, `profile` for a `PROFILE`, never both. This is the one statement
+  class for which the "produces result columns" discriminator above does not
+  select the shape: a prefixed statement that declares no column returns empty
+  `columns` and `rows` arrays beside its plan rather than `{"ok": true}`, because
+  an `EXPLAIN` executed nothing and `{"ok": true}` is what a committed write
+  reports. Exit code 0. The shape is fixed in
+  `DATA_FORMATS.md § Graph Plan Node`; the behaviour in
+  `GRAPH.md § Query Plans: The EXPLAIN and PROFILE Prefixes`.
 - Side effect of a statement that wrote: after committing, the invocation
   produces an on-disk snapshot under `~/.roadmaps/<name>/graph/snapshot/` and
   truncates the write-ahead log, synchronously, before exit (see
@@ -3660,6 +3683,23 @@ shape and exits 0. `GRAPH.md § Schema Management` is canonical for the schema
 statements: which forms the engine accepts, how a schema object is named, why
 changing an index is two invocations rather than one, and how a schema failure
 surfaces.
+
+**Asking for the plan:**
+
+```bash
+rmp graph execute -r backend-platform \
+  --query "EXPLAIN MATCH (s:Spec)-[:IMPLEMENTED_BY]->(c:Code) RETURN s.key"
+rmp graph execute -r backend-platform \
+  --query "PROFILE MATCH (s:Spec)-[:IMPLEMENTED_BY]->(c:Code) RETURN s.key"
+```
+
+The `EXPLAIN` invocation runs nothing: it returns the statement's declared
+columns, an empty `rows` array, and the plan under `plan`, whose row counts are
+the planner's estimates. The `PROFILE` invocation runs the statement and returns
+its real rows together with the same plan under `profile`, whose figures are
+measurements of that run. Both exit 0. `DATA_FORMATS.md § Graph Plan Node` is
+canonical for the plan's keys and for the rules under which a figure is omitted
+rather than published as zero.
 
 ### Execute Error Cases
 
@@ -3905,11 +3945,21 @@ This section does not restate them.
 
 - On success the output is byte-for-byte the output `rmp graph execute` produces
   for the same statement against the same graph: the `{columns, rows}` shape when
-  the statement produces result columns, and exactly `{"ok": true}` when it
-  produces none. `DATA_FORMATS.md § Graph Client Result` is canonical for the
-  mapping that makes the two identical, and
-  `DATA_FORMATS.md § Graph Query Result` and
-  `DATA_FORMATS.md § Graph Write Result` remain canonical for the shapes
+  the statement produces result columns, exactly `{"ok": true}` when it produces
+  none, and the same shape carrying a `plan` or `profile` member when the
+  statement was written with an `EXPLAIN` or `PROFILE` prefix. One key is outside
+  that identity and only one: a `profile` tree's `timeNs` measures the execution
+  that produced it, and the two subcommands are two executions, so they measure
+  two durations. Every other key, the structure, and the member order are
+  identical; `DATA_FORMATS.md § Graph Client Result`, rule 5, is canonical for the
+  boundary and this section does not restate it.
+  `DATA_FORMATS.md § Graph Client Result` is canonical for the
+  mapping that makes the two identical — for the plan as much as for the rows,
+  since both cross the protocol and both are mapped back onto the engine's own
+  representation before either is serialised — and
+  `DATA_FORMATS.md § Graph Query Result`,
+  `DATA_FORMATS.md § Graph Write Result` and
+  `DATA_FORMATS.md § Graph Plan Node` remain canonical for the shapes
   themselves.
 - Query notifications: the subcommand surfaces, as one plain-text diagnostic line
   per notification on stderr, the advisory notifications the server returns for

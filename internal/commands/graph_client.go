@@ -84,9 +84,11 @@ Optional:
   -h, --help              Show this help message
 
 Output (stdout JSON):
-  With result columns:      {"columns": [...], "rows": [[...], ...]}
+  With result columns:      {"columns": [...], "rows": [[...], ...], "plan": <plan node, EXPLAIN only>, "profile": <plan node, PROFILE only>}
   Without result columns:   {"ok": true}
   The same shapes, and the same bytes, that rmp graph execute writes.
+  A statement written with the EXPLAIN or PROFILE prefix always produces the
+  columns shape so that it can carry its plan, even with no column of its own.
 
 Exit codes:
   0   The statement was sent to a server, ran, and its result was written
