@@ -166,8 +166,8 @@ a decision about the response's size and refuses nothing (see
 12. `rmp graph execute` executes its statement under a time budget: the same
     budget, carrying the same value, that the web graph data endpoint applies. A
     statement that exhausts it is cancelled, its transaction rolls back whole, no
-    checkpoint runs, and the invocation fails with `utils.ErrDatabase` (exit code
-    1); no new sentinel error and no new exit code is introduced. What the budget
+    checkpoint runs, and the invocation fails with `utils.ErrGraphEngine` (exit
+    code 1); no new exit code is introduced. What the budget
     does to an invocation is specified in
     [Statement Time Budget](#statement-time-budget), and
     `WEB.md § Graph Query Time Budget` is canonical for the value.
@@ -621,7 +621,7 @@ Failure policy:
 4. A failure that occurs **before or during** the commit (the transaction does
    not commit durably) is a normal write failure, not a checkpoint failure: the
    write did not succeed, no checkpoint is attempted, and the command fails with
-   `utils.ErrDatabase` (exit code 1) per
+   `utils.ErrGraphEngine` (exit code 1) per
    [Error Handling and Exit Codes](#error-handling-and-exit-codes).
 
 Performance trade-off: a synchronous full snapshot on every write makes each
@@ -1623,11 +1623,11 @@ does not stay small if the graph grows.
 
 | Failure | Refused by | Sentinel | Exit code |
 |---------|-----------|----------|-----------|
-| `CREATE INDEX` or `CREATE CONSTRAINT` whose object already exists, without `IF NOT EXISTS` | The engine | `utils.ErrDatabase` | 1 |
-| `DROP INDEX` or `DROP CONSTRAINT` naming an object that does not exist, without `IF EXISTS` | The engine | `utils.ErrDatabase` | 1 |
-| A definition the engine does not support — composite, over a relationship property, or a constraint kind it does not implement | The engine | `utils.ErrDatabase` | 1 |
-| `CREATE CONSTRAINT` that the data already in the graph does not satisfy | The engine, having validated the data and registered nothing | `utils.ErrDatabase` | 1 |
-| A schema statement whose keyword spacing the engine does not route to its schema parser | The engine's general Cypher grammar, as a parse error | `utils.ErrDatabase` | 1 |
+| `CREATE INDEX` or `CREATE CONSTRAINT` whose object already exists, without `IF NOT EXISTS` | The engine | `utils.ErrGraphEngine` | 1 |
+| `DROP INDEX` or `DROP CONSTRAINT` naming an object that does not exist, without `IF EXISTS` | The engine | `utils.ErrGraphEngine` | 1 |
+| A definition the engine does not support — composite, over a relationship property, or a constraint kind it does not implement | The engine | `utils.ErrGraphEngine` | 1 |
+| `CREATE CONSTRAINT` that the data already in the graph does not satisfy | The engine, having validated the data and registered nothing | `utils.ErrGraphEngine` | 1 |
+| A schema statement whose keyword spacing the engine does not route to its schema parser | The engine's general Cypher grammar, as a parse error | `utils.ErrGraphEngine` | 1 |
 
 Rules:
 
@@ -1782,11 +1782,11 @@ is the whole reason both exist:
 4. **`PROFILE` refuses a statement that writes.** Measuring a write would mean
    performing it, and the engine refuses the statement rather than perform a
    write a caller asked only to have measured. The
-   invocation fails with `utils.ErrDatabase` and exit code 1, through the same
+   invocation fails with `utils.ErrGraphEngine` and exit code 1, through the same
    parse-and-execution failure class every other engine refusal uses, and the
    engine's own diagnostic names the remedy: use `EXPLAIN` for the statement's
-   plan, or run the statement with no prefix to execute it. No new sentinel and
-   no new exit code is introduced (see
+   plan, or run the statement with no prefix to execute it. No new exit code is
+   introduced (see
    [Error Handling and Exit Codes](#error-handling-and-exit-codes)).
 5. **A writing statement's plan is a logical plan, and it is published as one.**
    A write's operators bind to an open transaction, so there is no physical
@@ -1801,7 +1801,7 @@ is the whole reason both exist:
    `DROP INDEX`, `CREATE CONSTRAINT`, `DROP CONSTRAINT`, `SHOW INDEXES` and
    `SHOW CONSTRAINTS` are not statements the prefix grammar admits, and a
    prefixed one fails to parse. The invocation reports the engine's parse
-   diagnostic with `utils.ErrDatabase` and exit code 1, exactly as any other
+   diagnostic with `utils.ErrGraphEngine` and exit code 1, exactly as any other
    statement the engine will not parse does (see
    [Schema Failure Classes](#schema-failure-classes)).
 
@@ -1925,9 +1925,17 @@ stated here because it is a property of the diagnostic, not of the encoding;
 
 ## Error Handling and Exit Codes
 
-Graph subcommands use the existing sentinel errors and exit-code mapping defined
-in `ARCHITECTURE.md § Error Handling` and `ARCHITECTURE.md § Exit Codes`. No new
-sentinel is introduced for the graph feature.
+Graph subcommands use the exit-code mapping defined in
+`ARCHITECTURE.md § Error Handling` and `ARCHITECTURE.md § Exit Codes`. They
+introduce no exit code of their own.
+
+They do carry three sentinels of their own, `utils.ErrGraphEngine`,
+`utils.ErrGraphStore` and `utils.ErrGraphServer`, all three mapping to exit
+code 1. `ARCHITECTURE.md § Sentinel Error Catalogue` is canonical for what each
+one means and for why the three are kept apart; this section assigns every
+condition the graph subsystem can reach to one of them. No graph failure carries
+`utils.ErrDatabase`: the only database a roadmap has is its `project.db`, which
+no graph operation reads or writes ([Constraints](#constraints), rule 2).
 
 | Condition | Sentinel | Exit code |
 |-----------|----------|-----------|
@@ -1936,15 +1944,16 @@ sentinel is introduced for the graph feature.
 | No query supplied: `--query` absent and standard input empty, whitespace only, or a terminal; or `--query` present with an empty, whitespace-only, or absent value (see [Cypher Input Source and Precedence](#cypher-input-source-and-precedence)) | `utils.ErrRequired` | 2 |
 | `graph execute` receives a positional argument, a bare Cypher query included; it accepts none (see [No Positional Query: A Stray Token Is Refused](#no-positional-query-a-stray-token-is-refused)) | `utils.ErrInvalidInput` | 2 |
 | Query longer than the maximum query length of 1 MiB, from either source (see [Maximum Query Length](#maximum-query-length)) | `utils.ErrValidation` | 6 |
-| Cypher fails to parse or execute in the engine, a schema statement included (see [Schema Failure Classes](#schema-failure-classes)) | `utils.ErrDatabase` | 1 |
-| The statement exhausts the statement time budget and is cancelled (see [Statement Time Budget](#statement-time-budget)) | `utils.ErrDatabase` | 1 |
-| Every attempt of the client's retry policy loses a serialisation conflict against a graph server (see [Concurrency Inside the Server](#concurrency-inside-the-server), rule 9) | `utils.ErrDatabase` | 1 |
-| Graph store cannot be opened, recovered, read, or written (I/O, corruption, lock) | `utils.ErrDatabase` | 1 |
-| The roadmap's socket answers but no server can be reached through it, or the connection fails for a reason other than the socket being absent or refusing (see [Server Resolution](#server-resolution)) | `utils.ErrDatabase` | 1 |
-| The connection to a server is lost after the statement has been sent (see [Server Resolution](#server-resolution), rule 4) | `utils.ErrDatabase` | 1 |
-| A server does not answer within the caller's backstop deadline (see [Server Resolution](#server-resolution), rule 7) | `utils.ErrDatabase` | 1 |
-| `graph client` finds no server listening for the selected roadmap (see [The Bolt Client](#the-bolt-client)) | `utils.ErrDatabase` | 1 |
-| `graph serve` cannot bind its socket, or a live server already answers on the resolved socket (see [Server Startup](#server-startup)) | `utils.ErrDatabase` | 1 |
+| Cypher fails to parse or execute in the engine, a schema statement included (see [Schema Failure Classes](#schema-failure-classes)) | `utils.ErrGraphEngine` | 1 |
+| The statement exhausts the statement time budget and is cancelled (see [Statement Time Budget](#statement-time-budget)) | `utils.ErrGraphEngine` | 1 |
+| Every attempt of the client's retry policy loses a serialisation conflict against a graph server (see [Concurrency Inside the Server](#concurrency-inside-the-server), rule 9) | `utils.ErrGraphEngine` | 1 |
+| Graph store cannot be opened, recovered, read, or written (I/O or corruption) | `utils.ErrGraphStore` | 1 |
+| The graph store's exclusive lock is still held when the bounded wait is exhausted (see [Lock Contention](#lock-contention), rule 3) | `utils.ErrGraphStore` | 1 |
+| The roadmap's socket answers but no server can be reached through it, or the connection fails for a reason other than the socket being absent or refusing (see [Server Resolution](#server-resolution)) | `utils.ErrGraphServer` | 1 |
+| The connection to a server is lost after the statement has been sent (see [Server Resolution](#server-resolution), rule 4) | `utils.ErrGraphServer` | 1 |
+| A server does not answer within the caller's backstop deadline (see [Server Resolution](#server-resolution), rule 7) | `utils.ErrGraphServer` | 1 |
+| `graph client` finds no server listening for the selected roadmap (see [The Bolt Client](#the-bolt-client)) | `utils.ErrGraphServer` | 1 |
+| `graph serve` cannot bind its socket, or a live server already answers on the resolved socket (see [Server Startup](#server-startup)) | `utils.ErrGraphServer` | 1 |
 | Successful execution, and a server stopped by `SIGINT` or `SIGTERM` after a graceful shutdown | — | 0 |
 
 Rules:
@@ -1966,17 +1975,23 @@ Rules:
    [No Positional Query: A Stray Token Is Refused](#no-positional-query-a-stray-token-is-refused),
    rule 4).
 2. A Cypher parse or execution failure reported by the engine is wrapped as
-   `utils.ErrDatabase` (exit code 1), consistent with treating the graph store as
-   a database-class dependency. The message carries a fixed prefix and then the
-   engine's diagnostic text; `COMMANDS.md § Graph Management` publishes the exact
-   line, and the engine's half of it is not specified there or here.
+   `utils.ErrGraphEngine` (exit code 1). The sentinel names the engine because
+   the engine is what refused the statement, and because the action it calls for
+   is to correct the statement rather than to touch anything else. The message
+   carries a fixed prefix and then the engine's diagnostic text;
+   `COMMANDS.md § Graph Management` publishes the exact line, and the engine's
+   half of it is not specified there or here.
 3. Errors are written as plain text to stderr and carry the standard AI-agent
    hint (see `HELP.md § Error message format`).
-4. The graph feature introduces no new exit codes. If a future need arises for a
-   dedicated graph error class, it MUST be added following the procedure in
-   `ARCHITECTURE.md § Adding New Error Types`. The dedicated graph server and its
-   client introduce none either: every failure either of them can produce is
-   carried by a sentinel this table already names, and
+4. The graph feature introduces no new exit codes, and MUST NOT. Its three
+   sentinels all map to exit code 1, the code the graph subsystem returned for
+   every one of these conditions before the sentinels existed, so a consumer that
+   branches on an exit code sees no change. A further sentinel, if one is ever
+   needed, MUST be added following the procedure in
+   `ARCHITECTURE.md § Adding New Error Types`, and MUST map to a code the
+   catalogue already publishes. The dedicated graph server and its client add no
+   code either: every failure either of them can produce is carried by a sentinel
+   this table names, and
    `ARCHITECTURE.md § Exit Codes of the Graph Server and Client` enumerates the
    codes each subcommand can return.
 5. **A statement that the engine executes, and that does the wrong thing quietly,
@@ -1986,18 +2001,23 @@ Rules:
    the table above distinguishes them, and none is added to: an exit code that
    claimed to would require the inspection this specification does not perform.
 6. **A statement the time budget cuts fails in the same class and publishes a
-   line of its own.** It carries `utils.ErrDatabase` and exit code 1, as rule 2's
-   engine failures do, because the graph feature introduces no new sentinel and
-   no new exit code (see [Constraints](#constraints), rule 5). Its message is not
+   line of its own.** It carries `utils.ErrGraphEngine` and exit code 1, as rule
+   2's engine failures do: the statement had reached the engine and was running
+   there when the budget cut it, and the action the caller must take is on the
+   statement. It introduces no new exit code (see
+   [Constraints](#constraints), rule 5). Its message is not
    rule 2's message: the whole of it is `rmp`'s own text, it names the budget that
    was exceeded, it states that nothing was written, and it says what to do about
    it. `COMMANDS.md § Graph Management` publishes the exact line, and
    [Statement Time Budget](#statement-time-budget) states the behaviour behind it.
 7. **An exhausted serialisation retry fails in the same class and publishes a
-   line of its own too.** It carries `utils.ErrDatabase` and exit code 1, as rule
-   2's engine failures and rule 6's budget exhaustion do, and for the same
-   reason: the graph feature introduces no new sentinel and no new exit code. Its
-   message is neither rule 2's nor rule 6's. The whole of it is `rmp`'s own text;
+   line of its own too.** It carries `utils.ErrGraphEngine` and exit code 1, as
+   rule 2's engine failures and rule 6's budget exhaustion do, and for the same
+   reason: the statement reached the engine and the engine's transaction manager
+   refused every attempt of it. It carries the engine's sentinel even though the
+   statement is valid, because what failed is this execution of it and the action
+   the caller must take is still on the statement — run it again. It introduces
+   no new exit code. Its message is neither rule 2's nor rule 6's. The whole of it is `rmp`'s own text;
    it names the contention rather than the statement, it states that nothing was
    written, and it names the remedy — run the statement again, and spread
    concurrent writes across distinct nodes. It is reachable only for a statement
@@ -2845,7 +2865,7 @@ invocation or request, never the derived path specifically.
 | **Not served: no socket** | The socket path does not exist | Open the store directly under the exclusive lock, exactly as it did before this section existed. Exit code 0 on success | Open the store directly under the exclusive lock, exactly as before. HTTP `200` on success |
 | **Not served: nothing listening** | The connection is refused, which is what a socket file left behind by a killed server answers | As above, and the leftover file is neither an error nor removed. Exit code 0 on success | As above. HTTP `200` on success |
 | **Served** | The connection is accepted and the handshake completes inside the probe deadline | Send the statement to the server. Do not take the exclusive lock and do not open the store. Exit code 0 on success | Send the statement to the server. Do not take the exclusive lock and do not open the store. HTTP `200` on success |
-| **Unreachable** | The connection is accepted but the handshake does not complete inside the probe deadline, or the connection fails for any reason other than the two above | Fail with `utils.ErrDatabase`, exit code 1 | Fail as an internal read error, HTTP `500` |
+| **Unreachable** | The connection is accepted but the handshake does not complete inside the probe deadline, or the connection fails for any reason other than the two above | Fail with `utils.ErrGraphServer`, exit code 1 | Fail as an internal read error, HTTP `500` |
 
 Rules:
 
@@ -2875,7 +2895,7 @@ Rules:
    store a server may still be holding. The invocation therefore fails and reports
    what it can honestly report — that the connection to the server was lost and
    the statement's outcome is unknown. `rmp graph execute` fails with
-   `utils.ErrDatabase` and exit code 1. The web graph data endpoint answers HTTP
+   `utils.ErrGraphServer` and exit code 1. The web graph data endpoint answers HTTP
    `400` with the `execution` kind, because the failure surfaced once the
    statement was running, which is where `WEB.md § Query-Bar Error Handling`
    already draws that boundary.
@@ -3161,10 +3181,13 @@ limits that survive.
    [What a Statement That Writes Nothing Changes on Disk](#what-a-statement-that-writes-nothing-changes-on-disk)
    requires of every statement that commits nothing. The recovery repair the open
    already performed is neither undone nor repeated.
-4. **The invocation fails with `utils.ErrDatabase` (exit code 1).** The budget
-   introduces no new sentinel error and no new exit code, and may not:
-   [Constraints](#constraints), rule 5, forbids both. The exact line the user
-   reads is published in `COMMANDS.md § Graph Management`.
+4. **The invocation fails with `utils.ErrGraphEngine` (exit code 1).** The
+   budget introduces no new exit code, and may not:
+   [Constraints](#constraints), rule 5, forbids it. It carries the engine's
+   sentinel rather than the store's because the statement was running in the
+   engine when it was cut, and because what the caller must act on is the
+   statement. The exact line the user reads is published in
+   `COMMANDS.md § Graph Management`.
 5. **The cancellation arrives through the result iteration.** The engine's
    statement call returns no error; the result's own error does, as
    `context.DeadlineExceeded`. An implementation that classified only the call's
@@ -3388,7 +3411,7 @@ The same statement, at the same budget, over the same 600-node store:
 | peak resident memory | 2974-3293 MB | 3088 MB | 3618-3734 MB |
 | resident 130 s later | 0, the process exited | **3088 MB, none of it returned** | 1064 MB |
 | the store on disk afterwards | unchanged | unchanged | unchanged |
-| what the caller received | `utils.ErrDatabase`, exit 1 | an empty reply after 39.5 s | the unanswered-server line at 7.5 s, exit 1 |
+| what the caller received | `utils.ErrGraphEngine`, exit 1 | an empty reply after 39.5 s | the unanswered-server line at 7.5 s, exit 1 |
 
 A short-lived invocation returns the memory to the operating system by exiting;
 a long-lived one has no exit to return it at. `rmp web` returned none of its
@@ -3500,10 +3523,24 @@ One lock mode carries one contention policy.
    SQLite layer waits; the derivation, the 7.5 seconds it yields at the statement
    budget in force, and the holds it does not cover are stated below.
 2. If the lock is still unavailable when that bounded wait is exhausted, the
-   invocation fails: with `utils.ErrDatabase` (exit code 1) for
+   invocation fails: with `utils.ErrGraphStore` (exit code 1) for
    `rmp graph execute`, and as an internal read error (HTTP 500) for the web graph
    data endpoint, which is the status that endpoint already returns for a graph
    store that cannot be opened (see `WEB.md § Routes and Pages`).
+3. **The line an exhausted wait prints MUST NOT claim to know which process holds
+   the lock, because nothing records one.** The lock is advisory and carries no
+   owner, and the invocation that failed to take it cannot find out who has it.
+   Two holders are possible and they call for opposite actions. Another
+   short-lived `rmp` invocation releases the lock shortly, so the statement need
+   only be run again. An `rmp graph serve` holds it for the whole of its process
+   lifetime, which no finite wait outlasts, so running the statement again fails
+   for as long as that server runs, and the caller must reach the server instead
+   — with `--socket`, or through `rmp graph client` — or stop it. The
+   published line therefore states that the holder is not recorded and gives the
+   action for each case. Naming one holder would be a guess, and the guess that
+   reported a server as another invocation would tell a caller, and above all an
+   AI agent, to retry for ever. `COMMANDS.md § Execute Error Cases` publishes the
+   exact line.
 
 **Waiting rather than failing fast is the policy because every caller is now a
 possible reader.** A policy that failed on the first collision would make ordinary
@@ -3706,14 +3743,18 @@ there, and resolution sends it there only in these:
    a hold, the quantity this section already reserves an allowance for. Inside
    that allowance the caller waits and then succeeds; past it, the allowance's own
    limit above applies, exactly as it does to any other holder.
-3. **A server on a non-default socket, for the one surface that cannot be told
-   about it.** `rmp graph execute` follows such a server through its own
-   `--socket` flag and never reaches the lock. The web graph data endpoint has no
-   flag to follow it with, so it resolves the derived path, finds nothing, takes
-   the direct path, and fails for as long as that server runs (see
+3. **A server on a non-default socket, when the caller does not follow it
+   there.** `rmp graph execute` can follow such a server, through its own
+   `--socket` flag, and an invocation that supplies the flag never reaches the
+   lock. An invocation that omits it resolves the derived path, finds nothing
+   listening, concludes the roadmap is not served, takes the direct path, and
+   meets the lock the server holds — the same outcome the web graph data
+   endpoint reaches, and for the same reason, except that the endpoint has no
+   flag with which to do otherwise. Either way the wait is exhausted and the
+   caller fails for as long as that server runs (see
    [Serving on a Non-Default Socket](#serving-on-a-non-default-socket)).
 
-In each case the outcome is rule 2's: `utils.ErrDatabase` and exit code 1 for
+In each case the outcome is rule 2's: `utils.ErrGraphStore` and exit code 1 for
 `rmp graph execute`, HTTP 500 for the web graph data endpoint. That is the outcome
 this section has always specified for an exhausted wait, and the server adds no
 new one.
@@ -3726,7 +3767,7 @@ Groadmap's usage model and expectations:
    closes the store. The process does not hold the store open across invocations.
 2. Two concurrent invocations against the **same** roadmap contend for the lock,
    whatever their statements do. The implementation MUST surface an exhausted wait
-   as `utils.ErrDatabase` (exit code 1) rather than corrupting the store or
+   as `utils.ErrGraphStore` (exit code 1) rather than corrupting the store or
    hanging indefinitely. The checkpoint runs inside the invocation that already
    holds the lock: it adds no separate lock, and two concurrent invocations still
    serialise.
@@ -3743,7 +3784,7 @@ Groadmap's usage model and expectations:
    store is reopened, because the snapshot records the tombstone set and recovery
    reconstructs it. A graph left in a consistent committed state by a previous
    invocation opens cleanly. A graph whose store is corrupt or unreadable surfaces
-   as `utils.ErrDatabase` (exit code 1); there is no automatic graph-store repair
+   as `utils.ErrGraphStore` (exit code 1); there is no automatic graph-store repair
    in this first version.
 5. The graph store is independent of the SQLite layer and the SQLite WAL
    model described in `IMPLEMENTATION.md § Concurrency Model`; the two persistence
@@ -3774,8 +3815,14 @@ Groadmap's usage model and expectations:
    GoGraph's parameterisation. Groadmap does not override these.
 4. Graph operations require the `-r` / `--roadmap` flag, identical to `task` and
    `sprint` operations.
-5. The graph feature MUST NOT introduce a new sentinel error or exit code in this
-   version (see [Error Handling and Exit Codes](#error-handling-and-exit-codes)).
+5. The graph feature MUST NOT introduce a new exit code. It carries three
+   sentinels of its own — `utils.ErrGraphEngine`, `utils.ErrGraphStore` and
+   `utils.ErrGraphServer` — and all three map to exit code 1, which is the code
+   every condition they cover already returned. A sentinel exists to name, in the
+   line the caller reads, which part of the graph subsystem failed and therefore
+   which action to take; it never changes the code the process exits with (see
+   [Error Handling and Exit Codes](#error-handling-and-exit-codes), rule 4, and
+   `ARCHITECTURE.md § Sentinel Error Catalogue`).
 6. GoGraph is pinned to an exact version in `go.mod` (see
    [Dependency Maturity Risk](#dependency-maturity-risk)).
 

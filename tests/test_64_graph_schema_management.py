@@ -404,9 +404,11 @@ class TestGraphSchemaFailureClasses(SchemaTestBase):
         assert code == EXIT_ENGINE, (
             f"AC68: a duplicate CREATE INDEX exits {EXIT_ENGINE}, not "
             f"{EXIT_GUARD_RAIL}; exit={code} stderr={stderr!r}")
-        assert "database error" in stderr, (
-            f"AC68: it is an engine failure, so it carries the database-error "
-            f"class rather than the guard rail's validation error; got {stderr!r}")
+        assert "graph engine error" in stderr, (
+            f"AC68: it is an engine failure, so it carries the graph-engine class "
+            f"rather than the guard rail's validation error. The class names where "
+            f"the failure happened and therefore what to act on -- the statement, "
+            f"not the store and not a server; got {stderr!r}")
 
         assert self.ok("CREATE INDEX IF NOT EXISTS spec_key FOR (n:Spec) ON (n.key)") == {"ok": True}
 

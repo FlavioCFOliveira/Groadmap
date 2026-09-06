@@ -58,7 +58,7 @@ func TestGraphSchema_IntrospectionKeywordSpacingReachesTheEngine(t *testing.T) {
 				}
 				// The exit code is the whole point: 1, the engine's own failure
 				// class, and NOT the 6 the withdrawn guard rail used to carry.
-				if !errors.Is(err, utils.ErrDatabase) {
+				if !errors.Is(err, utils.ErrGraphEngine) {
 					t.Errorf("%q must fail as an engine error (ErrDatabase, exit 1), got %v", query, err)
 				}
 				if errors.Is(err, utils.ErrValidation) {
@@ -83,7 +83,7 @@ func TestGraphSchema_DDLKeywordSpacingReachesTheEngine(t *testing.T) {
 		t.Fatalf("%q was accepted; the engine routes only the single-space spelling to its "+
 			"schema parser (SPEC/GRAPH.md § What Groadmap Does Not Check, item 7)", misspaced)
 	}
-	if !errors.Is(err, utils.ErrDatabase) {
+	if !errors.Is(err, utils.ErrGraphEngine) {
 		t.Errorf("%q must fail as an engine error (ErrDatabase, exit 1), got %v", misspaced, err)
 	}
 	if names := readSchemaNames(t, runGraphExecute, roadmap, "SHOW INDEXES"); containsName(names, "spec_key") {

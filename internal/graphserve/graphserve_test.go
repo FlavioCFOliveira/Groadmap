@@ -36,6 +36,7 @@ package graphserve
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"os"
@@ -478,8 +479,8 @@ func TestBind_ReportsThePublishedLineForAPathItCannotBind(t *testing.T) {
 		_ = ln.Close() //nolint:errcheck // already failing
 		t.Fatal("binding a socket inside a directory that does not exist succeeded")
 	}
-	if !errors.Is(err, utils.ErrDatabase) {
-		t.Errorf("error = %v, want it to wrap utils.ErrDatabase (exit code 1)", err)
+	if !errors.Is(err, utils.ErrGraphServer) {
+		t.Errorf("error = %v, want it to wrap utils.ErrGraphServer (exit code 1)", err)
 	}
 	want := "cannot bind " + path + ": "
 	if got := err.Error(); !containsSubstring(got, want) {
@@ -502,15 +503,18 @@ func TestBind_ReportsThePublishedLineForAPathItCannotBind(t *testing.T) {
 // name a cause that is not there.
 func TestLockRefusal_RewordsOnlyTheExhaustedWait(t *testing.T) {
 	t.Run("an exhausted wait is reworded", func(t *testing.T) {
-		busy := utils.ErrDatabase
+		// The fixture must carry the sentinel the production error carries, which
+		// is graphlock.ErrBusy: it is what distinguishes an exhausted wait from a
+		// lock file that could not be opened, now that both are ErrGraphStore.
+		busy := fmt.Errorf("%w: %w: exhausted", utils.ErrGraphStore, graphlock.ErrBusy)
 		got := lockRefusal("backend-platform", busy)
 		want := `cannot take the graph store lock for roadmap "backend-platform": ` +
 			"another rmp graph serve may already be running for it"
 		if !containsSubstring(got.Error(), want) {
 			t.Errorf("error = %q, want it to carry %q", got.Error(), want)
 		}
-		if !errors.Is(got, utils.ErrDatabase) {
-			t.Errorf("error = %v, want it to wrap utils.ErrDatabase", got)
+		if !errors.Is(got, utils.ErrGraphStore) {
+			t.Errorf("error = %v, want it to wrap utils.ErrGraphStore", got)
 		}
 	})
 

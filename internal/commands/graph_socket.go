@@ -114,7 +114,7 @@ func graphSocketInForce(roadmapName, socketFlag string) (string, error) {
 	}
 	abs, err := filepath.Abs(path)
 	if err != nil {
-		return "", fmt.Errorf("%w: cannot resolve the socket path %s: %v", utils.ErrDatabase, path, err)
+		return "", fmt.Errorf("%w: cannot resolve the socket path %s: %v", utils.ErrGraphServer, path, err)
 	}
 	return abs, nil
 }
@@ -144,7 +144,7 @@ func resolveGraphServer(socket string) (graphclient.State, error) {
 // fail — which is the outcome resolution exists to prevent
 // (SPEC/GRAPH.md § Server Resolution, rule 2).
 func graphSocketUnreachable(socket string, cause error) error {
-	return fmt.Errorf("%w: graph server unreachable at %s: %v", utils.ErrDatabase, socket, cause)
+	return fmt.Errorf("%w: graph server unreachable at %s: %v", utils.ErrGraphServer, socket, cause)
 }
 
 // graphNoServerListening is the published line for `graph client` against a
@@ -155,7 +155,7 @@ func graphSocketUnreachable(socket string, cause error) error {
 // is nothing to send the statement to. `graph execute` never reaches this line —
 // for it the same two states are the direct path.
 func graphNoServerListening(socket string) error {
-	return fmt.Errorf("%w: no graph server is listening on %s", utils.ErrDatabase, socket)
+	return fmt.Errorf("%w: no graph server is listening on %s", utils.ErrGraphServer, socket)
 }
 
 // graphConnectionLost is the published line for a connection that died after the
@@ -168,7 +168,7 @@ func graphNoServerListening(socket string) error {
 // (SPEC/GRAPH.md § Server Resolution, rule 4).
 func graphConnectionLost(socket string) error {
 	return fmt.Errorf("%w: the connection to the graph server at %s was lost; "+
-		"the statement's outcome is unknown", utils.ErrDatabase, socket)
+		"the statement's outcome is unknown", utils.ErrGraphServer, socket)
 }
 
 // graphWriteConflict is the published line for a statement that lost a
@@ -203,7 +203,7 @@ func graphConnectionLost(socket string) error {
 func graphWriteConflict() error {
 	return fmt.Errorf("%w: graph write conflict: another writer committed first on every attempt "+
 		"within the %s retry budget; nothing was written. The statement is valid — run it again, "+
-		"and spread concurrent writes across distinct nodes.", utils.ErrDatabase, backoff.Total())
+		"and spread concurrent writes across distinct nodes.", utils.ErrGraphEngine, backoff.Total())
 }
 
 // graphServerSilent is the published line for a server that stayed connected and
@@ -217,7 +217,7 @@ func graphWriteConflict() error {
 // to the store.
 func graphServerSilent(socket string) error {
 	return fmt.Errorf("%w: the graph server at %s did not answer within %s; "+
-		"the statement's outcome is unknown", utils.ErrDatabase, socket, backstopLine)
+		"the statement's outcome is unknown", utils.ErrGraphServer, socket, backstopLine)
 }
 
 // runOnGraphServer sends one statement to the server at socket and returns the
@@ -304,7 +304,7 @@ func graphServerFailure(socket string, err error) error {
 		// The client returns nothing else, so this is defence rather than a
 		// live path; reporting it as a store failure names the class correctly
 		// without inventing a line for a case that does not arise.
-		return fmt.Errorf("%w: graph store unavailable: %v", utils.ErrDatabase, err)
+		return fmt.Errorf("%w: graph store unavailable: %v", utils.ErrGraphStore, err)
 	}
 
 	budget := graphStatementBudget()
@@ -330,12 +330,12 @@ func graphServerFailure(socket string, err error) error {
 	default:
 		// A statement the engine refused and a value the mapping could not
 		// represent land on the SAME published line, and deliberately: both are
-		// failures of the statement, both carry utils.ErrDatabase and exit code 1,
+		// failures of the statement, both carry utils.ErrGraphEngine and exit code 1,
 		// and the diagnostic is what tells them apart. The mapping's own
 		// diagnostic names its class in its own words
 		// (internal/graphclient.errUnrepresentable), so a second prefix here would
 		// say twice what the line already says once.
-		return fmt.Errorf("%w: graph query failed: %s", utils.ErrDatabase, sendErr.Diagnostic)
+		return fmt.Errorf("%w: graph query failed: %s", utils.ErrGraphEngine, sendErr.Diagnostic)
 	}
 }
 

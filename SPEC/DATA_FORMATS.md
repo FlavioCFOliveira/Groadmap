@@ -1049,7 +1049,7 @@ Rules:
    dropped rather than passed through.
 3. **A value the mapping cannot represent is a failure of the statement, not a
    silently different result.** The client does not substitute a placeholder for a
-   value it could not map; it fails with `utils.ErrDatabase` and exit code 1, so
+   value it could not map; it fails with `utils.ErrGraphServer` and exit code 1, so
    that a caller never reads a result that is quietly not the one the graph holds.
 
 **The query plan crosses the protocol the same way, and lands the same way.** A

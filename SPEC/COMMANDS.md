@@ -49,7 +49,7 @@ Every error string this file publishes is the **complete line the user reads on 
 Three consequences follow, and they hold for every table and every code block in this file:
 
 1. **The `Error: ` prefix is part of the string.** `rmp` writes `Error: ` before every failure message, so a published string that omits it is incomplete.
-2. **The sentinel text is part of the string.** Most messages carry a sentinel word or phrase between the prefix and the detail — `validation error: `, `required parameter missing: `, `resource not found: `, `invalid input: `, `field exceeds maximum size: `, `resource already exists: `, `no roadmap selected: `, `database error: `, `unknown command`. The sentinel names the failure class and determines the exit code; `ARCHITECTURE.md § Sentinel Error Catalogue` is canonical for the mapping. A message that carries no sentinel is published without one, because that is what the user sees.
+2. **The sentinel text is part of the string.** Most messages carry a sentinel word or phrase between the prefix and the detail — `validation error: `, `required parameter missing: `, `resource not found: `, `invalid input: `, `field exceeds maximum size: `, `resource already exists: `, `no roadmap selected: `, `database error: `, `graph engine error: `, `graph store error: `, `graph server error: `, `unknown command`. The sentinel names the failure class and determines the exit code; `ARCHITECTURE.md § Sentinel Error Catalogue` is canonical for the mapping. A message that carries no sentinel is published without one, because that is what the user sees.
 3. **One string means one condition.** A row publishes the string for the single condition its own scenario names. Where one flag or field can fail in more than one way — absent versus empty, empty versus oversize — each way is a separate row with its own string and its own exit code, because the binary prints a different line for each.
 
 **Placeholders.** A published string contains a placeholder only where the binary interpolates a value it cannot know in advance. Everything outside a placeholder is literal text, and a placeholder never stands for a fixed word: where the binary always prints the same text, that text is published. The complete set of placeholders is:
@@ -3635,16 +3635,16 @@ original the day the original changed, which is the outcome
 | Exit Code | Cause |
 |-----------|-------|
 | 0 | The statement executed successfully. |
-| 1 | Cypher failed to parse or execute, or the graph store could not be opened, read, or written (`utils.ErrDatabase`). A schema statement the engine refuses is in this class, including one whose keyword spacing the engine does not route to its schema parser. See `GRAPH.md § Schema Failure Classes`. |
-| 1 | The statement exhausted the 5-second statement time budget and was cancelled (`utils.ErrDatabase`). Nothing was written: the transaction rolled back, no snapshot was produced, and the write-ahead log was left unchanged. See `GRAPH.md § Statement Time Budget`. |
+| 1 | Cypher failed to parse or execute (`utils.ErrGraphEngine`), or the graph store could not be opened, read, or written, or its exclusive lock could not be taken within the bounded wait (`utils.ErrGraphStore`). A schema statement the engine refuses is in the first class, including one whose keyword spacing the engine does not route to its schema parser. See `GRAPH.md § Schema Failure Classes` and `GRAPH.md § Lock Contention`. |
+| 1 | The statement exhausted the 5-second statement time budget and was cancelled (`utils.ErrGraphEngine`). Nothing was written: the transaction rolled back, no snapshot was produced, and the write-ahead log was left unchanged. See `GRAPH.md § Statement Time Budget`. |
 | 2 | No statement supplied: `--query` absent and standard input empty, whitespace only, or a terminal; or `--query` present with an empty, whitespace-only, or absent value; or `--socket` supplied with an empty value (`utils.ErrRequired`). |
 | 2 | A positional argument was supplied. `graph execute` accepts none, so a bare Cypher statement on the command line, or any other token that is neither a flag nor a flag's value, is refused (`utils.ErrInvalidInput`). See `GRAPH.md § No Positional Query: A Stray Token Is Refused`. |
 | 3 | No roadmap selected and none provided via `-r` (`utils.ErrNoRoadmap`). |
 | 4 | Selected roadmap does not exist (`utils.ErrNotFound`). |
 | 6 | The statement is longer than the maximum query length of 1 MiB (1048576 bytes), whether it arrived through `--query` or through standard input (`utils.ErrValidation`). See `GRAPH.md § Maximum Query Length`. This is the only cause of exit code 6 the command has. |
-| 1 | The roadmap's socket answers, but no server could be reached through it within the resolution probe, or the connection failed for a reason other than the socket being absent or refusing (`utils.ErrDatabase`). The store was not opened and no lock was taken. See `GRAPH.md § Server Resolution`. |
-| 1 | The connection to a server was lost after the statement had been sent (`utils.ErrDatabase`). Whether the statement committed is unknown, and the invocation does not retry it against the store. See `GRAPH.md § Server Resolution`, rule 4. |
-| 1 | Every attempt of the retry policy lost a serialisation conflict against a server (`utils.ErrDatabase`). Nothing was written: a losing transaction commits nothing. The statement is valid and may be run again. See `GRAPH.md § Concurrency Inside the Server`. |
+| 1 | The roadmap's socket answers, but no server could be reached through it within the resolution probe, or the connection failed for a reason other than the socket being absent or refusing (`utils.ErrGraphServer`). The store was not opened and no lock was taken. See `GRAPH.md § Server Resolution`. |
+| 1 | The connection to a server was lost after the statement had been sent (`utils.ErrGraphServer`). Whether the statement committed is unknown, and the invocation does not retry it against the store. See `GRAPH.md § Server Resolution`, rule 4. |
+| 1 | Every attempt of the retry policy lost a serialisation conflict against a server (`utils.ErrGraphEngine`). Nothing was written: a losing transaction commits nothing. The statement is valid and may be run again. See `GRAPH.md § Concurrency Inside the Server`. |
 
 A socket file with nothing listening behind it is **not** in that table, because it
 is not a failure: the invocation reads the refused connection as evidence that the
@@ -3762,13 +3762,14 @@ rather than published as zero.
 | `--socket` supplied with an empty value | 2 | "Error: required parameter missing: --<flag>" |
 | Stray positional argument, such as a bare Cypher statement written without `--query` | 2 | "Error: invalid input: unexpected argument \"X\" (graph queries use --query or stdin)" |
 | Statement above the maximum length | 6 | "Error: validation error: query exceeds maximum length of 1048576 bytes" |
-| Cypher parse/execution error | 1 | "Error: database error: graph query failed: <engine diagnostic>" |
-| Statement cancelled for exhausting the 5-second statement time budget | 1 | "Error: database error: graph query exceeded the 5s statement time budget; nothing was written. Narrow the statement — add a label, an indexed property filter, or a LIMIT — or split it into smaller statements." |
-| Graph store open/read/write failure | 1 | "Error: database error: graph store unavailable: <detail>" |
+| Cypher parse/execution error | 1 | "Error: graph engine error: graph query failed: <engine diagnostic>" |
+| Statement cancelled for exhausting the 5-second statement time budget | 1 | "Error: graph engine error: graph query exceeded the 5s statement time budget; nothing was written. Narrow the statement — add a label, an indexed property filter, or a LIMIT — or split it into smaller statements." |
+| Graph store open/read/write failure | 1 | "Error: graph store error: graph store unavailable: <detail>" |
+| The graph store's exclusive lock was still held when the bounded wait was exhausted | 1 | "Error: graph store error: graph store is busy: still held when the bounded wait was exhausted, and nothing records the holder. Another rmp invocation releases it shortly, so run the statement again; an rmp graph serve holds it for its whole lifetime, so reach that server with --socket, or stop it." |
 | A server could not be reached through a socket that answered | 1 | The unreachable line of `§ Graph Server Socket Error Lines` |
 | Connection to a server lost after the statement was sent | 1 | The lost-connection line of `§ Graph Server Socket Error Lines` |
 | A server did not answer within the caller's backstop deadline | 1 | The unanswered line of `§ Graph Server Socket Error Lines` |
-| Every attempt of the retry policy lost a serialisation conflict on a served roadmap | 1 | "Error: database error: graph write conflict: another writer committed first on every attempt within the 2.5s retry budget; nothing was written. The statement is valid — run it again, and spread concurrent writes across distinct nodes." |
+| Every attempt of the retry policy lost a serialisation conflict on a served roadmap | 1 | "Error: graph engine error: graph write conflict: another writer committed first on every attempt within the 2.5s retry budget; nothing was written. The statement is valid — run it again, and spread concurrent writes across distinct nodes." |
 
 The last four rows arise only against a roadmap a graph server is serving; a
 socket file with nothing listening behind it produces none of them, because the
@@ -3782,58 +3783,66 @@ The parse/execution row and the store-failure row end in a diagnostic the Cypher
 
 The budget row is not one of them: it carries no engine diagnostic and no placeholder, and every character of it is `rmp`'s own text, so it is compared in full. `5s` is the budget itself, rendered as a duration; it is a fixed value and not a value the binary interpolates from the invocation. The line says the three things a caller who has just lost a statement needs: what was exceeded, that nothing was written, and what to do next. `GRAPH.md § Statement Time Budget` is canonical for the behaviour it reports.
 
+The lock row is not one of them either: it carries no engine diagnostic and no placeholder, every character of it is `rmp`'s own text, and it is compared in full. It reports the exclusive store lock of `GRAPH.md § Lock Contention`, and it names no holder because nothing records one — the two possible holders call for opposite actions, and rule 3 of that section is canonical for why the line gives both rather than guessing at one. It is reached on the direct path only; a statement a server executed never takes this lock.
+
 The conflict row is not one of them either, and for the same reason: it carries no engine diagnostic and no placeholder, every character of it is `rmp`'s own text, and it is compared in full. `2.5s` is the retry policy's total wait, rendered as a duration; it is a fixed value and not one the binary interpolates. The line exists because the condition it reports was otherwise indistinguishable from the parse/execution row above — both printed the same `graph query failed: ` text, and the only thing separating them was the engine's diagnostic tail, which the paragraph above deliberately declines to specify and which a caller therefore cannot lawfully match. The decision a caller must make on reading it is the opposite of the one an invalid statement calls for: run the statement again, rather than correct it. `GRAPH.md § Concurrency Inside the Server` is canonical for the behaviour it reports.
 
 ### Graph Server Socket Error Lines
 
-Seven failure conditions belong to the socket rather than to the roadmap, the
-statement, or the store, and three of this section's error tables refer here for
-their exact lines instead of each publishing a copy. Every line is complete, as
-`§ Published Error Strings Are Exact` requires, and every one carries
-`utils.ErrDatabase` and exit code 1 (`GRAPH.md § Error Handling and Exit Codes`).
-`<socket>` is the resolved socket path and `<detail>` is the operating system's
-own diagnostic; the placeholder table under `§ Published Error Strings Are Exact`
-declares both.
+Seven failure conditions belong to the graph server rather than to the roadmap,
+the statement, or anything the caller wrote, and three of this section's error
+tables refer here for their exact lines instead of each publishing a copy. Every
+line is complete, as `§ Published Error Strings Are Exact` requires, and every one
+exits 1. Six carry `utils.ErrGraphServer`. The seventh, the store-lock line,
+carries `utils.ErrGraphStore`, because the lock it reports belongs to the store
+rather than to the socket; it is published here with the other two `graph serve`
+startup lines because a reader meets all three in the same startup sequence
+(`GRAPH.md § Error Handling and Exit Codes`). `<socket>` is the resolved socket
+path and `<detail>` is the operating system's own diagnostic; the placeholder
+table under `§ Published Error Strings Are Exact` declares both.
 
 - **A live server already answers on the socket `graph serve` resolved.** The line
-  is `Error: database error: a graph server is already serving <socket>`. The
+  is `Error: graph server error: a graph server is already serving <socket>`. The
   incumbent's socket is left exactly as it was found, and the incumbent keeps
   serving (`GRAPH.md § Server Startup`, step 3).
 - **`graph serve` could not bind its socket.** The line is
-  `Error: database error: cannot bind <socket>: <detail>`. The part `rmp` fixes is
-  everything up to and including `cannot bind <socket>: `; the text after it is
+  `Error: graph server error: cannot bind <socket>: <detail>`. The part `rmp`
+  fixes is everything up to and including `cannot bind <socket>: `; the text after it is
   the operating system's, exactly as it is on the two bind rows of
   `§ Web Interface`.
 - **`graph serve` could not take the roadmap's graph store lock within the bounded
   wait.** The line is
-  `Error: database error: cannot take the graph store lock for roadmap "X": another rmp graph serve may already be running for it`.
+  `Error: graph store error: cannot take the graph store lock for roadmap "X": another rmp graph serve may already be running for it`.
   This is what refuses a second server against the same roadmap, and the line says
   so rather than reporting an unavailable store, because a second server is the
   overwhelmingly likely cause and the reader can act on it. It says "may": the
   lock records no holder, so the invocation reports the likely cause and does not
-  assert it (`GRAPH.md § Server Startup`, step 2).
+  assert it (`GRAPH.md § Server Startup`, step 2). It is `graph serve`'s wording
+  of the same exhausted wait that `graph execute` reports through the lock row of
+  `§ Execute Error Cases`; the two differ because only here is a second server
+  the likely holder, and only here is the reader already starting one.
 - **`graph client` found no server listening.** The line is
-  `Error: database error: no graph server is listening on <socket>`. It covers
+  `Error: graph server error: no graph server is listening on <socket>`. It covers
   both the socket that does not exist and the socket file a killed server left
   behind, because the two are one condition for this subcommand: there is nothing
   to send the statement to. `graph client` does not open the store
   (`GRAPH.md § The Bolt Client`).
 - **A server could not be reached through a socket that answered.** The line is
-  `Error: database error: graph server unreachable at <socket>: <detail>`. This is
-  the `Unreachable` state of `GRAPH.md § Server Resolution`: the connection was
+  `Error: graph server error: graph server unreachable at <socket>: <detail>`.
+  This is the `Unreachable` state of `GRAPH.md § Server Resolution`: the connection was
   accepted but the handshake did not complete inside the probe, or it failed for a
   reason other than the socket being absent or refusing. `graph execute` reports
   it and does **not** fall back to the store, because a socket that answers may
   belong to a server holding the lock.
 - **The connection was lost after the statement had been sent.** The line is
-  `Error: database error: the connection to the graph server at <socket> was lost; the statement's outcome is unknown`.
+  `Error: graph server error: the connection to the graph server at <socket> was lost; the statement's outcome is unknown`.
   It is deliberately not a claim that nothing was written: a commit is durable
   before it is acknowledged, so a connection lost between the two leaves the
   outcome genuinely unknown, and a line that said "nothing was written" would be
   false in exactly the case a caller most needs the truth
   (`GRAPH.md § Server Resolution`, rule 4).
 - **The server did not answer within the caller's backstop deadline.** The line is
-  `Error: database error: the graph server at <socket> did not answer within 7.5s; the statement's outcome is unknown`.
+  `Error: graph server error: the graph server at <socket> did not answer within 7.5s; the statement's outcome is unknown`.
   The connection is intact here and the server is alive; it is simply not
   answering, which is what a statement the budget cut mid-write looks like from
   outside, because the engine's undo replay runs past the deadline by a factor
@@ -3918,7 +3927,7 @@ client sends fails or succeeds inside a session and never changes them.
 | Exit Code | Cause |
 |-----------|-------|
 | 0 | The server started, served, and was stopped by `SIGINT` or `SIGTERM`. It drained, checkpointed, released the store lock, and removed its socket. |
-| 1 | The graph store could not be opened or recovered; or its exclusive lock could not be taken within the bounded wait, which is what refuses a second server against the same roadmap; or the socket could not be bound; or a live server already answers on the resolved socket (`utils.ErrDatabase`). |
+| 1 | The graph store could not be opened or recovered, or its exclusive lock could not be taken within the bounded wait, which is what refuses a second server against the same roadmap (`utils.ErrGraphStore`); or the socket could not be bound, or a live server already answers on the resolved socket (`utils.ErrGraphServer`). |
 | 2 | Unknown flag, or an unexpected positional argument (`utils.ErrInvalidInput`); or `--socket` supplied with an empty value (`utils.ErrRequired`). |
 | 3 | No roadmap selected and none provided via `-r` (`utils.ErrNoRoadmap`). |
 | 4 | Selected roadmap does not exist (`utils.ErrNotFound`). |
@@ -3967,7 +3976,7 @@ several servers, one per roadmap, each on its own socket.
 | Graph store lock could not be taken within the bounded wait | 1 | The lock line of `§ Graph Server Socket Error Lines` |
 | A live server already answers on the resolved socket | 1 | The already-serving line of `§ Graph Server Socket Error Lines` |
 | Socket could not be bound | 1 | The bind line of `§ Graph Server Socket Error Lines` |
-| Graph store open/recovery failure | 1 | "Error: database error: graph store unavailable: <detail>" |
+| Graph store open/recovery failure | 1 | "Error: graph store error: graph store unavailable: <detail>" |
 
 ### Client Options
 
@@ -4028,7 +4037,7 @@ This section does not restate them.
 | Exit Code | Cause |
 |-----------|-------|
 | 0 | The statement was sent to a server, ran, and its result was written to stdout. |
-| 1 | No server is listening for the roadmap; or a server could not be reached through the socket; or the connection was lost, or went unanswered, after the statement was sent; or the statement failed to parse or execute in the engine; or it exhausted the 5-second statement time budget; or every attempt of the retry policy lost a serialisation conflict; or a value the server returned could not be mapped onto the published result shape (`utils.ErrDatabase`, see `DATA_FORMATS.md § Graph Client Result`, rule 3). |
+| 1 | No server is listening for the roadmap; or a server could not be reached through the socket; or the connection was lost, or went unanswered, after the statement was sent; or a value the server returned could not be mapped onto the published result shape (`utils.ErrGraphServer`, see `DATA_FORMATS.md § Graph Client Result`, rule 3). Or the statement failed to parse or execute in the engine, or exhausted the 5-second statement time budget, or every attempt of the retry policy lost a serialisation conflict (`utils.ErrGraphEngine`). |
 | 2 | No statement supplied: `--query` absent and standard input empty, whitespace only, or a terminal; or `--query` present with an empty, whitespace-only, or absent value; or `--socket` supplied with an empty value (`utils.ErrRequired`). |
 | 2 | A positional argument was supplied. `graph client` accepts none, exactly as `graph execute` accepts none (`utils.ErrInvalidInput`). |
 | 3 | No roadmap selected and none provided via `-r` (`utils.ErrNoRoadmap`). |
@@ -4096,9 +4105,9 @@ why they differ.
 | A server could not be reached through a socket that answered | 1 | The unreachable line of `§ Graph Server Socket Error Lines` |
 | Connection lost after the statement was sent | 1 | The lost-connection line of `§ Graph Server Socket Error Lines` |
 | The server did not answer within the backstop deadline | 1 | The unanswered line of `§ Graph Server Socket Error Lines` |
-| Cypher parse/execution error reported by the server | 1 | "Error: database error: graph query failed: <engine diagnostic>" |
-| Statement cancelled for exhausting the 5-second statement time budget | 1 | "Error: database error: graph query exceeded the 5s statement time budget; nothing was written. Narrow the statement — add a label, an indexed property filter, or a LIMIT — or split it into smaller statements." |
-| Every attempt of the retry policy lost a serialisation conflict | 1 | "Error: database error: graph write conflict: another writer committed first on every attempt within the 2.5s retry budget; nothing was written. The statement is valid — run it again, and spread concurrent writes across distinct nodes." |
+| Cypher parse/execution error reported by the server | 1 | "Error: graph engine error: graph query failed: <engine diagnostic>" |
+| Statement cancelled for exhausting the 5-second statement time budget | 1 | "Error: graph engine error: graph query exceeded the 5s statement time budget; nothing was written. Narrow the statement — add a label, an indexed property filter, or a LIMIT — or split it into smaller statements." |
+| Every attempt of the retry policy lost a serialisation conflict | 1 | "Error: graph engine error: graph write conflict: another writer committed first on every attempt within the 2.5s retry budget; nothing was written. The statement is valid — run it again, and spread concurrent writes across distinct nodes." |
 
 The parse/execution row carries the engine's own diagnostic after
 `graph query failed: `, exactly as the same row does under

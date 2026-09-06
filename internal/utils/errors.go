@@ -68,7 +68,34 @@ var (
 	ErrNoRoadmap = errors.New("no roadmap selected")
 
 	// ErrDatabase indicates a database error occurred.
+	//
+	// Its scope is a roadmap's project.db and nothing else. No graph failure
+	// carries it: the graph store holds GoGraph's snapshot, WAL and lock file,
+	// and SPEC/GRAPH.md § Constraints forbids a graph operation from touching
+	// project.db at all, so the word never described what failed there.
 	ErrDatabase = errors.New("database error")
+
+	// The three graph sentinels. All map to exit code 1, exactly as ErrDatabase
+	// does, and the split exists for the reader rather than for the code: the
+	// sentinel is the first thing an agent reads, and these three select three
+	// different ACTIONS (SPEC/ARCHITECTURE.md § Sentinel Error Catalogue).
+	//
+	// One sentinel would not do it. "graph error" in front of both "fix your
+	// Cypher" and "start a server" reproduces one level down the defect the
+	// split exists to close: it still fails to say what to do next.
+
+	// ErrGraphEngine indicates the statement reached the graph engine and did
+	// not complete there -- a parse failure, a refusal, an exhausted time
+	// budget, a lost write conflict. ACT ON THE STATEMENT.
+	ErrGraphEngine = errors.New("graph engine error")
+
+	// ErrGraphStore indicates the graph store itself, its directory, or its
+	// exclusive advisory lock. ACT ON THE FILESYSTEM OR THE LOCK HOLDER.
+	ErrGraphStore = errors.New("graph store error")
+
+	// ErrGraphServer indicates the server, its socket, or the connection to it.
+	// ACT ON THE SERVER OR ON --socket.
+	ErrGraphServer = errors.New("graph server error")
 
 	// ErrValidation indicates a validation error.
 	ErrValidation = errors.New("validation error")
@@ -128,4 +155,19 @@ func IsFieldTooLarge(err error) bool {
 // IsInvalidUpdate checks if an error is ErrInvalidUpdate or wraps it.
 func IsInvalidUpdate(err error) bool {
 	return errors.Is(err, ErrInvalidUpdate)
+}
+
+// IsGraphEngine checks if an error is ErrGraphEngine or wraps it.
+func IsGraphEngine(err error) bool {
+	return errors.Is(err, ErrGraphEngine)
+}
+
+// IsGraphStore checks if an error is ErrGraphStore or wraps it.
+func IsGraphStore(err error) bool {
+	return errors.Is(err, ErrGraphStore)
+}
+
+// IsGraphServer checks if an error is ErrGraphServer or wraps it.
+func IsGraphServer(err error) bool {
+	return errors.Is(err, ErrGraphServer)
 }

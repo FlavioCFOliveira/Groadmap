@@ -330,10 +330,10 @@ func openGraphStore(roadmapName string) (graphDir string, err error) {
 // the store).
 func createGraphDir(graphDir string) error {
 	if mkErr := os.MkdirAll(graphDir, 0700); mkErr != nil {
-		return fmt.Errorf("%w: creating graph directory: %v", utils.ErrDatabase, mkErr)
+		return fmt.Errorf("%w: creating graph directory: %v", utils.ErrGraphStore, mkErr)
 	}
 	if chErr := os.Chmod(graphDir, 0700); chErr != nil { // #nosec G302 -- 0700 on a DIRECTORY is mandated by SPEC (CLAUDE.md §10: 0700 for the ~/.roadmaps tree); gosec G302 false-positives on directory permissions
-		return fmt.Errorf("%w: setting graph directory permissions: %v", utils.ErrDatabase, chErr)
+		return fmt.Errorf("%w: setting graph directory permissions: %v", utils.ErrGraphStore, chErr)
 	}
 	return nil
 }
@@ -680,11 +680,13 @@ func serializeGraphResult(result *cypher.Result) (graphQueryResult, error) {
 // executing — whether it surfaced from the engine call, from the walk over the
 // result, or from the commit — and words it truthfully.
 //
-// Every case carries utils.ErrDatabase and exit code 1. Exhausting the
-// statement time budget is a database failure exactly as a statement the engine
-// refuses is: the graph feature introduces no new sentinel error and no new exit
-// code, and may not (SPEC/GRAPH.md § Constraints, rule 5; § Schema Failure
-// Classes, rule 6). Only the message differs.
+// Every case carries utils.ErrGraphEngine and exit code 1. Exhausting the
+// statement time budget is an engine failure exactly as a statement the engine
+// refuses is -- in both the statement reached the engine and did not complete
+// there, which is what that sentinel names, and what tells a reader to act on
+// the STATEMENT rather than on the store or the server. The graph feature
+// introduces no new exit CODE, and may not (SPEC/GRAPH.md § Constraints, rule 5;
+// § Schema Failure Classes, rule 6). Only the message differs.
 //
 // **All three arrival points are classified, and the walk is the one that
 // matters.** The engine streams a disconnected pattern's tuples as the result is
@@ -714,9 +716,9 @@ func graphStatementError(budget time.Duration, stage string, err error) error {
 	if errors.Is(err, context.DeadlineExceeded) {
 		return fmt.Errorf("%w: graph query exceeded the %s statement time budget; nothing was "+
 			"written. Narrow the statement — add a label, an indexed property filter, or a "+
-			"LIMIT — or split it into smaller statements.", utils.ErrDatabase, budget)
+			"LIMIT — or split it into smaller statements.", utils.ErrGraphEngine, budget)
 	}
-	return fmt.Errorf("%w: %s: %v", utils.ErrDatabase, stage, err)
+	return fmt.Errorf("%w: %s: %v", utils.ErrGraphEngine, stage, err)
 }
 
 // runGraphExecute is the implementation of `rmp graph execute`.

@@ -156,8 +156,8 @@ func TestGraphSocketLines_MatchTheSpecificationCharacterForCharacter(t *testing.
 			want := fillSocketPlaceholders(t, publishedSocketLine(t, c.marker), socket, c.detail)
 
 			err := c.produce()
-			if !errors.Is(err, utils.ErrDatabase) {
-				t.Errorf("error = %v, want it to wrap utils.ErrDatabase (exit code 1)", err)
+			if !errors.Is(err, utils.ErrGraphServer) {
+				t.Errorf("error = %v, want it to wrap utils.ErrGraphServer (exit code 1)", err)
 			}
 			if got := errorLine(err); got != want {
 				t.Errorf("line = %q,\n want %q", got, want)
@@ -391,8 +391,8 @@ func TestResolveGraphServer_ReportsTheStatesTheSurfacesActOn(t *testing.T) {
 		if state.NotServed() {
 			t.Errorf("state = %v; an unreachable path must not put the caller on the direct path", state)
 		}
-		if !errors.Is(err, utils.ErrDatabase) {
-			t.Errorf("error = %v, want it to wrap utils.ErrDatabase (exit code 1)", err)
+		if !errors.Is(err, utils.ErrGraphServer) {
+			t.Errorf("error = %v, want it to wrap utils.ErrGraphServer (exit code 1)", err)
 		}
 		if !strings.Contains(err.Error(), "graph server unreachable at "+path) {
 			t.Errorf("error = %q, want the published unreachable line naming %q", err.Error(), path)
@@ -415,33 +415,43 @@ func TestGraphServerFailure_MapsEveryClientFailureOntoAPublishedLine(t *testing.
 
 	budget := graphlock.StatementBudget
 
+	// Each case names the sentinel it must carry. The three classes select three
+	// different ACTIONS for the reader -- act on the statement, act on the server
+	// -- so a table that asserted one shared sentinel would no longer be checking
+	// the property that matters (SPEC/ARCHITECTURE.md § Sentinel Error Catalogue).
 	cases := []struct {
-		name string
-		err  *graphclient.SendError
-		want string
+		name     string
+		err      *graphclient.SendError
+		want     string
+		sentinel error
 	}{
 		{
-			name: "a statement the engine refused carries the direct path's own line",
-			err:  &graphclient.SendError{Kind: graphclient.FailureStatement, Socket: socket, Diagnostic: diagnostic},
-			want: errorLine(graphStatementError(budget, "graph query failed", errors.New(diagnostic))), //nolint:err113 // a fixture standing in for the engine's own diagnostic
+			name:     "a statement the engine refused carries the direct path's own line",
+			sentinel: utils.ErrGraphEngine,
+			err:      &graphclient.SendError{Kind: graphclient.FailureStatement, Socket: socket, Diagnostic: diagnostic},
+			want:     errorLine(graphStatementError(budget, "graph query failed", errors.New(diagnostic))), //nolint:err113 // a fixture standing in for the engine's own diagnostic
 		},
 		{
-			name: "a statement the budget cut carries the direct path's own line",
-			err:  &graphclient.SendError{Kind: graphclient.FailureBudget, Socket: socket, Diagnostic: "context deadline exceeded"},
-			want: errorLine(graphStatementError(budget, "graph query failed", budgetSelector())),
+			name:     "a statement the budget cut carries the direct path's own line",
+			sentinel: utils.ErrGraphEngine,
+			err:      &graphclient.SendError{Kind: graphclient.FailureBudget, Socket: socket, Diagnostic: "context deadline exceeded"},
+			want:     errorLine(graphStatementError(budget, "graph query failed", budgetSelector())),
 		},
 		{
-			name: "a lost connection",
-			err:  &graphclient.SendError{Kind: graphclient.FailureLost, Socket: socket},
-			want: errorLine(graphConnectionLost(socket)),
+			name:     "a lost connection",
+			sentinel: utils.ErrGraphServer,
+			err:      &graphclient.SendError{Kind: graphclient.FailureLost, Socket: socket},
+			want:     errorLine(graphConnectionLost(socket)),
 		},
 		{
-			name: "an unanswered server",
-			err:  &graphclient.SendError{Kind: graphclient.FailureUnanswered, Socket: socket},
-			want: errorLine(graphServerSilent(socket)),
+			name:     "an unanswered server",
+			sentinel: utils.ErrGraphServer,
+			err:      &graphclient.SendError{Kind: graphclient.FailureUnanswered, Socket: socket},
+			want:     errorLine(graphServerSilent(socket)),
 		},
 		{
-			name: "an exhausted serialisation retry carries a line of its own",
+			name:     "an exhausted serialisation retry carries a line of its own",
+			sentinel: utils.ErrGraphEngine,
 			err: &graphclient.SendError{
 				Kind: graphclient.FailureConflict, Socket: socket,
 				Code:       "Neo.TransientError.Transaction.Outdated",
@@ -454,8 +464,8 @@ func TestGraphServerFailure_MapsEveryClientFailureOntoAPublishedLine(t *testing.
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			got := graphServerFailure(socket, c.err)
-			if !errors.Is(got, utils.ErrDatabase) {
-				t.Errorf("error = %v, want it to wrap utils.ErrDatabase (exit code 1)", got)
+			if !errors.Is(got, c.sentinel) {
+				t.Errorf("error = %v, want it to wrap %v (exit code 1)", got, c.sentinel)
 			}
 			if line := errorLine(got); line != c.want {
 				t.Errorf("line = %q,\n want %q", line, c.want)
@@ -477,8 +487,8 @@ func TestGraphServerFailure_MapsEveryClientFailureOntoAPublishedLine(t *testing.
 		got := graphServerFailure(socket, &graphclient.SendError{
 			Kind: graphclient.FailureMapping, Socket: socket, Diagnostic: "unsupported protocol structure tag 0x7A",
 		})
-		if !errors.Is(got, utils.ErrDatabase) {
-			t.Errorf("error = %v, want it to wrap utils.ErrDatabase (exit code 1): a value the "+
+		if !errors.Is(got, utils.ErrGraphEngine) {
+			t.Errorf("error = %v, want it to wrap utils.ErrGraphEngine (exit code 1): a value the "+
 				"mapping cannot represent fails the statement (SPEC/DATA_FORMATS.md § Graph Client "+
 				"Result, rule 3)", got)
 		}
@@ -506,7 +516,7 @@ func TestGraphServerFailure_MapsEveryClientFailureOntoAPublishedLine(t *testing.
 // defect while still printing a line, and only an assertion about what the line
 // is NOT would notice.
 func TestGraphWriteConflict_MatchesThePublishedLineAndIsNotTheStatementLine(t *testing.T) {
-	const published = "Error: database error: graph write conflict: another writer committed first " +
+	const published = "Error: graph engine error: graph write conflict: another writer committed first " +
 		"on every attempt within the 2.5s retry budget; nothing was written. The statement is " +
 		"valid — run it again, and spread concurrent writes across distinct nodes."
 
@@ -516,8 +526,8 @@ func TestGraphWriteConflict_MatchesThePublishedLineAndIsNotTheStatementLine(t *t
 		t.Errorf("the contention line does not match SPEC/COMMANDS.md § Client Error Cases "+
 			"character for character:\n got %q\nwant %q", got, published)
 	}
-	if !errors.Is(err, utils.ErrDatabase) {
-		t.Errorf("error = %v, want it to wrap utils.ErrDatabase (exit code 1): the graph feature "+
+	if !errors.Is(err, utils.ErrGraphEngine) {
+		t.Errorf("error = %v, want it to wrap utils.ErrGraphEngine (exit code 1): the graph feature "+
 			"introduces no new sentinel and no new exit code "+
 			"(SPEC/GRAPH.md § Error Handling and Exit Codes, rule 7)", err)
 	}

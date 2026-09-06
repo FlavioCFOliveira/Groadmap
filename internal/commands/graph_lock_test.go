@@ -165,7 +165,7 @@ func TestGraphExecute_WaitsForTheLockRatherThanFailingFast(t *testing.T) {
 
 // TestGraphExecute_FailsAfterTheBoundedWait covers SPEC/GRAPH.md acceptance
 // criterion 20 for the CLI half: an invocation that cannot take the lock within
-// the bounded wait exits 1 rather than hanging. utils.ErrDatabase is the
+// the bounded wait exits 1 rather than hanging. utils.ErrGraphStore is the
 // sentinel the exit-code mapping turns into 1.
 func TestGraphExecute_FailsAfterTheBoundedWait(t *testing.T) {
 	const roadmap = "graph-execute-bounded-wait"
@@ -197,8 +197,8 @@ func TestGraphExecute_FailsAfterTheBoundedWait(t *testing.T) {
 		if runErr == nil {
 			t.Fatal("the invocation succeeded while another holder held the exclusive lock")
 		}
-		if !errors.Is(runErr, utils.ErrDatabase) {
-			t.Errorf("an exhausted wait must surface as utils.ErrDatabase (exit 1), got: %v", runErr)
+		if !errors.Is(runErr, utils.ErrGraphStore) {
+			t.Errorf("an exhausted wait must surface as utils.ErrGraphStore (exit 1), got: %v", runErr)
 		}
 	case <-time.After(30 * time.Second):
 		t.Fatal("the invocation never returned; the wait must be BOUNDED and end in a failure, " +

@@ -715,7 +715,7 @@ class TestAIContractErrorParity:
         rc, out, err = self.fx.run(
             ["graph", "execute", "-r", self.fx.roadmap, "--query", "MATCH ("])
         actual = err.splitlines()[0] if err else ""
-        published = "Error: database error: graph query failed: <engine diagnostic>"
+        published = "Error: graph engine error: graph query failed: <engine diagnostic>"
         mode, prefix = classify(published)
         assert mode == "prefix", f"the engine-diagnostic marker no longer classifies: {published!r}"
         ok, _mode, expectation = compare(published, actual)

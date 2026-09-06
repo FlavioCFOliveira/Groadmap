@@ -630,7 +630,7 @@ func Run(opts Options) error {
 	// its socket exactly as it was found.
 	if state, _ := graphclient.Resolve(context.Background(), opts.SocketPath); state.Served() {
 		hold.Release()
-		return fmt.Errorf("%w: a graph server is already serving %s", utils.ErrDatabase, opts.SocketPath)
+		return fmt.Errorf("%w: a graph server is already serving %s", utils.ErrGraphServer, opts.SocketPath)
 	}
 
 	// Step 4. Replace a stale socket file: nothing answers there, so a file at
@@ -733,11 +733,11 @@ func Run(opts Options) error {
 // a lock file that cannot be opened at all — arrives already classified and is
 // returned untouched, because a second server is not a plausible cause of it.
 func lockRefusal(roadmapName string, err error) error {
-	if !errors.Is(err, utils.ErrDatabase) {
+	if !errors.Is(err, graphlock.ErrBusy) {
 		return err
 	}
 	return fmt.Errorf("%w: cannot take the graph store lock for roadmap %q: "+
-		"another rmp graph serve may already be running for it", utils.ErrDatabase, roadmapName)
+		"another rmp graph serve may already be running for it", utils.ErrGraphStore, roadmapName)
 }
 
 // removeStaleSocket removes the socket file at path when one is there and nothing
@@ -774,11 +774,11 @@ func removeStaleSocket(path string) {
 func bind(path string) (*serverListener, error) {
 	ln, err := net.Listen("unix", path)
 	if err != nil {
-		return nil, fmt.Errorf("%w: cannot bind %s: %v", utils.ErrDatabase, path, err)
+		return nil, fmt.Errorf("%w: cannot bind %s: %v", utils.ErrGraphServer, path, err)
 	}
 	if err := os.Chmod(path, graphclient.SocketMode); err != nil {
 		_ = ln.Close() //nolint:errcheck // already failing; the close unlinks the socket and its own error cannot be acted on
-		return nil, fmt.Errorf("%w: cannot bind %s: %v", utils.ErrDatabase, path, err)
+		return nil, fmt.Errorf("%w: cannot bind %s: %v", utils.ErrGraphServer, path, err)
 	}
 	return newServerListener(ln), nil
 }
@@ -868,7 +868,7 @@ func build(st *graphstore.Store, graphDir string, cadence checkpointCadence, log
 
 	srv, err := server.NewServer(engine, serverOptions(closer, log))
 	if err != nil {
-		return closer, nil, fmt.Errorf("%w: graph server unavailable: %v", utils.ErrDatabase, err)
+		return closer, nil, fmt.Errorf("%w: graph server unavailable: %v", utils.ErrGraphServer, err)
 	}
 	return closer, srv, nil
 }
@@ -1132,9 +1132,9 @@ func serve(srv *server.Server, ln *serverListener, st *graphstore.Store, socketP
 			// Serve returned without an error and without a signal. Nothing is
 			// listening any more, so reporting success would tell a caller the
 			// server had been stopped on purpose.
-			return fmt.Errorf("%w: the graph server stopped accepting connections", utils.ErrDatabase)
+			return fmt.Errorf("%w: the graph server stopped accepting connections", utils.ErrGraphServer)
 		}
-		return fmt.Errorf("%w: graph server failed: %v", utils.ErrDatabase, runErr)
+		return fmt.Errorf("%w: graph server failed: %v", utils.ErrGraphServer, runErr)
 	}
 
 	// A teardown failure after a signal is a diagnostic and not an exit code. The

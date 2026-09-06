@@ -826,7 +826,7 @@ class TestServeFlagsAndErrorCases(GraphServerTestBase):
 
         assert rc == EXIT_DATABASE, f"got {rc}, stderr={err!r}"
         expected = (
-            f'Error: database error: cannot take the graph store lock for '
+            f'Error: graph store error: cannot take the graph store lock for '
             f'roadmap "{roadmap}": another rmp graph serve may already be '
             f'running for it'
         )
@@ -886,7 +886,7 @@ class TestServeFlagsAndErrorCases(GraphServerTestBase):
         assert challenger.proc.returncode == EXIT_DATABASE, (
             f"got {challenger.proc.returncode}"
         )
-        expected = f"Error: database error: a graph server is already serving {shared_socket}"
+        expected = f"Error: graph server error: a graph server is already serving {shared_socket}"
         assert expected in challenger.stderr_text(), challenger.stderr_text()
 
         assert server_a.is_alive(), "the incumbent must be untouched by the refused challenger"
@@ -916,7 +916,7 @@ class TestServeFlagsAndErrorCases(GraphServerTestBase):
             raised = True
         assert raised
         assert server.proc.returncode == EXIT_DATABASE, f"got {server.proc.returncode}"
-        prefix = f"Error: database error: cannot bind {bad_socket}: "
+        prefix = f"Error: graph server error: cannot bind {bad_socket}: "
         assert server.stderr_text().startswith(prefix), (
             f"got {server.stderr_text()!r}, want prefix {prefix!r}"
         )
@@ -1051,7 +1051,7 @@ class TestGraphClient(GraphServerTestBase):
             ["graph", "client", "-r", roadmap, "--query", "MATCH (n RETURN n"]
         )
         assert rc == EXIT_DATABASE, f"got {rc}, stderr={err!r}"
-        assert err.startswith("Error: database error: graph query failed: "), err
+        assert err.startswith("Error: graph engine error: graph query failed: "), err
         assert out == ""
         server.stop(signal.SIGINT)
 
@@ -1129,7 +1129,7 @@ class TestGraphClient(GraphServerTestBase):
             ["graph", "client", "-r", roadmap, "--query", "MATCH (n) RETURN count(n)"]
         )
         assert rc == EXIT_DATABASE, f"got {rc}, stderr={err!r}"
-        expected = f"Error: database error: no graph server is listening on {socket_path}"
+        expected = f"Error: graph server error: no graph server is listening on {socket_path}"
         assert err.splitlines()[0] == expected, err
         assert out == ""
 
@@ -1149,7 +1149,7 @@ class TestGraphClient(GraphServerTestBase):
             ["graph", "client", "-r", roadmap, "--query", "MATCH (n) RETURN count(n)"]
         )
         assert rc == EXIT_DATABASE, f"got {rc}, stderr={err!r}"
-        expected = f"Error: database error: no graph server is listening on {socket_path}"
+        expected = f"Error: graph server error: no graph server is listening on {socket_path}"
         assert err.splitlines()[0] == expected, err
         assert out == ""
         assert os.path.exists(socket_path), (
@@ -1294,7 +1294,7 @@ class TestSocketUnreachable(GraphServerTestBase):
             timeout=PROBE_DEADLINE_S + 5,
         )
         assert rc == EXIT_DATABASE, f"got {rc}, stderr={err!r}"
-        prefix = f"Error: database error: graph server unreachable at {socket_path}: "
+        prefix = f"Error: graph server error: graph server unreachable at {socket_path}: "
         assert err.startswith(prefix), err
         assert out == "", "a failed resolution must not fall back and must write nothing"
 
@@ -1312,7 +1312,7 @@ class TestSocketUnreachable(GraphServerTestBase):
             timeout=PROBE_DEADLINE_S + 5,
         )
         assert rc == EXIT_DATABASE, f"got {rc}, stderr={err!r}"
-        prefix = f"Error: database error: graph server unreachable at {socket_path}: "
+        prefix = f"Error: graph server error: graph server unreachable at {socket_path}: "
         assert err.startswith(prefix), err
         assert out == ""
 
@@ -1363,7 +1363,7 @@ class TestServerConnectionFailureModes(GraphServerTestBase):
 
         assert client.returncode == EXIT_DATABASE, f"got {client.returncode}, stderr={err!r}"
         expected = (
-            f"Error: database error: the connection to the graph server at "
+            f"Error: graph server error: the connection to the graph server at "
             f"{socket_path} was lost; the statement's outcome is unknown"
         )
         assert err.splitlines()[0] == expected, err
@@ -1483,7 +1483,7 @@ class TestServerConnectionFailureModes(GraphServerTestBase):
                 f"{label}: got {client.returncode}, stderr={err!r}"
             )
             expected = (
-                f"Error: database error: the graph server at {socket_path} did "
+                f"Error: graph server error: the graph server at {socket_path} did "
                 f"not answer within {WAIT_BUDGET_S}s; the statement's outcome is "
                 f"unknown"
             )
@@ -1598,7 +1598,7 @@ class TestShutdownDrainsAStatementInFlight(GraphServerTestBase):
         out, err = client.communicate(timeout=15.0)
         assert client.returncode == EXIT_DATABASE, f"got {client.returncode}, stderr={err!r}"
         assert err.startswith(
-            "Error: database error: graph query exceeded the 5s statement "
+            "Error: graph engine error: graph query exceeded the 5s statement "
             "time budget; nothing was written."
         ), (
             f"the drain's guarantee is that a statement which COMPLETES "

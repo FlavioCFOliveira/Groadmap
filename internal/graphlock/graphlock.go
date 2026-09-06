@@ -81,6 +81,7 @@
 package graphlock
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -101,6 +102,17 @@ import (
 // party that has to know how long a hold may last is the party waiting for it.
 // Changing this value changes the wait every caller of this lock performs.
 const DefaultStatementBudget = 5 * time.Second
+
+// ErrBusy identifies the ONE failure of AcquireExclusive that means the lock was
+// held throughout the bounded wait, as opposed to the lock file not being usable
+// at all. Both carry utils.ErrGraphStore and exit code 1, so the sentinel is not
+// about the exit code: it is what lets a caller tell the two apart.
+//
+// internal/graphserve needs exactly that distinction. It rewords the exhausted
+// wait into a line naming a second `rmp graph serve` as the likely cause, and
+// that wording would be false for a lock file that could not be opened, where a
+// second server is not a plausible cause at all.
+var ErrBusy = errors.New("graph store is busy")
 
 // StatementBudget is the budget actually in force, and the value WaitBudget
 // derives from. It is a var rather than a const for exactly one reason: tests
@@ -168,7 +180,7 @@ const LockFileName = "write.lock"
 // Per SPEC/GRAPH.md § Lock Contention rule 1 an invocation that finds the lock
 // held does NOT fail on the first collision and does NOT block indefinitely: it
 // retries on internal/backoff's loop and ladder for as long as WaitBudget
-// allows, and only then fails with utils.ErrDatabase. Callers map that to exit
+// allows, and only then fails with utils.ErrGraphStore. Callers map that to exit
 // code 1 for the CLI and HTTP 500 for the web graph data endpoint.
 // SPEC/IMPLEMENTATION.md § Graph Store Concurrency, "Write Contention and
 // Recovery" rule 3 is the governing rule, and it is deliberately not the SQLite
@@ -217,7 +229,7 @@ const LockFileName = "write.lock"
 //     sized against one. The wait-based policy bounds every holder except that.
 //
 // When the wait is exhausted for either reason the waiter fails exactly as
-// rule 2 describes, with utils.ErrDatabase for the CLI and HTTP 500 for the web
+// rule 2 describes, with utils.ErrGraphStore for the CLI and HTTP 500 for the web
 // graph data endpoint. That outcome is the specified one and not corruption.
 //
 // The operating system releases the lock when the holding process exits, so an
@@ -244,7 +256,23 @@ func AcquireExclusive(graphDir string) (func(), error) {
 		// Close before returning: the handle must not leak on the contention
 		// path.
 		_ = f.Close()
-		return nil, fmt.Errorf("%w: graph store is busy: another invocation still holds it after the bounded wait", utils.ErrDatabase)
+		// The line does NOT name a holder, because nothing here knows one. The
+		// old wording said "another invocation still holds it", which is the one
+		// holder the doc comment above has already excluded: a bounded wait is
+		// sized against the maximum lawful hold, and a server has none. The two
+		// statements contradicted each other inside one function, and they imply
+		// OPPOSITE remedies -- an invocation releases shortly so retrying works,
+		// a server holds for its lifetime so retrying never will.
+		//
+		// Probing for a server was rejected rather than overlooked: a server can
+		// start or stop between the probe and the print, so the line would assert
+		// a holder it cannot know it still has, and the web graph endpoint reaches
+		// this same lock with no socket flag to probe with
+		// (SPEC/GRAPH.md § Lock Contention, rule 3).
+		return nil, fmt.Errorf("%w: %w: still held when the bounded wait was "+
+			"exhausted, and nothing records the holder. Another rmp invocation releases it "+
+			"shortly, so run the statement again; an rmp graph serve holds it for its whole "+
+			"lifetime, so reach that server with --socket, or stop it.", utils.ErrGraphStore, ErrBusy)
 	}
 	return release, nil
 }
@@ -259,7 +287,7 @@ func openLockFile(graphDir string) (*os.File, error) {
 	lockPath := filepath.Join(graphDir, LockFileName)
 	f, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0600) // #nosec G304 -- lockPath is derived from a validated roadmap name under ~/.roadmaps
 	if err != nil {
-		return nil, fmt.Errorf("%w: opening graph store lock: %v", utils.ErrDatabase, err)
+		return nil, fmt.Errorf("%w: opening graph store lock: %v", utils.ErrGraphStore, err)
 	}
 	return f, nil
 }

@@ -91,7 +91,7 @@ func setGraphStatementBudget(t *testing.T, d time.Duration) {
 // "5s" and this string is the published line exactly.
 //
 // The em dashes are U+2014, as published.
-const publishedBudgetLine = "database error: graph query exceeded the %s statement time budget; " +
+const publishedBudgetLine = "graph engine error: graph query exceeded the %s statement time budget; " +
 	"nothing was written. Narrow the statement — add a label, an indexed property filter, " +
 	"or a LIMIT — or split it into smaller statements."
 
@@ -226,14 +226,14 @@ func TestGraphExecute_StatementBudgetCutsAnExpensiveStatement(t *testing.T) {
 	})
 	elapsed := time.Since(started)
 
-	// (i) It failed, in the class the specification fixes: utils.ErrDatabase,
+	// (i) It failed, in the class the specification fixes: utils.ErrGraphEngine,
 	// which is exit code 1. No new sentinel and no new exit code
 	// (SPEC/GRAPH.md § Constraints, rule 5).
 	if err == nil {
 		t.Fatalf("the statement completed in %v under a %v budget over %d nodes: the budget bounded nothing", elapsed, budget, budgetSeedNodes)
 	}
-	if !errors.Is(err, utils.ErrDatabase) {
-		t.Errorf("err = %v, want it to wrap utils.ErrDatabase (exit code 1)", err)
+	if !errors.Is(err, utils.ErrGraphEngine) {
+		t.Errorf("err = %v, want it to wrap utils.ErrGraphEngine (exit code 1)", err)
 	}
 
 	// (ii) The message is the published line, with the budget rendered from the
@@ -392,7 +392,7 @@ func TestGraphStatementError_Classification(t *testing.T) {
 
 	t.Run("the production budget renders the published line", func(t *testing.T) {
 		err := graphStatementError(graphlock.DefaultStatementBudget, "graph query failed", wrappedDeadline)
-		want := "database error: graph query exceeded the 5s statement time budget; nothing was " +
+		want := "graph engine error: graph query exceeded the 5s statement time budget; nothing was " +
 			"written. Narrow the statement — add a label, an indexed property filter, or a LIMIT " +
 			"— or split it into smaller statements."
 		if err.Error() != want {
@@ -411,8 +411,8 @@ func TestGraphStatementError_Classification(t *testing.T) {
 	for _, stage := range []string{"graph query failed", "graph commit failed"} {
 		t.Run("a cut at "+stage, func(t *testing.T) {
 			err := graphStatementError(150*time.Millisecond, stage, wrappedDeadline)
-			if !errors.Is(err, utils.ErrDatabase) {
-				t.Errorf("err = %v, want it to wrap utils.ErrDatabase", err)
+			if !errors.Is(err, utils.ErrGraphEngine) {
+				t.Errorf("err = %v, want it to wrap utils.ErrGraphEngine", err)
 			}
 			if got, want := err.Error(), wantBudgetLine(150*time.Millisecond); got != want {
 				t.Errorf("\n got:  %q\n want: %q", got, want)
@@ -424,10 +424,10 @@ func TestGraphStatementError_Classification(t *testing.T) {
 
 		t.Run("an ordinary failure at "+stage+" keeps its message", func(t *testing.T) {
 			err := graphStatementError(150*time.Millisecond, stage, engineFailure)
-			if !errors.Is(err, utils.ErrDatabase) {
-				t.Errorf("err = %v, want it to wrap utils.ErrDatabase", err)
+			if !errors.Is(err, utils.ErrGraphEngine) {
+				t.Errorf("err = %v, want it to wrap utils.ErrGraphEngine", err)
 			}
-			want := "database error: " + stage + ": cypher: parse error at offset 12"
+			want := "graph engine error: " + stage + ": cypher: parse error at offset 12"
 			if err.Error() != want {
 				t.Errorf("\n got:  %q\n want: %q", err.Error(), want)
 			}

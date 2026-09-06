@@ -47,7 +47,7 @@ const (
 // the lock can be taken unless it is set, so omitting it would turn the fast
 // failure that SPEC/GRAPH.md § Lock Contention rule 1 requires into a hang. With
 // it, a contended call returns ERROR_LOCK_VIOLATION at once and
-// AcquireExclusive reports utils.ErrDatabase (exit 1).
+// AcquireExclusive reports utils.ErrGraphStore (exit 1).
 //
 // The overlapped structure supplies the range's starting offset; a zero value
 // means offset 0, so the lock starts at the beginning of the file. The lock is

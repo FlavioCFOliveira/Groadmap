@@ -209,5 +209,5 @@ func requireGraphStore(roadmapName, graphDir string) error {
 		return nil
 	}
 	return fmt.Errorf("%w: graph store unavailable: roadmap %q has no graph store at %s, "+
-		"and rmp graph serve creates none", utils.ErrDatabase, roadmapName, graphDir)
+		"and rmp graph serve creates none", utils.ErrGraphStore, roadmapName, graphDir)
 }

@@ -118,7 +118,7 @@ ROADMAP_PREFIX = "qa_errata_gate_"
 # The line is the serialisation-contention line COMMANDS.md publishes under
 # both "Execute Error Cases" and "Client Error Cases":
 #
-#   Error: database error: graph write conflict: another writer committed
+#   Error: graph engine error: graph write conflict: another writer committed
 #   first on every attempt within the 2.5s retry budget; nothing was written.
 #   The statement is valid -- run it again, and spread concurrent writes
 #   across distinct nodes.
@@ -554,13 +554,13 @@ CORPUS = build_corpus()
 # ---------------------------------------------------------------------------
 
 EXEMPT_KEYS = {
-    "Error: database error: graph query failed: <engine diagnostic>": (
+    "Error: graph engine error: graph query failed: <engine diagnostic>": (
         "internal/commands/graph.go: the tail is text the Cypher engine "
         "itself produces for a parse/execution failure and is not "
         "specified by COMMANDS.md:3261 (\"what follows is the engine's own "
         "text and is not specified here\")."
     ),
-    "Error: database error: graph store unavailable: <detail>": (
+    "Error: graph store error: graph store unavailable: <detail>": (
         "Derived from internal/commands/graph.go:847,917,1023 and "
         "internal/web/data.go:1978: an internal graph-store open/read/write "
         "failure, not reachable through ordinary CLI execution against a "
@@ -2418,7 +2418,7 @@ class TestErrorStringParity:
         """
         r = self.roadmap
         key = (
-            "Error: database error: graph query exceeded the 5s statement time "
+            "Error: graph engine error: graph query exceeded the 5s statement time "
             "budget; nothing was written. Narrow the statement — add a label, "
             "an indexed property filter, or a LIMIT — or split it into smaller "
             "statements."
@@ -2515,6 +2515,79 @@ class TestErrorStringParity:
     # ------------------------------------------------------------------
     # `rmp web`
     # ------------------------------------------------------------------
+
+    def test_graph_store_lock_busy_line(self):
+        """The lock line an `execute` meets when a server holds the store.
+
+        It is the one line in this corpus that cannot be reached without a
+        SECOND process, and reaching it is the whole point: the wording it
+        replaced asserted a holder the code had already ruled out. The doc
+        comment on graphlock.AcquireExclusive says a bounded wait is sized
+        against the maximum lawful hold and that a server has none -- and the
+        line then printed "another invocation still holds it", naming the one
+        holder the wait cannot resolve. The two disagreed inside one function,
+        and they imply opposite remedies: an invocation releases shortly so
+        retrying works, a server holds for its lifetime so retrying never will.
+
+        The shape below is the one that reproduces it. A server is started on a
+        NON-DEFAULT socket, so the `execute` that follows resolves the derived
+        path, finds nothing listening, takes the direct path, and meets the lock
+        the server is holding (SPEC/GRAPH.md § Lock Contention, residual case 3).
+
+        It costs the wait budget -- the statement budget plus the backoff total,
+        about 7.5s -- and that is irreducible: the line is what an EXHAUSTED wait
+        prints, so the wait has to be exhausted.
+        """
+        r = self.roadmap
+        key = (
+            "Error: graph store error: graph store is busy: still held when the "
+            "bounded wait was exhausted, and nothing records the holder. Another "
+            "rmp invocation releases it shortly, so run the statement again; an "
+            "rmp graph serve holds it for its whole lifetime, so reach that "
+            "server with --socket, or stop it."
+        )
+        assert key in CORPUS, (
+            f"the lock-busy line is no longer published under this text: {key!r}")
+
+        # `graph serve` refuses a roadmap with no graph store, so materialise one.
+        code, _, err = self.run_stdin(
+            ["graph", "execute", "-r", r, "--query", "CREATE (:LockProbe {k: 1})"])
+        assert code == 0, f"seeding the graph failed: exit={code} stderr={err!r}"
+
+        socket = str(self.test.home_dir / "held.sock")
+        env = os.environ.copy()
+        env["HOME"] = str(self.test.home_dir)
+        server = subprocess.Popen(
+            [self.test.cli_path, "graph", "serve", "-r", r, "--socket", socket],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env)
+        try:
+            # The startup object is written only after the store is open and the
+            # lock is held, so seeing it is seeing the lock taken.
+            deadline = time.time() + 20
+            announced = ""
+            while time.time() < deadline:
+                if server.poll() is not None:
+                    raise AssertionError(
+                        f"graph serve exited early: {server.stderr.read()!r}")
+                line = server.stdout.readline()
+                announced += line
+                if "socket" in announced and "}" in announced:
+                    break
+            assert "socket" in announced, (
+                f"graph serve never announced its socket; got {announced!r}")
+
+            # No --socket here: the derived path has nothing listening, so this
+            # takes the direct path and meets the held lock.
+            self.check(key, ["graph", "execute", "-r", r,
+                             "--query", "MATCH (n) RETURN count(n)"], 1,
+                       note="graph execute against a store a server holds")
+        finally:
+            server.terminate()
+            try:
+                server.wait(timeout=20)
+            except subprocess.TimeoutExpired:
+                server.kill()
+                server.wait(timeout=10)
 
     def test_web_errors(self):
         # #117: --port out of range (literal "70000" -- not a placeholder).
@@ -2789,7 +2862,7 @@ class TestErrorStringParity:
         would notice.
         """
         key = (
-            "Error: database error: graph write conflict: another writer "
+            "Error: graph engine error: graph write conflict: another writer "
             "committed first on every attempt within the 2.5s retry budget; "
             "nothing was written. The statement is valid \u2014 run it again, "
             "and spread concurrent writes across distinct nodes."
@@ -2896,7 +2969,7 @@ class TestErrorStringParity:
         assert rc == 1, f"exit code {rc}, want 1; stderr={err!r}"
         assert out == "", f"a failing invocation wrote to stdout: {out!r}"
         assert actual_line.startswith(
-            "Error: database error: graph query failed: "
+            "Error: graph engine error: graph query failed: "
         ), (
             "a statement the engine refused must carry the parse/execution "
             f"line, whose head is `rmp`'s own text; got {actual_line!r}"

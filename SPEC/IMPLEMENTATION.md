@@ -555,8 +555,8 @@ the boundary.
    invocation and a web graph request in either direction. The losing invocation
    MUST wait a bounded time and then fail; it MUST never hang indefinitely and
    MUST never corrupt the store.
-2. The contention/lock failure surfaces as `utils.ErrDatabase` (exit code 1),
-   consistent with treating the graph store as a database-class dependency. For a
+2. The contention/lock failure surfaces as `utils.ErrGraphStore` (exit code 1),
+   the sentinel that names the store whose lock could not be taken. For a
    web graph request, it surfaces as an internal read error (HTTP 500), the status
    that endpoint already returns for a graph store that cannot be opened.
 3. Every caller waits, and waits a bounded time. It retries the lock under the
@@ -622,8 +622,8 @@ the boundary.
      narrow windows in which a caller still meets a server on the lock, and each
      ends in this rule's bounded wait and this section's rule 2.
 5. Recovery on open is expected to be transparent for a consistently committed
-   store. A corrupt or unreadable store surfaces as `utils.ErrDatabase` (exit code
-   1); there is no automatic graph-store repair in this version.
+   store. A corrupt or unreadable store surfaces as `utils.ErrGraphStore` (exit
+   code 1); there is no automatic graph-store repair in this version.
 
 ### Synchronous Checkpoint on Write
 
@@ -662,7 +662,7 @@ implications.
    exit code. This is a degraded-but-correct state: the intact write-ahead log
    still recovers the committed state, and the next successful write checkpoints
    again and reconciles the snapshot. A failure before or during the commit is an
-   ordinary write failure (`utils.ErrDatabase`, exit code 1), not a checkpoint
+   ordinary write failure (`utils.ErrGraphEngine`, exit code 1), not a checkpoint
    failure, and no checkpoint is attempted.
 5. **Performance trade-off.** A synchronous full snapshot on every write makes each
    write cost proportional to the live graph size, because the snapshot rewrites

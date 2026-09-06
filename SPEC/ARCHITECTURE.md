@@ -760,14 +760,17 @@ The canonical set of sentinel errors is defined exclusively in `internal/utils/e
 | `utils.ErrInvalidInput` | 2 | Malformed argument, unknown flag, bad syntax |
 | `utils.ErrRequired` | 2 | Required parameter is absent or empty |
 | `utils.ErrNoRoadmap` | 3 | No roadmap selected and none provided via `-r` |
-| `utils.ErrDatabase` | 1 | Any SQLite or I/O failure |
+| `utils.ErrDatabase` | 1 | A failure of the roadmap's SQLite database, of the data directory, or of another file or stream the CLI reads or writes |
+| `utils.ErrGraphEngine` | 1 | A statement reached the graph engine and did not complete there |
+| `utils.ErrGraphStore` | 1 | The roadmap's graph store, its directory, or its exclusive access lock |
+| `utils.ErrGraphServer` | 1 | The graph server, its socket, or the connection to it |
 | `utils.ErrValidation` | 6 | Value out of allowed range or invalid enum value |
 | `utils.ErrFieldTooLarge` | 6 | String field exceeds its maximum character limit |
 | `utils.ErrUnknownCommand` | 127 | Dispatch failure: the name given does not resolve to a command or to a subcommand of a command |
 
 A dispatch failure MUST be carried by `utils.ErrUnknownCommand` and MUST NOT be wrapped in `utils.ErrInvalidInput`. The two are distinct classes: `utils.ErrInvalidInput` covers a malformed flag or argument supplied to a command that was resolved, and exits `2`; `utils.ErrUnknownCommand` covers a command or subcommand name that could not be resolved at all, and exits `127`. Wrapping the second in the first is what makes an unresolved subcommand exit `2` instead of `127`, and it also prefixes the message with `invalid input: `, which misreports the class to the reader.
 
-Three failure conditions are classified in ways the one-line descriptions above
+Four failure conditions are classified in ways the one-line descriptions above
 do not settle on their own, so the specification fixes them here.
 
 1. **A date value that does not parse** is carried by `utils.ErrValidation` and
@@ -789,6 +792,48 @@ do not settle on their own, so the specification fixes them here.
    refused in its entirety rather than applied to the identifiers that do exist.
    The per-command error tables in `COMMANDS.md` publish the exact string and
    restate that no change is made.
+4. **A failure of the knowledge graph never carries `utils.ErrDatabase`.** The
+   graph subsystem has three sentinels of its own, and every graph failure
+   carries exactly one of them:
+
+   - `utils.ErrGraphEngine` — the statement reached the graph engine and did not
+     complete there. The engine refused it, the statement time budget cut it, or
+     every attempt of its retry policy lost a serialisation conflict. What the
+     reader must act on is the statement: correct it, narrow it, or run it again.
+   - `utils.ErrGraphStore` — the roadmap's graph store, the directory it lives
+     in, or the exclusive advisory lock over it. The store could not be opened,
+     recovered, read or written; or the lock could not be taken within the
+     bounded wait. What the reader must act on is the filesystem or whatever
+     holds the lock; the statement is not at fault.
+   - `utils.ErrGraphServer` — the graph server, the socket it is reached through,
+     or the connection to it. Nothing is listening; a server answers but cannot
+     be reached; the connection was lost or went unanswered; the socket could not
+     be bound, or a live server already answers on it. What the reader must act
+     on is the server or the `--socket` path; the statement is not at fault.
+
+   All three map to exit code `1`, which is the code `utils.ErrDatabase` already
+   mapped to, so no consumer that branches on an exit code is affected by the
+   split. They exist because the printed sentinel is the first thing a reader —
+   and above all an AI agent acting without a human in the loop — reads, and
+   what it names is the subsystem to act on. `database error: ` in front of a
+   Cypher syntax error told that reader to retry or escalate when the correct
+   action was to fix the statement; and the only database a roadmap has is its
+   `project.db`, which no graph operation reads or writes
+   (`GRAPH.md § Constraints`, rule 2), so the word pointed at the wrong artefact
+   as well as at the wrong action.
+
+   The three are kept apart rather than merged into one graph sentinel because
+   each selects a different action, and the reader must be able to choose it
+   from the sentinel alone rather than by parsing the detail that follows.
+
+   **The boundary is the subject of the failure, not the subcommand that
+   reported it.** An `rmp graph serve` that cannot take the store's lock carries
+   `utils.ErrGraphStore`, not `utils.ErrGraphServer`, because the lock belongs to
+   the store. An `rmp graph execute` that cannot reach a server carries
+   `utils.ErrGraphServer`, not `utils.ErrGraphStore`, because the store was never
+   opened. `GRAPH.md § Error Handling and Exit Codes` is canonical for the
+   condition-by-condition assignment, and `COMMANDS.md § Graph Management`
+   publishes the exact line each condition prints.
 
 #### Wrapping Rules
 
@@ -816,6 +861,9 @@ Each layer of the stack has a designated wrapping responsibility:
 | `internal/db/` | `sql.ErrNoRows` | `utils.ErrNotFound` |
 | `internal/db/` | SQLite constraint violation | `utils.ErrAlreadyExists` |
 | `internal/db/` | Any other `database/sql` error | `utils.ErrDatabase` |
+| `internal/graphstore/`, `internal/graphlock/` | Any graph store, graph directory or store-lock failure | `utils.ErrGraphStore` |
+| `internal/graphserve/`, `internal/graphclient/` | Any graph server, socket or connection failure | `utils.ErrGraphServer` |
+| `internal/commands/` | A statement the graph engine refused, cut, or lost to a conflict | `utils.ErrGraphEngine` |
 | `internal/commands/` | Field length exceeded | `utils.ErrFieldTooLarge` |
 | `internal/commands/` | Missing required flag | `utils.ErrRequired` |
 | `internal/commands/` | Invalid flag value / enum | `utils.ErrValidation` or `utils.ErrInvalidInput` |
@@ -865,16 +913,17 @@ Groadmap follows standard Unix/Linux exit code conventions. Success output is JS
 
 ### Exit Codes of the Graph Server and Client
 
-`rmp graph serve` and `rmp graph client` introduce no new exit code and no new sentinel error. Every failure either can produce is carried by a sentinel the catalogue above already names, and this section enumerates which codes each subcommand can return so that the enumeration exists in one place. `COMMANDS.md § Graph Management` is canonical for the command-line contract, and `GRAPH.md § The Dedicated Graph Server` for the behaviour behind each row.
+`rmp graph serve` and `rmp graph client` introduce no new exit code. Every failure either can produce is carried by a sentinel the catalogue above names, and this section enumerates which codes each subcommand can return so that the enumeration exists in one place. `COMMANDS.md § Graph Management` is canonical for the command-line contract, and `GRAPH.md § The Dedicated Graph Server` for the behaviour behind each row.
 
-`rmp graph execute` is not enumerated here, because the graph server changed which failures it can reach without changing its exit codes: it gained the same `--socket` flag the two subcommands below carry, and with it three failures of the server path — a socket that answers but yields no reachable server, a connection lost or unanswered after the statement was sent, and a serialisation conflict every attempt of the retry policy collided on — all three `utils.ErrDatabase` and exit code 1, and an empty `--socket` value, `utils.ErrRequired` and exit code 2. Every one of them lands on a code that subcommand already returned. `COMMANDS.md § Execute Exit Codes` is canonical for its full set.
+`rmp graph execute` is not enumerated here, because the graph server changed which failures it can reach without changing its exit codes: it gained the same `--socket` flag the two subcommands below carry, and with it three failures it did not have before — a socket that answers but yields no reachable server, and a connection lost or unanswered after the statement was sent, both `utils.ErrGraphServer`; and a serialisation conflict every attempt of the retry policy collided on, `utils.ErrGraphEngine` — all three exit code 1, and an empty `--socket` value, `utils.ErrRequired` and exit code 2. Every one of them lands on a code that subcommand already returned. `COMMANDS.md § Execute Exit Codes` is canonical for its full set.
 
 `rmp graph serve`:
 
 | Exit Code | Sentinel | Cause |
 |-----------|----------|-------|
 | `0` | — | The server started, served, and was stopped by `SIGINT` or `SIGTERM`. The drain completed or its bound expired; in both cases every acknowledged commit is durable. |
-| `1` | `utils.ErrDatabase` | The store could not be opened or recovered; or its exclusive advisory lock could not be taken within the bounded wait, which is what refuses a second server against the same roadmap; or the socket could not be bound; or a live server already answers on the resolved socket. |
+| `1` | `utils.ErrGraphStore` | The store could not be opened or recovered; or its exclusive advisory lock could not be taken within the bounded wait, which is what refuses a second server against the same roadmap. |
+| `1` | `utils.ErrGraphServer` | The socket could not be bound; or a live server already answers on the resolved socket. |
 | `2` | `utils.ErrInvalidInput` | An unknown flag, or a positional argument: the subcommand accepts none. |
 | `2` | `utils.ErrRequired` | `--socket` was supplied with an empty value. |
 | `3` | `utils.ErrNoRoadmap` | No roadmap selected and none provided via `-r`. |
@@ -885,7 +934,8 @@ Groadmap follows standard Unix/Linux exit code conventions. Success output is JS
 | Exit Code | Sentinel | Cause |
 |-----------|----------|-------|
 | `0` | — | The statement was sent to a server, ran, and its result was written to stdout. |
-| `1` | `utils.ErrDatabase` | No server is listening for the roadmap; or a server could not be reached through the socket; or the connection was lost, or went unanswered, after the statement was sent; or the statement failed to parse or execute in the engine; or it exhausted the statement time budget; or every attempt of its retry policy lost a serialisation conflict; or a value the server returned could not be mapped onto the published result shape. |
+| `1` | `utils.ErrGraphServer` | No server is listening for the roadmap; or a server could not be reached through the socket; or the connection was lost, or went unanswered, after the statement was sent; or a value the server returned could not be mapped onto the published result shape. |
+| `1` | `utils.ErrGraphEngine` | The statement failed to parse or execute in the engine; or it exhausted the statement time budget; or every attempt of its retry policy lost a serialisation conflict. |
 | `2` | `utils.ErrRequired` | No statement supplied, or `--socket` supplied with an empty value. |
 | `2` | `utils.ErrInvalidInput` | An unknown flag, or a positional argument: the subcommand accepts none. |
 | `3` | `utils.ErrNoRoadmap` | No roadmap selected and none provided via `-r`. |
@@ -894,7 +944,7 @@ Groadmap follows standard Unix/Linux exit code conventions. Success output is JS
 
 Two remarks, because each is a place a reader could reasonably expect a different code:
 
-1. **A failure to reach a server is `1`, not `4`.** `utils.ErrNotFound` is the class of a roadmap, task, or sprint that does not exist. A socket with nothing behind it is a dependency that is unavailable, which is the class `utils.ErrDatabase` already carries for a graph store that cannot be opened, and treating it as `4` would make a shell script that branches on `4` act on the wrong condition.
+1. **A failure to reach a server is `1`, not `4`.** `utils.ErrNotFound` is the class of a roadmap, task, or sprint that does not exist. A socket with nothing behind it is a dependency that is unavailable, which is the class `utils.ErrGraphServer` carries and which lands on the same exit code as a graph store that cannot be opened; treating it as `4` would make a shell script that branches on `4` act on the wrong condition.
 2. **A graceful stop is `0`, not `130`, and the reading begins when the server takes the signals over.** The catalogue reserves `130` for an interruption, and `rmp graph serve` interprets `SIGINT` as an instruction to stop rather than as an interruption of unfinished work: it drains, checkpoints, and exits successfully. This matches `rmp web`, which is the only other long-lived command, and the two are stated the same way for the same reason. Both take the signals over immediately before they announce themselves (see the `internal/signals` entry under [Modules and Responsibilities](#modules-and-responsibilities)), so the `0` row of each table is conditioned on a server that started and served, exactly as it is worded. A signal that arrives during startup — before the socket or the URL is announced — reaches an invocation that has served nothing and owes no drain, and it is still an interruption: the process exits `130`. `GRAPH.md § Server Shutdown and the Drain` and `WEB.md § Server Lifecycle` state that boundary where a reader sizing a supervisor's grace period will meet it.
 
 ### Usage in Shell Scripts

@@ -20,7 +20,7 @@
 // refactor, is liable to break in isolation:
 //
 //   - exclusive excludes exclusive, and WAITS, bounded, before it fails;
-//   - the wait ENDS, with utils.ErrDatabase, rather than blocking indefinitely;
+//   - the wait ENDS, with utils.ErrGraphStore, rather than blocking indefinitely;
 //   - the wait is sized against the longest LAWFUL hold rather than against the
 //     SQLite policy's total, so a holder that stays inside its own statement
 //     budget cannot starve a waiter;
@@ -49,7 +49,10 @@ import (
 // platform once its bounded wait is exhausted (SPEC/GRAPH.md § Lock Contention
 // rule 2). It names no operation class, because the holder may not have been
 // writing: one mode carries one message, and it says only that the store is held.
-const busyExclusiveMessage = "graph store is busy: another invocation still holds it after the bounded wait"
+const busyExclusiveMessage = "graph store is busy: still held when the bounded wait was " +
+	"exhausted, and nothing records the holder. Another rmp invocation releases it " +
+	"shortly, so run the statement again; an rmp graph serve holds it for its whole " +
+	"lifetime, so reach that server with --socket, or stop it."
 
 // firstRung is the ladder's first delay, used by the assertions that an
 // acquisition did NOT wait. It comes from the shared policy, so no test in this
@@ -179,8 +182,8 @@ func TestAcquireExclusive_WaitsTheDerivedBudgetNotTheSQLiteTotal(t *testing.T) {
 			got.release()
 			t.Fatal("contended acquisition succeeded; the lock is not exclusive")
 		}
-		if !errors.Is(got.err, utils.ErrDatabase) {
-			t.Errorf("contention must surface as utils.ErrDatabase (exit 1), got: %v", got.err)
+		if !errors.Is(got.err, utils.ErrGraphStore) {
+			t.Errorf("contention must surface as utils.ErrGraphStore (exit 1), got: %v", got.err)
 		}
 		// The regression, named: a wait sized on the SQLite total alone would
 		// have given up here, while a statement running the whole budget in force
@@ -215,7 +218,7 @@ func TestAcquireExclusive_WaitsTheDerivedBudgetNotTheSQLiteTotal(t *testing.T) {
 
 // TestAcquireExclusive_MutualExclusion is a regression gate for finding #39:
 // the exclusive graph store lock must prevent two invocations from holding it at
-// once, and an exhausted wait must surface as utils.ErrDatabase (exit 1) — never
+// once, and an exhausted wait must surface as utils.ErrGraphStore (exit 1) — never
 // a silent overlap that would let a stale-snapshot checkpoint drop a committed
 // write. Releasing the lock must make it acquirable again.
 func TestAcquireExclusive_MutualExclusion(t *testing.T) {
@@ -238,8 +241,8 @@ func TestAcquireExclusive_MutualExclusion(t *testing.T) {
 		release1()
 		t.Fatal("second concurrent lock acquisition succeeded; expected contention error")
 	}
-	if !errors.Is(err, utils.ErrDatabase) {
-		t.Errorf("contention must surface as utils.ErrDatabase (exit 1), got: %v", err)
+	if !errors.Is(err, utils.ErrGraphStore) {
+		t.Errorf("contention must surface as utils.ErrGraphStore (exit 1), got: %v", err)
 	}
 	if !strings.Contains(err.Error(), busyExclusiveMessage) {
 		t.Errorf("contention message = %q, want it to contain %q", err.Error(), busyExclusiveMessage)
@@ -266,7 +269,7 @@ func TestAcquireExclusive_MutualExclusion(t *testing.T) {
 //   - the contended acquisition must take AT LEAST the bounded wait, or it is
 //     failing on the first collision and every statement against a busy roadmap
 //     becomes intermittently unavailable;
-//   - it must RETURN, and with utils.ErrDatabase, or an invocation hangs — and
+//   - it must RETURN, and with utils.ErrGraphStore, or an invocation hangs — and
 //     one of the two callers of this lock is an HTTP request handler.
 //
 // The lower bound is what would have caught the pre-collapse behaviour, in
@@ -310,8 +313,8 @@ func TestAcquireExclusive_ContentionWaitsThenFails(t *testing.T) {
 			got.release()
 			t.Fatal("contended acquisition succeeded; the lock is not exclusive")
 		}
-		if !errors.Is(got.err, utils.ErrDatabase) {
-			t.Errorf("contention must surface as utils.ErrDatabase (exit 1), got: %v", got.err)
+		if !errors.Is(got.err, utils.ErrGraphStore) {
+			t.Errorf("contention must surface as utils.ErrGraphStore (exit 1), got: %v", got.err)
 		}
 		if !strings.Contains(got.err.Error(), busyExclusiveMessage) {
 			t.Errorf("contention message = %q, want it to contain %q", got.err.Error(), busyExclusiveMessage)
