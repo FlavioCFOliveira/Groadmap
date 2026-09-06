@@ -77,7 +77,7 @@ func migrateLegacyLayout(warn *os.File) error {
 			return nil // no data directory yet: nothing to migrate
 		}
 		// Inability to read the data directory is the only fatal condition.
-		return fmt.Errorf("reading data directory %s: %w", dataDir, ErrDatabase)
+		return fmt.Errorf("%w: reading data directory %s", ErrIO, dataDir)
 	}
 
 	// Re-verify the data directory's own 0700 posture. SPEC/ARCHITECTURE.md
@@ -86,10 +86,10 @@ func migrateLegacyLayout(warn *os.File) error {
 	// home (~/.roadmaps/<name>/), never the ~/.roadmaps container itself, so a
 	// loosened data directory would survive a migration unnoticed (finding #59).
 	if err := os.Chmod(dataDir, DataDirPerm); err != nil {
-		return fmt.Errorf("setting permissions on data directory %s: %v: %w", dataDir, err, ErrDatabase)
+		return fmt.Errorf("%w: setting permissions on data directory %s: %v", ErrIO, dataDir, err)
 	}
 	if err := VerifyPermissions(dataDir, DataDirPerm); err != nil {
-		return fmt.Errorf("verifying data directory permissions: %v: %w", err, ErrDatabase)
+		return fmt.Errorf("%w: verifying data directory permissions: %v", ErrIO, err)
 	}
 
 	for _, entry := range entries {
@@ -173,7 +173,7 @@ func migrateOneRoadmap(dataDir, name string, warn *os.File) error {
 	if _, err := os.Lstat(currentDB); err == nil {
 		return fmt.Errorf("current layout already present at %s (legacy file left untouched): %w", currentDB, ErrAlreadyExists)
 	} else if !os.IsNotExist(err) {
-		return fmt.Errorf("checking current layout at %s: %v: %w", currentDB, err, ErrDatabase)
+		return fmt.Errorf("%w: checking current layout at %s: %v", ErrDatabase, currentDB, err)
 	}
 
 	// 3. Ensure the roadmap home directory exists with 0700 permissions before
@@ -200,10 +200,10 @@ func migrateOneRoadmap(dataDir, name string, warn *os.File) error {
 	}
 
 	if err := os.MkdirAll(roadmapDir, DataDirPerm); err != nil {
-		return fmt.Errorf("creating roadmap directory %s: %v: %w", roadmapDir, err, ErrDatabase)
+		return fmt.Errorf("%w: creating roadmap directory %s: %v", ErrIO, roadmapDir, err)
 	}
 	if err := os.Chmod(roadmapDir, DataDirPerm); err != nil {
-		return fmt.Errorf("setting permissions on roadmap directory %s: %v: %w", roadmapDir, err, ErrDatabase)
+		return fmt.Errorf("%w: setting permissions on roadmap directory %s: %v", ErrIO, roadmapDir, err)
 	}
 
 	// 4. Move the database (atomic rename). This is the first mutation of
@@ -213,7 +213,7 @@ func migrateOneRoadmap(dataDir, name string, warn *os.File) error {
 	//    guard confirmed project.db (currentDB) is absent; the rename therefore
 	//    cannot overwrite an existing database.
 	if err := os.Rename(legacyDB, currentDB); err != nil {
-		return fmt.Errorf("moving %s to %s: %v: %w", legacyDB, currentDB, err, ErrDatabase)
+		return fmt.Errorf("%w: moving %s to %s: %v", ErrDatabase, legacyDB, currentDB, err)
 	}
 
 	// At this point the authoritative database has been moved successfully:
@@ -228,13 +228,13 @@ func migrateOneRoadmap(dataDir, name string, warn *os.File) error {
 	//    0600 database. A failure here is reported as a (contained) roadmap
 	//    failure, but the database has already moved to the current layout.
 	if err := os.Chmod(currentDB, DBFilePerm); err != nil {
-		return fmt.Errorf("setting permissions on %s: %v: %w", currentDB, err, ErrDatabase)
+		return fmt.Errorf("%w: setting permissions on %s: %v", ErrDatabase, currentDB, err)
 	}
 	if err := VerifyPermissions(roadmapDir, DataDirPerm); err != nil {
-		return fmt.Errorf("verifying roadmap directory permissions: %v: %w", err, ErrDatabase)
+		return fmt.Errorf("%w: verifying roadmap directory permissions: %v", ErrIO, err)
 	}
 	if err := VerifyPermissions(currentDB, DBFilePerm); err != nil {
-		return fmt.Errorf("verifying database permissions: %v: %w", err, ErrDatabase)
+		return fmt.Errorf("%w: verifying database permissions: %v", ErrDatabase, err)
 	}
 
 	return nil

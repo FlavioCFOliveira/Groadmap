@@ -49,7 +49,7 @@ Every error string this file publishes is the **complete line the user reads on 
 Three consequences follow, and they hold for every table and every code block in this file:
 
 1. **The `Error: ` prefix is part of the string.** `rmp` writes `Error: ` before every failure message, so a published string that omits it is incomplete.
-2. **The sentinel text is part of the string.** Most messages carry a sentinel word or phrase between the prefix and the detail — `validation error: `, `required parameter missing: `, `resource not found: `, `invalid input: `, `field exceeds maximum size: `, `resource already exists: `, `no roadmap selected: `, `database error: `, `graph engine error: `, `graph store error: `, `graph server error: `, `unknown command`. The sentinel names the failure class and determines the exit code; `ARCHITECTURE.md § Sentinel Error Catalogue` is canonical for the mapping. A message that carries no sentinel is published without one, because that is what the user sees.
+2. **The sentinel text is part of the string.** Most messages carry a sentinel word or phrase between the prefix and the detail — `validation error: `, `required parameter missing: `, `resource not found: `, `invalid input: `, `field exceeds maximum size: `, `resource already exists: `, `no roadmap selected: `, `database error: `, `I/O error: `, `graph engine error: `, `graph store error: `, `graph server error: `, `unknown command`. The sentinel names the failure class and determines the exit code; `ARCHITECTURE.md § Sentinel Error Catalogue` is canonical for the mapping. A message that carries no sentinel is published without one, because that is what the user sees.
 3. **One string means one condition.** A row publishes the string for the single condition its own scenario names. Where one flag or field can fail in more than one way — absent versus empty, empty versus oversize — each way is a separate row with its own string and its own exit code, because the binary prints a different line for each.
 
 **Placeholders.** A published string contains a placeholder only where the binary interpolates a value it cannot know in advance. Everything outside a placeholder is literal text, and a placeholder never stands for a fixed word: where the binary always prints the same text, that text is published. The complete set of placeholders is:
@@ -264,6 +264,7 @@ The comment `body` is supplied either through the `--body` flag or on standard i
 3. When the body must come from standard input and standard input is empty, whitespace only, or not connected, the command fails with exit code 2. The message differs by subcommand, because the two subcommands are missing different things: on `comment-add` a body is mandatory and the message is "Error: required parameter missing: no comment body supplied"; on `comment-edit` the absent body means no change was requested at all, and the message is "Error: required parameter missing: at least one of --type or --body is required".
 4. When `--body` is present but its value is empty, whitespace only, or missing (no following token, or the following token is itself a flag), the command fails with exit code 2 and the message "Error: required parameter missing: no comment body supplied", in both subcommands. The command does not silently fall back to standard input in this case.
 5. Leading and trailing whitespace is trimmed before validation and before storage. Interior line breaks are preserved: a comment body is expected to be multi-line.
+6. When the body is to come from standard input and the read of the stream itself fails, the command fails with exit code 1 and the message "Error: I/O error: reading the comment body from standard input: <detail>", identically in all four subcommands. The part `rmp` fixes is everything up to and including `reading the comment body from standard input: `; `<detail>` is the operating system's own text and is not specified here. This is a failure of the stream and not of the body: a stream that carries nothing is refused by rule 3 with exit code 2, and one that carries too much by the bounded read below with exit code 6, and neither of those reaches this rule. Nothing about the process's standard input is a database, so the line does not name one; `ARCHITECTURE.md § Sentinel Error Catalogue` is canonical for the class, and `graph execute` reports the same failure of the same stream in its own wording (`§ Execute Error Cases`).
 
 **Bounded standard-input read.** When the body comes from standard input, the command does NOT read the stream to EOF. It reads only until the outcome is already decided, and it never retains more than the 4096-character cap while doing so:
 
@@ -1871,6 +1872,7 @@ Steps 4 and 5 both precede step 6 deliberately: a missing or invalid `--type` is
 | Missing task ID | 2 | `Error: required parameter missing: task ID required` |
 | Extra positional argument | 2 | `Error: invalid input: unexpected argument "X"` |
 | Unknown flag | 2 | `Error: invalid input: unknown flag: --foo` |
+| Body read from standard input, and the read of the stream failed | 1 | `Error: I/O error: reading the comment body from standard input: <detail>` |
 | Database failure | 1 | `Error: database error: <detail>` |
 
 **Audit:** Logged as `TASK_COMMENT_CREATE` against the parent task (`entity_type = TASK`, `entity_id = <task-id>`), in the same transaction as the insert. See `DATABASE.md § audit Table`.
@@ -1975,6 +1977,7 @@ Step 3 precedes step 5 for the same reason step 4 does: a malformed argument lis
 | Invalid comment ID format | 2 | `Error: invalid input: invalid comment ID: "X" (must be a positive integer)` |
 | Missing comment ID | 2 | `Error: required parameter missing: comment ID required` |
 | Extra positional argument | 2 | `Error: invalid input: unexpected argument "X"` |
+| Body read from standard input, and the read of the stream failed | 1 | `Error: I/O error: reading the comment body from standard input: <detail>` |
 | Database failure | 1 | `Error: database error: <detail>` |
 
 A comment id that exists in `sprint_comments` but not in `task_comments` is a not-found condition here (exit code 4): the two id spaces are independent.
@@ -2976,6 +2979,7 @@ rmp sprint comment-add -r <name> <sprint-id> --type DECISION < decision.txt
 | Missing sprint ID | 2 | `Error: required parameter missing: sprint ID required` |
 | Extra positional argument | 2 | `Error: invalid input: unexpected argument "X"` |
 | Unknown flag | 2 | `Error: invalid input: unknown flag: --foo` |
+| Body read from standard input, and the read of the stream failed | 1 | `Error: I/O error: reading the comment body from standard input: <detail>` |
 | Database failure | 1 | `Error: database error: <detail>` |
 
 **Audit:** Logged as `SPRINT_COMMENT_CREATE` against the parent sprint (`entity_type = SPRINT`, `entity_id = <sprint-id>`), in the same transaction as the insert. See `DATABASE.md § audit Table`.
@@ -3068,6 +3072,7 @@ rmp sprint comment-edit -r <name> <comment-id> < revised.txt
 | Invalid comment ID format | 2 | `Error: invalid input: invalid comment ID: "X" (must be a positive integer)` |
 | Missing comment ID | 2 | `Error: required parameter missing: comment ID required` |
 | Extra positional argument | 2 | `Error: invalid input: unexpected argument "X"` |
+| Body read from standard input, and the read of the stream failed | 1 | `Error: I/O error: reading the comment body from standard input: <detail>` |
 | Database failure | 1 | `Error: database error: <detail>` |
 
 **Audit:** Logged as `SPRINT_COMMENT_UPDATE` against the parent sprint (`entity_type = SPRINT`, `entity_id` = the id of the sprint the comment belongs to), in the same transaction as the update.
@@ -3759,6 +3764,7 @@ rather than published as zero.
 | Roadmap not specified | 3 | "Error: no roadmap selected: use -r <name> or --roadmap <name>" |
 | Roadmap not found | 4 | "Error: resource not found: roadmap \"X\" not found" |
 | No statement supplied | 2 | "Error: required parameter missing: no query supplied" |
+| The statement was to come from standard input and the read of it failed | 1 | "Error: I/O error: reading query from stdin: <detail>" |
 | `--socket` supplied with an empty value | 2 | "Error: required parameter missing: --<flag>" |
 | Stray positional argument, such as a bare Cypher statement written without `--query` | 2 | "Error: invalid input: unexpected argument \"X\" (graph queries use --query or stdin)" |
 | Statement above the maximum length | 6 | "Error: validation error: query exceeds maximum length of 1048576 bytes" |
@@ -3780,6 +3786,8 @@ because a direct invocation runs exactly one transaction
 (`GRAPH.md § Concurrency Inside the Server`).
 
 The parse/execution row and the store-failure row end in a diagnostic the Cypher engine produces, not `rmp`. The part `rmp` fixes is everything up to and including `graph query failed: ` and `graph store unavailable: `; what follows is the engine's own text and is not specified here.
+
+The standard-input row ends the same way, in the operating system's own text rather than `rmp`'s: the part `rmp` fixes is everything up to and including `reading query from stdin: `. It is the only row of this table that reports something other than the roadmap, the statement, the store, or a server — the stream the statement was to arrive on. Nothing about it is a database, and it does not say it is; `ARCHITECTURE.md § Sentinel Error Catalogue` is canonical for the class. It is reached only when the read itself fails: a stream that is empty, whitespace only, or a terminal supplies no statement and is refused with exit code 2 by the row above, and a stream that supplies more than the maximum is refused with exit code 6 by the row below (`GRAPH.md § Cypher Input Source and Precedence`). The identical row under `§ Client Error Cases` is the same condition on the same read: both subcommands take their statement from the same two sources.
 
 The budget row is not one of them: it carries no engine diagnostic and no placeholder, and every character of it is `rmp`'s own text, so it is compared in full. `5s` is the budget itself, rendered as a duration; it is a fixed value and not a value the binary interpolates from the invocation. The line says the three things a caller who has just lost a statement needs: what was exceeded, that nothing was written, and what to do next. `GRAPH.md § Statement Time Budget` is canonical for the behaviour it reports.
 
@@ -4098,6 +4106,7 @@ why they differ.
 | Roadmap not specified | 3 | "Error: no roadmap selected: use -r <name> or --roadmap <name>" |
 | Roadmap not found | 4 | "Error: resource not found: roadmap \"X\" not found" |
 | No statement supplied | 2 | "Error: required parameter missing: no query supplied" |
+| The statement was to come from standard input and the read of it failed | 1 | "Error: I/O error: reading query from stdin: <detail>" |
 | `--socket` supplied with an empty value | 2 | "Error: required parameter missing: --<flag>" |
 | Stray positional argument, such as a bare Cypher statement written without `--query` | 2 | "Error: invalid input: unexpected argument \"X\" (graph queries use --query or stdin)" |
 | Statement above the maximum length | 6 | "Error: validation error: query exceeds maximum length of 1048576 bytes" |
@@ -4241,7 +4250,7 @@ which are specified in `WEB.md § Routes and Pages`.
 | Exit Code | Cause |
 |-----------|-------|
 | 0 | Server started and was later stopped by `SIGINT`/`SIGTERM` (graceful shutdown). |
-| 1 | Requested host/port could not be bound (port in use with an explicit `--port`, or host not assignable), or the data directory could not be read (`utils.ErrDatabase`). |
+| 1 | Requested host/port could not be bound (port in use with an explicit `--port`, or host not assignable), the data directory could not be read, or the listener stopped accepting connections after the server had started (`utils.ErrIO`). |
 | 2 | Unknown flag or unexpected positional argument (`utils.ErrInvalidInput`). |
 | 6 | `--port` value out of range 0-65535 or non-integer (`utils.ErrValidation`). |
 
@@ -4252,15 +4261,19 @@ interface introduces no new codes.
 
 | Scenario | Exit Code | stderr Output |
 |----------|-----------|---------------|
-| Explicit `--port` already in use | 1 | "Error: database error: cannot bind 127.0.0.1:8787: listen tcp 127.0.0.1:8787: bind: address already in use" |
-| Host not assignable | 1 | "Error: database error: cannot bind 10.0.0.5:8787: listen tcp 10.0.0.5:8787: bind: cannot assign requested address" |
+| Explicit `--port` already in use | 1 | "Error: I/O error: cannot bind 127.0.0.1:8787: listen tcp 127.0.0.1:8787: bind: address already in use" |
+| Host not assignable | 1 | "Error: I/O error: cannot bind 10.0.0.5:8787: listen tcp 10.0.0.5:8787: bind: cannot assign requested address" |
 | `--port` out of range | 6 | "Error: validation error: --port must be an integer between 0 and 65535 (got 70000)" |
 | `--port` not an integer | 6 | "Error: validation error: --port must be an integer between 0 and 65535 (got \"notanumber\")" |
 | Unknown flag | 2 | "Error: invalid input: unknown flag: --foo" |
 | Unexpected positional argument | 2 | "Error: invalid input: unexpected argument: X" |
-| Data directory unreadable | 1 | "Error: reading data directory <absolute path of ~/.roadmaps>: database error" |
+| Data directory unreadable | 1 | "Error: I/O error: reading data directory <absolute path of ~/.roadmaps>" |
 
 The two bind rows carry the operating system's own diagnostic after the address, and its wording belongs to the platform rather than to `rmp`. The part `rmp` fixes is everything up to and including `cannot bind <host>:<port>: `; the text after it is the Go standard library's `net.OpError` rendering, shown here as observed on Linux.
+
+The data-directory row is published here because `rmp web` is the command that most often meets it, but the line is not the web interface's own: the startup layout sweep reads `~/.roadmaps/` before any command is dispatched, so any invocation whatsoever prints it when that directory exists and cannot be read (`ARCHITECTURE.md § Filesystem Layout Migration`). It carries no `<detail>`: the sweep names the directory it could not read and stops there.
+
+None of the three is a database failure, and none of them says so. A busy port, an unassignable address, and an unreadable directory are failures of a socket and of the filesystem; the sentinel that names them is `I/O error: `, and `ARCHITECTURE.md § Sentinel Error Catalogue` is canonical for the boundary against `database error: `.
 
 ---
 

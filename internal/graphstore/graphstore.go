@@ -196,7 +196,7 @@ type Store struct {
 // checkpoint publishes into, so the hold has to start before the open and end
 // after the last truncation.
 //
-// Every failure is returned classified as utils.ErrDatabase, except a lock
+// Every failure is returned classified as utils.ErrGraphStore, except a lock
 // acquisition failure, which arrives already classified by internal/graphlock.
 // On any failure Open releases everything it had taken, so a caller that gets an
 // error holds nothing and must not call Close.
@@ -283,10 +283,10 @@ func (h *Hold) Release() {
 // It spends the hold either way: on success the Store's Close releases it, and
 // on failure Open releases it before returning, so a caller that gets an error
 // holds nothing and must not call Close. Every failure is classified as
-// utils.ErrDatabase.
+// utils.ErrGraphStore.
 func (h *Hold) Open() (*Store, error) {
 	if h.spent {
-		return nil, fmt.Errorf("%w: graph store hold already spent", utils.ErrDatabase)
+		return nil, fmt.Errorf("%w: graph store hold already spent", utils.ErrGraphStore)
 	}
 	h.spent = true
 
@@ -296,7 +296,7 @@ func (h *Hold) Open() (*Store, error) {
 	res, err := recovery.Open[string, float64](graphDir, openOpts)
 	if err != nil {
 		release()
-		return nil, fmt.Errorf("%w: graph store unavailable: %v", utils.ErrDatabase, err)
+		return nil, fmt.Errorf("%w: graph store unavailable: %v", utils.ErrGraphStore, err)
 	}
 
 	w, err := openWAL(filepath.Join(graphDir, walFileName))
@@ -346,7 +346,7 @@ func (h *Hold) Open() (*Store, error) {
 func openWAL(walPath string) (*wal.Writer, error) {
 	w, err := backoff.Retry(func() (*wal.Writer, error) { return wal.Open(walPath) }, backoff.Always)
 	if err != nil {
-		return nil, fmt.Errorf("%w: graph store unavailable: %v", utils.ErrDatabase, err)
+		return nil, fmt.Errorf("%w: graph store unavailable: %v", utils.ErrGraphStore, err)
 	}
 	return w, nil
 }

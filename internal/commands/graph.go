@@ -547,7 +547,7 @@ func readQueryStream(src io.Reader) (string, error) {
 	// neither is a failure here. Anything else is a genuine I/O failure of the
 	// process rather than bad user input, and maps to exit code 1.
 	if err != nil && !errors.Is(err, io.EOF) && !errors.Is(err, io.ErrUnexpectedEOF) {
-		return "", fmt.Errorf("%w: reading query from stdin: %v", utils.ErrDatabase, err)
+		return "", fmt.Errorf("%w: reading query from stdin: %v", utils.ErrIO, err)
 	}
 
 	if n > maxQueryBytes {

@@ -759,15 +759,19 @@ func TestMoveSidecars_FailureIsBestEffortWithDistinctWarning(t *testing.T) {
 	}
 }
 
-// TestMigrateOneRoadmap_OSFailureCarriesErrDatabase covers ISSUE-006: the
-// non-fatal OS-error paths in the per-roadmap migration must carry the
-// ErrDatabase sentinel so errors.Is recognises them, consistent with the Error
-// Reuse Policy. The failure is forced by making the data directory read-only,
-// so creating the roadmap home directory (the first mutation, before any
-// rename) fails with EACCES. We assert errors.Is(err, ErrDatabase) without
+// TestMigrateOneRoadmap_OSFailureCarriesErrIO covers ISSUE-006: the
+// non-fatal OS-error paths in the per-roadmap migration must carry a sentinel
+// so errors.Is recognises them, consistent with the Error Reuse Policy. The
+// sentinel is ErrIO rather than ErrDatabase because the artefact is a roadmap
+// DIRECTORY: what the migration moves under project.db keeps ErrDatabase, and
+// what it does to the directories around it does not
+// (SPEC/ARCHITECTURE.md § Sentinel Error Catalogue, rule 5). The failure is
+// forced by making the data directory read-only, so creating the roadmap home
+// directory (the first mutation, before any rename) fails with EACCES. We
+// assert errors.Is(err, ErrIO) without
 // asserting exit-code behaviour (the sweep keeps surfacing these as non-fatal
 // warnings).
-func TestMigrateOneRoadmap_OSFailureCarriesErrDatabase(t *testing.T) {
+func TestMigrateOneRoadmap_OSFailureCarriesErrIO(t *testing.T) {
 	dataDir := withTempDataDir(t)
 
 	const name = "billing-engine"
@@ -796,7 +800,7 @@ func TestMigrateOneRoadmap_OSFailureCarriesErrDatabase(t *testing.T) {
 		// still writable; skip rather than assert a false negative.
 		t.Skip("environment permits writing to a read-only directory (likely running as root); cannot exercise the OS-failure path")
 	}
-	if !errors.Is(err, ErrDatabase) {
-		t.Errorf("OS-failure path must wrap ErrDatabase for errors.Is; got %v", err)
+	if !errors.Is(err, ErrIO) {
+		t.Errorf("OS-failure path must wrap ErrIO for errors.Is; got %v", err)
 	}
 }

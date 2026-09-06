@@ -97,6 +97,22 @@ var (
 	// ACT ON THE SERVER OR ON --socket.
 	ErrGraphServer = errors.New("graph server error")
 
+	// ErrIO indicates a stream, socket, file or directory the CLI reads or
+	// writes, and that is NOT a roadmap's database. It maps to exit code 1.
+	//
+	// The sentinel names the ARTEFACT rather than the layer that reported the
+	// failure. Moving a legacy project.db, or failing to secure it to 0600,
+	// therefore stays ErrDatabase even though both are file operations: the
+	// artefact is the database. A failed read of the process's own standard
+	// input, or a listener that cannot bind, is neither.
+	//
+	// "I/O" is written in the case the specification already used for this class
+	// before the sentinel existed. It is an acronym whose capitals are its
+	// spelling, not emphasis, which is why it sits beside twelve lower-case
+	// sentinels without breaking the rule they follow
+	// (SPEC/ARCHITECTURE.md § Sentinel Error Catalogue, rule 5).
+	ErrIO = errors.New("I/O error")
+
 	// ErrValidation indicates a validation error.
 	ErrValidation = errors.New("validation error")
 
@@ -170,4 +186,9 @@ func IsGraphStore(err error) bool {
 // IsGraphServer checks if an error is ErrGraphServer or wraps it.
 func IsGraphServer(err error) bool {
 	return errors.Is(err, ErrGraphServer)
+}
+
+// IsIO checks if an error is ErrIO or wraps it.
+func IsIO(err error) bool {
+	return errors.Is(err, ErrIO)
 }

@@ -357,8 +357,8 @@ func TestResolveGraphServerForRequest_TheThreeOutcomes(t *testing.T) {
 			t.Fatalf("a path that is not a socket resolved to %q with no error; this is not a "+
 				"reason to open the store", socket)
 		}
-		if !errors.Is(err, utils.ErrDatabase) {
-			t.Errorf("error = %v, want it to wrap utils.ErrDatabase, which handleGraphData answers "+
+		if !errors.Is(err, utils.ErrGraphServer) {
+			t.Errorf("error = %v, want it to wrap utils.ErrGraphServer, which handleGraphData answers "+
 				"with HTTP 500 — the status this endpoint already returns for a graph store it "+
 				"cannot open", err)
 		}
@@ -419,8 +419,8 @@ func TestServedGraphError_SeparatesTheInternalErrorFromTheExecutionFailures(t *t
 					isQueryError, c.wantExecution)
 			}
 			if !c.wantExecution {
-				if !errors.Is(err, utils.ErrDatabase) {
-					t.Errorf("error = %v, want it to wrap utils.ErrDatabase so handleGraphData "+
+				if !errors.Is(err, utils.ErrGraphServer) {
+					t.Errorf("error = %v, want it to wrap utils.ErrGraphServer so handleGraphData "+
 						"answers 500", err)
 				}
 				return

@@ -1432,6 +1432,18 @@ what the producer manages to write: the operating system's pipe buffer holds
 bytes the command never reads, so a writer may push somewhat more than 1048577
 bytes before the pipe breaks.
 
+**A read that fails is a failure of the stream, not of the statement.** The two
+ordinary outcomes of a bounded read — a stream shorter than the bound, with or
+without content — are not failures and are not reported as such. Anything else
+is: the command stops, exits 1, and prints
+`Error: I/O error: reading query from stdin: <detail>`, where `<detail>` is the
+operating system's own text. `COMMANDS.md § Execute Error Cases` publishes the
+line, and [Error Handling and Exit Codes](#error-handling-and-exit-codes)
+classifies it. The sentinel names the stream because the stream is what failed:
+no store has been opened, no server has been contacted, and there is no statement
+yet to correct. A directory redirected onto standard input is the plainest way to
+reach it.
+
 One difference from the comment body's bounded read is deliberate and must not be
 "aligned" away. That read looks past its cap for trailing whitespace, so that the
 verdict it reaches is exactly the verdict a read-to-EOF implementation would
@@ -1932,10 +1944,19 @@ introduce no exit code of their own.
 They do carry three sentinels of their own, `utils.ErrGraphEngine`,
 `utils.ErrGraphStore` and `utils.ErrGraphServer`, all three mapping to exit
 code 1. `ARCHITECTURE.md § Sentinel Error Catalogue` is canonical for what each
-one means and for why the three are kept apart; this section assigns every
-condition the graph subsystem can reach to one of them. No graph failure carries
-`utils.ErrDatabase`: the only database a roadmap has is its `project.db`, which
-no graph operation reads or writes ([Constraints](#constraints), rule 2).
+one means and for why the three are kept apart; the table below assigns every
+condition a graph subcommand can reach to a sentinel, and every graph failure
+among them to one of those three. No graph failure carries `utils.ErrDatabase`:
+the only database a roadmap has is its `project.db`, which no graph operation
+reads or writes ([Constraints](#constraints), rule 2).
+
+One row of the table is not a graph failure at all. A read of standard input that
+fails carries `utils.ErrIO`, because what failed is the stream the statement was
+to arrive on and not the graph: neither the store nor a server has been touched at
+that point, and the statement does not yet exist. It is listed here because
+`graph execute` and `graph client` can both reach it, and a table that claims to
+assign every condition a graph subcommand can reach would be incomplete without
+it.
 
 | Condition | Sentinel | Exit code |
 |-----------|----------|-----------|
@@ -1944,6 +1965,7 @@ no graph operation reads or writes ([Constraints](#constraints), rule 2).
 | No query supplied: `--query` absent and standard input empty, whitespace only, or a terminal; or `--query` present with an empty, whitespace-only, or absent value (see [Cypher Input Source and Precedence](#cypher-input-source-and-precedence)) | `utils.ErrRequired` | 2 |
 | `graph execute` receives a positional argument, a bare Cypher query included; it accepts none (see [No Positional Query: A Stray Token Is Refused](#no-positional-query-a-stray-token-is-refused)) | `utils.ErrInvalidInput` | 2 |
 | Query longer than the maximum query length of 1 MiB, from either source (see [Maximum Query Length](#maximum-query-length)) | `utils.ErrValidation` | 6 |
+| The query was to come from standard input and the read of the stream itself failed (see [Bounded Standard-Input Read](#bounded-standard-input-read)) | `utils.ErrIO` | 1 |
 | Cypher fails to parse or execute in the engine, a schema statement included (see [Schema Failure Classes](#schema-failure-classes)) | `utils.ErrGraphEngine` | 1 |
 | The statement exhausts the statement time budget and is cancelled (see [Statement Time Budget](#statement-time-budget)) | `utils.ErrGraphEngine` | 1 |
 | Every attempt of the client's retry policy loses a serialisation conflict against a graph server (see [Concurrency Inside the Server](#concurrency-inside-the-server), rule 9) | `utils.ErrGraphEngine` | 1 |

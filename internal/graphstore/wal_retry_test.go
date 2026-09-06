@@ -83,19 +83,19 @@ func TestOpenWALExhaustsTheSharedPolicy(t *testing.T) {
 	}
 }
 
-// TestOpenWALExhaustionSurfacesAsErrDatabase pins the error contract the
+// TestOpenWALExhaustionSurfacesAsErrGraphStore pins the error contract the
 // timing fix had to leave untouched: an exhausted wait is a database-class
 // failure (exit code 1), carrying the diagnostic the CLI prints, with the
 // underlying WAL error still named.
-func TestOpenWALExhaustionSurfacesAsErrDatabase(t *testing.T) {
+func TestOpenWALExhaustionSurfacesAsErrGraphStore(t *testing.T) {
 	t.Parallel()
 
 	_, err := openWAL(heldWALPath(t))
 	if err == nil {
 		t.Fatal("openWAL returned a writer for a path whose lock was held throughout")
 	}
-	if !errors.Is(err, utils.ErrDatabase) {
-		t.Errorf("an exhausted wait must surface as utils.ErrDatabase (exit 1), got: %v", err)
+	if !errors.Is(err, utils.ErrGraphStore) {
+		t.Errorf("an exhausted wait must surface as utils.ErrGraphStore (exit 1), got: %v", err)
 	}
 	if want := "graph store unavailable"; !strings.Contains(err.Error(), want) {
 		t.Errorf("exhaustion message = %q, want it to contain %q", err.Error(), want)

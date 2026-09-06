@@ -50,7 +50,7 @@ func TestBindListener_ExplicitPortBusyIsFatal(t *testing.T) {
 		_ = ln.Close()
 		t.Fatalf("bindListener on busy explicit port = nil error, want fatal bind error")
 	}
-	if !errors.Is(err, utils.ErrDatabase) {
+	if !errors.Is(err, utils.ErrIO) {
 		t.Errorf("error = %v, want wrapping ErrDatabase", err)
 	}
 	if !contains(err.Error(), strconv.Itoa(port)) {
@@ -100,7 +100,7 @@ func TestRunServer_ServeErrorPropagates(t *testing.T) {
 	if rerr == nil {
 		t.Fatalf("runServer on a closed listener = nil, want a wrapped serve error")
 	}
-	if !errors.Is(rerr, utils.ErrDatabase) {
+	if !errors.Is(rerr, utils.ErrIO) {
 		t.Errorf("error = %v, want wrapping ErrDatabase", rerr)
 	}
 }
@@ -120,7 +120,7 @@ func TestServe_BindFailureReturnsError(t *testing.T) {
 	if err == nil {
 		t.Fatalf("serve with busy explicit port = nil, want fatal bind error")
 	}
-	if !errors.Is(err, utils.ErrDatabase) {
+	if !errors.Is(err, utils.ErrIO) {
 		t.Errorf("error = %v, want wrapping ErrDatabase", err)
 	}
 }

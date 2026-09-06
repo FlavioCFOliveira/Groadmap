@@ -34,7 +34,7 @@ func serve(opts options) error {
 	//    migration sweep already ran in main.go before dispatch; we only
 	//    confirm the data directory here.
 	if err := utils.EnsureDataDir(); err != nil {
-		return fmt.Errorf("%w: cannot read data directory ~/.roadmaps: %v", utils.ErrDatabase, err)
+		return fmt.Errorf("%w: cannot read data directory ~/.roadmaps: %v", utils.ErrIO, err)
 	}
 
 	// 2. Ensure every served roadmap's SQLite schema is current. The web
@@ -155,7 +155,7 @@ func bindListener(opts options) (net.Listener, error) {
 	// An explicit --port does not fall back: the user asked for that exact
 	// port, so a bind failure is fatal.
 	if opts.portExplicit {
-		return nil, fmt.Errorf("%w: cannot bind %s: %v", utils.ErrDatabase, addr, err)
+		return nil, fmt.Errorf("%w: cannot bind %s: %v", utils.ErrIO, addr, err)
 	}
 
 	// Default port busy: fall back to an OS-chosen ephemeral port.
@@ -164,7 +164,7 @@ func bindListener(opts options) (net.Listener, error) {
 	if fbErr != nil {
 		// Even the ephemeral fallback failed (for example the host is not
 		// assignable); report the original requested address.
-		return nil, fmt.Errorf("%w: cannot bind %s: %v", utils.ErrDatabase, addr, fbErr)
+		return nil, fmt.Errorf("%w: cannot bind %s: %v", utils.ErrIO, addr, fbErr)
 	}
 	return fbLn, nil
 }
@@ -235,7 +235,7 @@ func runServer(ln net.Listener, sigCh <-chan os.Signal) error {
 		return nil
 	case err := <-serveErr:
 		if err != nil && !errors.Is(err, http.ErrServerClosed) {
-			return fmt.Errorf("%w: web server failed: %v", utils.ErrDatabase, err)
+			return fmt.Errorf("%w: web server failed: %v", utils.ErrIO, err)
 		}
 		return nil
 	}

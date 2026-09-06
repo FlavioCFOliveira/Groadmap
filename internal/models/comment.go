@@ -415,7 +415,7 @@ func ReadCommentBody(src io.Reader) (string, error) {
 			if errors.Is(err, io.EOF) {
 				break
 			}
-			return "", fmt.Errorf("%w: reading the comment body from standard input: %v", utils.ErrDatabase, err)
+			return "", fmt.Errorf("%w: reading the comment body from standard input: %v", utils.ErrIO, err)
 		}
 	}
 

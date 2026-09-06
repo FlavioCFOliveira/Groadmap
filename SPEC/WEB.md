@@ -5184,8 +5184,9 @@ server.
 |-----------|----------|-----------|
 | `--port` value out of range `0`-`65535`, or non-integer | `utils.ErrValidation` | 6 |
 | Unknown flag, or unexpected positional argument | `utils.ErrInvalidInput` | 2 |
-| Requested bind address/port cannot be bound (port in use with explicit `--port`, host not assignable) | `utils.ErrDatabase` | 1 |
-| Data directory `~/.roadmaps/` exists but cannot be read or created | `utils.ErrDatabase` | 1 |
+| Requested bind address/port cannot be bound (port in use with explicit `--port`, host not assignable) | `utils.ErrIO` | 1 |
+| Data directory `~/.roadmaps/` exists but cannot be read or created | `utils.ErrIO` | 1 |
+| The listener stops accepting connections after the server has started, for a reason other than the graceful shutdown | `utils.ErrIO` | 1 |
 | Server started and then stopped by `SIGINT`/`SIGTERM` (graceful shutdown) | — | 0 |
 
 Rules:
@@ -5193,10 +5194,15 @@ Rules:
 1. A startup failure (invalid flag, unbindable address/port, unreadable data
    directory) terminates the process before it serves any request, with the
    plain-text error to stderr and the matching exit code above.
-2. A bind failure is treated as an I/O / system failure and maps to
-   `utils.ErrDatabase` (exit code 1), consistent with how the CLI treats other
-   I/O and database-class failures. The error message names the host and port
-   that could not be bound.
+2. A bind failure is an I/O failure and maps to `utils.ErrIO` (exit code 1),
+   which prints `I/O error: `. A listener is not a database and the line does not
+   call it one; `ARCHITECTURE.md § Sentinel Error Catalogue` is canonical for the
+   class and for its boundary against `utils.ErrDatabase`. The exit code is the
+   one the CLI gives every I/O and database-class failure alike, so a consumer
+   that branches on it sees nothing new. The error message names the host and port
+   that could not be bound, and `COMMANDS.md § Web Interface` publishes it. The
+   data-directory row above carries the same sentinel for the same reason: what
+   could not be read or created is a directory.
 3. The default-port fallback to an ephemeral port (see
    [Bind Address and Port Selection](#bind-address-and-port-selection)) means
    that, without an explicit `--port`, a busy default port does **not** cause a

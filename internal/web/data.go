@@ -1971,7 +1971,7 @@ func loadGraphView(ctx context.Context, name, rawQuery, rawLimit string) (graphV
 		if os.IsNotExist(statErr) {
 			return empty, nil
 		}
-		return graphView{}, fmt.Errorf("%w: stat graph store: %v", utils.ErrDatabase, statErr)
+		return graphView{}, fmt.Errorf("%w: stat graph store: %v", utils.ErrGraphStore, statErr)
 	} else if !info.IsDir() {
 		return empty, nil
 	}
@@ -2076,7 +2076,7 @@ func resolveGraphServerForRequest(ctx context.Context, name string) (string, err
 	case state.NotServed():
 		return "", nil
 	default:
-		return "", fmt.Errorf("%w: graph server unreachable at %s: %v", utils.ErrDatabase, socket, probeErr)
+		return "", fmt.Errorf("%w: graph server unreachable at %s: %v", utils.ErrGraphServer, socket, probeErr)
 	}
 }
 
@@ -2129,12 +2129,12 @@ func servedGraphView(ctx context.Context, socket, query string) (graphView, erro
 func servedGraphError(ctx context.Context, socket string, err error) error {
 	var sendErr *graphclient.SendError
 	if !errors.As(err, &sendErr) {
-		return fmt.Errorf("%w: graph store unavailable: %v", utils.ErrDatabase, err)
+		return fmt.Errorf("%w: graph store unavailable: %v", utils.ErrGraphStore, err)
 	}
 
 	switch sendErr.Kind {
 	case graphclient.FailureUnreachable:
-		return fmt.Errorf("%w: graph server unreachable at %s: %v", utils.ErrDatabase, socket, sendErr.Cause)
+		return fmt.Errorf("%w: graph server unreachable at %s: %v", utils.ErrGraphServer, socket, sendErr.Cause)
 	case graphclient.FailureLost:
 		return newGraphQueryError(graphErrExecution,
 			"query failed to execute: the connection to the graph server was lost; the statement's outcome is unknown")

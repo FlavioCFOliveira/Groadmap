@@ -154,7 +154,10 @@ operate on it rather than warning and continuing.
 
 - **Error message.** The failure produces the standard error shape specified in
   `HELP.md § Error message format`, and the error wraps the `utils.ErrDatabase`
-  sentinel, as every I/O failure does (see
+  sentinel, because what could not be brought to `0600` is a roadmap's
+  `project.db` itself. It is a filesystem operation, but the artefact is the
+  database, and the artefact is what the sentinel names; a failure of the same
+  kind on a directory or a stream carries `utils.ErrIO` instead (see
   `ARCHITECTURE.md § Error Reuse Policy (Mandatory)`). The line written to stderr
   is:
 
@@ -692,7 +695,7 @@ The conflict check in step 2 is a mandatory safety guard. An atomic rename **sil
 ### Error Handling and Exit Codes
 
 1. A skipped roadmap (conflict, invalid name, or contained failure) does not change the invocation's exit code on its own; the sweep records a non-fatal warning to stderr and the requested command runs. A non-regular top-level entry (for example, a symbolic link or a directory) is not a candidate at all rather than a skipped roadmap: it does not change the exit code, and it is skipped silently with no warning (see Edge Cases).
-2. A failure that prevents the sweep from reading the data directory at all (for example, `~/.roadmaps/` exists but is not readable) is an I/O failure and maps to `utils.ErrDatabase` (exit code `1`), consistent with `ARCHITECTURE.md § Error Handling`.
+2. A failure that prevents the sweep from reading the data directory at all (for example, `~/.roadmaps/` exists but is not readable) is an I/O failure and maps to `utils.ErrIO` (exit code `1`), consistent with `ARCHITECTURE.md § Error Handling`. The data directory is not a database, and neither are the roadmap home directories the sweep creates and secures inside it; every filesystem failure the sweep reports on one of them carries `utils.ErrIO`. What the sweep does to a roadmap's `project.db` — checking whether one is already in place, moving a legacy database into its home, and securing and verifying the moved file — carries `utils.ErrDatabase`, because there the artefact is the database. `COMMANDS.md § Web Interface` publishes the exact line the unreadable data directory prints.
 3. The migration never deletes a file it did not first successfully move. Legacy files are removed only as the source side of an atomic rename; they are never unlinked independently.
 
 ## Error Handling
@@ -760,7 +763,8 @@ The canonical set of sentinel errors is defined exclusively in `internal/utils/e
 | `utils.ErrInvalidInput` | 2 | Malformed argument, unknown flag, bad syntax |
 | `utils.ErrRequired` | 2 | Required parameter is absent or empty |
 | `utils.ErrNoRoadmap` | 3 | No roadmap selected and none provided via `-r` |
-| `utils.ErrDatabase` | 1 | A failure of the roadmap's SQLite database, of the data directory, or of another file or stream the CLI reads or writes |
+| `utils.ErrDatabase` | 1 | A failure of a roadmap's SQLite database: its content, its schema, a statement against it, or the `project.db` file itself |
+| `utils.ErrIO` | 1 | A stream, socket, file, or directory the CLI reads or writes that is not a roadmap's database |
 | `utils.ErrGraphEngine` | 1 | A statement reached the graph engine and did not complete there |
 | `utils.ErrGraphStore` | 1 | The roadmap's graph store, its directory, or its exclusive access lock |
 | `utils.ErrGraphServer` | 1 | The graph server, its socket, or the connection to it |
@@ -770,7 +774,7 @@ The canonical set of sentinel errors is defined exclusively in `internal/utils/e
 
 A dispatch failure MUST be carried by `utils.ErrUnknownCommand` and MUST NOT be wrapped in `utils.ErrInvalidInput`. The two are distinct classes: `utils.ErrInvalidInput` covers a malformed flag or argument supplied to a command that was resolved, and exits `2`; `utils.ErrUnknownCommand` covers a command or subcommand name that could not be resolved at all, and exits `127`. Wrapping the second in the first is what makes an unresolved subcommand exit `2` instead of `127`, and it also prefixes the message with `invalid input: `, which misreports the class to the reader.
 
-Four failure conditions are classified in ways the one-line descriptions above
+Five failure conditions are classified in ways the one-line descriptions above
 do not settle on their own, so the specification fixes them here.
 
 1. **A date value that does not parse** is carried by `utils.ErrValidation` and
@@ -835,6 +839,55 @@ do not settle on their own, so the specification fixes them here.
    condition-by-condition assignment, and `COMMANDS.md § Graph Management`
    publishes the exact line each condition prints.
 
+5. **A failure of the process's own input or output never carries
+   `utils.ErrDatabase` either.** It carries `utils.ErrIO`, which prints
+   `I/O error: `.
+
+   The class is an operation on a stream, a socket, a file, or a directory that
+   the operating system refused or could not complete, where what was operated on
+   is not a roadmap's database. Three surfaces reach it today: a failed read of
+   standard input, which `graph execute`, `graph client` and the four
+   comment-body subcommands can all meet; a listener `rmp web` cannot bind, or a
+   listener that stops accepting once it is serving; and the data directory
+   `~/.roadmaps/`, together with the roadmap home directories inside it, when the
+   startup layout sweep or `rmp web` cannot read, create, or secure one of them.
+
+   **The boundary against `utils.ErrDatabase` is the artefact, not the layer that
+   reported the failure.** `utils.ErrDatabase` names a roadmap's SQLite database:
+   its content, its schema, a statement against it, or the `project.db` file
+   itself — so moving a legacy `project.db` into its home, or failing to bring one
+   to `0600`, stays a database failure even though both are filesystem
+   operations. `utils.ErrIO` names everything else the CLI reads or writes. A pipe
+   is not a database, a TCP listener is not a database, and the directory that
+   holds the databases is not one of them; a reader told otherwise is sent to the
+   wrong artefact, which is the same defect the graph split fixed one class up.
+
+   **An operation that succeeded and that `rmp` then refused is not in this
+   class.** The symbolic-link refusal of `§ Directory Structure`, location rule
+   10, is the case: the `lstat` succeeded and returned exactly what it was asked
+   for, and what follows is `rmp`'s own safety decision rather than a failure of
+   the operation. `utils.ErrIO` is for an operation the operating system did not
+   complete.
+
+   `utils.ErrIO` maps to exit code `1`, which is the code every one of these
+   conditions already returned under `utils.ErrDatabase`, so no consumer that
+   branches on an exit code is affected. It reaches `1` by falling through
+   `handleError`'s switch, exactly as `utils.ErrDatabase` does and exactly as the
+   three graph sentinels do; no case is added for it.
+
+   **The sentinel is spelled `I/O`, with both letters capital.** The other twelve
+   are lower case because they are ordinary English words, and lower case is what
+   an English word takes in the middle of a line. `I/O` is an initialism whose
+   capitals are its spelling rather than emphasis, and it is already the spelling
+   this specification uses for the class in `§ Filesystem Layout Migration`,
+   `GRAPH.md § Error Handling and Exit Codes`, and
+   `WEB.md § Error Handling and Exit Codes`. `input/output error: ` was
+   considered and rejected: it is the text `strerror(3)` returns for `EIO`
+   specifically, and almost nothing in this class is `EIO` — a busy port is
+   `EADDRINUSE`, an unreadable data directory is `EACCES`, a directory redirected
+   onto standard input is `EISDIR` — so the sentinel would read as a claim about
+   the errno that the detail after it would then contradict.
+
 #### Wrapping Rules
 
 1. **Always use `%w`**: Every `fmt.Errorf` call that produces or re-wraps an error MUST use the `%w` verb to preserve the error chain for `errors.Is()` inspection.
@@ -852,6 +905,8 @@ do not settle on their own, so the specification fixes them here.
 
 3. **Never construct ad-hoc sentinel errors inline**: Strings like `errors.New("not found")` in command handlers are forbidden. Always wrap the corresponding sentinel from `utils`.
 
+4. **The sentinel is rendered first**: the wrapped sentinel goes between the `Error: ` prefix and the detail, so the reader meets the failure class before the description of it — `fmt.Errorf("%w: reading data directory %s", ErrIO, dir)` and never `fmt.Errorf("reading data directory %s: %w", dir, ErrIO)`. The two produce the same error value and the same exit code, and `errors.Is()` cannot tell them apart, so nothing but this rule keeps the second out. It reads as a different message: `Error: reading data directory /home/user/.roadmaps: I/O error` puts the class where the operating system's diagnostic belongs, and a reader scanning the first words of the line for the class finds a verb instead. `COMMANDS.md § Published Error Strings Are Exact`, point 2, states the same order for every string that file publishes; this rule extends it to every wrap, published or not, so that one order holds across the whole binary.
+
 #### Propagation Rules
 
 Each layer of the stack has a designated wrapping responsibility:
@@ -861,6 +916,9 @@ Each layer of the stack has a designated wrapping responsibility:
 | `internal/db/` | `sql.ErrNoRows` | `utils.ErrNotFound` |
 | `internal/db/` | SQLite constraint violation | `utils.ErrAlreadyExists` |
 | `internal/db/` | Any other `database/sql` error | `utils.ErrDatabase` |
+| `internal/utils/`, `internal/web/` | Any failure to read, create, or secure the data directory or a roadmap home directory | `utils.ErrIO` |
+| `internal/web/` | A listener that cannot be bound, or that stops accepting once the server is serving | `utils.ErrIO` |
+| `internal/commands/`, `internal/models/` | A failed read of standard input | `utils.ErrIO` |
 | `internal/graphstore/`, `internal/graphlock/` | Any graph store, graph directory or store-lock failure | `utils.ErrGraphStore` |
 | `internal/graphserve/`, `internal/graphclient/` | Any graph server, socket or connection failure | `utils.ErrGraphServer` |
 | `internal/commands/` | A statement the graph engine refused, cut, or lost to a conflict | `utils.ErrGraphEngine` |
@@ -876,7 +934,7 @@ When a new error category is genuinely needed:
 
 1. Add the new sentinel variable to `internal/utils/errors.go` only — never inline.
 2. Add the corresponding `IsXxx()` helper function in the same file.
-3. Add a new exit-code mapping in `cmd/rmp/main.go` in the `handleError()` function.
+3. Settle the exit code in `cmd/rmp/main.go`'s `handleError()` function. A sentinel that maps to a code other than `1` needs a case of its own. A sentinel that maps to `1` MUST NOT have one: `1` is the value `handleError` returns when no case matches, so a case for it would state twice what the fall-through already does, and the two could then disagree. The catalogue row above is what records the mapping in that case, and the deliberate absence of a case is the step. `utils.ErrDatabase`, `utils.ErrIO` and the three graph sentinels all reach `1` this way.
 4. Update the sentinel catalogue table above in this specification.
 
 No new sentinel may be introduced without all four steps being completed in the same commit.

@@ -743,7 +743,7 @@ class TestAIContractErrorParity:
         finally:
             holder.close()
         actual = err.splitlines()[0] if err else ""
-        published = f"Error: database error: cannot bind 127.0.0.1:{port}: <detail>"
+        published = f"Error: I/O error: cannot bind 127.0.0.1:{port}: <detail>"
         mode, prefix = classify(published)
         assert mode == "prefix", f"the bind marker no longer classifies: {published!r}"
         ok, _mode, expectation = compare(published, actual)

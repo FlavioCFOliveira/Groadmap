@@ -566,12 +566,12 @@ EXEMPT_KEYS = {
         "failure, not reachable through ordinary CLI execution against a "
         "healthy filesystem."
     ),
-    "Error: database error: cannot bind 127.0.0.1:8787: listen tcp 127.0.0.1:8787: bind: address already in use": (
+    "Error: I/O error: cannot bind 127.0.0.1:8787: listen tcp 127.0.0.1:8787: bind: address already in use": (
         "internal/web: the tail after \"cannot bind 127.0.0.1:8787: \" is "
         "the Go standard library's net.OpError rendering, platform-"
         "dependent per COMMANDS.md:3369; not assertable as a fixed literal."
     ),
-    "Error: database error: cannot bind 10.0.0.5:8787: listen tcp 10.0.0.5:8787: bind: cannot assign requested address": (
+    "Error: I/O error: cannot bind 10.0.0.5:8787: listen tcp 10.0.0.5:8787: bind: cannot assign requested address": (
         "internal/web: same platform-dependent net.OpError tail as the "
         "row above, and binding a specific non-loopback, non-local address "
         "like 10.0.0.5 is itself environment-dependent (routable only on "
@@ -589,6 +589,21 @@ EXEMPT_KEYS = {
 # NARROWING, not an exemption: the key is marked reached, and the sentinel
 # half is asserted rather than skipped.
 TAIL_EXEMPT_KEYS = {
+    "Error: I/O error: reading query from stdin: <detail>": (
+        "<detail>",
+        "The head \"Error: I/O error: reading query from stdin: \" is asserted "
+        "exactly, which is the whole of rmp's own text. What follows is the Go "
+        "runtime's rendering of the operating system's errno -- for a directory "
+        "handed to stdin, \"read /dev/stdin: is a directory\" -- and it names "
+        "the offending stream and the reason, neither of which this project "
+        "words or is free to change."
+    ),
+    "Error: I/O error: reading the comment body from standard input: <detail>": (
+        "<detail>",
+        "The same failure on the four comment subcommands, narrowed for the "
+        "same reason: the head is rmp's and the tail is the operating "
+        "system's."
+    ),
     "Error: database error: <detail>": (
         "<detail>",
         "The six database-failure rows of the comment subcommands (three in "
@@ -670,11 +685,26 @@ class TestErrorStringParity:
     # Invocation helpers
     # ------------------------------------------------------------------
 
-    def run_stdin(self, args, input_text=None):
+    def run_stdin(self, args, input_text=None, stdin_fd=None):
         """Run the CLI with `input_text` (or a closed/empty stdin when None)
-        piped in, returning (exit_code, stdout, stderr)."""
+        piped in, returning (exit_code, stdout, stderr).
+
+        `stdin_fd` hands the child a descriptor DIRECTLY instead of a pipe,
+        which is the only way to drive a stdin whose failure is a property of
+        the descriptor rather than of the bytes on it -- a directory, whose
+        read(2) is EISDIR. It and `input_text` are mutually exclusive."""
         env = os.environ.copy()
         env["HOME"] = str(self.test.home_dir)
+        if stdin_fd is not None:
+            assert input_text is None, "stdin_fd and input_text are mutually exclusive"
+            result = subprocess.run(
+                [self.test.cli_path] + args,
+                stdin=stdin_fd,
+                capture_output=True,
+                text=True,
+                env=env,
+            )
+            return result.returncode, result.stdout, result.stderr
         result = subprocess.run(
             [self.test.cli_path] + args,
             input=input_text if input_text is not None else "",
@@ -716,7 +746,7 @@ class TestErrorStringParity:
         REACHED.add(key)
 
     def check_head(self, key, args, exit_code, tail_contains, subs=None,
-                   stdin=None, note=""):
+                   stdin=None, note="", stdin_fd=None):
         """The narrowed form of `check`, for the keys TAIL_EXEMPT_KEYS names.
 
         Everything BEFORE the named placeholder is compared character for
@@ -755,7 +785,7 @@ class TestErrorStringParity:
             f"sentinel -- narrowing it would assert nothing of substance"
         )
 
-        rc, out, err = self.run_stdin(args, stdin)
+        rc, out, err = self.run_stdin(args, stdin, stdin_fd=stdin_fd)
         actual_line = err.splitlines()[0] if err else ""
         assert rc == exit_code, (
             f"[{note or key}] exit code: expected {exit_code}, got {rc}\n"
@@ -2589,6 +2619,39 @@ class TestErrorStringParity:
                 server.kill()
                 server.wait(timeout=10)
 
+    def test_stdin_read_failures_name_the_stream_not_a_database(self):
+        """The two lines a failed read of standard input publishes.
+
+        Both used to say "database error". Nothing about a failed read of the
+        process's own stdin is a database, and an agent piping a query was
+        being pointed at the wrong artefact entirely.
+
+        The failure is forced hermetically by handing the command a DIRECTORY
+        as its standard input: read(2) on a directory descriptor is EISDIR on
+        Linux, so the read fails without a fixture, a permission change, or a
+        race. The graph case needs no roadmap either -- the read precedes the
+        roadmap resolution, so a name that does not exist still reaches it.
+        """
+        query_key = "Error: I/O error: reading query from stdin: <detail>"
+        body_key = (
+            "Error: I/O error: reading the comment body from standard input: <detail>")
+
+        for key, args, note in (
+            (query_key, ["graph", "execute", "-r", self.roadmap],
+             "graph execute reading a directory as its query"),
+            (query_key, ["graph", "client", "-r", self.roadmap],
+             "graph client reading a directory as its query"),
+            (body_key, ["task", "comment-add", "-r", self.roadmap, "1", "--type", "NOTE"],
+             "task comment-add reading a directory as its body"),
+            (body_key, ["sprint", "comment-add", "-r", self.roadmap, "1", "--type", "FINDING"],
+             "sprint comment-add reading a directory as its body"),
+        ):
+            fd = os.open(str(self.test.home_dir), os.O_RDONLY)
+            try:
+                self.check_head(key, args, 1, ["stdin"], stdin_fd=fd, note=note)
+            finally:
+                os.close(fd)
+
     def test_web_errors(self):
         # #117: --port out of range (literal "70000" -- not a placeholder).
         self.check(
@@ -2626,7 +2689,7 @@ class TestErrorStringParity:
         os.chmod(roadmaps_dir, 0o000)
         try:
             self.check(
-                "Error: reading data directory <absolute path of ~/.roadmaps>: database error",
+                "Error: I/O error: reading data directory <absolute path of ~/.roadmaps>",
                 ["roadmap", "list"], 1,
                 subs={"<absolute path of ~/.roadmaps>": str(roadmaps_dir)},
                 note="unreadable data directory",
