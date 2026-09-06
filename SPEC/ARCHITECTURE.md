@@ -723,7 +723,7 @@ Help follows an error in exactly one case: a **dispatch failure**, meaning the C
 **Example - General error:**
 ```
 $ rmp task get -r project1 999
-Error: Task with ID 999 not found in roadmap 'project1'
+Error: resource not found: task 999 not found
 ```
 
 **Example - Missing parameter (no help is appended):**

@@ -35,6 +35,15 @@ func taskRemove(args []string) error {
 		return err
 	}
 
+	// A repeated id names the same task each time, so the list is reduced to the
+	// set it denotes before anything downstream reads it: the membership test,
+	// the UPDATE's IN clause and the audit loop all then operate once per
+	// distinct task, as SPEC/COMMANDS.md § Task ID Lists (Batch Commands)
+	// requires. Deduplicating here rather than inside ParseCommaSeparatedIDs is
+	// deliberate -- `sprint reorder` shares that parser and a repeat is a real
+	// error there, which silent deduplication would hide.
+	ids = utils.DistinctIDs(ids)
+
 	database, err := db.OpenExisting(roadmapName)
 	if err != nil {
 		return err
@@ -49,8 +58,8 @@ func taskRemove(args []string) error {
 	if err != nil {
 		return err
 	}
-	if len(tasks) != len(ids) {
-		return fmt.Errorf("%w: some tasks not found", utils.ErrNotFound)
+	if err := utils.TasksNotFoundError(utils.MissingIDs(ids, taskIDsOf(tasks))); err != nil {
+		return err
 	}
 	for i := range tasks {
 		if tasks[i].Status != models.StatusBacklog {
@@ -222,6 +231,15 @@ func taskSetStatus(args []string) error {
 		return err
 	}
 
+	// A repeated id names the same task each time, so the list is reduced to the
+	// set it denotes before anything downstream reads it: the membership test,
+	// the UPDATE's IN clause and the audit loop all then operate once per
+	// distinct task, as SPEC/COMMANDS.md § Task ID Lists (Batch Commands)
+	// requires. Deduplicating here rather than inside ParseCommaSeparatedIDs is
+	// deliberate -- `sprint reorder` shares that parser and a repeat is a real
+	// error there, which silent deduplication would hide.
+	ids = utils.DistinctIDs(ids)
+
 	// Parse status — an unrecognised value is a validation failure (exit 6 /
 	// ErrValidation per SPEC/ARCHITECTURE.md), not a generic failure (exit 1).
 	newStatus, err := models.ParseTaskStatus(remaining[1])
@@ -316,8 +334,8 @@ func taskSetStatus(args []string) error {
 	if err != nil {
 		return err
 	}
-	if len(tasks) != len(ids) {
-		return fmt.Errorf("%w: some tasks not found", utils.ErrNotFound)
+	if err := utils.TasksNotFoundError(utils.MissingIDs(ids, taskIDsOf(tasks))); err != nil {
+		return err
 	}
 	for i := range tasks {
 		if !tasks[i].Status.CanTransitionTo(newStatus) {
@@ -535,6 +553,15 @@ func taskReopen(args []string) error {
 		return err
 	}
 
+	// A repeated id names the same task each time, so the list is reduced to the
+	// set it denotes before anything downstream reads it: the membership test,
+	// the UPDATE's IN clause and the audit loop all then operate once per
+	// distinct task, as SPEC/COMMANDS.md § Task ID Lists (Batch Commands)
+	// requires. Deduplicating here rather than inside ParseCommaSeparatedIDs is
+	// deliberate -- `sprint reorder` shares that parser and a repeat is a real
+	// error there, which silent deduplication would hide.
+	ids = utils.DistinctIDs(ids)
+
 	database, err := db.OpenExisting(roadmapName)
 	if err != nil {
 		return err
@@ -548,8 +575,8 @@ func taskReopen(args []string) error {
 	if err != nil {
 		return err
 	}
-	if len(tasks) != len(ids) {
-		return fmt.Errorf("%w: some tasks not found", utils.ErrNotFound)
+	if err := utils.TasksNotFoundError(utils.MissingIDs(ids, taskIDsOf(tasks))); err != nil {
+		return err
 	}
 
 	// Separate already-BACKLOG tasks from tasks that need transition.
@@ -651,6 +678,15 @@ func taskSetPriority(args []string) error {
 		return err
 	}
 
+	// A repeated id names the same task each time, so the list is reduced to the
+	// set it denotes before anything downstream reads it: the membership test,
+	// the UPDATE's IN clause and the audit loop all then operate once per
+	// distinct task, as SPEC/COMMANDS.md § Task ID Lists (Batch Commands)
+	// requires. Deduplicating here rather than inside ParseCommaSeparatedIDs is
+	// deliberate -- `sprint reorder` shares that parser and a repeat is a real
+	// error there, which silent deduplication would hide.
+	ids = utils.DistinctIDs(ids)
+
 	priority, err := strconv.Atoi(remaining[1])
 	if err != nil {
 		// A non-numeric priority is a domain value-validation failure
@@ -693,8 +729,8 @@ func taskSetPriority(args []string) error {
 	if err != nil {
 		return err
 	}
-	if len(tasks) != len(ids) {
-		return fmt.Errorf("%w: some tasks not found", utils.ErrNotFound)
+	if err := utils.TasksNotFoundError(utils.MissingIDs(ids, taskIDsOf(tasks))); err != nil {
+		return err
 	}
 
 	// Capture timestamp once for the entire operation
@@ -735,6 +771,15 @@ func taskSetSeverity(args []string) error {
 		return err
 	}
 
+	// A repeated id names the same task each time, so the list is reduced to the
+	// set it denotes before anything downstream reads it: the membership test,
+	// the UPDATE's IN clause and the audit loop all then operate once per
+	// distinct task, as SPEC/COMMANDS.md § Task ID Lists (Batch Commands)
+	// requires. Deduplicating here rather than inside ParseCommaSeparatedIDs is
+	// deliberate -- `sprint reorder` shares that parser and a repeat is a real
+	// error there, which silent deduplication would hide.
+	ids = utils.DistinctIDs(ids)
+
 	severity, err := strconv.Atoi(remaining[1])
 	if err != nil {
 		// A non-numeric severity is a domain value-validation failure
@@ -774,8 +819,8 @@ func taskSetSeverity(args []string) error {
 	if err != nil {
 		return err
 	}
-	if len(tasks) != len(ids) {
-		return fmt.Errorf("%w: some tasks not found", utils.ErrNotFound)
+	if err := utils.TasksNotFoundError(utils.MissingIDs(ids, taskIDsOf(tasks))); err != nil {
+		return err
 	}
 
 	// Capture timestamp once for the entire operation

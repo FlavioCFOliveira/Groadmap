@@ -100,7 +100,7 @@ func buildTaskCommand() Command {
 				Examples: []Example{
 					{Title: "Single task", Cmd: "rmp task get -r myproject 1", Exit: 0},
 					{Title: "Bulk", Cmd: "rmp task get -r myproject 1,3,5", Exit: 0},
-					{Title: "Unknown id", Cmd: "rmp task get -r myproject 99999", Stderr: "Error: resource not found: some tasks not found", Exit: 4},
+					{Title: "Unknown id", Cmd: "rmp task get -r myproject 99999", Stderr: "Error: resource not found: task 99999 not found", Exit: 4},
 				},
 			},
 			{
@@ -214,7 +214,7 @@ func buildTaskCommand() Command {
 				Examples: []Example{
 					{Title: "Reopen one", Cmd: "rmp task reopen -r myproject 7", Exit: 0},
 					{Title: "Reopen bulk", Cmd: "rmp task reopen -r myproject 1,3,5", Exit: 0},
-					{Title: "Unknown id", Cmd: "rmp task reopen -r myproject 99999", Stderr: "Error: resource not found: some tasks not found", Exit: 4},
+					{Title: "Unknown id", Cmd: "rmp task reopen -r myproject 99999", Stderr: "Error: resource not found: task 99999 not found", Exit: 4},
 				},
 			},
 			{
@@ -235,7 +235,7 @@ func buildTaskCommand() Command {
 				ExitCodes:   []int{0, 3, 4, 6},
 				Examples: []Example{
 					{Title: "Bulk reprioritise", Cmd: "rmp task prio -r myproject 1,2,3 8", Exit: 0},
-					{Title: "Unknown id", Cmd: "rmp task prio -r myproject 99999 5", Stderr: "Error: resource not found: some tasks not found", Exit: 4},
+					{Title: "Unknown id", Cmd: "rmp task prio -r myproject 99999 5", Stderr: "Error: resource not found: task 99999 not found", Exit: 4},
 				},
 			},
 			{
@@ -256,7 +256,7 @@ func buildTaskCommand() Command {
 				ExitCodes:   []int{0, 3, 4, 6},
 				Examples: []Example{
 					{Title: "Single", Cmd: "rmp task sev -r myproject 5 9", Exit: 0},
-					{Title: "Unknown id", Cmd: "rmp task sev -r myproject 99999 5", Stderr: "Error: resource not found: some tasks not found", Exit: 4},
+					{Title: "Unknown id", Cmd: "rmp task sev -r myproject 99999 5", Stderr: "Error: resource not found: task 99999 not found", Exit: 4},
 				},
 			},
 			{

@@ -1140,11 +1140,31 @@ class TestErrorStringParity:
             "Reconcile ledger entries against provider payout report",
             self.FR, self.TR, self.AC,
         )
-        # #41: some IDs do not exist.
+        # #41: one id does not exist. The singular line, because the wording
+        # follows how many ids are MISSING and not how many were supplied
+        # (SPEC/COMMANDS.md, Task ID Lists (Batch Commands), rule 4).
         self.check(
-            "Error: resource not found: some tasks not found",
+            "Error: resource not found: task N not found",
             ["task", "get", "-r", r, f"{task_id},{self.missing_id}"], 4,
-            note="task get some ids missing",
+            subs={"N": str(self.missing_id)},
+            note="task get one id missing among valid ones",
+        )
+        # #41b: two ids do not exist -- the plural line, with the ids separated
+        # by a comma and a space, in the order the caller supplied them.
+        self.check(
+            "Error: resource not found: tasks <ids> not found",
+            ["task", "get", "-r", r, f"{self.missing_id},{self.missing_id + 1}"], 4,
+            subs={"<ids>": f"{self.missing_id}, {self.missing_id + 1}"},
+            note="task get two ids missing",
+        )
+        # #41c: a repeated MISSING id is named once, which is the de-duplication
+        # rule (rule 3) and the only case that proves it.
+        self.check(
+            "Error: resource not found: task N not found",
+            ["task", "get", "-r", r,
+             f"{task_id},{self.missing_id},{task_id},{self.missing_id}"], 4,
+            subs={"N": str(self.missing_id)},
+            note="task get a repeated missing id is named once",
         )
         # #42: an ID is not an integer.
         self.check(
@@ -1970,11 +1990,17 @@ class TestErrorStringParity:
             [self.missing_id, self.missing_id + 1],
             [self.missing_id + 2, self.missing_id, self.missing_id + 1],
         ):
+            if len(ids) == 1:
+                template = "Error: resource not found: task N not found"
+                subs = {"N": str(ids[0])}
+            else:
+                template = "Error: resource not found: tasks <ids> not found"
+                subs = {"<ids>": ", ".join(str(i) for i in ids)}
             self.check(
-                "Error: resource not found: task(s) not found: [<ids>]",
+                template,
                 ["sprint", "add-tasks", "-r", r, str(sprint_id),
                  ",".join(str(i) for i in ids)], 4,
-                subs={"<ids>": " ".join(str(i) for i in ids)},
+                subs=subs,
                 note=f"sprint add-tasks missing ids ({len(ids)} member(s))",
             )
 
@@ -1983,12 +2009,18 @@ class TestErrorStringParity:
             [outside_task_id, outside_task_id_2],
             [outside_task_id_3, outside_task_id, outside_task_id_2],
         ):
+            if len(ids) == 1:
+                template = "Error: validation error: task N is not in sprint #M"
+                subs = {"N": str(ids[0]), "M": str(sprint_id)}
+            else:
+                template = "Error: validation error: tasks <ids> are not in sprint #N"
+                subs = {"N": str(sprint_id),
+                        "<ids>": ", ".join(str(i) for i in ids)}
             self.check(
-                "Error: validation error: task(s) not in sprint #N: [<ids>]",
+                template,
                 ["sprint", "remove-tasks", "-r", r, str(sprint_id),
                  ",".join(str(i) for i in ids)], 6,
-                subs={"N": str(sprint_id),
-                      "<ids>": " ".join(str(i) for i in ids)},
+                subs=subs,
                 note=f"sprint remove-tasks non-members ({len(ids)} member(s))",
             )
 

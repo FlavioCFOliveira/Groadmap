@@ -65,7 +65,7 @@ Three consequences follow, and they hold for every table and every code block in
 | `<sentinel>` | The sentinel text of the failure class the surface reports, in the one published string whose sentinel varies by surface, resolved by `§ Entity Identifier Range (All Positional Ids and --entity-id)`. |
 | `<detail>`, `<engine diagnostic>` | Text produced by a component other than `rmp` — the operating system, or the Cypher engine. Not specified here. |
 | `<socket>` | The filesystem path of a graph server's Unix domain socket, as the invocation resolved it: the default derived from the roadmap, or the value of `--socket`. Resolved by `GRAPH.md § Socket Path and Permissions`. |
-| `<ids>` | One or more ids, space-separated, in the order the user supplied them, as Go renders a slice of integers. The square brackets that surround the list in the message are literal text and are shown outside the placeholder. |
+| `<ids>` | Two or more ids, separated by a comma and a space, in the order the user supplied them, with a repeated id named once. A message that names exactly one id carries `N` instead, in that message's own singular wording. `§ Task ID Lists (Batch Commands)` is canonical for how the list is built. |
 | `<absolute path of ~/.roadmaps>` | The resolved data-directory path. |
 
 **Angle brackets are not always a placeholder.** Two messages print angle brackets literally, because the binary's own text contains them: `Error: no roadmap selected: use -r <name> or --roadmap <name>` and `Error: resource not found: no sprint is currently open. Use 'rmp sprint start <id>' to open a sprint first`. In those two lines `<name>` and `<id>` are characters the user sees, not values to substitute. Only the bracketed forms listed in the table above are placeholders.
@@ -981,6 +981,35 @@ rmp road rm <name>
 
 Command: `rmp task` (alias: `rmp t`)
 
+### Task ID Lists (Batch Commands)
+
+Six task commands take a comma-separated list of task ids as a positional argument: `task get`, `task stat`, `task prio`, `task sev`, `task reopen` and `task remove`. The three sprint assignment commands — `sprint add-tasks`, `sprint remove-tasks` and `sprint move-tasks` — take a list of the same kind. This section is canonical for how such a list is read, for when the invocation is refused, and for the wording of the refusal. Each command's block below states its own exit codes, and its error table carries these rows as well so that the table stays a complete list, but no block states a rule of its own.
+
+**A list of ids is a set.** The list names the tasks the invocation is about. An id that appears more than once names the same task each time, so the list is read as the set of the distinct ids it contains, ordered by each id's first occurrence. A repeated id is neither an error nor a missing id: `rmp task get -r <name> 7,7` is the same request as `rmp task get -r <name> 7`, and succeeds whenever task 7 exists.
+
+**The test is on the set, never on a count.** An invocation is refused when, and only when, at least one distinct id in the list names no task in the roadmap. Comparing how many rows the database returned against how many ids the caller supplied is not that test and MUST NOT be used as one: the two numbers differ whenever an id is repeated, so a count comparison refuses a valid invocation and states a cause that did not occur.
+
+**A repeated id is honoured once.** `task get` returns one JSON object per distinct id, so its array never carries two elements with the same `id`. Each mutating command applies its change to each distinct task once, and writes one audit entry per distinct task, exactly as it would had the caller named the id once. What an invocation does therefore depends on the set of ids alone, and never on how many times the caller spelled one of them.
+
+**Fail-fast.** Every id is validated before anything is written. An invocation that names an id which cannot be resolved performs nothing at all: no task is changed or removed, and no audit entry is written. That is what makes a refusal safe to reissue with a corrected list.
+
+**The refusal names the ids that are missing.** Five rules govern the list the message carries:
+
+1. **It carries exactly the ids that are missing.** Every id in it named no task, no id that resolved appears in it, and the list is never shortened, whatever its length.
+2. **It is in the caller's order.** The ids appear in the order the command line supplied them — by each id's first occurrence — and are not sorted.
+3. **Each missing id is named once.** An id the caller repeated is reported once, on the same rule that makes the supplied list a set.
+4. **The singular or plural wording follows the number of MISSING ids**, not the number supplied. One missing id out of five supplied prints the singular line.
+5. **The exit code is 4 and nothing is performed**, whether one id is missing or every one of them is.
+
+| Ids that name no task | Exit Code | Behavior | stderr Output |
+|-----------------------|-----------|----------|---------------|
+| Exactly one | 4 | **No operation performed** | "Error: resource not found: task N not found" |
+| Two or more | 4 | **No operation performed** | "Error: resource not found: tasks <ids> not found" |
+
+How many ids were supplied, and whether some or all of them were missing, changes nothing but the choice between those two lines. A caller therefore never has to bisect a list to learn which member failed: the message names every missing id, so a corrected invocation can be built from the message alone.
+
+The three sprint assignment commands refuse a task that is **not a member** of the sprint with a list built by rules 1 to 4 above — exactly the ids at fault, in the caller's order, each named once, and the singular or plural wording following how many are at fault — under their own sentinel and their own exit code. `Task Assignment` below publishes those two lines.
+
 ### List Tasks
 
 ```bash
@@ -1116,13 +1145,14 @@ All batch operations validate ALL IDs before executing any destructive operation
 
 | Scenario | Exit Code | Behavior | stderr Output |
 |----------|-----------|----------|---------------|
-| All IDs valid | 0 | Returns all tasks as JSON array | None |
-| Some IDs do not exist | 4 | **No operation performed**, returns error | "Error: resource not found: some tasks not found" |
-| All IDs do not exist | 4 | **No operation performed**, returns error | "Error: resource not found: some tasks not found" |
+| Every ID exists, each named once | 0 | Returns one task per ID as a JSON array | None |
+| Every ID exists and at least one is repeated | 0 | Returns each distinct task once | None |
+| Exactly one ID does not exist | 4 | **No operation performed**, returns error | "Error: resource not found: task N not found" |
+| Two or more IDs do not exist | 4 | **No operation performed**, returns error | "Error: resource not found: tasks <ids> not found" |
 | An ID is not an integer | 2 | **No operation performed** | "Error: invalid input: invalid task ID: \"X\" (must be a positive integer)" |
 | An ID is an integer outside `1`-`2147483647` | 6 | **No operation performed** | "Error: validation error: task_id must be between 1 and 2147483647, got N" |
 
-The message does not name which IDs were missing, and it is the same whether one ID or every ID was missing: the command reports that the batch could not be satisfied, not which member failed. A caller that needs to know which ID is absent queries the IDs one at a time.
+The message names every ID that was missing and nothing else, in the order the command line supplied them and with a repeated ID named once; `Task ID Lists (Batch Commands)` above is canonical for the list. Whether one ID or every ID was missing changes only the choice between the singular and the plural line: both exit `4` and both perform nothing. A caller that needs to know which ID is absent reads it from the message, and never has to query the IDs one at a time.
 
 **Validation Order:**
 1. Parse all IDs and validate format (must be positive integers)
@@ -1132,7 +1162,7 @@ The message does not name which IDs were missing, and it is the same whether one
 
 **Rationale:** Prevents partial state changes. If a batch update fails halfway through, the database would be in an inconsistent state. Fail-fast ensures either all operations succeed or none do.
 
-**JSON Output:** Array of Task objects.
+**JSON Output:** Array of Task objects — one object per distinct ID requested, ordered by ascending task id whatever order the command line supplied the IDs in.
 
 ### Get Next Tasks (next)
 
@@ -1295,8 +1325,10 @@ All batch operations validate ALL IDs and status transitions before applying any
 
 | Scenario | Exit Code | Behavior | stderr Output |
 |----------|-----------|----------|---------------|
-| All IDs valid | 0 | All tasks updated | None |
-| Some or all IDs do not exist | 4 | **No changes made** | "Error: resource not found: some tasks not found" |
+| All IDs valid, each named once | 0 | All tasks updated | None |
+| All IDs valid and at least one is repeated | 0 | Each distinct task updated once | None |
+| Exactly one ID does not exist | 4 | **No changes made** | "Error: resource not found: task N not found" |
+| Two or more IDs do not exist | 4 | **No changes made** | "Error: resource not found: tasks <ids> not found" |
 | An ID is not an integer | 2 | **No changes made** | "Error: invalid input: invalid task ID: \"X\" (must be a positive integer)" |
 | An ID is an integer outside `1`-`2147483647` | 6 | **No changes made** | "Error: validation error: task_id must be between 1 and 2147483647, got N" |
 | Target state is not a recognised status | 6 | **No changes made** | "Error: validation error: invalid task status: \"X\"" |
@@ -1346,7 +1378,7 @@ task, including the other tasks of a multi-ID invocation whose IDs were valid.
 
 **Output (success):** No output, exit code 0.
 
-**Audit:** One entry per task in the batch, named for the state the task entered:
+**Audit:** One entry per distinct task in the batch, named for the state the task entered:
 
 | Target state | Operation written | `commit_hash` |
 |--------------|-------------------|---------------|
@@ -1391,13 +1423,15 @@ Validates all IDs before updating any priorities. Follows same validation order 
 
 | Scenario | Exit Code | stderr Output |
 |----------|-----------|---------------|
-| All IDs valid | 0 | None |
-| Some IDs invalid | 4 | "Error: resource not found: some tasks not found" |
+| All IDs valid, each named once | 0 | None |
+| All IDs valid and at least one is repeated | 0 | None |
+| Exactly one ID does not exist | 4 | "Error: resource not found: task N not found" |
+| Two or more IDs do not exist | 4 | "Error: resource not found: tasks <ids> not found" |
 | Priority out of range (0-9) | 6 | "Error: validation error: priority must be between 0 and 9, got N" |
 
 **Output (success):** No output, exit code 0.
 
-**Audit:** One `TASK_PRIORITY_CHANGE` entry per task in the batch, against the task,
+**Audit:** One `TASK_PRIORITY_CHANGE` entry per distinct task in the batch, against the task,
 with NULL `related_entity_id` and NULL `commit_hash`. `task edit -p <n>` writes the
 same operation (see `Edit Task` below), so the priority of a task has one audit
 operation whichever command changed it.
@@ -1415,13 +1449,15 @@ Validates all IDs before updating any severities. Follows same validation order 
 
 | Scenario | Exit Code | stderr Output |
 |----------|-----------|---------------|
-| All IDs valid | 0 | None |
-| Some IDs invalid | 4 | "Error: resource not found: some tasks not found" |
+| All IDs valid, each named once | 0 | None |
+| All IDs valid and at least one is repeated | 0 | None |
+| Exactly one ID does not exist | 4 | "Error: resource not found: task N not found" |
+| Two or more IDs do not exist | 4 | "Error: resource not found: tasks <ids> not found" |
 | Severity out of range (0-9) | 6 | "Error: validation error: severity must be between 0 and 9, got N" |
 
 **Output (success):** No output, exit code 0.
 
-**Audit:** One `TASK_SEVERITY_CHANGE` entry per task in the batch, against the task,
+**Audit:** One `TASK_SEVERITY_CHANGE` entry per distinct task in the batch, against the task,
 with NULL `related_entity_id` and NULL `commit_hash`. `task edit --severity <n>`
 writes the same operation.
 
@@ -1541,9 +1577,10 @@ All batch operations validate ALL IDs before removing any tasks. This is especia
 
 | Scenario | Exit Code | Behavior | stderr Output |
 |----------|-----------|----------|---------------|
-| All IDs valid | 0 | All tasks removed | None |
-| Some IDs invalid | 4 | **No tasks removed** | "Error: resource not found: some tasks not found" |
-| All IDs invalid | 4 | **No tasks removed** | "Error: resource not found: some tasks not found" |
+| All IDs valid, each named once | 0 | All tasks removed | None |
+| All IDs valid and at least one is repeated | 0 | Each distinct task removed once | None |
+| Exactly one ID does not exist | 4 | **No tasks removed** | "Error: resource not found: task N not found" |
+| Two or more IDs do not exist | 4 | **No tasks removed** | "Error: resource not found: tasks <ids> not found" |
 | Invalid ID format | 2 | **No tasks removed** | "Error: invalid input: invalid task ID: \"X\" (must be a positive integer)" |
 
 **Validation Order:**
@@ -1728,7 +1765,11 @@ All IDs are validated before any transitions are applied. If any ID is invalid, 
 | Task transitions to BACKLOG from `SPRINT`, `DOING`, or `TESTING` | 0 | Timestamps, `completion_summary`, and `commit_close` cleared; `commit_open` preserved; `sprint_tasks` row removed | No stdout |
 | Task transitions to BACKLOG from `COMPLETED` | 0 | Timestamps, `completion_summary`, and `commit_close` cleared; `commit_open` preserved; `sprint_tasks` row kept | No stdout |
 | Task already in BACKLOG | 0 | No change; any `sprint_tasks` row is kept | Informational message to stderr |
-| Invalid task ID | 4 | **No tasks modified** | Error to stderr |
+| All IDs valid and at least one is repeated | 0 | Each distinct task reopened once | No stdout |
+| Exactly one ID does not exist | 4 | **No tasks modified** | "Error: resource not found: task N not found" |
+| Two or more IDs do not exist | 4 | **No tasks modified** | "Error: resource not found: tasks <ids> not found" |
+| An ID is not an integer | 2 | **No tasks modified** | "Error: invalid input: invalid task ID: \"X\" (must be a positive integer)" |
+| An ID is an integer outside `1`-`2147483647` | 6 | **No tasks modified** | "Error: validation error: task_id must be between 1 and 2147483647, got N" |
 
 **Output (success):** No output to stdout, exit code 0.
 
@@ -2389,15 +2430,25 @@ All sprint task operations validate ALL IDs before making any changes.
 
 | Scenario | Exit Code | Behavior | stderr Output |
 |----------|-----------|----------|---------------|
-| All IDs valid | 0 | All tasks assigned/removed/moved | None |
-| One or more task IDs do not exist, on `add-tasks` | 4 | **No changes made** | "Error: resource not found: task(s) not found: [<ids>]" |
-| One or more task IDs are not members, on `remove-tasks` | 6 | **No changes made** | "Error: validation error: task(s) not in sprint #N: [<ids>]" |
+| All IDs valid, each named once | 0 | All tasks assigned/removed/moved | None |
+| All IDs valid and at least one is repeated | 0 | Each distinct task assigned/removed/moved once | None |
+| Exactly one task ID does not exist, on `add-tasks` | 4 | **No changes made** | "Error: resource not found: task N not found" |
+| Two or more task IDs do not exist, on `add-tasks` | 4 | **No changes made** | "Error: resource not found: tasks <ids> not found" |
+| Exactly one task ID is not a member, on `remove-tasks` or `move-tasks` | 6 | **No changes made** | "Error: validation error: task N is not in sprint #M" |
+| Two or more task IDs are not members, on `remove-tasks` or `move-tasks` | 6 | **No changes made** | "Error: validation error: tasks <ids> are not in sprint #N" |
 | Sprint ID does not exist, on `add-tasks` or `remove-tasks` | 4 | **No changes made** | "Error: resource not found: sprint N" |
 | The source sprint ID does not exist, on `move-tasks` | 4 | **No changes made** | "Error: resource not found: from sprint N" |
 | The destination sprint ID does not exist, on `move-tasks` | 4 | **No changes made** | "Error: resource not found: to sprint N" |
 | A task ID is not a positive integer | 2 | **No changes made** | "Error: invalid input: invalid task ID: \"X\" (must be a positive integer)" |
 
-Unlike the task-family batch commands, which report only that the batch could not be satisfied, these three name the offending IDs: the list is rendered as Go renders a slice of integers, space-separated inside square brackets, in the order the IDs were supplied.
+These three read their task-ID list exactly as the task-family batch commands read theirs, and refuse it on the same rules: the list is a set, a repeated ID is not an error, and a refusal names the IDs at fault, in the order the command line supplied them, with a repeated ID named once. `Task ID Lists (Batch Commands)` is canonical for all of it.
+
+Two conditions are distinguished, and each has a singular and a plural line of its own:
+
+- **A task ID that names no task** is a not-found condition and exits `4`. It arises on `add-tasks`, which is the only one of the three that adds a task the sprint does not already hold. Both lines are the ones the task-family commands print, because the condition is the same one.
+- **A task ID that names a task which is not a member of the sprint** is a validation condition and exits `6`. It arises on `remove-tasks` and on `move-tasks`. The sprint the line names is the one whose membership was tested: the `<sprint-id>` argument for `remove-tasks`, and the **source** sprint (`<from-id>`) for `move-tasks`. A task ID that names no task at all reaches this condition too on those two subcommands, because a task that does not exist is not a member of any sprint.
+
+The sprint in the singular line is `M`, because that line carries the offending task ID first; in the plural line the ids occupy `<ids>` and the sprint is the only number left, so it is `N`.
 
 `move-tasks` is the only one of the three that names two sprints, so its
 unresolvable-sprint line carries the word `from` or the word `to` in front of the
@@ -2416,7 +2467,7 @@ the subcommands that perform it, and a step that names fewer than all three is
 not performed by the others at all.
 
 1. Validate the format and range of every sprint id on the command line: `<sprint-id>` for `add-tasks` and `remove-tasks`, `<from-id>` and then `<to-id>` for `move-tasks`. This reads the argument text alone; no sprint is looked up here (all three)
-2. Parse all task IDs and validate their format and range (all three)
+2. Parse all task IDs and validate their format and range, then read the result as the set of the distinct ids it contains, keeping each id's first occurrence (all three)
 3. Open the roadmap, which refuses a roadmap that does not exist before any sprint or task is resolved (all three)
 4. Verify the sprint exists: `<sprint-id>` for `add-tasks` and `remove-tasks`; `move-tasks` resolves its two sprints one at a time, source before destination, each lookup immediately followed by the CLOSED check below (all three)
 5. Reject a CLOSED sprint: `add-tasks` refuses a CLOSED `<sprint-id>`, and `move-tasks` refuses a CLOSED `<from-id>` or `<to-id>`. `remove-tasks` deliberately does not, because taking tasks out of a closed sprint is the carry-over workflow (`add-tasks`, `move-tasks`)

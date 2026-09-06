@@ -84,6 +84,7 @@ TEST_MODULES = [
     "test_64_graph_schema_management",
     "test_65_graph_server_client_e2e",
     "test_66_graph_plan_prefixes",
+    "test_67_batch_id_lists",
 ]
 
 # Stress tests (run separately due to time/data volume)
