@@ -33,8 +33,6 @@ type buildTarget struct {
 var supportedBuildTargets = []buildTarget{
 	{goos: "linux", goarch: "amd64", name: "linux-amd64"},
 	{goos: "linux", goarch: "arm64", name: "linux-arm64"},
-	{goos: "linux", goarch: "arm", goarm: "6", name: "linux-armv6"},
-	{goos: "linux", goarch: "arm", goarm: "7", name: "linux-armv7"},
 	{goos: "darwin", goarch: "amd64", name: "darwin-amd64"},
 	{goos: "darwin", goarch: "arm64", name: "darwin-arm64"},
 	{goos: "windows", goarch: "amd64", name: "windows-amd64"},

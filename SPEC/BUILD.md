@@ -101,7 +101,7 @@ this section, and so is a row naming a module that block does not require.
 
 | Module | Path | Version | Purpose |
 |--------|------|---------|---------|
-| GoGraph | `github.com/FlavioCFOliveira/GoGraph` | Exact tag **v0.12.0** | Labelled property graph, Cypher engine, and durable store backing the `graph` command. See `GRAPH.md`. |
+| GoGraph | `github.com/FlavioCFOliveira/GoGraph` | Exact tag **v0.14.0** | Labelled property graph, Cypher engine, and durable store backing the `graph` command. See `GRAPH.md`. |
 | System calls | `golang.org/x/sys` | Exact version **v0.47.0** | The operating-system calls the Go standard library does not publish. Groadmap imports the module at four sites, and each of the four compiles for one platform family only. `golang.org/x/sys/unix` is imported by `internal/terminal/terminal_unix.go`, for the `TIOCGWINSZ` ioctl that decides whether a stream is a terminal, and by `internal/testenv/pty_linux.go`, for the `/dev/ptmx` sequence that opens a pseudo-terminal pair. `golang.org/x/sys/windows` is imported by `internal/terminal/terminal_windows.go`, for the `GetConsoleMode` call that asks the console subsystem that same terminal question, and by `internal/graphlock/graphlock_windows.go`, for the `LockFileEx` and `UnlockFileEx` calls that are the graph store's mutual exclusion on that platform. See `GRAPH.md § Concurrency and Recovery` for the lock the last of those four implements. |
 | Unicode data | `golang.org/x/text` | Exact version **v0.41.0** | The Unicode character data the roadmap tasks board's search normalises a term and a task's searchable text by. `internal/unicodenorm` imports `golang.org/x/text/unicode/norm` — the Go project's own implementation of the normalisation forms UAX #15 defines — and no other package of the module. See `WEB.md § Roadmap Tasks Page` for the rule that normalisation serves and for the check that holds the client's copy of it equal to the server's. |
 | SQLite driver | `modernc.org/sqlite` | Exact version **v1.58.0** | Pure-Go SQLite driver backing every roadmap database (`~/.roadmaps/<name>/project.db`). It is the storage engine for all task, sprint, and audit data: `internal/db` registers it under the driver name `sqlite` and opens every database connection through it. Being pure Go, it needs no C toolchain and builds under `CGO_ENABLED=0`. See `DATABASE.md` for the schema it stores, `ARCHITECTURE.md § 3. internal/db/` for the layer that opens it, and `IMPLEMENTATION.md § Database Connections` for the entry point and DSN form that layer must use. |
@@ -111,11 +111,11 @@ this section, and so is a row naming a module that block does not require.
 1. GoGraph MUST be pinned to an exact, immutable version in `go.mod`, not a
    floating reference (no branch or moving target), so that builds are
    reproducible and the on-disk graph format is stable.
-2. GoGraph is consumed at the exact tag **v0.12.0**. Because v0.12.0 is a v0 (pre-1.0)
+2. GoGraph is consumed at the exact tag **v0.14.0**. Because v0.14.0 is a v0 (pre-1.0)
    version, it is consumable directly at the bare module path
    `github.com/FlavioCFOliveira/GoGraph`, and `go.mod` pins the clean exact tag
-   `v0.12.0`. This exact-tag pin satisfies Rule 1.
-3. v0.12.0 is a `0.y.z` release, so GoGraph's public API is not yet stable and may
+   `v0.14.0`. This exact-tag pin satisfies Rule 1.
+3. v0.14.0 is a `0.y.z` release, so GoGraph's public API is not yet stable and may
    change while the module matures toward `1.0.0`. The residual risks (pre-1.0 API
    instability and on-disk format change across pre-1.0 releases) and their
    mitigations are in `GRAPH.md § Dependency Maturity Risk`. Upgrading GoGraph is a
@@ -501,8 +501,6 @@ Rules:
 |------|--------|-------|-------------|-------|
 | linux | amd64 | - | linux-amd64 | Standard x86_64 Linux |
 | linux | arm64 | - | linux-arm64 | ARM 64-bit Linux |
-| linux | arm | 6 | linux-armv6 | ARMv6 (Raspberry Pi Zero/1) |
-| linux | arm | 7 | linux-armv7 | ARMv7 (Raspberry Pi 2/3/4 32-bit) |
 | darwin | amd64 | - | darwin-amd64 | Intel macOS |
 | darwin | arm64 | - | darwin-arm64 | Apple Silicon macOS |
 | windows | amd64 | - | windows-amd64 | Windows x86_64 |
@@ -511,7 +509,7 @@ Rules:
 | openbsd | amd64 | - | openbsd-amd64 | OpenBSD x86_64 |
 | openbsd | arm64 | - | openbsd-arm64 | OpenBSD ARM64 |
 
-Eleven targets in total. The two OpenBSD targets became available with
+Nine targets in total. The two OpenBSD targets became available with
 `modernc.org/sqlite` v1.56.0, which added `openbsd/amd64` and `openbsd/arm64` to
 its own supported-platform table; the storage engine was the only component that
 could have held them back, since the binary is pure Go and links no C library.
@@ -521,23 +519,64 @@ under `CGO_ENABLED=0` and their architecture is confirmed with `file`, but no
 OpenBSD host is used to execute the resulting binaries. They are released on the
 same terms as every other target the project cannot run locally.
 
+**Every supported target is 64-bit, and the project produces no 32-bit target.**
+The `GOARM` column is therefore `-` in every row of the table above. The column
+stays because the triple it completes is what both the target name and the build
+environment are derived from, so a target with no ARM version states that rather
+than leaving it implied. Three independent facts put 32-bit out of reach, and
+each one alone would be sufficient:
+
+1. **It does not compile.** `internal/graphserve`, the package behind
+   `rmp graph serve`, imports GoGraph's `bolt/server` package. That package fixes
+   the size of its transaction registry at 128 bytes and asserts that size at
+   compile time from both directions. On a 32-bit platform the structure does not
+   reach 128 bytes, one of the two assertions resolves to an array of negative
+   length, and the package fails to compile before any Groadmap code is reached.
+   No build tag or compiler flag avoids it, and `rmp` cannot be linked without
+   that package.
+2. **It was never a verified configuration.** Compiled for a 32-bit architecture
+   and run natively, GoGraph's own test suite fails: several structure-size
+   assertions in its labelled-property-graph package report sizes below the ones
+   those tests require, and its PackStream tests do not compile at all, because a
+   constant they use exceeds the range of a 32-bit `int`. The same tests pass on a
+   64-bit host at the same commit, so the cause is the word size and not a flaky
+   run. GoGraph publishes release binaries for 64-bit platforms only and runs no
+   32-bit continuous-integration job.
+3. **The stored graph would not be portable.** GoGraph's durable file format
+   persists the platform-width integer types — `int`, `uint`, and `uintptr` — as
+   64-bit values. A file written by a 64-bit build is misread by a 32-bit one, so
+   a roadmap's graph could not be carried between the two even if the first two
+   obstacles were removed.
+
+`DEPLOY.md § Architecture Detection` states the consequence for installation: the
+installation script recognises a 32-bit architecture and refuses it at detection,
+rather than requesting a release asset that does not exist.
+
 ### Raspberry Pi Support
+
+Raspberry Pi support is 64-bit support. One target serves it, `linux-arm64`, and
+the board qualifies by running a 64-bit operating system.
 
 | Model | Architecture | GOARM | Target Name |
 |-------|--------------|-------|-------------|
-| Raspberry Pi Zero / Zero W | ARMv6 | 6 | linux-armv6 |
-| Raspberry Pi 1 | ARMv6 | 6 | linux-armv6 |
-| Raspberry Pi 2 | ARMv7 | 7 | linux-armv7 |
-| Raspberry Pi 3 (32-bit OS) | ARMv7 | 7 | linux-armv7 |
+| Raspberry Pi Zero 2 W (64-bit OS) | ARMv8 | N/A (arm64) | linux-arm64 |
 | Raspberry Pi 3 (64-bit OS) | ARMv8 | N/A (arm64) | linux-arm64 |
-| Raspberry Pi 4 (32-bit OS) | ARMv7 | 7 | linux-armv7 |
 | Raspberry Pi 4 (64-bit OS) | ARMv8 | N/A (arm64) | linux-arm64 |
 | Raspberry Pi 5 (64-bit OS) | ARMv8 | N/A (arm64) | linux-arm64 |
 
 **Compatibility Notes:**
-- ARMv6 binaries are compatible with all Raspberry Pi models (backward compatible)
-- ARMv7 binaries offer better performance on Pi 2/3/4 but won't run on Pi Zero/1
-- ARMv8 (arm64) is already supported and should be used for 64-bit Raspberry Pi OS
+- ARMv8 (arm64) is the only ARM architecture the project builds for, and the
+  64-bit Raspberry Pi OS is what runs it. Every board in the table above has a
+  64-bit build of that operating system available for it.
+- **A board is not dropped by being absent from the table; an operating system
+  is.** A Raspberry Pi 3, a Pi 4, a Pi 5, or a Pi Zero 2 W running a 32-bit
+  operating system is not served by any target, although the hardware is 64-bit
+  capable. Reinstalling it with the 64-bit operating system brings it back under
+  `linux-arm64`; nothing else about the board has to change.
+- **Hardware that can only ever run 32-bit is not supported at all.** That is the
+  Raspberry Pi Zero, the Pi Zero W, the Pi 1, and the Pi 2. No target serves them,
+  for the reasons given in Primary Platforms, and no 64-bit operating system can
+  bring them back.
 
 ## GitHub Actions Workflow
 
@@ -566,20 +605,18 @@ so both track the version required by `Go Toolchain`.
    - Every gate MUST pass before the build job starts
 
 2. **build** — declares `needs: test`
-   - The `build` gate: builds the binary for all eleven Primary Platforms listed
+   - The `build` gate: builds the binary for all nine Primary Platforms listed
      in `Supported Build Targets`, in the same order
    - Upload artifacts with naming: `release-{target}`
    - Archive naming: `rmp-{version}-{target}.tar.gz` (or `.zip` for Windows)
    - Generates a SHA256 checksum file for each archive
 
-   `{target}` above is the Target Name from `Supported Build Targets`. It is
-   `{goos}-{goarch}` for nine of the eleven targets, and for the two ARM targets
-   the ARM version follows a literal `v`: `linux-armv6` and `linux-armv7`. The
-   artifact for the ARMv6 target is therefore `release-linux-armv6` and its
-   archive `rmp-{version}-linux-armv6.tar.gz`. Writing that suffix as
-   `{goarch}{goarm}` would name them `linux-arm6` and `linux-arm7`, which is
-   neither what the workflow produces nor what the installation script asks for
-   (see `DEPLOY.md § Architecture Detection`).
+   `{target}` above is the Target Name from `Supported Build Targets`, and it is
+   `{goos}-{goarch}` for every one of the nine targets, with no exception. The
+   artifact for the 64-bit ARM Linux target is therefore `release-linux-arm64`
+   and its archive `rmp-{version}-linux-arm64.tar.gz`, which is both what the
+   workflow produces and what the installation script asks for (see
+   `DEPLOY.md § Architecture Detection`).
 
 3. **release** — declares `needs: build`
    - Downloads every build artifact and creates the GitHub release, attaching the
@@ -884,13 +921,8 @@ GOOS=linux GOARCH=amd64 go build -o ./bin/rmp-linux-amd64 ./cmd/rmp
 ### Cross-Compilation
 
 ```bash
-# Raspberry Pi Zero / 1 (ARMv6)
-GOOS=linux GOARCH=arm GOARM=6 CGO_ENABLED=0 go build -o ./bin/rmp-linux-armv6 ./cmd/rmp
-
-# Raspberry Pi 2/3/4 32-bit (ARMv7)
-GOOS=linux GOARCH=arm GOARM=7 CGO_ENABLED=0 go build -o ./bin/rmp-linux-armv7 ./cmd/rmp
-
-# Raspberry Pi 3/4/5 64-bit
+# 64-bit ARM Linux, including a Raspberry Pi Zero 2 W, 3, 4 or 5
+# running a 64-bit operating system
 GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -o ./bin/rmp-linux-arm64 ./cmd/rmp
 ```
 
@@ -1007,7 +1039,7 @@ narrows it.
    `make check` builds the binary for the host platform only. The CI workflow
    builds a four-target fast-feedback subset — `linux/amd64`, `linux/arm64`,
    `darwin/amd64`, and `darwin/arm64` — for the rolling `dev` pre-release. The
-   release workflow builds all eleven Primary Platforms and ships them. That
+   release workflow builds all nine Primary Platforms and ships them. That
    subset is a statement about feedback speed, not about portability: the `test`
    gate compiles every Primary Platform wherever it runs, because the unit-test
    suite cross-compiles the whole target table (see `Supported Build Targets`).
@@ -1065,7 +1097,7 @@ structure governs both:
 
 | Archive | Name | Published by |
 |---------|------|--------------|
-| Release archive | `rmp-{version}-{target}.{ext}` | The release workflow, for all eleven Primary Platforms |
+| Release archive | `rmp-{version}-{target}.{ext}` | The release workflow, for all nine Primary Platforms |
 | Dev pre-release archive | `rmp-dev-{sha}-{target}.tar.gz` | The CI workflow, for the four-target fast-feedback subset |
 
 `{version}` is the `v*` tag being released, `{target}` is the Target Name from
@@ -1097,7 +1129,7 @@ separate published asset, not a fourth entry inside the archive.
 
 ### Architecture Verification
 - [ ] Use `file` command to verify binary architecture matches target
-- [ ] ARM binaries show correct ARM version (ARMv6, ARMv7)
+- [ ] No released binary is 32-bit. `file` reports `ELF 64-bit` for every Linux target, and `aarch64` for `linux-arm64`; no published archive name carries an `armv6` or `armv7` suffix (see Supported Build Targets)
 - [ ] BSD binaries report the expected OS in the ELF note: `file` shows `version 1 (FreeBSD)` for the FreeBSD target and `version 1 (OpenBSD)` for both OpenBSD targets. This is the only verification these targets receive, since none of them is executed (see Supported Build Targets)
 
 ### CI/CD Verification
@@ -1111,7 +1143,7 @@ separate published asset, not a fourth entry inside the archive.
 - [ ] `gosec` runs in both workflows with the invocation the `security` gate defines (`gosec -exclude-dir=.claude/worktrees ./...`), so the scanned scope and the accepted `#nosec` suppressions are the same everywhere
 - [ ] Every gate fails its job when it fails: introducing one violation at a time — an unformatted file, a `go vet` finding, a failing test, a `golangci-lint` violation, and an unsuppressed `gosec` finding — fails the workflow run in each case, in both workflows
 - [ ] No artefact is built or published on a run whose gates did not pass: the build job declares `needs:` on the gate job, and the publishing job declares `needs:` on the build job
-- [ ] The release workflow builds all eleven Primary Platforms, and the CI build job builds the four-target fast-feedback subset (see Validation Gates, Permitted Differences Between the Three Pipelines)
+- [ ] The release workflow builds all nine Primary Platforms, and the CI build job builds the four-target fast-feedback subset (see Validation Gates, Permitted Differences Between the Three Pipelines)
 - [ ] Artifacts uploaded successfully
 - [ ] Permissions set to minimum required in BOTH workflows: each grants `contents: read` at workflow level, and exactly one job in each raises that to `contents: write` — `release` in the release workflow, `dev-release` in the CI workflow. No gate job and no build job holds write permission
 - [ ] No release reports any gate as skipped, waived, not installed, or not applicable

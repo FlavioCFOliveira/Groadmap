@@ -249,24 +249,16 @@ detect_arch() {
     case "$(uname -m)" in
         x86_64|amd64)   arch="amd64" ;;
         arm64|aarch64)  arch="arm64" ;;
-        armv6l|armv6)   arch="armv6" ;;
-        armv7l|armv7)   arch="armv7" ;;
-        arm*)           # Fallback for generic ARM - try to detect version
-            if [ -f /proc/cpuinfo ]; then
-                if grep -q "ARMv7" /proc/cpuinfo 2>/dev/null || \
-                   grep -E "^CPU architecture:\s*7" /proc/cpuinfo 2>/dev/null; then
-                    arch="armv7"
-                elif grep -q "ARMv6" /proc/cpuinfo 2>/dev/null || \
-                     grep -E "^CPU architecture:\s*6" /proc/cpuinfo 2>/dev/null; then
-                    arch="armv6"
-                else
-                    # Default to armv6 for maximum compatibility (lowest common denominator)
-                    arch="armv6"
-                fi
-            else
-                arch="armv6"
-            fi
-            ;;
+        # Recognised, but the build does not produce it: SPEC/BUILD.md ships no
+        # 32-bit ARM target. The graph engine's durable format stores several
+        # platform-width integers as 64-bit, so a 32-bit build would misread a
+        # file a 64-bit one wrote. A Raspberry Pi Zero, Zero W, Pi 1 or Pi 2 is
+        # 32-bit-only hardware and is therefore not supported at all; a Pi 3, 4
+        # or 5 running a 64-bit OS reports aarch64 above and is. Reported as
+        # unsupported for the same reason i386 is, immediately below: mapping it
+        # to an asset no release produces would fail late on the download
+        # instead of here.
+        armv6l|armv6|armv7l|armv7|arm*) arch="unsupported" ;;
         # Recognised, but the build does not produce it: SPEC/BUILD.md ships no
         # 32-bit x86 target. Reported as unsupported rather than mapped to 386,
         # which would ask the release for an asset that does not exist and fail
@@ -712,7 +704,7 @@ main() {
     # "unsupported" is a recognised architecture the build does not produce;
     # "unknown" is one detect_arch does not recognise at all. Both stop here.
     if [ "$arch" = "unsupported" ] || [ "$arch" = "unknown" ]; then
-        error "architecture $(uname -m) is not supported. Supported targets: amd64, arm64, armv6, armv7. See SPEC/BUILD.md for the build matrix."
+        error "architecture $(uname -m) is not supported. Supported targets: amd64, arm64. See SPEC/BUILD.md for the build matrix."
         exit 1
     fi
 

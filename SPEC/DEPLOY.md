@@ -40,7 +40,8 @@ curl -fsSL https://raw.githubusercontent.com/FlavioCFOliveira/Groadmap/main/inst
 
 **Features:**
 - Automatic platform detection
-- Architecture detection (including ARM variants)
+- Architecture detection, which refuses an architecture the build does not
+  produce before anything is downloaded
 - Raspberry Pi detection
 - Downloads latest release binary
 - Verifies the downloaded archive against the SHA-256 checksum published beside
@@ -119,18 +120,31 @@ The installation script detects architecture via `uname -m`:
 |--------|--------------|---------------|
 | x86_64, amd64 | amd64 | {goos}-amd64 |
 | arm64, aarch64 | arm64 | {goos}-arm64 |
-| armv6l, armv6 | armv6 | {goos}-armv6 |
-| armv7l, armv7 | armv7 | {goos}-armv7 |
+| armv6l, armv6, armv7l, armv7, any other `arm*` | unsupported | none |
+| i386, i686 | unsupported | none |
 
-**Unsupported architectures:** 32-bit x86 (`i386`, `i686`) and any other
-architecture not listed above are not produced by `BUILD.md`. `detect_arch()`
-returns `unsupported` for an architecture it recognises but the build does not
-produce, and `unknown` for one it does not recognise at all. **The script MUST
-reject both values**, because neither can name an existing release asset. It
-calls the `error` helper with the message
+The last two rows are recognised on purpose. Every target the project ships is
+64-bit (see `BUILD.md § Supported Build Targets`), so no 32-bit archive exists for
+the script to download; naming those architectures explicitly is what lets it
+refuse them here. The generic `arm*` case joins them: with no 32-bit ARM target
+left to choose between, an ARM-version fallback has nothing to decide, and the
+script performs none — it reads no `/proc/cpuinfo` field to tell one 32-bit ARM
+variant from another.
+
+A 64-bit Raspberry Pi reaches the `arm64` row above, not the `arm*` one, because
+a 64-bit operating system reports `aarch64` from `uname -m`. Which boards that
+covers, and which hardware is 32-bit-only and therefore unreachable, is in
+`BUILD.md § Raspberry Pi Support`.
+
+**Unsupported architectures:** 32-bit ARM, 32-bit x86, and any other architecture
+not listed above are not produced by `BUILD.md`. `detect_arch()` returns
+`unsupported` for an architecture it recognises but the build does not produce,
+and `unknown` for one it does not recognise at all. **The script MUST reject both
+values**, because neither can name an existing release asset. It calls the
+`error` helper with the message
 
 ```
-architecture {uname} is not supported. Supported targets: amd64, arm64, armv6, armv7. See SPEC/BUILD.md for the build matrix.
+architecture {uname} is not supported. Supported targets: amd64, arm64. See SPEC/BUILD.md for the build matrix.
 ```
 
 and exits with code 1. `{uname}` is the raw `uname -m` output for the host — the
@@ -143,25 +157,11 @@ Rejecting these values is what keeps the failure early and legible. An
 unsupported architecture that reaches the download step instead produces a
 confusing failure fetching a release asset that was never built.
 
-### ARM Variant Detection
-
-For generic ARM (`arm*` fallback), the script attempts to determine the specific ARM version:
-
-```bash
-# Check /proc/cpuinfo for ARM version
-if grep -q "ARMv7" /proc/cpuinfo 2>/dev/null; then
-    arch="armv7"
-elif grep -q "ARMv6" /proc/cpuinfo 2>/dev/null; then
-    arch="armv6"
-else
-    # Default to armv6 for compatibility (lowest common denominator)
-    arch="armv6"
-fi
-```
-
 ### Raspberry Pi Detection
 
-The script can detect if running on a Raspberry Pi:
+The script can detect if running on a Raspberry Pi. This detection is
+informational: it names the hardware in a message and never selects the
+architecture, which `detect_arch()` alone decides from `uname -m`.
 
 ```bash
 is_raspberry_pi() {
@@ -217,10 +217,8 @@ Returns the architecture string for the current system.
 
 **Returns:**
 - `amd64` - x86_64 systems
-- `arm64` - 64-bit ARM systems
-- `armv6` - ARMv6 systems (Pi Zero/1)
-- `armv7` - ARMv7 systems (Pi 2/3/4 32-bit)
-- `unsupported` - Architecture detected but not produced by the build (e.g., `i386`, `i686`); the script rejects it and exits 1
+- `arm64` - 64-bit ARM systems, including a Raspberry Pi running a 64-bit operating system
+- `unsupported` - Architecture detected but not produced by the build: every 32-bit ARM string (`armv6l`, `armv7l`, and the generic `arm*` case) and 32-bit x86 (`i386`, `i686`); the script rejects it and exits 1
 - `unknown` - Unrecognized architecture string; the script rejects it and exits 1
 
 Both values are rejected by the same guard, with the same message and the same
@@ -252,7 +250,7 @@ https://github.com/FlavioCFOliveira/Groadmap/releases/download/{version}/rmp-{ve
 - Linux AMD64: `rmp-v1.0.0-linux-amd64.tar.gz`
 - macOS ARM64: `rmp-v1.0.0-darwin-arm64.tar.gz`
 - Windows AMD64: `rmp-v1.0.0-windows-amd64.zip`
-- Raspberry Pi ARMv6: `rmp-v1.0.0-linux-armv6.tar.gz`
+- Raspberry Pi on a 64-bit operating system: `rmp-v1.0.0-linux-arm64.tar.gz`
 
 ## Checksum Verification
 
@@ -537,7 +535,7 @@ Releases are created automatically when a tag matching `v*` pattern is pushed:
 
 2. **Build Release Binaries**
    - Matrix builds for all platforms:
-     - Linux: amd64, arm64, armv6, armv7
+     - Linux: amd64, arm64
      - macOS: amd64, arm64
      - Windows: amd64, arm64
      - FreeBSD: amd64
@@ -564,8 +562,6 @@ with the archive format each platform ships.
 |----|--------------|-------------|---------------|
 | Linux | amd64 | - | tar.gz |
 | Linux | arm64 | - | tar.gz |
-| Linux | arm | v6 | tar.gz |
-| Linux | arm | v7 | tar.gz |
 | macOS | amd64 | - | tar.gz |
 | macOS | arm64 | - | tar.gz |
 | Windows | amd64 | - | zip |
@@ -584,12 +580,12 @@ rmp-{version}-{os}-{arch}.{ext}
 - `rmp-v1.0.0-linux-amd64.tar.gz`
 - `rmp-v1.0.0-darwin-arm64.tar.gz`
 - `rmp-v1.0.0-windows-amd64.zip`
-- `rmp-v1.0.0-linux-armv6.tar.gz`
+- `rmp-v1.0.0-linux-arm64.tar.gz`
 
 ### Release Assets
 
 Each release includes:
-- Binary archives for all supported platforms (11 total)
+- Binary archives for all supported platforms (9 total)
 - SHA256 checksums for each archive
 - Automatic release notes generated from commits
 
@@ -610,7 +606,7 @@ Each release includes:
 - [ ] Downloads correct binary for detected platform
 - [ ] Installs binary with executable permissions
 - [ ] Provides helpful error messages on failure
-- [ ] An unsupported architecture fails before any download is attempted: on a host whose `uname -m` reports `i686`, the script exits 1 and standard error carries the line `ERROR: architecture i686 is not supported. Supported targets: amd64, arm64, armv6, armv7. See SPEC/BUILD.md for the build matrix.` No release asset is requested
+- [ ] An unsupported architecture fails before any download is attempted: on a host whose `uname -m` reports `i686`, the script exits 1 and standard error carries the line `ERROR: architecture i686 is not supported. Supported targets: amd64, arm64. See SPEC/BUILD.md for the build matrix.` No release asset is requested
 - [ ] The architecture guard rejects both values `detect_arch()` can return for a host the build does not serve, `unsupported` and `unknown`, with that same message and exit code
 - [ ] An unsupported operating system fails the same way: the script exits 1 and standard error carries the line `ERROR: operating system {uname} is not supported. Supported systems: linux, darwin, freebsd, openbsd, windows. See SPEC/BUILD.md for the build matrix.` with `{uname}` the raw `uname -s` output
 - [ ] Every failure the script reports goes through the `error` helper, so every error line begins with the `ERROR: ` prefix and no path prints a bare message (see Diagnostic Output)
@@ -627,10 +623,10 @@ Each release includes:
 - [ ] No exit path leaves the accepted staging directory behind: not a refusal, not a failed extraction, and not a signal. The `EXIT` trap removes it, and the `HUP`, `INT`, and `TERM` traps route a signal through that trap, exiting 129, 130, and 143
 
 ### Raspberry Pi Support
-- [ ] Detects ARMv6 on Pi Zero/1
-- [ ] Detects ARMv7 on Pi 2/3/4 (32-bit)
-- [ ] Falls back to ARMv6 for generic ARM detection
-- [ ] Can identify Raspberry Pi hardware
+- [ ] A Raspberry Pi running a 64-bit operating system installs through the `arm64` path: `uname -m` reports `aarch64`, `detect_arch()` returns `arm64`, and the script downloads `rmp-{version}-linux-arm64.tar.gz`
+- [ ] A 32-bit ARM host is refused at detection: on a host whose `uname -m` reports `armv6l` or `armv7l`, `detect_arch()` returns `unsupported`, the script exits 1 with the architecture message, and no release asset is requested
+- [ ] The script inspects no `/proc/cpuinfo` field in order to choose an ARM variant. Reading `install.sh` shows no ARM-version fallback and no `armv6` or `armv7` target string anywhere in it
+- [ ] Can identify Raspberry Pi hardware, and that identification changes nothing but the message it prints: the architecture the script installs is the one `detect_arch()` returned
 
 ### Manual Installation
 - [ ] Download URL format is correct
