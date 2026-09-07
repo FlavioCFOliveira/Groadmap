@@ -39,7 +39,7 @@ from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from tests.base_test import GroadmapTestBase
+from tests.base_test import GroadmapTestBase, assert_graph_write_shape
 
 
 EXIT_OK = 0
@@ -114,7 +114,12 @@ class TestGraphCheckpoint:
 
     def test_create_and_query_roundtrip(self):
         ok = self.write_json("CREATE (s:Spec {key:'authentication', title:'User Authentication'})")
-        assert ok == {"ok": True}, f"create without RETURN must emit {{'ok': true}}, got {ok!r}"
+        # One node, one label, two properties: the counters the CREATE applied,
+        # beside the {"ok": true} that was the whole of this object before the
+        # member existed.
+        assert_graph_write_shape(
+            ok, "create without RETURN",
+            {"nodesCreated": 1, "propertiesWritten": 2, "labelsAdded": 1})
         result = self.query_json("MATCH (s:Spec) RETURN s.key, s.title")
         by_key = self.rows_by(result, "s.key")
         assert "authentication" in by_key, f"created Spec not found on read-back: {result!r}"

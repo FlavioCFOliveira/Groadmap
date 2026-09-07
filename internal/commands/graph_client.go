@@ -84,11 +84,15 @@ Optional:
   -h, --help              Show this help message
 
 Output (stdout JSON):
-  With result columns:      {"columns": [...], "rows": [[...], ...], "plan": <plan node, EXPLAIN only>, "profile": <plan node, PROFILE only>}
-  Without result columns:   {"ok": true}
+  With result columns:      {"columns": [...], "rows": [[...], ...], "plan": <plan node, EXPLAIN only>, "profile": <plan node, PROFILE only>, "counters": <write counters, only when the statement changed the graph>}
+  Without result columns:   {"ok": true, "counters": <write counters, only when the statement changed the graph>}
   The same shapes, and the same bytes, that rmp graph execute writes.
   A statement written with the EXPLAIN or PROFILE prefix always produces the
   columns shape so that it can carry its plan, even with no column of its own.
+  A statement that changed the graph adds a counters block naming what it
+  changed, identical to the one rmp graph execute publishes for the same
+  statement against the same graph. A zero counter is left out, and a statement
+  that changed nothing carries no counters key at all.
 
 Exit codes:
   0   The statement was sent to a server, ran, and its result was written

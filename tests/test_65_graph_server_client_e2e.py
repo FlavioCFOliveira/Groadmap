@@ -106,7 +106,7 @@ import time
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from tests.base_test import GroadmapTestBase
+from tests.base_test import GroadmapTestBase, assert_graph_write_shape
 
 
 EXIT_OK = 0
@@ -970,7 +970,12 @@ class TestGraphClient(GraphServerTestBase):
              "CREATE (c)-[:GOVERNED_BY]->(d)"]
         )
         assert rc == EXIT_OK, f"got {rc}, stderr={err!r}"
-        assert json.loads(out) == {"ok": True}, out
+        # One SET, one labelled two-property node, one relationship: the whole
+        # of what the statement applied, published beside the {"ok": true}.
+        assert_graph_write_shape(
+            json.loads(out), "a multi-clause write through a running server",
+            {"nodesCreated": 1, "relationshipsCreated": 1,
+             "propertiesWritten": 3, "labelsAdded": 1})
 
         rc2, out2, err2 = self.run_cli(
             ["graph", "client", "-r", roadmap, "--query",
@@ -1181,7 +1186,10 @@ class TestExecuteRoutesThroughServer(GraphServerTestBase):
              "CREATE (c)-[:GOVERNED_BY]->(a)"]
         )
         assert rc == EXIT_OK, f"execute against a served roadmap must succeed; err={err!r}"
-        assert json.loads(out) == {"ok": True}, out
+        assert_graph_write_shape(
+            json.loads(out), "execute routed to a running server",
+            {"nodesCreated": 1, "relationshipsCreated": 1,
+             "propertiesWritten": 2, "labelsAdded": 1})
 
         rc2, out2, err2 = self.run_cli(
             ["graph", "client", "-r", roadmap, "--query",
@@ -1650,7 +1658,10 @@ class TestDurabilityAcrossKill(GraphServerTestBase):
                  f"CREATE (p)-[:GOVERNED_BY]->(s)"]
             )
             assert rc == EXIT_OK, f"{key}: exit={rc} err={err!r}"
-            assert json.loads(out) == {"ok": True}, out
+            assert_graph_write_shape(
+                json.loads(out), f"{key}: a write through a running server",
+                {"nodesCreated": 1, "relationshipsCreated": 1,
+                 "propertiesWritten": 2, "labelsAdded": 1})
 
         server.kill_dash_9()
         assert os.path.exists(socket_path), "a SIGKILLed server must leave a stale socket"
@@ -1708,7 +1719,7 @@ class TestConcurrentClients(GraphServerTestBase):
         for i, proc in enumerate(writers):
             out, err = proc.communicate(timeout=20.0)
             assert proc.returncode == EXIT_OK, f"writer {i}: exit={proc.returncode} err={err!r}"
-            assert json.loads(out) == {"ok": True}, out
+            assert_graph_write_shape(json.loads(out), f"writer {i}")
         for i, proc in enumerate(readers):
             out, err = proc.communicate(timeout=20.0)
             assert proc.returncode == EXIT_OK, f"reader {i}: exit={proc.returncode} err={err!r}"
@@ -1826,7 +1837,12 @@ class TestHotNodeContention(GraphServerTestBase):
         )
 
         # A write that reports success must have reported the write shape.
-        wrong_shape = [o for o in outcomes if json.loads(o[2]) != {"ok": True}]
+        def is_write_shape(stdout):
+            result = json.loads(stdout)
+            return (isinstance(result, dict) and result.get("ok") is True
+                    and not set(result) - {"ok", "counters"})
+
+        wrong_shape = [o for o in outcomes if not is_write_shape(o[2])]
         assert not wrong_shape, (
             f"{len(wrong_shape)} invocation(s) exited 0 without the write "
             f"result shape; first: {wrong_shape[0][2]!r}"

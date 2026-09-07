@@ -69,7 +69,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from tests.base_test import GroadmapTestBase
+from tests.base_test import GroadmapTestBase, assert_graph_write_shape
 
 
 EXIT_OK = 0
@@ -123,8 +123,9 @@ class TestGraphParallelEdgePredicates:
 
     def write(self, query):
         result = self.test.run_cmd_json(["graph", "execute", "-r", self.roadmap, "--query", query])
-        assert result == {"ok": True}, (
-            f"write without RETURN must emit {{'ok': true}}; {query!r} -> {result!r}")
+        # See test_34's helper: the shape is what a general-purpose write helper
+        # can assert, and the counters member is additive to it.
+        assert_graph_write_shape(result, f"write without RETURN {query!r}")
 
     def read(self, query):
         return self.test.run_cmd_json(["graph", "execute", "-r", self.roadmap, "--query", query])

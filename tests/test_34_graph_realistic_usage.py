@@ -53,7 +53,7 @@ from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from tests.base_test import GroadmapTestBase
+from tests.base_test import GroadmapTestBase, assert_graph_write_shape
 
 
 EXIT_OK = 0
@@ -168,8 +168,11 @@ class TestGraphRealisticUsage:
     def _write(self, query: str):
         self.calls += 1
         result = self.test.run_cmd_json(["graph", "execute", "-r", self.roadmap, "--query", query])
-        assert result == {"ok": True}, (
-            f"write without RETURN must emit {{'ok': true}}; {query!r} -> {result!r}")
+        # The shape, not the counters: this helper runs statements of every
+        # write class, so what it can assert for all of them is that the object
+        # is `ok` plus at most the counters member. The counter VALUES are
+        # asserted where a caller knows what its statement changed.
+        assert_graph_write_shape(result, f"write without RETURN {query!r}")
 
     def _read(self, query: str):
         self.calls += 1

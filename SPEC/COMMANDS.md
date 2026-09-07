@@ -3552,6 +3552,19 @@ valid its Cypher is and however healthy the store, and the remedy is to narrow i
 statements. `GRAPH.md § Statement Time Budget` is canonical for what a cut
 statement leaves behind, and `WEB.md § Graph Query Time Budget` for the value.
 
+**A statement that changes the graph says what it changed.** Beside its result
+it publishes a `counters` object naming the effects it applied — nodes and
+relationships created and deleted, properties written, labels added and removed,
+indexes and constraints added and dropped — so that a caller can tell a `MERGE`
+that created from one that matched, and a `DELETE` that removed a thousand
+relationships from one that removed none, without issuing a second statement to
+find out. A counter that is zero is omitted, and a statement that changed
+nothing publishes no such member and produces exactly the bytes it produced
+before, so no existing caller is affected. `execute` and `client` publish the
+same object for the same statement.
+`GRAPH.md § Write Counters: What a Statement Changed` is canonical for the
+behaviour and `DATA_FORMATS.md § Graph Query Counters` for the shape.
+
 **A statement may ask for its plan instead of, or as well as, its answer.**
 Written with an `EXPLAIN` prefix, a statement is planned and **not executed**, and
 `execute` and `client` return its declared columns, no rows, and the plan under a
@@ -3600,13 +3613,25 @@ original the day the original changed, which is the outcome
 - On success the output mirrors what the executed statement returns. When the
   statement produces result columns, the output is the `{columns, rows}` shape
   defined in `DATA_FORMATS.md § Graph Query Result`; when it produces none, the
-  output is exactly `{"ok": true}`. For a data-writing statement the two cases are
+  output is `{"ok": true}`. For a data-writing statement the two cases are
   exactly "has a `RETURN` clause" and "has none". A schema-introspection command
   produces columns while carrying no `RETURN` clause, and therefore returns the
   `{columns, rows}` shape; a `CREATE INDEX`, `DROP INDEX`, `CREATE CONSTRAINT`, or
-  `DROP CONSTRAINT` produces no columns and returns `{"ok": true}`. There is no
-  affected-element count, because the engine reports none. Exit code 0. The shape
-  is fixed in `DATA_FORMATS.md § Graph Write Result`.
+  `DROP CONSTRAINT` produces no columns and returns `{"ok": true}`. Exit code 0.
+  The shape is fixed in `DATA_FORMATS.md § Graph Write Result`.
+- On success for a statement that **changed the graph**, whichever of those two
+  shapes it produced carries one further member, `counters`, naming what it
+  changed: nodes and relationships created and deleted, properties written,
+  labels added and removed, indexes and constraints added and dropped. A counter
+  whose value is zero is left out, and a statement that changed nothing — every
+  read, a `MERGE` that matched, a `DELETE` that matched no row — carries no
+  `counters` key at all and produces exactly the bytes it produced before the
+  member existed. The member is additive: `ok`, `columns` and `rows` keep their
+  meanings and their positions, so an existing parser needs no change. Exit code
+  0. `DATA_FORMATS.md § Graph Query Counters` is canonical for the shape and the
+  key set, and `GRAPH.md § Write Counters: What a Statement Changed` for the
+  behaviour — including why the two property counters are published as one
+  figure.
 - On success for a statement written with an `EXPLAIN` or `PROFILE` prefix, the
   output is the `{columns, rows}` shape carrying one further member: `plan` for an
   `EXPLAIN`, `profile` for a `PROFILE`, never both. This is the one statement
@@ -3712,10 +3737,33 @@ rmp graph execute -r backend-platform \
   --query "MATCH (d:Decision {key:'use-sessions'}) DETACH DELETE d"
 ```
 
-Output (success): `{"ok": true}`, exit code 0. None of the three carries a
-`RETURN` clause, so none produces result columns. Appending `RETURN` to any of
-them (for example `... RETURN s`) returns the affected elements in the
-`{columns, rows}` shape instead (see `DATA_FORMATS.md § Graph Write Result`).
+Output (success): exit code 0, and an object built on `{"ok": true}`. None of
+the three carries a `RETURN` clause, so none produces result columns. Appending
+`RETURN` to any of them (for example `... RETURN s`) returns the affected
+elements in the `{columns, rows}` shape instead (see
+`DATA_FORMATS.md § Graph Write Result`).
+
+Each of the three also reports what it changed. The first, run against a graph
+that holds neither element, creates two nodes, one property on each, one label
+on each, and the relationship between them:
+
+```json
+{
+  "ok": true,
+  "counters": {
+    "nodesCreated": 2,
+    "relationshipsCreated": 1,
+    "propertiesWritten": 2,
+    "labelsAdded": 2
+  }
+}
+```
+
+Run a second time it matches everything it created and changes nothing, so it
+publishes `{"ok": true}` alone. The second statement publishes
+`"propertiesWritten": 1`, and the third publishes `nodesDeleted` and, if the
+node carried any, `relationshipsDeleted` — a deletion counts no property
+removal. `DATA_FORMATS.md § Graph Query Counters` is canonical for the member.
 
 **Traversal:**
 
@@ -3733,12 +3781,15 @@ rmp graph execute -r backend-platform --query "SHOW INDEXES"
 rmp graph execute -r backend-platform --query "DROP INDEX spec_key"
 ```
 
-The `CREATE INDEX` and `DROP INDEX` invocations output `{"ok": true}` and exit 0.
-The `SHOW INDEXES` invocation outputs the schema listing in the `{columns, rows}`
-shape and exits 0. `GRAPH.md § Schema Management` is canonical for the schema
-statements: which forms the engine accepts, how a schema object is named, why
-changing an index is two invocations rather than one, and how a schema failure
-surfaces.
+The `CREATE INDEX` and `DROP INDEX` invocations exit 0 and output `{"ok": true}`
+carrying `"indexesAdded": 1` and `"indexesRemoved": 1` respectively; a
+`CREATE INDEX ... IF NOT EXISTS` that finds the index already registered changes
+nothing and publishes `{"ok": true}` alone. The `SHOW INDEXES` invocation reads
+rather than writes: it outputs the schema listing in the `{columns, rows}` shape,
+with no `counters` member, and exits 0. `GRAPH.md § Schema Management` is
+canonical for the schema statements: which forms the engine accepts, how a
+schema object is named, why changing an index is two invocations rather than
+one, and how a schema failure surfaces.
 
 **Asking for the plan:**
 
@@ -4013,14 +4064,25 @@ This section does not restate them.
 
 - On success the output is byte-for-byte the output `rmp graph execute` produces
   for the same statement against the same graph: the `{columns, rows}` shape when
-  the statement produces result columns, exactly `{"ok": true}` when it produces
-  none, and the same shape carrying a `plan` or `profile` member when the
-  statement was written with an `EXPLAIN` or `PROFILE` prefix. One key is outside
-  that identity and only one: a `profile` tree's `timeNs` measures the execution
-  that produced it, and the two subcommands are two executions, so they measure
-  two durations. Every other key, the structure, and the member order are
+  the statement produces result columns, `{"ok": true}` when it produces
+  none, the same shape carrying a `plan` or `profile` member when the
+  statement was written with an `EXPLAIN` or `PROFILE` prefix, and either shape
+  carrying a `counters` member when the statement changed the graph. One key is
+  outside that identity and only one: a `profile` tree's `timeNs` measures the
+  execution that produced it, and the two subcommands are two executions, so they
+  measure two durations. Every other key, the structure, and the member order are
   identical; `DATA_FORMATS.md § Graph Client Result`, rule 5, is canonical for the
   boundary and this section does not restate it.
+- The counters take no exception from that identity. They describe the statement
+  and the graph rather than the duration of a run, so the two subcommands publish
+  the same `counters` object, key for key and value for value. One member,
+  `propertiesWritten`, carries the engine's property assignments and property
+  removals as a single figure, and it does so on **both** paths: the protocol a
+  served result crosses carries one property counter and no second channel for a
+  removal, so publishing the split on the direct path alone would make the two
+  surfaces disagree. That is a property of the mapping both paths share, not a
+  divergence between them; `DATA_FORMATS.md § Graph Client Result`, rule 6, and
+  `GRAPH.md § Write Counters: What a Statement Changed` are canonical for it.
   `DATA_FORMATS.md § Graph Client Result` is canonical for the
   mapping that makes the two identical — for the plan as much as for the rows,
   since both cross the protocol and both are mapped back onto the engine's own

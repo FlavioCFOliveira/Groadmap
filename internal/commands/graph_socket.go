@@ -258,7 +258,7 @@ func runOnGraphServer(socket, query string) (any, error) {
 	// (SPEC/GRAPH.md § Query Plans, rule 8).
 	prefixed := result.Plan != nil || result.Profile != nil
 	if len(result.Columns) == 0 && !prefixed {
-		return graphOKResult{OK: true}, nil
+		return graphOKResult{OK: true, Counters: graphjson.CountersOf(result.Counters)}, nil
 	}
 
 	columns := result.Columns
@@ -281,6 +281,13 @@ func runOnGraphServer(socket, query string) (any, error) {
 	// SPEC/DATA_FORMATS.md § Graph Client Result requires holds by construction.
 	out.Plan = graphjson.Plan(result.Plan, false)
 	out.Profile = graphjson.Plan(result.Profile, true)
+	// And the same for the counters, over the same shared mapping. The client
+	// inverted the protocol's statistics map onto the engine's own counters — with
+	// the property figure already folded by the server, which is the one place the
+	// two paths could have diverged — so this step arrives at the identical object
+	// the direct path publishes, by construction rather than by assertion
+	// (SPEC/DATA_FORMATS.md § Graph Client Result, rule 6).
+	out.Counters = graphjson.CountersOf(result.Counters)
 	return out, nil
 }
 

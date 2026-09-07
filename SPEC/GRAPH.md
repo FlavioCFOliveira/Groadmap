@@ -28,6 +28,7 @@
   - [Recovered Schema on Every Surface](#recovered-schema-on-every-surface)
 - [Query Notifications as Diagnostics](#query-notifications-as-diagnostics)
 - [Query Plans: The EXPLAIN and PROFILE Prefixes](#query-plans-the-explain-and-profile-prefixes)
+- [Write Counters: What a Statement Changed](#write-counters-what-a-statement-changed)
 - [Error Handling and Exit Codes](#error-handling-and-exit-codes)
 - [The Dedicated Graph Server](#the-dedicated-graph-server)
   - [Socket Path and Permissions](#socket-path-and-permissions)
@@ -116,8 +117,12 @@ a decision about the response's size and refuses nothing (see
    produces result columns returns those columns and rows as JSON to stdout, in
    the shape defined in `DATA_FORMATS.md § Graph Query Result`; a statement that
    produces none returns `{"ok": true}` (see
-   `DATA_FORMATS.md § Graph Write Result`). The engine reports no
-   affected-element count, so the result carries no such field. A statement
+   `DATA_FORMATS.md § Graph Write Result`). A statement that changed the graph
+   adds one member to whichever of those two shapes it produced, `counters`,
+   naming what it changed; a statement that changed nothing adds none and is
+   unchanged in every byte (see
+   [Write Counters: What a Statement Changed](#write-counters-what-a-statement-changed)
+   and `DATA_FORMATS.md § Graph Query Counters`). A statement
    written with an `EXPLAIN` or `PROFILE` prefix is the single exception to that
    discriminator: it always returns the columns-and-rows shape, carrying the
    captured plan, and never `{"ok": true}` (see
@@ -1934,6 +1939,127 @@ stated here because it is a property of the diagnostic, not of the encoding;
     exit code.** It is part of the statement text a caller already supplies
     through `--query` or standard input, and it reaches the engine through the
     path every statement reaches it through.
+
+## Write Counters: What a Statement Changed
+
+A statement that changed the graph reports what it changed. The engine keeps,
+for each statement it executes, a set of counters recording the write effects
+that were actually applied — nodes and relationships created and deleted,
+properties written, labels added and removed, indexes and constraints added and
+dropped — and `rmp graph execute` and `rmp graph client` publish them beside the
+statement's result. `DATA_FORMATS.md § Graph Query Counters` is canonical for the
+published shape, the key set and the omission rules; this section fixes the
+behaviour.
+
+**The reason the member exists is that `{"ok": true}` answers a different
+question.** It says a statement succeeded, which is worth knowing and is not the
+thing a caller writing to a graph most needs to know. Two invocations that both
+print it may have created a node and matched an existing one, or deleted a
+thousand relationships and deleted none. The counters separate those cases
+without the caller having to issue a second, reading statement to find out —
+which is the only way it could have found out before, and which reads a graph
+that other writers may have changed in the meantime.
+
+Behaviour:
+
+1. **The counters are read after the result has been fully drained and before
+   the transaction is committed.** They are accumulated by the write path as the
+   statement's operators run, so they are final only once every operator has been
+   driven to exhaustion; and the commit is what releases the result, so a read
+   after it is a read of something that no longer exists. This is the same window
+   in which the query plan and the advisory notifications are taken, and for the
+   same two reasons (see
+   [Query Notifications as Diagnostics](#query-notifications-as-diagnostics) and
+   [Query Plans: The EXPLAIN and PROFILE Prefixes](#query-plans-the-explain-and-profile-prefixes)).
+2. **Both surfaces publish them, and publish the same object.** `rmp graph
+   execute` reads them from the engine it opened, or from the server it resolved;
+   `rmp graph client` reads them from the server it was pointed at. The identity
+   `DATA_FORMATS.md § Graph Client Result` requires binds them with no exception:
+   they describe the statement and the graph, not the duration of the run, which
+   is the one thing that section exempts.
+3. **A statement that failed or was rolled back publishes no counters, because
+   it publishes nothing at all.** A failing invocation writes nothing to stdout
+   (see `DATA_FORMATS.md § Fundamental Principle`), so the question of what its
+   counters said does not arise. This holds for every failure class alike: a
+   statement the engine refused, one the time budget cut, one whose commit
+   failed, and one that lost every attempt of the retry policy against a server.
+   The counters live with the statement's own write path, so an abandoned
+   statement's counts are discarded rather than carried into the next one.
+4. **A statement that changed nothing publishes no counters either, and its
+   output is unchanged in every byte.** This covers every read, every `EXPLAIN`
+   — which executes nothing — and every write whose effects came to nothing,
+   such as a `MERGE` that matched an existing element or a `DELETE` whose
+   pattern matched no row. It is what makes the member additive rather than a
+   change to the published contract: a consumer that never issues a writing
+   statement never sees a byte it did not see before.
+5. **The counters count effects, not observability, and this specification
+   claims nothing about the second.** A counter is incremented at the point the
+   write path applies the change. It is not a statement that the change can
+   afterwards be read back, and it must not be read as one:
+   [What Groadmap Does Not Check](#what-groadmap-does-not-check) enumerates the
+   ways in which a statement that the engine accepted and executed can leave the
+   graph other than as its author intended, and publishing a count does not
+   remove any of them. What the counters add is a signal where there was none;
+   what they do not add is a guarantee that was never there.
+
+### The one figure the protocol carries folded
+
+6. **`propertiesWritten` is one member covering two engine counters, on both
+   paths, and the constraint that decides it is the protocol's.** The engine
+   counts a property assignment and a property removal separately, following
+   openCypher, which names `+properties` and `-properties` as two distinct side
+   effects. The Bolt protocol that carries a served result does not: its
+   statistics vocabulary has a single properties counter and no counterpart for
+   a removal. A result that reached a caller through `rmp graph client` therefore
+   arrives with the two already summed, and no second channel exists anywhere in
+   the protocol from which the split could be recovered.
+7. **The fold is therefore performed on the direct path as well, and the
+   published key is named for the sum.** Three alternatives were available and
+   each fails a requirement this feature is under:
+   - Publishing the split on the direct path and the sum on the served one makes
+     the two surfaces publish different key sets for one statement, which is
+     precisely what `DATA_FORMATS.md § Graph Client Result` forbids, and would
+     buy a second standing exception to that identity for one counter.
+   - Publishing the sum under a key named for an assignment — a
+     `propertiesSet` carrying a removal — asserts an effect that did not occur.
+     This specification already refuses that trade for a plan's figures, where a
+     count nobody took is omitted rather than published as a zero
+     ([Query Plans: The EXPLAIN and PROFILE Prefixes](#query-plans-the-explain-and-profile-prefixes),
+     rule 11), and the principle does not weaken because the number here happens
+     to be convenient.
+   - Omitting the property counter entirely leaves a statement whose only effect
+     was on properties — every `SET` and every `REMOVE` that touches no label —
+     with a change to report and no member to report it in. Its block would be
+     present, because the statement changed something, and empty, which
+     `DATA_FORMATS.md § Graph Query Counters`, rule 2, does not allow.
+8. **What the fold costs, stated plainly, and what it does not.** A caller
+   cannot tell, from `propertiesWritten` alone, whether a statement assigned two
+   properties, removed two, or did one of each. That is a real loss and it is
+   published rather than hidden. What it does not cost is the member's purpose:
+   distinguishing a `MERGE` that created from one that matched, a `DELETE` that
+   removed nothing from one that removed a thousand, and a schema statement that
+   registered an index from one that found it already present, all rest on the
+   node, relationship and schema counters, and every one of those crosses the
+   protocol faithfully. A caller that must know which of the two property
+   effects occurred knows it from the statement it wrote.
+9. **The remedy is upstream and is not available here.** Restoring the split
+   would require the protocol's statistics map to carry a properties-removed
+   figure alongside the one it has — an extension to the wire vocabulary, not a
+   change to how Groadmap reads it. Until such a figure exists on the wire,
+   folding on both paths is the only arrangement that keeps every requirement in
+   this section and in `DATA_FORMATS.md § Graph Client Result` true at the same
+   time. Should the figure appear, `propertiesWritten` may be replaced by the
+   two separate members, on both paths in the same change; nothing in this
+   specification is written so as to make that harder than it needs to be.
+10. **The counters and a query plan never appear together, and neither surface
+    has to arrange it.** An `EXPLAIN` executes nothing, so it has no applied
+    effect to count. A `PROFILE` executes, but the engine refuses a `PROFILE` of
+    a writing statement rather than perform a write it was asked only to measure
+    (see
+    [Query Plans: The EXPLAIN and PROFILE Prefixes](#query-plans-the-explain-and-profile-prefixes),
+    rules 1 and 4), so the only statement a `profile` tree can describe is one
+    that changed nothing. Both exclusions are the engine's, and this
+    specification records them rather than imposing them.
 
 ## Error Handling and Exit Codes
 
@@ -4375,12 +4501,47 @@ Groadmap's usage model and expectations:
     that `timeNs` is **present** on both sides wherever the shape requires it, so
     that excluding the value does not quietly excuse a missing key (see
     `DATA_FORMATS.md § Graph Client Result`, rule 5).
+61. **A write publishes its counters, a read publishes none, and the criterion
+    MUST assert both halves.** Against one roadmap:
+    `CREATE (:Widget {serial:'A-1', batch:7})` returns `{"ok": true}` carrying a
+    `counters` object of exactly `nodesCreated` 1, `propertiesWritten` 2 and
+    `labelsAdded` 1 — three members and no fourth, so the criterion fails on a
+    zero that was published rather than omitted; and `MATCH (w:Widget) RETURN
+    w.serial` returns its `columns` and `rows` with **no `counters` key at
+    all**, in bytes identical to those it returned before the member was
+    published. The second half is the one that cannot be dropped: it is the
+    guarantee every existing consumer depends on, and it is the part an
+    over-eager implementation breaks silently by publishing an empty object
+    (see [Write Counters: What a Statement Changed](#write-counters-what-a-statement-changed)
+    and `DATA_FORMATS.md § Graph Query Counters`).
+62. **A write that applied nothing is distinguishable from one that applied
+    something, and that is what the member is for.** Re-running a `MERGE` that
+    matches the element it matched before returns `{"ok": true}` with no
+    `counters` key, while its first run returned one; a `DELETE` whose pattern
+    matches no row does the same. The criterion MUST compare the two runs of the
+    **same statement** rather than two different statements, because it is the
+    difference between them that a caller reads, and MUST also assert that a
+    `DETACH DELETE` of a connected node reports `nodesDeleted` and
+    `relationshipsDeleted` and no property figure — a deletion counts no property
+    removal.
+63. **The two subcommands publish the same counters, and the criterion MUST
+    compare complete stdout.** With a server serving the roadmap, the stdout of
+    `rmp graph client` for a writing statement is byte for byte the stdout
+    `rmp graph execute` writes for the same statement against the same graph,
+    counters included and with nothing excluded: unlike the plan comparison of
+    criterion 60, there is no clock in this object and therefore no exception to
+    carve out (`DATA_FORMATS.md § Graph Client Result`, rule 6). The criterion
+    MUST include a statement that both assigns and removes a property in one
+    pass, whose `propertiesWritten` is the sum of the two effects on both paths;
+    a check that compared only a pure `SET` would pass on an implementation that
+    folded on one path and not the other.
 
 ## See Also
 
 - CLI command contract for `graph` → `COMMANDS.md § Graph Management`
 - Graph query result JSON and property-type mapping → `DATA_FORMATS.md § Graph Query Result`
 - Query plan JSON for a statement written with an `EXPLAIN` or `PROFILE` prefix → `DATA_FORMATS.md § Graph Plan Node`
+- The JSON shape of the write counters, their key set, and the rules that omit a zero and omit the block → `DATA_FORMATS.md § Graph Query Counters`
 - Standard input as a Cypher source → `DATA_FORMATS.md § Input`
 - The sibling standard-input rule for the comment body, whose cap counts characters rather than bytes → `COMMANDS.md § Comment Body Input Source and Precedence`
 - GoGraph integration, directory layout, error handling → `ARCHITECTURE.md`

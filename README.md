@@ -598,6 +598,41 @@ rmp graph execute -r myproject \
   --query "MATCH (d:Decision {key:'use-sessions'}) DETACH DELETE d"
 ```
 
+**How do I tell what a statement actually changed?**
+
+A statement that changes the graph publishes a `counters` object beside its result,
+naming the effects it applied — nodes and relationships created and deleted, properties
+written, labels added and removed, indexes and constraints added and dropped.
+
+```bash
+rmp graph execute -r myproject \
+  --query "CREATE (:Spec {key:'rate-limiting', status:'draft'})"
+```
+```json
+{
+  "ok": true,
+  "counters": {
+    "nodesCreated": 1,
+    "propertiesWritten": 2,
+    "labelsAdded": 1
+  }
+}
+```
+
+A counter that is zero is left out, and a statement that changed **nothing** carries no
+`counters` key at all — every read, a `MERGE` that matched an existing element, a
+`DELETE` whose pattern matched no row — so it produces exactly the bytes it produced
+before the member existed and no existing script needs a change. `execute` and `client`
+publish the same object for the same statement.
+
+One member, `propertiesWritten`, carries property assignments and property removals as a
+single figure. The protocol a served result crosses has one property counter and no
+counterpart for a removal, so the split cannot survive the trip to `client`; both
+surfaces publish the sum rather than report different keys for one statement, and the
+key is named for what it carries. So a `REMOVE` that reports `propertiesWritten` is
+correct, not a defect. See
+[DOCS/commands/graph.md](DOCS/commands/graph.md#what-a-statement-changed-the-counters-member).
+
 **How many graph subcommands are there?**
 
 Three: `execute`, `serve` and `client`. `execute` and `client` each run any Cypher statement the engine accepts — a read, a write, a deletion, index and constraint DDL, and the `SHOW INDEXES` / `SHOW CONSTRAINTS` listings — and differ only in where the statement runs. `serve` runs no statement of its own: it makes the graph available to the other two.
@@ -621,7 +656,8 @@ rmp graph execute -r myproject --query "PROFILE MATCH (s:Spec) RETURN s.key"
 
 The two members are never both present, so an estimate can never be read as a
 measurement: `EXPLAIN` carries the planner's `estimatedRows`, `PROFILE` carries the
-measured `rows`, `timeNs` and `dbHits`. A `PROFILE` of a **writing** statement is
+measured `rows`, `timeNs` and `dbHits`. An `EXPLAIN` executes nothing, so it never
+carries the `counters` a real write reports. A `PROFILE` of a **writing** statement is
 refused, because profiling it would mean committing it, and neither prefix is accepted
 on a schema statement. See [DOCS/commands/graph.md](DOCS/commands/graph.md#query-plans-explain-and-profile).
 

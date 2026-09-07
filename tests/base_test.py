@@ -522,3 +522,58 @@ class GroadmapTestBase:
         if status:
             cmd.extend(["--status", status])
         return self.run_cmd_json(cmd)
+
+
+# --------------------------------------------------------------------------
+# The graph write-result shape
+#
+# `rmp graph execute` and `rmp graph client` answer a statement that produces no
+# result columns with {"ok": true}, and a statement that CHANGED the graph adds
+# one further member, `counters`, naming what it changed
+# (SPEC/DATA_FORMATS.md § Graph Write Result and § Graph Query Counters;
+# SPEC/GRAPH.md § Write Counters: What a Statement Changed).
+#
+# The member is additive, so `ok` keeps its meaning, its value and its position.
+# What it broke is the IDIOM these suites used to assert that shape:
+# `result == {"ok": True}` compares the whole object and therefore fails on a
+# correct result the moment the statement changed something. Relaxing each site
+# to `result["ok"] is True` would fix the failure and lose what the comparison
+# was worth -- it would stop noticing a stray third member, which is exactly the
+# drift a whole-object comparison exists to catch.
+#
+# This is the one place the rule is written, so the suites cannot come to
+# disagree about what the shape is: `ok` is true, and the only other member the
+# object may carry is `counters`, whose value is asserted when the caller knows
+# what the statement changed.
+# --------------------------------------------------------------------------
+
+
+def assert_graph_write_shape(result: Any, context: str = "",
+                             counters: Optional[Dict[str, int]] = None):
+    """Assert the {"ok": true} write shape, with its optional counters member.
+
+    counters, when given, is the COMPLETE expected block: every counter the
+    statement produced, and no other, because a zero is omitted rather than
+    published. Pass {} to require that the statement changed nothing and
+    therefore carries no `counters` key at all.
+    """
+    where = f"{context}: " if context else ""
+    assert isinstance(result, dict), f"{where}the write shape is a JSON object; got {result!r}"
+    assert result.get("ok") is True, (
+        f"{where}a statement that produces no result columns returns "
+        f'{{"ok": true}}; got {result!r}')
+    extra = set(result) - {"ok", "counters"}
+    assert not extra, (
+        f"{where}the only member additive to the write shape is 'counters'; "
+        f"got the unexpected {sorted(extra)!r} in {result!r}")
+    if counters is None:
+        return
+    if counters == {}:
+        assert "counters" not in result, (
+            f"{where}a statement that changed nothing carries no 'counters' key at "
+            f"all, and produces exactly the bytes it produced before the member "
+            f"existed; got {result!r}")
+        return
+    assert result.get("counters") == counters, (
+        f"{where}expected the counters {counters!r} -- a zero is omitted, not "
+        f"published; got {result.get('counters')!r}")

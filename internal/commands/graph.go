@@ -48,12 +48,38 @@ type graphQueryResult struct {
 	// (SPEC/DATA_FORMATS.md § Graph Query Result, SPEC/GRAPH.md § Query Plans).
 	Plan    *graphjson.PlanNode `json:"plan,omitempty"`
 	Profile *graphjson.PlanNode `json:"profile,omitempty"`
+
+	// Counters names what the statement changed, and is nil — so the key is
+	// absent — for every statement that changed nothing, which is what a read
+	// and an EXPLAIN both are. It is written LAST because the member is additive:
+	// columns and rows keep their meanings and their positions, so an existing
+	// parser needs no change (SPEC/DATA_FORMATS.md § Graph Query Counters,
+	// rule 3). It never appears beside plan or profile, and neither surface has
+	// to arrange that: an EXPLAIN applies nothing and the engine refuses a
+	// PROFILE of a writing statement (rule 5).
+	Counters *graphjson.Counters `json:"counters,omitempty"`
 }
 
 // graphOKResult is the JSON shape returned by write subcommands whose
 // query has no RETURN clause.
+//
+// The field order is the JSON KEY order here too, for the same reason it is on
+// graphQueryResult: `ok` keeps its meaning, its value and its position, and the
+// counters follow it (SPEC/DATA_FORMATS.md § Graph Write Result;
+// § Graph Query Counters, rule 3). fieldalignment would have the pointer lead,
+// which would publish `counters` before `ok`; the published order is worth more
+// than the pointer-scan prefix of a struct built once per invocation, exactly as
+// it is on graphQueryResult above.
+//
+//nolint:govet // fieldalignment: field order is the published JSON key order.
 type graphOKResult struct {
 	OK bool `json:"ok"`
+
+	// Counters is nil for a statement that changed nothing, which is what a
+	// MERGE that matched and a DELETE that matched no row both are. Such a
+	// statement therefore still publishes exactly {"ok": true} — the bytes it
+	// published before this member existed.
+	Counters *graphjson.Counters `json:"counters,omitempty"`
 }
 
 // maxQueryBytes is the maximum length of a Cypher query: 1 MiB, which is
@@ -137,9 +163,9 @@ Options:
 
 Output (stdout JSON):
   Statement that produces result columns:
-    {"columns": [...], "rows": [[...], ...], "plan": <plan node, EXPLAIN only>, "profile": <plan node, PROFILE only>}
+    {"columns": [...], "rows": [[...], ...], "plan": <plan node, EXPLAIN only>, "profile": <plan node, PROFILE only>, "counters": <write counters, only when the statement changed the graph>}
   Statement that produces none:
-    {"ok": true}
+    {"ok": true, "counters": <write counters, only when the statement changed the graph>}
   Server startup:
     {"socket": "<path>"}
 
@@ -147,6 +173,14 @@ Output (stdout JSON):
   always produces the columns shape, whether or not it declares a column.
   EXPLAIN executes nothing and reports the plan the engine would run; PROFILE
   runs the statement and reports what the run measured.
+
+  A statement that changed the graph adds a counters block naming what it
+  changed: nodesCreated, nodesDeleted, relationshipsCreated,
+  relationshipsDeleted, propertiesWritten, labelsAdded, labelsRemoved,
+  indexesAdded, indexesRemoved, constraintsAdded, constraintsRemoved. A counter
+  that is zero is left out, and a statement that changed nothing -- every read,
+  a MERGE that matched, a DELETE that matched no row -- carries no counters key
+  at all.
 
 Exit codes:
   0   Success
@@ -256,13 +290,18 @@ Optional:
   -h, --help              Show this help message
 
 Output (stdout JSON):
-  With result columns:      {"columns": [...], "rows": [[...], ...], "plan": <plan node, EXPLAIN only>, "profile": <plan node, PROFILE only>}
-  Without result columns:   {"ok": true}
+  With result columns:      {"columns": [...], "rows": [[...], ...], "plan": <plan node, EXPLAIN only>, "profile": <plan node, PROFILE only>, "counters": <write counters, only when the statement changed the graph>}
+  Without result columns:   {"ok": true, "counters": <write counters, only when the statement changed the graph>}
   A statement carrying a RETURN clause produces columns and one without it does
   not; SHOW INDEXES and SHOW CONSTRAINTS produce columns although they carry no
   RETURN clause.
   A statement written with the EXPLAIN or PROFILE prefix always produces the
   columns shape so that it can carry its plan, even with no column of its own.
+  A statement that changed the graph adds a counters block naming what it
+  changed -- nodes and relationships created and deleted, properties written,
+  labels added and removed, indexes and constraints added and removed. A zero
+  counter is left out, and a statement that changed nothing carries no counters
+  key at all, so a MERGE that created is distinguishable from one that matched.
 
 Exit codes:
   0   Success
@@ -673,6 +712,14 @@ func serializeGraphResult(result *cypher.Result) (graphQueryResult, error) {
 	// non-nil, so an estimate can never be published as a measurement.
 	out.Plan = graphjson.Plan(result.Plan(), false)
 	out.Profile = graphjson.Plan(result.Profile(), true)
+	// The counters are read in the same window and for the same two reasons: the
+	// write path accumulates them as the operators run, so they are final only
+	// once every operator has been driven to exhaustion, and the commit releases
+	// the result, so a read after it is a read of something that no longer exists
+	// (SPEC/GRAPH.md § Write Counters: What a Statement Changed, rule 1). The mapping returns nil for a
+	// statement that changed nothing, so the accessor's result is handed over
+	// unconditionally.
+	out.Counters = graphjson.CountersOf(result.Counters())
 	return out, nil
 }
 
@@ -893,7 +940,12 @@ func runGraphExecute(args []string) error {
 			_ = result.Close() //nolint:errcheck // roll back; commit error is moot on iteration failure
 			return graphStatementError(budget, "graph query failed", iterErr)
 		}
-		output = graphOKResult{OK: true}
+		// The counters are read here — after the drain, before Close commits —
+		// for the reason serializeGraphResult reads them there: they are final
+		// only once every operator has run, and the commit releases the result
+		// (SPEC/GRAPH.md § Write Counters: What a Statement Changed, rule 1). A statement that changed
+		// nothing maps to nil and publishes exactly {"ok": true}.
+		output = graphOKResult{OK: true, Counters: graphjson.CountersOf(result.Counters())}
 	} else {
 		out, serErr := serializeGraphResult(result)
 		if serErr != nil {
