@@ -486,6 +486,25 @@ class GraphServeProcess:
     def is_alive(self) -> bool:
         return self.proc is not None and self.proc.poll() is None
 
+    def drain_stderr_to_eof(self, timeout: float = 5.0):
+        """Block until the server's stderr pipe reaches EOF, so a caller that
+        has already seen the process exit can read the WHOLE stream rather
+        than whatever the draining thread happened to have collected.
+
+        The drain runs on its own thread, so `proc.wait()` returning does not
+        mean the last line has been appended. Every assertion that compares the
+        COMPLETE stderr -- rather than searching it for a fragment -- has to
+        close that window first, or it races the thread and fails
+        intermittently on a line that did arrive.
+
+        `_StreamDrain._run` puts a `None` sentinel on the queue at EOF, so
+        waiting for a predicate nothing satisfies returns exactly when the pipe
+        closes (or when `timeout` elapses, which a caller that has already
+        observed the exit can treat as a drained stream).
+        """
+        if self._err is not None:
+            self._err.wait_for(lambda _line: False, timeout)
+
     def stderr_text(self) -> str:
         return self._err.text() if self._err else ""
 

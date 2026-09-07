@@ -1190,6 +1190,19 @@ whenever one is listening (see `GRAPH.md § Server Resolution`): the surface a
 statement was executed through is not observable in the JSON. A caller may
 therefore parse one shape and change nothing when a server is started or stopped.
 
+**The identity governs the success output and the exit code, and it does not
+reach the error line.** What it fixes is the bytes a statement writes to stdout
+and the code it exits with; the plain-text diagnostic a *failing* statement
+writes to stderr is outside it, and is fixed per condition by the error tables of
+`COMMANDS.md` rather than here. The distinction is not academic at the pinned
+engine: exactly one condition — a field the engine refuses as too long for its
+durable format — currently prints a different stderr line on each path, because
+the protocol carries no code that distinguishes it and the server replaces its
+message. `GRAPH.md § Field Length Limits`, rule 13, is canonical for that
+departure, for the remedy that ends it, and for what stays identical meanwhile:
+the sentinel, the exit code, and the fact that nothing was written. No other
+condition diverges, and nothing above is weakened for a statement that succeeds.
+
 5. **The identity binds every value that is a property of the statement and the
    graph. It does not bind `timeNs`, and no implementation could make it.** That
    key is a wall-clock measurement of the execution that produced it (see

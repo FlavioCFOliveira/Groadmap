@@ -29,6 +29,7 @@
 - [Query Notifications as Diagnostics](#query-notifications-as-diagnostics)
 - [Query Plans: The EXPLAIN and PROFILE Prefixes](#query-plans-the-explain-and-profile-prefixes)
 - [Write Counters: What a Statement Changed](#write-counters-what-a-statement-changed)
+- [Field Length Limits](#field-length-limits)
 - [Error Handling and Exit Codes](#error-handling-and-exit-codes)
 - [The Dedicated Graph Server](#the-dedicated-graph-server)
   - [Socket Path and Permissions](#socket-path-and-permissions)
@@ -618,7 +619,11 @@ Failure policy:
    `RETURN`-mirroring shape or `{"ok": true}`) and exit code 0. A failed
    checkpoint after a durable commit is a degraded-but-correct state: the
    write-ahead log is intact, so recovery still restores the committed state, and
-   the next successful write checkpoints again and reconciles the snapshot.
+   the next successful write checkpoints again and reconciles the snapshot. **One
+   cause of checkpoint failure does not reconcile, and is a condition of its
+   own**: a field the snapshot format cannot carry is committed graph state, so
+   every later checkpoint refuses for the same reason until that field is removed
+   (see [Field Length Limits](#field-length-limits), rules 6 to 9).
 3. The checkpoint failure is surfaced through the existing error and
    observability conventions (a diagnostic on stderr, consistent with
    `HELP.md § Error message format`) **without** changing the exit code from 0.
@@ -2062,6 +2067,270 @@ Behaviour:
     that changed nothing. Both exclusions are the engine's, and this
     specification records them rather than imposing them.
 
+## Field Length Limits
+
+A statement writes labels, property keys and property values into two durable
+formats, and each format bounds how long a field it will carry. The bounds are
+the engine's. This specification does not set them, does not raise them and does
+not lower them; what it fixes is what the caller is told when a field exceeds
+one, and what Groadmap does next.
+
+**The two formats do not bound a field alike, and that is why this section has
+two halves rather than one rule applied twice.** A committed write goes into the
+write-ahead log; a checkpoint later folds the committed state into a snapshot
+(see [Synchronous Checkpoint on Write](#synchronous-checkpoint-on-write)). The
+log bounds a field by the capacity of the length prefix its frame reserves, which
+is an encoding limit. The snapshot bounds one by what its own reader is required
+to accept, which is an anti-exhaustion control — a reader that allocated for any
+length a prefix could express would allocate gigabytes on an untrusted file. The
+two are set independently and neither is uniformly the stricter: for a label and
+for a property key the log's bound is by far the tighter and fires first, at
+commit, so the snapshot's can never be reached; for a property value and for a
+node key the snapshot's is the tighter by a factor of four, so a field can be
+short enough to commit and too long to fold. Such a field is durable, correct,
+recoverable and unfoldable at the same time. Rules 6 to 9 exist for exactly that
+field, and they are not a wording variant of rules 2 to 5.
+
+**The figures are read from the pinned GoGraph version and are recorded here as
+evidence, not as the rule.** They move with the engine, a version bump may move
+any of them, and no line Groadmap publishes repeats one from this page: every
+published line carries the figure the engine reported for the run that produced
+it (see [Dependency Maturity Risk](#dependency-maturity-risk)).
+
+| Field | Write-ahead log, at commit | Snapshot, at checkpoint | Which bound binds |
+|-------|----------------------------|-------------------------|-------------------|
+| Node or edge label | 65535 bytes | 1 MiB | The log, by a factor of sixteen |
+| Node or edge property key | 65535 bytes | 1 MiB | The log, by a factor of sixteen |
+| Index or constraint identifier | 65535 bytes | 64 KiB | Neither: the engine's Cypher parser bounds it far below both |
+| Property value, list element, list element count | 4294967295 bytes | 1 GiB | **The snapshot**, at a quarter of the log's bound |
+| Node key | 4294967295 bytes, enforced by the node-key codec | 1 GiB | **The snapshot**, at a quarter of the log's bound |
+| Labels or properties on one edge-handle record | — | 1 Mi | The snapshot, at a ceiling no graph the engine produces approaches |
+
+**The binding bound for a property value is 1 GiB, and a caller who reads only
+the log's figure is misled.** A 2 GiB value is inside the log's bound, so it
+commits, and it is acknowledged, durable and recoverable. It is outside the
+snapshot's, so from that moment every checkpoint of that graph fails, the
+write-ahead log is never folded again and never reclaimed, and it grows for as
+long as the value remains. The last column of the table above is therefore the
+column that matters when writing, and 1 GiB is the number to write under.
+
+Behaviour:
+
+1. **Groadmap checks no field length, and MUST NOT.** It cannot: a statement's
+   fields are the values its expressions produce, so learning them means
+   executing the statement, which is what the engine does. A pre-check would have
+   to reimplement the engine's evaluator to guess at a bound the engine owns, and
+   it would be wrong in the direction that matters — refusing writes the engine
+   accepts. This is the same reasoning that puts the write-ahead log, and not the
+   statement's text, in charge of whether a checkpoint runs
+   ([Synchronous Checkpoint on Write](#synchronous-checkpoint-on-write)). Every
+   rule below describes what Groadmap does with a refusal the engine has already
+   made.
+2. **A commit the engine refuses for an over-long field publishes a line of its
+   own.** It carries `utils.ErrGraphEngine` and exit code 1, as an ordinary parse
+   or execution failure does, and it is nonetheless not that failure's line. The
+   two conditions were otherwise separated only by the engine's diagnostic tail,
+   which [Error Handling and Exit Codes](#error-handling-and-exit-codes), rule 2,
+   deliberately declines to specify and which a caller therefore cannot lawfully
+   match: a caller reading `graph query failed: ` had to parse English to learn
+   whether to correct the statement's syntax or to shorten one of its values.
+   This is the same defect, and the same remedy, as the statement time budget and
+   the exhausted serialisation retry, which each hold a line of their own for the
+   same reason (rules 6 and 7 of that section).
+3. **What a caller may rely on to recognise the class is `rmp`'s own text, and
+   inside the binary the engine's sentinel.** Externally, the fixed prefix of the
+   published line is the whole of the contract: `COMMANDS.md § Graph Management`
+   publishes the exact line. Internally, the condition is recognised with
+   `errors.Is` against `store/txn.ErrFieldTooLong`, which the engine wraps around
+   every write-ahead-log length refusal. It MUST NOT be recognised by matching
+   the engine's message text: that text is the engine's to reword, a match on it
+   fails silently at the next version bump, and the whole point of a sentinel is
+   that it survives the wording.
+4. **The published line ends in the engine's diagnostic, and the resulting echo
+   is deliberate.** The engine formats every such refusal with the field kind and
+   both figures — the length the field occupies and the maximum in force — and
+   that is the most useful part of the line, because it names which of the
+   statement's fields is at fault and by how much. It follows `rmp`'s own text
+   unchanged, untrimmed and **last**, which is where every other published line
+   carrying an engine or operating-system diagnostic puts it, and which is what
+   lets a test assert the whole of `rmp`'s half and none of the engine's. The two
+   halves therefore both say the field is too long, and that repetition MUST NOT
+   be tidied away by editing, trimming or re-deriving the engine's half: doing so
+   would put `rmp` back to parsing a diagnostic that rule 3 forbids it to match.
+   `rmp`'s half accordingly names no field kind of its own — it defers to the
+   engine's, which is the only one that knows.
+5. **Nothing is written, the store stays usable, and the exit code is
+   unchanged.** The refused transaction consumes a sequence number and applies
+   nothing, so the graph holds no part of the statement — not the elements it
+   created before the over-long field, and not the properties it set on them.
+   Measured, an ordinary write submitted immediately after such a refusal
+   returned `{"ok": true}` and a following `MATCH` counted it. The refusal adds
+   no exit code and moves no condition between sentinels
+   ([Constraints](#constraints), rule 5).
+6. **A checkpoint the engine refuses for an over-long field is a condition of its
+   own, and what separates it from every other checkpoint failure is that it
+   cannot heal.** A checkpoint that fails because a disk is full, a permission is
+   wrong or a write is interrupted may succeed the next time it runs, and both
+   the existing rule and the existing diagnostic are built on that expectation:
+   the write succeeded, the log is intact, and the next successful checkpoint
+   reconciles the snapshot
+   ([Synchronous Checkpoint on Write](#synchronous-checkpoint-on-write), failure
+   policy;
+   [Durability and Checkpointing in a Long-Lived Process](#durability-and-checkpointing-in-a-long-lived-process),
+   rule 7). Here that expectation is false. The field the snapshot refuses is
+   committed graph state; every later capture captures the same state, so every
+   later checkpoint refuses for the same reason. **The condition is permanent
+   until the offending field is removed or shortened.** Nothing in the
+   environment changes it, no amount of waiting resolves it, and a diagnostic
+   that told the operator the next checkpoint would reconcile the snapshot would
+   be telling them to wait for something that will not happen. That is why this
+   is a condition of its own and not the general one worded better.
+7. **What the failure costs is bounded growth lost, not data.** The engine's
+   guard fires while the capture is still being assembled, before any snapshot
+   file is written and before the write-ahead log's prefix is truncated. Every
+   acknowledged commit therefore remains durable in the log, recovery still
+   restores it in full, and the store stays open and usable. What is lost is the
+   truncation: the log keeps growing for as long as the offending field is in the
+   graph, and every open replays more of it, so recovery time grows with it. That
+   is a real and unbounded cost, and it is the reason the condition must be
+   reported rather than absorbed — but it is not a durability failure, and a
+   diagnostic that read as one would be worse than none.
+8. **Every surface that holds the checkpoint error MUST classify it; the one that
+   does not hold it MUST NOT pretend to.** The synchronous checkpoint of a
+   short-lived invocation and the graph server's shutdown checkpoint both return
+   an error to Groadmap, so both MUST recognise
+   `store/snapshot.ErrFieldTooLong` with `errors.Is` and report this condition
+   rather than the general one. The graph server's in-flight checkpoint does not:
+   it runs on the engine's own cadence loop
+   ([Durability and Checkpointing in a Long-Lived Process](#durability-and-checkpointing-in-a-long-lived-process),
+   rules 5 and 9), and what Groadmap can observe of it is a statistics value
+   carrying the last failure as a **rendered string**, not as an error. On that
+   path `errors.Is` has nothing to match, and matching the string is what rule 3
+   forbids, so the in-flight report stays the general one — with the engine's own
+   text inside it, which is where an operator reads the kind. This is a limit of
+   what the engine exposes; it is stated as one rather than closed by a text
+   match, and it is the boundary an implementation MUST observe rather than work
+   around.
+9. **The report says what is safe, what did not happen, that it will not happen
+   again, and what to remove.** Wherever rule 8 requires the classification, the
+   diagnostic MUST carry four things: that every acknowledged commit is still
+   durable and recovery still restores it; that the log was not folded, and that
+   the log therefore grows and the next open replays more of it; that the
+   condition will persist through every later checkpoint while the field remains;
+   and that the remedy is to shorten or remove the offending field with a
+   statement. The last two are what make this report different from every other
+   checkpoint diagnostic, all of which describe a condition the operator waits
+   out or repairs in the environment. They are also what makes the report worth
+   emitting more than once: on the short-lived surfaces the diagnostic
+   accompanies **every subsequent write**, because every subsequent write
+   checkpoints and every checkpoint refuses, and a line that recurred on every
+   write saying only that a checkpoint had failed would train an operator to
+   ignore the one message that names an unbounded, permanent cost. **No literal
+   for these diagnostics is published in this specification or in `COMMANDS.md`.**
+   They accompany a successful invocation — exit code 0 for the short-lived
+   surfaces
+   ([Synchronous Checkpoint on Write](#synchronous-checkpoint-on-write), failure
+   policy, rule 2) and a log record for the server
+   ([Server Diagnostics on Stderr](#server-diagnostics-on-stderr)) — so neither
+   is an error line and neither belongs in the error tables that
+   `COMMANDS.md § Published Error Strings Are Exact` governs. What is fixed is
+   the content above, not the wording.
+10. **Two neighbouring refusals are outside this class, and an implementation
+    MUST NOT fold them in.** A node key longer than the write-ahead log's
+    unsigned 32-bit prefix is refused by the engine's node-key codec, which does
+    not wrap `store/txn.ErrFieldTooLong`; it reaches the caller through the
+    ordinary parse-or-execution line of
+    [Error Handling and Exit Codes](#error-handling-and-exit-codes), rule 2. An
+    assembled write-ahead-log frame over the engine's frame ceiling — which a
+    single list property of many individually-legal elements can reach without
+    any one of them being over-long — is refused by the log's framer under a
+    sentinel of its own, and reaches the caller the same way. Both are genuine
+    length refusals in spirit; neither is this class, because the class is
+    defined by the sentinel a caller matches and not by the shape of the
+    complaint.
+11. **A schema identifier does not reach the write-ahead log's bound.** The
+    engine's Cypher parser bounds an index or constraint name, label and property
+    far below 65535 bytes at the point the statement is parsed, so a schema
+    statement meets that bound first and is refused there, with its own message
+    and as an ordinary engine refusal (see
+    [Schema Failure Classes](#schema-failure-classes)). The field kinds a Cypher
+    statement can drive into rule 2's refusal are therefore a node or edge label
+    and a node or edge property key — the two a caller writes in a pattern.
+12. **What is checkable end to end, and what is not.** The 65535-byte bound on a
+    label and on a property key is reachable from a statement that fits inside
+    the maximum query length, so rule 2's refusal, rule 5's intact store and the
+    published line are all drivable against the compiled binary, and
+    [Acceptance Criteria](#acceptance-criteria) 68 and 69 drive them. The bounds
+    that govern a property value are not, in either format: a literal of a
+    gigabyte does not fit inside the maximum query length, and a regression test
+    cannot materialise a field of that size at all — one that tried would measure
+    the machine rather than the product. Rules 6 to 9 are therefore not drivable
+    end to end either, since the only way to a refused checkpoint is a field of
+    that size. Their coverage lives in two places instead, and this specification
+    says where rather than implying an end-to-end check exists. The engine's own
+    suite covers each guard at the boundary of its own constant, which is where
+    that coverage belongs, because the constants are the engine's. Groadmap's
+    coverage is of the classification alone, driven with a fabricated error that
+    wraps the engine's sentinel: what Groadmap owns on this path is the decision
+    of which line or which diagnostic to publish, and that decision is testable
+    without a field of any particular size. Criterion 70 fixes that division and
+    forbids a criterion that attempts the field itself.
+13. **The published line is reached on the direct path, and at the pinned engine
+    it is not reached through a server.** Where a statement runs against the
+    store itself, the line is exactly what rules 2 to 4 describe, and criteria 68
+    and 69 drive it there. Where the same statement is sent to a running server
+    — which `rmp graph execute` does whenever one answers
+    ([Server Resolution](#server-resolution)), and which `rmp graph client`
+    always does — it cannot be reached. The engine's Bolt server classifies this
+    refusal as a **server** fault, because its failure-code mapping carries no
+    case for `store/txn.ErrFieldTooLong` and falls back to its generic
+    database-error code; the session then replaces the message of every failure
+    so classified with generic internal-error text naming only the session. So
+    neither the sentinel, nor a code that separates this condition from any
+    other, nor the field kind crosses the connection, and what such a caller
+    reads is the ordinary parse-or-execution line of
+    [Error Handling and Exit Codes](#error-handling-and-exit-codes), rule 2,
+    carrying that generic text where the engine's diagnostic would be. That is
+    precisely the defect rule 2 of this section exists to remove, still standing
+    on this one path. The diagnostic itself is not destroyed: the engine logs it
+    in full, under the same session, as a record of the kind
+    [Server Diagnostics on Stderr](#server-diagnostics-on-stderr), rule 1,
+    governs — so it is readable by whoever can read the server's stderr, and
+    unreadable by the caller who ran the statement.
+
+    **What is unaffected.** The sentinel is `utils.ErrGraphEngine` and the exit
+    code is 1 on both paths; nothing is written and the store stays usable on
+    both (rule 5); no condition moves between sentinels and no exit code is
+    added. Only the message differs.
+
+    **Groadmap MUST NOT close this on its own side.** There is no interception
+    point to close it at: the engine's server exposes no error-mapping option,
+    and Groadmap runs no statement of its own between the caller and the server
+    on this path. The one remaining lever would be matching the sanitised text,
+    which rule 3 forbids and which would yield nothing worth publishing in any
+    case — that text names no field, no kind and no figure. **The remedy belongs
+    in the engine**: a case for `store/txn.ErrFieldTooLong` in its Bolt
+    failure-code mapping, resolving to a client-error code, exactly as the
+    per-transaction operation cap is already mapped there and its message
+    reaches the client intact. Once a code distinguishes the condition, the
+    client reaches the published line through the code-matching it already uses
+    lawfully for the conflict and the budget classes, this rule's exception
+    ends, and the line becomes drivable on both paths.
+
+    **The departure this leaves is recorded here rather than left to be
+    discovered.** Because `graph execute` takes the served path whenever a server
+    answers, one statement produces one of two different stderr lines according
+    to whether a server happens to be running — which the caller did not choose
+    and cannot see. The identity between the two paths is stated in
+    [Functional Requirements](#functional-requirements), rule 16, and in
+    `DATA_FORMATS.md § Graph Client Result`, and both bind the success output and
+    the exit code, which this departure leaves whole; it is confined to the
+    stderr diagnostic of this one condition, and it lasts only until the engine
+    gains the case above. `COMMANDS.md § Execute Error Cases` and
+    `COMMANDS.md § Client Error Cases` are written to this rule: the first
+    qualifies its field-length row to the direct path, and the second carries no
+    such row at all.
+
 ## Error Handling and Exit Codes
 
 Graph subcommands use the exit-code mapping defined in
@@ -2094,6 +2363,7 @@ it.
 | Query longer than the maximum query length of 1 MiB, from either source (see [Maximum Query Length](#maximum-query-length)) | `utils.ErrValidation` | 6 |
 | The query was to come from standard input and the read of the stream itself failed (see [Bounded Standard-Input Read](#bounded-standard-input-read)) | `utils.ErrIO` | 1 |
 | Cypher fails to parse or execute in the engine, a schema statement included (see [Schema Failure Classes](#schema-failure-classes)) | `utils.ErrGraphEngine` | 1 |
+| A label or property key the statement writes is longer than the write-ahead log's length prefix allows, and the engine refuses the commit (see [Field Length Limits](#field-length-limits)) | `utils.ErrGraphEngine` | 1 |
 | The statement exhausts the statement time budget and is cancelled (see [Statement Time Budget](#statement-time-budget)) | `utils.ErrGraphEngine` | 1 |
 | Every attempt of the client's retry policy loses a serialisation conflict against a graph server (see [Concurrency Inside the Server](#concurrency-inside-the-server), rule 9) | `utils.ErrGraphEngine` | 1 |
 | Graph store cannot be opened, recovered, read, or written (I/O or corruption) | `utils.ErrGraphStore` | 1 |
@@ -2177,6 +2447,21 @@ Rules:
    `COMMANDS.md § Graph Management` publishes the exact line, and
    [Concurrency Inside the Server](#concurrency-inside-the-server) states the
    behaviour behind it.
+
+8. **An over-long field fails in the same class and publishes a line of its own
+   too, and it is the last of the four that do.** It carries
+   `utils.ErrGraphEngine` and exit code 1, as rule 2's engine failures, rule 6's
+   budget exhaustion and rule 7's exhausted retry do: the statement reached the
+   engine, and the engine refused to make it durable. It introduces no new exit
+   code. Its message is none of the other three's. Unlike rule 6's and rule 7's,
+   it is **not** wholly `rmp`'s own text: `rmp` writes the class, the statement
+   that nothing was written and the action to take, and then ends the line with
+   the engine's diagnostic, because that diagnostic names which field is at fault
+   and by how much and no text `rmp` could write would know that. What `rmp`'s
+   half supplies is the class — the thing rule 2's line could not distinguish. `COMMANDS.md § Graph Management` publishes the exact line, and
+   [Field Length Limits](#field-length-limits) states the behaviour behind it,
+   including the second half of the condition that reaches the caller as a
+   diagnostic on a successful invocation rather than as an error at all.
 
 ## The Dedicated Graph Server
 
@@ -3052,7 +3337,11 @@ something.
    durably**, exactly as it does not on the direct path. The write succeeded, the
    log is intact, the next successful checkpoint reconciles the snapshot, and the
    failure is a diagnostic rather than a failed statement (see
-   [Synchronous Checkpoint on Write](#synchronous-checkpoint-on-write)).
+   [Synchronous Checkpoint on Write](#synchronous-checkpoint-on-write)). The
+   reconciliation is what an over-long field does not get: it is committed state,
+   so it refuses every later checkpoint too, and the server reports it as its own
+   condition on the one checkpoint path whose error it holds (see
+   [Field Length Limits](#field-length-limits), rules 6 to 9).
 8. **An unconditional checkpoint is not merely a wasted write; it publishes a
    permanent residue, and that is why rule 4's condition is a requirement rather
    than an optimisation.** A statement the deadline cuts while it is writing is
@@ -4702,6 +4991,60 @@ Groadmap's usage model and expectations:
     everywhere the criterion does not run. The measured comparison fails against
     any hard-coded value on at least one supported platform, and against a correct
     derivation on none.
+
+68. **An over-long field is distinguishable from an invalid statement, and the
+    criterion MUST assert the distinction in both directions.** Against one
+    roadmap, a statement writing a label one byte over the engine's limit, and a
+    statement writing a property key one byte over it, each exit 1 and write a
+    line carrying the field-length prefix `COMMANDS.md § Graph Management`
+    publishes; the same two statements at exactly the limit exit 0 and their
+    elements are found by a following `MATCH`. The criterion MUST derive both
+    lengths from the maximum the refusal line itself reports rather than from a
+    literal, for the reason criterion 67 gives: the limit is the engine's, a
+    version bump may move it, and a criterion pinned to a literal would confirm a
+    stale figure instead of failing on it. It MUST also assert that a statement
+    with a genuine syntax error still writes the parse-or-execution line, because
+    an implementation that routed every engine failure to the new line would
+    otherwise pass a check that only looked for the new one.
+69. **The refused statement leaves nothing behind, and the criterion MUST assert
+    the partial-write half.** The statement it refuses MUST both create a
+    well-formed element and write the over-long field, in that order and in one
+    pass. After the refusal, a `MATCH` for that element returns no row; an
+    ordinary write then returns `{"ok": true}` and a following `MATCH` counts it.
+    All three MUST be asserted. A criterion that checked only the write that
+    follows would pass on an implementation that committed the statement's
+    well-formed prefix and refused only its tail, which is the failure this
+    criterion exists against.
+70. **The property-value bound and the checkpoint condition are covered without a
+    field of that size, and the criterion MUST NOT attempt one.** A field of a
+    gigabyte cannot be carried by a statement inside the maximum query length and
+    cannot be materialised by a regression test at all, so no criterion may try:
+    one that did would measure the machine. What is asserted instead is the
+    classification, driven with a fabricated error that wraps the engine's
+    snapshot sentinel, and what it asserts is the content
+    [Field Length Limits](#field-length-limits), rule 9, requires — that the
+    diagnostic states the commits are durable, that the log was not folded, that
+    the condition persists through every later checkpoint while the field
+    remains, and what to remove. A criterion that asserted only that some
+    checkpoint diagnostic was emitted would pass on the general one, which is the
+    defect: the general one tells an operator to wait for a reconciliation that
+    will never come.
+71. **The healthy path stays silent, and the criterion MUST assert the whole
+    stream rather than search it for one phrase.** A `graph execute` that writes
+    an ordinary element exits 0 and writes **zero bytes** to stderr, for a
+    statement the engine raises no notification for — the criterion MUST choose
+    such a statement, because a notification is the engine's to raise and shares
+    that stream
+    ([Query Notifications as Diagnostics](#query-notifications-as-diagnostics),
+    rule 5). A graph server that starts, serves a writing statement and stops
+    cleanly on `SIGINT` writes its two startup warnings and nothing further, with
+    no checkpoint record of any kind among them. The criterion MUST compare the
+    complete stream in both halves, because an implementation that emitted the
+    new diagnostic speculatively — on every checkpoint, or on every checkpoint
+    that returned any error at all — would satisfy a check that merely searched
+    for the absence of one phrase, while making rule 9 meaningless by announcing
+    a permanent condition that does not hold.
+
 
 ## See Also
 

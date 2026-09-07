@@ -3671,6 +3671,7 @@ original the day the original changed, which is the outcome
 | 0 | The statement executed successfully. |
 | 1 | Cypher failed to parse or execute (`utils.ErrGraphEngine`), or the graph store could not be opened, read, or written, or its exclusive lock could not be taken within the bounded wait (`utils.ErrGraphStore`). A schema statement the engine refuses is in the first class, including one whose keyword spacing the engine does not route to its schema parser. See `GRAPH.md § Schema Failure Classes` and `GRAPH.md § Lock Contention`. |
 | 1 | The statement exhausted the 5-second statement time budget and was cancelled (`utils.ErrGraphEngine`). Nothing was written: the transaction rolled back, no snapshot was produced, and the write-ahead log was left unchanged. See `GRAPH.md § Statement Time Budget`. |
+| 1 | The engine refused a field the statement writes as too long for its durable format (`utils.ErrGraphEngine`). Nothing was written: the transaction consumed a sequence and applied nothing, and the store stays usable for the next statement. See `GRAPH.md § Field Length Limits`. |
 | 2 | No statement supplied: `--query` absent and standard input empty, whitespace only, or a terminal; or `--query` present with an empty, whitespace-only, or absent value; or `--socket` supplied with an empty value (`utils.ErrRequired`). |
 | 2 | A positional argument was supplied. `graph execute` accepts none, so a bare Cypher statement on the command line, or any other token that is neither a flag nor a flag's value, is refused (`utils.ErrInvalidInput`). See `GRAPH.md § No Positional Query: A Stray Token Is Refused`. |
 | 3 | No roadmap selected and none provided via `-r` (`utils.ErrNoRoadmap`). |
@@ -3826,6 +3827,7 @@ rather than published as zero.
 | Stray positional argument, such as a bare Cypher statement written without `--query` | 2 | "Error: invalid input: unexpected argument \"X\" (graph queries use --query or stdin)" |
 | Statement above the maximum length | 6 | "Error: validation error: query exceeds maximum length of 1048576 bytes" |
 | Cypher parse/execution error | 1 | "Error: graph engine error: graph query failed: <engine diagnostic>" |
+| The engine refuses a field the statement writes as too long for its durable format, and the statement ran against the store rather than through a server | 1 | "Error: graph engine error: graph field too long; nothing was written. Shorten the field the engine names: <engine diagnostic>" |
 | Statement cancelled for exhausting the 5-second statement time budget | 1 | "Error: graph engine error: graph query exceeded the 5s statement time budget; nothing was written. Narrow the statement — add a label, an indexed property filter, or a LIMIT — or split it into smaller statements." |
 | Graph store open/read/write failure | 1 | "Error: graph store error: graph store unavailable: <detail>" |
 | The graph store's exclusive lock was still held when the bounded wait was exhausted | 1 | "Error: graph store error: graph store is busy: still held when the bounded wait was exhausted, and nothing records the holder. Another rmp invocation releases it shortly, so run the statement again; an rmp graph serve holds it for its whole lifetime, so reach that server with --socket, or stop it." |
@@ -3851,6 +3853,12 @@ The budget row is not one of them: it carries no engine diagnostic and no placeh
 The lock row is not one of them either: it carries no engine diagnostic and no placeholder, every character of it is `rmp`'s own text, and it is compared in full. It reports the exclusive store lock of `GRAPH.md § Lock Contention`, and it names no holder because nothing records one — the two possible holders call for opposite actions, and rule 3 of that section is canonical for why the line gives both rather than guessing at one. It is reached on the direct path only; a statement a server executed never takes this lock.
 
 The conflict row is not one of them either, and for the same reason: it carries no engine diagnostic and no placeholder, every character of it is `rmp`'s own text, and it is compared in full. `2.5s` is the retry policy's total wait, rendered as a duration; it is a fixed value and not one the binary interpolates. The line exists because the condition it reports was otherwise indistinguishable from the parse/execution row above — both printed the same `graph query failed: ` text, and the only thing separating them was the engine's diagnostic tail, which the paragraph above deliberately declines to specify and which a caller therefore cannot lawfully match. The decision a caller must make on reading it is the opposite of the one an invalid statement calls for: run the statement again, rather than correct it. `GRAPH.md § Concurrency Inside the Server` is canonical for the behaviour it reports.
+
+The field-length row is a fourth case, and it is a hybrid of the two shapes above. It exists for the reason the budget and conflict rows exist — it was otherwise indistinguishable from the parse/execution row, and a caller had to read English to learn whether to correct the statement or to shorten one of its values — but it cannot be wholly `rmp`'s own text the way those two are, because the caller must be told **which** field is at fault and only the engine knows. So `rmp` writes the class, the fact that nothing was written, and the remedy, and then hands over: the part `rmp` fixes is everything up to and including `Shorten the field the engine names: `, and the engine's diagnostic ends the line, exactly as it ends the parse/execution row. That diagnostic carries the field kind, the length the field occupies and the maximum in force. `rmp` neither trims it nor rewrites it — which is why `rmp`'s half and the engine's half both say the field is too long, and why that repetition is not a defect to tidy away: trimming it would mean parsing it, and a match on the engine's wording fails silently at the next version bump.
+
+The row holds where the statement ran against the store, which is why its scenario says so. `graph execute` sends its statement to a running server whenever one answers (`GRAPH.md § Server Resolution`), and at the pinned engine that path cannot produce this line: the server classifies the refusal as its own fault rather than the caller's and replaces the message, so the condition arrives at the caller through the parse/execution row above, carrying the server's generic internal-error text as its engine diagnostic. The sentinel is still `utils.ErrGraphEngine`, the exit code is still 1, and nothing is written either way; only the message differs. `GRAPH.md § Field Length Limits`, rule 13, is canonical for that limitation, for what it leaves intact, and for the engine-side change that ends it — after which the row holds on both paths and the qualification comes out of the scenario. `§ Client Error Cases` publishes no field-length row at all, for the same reason: that subcommand has no direct path.
+
+`GRAPH.md § Field Length Limits` is canonical for the behaviour this row reports, for which of the two durable formats binds each kind of field, and for the second half of that condition — a field that commits and is then refused by every checkpoint — which never reaches this table at all, because it accompanies a **successful** invocation rather than failing one, and no literal for it is published anywhere in this file.
 
 ### Graph Server Socket Error Lines
 
@@ -4139,7 +4147,7 @@ This section does not restate them.
 | Exit Code | Cause |
 |-----------|-------|
 | 0 | The statement was sent to a server, ran, and its result was written to stdout. |
-| 1 | No server is listening for the roadmap; or a server could not be reached through the socket; or the connection was lost, or went unanswered, after the statement was sent; or a value the server returned could not be mapped onto the published result shape (`utils.ErrGraphServer`, see `DATA_FORMATS.md § Graph Client Result`, rule 3). Or the statement failed to parse or execute in the engine, or exhausted the 5-second statement time budget, or every attempt of the retry policy lost a serialisation conflict (`utils.ErrGraphEngine`). |
+| 1 | No server is listening for the roadmap; or a server could not be reached through the socket; or the connection was lost, or went unanswered, after the statement was sent; or a value the server returned could not be mapped onto the published result shape (`utils.ErrGraphServer`, see `DATA_FORMATS.md § Graph Client Result`, rule 3). Or the statement failed to parse or execute in the engine, or wrote a field the engine refused as too long for its durable format, or exhausted the 5-second statement time budget, or every attempt of the retry policy lost a serialisation conflict (`utils.ErrGraphEngine`). |
 | 2 | No statement supplied: `--query` absent and standard input empty, whitespace only, or a terminal; or `--query` present with an empty, whitespace-only, or absent value; or `--socket` supplied with an empty value (`utils.ErrRequired`). |
 | 2 | A positional argument was supplied. `graph client` accepts none, exactly as `graph execute` accepts none (`utils.ErrInvalidInput`). |
 | 3 | No roadmap selected and none provided via `-r` (`utils.ErrNoRoadmap`). |
@@ -4227,6 +4235,24 @@ identically here and under `§ Execute Error Cases`, because both subcommands
 reach it through the same client against the same server
 (`GRAPH.md § The Bolt Client`). Every character of that line is `rmp`'s own and
 it is compared in full.
+
+**This table carries no field-length row, and the omission is deliberate.**
+`§ Execute Error Cases` publishes one, because the engine refuses an over-long
+field wherever the statement runs and that subcommand can run it against the
+store. `graph client` cannot: every statement it sends crosses a server
+(`GRAPH.md § The Bolt Client`), and at the pinned engine the refusal does not
+survive the crossing. The server classifies it as its own fault rather than the
+caller's and replaces the message with generic internal-error text, so no
+sentinel, no distinguishing code and no field kind reaches this side. The
+condition therefore arrives through the parse/execution row above — the very
+outcome the field-length line was published to end, still standing on this one
+path — and a row promising the line here would promise what the binary cannot
+print. What does hold is the rest: the sentinel is `utils.ErrGraphEngine`, the
+exit code is 1, and nothing was written. `GRAPH.md § Field Length Limits`,
+rule 13, is canonical for the limitation, for why Groadmap MUST NOT close it by
+matching the replaced text, and for the engine-side change that ends it; when
+that change lands, this table gains the row and it is published identically
+here and under `§ Execute Error Cases`.
 
 ---
 

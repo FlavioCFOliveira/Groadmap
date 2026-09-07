@@ -735,6 +735,34 @@ func serializeGraphResult(result *cypher.Result) (graphQueryResult, error) {
 // introduces no new exit CODE, and may not (SPEC/GRAPH.md § Constraints, rule 5;
 // § Schema Failure Classes, rule 6). Only the message differs.
 //
+// **A field the engine refuses as too long for the write-ahead log is the third
+// message, and it is the only one of the three that ends in the engine's own
+// text.** The other two are wholly rmp's, because rmp knows the whole of what
+// they report; this one cannot be, because the caller must be told WHICH of the
+// statement's fields is at fault and by how much, and only the engine knows that.
+// So rmp writes the class, the fact that nothing was written and the action to
+// take, and then hands over: the engine's diagnostic follows unchanged,
+// untrimmed and LAST, which is where every other line carrying an engine or
+// operating-system diagnostic puts it and what lets a test assert the whole of
+// rmp's half and none of the engine's. Both halves therefore say the field is
+// too long, and that echo is deliberate — trimming it would mean parsing it, and
+// a match on the engine's wording fails silently at the next version bump
+// (SPEC/GRAPH.md § Field Length Limits, rules 3 and 4).
+//
+// The class exists because without it the two conditions were separated only by
+// that diagnostic tail, which SPEC/GRAPH.md § Error Handling and Exit Codes,
+// rule 2, deliberately declines to specify and which a caller therefore cannot
+// lawfully match: a caller reading "graph query failed: " had to parse English to
+// learn whether to correct the statement's syntax or to shorten one of its
+// values. That is the same defect, and the same remedy, as the statement time
+// budget above.
+//
+// The RECOGNITION is graphstore's, not this function's, and it is a sentinel
+// rather than a string match. Two neighbouring refusals — an over-long node key
+// and an over-large assembled log frame — are genuine length refusals that this
+// class MUST NOT absorb, and matching the sentinel and nothing else is what keeps
+// them on the ordinary line (SPEC/GRAPH.md § Field Length Limits, rule 10).
+//
 // **All three arrival points are classified, and the walk is the one that
 // matters.** The engine streams a disconnected pattern's tuples as the result is
 // iterated, so a Cartesian product's cost is paid during result.Next() and the
@@ -764,6 +792,10 @@ func graphStatementError(budget time.Duration, stage string, err error) error {
 		return fmt.Errorf("%w: graph query exceeded the %s statement time budget; nothing was "+
 			"written. Narrow the statement — add a label, an indexed property filter, or a "+
 			"LIMIT — or split it into smaller statements.", utils.ErrGraphEngine, budget)
+	}
+	if graphstore.CommitRefusedFieldTooLong(err) {
+		return fmt.Errorf("%w: graph field too long; nothing was written. Shorten the field the "+
+			"engine names: %v", utils.ErrGraphEngine, err)
 	}
 	return fmt.Errorf("%w: %s: %v", utils.ErrGraphEngine, stage, err)
 }
@@ -990,8 +1022,44 @@ func runGraphExecute(args []string) error {
 	// surfaces that take this checkpoint cannot come to disagree about when it
 	// runs.
 	if _, cperr := st.Checkpoint(); cperr != nil {
-		fmt.Fprintf(os.Stderr, "Warning: graph checkpoint failed: %v\n", cperr)
+		fmt.Fprintln(os.Stderr, graphCheckpointWarning(cperr))
 	}
 
 	return utils.PrintJSON(output)
+}
+
+// graphCheckpointWarning words a failed synchronous checkpoint for stderr, and
+// chooses between the two conditions a checkpoint can be in.
+//
+// A checkpoint failure after a durable commit never fails the write and never
+// changes the exit code: the commit is the durability boundary, the log is
+// intact, and recovery still restores everything acknowledged
+// (SPEC/GRAPH.md § Synchronous Checkpoint on Write, failure policy). What differs
+// between the two branches is what the operator is told to expect NEXT.
+//
+// The general branch is built on an expectation that usually holds: a disk that
+// filled, a permission that was wrong, a write that was interrupted — all may
+// succeed the next time a checkpoint runs, and the next successful one
+// reconciles the snapshot. The other branch is the one case where that
+// expectation is false. The field the snapshot format refuses is committed graph
+// state, so every later capture captures it again and every later checkpoint
+// refuses for the same reason; on this surface the warning then accompanies EVERY
+// subsequent write, because every subsequent write checkpoints. A line that
+// recurred that often saying only that a checkpoint had failed would train an
+// operator to ignore the one message naming an unbounded, permanent cost
+// (SPEC/GRAPH.md § Field Length Limits, rules 6 and 9).
+//
+// The wording of that branch is graphstore's and not this file's, because the
+// same four things have to be said by the web endpoint and by the graph server's
+// shutdown checkpoint, and three copies of a paragraph are three chances for one
+// of them to stop being true. The engine's own error ends both branches: it is
+// the half that names which field is at fault.
+//
+// The returned string carries no trailing newline; the caller supplies it.
+func graphCheckpointWarning(err error) string {
+	if graphstore.CheckpointRefusedFieldTooLong(err) {
+		return fmt.Sprintf("Warning: %s: %v",
+			graphstore.FieldTooLongCheckpointDiagnostic("the graph checkpoint"), err)
+	}
+	return fmt.Sprintf("Warning: graph checkpoint failed: %v", err)
 }

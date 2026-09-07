@@ -1007,10 +1007,7 @@ func (c *shutdownCloser) Close() error {
 		if _, err := c.st.CheckpointIfAppended(func() error {
 			return c.cp.TriggerCtx(context.Background())
 		}); err != nil {
-			logger.Error("the graph server's shutdown checkpoint failed; every acknowledged "+
-				"commit is still durable in the write-ahead log and the next open recovers it, "+
-				"but the log was not folded into the snapshot and the next open replays it in full",
-				slog.String("err", err.Error()))
+			logger.Error(shutdownCheckpointMessage(err), slog.String("err", err.Error()))
 		}
 		// Step 5, the store's half: stop the checkpoint loop, then close the
 		// write-ahead log inside the commit lock. Releasing the exclusive
@@ -1018,6 +1015,36 @@ func (c *shutdownCloser) Close() error {
 		c.err = c.db.Close()
 	})
 	return c.err
+}
+
+// shutdownCheckpointMessage words the shutdown checkpoint's failure, and chooses
+// between the two conditions a checkpoint can be in.
+//
+// Both branches name THIS checkpoint rather than checkpoints in general, and that
+// is load-bearing rather than tidy: the in-flight watch reports on the same
+// stderr stream of the same process, and a reader must be able to tell which of
+// the two failed (see checkpointwatch.go, which owns the other subject line).
+//
+// The general branch says what is safe and what did not happen, which is the
+// whole of what an operator can act on for a condition that may clear the next
+// time a checkpoint runs. The other branch is the one case where it cannot clear:
+// the field the snapshot format refuses is committed graph state, so it refuses
+// every later checkpoint too — including this one, on every later shutdown of
+// this store — until a statement removes or shortens it. Its wording is
+// graphstore's, shared with the CLI and the web endpoint so the four things
+// SPEC/GRAPH.md § Field Length Limits, rule 9, requires are said once rather than
+// three times.
+//
+// Neither branch folds in the engine's own error: the caller logs it as the "err"
+// attribute, which is where a reader of structured output finds which field is at
+// fault.
+func shutdownCheckpointMessage(err error) string {
+	if graphstore.CheckpointRefusedFieldTooLong(err) {
+		return graphstore.FieldTooLongCheckpointDiagnostic("the graph server's shutdown checkpoint")
+	}
+	return "the graph server's shutdown checkpoint failed; every acknowledged commit is still " +
+		"durable in the write-ahead log and the next open recovers it, but the log was not folded " +
+		"into the snapshot and the next open replays it in full"
 }
 
 // serverOptions is every option Groadmap fixes on the engine's Bolt server, and

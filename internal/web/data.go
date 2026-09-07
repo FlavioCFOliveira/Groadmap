@@ -2043,10 +2043,34 @@ func loadGraphView(ctx context.Context, name, rawQuery, rawLimit string) (graphV
 	// surfaces that take this checkpoint cannot come to disagree about when it
 	// runs.
 	if _, cperr := st.Checkpoint(); cperr != nil {
-		slog.Error("graph checkpoint failed", "roadmap", name, "err", cperr)
+		slog.Error(graphCheckpointLogMessage(cperr), "roadmap", name, "err", cperr)
 	}
 
 	return view, nil
+}
+
+// graphCheckpointLogMessage words a failed synchronous checkpoint for the server
+// log, and chooses between the two conditions a checkpoint can be in.
+//
+// The request still answers 200 either way: a checkpoint failure after a durable
+// commit MUST NOT fail the request, which is the web analogue of the CLI's stderr
+// diagnostic beside exit code 0 (SPEC/GRAPH.md § Synchronous Checkpoint on Write,
+// failure policy). What the two branches differ on is whether the condition can
+// clear. The general one may succeed the next time a checkpoint runs; a field the
+// snapshot format refuses is committed graph state, so it refuses every later
+// checkpoint too, until a statement removes or shortens it
+// (SPEC/GRAPH.md § Field Length Limits, rules 6 and 9).
+//
+// The wording of that branch is graphstore's, shared with the CLI's warning and
+// with the graph server's shutdown checkpoint, so the four things rule 9 requires
+// are said once. The engine's own error is not folded in here: it stays the "err"
+// attribute this endpoint already logs, which is where a reader of structured
+// output looks for which field is at fault.
+func graphCheckpointLogMessage(err error) string {
+	if graphstore.CheckpointRefusedFieldTooLong(err) {
+		return graphstore.FieldTooLongCheckpointDiagnostic("the graph checkpoint")
+	}
+	return "graph checkpoint failed"
 }
 
 // resolveGraphServerForRequest probes the roadmap's derived socket and reports

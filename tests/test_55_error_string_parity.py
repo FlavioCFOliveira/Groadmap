@@ -645,6 +645,24 @@ TAIL_EXEMPT_KEYS = {
         "same reason: the head is rmp's and the tail is the operating "
         "system's."
     ),
+    "Error: graph engine error: graph field too long; nothing was written. Shorten the field the engine names: <engine diagnostic>": (
+        "<engine diagnostic>",
+        "internal/commands/graph.go: the head -- everything up to and "
+        "including \"Shorten the field the engine names: \" -- is rmp's own "
+        "text and is asserted character for character, which is the whole "
+        "point of the row: it is what tells a caller to shorten a value "
+        "rather than to correct the statement's syntax, and it is what the "
+        "parse/execution line above could not distinguish. The tail is the "
+        "engine's own guard message and is not specified by COMMANDS.md, for "
+        "the reason GRAPH.md gives -- it names which field is at fault and by "
+        "how much, and rmp neither trims it nor rewrites it, because trimming "
+        "it would mean parsing it and a match on the engine's wording fails "
+        "silently at the next version bump (GRAPH.md 'Field Length Limits', "
+        "rules 3 and 4). What the tail IS required to carry is the field "
+        "kind, which is the one thing the caller acts on and the one thing "
+        "rmp's half deliberately does not name; the driver writes an "
+        "over-long LABEL and requires the engine to say so."
+    ),
     "Error: database error: <detail>": (
         "<detail>",
         "The six database-failure rows of the comment subcommands (three in "
@@ -2440,6 +2458,70 @@ class TestErrorStringParity:
             ["graph", "execute", "-r", r, "MATCH (n:Incident) RETURN n"], 2,
             subs={"X": "MATCH (n:Incident) RETURN n"},
             note="graph execute bare positional query",
+        )
+
+    def test_graph_field_too_long_line(self):
+        """The field-length refusal (rmp task #413).
+
+        A statement writing a label longer than the write-ahead log's length
+        prefix can carry is refused at commit, and the line it writes is a
+        class of its own rather than the parse/execution line beside it: the
+        two were separated only by the engine's diagnostic tail, which
+        COMMANDS.md deliberately declines to specify and which a caller
+        therefore cannot lawfully match, so a caller had to parse English to
+        learn whether to correct the statement's syntax or to shorten one of
+        its values.
+
+        The statement is fed on STDIN rather than as a --query argument. The
+        label alone is 70000 bytes, which is under Linux's 128 KiB
+        MAX_ARG_STRLEN and would probably fit in argv on this host, but
+        nothing in this module needs it to: GRAPH.md's Cypher Input Source and
+        Precedence makes standard input an equally valid source for the same
+        statement, and stdin has no per-argument bound to be near.
+
+        The 70000 bytes are chosen to be over the engine's bound rather than
+        derived from it, and that is a deliberate division of labour: this
+        module asserts the published LINE, and test_69_graph_field_length
+        owns the bound itself, deriving both the refused length and the
+        accepted one from the maximum the refusal reports. If the engine's
+        bound ever rose above 70000 this case would fail loudly here -- the
+        statement would succeed and the head would never be written -- which
+        is the right failure rather than a silent one.
+        """
+        r = self.roadmap
+        over_long_label = "L" * 70000
+        self.check_head(
+            "Error: graph engine error: graph field too long; nothing was written. "
+            "Shorten the field the engine names: <engine diagnostic>",
+            ["graph", "execute", "-r", r], 1,
+            tail_contains=["label"],
+            stdin="CREATE (n:FieldLengthProbe {name:'kept'}) CREATE (m:`" + over_long_label + "`)",
+            note="graph execute writing a label over the log's length prefix",
+        )
+        # The refusal left NOTHING behind -- not even the well-formed element
+        # the statement created before the over-long label. A caller told
+        # "nothing was written" must be able to rely on it
+        # (GRAPH.md "Field Length Limits", rule 5).
+        rc, out, err = self.run_stdin(
+            ["graph", "execute", "-r", r, "--query",
+             "MATCH (n:FieldLengthProbe) RETURN count(n) AS c"])
+        assert rc == 0, f"counting after the refusal failed: rc={rc} err={err!r}"
+        assert '"c"' in out and json.loads(out)["rows"] == [[0]], (
+            f"the refused statement left something behind: {out!r}"
+        )
+        # And a genuine syntax error still writes the parse/execution line,
+        # which is the string EXEMPT_KEYS names: an implementation that routed
+        # every engine failure to the new line would satisfy every assertion
+        # above and break this one.
+        rc, out, err = self.run_stdin(
+            ["graph", "execute", "-r", r, "--query", "CREATE (n:Broken"])
+        assert rc == 1, f"a malformed statement was accepted: rc={rc} out={out!r}"
+        first = err.splitlines()[0] if err else ""
+        assert first.startswith("Error: graph engine error: graph query failed: "), (
+            f"a syntax error no longer writes the parse/execution line: {first!r}"
+        )
+        assert "graph field too long" not in first, (
+            f"a syntax error was reported as a field-length refusal: {first!r}"
         )
 
     def test_graph_statement_time_budget(self):
