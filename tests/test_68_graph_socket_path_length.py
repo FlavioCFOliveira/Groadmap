@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Test 68: the platform's socket-path bound, end to end (rmp task #412).
+Test 68: the platform's socket-path bound, end to end (rmp tasks #412, #427).
 
 SPEC/GRAPH.md "Socket Path Length" is canonical for everything asserted here,
 and Acceptance Criteria 64, 65, 66 and 67 are the four obligations this module
@@ -34,16 +34,34 @@ literal 107 would agree with a hard-coded implementation on this host and would
 confirm the defect, silently, on the three operating systems where both are
 wrong.
 
-## The rule splits on who chose the path
+## The rule is uniform, however the path was chosen
 
-`--socket` over the bound fails all three subcommands, and `graph execute` in
-particular does NOT fall back to the store: the caller named a socket no process
-can create. A DERIVED path over the bound fails `serve` and `client` -- neither
-has anywhere else to go -- while `execute` opens the store, exactly as it does
-for a socket nobody is listening on. TestTheDerivedPathIsValidatedOnTheSameRule
-asserts all three outcomes, because the whole value of the rule is in the split:
-an implementation that refused every surface would pass a check of the server
-alone while withdrawing the two surfaces that still work.
+An over-long resolved socket path fails all three subcommands, and `graph
+execute` in particular does NOT fall back to the store. That holds for a
+`--socket` value the caller named and for the path derived from the roadmap
+alike: a path over the bound is evidence that no server can EVER answer there,
+which is not the same fact as "none happens to be listening" and does not
+warrant the same answer.
+
+This is the rule rmp task #427 put in place of the one task #412 shipped, and
+the tests here are inverted rather than deleted. Under the split, a derived path
+over the bound refused `serve` and `client` while letting `execute` and the web
+graph data endpoint open the store. A roadmap whose derived socket path cannot
+be bound has a real and permanent fault in its layout, and the split reported
+that fault at two surfaces and concealed it at two others -- an operator saw
+`serve` fail while `execute` worked and had no reason to connect the two. It
+also made `graph execute` exit 0 with a result where `graph client` refused the
+same roadmap, a divergence SPEC/DATA_FORMATS.md "Graph Client Result" forbids as
+a requirement rather than merely observes.
+
+What the uniform rule costs is asserted here too, and so is the recovery.
+`graph execute` is refused a roadmap it needs no socket for; on the command line
+that is recoverable without moving the roadmap, because `--socket` naming a path
+inside the bound passes the check, resolves as not served, and sends the
+statement to the store. TestTheDerivedPathIsValidatedOnTheSameRule asserts the
+refusal at all three subcommands AND that recovery, because a criterion that
+asserted only the refusals would be satisfied by an implementation that had
+withdrawn the roadmap's graph unconditionally.
 """
 
 import inspect
@@ -142,17 +160,19 @@ class SocketLengthBase:
         self._servers = []
 
         self.roadmap = self.test.create_roadmap(self.ROADMAP_NAME)
-        rc, out, err = self.run_cli(["graph", "execute", "-r", self.roadmap, "--query", SEED])
+        rc, out, err = self.run_cli(self.seed_invocation())
         # The seed runs through `graph execute` on the direct path, which is what
-        # materialises ~/.roadmaps/<name>/graph/. Under DEEP_HOME that is the
-        # criterion-66 execute half firing inside the fixture, so the failure
-        # says so rather than reading as a broken harness.
+        # materialises ~/.roadmaps/<name>/graph/. Under DEEP_HOME it can only
+        # reach that path through a short --socket, which is the recovery the
+        # published line names; a failure here is therefore a failure of that
+        # recovery and says so rather than reading as a broken harness.
         assert rc == EXIT_OK, (
             f"seeding failed: exit={rc} out={out!r} err={err!r}"
             + (
                 "\n\nThe derived socket path of this fixture is over the platform's "
-                "bound, and `graph execute` must still open the store: a derived "
-                "path over the bound is a definite negative, not a refusal "
+                "bound, so the seed names a short one with --socket. A lawful path "
+                "nothing is listening on must pass the length check, resolve as not "
+                "served, and send the statement to the store "
                 "(SPEC/GRAPH.md 'Socket Path Length', rule 6)."
                 if self.DEEP_HOME else ""
             )
@@ -188,6 +208,21 @@ class SocketLengthBase:
         return home
 
     # ---- invocations ------------------------------------------------------
+
+    def seed_invocation(self):
+        """The `graph execute` that materialises the store for this fixture.
+
+        Under DEEP_HOME the roadmap's DERIVED socket path is over the bound, and
+        every surface refuses it -- `graph execute` included. The fixture takes
+        the remedy the published line names: --socket pointing at a path inside
+        the bound, with nothing listening on it, which passes the length check
+        and resolves as not served, so the statement reaches the store
+        (SPEC/GRAPH.md 'Socket Path Length', rule 6).
+        """
+        args = ["graph", "execute", "-r", self.roadmap]
+        if self.DEEP_HOME:
+            args += ["--socket", self.socket_path_of_length(self.bound)]
+        return args + ["--query", SEED]
 
     def run_cli(self, args, timeout: float = 30.0):
         """One ./bin/rmp invocation against this fixture's HOME, returning
@@ -444,9 +479,12 @@ class TestTheDerivedPathIsValidatedOnTheSameRule(SocketLengthBase):
     was reached in practice: a three-character roadmap name under a deep home
     directory.
 
-    All three outcomes are asserted, because the whole value of the rule is in
-    the split. An implementation that refused every surface would pass a check
-    of the server alone while withdrawing the two surfaces that still work.
+    All three subcommands are asserted to refuse it with one line, and the
+    RECOVERY is asserted beside them. Both halves are load-bearing. Without the
+    refusals, an implementation that had kept the old split would pass; without
+    the recovery, one that had withdrawn the roadmap's graph unconditionally
+    would pass too, and that is not what the rule says (SPEC/GRAPH.md 'Socket
+    Path Length', rules 5 and 6).
     """
 
     DEEP_HOME = True
@@ -472,40 +510,94 @@ class TestTheDerivedPathIsValidatedOnTheSameRule(SocketLengthBase):
         rc, out, err = self.run_cli(["graph", "client", "-r", self.roadmap, "--query", READ])
         self.assert_path_length_refusal(rc, out, err, self.derived)
 
-    def test_execute_runs_against_the_store_and_exits_zero(self):
+    def test_execute_refuses_the_derived_path_with_the_same_line(self):
+        """The half rmp task #427 inverted.
+
+        `graph execute` is the command-line surface that had somewhere else to
+        go, and the value of the uniform rule is that it binds that surface too:
+        an implementation which checked only the two subcommands that NEED a
+        socket would pass a check of the server alone while letting `execute`
+        resolve a path no socket can occupy. The invocation carries no --socket
+        flag at all, which is the provenance the rule changed.
+        """
         rc, out, err = self.run_cli(["graph", "execute", "-r", self.roadmap, "--query", READ])
-        assert rc == EXIT_OK, (
-            f"`graph execute` against a roadmap whose derived socket path is over "
-            f"the bound exited {rc}. A derived path over the bound is a definite "
-            f"negative -- no server can exist there -- so the statement runs "
-            f"against the store, exactly as it does for a socket that is absent "
-            f"(SPEC/GRAPH.md 'Socket Path Length', rule 6). stderr={err!r}"
-        )
-        assert json.loads(out)["rows"] == [["socket-path-length"]], (
-            f"the statement exited 0 without returning the seeded graph: {out!r}"
+        self.assert_path_length_refusal(rc, out, err, self.derived)
+
+    def test_the_three_subcommands_refuse_the_derived_path_with_one_line(self):
+        """One condition, one line, on every surface that publishes one.
+
+        Asserting the three separately leaves room for three wordings of the
+        same refusal; the whole point of the uniform rule is that an operator
+        meets the same answer at whichever surface they reach first.
+        """
+        invocations = {
+            "serve": ["graph", "serve", "-r", self.roadmap],
+            "client": ["graph", "client", "-r", self.roadmap, "--query", READ],
+            "execute": ["graph", "execute", "-r", self.roadmap, "--query", READ],
+        }
+        lines = {}
+        for name, args in invocations.items():
+            rc, out, err = self.run_cli(args)
+            self.assert_path_length_refusal(rc, out, err, self.derived)
+            lines[name] = err.splitlines()[0]
+
+        assert len(set(lines.values())) == 1, (
+            f"the three subcommands publish different lines for one derived-path "
+            f"condition: {lines!r}"
         )
 
-    def test_execute_still_writes_and_commits(self):
-        """The reading surface is not merely non-failing: it is the whole store.
+    def test_execute_does_not_reach_the_store_on_the_derived_path(self):
+        """The inversion of what used to be `test_execute_still_writes_and_commits`.
 
-        A roadmap whose home directory is deep enough to push the derived path
-        over the bound loses the server and keeps both of the surfaces that
-        existed before the server did.
+        The exit code alone would not prove it: a refusal that happened to fail
+        for some other reason would look the same. The statement here is a
+        WRITE, and the check is that the graph is unchanged afterwards -- read
+        back through an invocation that DOES reach the store, by naming a socket
+        path inside the bound.
         """
         rc, out, err = self.run_cli(
             ["graph", "execute", "-r", self.roadmap, "--query",
              "CREATE (:Spec {key:'deep-home-write'})"]
         )
-        assert rc == EXIT_OK, f"exit={rc} stderr={err!r}"
+        self.assert_path_length_refusal(rc, out, err, self.derived)
 
         rc, out, err = self.run_cli(
-            ["graph", "execute", "-r", self.roadmap, "--query",
+            ["graph", "execute", "-r", self.roadmap,
+             "--socket", self.socket_path_of_length(self.bound), "--query",
              "MATCH (s:Spec {key:'deep-home-write'}) RETURN count(s) AS n"]
         )
-        assert rc == EXIT_OK, f"exit={rc} stderr={err!r}"
-        assert json.loads(out)["rows"] == [[1]], (
-            f"the write did not commit through the direct path: {out!r}"
+        assert rc == EXIT_OK, f"reading back failed: exit={rc} stderr={err!r}"
+        assert json.loads(out)["rows"] == [[0]], (
+            f"the refused invocation reached the store and committed its write: "
+            f"{out!r}. A resolved path over the bound is evidence that no server "
+            f"can EVER answer there, not evidence that none happens to be "
+            f"listening (SPEC/GRAPH.md 'Socket Path Length', rules 5 and 6)"
         )
+
+    def test_execute_recovers_through_a_socket_path_inside_the_bound(self):
+        """Acceptance Criterion 66's recovery half, and the control for the
+        three refusals above.
+
+        The roadmap's derived path is unusable and nothing is listening on the
+        path named here, but it is a path a socket could lawfully occupy: it
+        passes the length check, resolves as not served, and the statement runs
+        against the store. Without this, the class would also pass on an
+        implementation that had withdrawn this roadmap's graph outright, which
+        is not the rule -- and it is what makes the published line's remedy
+        truthful for `graph execute` and not only for the two subcommands that
+        need a socket.
+        """
+        socket_path = self.socket_path_of_length(self.bound)
+        assert not os.path.exists(socket_path)
+
+        rc, out, err = self.run_cli(
+            ["graph", "execute", "-r", self.roadmap, "--socket", socket_path, "--query", READ]
+        )
+        assert rc == EXIT_OK, (
+            f"a lawful but absent socket path must send the invocation to the "
+            f"store: exit={rc} stderr={err!r}"
+        )
+        assert json.loads(out)["rows"] == [["socket-path-length"]], out
 
     def test_a_server_on_a_short_supplied_socket_still_serves_this_roadmap(self):
         """The control for the three checks above.

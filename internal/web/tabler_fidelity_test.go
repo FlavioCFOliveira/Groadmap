@@ -18,7 +18,7 @@ import (
 // knowledge-graph page — and asserts the rendered HTML contains the gutter
 // class on the page-header row and no longer contains the gutter-less variant.
 func TestTablerFidelity_PageHeaderGutter(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	t.Setenv("HOME", shortHome(t))
 	// seedRoadmap creates sprint 1 (for the /sprints/1 detail page);
 	// seedRoadmapWithAudit adds audit entries to the same roadmap (for /audit).
 	name := seedRoadmap(t, "platform-core")
@@ -57,7 +57,7 @@ func TestTablerFidelity_PageHeaderGutter(t *testing.T) {
 // the property on any rendered page covers the brand markup. The brand link,
 // favicon image, and "Groadmap" text must remain present and unchanged.
 func TestTablerFidelity_SidebarBrandHeading(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	t.Setenv("HOME", shortHome(t))
 	name := seedRoadmap(t, "platform-core")
 	mux := buildMux()
 
@@ -95,7 +95,7 @@ func TestTablerFidelity_SidebarBrandHeading(t *testing.T) {
 // added to a template that some future route stops rendering would otherwise slip
 // past a behavioural sweep alone.
 func TestShell_CarriesNoFooterAnywhere(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	t.Setenv("HOME", shortHome(t))
 	// seedRoadmap creates sprint 1 (for the /sprints/1 detail page);
 	// seedRoadmapWithAudit adds audit entries to the same roadmap (for /audit).
 	name := seedRoadmap(t, "platform-core")
@@ -228,7 +228,7 @@ func topNavbarRegion(t *testing.T, path, body string) string {
 // the page BELONGS TO rather than any fixed string that happens to match the
 // only roadmap in the fixture.
 func TestShell_TopNavbarNamesTheSelectedRoadmap(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	t.Setenv("HOME", shortHome(t))
 	// seedRoadmap creates sprint 1 (for the /sprints/1 detail page);
 	// seedRoadmapWithAudit adds audit entries to the same roadmap (for /audit).
 	platform := seedRoadmap(t, "platform-core")
@@ -352,7 +352,7 @@ func topNavbarDefinition(t *testing.T) string {
 // `~.page-wrapper` rule give the header and the wrapper the same 15rem offset
 // through the sibling combinator, which never applies to a nested header.
 func TestTablerFidelity_TopNavbarIsSiblingOfPageWrapper(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	t.Setenv("HOME", shortHome(t))
 	name := seedRoadmap(t, "platform-core")
 	seedRoadmapWithAudit(t, name, 3)
 	mux := buildMux()
@@ -389,7 +389,7 @@ func TestTablerFidelity_TopNavbarIsSiblingOfPageWrapper(t *testing.T) {
 // targets its own #navbar-menu (Navbar.astro), a menu this interface does not
 // have.
 func TestTablerFidelity_SingleTogglerAndSingleBrand(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	t.Setenv("HOME", shortHome(t))
 	name := seedRoadmap(t, "platform-core")
 	seedRoadmapWithAudit(t, name, 3)
 	mux := buildMux()
@@ -419,7 +419,7 @@ func TestTablerFidelity_SingleTogglerAndSingleBrand(t *testing.T) {
 // (shared/components/navbar/Sidebar.astro: `<nav class="collapse
 // navbar-collapse" id="sidebar-menu" aria-label="Sidebar">`), not a bare div.
 func TestTablerFidelity_SidebarCollapseIsNavLandmark(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	t.Setenv("HOME", shortHome(t))
 	name := seedRoadmap(t, "platform-core")
 	seedRoadmapWithAudit(t, name, 3)
 	mux := buildMux()
@@ -441,7 +441,7 @@ func TestTablerFidelity_SidebarCollapseIsNavLandmark(t *testing.T) {
 // list item (shared/components/navbar/NavbarMenu.astro); the class alone is a
 // visual cue that assistive technology cannot read.
 func TestTablerFidelity_ActiveSidebarLinkCarriesAriaCurrent(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	t.Setenv("HOME", shortHome(t))
 	name := seedRoadmap(t, "platform-core")
 	seedRoadmapWithAudit(t, name, 3)
 	mux := buildMux()
@@ -492,7 +492,7 @@ func sidebarRegion(t *testing.T, path, body string) string {
 // class="pagination">`). A bare list is not announced as a navigation landmark
 // and is indistinguishable from the sidebar's navigation.
 func TestTablerFidelity_PaginationIsANavLandmark(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	t.Setenv("HOME", shortHome(t))
 	name := seedRoadmap(t, "platform-core")
 	seedRoadmapWithAudit(t, name, 250)
 	mux := buildMux()
@@ -520,7 +520,7 @@ func TestTablerFidelity_PaginationIsANavLandmark(t *testing.T) {
 // d-print-none">`). Without it the actions print on a page header that is
 // otherwise excluded from print by its own d-print-none.
 func TestTablerFidelity_PageHeaderActionsAreHiddenInPrint(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	t.Setenv("HOME", shortHome(t))
 	name := seedRoadmap(t, "platform-core")
 	seedRoadmapWithAudit(t, name, 3)
 	mux := buildMux()
@@ -556,7 +556,7 @@ func TestTablerFidelity_PageHeaderActionsAreHiddenInPrint(t *testing.T) {
 // navbar aside — is the framework's own markup and stays, so the assertion
 // counts rather than forbids.
 func TestTablerFidelity_FluidLayoutUsesContainerXl(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	t.Setenv("HOME", shortHome(t))
 	name := seedRoadmap(t, "platform-core")
 	seedRoadmapWithAudit(t, name, 3)
 	mux := buildMux()
@@ -659,7 +659,7 @@ var structuralHookClasses = map[string]string{
 // Both sides are read through the go:embed filesystems, so the test gates
 // exactly what the binary ships.
 func TestTablerFidelity_NoClassOutsideTheVendoredStylesheets(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	t.Setenv("HOME", shortHome(t))
 	name := seedRoadmap(t, "platform-core")
 	seedRoadmapWithAudit(t, name, 3)
 	mux := buildMux()
@@ -760,7 +760,7 @@ func isClassNameByte(b byte) bool {
 // Where the two disagree, the built shell of the vendored version governs, so
 // this test also fails if the div comes back.
 func TestTablerFidelity_PageBodyIsTheMainLandmark(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	t.Setenv("HOME", shortHome(t))
 	name := seedRoadmap(t, "platform-core")
 	seedRoadmapWithAudit(t, name, 3)
 	mux := buildMux()
@@ -791,7 +791,7 @@ func TestTablerFidelity_PageBodyIsTheMainLandmark(t *testing.T) {
 // navbar took it. This test fixes what each header now says and what its
 // actions column may hold.
 func TestPageHeader_SharedPartialAndActions(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	t.Setenv("HOME", shortHome(t))
 	name := seedRoadmap(t, "platform-core")
 	seedRoadmapWithAudit(t, name, 3)
 	mux := buildMux()

@@ -8,7 +8,7 @@ Each roadmap owns one graph, stored under that roadmap's home directory at `~/.r
 
 The graph is reached through three subcommands. `execute` accepts any Cypher statement the engine accepts and runs it against the roadmap's graph; `serve` runs no statement of its own and instead holds that graph open, answering statements over a Unix domain socket until it is stopped; `client` sends a statement to a running server and prints what comes back. Groadmap does not examine a statement and refuses none on the ground of what it does.
 
-**A running server is used automatically, and only the socket is a choice.** When a server is serving the selected roadmap, `execute` sends its statement to that server instead of opening the store, with no flag and no configuration; with nothing listening it opens the store directly, as it always did. The statement, the result, the output shape and the exit code are the same either way. `client` resolves the same socket and has no second path: with nothing listening it fails. All three subcommands take `--socket <path>` and default it identically; the flag names which socket is looked at and neither forces a server nor forbids one.
+**A running server is used automatically, and only the socket is a choice.** When a server is serving the selected roadmap, `execute` sends its statement to that server instead of opening the store, with no flag and no configuration; with nothing listening it opens the store directly, as it always did. The statement, the result, the output shape and the exit code are the same either way. `client` resolves the same socket and has no second path: with nothing listening it fails. All three subcommands take `--socket <path>` and default it identically; the flag names which socket is looked at and neither forces a server nor forbids one. One condition overrides that resolution entirely: a resolved socket path longer than the platform allows names a socket no process can create, so every surface refuses the invocation instead of falling back to the store, and the path derived from the roadmap is refused on exactly the same rule as one written on the command line. See [The socket path has a length limit](#the-socket-path-has-a-length-limit).
 
 ## Synopsis
 
@@ -43,7 +43,7 @@ Every class of statement runs through this one subcommand:
 |------------|-----------|------|---------|-------------|
 | `-r` | `--roadmap` | string | - | Roadmap name (required) |
 | `-q` | `--query` | string | - | Cypher statement. When absent, the statement is read from standard input |
-| | `--socket` | string | `~/.roadmaps/<name>/graph.sock` | Socket this invocation resolves. A server answering there takes the statement; an absent socket, or one that refuses the connection, sends the invocation to the store under the exclusive lock. Write it only when the server was started with the same flag |
+| | `--socket` | string | `~/.roadmaps/<name>/graph.sock` | Socket this invocation resolves. A server answering there takes the statement; an absent socket, or one that refuses the connection, sends the invocation to the store under the exclusive lock. Write it only when the server was started with the same flag. A path longer than the platform allows fails the invocation with exit code 1 and does **not** send it to the store; the derived default path is refused on the same rule, which is why this flag is also the remedy for that case (see [The socket path has a length limit](#the-socket-path-has-a-length-limit)) |
 | `-h` | `--help` | bool | false | Show subcommand help |
 
 **Output:** `{"columns": [...], "rows": [[...], ...]}` when the statement produces result columns; `{"ok": true}` when it produces none. For a data statement the two cases are exactly "has a `RETURN` clause" and "has none". A schema-introspection command produces the listing and returns the `{columns, rows}` shape even though it carries no `RETURN` clause; a `CREATE INDEX`, `DROP INDEX`, `CREATE CONSTRAINT` or `DROP CONSTRAINT` produces no columns and returns `{"ok": true}`. The bytes are the same whichever path carried the statement, so a script may parse one shape and change nothing when a server is started or stopped.
@@ -107,7 +107,7 @@ Opens the roadmap's knowledge graph once, holds it and its exclusive advisory st
 | Short Flag | Long Flag | Type | Default | Description |
 |------------|-----------|------|---------|-------------|
 | `-r` | `--roadmap` | string | - | Roadmap name (required). The server serves this one roadmap's graph and no other |
-| | `--socket` | string | `~/.roadmaps/<name>/graph.sock` | Unix domain socket to bind. A non-default path is followed by the CLI through the same flag and by nothing else: the web interface has no way to receive one. See [Serving on a non-default socket](#serving-on-a-non-default-socket) |
+| | `--socket` | string | `~/.roadmaps/<name>/graph.sock` | Unix domain socket to bind. A non-default path is followed by the CLI through the same flag and by nothing else: the web interface has no way to receive one. See [Serving on a non-default socket](#serving-on-a-non-default-socket). A path longer than the platform allows is refused while the path is resolved, before the bind, and the line names the path's length and the platform's limit instead of the operating system's errno; the derived default path is refused on the same rule (see [The socket path has a length limit](#the-socket-path-has-a-length-limit)) |
 | `-h` | `--help` | bool | false | Show subcommand help |
 
 `serve` takes no `--query`, because it runs no statement, and accepts no positional argument.
@@ -124,7 +124,7 @@ Per-statement results go to the client that asked for them, never to this comman
 
 **What startup does, in order.** The order is load-bearing, and knowing it explains the failures below:
 
-1. Resolve the roadmap and the socket path. A roadmap that does not exist fails here, before anything is opened, created or removed.
+1. Resolve the roadmap and the socket path, and check the path's length. A roadmap that does not exist fails here, before anything is opened, created or removed. So does a resolved socket path longer than the platform allows, whether it was derived from the roadmap or supplied through `--socket` (see [The socket path has a length limit](#the-socket-path-has-a-length-limit)).
 2. Take the graph store's exclusive advisory lock under the ordinary bounded wait. A server starting while a short-lived `rmp graph execute` holds the lock waits for it rather than failing at once. This is what refuses a second server against the same roadmap.
 3. Refuse to start if a live server already answers on the resolved socket, leaving that socket exactly as it was found.
 4. Remove a stale socket file — one a killed server left behind — now that nothing answers on it. This is what lets a relaunch after a kill succeed.
@@ -162,7 +162,7 @@ Sends exactly one Cypher statement to a running graph server over its Unix domai
 |------------|-----------|------|---------|-------------|
 | `-r` | `--roadmap` | string | - | Roadmap name (required). It selects the graph the statement runs against and, unless `--socket` overrides it, the socket the statement is sent to |
 | `-q` | `--query` | string | - | Cypher statement. When absent, the statement is read from standard input |
-| | `--socket` | string | `~/.roadmaps/<name>/graph.sock` | Unix domain socket of the server, the same derivation `serve` uses. Write it when the server was started with the same flag |
+| | `--socket` | string | `~/.roadmaps/<name>/graph.sock` | Unix domain socket of the server, the same derivation `serve` uses. Write it when the server was started with the same flag. A path longer than the platform allows fails the invocation with exit code 1, naming the path's length and the platform's limit rather than reporting that nothing is listening; the derived default path is refused on the same rule (see [The socket path has a length limit](#the-socket-path-has-a-length-limit)) |
 | `-h` | `--help` | bool | false | Show subcommand help |
 
 **Output:** `{"columns": [...], "rows": [[...], ...]}` when the statement produces result columns; `{"ok": true}` when it produces none; either of them carrying a `counters` member when the statement changed the graph — the same shapes, and the same bytes, `execute` writes. The counters are inside that identity and take no exception from it: the same statement against the same graph reports the same figures on both subcommands.
@@ -210,12 +210,13 @@ Every surface that reaches a graph resolves the socket first: it connects, compl
 | **Served** | The connection is accepted and the handshake completes inside the probe deadline | Sends the statement to the server; takes no lock and opens no store | Sends the statement | Sends the statement |
 | **Unreachable** | The connection is accepted but the handshake does not complete in time, or the connection fails for any other reason | Fails, exit code 1. It does **not** fall back to the store | Fails, exit code 1 | HTTP `500` |
 
-Four consequences worth stating outright:
+Five consequences worth stating outright:
 
 - **No flag selects a path.** `--socket` names which socket is looked at. It does not force a server, does not forbid one, and does not select the store.
 - **A caller takes exactly one path, never both.** Resolution happens before any lock is taken, and a caller that reached a server and then failed does not retry against the store.
 - **A connection lost after the statement was sent is a failure, and the statement's outcome is unknown.** A commit is durable before it is acknowledged, so a connection that dies between the two leaves nobody able to say whether the write happened. The invocation reports exactly that and does not re-run the statement, because re-running it could apply it twice. A caller that must know re-reads the graph, which is why a statement whose effect has to be confirmed is written with a `RETURN` clause or followed by a read.
 - **A leftover socket file is never an error.** A killed server leaves one behind; the refusal a connection to it receives is the whole of the evidence needed to conclude that nothing is listening. The next `rmp graph serve` replaces it.
+- **A path over the platform's length limit is settled before the probe, and is not one of the four states above.** A path the kernel cannot bind cannot be listened on, so probing it tells a caller nothing it does not already know. Every surface refuses the invocation instead of reading the absent socket as "not served", the derived default path included. See [The socket path has a length limit](#the-socket-path-has-a-length-limit).
 
 ### Serving on a non-default socket
 
@@ -227,7 +228,31 @@ The web interface's graph data endpoint has no command line, `rmp web` serves ev
 
 So `--socket` is an option that keeps the CLI and costs the web page. Use it for a server the browser is not expected to reach — a test harness, a diagnostic session, a socket that has to live on another filesystem — and start a server whose roadmap is also browsed without it.
 
-A mistyped path has the same shape with a quieter symptom: a path nothing answers on reads as "not served", so `rmp graph execute --socket /typo.sock` goes to the store rather than to the server it meant. Against an unserved roadmap it succeeds there and says nothing; against a roadmap whose server is running on the default socket it meets that server's lock and fails with `Error: graph store error: graph store is busy: still held when the bounded wait was exhausted, and nothing records the holder. ...`, whose remainder names both remedies because the line cannot tell which holder it met.
+A mistyped path has the same shape with a quieter symptom: a path nothing answers on reads as "not served", so `rmp graph execute --socket /typo.sock` goes to the store rather than to the server it meant. Against an unserved roadmap it succeeds there and says nothing; against a roadmap whose server is running on the default socket it meets that server's lock and fails with `Error: graph store error: graph store is busy: still held when the bounded wait was exhausted, and nothing records the holder. ...`, whose remainder names both remedies because the line cannot tell which holder it met. One class of mistyped value is caught rather than followed: a path longer than the platform allows cannot name a socket at all, so every subcommand given it refuses the invocation and says why, instead of resolving it (see [The socket path has a length limit](#the-socket-path-has-a-length-limit)). Every other typo falls through as this paragraph describes, because every other typo names a path a socket could lawfully occupy.
+
+### The socket path has a length limit
+
+A Unix domain socket is named by a path in the filesystem, and the operating system bounds how long that path may be: the kernel copies the path into a fixed-size field of its socket address structure, and a path that does not fit there — terminator included — can be neither bound nor connected to. Left unchecked, such a path surfaces as the kernel's own `invalid argument`, which names neither the length, nor the limit, nor anything you can act on.
+
+**The bound belongs to the platform, so it is not one number.** It is **107 bytes on Linux and Windows** and **103 bytes on macOS, FreeBSD and OpenBSD**. The published line carries no figure of its own: it reports the length of the path it measured and the limit in force on the platform it ran on, so the same line is correct on every target.
+
+**The length is counted in bytes, not characters.** A roadmap name carrying multi-byte UTF-8 uses more of the bound than its character count suggests.
+
+**Every surface refuses an over-long resolved path, however the path was chosen.** The check runs on the path the invocation will actually use — a `--socket` value expanded to an absolute path, or the path derived from the roadmap — and it runs before the socket is probed, before any lock is taken and before any store is opened. `execute`, `serve` and `client` each fail with exit code 1 and the line below; the web interface's graph data endpoint, which publishes no such flag, refuses its request with HTTP `500`.
+
+```
+Error: graph server error: socket path is too long: <socket> is N bytes and this platform allows at most M. Use --socket to name a shorter path.
+```
+
+`<socket>` is the resolved path, `N` its length in bytes, and `M` the limit the platform yields.
+
+**No surface falls back to the store.** An absent socket is evidence that a roadmap is not served *at this moment*; a path over the bound is evidence that no server can ever answer there, which is a different fact and does not warrant the same answer. So `execute` does not open the store on it, and neither does the web interface's graph data endpoint.
+
+**The default path reaches the bound without an unusual roadmap name.** The derived path is the home directory, 22 fixed bytes for `/.roadmaps/` and `/graph.sock`, and the roadmap name. A roadmap name may be 50 bytes, so a home directory of 36 bytes puts the derived path one byte past the figure Linux and Windows yield, and one of 32 bytes puts it past the figure macOS, FreeBSD and OpenBSD yield. It has been reached in practice on a three-character roadmap name under a deep home directory, at 139 bytes. This is therefore not only a `--socket` concern: the path a caller never typed crosses the bound on an ordinary installation.
+
+**A home directory deep enough to push the derived path over the bound makes that roadmap's graph unreachable through every surface at once.** That includes `rmp graph execute`, which needs no socket of its own, and the graph page, which needs none either: both are refused against a bound that constrains sockets and not stores.
+
+**On the command line the refusal is recoverable without moving the roadmap**, and the line's remedy is truthful for all three subcommands: `--socket` naming a path inside the bound passes the check, and with nothing listening on it the roadmap resolves as not served — so `execute` given one opens the store and runs the statement as usual. The web interface's graph data endpoint has no such flag and no way to receive a path, so for that surface the only remedy is a shorter derived path: a shorter home directory, or a shorter roadmap name.
 
 ### Concurrency inside a server
 
@@ -259,10 +284,11 @@ What the drain guarantees, and what it does not:
 
 ### Socket failure lines
 
-Seven failures belong to the socket rather than to the roadmap, the statement or the store. Each carries exit code 1. `<socket>` is the resolved socket path; `<detail>` is the operating system's own diagnostic.
+Eight failures belong to the graph server rather than to the roadmap, the statement or anything you wrote. Each carries exit code 1. `<socket>` is the resolved socket path; `<detail>` is the operating system's own diagnostic; `N` and `M` are the two byte counts the path-length line carries.
 
 | Condition | Subcommand | Line |
 |-----------|-----------|------|
+| The resolved socket path is longer than the platform allows, whether derived from the roadmap or supplied through `--socket` | `execute`, `serve`, `client` | `Error: graph server error: socket path is too long: <socket> is N bytes and this platform allows at most M. Use --socket to name a shorter path.` |
 | A live server already answers on the socket `serve` resolved | `serve` | `Error: graph server error: a graph server is already serving <socket>` |
 | The socket could not be bound | `serve` | `Error: graph server error: cannot bind <socket>: <detail>` |
 | The store lock could not be taken within the bounded wait | `serve` | `Error: graph store error: cannot take the graph store lock for roadmap "X": another rmp graph serve may already be running for it` |
@@ -271,10 +297,12 @@ Seven failures belong to the socket rather than to the roadmap, the statement or
 | The connection was lost after the statement had been sent | `execute`, `client` | `Error: graph server error: the connection to the graph server at <socket> was lost; the statement's outcome is unknown` |
 | The server did not answer within the caller's backstop deadline | `execute`, `client` | `Error: graph server error: the graph server at <socket> did not answer within 7.5s; the statement's outcome is unknown` |
 
-Six of the seven carry `graph server error:`, because the server, its socket or the
+Seven of the eight carry `graph server error:`, because the server, its socket or the
 connection to it is what failed. The lock line carries `graph store error:` instead,
 because the failure is the store's and not the server's: `serve` never got far enough
 to have a server. The two prefixes are distinct sentinels that both exit `1`.
+
+The path-length line is the only one of the eight that all three subcommands write, and the only one that refuses an invocation before the socket is probed at all. It is written for a path you supplied and for the path derived from the roadmap alike; [The socket path has a length limit](#the-socket-path-has-a-length-limit) is canonical for the bound it reports and for why no surface falls back to the store on it.
 
 The lock line says "may" deliberately: the lock records no holder, so the invocation reports the overwhelmingly likely cause without asserting it. The last two lines say the outcome is *unknown* rather than that nothing was written, because a commit is durable before it is acknowledged and a line claiming nothing was written would be false in exactly the case a caller most needs the truth.
 
@@ -681,7 +709,7 @@ All three subcommands follow these conventions:
 | Code | Meaning |
 |------|---------|
 | 0 | The statement executed successfully. For `serve`: the server started, served, and was stopped by `SIGINT` or `SIGTERM` |
-| 1 | Cypher failed to parse or execute, the engine refused a schema statement, the statement exhausted the 5-second time budget, every attempt of the retry policy lost a serialisation conflict against a server, or the graph store could not be opened, read, or written. The conflict is the one cause here whose remedy is to run the **same** statement again: the Cypher was valid, the store was healthy, and nothing was written, so spread concurrent writes across distinct nodes rather than rewriting the statement. Also every socket failure: for `client`, no server listening; for `execute` and `client`, a socket that answers but yields no reachable server, and a connection lost or unanswered after the statement was sent; for `serve`, a lock it could not take, a socket it could not bind, and a live server already answering there |
+| 1 | Cypher failed to parse or execute, the engine refused a schema statement, the statement exhausted the 5-second time budget, every attempt of the retry policy lost a serialisation conflict against a server, or the graph store could not be opened, read, or written. The conflict is the one cause here whose remedy is to run the **same** statement again: the Cypher was valid, the store was healthy, and nothing was written, so spread concurrent writes across distinct nodes rather than rewriting the statement. Also every socket failure: for all three, a resolved socket path longer than the platform allows, whether derived or supplied; for `client`, no server listening; for `execute` and `client`, a socket that answers but yields no reachable server, and a connection lost or unanswered after the statement was sent; for `serve`, a lock it could not take, a socket it could not bind, and a live server already answering there |
 | 2 | No statement supplied (`--query` absent and stdin empty, or `--query` empty/whitespace); or `--socket` supplied with an empty value; or an unknown flag or a positional argument was supplied |
 | 3 | No roadmap selected (`-r` missing/required) |
 | 4 | Roadmap not found (the roadmap given via `-r` does not exist) |
@@ -689,5 +717,7 @@ All three subcommands follow these conventions:
 | 127 | Unknown subcommand |
 
 A socket file with nothing listening behind it is not a failure for `execute`: the refused connection is read as evidence that the roadmap is not served, the store is opened directly, and the invocation exits 0. For `client` the same state is exit code 1, because it has no second path.
+
+A resolved socket path longer than the platform allows is exit code 1 for all three subcommands, and `execute` does not open the store on it: a path the kernel cannot bind is evidence that no server can ever answer there, and not evidence that none happens to be listening (see [The socket path has a length limit](#the-socket-path-has-a-length-limit)).
 
 A graceful stop of `rmp graph serve` is exit code `0` and not `130`: `SIGINT` is an instruction to stop rather than an interruption of unfinished work, and the server drains, checkpoints and exits successfully. `rmp web`, the only other long-lived command, behaves the same way.

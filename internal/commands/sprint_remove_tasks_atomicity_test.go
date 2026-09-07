@@ -26,7 +26,7 @@ import (
 func TestSprintRemoveTasksKeepsMembershipAndStatusInAgreement(t *testing.T) {
 	const roadmap = "settlement-membership-atomicity"
 
-	t.Setenv("HOME", t.TempDir())
+	t.Setenv("HOME", shortHome(t))
 	database, cleanup := setupTestTaskRoadmap(t, roadmap)
 	defer cleanup()
 

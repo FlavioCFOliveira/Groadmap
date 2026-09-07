@@ -34,7 +34,7 @@ import (
 // full field set and its comments, oldest first — in the object shapes
 // DATA_FORMATS.md already fixes, introducing no new shape.
 func TestTaskDetailEndpoint_ReturnsTheTaskAndItsComments(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	t.Setenv("HOME", shortHome(t))
 	f := seedCommentFixture(t, "settlement-reconciliation")
 	mux := buildMux()
 
@@ -121,7 +121,7 @@ func taskJSONFields(t *testing.T) []string {
 // route, serves GET and HEAD only, and carries the no-store header every
 // data-derived response carries.
 func TestTaskDetailEndpoint_PathDiscipline(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	t.Setenv("HOME", shortHome(t))
 	f := seedCommentFixture(t, "settlement-reconciliation")
 	// A second roadmap, so "a task of another roadmap" is a real case rather than
 	// a hypothetical one.
@@ -204,7 +204,7 @@ func TestTaskDetailEndpoint_PathDiscipline(t *testing.T) {
 // reads, so opening a modal never reintroduces a per-task query into page
 // rendering (SPEC/WEB.md § Task Detail Endpoint, Reads).
 func TestTaskDetailEndpoint_ReadsOneTaskAndItsComments(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	t.Setenv("HOME", shortHome(t))
 	f := seedCommentFixture(t, "settlement-reconciliation")
 	src := openCounting(t, f.name)
 
@@ -242,7 +242,7 @@ func TestTaskDetailEndpoint_ReadsOneTaskAndItsComments(t *testing.T) {
 // modals. The page is measured here at two task counts, so the per-task marginal
 // cost is measured too — a card, not a card plus a 7.7 KB modal.
 func TestTasksPage_CarriesOneModalShellAndNoTaskDetail(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	t.Setenv("HOME", shortHome(t))
 
 	const (
 		baselineBytes    = 930188 // the recorded document for 100 tasks
@@ -320,7 +320,7 @@ func TestTasksPage_CarriesOneModalShellAndNoTaskDetail(t *testing.T) {
 // that wrote a value as markup would have to use one of the forbidden sinks, so
 // this test fails the moment one appears.
 func TestTaskModalScript_WritesEveryValueAsText(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	t.Setenv("HOME", shortHome(t))
 	// The scan runs on the CODE, with comments stripped: the file's own header
 	// explains which sinks it must never use, and naming them in prose must not
 	// read as using them.
@@ -369,7 +369,7 @@ func TestTaskModalScript_WritesEveryValueAsText(t *testing.T) {
 // with TestTaskModalScript_WritesEveryValueAsText, which fails if the script ever
 // wrote one as markup — the two cover the whole path from the database to the DOM.
 func TestTaskModal_HostileValuesNeverReachThePageAsMarkup(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	t.Setenv("HOME", shortHome(t))
 
 	const (
 		hostileTaskTitle = `Reject <script>alert("xss")</script> in a title`
@@ -573,7 +573,7 @@ func scriptBlock(t *testing.T, script, name, open, close string) string {
 // previous task's content before every fetch and reports on every failure mode the
 // SPEC names — a network error, a non-200 response, and a body that does not parse.
 func TestTaskModal_ReportsAFailedFetchInTheModal(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	t.Setenv("HOME", shortHome(t))
 	name := seedRoadmap(t, "platform-core")
 	mux := buildMux()
 

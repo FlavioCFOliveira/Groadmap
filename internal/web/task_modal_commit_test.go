@@ -75,7 +75,7 @@ func seedCommitFixture(t *testing.T, name string) (untouched, completed, reopene
 // one that matters: it is what a reopen produces, and it is the state the SPEC
 // singles out as reachable rather than theoretical.
 func TestTaskDetailEndpoint_CarriesBothCommitHashes(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	t.Setenv("HOME", shortHome(t))
 	untouched, completed, reopened := seedCommitFixture(t, "settlement-reconciliation")
 	mux := buildMux()
 
@@ -125,7 +125,7 @@ func TestTaskDetailEndpoint_CarriesBothCommitHashes(t *testing.T) {
 // be built. Those absences are asserted, not assumed — an added anchor would
 // otherwise pass every other test in this package.
 func TestTaskModalScript_RendersBothCommitHashes(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	t.Setenv("HOME", shortHome(t))
 	script := stripJSComments(readEmbeddedAsset(t, "static/task-modal.js"))
 
 	for _, field := range []string{"task.commit_open", "task.commit_close"} {

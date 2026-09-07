@@ -151,7 +151,7 @@ func TestParseArgs_PortErrors(t *testing.T) {
 // exists, exercising the validation and not-found paths without touching the
 // developer's data directory.
 func TestRoutes_NameGuard(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	t.Setenv("HOME", shortHome(t))
 	mux := buildMux()
 
 	cases := []struct {
@@ -217,7 +217,7 @@ func TestStatic_MissingAssetIs404(t *testing.T) {
 // TestIndex_EmptyState confirms the index renders 200 with an empty state
 // when no roadmaps exist.
 func TestIndex_EmptyState(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	t.Setenv("HOME", shortHome(t))
 	mux := buildMux()
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	rec := httptest.NewRecorder()

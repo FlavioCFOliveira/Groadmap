@@ -173,11 +173,13 @@ func runGraphClient(args []string) error {
 		return err
 	}
 	// Settled before the probe, and settled the same way whoever chose the path.
-	// This subcommand speaks to a server and to nothing else, so a path the
-	// platform cannot hold is a failure however it was arrived at — and the line
-	// it publishes tells the caller why no server can EVER answer there, rather
-	// than reporting that none happens to be listening at the moment
-	// (SPEC/GRAPH.md § Socket Path Length, rule 6; § Server Resolution, rule 12).
+	// The refusal is not this subcommand's own and does not follow from its
+	// having no second path: it is the one rule every surface applies, so a path
+	// the platform cannot hold fails here exactly as it fails at `graph serve` and
+	// at `graph execute`. What the published line tells the caller is why no
+	// server can EVER answer there, rather than that none happens to be listening
+	// at the moment (SPEC/GRAPH.md § Socket Path Length, rules 5 and 6;
+	// § Server Resolution, rule 12).
 	if err := refuseOverLongSocket(socket); err != nil {
 		return err
 	}

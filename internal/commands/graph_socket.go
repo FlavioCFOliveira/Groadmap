@@ -149,65 +149,52 @@ func graphSocketTooLong(socket string) error {
 // refuseOverLongSocket returns that line when socket is over the platform's
 // bound, and nil otherwise.
 //
-// It is what the two subcommands with NO second path call — `graph serve`, which
-// must create the socket and cannot, and `graph client`, which speaks to a server
-// and to nothing else. For those two the origin of the path does not change the
-// outcome: a derived path over the bound fails exactly as a supplied one does,
-// because no server can ever answer there and reporting that none happens to be
-// listening would describe a moment rather than the constraint
-// (SPEC/GRAPH.md § Socket Path Length, rule 6).
+// It is what ALL THREE subcommands call, in the same position and to the same
+// effect: `graph serve`, which must create the socket; `graph client`, which
+// speaks to a server and to nothing else; and `graph execute`, which has a store
+// to fall back on and does not fall back on this. Where the path came from is
+// never asked. A derived path over the bound is refused exactly as a supplied one
+// is (SPEC/GRAPH.md § Socket Path Length, rules 5 and 6).
+//
+// The rule is uniform because the condition it reports is not a moment but a
+// defect. A roadmap whose derived socket path cannot be bound has a real and
+// permanent fault in its layout: the path is what it is, no server can ever be
+// started for that roadmap, and nothing the caller does at the moment of the call
+// changes it. A rule that refused `graph serve` and `graph client` while letting
+// `graph execute` and the web graph data endpoint open the store would report
+// that fault at two surfaces and conceal it at two others — and an operator who
+// saw `serve` fail while `execute` worked would have no reason to connect the
+// two, because from where they stand the two are answering different questions.
+//
+// The uniform rule also restores an identity stated elsewhere in the
+// specification and broken, under the split, without anything recording that it
+// had. SPEC/DATA_FORMATS.md § Graph Client Result requires — as a requirement and
+// not as an observation — that the surface a statement ran through is not
+// observable. Against a roadmap whose derived path was over the bound it was
+// plainly observable: `rmp graph execute` returned a result and exited 0 where
+// `rmp graph client` refused the same roadmap over the same path. The two now
+// refuse together, with the same line and the same code, so the identity holds
+// again at no cost.
+//
+// The cost of the uniformity is elsewhere and is not softened here: `graph
+// execute` is refused a roadmap it needs no socket for, against a bound that
+// constrains sockets and not stores. On the command line it is recoverable, and
+// the published line's remedy is truthful for all three subcommands — a --socket
+// value inside the bound passes this check, and with nothing listening on it the
+// roadmap resolves as not served, so the statement reaches the store
+// (§ Server Resolution, rule 12).
 //
 // The check runs on the RESOLVED path and before the socket is used — before the
 // lock, the probe, the unlink and the bind on the server side, and before the
 // probe on the caller's (§ Server Startup, step 1; § Server Resolution, rule 12).
-// A check placed after the attempt would be too late to replace anything.
+// A check placed after the attempt would be too late to replace anything, and one
+// placed after the probe would report an ordinary file sitting at such a path as
+// a server that could not be reached, which names the wrong thing entirely.
 func refuseOverLongSocket(socket string) error {
 	if graphclient.SocketPathTooLong(socket) {
 		return graphSocketTooLong(socket)
 	}
 	return nil
-}
-
-// servedOnResolvedSocket settles where `rmp graph execute` runs its statement:
-// true to send it to a server, false to open the store on the direct path.
-//
-// It exists because `execute` is the ONE command-line surface with a second path,
-// and the path-length rule is the single point at which that second path is not
-// always taken. The split is on WHO CHOSE THE PATH
-// (SPEC/GRAPH.md § Socket Path Length, rules 5 and 6):
-//
-//   - A --socket value over the bound FAILS the invocation. The caller named a
-//     socket no process on this platform can create; there is nothing to bind,
-//     nothing to reach, and no honest way to carry on as though the request had
-//     been understood. Falling back here would make the flag mean nothing in
-//     exactly the case the product can tell that it does.
-//   - A DERIVED path over the bound is the strongest of the definite negatives —
-//     no server can exist there — so the roadmap resolves as not served and the
-//     statement runs against the store under the exclusive lock, exactly as it
-//     does for a socket that is absent. This is not a nicety: during rmp task
-//     #411's verification a scratch HOME produced a 139-byte derived path, and
-//     `graph execute` against that roadmap ran correctly dozens of times because
-//     it opened the store and never looked at a socket. A uniform refusal would
-//     have withdrawn every one of those invocations over a constraint that binds
-//     sockets alone, and the store is not a socket.
-//
-// Both cases are settled BEFORE the probe, and the order matters beyond tidiness.
-// A path over the bound cannot hold a listener, so probing it can tell a caller
-// nothing it does not already know — and a probe that found an ordinary FILE at
-// such a path would report Unreachable and fail an invocation the derived-path
-// rule requires to succeed (§ Server Resolution, rule 12).
-func servedOnResolvedSocket(socket, socketFlag string) (bool, error) {
-	if graphclient.SocketPathTooLong(socket) {
-		if socketFlag != "" {
-			return false, graphSocketTooLong(socket)
-		}
-		return false, nil
-	}
-	state, err := resolveGraphServer(socket)
-	if err != nil {
-		return false, err
-	}
-	return state.Served(), nil
 }
 
 // resolveGraphServer probes the socket in force and reports whether a server is

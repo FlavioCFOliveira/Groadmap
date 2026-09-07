@@ -111,7 +111,7 @@ func TestRunServer_ServeErrorPropagates(t *testing.T) {
 // the long-lived runServer loop (so the test does not block). This exercises
 // serve through EnsureDataDir success and the `bindListener` error return.
 func TestServe_BindFailureReturnsError(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	t.Setenv("HOME", shortHome(t))
 
 	busy, port := occupyPort(t)
 	defer busy.Close() //nolint:errcheck // test cleanup

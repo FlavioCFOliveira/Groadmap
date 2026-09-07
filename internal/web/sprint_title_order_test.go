@@ -16,7 +16,7 @@ import (
 // Criterion 13). The fixture seeds distinct, realistic titles per sprint, so a
 // title appearing under a tab proves the card rendered that sprint's own title.
 func TestSprintCard_ShowsTitle(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	t.Setenv("HOME", shortHome(t))
 	f := seedSprintFixture(t, "web-sprint-card-title")
 	mux := buildMux()
 
@@ -54,7 +54,7 @@ func TestSprintCard_ShowsTitle(t *testing.T) {
 // Page, "Sprint details"). The OPEN sprint was seeded with a known title and
 // Order (99).
 func TestSprintDetail_ShowsTitleAndOrder(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	t.Setenv("HOME", shortHome(t))
 	f := seedSprintFixture(t, "web-sprint-detail-title-order")
 	mux := buildMux()
 
@@ -91,7 +91,7 @@ func TestSprintDetail_ShowsTitleAndOrder(t *testing.T) {
 // presents the sprint's title together with the "Sprint #<ID>" identifier
 // (SPEC/WEB.md § Roadmap Sprint Page, "Page header"; Acceptance Criterion 13).
 func TestSprintPage_HeaderShowsTitle(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	t.Setenv("HOME", shortHome(t))
 	f := seedSprintFixture(t, "web-sprint-page-header-title")
 	mux := buildMux()
 
@@ -117,7 +117,7 @@ func TestSprintPage_HeaderShowsTitle(t *testing.T) {
 // the title with neither template.HTML nor a safe pipeline). This is a
 // regression guard against switching the title to unescaped output.
 func TestSprint_TitleIsHTMLEscaped(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	t.Setenv("HOME", shortHome(t))
 
 	const name = "web-sprint-title-escape"
 	const rawTitle = `Migrate <auth> & sessions store`

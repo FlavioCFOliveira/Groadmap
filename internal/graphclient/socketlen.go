@@ -55,8 +55,10 @@ const MaxSocketPathLen = len(syscall.RawSockaddrUnix{}.Path) - 1
 // The caller passes the RESOLVED path — the default derived from the roadmap, or
 // a --socket value already made absolute — because the kernel measures the string
 // the invocation will actually use and a check on anything earlier would be
-// measuring something else (rule 1). What a caller DOES with a true answer is not
-// decided here: it depends on who chose the path and on whether that surface has
-// a second one, and the four surfaces answer differently (rules 5 and 6,
-// § Server Resolution, rule 12).
+// measuring something else (rule 1). Where that path came from is neither asked
+// here nor needed: all four surfaces answer a true result the same way, by
+// refusing the invocation, and not one of them reads it as evidence that the
+// roadmap is merely unserved. What each surface then WRITES is still its own —
+// three of them publish a line and an exit code, and the web graph data endpoint
+// an HTTP status (rules 5 and 6, § Server Resolution, rule 12).
 func SocketPathTooLong(path string) bool { return len(path) > MaxSocketPathLen }

@@ -52,7 +52,7 @@ type removalFixture struct {
 func setupSprintRemovalRoadmap(t *testing.T, name string) *removalFixture {
 	t.Helper()
 
-	t.Setenv("HOME", t.TempDir())
+	t.Setenv("HOME", shortHome(t))
 
 	database, cleanup := setupTestTaskRoadmap(t, name)
 	t.Cleanup(cleanup)

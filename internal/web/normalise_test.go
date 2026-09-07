@@ -165,7 +165,7 @@ func firstWord(title string) string {
 func TestTaskSearch_EitherStoredSpellingIsFoundByEitherTypedSpelling(t *testing.T) {
 	assertFixtureStillHoldsTwoSpellings(t)
 
-	t.Setenv("HOME", t.TempDir())
+	t.Setenv("HOME", shortHome(t))
 	f := seedNormalisationFixture(t, "canonical-settlement")
 	mux := buildMux()
 
@@ -278,7 +278,7 @@ func TestTaskSearch_EitherStoredSpellingIsFoundByEitherTypedSpelling(t *testing.
 func TestSearchNormalisation_TouchesNoStoredOrRenderedByte(t *testing.T) {
 	assertFixtureStillHoldsTwoSpellings(t)
 
-	t.Setenv("HOME", t.TempDir())
+	t.Setenv("HOME", shortHome(t))
 	f := seedNormalisationFixture(t, "stored-verbatim")
 
 	database, err := db.Open(f.name)
@@ -474,7 +474,7 @@ func TestSearchNormalisation_IsTwoPassesInThisOrder(t *testing.T) {
 func TestSearchNormalisation_ChangesNothingElse(t *testing.T) {
 	assertFixtureStillHoldsTwoSpellings(t)
 
-	t.Setenv("HOME", t.TempDir())
+	t.Setenv("HOME", shortHome(t))
 	f := seedNormalisationFixture(t, "no-false-positives")
 	mux := buildMux()
 

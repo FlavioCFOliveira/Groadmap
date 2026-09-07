@@ -162,7 +162,7 @@ func setClosed(t *testing.T, database *db.DB, id int, closedAt string) {
 // active/default tab on load (SPEC/WEB.md § Roadmap Sprints Page, Acceptance
 // Criterion 11).
 func TestSprints_SprintTabsLabelsAndDefault(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	t.Setenv("HOME", shortHome(t))
 	f := seedSprintFixture(t, "web-sprint-tabs")
 	mux := buildMux()
 
@@ -198,7 +198,7 @@ func TestSprints_SprintTabsLabelsAndDefault(t *testing.T) {
 // default-active tab with its pane carrying "active show" (SPEC/WEB.md
 // § UI Framework rule 9, § Roadmap Sprints Page; Acceptance Criterion 60).
 func TestSprints_CardHeaderTabs(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	t.Setenv("HOME", shortHome(t))
 	f := seedSprintFixture(t, "web-card-header-tabs")
 	mux := buildMux()
 
@@ -298,7 +298,7 @@ func cardBodySlice(t *testing.T, body string) string {
 // closed_at-descending order (SPEC/WEB.md § Roadmap Sprints Page, Acceptance
 // Criteria 12/13).
 func TestSprints_SprintClassificationAndLinks(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	t.Setenv("HOME", shortHome(t))
 	f := seedSprintFixture(t, "web-sprint-classify")
 	mux := buildMux()
 
@@ -423,7 +423,7 @@ func TestClassifySprints_OrderingRules(t *testing.T) {
 // every task card clickable to a modal and no edit affordance (SPEC/WEB.md
 // § Roadmap Sprint Page; Acceptance Criterion 13).
 func TestSprintPage_HappyPath(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	t.Setenv("HOME", shortHome(t))
 	f := seedSprintFixture(t, "web-sprint-page")
 	mux := buildMux()
 
@@ -471,7 +471,7 @@ func TestSprintPage_HappyPath(t *testing.T) {
 // as-seeded page cannot tell a position-ordered column from an id-ordered one,
 // and the reordered page can — the two orders are then opposites.
 func TestSprintPage_TaskOrder(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	t.Setenv("HOME", shortHome(t))
 	f := seedSprintFixture(t, "web-sprint-order")
 	mux := buildMux()
 
@@ -515,7 +515,7 @@ func TestSprintPage_TaskOrder(t *testing.T) {
 // 404; and a non-read method returns 405 (SPEC/WEB.md § Routes and Pages,
 // path-parameter rule 3; Acceptance Criterion 13).
 func TestSprintPage_NotFoundCases(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	t.Setenv("HOME", shortHome(t))
 	f := seedSprintFixture(t, "web-sprint-404")
 	mux := buildMux()
 
@@ -558,7 +558,7 @@ func TestSprintPage_NotFoundCases(t *testing.T) {
 var rePerTaskModal = regexp.MustCompile(`id="task-modal-\d+"`)
 
 func TestTaskModal_WiringAndContent(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	t.Setenv("HOME", shortHome(t))
 	f := seedSprintFixture(t, "web-task-modal")
 	mux := buildMux()
 

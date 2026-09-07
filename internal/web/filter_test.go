@@ -292,7 +292,7 @@ var filterControlIDs = []struct{ id, param string }{
 // no-filter first option, each carrying a real programmatically associated label,
 // each keyboard-operable, and none of them filtering by status.
 func TestTaskFilters_HeaderCarriesTheThreeDropdowns(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	t.Setenv("HOME", shortHome(t))
 	f := seedFilterFixture(t, "delivery-platform")
 	mux := buildMux()
 
@@ -398,7 +398,7 @@ func TestTaskFilters_HeaderCarriesTheThreeDropdowns(t *testing.T) {
 // Criterion 113: the type filter is an EQUALITY, the priority and severity
 // filters are THRESHOLDS, and every column count follows the narrowed set.
 func TestTaskFilters_EachDimensionNarrowsAndCountsFollow(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	t.Setenv("HOME", shortHome(t))
 	f := seedFilterFixture(t, "delivery-platform")
 	mux := buildMux()
 
@@ -459,7 +459,7 @@ func TestTaskFilters_EachDimensionNarrowsAndCountsFollow(t *testing.T) {
 // example selects exactly what the specification says it selects, and activating
 // a further control can only shrink the shown set.
 func TestTaskFilters_ComposeConjunctively(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	t.Setenv("HOME", shortHome(t))
 	f := seedFilterFixture(t, "delivery-platform")
 	mux := buildMux()
 
@@ -621,7 +621,7 @@ func mustBoard(t *testing.T, mux *http.ServeMux, roadmap string, c clientControl
 // value a dimension does not accept applies NO filter on that dimension, answers
 // HTTP 200, leaves the other dimensions applied, and never produces an error page.
 func TestTaskFilters_NoValueIsAnError(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	t.Setenv("HOME", shortHome(t))
 	f := seedFilterFixture(t, "delivery-platform")
 	mux := buildMux()
 	srv := handler()
@@ -728,7 +728,7 @@ func TestTaskFilters_NoValueIsAnError(t *testing.T) {
 // and clearing every control restores the full board with its true counts and the
 // bare page URL.
 func TestTaskFilters_URLRoundTripsAndControlsShowTheValue(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	t.Setenv("HOME", shortHome(t))
 	f := seedFilterFixture(t, "delivery-platform")
 	mux := buildMux()
 
@@ -788,7 +788,7 @@ func TestTaskFilters_URLRoundTripsAndControlsShowTheValue(t *testing.T) {
 // page with the script's own rule applied to it (boardState.narrow, which
 // TestTaskFilters_ScriptAppliesTheSameConjunction pins to the served script).
 func TestTaskFilters_ServerAndClientProduceTheSameBoard(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	t.Setenv("HOME", shortHome(t))
 	f := seedFilterFixture(t, "delivery-platform")
 	mux := buildMux()
 
@@ -982,7 +982,7 @@ func functionBody(t *testing.T, script, signature string) string {
 // Criterion 117: a filter contributes no clause to the page's read, no read of its
 // own, and no per-dimension query; and no filter value is echoed into the page.
 func TestTaskFilters_AddNoDatabaseQueryAndEchoNoValue(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	t.Setenv("HOME", shortHome(t))
 	f := seedFilterFixture(t, "delivery-platform")
 	mux := buildMux()
 

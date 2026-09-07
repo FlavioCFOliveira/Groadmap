@@ -38,3 +38,29 @@ func runTests(m *testing.M) int {
 
 	return m.Run()
 }
+
+// shortHome is a HOME under which a roadmap's DERIVED socket path fits, for a
+// test that needs a home of its own rather than the package-wide one TestMain
+// installs.
+//
+// t.TempDir() is the obvious way to get one and is the wrong way here: it names
+// its directory after the TEST, so a descriptive name spends dozens of the bytes
+// sun_path allows and <home>/.roadmaps/<name>/graph.sock lands over the platform's
+// bound — at which point every graph surface refuses the roadmap outright
+// (SPEC/GRAPH.md § Socket Path Length, rules 5 and 6). The refusal is correct and
+// has nothing to do with what such a test is asserting, and whether a test meets
+// it depends on how long its own name happens to be.
+//
+// The directory is testenv's, shared with internal/web's helper of the same name,
+// so there is one implementation of "a home short enough to hold a socket"; what
+// is here is the t.Fatalf and the t.Cleanup.
+func shortHome(t *testing.T) string {
+	t.Helper()
+
+	home, remove, err := testenv.ShortHome()
+	if err != nil {
+		t.Fatalf("creating a short HOME: %v", err)
+	}
+	t.Cleanup(remove)
+	return home
+}

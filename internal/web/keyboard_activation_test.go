@@ -134,7 +134,7 @@ func wantAccessibleName(taskID, renderedTitle string) string {
 // test states is the property that must hold however either surface is built —
 // some real control exists for every task the page can open.
 func TestModalTriggers_EveryTaskHasANativelyActivatableTrigger(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	t.Setenv("HOME", shortHome(t))
 	name := seedRoadmap(t, "platform-core")
 	mux := buildMux()
 
@@ -212,7 +212,7 @@ func TestModalTriggers_EveryTaskHasANativelyActivatableTrigger(t *testing.T) {
 // show clickable tasks, so the pattern cannot reappear on a page this feature
 // never touched.
 func TestModalTriggers_NeverFakeAButtonWithRoleAndTabindex(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	t.Setenv("HOME", shortHome(t))
 	name := seedRoadmap(t, "platform-core")
 	seedRoadmapWithAudit(t, name, 3)
 	mux := buildMux()
@@ -264,7 +264,7 @@ func TestModalTriggers_NeverFakeAButtonWithRoleAndTabindex(t *testing.T) {
 // promise: a script that taught a div to respond to Enter would have to be served
 // from /static/ (the policy forbids inline script), and it would show up here.
 func TestModalTriggers_AddNoScriptAndKeepTheContentSecurityPolicy(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	t.Setenv("HOME", shortHome(t))
 	name := seedRoadmap(t, "platform-core")
 	// handler() is the fully wired handler the server runs: the mux wrapped by the
 	// security-header middleware. buildMux() alone would answer with no headers at
@@ -345,7 +345,7 @@ func TestModalTriggers_AddNoScriptAndKeepTheContentSecurityPolicy(t *testing.T) 
 // kind of trigger, which is why the exact opening markup is asserted rather than
 // merely "some button exists".
 func TestSprintBoard_CardIsTheWholeTrigger(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	t.Setenv("HOME", shortHome(t))
 	f := seedSprintFixture(t, "web-task-modal")
 	mux := buildMux()
 
@@ -418,7 +418,7 @@ const hostileTitle = `Reject "quoted" <b>bold</b> & O'Brien &amp; 100% > 50%`
 // value, where an unescaped double quote would end the attribute and everything
 // after it would become markup.
 func TestModalTriggers_AccessibleNameEscapesAHostileTitle(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	t.Setenv("HOME", shortHome(t))
 	f := seedSprintFixture(t, "web-hostile-title")
 	renameTask(t, f.name, f.openTaskID, hostileTitle)
 	mux := buildMux()

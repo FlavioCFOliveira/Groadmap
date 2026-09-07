@@ -115,7 +115,7 @@ func doGraphData(t *testing.T, name string, params url.Values) *httptest.Respons
 // and edge, exactly as the endpoint behaved before the query bar existed
 // (SPEC/WEB.md § Graph Data Endpoint; Acceptance Criterion 46).
 func TestHandleGraphData_DefaultQueryBackwardCompatible(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	t.Setenv("HOME", shortHome(t))
 	name := seedRoadmap(t, "web-ui-rollout")
 	seedGraph(t, name, graphSeedQueries()...)
 
@@ -189,7 +189,7 @@ func nodeKeys(t *testing.T, rec *httptest.ResponseRecorder) []string {
 // "Run does not execute write or DDL statements" — a 400 with kind execution.
 // Both are refusals; the criterion is met only by a 200 plus a read-back.
 func TestHandleGraphData_ExecutesWriteStatements(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	t.Setenv("HOME", shortHome(t))
 	name := seedRoadmap(t, "web-ui-rollout")
 	seedGraph(t, name, graphSeedQueries()...)
 
@@ -265,7 +265,7 @@ func TestHandleGraphData_ExecutesWriteStatements(t *testing.T) {
 // graph — a cost proportional to the graph, paid for no change at all — and
 // would shorten the history a later recovery replays.
 func TestHandleGraphData_StatementThatWritesNothingLeavesTheStoreByteIdentical(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	t.Setenv("HOME", shortHome(t))
 	name := seedRoadmap(t, "web-ui-rollout")
 	seedGraph(t, name, graphSeedQueries()...)
 
@@ -338,7 +338,7 @@ func storeFingerprint(t *testing.T, graphDir string) map[string]string {
 // classification, and the query is not executed (SPEC/WEB.md § Graph Data
 // Endpoint; Acceptance Criterion 48).
 func TestHandleGraphData_InvalidLimitRejected(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	t.Setenv("HOME", shortHome(t))
 	name := seedRoadmap(t, "web-ui-rollout")
 	seedGraph(t, name, graphSeedQueries()...)
 
@@ -370,7 +370,7 @@ func TestHandleGraphData_InvalidLimitRejected(t *testing.T) {
 // not a read-only rejection (SPEC/WEB.md § Query-Bar Error Handling, rule 3;
 // Acceptance Criterion 50).
 func TestHandleGraphData_ExecutionFailure(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	t.Setenv("HOME", shortHome(t))
 	name := seedRoadmap(t, "web-ui-rollout")
 	seedGraph(t, name, graphSeedQueries()...)
 
@@ -392,7 +392,7 @@ func TestHandleGraphData_ExecutionFailure(t *testing.T) {
 // still carries Cache-Control: no-store (it is a data-derived response) and the
 // JSON content type (SPEC/WEB.md § Cache Policy; § Query-Bar Error Handling).
 func TestHandleGraphData_CacheControlOnError(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	t.Setenv("HOME", shortHome(t))
 	name := seedRoadmap(t, "web-ui-rollout")
 	seedGraph(t, name, graphSeedQueries()...)
 
@@ -434,7 +434,7 @@ func TestHandleGraphData_CacheControlOnError(t *testing.T) {
 // above all — means a refusal was reintroduced without a change to the
 // specification, and that is what this test fails on.
 func TestHandleGraphData_SpoofedDDLKeywordsAreNoLongerRefused(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	t.Setenv("HOME", shortHome(t))
 	name := seedRoadmap(t, "web-ui-rollout")
 	seedGraph(t, name, graphSeedQueries()...)
 
@@ -487,7 +487,7 @@ func TestHandleGraphData_SpoofedDDLKeywordsAreNoLongerRefused(t *testing.T) {
 // swallowed it and the endpoint returned the WHOLE graph instead of the resolved
 // limit (proven against a 252-node store, which returned all 252 nodes).
 func TestHandleGraphData_LimitAppliesDespiteTrailingComment(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	t.Setenv("HOME", shortHome(t))
 	name := seedRoadmap(t, "web-ui-rollout")
 	seedGraph(t, name, `UNWIND range(1,120) AS i CREATE (:Bulk {i:i})`)
 
@@ -560,7 +560,7 @@ func corruptGraphWAL(t *testing.T, name string) {
 // endpoint used to publish is withdrawn with the guard rail that produced it;
 // there is nothing else left to order.
 func TestHandleGraphData_InvalidLimitIsResolvedBeforeTheStatementRuns(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	t.Setenv("HOME", shortHome(t))
 	name := seedRoadmap(t, "web-ui-rollout")
 	seedGraph(t, name, graphSeedQueries()...)
 
@@ -630,7 +630,7 @@ func TestHandleGraphData_InvalidLimitIsResolvedBeforeTheStatementRuns(t *testing
 // include a statement that would once have been refused without the store ever
 // being touched.
 func TestHandleGraphData_TheStoreOpenBoundary(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	t.Setenv("HOME", shortHome(t))
 	name := seedRoadmap(t, "web-ui-rollout")
 	seedGraph(t, name, graphSeedQueries()...)
 	corruptGraphWAL(t, name)
@@ -677,7 +677,7 @@ func TestHandleGraphData_TheStoreOpenBoundary(t *testing.T) {
 // field, or that leaked an empty `nodes`/`edges` pair from the success shape,
 // would satisfy every existing assertion and only this one would catch it.
 func TestHandleGraphData_ErrorBodyShape(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	t.Setenv("HOME", shortHome(t))
 	name := seedRoadmap(t, "web-ui-rollout")
 	seedGraph(t, name, graphSeedQueries()...)
 
@@ -742,7 +742,7 @@ func TestHandleGraphData_ErrorBodyShape(t *testing.T) {
 // the rejected value verbatim, so a crafted limit is the one place request-derived
 // text reaches the response body of this endpoint.
 func TestHandleGraphData_ErrorBodySerialization(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	t.Setenv("HOME", shortHome(t))
 	name := seedRoadmap(t, "web-ui-rollout")
 	seedGraph(t, name, graphSeedQueries()...)
 
@@ -794,7 +794,7 @@ func TestHandleGraphData_ErrorBodySerialization(t *testing.T) {
 // fail. Each is either served or fails in the engine; none of them may produce a
 // kind of its own.
 func TestHandleGraphData_PublishesExactlyTwoKinds(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	t.Setenv("HOME", shortHome(t))
 	name := seedRoadmap(t, "web-ui-rollout")
 	seedGraph(t, name, graphSeedQueries()...)
 

@@ -351,7 +351,7 @@ func decodeTaskDetail(t *testing.T, mux *http.ServeMux, roadmap string, taskID i
 // the log's order and completeness are now measured. That the script renders them
 // as a Tabler timeline, as text, is pinned in task_modal_test.go.
 func TestTaskDetail_CommentLog(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	t.Setenv("HOME", shortHome(t))
 	f := seedCommentFixture(t, "settlement-reconciliation")
 	mux := buildMux()
 
@@ -423,7 +423,7 @@ func TestTaskDetail_CommentLog(t *testing.T) {
 // data layer: a task with no comment yields an EMPTY ARRAY, never null, so the
 // script walks it unconditionally and renders its empty-state message.
 func TestTaskDetail_CommentEmptyState(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	t.Setenv("HOME", shortHome(t))
 	f := seedCommentFixture(t, "settlement-reconciliation")
 	mux := buildMux()
 
@@ -464,7 +464,7 @@ func TestTaskDetail_CommentEmptyState(t *testing.T) {
 // characters are JSON-escaped by the encoder. How the client writes it into the
 // DOM — as text, never as markup — is pinned in task_modal_test.go.
 func TestTaskDetail_CommentBodyTravelsAsAJSONString(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	t.Setenv("HOME", shortHome(t))
 	f := seedCommentFixture(t, "settlement-reconciliation")
 	mux := buildMux()
 
@@ -520,7 +520,7 @@ func TestTaskDetail_CommentBodyTravelsAsAJSONString(t *testing.T) {
 // follows: the member-tasks table it used to follow no longer exists (SPEC/WEB.md
 // § Sprint Detail Sub-Template, rule 2; Acceptance Criterion 130).
 func TestSprintPage_CommentsCard(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	t.Setenv("HOME", shortHome(t))
 	f := seedCommentFixture(t, "settlement-reconciliation")
 	mux := buildMux()
 
@@ -606,7 +606,7 @@ func TestSprintPage_CommentsCard(t *testing.T) {
 // 68: a sprint with no comments STILL renders the card, showing an empty state in
 // place of the timeline.
 func TestSprintPage_CommentsCardEmptyState(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	t.Setenv("HOME", shortHome(t))
 	f := seedCommentFixture(t, "settlement-reconciliation")
 	mux := buildMux()
 
@@ -634,7 +634,7 @@ func TestSprintPage_CommentsCardEmptyState(t *testing.T) {
 // against a member task appears in that task's detail modal and nowhere in the card,
 // and no aggregate of task comments is presented at sprint level.
 func TestSprintPage_CommentsCardHoldsOnlySprintOwnComments(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	t.Setenv("HOME", shortHome(t))
 	f := seedCommentFixture(t, "settlement-reconciliation")
 	mux := buildMux()
 
@@ -672,7 +672,7 @@ func TestSprintPage_CommentsCardHoldsOnlySprintOwnComments(t *testing.T) {
 // that belongs to no sprint shows its comment count on its card and serves its
 // log from its own endpoint, and is absent from the sprint page altogether.
 func TestTasksPage_CoversTasksOutsideAnySprint(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	t.Setenv("HOME", shortHome(t))
 	f := seedCommentFixture(t, "settlement-reconciliation")
 	mux := buildMux()
 
@@ -712,7 +712,7 @@ func TestTasksPage_CoversTasksOutsideAnySprint(t *testing.T) {
 // task detail modal, and therefore shows no comment log of any kind — neither the
 // sprint's own nor a member task's (SPEC/WEB.md § Shared Sprint-Card Partial).
 func TestSprintsLandingPage_RendersNoCommentLog(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	t.Setenv("HOME", shortHome(t))
 	f := seedCommentFixture(t, "settlement-reconciliation")
 	mux := buildMux()
 
@@ -939,7 +939,7 @@ func seedTasksWithComments(t *testing.T, name string, n int) []int {
 // only when a user opens that task's modal, by the task detail endpoint
 // (SPEC/DATABASE.md § Count Comments for Many Parents (Grouped)).
 func TestTasksPage_OneGroupedCommentCountQueryIndependentOfTaskCount(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	t.Setenv("HOME", shortHome(t))
 
 	// The same parent counts the driver-level statement counter measures for the
 	// grouped read itself, so the two measurements line up.
@@ -1041,7 +1041,7 @@ func TestTasksPage_OneGroupedCommentCountQueryIndependentOfTaskCount(t *testing.
 // zero on the per-task listing states (SPEC/WEB.md § Tasks and Sprints from SQLite;
 // § Sprint Detail Sub-Template, Read cost; Acceptance Criterion 137).
 func TestSprintPage_CommentQueryCount(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	t.Setenv("HOME", shortHome(t))
 	f := seedCommentFixture(t, "settlement-reconciliation")
 	src := openCounting(t, f.name)
 
@@ -1127,7 +1127,7 @@ func TestSprintPage_CommentQueryCount(t *testing.T) {
 // server-rendered, so its read-only property is asserted on the script that builds
 // it.
 func TestCommentSurface_HasNoWriteAffordance(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	t.Setenv("HOME", shortHome(t))
 	f := seedCommentFixture(t, "settlement-reconciliation")
 	mux := buildMux()
 
@@ -1264,7 +1264,7 @@ func registeredRoutePatterns(t *testing.T) []string {
 // method that could carry a change. It is the runtime half of Acceptance Criterion
 // 72 — the parsed route set above is the structural half.
 func TestCommentPages_AnswerReadMethodsOnly(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	t.Setenv("HOME", shortHome(t))
 	f := seedCommentFixture(t, "settlement-reconciliation")
 	mux := buildMux()
 
@@ -1344,7 +1344,7 @@ func TestWebPackage_ReferencesNoCommentWriteAPI(t *testing.T) {
 // so a class that exists nowhere — an invented one that would need new CSS — fails
 // the test.
 func TestCommentTimeline_ClassesComeFromVendoredCSS(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	t.Setenv("HOME", shortHome(t))
 	f := seedCommentFixture(t, "settlement-reconciliation")
 	mux := buildMux()
 
@@ -1464,7 +1464,7 @@ func readEmbeddedAsset(t *testing.T, path string) string {
 // tasks have no comments; this one covers the populated timeline, the empty state,
 // and the sprint Comments card in both of its branches.
 func TestCommentPages_RenderOfflineWithoutInlineStyle(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	t.Setenv("HOME", shortHome(t))
 	f := seedCommentFixture(t, "settlement-reconciliation")
 	mux := buildMux()
 
@@ -1515,7 +1515,7 @@ func TestCommentPages_RenderOfflineWithoutInlineStyle(t *testing.T) {
 // is migrated by that startup step, after which both comment-bearing pages render
 // with the empty state rather than failing the read.
 func TestCommentPages_RenderOnAMigratedLegacyRoadmap(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	t.Setenv("HOME", shortHome(t))
 
 	const roadmapName = "legacy-settlement-ledger"
 	buildStaleSchemaDB(t, roadmapName)

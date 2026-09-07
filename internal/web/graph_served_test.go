@@ -41,28 +41,33 @@ import (
 	"github.com/FlavioCFOliveira/Groadmap/internal/backoff"
 	"github.com/FlavioCFOliveira/Groadmap/internal/graphclient"
 	"github.com/FlavioCFOliveira/Groadmap/internal/graphlock"
+	"github.com/FlavioCFOliveira/Groadmap/internal/testenv"
 	"github.com/FlavioCFOliveira/Groadmap/internal/utils"
 )
 
 // shortHome is a HOME under which the roadmap's DERIVED socket path fits.
 //
-// A Unix domain socket path is capped at 108 bytes, and t.TempDir() names its
+// A Unix domain socket path must fit in sun_path, and t.TempDir() names its
 // directory after the test — so a descriptive test name pushes
-// <home>/.roadmaps/<name>/graph.sock past the cap and the bind fails with
-// "invalid argument", which reads as a defect in the code under test rather than
-// in the harness. It is the constraint rmp task #367 measured (FINDING #266)
-// reaching a second harness, exactly as that finding predicted it would.
+// <home>/.roadmaps/<name>/graph.sock past the bound. It used to fail the bind
+// with "invalid argument", which read as a defect in the code under test rather
+// than in the harness; since rmp task #427 it is refused outright, on this
+// surface as on every other (SPEC/GRAPH.md § Socket Path Length, rules 5 and 6).
+// It is the constraint rmp task #367 measured (FINDING #266) reaching a second
+// harness, exactly as that finding predicted it would.
 //
-// The directory is created directly under the system temporary directory with a
-// short prefix, and removed when the test ends.
+// The directory itself is testenv's, so this package and internal/commands share
+// one implementation of "a home short enough to hold a socket" rather than each
+// keeping its own; what stays here is the t.Fatalf and the t.Cleanup, which is
+// the part that needs a *testing.T.
 func shortHome(t *testing.T) string {
 	t.Helper()
 
-	home, err := os.MkdirTemp("", "rmpw")
+	home, remove, err := testenv.ShortHome()
 	if err != nil {
 		t.Fatalf("creating a short HOME: %v", err)
 	}
-	t.Cleanup(func() { _ = os.RemoveAll(home) }) //nolint:errcheck // a temporary directory the test is done with
+	t.Cleanup(remove)
 	return home
 }
 

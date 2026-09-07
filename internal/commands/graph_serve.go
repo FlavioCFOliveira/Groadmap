@@ -194,8 +194,9 @@ func runGraphServe(args []string) error {
 	// every one of which lives behind graphserve.Run below. A server that cannot
 	// start therefore touches nothing: no lock taken, no stale file removed, no
 	// listener bound. The refusal is the same for a derived path as for a
-	// supplied one, because this subcommand has to CREATE the socket and can do
-	// so at neither (§ Socket Path Length, rules 5 and 6).
+	// supplied one, and the same as the one every other surface applies: the
+	// bound is a property of the path, and where the path came from is not asked
+	// (§ Socket Path Length, rules 5 and 6).
 	if err := refuseOverLongSocket(socketPath); err != nil {
 		return err
 	}

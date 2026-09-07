@@ -104,7 +104,7 @@ func TestSprintBoardColumns_NameTheCanonicalStatusOfTheirGroup(t *testing.T) {
 // board the neutral variant must fail, so each board is also asserted to show more
 // than one variant across its columns.
 func TestBoardColumnBadges_CarryTheColourOfTheStatusTheyGroup(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	t.Setenv("HOME", shortHome(t))
 	f := seedSprintBoardFixture(t, "settlement-platform")
 	mux := buildMux()
 
@@ -306,7 +306,7 @@ func TestBoardColumnBadges_ClassComesFromTheOneHelper(t *testing.T) {
 // sprint with no member task — so every column of both is empty and the colour has
 // no card to be read from.
 func TestBoardColumnBadges_EmptyColumnKeepsItsStatusColour(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	t.Setenv("HOME", shortHome(t))
 	if err := createEmptyRoadmap("clearing-house-empty"); err != nil {
 		t.Fatalf("creating the empty roadmap: %v", err)
 	}
@@ -348,7 +348,7 @@ func TestBoardColumnBadges_EmptyColumnKeepsItsStatusColour(t *testing.T) {
 // matched everything would leave the counts unchanged and make the comparison
 // vacuous, which is why the totals are asserted to differ.
 func TestBoardColumnBadges_NarrowedBoardKeepsItsColours(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	t.Setenv("HOME", shortHome(t))
 	f := seedBoardFixture(t, "payment-platform")
 	mux := buildMux()
 
@@ -397,7 +397,7 @@ func TestBoardColumnBadges_NarrowedBoardKeepsItsColours(t *testing.T) {
 // compared where the distinction actually lives: the board's column badges above
 // the card are coloured, the card's own count badge below it is not.
 func TestCountBadges_WithNoStatusToKeyOnStayNeutral(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	t.Setenv("HOME", shortHome(t))
 	f := seedSprintBoardFixture(t, "settlement-platform")
 	mux := buildMux()
 

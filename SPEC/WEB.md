@@ -876,6 +876,7 @@ HTTP status mapping for page and data routes:
 | Tasks `type`, `priority`, or `severity` filter parameter absent, unknown, malformed, or undecodable | 200 (never an error; the dimension applies no filter; see [Roadmap Tasks Page](#roadmap-tasks-page)) |
 | Graph data `limit` not one of the six allowed values | 400 (`kind` `invalid_limit`; the query is not executed; see [Query-Bar Error Handling](#query-bar-error-handling)) |
 | Graph data query fails once running, a query cancelled for exhausting the time budget included | 400 (`kind` `execution`; see [Query-Bar Error Handling](#query-bar-error-handling)) |
+| Graph data request for a roadmap whose derived socket path is longer than the platform's bound | 500 (no server can exist there; the store is not opened and the response carries no `kind`; see [Knowledge Graph from the GoGraph Store](#knowledge-graph-from-the-gograph-store)) |
 | Non-read HTTP method on any route | 405 |
 | Unhandled internal error reading data (I/O, corrupt store), a graph store that fails to open included | 500 |
 
@@ -4097,6 +4098,22 @@ re-presents an earlier, now-stale response in its place.
      [Query-Bar Error Handling](#query-bar-error-handling), rule 6, already draws
      the boundary. No new status and no new kind is introduced.
 
+   **One condition is settled before those four states are reached, and it costs
+   this endpoint its direct path.** When the socket path derived for the roadmap
+   is longer than the platform allows a socket path to be, no server can ever
+   listen there, and the endpoint refuses the request rather than reading the
+   absent socket as evidence that the roadmap is merely not served. It answers
+   HTTP `500`, the status it already returns for a graph it cannot serve, and it
+   introduces no new status and no `kind`: the request never reached a statement,
+   so it is not a query-bar failure. The store is not opened and no lock is taken.
+   This endpoint publishes no `--socket` flag and can receive no path, so unlike
+   the command line it has no way to reach a shorter one: the graph page still
+   renders, and every fetch it makes for that roadmap's data is refused, for as
+   long as the derived path is what it is.
+   `GRAPH.md § Socket Path Length`, rules 5 and 6, is canonical for the bound and
+   for why the refusal binds this surface, which needs no socket, as it binds the
+   ones that do.
+
    Resolution runs once per request and its outcome is not cached: a cached
    outcome would act on a server that had since stopped. It is spent before the
    statement starts and before any lock is taken, so it consumes neither the
@@ -7077,6 +7094,38 @@ Rules:
     and then answers `500`. The leftover socket file is still present afterwards,
     because a caller never removes one (see `GRAPH.md § Server Resolution`,
     rule 1).
+160. **A derived socket path over the platform's bound refuses the request, and
+    the refusal is established by a paired control rather than by the status.**
+    The criterion drives one request, `GET /roadmaps/<roadmap>/graph/data`,
+    against two `rmp web` servers differing in exactly one respect: the `HOME`
+    each was started with. Under a `HOME` deep enough that the roadmap's derived
+    socket path `~/.roadmaps/<name>/graph.sock` exceeds the platform's bound, the
+    request is answered HTTP `500`, and the response carries no `kind` — the
+    query-bar error shape belongs to the `400`s, and this request never reached a
+    statement. Under a `HOME` short enough that the same roadmap's derived path
+    is inside the bound, the identical request is answered HTTP `200`. **The pair
+    is the assertion and neither half is one on its own.** A `500` alone
+    separates nothing, because `500` is also this endpoint's answer to a store it
+    cannot open and to a lock the bounded wait does not win; a `200` alone is
+    what the fall-through behaviour and the refusal both produce under a short
+    `HOME`. It is the divergence across the pair, under one request and one
+    difference, that establishes the rule. The criterion MUST establish the bound
+    empirically, by binding real sockets at increasing path lengths until one is
+    refused, and never from a literal — the reason `GRAPH.md` Acceptance
+    Criterion 67 gives holds here unchanged, because a hard-coded 107 is wrong on
+    three of the five supported operating systems. It MUST also assert that
+    `~/.roadmaps/<roadmap>/graph/` does not exist after the refused request, and
+    the scope of that assertion is stated here so that it is not mistaken for the
+    discriminator: this endpoint stats that directory and never creates it, and a
+    roadmap without one is served as an empty graph rather than having one made
+    for it (see [Security and Constraints](#security-and-constraints), rule 4).
+    An implementation that read the unbindable path as evidence that the roadmap
+    is merely not served would therefore answer `200` with an empty graph and
+    leave no directory behind either, so the absence catches nothing about the
+    fall-through. What it does rule out is a different defect, and a future one:
+    an implementation that opened or created the store on this path (see
+    [Knowledge Graph from the GoGraph Store](#knowledge-graph-from-the-gograph-store),
+    rule 1, and `GRAPH.md § Socket Path Length`, rules 5 and 6).
 
 ## See Also
 

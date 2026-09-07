@@ -374,7 +374,7 @@ func summaryLineCounts(t *testing.T, body string) (pending, inProgress, complete
 // are pinned against the specification's three spellings first, so a change to
 // them cannot silently redefine what this test asserts.
 func TestSprintBoard_RendersThreeFixedColumns(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	t.Setenv("HOME", shortHome(t))
 	f := seedSprintBoardFixture(t, "settlement-platform")
 	mux := buildMux()
 
@@ -450,7 +450,7 @@ func TestSprintBoard_RendersThreeFixedColumns(t *testing.T) {
 // showing the in-column empty state in place of its card list — not a page-level
 // empty state, and not an absent board.
 func TestSprintBoard_EmptySprintIsAnEmptyBoard(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	t.Setenv("HOME", shortHome(t))
 	const name = "settlement-platform"
 	sprintID := seedSprintWithMembers(t, name, 0)
 	mux := buildMux()
@@ -503,7 +503,7 @@ func TestSprintBoard_EmptySprintIsAnEmptyBoard(t *testing.T) {
 // that mapped the categories to the wrong columns cannot satisfy the comparison by
 // coincidence.
 func TestSprintBoard_ColumnCountsAreTheSummaryLinesOwnNumbers(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	t.Setenv("HOME", shortHome(t))
 	f := seedSprintBoardFixture(t, "settlement-platform")
 	mux := buildMux()
 
@@ -956,7 +956,7 @@ var sprintOrderColumnHeadings = []string{"WAITING", "DOING", "CLOSED"}
 // guards below state that explicitly, so an assertion cannot pass on an order
 // that merely happens to look like the specified one.
 func TestSprintBoard_EachColumnOrdersByItsOwnKey(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	t.Setenv("HOME", shortHome(t))
 	f := seedSprintOrderFixture(t, "ledger-migration")
 	mux := buildMux()
 
@@ -1132,7 +1132,7 @@ var sprintTieStartedAt = [...]string{
 // and is checked against both the plain position order and the plain id order, so
 // it cannot pass on either.
 func TestSprintBoard_TiedCardsKeepThePlannedOrderAtColumnScale(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	t.Setenv("HOME", shortHome(t))
 	name, sprintID, ids := seedSprintTieFixture(t, "payments-cutover")
 	mux := buildMux()
 
@@ -1294,7 +1294,7 @@ func reorderSprintTasks(t *testing.T, roadmap string, sprintID int, taskIDs []in
 // class each badge carries is still the one the mapping assigns to the integer
 // alone, which is why the classes below are still read from the helpers.
 func TestSprintBoard_CardShowsSixDataPointsInOrder(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	t.Setenv("HOME", shortHome(t))
 	f := seedSprintBoardFixture(t, "settlement-platform")
 	mux := buildMux()
 
@@ -1435,7 +1435,7 @@ func TestSprintBoard_CardShowsSixDataPointsInOrder(t *testing.T) {
 // rendering that printed an icon with nothing beside it, or a bare `0` with no
 // icon, would satisfy a check for the digit and state nothing to the reader.
 func TestSprintBoard_BothCountersAlwaysRender(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	t.Setenv("HOME", shortHome(t))
 	f := seedSprintBoardFixture(t, "settlement-platform")
 	mux := buildMux()
 
@@ -1554,7 +1554,7 @@ func TestSprintBoard_BothCountersAlwaysRender(t *testing.T) {
 // one: a template that had dropped the footer from both cards would satisfy every
 // absence assertion here.
 func TestSprintBoard_CardMergesBadgesAndCountersOntoOneLine(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	t.Setenv("HOME", shortHome(t))
 	f := seedSprintBoardFixture(t, "settlement-platform")
 	mux := buildMux()
 
@@ -1702,7 +1702,7 @@ func counterMarkup(role, icon string, n int) string {
 // page-wide check would either fail on those or have to be weakened until it
 // proved nothing.
 func TestSprintBoard_IsReadOnly(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	t.Setenv("HOME", shortHome(t))
 	f := seedSprintBoardFixture(t, "settlement-platform")
 	mux := buildMux()
 
@@ -1749,7 +1749,7 @@ func TestSprintBoard_IsReadOnly(t *testing.T) {
 // It measures on the same counting source Acceptance Criterion 70 is measured
 // with, so the two counts are taken on one instrument rather than two.
 func TestSprintBoard_CommentCountIsOneGroupedQueryWhateverN(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	t.Setenv("HOME", shortHome(t))
 
 	// The same three reads for 1, 3 and 12 member tasks: the query count does not
 	// grow with N.

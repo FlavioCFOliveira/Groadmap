@@ -319,7 +319,7 @@ func overLongLabelStatement(n int) string {
 // statement, and a test that tried would measure the machine
 // (SPEC/GRAPH.md § Field Length Limits, rule 12).
 func TestGraphExecute_FieldTooLongAgainstTheRealEngine(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	t.Setenv("HOME", shortHome(t))
 	const name = "field-length-fence"
 	t.Cleanup(setupTestGraphRoadmap(t, name))
 

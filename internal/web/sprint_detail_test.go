@@ -85,7 +85,7 @@ func TestNewSprintCompletion_CountsAndLine(t *testing.T) {
 // now carries it: the board container, its column, and the WAITING heading with a
 // count badge, which no other page emits.
 func TestSprintDetail_FullBlockOnlyOnSprintPage(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	t.Setenv("HOME", shortHome(t))
 	f := seedSprintFixture(t, "web-shared-detail")
 	mux := buildMux()
 
@@ -184,7 +184,7 @@ func TestSprintDetail_FullBlockOnlyOnSprintPage(t *testing.T) {
 // layout and the OPEN sprint is a card, not an expanded block (SPEC/WEB.md
 // § Shared Sprint-Card Partial; Acceptance Criteria 8/12/13/38).
 func TestSprintsPage_SharedCardAcrossAllTabs(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	t.Setenv("HOME", shortHome(t))
 	f := seedSprintFixture(t, "web-shared-card")
 	mux := buildMux()
 
@@ -244,7 +244,7 @@ func TestSprintsPage_SharedCardAcrossAllTabs(t *testing.T) {
 // show their task count, asserted indirectly by the existing fixture, but the
 // closed cards previously showed only the closed_at date.
 func TestSprintsPage_ClosedCardsShowTaskCount(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	t.Setenv("HOME", shortHome(t))
 	f := seedSprintFixture(t, "web-closed-counts")
 	mux := buildMux()
 
@@ -266,7 +266,7 @@ func TestSprintsPage_ClosedCardsShowTaskCount(t *testing.T) {
 // Sprints Page, Próximos; Acceptance Criterion 40). The fixture's first PENDING
 // sprint has two member tasks; the second has none.
 func TestSprintsPage_UpcomingCardsShowTaskCount(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	t.Setenv("HOME", shortHome(t))
 	f := seedSprintFixture(t, "web-upcoming-counts")
 	mux := buildMux()
 

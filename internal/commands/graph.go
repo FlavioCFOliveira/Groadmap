@@ -885,22 +885,35 @@ func runGraphExecute(args []string) error {
 	if err != nil {
 		return err
 	}
-	// The path's LENGTH is settled inside this call and before the probe, and it
-	// is the one point at which the second path is not always taken: a --socket
-	// value the platform cannot hold fails the invocation rather than falling
-	// back, while a DERIVED path over the bound resolves as not served and takes
-	// the direct path exactly as an absent socket does (SPEC/GRAPH.md § Socket
-	// Path Length, rules 5 and 6; § Server Resolution, rule 12).
-	served, err := servedOnResolvedSocket(socket, socketFlag)
-	if err != nil {
-		// Either the socket answered and yielded no server, or the caller named a
-		// path no socket can occupy. Neither is a fall back: the answering socket
-		// may belong to a server holding the lock, so opening the store on it
-		// would wait the whole wait budget and then fail (rule 2), and the named
-		// path was named rather than merely found.
+	// The path's LENGTH is settled first, before the probe, and it is the one
+	// point at which the second path is not taken: a resolved path over the
+	// platform's bound fails the invocation rather than falling back, whether the
+	// caller named it through --socket or it was derived from the roadmap
+	// (SPEC/GRAPH.md § Socket Path Length, rules 5 and 6; § Server Resolution,
+	// rule 12).
+	//
+	// These two calls used to be one helper, servedOnResolvedSocket, and it is
+	// gone rather than repaired. The whole of its content was the branch on WHO
+	// CHOSE THE PATH; with that branch withdrawn what remained was a wrapper over
+	// the two calls below — and runGraphClient writes those same two calls out, in
+	// the same order, in graph_client.go. Two spellings of one sequence is how the
+	// two come to differ, and the sequence is now identical by rule rather than by
+	// coincidence: refuse the path, then probe it. What separates the two
+	// subcommands is the LAST step alone — this one takes the direct path against
+	// a roadmap nothing is serving, and `graph client` fails there — and that
+	// difference is better read here than folded into a name.
+	if err := refuseOverLongSocket(socket); err != nil {
 		return err
 	}
-	if served {
+	state, err := resolveGraphServer(socket)
+	if err != nil {
+		// The socket answered and yielded no server. It is not a fall back: the
+		// answering socket may belong to a server holding the store's lock, so
+		// opening the store on it would wait the whole wait budget and then fail
+		// (§ Server Resolution, rule 2).
+		return err
+	}
+	if state.Served() {
 		output, sendErr := runOnGraphServer(socket, query)
 		if sendErr != nil {
 			return sendErr

@@ -2614,34 +2614,63 @@ Behaviour:
    platform the binary is running on, so the same published line is correct on
    all nine targets. `COMMANDS.md § Graph Server Socket Error Lines` publishes
    the exact line.
-5. **Where the caller named the path, an over-long value fails the invocation.**
-   All three subcommands that publish `--socket` refuse it — `graph serve`,
-   `graph client` and `graph execute` — with exit code 1 and the line above. The
-   caller named a socket no process on this platform can create: there is nothing
-   to bind, nothing to reach, and no honest way to carry on as though the request
-   had been understood. `graph execute` in particular does **not** fall back to
-   the store here, and this is the single point at which an over-long path departs
-   from the resolution rule. An absent socket is evidence that a roadmap is not
-   served; a socket the caller asked for by name and that cannot exist is evidence
-   that the invocation was misunderstood. Falling back would repeat, silently, the
-   outcome [Serving on a Non-Default Socket](#serving-on-a-non-default-socket),
-   rule 6, records for a mistyped path — with the difference that here the product
-   can tell, and a product that can tell and says nothing is choosing not to.
-6. **Where the path was derived, the outcome follows what the surface needs the
-   socket for, and no reading surface is lost.** `graph serve` must create the
-   socket and cannot, so it fails at startup with the same line. `graph client`
-   speaks to a server and to nothing else, so it fails with the same line as well,
-   which tells the caller why no server can ever answer there rather than
-   reporting that none happens to be listening at the moment. `graph execute` and
-   the web graph data endpoint have a second path and take it: a derived path over
-   the bound is a definite negative — no server can exist there — so the roadmap
-   resolves as **not served** and the statement runs against the store under the
-   exclusive lock, exactly as it does for a socket that is absent (see
-   [Server Resolution](#server-resolution), rule 12). A roadmap whose home
-   directory is deep enough to push the derived path over the bound loses the
-   server and keeps both of the surfaces that existed before the server did.
-   Refusing those two as well would withdraw a working path over a constraint that
-   binds sockets alone, and the store is not a socket.
+5. **An over-long resolved path fails the invocation, on every surface, however
+   the path was chosen.** The three subcommands that publish `--socket` —
+   `graph serve`, `graph client` and `graph execute` — each exit 1 with the line
+   above, and the web graph data endpoint refuses the request; each of them does
+   so both for a path the caller supplied and for the derived default path. No
+   surface falls back to the store on this condition: `graph execute` does
+   **not** open it, and the web graph data endpoint does **not** open it either.
+   This is the single point at which an over-long path departs from the
+   resolution rule, and it departs from it identically in both cases, because the
+   bound is a property of the path and rule 1 has already fixed that the two are
+   measured on the same rule. An absent socket is evidence that a roadmap is not
+   served *at this moment*; a path over the bound is evidence that no server can
+   ever answer there, which is not the same fact and does not warrant the same
+   answer. Falling back would repeat, silently, the outcome
+   [Serving on a Non-Default Socket](#serving-on-a-non-default-socket), rule 6,
+   records for a mistyped path — with the difference that here the product can
+   tell, and a product that can tell and says nothing is choosing not to.
+6. **The rule is uniform because a report that is the same everywhere is worth
+   more here than the one surface that could have carried on, and what that
+   costs is stated rather than hidden.** A roadmap whose derived socket path
+   cannot be bound has a real and permanent defect in its layout: the path is
+   what it is, no server can be started for that roadmap, and nothing the caller
+   does at the moment of the call changes it. A rule that refused `graph serve`
+   and `graph client` while letting `graph execute` and the web graph data
+   endpoint open the store would report that defect at two surfaces and conceal
+   it at two others; an operator who sees `serve` fail while `execute` works has
+   no reason to connect the two, because from where they stand the two surfaces
+   are answering different questions. The split also broke a requirement stated
+   elsewhere in this specification, and broke it without recording that it had:
+   `DATA_FORMATS.md § Graph Client Result` fixes, as a requirement rather than an
+   observation, that the surface a statement ran through is not observable — and
+   under the split an over-long derived path made `rmp graph execute` return a
+   result and exit 0 where `rmp graph client` refused the same roadmap. The
+   uniform rule restores that identity at no cost, because the two now refuse
+   together, with the same line and the same code. What the uniform rule buys is
+   therefore one answer at whichever surface the operator reaches first, given at
+   the first point of contact, where the published line already names the remedy.
+   **The cost is real and is not softened here.** `graph execute` and the web
+   graph page refuse a roadmap neither of them needs a socket for, against a
+   bound that constrains sockets and not stores: the store is not bounded by `sun_path`, and a statement those
+   two surfaces could have served is refused anyway. A home directory deep enough
+   to push the derived path over the bound therefore makes that roadmap's graph
+   unreachable through every surface at once, where a split rule would have left
+   two of them working. That is an ordinary installation and not a hypothetical:
+   rule 8 records the bound being reached in practice on a three-character
+   roadmap name. On the command line the refusal is recoverable without moving
+   the roadmap, and the published line's remedy is truthful there for all three
+   subcommands: `--socket` naming a path inside the bound is checked and passes,
+   and a path nothing is listening on resolves as not served, so
+   `graph execute` given one opens the store and runs the statement (see
+   [Server Resolution](#server-resolution), rule 12). The web graph data endpoint
+   has no such flag and no way to receive one, so for that surface the only
+   remedy is a shorter derived path: a shorter home directory, or a shorter
+   roadmap name. That asymmetry between the command line and the web interface
+   is the same boundary, drawn for the same reason, that
+   [Serving on a Non-Default Socket](#serving-on-a-non-default-socket) already
+   states.
 7. **The failure class and the exit code are unchanged; only the message
    differs.** The refusal carries `utils.ErrGraphServer` and exit code 1 — the
    same sentinel and the same code the unqualified bind failure already carried.
@@ -3527,17 +3556,21 @@ Rules:
     that subcommand the first two states are failures rather than fallbacks; see
     [The Bolt Client](#the-bolt-client).
 12. **A resolved path longer than the platform's socket-path bound is settled
-    before the probe, and it is settled differently depending on who chose it.**
-    A path that cannot be bound cannot be listened on, so probing it can tell a
-    caller nothing it does not already know. Where the path was derived, it is the
-    strongest of the definite negatives the first two states describe, and the two
-    surfaces with a second path take it: `rmp graph execute` and the web graph data
-    endpoint open the store directly, exactly as they do for a socket that does not
-    exist. Where the caller supplied it through `--socket`, the invocation fails
-    instead, on all three subcommands that publish the flag. `rmp graph client`
-    fails either way, having no second path at all.
+    before the probe, and it is settled the same way on every surface.** A path
+    that cannot be bound cannot be listened on, so probing it can tell a caller
+    nothing it does not already know. It is **not** one of the two definite
+    negatives the first two states describe: those report that no server is
+    listening now, while a path over the bound reports that none can ever listen
+    there, and the second fact is not served by the answer the first one gets.
+    The resolution therefore fails rather than falling back — on `rmp graph
+    serve`, `rmp graph client` and `rmp graph execute` alike, and the web graph
+    data endpoint refuses the request — whether the path was derived from the
+    roadmap or supplied through `--socket`. Neither of the two surfaces that have
+    a second path takes it here. A caller that can name a path can still reach the
+    store: a `--socket` value inside the bound passes this check and, with nothing
+    listening on it, resolves as not served under rule 1.
     [Socket Path Length](#socket-path-length) is canonical for the bound, for the
-    line each of these failures publishes, and for why the two cases differ.
+    line each of these failures publishes, and for why the rule is uniform.
 
 ### The Bolt Client
 
@@ -4970,17 +5003,24 @@ Groadmap's usage model and expectations:
     path's length in both — would satisfy a check that merely found two numbers.
     It MUST also assert that the operating system's own text is absent: an
     `invalid argument` in that line is the defect the criterion exists against.
-66. **The derived default path is validated on the same rule, and the reading
-    surfaces survive it.** Against a roadmap whose derived path
+66. **The derived default path is validated on the same rule, and every surface
+    refuses it.** Against a roadmap whose derived path
     `~/.roadmaps/<name>/graph.sock` is longer than the bound, `rmp graph serve`
     invoked with **no `--socket` flag at all** exits 1 with the same line, naming
-    the derived path. In that same state `rmp graph execute` runs a statement
-    against that roadmap, returns its result, and exits 0, while `rmp graph
-    client` exits 1 with the same line. The criterion MUST assert all three,
-    because the whole value of the rule is in the split: an implementation that
-    refused every surface would pass a check of the server alone while withdrawing
-    the two surfaces that still work (see
-    [Socket Path Length](#socket-path-length), rule 6).
+    the derived path. In that same state, and each invoked with no `--socket`
+    flag either, `rmp graph execute` and `rmp graph client` exit 1 with that same
+    line as well, and `rmp graph execute` writes nothing to stdout and does not
+    open the store. The criterion MUST assert all three, because the value of the
+    rule is that it binds the surface which had somewhere else to go: an
+    implementation that checked only the two surfaces that need a socket would
+    pass a check of the server alone while letting `rmp graph execute` resolve a
+    path no socket can occupy. It MUST also assert the recovery, in the same
+    state and against the same roadmap: `rmp graph execute --socket <path>` with
+    a path inside the bound, and nothing listening on it, returns the statement's
+    result and exits 0. Without that half the criterion is satisfied by an
+    implementation that refuses the roadmap's graph unconditionally, which is not
+    what the rule says (see [Socket Path Length](#socket-path-length), rules 5
+    and 6).
 67. **The limit is derived from the platform, and the criterion MUST be capable of
     failing a hard-coded one.** The criterion MUST establish the bound
     empirically — by binding real sockets at increasing path lengths until one is

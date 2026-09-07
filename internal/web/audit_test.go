@@ -71,7 +71,7 @@ func getAudit(t *testing.T, name, rawQuery string) *httptest.ResponseRecorder {
 // handful of entries the whole log fits on page 1 and "Page 1 of 1" is shown
 // (SPEC/WEB.md § Roadmap Audit Log Page, ordering).
 func TestHandleAudit_HappyPathOrdering(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	t.Setenv("HOME", shortHome(t))
 	name := seedRoadmapWithAudit(t, "web-audit-rollout", 5)
 
 	rec := getAudit(t, name, "")
@@ -107,7 +107,7 @@ func TestHandleAudit_HappyPathOrdering(t *testing.T) {
 // page, and the remainder on the last page, with the correct "Page X of Y"
 // indicator (SPEC/WEB.md § Roadmap Audit Log Page, pagination).
 func TestHandleAudit_FullFirstPageAndRemainder(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	t.Setenv("HOME", shortHome(t))
 	// 100 + 30 entries -> 2 pages: 100 on page 1, 30 on page 2.
 	const remainder = 30
 	total := auditPageSize + remainder
@@ -154,7 +154,7 @@ func countDataRows(body string) int {
 // § Roadmap Audit Log Page, pagination is clamped, not strict; Routes and
 // Pages, audit page status mapping).
 func TestHandleAudit_PageClamping(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	t.Setenv("HOME", shortHome(t))
 	// 250 entries -> 3 pages (100 + 100 + 50).
 	total := 250
 	name := seedRoadmapWithAudit(t, "web-audit-clamp", total)
@@ -192,7 +192,7 @@ func TestHandleAudit_PageClamping(t *testing.T) {
 // active (no prev/next links) (SPEC/WEB.md § Roadmap Audit Log Page, empty
 // state).
 func TestHandleAudit_EmptyState(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	t.Setenv("HOME", shortHome(t))
 	// A roadmap whose audit log is empty: seeding zero entries writes no rows,
 	// and creating the roadmap itself writes none either.
 	name := seedRoadmapWithAudit(t, "web-audit-empty", 0)
@@ -220,7 +220,7 @@ func TestHandleAudit_EmptyState(t *testing.T) {
 // and both are present on a middle page (SPEC/WEB.md § Roadmap Audit Log Page,
 // pagination controls).
 func TestHandleAudit_PrevNextEdges(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	t.Setenv("HOME", shortHome(t))
 	// 250 entries -> 3 pages, so page 2 is a genuine middle page.
 	name := seedRoadmapWithAudit(t, "web-audit-edges", 250)
 
@@ -260,7 +260,7 @@ func TestHandleAudit_PrevNextEdges(t *testing.T) {
 // many-page roadmap so the bar exercises both anchors, the window, and an
 // ellipsis on at least one side.
 func TestHandleAudit_NumberedBarRendering(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	t.Setenv("HOME", shortHome(t))
 	// 800 entries -> 8 pages. Page 4 -> window [2..6], anchors 1 and 8; the gap
 	// between the window high (6) and the last anchor (8) is exactly page 7,
 	// rendered directly, while there is no low-side gap (1 and 2 contiguous).
@@ -303,7 +303,7 @@ func TestHandleAudit_NumberedBarRendering(t *testing.T) {
 // 405 (SPEC/WEB.md § Roadmap Audit Log Page, path parameters; Routes and
 // Pages, status mapping).
 func TestHandleAudit_NameGuardAndMethod(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	t.Setenv("HOME", shortHome(t))
 	// One real roadmap so the 405 cases hit a registered path, not a 404.
 	name := seedRoadmapWithAudit(t, "web-audit-guard", 3)
 	mux := buildMux()
@@ -338,7 +338,7 @@ func TestHandleAudit_NameGuardAndMethod(t *testing.T) {
 // and the HTML content type (SPEC/WEB.md § Routes and Pages: all routes serve
 // GET and HEAD only).
 func TestHandleAudit_Head(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	t.Setenv("HOME", shortHome(t))
 	name := seedRoadmapWithAudit(t, "web-audit-head", 3)
 	mux := buildMux()
 
@@ -359,7 +359,7 @@ func TestHandleAudit_Head(t *testing.T) {
 // cache (SPEC/WEB.md § Cache Policy). The full handler() chain is exercised so
 // the middleware runs.
 func TestHandleAudit_CacheControlNoStore(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	t.Setenv("HOME", shortHome(t))
 	name := seedRoadmapWithAudit(t, "web-audit-cache", 3)
 
 	h := handler()
