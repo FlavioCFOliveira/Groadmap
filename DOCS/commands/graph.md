@@ -36,6 +36,8 @@ Every class of statement runs through this one subcommand:
 
 **The statement runs under a 5-second time budget** on both paths. A statement that exhausts it is cancelled, its transaction rolls back whole, nothing is written, and the command fails with exit code 1. The remedy is to narrow the statement — add a label, an indexed property filter, or a `LIMIT` — or to split it into smaller statements.
 
+**A field the statement writes may be too long for the store's durable formats.** The engine refuses such a commit and the invocation exits 1 with a line naming the field it must shorten; a field short enough to commit and too long to fold into a snapshot commits and then refuses every checkpoint of that graph. See [How long a field may be](#how-long-a-field-may-be).
+
 **Usage:** `rmp graph execute -r <roadmap> [--query <cypher>] [--socket <path>]`
 
 **Flags:**
@@ -149,7 +151,7 @@ Sends exactly one Cypher statement to a running graph server over its Unix domai
 
 **It requires a server.** `client` resolves `~/.roadmaps/<name>/graph.sock`, or the `--socket` path when one is given, and with nothing listening there it fails with exit code `1`. It does **not** open the store. That is the whole difference between this subcommand and `execute`, which resolves the same socket and has a second path to fall back on: a subcommand that quietly became `execute` when no server answered would report a success that says nothing about whether a server was reached.
 
-**The output is `execute`'s output.** For the same statement against the same graph the bytes on stdout are byte for byte what `rmp graph execute` writes, so a caller may parse one shape and change nothing when a server is started or stopped.
+**The output is `execute`'s output.** For the same statement against the same graph the bytes on stdout are byte for byte what `rmp graph execute` writes, so a caller may parse one shape and change nothing when a server is started or stopped. Two boundaries on that identity are worth knowing, and neither touches an ordinary statement: a `PROFILE`'s `timeNs` measures the run that produced it, so two subcommands measure two durations (see [Query Plans](#query-plans-explain-and-profile)); and the identity governs stdout and the exit code rather than the stderr diagnostic, where at the pinned engine exactly one condition prints a different line here than it does against the store (see [How long a field may be](#how-long-a-field-may-be)).
 
 **A serialisation conflict is retried, not reported.** Two clients writing to the same nodes at the same time is an ordinary situation inside a server, and the store detects the collision rather than preventing it. The losing statement committed nothing, so the client re-sends it under the project's retry policy and reports a failure only when that policy or the statement time budget is exhausted. **An exhausted policy is reported as itself**, on a line of `rmp`'s own rather than the engine's: it names the contention, states that nothing was written, and asks for the same statement again, so a caller can tell "you hit contention, run it again" from "your statement is wrong" instead of guessing. The exit-1 enumeration in `rmp graph client --help` names that cause too. Sustained contention on one node is the shape that produces it, and it is rare at this boundary: sixteen concurrent writers to a **single** node, driven through `rmp graph client`, exhausted the policy on **0 of 7,040** statements. Spreading those writes across distinct nodes removes the failure rather than moving its threshold.
 
@@ -593,9 +595,13 @@ set, and `SPEC/GRAPH.md § Write Counters: What a Statement Changed` for the beh
 ## Query Plans: `EXPLAIN` and `PROFILE`
 
 A statement may ask for its plan instead of, or as well as, its answer. Both prefixes
-work on `execute` and on `client`, and both produce the same bytes on either, because
-the client maps the protocol encoding back onto the engine's own plan node rather than
-onto JSON.
+are recognised without regard to case, and both work on `execute` and on `client`: the
+client maps the protocol encoding back onto the engine's own plan node rather than onto
+JSON, so one serialiser writes the output on both surfaces. An `EXPLAIN` is therefore
+identical in every byte on either subcommand. A `PROFILE` has one figure that cannot be,
+and no implementation could make it one: `timeNs` measures the run that produced it, and
+two subcommands are two runs. Every other key — `rows`, `dbHits`, `rowsRemovedByFilter`
+and the estimate pair included — is identical.
 
 | Prefix | Does it run the statement? | What it returns | Member |
 |--------|---------------------------|-----------------|--------|
@@ -622,10 +628,69 @@ rmp graph execute -r backend-platform \
 rmp graph client -r backend-platform --query "EXPLAIN MATCH (n:Spec) RETURN n.key"
 ```
 
-A plan is a recursive object: each node names the `operator` that runs, the `detail`
-of the physical decision it took, and the `children` it draws its rows from, in
-**execution** order. `SPEC/DATA_FORMATS.md § Graph Plan Node` is canonical for every
-field and for when each is present.
+A plan is a recursive object. Each node names the `operator` that runs, the `detail` of
+the physical decision it took, and the `children` it draws its rows from, in
+**execution** order — a join's build side before its probe side, an apply's outer before
+its inner. `operator` is the only key always present, whichever member carries the tree;
+a consumer must treat every other key as optional.
+
+| Key | In a `plan` | In a `profile` | What it is |
+|-----|-------------|----------------|------------|
+| `operator` | Always | Always | The operator's type name — or, in a logical plan, the whole plan line (see below) |
+| `detail` | When it has one | When it has one | The physical decision: the label it scans, the index it seeks, the pattern it expands |
+| `children` | When it has any | When it has any | The operators it draws its rows from, in execution order. A leaf carries no key |
+| `estimatedRows` | When the planner had an estimate | The same, and the same number | The planner's prediction, made before anything ran |
+| `estimatedRowsSource` | With `estimatedRows` | With `estimatedRows` | Where the estimate came from, and therefore how far it may be trusted: `exact`, `stats` or `heuristic` |
+| `rows` | Never | Yes | Rows the operator emitted. Measured |
+| `timeNs` | Never | Yes | Whole nanoseconds attributed to the operator. Measured |
+| `dbHits` | Never | When the figure was counted | Storage record accesses charged to the operator |
+| `rowsRemovedByFilter` | Never | When the operator can reject a row | Candidate rows the operator read and then discarded because a predicate said no |
+
+`estimatedRows` is published for an `EXPLAIN` and for a `PROFILE` alike, and it is the
+same number in both, because the planner predicted it before either ran. Reading it
+beside a `profile`'s measured `rows` is the point: a bad estimate becomes visible in one
+object.
+
+**Four presence rules decide what a number means, and reading any of them backwards
+gives a wrong answer.**
+
+- **An absent `dbHits` means "nobody counted", never "none".** The engine distinguishes
+  an operator whose storage accesses were counted and came to zero — which publishes
+  `0` — from one whose accesses nobody counted at all, which publishes no key. The
+  engine's own text rendering prints `?` for the second case, for the same reason. A
+  reader who treats the absent key as a zero has a measurement that was never taken.
+- **A `rowsRemovedByFilter` of `0` is a finding, and its absence says something else.**
+  An operator that can reject rows and rejected none reports `0` deliberately: a filter
+  that rejected nothing is exactly what a reader of a slow plan is looking for. The key
+  is omitted only by an operator with no rejection mechanism at all. The asymmetry
+  against the rule above is intended: there an absent key admits that a figure exists
+  and was not counted, here it states that there is no figure to have.
+- **An absent estimate is an absent estimate, not a zero**, and the pair is written as a
+  pair. An operator the planner attributed no estimate to, and one whose backing
+  statistic was absent or stale, both omit `estimatedRows` and `estimatedRowsSource`
+  together; an estimate with no provenance is a bare number a reader cannot weigh. A
+  genuine estimate of zero is published as `0`.
+- **`timeNs` is inclusive of the node's children.** The figure covers everything the
+  operator drew from the operators beneath it, so summing a tree's nodes double-counts
+  every level; the root's figure is the one that describes the statement. It is a whole
+  number of nanoseconds rather than a millisecond value, so that both subcommands
+  publish the one integer they already hold; a consumer that wants milliseconds divides,
+  and the rounding is that consumer's decision.
+
+**`dbHits` counts access-path record reads and never property reads.** This is a
+deliberate divergence from Neo4j, which additionally charges one hit per property read,
+and it is published because a caller comparing the two products otherwise concludes the
+figure is wrong. It is not: it counts a different thing, and it counts that thing
+exactly.
+
+**An `EXPLAIN` of a writing statement publishes a logical plan, whose nodes carry
+`operator` and `children` and nothing else.** A write's operators bind to an open
+transaction, so there is no physical operator tree to walk outside one — and opening one
+is precisely what `EXPLAIN` must not do. In such a tree `operator` is the plan line as
+the engine writes it, with any detail already inside that string, so there is no
+separate `detail` and no estimate pair beside it. A consumer that parses `operator` as a
+bare operator type name is correct for every reading statement and wrong for this one,
+which is why the case is stated here rather than left to be discovered.
 
 **A prefixed statement always returns the `{columns, rows}` shape**, even when it
 declares no column of its own — empty `columns` and `rows` arrays beside the plan,
@@ -637,6 +702,200 @@ what a real committed write reports, over a statement that had written nothing.
 statement is refused, because profiling it would mean committing it. Neither prefix is
 accepted on a **schema** statement. Both refusals exit `1` and carry the engine's own
 diagnostic.
+
+`SPEC/DATA_FORMATS.md § Graph Plan Node` is canonical for the shape and for when each
+key is present; `SPEC/GRAPH.md § Query Plans: The EXPLAIN and PROFILE Prefixes` for the
+behaviour.
+
+## How Long a Field May Be
+
+Groadmap checks no field length, and cannot. A statement's fields are the values its
+expressions produce, so learning them means executing the statement — which is what the
+engine does. Every refusal in this section is therefore the engine's, already made; what
+is documented here is what you are told about it and what happens next.
+
+**A field goes into two durable formats, and they do not bound it alike.** A committed
+write is appended to the write-ahead log; a later checkpoint folds the committed state
+into a snapshot. The log bounds a field by the capacity of the length prefix its frame
+reserves, which is an encoding limit. The snapshot bounds one by what its own reader is
+required to accept, which is an anti-exhaustion control — a reader that allocated for
+any length a prefix could express would allocate gigabytes on an untrusted file. The two
+are set independently, and neither is uniformly the stricter.
+
+| Field | Write-ahead log, at commit | Snapshot, at checkpoint | Which bound binds |
+|-------|----------------------------|-------------------------|-------------------|
+| Node or edge label | 65535 bytes | 1 MiB | The log, by a factor of sixteen |
+| Node or edge property key | 65535 bytes | 1 MiB | The log, by a factor of sixteen |
+| Index or constraint identifier | 65535 bytes | 64 KiB | Neither: the engine's Cypher parser bounds it far below both |
+| Property value, list element, list element count | 4294967295 bytes | 1 GiB | **The snapshot**, at a quarter of the log's bound |
+| Node key | 4294967295 bytes | 1 GiB | **The snapshot**, at a quarter of the log's bound |
+
+These figures are read from the pinned engine and are recorded here as evidence, not as
+a contract. They move with the engine, and no line `rmp` prints repeats one from this
+page: every published line carries the figure the engine reported for the run that
+produced it.
+
+**For a property value, write under 1 GiB, and treat the log's four-gigabyte figure as
+the misleading one.** The last column is the column that matters when writing. A value
+between 1 GiB and 4 GiB is inside the log's bound, so it commits — acknowledged, durable
+and recoverable. It is outside the snapshot's, so from that moment every checkpoint of
+that graph fails, the write-ahead log is never folded again and never reclaimed, and it
+grows for as long as the value remains. A caller who read only the log's figure would
+write two gigabytes believing it legal, and would be told nothing until the checkpoint.
+
+### A field too long for the log refuses the commit
+
+The commit is refused, nothing is written, and the invocation exits `1` with a line of
+its own rather than the general parse-or-execution one:
+
+```
+Error: graph engine error: graph field too long; nothing was written. Shorten the field the engine names: <engine diagnostic>
+```
+
+The part `rmp` fixes is everything up to and including `Shorten the field the engine
+names: `. What follows is the engine's own text, which is not fixed here and which names
+the field kind, the length the field occupies and the maximum in force — the half that
+tells you what to shorten. Both halves say the field is too long, and that repetition is
+deliberate: trimming the engine's half would mean parsing it, and a match on the
+engine's wording breaks silently at the next version bump.
+
+**The line exists because the condition was otherwise unrecognisable.** It used to be
+reported through `graph query failed: `, the same text a syntax error prints, and the
+only thing separating the two was the engine's diagnostic tail — which is outside the
+published contract and which a caller therefore cannot lawfully match. A caller had to
+read English to learn whether to correct the statement's syntax or to shorten one of its
+values. The statement time budget and the exhausted retry policy each hold a line of
+their own for the same reason.
+
+**Nothing is written and the store stays usable.** The refused transaction consumes a
+sequence number and applies nothing, so the graph holds no part of the statement — not
+the elements it created before it reached the over-long field, and not the properties it
+set on them. An ordinary write submitted immediately afterwards succeeds, and a
+following `MATCH` counts it.
+
+**Two field kinds are reachable from a statement, and the others are not.** The
+65535-byte bound is what a node or edge **label** and a node or edge **property key**
+meet, and those two are what a caller writes in a pattern. A schema identifier does not
+reach it: the engine's Cypher parser bounds an index or constraint name, label and
+property far below 65535 bytes at the point the statement is parsed, so a schema
+statement is refused there instead, with the parser's own message and as an ordinary
+engine refusal (see [Managing the Schema](#managing-the-schema)). A property value does
+not reach either of its bounds from a literal, because a literal of a gigabyte does not
+fit inside the 1 MiB maximum query length; a field of that size is one a statement's own
+expressions produce.
+
+Two neighbouring refusals are **not** this class, and neither prints this line. A node
+key longer than the log's 32-bit prefix is refused by the engine's node-key codec, and
+an assembled log frame over the engine's frame ceiling — which one list property of many
+individually-legal elements can reach without any one of them being over-long — is
+refused by the log's framer. Both are length refusals in spirit; both arrive through the
+ordinary `graph query failed: ` line, because the class is defined by what a caller can
+match and not by the shape of the complaint.
+
+### A field too long for the snapshot commits, and then no checkpoint succeeds
+
+This is the other half of the condition, and it is not the first half worded
+differently. The field the snapshot refuses is already **committed graph state**, so it
+is not a statement to correct and re-run.
+
+**The write succeeded.** The commit is the durability boundary and it was crossed: the
+invocation prints its normal success output and exits `0`. What fails is the checkpoint
+that follows, and a checkpoint failure after a durable commit never fails the write. The
+diagnostic reaches stderr beside the success — the one place in the product where a
+non-fatal diagnostic accompanies exit code 0.
+
+**It cannot heal, and that is what separates it from every other checkpoint failure.** A
+checkpoint refused because a disk filled, a permission was wrong or a write was
+interrupted may succeed the next time one runs, and the next successful checkpoint
+reconciles the snapshot. Here every later capture captures the same committed field, so
+every later checkpoint is refused for the same reason. Nothing in the environment
+changes it and no amount of waiting resolves it. **The condition is permanent until the
+offending field is shortened or removed by a statement.**
+
+**What it costs is bounded growth, not data.** The engine's guard fires while the
+capture is still being assembled, before any snapshot file is written and before the
+log's prefix is truncated. Every acknowledged commit therefore stays durable in the
+write-ahead log, recovery still restores it in full, and the store stays open and
+usable. What is lost is the truncation: the log keeps growing for as long as the field
+is in the graph, and every open replays more of it, so recovery time grows with it. That
+cost is real and unbounded, which is why the condition is reported rather than absorbed
+— but it is not a durability failure, and a diagnostic that read as one would be worse
+than none.
+
+**The diagnostic says four things**, and no exact wording for it is published in the
+specification, because it accompanies a success rather than a failure and is therefore
+not one of the error lines fixed character for character. What is fixed is the content:
+that every acknowledged commit is still durable and recovery still restores it; that the
+log was not folded, so it keeps growing and the next open replays more of it; that the
+condition will persist through every later checkpoint while the field remains; and that
+the remedy is to shorten or remove the offending field with a statement. It ends in the
+engine's own error, which is the half that names which field is at fault. Illustrative
+of the shape, and not a contract:
+
+```
+Warning: the graph checkpoint was refused because a committed field is longer than the snapshot format accepts; ... until a statement shortens or removes the field the engine names: <engine diagnostic>
+```
+
+**Expect it on every subsequent write.** On the short-lived surfaces every successful
+write checkpoints, and every one of those checkpoints is refused, so the diagnostic
+recurs for as long as the field is in the graph. That is deliberate: a line that recurred
+on every write saying only that a checkpoint had failed would train an operator to ignore
+the one message naming an unbounded, permanent cost.
+
+**Which surfaces classify it, and the one that cannot.** `rmp graph execute`, the web
+interface's graph data endpoint, and `rmp graph serve`'s shutdown checkpoint all hold the
+checkpoint's error, so all three report this condition rather than the general one. A
+running server's **in-flight** checkpoint — the age-based cadence of
+[Durability, checkpoints and shutdown](#durability-checkpoints-and-shutdown) — does not:
+it runs on the engine's own loop, and what Groadmap can observe of it is a statistics
+value carrying the last failure as a rendered string rather than as an error. There is
+nothing there to classify without matching the engine's wording, which is what this
+whole feature is built to avoid, so that one report stays the general checkpoint-failure
+record with the engine's own text inside it. An operator reading a server's log finds the
+kind there.
+
+### Through a running server the line is the generic one
+
+At the pinned engine the field-length line is reached on the **direct** path only.
+
+`rmp graph execute` sends its statement to a server whenever one answers, and
+`rmp graph client` always does. The engine's Bolt server classifies this refusal as a
+**server** fault rather than the caller's — its failure-code mapping carries no case for
+the condition and falls back to a generic database-error code — and the session then
+replaces the message of every failure so classified. Neither the field kind, nor the
+figures, nor any code that separates this condition from another crosses the connection.
+
+The same statement therefore produces one of two stderr lines according to whether a
+server happens to be running, which the caller did not choose and cannot see. Measured:
+
+```
+# Against the store: the field, the figures and the remedy
+Error: graph engine error: graph field too long; nothing was written. Shorten the field the engine names: <engine diagnostic>
+
+# Through a running server: the general parse-or-execution line, sanitised
+Error: graph engine error: graph query failed: An internal error occurred. See server logs for details (session: <id>).
+```
+
+The sanitised half of the second line is the engine's own wording at the pinned version
+and not a Groadmap contract; what is stable about it is that it names the session and
+nothing else.
+
+**It is not a different failure.** The sentinel is the same, the exit code is 1 on both
+paths, nothing is written on either, and the store stays usable on either. Only the
+message differs, and the two things the identity between `execute` and `client` binds —
+the success output and the exit code — are untouched.
+
+**The diagnostic is not destroyed; it went to the server.** The engine logs it in full,
+under the same session, on the server's own stderr. A caller who meets the sanitised line
+and needs to know which field was at fault reads the stderr of the server that answered
+the statement. A caller who cannot read it knows at least that nothing was written.
+
+Groadmap does not close this on its own side, and there is no interception point at which
+it could: the engine's server exposes no error-mapping option, and Groadmap runs no
+statement of its own between the caller and the server. The one remaining lever would be
+matching the replaced text, which names no field, no kind and no figure. The remedy
+belongs in the engine, and when it lands the line is reached on both paths and
+`rmp graph client` gains it too.
 
 ## Query Input Source and Precedence
 
@@ -709,7 +968,7 @@ All three subcommands follow these conventions:
 | Code | Meaning |
 |------|---------|
 | 0 | The statement executed successfully. For `serve`: the server started, served, and was stopped by `SIGINT` or `SIGTERM` |
-| 1 | Cypher failed to parse or execute, the engine refused a schema statement, the statement exhausted the 5-second time budget, every attempt of the retry policy lost a serialisation conflict against a server, or the graph store could not be opened, read, or written. The conflict is the one cause here whose remedy is to run the **same** statement again: the Cypher was valid, the store was healthy, and nothing was written, so spread concurrent writes across distinct nodes rather than rewriting the statement. Also every socket failure: for all three, a resolved socket path longer than the platform allows, whether derived or supplied; for `client`, no server listening; for `execute` and `client`, a socket that answers but yields no reachable server, and a connection lost or unanswered after the statement was sent; for `serve`, a lock it could not take, a socket it could not bind, and a live server already answering there |
+| 1 | Cypher failed to parse or execute, the engine refused a schema statement, the engine refused a field the statement writes as too long for the write-ahead log, the statement exhausted the 5-second time budget, every attempt of the retry policy lost a serialisation conflict against a server, or the graph store could not be opened, read, or written. The conflict is the one cause here whose remedy is to run the **same** statement again: the Cypher was valid, the store was healthy, and nothing was written, so spread concurrent writes across distinct nodes rather than rewriting the statement. Also every socket failure: for all three, a resolved socket path longer than the platform allows, whether derived or supplied; for `client`, no server listening; for `execute` and `client`, a socket that answers but yields no reachable server, and a connection lost or unanswered after the statement was sent; for `serve`, a lock it could not take, a socket it could not bind, and a live server already answering there |
 | 2 | No statement supplied (`--query` absent and stdin empty, or `--query` empty/whitespace); or `--socket` supplied with an empty value; or an unknown flag or a positional argument was supplied |
 | 3 | No roadmap selected (`-r` missing/required) |
 | 4 | Roadmap not found (the roadmap given via `-r` does not exist) |

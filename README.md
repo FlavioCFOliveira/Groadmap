@@ -659,7 +659,46 @@ measurement: `EXPLAIN` carries the planner's `estimatedRows`, `PROFILE` carries 
 measured `rows`, `timeNs` and `dbHits`. An `EXPLAIN` executes nothing, so it never
 carries the `counters` a real write reports. A `PROFILE` of a **writing** statement is
 refused, because profiling it would mean committing it, and neither prefix is accepted
-on a schema statement. See [DOCS/commands/graph.md](DOCS/commands/graph.md#query-plans-explain-and-profile).
+on a schema statement.
+
+Two presence rules decide what a `profile` figure means, and both are read wrongly at
+first sight: an **absent** `dbHits` means nobody counted that operator's storage
+accesses rather than that there were none, and a `rowsRemovedByFilter` of `0` is a
+genuine finding while its **absence** means the operator has no rejection mechanism at
+all. `timeNs` is inclusive of an operator's children, so summing a tree double-counts
+every level. See [DOCS/commands/graph.md](DOCS/commands/graph.md#query-plans-explain-and-profile).
+
+**Is there a limit on how long a graph field can be?**
+
+Yes — a field goes into two durable formats and they do not bound it alike. Both bounds
+are the engine's rather than Groadmap's, which checks no field length and cannot, because
+a statement's fields are the values its expressions produce. A committed write goes into
+a write-ahead log; a later checkpoint folds the committed state into a snapshot. The log
+bounds a label or a property key at 65535 bytes and a property value at 4294967295
+bytes; the snapshot bounds a label or a key at 1 MiB and a property value at 1 GiB. **For a property value the snapshot binds at a quarter of the
+log's figure, and 1 GiB is the number to write under.**
+
+The two bounds fail differently, and that is the part worth knowing:
+
+- **Too long for the log** and the commit is refused. Nothing is written, the store stays
+  usable, and the invocation exits 1 with a line of its own rather than the general
+  parse-or-execution one:
+  `Error: graph engine error: graph field too long; nothing was written. Shorten the field the engine names: <engine diagnostic>`
+- **Short enough to commit and too long to fold** — a property value between 1 GiB and
+  4 GiB — and the write succeeds and exits 0, and then **every checkpoint of that graph
+  fails from that moment on**. Unlike every other checkpoint failure this one cannot
+  heal, because the offending field is committed graph state: the write-ahead log is
+  never folded again and never reclaimed, so it grows and every open replays more of it.
+  A diagnostic beside the success says so, and it recurs on every subsequent write until
+  a statement shortens or removes the field.
+
+Through a **running server** the first of the two prints the general `graph query
+failed: ` line carrying generic internal-error text instead: the engine's Bolt server
+classifies the refusal as its own fault and replaces the message, so the field and the
+figures reach that server's stderr rather than the caller. It is the same failure — exit
+code 1, nothing written — and `rmp graph client`, which always crosses a server, never
+prints the specific line. See
+[DOCS/commands/graph.md](DOCS/commands/graph.md#how-long-a-field-may-be).
 
 **What does `rmp graph serve` do, and do I need it?**
 
