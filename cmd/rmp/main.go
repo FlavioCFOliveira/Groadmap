@@ -44,7 +44,7 @@ import (
 )
 
 const (
-	version = "1.15.2"
+	version = "2.0.0"
 	appName = "Groadmap"
 )
 
