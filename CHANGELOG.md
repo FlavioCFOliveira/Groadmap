@@ -5,7 +5,7 @@ All notable changes to **Groadmap** (`rmp`) are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [2.0.0] - 2026-09-06
+## [1.16.0] - 2026-09-07
 
 ### Added
 
@@ -406,7 +406,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Notes
 
-- **Why this is `2.0.0` and not `1.16.0`.** `SPEC/VERSION.md` defines `MAJOR` as
+- **Why this is `1.16.0`, and what the number does not tell you.** `SPEC/VERSION.md` defines `MAJOR` as
   "incompatible API changes or major architectural changes", and this release contains
   three independent incompatibilities, any one of which would carry the bump on its own:
   1. **Five subcommands were removed with no aliases.** `rmp graph create`,
@@ -436,17 +436,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   bytes it produced before. These are reasons the release is not *more* disruptive than
   it is; none of them is a reason to call it `MINOR`.
 
-- **This is the first Groadmap release whose number is the strict SemVer reading rather
-  than an owner's decision.** `1.15.0` shipped breaking changes as a `MINOR` and `1.15.2`
-  shipped them as a `PATCH`, each by explicit decision recorded at the time. Nothing here
-  overrides SemVer, so this entry records the reasoning rather than an exception to it.
+- **The number is the owner's decision and not the strict reading.** A strict reading of
+  the three incompatibilities above gives `MAJOR`. The project publishes `1.16.0`, by the
+  owner's explicit decision, on the same footing as its two predecessors: `1.15.0` shipped
+  breaking changes as a `MINOR` and `1.15.2` shipped them as a `PATCH`, each recorded at
+  the time rather than inferred later. This entry is that record.
+
+  **So do not read the minor digit as a promise that nothing breaks.** Three things break,
+  they are enumerated above, and the list is the warning the number does not carry. Read
+  **Changed — BREAKING** before upgrading, and in particular before upgrading anything
+  that invokes `rmp graph create`, `query`, `update`, `delete` or `search`, that runs on
+  32-bit ARM, or that matches on the text of an error message.
 
 - **There is no database migration.** The SQLite schema version is unchanged, and the
   graph store's on-disk format takes no version step — the snapshot manifest declares
   `version: 3` under both binaries. The round trip was measured in both directions with
   binaries built from the two tags, rather than assumed: a graph plus a registered index
-  written by `2.0.0` reads back correctly under `1.15.2`, and a graph plus an index
-  written by `1.15.2` reads back correctly under `2.0.0` with the index still `ONLINE`. The one additive
+  written by `1.16.0` reads back correctly under `1.15.2`, and a graph plus an index
+  written by `1.15.2` reads back correctly under `1.16.0` with the index still `ONLINE`. The one additive
   change that an older reader cannot consume — two new columnar wire values for 1- and
   2-byte edge-weight kinds — makes it **refuse the file** rather than misread it, and
   Groadmap writes no edge weights, so it is not reachable through `rmp`.
@@ -3088,7 +3095,7 @@ behaviour.
   AI-contract E2E suite (`tests/test_30_aihelp_contract.py`) to lock in the
   revised help text and contract invariants.
 
-[2.0.0]: https://github.com/FlavioCFOliveira/Groadmap/compare/v1.15.2...v2.0.0
+[1.16.0]: https://github.com/FlavioCFOliveira/Groadmap/compare/v1.15.2...v1.16.0
 [1.15.2]: https://github.com/FlavioCFOliveira/Groadmap/compare/v1.15.1...v1.15.2
 [1.15.1]: https://github.com/FlavioCFOliveira/Groadmap/compare/v1.15.0...v1.15.1
 [1.15.0]: https://github.com/FlavioCFOliveira/Groadmap/compare/v1.14.0...v1.15.0
