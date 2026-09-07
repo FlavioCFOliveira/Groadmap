@@ -130,7 +130,7 @@ const budgetSeedNodes = 600
 // milliseconds. It returns the roadmap name.
 func seedBudgetGraph(t *testing.T, name string) string {
 	t.Helper()
-	t.Setenv("HOME", t.TempDir())
+	t.Setenv("HOME", shortHome(t))
 	t.Cleanup(setupTestGraphRoadmap(t, name))
 
 	seed := fmt.Sprintf("UNWIND range(1,%d) AS i CREATE (:Bulk {i:i})", budgetSeedNodes)

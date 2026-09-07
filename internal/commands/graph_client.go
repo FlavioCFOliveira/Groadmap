@@ -84,11 +84,15 @@ Optional:
   -h, --help              Show this help message
 
 Output (stdout JSON):
-  With result columns:      {"columns": [...], "rows": [[...], ...], "plan": <plan node, EXPLAIN only>, "profile": <plan node, PROFILE only>}
-  Without result columns:   {"ok": true}
+  With result columns:      {"columns": [...], "rows": [[...], ...], "plan": <plan node, EXPLAIN only>, "profile": <plan node, PROFILE only>, "counters": <write counters, only when the statement changed the graph>}
+  Without result columns:   {"ok": true, "counters": <write counters, only when the statement changed the graph>}
   The same shapes, and the same bytes, that rmp graph execute writes.
   A statement written with the EXPLAIN or PROFILE prefix always produces the
   columns shape so that it can carry its plan, even with no column of its own.
+  A statement that changed the graph adds a counters block naming what it
+  changed, identical to the one rmp graph execute publishes for the same
+  statement against the same graph. A zero counter is left out, and a statement
+  that changed nothing carries no counters key at all.
 
 Exit codes:
   0   The statement was sent to a server, ran, and its result was written
@@ -166,6 +170,17 @@ func runGraphClient(args []string) error {
 
 	socket, err := graphSocketInForce(roadmapName, socketFlag)
 	if err != nil {
+		return err
+	}
+	// Settled before the probe, and settled the same way whoever chose the path.
+	// The refusal is not this subcommand's own and does not follow from its
+	// having no second path: it is the one rule every surface applies, so a path
+	// the platform cannot hold fails here exactly as it fails at `graph serve` and
+	// at `graph execute`. What the published line tells the caller is why no
+	// server can EVER answer there, rather than that none happens to be listening
+	// at the moment (SPEC/GRAPH.md § Socket Path Length, rules 5 and 6;
+	// § Server Resolution, rule 12).
+	if err := refuseOverLongSocket(socket); err != nil {
 		return err
 	}
 

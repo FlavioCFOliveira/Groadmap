@@ -88,6 +88,7 @@ module does not know how to reach is a bug in this module, not a silent gap.
 
 import json
 import os
+import tempfile
 import re
 import socket as socketlib
 import sqlite3
@@ -99,7 +100,14 @@ import uuid
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from tests.base_test import GroadmapTestBase, REPO_ROOT, COMMIT_OPEN_HASH, COMMIT_CLOSE_HASH
+from tests.base_test import (GroadmapTestBase, REPO_ROOT, COMMIT_OPEN_HASH,
+                             COMMIT_CLOSE_HASH, measure_socket_path_bound)
+# The socket-path bound is MEASURED, never written down: it is 107 bytes on
+# Linux and Windows and 103 on macOS, FreeBSD and OpenBSD, so a literal here
+# would agree with a hard-coded implementation on one host and confirm the
+# defect on the others. test_68 owns the one measurement (it binds real AF_UNIX
+# listeners at increasing path lengths until one is refused) and this module
+# reuses it rather than growing a second copy that could drift from it.
 
 
 SPEC_PATH = REPO_ROOT / "SPEC" / "COMMANDS.md"
@@ -169,11 +177,30 @@ _CONFLICT_MESSAGE = (
     "committed first"
 )
 
-# A Unix domain socket path is capped at 108 bytes (sun_path). The derived
-# path here is about 80, but a HOME under a long build directory would blow
-# past it and bind would fail with "invalid argument", which reads as a defect
-# in the binary rather than in the harness.
-_MAX_SUN_PATH = 108
+# A Unix domain socket path is bounded by sun_path. The derived path here is
+# about 80 bytes, but a HOME under a long build directory would blow past the
+# bound and bind would fail with "invalid argument", which reads as a defect in
+# the binary rather than in the harness.
+#
+# The bound is MEASURED rather than written down: it is 107 on Linux and Windows
+# and 103 on macOS, FreeBSD and OpenBSD, so the literal 108 this module used to
+# carry was too PERMISSIVE on three of the five operating systems (rmp task
+# #412). base_test owns the one measurement; the result is cached because
+# binding a few hundred sockets once per module is cheap and once per call
+# is not.
+_measured_bound = None
+
+
+def _max_sun_path():
+    """The greatest socket-path length this platform binds, measured once."""
+    global _measured_bound
+    if _measured_bound is None:
+        probe = tempfile.mkdtemp(prefix="sunpath-")
+        try:
+            _measured_bound = measure_socket_path_bound(probe)
+        finally:
+            os.rmdir(probe)
+    return _measured_bound
 
 
 def _pack_string(text):
@@ -268,9 +295,10 @@ class ConflictingBoltServer:
 
     def __enter__(self):
         encoded = os.fsencode(self.socket_path)
-        assert len(encoded) < _MAX_SUN_PATH, (
+        bound = _max_sun_path()
+        assert len(encoded) <= bound, (
             f"the derived socket path is {len(encoded)} bytes, at or over the "
-            f"AF_UNIX sun_path limit of {_MAX_SUN_PATH}: {self.socket_path!r}"
+            f"measured AF_UNIX sun_path bound of {bound}: {self.socket_path!r}"
         )
         self._listener = socketlib.socket(socketlib.AF_UNIX, socketlib.SOCK_STREAM)
         self._listener.bind(self.socket_path)
@@ -497,6 +525,19 @@ SUPPLEMENTAL_CORPUS = [
     # ('Error: validation error: invalid entity type: "X"'), naming the exact
     # literal value (-e) the prose describes.
     ('Error: validation error: invalid entity type: "-e"', 'Error: validation error: invalid entity type: "-e"'),
+    # The socket-path-length line (rmp task #412). It is published in a PROSE
+    # BULLET of `Graph Server Socket Error Lines`, which is that section's
+    # convention -- the section publishes every one of its eight lines that way,
+    # and three of the file's error tables point at it instead of each carrying
+    # a copy. Extraction reads table cells and fenced blocks, so the whole
+    # section is invisible to it and the line arrived as a full contractual
+    # obligation with nothing carrying it forward. This entry is what gates it;
+    # test_graph_socket_path_length_line drives it against all three
+    # subcommands that publish `--socket`.
+    (
+        'Error: graph server error: socket path is too long: <socket> is N bytes and this platform allows at most M. Use --socket to name a shorter path.',
+        'Error: graph server error: socket path is too long: <socket> is N bytes and this platform allows at most M. Use --socket to name a shorter path.',
+    ),
 ]
 
 # Three prose spans that ARE complete, well-formed "Error:" strings but are
@@ -603,6 +644,24 @@ TAIL_EXEMPT_KEYS = {
         "The same failure on the four comment subcommands, narrowed for the "
         "same reason: the head is rmp's and the tail is the operating "
         "system's."
+    ),
+    "Error: graph engine error: graph field too long; nothing was written. Shorten the field the engine names: <engine diagnostic>": (
+        "<engine diagnostic>",
+        "internal/commands/graph.go: the head -- everything up to and "
+        "including \"Shorten the field the engine names: \" -- is rmp's own "
+        "text and is asserted character for character, which is the whole "
+        "point of the row: it is what tells a caller to shorten a value "
+        "rather than to correct the statement's syntax, and it is what the "
+        "parse/execution line above could not distinguish. The tail is the "
+        "engine's own guard message and is not specified by COMMANDS.md, for "
+        "the reason GRAPH.md gives -- it names which field is at fault and by "
+        "how much, and rmp neither trims it nor rewrites it, because trimming "
+        "it would mean parsing it and a match on the engine's wording fails "
+        "silently at the next version bump (GRAPH.md 'Field Length Limits', "
+        "rules 3 and 4). What the tail IS required to carry is the field "
+        "kind, which is the one thing the caller acts on and the one thing "
+        "rmp's half deliberately does not name; the driver writes an "
+        "over-long LABEL and requires the engine to say so."
     ),
     "Error: database error: <detail>": (
         "<detail>",
@@ -2401,6 +2460,70 @@ class TestErrorStringParity:
             note="graph execute bare positional query",
         )
 
+    def test_graph_field_too_long_line(self):
+        """The field-length refusal (rmp task #413).
+
+        A statement writing a label longer than the write-ahead log's length
+        prefix can carry is refused at commit, and the line it writes is a
+        class of its own rather than the parse/execution line beside it: the
+        two were separated only by the engine's diagnostic tail, which
+        COMMANDS.md deliberately declines to specify and which a caller
+        therefore cannot lawfully match, so a caller had to parse English to
+        learn whether to correct the statement's syntax or to shorten one of
+        its values.
+
+        The statement is fed on STDIN rather than as a --query argument. The
+        label alone is 70000 bytes, which is under Linux's 128 KiB
+        MAX_ARG_STRLEN and would probably fit in argv on this host, but
+        nothing in this module needs it to: GRAPH.md's Cypher Input Source and
+        Precedence makes standard input an equally valid source for the same
+        statement, and stdin has no per-argument bound to be near.
+
+        The 70000 bytes are chosen to be over the engine's bound rather than
+        derived from it, and that is a deliberate division of labour: this
+        module asserts the published LINE, and test_69_graph_field_length
+        owns the bound itself, deriving both the refused length and the
+        accepted one from the maximum the refusal reports. If the engine's
+        bound ever rose above 70000 this case would fail loudly here -- the
+        statement would succeed and the head would never be written -- which
+        is the right failure rather than a silent one.
+        """
+        r = self.roadmap
+        over_long_label = "L" * 70000
+        self.check_head(
+            "Error: graph engine error: graph field too long; nothing was written. "
+            "Shorten the field the engine names: <engine diagnostic>",
+            ["graph", "execute", "-r", r], 1,
+            tail_contains=["label"],
+            stdin="CREATE (n:FieldLengthProbe {name:'kept'}) CREATE (m:`" + over_long_label + "`)",
+            note="graph execute writing a label over the log's length prefix",
+        )
+        # The refusal left NOTHING behind -- not even the well-formed element
+        # the statement created before the over-long label. A caller told
+        # "nothing was written" must be able to rely on it
+        # (GRAPH.md "Field Length Limits", rule 5).
+        rc, out, err = self.run_stdin(
+            ["graph", "execute", "-r", r, "--query",
+             "MATCH (n:FieldLengthProbe) RETURN count(n) AS c"])
+        assert rc == 0, f"counting after the refusal failed: rc={rc} err={err!r}"
+        assert '"c"' in out and json.loads(out)["rows"] == [[0]], (
+            f"the refused statement left something behind: {out!r}"
+        )
+        # And a genuine syntax error still writes the parse/execution line,
+        # which is the string EXEMPT_KEYS names: an implementation that routed
+        # every engine failure to the new line would satisfy every assertion
+        # above and break this one.
+        rc, out, err = self.run_stdin(
+            ["graph", "execute", "-r", r, "--query", "CREATE (n:Broken"])
+        assert rc == 1, f"a malformed statement was accepted: rc={rc} out={out!r}"
+        first = err.splitlines()[0] if err else ""
+        assert first.startswith("Error: graph engine error: graph query failed: "), (
+            f"a syntax error no longer writes the parse/execution line: {first!r}"
+        )
+        assert "graph field too long" not in first, (
+            f"a syntax error was reported as a field-length refusal: {first!r}"
+        )
+
     def test_graph_statement_time_budget(self):
         """The statement time budget line, driven rather than exempted
         (SPEC/GRAPH.md § Statement Time Budget; SPEC/COMMANDS.md
@@ -2545,6 +2668,59 @@ class TestErrorStringParity:
     # ------------------------------------------------------------------
     # `rmp web`
     # ------------------------------------------------------------------
+
+    def test_graph_socket_path_length_line(self):
+        """The line a socket path longer than the platform allows publishes.
+
+        The defect it replaced (rmp task #412) printed the operating system's
+        own `bind: invalid argument`, which named the path twice and the cause
+        not at all. The line that replaces it names the path once, the number of
+        bytes it occupies, the number the platform allows, and `--socket` as the
+        remedy.
+
+        BOTH numbers are values this module fixes BEFORE the command runs, as
+        every other placeholder in this corpus is. The length is the length of
+        the path constructed here; the limit is measured by binding real
+        sockets, because it is 107 bytes on Linux and Windows and 103 on macOS,
+        FreeBSD and OpenBSD -- a literal would pass here and confirm the defect
+        on three of the five operating systems the project targets.
+
+        All three subcommands that publish `--socket` are driven, because all
+        three publish this line and the section's contract is one line for one
+        condition (SPEC/GRAPH.md § Socket Path Length, rule 5).
+        """
+        r = self.roadmap
+        key = (
+            "Error: graph server error: socket path is too long: <socket> is N "
+            "bytes and this platform allows at most M. "
+            "Use --socket to name a shorter path."
+        )
+
+        # `graph serve` refuses a roadmap with no graph store before it resolves
+        # the socket, so materialise one -- otherwise that subcommand would never
+        # reach the line under test.
+        code, _, err = self.run_stdin(
+            ["graph", "execute", "-r", r, "--query", "CREATE (:SocketProbe {k: 1})"])
+        assert code == 0, f"seeding the graph failed: exit={code} stderr={err!r}"
+
+        home = str(self.test.home_dir)
+        bound = measure_socket_path_bound(home)
+        socket = os.path.join(home, "s" * (bound + 1 - len(home) - 1))
+        assert len(socket) == bound + 1, (len(socket), bound + 1)
+
+        # N and M are substituted before <socket>, and both as whole words, so a
+        # path cannot have a letter of its own rewritten.
+        subs = {"N": str(len(socket)), "M": str(bound), "<socket>": socket}
+
+        for note, args in (
+            ("graph serve with a socket path over the platform's bound",
+             ["graph", "serve", "-r", r, "--socket", socket]),
+            ("graph client with a socket path over the platform's bound",
+             ["graph", "client", "-r", r, "--socket", socket, "--query", "RETURN 1"]),
+            ("graph execute with a socket path over the platform's bound",
+             ["graph", "execute", "-r", r, "--socket", socket, "--query", "RETURN 1"]),
+        ):
+            self.check(key, args, 1, subs=subs, note=note)
 
     def test_graph_store_lock_busy_line(self):
         """The lock line an `execute` meets when a server holds the store.

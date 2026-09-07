@@ -2043,10 +2043,34 @@ func loadGraphView(ctx context.Context, name, rawQuery, rawLimit string) (graphV
 	// surfaces that take this checkpoint cannot come to disagree about when it
 	// runs.
 	if _, cperr := st.Checkpoint(); cperr != nil {
-		slog.Error("graph checkpoint failed", "roadmap", name, "err", cperr)
+		slog.Error(graphCheckpointLogMessage(cperr), "roadmap", name, "err", cperr)
 	}
 
 	return view, nil
+}
+
+// graphCheckpointLogMessage words a failed synchronous checkpoint for the server
+// log, and chooses between the two conditions a checkpoint can be in.
+//
+// The request still answers 200 either way: a checkpoint failure after a durable
+// commit MUST NOT fail the request, which is the web analogue of the CLI's stderr
+// diagnostic beside exit code 0 (SPEC/GRAPH.md § Synchronous Checkpoint on Write,
+// failure policy). What the two branches differ on is whether the condition can
+// clear. The general one may succeed the next time a checkpoint runs; a field the
+// snapshot format refuses is committed graph state, so it refuses every later
+// checkpoint too, until a statement removes or shortens it
+// (SPEC/GRAPH.md § Field Length Limits, rules 6 and 9).
+//
+// The wording of that branch is graphstore's, shared with the CLI's warning and
+// with the graph server's shutdown checkpoint, so the four things rule 9 requires
+// are said once. The engine's own error is not folded in here: it stays the "err"
+// attribute this endpoint already logs, which is where a reader of structured
+// output looks for which field is at fault.
+func graphCheckpointLogMessage(err error) string {
+	if graphstore.CheckpointRefusedFieldTooLong(err) {
+		return graphstore.FieldTooLongCheckpointDiagnostic("the graph checkpoint")
+	}
+	return "graph checkpoint failed"
 }
 
 // resolveGraphServerForRequest probes the roadmap's derived socket and reports
@@ -2055,11 +2079,10 @@ func loadGraphView(ctx context.Context, name, rawQuery, rawLimit string) (graphV
 //
 // The rule and the probe are internal/graphclient's — the ONE realisation
 // SPEC/ARCHITECTURE.md module 9 fixes and the one every surface follows. What
-// this function adds is the outcome THIS surface reports for the one failing
-// state, because a status code is the web's own business: a socket that answers
-// and yields no server is an internal read error, HTTP 500, and is emphatically
-// not a reason to open the store — the socket may belong to a server holding the
-// lock (SPEC/WEB.md § Knowledge Graph from the GoGraph Store, rule 1).
+// this function adds is the outcome THIS surface reports for the two failing
+// conditions, because a status code is the web's own business: both are internal
+// read errors, HTTP 500, and neither is a reason to open the store
+// (SPEC/WEB.md § Knowledge Graph from the GoGraph Store, rule 1).
 //
 // The two definite negatives — no socket, and a socket file a killed server left
 // behind — are the direct path, and the leftover file is neither an error nor
@@ -2068,6 +2091,42 @@ func resolveGraphServerForRequest(ctx context.Context, name string) (string, err
 	socket, err := graphclient.SocketPath(name)
 	if err != nil {
 		return "", err
+	}
+	// A derived path longer than the platform allows a socket path to be REFUSES
+	// the request, and is settled here, before the probe. No process can bind such
+	// a path, so probing it could tell this handler nothing it does not already
+	// know — and what it knows is not one of the two definite negatives. Those
+	// report that no server is listening now; this reports that none can ever
+	// listen there, which is a different fact and is not served by the answer the
+	// first one gets (SPEC/GRAPH.md § Socket Path Length, rules 5 and 6;
+	// § Server Resolution, rule 12).
+	//
+	// The refusal binds this surface, which needs no socket, as it binds the ones
+	// that do, and the reason is what the condition IS. A roadmap whose derived
+	// socket path cannot be bound has a real and permanent fault in its layout: no
+	// server can ever be started for it, and nothing a request does changes that.
+	// Reading the unbindable path as "merely not served" would have reported that
+	// fault at `rmp graph serve` and concealed it here, leaving an operator to
+	// watch the server fail while the page worked, with no reason to connect the
+	// two.
+	//
+	// The cost is stated rather than avoided (SPEC/WEB.md § Knowledge Graph from
+	// the GoGraph Store, rule 1): this endpoint publishes no --socket flag and has
+	// nowhere to receive one (§ Socket Path and Permissions, rule 2), so unlike
+	// the command line it cannot be pointed at a shorter path. The graph page
+	// still renders and every fetch it makes for this roadmap is refused, for as
+	// long as the derived path is what it is; the only remedy is a shorter home
+	// directory or a shorter roadmap name.
+	//
+	// utils.ErrGraphServer carries it to the handler's internal-error branch, HTTP
+	// 500 — the status this endpoint already returns for a graph it cannot serve.
+	// It is deliberately NOT a graphQueryError: those are the 400s, and they carry
+	// a kind because a statement of the caller's failed. This request never
+	// reached a statement.
+	if graphclient.SocketPathTooLong(socket) {
+		return "", fmt.Errorf("%w: the socket path derived for roadmap %q cannot be bound: %s is "+
+			"%d bytes and this platform allows at most %d, so no graph server can ever listen there",
+			utils.ErrGraphServer, name, socket, len(socket), graphclient.MaxSocketPathLen)
 	}
 	state, probeErr := graphclient.Resolve(ctx, socket)
 	switch {

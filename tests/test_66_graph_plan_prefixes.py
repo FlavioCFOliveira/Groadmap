@@ -220,9 +220,20 @@ class TestPlanPrefixesOnExecute(PlanPrefixBase):
             f"and exactly the two keys it always published. Got {sorted(read)!r}")
 
         write = self.execute("CREATE (:Spec {key:'DEPLOY.md', status:'draft'})")
-        assert write == {"ok": True}, (
-            "an unprefixed write still publishes exactly {\"ok\": true}: the "
-            f"discriminator is departed from only where a plan must be carried. Got {write!r}")
+        assert "plan" not in write and "profile" not in write, (
+            f"an unprefixed write publishes neither member either. Got {write!r}")
+        # `ok` keeps its meaning, its value and its position, and the one member
+        # additive to it is the counters of what the write applied
+        # (SPEC/DATA_FORMATS.md "Graph Write Result"). The key set is asserted
+        # in full, as it was before that member existed, so a THIRD key still
+        # fails here.
+        assert write == {
+            "ok": True,
+            "counters": {"nodesCreated": 1, "propertiesWritten": 2, "labelsAdded": 1},
+        }, (
+            "an unprefixed write still publishes {\"ok\": true}, now beside the "
+            "counters of the node it created: the discriminator is departed from "
+            f"only where a plan must be carried. Got {write!r}")
 
 
 class TestPlanPrefixParityAcrossSurfaces(PlanPrefixBase):
@@ -284,6 +295,107 @@ class TestPlanPrefixParityAcrossSurfaces(PlanPrefixBase):
             f"prefixed writing statement.\nexecute:\n{direct_out}\nclient:\n{client_out}")
         assert "ok" not in json.loads(client_out), (
             "and neither may claim a write that did not happen")
+
+
+class TestWriteCounterParityAcrossSurfaces(PlanPrefixBase):
+    """The counters identity, asserted on complete stdout.
+
+    Unlike the plan comparison above there is no clock in this object, so
+    nothing is excused and nothing is stripped: the two surfaces publish the
+    same bytes or one of them is wrong
+    (SPEC/DATA_FORMATS.md "Graph Client Result", rule 6;
+    SPEC/GRAPH.md "Write Counters: What a Statement Changed", rule 2).
+    """
+
+    # A gauge carrying both a property to reassign and a property to remove, so
+    # that one statement exercises BOTH engine property counters.
+    GAUGE = "CREATE (:Gauge {serial:'G-1', reading:1, spare:'x'})"
+    # The mixed statement. A check over a pure SET would pass on an
+    # implementation that folded the two property counters on one path and not
+    # the other, which is the one way these two surfaces could still disagree.
+    MIXED = "MATCH (g:Gauge {serial:'G-1'}) SET g.reading = 12 REMOVE g.spare"
+    # Puts the gauge back exactly as the seed left it, so the second surface
+    # runs the same statement against the same graph state rather than against
+    # what the first surface left behind.
+    RESTORE = "MATCH (g:Gauge {serial:'G-1'}) SET g.reading = 1, g.spare = 'x'"
+
+    def test_a_write_is_byte_identical_across_both_surfaces(self):
+        """A CREATE runs identically twice, so no restoration is needed: each
+        surface creates its own node and each reports the same effects."""
+        create = "CREATE (:Widget {serial:'A-1', batch:7})"
+
+        direct_rc, direct_out, direct_err = self.run_cli(
+            ["graph", "execute", "-r", self.roadmap, "--query", create])
+        assert direct_rc == EXIT_OK, f"execute failed: exit={direct_rc} stderr={direct_err!r}"
+
+        server = self.start_server()
+        client_rc, client_out, client_err = self.run_cli(
+            ["graph", "client", "-r", self.roadmap, "--socket", server.socket,
+             "--query", create])
+        assert client_rc == EXIT_OK, f"client failed: exit={client_rc} stderr={client_err!r}"
+
+        assert direct_out == client_out, (
+            "`rmp graph client` must write the bytes `rmp graph execute` writes for "
+            "the same writing statement, counters included and with nothing "
+            "excluded.\n"
+            f"execute:\n{direct_out}\nclient:\n{client_out}")
+        assert json.loads(direct_out) == {
+            "ok": True,
+            "counters": {"nodesCreated": 1, "propertiesWritten": 2, "labelsAdded": 1},
+        }, f"and the object itself must be the specified one. Got {direct_out!r}"
+
+    def test_a_mixed_property_write_is_byte_identical_across_both_surfaces(self):
+        rc, _out, err = self.run_cli(
+            ["graph", "execute", "-r", self.roadmap, "--query", self.GAUGE])
+        assert rc == EXIT_OK, f"seeding the gauge failed: exit={rc} stderr={err!r}"
+
+        direct_rc, direct_out, direct_err = self.run_cli(
+            ["graph", "execute", "-r", self.roadmap, "--query", self.MIXED])
+        assert direct_rc == EXIT_OK, f"execute failed: exit={direct_rc} stderr={direct_err!r}"
+
+        rc, _out, err = self.run_cli(
+            ["graph", "execute", "-r", self.roadmap, "--query", self.RESTORE])
+        assert rc == EXIT_OK, f"restoring the gauge failed: exit={rc} stderr={err!r}"
+
+        server = self.start_server()
+        client_rc, client_out, client_err = self.run_cli(
+            ["graph", "client", "-r", self.roadmap, "--socket", server.socket,
+             "--query", self.MIXED])
+        assert client_rc == EXIT_OK, f"client failed: exit={client_rc} stderr={client_err!r}"
+
+        assert direct_out == client_out, (
+            "a statement that assigns one property and removes another must publish "
+            "the same folded figure on both surfaces. The protocol carries one "
+            "property counter and no counterpart for a removal, so a surface that "
+            "did not fold would report 1 here where the other reports 2 "
+            '(SPEC/GRAPH.md "Write Counters: What a Statement Changed", rules 6 '
+            "to 9).\n"
+            f"execute:\n{direct_out}\nclient:\n{client_out}")
+        assert json.loads(direct_out) == {
+            "ok": True, "counters": {"propertiesWritten": 2},
+        }, (
+            "the assignment and the removal are ONE figure of 2, published under a "
+            f"key named for the sum. Got {direct_out!r}")
+
+    def test_a_read_carries_no_counters_on_either_surface(self):
+        """The compatibility half, across both surfaces: a read is unchanged in
+        every byte, and it was the bytes an existing consumer parsed."""
+        direct_rc, direct_out, direct_err = self.run_cli(
+            ["graph", "execute", "-r", self.roadmap, "--query", READ])
+        assert direct_rc == EXIT_OK, f"execute failed: exit={direct_rc} stderr={direct_err!r}"
+
+        server = self.start_server()
+        client_rc, client_out, client_err = self.run_cli(
+            ["graph", "client", "-r", self.roadmap, "--socket", server.socket,
+             "--query", READ])
+        assert client_rc == EXIT_OK, f"client failed: exit={client_rc} stderr={client_err!r}"
+
+        assert direct_out == client_out, (
+            f"a read must be identical across both surfaces.\n"
+            f"execute:\n{direct_out}\nclient:\n{client_out}")
+        assert set(json.loads(direct_out)) == {"columns", "rows"}, (
+            "a statement that changed nothing carries no `counters` key at all, on "
+            f"either surface. Got {direct_out!r}")
 
 
 def _run_all():

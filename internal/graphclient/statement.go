@@ -239,6 +239,16 @@ type Result struct {
 	Plan    *exec.PlanNode
 	Profile *exec.PlanNode
 
+	// Counters is what the statement changed in the graph, nil when it changed
+	// nothing — which is what the server's omission of the statistics map means
+	// and what a read produces (SPEC/GRAPH.md § Write Counters: What a Statement Changed, rule 4).
+	//
+	// It joins the pointer prefix for the alignment reason the two plan pointers
+	// are there for, and it is the engine's own representation for the reason
+	// they are: the step from here to the published JSON is the one realisation
+	// every surface shares, so this surface adds no second opinion about it.
+	Counters *exec.QueryCounters
+
 	Columns       []string
 	Rows          [][]expr.Value
 	Notifications []Notification
@@ -521,6 +531,12 @@ func (s *session) run(ctx context.Context, statement string) (*Result, error) {
 			// is. At most one of the two keys is ever written.
 			result.Plan = planOf(m.Metadata, "plan")
 			result.Profile = planOf(m.Metadata, "profile")
+			// Same message, same window, same reason: the write effects are
+			// final only once the statement is, so the server computes them for
+			// the SUCCESS that terminates the stream and writes them beside the
+			// notifications and the plan. The key is absent whenever the
+			// statement changed nothing.
+			result.Counters = countersOf(m.Metadata)
 			return result, nil
 		default:
 			return nil, s.responseFailure(ctx, response)

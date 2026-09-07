@@ -106,7 +106,8 @@ import time
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from tests.base_test import GroadmapTestBase
+from tests.base_test import (GroadmapTestBase, assert_graph_write_shape,
+                             measure_socket_path_bound)
 
 
 EXIT_OK = 0
@@ -177,26 +178,47 @@ STATEMENT_BUDGET_S = 5.0
 # and 9.2s.
 BACKSTOP_FREEZE_DELAYS_S = (0.4, 1.0, 2.0)
 
-# A Unix domain socket path is capped at 108 bytes on Linux -- sun_path's
-# size -- and a HOME rooted under a long build/session directory blows past
-# it the moment a roadmap name is appended (rmp task #367 FINDING #266,
-# measured there against exactly this failure). tempfile.mkdtemp() defaults
-# to $TMPDIR or /tmp, which is short; this constant is the guard that turns a
-# violation into a diagnosable setup failure instead of a mysterious "bind:
-# invalid argument" deep inside a signal-handling test.
-_MAX_SUN_PATH = 108
+# A Unix domain socket path is bounded by sun_path, and a HOME rooted under a
+# long build/session directory blows past it the moment a roadmap name is
+# appended (rmp task #367 FINDING #266, measured there against exactly this
+# failure). tempfile.mkdtemp() defaults to $TMPDIR or /tmp, which is short;
+# this guard turns a violation into a diagnosable setup failure instead of a
+# mysterious "bind: invalid argument" deep inside a signal-handling test.
+#
+# The bound is MEASURED rather than written down. This module used to declare
+# 108 -- Linux's sun_path size -- which is right here and too PERMISSIVE on
+# macOS, FreeBSD and OpenBSD, where the bound is 103 (rmp task #412). A guard
+# that is too permissive is worse than none: it passes, and then the failure it
+# exists to explain arrives anyway, with the errno it exists to replace.
+# base_test owns the one measurement; the result is cached because binding a
+# few hundred sockets once per module is cheap and once per call is not.
+_measured_bound = None
+
+
+def _max_sun_path() -> int:
+    """The greatest socket-path length this platform binds, measured once."""
+    global _measured_bound
+    if _measured_bound is None:
+        probe = tempfile.mkdtemp(prefix="sunpath-")
+        try:
+            _measured_bound = measure_socket_path_bound(probe)
+        finally:
+            os.rmdir(probe)
+    return _measured_bound
 
 
 def _assert_socket_path_fits(path: str):
-    """Guard the trap SPEC/GRAPH.md documents: a derived socket path over 108
-    bytes fails to bind for a reason ("bind: invalid argument") that gives no
-    hint the path itself is the cause. Failing here, with the path and its
-    length spelled out, is what makes that diagnosable instead of mysterious.
+    """Guard the trap SPEC/GRAPH.md documents: a derived socket path over the
+    platform's bound fails to bind for a reason ("bind: invalid argument") that
+    gives no hint the path itself is the cause. Failing here, with the path and
+    its length spelled out, is what makes that diagnosable instead of
+    mysterious.
     """
     encoded = os.fsencode(path)
-    assert len(encoded) < _MAX_SUN_PATH, (
-        f"derived socket path is {len(encoded)} bytes, at or over the "
-        f"AF_UNIX sun_path limit of {_MAX_SUN_PATH}: {path!r}. The harness "
+    bound = _max_sun_path()
+    assert len(encoded) <= bound, (
+        f"derived socket path is {len(encoded)} bytes, over this platform's "
+        f"measured AF_UNIX sun_path bound of {bound}: {path!r}. The harness "
         f"must use a short HOME (tempfile.mkdtemp() under $TMPDIR/tmp) and a "
         f"short roadmap name."
     )
@@ -463,6 +485,25 @@ class GraphServeProcess:
 
     def is_alive(self) -> bool:
         return self.proc is not None and self.proc.poll() is None
+
+    def drain_stderr_to_eof(self, timeout: float = 5.0):
+        """Block until the server's stderr pipe reaches EOF, so a caller that
+        has already seen the process exit can read the WHOLE stream rather
+        than whatever the draining thread happened to have collected.
+
+        The drain runs on its own thread, so `proc.wait()` returning does not
+        mean the last line has been appended. Every assertion that compares the
+        COMPLETE stderr -- rather than searching it for a fragment -- has to
+        close that window first, or it races the thread and fails
+        intermittently on a line that did arrive.
+
+        `_StreamDrain._run` puts a `None` sentinel on the queue at EOF, so
+        waiting for a predicate nothing satisfies returns exactly when the pipe
+        closes (or when `timeout` elapses, which a caller that has already
+        observed the exit can treat as a drained stream).
+        """
+        if self._err is not None:
+            self._err.wait_for(lambda _line: False, timeout)
 
     def stderr_text(self) -> str:
         return self._err.text() if self._err else ""
@@ -970,7 +1011,12 @@ class TestGraphClient(GraphServerTestBase):
              "CREATE (c)-[:GOVERNED_BY]->(d)"]
         )
         assert rc == EXIT_OK, f"got {rc}, stderr={err!r}"
-        assert json.loads(out) == {"ok": True}, out
+        # One SET, one labelled two-property node, one relationship: the whole
+        # of what the statement applied, published beside the {"ok": true}.
+        assert_graph_write_shape(
+            json.loads(out), "a multi-clause write through a running server",
+            {"nodesCreated": 1, "relationshipsCreated": 1,
+             "propertiesWritten": 3, "labelsAdded": 1})
 
         rc2, out2, err2 = self.run_cli(
             ["graph", "client", "-r", roadmap, "--query",
@@ -1181,7 +1227,10 @@ class TestExecuteRoutesThroughServer(GraphServerTestBase):
              "CREATE (c)-[:GOVERNED_BY]->(a)"]
         )
         assert rc == EXIT_OK, f"execute against a served roadmap must succeed; err={err!r}"
-        assert json.loads(out) == {"ok": True}, out
+        assert_graph_write_shape(
+            json.loads(out), "execute routed to a running server",
+            {"nodesCreated": 1, "relationshipsCreated": 1,
+             "propertiesWritten": 2, "labelsAdded": 1})
 
         rc2, out2, err2 = self.run_cli(
             ["graph", "client", "-r", roadmap, "--query",
@@ -1650,7 +1699,10 @@ class TestDurabilityAcrossKill(GraphServerTestBase):
                  f"CREATE (p)-[:GOVERNED_BY]->(s)"]
             )
             assert rc == EXIT_OK, f"{key}: exit={rc} err={err!r}"
-            assert json.loads(out) == {"ok": True}, out
+            assert_graph_write_shape(
+                json.loads(out), f"{key}: a write through a running server",
+                {"nodesCreated": 1, "relationshipsCreated": 1,
+                 "propertiesWritten": 2, "labelsAdded": 1})
 
         server.kill_dash_9()
         assert os.path.exists(socket_path), "a SIGKILLed server must leave a stale socket"
@@ -1708,7 +1760,7 @@ class TestConcurrentClients(GraphServerTestBase):
         for i, proc in enumerate(writers):
             out, err = proc.communicate(timeout=20.0)
             assert proc.returncode == EXIT_OK, f"writer {i}: exit={proc.returncode} err={err!r}"
-            assert json.loads(out) == {"ok": True}, out
+            assert_graph_write_shape(json.loads(out), f"writer {i}")
         for i, proc in enumerate(readers):
             out, err = proc.communicate(timeout=20.0)
             assert proc.returncode == EXIT_OK, f"reader {i}: exit={proc.returncode} err={err!r}"
@@ -1826,7 +1878,12 @@ class TestHotNodeContention(GraphServerTestBase):
         )
 
         # A write that reports success must have reported the write shape.
-        wrong_shape = [o for o in outcomes if json.loads(o[2]) != {"ok": True}]
+        def is_write_shape(stdout):
+            result = json.loads(stdout)
+            return (isinstance(result, dict) and result.get("ok") is True
+                    and not set(result) - {"ok", "counters"})
+
+        wrong_shape = [o for o in outcomes if not is_write_shape(o[2])]
         assert not wrong_shape, (
             f"{len(wrong_shape)} invocation(s) exited 0 without the write "
             f"result shape; first: {wrong_shape[0][2]!r}"

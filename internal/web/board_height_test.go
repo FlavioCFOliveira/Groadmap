@@ -292,7 +292,7 @@ func TestFullHeightShell_ChainFromTheViewportToTheBoardIsComplete(t *testing.T) 
 // between them, and a chain broken at that link leaves the board sizing itself to
 // its content with no rule having changed.
 func TestTasksPage_BoardSitsInTheFullHeightShellChain(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	t.Setenv("HOME", shortHome(t))
 	name := seedRoadmap(t, "platform-core")
 	mux := buildMux()
 	path := "/roadmaps/" + name + "/tasks"
@@ -338,7 +338,7 @@ func TestTasksPage_BoardSitsInTheFullHeightShellChain(t *testing.T) {
 // the page body's own height accounts for, and wrapped in an element of its own it
 // would break `.page-body > .container-xl` exactly as an inserted wrapper would.
 func TestGraphPage_CardSitsInTheFullHeightShellChain(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	t.Setenv("HOME", shortHome(t))
 	name := seedRoadmap(t, "platform-core")
 	mux := buildMux()
 	path := "/roadmaps/" + name + "/graph"

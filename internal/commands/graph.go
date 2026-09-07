@@ -48,12 +48,38 @@ type graphQueryResult struct {
 	// (SPEC/DATA_FORMATS.md § Graph Query Result, SPEC/GRAPH.md § Query Plans).
 	Plan    *graphjson.PlanNode `json:"plan,omitempty"`
 	Profile *graphjson.PlanNode `json:"profile,omitempty"`
+
+	// Counters names what the statement changed, and is nil — so the key is
+	// absent — for every statement that changed nothing, which is what a read
+	// and an EXPLAIN both are. It is written LAST because the member is additive:
+	// columns and rows keep their meanings and their positions, so an existing
+	// parser needs no change (SPEC/DATA_FORMATS.md § Graph Query Counters,
+	// rule 3). It never appears beside plan or profile, and neither surface has
+	// to arrange that: an EXPLAIN applies nothing and the engine refuses a
+	// PROFILE of a writing statement (rule 5).
+	Counters *graphjson.Counters `json:"counters,omitempty"`
 }
 
 // graphOKResult is the JSON shape returned by write subcommands whose
 // query has no RETURN clause.
+//
+// The field order is the JSON KEY order here too, for the same reason it is on
+// graphQueryResult: `ok` keeps its meaning, its value and its position, and the
+// counters follow it (SPEC/DATA_FORMATS.md § Graph Write Result;
+// § Graph Query Counters, rule 3). fieldalignment would have the pointer lead,
+// which would publish `counters` before `ok`; the published order is worth more
+// than the pointer-scan prefix of a struct built once per invocation, exactly as
+// it is on graphQueryResult above.
+//
+//nolint:govet // fieldalignment: field order is the published JSON key order.
 type graphOKResult struct {
 	OK bool `json:"ok"`
+
+	// Counters is nil for a statement that changed nothing, which is what a
+	// MERGE that matched and a DELETE that matched no row both are. Such a
+	// statement therefore still publishes exactly {"ok": true} — the bytes it
+	// published before this member existed.
+	Counters *graphjson.Counters `json:"counters,omitempty"`
 }
 
 // maxQueryBytes is the maximum length of a Cypher query: 1 MiB, which is
@@ -137,9 +163,9 @@ Options:
 
 Output (stdout JSON):
   Statement that produces result columns:
-    {"columns": [...], "rows": [[...], ...], "plan": <plan node, EXPLAIN only>, "profile": <plan node, PROFILE only>}
+    {"columns": [...], "rows": [[...], ...], "plan": <plan node, EXPLAIN only>, "profile": <plan node, PROFILE only>, "counters": <write counters, only when the statement changed the graph>}
   Statement that produces none:
-    {"ok": true}
+    {"ok": true, "counters": <write counters, only when the statement changed the graph>}
   Server startup:
     {"socket": "<path>"}
 
@@ -147,6 +173,14 @@ Output (stdout JSON):
   always produces the columns shape, whether or not it declares a column.
   EXPLAIN executes nothing and reports the plan the engine would run; PROFILE
   runs the statement and reports what the run measured.
+
+  A statement that changed the graph adds a counters block naming what it
+  changed: nodesCreated, nodesDeleted, relationshipsCreated,
+  relationshipsDeleted, propertiesWritten, labelsAdded, labelsRemoved,
+  indexesAdded, indexesRemoved, constraintsAdded, constraintsRemoved. A counter
+  that is zero is left out, and a statement that changed nothing -- every read,
+  a MERGE that matched, a DELETE that matched no row -- carries no counters key
+  at all.
 
 Exit codes:
   0   Success
@@ -256,13 +290,18 @@ Optional:
   -h, --help              Show this help message
 
 Output (stdout JSON):
-  With result columns:      {"columns": [...], "rows": [[...], ...], "plan": <plan node, EXPLAIN only>, "profile": <plan node, PROFILE only>}
-  Without result columns:   {"ok": true}
+  With result columns:      {"columns": [...], "rows": [[...], ...], "plan": <plan node, EXPLAIN only>, "profile": <plan node, PROFILE only>, "counters": <write counters, only when the statement changed the graph>}
+  Without result columns:   {"ok": true, "counters": <write counters, only when the statement changed the graph>}
   A statement carrying a RETURN clause produces columns and one without it does
   not; SHOW INDEXES and SHOW CONSTRAINTS produce columns although they carry no
   RETURN clause.
   A statement written with the EXPLAIN or PROFILE prefix always produces the
   columns shape so that it can carry its plan, even with no column of its own.
+  A statement that changed the graph adds a counters block naming what it
+  changed -- nodes and relationships created and deleted, properties written,
+  labels added and removed, indexes and constraints added and removed. A zero
+  counter is left out, and a statement that changed nothing carries no counters
+  key at all, so a MERGE that created is distinguishable from one that matched.
 
 Exit codes:
   0   Success
@@ -673,6 +712,14 @@ func serializeGraphResult(result *cypher.Result) (graphQueryResult, error) {
 	// non-nil, so an estimate can never be published as a measurement.
 	out.Plan = graphjson.Plan(result.Plan(), false)
 	out.Profile = graphjson.Plan(result.Profile(), true)
+	// The counters are read in the same window and for the same two reasons: the
+	// write path accumulates them as the operators run, so they are final only
+	// once every operator has been driven to exhaustion, and the commit releases
+	// the result, so a read after it is a read of something that no longer exists
+	// (SPEC/GRAPH.md § Write Counters: What a Statement Changed, rule 1). The mapping returns nil for a
+	// statement that changed nothing, so the accessor's result is handed over
+	// unconditionally.
+	out.Counters = graphjson.CountersOf(result.Counters())
 	return out, nil
 }
 
@@ -687,6 +734,34 @@ func serializeGraphResult(result *cypher.Result) (graphQueryResult, error) {
 // the STATEMENT rather than on the store or the server. The graph feature
 // introduces no new exit CODE, and may not (SPEC/GRAPH.md § Constraints, rule 5;
 // § Schema Failure Classes, rule 6). Only the message differs.
+//
+// **A field the engine refuses as too long for the write-ahead log is the third
+// message, and it is the only one of the three that ends in the engine's own
+// text.** The other two are wholly rmp's, because rmp knows the whole of what
+// they report; this one cannot be, because the caller must be told WHICH of the
+// statement's fields is at fault and by how much, and only the engine knows that.
+// So rmp writes the class, the fact that nothing was written and the action to
+// take, and then hands over: the engine's diagnostic follows unchanged,
+// untrimmed and LAST, which is where every other line carrying an engine or
+// operating-system diagnostic puts it and what lets a test assert the whole of
+// rmp's half and none of the engine's. Both halves therefore say the field is
+// too long, and that echo is deliberate — trimming it would mean parsing it, and
+// a match on the engine's wording fails silently at the next version bump
+// (SPEC/GRAPH.md § Field Length Limits, rules 3 and 4).
+//
+// The class exists because without it the two conditions were separated only by
+// that diagnostic tail, which SPEC/GRAPH.md § Error Handling and Exit Codes,
+// rule 2, deliberately declines to specify and which a caller therefore cannot
+// lawfully match: a caller reading "graph query failed: " had to parse English to
+// learn whether to correct the statement's syntax or to shorten one of its
+// values. That is the same defect, and the same remedy, as the statement time
+// budget above.
+//
+// The RECOGNITION is graphstore's, not this function's, and it is a sentinel
+// rather than a string match. Two neighbouring refusals — an over-long node key
+// and an over-large assembled log frame — are genuine length refusals that this
+// class MUST NOT absorb, and matching the sentinel and nothing else is what keeps
+// them on the ordinary line (SPEC/GRAPH.md § Field Length Limits, rule 10).
 //
 // **All three arrival points are classified, and the walk is the one that
 // matters.** The engine streams a disconnected pattern's tuples as the result is
@@ -717,6 +792,10 @@ func graphStatementError(budget time.Duration, stage string, err error) error {
 		return fmt.Errorf("%w: graph query exceeded the %s statement time budget; nothing was "+
 			"written. Narrow the statement — add a label, an indexed property filter, or a "+
 			"LIMIT — or split it into smaller statements.", utils.ErrGraphEngine, budget)
+	}
+	if graphstore.CommitRefusedFieldTooLong(err) {
+		return fmt.Errorf("%w: graph field too long; nothing was written. Shorten the field the "+
+			"engine names: %v", utils.ErrGraphEngine, err)
 	}
 	return fmt.Errorf("%w: %s: %v", utils.ErrGraphEngine, stage, err)
 }
@@ -806,12 +885,32 @@ func runGraphExecute(args []string) error {
 	if err != nil {
 		return err
 	}
+	// The path's LENGTH is settled first, before the probe, and it is the one
+	// point at which the second path is not taken: a resolved path over the
+	// platform's bound fails the invocation rather than falling back, whether the
+	// caller named it through --socket or it was derived from the roadmap
+	// (SPEC/GRAPH.md § Socket Path Length, rules 5 and 6; § Server Resolution,
+	// rule 12).
+	//
+	// These two calls used to be one helper, servedOnResolvedSocket, and it is
+	// gone rather than repaired. The whole of its content was the branch on WHO
+	// CHOSE THE PATH; with that branch withdrawn what remained was a wrapper over
+	// the two calls below — and runGraphClient writes those same two calls out, in
+	// the same order, in graph_client.go. Two spellings of one sequence is how the
+	// two come to differ, and the sequence is now identical by rule rather than by
+	// coincidence: refuse the path, then probe it. What separates the two
+	// subcommands is the LAST step alone — this one takes the direct path against
+	// a roadmap nothing is serving, and `graph client` fails there — and that
+	// difference is better read here than folded into a name.
+	if err := refuseOverLongSocket(socket); err != nil {
+		return err
+	}
 	state, err := resolveGraphServer(socket)
 	if err != nil {
-		// The socket answered and yielded no server. This is a FAILURE and not a
-		// fall back: the socket may belong to a server holding the lock, so
-		// opening the store here would wait the whole wait budget and then fail
-		// (rule 2).
+		// The socket answered and yielded no server. It is not a fall back: the
+		// answering socket may belong to a server holding the store's lock, so
+		// opening the store on it would wait the whole wait budget and then fail
+		// (§ Server Resolution, rule 2).
 		return err
 	}
 	if state.Served() {
@@ -893,7 +992,12 @@ func runGraphExecute(args []string) error {
 			_ = result.Close() //nolint:errcheck // roll back; commit error is moot on iteration failure
 			return graphStatementError(budget, "graph query failed", iterErr)
 		}
-		output = graphOKResult{OK: true}
+		// The counters are read here — after the drain, before Close commits —
+		// for the reason serializeGraphResult reads them there: they are final
+		// only once every operator has run, and the commit releases the result
+		// (SPEC/GRAPH.md § Write Counters: What a Statement Changed, rule 1). A statement that changed
+		// nothing maps to nil and publishes exactly {"ok": true}.
+		output = graphOKResult{OK: true, Counters: graphjson.CountersOf(result.Counters())}
 	} else {
 		out, serErr := serializeGraphResult(result)
 		if serErr != nil {
@@ -931,8 +1035,44 @@ func runGraphExecute(args []string) error {
 	// surfaces that take this checkpoint cannot come to disagree about when it
 	// runs.
 	if _, cperr := st.Checkpoint(); cperr != nil {
-		fmt.Fprintf(os.Stderr, "Warning: graph checkpoint failed: %v\n", cperr)
+		fmt.Fprintln(os.Stderr, graphCheckpointWarning(cperr))
 	}
 
 	return utils.PrintJSON(output)
+}
+
+// graphCheckpointWarning words a failed synchronous checkpoint for stderr, and
+// chooses between the two conditions a checkpoint can be in.
+//
+// A checkpoint failure after a durable commit never fails the write and never
+// changes the exit code: the commit is the durability boundary, the log is
+// intact, and recovery still restores everything acknowledged
+// (SPEC/GRAPH.md § Synchronous Checkpoint on Write, failure policy). What differs
+// between the two branches is what the operator is told to expect NEXT.
+//
+// The general branch is built on an expectation that usually holds: a disk that
+// filled, a permission that was wrong, a write that was interrupted — all may
+// succeed the next time a checkpoint runs, and the next successful one
+// reconciles the snapshot. The other branch is the one case where that
+// expectation is false. The field the snapshot format refuses is committed graph
+// state, so every later capture captures it again and every later checkpoint
+// refuses for the same reason; on this surface the warning then accompanies EVERY
+// subsequent write, because every subsequent write checkpoints. A line that
+// recurred that often saying only that a checkpoint had failed would train an
+// operator to ignore the one message naming an unbounded, permanent cost
+// (SPEC/GRAPH.md § Field Length Limits, rules 6 and 9).
+//
+// The wording of that branch is graphstore's and not this file's, because the
+// same four things have to be said by the web endpoint and by the graph server's
+// shutdown checkpoint, and three copies of a paragraph are three chances for one
+// of them to stop being true. The engine's own error ends both branches: it is
+// the half that names which field is at fault.
+//
+// The returned string carries no trailing newline; the caller supplies it.
+func graphCheckpointWarning(err error) string {
+	if graphstore.CheckpointRefusedFieldTooLong(err) {
+		return fmt.Sprintf("Warning: %s: %v",
+			graphstore.FieldTooLongCheckpointDiagnostic("the graph checkpoint"), err)
+	}
+	return fmt.Sprintf("Warning: graph checkpoint failed: %v", err)
 }

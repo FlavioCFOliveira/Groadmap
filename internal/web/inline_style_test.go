@@ -26,7 +26,7 @@ import (
 // markup when there is nothing to list, so they are exercised explicitly here to
 // prove the sizing moved to a stylesheet class.
 func TestPages_NoInlineStyleAttribute(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	t.Setenv("HOME", shortHome(t))
 	name := seedRoadmap(t, "platform-core")
 	mux := buildMux()
 
@@ -52,7 +52,7 @@ func TestPages_NoInlineStyleAttribute(t *testing.T) {
 func TestPages_EmptyStates_NoInlineStyleAttribute(t *testing.T) {
 	// A fresh HOME with no roadmaps exercises the index empty state, whose icon
 	// glyph carries the empty-icon-glyph class (was an inline style).
-	t.Setenv("HOME", t.TempDir())
+	t.Setenv("HOME", shortHome(t))
 	mux := buildMux()
 	body := servePage(t, mux, "/")
 	if !strings.Contains(body, "empty-icon-glyph") {
@@ -86,7 +86,7 @@ func TestPages_EmptyStates_NoInlineStyleAttribute(t *testing.T) {
 // TestTablerFidelity_NoClassOutsideTheVendoredStylesheets is the general guard;
 // this test pins the specific markup.
 func TestSidebarSectionLabel_UsesTablerSubheaderIdiom(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	t.Setenv("HOME", shortHome(t))
 	name := seedRoadmap(t, "platform-core")
 	mux := buildMux()
 

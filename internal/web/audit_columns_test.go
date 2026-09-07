@@ -141,7 +141,7 @@ const (
 // order against the seven AuditEntry fields SPEC/WEB.md § Roadmap Audit Log Page
 // requires, in the order it fixes them. The page carried five.
 func TestHandleAudit_PresentsTheSevenColumnsInOrder(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	t.Setenv("HOME", shortHome(t))
 	name := seedRoadmapWithNullableAudit(t, "ledger-settlement")
 
 	rec := getAudit(t, name, "")
@@ -179,7 +179,7 @@ func TestHandleAudit_PresentsTheSevenColumnsInOrder(t *testing.T) {
 // renderer that shortened the text to the customary seven would fail rather than
 // pass on a prefix match.
 func TestHandleAudit_RendersBothNullableColumnsPerEntry(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	t.Setenv("HOME", shortHome(t))
 	name := seedRoadmapWithNullableAudit(t, "ledger-settlement")
 
 	region := auditTableRegion(t, getAudit(t, name, "").Body.String())
@@ -257,7 +257,7 @@ func TestHandleAudit_RendersBothNullableColumnsPerEntry(t *testing.T) {
 // repository and holds no repository URL from which such a link could be built
 // (SPEC/WEB.md § Roadmap Audit Log Page; § Task Detail Modal, Fields shown).
 func TestHandleAudit_NullableColumnsAddNoControlAndNoLink(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	t.Setenv("HOME", shortHome(t))
 	name := seedRoadmapWithNullableAudit(t, "ledger-settlement")
 
 	region := auditTableRegion(t, getAudit(t, name, "").Body.String())
@@ -485,7 +485,7 @@ func jsFunctionBody(t *testing.T, script, name string) string {
 // that can in principle still measure wrong; one failing any of it cannot measure
 // right. The measurement itself is made with a browser against a running server.
 func TestAuditTable_ScrollsInsideItsOwnContainer(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	t.Setenv("HOME", shortHome(t))
 	name := seedRoadmapWithNullableAudit(t, "ledger-settlement")
 	body := getAudit(t, name, "").Body.String()
 
@@ -538,7 +538,7 @@ func TestAuditTable_ScrollsInsideItsOwnContainer(t *testing.T) {
 // audit rows must still answer 200 with its empty-state message and its
 // "Page 1 of 1" footer, and must render no table at all.
 func TestHandleAudit_EmptyLogStillRendersWithTheNewColumns(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	t.Setenv("HOME", shortHome(t))
 	// Seeding zero entries writes no audit row, and creating the roadmap itself
 	// writes none either.
 	name := seedRoadmapWithAudit(t, "ledger-empty", 0)

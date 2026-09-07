@@ -187,6 +187,19 @@ func runGraphServe(args []string) error {
 	if err != nil {
 		return err
 	}
+	// The path's length is settled HERE, in the CLI, and not inside
+	// internal/graphserve. SPEC/GRAPH.md § Server Startup, step 1, puts the
+	// refusal with the resolution of the path rather than with the use of it,
+	// and requires it to precede the lock, the probe, the unlink and the bind —
+	// every one of which lives behind graphserve.Run below. A server that cannot
+	// start therefore touches nothing: no lock taken, no stale file removed, no
+	// listener bound. The refusal is the same for a derived path as for a
+	// supplied one, and the same as the one every other surface applies: the
+	// bound is a property of the path, and where the path came from is not asked
+	// (§ Socket Path Length, rules 5 and 6).
+	if err := refuseOverLongSocket(socketPath); err != nil {
+		return err
+	}
 
 	return graphserve.Run(graphserve.Options{
 		Announce:    announceServeSocket,

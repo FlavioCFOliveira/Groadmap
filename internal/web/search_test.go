@@ -307,7 +307,7 @@ func servedBoardQuery(t *testing.T, mux *http.ServeMux, roadmap, query string) (
 // Criterion 100: the page header's actions column carries a labelled search input
 // and no knowledge-graph link, and the graph stays reachable through the sidebar.
 func TestTaskSearch_HeaderCarriesTheSearchControl(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	t.Setenv("HOME", shortHome(t))
 	f := seedBoardFixture(t, "payment-platform")
 	mux := buildMux()
 
@@ -368,7 +368,7 @@ func TestTaskSearch_HeaderCarriesTheSearchControl(t *testing.T) {
 // shown set, matching is case-insensitive and by substring over the title and the
 // "#<id>" reference, and no other field is searched.
 func TestTaskSearch_NarrowsTheBoardAndItsCounts(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	t.Setenv("HOME", shortHome(t))
 	f := seedBoardFixture(t, "payment-platform")
 	mux := buildMux()
 
@@ -497,7 +497,7 @@ func sameIDSet(got, want []int) bool {
 // of Acceptance Criterion 101: narrowing removes cards, it does not reorder the
 // ones that remain.
 func TestTaskSearch_PreservesTheOrderWithinAColumn(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	t.Setenv("HOME", shortHome(t))
 	f := seedBoardFixture(t, "payment-platform")
 	mux := buildMux()
 
@@ -533,7 +533,7 @@ func TestTaskSearch_PreservesTheOrderWithinAColumn(t *testing.T) {
 // columns stay, and a board emptied by the search says so — which a roadmap that
 // simply holds no task does not.
 func TestTaskSearch_EmptyStates(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	t.Setenv("HOME", shortHome(t))
 	f := seedBoardFixture(t, "payment-platform")
 	if err := createEmptyRoadmap("payment-platform-empty"); err != nil {
 		t.Fatalf("creating the empty roadmap: %v", err)
@@ -599,7 +599,7 @@ func TestTaskSearch_EmptyStates(t *testing.T) {
 // The comparison is direct: one side is the served ?q= page, the other is the
 // served bare page with the script's own rule applied to it.
 func TestTaskSearch_ServerAndClientProduceTheSameBoard(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	t.Setenv("HOME", shortHome(t))
 	f := seedBoardFixture(t, "payment-platform")
 	mux := buildMux()
 
@@ -668,7 +668,7 @@ func shownOf(column searchColumn) []int {
 // difference between Go's case conversion and the browser's cannot make the same
 // term select different tasks.
 func TestTaskSearch_CorpusIsFoldedByTheServer(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	t.Setenv("HOME", shortHome(t))
 	f := seedBoardFixture(t, "payment-platform")
 	mux := buildMux()
 
@@ -708,7 +708,7 @@ func TestTaskSearch_CorpusIsFoldedByTheServer(t *testing.T) {
 // Criterion 105: every q value answers 200, an undecodable q is treated as
 // absent, and applying a term adds no database query.
 func TestTaskSearch_NoTermIsAnErrorAndNoneAddsAQuery(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	t.Setenv("HOME", shortHome(t))
 	f := seedBoardFixture(t, "payment-platform")
 	srv := handler()
 
@@ -770,7 +770,7 @@ func TestTaskSearch_NoTermIsAnErrorAndNoneAddsAQuery(t *testing.T) {
 // input and into the no-match message as text, and introduces no element,
 // attribute, or script.
 func TestTaskSearch_TermIsEscapedWhereverItIsEchoed(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	t.Setenv("HOME", shortHome(t))
 	f := seedBoardFixture(t, "payment-platform")
 	mux := buildMux()
 
@@ -969,7 +969,7 @@ func TestTaskSearchScript_WritesTheTermAsText(t *testing.T) {
 // Criterion 107: the narrowing script loads from /static/ like every other client
 // script and the Content-Security-Policy is unchanged.
 func TestTaskSearch_AddsNoInlineScriptAndKeepsThePolicy(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	t.Setenv("HOME", shortHome(t))
 	f := seedBoardFixture(t, "payment-platform")
 	srv := handler()
 

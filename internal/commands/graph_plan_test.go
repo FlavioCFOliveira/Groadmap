@@ -184,8 +184,25 @@ func TestGraphUnprefixed_OutputIsUnchanged(t *testing.T) {
 		t.Errorf("an unprefixed write still publishes {\"ok\": true}: the discriminator is "+
 			"departed from only where a plan has to be carried.\ngot: %v", write)
 	}
-	if len(write) != 1 {
-		t.Errorf("an unprefixed write publishes exactly one key.\ngot: %v", write)
+	for _, key := range []string{"plan", "profile"} {
+		if _, present := write[key]; present {
+			t.Errorf("an unprefixed write must publish no %q member either "+
+				"(SPEC/GRAPH.md § Query Plans, rule 9).\ngot: %v", key, write)
+		}
+	}
+	// The envelope carries `ok` and the counters of the write it just committed,
+	// and nothing else. The count is asserted rather than only the two lookups
+	// above so that a THIRD member cannot enter the shape unnoticed; it was 1
+	// before the counters were published, and the second key is the one member
+	// SPEC/DATA_FORMATS.md § Graph Write Result adds to a statement that changed
+	// something. That the counters themselves are right is graph_counters_test.go's
+	// subject, not this file's.
+	if _, counted := write["counters"]; !counted {
+		t.Errorf("a write that created a node publishes its counters beside `ok` "+
+			"(SPEC/DATA_FORMATS.md § Graph Write Result).\ngot: %v", write)
+	}
+	if len(write) != 2 {
+		t.Errorf("an unprefixed write publishes exactly `ok` and `counters`.\ngot: %v", write)
 	}
 }
 

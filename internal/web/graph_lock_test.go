@@ -58,7 +58,7 @@ func webGraphDir(t *testing.T, name string) string {
 // whenever anyone ran a write, which is why the reader waits where the writer
 // does not (SPEC/GRAPH.md § Lock Contention).
 func TestHandleGraphData_WaitsForAWriterRatherThanFailingFast(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	t.Setenv("HOME", shortHome(t))
 	name := seedRoadmap(t, "web-ui-rollout")
 	seedGraph(t, name, graphSeedQueries()...)
 
@@ -99,7 +99,7 @@ func TestHandleGraphData_WaitsForAWriterRatherThanFailingFast(t *testing.T) {
 // query-bar 400s: the page would then show the user a "your query failed"
 // message for a condition the user's query had nothing to do with.
 func TestHandleGraphData_LockExhaustionIsAnInternalError(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	t.Setenv("HOME", shortHome(t))
 	name := seedRoadmap(t, "web-ui-rollout")
 	seedGraph(t, name, graphSeedQueries()...)
 
@@ -202,7 +202,7 @@ const slowReadGraphNodes = 252
 // request took meaningfully longer than a store open — is what makes the
 // ordering worth observing at all.
 func TestHandleGraphData_HoldsTheLockAcrossTheStatement(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	t.Setenv("HOME", shortHome(t))
 	name := seedRoadmap(t, "web-ui-rollout")
 
 	seeds := graphSeedQueries()
@@ -312,7 +312,7 @@ func TestHandleGraphData_HoldsTheLockAcrossTheStatement(t *testing.T) {
 // Both nodes being present at the end is the property the lock exists to
 // deliver.
 func TestHandleGraphData_ConcurrentRequestsSerialise(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	t.Setenv("HOME", shortHome(t))
 	name := seedRoadmap(t, "web-ui-rollout")
 	seedGraph(t, name, graphSeedQueries()...)
 
@@ -348,7 +348,7 @@ func TestHandleGraphData_ConcurrentRequestsSerialise(t *testing.T) {
 // whose transaction appended nothing must not checkpoint, so no snapshot/
 // appears.
 func TestHandleGraphData_LockFileIsTheOnlyArtefactCreated(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	t.Setenv("HOME", shortHome(t))
 	name := seedRoadmap(t, "web-ui-rollout")
 	graphDir := webGraphDir(t, name)
 

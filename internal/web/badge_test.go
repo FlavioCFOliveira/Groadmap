@@ -212,7 +212,7 @@ func seedBadgeRoadmap(t *testing.T, name string) (roadmap string, sprintID int) 
 // is pinned against these same Go helpers, value by value, in
 // TestTaskModalScript_BadgeMappingMatchesTheServerHelpers.
 func TestTasksPage_RendersSemanticBadgeColours(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	t.Setenv("HOME", shortHome(t))
 	name, _ := seedBadgeRoadmap(t, "badge-colours")
 
 	mux := buildMux()
@@ -259,7 +259,7 @@ func TestTasksPage_RendersSemanticBadgeColours(t *testing.T) {
 // rule 4, The card; Acceptance Criterion 133). The sprint's own status badge is
 // unaffected and is still required above.
 func TestSprintPage_RendersSemanticStatusBadge(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	t.Setenv("HOME", shortHome(t))
 	name, sprintID := seedBadgeRoadmap(t, "badge-colours")
 
 	mux := buildMux()
@@ -353,7 +353,7 @@ func sprintTabColours(t *testing.T) (pending, open, closed string) {
 // distinctness guard in sprintTabColours is what keeps that from making the
 // assertions vacuous.
 func TestSprintsPage_TabCountBadgesCarryTheirTabStatusColour(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	t.Setenv("HOME", shortHome(t))
 	// The fixture holds 2 PENDING, 1 OPEN and 2 CLOSED sprints, so each tab
 	// shows a non-zero count and no two tabs are told apart by count alone.
 	f := seedSprintFixture(t, "sprint-tab-badge-colours")
@@ -392,7 +392,7 @@ func TestSprintsPage_TabCountBadgesCarryTheirTabStatusColour(t *testing.T) {
 // still render bg-green-lt — and, as above, the three tabs are asserted together
 // so the neutral Próximos badge is never the only evidence.
 func TestSprintsPage_EmptyTabKeepsItsStatusColour(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	t.Setenv("HOME", shortHome(t))
 	name, _ := seedBadgeRoadmap(t, "empty-sprint-tabs")
 	pending, open, closed := sprintTabColours(t)
 

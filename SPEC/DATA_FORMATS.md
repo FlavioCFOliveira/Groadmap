@@ -440,6 +440,13 @@ optional, at most one is ever present, and each holds the recursive object
 [Graph Plan Node](#graph-plan-node) defines. A statement written with neither
 prefix carries neither key, and its object is unchanged in every byte.
 
+A statement that **changed the graph** adds one further optional member,
+`counters`, naming what it changed;
+[Graph Query Counters](#graph-query-counters) is canonical for it. A statement
+that changed nothing carries no such key, so a read — which is what this shape
+answers in the ordinary case — is unchanged in every byte. The member never
+appears beside `plan` or `profile`, for the reason that section's rule 5 gives.
+
 This is the canonical specification of the graph read-result shape. The command
 contract that references it is `COMMANDS.md § Graph Management`; the feature
 design is in `GRAPH.md`.
@@ -480,6 +487,7 @@ Field reference:
 | `rows` | array of array | One inner array per record, in the order the engine yields records. Each inner array has exactly `columns.length` cells, positionally aligned with `columns`. |
 | `plan` | object, omitted unless present | The plan the engine built for a statement written with an `EXPLAIN` prefix, as [Graph Plan Node](#graph-plan-node) defines it. Its figures are the planner's **estimates**: the statement was not executed. |
 | `profile` | object, omitted unless present | The plan the engine ran for a statement written with a `PROFILE` prefix, as [Graph Plan Node](#graph-plan-node) defines it. Its figures are **measurements** of that run. |
+| `counters` | object, omitted unless present | What the statement changed in the graph, as [Graph Query Counters](#graph-query-counters) defines it. Present only when the statement changed something, and written after `rows`. |
 
 Rules:
 
@@ -507,6 +515,11 @@ Rules:
    object. `EXPLAIN CREATE (n:Spec {key:'auth'})` is the case that arises: it
    executes nothing, so `{"ok": true}` would report a success identical to the
    one a committed `CREATE` reports.
+7. A statement that both declares result columns and changed the graph — a
+   `CREATE ... RETURN`, a `SET ... RETURN` — publishes `counters` after `rows`,
+   under the rules of [Graph Query Counters](#graph-query-counters). The member
+   is additive: it never displaces `columns` or `rows`, and a statement that
+   changed nothing does not carry it.
 
 ### Property-Type Mapping
 
@@ -884,11 +897,34 @@ statement produces **result columns**:
 {"ok": true}
 ```
 
-The GoGraph engine exposes only the result's columns and an iterable record
-sequence; it reports no mutation or affected-element counter. There is therefore
-**no** count field in the write result, and the CLI does not attempt to compute
-one. The `{"ok": true}` object is the success signal for a statement that returns no
-data.
+`{"ok": true}` is the success signal for a statement that returns no data, and
+it is the whole of the object for a statement that changed nothing. A statement
+that **did** change something adds one member, `counters`, naming what it
+changed:
+
+```json
+{
+  "ok": true,
+  "counters": {
+    "nodesCreated": 1,
+    "propertiesWritten": 2,
+    "labelsAdded": 1
+  }
+}
+```
+
+[Graph Query Counters](#graph-query-counters) is canonical for that member: its
+key set, the rule that omits a zero, and the rule that omits the whole block for
+a statement that changed nothing. The member is **additive**, so `ok` keeps its
+meaning, its value and its position, and a consumer that reads `ok` and ignores
+members it does not know is unaffected.
+
+**Where this specification writes `{"ok": true}` for a statement that changed
+the graph, it names the constant part of the object.** The two-member form above
+is what such a statement actually publishes; the shorthand is used throughout
+this file, `GRAPH.md` and `COMMANDS.md` wherever the point being made is the
+shape rather than the counters, and it is not a second, counter-free shape. A
+statement that changed nothing publishes the shorthand literally.
 
 **Why the discriminator is the columns and not the `RETURN` clause.** For every
 data-writing statement the two coincide exactly: a `CREATE`, `MERGE`, `SET`,
@@ -920,17 +956,44 @@ Field reference (no-columns case):
 | Field | Type | Description |
 |-------|------|-------------|
 | `ok` | boolean | Always `true`. Confirms the statement succeeded: for a data-writing query, that its transaction committed; for a schema-mutating statement, that the schema change was applied. |
+| `counters` | object, omitted unless present | What the statement changed in the graph, as [Graph Query Counters](#graph-query-counters) defines it. Present only when the statement changed something, and written after `ok`. |
 
 Examples:
 
-A write query without `RETURN`, or a schema-mutating statement such as
-`CREATE INDEX`:
+A write query without `RETURN` whose transaction applied nothing — a `MERGE`
+that matched an existing element, a `DELETE` whose pattern matched no row:
 
 ```json
 {"ok": true}
 ```
 
-A write query that ends with `RETURN n` (same shape as a read result):
+The same query when it did change the graph, here a `MERGE` that created a
+labelled node with one property:
+
+```json
+{
+  "ok": true,
+  "counters": {
+    "nodesCreated": 1,
+    "propertiesWritten": 1,
+    "labelsAdded": 1
+  }
+}
+```
+
+A schema-mutating statement such as `CREATE INDEX`, which registers one index:
+
+```json
+{
+  "ok": true,
+  "counters": {
+    "indexesAdded": 1
+  }
+}
+```
+
+A write query that ends with `RETURN n` (same shape as a read result, with the
+same counters member added):
 
 ```json
 {
@@ -943,9 +1006,156 @@ A write query that ends with `RETURN n` (same shape as a read result):
         "properties": {"key": "user-authentication"}
       }
     ]
-  ]
+  ],
+  "counters": {
+    "nodesCreated": 1,
+    "propertiesWritten": 1,
+    "labelsAdded": 1
+  }
 }
 ```
+
+---
+
+## Graph Query Counters
+
+A statement that changed the graph publishes, beside its result, a `counters`
+object naming what it changed. `rmp graph execute` and `rmp graph client` both
+publish it, and they publish the same object for the same statement against the
+same graph (see [Graph Client Result](#graph-client-result)).
+
+The member is **additive**. It is added to the two published result shapes and
+removes nothing from either: `ok` keeps its meaning and its position in
+[Graph Write Result](#graph-write-result), and `columns` and `rows` keep theirs
+in [Graph Query Result](#graph-query-result). A statement that changed nothing
+carries no `counters` key at all and produces exactly the bytes it produced
+before this member existed. An existing consumer is therefore unaffected in
+either case: it parses what it parsed before, and reads one further member on
+the statements that now have something more to report.
+
+This is the canonical specification of the counters' shape and key set. The
+behaviour that produces them — when they are read, what a failed or rolled-back
+statement publishes, and the protocol constraint that fixes the property key —
+is in `GRAPH.md § Write Counters: What a Statement Changed`; the command
+contract is `COMMANDS.md § Graph Management`.
+
+### Shape of the counters object
+
+A write that declares no result column, added to the object of
+[Graph Write Result](#graph-write-result):
+
+```json
+{
+  "ok": true,
+  "counters": {
+    "nodesCreated": 1,
+    "propertiesWritten": 2,
+    "labelsAdded": 1
+  }
+}
+```
+
+A write that declares one, added to the object of
+[Graph Query Result](#graph-query-result):
+
+```json
+{
+  "columns": ["w.serial"],
+  "rows": [["W-1"]],
+  "counters": {
+    "propertiesWritten": 1
+  }
+}
+```
+
+Field reference. Every member is a JSON number, every member is omitted when its
+value is zero, and the table's order is the order the members are written in:
+
+| Field | Description |
+|-------|-------------|
+| `nodesCreated` | Nodes the statement added to the graph. |
+| `nodesDeleted` | Nodes the statement removed from the graph. |
+| `relationshipsCreated` | Relationships the statement added. |
+| `relationshipsDeleted` | Relationships the statement removed, including the ones a `DETACH DELETE` removed as a consequence of deleting a node rather than by naming them. |
+| `propertiesWritten` | Property assignments and property removals together, as one figure. It is one figure rather than two for the reason rule 4 gives, and its name is chosen to say so. Two consequences a caller should know: assigning `null` to a property removes it, and therefore counts here; and deleting an element does not count the properties that went with it, so a `DETACH DELETE` reports no property figure at all. |
+| `labelsAdded` | Labels the statement attached to a node. Creating a node with a label counts the label here as well as the node under `nodesCreated`. |
+| `labelsRemoved` | Labels the statement detached from a node. |
+| `indexesAdded` | Indexes a schema statement registered. |
+| `indexesRemoved` | Indexes a schema statement dropped. |
+| `constraintsAdded` | Constraints a schema statement registered. |
+| `constraintsRemoved` | Constraints a schema statement dropped. |
+
+Rules:
+
+1. **The `counters` member is present if and only if the statement changed
+   something.** The engine reports whether a statement contained updates at all,
+   and the member is published exactly when it did. Three classes therefore
+   carry no `counters` key, and each produces exactly the bytes it produced
+   before this member existed: a statement that only reads; a statement that
+   writes but applied nothing, such as a `MERGE` that matched an existing
+   element or a `DELETE` whose pattern matched no row; and any statement written
+   with an `EXPLAIN` prefix, which executes nothing at all.
+2. **Within the block, a counter whose value is zero is omitted.** The block is
+   consequently never empty when it is present, and a caller reads an absent key
+   as zero. This is the opposite of the rule [Graph Plan Node](#graph-plan-node)
+   states for an absent estimate, and the asymmetry is intended: there, an
+   absent key admits that a figure exists and was not measured, so publishing a
+   zero would fabricate a measurement. Here every counter is counted for every
+   statement that reaches the block, so an absent key states that the effect it
+   names did not happen and there is no second state for a zero to hide. What
+   omission buys is that the figures which matter are not buried under ten
+   zeroes.
+3. **The member is additive to both published result shapes, and is written
+   last in each.** It may appear beside `ok` in
+   [Graph Write Result](#graph-write-result) and beside `columns` and `rows` in
+   [Graph Query Result](#graph-query-result). No existing member changes its
+   meaning, its value, or its position: `ok` still says that the statement
+   succeeded in committing what it was asked to commit. This is the same bound
+   `GRAPH.md § Query Plans: The EXPLAIN and PROFILE Prefixes`, rule 9, places on
+   the plan members — what changes is the output of a statement that has
+   something new to report, and the output of every other statement is left
+   untouched.
+4. **`propertiesWritten` carries property assignments and property removals as
+   one figure, and is named for what it carries.** The engine counts the two
+   separately, and this specification publishes them as one. The reason is the
+   protocol a served result crosses: it carries a single property counter and
+   has no second channel for a removal, so a result read through
+   `rmp graph client` can distinguish eleven of the engine's twelve counters and
+   never the twelfth. Publishing the split on the direct path alone would break
+   the identity [Graph Client Result](#graph-client-result) requires; publishing
+   a removal under a key named for an assignment would state an effect that did
+   not happen. Folding on both paths and naming the key for the sum is the only
+   arrangement under which every requirement stated here holds at once, and it
+   costs the member's purpose nothing: telling a `MERGE` that created from one
+   that matched, and a `DELETE` that removed nothing from one that removed a
+   thousand, rests on the node and relationship counters, and those cross the
+   protocol faithfully. `GRAPH.md § Write Counters: What a Statement Changed` is
+   canonical for the constraint and for the upstream change that would let the
+   split be restored.
+5. **`counters` and the plan members are mutually exclusive, and that is a
+   property of the engine rather than a rule imposed here.** A consumer may rely
+   on never seeing `counters` beside `plan` or `profile`, and the two ways it
+   could have happened are both closed upstream. An `EXPLAIN` executes nothing,
+   so it has no applied effect to count and rule 1 omits the block. A `PROFILE`
+   does execute, but the engine refuses a `PROFILE` of a writing statement
+   outright rather than perform a write a caller asked only to have measured, so
+   the only statement a `profile` tree can describe is one that changed nothing.
+   `GRAPH.md § Query Plans: The EXPLAIN and PROFILE Prefixes`, rules 1 and 4, is
+   canonical for what each prefix does and for that refusal.
+6. **The counters fall inside the identity
+   [Graph Client Result](#graph-client-result) requires, and take no exception
+   from it.** They describe the statement and the graph, not the duration of the
+   run that executed it, which is what the one documented exception — a
+   `profile` tree's `timeNs` — is about. Two correct executions of one statement
+   against one graph change the graph the same way, so the two surfaces publish
+   the same `counters` object, key for key and value for value, or one of them
+   is wrong.
+7. **Every value is a count of an effect actually applied, never of one
+   attempted.** A `MERGE` that matched counts nothing, because it never reached
+   a creation. A `REMOVE` of a property the element does not carry counts
+   nothing, and so does the removal of a label it does not bear. Values are
+   therefore non-negative, and a counter is incremented at the point the write
+   is applied rather than at the point it is requested.
 
 ---
 
@@ -959,14 +1169,17 @@ to describe a second format.
 
 1. A statement that produces result columns returns the `{columns, rows}` shape of
    [Graph Query Result](#graph-query-result).
-2. A statement that produces none returns exactly `{"ok": true}`, the shape of
+2. A statement that produces none returns the object of
    [Graph Write Result](#graph-write-result).
 3. A statement written with an `EXPLAIN` or `PROFILE` prefix returns the shape of
    [Graph Query Result](#graph-query-result) carrying its `plan` or `profile`
    member, whether or not it declares a result column.
 4. All three are pretty-printed with two-space indentation and a trailing newline,
    consistent with all other JSON output (see
-   [Implementation Notes](#implementation-notes)).
+   [Implementation Notes](#implementation-notes)). A statement that changed the
+   graph adds, to whichever of the first two shapes it produced, the `counters`
+   member of [Graph Query Counters](#graph-query-counters); rule 6 below is
+   canonical for its standing against the identity.
 
 **The identity is a requirement, not an observation.** For any statement and any
 graph, the bytes `rmp graph client` writes to stdout are the bytes
@@ -976,6 +1189,19 @@ itself when it reaches a running server rather than the store, which it does
 whenever one is listening (see `GRAPH.md § Server Resolution`): the surface a
 statement was executed through is not observable in the JSON. A caller may
 therefore parse one shape and change nothing when a server is started or stopped.
+
+**The identity governs the success output and the exit code, and it does not
+reach the error line.** What it fixes is the bytes a statement writes to stdout
+and the code it exits with; the plain-text diagnostic a *failing* statement
+writes to stderr is outside it, and is fixed per condition by the error tables of
+`COMMANDS.md` rather than here. The distinction is not academic at the pinned
+engine: exactly one condition — a field the engine refuses as too long for its
+durable format — currently prints a different stderr line on each path, because
+the protocol carries no code that distinguishes it and the server replaces its
+message. `GRAPH.md § Field Length Limits`, rule 13, is canonical for that
+departure, for the remedy that ends it, and for what stays identical meanwhile:
+the sentinel, the exit code, and the fact that nothing was written. No other
+condition diverges, and nothing above is weakened for a statement that succeeds.
 
 5. **The identity binds every value that is a property of the statement and the
    graph. It does not bind `timeNs`, and no implementation could make it.** That
@@ -989,12 +1215,12 @@ therefore parse one shape and change nothing when a server is started or stopped
    **What a caller may rely on is therefore everything but the clock.** For any
    statement, the two surfaces publish the same key set, the same structure, the
    same member order, the same plan-tree shape, and the same value under every
-   key other than `timeNs` — including `rows`, `dbHits`, `rowsRemovedByFilter`
-   and the estimate pair, each of which describes the statement and the graph
-   rather than the run's duration. A consumer comparing the two surfaces compares
-   everything except the clock, and a statement carrying neither prefix, or
-   carrying `EXPLAIN`, has no `timeNs` at all and is therefore identical in every
-   byte.
+   key other than `timeNs` — including `rows`, `dbHits`, `rowsRemovedByFilter`,
+   the estimate pair, and every member of `counters`, each of which describes the
+   statement and the graph rather than the run's duration. A consumer comparing
+   the two surfaces compares everything except the clock, and a statement
+   carrying neither prefix, or carrying `EXPLAIN`, has no `timeNs` at all and is
+   therefore identical in every byte.
 
    **This is narrower than the guarantee stated in the paragraph above, and it is
    narrow on purpose.** A wider claim would be one the specification could not
@@ -1004,6 +1230,50 @@ therefore parse one shape and change nothing when a server is started or stopped
    **mapping** — one realisation over one representation, as the paragraphs below
    establish — and the mapping is exactly what governs every key the exception
    does not name.
+
+6. **The `counters` member is inside the identity, without exception, and the
+   one figure the protocol cannot carry twice is folded on BOTH paths so that it
+   stays inside.** The counters describe what the statement did to the graph, so
+   two correct executions of one statement against one graph must report the
+   same object; nothing about them measures the run, which is the only ground
+   rule 5's exception stands on. The protocol, however, carries a single property
+   counter and has no second channel for a property removal, so a served result
+   can distinguish eleven of the engine's twelve counters and never the twelfth.
+   The published shape resolves that by folding the two property figures into one
+   member, `propertiesWritten`, on the direct path as well as the served one —
+   which is a property of the shared mapping and not a divergence between the
+   surfaces. Publishing the split where it happens to be available would make the
+   direct path publish a key the served path cannot, turning a protocol limit
+   into a second exception to this section's central requirement; and publishing
+   a removal under a key named for an assignment would state an effect that did
+   not happen. [Graph Query Counters](#graph-query-counters), rule 4, is
+   canonical for the choice, and
+   `GRAPH.md § Write Counters: What a Statement Changed` for the constraint
+   behind it.
+
+**The counters cross the protocol as summary metadata, and land the same way the
+plan does.** They arrive in the same terminal success metadata that already
+carries the notifications and the plan — the statistics map a driver turns into
+its result summary — rather than as rows, and the client inverts that encoding
+onto **the engine's own counter model, not onto JSON**. The step from there to
+the published object is then the one realisation both surfaces run. Three
+consequences follow, and each is a requirement:
+
+1. **A key the protocol's statistics encoding adds is not added to the JSON.**
+   The protocol names its counters in its own spelling and carries an extra
+   boolean saying that the statement contained updates; the published object
+   names the eleven keys of [Graph Query Counters](#graph-query-counters) and no
+   others. The boolean is not published, because the presence of the block
+   already carries it.
+2. **An absent counter is an absent counter on both paths.** The protocol omits
+   a counter whose value is zero, and the client MUST carry that omission
+   through rather than read the missing key as `0` and publish it. Publishing it
+   would break the byte identity in the same stroke, since the direct path omits
+   it too.
+3. **A statement that changed nothing carries no statistics at all**, and the
+   client publishes no `counters` key for it, exactly as the direct path
+   publishes none. The protocol omits the whole map in that case, so the two
+   paths agree without either having to test for the empty object.
 
 **Why the identity holds, and where the work is.** A result that crossed the
 protocol arrives in the protocol's own encoding rather than as the engine's

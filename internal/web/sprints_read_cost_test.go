@@ -47,7 +47,7 @@ import (
 // instrument, so the count is falsifiable rather than a number that would read 1
 // however the page behaved.
 func TestSprintsPage_IssuesOneReadAndNoneMore(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	t.Setenv("HOME", shortHome(t))
 
 	// Five sprints holding 2, 0, 0, 2 and 0 member tasks: the roadmap has several
 	// sprints, and both a sprint that holds work and one that holds none.
@@ -235,7 +235,7 @@ var sprintCardFooter = regexp.MustCompile(
 // member read is gone, and this proves nothing rendered changed when it went,
 // including for a sprint that holds no task at all.
 func TestSprintsPage_CardFooterShowsTheSprintsOwnTaskCount(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	t.Setenv("HOME", shortHome(t))
 
 	// Sprints holding 0, 1, 2, 3 and 4 member tasks, so the assertion discriminates
 	// between the counts rather than reading one number five times, and covers the

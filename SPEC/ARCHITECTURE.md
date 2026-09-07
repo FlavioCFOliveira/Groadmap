@@ -973,7 +973,7 @@ Groadmap follows standard Unix/Linux exit code conventions. Success output is JS
 
 `rmp graph serve` and `rmp graph client` introduce no new exit code. Every failure either can produce is carried by a sentinel the catalogue above names, and this section enumerates which codes each subcommand can return so that the enumeration exists in one place. `COMMANDS.md § Graph Management` is canonical for the command-line contract, and `GRAPH.md § The Dedicated Graph Server` for the behaviour behind each row.
 
-`rmp graph execute` is not enumerated here, because the graph server changed which failures it can reach without changing its exit codes: it gained the same `--socket` flag the two subcommands below carry, and with it three failures it did not have before — a socket that answers but yields no reachable server, and a connection lost or unanswered after the statement was sent, both `utils.ErrGraphServer`; and a serialisation conflict every attempt of the retry policy collided on, `utils.ErrGraphEngine` — all three exit code 1, and an empty `--socket` value, `utils.ErrRequired` and exit code 2. Every one of them lands on a code that subcommand already returned. `COMMANDS.md § Execute Exit Codes` is canonical for its full set.
+`rmp graph execute` is not enumerated here, because the graph server changed which failures it can reach without changing its exit codes: it gained the same `--socket` flag the two subcommands below carry, and with the server four failures it did not have before — a resolved socket path longer than the platform allows a socket path to be, whether that path was derived from the roadmap or supplied through `--socket`; a socket that answers but yields no reachable server; and a connection lost or unanswered after the statement was sent, all three `utils.ErrGraphServer`; and a serialisation conflict every attempt of the retry policy collided on, `utils.ErrGraphEngine` — all four exit code 1, and an empty `--socket` value, `utils.ErrRequired` and exit code 2. Every one of them lands on a code that subcommand already returned. `COMMANDS.md § Execute Exit Codes` is canonical for its full set.
 
 `rmp graph serve`:
 
@@ -981,7 +981,7 @@ Groadmap follows standard Unix/Linux exit code conventions. Success output is JS
 |-----------|----------|-------|
 | `0` | — | The server started, served, and was stopped by `SIGINT` or `SIGTERM`. The drain completed or its bound expired; in both cases every acknowledged commit is durable. |
 | `1` | `utils.ErrGraphStore` | The store could not be opened or recovered; or its exclusive advisory lock could not be taken within the bounded wait, which is what refuses a second server against the same roadmap. |
-| `1` | `utils.ErrGraphServer` | The socket could not be bound; or a live server already answers on the resolved socket. |
+| `1` | `utils.ErrGraphServer` | The resolved socket path is longer than the platform allows, whether it was derived from the roadmap or supplied through `--socket`; or the socket could not be bound; or a live server already answers on the resolved socket. |
 | `2` | `utils.ErrInvalidInput` | An unknown flag, or a positional argument: the subcommand accepts none. |
 | `2` | `utils.ErrRequired` | `--socket` was supplied with an empty value. |
 | `3` | `utils.ErrNoRoadmap` | No roadmap selected and none provided via `-r`. |
@@ -992,7 +992,7 @@ Groadmap follows standard Unix/Linux exit code conventions. Success output is JS
 | Exit Code | Sentinel | Cause |
 |-----------|----------|-------|
 | `0` | — | The statement was sent to a server, ran, and its result was written to stdout. |
-| `1` | `utils.ErrGraphServer` | No server is listening for the roadmap; or a server could not be reached through the socket; or the connection was lost, or went unanswered, after the statement was sent; or a value the server returned could not be mapped onto the published result shape. |
+| `1` | `utils.ErrGraphServer` | The resolved socket path is longer than the platform allows, so no server can be listening there; or no server is listening for the roadmap; or a server could not be reached through the socket; or the connection was lost, or went unanswered, after the statement was sent; or a value the server returned could not be mapped onto the published result shape. |
 | `1` | `utils.ErrGraphEngine` | The statement failed to parse or execute in the engine; or it exhausted the statement time budget; or every attempt of its retry policy lost a serialisation conflict. |
 | `2` | `utils.ErrRequired` | No statement supplied, or `--socket` supplied with an empty value. |
 | `2` | `utils.ErrInvalidInput` | An unknown flag, or a positional argument: the subcommand accepts none. |

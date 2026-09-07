@@ -173,7 +173,7 @@ CREATE TABLE IF NOT EXISTS task_dependencies (
 //     startup path runs the whole chain, including the 1.9.0 -> 1.10.0 drop, so
 //     a roadmap the web server opens can never still carry the retired column.
 func TestMigrateRoadmapsAtStartup_StaleDBBecomesCurrentSchema(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	t.Setenv("HOME", shortHome(t))
 
 	const roadmapName = "auth-pipeline-hardening"
 	buildStaleSchemaDB(t, roadmapName)
@@ -259,7 +259,7 @@ func TestMigrateRoadmapsAtStartup_StaleDBBecomesCurrentSchema(t *testing.T) {
 //  2. Run migrateRoadmapsAtStartup (the startup step in serve).
 //  3. Drive GET /roadmaps/{name} through buildMux() and assert 200.
 func TestMigrateRoadmapsAtStartup_SprintsPageReturns200(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	t.Setenv("HOME", shortHome(t))
 
 	const roadmapName = "q3-performance-push"
 	buildStaleSchemaDB(t, roadmapName)
@@ -293,7 +293,7 @@ func TestMigrateRoadmapsAtStartup_SprintsPageReturns200(t *testing.T) {
 // roadmap is a genuine stale database. The function must continue past the
 // broken entry and migrate the healthy one.
 func TestMigrateRoadmapsAtStartup_NonFatalWhenOneRoadmapBroken(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	t.Setenv("HOME", shortHome(t))
 
 	home := os.Getenv("HOME")
 	roadmapsDir := filepath.Join(home, ".roadmaps")
@@ -383,7 +383,7 @@ func TestMigrateRoadmapsAtStartup_NonFatalWhenOneRoadmapBroken(t *testing.T) {
 // just the first one (SPEC/WEB.md § Startup Schema Migration rule 2:
 // "Migrates every existing roadmap").
 func TestMigrateRoadmapsAtStartup_MultipleRoadmapsAllMigrated(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	t.Setenv("HOME", shortHome(t))
 
 	roadmaps := []string{"identity-service", "billing-engine", "notification-hub"}
 	for _, name := range roadmaps {
@@ -413,7 +413,7 @@ func TestMigrateRoadmapsAtStartup_MultipleRoadmapsAllMigrated(t *testing.T) {
 // on roadmaps that are already at the current schema leaves them unchanged —
 // the migration is a no-op and the function returns normally.
 func TestMigrateRoadmapsAtStartup_IdempotentOnCurrentSchema(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	t.Setenv("HOME", shortHome(t))
 
 	const roadmapName = "search-indexing-pipeline"
 	// Use db.Open which creates a fresh current-schema database.
@@ -453,7 +453,7 @@ func TestMigrateRoadmapsAtStartup_IdempotentOnCurrentSchema(t *testing.T) {
 // loader were to accidentally call db.Open (the writable path), it would write
 // an audit entry, which would be detected here.
 func TestReadOnlyInvariant_PerRequestLoadersUseOpenReadOnly(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	t.Setenv("HOME", shortHome(t))
 
 	const roadmapName = "event-sourcing-refactor"
 	// Seed the roadmap with current schema and a sprint so the sprints page has

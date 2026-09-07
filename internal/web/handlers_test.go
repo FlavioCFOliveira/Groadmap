@@ -73,7 +73,7 @@ func seedRoadmap(t *testing.T, name string) string {
 // + ordered member tasks + classification) and renderHTML's success branch
 // (SPEC/WEB.md § Roadmap Sprints Page; Tasks and Sprints from SQLite).
 func TestHandleSprints_HappyPath(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	t.Setenv("HOME", shortHome(t))
 	name := seedRoadmap(t, "web-ui-rollout")
 
 	mux := buildMux()
@@ -112,7 +112,7 @@ func TestHandleSprints_HappyPath(t *testing.T) {
 // read path (the full, unfiltered task list) and renderHTML's success branch
 // (SPEC/WEB.md § Roadmap Tasks Page; Tasks and Sprints from SQLite).
 func TestHandleTasks_HappyPath(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	t.Setenv("HOME", shortHome(t))
 	name := seedRoadmap(t, "web-ui-rollout")
 
 	mux := buildMux()
@@ -150,7 +150,7 @@ func TestHandleTasks_HappyPath(t *testing.T) {
 // a read method the routes register explicitly alongside GET (SPEC/WEB.md
 // § Routes and Pages: all routes serve GET and HEAD only).
 func TestHandleSprintsAndTasks_Head(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	t.Setenv("HOME", shortHome(t))
 	name := seedRoadmap(t, "web-ui-rollout")
 	mux := buildMux()
 
@@ -174,7 +174,7 @@ func TestHandleSprintsAndTasks_Head(t *testing.T) {
 // labelled "Sprints", not the retired "Tasks & sprints" (SPEC/WEB.md § Roadmap
 // Index Page, Acceptance Criterion 6).
 func TestHandleIndex_WithRoadmaps(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	t.Setenv("HOME", shortHome(t))
 	name := seedRoadmap(t, "web-ui-rollout")
 
 	mux := buildMux()
@@ -219,7 +219,7 @@ func TestHandleIndex_WithRoadmaps(t *testing.T) {
 // loadGraphView's no-graph-yet path and renderJSON's success branch
 // (SPEC/DATA_FORMATS.md § Graph View Data; SPEC/WEB.md § empty graph).
 func TestHandleGraphData_EmptyGraph(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	t.Setenv("HOME", shortHome(t))
 	name := seedRoadmap(t, "web-ui-rollout")
 
 	mux := buildMux()
@@ -253,7 +253,7 @@ func TestHandleGraphData_EmptyGraph(t *testing.T) {
 // rather than erroring. This guards the read path against a non-directory
 // collision without creating or touching any store.
 func TestHandleGraphData_GraphPathIsFile(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	t.Setenv("HOME", shortHome(t))
 	name := seedRoadmap(t, "web-ui-rollout")
 
 	roadmapDir, err := utils.GetRoadmapDir(name)
@@ -285,7 +285,7 @@ func TestHandleGraphData_GraphPathIsFile(t *testing.T) {
 // roadmap: it renders the graph page shell (200 HTML) that bootstraps the
 // client-side visualisation. This covers the renderHTML call for graph.html.
 func TestHandleGraphPage_HappyPath(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	t.Setenv("HOME", shortHome(t))
 	name := seedRoadmap(t, "web-ui-rollout")
 
 	mux := buildMux()

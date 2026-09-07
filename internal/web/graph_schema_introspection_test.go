@@ -195,7 +195,7 @@ var introspectionQueries = []string{
 // Acceptance Criterion 157 turns on — an empty answer that is a property of the
 // RESPONSE SHAPE and not of the store — would be unobservable.
 func TestHandleGraphData_StoreReallyHoldsTheSchema(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	t.Setenv("HOME", shortHome(t))
 	name := seedGraphWithSchema(t, "web-ui-rollout")
 
 	if names := schemaNamesOnTheStore(t, name, "SHOW INDEXES"); !slices.Contains(names, "spec_key") {
@@ -216,7 +216,7 @@ func TestHandleGraphData_StoreReallyHoldsTheSchema(t *testing.T) {
 // the empty body is asserted exactly — a body carrying any node, any edge, or any
 // `kind` fails.
 func TestHandleGraphData_SchemaListingIsReadFromTheStoreNotTheEndpoint(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	t.Setenv("HOME", shortHome(t))
 	name := seedGraphWithSchema(t, "web-ui-rollout")
 
 	for _, query := range introspectionQueries {
@@ -266,7 +266,7 @@ func TestHandleGraphData_SchemaListingIsReadFromTheStoreNotTheEndpoint(t *testin
 // store returns a non-empty nodes array, so an empty answer is a property of the
 // statement rather than of the endpoint.
 func TestHandleGraphData_EmptyGraphAnswersAreIndistinguishable(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	t.Setenv("HOME", shortHome(t))
 	name := seedGraphWithSchema(t, "web-ui-rollout")
 
 	statements := []string{
@@ -322,7 +322,7 @@ func TestHandleGraphData_EmptyGraphAnswersAreIndistinguishable(t *testing.T) {
 // store, an ordinary reading query returns HTTP 200 and the ordinary
 // node-and-edge shape, populated.
 func TestHandleGraphData_OrdinaryReadUnaffected(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	t.Setenv("HOME", shortHome(t))
 	name := seedGraphWithSchema(t, "web-ui-rollout")
 
 	for _, query := range []string{
@@ -370,7 +370,7 @@ func TestHandleGraphData_OrdinaryReadUnaffected(t *testing.T) {
 // to prove: an unauthenticated GET creates an index in the roadmap's knowledge
 // graph (SPEC/WEB.md § Security and Constraints, rule 3).
 func TestHandleGraphData_SchemaDDLThroughTheEndpointPersists(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	t.Setenv("HOME", shortHome(t))
 	name := seedGraphWithSchema(t, "web-ui-rollout")
 
 	if names := schemaNamesOnTheStore(t, name, "SHOW INDEXES"); slices.Contains(names, "audit_key") {
@@ -412,7 +412,7 @@ func TestHandleGraphData_SchemaDDLThroughTheEndpointPersists(t *testing.T) {
 // put a raw angle bracket into the response, whatever the response is
 // (SPEC/WEB.md Acceptance Criteria 35 and 157).
 func TestHandleGraphData_EmptyGraphAnswerIsHTMLSafe(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	t.Setenv("HOME", shortHome(t))
 	name := seedGraphWithSchema(t, "web-ui-rollout")
 
 	const crafted = `SHOW INDEXES WHERE name = '<script>alert(1)</script>'`

@@ -54,7 +54,7 @@ func buildGraphCommand() Command {
 				},
 				Output: SuccessOutput{
 					Kind:    "object",
-					Schema:  `{"columns": [...], "rows": [[...],...], "plan": {...} with EXPLAIN, "profile": {...} with PROFILE (never both)} when the statement produces result columns or carries either prefix; {"ok": true} when it produces none.`,
+					Schema:  `{"columns": [...], "rows": [[...],...], "plan": {...} with EXPLAIN, "profile": {...} with PROFILE (never both), "counters": {...} when the statement changed the graph} when the statement produces result columns or carries either prefix; {"ok": true, "counters": {...} when the statement changed the graph} when it produces none.`,
 					Example: `{"columns":["n.key"],"rows":[["auth"]]}`,
 				},
 				SideEffects: SideEffects{
@@ -74,13 +74,13 @@ func buildGraphCommand() Command {
 					{
 						Title:  "Create a node",
 						Cmd:    `rmp graph execute -r myproject --query "CREATE (n:Spec {key:'auth'})"`,
-						Stdout: `{"ok":true}`,
+						Stdout: `{"ok":true,"counters":{"nodesCreated":1,"propertiesWritten":1,"labelsAdded":1}}`,
 						Exit:   0,
 					},
 					{
 						Title:  "Create an index",
 						Cmd:    `rmp graph execute -r myproject --query "CREATE INDEX spec_key FOR (n:Spec) ON (n.key)"`,
-						Stdout: `{"ok":true}`,
+						Stdout: `{"ok":true,"counters":{"indexesAdded":1}}`,
 						Exit:   0,
 					},
 					{
@@ -168,7 +168,7 @@ func buildGraphCommand() Command {
 				},
 				Output: SuccessOutput{
 					Kind:    "object",
-					Schema:  `{"columns": [...], "rows": [[...],...], "plan": {...} with EXPLAIN, "profile": {...} with PROFILE (never both)} when the statement produces result columns or carries either prefix; {"ok": true} when it produces none.`,
+					Schema:  `{"columns": [...], "rows": [[...],...], "plan": {...} with EXPLAIN, "profile": {...} with PROFILE (never both), "counters": {...} when the statement changed the graph} when the statement produces result columns or carries either prefix; {"ok": true, "counters": {...} when the statement changed the graph} when it produces none.`,
 					Example: `{"columns":["n.key"],"rows":[["auth"]]}`,
 				},
 				SideEffects: SideEffects{
@@ -188,7 +188,7 @@ func buildGraphCommand() Command {
 					{
 						Title:  "Write through a running server",
 						Cmd:    `rmp graph client -r myproject --query "CREATE (n:Spec {key:'auth'})"`,
-						Stdout: `{"ok":true}`,
+						Stdout: `{"ok":true,"counters":{"nodesCreated":1,"propertiesWritten":1,"labelsAdded":1}}`,
 						Exit:   0,
 					},
 					{

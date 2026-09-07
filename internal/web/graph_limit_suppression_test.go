@@ -392,7 +392,7 @@ func TestApplyGraphLimit_SuppressedForNonLimitableForms(t *testing.T) {
 // the node limit: the standalone call returns every label, more than the
 // resolved limit allows.
 func TestApplyGraphLimit_SuppressedFormsExecute(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	t.Setenv("HOME", shortHome(t))
 	name := seedRoadmap(t, "web-ui-rollout")
 	labels := seedLabelledGraph(t, name)
 	engine := openGraphReadEngine(t, name)
@@ -467,7 +467,7 @@ func TestApplyGraphLimit_SuppressedFormsExecute(t *testing.T) {
 // Acceptance Criterion 157. The sibling test below asserts that refusal, so the
 // form is covered rather than dropped.
 func TestHandleGraphData_NonLimitableFormsRunThroughTheEndpoint(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	t.Setenv("HOME", shortHome(t))
 	name := seedRoadmap(t, "web-ui-rollout")
 	seedLabelledGraph(t, name)
 
@@ -528,7 +528,7 @@ func TestHandleGraphData_NonLimitableFormsRunThroughTheEndpoint(t *testing.T) {
 // 400 with a kind of its own, which Acceptance Criterion 111 states MUST fail:
 // "asserting that either form is refused MUST fail this criterion".
 func TestHandleGraphData_SchemaIntrospectionIsSuppressedAndExecuted(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	t.Setenv("HOME", shortHome(t))
 	name := seedRoadmap(t, "web-ui-rollout")
 	seedLabelledGraph(t, name)
 
@@ -568,7 +568,7 @@ func TestHandleGraphData_SchemaIntrospectionIsSuppressedAndExecuted(t *testing.T
 // it. The call projects node values so the bound is observable in the response's
 // own node array, which is the endpoint's only measurable output.
 func TestHandleGraphData_ProjectedCallIsNotStandalone(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	t.Setenv("HOME", shortHome(t))
 	name := seedRoadmap(t, "web-ui-rollout")
 	seedGraph(t, name, `UNWIND range(1,120) AS i CREATE (:Bulk {i:i})`)
 

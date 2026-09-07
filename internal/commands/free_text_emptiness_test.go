@@ -69,7 +69,7 @@ type freeTextWriter struct {
 func setupEmptinessRoadmap(t *testing.T, name string) *db.DB {
 	t.Helper()
 
-	t.Setenv("HOME", t.TempDir())
+	t.Setenv("HOME", shortHome(t))
 
 	database, cleanup := setupTestTaskRoadmap(t, name)
 	t.Cleanup(cleanup)

@@ -119,6 +119,84 @@ func graphSocketInForce(roadmapName, socketFlag string) (string, error) {
 	return abs, nil
 }
 
+// graphSocketTooLong is the published line for a resolved socket path longer
+// than the platform allows a socket path to be.
+//
+// It is the line SPEC/COMMANDS.md § Graph Server Socket Error Lines publishes,
+// and it carries three interpolations and no figure of its own: the resolved
+// path, the number of bytes that path occupies, and the bound in force on the
+// platform the binary is running on. The bound is read from
+// internal/graphclient, the one place it is derived, so the SAME published line
+// is correct on all nine targets SPEC/BUILD.md declares — 107 bytes on Linux and
+// Windows, 103 on macOS, FreeBSD and OpenBSD — and no call site can come to
+// report a limit the check did not apply.
+//
+// What it replaces is worth stating, because it is the whole of rmp task #412:
+// the kernel's own `bind: invalid argument`, which named the path twice, named
+// the cause not at all, and gave the reader nothing to act on. This line names a
+// length, a limit, and the flag that moves the socket somewhere shorter.
+//
+// The failure class does not change with the message. It carries
+// utils.ErrGraphServer and exit code 1, the same sentinel and the same code the
+// unqualified bind failure already carried (SPEC/GRAPH.md § Socket Path Length,
+// rules 4 and 7).
+func graphSocketTooLong(socket string) error {
+	return fmt.Errorf("%w: socket path is too long: %s is %d bytes and this platform "+
+		"allows at most %d. Use --socket to name a shorter path.",
+		utils.ErrGraphServer, socket, len(socket), graphclient.MaxSocketPathLen)
+}
+
+// refuseOverLongSocket returns that line when socket is over the platform's
+// bound, and nil otherwise.
+//
+// It is what ALL THREE subcommands call, in the same position and to the same
+// effect: `graph serve`, which must create the socket; `graph client`, which
+// speaks to a server and to nothing else; and `graph execute`, which has a store
+// to fall back on and does not fall back on this. Where the path came from is
+// never asked. A derived path over the bound is refused exactly as a supplied one
+// is (SPEC/GRAPH.md § Socket Path Length, rules 5 and 6).
+//
+// The rule is uniform because the condition it reports is not a moment but a
+// defect. A roadmap whose derived socket path cannot be bound has a real and
+// permanent fault in its layout: the path is what it is, no server can ever be
+// started for that roadmap, and nothing the caller does at the moment of the call
+// changes it. A rule that refused `graph serve` and `graph client` while letting
+// `graph execute` and the web graph data endpoint open the store would report
+// that fault at two surfaces and conceal it at two others — and an operator who
+// saw `serve` fail while `execute` worked would have no reason to connect the
+// two, because from where they stand the two are answering different questions.
+//
+// The uniform rule also restores an identity stated elsewhere in the
+// specification and broken, under the split, without anything recording that it
+// had. SPEC/DATA_FORMATS.md § Graph Client Result requires — as a requirement and
+// not as an observation — that the surface a statement ran through is not
+// observable. Against a roadmap whose derived path was over the bound it was
+// plainly observable: `rmp graph execute` returned a result and exited 0 where
+// `rmp graph client` refused the same roadmap over the same path. The two now
+// refuse together, with the same line and the same code, so the identity holds
+// again at no cost.
+//
+// The cost of the uniformity is elsewhere and is not softened here: `graph
+// execute` is refused a roadmap it needs no socket for, against a bound that
+// constrains sockets and not stores. On the command line it is recoverable, and
+// the published line's remedy is truthful for all three subcommands — a --socket
+// value inside the bound passes this check, and with nothing listening on it the
+// roadmap resolves as not served, so the statement reaches the store
+// (§ Server Resolution, rule 12).
+//
+// The check runs on the RESOLVED path and before the socket is used — before the
+// lock, the probe, the unlink and the bind on the server side, and before the
+// probe on the caller's (§ Server Startup, step 1; § Server Resolution, rule 12).
+// A check placed after the attempt would be too late to replace anything, and one
+// placed after the probe would report an ordinary file sitting at such a path as
+// a server that could not be reached, which names the wrong thing entirely.
+func refuseOverLongSocket(socket string) error {
+	if graphclient.SocketPathTooLong(socket) {
+		return graphSocketTooLong(socket)
+	}
+	return nil
+}
+
 // resolveGraphServer probes the socket in force and reports whether a server is
 // answering there.
 //
@@ -258,7 +336,7 @@ func runOnGraphServer(socket, query string) (any, error) {
 	// (SPEC/GRAPH.md § Query Plans, rule 8).
 	prefixed := result.Plan != nil || result.Profile != nil
 	if len(result.Columns) == 0 && !prefixed {
-		return graphOKResult{OK: true}, nil
+		return graphOKResult{OK: true, Counters: graphjson.CountersOf(result.Counters)}, nil
 	}
 
 	columns := result.Columns
@@ -281,6 +359,13 @@ func runOnGraphServer(socket, query string) (any, error) {
 	// SPEC/DATA_FORMATS.md § Graph Client Result requires holds by construction.
 	out.Plan = graphjson.Plan(result.Plan, false)
 	out.Profile = graphjson.Plan(result.Profile, true)
+	// And the same for the counters, over the same shared mapping. The client
+	// inverted the protocol's statistics map onto the engine's own counters — with
+	// the property figure already folded by the server, which is the one place the
+	// two paths could have diverged — so this step arrives at the identical object
+	// the direct path publishes, by construction rather than by assertion
+	// (SPEC/DATA_FORMATS.md § Graph Client Result, rule 6).
+	out.Counters = graphjson.CountersOf(result.Counters)
 	return out, nil
 }
 

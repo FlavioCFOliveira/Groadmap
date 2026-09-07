@@ -28,9 +28,12 @@
   - [Recovered Schema on Every Surface](#recovered-schema-on-every-surface)
 - [Query Notifications as Diagnostics](#query-notifications-as-diagnostics)
 - [Query Plans: The EXPLAIN and PROFILE Prefixes](#query-plans-the-explain-and-profile-prefixes)
+- [Write Counters: What a Statement Changed](#write-counters-what-a-statement-changed)
+- [Field Length Limits](#field-length-limits)
 - [Error Handling and Exit Codes](#error-handling-and-exit-codes)
 - [The Dedicated Graph Server](#the-dedicated-graph-server)
   - [Socket Path and Permissions](#socket-path-and-permissions)
+  - [Socket Path Length](#socket-path-length)
   - [Server Startup](#server-startup)
   - [Server Shutdown and the Drain](#server-shutdown-and-the-drain)
   - [Server Options](#server-options)
@@ -116,8 +119,12 @@ a decision about the response's size and refuses nothing (see
    produces result columns returns those columns and rows as JSON to stdout, in
    the shape defined in `DATA_FORMATS.md § Graph Query Result`; a statement that
    produces none returns `{"ok": true}` (see
-   `DATA_FORMATS.md § Graph Write Result`). The engine reports no
-   affected-element count, so the result carries no such field. A statement
+   `DATA_FORMATS.md § Graph Write Result`). A statement that changed the graph
+   adds one member to whichever of those two shapes it produced, `counters`,
+   naming what it changed; a statement that changed nothing adds none and is
+   unchanged in every byte (see
+   [Write Counters: What a Statement Changed](#write-counters-what-a-statement-changed)
+   and `DATA_FORMATS.md § Graph Query Counters`). A statement
    written with an `EXPLAIN` or `PROFILE` prefix is the single exception to that
    discriminator: it always returns the columns-and-rows shape, carrying the
    captured plan, and never `{"ok": true}` (see
@@ -612,7 +619,11 @@ Failure policy:
    `RETURN`-mirroring shape or `{"ok": true}`) and exit code 0. A failed
    checkpoint after a durable commit is a degraded-but-correct state: the
    write-ahead log is intact, so recovery still restores the committed state, and
-   the next successful write checkpoints again and reconciles the snapshot.
+   the next successful write checkpoints again and reconciles the snapshot. **One
+   cause of checkpoint failure does not reconcile, and is a condition of its
+   own**: a field the snapshot format cannot carry is committed graph state, so
+   every later checkpoint refuses for the same reason until that field is removed
+   (see [Field Length Limits](#field-length-limits), rules 6 to 9).
 3. The checkpoint failure is surfaced through the existing error and
    observability conventions (a diagnostic on stderr, consistent with
    `HELP.md § Error message format`) **without** changing the exit code from 0.
@@ -1935,6 +1946,391 @@ stated here because it is a property of the diagnostic, not of the encoding;
     through `--query` or standard input, and it reaches the engine through the
     path every statement reaches it through.
 
+## Write Counters: What a Statement Changed
+
+A statement that changed the graph reports what it changed. The engine keeps,
+for each statement it executes, a set of counters recording the write effects
+that were actually applied — nodes and relationships created and deleted,
+properties written, labels added and removed, indexes and constraints added and
+dropped — and `rmp graph execute` and `rmp graph client` publish them beside the
+statement's result. `DATA_FORMATS.md § Graph Query Counters` is canonical for the
+published shape, the key set and the omission rules; this section fixes the
+behaviour.
+
+**The reason the member exists is that `{"ok": true}` answers a different
+question.** It says a statement succeeded, which is worth knowing and is not the
+thing a caller writing to a graph most needs to know. Two invocations that both
+print it may have created a node and matched an existing one, or deleted a
+thousand relationships and deleted none. The counters separate those cases
+without the caller having to issue a second, reading statement to find out —
+which is the only way it could have found out before, and which reads a graph
+that other writers may have changed in the meantime.
+
+Behaviour:
+
+1. **The counters are read after the result has been fully drained and before
+   the transaction is committed.** They are accumulated by the write path as the
+   statement's operators run, so they are final only once every operator has been
+   driven to exhaustion; and the commit is what releases the result, so a read
+   after it is a read of something that no longer exists. This is the same window
+   in which the query plan and the advisory notifications are taken, and for the
+   same two reasons (see
+   [Query Notifications as Diagnostics](#query-notifications-as-diagnostics) and
+   [Query Plans: The EXPLAIN and PROFILE Prefixes](#query-plans-the-explain-and-profile-prefixes)).
+2. **Both surfaces publish them, and publish the same object.** `rmp graph
+   execute` reads them from the engine it opened, or from the server it resolved;
+   `rmp graph client` reads them from the server it was pointed at. The identity
+   `DATA_FORMATS.md § Graph Client Result` requires binds them with no exception:
+   they describe the statement and the graph, not the duration of the run, which
+   is the one thing that section exempts.
+3. **A statement that failed or was rolled back publishes no counters, because
+   it publishes nothing at all.** A failing invocation writes nothing to stdout
+   (see `DATA_FORMATS.md § Fundamental Principle`), so the question of what its
+   counters said does not arise. This holds for every failure class alike: a
+   statement the engine refused, one the time budget cut, one whose commit
+   failed, and one that lost every attempt of the retry policy against a server.
+   The counters live with the statement's own write path, so an abandoned
+   statement's counts are discarded rather than carried into the next one.
+4. **A statement that changed nothing publishes no counters either, and its
+   output is unchanged in every byte.** This covers every read, every `EXPLAIN`
+   — which executes nothing — and every write whose effects came to nothing,
+   such as a `MERGE` that matched an existing element or a `DELETE` whose
+   pattern matched no row. It is what makes the member additive rather than a
+   change to the published contract: a consumer that never issues a writing
+   statement never sees a byte it did not see before.
+5. **The counters count effects, not observability, and this specification
+   claims nothing about the second.** A counter is incremented at the point the
+   write path applies the change. It is not a statement that the change can
+   afterwards be read back, and it must not be read as one:
+   [What Groadmap Does Not Check](#what-groadmap-does-not-check) enumerates the
+   ways in which a statement that the engine accepted and executed can leave the
+   graph other than as its author intended, and publishing a count does not
+   remove any of them. What the counters add is a signal where there was none;
+   what they do not add is a guarantee that was never there.
+
+### The one figure the protocol carries folded
+
+6. **`propertiesWritten` is one member covering two engine counters, on both
+   paths, and the constraint that decides it is the protocol's.** The engine
+   counts a property assignment and a property removal separately, following
+   openCypher, which names `+properties` and `-properties` as two distinct side
+   effects. The Bolt protocol that carries a served result does not: its
+   statistics vocabulary has a single properties counter and no counterpart for
+   a removal. A result that reached a caller through `rmp graph client` therefore
+   arrives with the two already summed, and no second channel exists anywhere in
+   the protocol from which the split could be recovered.
+7. **The fold is therefore performed on the direct path as well, and the
+   published key is named for the sum.** Three alternatives were available and
+   each fails a requirement this feature is under:
+   - Publishing the split on the direct path and the sum on the served one makes
+     the two surfaces publish different key sets for one statement, which is
+     precisely what `DATA_FORMATS.md § Graph Client Result` forbids, and would
+     buy a second standing exception to that identity for one counter.
+   - Publishing the sum under a key named for an assignment — a
+     `propertiesSet` carrying a removal — asserts an effect that did not occur.
+     This specification already refuses that trade for a plan's figures, where a
+     count nobody took is omitted rather than published as a zero
+     ([Query Plans: The EXPLAIN and PROFILE Prefixes](#query-plans-the-explain-and-profile-prefixes),
+     rule 11), and the principle does not weaken because the number here happens
+     to be convenient.
+   - Omitting the property counter entirely leaves a statement whose only effect
+     was on properties — every `SET` and every `REMOVE` that touches no label —
+     with a change to report and no member to report it in. Its block would be
+     present, because the statement changed something, and empty, which
+     `DATA_FORMATS.md § Graph Query Counters`, rule 2, does not allow.
+8. **What the fold costs, stated plainly, and what it does not.** A caller
+   cannot tell, from `propertiesWritten` alone, whether a statement assigned two
+   properties, removed two, or did one of each. That is a real loss and it is
+   published rather than hidden. What it does not cost is the member's purpose:
+   distinguishing a `MERGE` that created from one that matched, a `DELETE` that
+   removed nothing from one that removed a thousand, and a schema statement that
+   registered an index from one that found it already present, all rest on the
+   node, relationship and schema counters, and every one of those crosses the
+   protocol faithfully. A caller that must know which of the two property
+   effects occurred knows it from the statement it wrote.
+9. **The remedy is upstream and is not available here.** Restoring the split
+   would require the protocol's statistics map to carry a properties-removed
+   figure alongside the one it has — an extension to the wire vocabulary, not a
+   change to how Groadmap reads it. Until such a figure exists on the wire,
+   folding on both paths is the only arrangement that keeps every requirement in
+   this section and in `DATA_FORMATS.md § Graph Client Result` true at the same
+   time. Should the figure appear, `propertiesWritten` may be replaced by the
+   two separate members, on both paths in the same change; nothing in this
+   specification is written so as to make that harder than it needs to be.
+10. **The counters and a query plan never appear together, and neither surface
+    has to arrange it.** An `EXPLAIN` executes nothing, so it has no applied
+    effect to count. A `PROFILE` executes, but the engine refuses a `PROFILE` of
+    a writing statement rather than perform a write it was asked only to measure
+    (see
+    [Query Plans: The EXPLAIN and PROFILE Prefixes](#query-plans-the-explain-and-profile-prefixes),
+    rules 1 and 4), so the only statement a `profile` tree can describe is one
+    that changed nothing. Both exclusions are the engine's, and this
+    specification records them rather than imposing them.
+
+## Field Length Limits
+
+A statement writes labels, property keys and property values into two durable
+formats, and each format bounds how long a field it will carry. The bounds are
+the engine's. This specification does not set them, does not raise them and does
+not lower them; what it fixes is what the caller is told when a field exceeds
+one, and what Groadmap does next.
+
+**The two formats do not bound a field alike, and that is why this section has
+two halves rather than one rule applied twice.** A committed write goes into the
+write-ahead log; a checkpoint later folds the committed state into a snapshot
+(see [Synchronous Checkpoint on Write](#synchronous-checkpoint-on-write)). The
+log bounds a field by the capacity of the length prefix its frame reserves, which
+is an encoding limit. The snapshot bounds one by what its own reader is required
+to accept, which is an anti-exhaustion control — a reader that allocated for any
+length a prefix could express would allocate gigabytes on an untrusted file. The
+two are set independently and neither is uniformly the stricter: for a label and
+for a property key the log's bound is by far the tighter and fires first, at
+commit, so the snapshot's can never be reached; for a property value and for a
+node key the snapshot's is the tighter by a factor of four, so a field can be
+short enough to commit and too long to fold. Such a field is durable, correct,
+recoverable and unfoldable at the same time. Rules 6 to 9 exist for exactly that
+field, and they are not a wording variant of rules 2 to 5.
+
+**The figures are read from the pinned GoGraph version and are recorded here as
+evidence, not as the rule.** They move with the engine, a version bump may move
+any of them, and no line Groadmap publishes repeats one from this page: every
+published line carries the figure the engine reported for the run that produced
+it (see [Dependency Maturity Risk](#dependency-maturity-risk)).
+
+| Field | Write-ahead log, at commit | Snapshot, at checkpoint | Which bound binds |
+|-------|----------------------------|-------------------------|-------------------|
+| Node or edge label | 65535 bytes | 1 MiB | The log, by a factor of sixteen |
+| Node or edge property key | 65535 bytes | 1 MiB | The log, by a factor of sixteen |
+| Index or constraint identifier | 65535 bytes | 64 KiB | Neither: the engine's Cypher parser bounds it far below both |
+| Property value, list element, list element count | 4294967295 bytes | 1 GiB | **The snapshot**, at a quarter of the log's bound |
+| Node key | 4294967295 bytes, enforced by the node-key codec | 1 GiB | **The snapshot**, at a quarter of the log's bound |
+| Labels or properties on one edge-handle record | — | 1 Mi | The snapshot, at a ceiling no graph the engine produces approaches |
+
+**The binding bound for a property value is 1 GiB, and a caller who reads only
+the log's figure is misled.** A 2 GiB value is inside the log's bound, so it
+commits, and it is acknowledged, durable and recoverable. It is outside the
+snapshot's, so from that moment every checkpoint of that graph fails, the
+write-ahead log is never folded again and never reclaimed, and it grows for as
+long as the value remains. The last column of the table above is therefore the
+column that matters when writing, and 1 GiB is the number to write under.
+
+Behaviour:
+
+1. **Groadmap checks no field length, and MUST NOT.** It cannot: a statement's
+   fields are the values its expressions produce, so learning them means
+   executing the statement, which is what the engine does. A pre-check would have
+   to reimplement the engine's evaluator to guess at a bound the engine owns, and
+   it would be wrong in the direction that matters — refusing writes the engine
+   accepts. This is the same reasoning that puts the write-ahead log, and not the
+   statement's text, in charge of whether a checkpoint runs
+   ([Synchronous Checkpoint on Write](#synchronous-checkpoint-on-write)). Every
+   rule below describes what Groadmap does with a refusal the engine has already
+   made.
+2. **A commit the engine refuses for an over-long field publishes a line of its
+   own.** It carries `utils.ErrGraphEngine` and exit code 1, as an ordinary parse
+   or execution failure does, and it is nonetheless not that failure's line. The
+   two conditions were otherwise separated only by the engine's diagnostic tail,
+   which [Error Handling and Exit Codes](#error-handling-and-exit-codes), rule 2,
+   deliberately declines to specify and which a caller therefore cannot lawfully
+   match: a caller reading `graph query failed: ` had to parse English to learn
+   whether to correct the statement's syntax or to shorten one of its values.
+   This is the same defect, and the same remedy, as the statement time budget and
+   the exhausted serialisation retry, which each hold a line of their own for the
+   same reason (rules 6 and 7 of that section).
+3. **What a caller may rely on to recognise the class is `rmp`'s own text, and
+   inside the binary the engine's sentinel.** Externally, the fixed prefix of the
+   published line is the whole of the contract: `COMMANDS.md § Graph Management`
+   publishes the exact line. Internally, the condition is recognised with
+   `errors.Is` against `store/txn.ErrFieldTooLong`, which the engine wraps around
+   every write-ahead-log length refusal. It MUST NOT be recognised by matching
+   the engine's message text: that text is the engine's to reword, a match on it
+   fails silently at the next version bump, and the whole point of a sentinel is
+   that it survives the wording.
+4. **The published line ends in the engine's diagnostic, and the resulting echo
+   is deliberate.** The engine formats every such refusal with the field kind and
+   both figures — the length the field occupies and the maximum in force — and
+   that is the most useful part of the line, because it names which of the
+   statement's fields is at fault and by how much. It follows `rmp`'s own text
+   unchanged, untrimmed and **last**, which is where every other published line
+   carrying an engine or operating-system diagnostic puts it, and which is what
+   lets a test assert the whole of `rmp`'s half and none of the engine's. The two
+   halves therefore both say the field is too long, and that repetition MUST NOT
+   be tidied away by editing, trimming or re-deriving the engine's half: doing so
+   would put `rmp` back to parsing a diagnostic that rule 3 forbids it to match.
+   `rmp`'s half accordingly names no field kind of its own — it defers to the
+   engine's, which is the only one that knows.
+5. **Nothing is written, the store stays usable, and the exit code is
+   unchanged.** The refused transaction consumes a sequence number and applies
+   nothing, so the graph holds no part of the statement — not the elements it
+   created before the over-long field, and not the properties it set on them.
+   Measured, an ordinary write submitted immediately after such a refusal
+   returned `{"ok": true}` and a following `MATCH` counted it. The refusal adds
+   no exit code and moves no condition between sentinels
+   ([Constraints](#constraints), rule 5).
+6. **A checkpoint the engine refuses for an over-long field is a condition of its
+   own, and what separates it from every other checkpoint failure is that it
+   cannot heal.** A checkpoint that fails because a disk is full, a permission is
+   wrong or a write is interrupted may succeed the next time it runs, and both
+   the existing rule and the existing diagnostic are built on that expectation:
+   the write succeeded, the log is intact, and the next successful checkpoint
+   reconciles the snapshot
+   ([Synchronous Checkpoint on Write](#synchronous-checkpoint-on-write), failure
+   policy;
+   [Durability and Checkpointing in a Long-Lived Process](#durability-and-checkpointing-in-a-long-lived-process),
+   rule 7). Here that expectation is false. The field the snapshot refuses is
+   committed graph state; every later capture captures the same state, so every
+   later checkpoint refuses for the same reason. **The condition is permanent
+   until the offending field is removed or shortened.** Nothing in the
+   environment changes it, no amount of waiting resolves it, and a diagnostic
+   that told the operator the next checkpoint would reconcile the snapshot would
+   be telling them to wait for something that will not happen. That is why this
+   is a condition of its own and not the general one worded better.
+7. **What the failure costs is bounded growth lost, not data.** The engine's
+   guard fires while the capture is still being assembled, before any snapshot
+   file is written and before the write-ahead log's prefix is truncated. Every
+   acknowledged commit therefore remains durable in the log, recovery still
+   restores it in full, and the store stays open and usable. What is lost is the
+   truncation: the log keeps growing for as long as the offending field is in the
+   graph, and every open replays more of it, so recovery time grows with it. That
+   is a real and unbounded cost, and it is the reason the condition must be
+   reported rather than absorbed — but it is not a durability failure, and a
+   diagnostic that read as one would be worse than none.
+8. **Every surface that holds the checkpoint error MUST classify it; the one that
+   does not hold it MUST NOT pretend to.** The synchronous checkpoint of a
+   short-lived invocation and the graph server's shutdown checkpoint both return
+   an error to Groadmap, so both MUST recognise
+   `store/snapshot.ErrFieldTooLong` with `errors.Is` and report this condition
+   rather than the general one. The graph server's in-flight checkpoint does not:
+   it runs on the engine's own cadence loop
+   ([Durability and Checkpointing in a Long-Lived Process](#durability-and-checkpointing-in-a-long-lived-process),
+   rules 5 and 9), and what Groadmap can observe of it is a statistics value
+   carrying the last failure as a **rendered string**, not as an error. On that
+   path `errors.Is` has nothing to match, and matching the string is what rule 3
+   forbids, so the in-flight report stays the general one — with the engine's own
+   text inside it, which is where an operator reads the kind. This is a limit of
+   what the engine exposes; it is stated as one rather than closed by a text
+   match, and it is the boundary an implementation MUST observe rather than work
+   around.
+9. **The report says what is safe, what did not happen, that it will not happen
+   again, and what to remove.** Wherever rule 8 requires the classification, the
+   diagnostic MUST carry four things: that every acknowledged commit is still
+   durable and recovery still restores it; that the log was not folded, and that
+   the log therefore grows and the next open replays more of it; that the
+   condition will persist through every later checkpoint while the field remains;
+   and that the remedy is to shorten or remove the offending field with a
+   statement. The last two are what make this report different from every other
+   checkpoint diagnostic, all of which describe a condition the operator waits
+   out or repairs in the environment. They are also what makes the report worth
+   emitting more than once: on the short-lived surfaces the diagnostic
+   accompanies **every subsequent write**, because every subsequent write
+   checkpoints and every checkpoint refuses, and a line that recurred on every
+   write saying only that a checkpoint had failed would train an operator to
+   ignore the one message that names an unbounded, permanent cost. **No literal
+   for these diagnostics is published in this specification or in `COMMANDS.md`.**
+   They accompany a successful invocation — exit code 0 for the short-lived
+   surfaces
+   ([Synchronous Checkpoint on Write](#synchronous-checkpoint-on-write), failure
+   policy, rule 2) and a log record for the server
+   ([Server Diagnostics on Stderr](#server-diagnostics-on-stderr)) — so neither
+   is an error line and neither belongs in the error tables that
+   `COMMANDS.md § Published Error Strings Are Exact` governs. What is fixed is
+   the content above, not the wording.
+10. **Two neighbouring refusals are outside this class, and an implementation
+    MUST NOT fold them in.** A node key longer than the write-ahead log's
+    unsigned 32-bit prefix is refused by the engine's node-key codec, which does
+    not wrap `store/txn.ErrFieldTooLong`; it reaches the caller through the
+    ordinary parse-or-execution line of
+    [Error Handling and Exit Codes](#error-handling-and-exit-codes), rule 2. An
+    assembled write-ahead-log frame over the engine's frame ceiling — which a
+    single list property of many individually-legal elements can reach without
+    any one of them being over-long — is refused by the log's framer under a
+    sentinel of its own, and reaches the caller the same way. Both are genuine
+    length refusals in spirit; neither is this class, because the class is
+    defined by the sentinel a caller matches and not by the shape of the
+    complaint.
+11. **A schema identifier does not reach the write-ahead log's bound.** The
+    engine's Cypher parser bounds an index or constraint name, label and property
+    far below 65535 bytes at the point the statement is parsed, so a schema
+    statement meets that bound first and is refused there, with its own message
+    and as an ordinary engine refusal (see
+    [Schema Failure Classes](#schema-failure-classes)). The field kinds a Cypher
+    statement can drive into rule 2's refusal are therefore a node or edge label
+    and a node or edge property key — the two a caller writes in a pattern.
+12. **What is checkable end to end, and what is not.** The 65535-byte bound on a
+    label and on a property key is reachable from a statement that fits inside
+    the maximum query length, so rule 2's refusal, rule 5's intact store and the
+    published line are all drivable against the compiled binary, and
+    [Acceptance Criteria](#acceptance-criteria) 68 and 69 drive them. The bounds
+    that govern a property value are not, in either format: a literal of a
+    gigabyte does not fit inside the maximum query length, and a regression test
+    cannot materialise a field of that size at all — one that tried would measure
+    the machine rather than the product. Rules 6 to 9 are therefore not drivable
+    end to end either, since the only way to a refused checkpoint is a field of
+    that size. Their coverage lives in two places instead, and this specification
+    says where rather than implying an end-to-end check exists. The engine's own
+    suite covers each guard at the boundary of its own constant, which is where
+    that coverage belongs, because the constants are the engine's. Groadmap's
+    coverage is of the classification alone, driven with a fabricated error that
+    wraps the engine's sentinel: what Groadmap owns on this path is the decision
+    of which line or which diagnostic to publish, and that decision is testable
+    without a field of any particular size. Criterion 70 fixes that division and
+    forbids a criterion that attempts the field itself.
+13. **The published line is reached on the direct path, and at the pinned engine
+    it is not reached through a server.** Where a statement runs against the
+    store itself, the line is exactly what rules 2 to 4 describe, and criteria 68
+    and 69 drive it there. Where the same statement is sent to a running server
+    — which `rmp graph execute` does whenever one answers
+    ([Server Resolution](#server-resolution)), and which `rmp graph client`
+    always does — it cannot be reached. The engine's Bolt server classifies this
+    refusal as a **server** fault, because its failure-code mapping carries no
+    case for `store/txn.ErrFieldTooLong` and falls back to its generic
+    database-error code; the session then replaces the message of every failure
+    so classified with generic internal-error text naming only the session. So
+    neither the sentinel, nor a code that separates this condition from any
+    other, nor the field kind crosses the connection, and what such a caller
+    reads is the ordinary parse-or-execution line of
+    [Error Handling and Exit Codes](#error-handling-and-exit-codes), rule 2,
+    carrying that generic text where the engine's diagnostic would be. That is
+    precisely the defect rule 2 of this section exists to remove, still standing
+    on this one path. The diagnostic itself is not destroyed: the engine logs it
+    in full, under the same session, as a record of the kind
+    [Server Diagnostics on Stderr](#server-diagnostics-on-stderr), rule 1,
+    governs — so it is readable by whoever can read the server's stderr, and
+    unreadable by the caller who ran the statement.
+
+    **What is unaffected.** The sentinel is `utils.ErrGraphEngine` and the exit
+    code is 1 on both paths; nothing is written and the store stays usable on
+    both (rule 5); no condition moves between sentinels and no exit code is
+    added. Only the message differs.
+
+    **Groadmap MUST NOT close this on its own side.** There is no interception
+    point to close it at: the engine's server exposes no error-mapping option,
+    and Groadmap runs no statement of its own between the caller and the server
+    on this path. The one remaining lever would be matching the sanitised text,
+    which rule 3 forbids and which would yield nothing worth publishing in any
+    case — that text names no field, no kind and no figure. **The remedy belongs
+    in the engine**: a case for `store/txn.ErrFieldTooLong` in its Bolt
+    failure-code mapping, resolving to a client-error code, exactly as the
+    per-transaction operation cap is already mapped there and its message
+    reaches the client intact. Once a code distinguishes the condition, the
+    client reaches the published line through the code-matching it already uses
+    lawfully for the conflict and the budget classes, this rule's exception
+    ends, and the line becomes drivable on both paths.
+
+    **The departure this leaves is recorded here rather than left to be
+    discovered.** Because `graph execute` takes the served path whenever a server
+    answers, one statement produces one of two different stderr lines according
+    to whether a server happens to be running — which the caller did not choose
+    and cannot see. The identity between the two paths is stated in
+    [Functional Requirements](#functional-requirements), rule 16, and in
+    `DATA_FORMATS.md § Graph Client Result`, and both bind the success output and
+    the exit code, which this departure leaves whole; it is confined to the
+    stderr diagnostic of this one condition, and it lasts only until the engine
+    gains the case above. `COMMANDS.md § Execute Error Cases` and
+    `COMMANDS.md § Client Error Cases` are written to this rule: the first
+    qualifies its field-length row to the direct path, and the second carries no
+    such row at all.
+
 ## Error Handling and Exit Codes
 
 Graph subcommands use the exit-code mapping defined in
@@ -1967,6 +2363,7 @@ it.
 | Query longer than the maximum query length of 1 MiB, from either source (see [Maximum Query Length](#maximum-query-length)) | `utils.ErrValidation` | 6 |
 | The query was to come from standard input and the read of the stream itself failed (see [Bounded Standard-Input Read](#bounded-standard-input-read)) | `utils.ErrIO` | 1 |
 | Cypher fails to parse or execute in the engine, a schema statement included (see [Schema Failure Classes](#schema-failure-classes)) | `utils.ErrGraphEngine` | 1 |
+| A label or property key the statement writes is longer than the write-ahead log's length prefix allows, and the engine refuses the commit (see [Field Length Limits](#field-length-limits)) | `utils.ErrGraphEngine` | 1 |
 | The statement exhausts the statement time budget and is cancelled (see [Statement Time Budget](#statement-time-budget)) | `utils.ErrGraphEngine` | 1 |
 | Every attempt of the client's retry policy loses a serialisation conflict against a graph server (see [Concurrency Inside the Server](#concurrency-inside-the-server), rule 9) | `utils.ErrGraphEngine` | 1 |
 | Graph store cannot be opened, recovered, read, or written (I/O or corruption) | `utils.ErrGraphStore` | 1 |
@@ -1975,6 +2372,7 @@ it.
 | The connection to a server is lost after the statement has been sent (see [Server Resolution](#server-resolution), rule 4) | `utils.ErrGraphServer` | 1 |
 | A server does not answer within the caller's backstop deadline (see [Server Resolution](#server-resolution), rule 7) | `utils.ErrGraphServer` | 1 |
 | `graph client` finds no server listening for the selected roadmap (see [The Bolt Client](#the-bolt-client)) | `utils.ErrGraphServer` | 1 |
+| A resolved socket path is longer than the platform's bound, whether derived from the roadmap or supplied through `--socket` (see [Socket Path Length](#socket-path-length)) | `utils.ErrGraphServer` | 1 |
 | `graph serve` cannot bind its socket, or a live server already answers on the resolved socket (see [Server Startup](#server-startup)) | `utils.ErrGraphServer` | 1 |
 | Successful execution, and a server stopped by `SIGINT` or `SIGTERM` after a graceful shutdown | — | 0 |
 
@@ -2049,6 +2447,21 @@ Rules:
    `COMMANDS.md § Graph Management` publishes the exact line, and
    [Concurrency Inside the Server](#concurrency-inside-the-server) states the
    behaviour behind it.
+
+8. **An over-long field fails in the same class and publishes a line of its own
+   too, and it is the last of the four that do.** It carries
+   `utils.ErrGraphEngine` and exit code 1, as rule 2's engine failures, rule 6's
+   budget exhaustion and rule 7's exhausted retry do: the statement reached the
+   engine, and the engine refused to make it durable. It introduces no new exit
+   code. Its message is none of the other three's. Unlike rule 6's and rule 7's,
+   it is **not** wholly `rmp`'s own text: `rmp` writes the class, the statement
+   that nothing was written and the action to take, and then ends the line with
+   the engine's diagnostic, because that diagnostic names which field is at fault
+   and by how much and no text `rmp` could write would know that. What `rmp`'s
+   half supplies is the class — the thing rule 2's line could not distinguish. `COMMANDS.md § Graph Management` publishes the exact line, and
+   [Field Length Limits](#field-length-limits) states the behaviour behind it,
+   including the second half of the condition that reaches the caller as a
+   diagnostic on a successful invocation rather than as an error at all.
 
 ## The Dedicated Graph Server
 
@@ -2147,13 +2560,146 @@ and not inside `graph/`: the contents of that directory belong to GoGraph, and
    and every resolver reads it as evidence that the roadmap is not served (see
    [Server Resolution](#server-resolution)).
 
+### Socket Path Length
+
+A Unix domain socket is named by a path in the filesystem, and the operating
+system bounds how long that path may be. The bound belongs to the platform and
+not to Groadmap: the kernel copies the path into the fixed-size `sun_path` field
+of its socket address structure, and a path that does not fit there — terminator
+included — can be neither bound nor connected to. A path over the bound therefore
+names a socket that no process can create and no caller can reach, and it stays
+that way for as long as the path stays what it is. Left unchecked, it surfaces as
+the kernel's own `invalid argument`, which names neither the length, nor the
+limit, nor anything the reader can act on.
+
+**The bound is derived from the platform, never declared here.** It is the
+capacity of the `sun_path` field, less one byte for the terminator that must have
+somewhere to go. That expression is what this specification fixes; the number it
+yields is not, because the number is not the same everywhere. Across the
+operating systems the project's targets span (`BUILD.md § Primary Platforms`) the
+same expression yields **107 bytes on Linux and Windows** and **103 bytes on
+macOS, FreeBSD and OpenBSD** — two figures over nine targets, from one
+expression. An implementation that hard-codes 107 is correct on two of the five
+operating systems and silently wrong on the other three, where it would accept
+four paths the platform cannot bind and hand the caller back the very errno this
+section exists to replace. The figures above are what the derivation produces;
+they are evidence for it, and they are not a substitute for it.
+
+Behaviour:
+
+1. **The check runs on the resolved path, not on what the caller typed.** It is
+   applied after `~/.roadmaps/<name>/graph.sock` has been derived from the
+   roadmap, and after a `--socket` value has been expanded to the absolute path
+   the invocation will actually use. The kernel measures the resolved string, so
+   a check that measured anything earlier would be measuring something else. The
+   derived default path is therefore checked exactly as a supplied one is: the
+   bound is a property of the path, not of how the path was chosen.
+2. **The length is counted in bytes.** `sun_path` holds bytes, and a roadmap name
+   may carry multi-byte UTF-8, so a path of a hundred characters can be well over
+   the bound. A check that counted runes would pass paths the kernel refuses, and
+   would do so only for callers whose roadmap names are not ASCII — the worst way
+   for a bound to be wrong, because it would look correct everywhere it was
+   tested.
+3. **The check runs before the socket is used.** `rmp graph serve` performs it
+   while it resolves the path, before it takes the store lock, probes the path,
+   removes a stale file, or binds anything (see
+   [Server Startup](#server-startup), step 1). A caller performs it before it
+   probes. The purpose is to report the cause instead of the errno, and a check
+   placed after the attempt would be too late to replace anything.
+4. **The published line names the actual length, the derived limit, and the
+   remedy.** It reports the resolved path once, the number of bytes that path
+   occupies, and the number of bytes this platform allows, and it names
+   `--socket` as the way to put the socket somewhere shorter. Both numbers are
+   values the binary interpolates: the limit is the derived figure for the
+   platform the binary is running on, so the same published line is correct on
+   all nine targets. `COMMANDS.md § Graph Server Socket Error Lines` publishes
+   the exact line.
+5. **An over-long resolved path fails the invocation, on every surface, however
+   the path was chosen.** The three subcommands that publish `--socket` —
+   `graph serve`, `graph client` and `graph execute` — each exit 1 with the line
+   above, and the web graph data endpoint refuses the request; each of them does
+   so both for a path the caller supplied and for the derived default path. No
+   surface falls back to the store on this condition: `graph execute` does
+   **not** open it, and the web graph data endpoint does **not** open it either.
+   This is the single point at which an over-long path departs from the
+   resolution rule, and it departs from it identically in both cases, because the
+   bound is a property of the path and rule 1 has already fixed that the two are
+   measured on the same rule. An absent socket is evidence that a roadmap is not
+   served *at this moment*; a path over the bound is evidence that no server can
+   ever answer there, which is not the same fact and does not warrant the same
+   answer. Falling back would repeat, silently, the outcome
+   [Serving on a Non-Default Socket](#serving-on-a-non-default-socket), rule 6,
+   records for a mistyped path — with the difference that here the product can
+   tell, and a product that can tell and says nothing is choosing not to.
+6. **The rule is uniform because a report that is the same everywhere is worth
+   more here than the one surface that could have carried on, and what that
+   costs is stated rather than hidden.** A roadmap whose derived socket path
+   cannot be bound has a real and permanent defect in its layout: the path is
+   what it is, no server can be started for that roadmap, and nothing the caller
+   does at the moment of the call changes it. A rule that refused `graph serve`
+   and `graph client` while letting `graph execute` and the web graph data
+   endpoint open the store would report that defect at two surfaces and conceal
+   it at two others; an operator who sees `serve` fail while `execute` works has
+   no reason to connect the two, because from where they stand the two surfaces
+   are answering different questions. The split also broke a requirement stated
+   elsewhere in this specification, and broke it without recording that it had:
+   `DATA_FORMATS.md § Graph Client Result` fixes, as a requirement rather than an
+   observation, that the surface a statement ran through is not observable — and
+   under the split an over-long derived path made `rmp graph execute` return a
+   result and exit 0 where `rmp graph client` refused the same roadmap. The
+   uniform rule restores that identity at no cost, because the two now refuse
+   together, with the same line and the same code. What the uniform rule buys is
+   therefore one answer at whichever surface the operator reaches first, given at
+   the first point of contact, where the published line already names the remedy.
+   **The cost is real and is not softened here.** `graph execute` and the web
+   graph page refuse a roadmap neither of them needs a socket for, against a
+   bound that constrains sockets and not stores: the store is not bounded by `sun_path`, and a statement those
+   two surfaces could have served is refused anyway. A home directory deep enough
+   to push the derived path over the bound therefore makes that roadmap's graph
+   unreachable through every surface at once, where a split rule would have left
+   two of them working. That is an ordinary installation and not a hypothetical:
+   rule 8 records the bound being reached in practice on a three-character
+   roadmap name. On the command line the refusal is recoverable without moving
+   the roadmap, and the published line's remedy is truthful there for all three
+   subcommands: `--socket` naming a path inside the bound is checked and passes,
+   and a path nothing is listening on resolves as not served, so
+   `graph execute` given one opens the store and runs the statement (see
+   [Server Resolution](#server-resolution), rule 12). The web graph data endpoint
+   has no such flag and no way to receive one, so for that surface the only
+   remedy is a shorter derived path: a shorter home directory, or a shorter
+   roadmap name. That asymmetry between the command line and the web interface
+   is the same boundary, drawn for the same reason, that
+   [Serving on a Non-Default Socket](#serving-on-a-non-default-socket) already
+   states.
+7. **The failure class and the exit code are unchanged; only the message
+   differs.** The refusal carries `utils.ErrGraphServer` and exit code 1 — the
+   same sentinel and the same code the unqualified bind failure already carried.
+   This section adds no exit code, moves no condition between sentinels, and
+   changes no classification (see
+   [Error Handling and Exit Codes](#error-handling-and-exit-codes)). What it
+   changes is what the reader is told: a length, a limit and a remedy, in place of
+   a diagnostic that named the path twice and the cause not at all.
+8. **The derived path reaches the bound without an unusual roadmap name.** The
+   default path is the home directory, 22 fixed bytes for `/.roadmaps/` and
+   `/graph.sock`, and the roadmap name. A roadmap name may be 50 bytes, so a home
+   directory of 36 bytes puts the derived path one byte over the 107-byte figure
+   Linux and Windows yield, and one of 32 bytes puts it over the 103-byte figure
+   macOS, FreeBSD and OpenBSD yield. It has been reached in practice on a three-character roadmap name under
+   a deep home directory, at 139 bytes — 32 over the limit in force there. The
+   bound is a live constraint on ordinary installations, and not a limit only a
+   deliberately long `--socket` can find.
+
 ### Server Startup
 
 `rmp graph serve` performs this sequence in this order. The order is load-bearing:
 each step is what makes a later one safe.
 
-1. **Resolve the roadmap and the socket path.** A roadmap that does not exist
-   fails here, before anything is opened, created, or removed.
+1. **Resolve the roadmap and the socket path, and check the path's length.** A
+   roadmap that does not exist fails here, before anything is opened, created, or
+   removed. So does a resolved socket path longer than the platform's bound,
+   whether it was derived from the roadmap or supplied through `--socket` (see
+   [Socket Path Length](#socket-path-length)). Both refusals precede the lock, the
+   probe, the unlink and the bind, so a server that cannot start touches nothing.
 2. **Take the graph store's exclusive advisory lock under the bounded wait**
    [Lock Contention](#lock-contention) specifies. The wait is the ordinary one: a
    server starting while a short-lived `rmp graph execute` invocation holds the
@@ -2820,7 +3366,11 @@ something.
    durably**, exactly as it does not on the direct path. The write succeeded, the
    log is intact, the next successful checkpoint reconciles the snapshot, and the
    failure is a diagnostic rather than a failed statement (see
-   [Synchronous Checkpoint on Write](#synchronous-checkpoint-on-write)).
+   [Synchronous Checkpoint on Write](#synchronous-checkpoint-on-write)). The
+   reconciliation is what an over-long field does not get: it is committed state,
+   so it refuses every later checkpoint too, and the server reports it as its own
+   condition on the one checkpoint path whose error it holds (see
+   [Field Length Limits](#field-length-limits), rules 6 to 9).
 8. **An unconditional checkpoint is not merely a wasted write; it publishes a
    permanent residue, and that is why rule 4's condition is a requirement rather
    than an optimisation.** A statement the deadline cuts while it is writing is
@@ -3005,6 +3555,22 @@ Rules:
 11. **`rmp graph client` resolves the same socket but has no second path.** For
     that subcommand the first two states are failures rather than fallbacks; see
     [The Bolt Client](#the-bolt-client).
+12. **A resolved path longer than the platform's socket-path bound is settled
+    before the probe, and it is settled the same way on every surface.** A path
+    that cannot be bound cannot be listened on, so probing it can tell a caller
+    nothing it does not already know. It is **not** one of the two definite
+    negatives the first two states describe: those report that no server is
+    listening now, while a path over the bound reports that none can ever listen
+    there, and the second fact is not served by the answer the first one gets.
+    The resolution therefore fails rather than falling back — on `rmp graph
+    serve`, `rmp graph client` and `rmp graph execute` alike, and the web graph
+    data endpoint refuses the request — whether the path was derived from the
+    roadmap or supplied through `--socket`. Neither of the two surfaces that have
+    a second path takes it here. A caller that can name a path can still reach the
+    store: a `--socket` value inside the bound passes this check and, with nothing
+    listening on it, resolves as not served under rule 1.
+    [Socket Path Length](#socket-path-length) is canonical for the bound, for the
+    line each of these failures publishes, and for why the rule is uniform.
 
 ### The Bolt Client
 
@@ -3070,7 +3636,13 @@ this section is about.**
    invocation to the store rather than to the server it meant, silently and
    successfully. That is rule 2 of [Server Resolution](#server-resolution) applied
    to a caller-supplied path, and it is stated here because a typo is a likelier
-   cause of it than a deliberate choice.
+   cause of it than a deliberate choice. One class of mistyped value is caught
+   rather than followed: a path longer than the platform's socket-path bound
+   cannot name a socket at all, so every subcommand given it refuses the
+   invocation and says why, instead of resolving it (see
+   [Socket Path Length](#socket-path-length), rule 5). Every other typo still falls
+   through as this rule describes, because every other typo names a path a socket
+   could lawfully occupy.
 
 ## Concurrency and Recovery
 
@@ -4375,12 +4947,151 @@ Groadmap's usage model and expectations:
     that `timeNs` is **present** on both sides wherever the shape requires it, so
     that excluding the value does not quietly excuse a missing key (see
     `DATA_FORMATS.md § Graph Client Result`, rule 5).
+61. **A write publishes its counters, a read publishes none, and the criterion
+    MUST assert both halves.** Against one roadmap:
+    `CREATE (:Widget {serial:'A-1', batch:7})` returns `{"ok": true}` carrying a
+    `counters` object of exactly `nodesCreated` 1, `propertiesWritten` 2 and
+    `labelsAdded` 1 — three members and no fourth, so the criterion fails on a
+    zero that was published rather than omitted; and `MATCH (w:Widget) RETURN
+    w.serial` returns its `columns` and `rows` with **no `counters` key at
+    all**, in bytes identical to those it returned before the member was
+    published. The second half is the one that cannot be dropped: it is the
+    guarantee every existing consumer depends on, and it is the part an
+    over-eager implementation breaks silently by publishing an empty object
+    (see [Write Counters: What a Statement Changed](#write-counters-what-a-statement-changed)
+    and `DATA_FORMATS.md § Graph Query Counters`).
+62. **A write that applied nothing is distinguishable from one that applied
+    something, and that is what the member is for.** Re-running a `MERGE` that
+    matches the element it matched before returns `{"ok": true}` with no
+    `counters` key, while its first run returned one; a `DELETE` whose pattern
+    matches no row does the same. The criterion MUST compare the two runs of the
+    **same statement** rather than two different statements, because it is the
+    difference between them that a caller reads, and MUST also assert that a
+    `DETACH DELETE` of a connected node reports `nodesDeleted` and
+    `relationshipsDeleted` and no property figure — a deletion counts no property
+    removal.
+63. **The two subcommands publish the same counters, and the criterion MUST
+    compare complete stdout.** With a server serving the roadmap, the stdout of
+    `rmp graph client` for a writing statement is byte for byte the stdout
+    `rmp graph execute` writes for the same statement against the same graph,
+    counters included and with nothing excluded: unlike the plan comparison of
+    criterion 60, there is no clock in this object and therefore no exception to
+    carve out (`DATA_FORMATS.md § Graph Client Result`, rule 6). The criterion
+    MUST include a statement that both assigns and removes a property in one
+    pass, whose `propertiesWritten` is the sum of the two effects on both paths;
+    a check that compared only a pure `SET` would pass on an implementation that
+    folded on one path and not the other.
+
+64. **A path one byte over the bound is refused and a path exactly at the bound
+    serves, and the criterion MUST assert both halves.** Against one roadmap,
+    `rmp graph serve --socket <path>` is invoked twice: once with a path whose
+    length is exactly the platform's bound, which binds the socket, announces it
+    on stdout, answers a statement sent to it, and stops cleanly on `SIGINT`; and
+    once with a path one byte longer, which exits 1, writes zero bytes to stdout,
+    and leaves no file at that path. The criterion MUST construct both lengths
+    from the bound it measured rather than from a literal, and it MUST keep the
+    at-the-bound half: a check of the refusal alone passes on an implementation
+    that is one byte too strict, and such an implementation refuses a path the
+    kernel accepts on every platform at once.
+65. **The refusal names the length and the limit, and the criterion MUST assert
+    both numbers separately.** The line the over-long invocation writes to stderr
+    reports the resolved path, the number of bytes that path occupies, and the
+    number of bytes the platform allows, and the invocation exits 1. The criterion
+    MUST assert that the length reported is the length of the path it supplied
+    **and** that the limit reported is the bound it measured, as two distinct
+    checks, because a message that printed the limit in both places — or the
+    path's length in both — would satisfy a check that merely found two numbers.
+    It MUST also assert that the operating system's own text is absent: an
+    `invalid argument` in that line is the defect the criterion exists against.
+66. **The derived default path is validated on the same rule, and every surface
+    refuses it.** Against a roadmap whose derived path
+    `~/.roadmaps/<name>/graph.sock` is longer than the bound, `rmp graph serve`
+    invoked with **no `--socket` flag at all** exits 1 with the same line, naming
+    the derived path. In that same state, and each invoked with no `--socket`
+    flag either, `rmp graph execute` and `rmp graph client` exit 1 with that same
+    line as well, and `rmp graph execute` writes nothing to stdout and does not
+    open the store. The criterion MUST assert all three, because the value of the
+    rule is that it binds the surface which had somewhere else to go: an
+    implementation that checked only the two surfaces that need a socket would
+    pass a check of the server alone while letting `rmp graph execute` resolve a
+    path no socket can occupy. It MUST also assert the recovery, in the same
+    state and against the same roadmap: `rmp graph execute --socket <path>` with
+    a path inside the bound, and nothing listening on it, returns the statement's
+    result and exits 0. Without that half the criterion is satisfied by an
+    implementation that refuses the roadmap's graph unconditionally, which is not
+    what the rule says (see [Socket Path Length](#socket-path-length), rules 5
+    and 6).
+67. **The limit is derived from the platform, and the criterion MUST be capable of
+    failing a hard-coded one.** The criterion MUST establish the bound
+    empirically — by binding real sockets at increasing path lengths until one is
+    refused — and MUST compare that measured figure against the figure the refusal
+    line reports. A criterion that asserted the literal 107 would confirm the
+    defect on the three operating systems whose bound is 103, and would confirm it
+    silently, because it would then agree with an implementation that is wrong
+    everywhere the criterion does not run. The measured comparison fails against
+    any hard-coded value on at least one supported platform, and against a correct
+    derivation on none.
+
+68. **An over-long field is distinguishable from an invalid statement, and the
+    criterion MUST assert the distinction in both directions.** Against one
+    roadmap, a statement writing a label one byte over the engine's limit, and a
+    statement writing a property key one byte over it, each exit 1 and write a
+    line carrying the field-length prefix `COMMANDS.md § Graph Management`
+    publishes; the same two statements at exactly the limit exit 0 and their
+    elements are found by a following `MATCH`. The criterion MUST derive both
+    lengths from the maximum the refusal line itself reports rather than from a
+    literal, for the reason criterion 67 gives: the limit is the engine's, a
+    version bump may move it, and a criterion pinned to a literal would confirm a
+    stale figure instead of failing on it. It MUST also assert that a statement
+    with a genuine syntax error still writes the parse-or-execution line, because
+    an implementation that routed every engine failure to the new line would
+    otherwise pass a check that only looked for the new one.
+69. **The refused statement leaves nothing behind, and the criterion MUST assert
+    the partial-write half.** The statement it refuses MUST both create a
+    well-formed element and write the over-long field, in that order and in one
+    pass. After the refusal, a `MATCH` for that element returns no row; an
+    ordinary write then returns `{"ok": true}` and a following `MATCH` counts it.
+    All three MUST be asserted. A criterion that checked only the write that
+    follows would pass on an implementation that committed the statement's
+    well-formed prefix and refused only its tail, which is the failure this
+    criterion exists against.
+70. **The property-value bound and the checkpoint condition are covered without a
+    field of that size, and the criterion MUST NOT attempt one.** A field of a
+    gigabyte cannot be carried by a statement inside the maximum query length and
+    cannot be materialised by a regression test at all, so no criterion may try:
+    one that did would measure the machine. What is asserted instead is the
+    classification, driven with a fabricated error that wraps the engine's
+    snapshot sentinel, and what it asserts is the content
+    [Field Length Limits](#field-length-limits), rule 9, requires — that the
+    diagnostic states the commits are durable, that the log was not folded, that
+    the condition persists through every later checkpoint while the field
+    remains, and what to remove. A criterion that asserted only that some
+    checkpoint diagnostic was emitted would pass on the general one, which is the
+    defect: the general one tells an operator to wait for a reconciliation that
+    will never come.
+71. **The healthy path stays silent, and the criterion MUST assert the whole
+    stream rather than search it for one phrase.** A `graph execute` that writes
+    an ordinary element exits 0 and writes **zero bytes** to stderr, for a
+    statement the engine raises no notification for — the criterion MUST choose
+    such a statement, because a notification is the engine's to raise and shares
+    that stream
+    ([Query Notifications as Diagnostics](#query-notifications-as-diagnostics),
+    rule 5). A graph server that starts, serves a writing statement and stops
+    cleanly on `SIGINT` writes its two startup warnings and nothing further, with
+    no checkpoint record of any kind among them. The criterion MUST compare the
+    complete stream in both halves, because an implementation that emitted the
+    new diagnostic speculatively — on every checkpoint, or on every checkpoint
+    that returned any error at all — would satisfy a check that merely searched
+    for the absence of one phrase, while making rule 9 meaningless by announcing
+    a permanent condition that does not hold.
+
 
 ## See Also
 
 - CLI command contract for `graph` → `COMMANDS.md § Graph Management`
 - Graph query result JSON and property-type mapping → `DATA_FORMATS.md § Graph Query Result`
 - Query plan JSON for a statement written with an `EXPLAIN` or `PROFILE` prefix → `DATA_FORMATS.md § Graph Plan Node`
+- The JSON shape of the write counters, their key set, and the rules that omit a zero and omit the block → `DATA_FORMATS.md § Graph Query Counters`
 - Standard input as a Cypher source → `DATA_FORMATS.md § Input`
 - The sibling standard-input rule for the comment body, whose cap counts characters rather than bytes → `COMMANDS.md § Comment Body Input Source and Precedence`
 - GoGraph integration, directory layout, error handling → `ARCHITECTURE.md`

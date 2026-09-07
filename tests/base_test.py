@@ -8,6 +8,7 @@ import re
 import subprocess
 import json
 import os
+import socket as socketlib
 import tempfile
 import shutil
 import uuid
@@ -522,3 +523,147 @@ class GroadmapTestBase:
         if status:
             cmd.extend(["--status", status])
         return self.run_cmd_json(cmd)
+
+
+# --------------------------------------------------------------------------
+# The graph write-result shape
+#
+# `rmp graph execute` and `rmp graph client` answer a statement that produces no
+# result columns with {"ok": true}, and a statement that CHANGED the graph adds
+# one further member, `counters`, naming what it changed
+# (SPEC/DATA_FORMATS.md § Graph Write Result and § Graph Query Counters;
+# SPEC/GRAPH.md § Write Counters: What a Statement Changed).
+#
+# The member is additive, so `ok` keeps its meaning, its value and its position.
+# What it broke is the IDIOM these suites used to assert that shape:
+# `result == {"ok": True}` compares the whole object and therefore fails on a
+# correct result the moment the statement changed something. Relaxing each site
+# to `result["ok"] is True` would fix the failure and lose what the comparison
+# was worth -- it would stop noticing a stray third member, which is exactly the
+# drift a whole-object comparison exists to catch.
+#
+# This is the one place the rule is written, so the suites cannot come to
+# disagree about what the shape is: `ok` is true, and the only other member the
+# object may carry is `counters`, whose value is asserted when the caller knows
+# what the statement changed.
+# --------------------------------------------------------------------------
+
+
+def assert_graph_write_shape(result: Any, context: str = "",
+                             counters: Optional[Dict[str, int]] = None):
+    """Assert the {"ok": true} write shape, with its optional counters member.
+
+    counters, when given, is the COMPLETE expected block: every counter the
+    statement produced, and no other, because a zero is omitted rather than
+    published. Pass {} to require that the statement changed nothing and
+    therefore carries no `counters` key at all.
+    """
+    where = f"{context}: " if context else ""
+    assert isinstance(result, dict), f"{where}the write shape is a JSON object; got {result!r}"
+    assert result.get("ok") is True, (
+        f"{where}a statement that produces no result columns returns "
+        f'{{"ok": true}}; got {result!r}')
+    extra = set(result) - {"ok", "counters"}
+    assert not extra, (
+        f"{where}the only member additive to the write shape is 'counters'; "
+        f"got the unexpected {sorted(extra)!r} in {result!r}")
+    if counters is None:
+        return
+    if counters == {}:
+        assert "counters" not in result, (
+            f"{where}a statement that changed nothing carries no 'counters' key at "
+            f"all, and produces exactly the bytes it produced before the member "
+            f"existed; got {result!r}")
+        return
+    assert result.get("counters") == counters, (
+        f"{where}expected the counters {counters!r} -- a zero is omitted, not "
+        f"published; got {result.get('counters')!r}")
+
+
+# --------------------------------------------------------------------------
+# The platform's socket-path bound
+#
+# A Unix domain socket path is bounded by the size of the kernel's sun_path
+# field, and the bound is NOT the same everywhere: across the nine targets
+# SPEC/BUILD.md declares it is 107 bytes on Linux and Windows and 103 on
+# macOS, FreeBSD and OpenBSD. A test that writes either figure down is wrong
+# on the other platforms, and wrong in the PERMISSIVE direction on three of
+# the five -- it would let a harness build a path the kernel refuses and then
+# fail with the bare "bind: invalid argument" that SPEC/GRAPH.md
+# "Socket Path Length" exists to replace.
+#
+# So the bound is MEASURED, once, here, by binding real sockets until one is
+# refused, and every module that needs it reads this one function. It lives in
+# base_test rather than in the module that first needed it because two modules
+# need it, and importing one test module from another merely to share a number
+# makes the two a cycle.
+# --------------------------------------------------------------------------
+
+
+def _bind_at(directory: str, length: int) -> bool:
+    """Bind a real AF_UNIX listener whose absolute path is exactly `length`
+    bytes, and report whether the platform accepted it.
+
+    The socket is created and immediately removed, so the measurement leaves
+    nothing behind. A successful return is a real kernel bind -- the half that
+    could not be faked by any check running before the syscall.
+    """
+    padding = length - len(directory) - 1
+    assert padding >= 1, (
+        f"the measurement directory {directory!r} is {len(directory)} bytes, "
+        f"too long to build a path of {length} bytes inside it. This module "
+        f"needs a short $TMPDIR."
+    )
+    path = os.path.join(directory, "b" * padding)
+    assert len(path) == length, (len(path), length)
+
+    sock = socketlib.socket(socketlib.AF_UNIX, socketlib.SOCK_STREAM)
+    try:
+        sock.bind(path)
+    except OSError:
+        return False
+    finally:
+        sock.close()
+    os.unlink(path)
+    return True
+
+
+def measure_socket_path_bound(directory: str, floor: int = 64, ceiling: int = 400) -> int:
+    """Return the greatest socket-path length this platform will bind, found by
+    binding real sockets at increasing lengths until one is refused.
+
+    Acceptance Criterion 67 requires exactly this and forbids the alternative:
+    a criterion asserting the literal 107 would confirm the defect on the three
+    operating systems whose bound is 103, and would confirm it silently.
+
+    The figure returned is the largest length that SUCCEEDED, which is a pure
+    kernel observation. The refusals above it are corroboration, and four of
+    them are required so a single anomalous length cannot be mistaken for the
+    boundary.
+    """
+    largest_bound = None
+    for length in range(floor, ceiling + 1):
+        if _bind_at(directory, length):
+            largest_bound = length
+            continue
+
+        assert largest_bound is not None, (
+            f"no socket path bound at any length from {floor} bytes upward; the "
+            f"measurement directory {directory!r} is unusable"
+        )
+        assert largest_bound == length - 1, (
+            f"the boundary is not contiguous: the largest length that bound was "
+            f"{largest_bound} but {length} is the first refused"
+        )
+        for over in range(length, min(length + 4, ceiling) + 1):
+            assert not _bind_at(directory, over), (
+                f"a path of {over} bytes bound after {length} was refused, so the "
+                f"refusal at {length} was not the platform's bound"
+            )
+        return largest_bound
+
+    raise AssertionError(
+        f"no socket path was refused at any length up to {ceiling} bytes; this "
+        f"platform appears to have no sun_path bound, which contradicts every "
+        f"target SPEC/BUILD.md declares"
+    )

@@ -598,6 +598,41 @@ rmp graph execute -r myproject \
   --query "MATCH (d:Decision {key:'use-sessions'}) DETACH DELETE d"
 ```
 
+**How do I tell what a statement actually changed?**
+
+A statement that changes the graph publishes a `counters` object beside its result,
+naming the effects it applied — nodes and relationships created and deleted, properties
+written, labels added and removed, indexes and constraints added and dropped.
+
+```bash
+rmp graph execute -r myproject \
+  --query "CREATE (:Spec {key:'rate-limiting', status:'draft'})"
+```
+```json
+{
+  "ok": true,
+  "counters": {
+    "nodesCreated": 1,
+    "propertiesWritten": 2,
+    "labelsAdded": 1
+  }
+}
+```
+
+A counter that is zero is left out, and a statement that changed **nothing** carries no
+`counters` key at all — every read, a `MERGE` that matched an existing element, a
+`DELETE` whose pattern matched no row — so it produces exactly the bytes it produced
+before the member existed and no existing script needs a change. `execute` and `client`
+publish the same object for the same statement.
+
+One member, `propertiesWritten`, carries property assignments and property removals as a
+single figure. The protocol a served result crosses has one property counter and no
+counterpart for a removal, so the split cannot survive the trip to `client`; both
+surfaces publish the sum rather than report different keys for one statement, and the
+key is named for what it carries. So a `REMOVE` that reports `propertiesWritten` is
+correct, not a defect. See
+[DOCS/commands/graph.md](DOCS/commands/graph.md#what-a-statement-changed-the-counters-member).
+
 **How many graph subcommands are there?**
 
 Three: `execute`, `serve` and `client`. `execute` and `client` each run any Cypher statement the engine accepts — a read, a write, a deletion, index and constraint DDL, and the `SHOW INDEXES` / `SHOW CONSTRAINTS` listings — and differ only in where the statement runs. `serve` runs no statement of its own: it makes the graph available to the other two.
@@ -621,9 +656,49 @@ rmp graph execute -r myproject --query "PROFILE MATCH (s:Spec) RETURN s.key"
 
 The two members are never both present, so an estimate can never be read as a
 measurement: `EXPLAIN` carries the planner's `estimatedRows`, `PROFILE` carries the
-measured `rows`, `timeNs` and `dbHits`. A `PROFILE` of a **writing** statement is
+measured `rows`, `timeNs` and `dbHits`. An `EXPLAIN` executes nothing, so it never
+carries the `counters` a real write reports. A `PROFILE` of a **writing** statement is
 refused, because profiling it would mean committing it, and neither prefix is accepted
-on a schema statement. See [DOCS/commands/graph.md](DOCS/commands/graph.md#query-plans-explain-and-profile).
+on a schema statement.
+
+Two presence rules decide what a `profile` figure means, and both are read wrongly at
+first sight: an **absent** `dbHits` means nobody counted that operator's storage
+accesses rather than that there were none, and a `rowsRemovedByFilter` of `0` is a
+genuine finding while its **absence** means the operator has no rejection mechanism at
+all. `timeNs` is inclusive of an operator's children, so summing a tree double-counts
+every level. See [DOCS/commands/graph.md](DOCS/commands/graph.md#query-plans-explain-and-profile).
+
+**Is there a limit on how long a graph field can be?**
+
+Yes — a field goes into two durable formats and they do not bound it alike. Both bounds
+are the engine's rather than Groadmap's, which checks no field length and cannot, because
+a statement's fields are the values its expressions produce. A committed write goes into
+a write-ahead log; a later checkpoint folds the committed state into a snapshot. The log
+bounds a label or a property key at 65535 bytes and a property value at 4294967295
+bytes; the snapshot bounds a label or a key at 1 MiB and a property value at 1 GiB. **For a property value the snapshot binds at a quarter of the
+log's figure, and 1 GiB is the number to write under.**
+
+The two bounds fail differently, and that is the part worth knowing:
+
+- **Too long for the log** and the commit is refused. Nothing is written, the store stays
+  usable, and the invocation exits 1 with a line of its own rather than the general
+  parse-or-execution one:
+  `Error: graph engine error: graph field too long; nothing was written. Shorten the field the engine names: <engine diagnostic>`
+- **Short enough to commit and too long to fold** — a property value between 1 GiB and
+  4 GiB — and the write succeeds and exits 0, and then **every checkpoint of that graph
+  fails from that moment on**. Unlike every other checkpoint failure this one cannot
+  heal, because the offending field is committed graph state: the write-ahead log is
+  never folded again and never reclaimed, so it grows and every open replays more of it.
+  A diagnostic beside the success says so, and it recurs on every subsequent write until
+  a statement shortens or removes the field.
+
+Through a **running server** the first of the two prints the general `graph query
+failed: ` line carrying generic internal-error text instead: the engine's Bolt server
+classifies the refusal as its own fault and replaces the message, so the field and the
+figures reach that server's stderr rather than the caller. It is the same failure — exit
+code 1, nothing written — and `rmp graph client`, which always crosses a server, never
+prints the specific line. See
+[DOCS/commands/graph.md](DOCS/commands/graph.md#how-long-a-field-may-be).
 
 **What does `rmp graph serve` do, and do I need it?**
 
@@ -643,7 +718,9 @@ rmp graph client -r myproject --query "MATCH (n:Spec) RETURN n.key"
 
 **Access control is the filesystem and nothing else.** The socket is mode `0600` inside a roadmap home that is `0700`, there is no authentication and no transport security (the server prints a warning for each at startup), and any caller that can open the socket can read, write, delete and change the schema of that roadmap's graph.
 
-**`--socket` is accepted by all three subcommands** — `execute`, `serve` and `client` — and all three default it to `~/.roadmaps/<name>/graph.sock`. It names *which socket is looked at* and nothing else: it does not force a server, does not forbid one, and does not select the store. Write it on `execute` or `client` when the server was started with the same flag.
+**`--socket` is accepted by all three subcommands** — `execute`, `serve` and `client` — and all three default it to `~/.roadmaps/<name>/graph.sock`. It names *which socket is looked at*: it does not force a server, does not forbid one, and does not select the store. Write it on `execute` or `client` when the server was started with the same flag.
+
+**The socket path has a length limit, and the default path can cross it.** The operating system bounds how long a Unix domain socket path may be — 107 bytes on Linux and Windows, 103 on macOS, FreeBSD and OpenBSD, counted in bytes rather than characters. A resolved path over that bound names a socket no process can create, so `execute`, `serve` and `client` all refuse the invocation with exit code 1 and the web interface's graph data endpoint answers HTTP 500; none of them falls back to opening the store. This is not only a `--socket` concern: `~/.roadmaps/<name>/graph.sock` crosses the bound on its own under a deep enough home directory, with no unusual roadmap name, and it then makes that roadmap's graph unreachable through every surface at once — `rmp graph execute` included, which needs no socket of its own. On the command line the way back is `--socket` naming a path inside the bound: it passes the check, nothing is listening there, so `execute` opens the store as usual. The web page has no such flag, so its only remedy is a shorter home directory or a shorter roadmap name. See [DOCS/commands/graph.md](DOCS/commands/graph.md#the-socket-path-has-a-length-limit).
 
 **One caution.** `--socket` moves the socket off the default path, and the web interface cannot follow it: it is an HTTP handler with no command line, and no request parameter carries a socket path, so a server started with `--socket` leaves that roadmap's graph page failing with HTTP 500 for as long as it runs. Start a server without the flag whenever the same roadmap is also browsed. See [DOCS/commands/graph.md](DOCS/commands/graph.md#running-a-graph-server).
 

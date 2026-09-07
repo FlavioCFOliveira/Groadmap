@@ -159,7 +159,7 @@ func TestGraphQueryBudget_StatementAndWaitFitTheWriteTimeout(t *testing.T) {
 // budget introduces no new knob, and the endpoint's only parameters remain q
 // and limit).
 func TestHandleGraphData_BudgetIsNotCallerControlled(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	t.Setenv("HOME", shortHome(t))
 	name := seedRoadmap(t, "web-ui-rollout")
 	seedGraph(t, name, graphSeedQueries()...)
 
@@ -197,7 +197,7 @@ func TestHandleGraphData_BudgetIsNotCallerControlled(t *testing.T) {
 // classification an engine failure gets, not a new one), and the server keeps
 // serving afterwards.
 func TestHandleGraphData_ExpensiveQueryHitsTimeBudget(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	t.Setenv("HOME", shortHome(t))
 	name := seedRoadmap(t, "web-ui-rollout")
 	nodes := seedExpensiveGraph(t, name)
 
@@ -273,7 +273,7 @@ func TestHandleGraphData_ExpensiveQueryHitsTimeBudget(t *testing.T) {
 // fresh read after the failure must still return exactly the seeded graph, with
 // no node or edge added, removed, or altered.
 func TestHandleGraphData_BudgetExhaustionWritesNothing(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	t.Setenv("HOME", shortHome(t))
 	name := seedRoadmap(t, "web-ui-rollout")
 	nodes := seedExpensiveGraph(t, name)
 
@@ -314,7 +314,7 @@ func TestHandleGraphData_BudgetExhaustionWritesNothing(t *testing.T) {
 // The payload is also asserted against the seeded graph, so the comparison
 // cannot pass by both sides being empty.
 func TestHandleGraphData_OrdinaryQueryUnaffectedByBudget(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	t.Setenv("HOME", shortHome(t))
 	name := seedRoadmap(t, "web-ui-rollout")
 	seedGraph(t, name, graphSeedQueries()...)
 
@@ -372,7 +372,7 @@ func TestHandleGraphData_OrdinaryQueryUnaffectedByBudget(t *testing.T) {
 // must still be an execution failure (rule 4: no new kind), but reported as the
 // cancellation it is, never as budget exhaustion.
 func TestLoadGraphView_ClientDisconnectIsNotReportedAsTheBudget(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	t.Setenv("HOME", shortHome(t))
 	name := seedRoadmap(t, "web-ui-rollout")
 	seedGraph(t, name, graphSeedQueries()...)
 

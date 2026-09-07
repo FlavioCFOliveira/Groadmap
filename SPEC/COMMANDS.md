@@ -3552,6 +3552,19 @@ valid its Cypher is and however healthy the store, and the remedy is to narrow i
 statements. `GRAPH.md § Statement Time Budget` is canonical for what a cut
 statement leaves behind, and `WEB.md § Graph Query Time Budget` for the value.
 
+**A statement that changes the graph says what it changed.** Beside its result
+it publishes a `counters` object naming the effects it applied — nodes and
+relationships created and deleted, properties written, labels added and removed,
+indexes and constraints added and dropped — so that a caller can tell a `MERGE`
+that created from one that matched, and a `DELETE` that removed a thousand
+relationships from one that removed none, without issuing a second statement to
+find out. A counter that is zero is omitted, and a statement that changed
+nothing publishes no such member and produces exactly the bytes it produced
+before, so no existing caller is affected. `execute` and `client` publish the
+same object for the same statement.
+`GRAPH.md § Write Counters: What a Statement Changed` is canonical for the
+behaviour and `DATA_FORMATS.md § Graph Query Counters` for the shape.
+
 **A statement may ask for its plan instead of, or as well as, its answer.**
 Written with an `EXPLAIN` prefix, a statement is planned and **not executed**, and
 `execute` and `client` return its declared columns, no rows, and the plan under a
@@ -3578,9 +3591,18 @@ statement is refused, and neither prefix is accepted on a schema statement — a
   answering there takes the statement, and a path that is absent or refuses the
   connection sends the invocation to the store under the exclusive lock, exactly
   as before the flag existed (see `GRAPH.md § Server Resolution`). Supplying the
-  flag with an empty value is a missing parameter (exit code 2). It is the flag
-  that lets the CLI follow a server started with `--socket`; the web graph data
-  endpoint has no equivalent and cannot (see
+  flag with an empty value is a missing parameter (exit code 2). Supplying a path
+  longer than the platform allows fails the invocation with exit code 1 and does
+  **not** send it to the store: it is the one case in which this flag's value
+  decides more than which socket is looked at, because a path over that bound
+  names a socket no process can create and is therefore not read as evidence
+  that the roadmap is unserved. The derived default path is refused on exactly
+  the same rule when it is over the bound, which is why this flag is also the
+  remedy for that case: a shorter path with nothing listening on it passes the
+  check, resolves as unserved, and sends the statement to the store
+  (`GRAPH.md § Socket Path Length`, rules 5 and 6). It is the flag that lets the
+  CLI follow a server started with `--socket`; the web graph data endpoint has
+  no equivalent and cannot (see
   `GRAPH.md § Serving on a Non-Default Socket`).
 - `-h, --help` - Show the subcommand help.
 
@@ -3600,13 +3622,25 @@ original the day the original changed, which is the outcome
 - On success the output mirrors what the executed statement returns. When the
   statement produces result columns, the output is the `{columns, rows}` shape
   defined in `DATA_FORMATS.md § Graph Query Result`; when it produces none, the
-  output is exactly `{"ok": true}`. For a data-writing statement the two cases are
+  output is `{"ok": true}`. For a data-writing statement the two cases are
   exactly "has a `RETURN` clause" and "has none". A schema-introspection command
   produces columns while carrying no `RETURN` clause, and therefore returns the
   `{columns, rows}` shape; a `CREATE INDEX`, `DROP INDEX`, `CREATE CONSTRAINT`, or
-  `DROP CONSTRAINT` produces no columns and returns `{"ok": true}`. There is no
-  affected-element count, because the engine reports none. Exit code 0. The shape
-  is fixed in `DATA_FORMATS.md § Graph Write Result`.
+  `DROP CONSTRAINT` produces no columns and returns `{"ok": true}`. Exit code 0.
+  The shape is fixed in `DATA_FORMATS.md § Graph Write Result`.
+- On success for a statement that **changed the graph**, whichever of those two
+  shapes it produced carries one further member, `counters`, naming what it
+  changed: nodes and relationships created and deleted, properties written,
+  labels added and removed, indexes and constraints added and dropped. A counter
+  whose value is zero is left out, and a statement that changed nothing — every
+  read, a `MERGE` that matched, a `DELETE` that matched no row — carries no
+  `counters` key at all and produces exactly the bytes it produced before the
+  member existed. The member is additive: `ok`, `columns` and `rows` keep their
+  meanings and their positions, so an existing parser needs no change. Exit code
+  0. `DATA_FORMATS.md § Graph Query Counters` is canonical for the shape and the
+  key set, and `GRAPH.md § Write Counters: What a Statement Changed` for the
+  behaviour — including why the two property counters are published as one
+  figure.
 - On success for a statement written with an `EXPLAIN` or `PROFILE` prefix, the
   output is the `{columns, rows}` shape carrying one further member: `plan` for an
   `EXPLAIN`, `profile` for a `PROFILE`, never both. This is the one statement
@@ -3642,11 +3676,13 @@ original the day the original changed, which is the outcome
 | 0 | The statement executed successfully. |
 | 1 | Cypher failed to parse or execute (`utils.ErrGraphEngine`), or the graph store could not be opened, read, or written, or its exclusive lock could not be taken within the bounded wait (`utils.ErrGraphStore`). A schema statement the engine refuses is in the first class, including one whose keyword spacing the engine does not route to its schema parser. See `GRAPH.md § Schema Failure Classes` and `GRAPH.md § Lock Contention`. |
 | 1 | The statement exhausted the 5-second statement time budget and was cancelled (`utils.ErrGraphEngine`). Nothing was written: the transaction rolled back, no snapshot was produced, and the write-ahead log was left unchanged. See `GRAPH.md § Statement Time Budget`. |
+| 1 | The engine refused a field the statement writes as too long for its durable format (`utils.ErrGraphEngine`). Nothing was written: the transaction consumed a sequence and applied nothing, and the store stays usable for the next statement. See `GRAPH.md § Field Length Limits`. |
 | 2 | No statement supplied: `--query` absent and standard input empty, whitespace only, or a terminal; or `--query` present with an empty, whitespace-only, or absent value; or `--socket` supplied with an empty value (`utils.ErrRequired`). |
 | 2 | A positional argument was supplied. `graph execute` accepts none, so a bare Cypher statement on the command line, or any other token that is neither a flag nor a flag's value, is refused (`utils.ErrInvalidInput`). See `GRAPH.md § No Positional Query: A Stray Token Is Refused`. |
 | 3 | No roadmap selected and none provided via `-r` (`utils.ErrNoRoadmap`). |
 | 4 | Selected roadmap does not exist (`utils.ErrNotFound`). |
 | 6 | The statement is longer than the maximum query length of 1 MiB (1048576 bytes), whether it arrived through `--query` or through standard input (`utils.ErrValidation`). See `GRAPH.md § Maximum Query Length`. This is the only cause of exit code 6 the command has. |
+| 1 | The resolved socket path is longer than the platform allows a socket path to be, so no socket can exist there (`utils.ErrGraphServer`). This holds whether the path was supplied through `--socket` or derived from the roadmap. The store was not opened and no lock was taken: the invocation does not fall back to it, because a path over the bound is evidence that no server can ever answer there and not evidence that none happens to be listening. See `GRAPH.md § Socket Path Length`, rules 5 and 6. |
 | 1 | The roadmap's socket answers, but no server could be reached through it within the resolution probe, or the connection failed for a reason other than the socket being absent or refusing (`utils.ErrGraphServer`). The store was not opened and no lock was taken. See `GRAPH.md § Server Resolution`. |
 | 1 | The connection to a server was lost after the statement had been sent (`utils.ErrGraphServer`). Whether the statement committed is unknown, and the invocation does not retry it against the store. See `GRAPH.md § Server Resolution`, rule 4. |
 | 1 | Every attempt of the retry policy lost a serialisation conflict against a server (`utils.ErrGraphEngine`). Nothing was written: a losing transaction commits nothing. The statement is valid and may be run again. See `GRAPH.md § Concurrency Inside the Server`. |
@@ -3712,10 +3748,33 @@ rmp graph execute -r backend-platform \
   --query "MATCH (d:Decision {key:'use-sessions'}) DETACH DELETE d"
 ```
 
-Output (success): `{"ok": true}`, exit code 0. None of the three carries a
-`RETURN` clause, so none produces result columns. Appending `RETURN` to any of
-them (for example `... RETURN s`) returns the affected elements in the
-`{columns, rows}` shape instead (see `DATA_FORMATS.md § Graph Write Result`).
+Output (success): exit code 0, and an object built on `{"ok": true}`. None of
+the three carries a `RETURN` clause, so none produces result columns. Appending
+`RETURN` to any of them (for example `... RETURN s`) returns the affected
+elements in the `{columns, rows}` shape instead (see
+`DATA_FORMATS.md § Graph Write Result`).
+
+Each of the three also reports what it changed. The first, run against a graph
+that holds neither element, creates two nodes, one property on each, one label
+on each, and the relationship between them:
+
+```json
+{
+  "ok": true,
+  "counters": {
+    "nodesCreated": 2,
+    "relationshipsCreated": 1,
+    "propertiesWritten": 2,
+    "labelsAdded": 2
+  }
+}
+```
+
+Run a second time it matches everything it created and changes nothing, so it
+publishes `{"ok": true}` alone. The second statement publishes
+`"propertiesWritten": 1`, and the third publishes `nodesDeleted` and, if the
+node carried any, `relationshipsDeleted` — a deletion counts no property
+removal. `DATA_FORMATS.md § Graph Query Counters` is canonical for the member.
 
 **Traversal:**
 
@@ -3733,12 +3792,15 @@ rmp graph execute -r backend-platform --query "SHOW INDEXES"
 rmp graph execute -r backend-platform --query "DROP INDEX spec_key"
 ```
 
-The `CREATE INDEX` and `DROP INDEX` invocations output `{"ok": true}` and exit 0.
-The `SHOW INDEXES` invocation outputs the schema listing in the `{columns, rows}`
-shape and exits 0. `GRAPH.md § Schema Management` is canonical for the schema
-statements: which forms the engine accepts, how a schema object is named, why
-changing an index is two invocations rather than one, and how a schema failure
-surfaces.
+The `CREATE INDEX` and `DROP INDEX` invocations exit 0 and output `{"ok": true}`
+carrying `"indexesAdded": 1` and `"indexesRemoved": 1` respectively; a
+`CREATE INDEX ... IF NOT EXISTS` that finds the index already registered changes
+nothing and publishes `{"ok": true}` alone. The `SHOW INDEXES` invocation reads
+rather than writes: it outputs the schema listing in the `{columns, rows}` shape,
+with no `counters` member, and exits 0. `GRAPH.md § Schema Management` is
+canonical for the schema statements: which forms the engine accepts, how a
+schema object is named, why changing an index is two invocations rather than
+one, and how a schema failure surfaces.
 
 **Asking for the plan:**
 
@@ -3766,9 +3828,11 @@ rather than published as zero.
 | No statement supplied | 2 | "Error: required parameter missing: no query supplied" |
 | The statement was to come from standard input and the read of it failed | 1 | "Error: I/O error: reading query from stdin: <detail>" |
 | `--socket` supplied with an empty value | 2 | "Error: required parameter missing: --<flag>" |
+| The resolved socket path is longer than the platform allows, whether derived or supplied | 1 | The path-length line of `§ Graph Server Socket Error Lines` |
 | Stray positional argument, such as a bare Cypher statement written without `--query` | 2 | "Error: invalid input: unexpected argument \"X\" (graph queries use --query or stdin)" |
 | Statement above the maximum length | 6 | "Error: validation error: query exceeds maximum length of 1048576 bytes" |
 | Cypher parse/execution error | 1 | "Error: graph engine error: graph query failed: <engine diagnostic>" |
+| The engine refuses a field the statement writes as too long for its durable format, and the statement ran against the store rather than through a server | 1 | "Error: graph engine error: graph field too long; nothing was written. Shorten the field the engine names: <engine diagnostic>" |
 | Statement cancelled for exhausting the 5-second statement time budget | 1 | "Error: graph engine error: graph query exceeded the 5s statement time budget; nothing was written. Narrow the statement — add a label, an indexed property filter, or a LIMIT — or split it into smaller statements." |
 | Graph store open/read/write failure | 1 | "Error: graph store error: graph store unavailable: <detail>" |
 | The graph store's exclusive lock was still held when the bounded wait was exhausted | 1 | "Error: graph store error: graph store is busy: still held when the bounded wait was exhausted, and nothing records the holder. Another rmp invocation releases it shortly, so run the statement again; an rmp graph serve holds it for its whole lifetime, so reach that server with --socket, or stop it." |
@@ -3795,24 +3859,45 @@ The lock row is not one of them either: it carries no engine diagnostic and no p
 
 The conflict row is not one of them either, and for the same reason: it carries no engine diagnostic and no placeholder, every character of it is `rmp`'s own text, and it is compared in full. `2.5s` is the retry policy's total wait, rendered as a duration; it is a fixed value and not one the binary interpolates. The line exists because the condition it reports was otherwise indistinguishable from the parse/execution row above — both printed the same `graph query failed: ` text, and the only thing separating them was the engine's diagnostic tail, which the paragraph above deliberately declines to specify and which a caller therefore cannot lawfully match. The decision a caller must make on reading it is the opposite of the one an invalid statement calls for: run the statement again, rather than correct it. `GRAPH.md § Concurrency Inside the Server` is canonical for the behaviour it reports.
 
+The field-length row is a fourth case, and it is a hybrid of the two shapes above. It exists for the reason the budget and conflict rows exist — it was otherwise indistinguishable from the parse/execution row, and a caller had to read English to learn whether to correct the statement or to shorten one of its values — but it cannot be wholly `rmp`'s own text the way those two are, because the caller must be told **which** field is at fault and only the engine knows. So `rmp` writes the class, the fact that nothing was written, and the remedy, and then hands over: the part `rmp` fixes is everything up to and including `Shorten the field the engine names: `, and the engine's diagnostic ends the line, exactly as it ends the parse/execution row. That diagnostic carries the field kind, the length the field occupies and the maximum in force. `rmp` neither trims it nor rewrites it — which is why `rmp`'s half and the engine's half both say the field is too long, and why that repetition is not a defect to tidy away: trimming it would mean parsing it, and a match on the engine's wording fails silently at the next version bump.
+
+The row holds where the statement ran against the store, which is why its scenario says so. `graph execute` sends its statement to a running server whenever one answers (`GRAPH.md § Server Resolution`), and at the pinned engine that path cannot produce this line: the server classifies the refusal as its own fault rather than the caller's and replaces the message, so the condition arrives at the caller through the parse/execution row above, carrying the server's generic internal-error text as its engine diagnostic. The sentinel is still `utils.ErrGraphEngine`, the exit code is still 1, and nothing is written either way; only the message differs. `GRAPH.md § Field Length Limits`, rule 13, is canonical for that limitation, for what it leaves intact, and for the engine-side change that ends it — after which the row holds on both paths and the qualification comes out of the scenario. `§ Client Error Cases` publishes no field-length row at all, for the same reason: that subcommand has no direct path.
+
+`GRAPH.md § Field Length Limits` is canonical for the behaviour this row reports, for which of the two durable formats binds each kind of field, and for the second half of that condition — a field that commits and is then refused by every checkpoint — which never reaches this table at all, because it accompanies a **successful** invocation rather than failing one, and no literal for it is published anywhere in this file.
+
 ### Graph Server Socket Error Lines
 
-Seven failure conditions belong to the graph server rather than to the roadmap,
+Eight failure conditions belong to the graph server rather than to the roadmap,
 the statement, or anything the caller wrote, and three of this section's error
 tables refer here for their exact lines instead of each publishing a copy. Every
 line is complete, as `§ Published Error Strings Are Exact` requires, and every one
-exits 1. Six carry `utils.ErrGraphServer`. The seventh, the store-lock line,
-carries `utils.ErrGraphStore`, because the lock it reports belongs to the store
-rather than to the socket; it is published here with the other two `graph serve`
-startup lines because a reader meets all three in the same startup sequence
+exits 1. Seven carry `utils.ErrGraphServer`. The remaining one, the store-lock
+line, carries `utils.ErrGraphStore`, because the lock it reports belongs to the
+store rather than to the socket; it is published here with the other three
+`graph serve` startup lines because a reader meets all four in the same startup
+sequence
 (`GRAPH.md § Error Handling and Exit Codes`). `<socket>` is the resolved socket
-path and `<detail>` is the operating system's own diagnostic; the placeholder
-table under `§ Published Error Strings Are Exact` declares both.
+path, `<detail>` is the operating system's own diagnostic, and `N` and `M` are the
+two byte counts the path-length line carries; the placeholder table under
+`§ Published Error Strings Are Exact` declares all four.
 
 - **A live server already answers on the socket `graph serve` resolved.** The line
   is `Error: graph server error: a graph server is already serving <socket>`. The
   incumbent's socket is left exactly as it was found, and the incumbent keeps
   serving (`GRAPH.md § Server Startup`, step 3).
+- **A resolved socket path is longer than the platform allows.** The line is
+  `Error: graph server error: socket path is too long: <socket> is N bytes and this platform allows at most M. Use --socket to name a shorter path.`
+  `N` is the resolved path's length in bytes and `M` is the limit the platform
+  yields, so the published line carries no figure of its own and is one line on
+  every target: the limit is 107 on Linux and Windows and 103 on macOS, FreeBSD
+  and OpenBSD, and the binary interpolates the one in force. Everything outside
+  the three placeholders is `rmp`'s own text, and the line is compared in full.
+  All three subcommands that publish `--socket` write it, for a path the caller
+  supplied and for the derived default path alike; the web graph data endpoint,
+  which publishes no such flag, refuses its request on the same condition. No
+  surface reads a path over the limit as evidence that the roadmap is merely not
+  served, and none of them opens the store on it
+  (`GRAPH.md § Socket Path Length`, rules 5 and 6).
 - **`graph serve` could not bind its socket.** The line is
   `Error: graph server error: cannot bind <socket>: <detail>`. The part `rmp`
   fixes is everything up to and including `cannot bind <socket>: `; the text after it is
@@ -3867,7 +3952,13 @@ table under `§ Published Error Strings Are Exact` declares both.
 - `--socket <path>` - Path of the Unix domain socket to bind. Default
   `~/.roadmaps/<name>/graph.sock`, derived from the selected roadmap. Supplying
   the flag with an empty value is a missing parameter (exit code 2); supplying a
-  path that cannot be bound is a bind failure (exit code 1). A non-default path is
+  path that cannot be bound is a bind failure (exit code 1). A path longer than
+  the platform allows is the one unbindable path that never reaches the bind: it
+  is refused while the path is resolved, and the line it writes names the path's
+  length and the platform's limit instead of the operating system's errno. That
+  bound is the platform's rather than Groadmap's, and it binds the derived default
+  path exactly as it binds this flag's value;
+  `GRAPH.md § Socket Path Length` is canonical for it. A non-default path is
   followed by the two CLI subcommands that take the same flag, `graph execute` and
   `graph client`, and by nothing else: the web graph data endpoint has no way to
   receive it, resolves the default path, finds nothing there, and fails against
@@ -3981,6 +4072,7 @@ several servers, one per roadmap, each on its own socket.
 | Unknown flag | 2 | "Error: invalid input: unknown flag: --foo" |
 | Unexpected positional argument | 2 | "Error: invalid input: unexpected argument \"X\"" |
 | `--socket` supplied with an empty value | 2 | "Error: required parameter missing: --<flag>" |
+| The resolved socket path is longer than the platform allows, whether derived or supplied | 1 | The path-length line of `§ Graph Server Socket Error Lines` |
 | Graph store lock could not be taken within the bounded wait | 1 | The lock line of `§ Graph Server Socket Error Lines` |
 | A live server already answers on the resolved socket | 1 | The already-serving line of `§ Graph Server Socket Error Lines` |
 | Socket could not be bound | 1 | The bind line of `§ Graph Server Socket Error Lines` |
@@ -3994,7 +4086,12 @@ several servers, one per roadmap, each on its own socket.
   statement is sent to.
 - `--socket <path>` - Path of the server's Unix domain socket. Default
   `~/.roadmaps/<name>/graph.sock`, the same derivation `graph serve` uses.
-  Supplying the flag with an empty value is a missing parameter (exit code 2).
+  Supplying the flag with an empty value is a missing parameter (exit code 2). A
+  socket path longer than the platform allows fails the invocation with exit code
+  1, naming the path's length and the platform's limit rather than reporting that
+  nothing is listening; the same line is written when the derived default path is
+  over that bound, because no server can exist at either
+  (`GRAPH.md § Socket Path Length`).
 - `-q, --query <cypher>` - The Cypher statement to send. When omitted, the
   statement is read from standard input under a bound; it is not read to EOF.
   There is no `--statement` flag: the statement reaches `client` through exactly
@@ -4013,14 +4110,25 @@ This section does not restate them.
 
 - On success the output is byte-for-byte the output `rmp graph execute` produces
   for the same statement against the same graph: the `{columns, rows}` shape when
-  the statement produces result columns, exactly `{"ok": true}` when it produces
-  none, and the same shape carrying a `plan` or `profile` member when the
-  statement was written with an `EXPLAIN` or `PROFILE` prefix. One key is outside
-  that identity and only one: a `profile` tree's `timeNs` measures the execution
-  that produced it, and the two subcommands are two executions, so they measure
-  two durations. Every other key, the structure, and the member order are
+  the statement produces result columns, `{"ok": true}` when it produces
+  none, the same shape carrying a `plan` or `profile` member when the
+  statement was written with an `EXPLAIN` or `PROFILE` prefix, and either shape
+  carrying a `counters` member when the statement changed the graph. One key is
+  outside that identity and only one: a `profile` tree's `timeNs` measures the
+  execution that produced it, and the two subcommands are two executions, so they
+  measure two durations. Every other key, the structure, and the member order are
   identical; `DATA_FORMATS.md § Graph Client Result`, rule 5, is canonical for the
   boundary and this section does not restate it.
+- The counters take no exception from that identity. They describe the statement
+  and the graph rather than the duration of a run, so the two subcommands publish
+  the same `counters` object, key for key and value for value. One member,
+  `propertiesWritten`, carries the engine's property assignments and property
+  removals as a single figure, and it does so on **both** paths: the protocol a
+  served result crosses carries one property counter and no second channel for a
+  removal, so publishing the split on the direct path alone would make the two
+  surfaces disagree. That is a property of the mapping both paths share, not a
+  divergence between them; `DATA_FORMATS.md § Graph Client Result`, rule 6, and
+  `GRAPH.md § Write Counters: What a Statement Changed` are canonical for it.
   `DATA_FORMATS.md § Graph Client Result` is canonical for the
   mapping that makes the two identical — for the plan as much as for the rows,
   since both cross the protocol and both are mapped back onto the engine's own
@@ -4045,7 +4153,7 @@ This section does not restate them.
 | Exit Code | Cause |
 |-----------|-------|
 | 0 | The statement was sent to a server, ran, and its result was written to stdout. |
-| 1 | No server is listening for the roadmap; or a server could not be reached through the socket; or the connection was lost, or went unanswered, after the statement was sent; or a value the server returned could not be mapped onto the published result shape (`utils.ErrGraphServer`, see `DATA_FORMATS.md § Graph Client Result`, rule 3). Or the statement failed to parse or execute in the engine, or exhausted the 5-second statement time budget, or every attempt of the retry policy lost a serialisation conflict (`utils.ErrGraphEngine`). |
+| 1 | No server is listening for the roadmap; or a server could not be reached through the socket; or the connection was lost, or went unanswered, after the statement was sent; or a value the server returned could not be mapped onto the published result shape (`utils.ErrGraphServer`, see `DATA_FORMATS.md § Graph Client Result`, rule 3). Or the statement failed to parse or execute in the engine, or wrote a field the engine refused as too long for its durable format, or exhausted the 5-second statement time budget, or every attempt of the retry policy lost a serialisation conflict (`utils.ErrGraphEngine`). |
 | 2 | No statement supplied: `--query` absent and standard input empty, whitespace only, or a terminal; or `--query` present with an empty, whitespace-only, or absent value; or `--socket` supplied with an empty value (`utils.ErrRequired`). |
 | 2 | A positional argument was supplied. `graph client` accepts none, exactly as `graph execute` accepts none (`utils.ErrInvalidInput`). |
 | 3 | No roadmap selected and none provided via `-r` (`utils.ErrNoRoadmap`). |
@@ -4110,6 +4218,7 @@ why they differ.
 | `--socket` supplied with an empty value | 2 | "Error: required parameter missing: --<flag>" |
 | Stray positional argument, such as a bare Cypher statement written without `--query` | 2 | "Error: invalid input: unexpected argument \"X\" (graph queries use --query or stdin)" |
 | Statement above the maximum length | 6 | "Error: validation error: query exceeds maximum length of 1048576 bytes" |
+| The resolved socket path is longer than the platform allows, whether derived or supplied | 1 | The path-length line of `§ Graph Server Socket Error Lines` |
 | No server listening on the resolved socket | 1 | The no-server line of `§ Graph Server Socket Error Lines` |
 | A server could not be reached through a socket that answered | 1 | The unreachable line of `§ Graph Server Socket Error Lines` |
 | Connection lost after the statement was sent | 1 | The lost-connection line of `§ Graph Server Socket Error Lines` |
@@ -4132,6 +4241,24 @@ identically here and under `§ Execute Error Cases`, because both subcommands
 reach it through the same client against the same server
 (`GRAPH.md § The Bolt Client`). Every character of that line is `rmp`'s own and
 it is compared in full.
+
+**This table carries no field-length row, and the omission is deliberate.**
+`§ Execute Error Cases` publishes one, because the engine refuses an over-long
+field wherever the statement runs and that subcommand can run it against the
+store. `graph client` cannot: every statement it sends crosses a server
+(`GRAPH.md § The Bolt Client`), and at the pinned engine the refusal does not
+survive the crossing. The server classifies it as its own fault rather than the
+caller's and replaces the message with generic internal-error text, so no
+sentinel, no distinguishing code and no field kind reaches this side. The
+condition therefore arrives through the parse/execution row above — the very
+outcome the field-length line was published to end, still standing on this one
+path — and a row promising the line here would promise what the binary cannot
+print. What does hold is the rest: the sentinel is `utils.ErrGraphEngine`, the
+exit code is 1, and nothing was written. `GRAPH.md § Field Length Limits`,
+rule 13, is canonical for the limitation, for why Groadmap MUST NOT close it by
+matching the replaced text, and for the engine-side change that ends it; when
+that change lands, this table gains the row and it is published identically
+here and under `§ Execute Error Cases`.
 
 ---
 

@@ -8,7 +8,7 @@ Each roadmap owns one graph, stored under that roadmap's home directory at `~/.r
 
 The graph is reached through three subcommands. `execute` accepts any Cypher statement the engine accepts and runs it against the roadmap's graph; `serve` runs no statement of its own and instead holds that graph open, answering statements over a Unix domain socket until it is stopped; `client` sends a statement to a running server and prints what comes back. Groadmap does not examine a statement and refuses none on the ground of what it does.
 
-**A running server is used automatically, and only the socket is a choice.** When a server is serving the selected roadmap, `execute` sends its statement to that server instead of opening the store, with no flag and no configuration; with nothing listening it opens the store directly, as it always did. The statement, the result, the output shape and the exit code are the same either way. `client` resolves the same socket and has no second path: with nothing listening it fails. All three subcommands take `--socket <path>` and default it identically; the flag names which socket is looked at and neither forces a server nor forbids one.
+**A running server is used automatically, and only the socket is a choice.** When a server is serving the selected roadmap, `execute` sends its statement to that server instead of opening the store, with no flag and no configuration; with nothing listening it opens the store directly, as it always did. The statement, the result, the output shape and the exit code are the same either way. `client` resolves the same socket and has no second path: with nothing listening it fails. All three subcommands take `--socket <path>` and default it identically; the flag names which socket is looked at and neither forces a server nor forbids one. One condition overrides that resolution entirely: a resolved socket path longer than the platform allows names a socket no process can create, so every surface refuses the invocation instead of falling back to the store, and the path derived from the roadmap is refused on exactly the same rule as one written on the command line. See [The socket path has a length limit](#the-socket-path-has-a-length-limit).
 
 ## Synopsis
 
@@ -36,6 +36,8 @@ Every class of statement runs through this one subcommand:
 
 **The statement runs under a 5-second time budget** on both paths. A statement that exhausts it is cancelled, its transaction rolls back whole, nothing is written, and the command fails with exit code 1. The remedy is to narrow the statement — add a label, an indexed property filter, or a `LIMIT` — or to split it into smaller statements.
 
+**A field the statement writes may be too long for the store's durable formats.** The engine refuses such a commit and the invocation exits 1 with a line naming the field it must shorten; a field short enough to commit and too long to fold into a snapshot commits and then refuses every checkpoint of that graph. See [How long a field may be](#how-long-a-field-may-be).
+
 **Usage:** `rmp graph execute -r <roadmap> [--query <cypher>] [--socket <path>]`
 
 **Flags:**
@@ -43,10 +45,12 @@ Every class of statement runs through this one subcommand:
 |------------|-----------|------|---------|-------------|
 | `-r` | `--roadmap` | string | - | Roadmap name (required) |
 | `-q` | `--query` | string | - | Cypher statement. When absent, the statement is read from standard input |
-| | `--socket` | string | `~/.roadmaps/<name>/graph.sock` | Socket this invocation resolves. A server answering there takes the statement; an absent socket, or one that refuses the connection, sends the invocation to the store under the exclusive lock. Write it only when the server was started with the same flag |
+| | `--socket` | string | `~/.roadmaps/<name>/graph.sock` | Socket this invocation resolves. A server answering there takes the statement; an absent socket, or one that refuses the connection, sends the invocation to the store under the exclusive lock. Write it only when the server was started with the same flag. A path longer than the platform allows fails the invocation with exit code 1 and does **not** send it to the store; the derived default path is refused on the same rule, which is why this flag is also the remedy for that case (see [The socket path has a length limit](#the-socket-path-has-a-length-limit)) |
 | `-h` | `--help` | bool | false | Show subcommand help |
 
 **Output:** `{"columns": [...], "rows": [[...], ...]}` when the statement produces result columns; `{"ok": true}` when it produces none. For a data statement the two cases are exactly "has a `RETURN` clause" and "has none". A schema-introspection command produces the listing and returns the `{columns, rows}` shape even though it carries no `RETURN` clause; a `CREATE INDEX`, `DROP INDEX`, `CREATE CONSTRAINT` or `DROP CONSTRAINT` produces no columns and returns `{"ok": true}`. The bytes are the same whichever path carried the statement, so a script may parse one shape and change nothing when a server is started or stopped.
+
+A statement that **changed** the graph adds one further member to whichever of those two shapes it produced: `counters`, naming what it changed. A statement that changed nothing carries no such member and produces exactly the bytes it produced before the member existed. See [What a statement changed](#what-a-statement-changed-the-counters-member).
 
 **Examples:**
 ```bash
@@ -105,7 +109,7 @@ Opens the roadmap's knowledge graph once, holds it and its exclusive advisory st
 | Short Flag | Long Flag | Type | Default | Description |
 |------------|-----------|------|---------|-------------|
 | `-r` | `--roadmap` | string | - | Roadmap name (required). The server serves this one roadmap's graph and no other |
-| | `--socket` | string | `~/.roadmaps/<name>/graph.sock` | Unix domain socket to bind. A non-default path is followed by the CLI through the same flag and by nothing else: the web interface has no way to receive one. See [Serving on a non-default socket](#serving-on-a-non-default-socket) |
+| | `--socket` | string | `~/.roadmaps/<name>/graph.sock` | Unix domain socket to bind. A non-default path is followed by the CLI through the same flag and by nothing else: the web interface has no way to receive one. See [Serving on a non-default socket](#serving-on-a-non-default-socket). A path longer than the platform allows is refused while the path is resolved, before the bind, and the line names the path's length and the platform's limit instead of the operating system's errno; the derived default path is refused on the same rule (see [The socket path has a length limit](#the-socket-path-has-a-length-limit)) |
 | `-h` | `--help` | bool | false | Show subcommand help |
 
 `serve` takes no `--query`, because it runs no statement, and accepts no positional argument.
@@ -122,7 +126,7 @@ Per-statement results go to the client that asked for them, never to this comman
 
 **What startup does, in order.** The order is load-bearing, and knowing it explains the failures below:
 
-1. Resolve the roadmap and the socket path. A roadmap that does not exist fails here, before anything is opened, created or removed.
+1. Resolve the roadmap and the socket path, and check the path's length. A roadmap that does not exist fails here, before anything is opened, created or removed. So does a resolved socket path longer than the platform allows, whether it was derived from the roadmap or supplied through `--socket` (see [The socket path has a length limit](#the-socket-path-has-a-length-limit)).
 2. Take the graph store's exclusive advisory lock under the ordinary bounded wait. A server starting while a short-lived `rmp graph execute` holds the lock waits for it rather than failing at once. This is what refuses a second server against the same roadmap.
 3. Refuse to start if a live server already answers on the resolved socket, leaving that socket exactly as it was found.
 4. Remove a stale socket file — one a killed server left behind — now that nothing answers on it. This is what lets a relaunch after a kill succeed.
@@ -147,7 +151,7 @@ Sends exactly one Cypher statement to a running graph server over its Unix domai
 
 **It requires a server.** `client` resolves `~/.roadmaps/<name>/graph.sock`, or the `--socket` path when one is given, and with nothing listening there it fails with exit code `1`. It does **not** open the store. That is the whole difference between this subcommand and `execute`, which resolves the same socket and has a second path to fall back on: a subcommand that quietly became `execute` when no server answered would report a success that says nothing about whether a server was reached.
 
-**The output is `execute`'s output.** For the same statement against the same graph the bytes on stdout are byte for byte what `rmp graph execute` writes, so a caller may parse one shape and change nothing when a server is started or stopped.
+**The output is `execute`'s output.** For the same statement against the same graph the bytes on stdout are byte for byte what `rmp graph execute` writes, so a caller may parse one shape and change nothing when a server is started or stopped. Two boundaries on that identity are worth knowing, and neither touches an ordinary statement: a `PROFILE`'s `timeNs` measures the run that produced it, so two subcommands measure two durations (see [Query Plans](#query-plans-explain-and-profile)); and the identity governs stdout and the exit code rather than the stderr diagnostic, where at the pinned engine exactly one condition prints a different line here than it does against the store (see [How long a field may be](#how-long-a-field-may-be)).
 
 **A serialisation conflict is retried, not reported.** Two clients writing to the same nodes at the same time is an ordinary situation inside a server, and the store detects the collision rather than preventing it. The losing statement committed nothing, so the client re-sends it under the project's retry policy and reports a failure only when that policy or the statement time budget is exhausted. **An exhausted policy is reported as itself**, on a line of `rmp`'s own rather than the engine's: it names the contention, states that nothing was written, and asks for the same statement again, so a caller can tell "you hit contention, run it again" from "your statement is wrong" instead of guessing. The exit-1 enumeration in `rmp graph client --help` names that cause too. Sustained contention on one node is the shape that produces it, and it is rare at this boundary: sixteen concurrent writers to a **single** node, driven through `rmp graph client`, exhausted the policy on **0 of 7,040** statements. Spreading those writes across distinct nodes removes the failure rather than moving its threshold.
 
@@ -160,10 +164,10 @@ Sends exactly one Cypher statement to a running graph server over its Unix domai
 |------------|-----------|------|---------|-------------|
 | `-r` | `--roadmap` | string | - | Roadmap name (required). It selects the graph the statement runs against and, unless `--socket` overrides it, the socket the statement is sent to |
 | `-q` | `--query` | string | - | Cypher statement. When absent, the statement is read from standard input |
-| | `--socket` | string | `~/.roadmaps/<name>/graph.sock` | Unix domain socket of the server, the same derivation `serve` uses. Write it when the server was started with the same flag |
+| | `--socket` | string | `~/.roadmaps/<name>/graph.sock` | Unix domain socket of the server, the same derivation `serve` uses. Write it when the server was started with the same flag. A path longer than the platform allows fails the invocation with exit code 1, naming the path's length and the platform's limit rather than reporting that nothing is listening; the derived default path is refused on the same rule (see [The socket path has a length limit](#the-socket-path-has-a-length-limit)) |
 | `-h` | `--help` | bool | false | Show subcommand help |
 
-**Output:** `{"columns": [...], "rows": [[...], ...]}` when the statement produces result columns; `{"ok": true}` when it produces none — the same shapes, and the same bytes, `execute` writes.
+**Output:** `{"columns": [...], "rows": [[...], ...]}` when the statement produces result columns; `{"ok": true}` when it produces none; either of them carrying a `counters` member when the statement changed the graph — the same shapes, and the same bytes, `execute` writes. The counters are inside that identity and take no exception from it: the same statement against the same graph reports the same figures on both subcommands.
 
 **Examples:**
 ```bash
@@ -208,12 +212,13 @@ Every surface that reaches a graph resolves the socket first: it connects, compl
 | **Served** | The connection is accepted and the handshake completes inside the probe deadline | Sends the statement to the server; takes no lock and opens no store | Sends the statement | Sends the statement |
 | **Unreachable** | The connection is accepted but the handshake does not complete in time, or the connection fails for any other reason | Fails, exit code 1. It does **not** fall back to the store | Fails, exit code 1 | HTTP `500` |
 
-Four consequences worth stating outright:
+Five consequences worth stating outright:
 
 - **No flag selects a path.** `--socket` names which socket is looked at. It does not force a server, does not forbid one, and does not select the store.
 - **A caller takes exactly one path, never both.** Resolution happens before any lock is taken, and a caller that reached a server and then failed does not retry against the store.
 - **A connection lost after the statement was sent is a failure, and the statement's outcome is unknown.** A commit is durable before it is acknowledged, so a connection that dies between the two leaves nobody able to say whether the write happened. The invocation reports exactly that and does not re-run the statement, because re-running it could apply it twice. A caller that must know re-reads the graph, which is why a statement whose effect has to be confirmed is written with a `RETURN` clause or followed by a read.
 - **A leftover socket file is never an error.** A killed server leaves one behind; the refusal a connection to it receives is the whole of the evidence needed to conclude that nothing is listening. The next `rmp graph serve` replaces it.
+- **A path over the platform's length limit is settled before the probe, and is not one of the four states above.** A path the kernel cannot bind cannot be listened on, so probing it tells a caller nothing it does not already know. Every surface refuses the invocation instead of reading the absent socket as "not served", the derived default path included. See [The socket path has a length limit](#the-socket-path-has-a-length-limit).
 
 ### Serving on a non-default socket
 
@@ -225,7 +230,31 @@ The web interface's graph data endpoint has no command line, `rmp web` serves ev
 
 So `--socket` is an option that keeps the CLI and costs the web page. Use it for a server the browser is not expected to reach — a test harness, a diagnostic session, a socket that has to live on another filesystem — and start a server whose roadmap is also browsed without it.
 
-A mistyped path has the same shape with a quieter symptom: a path nothing answers on reads as "not served", so `rmp graph execute --socket /typo.sock` goes to the store rather than to the server it meant. Against an unserved roadmap it succeeds there and says nothing; against a roadmap whose server is running on the default socket it meets that server's lock and fails with `Error: graph store error: graph store is busy: still held when the bounded wait was exhausted, and nothing records the holder. ...`, whose remainder names both remedies because the line cannot tell which holder it met.
+A mistyped path has the same shape with a quieter symptom: a path nothing answers on reads as "not served", so `rmp graph execute --socket /typo.sock` goes to the store rather than to the server it meant. Against an unserved roadmap it succeeds there and says nothing; against a roadmap whose server is running on the default socket it meets that server's lock and fails with `Error: graph store error: graph store is busy: still held when the bounded wait was exhausted, and nothing records the holder. ...`, whose remainder names both remedies because the line cannot tell which holder it met. One class of mistyped value is caught rather than followed: a path longer than the platform allows cannot name a socket at all, so every subcommand given it refuses the invocation and says why, instead of resolving it (see [The socket path has a length limit](#the-socket-path-has-a-length-limit)). Every other typo falls through as this paragraph describes, because every other typo names a path a socket could lawfully occupy.
+
+### The socket path has a length limit
+
+A Unix domain socket is named by a path in the filesystem, and the operating system bounds how long that path may be: the kernel copies the path into a fixed-size field of its socket address structure, and a path that does not fit there — terminator included — can be neither bound nor connected to. Left unchecked, such a path surfaces as the kernel's own `invalid argument`, which names neither the length, nor the limit, nor anything you can act on.
+
+**The bound belongs to the platform, so it is not one number.** It is **107 bytes on Linux and Windows** and **103 bytes on macOS, FreeBSD and OpenBSD**. The published line carries no figure of its own: it reports the length of the path it measured and the limit in force on the platform it ran on, so the same line is correct on every target.
+
+**The length is counted in bytes, not characters.** A roadmap name carrying multi-byte UTF-8 uses more of the bound than its character count suggests.
+
+**Every surface refuses an over-long resolved path, however the path was chosen.** The check runs on the path the invocation will actually use — a `--socket` value expanded to an absolute path, or the path derived from the roadmap — and it runs before the socket is probed, before any lock is taken and before any store is opened. `execute`, `serve` and `client` each fail with exit code 1 and the line below; the web interface's graph data endpoint, which publishes no such flag, refuses its request with HTTP `500`.
+
+```
+Error: graph server error: socket path is too long: <socket> is N bytes and this platform allows at most M. Use --socket to name a shorter path.
+```
+
+`<socket>` is the resolved path, `N` its length in bytes, and `M` the limit the platform yields.
+
+**No surface falls back to the store.** An absent socket is evidence that a roadmap is not served *at this moment*; a path over the bound is evidence that no server can ever answer there, which is a different fact and does not warrant the same answer. So `execute` does not open the store on it, and neither does the web interface's graph data endpoint.
+
+**The default path reaches the bound without an unusual roadmap name.** The derived path is the home directory, 22 fixed bytes for `/.roadmaps/` and `/graph.sock`, and the roadmap name. A roadmap name may be 50 bytes, so a home directory of 36 bytes puts the derived path one byte past the figure Linux and Windows yield, and one of 32 bytes puts it past the figure macOS, FreeBSD and OpenBSD yield. It has been reached in practice on a three-character roadmap name under a deep home directory, at 139 bytes. This is therefore not only a `--socket` concern: the path a caller never typed crosses the bound on an ordinary installation.
+
+**A home directory deep enough to push the derived path over the bound makes that roadmap's graph unreachable through every surface at once.** That includes `rmp graph execute`, which needs no socket of its own, and the graph page, which needs none either: both are refused against a bound that constrains sockets and not stores.
+
+**On the command line the refusal is recoverable without moving the roadmap**, and the line's remedy is truthful for all three subcommands: `--socket` naming a path inside the bound passes the check, and with nothing listening on it the roadmap resolves as not served — so `execute` given one opens the store and runs the statement as usual. The web interface's graph data endpoint has no such flag and no way to receive a path, so for that surface the only remedy is a shorter derived path: a shorter home directory, or a shorter roadmap name.
 
 ### Concurrency inside a server
 
@@ -257,10 +286,11 @@ What the drain guarantees, and what it does not:
 
 ### Socket failure lines
 
-Seven failures belong to the socket rather than to the roadmap, the statement or the store. Each carries exit code 1. `<socket>` is the resolved socket path; `<detail>` is the operating system's own diagnostic.
+Eight failures belong to the graph server rather than to the roadmap, the statement or anything you wrote. Each carries exit code 1. `<socket>` is the resolved socket path; `<detail>` is the operating system's own diagnostic; `N` and `M` are the two byte counts the path-length line carries.
 
 | Condition | Subcommand | Line |
 |-----------|-----------|------|
+| The resolved socket path is longer than the platform allows, whether derived from the roadmap or supplied through `--socket` | `execute`, `serve`, `client` | `Error: graph server error: socket path is too long: <socket> is N bytes and this platform allows at most M. Use --socket to name a shorter path.` |
 | A live server already answers on the socket `serve` resolved | `serve` | `Error: graph server error: a graph server is already serving <socket>` |
 | The socket could not be bound | `serve` | `Error: graph server error: cannot bind <socket>: <detail>` |
 | The store lock could not be taken within the bounded wait | `serve` | `Error: graph store error: cannot take the graph store lock for roadmap "X": another rmp graph serve may already be running for it` |
@@ -269,10 +299,12 @@ Seven failures belong to the socket rather than to the roadmap, the statement or
 | The connection was lost after the statement had been sent | `execute`, `client` | `Error: graph server error: the connection to the graph server at <socket> was lost; the statement's outcome is unknown` |
 | The server did not answer within the caller's backstop deadline | `execute`, `client` | `Error: graph server error: the graph server at <socket> did not answer within 7.5s; the statement's outcome is unknown` |
 
-Six of the seven carry `graph server error:`, because the server, its socket or the
+Seven of the eight carry `graph server error:`, because the server, its socket or the
 connection to it is what failed. The lock line carries `graph store error:` instead,
 because the failure is the store's and not the server's: `serve` never got far enough
 to have a server. The two prefixes are distinct sentinels that both exit `1`.
+
+The path-length line is the only one of the eight that all three subcommands write, and the only one that refuses an invocation before the socket is probed at all. It is written for a path you supplied and for the path derived from the roadmap alike; [The socket path has a length limit](#the-socket-path-has-a-length-limit) is canonical for the bound it reports and for why no surface falls back to the store on it.
 
 The lock line says "may" deliberately: the lock records no holder, so the invocation reports the overwhelmingly likely cause without asserting it. The last two lines say the outcome is *unknown* rather than that nothing was written, because a commit is durable before it is acknowledged and a line claiming nothing was written would be false in exactly the case a caller most needs the truth.
 
@@ -332,7 +364,7 @@ rmp graph execute -r backend-platform \
   --query "CREATE CONSTRAINT spec_title_req IF NOT EXISTS FOR (n:Spec) REQUIRE n.title IS NOT NULL"
 ```
 
-Each of these statements produces no result columns, so on success it outputs `{"ok": true}` and exits 0.
+Each of these statements produces no result columns, so on success it outputs `{"ok": true}` and exits 0, carrying `"indexesAdded": 1` or `"constraintsAdded": 1` under `counters`. An `IF NOT EXISTS` form whose object is already registered changes nothing and outputs `{"ok": true}` alone.
 
 A `CREATE INDEX` back-fills the new index from the data already in the graph. A `CREATE CONSTRAINT` validates the data already in the graph first and registers the constraint only if it passes; a uniqueness rule over a property that already holds a repeated value, or a presence rule over a property some node lacks, is refused with exit code 1 and nothing is registered.
 
@@ -348,6 +380,10 @@ rmp graph execute -r backend-platform --query "DROP CONSTRAINT spec_key_uq"
 # IF EXISTS makes a drop of an absent object a silent no-op
 rmp graph execute -r backend-platform --query "DROP INDEX spec_key IF EXISTS"
 ```
+
+A drop that removed the object outputs `{"ok": true}` carrying `"indexesRemoved": 1` or `"constraintsRemoved": 1` under `counters`. A `DROP CONSTRAINT ... IF EXISTS` that found nothing to drop changes nothing and outputs `{"ok": true}` alone.
+
+**The figure a no-op `DROP INDEX ... IF EXISTS` reports is currently unreliable.** Over an index that does not exist, the engine reports `"indexesRemoved": 1` although nothing was removed. Only this one form is affected: a `DROP CONSTRAINT ... IF EXISTS` over an absent constraint reports no counter, and neither does a `CREATE INDEX ... IF NOT EXISTS` over an index already registered. The count comes from the engine, and the defect is tracked for repair; until it is fixed, read `indexesRemoved` after an `IF EXISTS` drop as saying that the drop ran, not as evidence that an index was there to remove. `SHOW INDEXES` remains the authoritative report of what is registered.
 
 Because removal is by name only, a caller who did not declare a name must first learn the derived one from a listing. Declaring a name is the recommended practice and Groadmap does not enforce it: a named object is dropped by the name its author wrote, while an unnamed one is dropped by a name the engine chose, which changes if the index kind changes.
 
@@ -393,7 +429,7 @@ The engine's schema parser stops as soon as its grammar is satisfied and **disca
 CREATE INDEX ix FOR (n:Spec) ON (n.key) MATCH (m) SET m.p = true
 ```
 
-the engine creates the index, drops the `MATCH ... SET` on the floor, and returns success, so `graph execute` prints `{"ok": true}` and exits 0 for a statement half of which never ran — and you have no reason to check, because the command reported that it worked. Issue the two halves as two invocations.
+the engine creates the index, drops the `MATCH ... SET` on the floor, and returns success, so `graph execute` prints `{"ok": true, "counters": {"indexesAdded": 1}}` and exits 0 for a statement half of which never ran — and you have no reason to check, because the command reported that it worked. The counters name the index and nothing else, because the discarded half applied nothing to count; that absence is a trace rather than a report, since a `SET` that legitimately writes nothing produces no figure either. Issue the two halves as two invocations.
 
 A schema-introspection command carrying a further clause is refused by the engine, which names the unsupported clause rather than discarding it. And a statement that *begins* with a data-writing clause and carries schema text after it is not a schema statement at all: the engine routes it to the general Cypher grammar, which refuses it as a parse error (exit code 1).
 
@@ -420,12 +456,152 @@ rmp graph execute -r backend-platform --query "CREATE INDEX spec_key FOR (n:Spec
 
 A failed schema statement leaves the schema as it was. No partial registration exists in any of these classes: the object is either registered or it is not.
 
+## What a Statement Changed: the `counters` Member
+
+`{"ok": true}` says that a statement succeeded. It does not say what the statement did,
+and two invocations that both print it may have created a node and matched an existing
+one, or deleted a thousand relationships and deleted none. A statement that **changed**
+the graph therefore publishes one further member, `counters`, naming the effects it
+applied — so a caller can tell those cases apart without issuing a second statement to
+read the graph back, which is the only way it could have found out before, and which
+reads a graph other writers may have changed in the meantime.
+
+```bash
+rmp graph execute -r backend-platform \
+  --query "CREATE (:Spec {key:'rate-limiting', status:'draft'})"
+```
+
+```json
+{
+  "ok": true,
+  "counters": {
+    "nodesCreated": 1,
+    "propertiesWritten": 2,
+    "labelsAdded": 1
+  }
+}
+```
+
+A write that declares a `RETURN` clause carries the same member beside its rows:
+
+```bash
+rmp graph execute -r backend-platform \
+  --query "MATCH (s:Spec {key:'rate-limiting'}) SET s.status = 'implemented' RETURN s.key"
+```
+
+```json
+{
+  "columns": ["s.key"],
+  "rows": [["rate-limiting"]],
+  "counters": {
+    "propertiesWritten": 1
+  }
+}
+```
+
+The eleven keys, in the order they are written:
+
+| Key | Counts |
+|-----|--------|
+| `nodesCreated` | Nodes the statement added to the graph |
+| `nodesDeleted` | Nodes the statement removed from the graph |
+| `relationshipsCreated` | Relationships the statement added |
+| `relationshipsDeleted` | Relationships the statement removed, including the ones a `DETACH DELETE` removed as a consequence of deleting a node rather than by naming them |
+| `propertiesWritten` | Property assignments and property removals together, as one figure. See [below](#why-propertieswritten-is-one-figure) |
+| `labelsAdded` | Labels attached to a node. Creating a node with a label counts the label here as well as the node under `nodesCreated` |
+| `labelsRemoved` | Labels detached from a node |
+| `indexesAdded` | Indexes a schema statement registered |
+| `indexesRemoved` | Indexes a schema statement dropped |
+| `constraintsAdded` | Constraints a schema statement registered |
+| `constraintsRemoved` | Constraints a schema statement dropped |
+
+**Nothing you already parse changes.** The member is additive and written last: `ok`,
+`columns` and `rows` keep their meanings and their positions. A counter whose value is
+zero is left out, so the block is never empty when it is present and an absent key
+reads as zero. And a statement that changed nothing carries **no `counters` key at
+all**, producing exactly the bytes it produced before the member existed — every read,
+every `EXPLAIN`, which executes nothing, a `MERGE` that matched an existing element,
+and a `DELETE` whose pattern matched no row:
+
+```bash
+# Matched what it would otherwise have created: no counters key
+rmp graph execute -r backend-platform --query "MERGE (s:Spec {key:'rate-limiting'})"
+# {"ok": true}
+
+# Matched no row: no counters key
+rmp graph execute -r backend-platform \
+  --query "MATCH (s:Spec) WHERE s.key = 'no-such-spec' DELETE s"
+# {"ok": true}
+```
+
+**`execute` and `client` publish the same object.** The counters describe the statement
+and the graph rather than the run that executed it, so they fall inside the byte
+identity between the two subcommands with no exception: the same statement against the
+same graph reports the same figures whichever one carried it.
+
+### Why `propertiesWritten` is one figure
+
+The engine counts a property **assignment** and a property **removal** separately. The
+published member is their sum, and its name says so.
+
+The constraint that decides this is the Bolt protocol a served result crosses: its
+statistics carry a single properties counter and no counterpart for a removal. A result
+read through `rmp graph client` therefore arrives with the two already summed, and the
+protocol offers no second channel from which the split could be recovered.
+Publishing the split on `execute` alone would make the two subcommands report different
+keys for one statement, and publishing a removal under a key named for an assignment
+would claim an effect that did not occur. Both paths therefore fold, and the key is
+named for the sum.
+
+Three consequences worth knowing:
+
+- A `REMOVE` that removed one property reports `"propertiesWritten": 1`. That is
+  correct, not a defect.
+- Assigning `null` to a property removes it, and so counts here too.
+- The figure alone cannot tell you whether a statement assigned two properties, removed
+  two, or did one of each. The statement you wrote can.
+
+Deleting an element counts no property removal, so a `DETACH DELETE` reports no property
+figure at all — only the node and the relationships that went with it, here a decision
+carrying one:
+
+```bash
+rmp graph execute -r backend-platform \
+  --query "MATCH (d:Decision {key:'use-sessions'}) DETACH DELETE d"
+```
+
+```json
+{
+  "ok": true,
+  "counters": {
+    "nodesDeleted": 1,
+    "relationshipsDeleted": 1
+  }
+}
+```
+
+### A counter is not a promise that the write can be read back
+
+Each figure is incremented where the engine applied the change, which is not the same as
+saying the change is afterwards visible. The two relationship-write defects under
+[Known Limitations](#known-limitations) both report their counters as though the write
+had persisted: where their preconditions hold, `counters` is exactly as silent about the
+loss as `{"ok": true}` was. What the member adds is a signal where there was none; what
+it does not add is a guarantee that was never there.
+
+`SPEC/DATA_FORMATS.md § Graph Query Counters` is canonical for the shape and the key
+set, and `SPEC/GRAPH.md § Write Counters: What a Statement Changed` for the behaviour.
+
 ## Query Plans: `EXPLAIN` and `PROFILE`
 
 A statement may ask for its plan instead of, or as well as, its answer. Both prefixes
-work on `execute` and on `client`, and both produce the same bytes on either, because
-the client maps the protocol encoding back onto the engine's own plan node rather than
-onto JSON.
+are recognised without regard to case, and both work on `execute` and on `client`: the
+client maps the protocol encoding back onto the engine's own plan node rather than onto
+JSON, so one serialiser writes the output on both surfaces. An `EXPLAIN` is therefore
+identical in every byte on either subcommand. A `PROFILE` has one figure that cannot be,
+and no implementation could make it one: `timeNs` measures the run that produced it, and
+two subcommands are two runs. Every other key — `rows`, `dbHits`, `rowsRemovedByFilter`
+and the estimate pair included — is identical.
 
 | Prefix | Does it run the statement? | What it returns | Member |
 |--------|---------------------------|-----------------|--------|
@@ -452,10 +628,69 @@ rmp graph execute -r backend-platform \
 rmp graph client -r backend-platform --query "EXPLAIN MATCH (n:Spec) RETURN n.key"
 ```
 
-A plan is a recursive object: each node names the `operator` that runs, the `detail`
-of the physical decision it took, and the `children` it draws its rows from, in
-**execution** order. `SPEC/DATA_FORMATS.md § Graph Plan Node` is canonical for every
-field and for when each is present.
+A plan is a recursive object. Each node names the `operator` that runs, the `detail` of
+the physical decision it took, and the `children` it draws its rows from, in
+**execution** order — a join's build side before its probe side, an apply's outer before
+its inner. `operator` is the only key always present, whichever member carries the tree;
+a consumer must treat every other key as optional.
+
+| Key | In a `plan` | In a `profile` | What it is |
+|-----|-------------|----------------|------------|
+| `operator` | Always | Always | The operator's type name — or, in a logical plan, the whole plan line (see below) |
+| `detail` | When it has one | When it has one | The physical decision: the label it scans, the index it seeks, the pattern it expands |
+| `children` | When it has any | When it has any | The operators it draws its rows from, in execution order. A leaf carries no key |
+| `estimatedRows` | When the planner had an estimate | The same, and the same number | The planner's prediction, made before anything ran |
+| `estimatedRowsSource` | With `estimatedRows` | With `estimatedRows` | Where the estimate came from, and therefore how far it may be trusted: `exact`, `stats` or `heuristic` |
+| `rows` | Never | Yes | Rows the operator emitted. Measured |
+| `timeNs` | Never | Yes | Whole nanoseconds attributed to the operator. Measured |
+| `dbHits` | Never | When the figure was counted | Storage record accesses charged to the operator |
+| `rowsRemovedByFilter` | Never | When the operator can reject a row | Candidate rows the operator read and then discarded because a predicate said no |
+
+`estimatedRows` is published for an `EXPLAIN` and for a `PROFILE` alike, and it is the
+same number in both, because the planner predicted it before either ran. Reading it
+beside a `profile`'s measured `rows` is the point: a bad estimate becomes visible in one
+object.
+
+**Four presence rules decide what a number means, and reading any of them backwards
+gives a wrong answer.**
+
+- **An absent `dbHits` means "nobody counted", never "none".** The engine distinguishes
+  an operator whose storage accesses were counted and came to zero — which publishes
+  `0` — from one whose accesses nobody counted at all, which publishes no key. The
+  engine's own text rendering prints `?` for the second case, for the same reason. A
+  reader who treats the absent key as a zero has a measurement that was never taken.
+- **A `rowsRemovedByFilter` of `0` is a finding, and its absence says something else.**
+  An operator that can reject rows and rejected none reports `0` deliberately: a filter
+  that rejected nothing is exactly what a reader of a slow plan is looking for. The key
+  is omitted only by an operator with no rejection mechanism at all. The asymmetry
+  against the rule above is intended: there an absent key admits that a figure exists
+  and was not counted, here it states that there is no figure to have.
+- **An absent estimate is an absent estimate, not a zero**, and the pair is written as a
+  pair. An operator the planner attributed no estimate to, and one whose backing
+  statistic was absent or stale, both omit `estimatedRows` and `estimatedRowsSource`
+  together; an estimate with no provenance is a bare number a reader cannot weigh. A
+  genuine estimate of zero is published as `0`.
+- **`timeNs` is inclusive of the node's children.** The figure covers everything the
+  operator drew from the operators beneath it, so summing a tree's nodes double-counts
+  every level; the root's figure is the one that describes the statement. It is a whole
+  number of nanoseconds rather than a millisecond value, so that both subcommands
+  publish the one integer they already hold; a consumer that wants milliseconds divides,
+  and the rounding is that consumer's decision.
+
+**`dbHits` counts access-path record reads and never property reads.** This is a
+deliberate divergence from Neo4j, which additionally charges one hit per property read,
+and it is published because a caller comparing the two products otherwise concludes the
+figure is wrong. It is not: it counts a different thing, and it counts that thing
+exactly.
+
+**An `EXPLAIN` of a writing statement publishes a logical plan, whose nodes carry
+`operator` and `children` and nothing else.** A write's operators bind to an open
+transaction, so there is no physical operator tree to walk outside one — and opening one
+is precisely what `EXPLAIN` must not do. In such a tree `operator` is the plan line as
+the engine writes it, with any detail already inside that string, so there is no
+separate `detail` and no estimate pair beside it. A consumer that parses `operator` as a
+bare operator type name is correct for every reading statement and wrong for this one,
+which is why the case is stated here rather than left to be discovered.
 
 **A prefixed statement always returns the `{columns, rows}` shape**, even when it
 declares no column of its own — empty `columns` and `rows` arrays beside the plan,
@@ -467,6 +702,200 @@ what a real committed write reports, over a statement that had written nothing.
 statement is refused, because profiling it would mean committing it. Neither prefix is
 accepted on a **schema** statement. Both refusals exit `1` and carry the engine's own
 diagnostic.
+
+`SPEC/DATA_FORMATS.md § Graph Plan Node` is canonical for the shape and for when each
+key is present; `SPEC/GRAPH.md § Query Plans: The EXPLAIN and PROFILE Prefixes` for the
+behaviour.
+
+## How Long a Field May Be
+
+Groadmap checks no field length, and cannot. A statement's fields are the values its
+expressions produce, so learning them means executing the statement — which is what the
+engine does. Every refusal in this section is therefore the engine's, already made; what
+is documented here is what you are told about it and what happens next.
+
+**A field goes into two durable formats, and they do not bound it alike.** A committed
+write is appended to the write-ahead log; a later checkpoint folds the committed state
+into a snapshot. The log bounds a field by the capacity of the length prefix its frame
+reserves, which is an encoding limit. The snapshot bounds one by what its own reader is
+required to accept, which is an anti-exhaustion control — a reader that allocated for
+any length a prefix could express would allocate gigabytes on an untrusted file. The two
+are set independently, and neither is uniformly the stricter.
+
+| Field | Write-ahead log, at commit | Snapshot, at checkpoint | Which bound binds |
+|-------|----------------------------|-------------------------|-------------------|
+| Node or edge label | 65535 bytes | 1 MiB | The log, by a factor of sixteen |
+| Node or edge property key | 65535 bytes | 1 MiB | The log, by a factor of sixteen |
+| Index or constraint identifier | 65535 bytes | 64 KiB | Neither: the engine's Cypher parser bounds it far below both |
+| Property value, list element, list element count | 4294967295 bytes | 1 GiB | **The snapshot**, at a quarter of the log's bound |
+| Node key | 4294967295 bytes | 1 GiB | **The snapshot**, at a quarter of the log's bound |
+
+These figures are read from the pinned engine and are recorded here as evidence, not as
+a contract. They move with the engine, and no line `rmp` prints repeats one from this
+page: every published line carries the figure the engine reported for the run that
+produced it.
+
+**For a property value, write under 1 GiB, and treat the log's four-gigabyte figure as
+the misleading one.** The last column is the column that matters when writing. A value
+between 1 GiB and 4 GiB is inside the log's bound, so it commits — acknowledged, durable
+and recoverable. It is outside the snapshot's, so from that moment every checkpoint of
+that graph fails, the write-ahead log is never folded again and never reclaimed, and it
+grows for as long as the value remains. A caller who read only the log's figure would
+write two gigabytes believing it legal, and would be told nothing until the checkpoint.
+
+### A field too long for the log refuses the commit
+
+The commit is refused, nothing is written, and the invocation exits `1` with a line of
+its own rather than the general parse-or-execution one:
+
+```
+Error: graph engine error: graph field too long; nothing was written. Shorten the field the engine names: <engine diagnostic>
+```
+
+The part `rmp` fixes is everything up to and including `Shorten the field the engine
+names: `. What follows is the engine's own text, which is not fixed here and which names
+the field kind, the length the field occupies and the maximum in force — the half that
+tells you what to shorten. Both halves say the field is too long, and that repetition is
+deliberate: trimming the engine's half would mean parsing it, and a match on the
+engine's wording breaks silently at the next version bump.
+
+**The line exists because the condition was otherwise unrecognisable.** It used to be
+reported through `graph query failed: `, the same text a syntax error prints, and the
+only thing separating the two was the engine's diagnostic tail — which is outside the
+published contract and which a caller therefore cannot lawfully match. A caller had to
+read English to learn whether to correct the statement's syntax or to shorten one of its
+values. The statement time budget and the exhausted retry policy each hold a line of
+their own for the same reason.
+
+**Nothing is written and the store stays usable.** The refused transaction consumes a
+sequence number and applies nothing, so the graph holds no part of the statement — not
+the elements it created before it reached the over-long field, and not the properties it
+set on them. An ordinary write submitted immediately afterwards succeeds, and a
+following `MATCH` counts it.
+
+**Two field kinds are reachable from a statement, and the others are not.** The
+65535-byte bound is what a node or edge **label** and a node or edge **property key**
+meet, and those two are what a caller writes in a pattern. A schema identifier does not
+reach it: the engine's Cypher parser bounds an index or constraint name, label and
+property far below 65535 bytes at the point the statement is parsed, so a schema
+statement is refused there instead, with the parser's own message and as an ordinary
+engine refusal (see [Managing the Schema](#managing-the-schema)). A property value does
+not reach either of its bounds from a literal, because a literal of a gigabyte does not
+fit inside the 1 MiB maximum query length; a field of that size is one a statement's own
+expressions produce.
+
+Two neighbouring refusals are **not** this class, and neither prints this line. A node
+key longer than the log's 32-bit prefix is refused by the engine's node-key codec, and
+an assembled log frame over the engine's frame ceiling — which one list property of many
+individually-legal elements can reach without any one of them being over-long — is
+refused by the log's framer. Both are length refusals in spirit; both arrive through the
+ordinary `graph query failed: ` line, because the class is defined by what a caller can
+match and not by the shape of the complaint.
+
+### A field too long for the snapshot commits, and then no checkpoint succeeds
+
+This is the other half of the condition, and it is not the first half worded
+differently. The field the snapshot refuses is already **committed graph state**, so it
+is not a statement to correct and re-run.
+
+**The write succeeded.** The commit is the durability boundary and it was crossed: the
+invocation prints its normal success output and exits `0`. What fails is the checkpoint
+that follows, and a checkpoint failure after a durable commit never fails the write. The
+diagnostic reaches stderr beside the success — the one place in the product where a
+non-fatal diagnostic accompanies exit code 0.
+
+**It cannot heal, and that is what separates it from every other checkpoint failure.** A
+checkpoint refused because a disk filled, a permission was wrong or a write was
+interrupted may succeed the next time one runs, and the next successful checkpoint
+reconciles the snapshot. Here every later capture captures the same committed field, so
+every later checkpoint is refused for the same reason. Nothing in the environment
+changes it and no amount of waiting resolves it. **The condition is permanent until the
+offending field is shortened or removed by a statement.**
+
+**What it costs is bounded growth, not data.** The engine's guard fires while the
+capture is still being assembled, before any snapshot file is written and before the
+log's prefix is truncated. Every acknowledged commit therefore stays durable in the
+write-ahead log, recovery still restores it in full, and the store stays open and
+usable. What is lost is the truncation: the log keeps growing for as long as the field
+is in the graph, and every open replays more of it, so recovery time grows with it. That
+cost is real and unbounded, which is why the condition is reported rather than absorbed
+— but it is not a durability failure, and a diagnostic that read as one would be worse
+than none.
+
+**The diagnostic says four things**, and no exact wording for it is published in the
+specification, because it accompanies a success rather than a failure and is therefore
+not one of the error lines fixed character for character. What is fixed is the content:
+that every acknowledged commit is still durable and recovery still restores it; that the
+log was not folded, so it keeps growing and the next open replays more of it; that the
+condition will persist through every later checkpoint while the field remains; and that
+the remedy is to shorten or remove the offending field with a statement. It ends in the
+engine's own error, which is the half that names which field is at fault. Illustrative
+of the shape, and not a contract:
+
+```
+Warning: the graph checkpoint was refused because a committed field is longer than the snapshot format accepts; ... until a statement shortens or removes the field the engine names: <engine diagnostic>
+```
+
+**Expect it on every subsequent write.** On the short-lived surfaces every successful
+write checkpoints, and every one of those checkpoints is refused, so the diagnostic
+recurs for as long as the field is in the graph. That is deliberate: a line that recurred
+on every write saying only that a checkpoint had failed would train an operator to ignore
+the one message naming an unbounded, permanent cost.
+
+**Which surfaces classify it, and the one that cannot.** `rmp graph execute`, the web
+interface's graph data endpoint, and `rmp graph serve`'s shutdown checkpoint all hold the
+checkpoint's error, so all three report this condition rather than the general one. A
+running server's **in-flight** checkpoint — the age-based cadence of
+[Durability, checkpoints and shutdown](#durability-checkpoints-and-shutdown) — does not:
+it runs on the engine's own loop, and what Groadmap can observe of it is a statistics
+value carrying the last failure as a rendered string rather than as an error. There is
+nothing there to classify without matching the engine's wording, which is what this
+whole feature is built to avoid, so that one report stays the general checkpoint-failure
+record with the engine's own text inside it. An operator reading a server's log finds the
+kind there.
+
+### Through a running server the line is the generic one
+
+At the pinned engine the field-length line is reached on the **direct** path only.
+
+`rmp graph execute` sends its statement to a server whenever one answers, and
+`rmp graph client` always does. The engine's Bolt server classifies this refusal as a
+**server** fault rather than the caller's — its failure-code mapping carries no case for
+the condition and falls back to a generic database-error code — and the session then
+replaces the message of every failure so classified. Neither the field kind, nor the
+figures, nor any code that separates this condition from another crosses the connection.
+
+The same statement therefore produces one of two stderr lines according to whether a
+server happens to be running, which the caller did not choose and cannot see. Measured:
+
+```
+# Against the store: the field, the figures and the remedy
+Error: graph engine error: graph field too long; nothing was written. Shorten the field the engine names: <engine diagnostic>
+
+# Through a running server: the general parse-or-execution line, sanitised
+Error: graph engine error: graph query failed: An internal error occurred. See server logs for details (session: <id>).
+```
+
+The sanitised half of the second line is the engine's own wording at the pinned version
+and not a Groadmap contract; what is stable about it is that it names the session and
+nothing else.
+
+**It is not a different failure.** The sentinel is the same, the exit code is 1 on both
+paths, nothing is written on either, and the store stays usable on either. Only the
+message differs, and the two things the identity between `execute` and `client` binds —
+the success output and the exit code — are untouched.
+
+**The diagnostic is not destroyed; it went to the server.** The engine logs it in full,
+under the same session, on the server's own stderr. A caller who meets the sanitised line
+and needs to know which field was at fault reads the stderr of the server that answered
+the statement. A caller who cannot read it knows at least that nothing was written.
+
+Groadmap does not close this on its own side, and there is no interception point at which
+it could: the engine's server exposes no error-mapping option, and Groadmap runs no
+statement of its own between the caller and the server. The one remaining lever would be
+matching the replaced text, which names no field, no kind and no figure. The remedy
+belongs in the engine, and when it lands the line is reached on both paths and
+`rmp graph client` gains it too.
 
 ## Query Input Source and Precedence
 
@@ -507,8 +936,8 @@ These are measured, currently unfixed, and reported here rather than left to be 
 
 - **A statement cancelled by the time budget can cost gigabytes of memory.** Every mutation a statement has applied is retained until the rollback finishes — across four accumulators, of which the undo log is only about a fifth — and the only ceiling on how many mutations a statement applies is the engine's own cap on the rows one statement may produce, which the 5-second budget is far too short to reach: given a budget long enough to reach it, the same statement costs roughly **20 GB**. Measured: `MATCH (a),(b),(c) CREATE ()` over a 600-node store of 80 KB drove a single `rmp graph execute` process to **3.3 GB** of resident memory at the 5-second budget. The figure tracks the budget rather than the size of the graph. A short-lived invocation returns that memory to the operating system by exiting; `rmp graph serve` and `rmp web` have no exit to return it at, and the connection ceiling bounds how many such statements may run at once but not what each of them costs.
 - **A server's shutdown is not bounded, and the undo replay is the only cause of that left.** A statement the budget cut while it was writing is inside an undo replay that takes no cancellation, and the store cannot close until that call returns. The longest such hold measured is **35.6 seconds** — the largest measured and not a maximum, since the same shape over the same store measured 34.5 seconds on an earlier run — and no ceiling has been established. A client that had stopped reading its result was a second cause until the drain began closing such a socket, which took that shutdown from 60.0 seconds to 7.5; what remains of that cause is bounded by the 60-second connection timeout rather than unbounded. `SPEC/GRAPH.md § Server Shutdown and the Drain` is canonical for which sessions the drain reaches and for what bounds each. A supervisor that escalates `SIGTERM` to `SIGKILL` after a short grace period may therefore kill the server mid-replay; every acknowledged commit is still durable and the next open replays the log, but the shutdown checkpoint is lost.
-- **A `SET` on a relationship bound by a `MERGE` that matched an existing relationship is silently discarded when the ordered node pair already carries a parallel relationship.** The precondition is narrow and all three parts are required: the relationship variable must be bound by a `MERGE` clause in the same statement, that `MERGE` must have **matched** rather than created, and the same ordered pair `(source, target)` must already carry another relationship **in the same direction**. When all three hold, the statement exits 0, reports `{"ok": true}`, and writes nothing; a following read shows the previous value. Measured: with `(a)-[:OTHER]->(b)` present, `MERGE (a)-[e:T]->(b) SET e = {c:2}` over an existing `T` leaves `c` at `1`. Remove any one of the three and the write persists — an isolated pair works, a parallel edge in the **reverse** direction does not trigger it, and a plain `MATCH ... SET` writes correctly with the parallel edge present. Bind the relationship with `MATCH` rather than `MERGE` when you intend to update one that already exists, or set the properties in a second statement after a fresh `MATCH`. A `SET` on a relationship bound by `CREATE`, or by a `MERGE` that creates, is **not** affected and was repaired by the move to GoGraph v0.14.0.
-- **An undirected or incoming `SET` on a relationship does not write every relationship it matched, and how many it loses depends on the data.** A write persists only where the row's left-hand node is the relationship's stored source and its right-hand node the stored target, so the same statement may write everything it matched, some of it, or none of it. Re-measured for the 1.16.0 release on a single stored `(alice)-[:MENTORS]->(bob)`: the pattern anchored with `alice` on the left writes correctly, while the same pattern written with `bob` on the left writes nothing at all, exits 0, and leaves the property at its previous value. Measured on two relationships either side of one node, `MATCH (n)-[r:R]-(m {key:'b'}) RETURN count(r)` reports 2 while the same pattern with `SET r.stamp = 'x'` writes one of them and still reports `{"ok": true}`; with both relationships pointing away from the anchored node, none is written and the report is unchanged. Nothing in the output distinguishes a complete write from a partial one. **A selective statement is the hazardous one and an unanchored sweep is safe**, because each relationship is then emitted twice and one of the two rows is correctly oriented. Write through an outgoing pattern, which can be anchored on either endpoint. `DELETE` is unaffected and removes everything it matched.
+- **A `SET` on a relationship bound by a `MERGE` that matched an existing relationship is silently discarded when the ordered node pair already carries a parallel relationship.** The precondition is narrow and all three parts are required: the relationship variable must be bound by a `MERGE` clause in the same statement, that `MERGE` must have **matched** rather than created, and the same ordered pair `(source, target)` must already carry another relationship **in the same direction**. When all three hold, the statement exits 0, reports success, and writes nothing; a following read shows the previous value. Measured: with `(a)-[:OTHER]->(b)` present, `MERGE (a)-[e:T]->(b) SET e = {c:2}` over an existing `T` leaves `c` at `1` while still reporting `{"ok": true, "counters": {"propertiesWritten": 1}}` — the same output the statement produces when the write does persist, so the counters do not expose the loss either. Remove any one of the three and the write persists — an isolated pair works, a parallel edge in the **reverse** direction does not trigger it, and a plain `MATCH ... SET` writes correctly with the parallel edge present. Bind the relationship with `MATCH` rather than `MERGE` when you intend to update one that already exists, or set the properties in a second statement after a fresh `MATCH`. A `SET` on a relationship bound by `CREATE`, or by a `MERGE` that creates, is **not** affected and was repaired by the move to GoGraph v0.14.0.
+- **An undirected or incoming `SET` on a relationship does not write every relationship it matched, and how many it loses depends on the data.** A write persists only where the row's left-hand node is the relationship's stored source and its right-hand node the stored target, so the same statement may write everything it matched, some of it, or none of it. Re-measured for the 1.16.0 release on a single stored `(alice)-[:MENTORS]->(bob)`: the pattern anchored with `alice` on the left writes correctly, while the same pattern written with `bob` on the left writes nothing at all, exits 0, and leaves the property at its previous value. Measured on two relationships either side of one node, `MATCH (n)-[r:R]-(m {key:'b'}) RETURN count(r)` reports 2 while the same pattern with `SET r.stamp = 'x'` writes one of them and still reports success; with both relationships pointing away from the anchored node, none is written and the report is unchanged. Nothing in the output distinguishes a complete write from a partial one, and the counters do not either — that two-relationship statement reports `"propertiesWritten": 2` over a single persisted write, and the one anchored on the wrong endpoint reports `"propertiesWritten": 1` over none. **A selective statement is the hazardous one and an unanchored sweep is safe**, because each relationship is then emitted twice and one of the two rows is correctly oriented. Write through an outgoing pattern, which can be anchored on either endpoint. `DELETE` is unaffected and removes everything it matched.
 
 ## Aliases
 
@@ -520,7 +949,7 @@ The `graph` command has no alias, and neither `execute`, `serve` nor `client` ha
 - The graph store is a directory (`~/.roadmaps/<name>/graph/`, mode `0700`), not a single file, because GoGraph persists through an on-disk snapshot plus a write-ahead log. The server's socket sits beside it, at `~/.roadmaps/<name>/graph.sock`, and not inside it: the contents of `graph/` belong to the engine.
 - Graph operations never read from or write to the roadmap's SQLite `project.db`, and removing a roadmap (`rmp roadmap remove <name>`) deletes the graph along with the rest of the roadmap home directory.
 - **On the direct path**, every invocation takes the store's advisory lock **exclusively**, and holds it across the whole open, execution, commit, checkpoint and write-ahead-log truncation sequence. There is one lock mode because there is one execution path: Groadmap cannot know before running a statement whether it will write. Two invocations against the same roadmap therefore serialise even when neither of them writes; an invocation that finds the lock held waits, under a bounded backoff, and fails with exit code 1 only once that wait is exhausted. **On the served path no lock is taken at all** — the server holds it — and concurrency is resolved by the store's MVCC instead.
-- A statement that changes the graph runs inside a single transaction and persists durably before its result is reported. The engine reports no affected-element count, so write results carry no such field.
+- A statement that changes the graph runs inside a single transaction and persists durably before its result is reported. It also reports what it changed, under the `counters` member described in [What a statement changed](#what-a-statement-changed-the-counters-member); a statement that changed nothing carries no such member.
 - A statement whose transaction appended nothing to the write-ahead log neither snapshots nor truncates the log; the store's `snapshot/` directory and its `wal` file are left exactly as the statement found them. A server on its cadence is the exception, since its checkpoint is not gated on the statement you just ran.
 - A schema statement is the one exception to that transaction: the invocation still takes the exclusive lock and runs the statement through the engine's transactional entry point, but the engine recognises a schema statement there and executes it outside the transaction, because a schema change is not transactional in this engine. A schema statement that succeeds has taken effect and there is nothing to roll it back into. It checkpoints like any other successful write, and the snapshot carries the registered schema.
 - The engine may attach advisory notifications to a result — a Cartesian-product warning on a disconnected multi-pattern `MATCH`, for example. Each is written to stderr as one plain-text line and changes neither the stdout output nor the exit code. `client` surfaces the notifications the server returns in exactly the same way.
@@ -539,7 +968,7 @@ All three subcommands follow these conventions:
 | Code | Meaning |
 |------|---------|
 | 0 | The statement executed successfully. For `serve`: the server started, served, and was stopped by `SIGINT` or `SIGTERM` |
-| 1 | Cypher failed to parse or execute, the engine refused a schema statement, the statement exhausted the 5-second time budget, every attempt of the retry policy lost a serialisation conflict against a server, or the graph store could not be opened, read, or written. The conflict is the one cause here whose remedy is to run the **same** statement again: the Cypher was valid, the store was healthy, and nothing was written, so spread concurrent writes across distinct nodes rather than rewriting the statement. Also every socket failure: for `client`, no server listening; for `execute` and `client`, a socket that answers but yields no reachable server, and a connection lost or unanswered after the statement was sent; for `serve`, a lock it could not take, a socket it could not bind, and a live server already answering there |
+| 1 | Cypher failed to parse or execute, the engine refused a schema statement, the engine refused a field the statement writes as too long for the write-ahead log, the statement exhausted the 5-second time budget, every attempt of the retry policy lost a serialisation conflict against a server, or the graph store could not be opened, read, or written. The conflict is the one cause here whose remedy is to run the **same** statement again: the Cypher was valid, the store was healthy, and nothing was written, so spread concurrent writes across distinct nodes rather than rewriting the statement. Also every socket failure: for all three, a resolved socket path longer than the platform allows, whether derived or supplied; for `client`, no server listening; for `execute` and `client`, a socket that answers but yields no reachable server, and a connection lost or unanswered after the statement was sent; for `serve`, a lock it could not take, a socket it could not bind, and a live server already answering there |
 | 2 | No statement supplied (`--query` absent and stdin empty, or `--query` empty/whitespace); or `--socket` supplied with an empty value; or an unknown flag or a positional argument was supplied |
 | 3 | No roadmap selected (`-r` missing/required) |
 | 4 | Roadmap not found (the roadmap given via `-r` does not exist) |
@@ -547,5 +976,7 @@ All three subcommands follow these conventions:
 | 127 | Unknown subcommand |
 
 A socket file with nothing listening behind it is not a failure for `execute`: the refused connection is read as evidence that the roadmap is not served, the store is opened directly, and the invocation exits 0. For `client` the same state is exit code 1, because it has no second path.
+
+A resolved socket path longer than the platform allows is exit code 1 for all three subcommands, and `execute` does not open the store on it: a path the kernel cannot bind is evidence that no server can ever answer there, and not evidence that none happens to be listening (see [The socket path has a length limit](#the-socket-path-has-a-length-limit)).
 
 A graceful stop of `rmp graph serve` is exit code `0` and not `130`: `SIGINT` is an instruction to stop rather than an interruption of unfinished work, and the server drains, checkpoints and exits successfully. `rmp web`, the only other long-lived command, behaves the same way.
