@@ -5,7 +5,7 @@ All notable changes to **Groadmap** (`rmp`) are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [2.0.0] - 2026-09-06
 
 ### Added
 
@@ -53,6 +53,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   The flag names **which socket is looked at** and nothing else: it does not force
   a server, does not forbid one, and does not select the store.
 
+- **`EXPLAIN` and `PROFILE` publish the query plan, on `rmp graph execute` and
+  `rmp graph client` alike.** A statement written with an `EXPLAIN` prefix is **planned
+  and not executed**, and the invocation returns the statement's declared columns, no
+  rows, and the plan under a new `plan` member. Written with a `PROFILE` prefix it is
+  executed and returns its real rows together with what each operator cost, under a new
+  `profile` member. **The two members are never both present**, which is what stops an
+  estimate being read as a measurement: an `EXPLAIN` tree carries only `estimatedRows`
+  and `estimatedRowsSource`, and never `rows`, `timeNs`, `dbHits` or
+  `rowsRemovedByFilter`, because it ran nothing and a figure there would be invented.
+  - **A statement written with neither prefix produces exactly the bytes it produced
+    before**, so no existing caller is affected. Both members are omitted when empty.
+  - **The two surfaces agree by construction rather than by vigilance.** The client
+    inverts the Bolt encoding back onto the engine's own plan node rather than onto
+    JSON, so both surfaces then run one mapping, in `internal/graphjson`. Measured
+    across five statement classes, `EXPLAIN` output is byte-identical between
+    `graph execute` and `graph client` with nothing excused; a `PROFILE` differs in
+    `timeNs` alone, and it must, because that member measures the execution and the two
+    subcommands are two executions. The specification's byte-identity claim was narrowed
+    in five places to say so.
+  - **Four measured keys are pointers rather than plain integers**, so that
+    `omitempty` cannot collapse a counted zero into an uncounted one. Which is built is
+    decided by the engine's own known-flags, never by the value. `timeNs` publishes
+    whole nanoseconds rather than a millisecond float, so that the identity above holds
+    on the integer instead of on two float formatters agreeing.
+  - `SPEC/DATA_FORMATS.md § Graph Plan Node` is canonical for the shape;
+    `SPEC/GRAPH.md § Query Plans: The EXPLAIN and PROFILE Prefixes` for the behaviour.
+  - **A `PROFILE` of a writing statement is refused**, because profiling it would mean
+    committing it, and neither prefix is accepted on a schema statement. Both exit `1`
+    and carry the engine's own diagnostic.
+
 ### Changed
 
 - **`rmp graph execute` and the web graph data endpoint route through a running
@@ -85,7 +115,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     long as it runs. Start a server without the flag whenever the roadmap is also
     browsed.
 
-### Changed - BREAKING
+### Changed — BREAKING
 
 - **`rmp graph`'s five original subcommands are gone, and `execute` replaces all
   five.**
@@ -175,6 +205,153 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     caller left, this endpoint, and goes with it. There is one lock mode because
     there is one execution path.
 
+### Removed — BREAKING
+
+- **The two 32-bit ARM build targets are gone: `linux-armv6` and `linux-armv7`.** The
+  release ships **nine** archives where it shipped eleven, and `install.sh` now refuses a
+  32-bit ARM host **at architecture detection**, before any release asset is requested —
+  the same treatment `i386` and `i686` already received. The refusal line's target list
+  narrows from `amd64, arm64, armv6, armv7` to `amd64, arm64`, and the `/proc/cpuinfo`
+  ARM-version fallback is deleted, because with no 32-bit ARM target left to choose
+  between it has nothing to decide.
+  - **A user on 32-bit-only hardware cannot upgrade.** That is Raspberry Pi Zero,
+    Zero W, Pi 1 and Pi 2. `linux-arm64` is unaffected and covers the Pi 3, 4, 5 and
+    Zero 2 W; a Pi 3 or later running a 32-bit operating system recovers by installing a
+    64-bit one. Nothing else is affected: every other target is unchanged, and because no
+    ARM variant remains, every archive is now named `{goos}-{goarch}` with no ARM
+    exception.
+  - **Three independent facts put 32-bit out of reach, and each alone is sufficient.**
+    (1) *It does not compile.* GoGraph v0.13.0 pads its Bolt transaction registry entry
+    to a hard-coded 128 bytes and asserts that size from both directions at compile time;
+    on a 32-bit platform the structure reaches 80 bytes, one assertion resolves to an
+    array of negative length, and `internal/graphserve` — which `rmp` cannot link
+    without — fails to build. Measured per version: v0.12.0 builds for `GOARCH=arm` and
+    `GOARCH=386`, v0.13.0 and v0.14.0 do not. (2) *It was never a verified
+    configuration*, and this is about the version being replaced, not the new one: at
+    **v0.12.0**, GoGraph's own suite compiled for 386 already failed three size-pinning
+    tests and would not compile its packstream tests at all, while a control run of the
+    same tests on `amd64` at the same commit passed — so the word size is the cause and
+    not flakiness. (3) *The stored graph would not be portable.* GoGraph persists `int`,
+    `uint` and `uintptr` as u64, so a graph written by a 64-bit build is misread by a
+    32-bit one.
+  - **Restoring the compile would have restored a build, not a working target.**
+    Shipping those two binaries was a data-safety problem rather than a build problem,
+    which is why they are withdrawn instead of repaired.
+
+### Changed — BREAKING (error message text)
+
+- **`database error: ` no longer covers the knowledge graph, and four new sentinels
+  carve up what it used to.** The prefix survives, **narrowed to a roadmap's SQLite
+  database** — its contents, its schema, a statement against it, or the `project.db`
+  file. Everything else that used to arrive under it now carries one of:
+
+  | Prefix | What failed | What the reader acts on |
+  |--------|-------------|-------------------------|
+  | `graph engine error: ` | The statement reached the engine and did not complete there: a parse failure, a refusal, an exhausted time budget, a lost write conflict | The **statement** |
+  | `graph store error: ` | The graph store, its directory, or its exclusive advisory lock | The **filesystem** or the **lock holder** |
+  | `graph server error: ` | A graph server, its socket, or the connection to it | The **server**, or `--socket` |
+  | `I/O error: ` | Any other stream, socket, file or directory that is not a roadmap's database | The **stream or path** named |
+
+  **The dividing line is the artefact, not the layer**, and one consequence looks
+  inconsistent until that rule is read: moving a legacy `project.db`, or failing to
+  secure it to `0600`, stays `database error:` although both are file operations,
+  because the artefact is the database.
+
+  **Anything that matches on the old text breaks.** This project treats a published
+  error string as part of its contract — `tests/test_55_error_string_parity.py` builds
+  a corpus of **138** published strings from `SPEC/COMMANDS.md` and drives them against
+  the compiled binary: **131** are compared character for character after placeholder
+  substitution, three are compared up to a placeholder whose tail is operating-system or
+  SQLite text, and four have no deterministic hermetic trigger and are declared exempt.
+  So this is a contract change, and it is recorded as one.
+
+  **No exit code moved.** All four new sentinels reach exit `1` by the same fall-through
+  `database error:` uses; `cmd/rmp/main.go` is byte-identical across the two commits that
+  made the change, and `SPEC/ARCHITECTURE.md § Adding New Error Types` now **forbids** an
+  exit-1 sentinel from having a `handleError` case at all, so the two can never disagree.
+  The web interface is unaffected: its graph endpoint branches on its own error kind, so
+  no HTTP status changed.
+
+  One line also **inverts**: `Error: reading data directory <path>: database error`
+  published the class where the operating system's diagnostic belongs, and is now
+  `Error: I/O error: reading data directory <path>`. A new wrapping rule binds every
+  wrap in the tree, published or not, to render the sentinel first.
+
+- **The store-contention line stops naming a holder it cannot know.** It was
+  `graph store is busy: another invocation still holds it after the bounded wait`; it is
+  now `graph store is busy: still held when the bounded wait was exhausted, and nothing
+  records the holder.` followed by the remedy for each of the two possible holders. The
+  old line contradicted its own function's documented reasoning — a bounded wait is
+  sized against the maximum lawful hold, and a server has none — and the two holders
+  imply **opposite** remedies: an ordinary invocation releases shortly, so retrying
+  works; an `rmp graph serve` holds for its whole lifetime, so retrying never will.
+  Probing for a server was rejected rather than overlooked, because a server can start or
+  stop between the probe and the print.
+
+- **A batch refusal names the ids it is about.** `some tasks not found`, published at six
+  sites for every shape, becomes `task N not found` for one and `tasks N, M not found`
+  for several, naming exactly the missing ids in the caller's order, each once. The
+  singular form follows the number **missing**, not the number supplied. Two sibling
+  lines change with it: `task(s) not found: [999999 999998]` — Go's slice printer,
+  bracketed and space-separated — becomes the same `tasks ... not found` form, and
+  `task(s) not in sprint #N: [...]` becomes `task N is not in sprint #N` /
+  `tasks N, M are not in sprint #N`. Nine commands publish these lines: `task get`,
+  `task prio`, `task sev`, `task reopen`, `task remove`, `task stat`,
+  `sprint add-tasks`, `sprint remove-tasks` and `sprint move-tasks`.
+
+### Fixed
+
+- **An `EXPLAIN` of a writing statement reported `{"ok": true}`** — byte-identical to
+  what a real committed write reports — **over a statement that had written nothing**.
+  The output was not merely uninformative, it was false, and nothing distinguished it
+  from the real thing. Two sibling defects went with it: an `EXPLAIN` of a read returned
+  an empty row set indistinguishable from a query that matched nothing, and a `PROFILE`
+  discarded its measurement entirely. The cause was one discriminator — an output shape
+  chosen on "does the statement declare columns", which an `EXPLAIN CREATE` does not.
+  A prefixed statement now always returns the `{columns, rows}` shape, with empty arrays
+  beside its plan where it declares no column of its own.
+
+- **A repeated task id produced a false `resource not found` on all nine batch
+  commands.** The membership guard compared a **count** where it meant a **set**, and the
+  database returns one row per distinct id, so `rmp task get -r X 1,1` failed at exit `4`
+  with nothing missing. `rmp sprint add-tasks 1 4,4` was worse still: it printed
+  `task(s) not found: []` — a message asserting that ids were missing and then naming
+  none — and `sprint move-tasks` refused a valid move at exit `6`. A repeated id is now
+  accepted: the list is reduced to the set it denotes, each distinct task is acted on
+  once, and one audit entry is written per distinct id. The arithmetic lives once, in
+  `internal/utils/idlist.go`, so the two questions — *which ids are missing* and *how
+  many are there* — cannot be answered inconsistently. Deduplication is applied at the
+  call site rather than inside the shared id parser, deliberately: `sprint reorder`
+  shares that parser and a repeat is a genuine error there.
+  - **No invocation that previously succeeded now fails.** The only movement is
+    failures becoming successes.
+
+- **A `SET` or `REMOVE` on a relationship bound by a `CREATE` or `MERGE` clause in the
+  same statement no longer loses the write.** The statement exited 0, created the
+  relationship, and wrote none of the properties; `SET e = {…}` was worse still, because
+  its `RETURN` echoed the value it had not written. The defect was the graph engine's and
+  the move to **GoGraph v0.14.0** closed it. Proven by building the commit immediately
+  before the dependency bump and the released tree and running the same eight statement
+  shapes against both: **all eight lose the write before and all eight persist after** —
+  `CREATE` with a scalar `SET`, with `SET e = {…}`, with `SET e += {…}`, through a `WITH`,
+  inside a `FOREACH`, `MERGE` creating a new relationship, `MERGE` matching one that
+  already existed, and both hops of a multi-hop `MERGE`.
+  - **It was never reachable from a released Groadmap binary.** On `1.15.2` the guard rail
+    refused a `CREATE … SET` on every one of the five subcommands, so the statement never
+    reached the engine. The hazard became reachable when the guard rail was withdrawn
+    earlier in this same window and was closed by the dependency bump later in it, so no
+    released version both admits the statement and loses the write.
+  - **One narrow case survives the repair and is not claimed as fixed.** A `SET` on a
+    relationship bound by a `MERGE` that **matched** rather than created still loses the
+    write when the ordered node pair already carries a parallel relationship in the same
+    direction. It is published under Known Issues with its full precondition.
+  - The hazard on an **undirected or incoming** `SET` is a different defect and remains
+    open; see Known Issues.
+  - **`SPEC/GRAPH.md § What Groadmap Does Not Check` item 8 still publishes the hazard in
+    its original, broader form and is inaccurate as shipped.** Correcting a specification
+    file belongs to the `specification-manager` and is deliberately not done here;
+    `DOCS/commands/graph.md` carries the corrected scope.
+
 ### Changed — toolchain and dependencies
 
 - **`modernc.org/sqlite` moves from v1.57.0 to v1.58.0, and its coupling moves with
@@ -201,66 +378,164 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`golang.org/x/exp` moves to v0.0.0-20260824195058-e88cd73687aa**, reached through
   `GoGraph/cypher/parser` and `antlr4-go/antlr/v4`, which imports `x/exp/slices`.
 
-  GoGraph v0.12.0, `golang.org/x/sys` v0.47.0 and `golang.org/x/text` v0.41.0 were
-  checked and are already at their latest published versions, so they did not move. The
+  `golang.org/x/sys` v0.47.0 and `golang.org/x/text` v0.41.0 were checked and are
+  already at their latest published versions, so they did not move. GoGraph was at its
+  latest when that check was made and moved afterwards, in the same release window —
+  see the GoGraph entry below. The
   modules that only a dependency's own test binary reaches — `klauspost/compress`,
   `neo4j-go-driver/v5`, `testify`, `go-cmp`, `pprof`, `golang.org/x/mod`, and
   `modernc.org/cc`, `ccgo` and `gc` — are in the module graph but in neither the build
   nor `go.mod`, and did not move either.
 
+- **`github.com/FlavioCFOliveira/GoGraph` moves from v0.12.0 to v0.14.0**, absorbing two
+  upstream releases. **v0.13.0** made `EXPLAIN` and `PROFILE` parseable Cypher statement
+  prefixes — until then the engine's plan renderers were reachable only from Go, so no
+  Bolt client could ask for a plan — and carried seven changes marked breaking, every one
+  of which turns a previously silent failure loud. **v0.14.0** made the plan's db-hits
+  figure tri-state, so that a counted zero is no longer printed identically to a figure
+  that was never counted, added a `RowsRemovedByFilter` column, and taught the planner to
+  consume its own property statistics when ordering a disjoint-component join. Both
+  releases leave `go.mod` and `go.sum` byte-identical to their predecessor, and the
+  engine's openCypher TCK gate is unchanged at 3897/3897 across both.
+
+  **One consequence is worth stating because it surprises.** Now that the planner reads
+  its own statistics, **the plan a statement runs can differ according to whether the
+  engine's statistics have been refreshed**. The result the statement returns is
+  identical either way; only the plan that produced it, and therefore what an `EXPLAIN`
+  or a `PROFILE` reports, may differ.
+
+### Notes
+
+- **Why this is `2.0.0` and not `1.16.0`.** `SPEC/VERSION.md` defines `MAJOR` as
+  "incompatible API changes or major architectural changes", and this release contains
+  three independent incompatibilities, any one of which would carry the bump on its own:
+  1. **Five subcommands were removed with no aliases.** `rmp graph create`,
+     `query`, `update`, `delete` and `search` are each now an unresolved subcommand name
+     answered with exit `127`. Every script, agent prompt and stored recipe that names
+     one of them stops working, and no compatibility shim exists.
+  2. **Two published build targets were withdrawn.** A user on 32-bit ARM hardware
+     cannot upgrade at all, because the release no longer produces an archive for them.
+     That is the strongest form of incompatibility a distributed binary has.
+  3. **Published error strings changed across many lines.** Anything matching on the
+     `database error: ` text for a graph or I/O failure breaks. This project treats
+     those strings as contract and drives a 138-string corpus against the binary, 131 of
+     them matched character for character, which is what makes them API rather than
+     incidental output.
+
+  Two further changes are incompatible in effect if not in signature: the web graph data
+  endpoint now **executes writes** over an unauthenticated `GET`, so `--host 0.0.0.0` has
+  become a write grant where it was a read grant; and the endpoint's published `kind`
+  enum drops from five values to two.
+
+- **What did NOT change, and why it does not soften the above.** No exit code moved
+  anywhere. No flag was removed. The JSON success shapes are unchanged except for two
+  additive, mutually exclusive members, `plan` and `profile`, which appear only for a
+  statement written with an `EXPLAIN` or `PROFILE` prefix — and those prefixes only
+  became parseable in this same release window, so no consumer can have depended on
+  their earlier output. A statement written with neither prefix produces exactly the
+  bytes it produced before. These are reasons the release is not *more* disruptive than
+  it is; none of them is a reason to call it `MINOR`.
+
+- **This is the first Groadmap release whose number is the strict SemVer reading rather
+  than an owner's decision.** `1.15.0` shipped breaking changes as a `MINOR` and `1.15.2`
+  shipped them as a `PATCH`, each by explicit decision recorded at the time. Nothing here
+  overrides SemVer, so this entry records the reasoning rather than an exception to it.
+
+- **There is no database migration.** The SQLite schema version is unchanged, and the
+  graph store's on-disk format takes no version step — the snapshot manifest declares
+  `version: 3` under both binaries. The round trip was measured in both directions with
+  binaries built from the two tags, rather than assumed: a graph plus a registered index
+  written by `2.0.0` reads back correctly under `1.15.2`, and a graph plus an index
+  written by `1.15.2` reads back correctly under `2.0.0` with the index still `ONLINE`. The one additive
+  change that an older reader cannot consume — two new columnar wire values for 1- and
+  2-byte edge-weight kinds — makes it **refuse the file** rather than misread it, and
+  Groadmap writes no edge weights, so it is not reachable through `rmp`.
+
 ### Known Issues
 
-These were found and measured during this cycle and are **open**. They are listed
-so that nothing above is read as a promise the product does not keep.
+Every entry below was **re-measured against the released binary immediately before the
+tag**, not carried forward. That discipline changed three of the six entries this cycle
+had accumulated: one was **narrowed to a precondition** after the dependency bump repaired
+most of it, one specification contradiction had already been repaired, and one could not
+be reproduced at all. The last two are recorded under *Withdrawn after re-measurement*
+rather than deleted in silence.
 
-- **One statement can drive the process to gigabytes of resident memory.** Every
-  mutation a statement has applied is retained until its rollback finishes, across
-  four accumulators — the write-ahead-log operation buffer, the applied graph
-  state, the undo log, and an index buffer — and nothing bounds how many mutations
-  it applies before the time budget cuts it. Measured: `MATCH (a),(b),(c) CREATE ()`
-  reached 3.3 GB at the 5-second budget, and the figure tracks the budget rather
-  than the size of the graph, which is flat across stores of 40 KB to 248 KB.
-  A pure read costs the same and has none of the shutdown cost, so the two are
-  distinct defects rather than one seen twice. There is a ceiling: given a budget
-  long enough, the engine's own row cap cuts the statement at roughly 20 GB. A short-lived `rmp graph execute` returns that memory
-  by exiting; `rmp graph serve` and `rmp web` have no exit to return it at. The
-  server's connection ceiling bounds how many such statements run at once, not what
-  each of them costs, and no ceiling both preserves throughput and bounds the
-  product.
-- **A server's shutdown is not bounded.** A statement the budget cut while it was
-  writing is inside an undo replay that takes no cancellation, and the store cannot
-  close until it returns. The longest such hold measured is 35.6 seconds — the largest measured rather than a maximum — with no
-  ceiling established.
-- **A `SET` on a relationship bound by `CREATE` or `MERGE` in the same statement is
-  silently discarded.** The invocation exits 0, creates the relationship, and writes
-  none of the properties. Binding origin is the only thing that matters: a plain
-  `CREATE` loses it too, so does a `MERGE` that matched a relationship which already
-  existed, and neither a `WITH` nor a `FOREACH` between the clauses rescues it.
-  `SET e = {...}` is worse still, because its `RETURN` echoes the value it did not
-  write. The same shape on a node is correct. Use `ON CREATE SET` or `ON MATCH SET`,
-  or inline the properties in the pattern, or set them after a fresh `MATCH`.
-- **An undirected `SET` on a relationship does not write every relationship it
-  matched, and how much it loses depends on the data.** A write persists only where
-  the row's left-hand node is the relationship's stored source and its right-hand
-  node the stored target, so the same statement may write all of what it matched,
-  some of it, or none — and it reports `{"ok": true}` either way. A selective
-  statement is the hazardous one and an unanchored sweep is safe, because each
-  relationship is then emitted twice and one of the two rows is correctly oriented.
-  Write through an outgoing pattern, which can be anchored on either endpoint.
-  `DELETE` is unaffected and removes everything it matched.
-- **About 1% of writers to a single hot node exhaust the client's retry ladder.**
-  Measured at 16 concurrent writers to one node through `rmp graph client`: the
-  raw transient-conflict diagnostic reaches the caller for a statement that was
-  correct against a healthy store, and nothing in the message separates contention
-  from a defective statement.
-- **`SPEC/DATA_FORMATS.md § Graph Client Result` states two requirements that
-  cannot both hold.** It requires the client's stdout to be byte-identical to
-  `rmp graph execute`'s and, in the same table, requires a temporal value to render
-  as an ISO 8601 UTC string with milliseconds — which is not what
-  `rmp graph execute` has ever rendered. The implementation chose identity, so a
-  temporal value crossing the socket renders exactly as it does on the direct path
-  and the temporal row is unsatisfied. No temporal formatting for graph values is
-  documented in `DOCS/` until the contradiction is settled.
+- **One statement can drive the process to gigabytes of resident memory.** Every mutation
+  a statement has applied is retained until its rollback finishes, across four
+  accumulators — the write-ahead-log operation buffer, the applied graph state, the undo
+  log, and an index buffer — and nothing bounds how many mutations it applies before the
+  time budget cuts it. Re-measured for this release under a 4 GB cgroup limit against a
+  ~100 KB store: `MATCH (a),(b),(c) CREATE ()` reached a peak resident set of
+  **2.6 GB** and the process took **~25 seconds** to exit, against a 5-second statement
+  budget — the gap being the undo replay. An earlier run in this same cycle measured
+  3.3 GB. **Neither figure is a maximum**; the cost tracks the budget and the hardware
+  rather than the size of the graph. There is a ceiling: given a budget long enough, the
+  engine's own row cap cuts the statement at roughly 20 GB. A pure read of the same
+  Cartesian shape is cut at the budget and costs about 30 MB, so the memory cost belongs
+  to the write path and the two are distinct defects rather than one seen twice. Nothing
+  was written in any run, and the store was byte-identical afterwards: this is an
+  availability defect, not a durability one. A short-lived `rmp graph execute` returns the
+  memory by exiting; `rmp graph serve` and `rmp web` have no exit to return it at.
+
+- **A server's shutdown is not bounded.** A statement the budget cut while it was writing
+  is inside an undo replay that takes no cancellation, and the store cannot close until it
+  returns. Re-measured for this release: `SIGTERM` to a server with one such statement in
+  flight held for **16.2 s and 27.3 s** across two trials; an earlier run in this cycle
+  measured 35.6 s. **These are the largest observed, not a maximum**, and no ceiling has
+  been established. The socket is still removed and the store is still intact afterwards.
+  A supervisor that escalates `SIGTERM` to `SIGKILL` after a short grace period may kill
+  the server mid-replay; every acknowledged commit is still durable and the next open
+  replays the log, but the shutdown checkpoint is lost.
+
+- **A `SET` on a relationship bound by a `MERGE` that matched an existing relationship is
+  silently discarded when the ordered node pair already carries a parallel relationship.**
+  This is what survives of a broader hazard the move to GoGraph v0.14.0 otherwise closed
+  (see **Fixed**), and the surviving precondition is narrow: all three of the following
+  must hold. The relationship variable is bound by a `MERGE` clause in the same statement;
+  that `MERGE` **matched** rather than created; and the same ordered pair
+  `(source, target)` already carries another relationship **in the same direction**. When
+  all three hold the statement exits 0, reports `{"ok": true}`, and writes nothing, while
+  a following read shows the previous value. Measured: with `(a)-[:OTHER]->(b)` present,
+  `MERGE (a)-[e:T]->(b) SET e = {c:2}` over an existing `T` leaves `c` at `1`; the scalar
+  form behaves identically. Removing any one of the three restores the write — an isolated
+  pair is correct, a parallel edge in the **reverse** direction does not trigger it, and a
+  plain `MATCH ... SET` writes correctly with the parallel edge present. **Bind with
+  `MATCH` rather than `MERGE`** when you intend to update a relationship that already
+  exists, or set the properties in a second statement after a fresh `MATCH`.
+
+- **An undirected or incoming `SET` on a relationship does not write every relationship it
+  matched, and how much it loses depends on the data.** A write persists only where the
+  row's left-hand node is the relationship's stored source and its right-hand node the
+  stored target. Re-measured for this release on a single stored
+  `(alice)-[:MENTORS]->(bob)`: the pattern anchored with `alice` on the left writes
+  correctly; the same pattern written with `bob` on the left **silently writes nothing**,
+  exits 0, reports the value it did not write, and leaves the property at its previous
+  value. A fully unanchored sweep is **safe**, because each relationship is then emitted
+  twice — `count(e)` returns 2 for one stored edge — and one of the two rows is correctly
+  oriented. **The selective statement is the hazardous one and the sweeping one is safe**,
+  which inverts a careful reader's intuition. Write through an outgoing pattern, which can
+  be anchored on either endpoint. `DELETE` is unaffected and removes everything it
+  matched, verified through the reversed pattern.
+
+#### Withdrawn after re-measurement
+
+- **The `SPEC/DATA_FORMATS.md § Graph Client Result` contradiction is gone.** It was
+  published as requiring both byte-identical client output and a millisecond-precision UTC
+  rendering for temporal values, which `rmp graph execute` has never produced. The file as
+  released states neither: the byte-identity rule explicitly excludes `timeNs` and nothing
+  else, and the temporal rule renders each of the six kinds in the ISO 8601 form of **its
+  own type** rather than as an instant in UTC. Verified against the binary as well as the
+  text: the same temporal statement through `graph execute` and `graph client` produces
+  byte-identical output.
+
+- **The retry-ladder exhaustion could not be reproduced.** It was published as "about 1% of
+  writers to a single hot node exhaust the client's retry ladder", on a sample of 2
+  failures in 200. Re-measured at 16 concurrent `rmp graph client` writers to one node over
+  100 rounds — **1,600 invocations, 0 failures**, with the final counter matching the number
+  of successful writes exactly, so no update was lost either. Under a stable 1% rate, zero
+  failures in 1,600 trials has probability of order 10⁻⁷. **This is reported as not
+  reproduced rather than as fixed**, because the original harness is not available to rule
+  out a difference in how simultaneous the writers were.
 
 ## [1.15.2] - 2026-09-01
 
@@ -2813,6 +3088,7 @@ behaviour.
   AI-contract E2E suite (`tests/test_30_aihelp_contract.py`) to lock in the
   revised help text and contract invariants.
 
+[2.0.0]: https://github.com/FlavioCFOliveira/Groadmap/compare/v1.15.2...v2.0.0
 [1.15.2]: https://github.com/FlavioCFOliveira/Groadmap/compare/v1.15.1...v1.15.2
 [1.15.1]: https://github.com/FlavioCFOliveira/Groadmap/compare/v1.15.0...v1.15.1
 [1.15.0]: https://github.com/FlavioCFOliveira/Groadmap/compare/v1.14.0...v1.15.0

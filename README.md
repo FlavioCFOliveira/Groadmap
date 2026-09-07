@@ -8,7 +8,9 @@ Local Roadmap Manager CLI for agentic workflows. Groadmap is a CLI tool in Go fo
 curl -fsSL https://raw.githubusercontent.com/FlavioCFOliveira/Groadmap/main/install.sh | bash
 ```
 
-This will detect your OS and architecture, download the latest release from GitHub, and install the `rmp` binary to `/usr/local/bin`. If `rmp` is already installed, it will be updated to the latest version.
+This will detect your OS and architecture, download the latest release from GitHub, and install the `rmp` binary. Piped into `bash` as shown, it installs system-wide to `/usr/local/bin` (falling back to `/usr/bin` where that directory does not exist), asking for `sudo` when the directory is not writable; run the script from a terminal instead and it offers a user-scope install into `~/.local/bin`. If `rmp` is already installed, it will be updated to the latest version.
+
+**Every released binary is 64-bit.** The supported targets are Linux, macOS and Windows on `amd64` and `arm64`, FreeBSD on `amd64`, and OpenBSD on `amd64` and `arm64` — nine in total, listed in `SPEC/BUILD.md § Supported Build Targets`. There is no 32-bit build: on a 32-bit host (`i686`, `armv6l`, `armv7l`) the script refuses at detection, before it downloads anything. A Raspberry Pi running a 64-bit operating system installs through the `arm64` path, which covers the Pi 3, 4, 5 and Zero 2 W.
 
 Before extracting anything, the script verifies the downloaded archive against the SHA-256 checksum published beside it in the same release, and refuses to install if the two differ, if the checksum is missing, or if the host has no SHA-256 tool. This detects a corrupted or truncated download and an archive replaced without its checksum; it is not a signature, so it cannot detect a release replaced at its source. `SPEC/DEPLOY.md` states the boundary in full.
 
@@ -27,7 +29,7 @@ Before extracting anything, the script verifies the downloaded archive against t
 - **State Machine**: Validated task and sprint status transitions with automatic date tracking
 - **Bulk Operations**: Support for multiple task IDs in single commands
 - **Knowledge Graph**: Per-roadmap queryable graph (nodes, edges, Cypher) for capturing project elements and their relationships, optionally held open by a dedicated server (`rmp graph serve`) that answers Cypher over a Unix domain socket
-- **Web Interface**: Read-only, self-contained, mobile-first browser view of all roadmaps, their sprints, their tasks on a searchable and filterable Kanban board, and an interactive knowledge-graph visualisation, built on the Tabler admin-shell UI in a dark theme (`rmp web`)
+- **Web Interface**: Self-contained, mobile-first browser view of all roadmaps, their sprints, their tasks on a searchable and filterable Kanban board, and an interactive knowledge-graph visualisation, built on the Tabler admin-shell UI in a dark theme (`rmp web`)
 
 ## Roadmap Selection (Always Required)
 
@@ -50,7 +52,7 @@ The only commands that do **not** take `-r` are:
 | `stats` | Roadmap-wide statistics and velocity | [DOCS/commands/stats.md](DOCS/commands/stats.md) |
 | `audit` | Audit log and entity history | [DOCS/commands/audit.md](DOCS/commands/audit.md) |
 | `graph` | Knowledge graph: run one Cypher statement (`execute`), serve the graph over a Unix domain socket (`serve`), or send a statement to a running server (`client`) | [DOCS/commands/graph.md](DOCS/commands/graph.md) |
-| `web` | Read-only, self-contained web interface for all roadmaps and their knowledge graphs | [DOCS/commands/web.md](DOCS/commands/web.md) |
+| `web` | Self-contained web interface for all roadmaps and their knowledge graphs; read-only except the graph query bar, which executes the statement it is given | [DOCS/commands/web.md](DOCS/commands/web.md) |
 | `ai-help` | Emit the AI Agent Contract (machine-readable JSON for automated callers) | [DOCS/commands/ai-help.md](DOCS/commands/ai-help.md) |
 
 ## Installation
@@ -133,15 +135,25 @@ rmp graph serve -r myproject
 .
 ├── cmd/rmp/main.go          # CLI entry point
 ├── internal/
-│   ├── commands/            # Subcommands (roadmap, task, sprint, backlog, audit, graph, stats)
+│   ├── commands/            # Subcommands (roadmap, task, sprint, backlog, audit,
+│   │                        #   graph, stats, web, ai-help)
 │   ├── db/                  # SQLite, schema, parameterized queries
 │   ├── models/              # Structs and enums
-│   ├── web/                 # Read-only embedded web interface
-│   └── utils/               # JSON, ISO 8601 dates, paths
+│   ├── web/                 # Embedded web interface (read-only except the graph
+│   │                        #   query bar)
+│   ├── graphserve/          # The rmp graph serve Bolt server
+│   ├── graphclient/         # Socket resolution and the rmp graph client
+│   ├── graphstore/          # Graph store lifecycle (open, checkpoint, close)
+│   ├── graphlock/           # The graph store's advisory lock
+│   ├── graphjson/           # Graph value and query-plan JSON rendering
+│   └── utils/               # JSON, ISO 8601 dates, paths, error sentinels
 ├── bin/                     # Build output
+├── tests/                   # End-to-end test suite (Python, against ./bin/rmp)
 ├── SPEC/                    # Technical specifications
 └── DOCS/                    # Command documentation
 ```
+
+The `internal/` entries above are the principal packages, not the complete set.
 
 ## Conventions
 
@@ -151,14 +163,14 @@ rmp graph serve -r myproject
 - **Dates**: ISO 8601 UTC (with milliseconds, suffix `Z`)
 - **List arguments**: comma-separated, no spaces (e.g. `1,2,3`)
 - **Roadmaps**: Each roadmap is a directory `~/.roadmaps/<name>/` (permissions `0700`) holding its SQLite database `project.db` (permissions `0600`)
-- **Knowledge graph**: Each roadmap may hold a graph store under `~/.roadmaps/<name>/graph/` (a directory, permissions `0700`), created on first use of the `graph` command. While `rmp graph serve` is running for that roadmap, its socket sits beside the store at `~/.roadmaps/<name>/graph.sock` (permissions `0600`) and is removed when the server stops
+- **Knowledge graph**: Each roadmap may hold a graph store under `~/.roadmaps/<name>/graph/` (a directory, permissions `0700`), created on first use of `rmp graph execute` — including by a statement that only reads. `rmp graph serve` creates no store: against a roadmap that has none it exits 1 rather than making one. While a server is running for that roadmap, its socket sits beside the store at `~/.roadmaps/<name>/graph.sock` (permissions `0600`) and is removed when the server stops
 
 ## Exit Codes
 
 | Code | Meaning | Description |
 |------|---------|-------------|
 | 0 | Success | Command completed successfully |
-| 1 | General error | Database failure, unexpected error |
+| 1 | General error | A subsystem failed. Five sentinels share this code and the message names which one: `database error:` (SQLite), `graph engine error:` (Cypher parse or execution), `graph store error:` (the graph store, its directory or its lock), `graph server error:` (a graph server, its socket or the connection to it), and `I/O error:` (a stream, file or directory the CLI reads or writes). A knowledge-graph failure never carries `database error:` |
 | 2 | Invalid usage | Wrong arguments, syntax error |
 | 3 | No roadmap | No roadmap provided via `-r` for a command that requires it |
 | 4 | Not found | Roadmap/task/sprint/comment doesn't exist |
@@ -183,7 +195,7 @@ See the `SPEC/` folder for detailed technical documentation:
 - `SPEC/MODELS.md` - Model definitions
 - `SPEC/STATE_MACHINE.md` - State machines
 - `SPEC/VERSION.md` - Version management strategy
-- `SPEC/WEB.md` - Read-only web interface and knowledge-graph visualisation
+- `SPEC/WEB.md` - Web interface and knowledge-graph visualisation
 
 ## FAQ
 
@@ -448,6 +460,9 @@ rmp task stat -r <name> 1,2,3 DOING --commit-open 5f93b51   # one hash, every ta
 ```
 - A single hash applies to every id in the batch. Batches are fail-fast: if any
   id or any flag is rejected, **no** task in the batch changes.
+- A refusal names the ids it is about: `task 99 not found` for one, and
+  `tasks 98, 99 not found` for several, in the order you supplied them. A
+  repeated id is accepted rather than refused — `1,1` is the same batch as `1`.
 
 **How do I reopen a completed task?**
 ```bash
@@ -498,7 +513,7 @@ Returns: status, task summary (pending/in-progress/completed), progress percenta
 ```bash
 rmp sprint stats -r <name> <id>
 ```
-Returns: total tasks, completed tasks, progress percentage, status distribution, task order, velocity (tasks/day, CLOSED sprints only), days elapsed, and burndown series.
+Returns: total tasks, completed tasks, progress percentage, status distribution, task order, velocity (tasks/day, CLOSED sprints only), days elapsed, and burndown series. The JSON also carries `days_remaining`, which is **always null**: a sprint has no end date, so there is nothing to count down to.
 
 **What tasks are still open in the sprint?**
 ```bash
@@ -591,9 +606,30 @@ Three: `execute`, `serve` and `client`. `execute` and `client` each run any Cyph
 
 Because nothing is checked, the effect of a statement is decided by its Cypher alone. There is no subcommand whose contract is "this cannot delete", so the guarantee you need about a statement is a guarantee about the text you supply.
 
+**How do I see what a statement will do before running it?**
+
+Prefix it with `EXPLAIN` to have it planned and **not executed**, or with `PROFILE` to
+run it and measure every operator. Both work on `execute` and on `client`.
+
+```bash
+# Plan only: declared columns, no rows, and the plan under "plan"
+rmp graph execute -r myproject --query "EXPLAIN MATCH (s:Spec) RETURN s.key"
+
+# Run and measure: real rows, and the cost of each operator under "profile"
+rmp graph execute -r myproject --query "PROFILE MATCH (s:Spec) RETURN s.key"
+```
+
+The two members are never both present, so an estimate can never be read as a
+measurement: `EXPLAIN` carries the planner's `estimatedRows`, `PROFILE` carries the
+measured `rows`, `timeNs` and `dbHits`. A `PROFILE` of a **writing** statement is
+refused, because profiling it would mean committing it, and neither prefix is accepted
+on a schema statement. See [DOCS/commands/graph.md](DOCS/commands/graph.md#query-plans-explain-and-profile).
+
 **What does `rmp graph serve` do, and do I need it?**
 
 You do not need it: everything the graph can do works without one. `rmp graph serve` opens a roadmap's graph once and answers Cypher over a Unix domain socket until you stop it, so a caller pays one store open for the whole session instead of one per invocation, and statements that would otherwise serialise on the store's exclusive lock run concurrently under the store's MVCC instead.
+
+It serves a graph that already exists and creates none: against a roadmap whose store has never been written, it exits 1. Run one `rmp graph execute` first.
 
 ```bash
 # Hold the graph open until Ctrl+C; it prints the socket it bound
@@ -607,7 +643,9 @@ rmp graph client -r myproject --query "MATCH (n:Spec) RETURN n.key"
 
 **Access control is the filesystem and nothing else.** The socket is mode `0600` inside a roadmap home that is `0700`, there is no authentication and no transport security (the server prints a warning for each at startup), and any caller that can open the socket can read, write, delete and change the schema of that roadmap's graph.
 
-**One caution.** `--socket` moves the socket off the default path, and the web interface cannot follow it: a server started with `--socket` leaves that roadmap's graph page failing with HTTP 500 for as long as it runs. Start a server without the flag whenever the same roadmap is also browsed. See [DOCS/commands/graph.md](DOCS/commands/graph.md#running-a-graph-server).
+**`--socket` is accepted by all three subcommands** — `execute`, `serve` and `client` — and all three default it to `~/.roadmaps/<name>/graph.sock`. It names *which socket is looked at* and nothing else: it does not force a server, does not forbid one, and does not select the store. Write it on `execute` or `client` when the server was started with the same flag.
+
+**One caution.** `--socket` moves the socket off the default path, and the web interface cannot follow it: it is an HTTP handler with no command line, and no request parameter carries a socket path, so a server started with `--socket` leaves that roadmap's graph page failing with HTTP 500 for as long as it runs. Start a server without the flag whenever the same roadmap is also browsed. See [DOCS/commands/graph.md](DOCS/commands/graph.md#running-a-graph-server).
 
 **Can I pipe a statement instead of using `--query`?**
 ```bash

@@ -4,7 +4,7 @@
 
 Operate a roadmap's knowledge graph: a free-form, queryable store of the project's elements and the relationships between them, backed by the GoGraph engine. The graph turns a roadmap into a "second brain" where an AI agent records and retrieves project elements (specs, code, decisions, dependencies) and how they connect, without re-reading every source file.
 
-Each roadmap owns one graph, stored under that roadmap's home directory at `~/.roadmaps/<name>/graph/` (a directory, mode `0700`), created on first use of the `graph` command. The graph is free-form: Groadmap imposes no schema. It is independent of the roadmap's SQLite tasks and sprints data in this version.
+Each roadmap owns one graph, stored under that roadmap's home directory at `~/.roadmaps/<name>/graph/` (a directory, mode `0700`), created on first use of `rmp graph execute` — including by a statement that only reads. `rmp graph serve` creates no store and exits 1 against a roadmap that has none. The graph is free-form: Groadmap imposes no schema. It is independent of the roadmap's SQLite tasks and sprints data in this version.
 
 The graph is reached through three subcommands. `execute` accepts any Cypher statement the engine accepts and runs it against the roadmap's graph; `serve` runs no statement of its own and instead holds that graph open, answering statements over a Unix domain socket until it is stopped; `client` sends a statement to a running server and prints what comes back. Groadmap does not examine a statement and refuses none on the ground of what it does.
 
@@ -225,7 +225,7 @@ The web interface's graph data endpoint has no command line, `rmp web` serves ev
 
 So `--socket` is an option that keeps the CLI and costs the web page. Use it for a server the browser is not expected to reach — a test harness, a diagnostic session, a socket that has to live on another filesystem — and start a server whose roadmap is also browsed without it.
 
-A mistyped path has the same shape with a quieter symptom: a path nothing answers on reads as "not served", so `rmp graph execute --socket /typo.sock` goes to the store rather than to the server it meant. Against an unserved roadmap it succeeds there and says nothing; against a roadmap whose server is running on the default socket it meets that server's lock and fails with `Error: database error: graph store is busy: another invocation still holds it after the bounded wait`.
+A mistyped path has the same shape with a quieter symptom: a path nothing answers on reads as "not served", so `rmp graph execute --socket /typo.sock` goes to the store rather than to the server it meant. Against an unserved roadmap it succeeds there and says nothing; against a roadmap whose server is running on the default socket it meets that server's lock and fails with `Error: graph store error: graph store is busy: still held when the bounded wait was exhausted, and nothing records the holder. ...`, whose remainder names both remedies because the line cannot tell which holder it met.
 
 ### Concurrency inside a server
 
@@ -261,13 +261,18 @@ Seven failures belong to the socket rather than to the roadmap, the statement or
 
 | Condition | Subcommand | Line |
 |-----------|-----------|------|
-| A live server already answers on the socket `serve` resolved | `serve` | `Error: database error: a graph server is already serving <socket>` |
-| The socket could not be bound | `serve` | `Error: database error: cannot bind <socket>: <detail>` |
-| The store lock could not be taken within the bounded wait | `serve` | `Error: database error: cannot take the graph store lock for roadmap "X": another rmp graph serve may already be running for it` |
-| No server is listening on the resolved socket | `client` | `Error: database error: no graph server is listening on <socket>` |
-| The socket answered but no server could be reached through it | `execute`, `client` | `Error: database error: graph server unreachable at <socket>: <detail>` |
-| The connection was lost after the statement had been sent | `execute`, `client` | `Error: database error: the connection to the graph server at <socket> was lost; the statement's outcome is unknown` |
-| The server did not answer within the caller's backstop deadline | `execute`, `client` | `Error: database error: the graph server at <socket> did not answer within 7.5s; the statement's outcome is unknown` |
+| A live server already answers on the socket `serve` resolved | `serve` | `Error: graph server error: a graph server is already serving <socket>` |
+| The socket could not be bound | `serve` | `Error: graph server error: cannot bind <socket>: <detail>` |
+| The store lock could not be taken within the bounded wait | `serve` | `Error: graph store error: cannot take the graph store lock for roadmap "X": another rmp graph serve may already be running for it` |
+| No server is listening on the resolved socket | `client` | `Error: graph server error: no graph server is listening on <socket>` |
+| The socket answered but no server could be reached through it | `execute`, `client` | `Error: graph server error: graph server unreachable at <socket>: <detail>` |
+| The connection was lost after the statement had been sent | `execute`, `client` | `Error: graph server error: the connection to the graph server at <socket> was lost; the statement's outcome is unknown` |
+| The server did not answer within the caller's backstop deadline | `execute`, `client` | `Error: graph server error: the graph server at <socket> did not answer within 7.5s; the statement's outcome is unknown` |
+
+Six of the seven carry `graph server error:`, because the server, its socket or the
+connection to it is what failed. The lock line carries `graph store error:` instead,
+because the failure is the store's and not the server's: `serve` never got far enough
+to have a server. The two prefixes are distinct sentinels that both exit `1`.
 
 The lock line says "may" deliberately: the lock records no holder, so the invocation reports the overwhelmingly likely cause without asserting it. The last two lines say the outcome is *unknown* rather than that nothing was written, because a commit is durable before it is acknowledged and a line claiming nothing was written would be false in exactly the case a caller most needs the truth.
 
@@ -410,10 +415,58 @@ A duplicate create and a drop of an absent object are **engine** failures rather
 # Exit 1: the engine refuses the second create, because the object exists
 rmp graph execute -r backend-platform --query "CREATE INDEX spec_key FOR (n:Spec) ON (n.key)"
 rmp graph execute -r backend-platform --query "CREATE INDEX spec_key FOR (n:Spec) ON (n.key)"
-# Error: database error: graph query failed: <engine diagnostic>
+# Error: graph engine error: graph query failed: <engine diagnostic>
 ```
 
 A failed schema statement leaves the schema as it was. No partial registration exists in any of these classes: the object is either registered or it is not.
+
+## Query Plans: `EXPLAIN` and `PROFILE`
+
+A statement may ask for its plan instead of, or as well as, its answer. Both prefixes
+work on `execute` and on `client`, and both produce the same bytes on either, because
+the client maps the protocol encoding back onto the engine's own plan node rather than
+onto JSON.
+
+| Prefix | Does it run the statement? | What it returns | Member |
+|--------|---------------------------|-----------------|--------|
+| `EXPLAIN` | No. The statement is planned and nothing is executed | The statement's declared columns, **no rows**, and the plan the planner built | `plan` |
+| `PROFILE` | Yes | The statement's real rows, and what each operator actually cost | `profile` |
+
+The two members are never both present. That separation is the point of the feature:
+an estimate must not be readable as a measurement. The only counts an `EXPLAIN` can
+carry are `estimatedRows` and `estimatedRowsSource`, which are predictions made before
+anything ran, and an operator the planner had no estimate for carries neither. A
+`PROFILE` adds `rows`, `timeNs`, `dbHits` and `rowsRemovedByFilter`, which are
+measured.
+
+```bash
+# Plan a read without running it
+rmp graph execute -r backend-platform \
+  --query "EXPLAIN MATCH (s:Spec)-[:IMPLEMENTED_BY]->(c:Code) RETURN s.key"
+
+# Run it and measure every operator
+rmp graph execute -r backend-platform \
+  --query "PROFILE MATCH (s:Spec) WHERE s.status = 'implemented' RETURN s.key"
+
+# Both work identically through a running server
+rmp graph client -r backend-platform --query "EXPLAIN MATCH (n:Spec) RETURN n.key"
+```
+
+A plan is a recursive object: each node names the `operator` that runs, the `detail`
+of the physical decision it took, and the `children` it draws its rows from, in
+**execution** order. `SPEC/DATA_FORMATS.md § Graph Plan Node` is canonical for every
+field and for when each is present.
+
+**A prefixed statement always returns the `{columns, rows}` shape**, even when it
+declares no column of its own — empty `columns` and `rows` arrays beside the plan,
+rather than `{"ok": true}`. This is deliberate and it is the defect the feature closed:
+an `EXPLAIN` of a writing statement used to print `{"ok": true}`, byte-identical to
+what a real committed write reports, over a statement that had written nothing.
+
+**Two statements are refused rather than planned.** A `PROFILE` of a **writing**
+statement is refused, because profiling it would mean committing it. Neither prefix is
+accepted on a **schema** statement. Both refusals exit `1` and carry the engine's own
+diagnostic.
 
 ## Query Input Source and Precedence
 
@@ -454,8 +507,8 @@ These are measured, currently unfixed, and reported here rather than left to be 
 
 - **A statement cancelled by the time budget can cost gigabytes of memory.** Every mutation a statement has applied is retained until the rollback finishes — across four accumulators, of which the undo log is only about a fifth — and the only ceiling on how many mutations a statement applies is the engine's own cap on the rows one statement may produce, which the 5-second budget is far too short to reach: given a budget long enough to reach it, the same statement costs roughly **20 GB**. Measured: `MATCH (a),(b),(c) CREATE ()` over a 600-node store of 80 KB drove a single `rmp graph execute` process to **3.3 GB** of resident memory at the 5-second budget. The figure tracks the budget rather than the size of the graph. A short-lived invocation returns that memory to the operating system by exiting; `rmp graph serve` and `rmp web` have no exit to return it at, and the connection ceiling bounds how many such statements may run at once but not what each of them costs.
 - **A server's shutdown is not bounded, and the undo replay is the only cause of that left.** A statement the budget cut while it was writing is inside an undo replay that takes no cancellation, and the store cannot close until that call returns. The longest such hold measured is **35.6 seconds** — the largest measured and not a maximum, since the same shape over the same store measured 34.5 seconds on an earlier run — and no ceiling has been established. A client that had stopped reading its result was a second cause until the drain began closing such a socket, which took that shutdown from 60.0 seconds to 7.5; what remains of that cause is bounded by the 60-second connection timeout rather than unbounded. `SPEC/GRAPH.md § Server Shutdown and the Drain` is canonical for which sessions the drain reaches and for what bounds each. A supervisor that escalates `SIGTERM` to `SIGKILL` after a short grace period may therefore kill the server mid-replay; every acknowledged commit is still durable and the next open replays the log, but the shutdown checkpoint is lost.
-- **A `SET` on a relationship bound by `CREATE` or `MERGE` in the same statement is silently discarded.** `CREATE (a)-[e:R]->(b) SET e.stamp = 'x' RETURN e.stamp` creates the relationship, returns `null`, writes no property, and exits 0; `MERGE` behaves the same, whether it creates the relationship or matches one that already existed. Binding origin is the only thing that matters: a `WITH` or a `FOREACH` between the two clauses does not rescue the write, and `SET e = {...}` is worse still, because its `RETURN` echoes the value it did not write. The same shape on a **node** is correct. Use `ON CREATE SET` or `ON MATCH SET`, or inline the properties in the pattern, or set them in a second statement after a fresh `MATCH`.
-- **An undirected or incoming `SET` on a relationship does not write every relationship it matched, and how many it loses depends on the data.** A write persists only where the row's left-hand node is the relationship's stored source and its right-hand node the stored target, so the same statement may write everything it matched, some of it, or none of it. Measured on two relationships either side of one node, `MATCH (n)-[r:R]-(m {key:'b'}) RETURN count(r)` reports 2 while the same pattern with `SET r.stamp = 'x'` writes one of them and still reports `{"ok": true}`; with both relationships pointing away from the anchored node, none is written and the report is unchanged. Nothing in the output distinguishes a complete write from a partial one. **A selective statement is the hazardous one and an unanchored sweep is safe**, because each relationship is then emitted twice and one of the two rows is correctly oriented. Write through an outgoing pattern, which can be anchored on either endpoint. `DELETE` is unaffected and removes everything it matched.
+- **A `SET` on a relationship bound by a `MERGE` that matched an existing relationship is silently discarded when the ordered node pair already carries a parallel relationship.** The precondition is narrow and all three parts are required: the relationship variable must be bound by a `MERGE` clause in the same statement, that `MERGE` must have **matched** rather than created, and the same ordered pair `(source, target)` must already carry another relationship **in the same direction**. When all three hold, the statement exits 0, reports `{"ok": true}`, and writes nothing; a following read shows the previous value. Measured: with `(a)-[:OTHER]->(b)` present, `MERGE (a)-[e:T]->(b) SET e = {c:2}` over an existing `T` leaves `c` at `1`. Remove any one of the three and the write persists — an isolated pair works, a parallel edge in the **reverse** direction does not trigger it, and a plain `MATCH ... SET` writes correctly with the parallel edge present. Bind the relationship with `MATCH` rather than `MERGE` when you intend to update one that already exists, or set the properties in a second statement after a fresh `MATCH`. A `SET` on a relationship bound by `CREATE`, or by a `MERGE` that creates, is **not** affected and was repaired by the move to GoGraph v0.14.0.
+- **An undirected or incoming `SET` on a relationship does not write every relationship it matched, and how many it loses depends on the data.** A write persists only where the row's left-hand node is the relationship's stored source and its right-hand node the stored target, so the same statement may write everything it matched, some of it, or none of it. Re-measured for the 2.0.0 release on a single stored `(alice)-[:MENTORS]->(bob)`: the pattern anchored with `alice` on the left writes correctly, while the same pattern written with `bob` on the left writes nothing at all, exits 0, and leaves the property at its previous value. Measured on two relationships either side of one node, `MATCH (n)-[r:R]-(m {key:'b'}) RETURN count(r)` reports 2 while the same pattern with `SET r.stamp = 'x'` writes one of them and still reports `{"ok": true}`; with both relationships pointing away from the anchored node, none is written and the report is unchanged. Nothing in the output distinguishes a complete write from a partial one. **A selective statement is the hazardous one and an unanchored sweep is safe**, because each relationship is then emitted twice and one of the two rows is correctly oriented. Write through an outgoing pattern, which can be anchored on either endpoint. `DELETE` is unaffected and removes everything it matched.
 
 ## Aliases
 
