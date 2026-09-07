@@ -428,14 +428,14 @@ type errReader struct{ err error }
 func (e errReader) Read([]byte) (int, error) { return 0, e.err }
 
 // TestReadCommentBodyReportsIOFailure pins that a stream failure stays an I/O
-// failure of the process (utils.ErrDatabase, exit code 1) and is never reported
+// failure of the process (utils.ErrIO, exit code 1) and is never reported
 // as bad user input.
 func TestReadCommentBodyReportsIOFailure(t *testing.T) {
 	t.Parallel()
 
 	_, err := ReadCommentBody(errReader{err: errors.New("read /dev/stdin: is a directory")})
-	if !errors.Is(err, utils.ErrDatabase) {
-		t.Fatalf("ReadCommentBody error = %v, want utils.ErrDatabase", err)
+	if !errors.Is(err, utils.ErrIO) {
+		t.Fatalf("ReadCommentBody error = %v, want utils.ErrIO", err)
 	}
 	if errors.Is(err, utils.ErrValidation) || errors.Is(err, utils.ErrFieldTooLarge) {
 		t.Errorf("an I/O failure must not be reported as a validation failure: %v", err)

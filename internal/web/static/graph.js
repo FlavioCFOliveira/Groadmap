@@ -1662,10 +1662,10 @@
     fetch(buildDataUrl(), { headers: { Accept: "application/json" } })
       .then(function (resp) {
         // The endpoint returns a structured JSON error with HTTP 400 for a
-        // classified query-bar failure (not read-only, invalid limit, or
-        // execution failure). Parse the body either way so the distinct message
-        // can be shown; only a non-OK, non-400 status is treated as a hard
-        // failure.
+        // classified query-bar failure (an invalid limit, or a statement that
+        // failed once running). Parse the body either way so the distinct
+        // message can be shown; only a non-OK, non-400 status is treated as a
+        // hard failure.
         return resp.json().then(function (body) {
           return { ok: resp.ok, status: resp.status, body: body };
         });

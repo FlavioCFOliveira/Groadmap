@@ -219,7 +219,9 @@ help text must match the command contract in `COMMANDS.md`.
 | Audit | `rmp audit [list \| history \| stats]` | `COMMANDS.md § Audit Log Management` |
 | Backlog | `rmp backlog [list \| show-next]` | `COMMANDS.md § Backlog Management` |
 | Stats | `rmp stats` | `COMMANDS.md § Statistics Command` |
-| Graph | `rmp graph [create \| query \| update \| delete \| search]` | `COMMANDS.md § Graph Management` |
+| Graph | `rmp graph execute` | `COMMANDS.md § Graph Management` |
+| Graph | `rmp graph serve` | `COMMANDS.md § Graph Management` |
+| Graph | `rmp graph client` | `COMMANDS.md § Graph Management` |
 | Web | `rmp web` | `COMMANDS.md § Web Interface` |
 
 Each subcommand in the inventory has its own dedicated help printer in
@@ -589,26 +591,143 @@ explicit, because a reader cannot infer them from the generic template:
 
 ### Graph family help specifics
 
-The `graph` family help and each graph subcommand help follow the same
-structure template as every other family but MUST additionally make two
+The `graph` family help and the `graph execute` help follow the same
+structure template as every other family but MUST additionally make four
 graph-specific behaviours explicit, because an agent cannot infer them
-from the generic template:
+from the generic template. Items 5 to 10 add the behaviours the graph
+server and its client introduce; items 1 to 4 continue to govern
+`execute`.
 
-1. **Query input.** State that the Cypher query comes from the `--query`
-   flag or, when the flag is absent, from standard input, and that
-   supplying neither is an error (exit code 2). The `graph` subcommands and
-   the comment subcommands of the `task` and `sprint` families are the only
+1. **Query input.** State that the Cypher statement comes from the `-q` /
+   `--query` flag or, when the flag is absent, from standard input, and that
+   supplying neither is an error (exit code 2). `graph execute` and the
+   comment subcommands of the `task` and `sprint` families are the only
    commands in the CLI that read standard input. See
    `GRAPH.md § Cypher Input Source and Precedence`.
-2. **Guard rail.** State, per subcommand, which Cypher operation class or
-   classes are accepted and that a mismatching query is rejected with exit code 6
-   before execution. The family help lists the five subcommand-to-operation
-   mappings; each subcommand help names its own allowed class or classes. Four
-   subcommands accept one class each; `graph update` accepts three, because it is
-   also the schema subcommand, and its help MUST name the schema statements it
-   accepts rather than leaving an agent to discover them by trial. See
-   `GRAPH.md § Subcommands and Guard-Rail Validation` and
-   `GRAPH.md § Schema Management`.
+2. **One subcommand, and what it runs.** State that `execute` runs any
+   Cypher statement the engine accepts — a read, a write, a deletion, a
+   schema change — and that `rmp` does not examine the statement or refuse
+   it on the ground of what it does. The help MUST NOT describe any
+   statement as rejected before execution on its operation class, because
+   none is. See `COMMANDS.md § Graph Management`.
+3. **Schema statements.** State that index and constraint DDL and the
+   `SHOW INDEX(ES)` / `SHOW CONSTRAINT(S)` commands run through this same
+   subcommand, and name them, rather than leaving an agent to discover them
+   by trial. See `GRAPH.md § Schema Management`.
+4. **The statement time budget.** The exit-codes block of this help
+   enumerates the causes of each code rather than naming the code alone
+   (see [Help structure template](#help-structure-template), block 8), and
+   the budget is a cause of exit code 1 that a caller cannot infer from
+   "a Cypher parse or execution error": the statement was valid and the
+   store was healthy. The exit-code-1 line MUST therefore name it, stating
+   that a statement running past the 5-second budget is cancelled and that
+   nothing is written. It is the one failure whose remedy is to rewrite a
+   working statement, so the help states the remedy too — narrow the
+   statement, or split it — in the same terms as the published error line.
+   It introduces no new exit code, so no line is added to the block. See
+   `GRAPH.md § Statement Time Budget` and `COMMANDS.md § Graph Management`.
+5. **Three subcommands, and what each is for.** The family help MUST list
+   `execute`, `serve` and `client`, each with a verb-first description, and
+   MUST make the distinction between them explicit in one sentence rather
+   than leaving it to be inferred from three summaries: `execute` runs a
+   statement against the roadmap's graph, `serve` makes that graph available
+   over a socket until it is stopped, and `client` sends a statement to a
+   running server. See `COMMANDS.md § Graph Management`.
+6. **A running server is used automatically; the flag chooses the target, not
+   the path.** The `execute` help MUST state that when a server is serving the
+   selected roadmap the statement is sent to that server instead of opening
+   the store, that this happens with no flag and no configuration, and that
+   the result and the exit code are the same either way. It MUST additionally
+   document `--socket <path>` for what it is: the socket the invocation
+   resolves, defaulting to `~/.roadmaps/<name>/graph.sock`, written only when
+   the server was started with the same flag. The help MUST NOT present it as
+   a switch that forces or forbids a server, because it is neither. An agent
+   told only "it is automatic" would have no way to reach a server on a
+   non-default socket; an agent told only "there is a flag" would write it on
+   every invocation. See `GRAPH.md § Server Resolution` and
+   `GRAPH.md § Serving on a Non-Default Socket`.
+7. **`client` requires a server and does not fall back.** The `client` help
+   MUST state that a roadmap with no server listening is a failure (exit code
+   1) and not a fall back onto the store, and MUST name the socket it
+   resolves: `~/.roadmaps/<name>/graph.sock` unless `--socket` overrides it.
+   This is the one place the two Cypher-running subcommands differ — they take
+   the same statement sources and the same `--socket` flag, and differ only in
+   whether an unanswered socket is a fallback or a failure — so it is the one
+   an agent choosing between them needs. See `GRAPH.md § The Bolt Client`.
+8. **`serve` is long-lived, and it is the second such command.** The `serve`
+   help MUST state that the command does not complete and exit: it serves
+   until `Ctrl+C` (`SIGINT`) or `SIGTERM`, then drains, checkpoints and exits
+   0, exactly as `rmp web` does and unlike every other command. It MUST state
+   that it prints the bound socket path as JSON on startup, and that one
+   server runs per roadmap, a second against the same roadmap failing rather
+   than queuing. See `GRAPH.md § The Dedicated Graph Server`.
+9. **The socket's access model is stated, because it is the whole access
+   model.** The `serve` help MUST state that the socket is created with mode
+   `0600` inside the roadmap's `0700` home directory, that the server
+   authenticates nobody, and that any caller able to open the socket can read,
+   write, delete and change the schema of that roadmap's graph. Where the
+   `serve` help documents `--socket`, it MUST state the consequence a user
+   cannot infer: the CLI follows a non-default socket through the same flag,
+   and the web interface cannot follow it at all and fails against that
+   roadmap's graph for as long as the server runs
+   (`GRAPH.md § Serving on a Non-Default Socket`). It is the same
+   obligation item 2 of `Web command help specifics` places on `rmp web` for
+   the same reason: a surface with no authentication has to say so where the
+   reader is, not only in the specification. See
+   `GRAPH.md § Socket Path and Permissions`.
+10. **The exhausted serialisation conflict, for item 4's reason and with more
+    force.** It is a second cause of exit code 1 that a caller cannot infer
+    from "a Cypher parse or execution error": the statement was valid and the
+    store was healthy, and the failure is contention between writers. The
+    exit-code-1 line of the `execute` help and of the `client` help MUST
+    therefore name it, stating that every attempt of the retry policy lost a
+    serialisation conflict against a server and that nothing was written — a
+    fact rather than a hope, because the conflict is detected before anything
+    is applied. Both helps carry it because both subcommands have the cause:
+    `client` always reaches a server, and `execute` reaches one whenever the
+    roadmap is served. The prose paragraph the `client` help already carries
+    about contention does not discharge this obligation, because the
+    exit-codes block is where a caller goes to learn why a command exited 1.
+
+    **It is the one cause of exit code 1 whose remedy is to run the SAME
+    statement again**, and the help MUST state that, because it is what
+    separates this cause from every other one in the block: a parse or
+    execution error asks the caller to correct a broken statement, the
+    statement time budget of item 4 asks it to rewrite a working one, and this
+    cause asks it to change nothing. The help states the second half of the
+    remedy too — spread concurrent writes across distinct nodes — in the same
+    terms as the published error line, that being the measure which removes the
+    failure rather than moving the point at which it appears.
+
+    **The help MUST NOT write the retry budget's figure into its own text.**
+    The published error line renders that figure from the retry policy instead
+    of spelling it out, so that one quantity keeps one expression; a figure
+    written into a help string would be a second expression of it, and would
+    disagree with the policy silently the moment the policy changed. Where a
+    help names the budget at all, it MUST render it from the same policy the
+    error line reads. Nothing the caller decides needs the figure: the cause,
+    the fact that nothing was written, and the remedy are what the block owes,
+    and the error line carries the figure at the moment it is relevant. This is
+    rule 2 of `Audit operation entity-type classification` applied to a
+    duration, and behind it `ARCHITECTURE.md § AI Agent Contract Generation`.
+
+    It introduces no new exit code, so no line is added to either block — the
+    exit-code-1 line gains a clause, exactly as item 4's cause does. The
+    command contract already states the cause: a row of its own in
+    `COMMANDS.md § Execute Exit Codes`, and a clause of the single
+    exit-code-1 row in `COMMANDS.md § Client Exit Codes`. What this item
+    closes is therefore a divergence between the contract and the published
+    help rather than an unspecified behaviour. See
+    `GRAPH.md § Concurrency Inside the Server`, canonical for the mechanism and
+    for the measured remedy, and `IMPLEMENTATION.md § Retry Logic`, canonical
+    for the policy whose exhaustion this reports.
+
+The `graph serve` and `graph client` helps carry an `Exit codes:` block like
+every other subcommand help, listing only the codes each can emit;
+`ARCHITECTURE.md § Exit Codes of the Graph Server and Client` enumerates
+them, and `COMMANDS.md § Serve Exit Codes` and
+`COMMANDS.md § Client Exit Codes` are the command contract for them. Neither
+subcommand adds an exit code to the catalogue.
 
 ### Web command help specifics
 
@@ -621,15 +740,19 @@ or user cannot infer from the generic template:
    `--roadmap`: it lists all roadmaps and the user selects one in the browser.
    This is the one command exempt from the always-required-roadmap rule (see
    `COMMANDS.md § Roadmap Selection (Always Required)`).
-2. **Read-only, loopback by default.** State that the interface is read-only
-   (the CLI remains the sole write path) and binds loopback (`127.0.0.1`) by
-   default, so it is reachable only from the local machine; that
+2. **Pages are read-only, the graph endpoint is not, and loopback is the
+   default.** State that every page the server renders is read-only and that the
+   server never writes to a roadmap's `project.db`; that the graph page's query
+   bar is the exception, because the statement it submits is executed as written
+   and may create, change, or delete graph data, with no authentication; and that
+   the server binds loopback (`127.0.0.1`) by default, so it is reachable only
+   from the local machine. State that
    `--host 0.0.0.0` is the explicit opt-in to expose it on all interfaces
    (network-reachable); and that `--host`/`--port` override the bind address,
    with the default-port ephemeral fallback. See `WEB.md`.
 3. **Long-lived process.** State that the command starts a server that keeps
    running until interrupted (`Ctrl+C` / `SIGINT` or `SIGTERM`), unlike every
-   other command, which completes and exits. On startup it prints the served
+   command except `rmp graph serve`, which completes and exits. On startup it prints the served
    URL; with `--no-open` it does not launch a browser.
 
 The skeleton (illustrative; the canonical contract is
@@ -638,10 +761,12 @@ The skeleton (illustrative; the canonical contract is
 ```
 Usage: rmp web [options]
 
-Start a read-only web interface for the roadmaps under ~/.roadmaps/.
-The browser lists every roadmap and lets you view its tasks, sprints,
-and knowledge graph. The web interface never writes; the rmp CLI
-remains the sole write path. rmp web does not take -r/--roadmap.
+Start a web interface for the roadmaps under ~/.roadmaps/. The browser
+lists every roadmap and lets you view its tasks, sprints, and knowledge
+graph. Every page is read-only and no roadmap database is ever written.
+The knowledge-graph query bar is the exception: it runs the Cypher you
+type, including statements that write or delete, and it is not
+authenticated. rmp web does not take -r/--roadmap.
 
 Options:
   --host <address>   Bind host. Default 127.0.0.1 (loopback, local machine

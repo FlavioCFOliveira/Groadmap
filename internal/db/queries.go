@@ -1924,20 +1924,25 @@ func (db *DB) MoveTasksBetweenSprints(ctx context.Context, fromID, toID int, tas
 		for _, id := range taskIDs {
 			memberArgs = append(memberArgs, id)
 		}
-		countQuery := fmt.Sprintf( // #nosec G201 -- only ? placeholders interpolated, values are parameterized
-			"SELECT COUNT(*) FROM sprint_tasks WHERE sprint_id = ? AND task_id IN (%s)",
+		// Read WHICH ids are members rather than how many. A COUNT compared
+		// against len(taskIDs) cannot tell a non-member from a repeat -- the IN
+		// clause collapses a repeated id and the length does not -- so it
+		// refused a valid move and reported a membership failure that had not
+		// occurred. Reading the ids answers the question the message has to
+		// carry anyway (SPEC/COMMANDS.md § Task ID Lists (Batch Commands)).
+		memberQuery := fmt.Sprintf( // #nosec G201 -- only ? placeholders interpolated, values are parameterized
+			"SELECT task_id FROM sprint_tasks WHERE sprint_id = ? AND task_id IN (%s)",
 			db.queryCache.GetPlaceholders(len(taskIDs)),
 		)
-		var count int
-		if err := tx.QueryRow(countQuery, memberArgs...).Scan(&count); err != nil {
+		members, err := scanIDs(tx, memberQuery, memberArgs)
+		if err != nil {
 			return fmt.Errorf("verifying task membership: %w", err)
 		}
-		if count != len(taskIDs) {
-			// Wrap with utils.ErrValidation so the CLI maps this to exit 6,
-			// the code the membership step of SPEC/COMMANDS.md
-			// § Task Assignment publishes for a non-member.
-			return fmt.Errorf("%w: %w: one or more tasks are not in sprint #%d",
-				utils.ErrValidation, ErrTasksNotInSprint, fromID)
+		// TasksNotInSprintError carries utils.ErrValidation, which the CLI maps
+		// to exit 6 -- the code the membership step of SPEC/COMMANDS.md
+		// § Task Assignment publishes for a non-member.
+		if err := utils.TasksNotInSprintError(utils.MissingIDs(taskIDs, members), fromID); err != nil {
+			return err
 		}
 
 		// Re-parent the membership rows, appending after the destination's
@@ -2996,4 +3001,35 @@ func (db *DB) GetAverageVelocity(ctx context.Context, limit int) (float64, error
 	}
 
 	return totalVelocity / float64(count), nil
+}
+
+// scanIDs runs a query whose rows are a single integer column and collects them.
+//
+// It exists so a membership check can read WHICH ids are present rather than how
+// many: a COUNT compared against the length of the caller's list cannot tell a
+// non-member from a repeated id, because the IN clause collapses a repeat and
+// the length does not. Reading the ids answers both questions at once and gives
+// the error message the ids it has to name (SPEC/COMMANDS.md § Task ID Lists
+// (Batch Commands)).
+//
+// The deferred close reports its own failure only when nothing else already
+// failed, so a scan error is never masked by a close error.
+func scanIDs(tx *sql.Tx, query string, args []any) (ids []int, err error) {
+	rows, err := tx.Query(query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		if cerr := rows.Close(); cerr != nil && err == nil {
+			err = cerr
+		}
+	}()
+	for rows.Next() {
+		var id int
+		if scanErr := rows.Scan(&id); scanErr != nil {
+			return nil, scanErr
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
 }

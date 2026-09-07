@@ -223,6 +223,10 @@ func sprintAddTasks(args []string) error {
 		return err
 	}
 
+	// A repeated id names the same task each time; see the note in
+	// internal/commands/task_mutate.go and SPEC/COMMANDS.md § Task ID Lists.
+	taskIDs = utils.DistinctIDs(taskIDs)
+
 	database, err := db.OpenExisting(roadmapName)
 	if err != nil {
 		return err
@@ -247,18 +251,8 @@ func sprintAddTasks(args []string) error {
 	if err != nil {
 		return err
 	}
-	if len(existing) != len(taskIDs) {
-		found := make(map[int]struct{}, len(existing))
-		for i := range existing {
-			found[existing[i].ID] = struct{}{}
-		}
-		missing := make([]int, 0, len(taskIDs)-len(existing))
-		for _, id := range taskIDs {
-			if _, ok := found[id]; !ok {
-				missing = append(missing, id)
-			}
-		}
-		return fmt.Errorf("%w: task(s) not found: %v", utils.ErrNotFound, missing)
+	if err := utils.TasksNotFoundError(utils.MissingIDs(taskIDs, taskIDsOf(existing))); err != nil {
+		return err
 	}
 
 	// Friendly capacity pre-check when max_tasks is set. This is a fast
@@ -307,6 +301,10 @@ func sprintRemoveTasks(args []string) error {
 		return err
 	}
 
+	// A repeated id names the same task each time; see the note in
+	// internal/commands/task_mutate.go and SPEC/COMMANDS.md § Task ID Lists.
+	taskIDs = utils.DistinctIDs(taskIDs)
+
 	database, err := db.OpenExisting(roadmapName)
 	if err != nil {
 		return err
@@ -341,18 +339,8 @@ func sprintRemoveTasks(args []string) error {
 	if err != nil {
 		return err
 	}
-	memberSet := make(map[int]struct{}, len(members))
-	for _, id := range members {
-		memberSet[id] = struct{}{}
-	}
-	missing := make([]int, 0, len(taskIDs))
-	for _, id := range taskIDs {
-		if _, ok := memberSet[id]; !ok {
-			missing = append(missing, id)
-		}
-	}
-	if len(missing) > 0 {
-		return fmt.Errorf("%w: task(s) not in sprint #%d: %v", utils.ErrValidation, sprintID, missing)
+	if err := utils.TasksNotInSprintError(utils.MissingIDs(taskIDs, members), sprintID); err != nil {
+		return err
 	}
 
 	// Capture timestamp once for the entire operation
@@ -494,6 +482,10 @@ func sprintMoveTasks(args []string) error {
 	if err != nil {
 		return err
 	}
+
+	// A repeated id names the same task each time; see the note in
+	// internal/commands/task_mutate.go and SPEC/COMMANDS.md § Task ID Lists.
+	taskIDs = utils.DistinctIDs(taskIDs)
 
 	database, err := db.OpenExisting(roadmapName)
 	if err != nil {

@@ -89,9 +89,12 @@ module does not know how to reach is a bug in this module, not a silent gap.
 import json
 import os
 import re
+import socket as socketlib
 import sqlite3
 import subprocess
 import sys
+import threading
+import time
 import uuid
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -106,6 +109,244 @@ SPEC_PATH = REPO_ROOT / "SPEC" / "COMMANDS.md"
 # pre-existing `audit-e2e-probe` roadmap that a past agent left behind and
 # that this module must not touch.
 ROADMAP_PREFIX = "qa_errata_gate_"
+
+
+# ---------------------------------------------------------------------------
+# A scripted Bolt listener, for the one published line whose condition cannot
+# be produced by driving the CLI alone (rmp task #384).
+#
+# The line is the serialisation-contention line COMMANDS.md publishes under
+# both "Execute Error Cases" and "Client Error Cases":
+#
+#   Error: graph engine error: graph write conflict: another writer committed
+#   first on every attempt within the 2.5s retry budget; nothing was written.
+#   The statement is valid -- run it again, and spread concurrent writes
+#   across distinct nodes.
+#
+# Reaching it needs a graph server that loses a serialisation conflict on
+# EVERY attempt of the client's retry policy. Racing sixteen real writers
+# against a real server would reach it only sometimes -- measured at 0.18% to
+# 0.43% of statements at sixteen writers on one node, with a 2.4x spread
+# between identical repeats -- so a test built that way would be a flake
+# rather than a driver. A listener that answers every RUN with the engine's
+# own transient code reaches it every time, in about the 2.5 seconds the
+# policy spends, and asserts the same thing about the same binary.
+#
+# What this speaks is only as much Bolt as `rmp graph client` performs
+# against a server: the 20-byte handshake, HELLO, LOGON, then RUN. It is not
+# a graph engine and holds no data. The bytes are PackStream v2's
+# (github.com/FlavioCFOliveira/GoGraph/bolt/packstream): TinyStruct 0xB0|n,
+# TinyString 0x80|n, STRING8 0xD0, TinyMap 0xA0|n, and Bolt's chunked framing
+# of a 2-byte big-endian length per chunk terminated by a zero-length chunk.
+# ---------------------------------------------------------------------------
+
+# github.com/FlavioCFOliveira/GoGraph/bolt/proto, handshake.go: Magic.
+_BOLT_MAGIC = b"\x60\x60\xb0\x17"
+
+# The version this listener selects. Bolt 5.1 split authentication out of
+# HELLO into a dedicated LOGON, so answering 5.x with x >= 1 is what makes the
+# client send the LOGON -- the exchange a real server performs.
+_BOLT_VERSION_ANSWER = bytes([0x00, 0x00, 0x06, 0x05])  # 5.6
+
+# proto/messages.go structure tags.
+_TAG_HELLO = 0x01
+_TAG_GOODBYE = 0x02
+_TAG_LOGON = 0x6A
+_TAG_RUN = 0x10
+_TAG_SUCCESS = 0x70
+_TAG_FAILURE = 0x7F
+
+# bolt/server/errors.go maps a first-updater-wins MVCC collision onto this
+# code, and internal/graphclient/statement.go matches exactly it. Nothing else
+# in the product is retried.
+_CONFLICT_CODE = "Neo.TransientError.Transaction.Outdated"
+
+# The engine's own diagnostic for the collision. It is deliberately NOT
+# asserted anywhere: the whole point of the published line is that `rmp`
+# stopped making the caller read this text to find out what happened.
+_CONFLICT_MESSAGE = (
+    "mvcc: serialization conflict in node properties: another transaction "
+    "committed first"
+)
+
+# A Unix domain socket path is capped at 108 bytes (sun_path). The derived
+# path here is about 80, but a HOME under a long build directory would blow
+# past it and bind would fail with "invalid argument", which reads as a defect
+# in the binary rather than in the harness.
+_MAX_SUN_PATH = 108
+
+
+def _pack_string(text):
+    """PackStream string: TinyString for 0..15 bytes, STRING8 beyond."""
+    raw = text.encode("utf-8")
+    if len(raw) <= 15:
+        return bytes([0x80 | len(raw)]) + raw
+    if len(raw) <= 0xFF:
+        return b"\xd0" + bytes([len(raw)]) + raw
+    raise AssertionError(f"this listener packs strings up to 255 bytes; got {len(raw)}")
+
+
+def _pack_string_map(pairs):
+    """PackStream map of string keys to string values (TinyMap, 0..15 pairs)."""
+    assert len(pairs) <= 15, "TinyMap holds at most 15 pairs"
+    out = bytes([0xA0 | len(pairs)])
+    for key, value in pairs:
+        out += _pack_string(key) + _pack_string(value)
+    return out
+
+
+def _bolt_message(tag, fields):
+    """One PackStream structure carrying `fields` already-encoded values."""
+    return bytes([0xB0 | len(fields)]) + bytes([tag]) + b"".join(fields)
+
+
+def _chunked(message):
+    """Bolt framing: 2-byte big-endian length per chunk, zero-length chunk to
+    end the message."""
+    out = b""
+    while message:
+        chunk, message = message[:0xFFFF], message[0xFFFF:]
+        out += len(chunk).to_bytes(2, "big") + chunk
+    return out + b"\x00\x00"
+
+
+_SUCCESS_MESSAGE = _chunked(_bolt_message(_TAG_SUCCESS, [_pack_string_map([])]))
+
+
+def _failure_message(code, message):
+    return _chunked(_bolt_message(_TAG_FAILURE, [
+        _pack_string_map([("code", code), ("message", message)]),
+    ]))
+
+
+def _recv_exactly(conn, count):
+    buf = b""
+    while len(buf) < count:
+        part = conn.recv(count - len(buf))
+        if not part:
+            raise EOFError("the peer closed the connection")
+        buf += part
+    return buf
+
+
+def _recv_bolt_message(conn):
+    """Read one chunked Bolt message and return its raw PackStream payload."""
+    payload = b""
+    while True:
+        length = int.from_bytes(_recv_exactly(conn, 2), "big")
+        if length == 0:
+            return payload
+        payload += _recv_exactly(conn, length)
+
+
+class ConflictingBoltServer:
+    """A Unix-socket listener that completes the Bolt session and then loses a
+    serialisation conflict on every statement, deterministically.
+
+    It answers on the path `rmp graph client` derives from the roadmap name,
+    so the binary is driven with no --socket flag and exercises the same
+    resolution a real server is found through.
+    """
+
+    def __init__(self, socket_path, failure_code=_CONFLICT_CODE,
+                 failure_message=_CONFLICT_MESSAGE):
+        self.socket_path = socket_path
+        # The code answered to every RUN. It defaults to the conflict, and is
+        # a parameter so the SAME listener can stand in for the other
+        # server-reported failure -- a statement the engine refuses -- which
+        # is what makes the contrast between the two published lines drivable
+        # end to end rather than merely arguable.
+        self._failure = _failure_message(failure_code, failure_message)
+        self.runs = 0
+        self.connections = 0
+        self._lock = threading.Lock()
+        self._stop = threading.Event()
+        self._listener = None
+        self._thread = None
+
+    # -- lifecycle ---------------------------------------------------------
+
+    def __enter__(self):
+        encoded = os.fsencode(self.socket_path)
+        assert len(encoded) < _MAX_SUN_PATH, (
+            f"the derived socket path is {len(encoded)} bytes, at or over the "
+            f"AF_UNIX sun_path limit of {_MAX_SUN_PATH}: {self.socket_path!r}"
+        )
+        self._listener = socketlib.socket(socketlib.AF_UNIX, socketlib.SOCK_STREAM)
+        self._listener.bind(self.socket_path)
+        # The mode a real server publishes (GRAPH.md "Socket Path and
+        # Permissions"). Nothing in the client checks it; matching it keeps the
+        # fixture honest about what it is standing in for.
+        os.chmod(self.socket_path, 0o600)
+        self._listener.listen(64)
+        self._listener.settimeout(0.2)
+        self._thread = threading.Thread(target=self._accept_loop, daemon=True)
+        self._thread.start()
+        return self
+
+    def __exit__(self, *_exc):
+        self._stop.set()
+        if self._thread is not None:
+            self._thread.join(timeout=15)
+        if self._listener is not None:
+            self._listener.close()
+        try:
+            os.unlink(self.socket_path)
+        except FileNotFoundError:
+            pass
+        return False
+
+    # -- the protocol ------------------------------------------------------
+
+    def _accept_loop(self):
+        while not self._stop.is_set():
+            try:
+                conn, _ = self._listener.accept()
+            except socketlib.timeout:
+                continue
+            except OSError:
+                return
+            with self._lock:
+                self.connections += 1
+            threading.Thread(
+                target=self._serve, args=(conn,), daemon=True
+            ).start()
+
+    def _serve(self, conn):
+        try:
+            conn.settimeout(20)
+            offer = _recv_exactly(conn, 20)
+            if offer[:4] != _BOLT_MAGIC:
+                return
+            conn.sendall(_BOLT_VERSION_ANSWER)
+            while True:
+                payload = _recv_bolt_message(conn)
+                if len(payload) < 2:
+                    # Server resolution probes the socket with the handshake
+                    # alone and then closes: an empty read here is that probe
+                    # finishing, not a fault.
+                    return
+                tag = payload[1]
+                if tag == _TAG_GOODBYE:
+                    return
+                if tag == _TAG_RUN:
+                    with self._lock:
+                        self.runs += 1
+                    conn.sendall(self._failure)
+                    continue
+                if tag in (_TAG_HELLO, _TAG_LOGON):
+                    conn.sendall(_SUCCESS_MESSAGE)
+                    continue
+                # Nothing else is sent by this client; a SUCCESS keeps an
+                # unexpected message from being read as a broken server.
+                conn.sendall(_SUCCESS_MESSAGE)
+        except (EOFError, OSError):
+            return
+        finally:
+            try:
+                conn.close()
+            except OSError:
+                pass
 
 
 # ---------------------------------------------------------------------------
@@ -313,24 +554,24 @@ CORPUS = build_corpus()
 # ---------------------------------------------------------------------------
 
 EXEMPT_KEYS = {
-    "Error: database error: graph query failed: <engine diagnostic>": (
+    "Error: graph engine error: graph query failed: <engine diagnostic>": (
         "internal/commands/graph.go: the tail is text the Cypher engine "
         "itself produces for a parse/execution failure and is not "
         "specified by COMMANDS.md:3261 (\"what follows is the engine's own "
         "text and is not specified here\")."
     ),
-    "Error: database error: graph store unavailable: <detail>": (
+    "Error: graph store error: graph store unavailable: <detail>": (
         "Derived from internal/commands/graph.go:847,917,1023 and "
         "internal/web/data.go:1978: an internal graph-store open/read/write "
         "failure, not reachable through ordinary CLI execution against a "
         "healthy filesystem."
     ),
-    "Error: database error: cannot bind 127.0.0.1:8787: listen tcp 127.0.0.1:8787: bind: address already in use": (
+    "Error: I/O error: cannot bind 127.0.0.1:8787: listen tcp 127.0.0.1:8787: bind: address already in use": (
         "internal/web: the tail after \"cannot bind 127.0.0.1:8787: \" is "
         "the Go standard library's net.OpError rendering, platform-"
         "dependent per COMMANDS.md:3369; not assertable as a fixed literal."
     ),
-    "Error: database error: cannot bind 10.0.0.5:8787: listen tcp 10.0.0.5:8787: bind: cannot assign requested address": (
+    "Error: I/O error: cannot bind 10.0.0.5:8787: listen tcp 10.0.0.5:8787: bind: cannot assign requested address": (
         "internal/web: same platform-dependent net.OpError tail as the "
         "row above, and binding a specific non-loopback, non-local address "
         "like 10.0.0.5 is itself environment-dependent (routable only on "
@@ -348,6 +589,21 @@ EXEMPT_KEYS = {
 # NARROWING, not an exemption: the key is marked reached, and the sentinel
 # half is asserted rather than skipped.
 TAIL_EXEMPT_KEYS = {
+    "Error: I/O error: reading query from stdin: <detail>": (
+        "<detail>",
+        "The head \"Error: I/O error: reading query from stdin: \" is asserted "
+        "exactly, which is the whole of rmp's own text. What follows is the Go "
+        "runtime's rendering of the operating system's errno -- for a directory "
+        "handed to stdin, \"read /dev/stdin: is a directory\" -- and it names "
+        "the offending stream and the reason, neither of which this project "
+        "words or is free to change."
+    ),
+    "Error: I/O error: reading the comment body from standard input: <detail>": (
+        "<detail>",
+        "The same failure on the four comment subcommands, narrowed for the "
+        "same reason: the head is rmp's and the tail is the operating "
+        "system's."
+    ),
     "Error: database error: <detail>": (
         "<detail>",
         "The six database-failure rows of the comment subcommands (three in "
@@ -429,11 +685,26 @@ class TestErrorStringParity:
     # Invocation helpers
     # ------------------------------------------------------------------
 
-    def run_stdin(self, args, input_text=None):
+    def run_stdin(self, args, input_text=None, stdin_fd=None):
         """Run the CLI with `input_text` (or a closed/empty stdin when None)
-        piped in, returning (exit_code, stdout, stderr)."""
+        piped in, returning (exit_code, stdout, stderr).
+
+        `stdin_fd` hands the child a descriptor DIRECTLY instead of a pipe,
+        which is the only way to drive a stdin whose failure is a property of
+        the descriptor rather than of the bytes on it -- a directory, whose
+        read(2) is EISDIR. It and `input_text` are mutually exclusive."""
         env = os.environ.copy()
         env["HOME"] = str(self.test.home_dir)
+        if stdin_fd is not None:
+            assert input_text is None, "stdin_fd and input_text are mutually exclusive"
+            result = subprocess.run(
+                [self.test.cli_path] + args,
+                stdin=stdin_fd,
+                capture_output=True,
+                text=True,
+                env=env,
+            )
+            return result.returncode, result.stdout, result.stderr
         result = subprocess.run(
             [self.test.cli_path] + args,
             input=input_text if input_text is not None else "",
@@ -475,7 +746,7 @@ class TestErrorStringParity:
         REACHED.add(key)
 
     def check_head(self, key, args, exit_code, tail_contains, subs=None,
-                   stdin=None, note=""):
+                   stdin=None, note="", stdin_fd=None):
         """The narrowed form of `check`, for the keys TAIL_EXEMPT_KEYS names.
 
         Everything BEFORE the named placeholder is compared character for
@@ -514,7 +785,7 @@ class TestErrorStringParity:
             f"sentinel -- narrowing it would assert nothing of substance"
         )
 
-        rc, out, err = self.run_stdin(args, stdin)
+        rc, out, err = self.run_stdin(args, stdin, stdin_fd=stdin_fd)
         actual_line = err.splitlines()[0] if err else ""
         assert rc == exit_code, (
             f"[{note or key}] exit code: expected {exit_code}, got {rc}\n"
@@ -899,11 +1170,31 @@ class TestErrorStringParity:
             "Reconcile ledger entries against provider payout report",
             self.FR, self.TR, self.AC,
         )
-        # #41: some IDs do not exist.
+        # #41: one id does not exist. The singular line, because the wording
+        # follows how many ids are MISSING and not how many were supplied
+        # (SPEC/COMMANDS.md, Task ID Lists (Batch Commands), rule 4).
         self.check(
-            "Error: resource not found: some tasks not found",
+            "Error: resource not found: task N not found",
             ["task", "get", "-r", r, f"{task_id},{self.missing_id}"], 4,
-            note="task get some ids missing",
+            subs={"N": str(self.missing_id)},
+            note="task get one id missing among valid ones",
+        )
+        # #41b: two ids do not exist -- the plural line, with the ids separated
+        # by a comma and a space, in the order the caller supplied them.
+        self.check(
+            "Error: resource not found: tasks <ids> not found",
+            ["task", "get", "-r", r, f"{self.missing_id},{self.missing_id + 1}"], 4,
+            subs={"<ids>": f"{self.missing_id}, {self.missing_id + 1}"},
+            note="task get two ids missing",
+        )
+        # #41c: a repeated MISSING id is named once, which is the de-duplication
+        # rule (rule 3) and the only case that proves it.
+        self.check(
+            "Error: resource not found: task N not found",
+            ["task", "get", "-r", r,
+             f"{task_id},{self.missing_id},{task_id},{self.missing_id}"], 4,
+            subs={"N": str(self.missing_id)},
+            note="task get a repeated missing id is named once",
         )
         # #42: an ID is not an integer.
         self.check(
@@ -1729,11 +2020,17 @@ class TestErrorStringParity:
             [self.missing_id, self.missing_id + 1],
             [self.missing_id + 2, self.missing_id, self.missing_id + 1],
         ):
+            if len(ids) == 1:
+                template = "Error: resource not found: task N not found"
+                subs = {"N": str(ids[0])}
+            else:
+                template = "Error: resource not found: tasks <ids> not found"
+                subs = {"<ids>": ", ".join(str(i) for i in ids)}
             self.check(
-                "Error: resource not found: task(s) not found: [<ids>]",
+                template,
                 ["sprint", "add-tasks", "-r", r, str(sprint_id),
                  ",".join(str(i) for i in ids)], 4,
-                subs={"<ids>": " ".join(str(i) for i in ids)},
+                subs=subs,
                 note=f"sprint add-tasks missing ids ({len(ids)} member(s))",
             )
 
@@ -1742,12 +2039,18 @@ class TestErrorStringParity:
             [outside_task_id, outside_task_id_2],
             [outside_task_id_3, outside_task_id, outside_task_id_2],
         ):
+            if len(ids) == 1:
+                template = "Error: validation error: task N is not in sprint #M"
+                subs = {"N": str(ids[0]), "M": str(sprint_id)}
+            else:
+                template = "Error: validation error: tasks <ids> are not in sprint #N"
+                subs = {"N": str(sprint_id),
+                        "<ids>": ", ".join(str(i) for i in ids)}
             self.check(
-                "Error: validation error: task(s) not in sprint #N: [<ids>]",
+                template,
                 ["sprint", "remove-tasks", "-r", r, str(sprint_id),
                  ",".join(str(i) for i in ids)], 6,
-                subs={"N": str(sprint_id),
-                      "<ids>": " ".join(str(i) for i in ids)},
+                subs=subs,
                 note=f"sprint remove-tasks non-members ({len(ids)} member(s))",
             )
 
@@ -2045,7 +2348,7 @@ class TestErrorStringParity:
         )
 
     # ------------------------------------------------------------------
-    # `graph create` / `query` / `update` / `delete` / `search`
+    # `graph execute`
     # ------------------------------------------------------------------
 
     def test_graph_errors(self):
@@ -2053,7 +2356,7 @@ class TestErrorStringParity:
         # #106: no query supplied (neither --query nor stdin).
         self.check(
             "Error: required parameter missing: no query supplied",
-            ["graph", "query", "-r", r], 2, note="graph query no query supplied",
+            ["graph", "execute", "-r", r], 2, note="graph execute no query supplied",
         )
         # #107: query above the maximum length (1 MiB). Fed on stdin rather
         # than as a --query argument: an argv entry this large trips the
@@ -2062,51 +2365,28 @@ class TestErrorStringParity:
         # host), and GRAPH.md's Cypher Input Source and Precedence makes
         # standard input an equally valid, equally load-bearing source for
         # the SAME bounded-length check.
+        #
+        # This is now the ONLY cause of exit code 6 the graph family has.
+        # Five operation-class refusals used to sit below it, one per
+        # subcommand; the subcommands are gone and so are their lines
+        # (SPEC/COMMANDS.md § Graph Management), and the corpus this module
+        # reads no longer publishes them -- so a case left here would fail on
+        # its `key in CORPUS` assertion rather than on the binary.
         oversized = "RETURN " + ("1" * 1048571)
         assert len(oversized) == 1048578
         self.check(
             "Error: validation error: query exceeds maximum length of 1048576 bytes",
-            ["graph", "query", "-r", r], 6, stdin=oversized,
-            note="graph query oversized",
+            ["graph", "execute", "-r", r], 6, stdin=oversized,
+            note="graph execute oversized",
         )
-        # #108: `graph create` rejects a read-only query.
-        self.check(
-            "Error: validation error: graph create accepts only CREATE/MERGE queries",
-            ["graph", "create", "-r", r, "--query", "MATCH (n) RETURN n"], 6,
-            note="graph create rejects read-only query",
-        )
-        # #109: `graph query` rejects a writing query.
-        self.check(
-            "Error: validation error: graph query accepts only read-only queries",
-            ["graph", "query", "-r", r, "--query", "CREATE (n:Incident {key:'payment-outage-0417'})"],
-            6, note="graph query rejects writing query",
-        )
-        # #110: `graph update` rejects a query outside SET/REMOVE.
-        self.check(
-            "Error: validation error: graph update accepts only SET/REMOVE, index/constraint DDL, and schema-introspection queries",
-            ["graph", "update", "-r", r, "--query", "CREATE (n:Incident {key:'payment-outage-0417'})"],
-            6, note="graph update rejects create query",
-        )
-        # #111: `graph delete` rejects a query outside DELETE/DETACH DELETE.
-        self.check(
-            "Error: validation error: graph delete accepts only DELETE/DETACH DELETE queries",
-            ["graph", "delete", "-r", r, "--query", "CREATE (n:Incident {key:'payment-outage-0417'})"],
-            6, note="graph delete rejects create query",
-        )
-        # #112: `graph search` rejects a writing query.
-        self.check(
-            "Error: validation error: graph search accepts only read-only queries",
-            ["graph", "search", "-r", r, "--query", "CREATE (n:Incident {key:'payment-outage-0417'})"],
-            6, note="graph search rejects writing query",
-        )
-        # Roadmap not found, on a graph subcommand (WITH "not found",
+        # Roadmap not found, on the graph subcommand (WITH "not found",
         # distinct from #104's stats/backlog wording).
         self.check(
             'Error: resource not found: roadmap "X" not found',
-            ["graph", "query", "-r", "ghost-roadmap-9182", "--query", "MATCH (n) RETURN n"], 4,
-            subs={"X": "ghost-roadmap-9182"}, note="graph query roadmap not found",
+            ["graph", "execute", "-r", "ghost-roadmap-9182", "--query", "MATCH (n) RETURN n"], 4,
+            subs={"X": "ghost-roadmap-9182"}, note="graph execute roadmap not found",
         )
-        # A Cypher query written as a positional argument. The graph family
+        # A Cypher query written as a positional argument. `graph execute`
         # declares a maximum of zero positional arguments (COMMANDS.md
         # § Positional Arity by Command), and it is one of the three commands
         # that publish a line of their own for the refusal: the canonical
@@ -2116,14 +2396,261 @@ class TestErrorStringParity:
         # a lookup failure.
         self.check(
             'Error: invalid input: unexpected argument "X" (graph queries use --query or stdin)',
-            ["graph", "query", "-r", r, "MATCH (n:Incident) RETURN n"], 2,
+            ["graph", "execute", "-r", r, "MATCH (n:Incident) RETURN n"], 2,
             subs={"X": "MATCH (n:Incident) RETURN n"},
-            note="graph query bare positional query",
+            note="graph execute bare positional query",
+        )
+
+    def test_graph_statement_time_budget(self):
+        """The statement time budget line, driven rather than exempted
+        (SPEC/GRAPH.md § Statement Time Budget; SPEC/COMMANDS.md
+        § Graph Management; GRAPH.md acceptance criterion 39).
+
+        `rmp graph execute` runs its statement under a 5-second deadline. A
+        statement that exhausts it is cancelled, its transaction rolls back
+        whole, no checkpoint runs, and the invocation exits 1 with a line that
+        is rmp's own text from end to end -- no engine diagnostic, no
+        placeholder -- so it is compared in full, exactly as this module
+        compares every other published line.
+
+        **Driven, not exempted, and deliberately so.** The budget is provokable
+        through the binary, unlike the four strings EXEMPT_KEYS names, whose
+        tails are platform-dependent `net.OpError` renderings. An exemption
+        here would be this module declining to test the one thing the string
+        exists to report.
+
+        **How the budget is provoked, since it cannot be lowered.** No flag,
+        environment variable or any other knob reaches it (SPEC/WEB.md
+        § Graph Query Time Budget, rule 8), so the statement has to
+        genuinely cost more than five seconds. The shape is a three-way
+        Cartesian product: it returns a single aggregate row, so nothing about
+        the RESULT is large, while the engine must stream N**3 intermediate
+        tuples to produce it.
+
+        **The seed is grossly over budget, not marginally, and that is the
+        cheap direction here rather than the expensive one.** The cost of this
+        test is capped by the budget itself, not by the query, so a larger
+        store buys robustness against faster hardware and costs no wall time --
+        the opposite of the usual trade-off. Measured on the development
+        machine: seeding these 2000 nodes costs 70 ms, and the product over
+        them (8e9 tuples) was still running when killed at 30 s. A seed sized
+        only just over budget would not do: 400 nodes was measured at 6.04 s,
+        a 1.2x margin that any machine 1.2x faster would turn into a silent
+        false pass.
+
+        Three properties are asserted, and the wall clock carries two of them.
+        The FLOOR is what proves the failure was the deadline: an
+        implementation that refused the statement instantly for some unrelated
+        reason would satisfy a ceiling on its own. The CEILING is what proves
+        the deadline fired at all, and it is enforced as a subprocess timeout
+        rather than as an assertion after the fact, because an invocation with
+        no deadline does not finish in any time this suite could wait for.
+        """
+        r = self.roadmap
+        key = (
+            "Error: graph engine error: graph query exceeded the 5s statement time "
+            "budget; nothing was written. Narrow the statement — add a label, "
+            "an indexed property filter, or a LIMIT — or split it into smaller "
+            "statements."
+        )
+        assert key in CORPUS, (
+            "the budget line is no longer published by SPEC/COMMANDS.md under "
+            f"this exact text: {key!r}"
+        )
+
+        # One UNWIND, one invocation: 2000 nodes for about 70 ms.
+        bulk = 2000
+        rc, out, err = self.run_stdin(
+            ["graph", "execute", "-r", r, "--query",
+             "UNWIND range(1," + str(bulk) + ") AS i CREATE (:Bulk {i:i})"]
+        )
+        assert rc == 0, f"seeding {bulk} nodes failed: rc={rc} stderr={err!r}"
+
+        # Ground truth read from the engine rather than assumed, so the size
+        # the margin rests on cannot silently drift with the seed.
+        rc, out, err = self.run_stdin(
+            ["graph", "execute", "-r", r, "--query", "MATCH (n) RETURN count(n)"]
+        )
+        assert rc == 0, f"counting the seed failed: rc={rc} stderr={err!r}"
+        seeded = json.loads(out)["rows"][0][0]
+        assert seeded == bulk, f"the seed produced {seeded} nodes, want {bulk}"
+
+        expensive = "MATCH (a),(b),(c) RETURN count(*)"
+        env = os.environ.copy()
+        env["HOME"] = str(self.test.home_dir)
+        started = time.monotonic()
+        try:
+            proc = subprocess.run(
+                [self.test.cli_path, "graph", "execute", "-r", r,
+                 "--query", expensive],
+                input="",
+                capture_output=True,
+                text=True,
+                env=env,
+                timeout=60,
+            )
+        except subprocess.TimeoutExpired:
+            raise AssertionError(
+                f"`graph execute` was still running 60s into a three-way "
+                f"Cartesian product over {seeded} nodes: the 5s statement time "
+                f"budget did not bound the work at all (SPEC/GRAPH.md "
+                f"§ Statement Time Budget)"
+            )
+        elapsed = time.monotonic() - started
+
+        # (i) The deadline is what ended it: the invocation cannot have
+        # returned before its own budget elapsed.
+        assert elapsed >= 4.9, (
+            f"the invocation returned after {elapsed:.2f}s, before its 5s "
+            f"budget could elapse: whatever failed, it was not the budget"
+        )
+        # (ii) It was cut promptly rather than run to completion.
+        assert elapsed < 30, (
+            f"the invocation took {elapsed:.2f}s under a 5s budget: the "
+            f"deadline was not honoured promptly"
+        )
+        # (iii) Exit code 1, nothing on stdout, and the published line on
+        # stderr -- compared character for character, first line, exactly as
+        # `check` compares every other string in this module.
+        assert proc.returncode == 1, (
+            f"exit code: expected 1, got {proc.returncode}\n"
+            f"  stdout: {proc.stdout!r}\n  stderr: {proc.stderr!r}"
+        )
+        assert proc.stdout == "", (
+            f"stdout: expected nothing from a cut statement, got {proc.stdout!r}"
+        )
+        actual_line = proc.stderr.splitlines()[0] if proc.stderr else ""
+        assert actual_line == key, (
+            "published string does not match the binary\n"
+            f"  file:      {SPEC_PATH} line(s) {CORPUS[key]}\n"
+            f"  published: {key!r}\n"
+            f"  captured:  {actual_line!r}\n"
+            f"  full stderr: {proc.stderr!r}"
+        )
+        REACHED.add(key)
+
+        # (iv) Nothing was written and nothing on disk was rewritten: the
+        # store still holds exactly the seed, read back through a fresh open
+        # in a separate invocation.
+        rc, out, err = self.run_stdin(
+            ["graph", "execute", "-r", r, "--query", "MATCH (n) RETURN count(n)"]
+        )
+        assert rc == 0, f"reading the store back failed: rc={rc} stderr={err!r}"
+        after = json.loads(out)["rows"][0][0]
+        assert after == bulk, (
+            f"the store holds {after} nodes after a cut statement, want the "
+            f"{bulk} seeded: the cut was not clean"
         )
 
     # ------------------------------------------------------------------
     # `rmp web`
     # ------------------------------------------------------------------
+
+    def test_graph_store_lock_busy_line(self):
+        """The lock line an `execute` meets when a server holds the store.
+
+        It is the one line in this corpus that cannot be reached without a
+        SECOND process, and reaching it is the whole point: the wording it
+        replaced asserted a holder the code had already ruled out. The doc
+        comment on graphlock.AcquireExclusive says a bounded wait is sized
+        against the maximum lawful hold and that a server has none -- and the
+        line then printed "another invocation still holds it", naming the one
+        holder the wait cannot resolve. The two disagreed inside one function,
+        and they imply opposite remedies: an invocation releases shortly so
+        retrying works, a server holds for its lifetime so retrying never will.
+
+        The shape below is the one that reproduces it. A server is started on a
+        NON-DEFAULT socket, so the `execute` that follows resolves the derived
+        path, finds nothing listening, takes the direct path, and meets the lock
+        the server is holding (SPEC/GRAPH.md § Lock Contention, residual case 3).
+
+        It costs the wait budget -- the statement budget plus the backoff total,
+        about 7.5s -- and that is irreducible: the line is what an EXHAUSTED wait
+        prints, so the wait has to be exhausted.
+        """
+        r = self.roadmap
+        key = (
+            "Error: graph store error: graph store is busy: still held when the "
+            "bounded wait was exhausted, and nothing records the holder. Another "
+            "rmp invocation releases it shortly, so run the statement again; an "
+            "rmp graph serve holds it for its whole lifetime, so reach that "
+            "server with --socket, or stop it."
+        )
+        assert key in CORPUS, (
+            f"the lock-busy line is no longer published under this text: {key!r}")
+
+        # `graph serve` refuses a roadmap with no graph store, so materialise one.
+        code, _, err = self.run_stdin(
+            ["graph", "execute", "-r", r, "--query", "CREATE (:LockProbe {k: 1})"])
+        assert code == 0, f"seeding the graph failed: exit={code} stderr={err!r}"
+
+        socket = str(self.test.home_dir / "held.sock")
+        env = os.environ.copy()
+        env["HOME"] = str(self.test.home_dir)
+        server = subprocess.Popen(
+            [self.test.cli_path, "graph", "serve", "-r", r, "--socket", socket],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env)
+        try:
+            # The startup object is written only after the store is open and the
+            # lock is held, so seeing it is seeing the lock taken.
+            deadline = time.time() + 20
+            announced = ""
+            while time.time() < deadline:
+                if server.poll() is not None:
+                    raise AssertionError(
+                        f"graph serve exited early: {server.stderr.read()!r}")
+                line = server.stdout.readline()
+                announced += line
+                if "socket" in announced and "}" in announced:
+                    break
+            assert "socket" in announced, (
+                f"graph serve never announced its socket; got {announced!r}")
+
+            # No --socket here: the derived path has nothing listening, so this
+            # takes the direct path and meets the held lock.
+            self.check(key, ["graph", "execute", "-r", r,
+                             "--query", "MATCH (n) RETURN count(n)"], 1,
+                       note="graph execute against a store a server holds")
+        finally:
+            server.terminate()
+            try:
+                server.wait(timeout=20)
+            except subprocess.TimeoutExpired:
+                server.kill()
+                server.wait(timeout=10)
+
+    def test_stdin_read_failures_name_the_stream_not_a_database(self):
+        """The two lines a failed read of standard input publishes.
+
+        Both used to say "database error". Nothing about a failed read of the
+        process's own stdin is a database, and an agent piping a query was
+        being pointed at the wrong artefact entirely.
+
+        The failure is forced hermetically by handing the command a DIRECTORY
+        as its standard input: read(2) on a directory descriptor is EISDIR on
+        Linux, so the read fails without a fixture, a permission change, or a
+        race. The graph case needs no roadmap either -- the read precedes the
+        roadmap resolution, so a name that does not exist still reaches it.
+        """
+        query_key = "Error: I/O error: reading query from stdin: <detail>"
+        body_key = (
+            "Error: I/O error: reading the comment body from standard input: <detail>")
+
+        for key, args, note in (
+            (query_key, ["graph", "execute", "-r", self.roadmap],
+             "graph execute reading a directory as its query"),
+            (query_key, ["graph", "client", "-r", self.roadmap],
+             "graph client reading a directory as its query"),
+            (body_key, ["task", "comment-add", "-r", self.roadmap, "1", "--type", "NOTE"],
+             "task comment-add reading a directory as its body"),
+            (body_key, ["sprint", "comment-add", "-r", self.roadmap, "1", "--type", "FINDING"],
+             "sprint comment-add reading a directory as its body"),
+        ):
+            fd = os.open(str(self.test.home_dir), os.O_RDONLY)
+            try:
+                self.check_head(key, args, 1, ["stdin"], stdin_fd=fd, note=note)
+            finally:
+                os.close(fd)
 
     def test_web_errors(self):
         # #117: --port out of range (literal "70000" -- not a placeholder).
@@ -2162,7 +2689,7 @@ class TestErrorStringParity:
         os.chmod(roadmaps_dir, 0o000)
         try:
             self.check(
-                "Error: reading data directory <absolute path of ~/.roadmaps>: database error",
+                "Error: I/O error: reading data directory <absolute path of ~/.roadmaps>",
                 ["roadmap", "list"], 1,
                 subs={"<absolute path of ~/.roadmaps>": str(roadmaps_dir)},
                 note="unreadable data directory",
@@ -2364,6 +2891,166 @@ class TestErrorStringParity:
                 f"length {length}: expected {expected!r}, got {actual_line!r}"
             )
         REACHED.add("Error: Roadmap name must not exceed 50 characters (got N)")
+
+    # ------------------------------------------------------------------
+    # The serialisation-contention line (rmp task #384). It is the one
+    # published string whose condition needs a server on the other end of
+    # the socket, so it is driven against a scripted Bolt listener rather
+    # than against the CLI alone. The driver lives HERE, in the module that
+    # owns the corpus, because a case in another module would assert the
+    # same thing and still leave this module's coverage report red: the key
+    # is only accounted for by being marked in THIS module's REACHED set.
+    # ------------------------------------------------------------------
+
+    def test_graph_write_conflict_line_when_every_attempt_loses(self):
+        """SPEC/GRAPH.md acceptance criterion 55.
+
+        Driven against a server that answers every statement with the
+        serialisation conflict, `rmp graph client` exits 1 once the retry
+        policy is spent, writes zero bytes to stdout, and writes on stderr
+        exactly the line COMMANDS.md publishes -- compared character for
+        character, never as a prefix, because the distinction the line exists
+        to establish (contention as against an invalid statement) is carried
+        entirely by text `rmp` chooses.
+
+        The negative half is asserted too, and it is the half that matters:
+        the caller must NOT read the `graph query failed: ` line an invalid
+        statement produces. That line is what an exhausted retry printed
+        before this one existed, and the only thing separating the two was
+        the engine's diagnostic tail -- which COMMANDS.md deliberately
+        declines to specify (see EXEMPT_KEYS for that very row) and which a
+        caller therefore cannot lawfully match. A regression that folded the
+        conflict back onto the parse/execution row would still print a line
+        and would still exit 1; only an assertion about what the line is NOT
+        would notice.
+        """
+        key = (
+            "Error: graph engine error: graph write conflict: another writer "
+            "committed first on every attempt within the 2.5s retry budget; "
+            "nothing was written. The statement is valid \u2014 run it again, "
+            "and spread concurrent writes across distinct nodes."
+        )
+        assert key in CORPUS, (
+            "SPEC/COMMANDS.md no longer publishes the contention line this "
+            "case drives, or publishes it in different words"
+        )
+
+        socket_path = str(
+            self.test.home_dir / ".roadmaps" / self.roadmap / "graph.sock"
+        )
+        # No --socket: the binary derives the same path from the roadmap
+        # name, which is how a real server is found (GRAPH.md "Socket Path
+        # and Permissions", rule 1).
+        statement = ("MATCH (n:Component {key:'internal/graphclient'}) "
+                     "SET n.reviewed_at = '2026-09-03T00:00:00Z'")
+        args = ["graph", "client", "-r", self.roadmap, "--query", statement]
+
+        with ConflictingBoltServer(socket_path) as server:
+            rc, out, err = self.run_stdin(args)
+
+        actual_line = err.splitlines()[0] if err else ""
+
+        assert rc == 1, (
+            f"exit code {rc}, want 1: an exhausted retry policy is a database "
+            f"failure like every other the graph feature produces "
+            f"(GRAPH.md 'Error Handling and Exit Codes', rule 7)\n"
+            f"  stdout: {out!r}\n  stderr: {err!r}"
+        )
+        assert out == "", (
+            f"a failing invocation wrote to stdout: {out!r}. Nothing was "
+            f"written to the graph and nothing must be written to stdout"
+        )
+        assert actual_line == key, (
+            f"the contention line does not match SPEC/COMMANDS.md\n"
+            f"  file:      {SPEC_PATH} line(s) {CORPUS[key]}\n"
+            f"  published: {key!r}\n"
+            f"  captured:  {actual_line!r}\n"
+            f"  full stderr: {err!r}"
+        )
+        assert "graph query failed: " not in err, (
+            "the caller read the parse/execution line for a statement that "
+            "was valid. That is the confusion this line was published to end: "
+            "contention tells the caller to run the statement again, an "
+            "invalid statement tells it to correct one -- and the two courses "
+            f"are opposite. Captured: {err!r}"
+        )
+
+        # The invocation must actually have been RETRIED rather than failed
+        # on its first collision: a conflict is a normal outcome inside a
+        # server and is not surfaced on its first occurrence (GRAPH.md
+        # "Concurrency Inside the Server", rule 4). Without this, a client
+        # that surfaced the very first conflict would print the same line and
+        # this case would pass for the wrong reason.
+        assert server.runs >= 2, (
+            f"the listener saw {server.runs} RUN message(s); a serialisation "
+            f"conflict must be re-sent under the retry policy, not reported "
+            f"on its first occurrence"
+        )
+        # And the statement really did travel over a session the client
+        # established: resolution probes once, and each attempt connects
+        # again, so a failure raised before the RUN could not produce this.
+        assert server.connections >= 1 + server.runs, (
+            f"the listener accepted {server.connections} connection(s) for "
+            f"{server.runs} statement(s); expected the resolution probe plus "
+            f"one connection per attempt"
+        )
+
+        REACHED.add(key)
+
+    def test_graph_client_words_contention_and_a_bad_statement_differently(self):
+        """The property the contention line was published FOR, driven end to
+        end against the same binary and the same socket: two engine failures,
+        two different published lines, distinguishable without reading the
+        engine's diagnostic.
+
+        This is what makes the case above non-vacuous. A binary that printed
+        the contention line for EVERY server-reported failure would satisfy
+        criterion 55 on its own and would be no more use to a caller than the
+        single line the two conditions used to share. The contrast is
+        therefore driven rather than argued: the listener is asked to answer
+        with a syntax error instead of a conflict, nothing else changes, and
+        the caller must read the parse/execution line COMMANDS.md publishes
+        for that condition -- whose engine tail is exempt from comparison
+        here (EXEMPT_KEYS) but whose HEAD is `rmp`'s and is asserted.
+        """
+        socket_path = str(
+            self.test.home_dir / ".roadmaps" / self.roadmap / "graph.sock"
+        )
+        statement = "MATCH (n:Component RETURN n"
+
+        with ConflictingBoltServer(
+            socket_path,
+            failure_code="Neo.ClientError.Statement.SyntaxError",
+            failure_message='cypher: parse: unexpected "RETURN" at 1:21',
+        ) as server:
+            rc, out, err = self.run_stdin(
+                ["graph", "client", "-r", self.roadmap, "--query", statement]
+            )
+
+        actual_line = err.splitlines()[0] if err else ""
+
+        assert rc == 1, f"exit code {rc}, want 1; stderr={err!r}"
+        assert out == "", f"a failing invocation wrote to stdout: {out!r}"
+        assert actual_line.startswith(
+            "Error: graph engine error: graph query failed: "
+        ), (
+            "a statement the engine refused must carry the parse/execution "
+            f"line, whose head is `rmp`'s own text; got {actual_line!r}"
+        )
+        assert "graph write conflict" not in err, (
+            "an invalid statement was reported as contention. A caller acting "
+            "on that would re-run a statement that can only fail again, and a "
+            "write that is not idempotent would be run twice. Captured: "
+            f"{err!r}"
+        )
+
+        # A statement the engine refuses fails the same way every time and is
+        # NOT retried: retrying it would spend 2.5 seconds to reach the same
+        # answer (internal/graphclient.isRetriable).
+        assert server.runs == 1, (
+            f"the listener saw {server.runs} RUN message(s) for a syntax "
+            f"error; only a serialisation conflict is retried"
+        )
 
     # ------------------------------------------------------------------
     # Exemptions and final coverage accounting. test_zz_coverage_report is

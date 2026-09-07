@@ -8,7 +8,7 @@
 // NFC forms are equal — and states that Groadmap does not enforce it. It is a
 // convention the caller honours, so what the product owes is not prevention but
 // DETECTION. Step 1 of that detection is a read-only Cypher query the
-// specification publishes, run with `rmp graph query`, returning `id(n)`,
+// specification publishes, run with `rmp graph execute`, returning `id(n)`,
 // `labels(n)` and `n.key` for every keyed node. Step 2 cannot be Cypher: GoGraph's
 // function registry holds no normalising function, and a query calling one is
 // refused as an unknown function. So the grouping happens out here, over the rows
@@ -163,7 +163,7 @@ func Audit(rows []Row) []Violation {
 }
 
 // RowsFrom adapts one Graph Query Result — the columns and rows
-// `rmp graph query` publishes, as DATA_FORMATS.md § Graph Query Result defines
+// `rmp graph execute` publishes, as DATA_FORMATS.md § Graph Query Result defines
 // them — into the rows Audit consumes.
 //
 // Every failure it returns is carried by utils.ErrInvalidInput, because

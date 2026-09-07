@@ -68,7 +68,11 @@ FINDINGS_INDEX = {
     "#75": ("CWE-59", "FS", "os.Chmod follows a ~/.roadmaps symlink"),
     "#76": ("CWE-668", "WEB", "default bind 0.0.0.0, no auth"),
     "#78": ("CWE-276", "FS", "WAL/SHM sidecars inherit umask perms"),
-    "#79": ("CWE-863", "GRAPH", "DDL bypasses read-only guard-rail"),
+    # The control this finding named was WITHDRAWN by owner decision, not
+    # fixed: `rmp graph` no longer classifies a statement at all, so there is
+    # no read path for DDL to bypass. The probe below now pins the deliberate
+    # posture rather than reproducing a defect (sprint 41).
+    "#79": ("CWE-863", "GRAPH", "read-only DDL guard-rail withdrawn by decision"),
     "#82": ("CWE-116", "INPUT", "ANSI escape sequences stored verbatim"),
     "#83": ("CWE-176", "INPUT", "bidi override chars stored (Trojan Source)"),
     "#84": ("CWE-20", "INPUT", "audit history entity id lacks bounds check"),
@@ -439,30 +443,62 @@ class TestSecurityAudit:
             f"(roadmap home became {oct(_mode(rdir))})")
         assert proc.poll() is None, "the server must keep serving"
 
-    def test_defense_graph_guardrail_blocks_dml_writes(self):
-        """The read-only `graph query` path rejects every DML write clause,
-        including literal/comment/escape desync bypass attempts."""
-        rm = self.test.create_roadmap()
-        bypasses = [
-            "MATCH (n) CREATE (x:Hack) RETURN n",
-            "MATCH (n) WHERE n.x='a' SET n.y=1 RETURN n",
-            "MATCH (n) DETACH DELETE n",
-            "MERGE (x:Hack) RETURN x",
-            "MATCH (n) RETURN n // c\nCREATE (x:Hack)",
-            "MATCH (n) /* c */ CREATE (x:Hack) RETURN n",
-            "MATCH (n) CALL { CREATE (x:Hack) } RETURN n",
-            "UNWIND [1] AS x CREATE (:Hack {n:x})",
-            "MATCH (n) RETURN n; CREATE (x:Hack)",
-            "MATCH (n) FOREACH (x IN [1] | CREATE (:Hack)) RETURN n",
-            "MATCH (n) WHERE n.x='\\\\' CREATE (x:Hack) RETURN n",
-        ]
-        for q in bypasses:
-            code, _, _ = self._run(["graph", "query", "-r", rm, "--query", q])
-            assert code != 0, f"DML guard-rail bypassed by: {q!r} (exit {code})"
-        # No node was ever created.
-        rows = self._json(["graph", "query", "-r", rm,
+    def test_defense_graph_statement_cannot_reach_another_roadmaps_store(self):
+        """A statement runs against the graph of the roadmap `-r` names, and
+        against no other. Roadmap isolation is what remains of the graph's
+        security boundary and it is asserted here.
+
+        This test replaces `test_defense_graph_guardrail_blocks_dml_writes`,
+        which asserted that the read path refused every DML write clause. That
+        control was WITHDRAWN by owner decision rather than broken: `rmp graph`
+        has one subcommand, it does not classify a statement, and a statement
+        that writes is executed whatever it says
+        (SPEC/GRAPH.md section "What Groadmap Does Not Check", item 1). Keeping
+        the old assertion would have been asserting a control that the
+        specification says does not exist.
+
+        What that decision does NOT change is the boundary the store keeps: a
+        statement reaches one roadmap's graph directory, the directory is 0700,
+        and the lock file beside it is 0600. A caller who can read another
+        roadmap's graph already has the filesystem access to read it directly.
+        """
+        target = self.test.create_roadmap()
+        neighbour = self.test.create_roadmap()
+
+        # A write against `target`, of the shape the withdrawn guard rail used
+        # to refuse. It is expected to SUCCEED: the point of the test is where
+        # it lands, not whether it runs.
+        code, _, err = self._run(["graph", "execute", "-r", target, "--query",
+                                  "CREATE (s:Spec {key:'isolation-probe'})"])
+        assert code == 0, (
+            f"a write must execute: `rmp graph execute` refuses no statement for what "
+            f"it does (exit {code}, stderr={err!r})")
+
+        rows = self._json(["graph", "execute", "-r", target,
+                           "--query", "MATCH (n:Spec) RETURN n.key"])
+        assert rows["rows"] == [["isolation-probe"]], (
+            f"the write did not land in the roadmap it named: {rows!r}")
+
+        # The neighbour's graph is untouched, and the neighbour's graph
+        # directory was not even created by the write above.
+        neighbour_graph = Path(self.test.roadmaps_dir) / neighbour / "graph"
+        assert not neighbour_graph.exists(), (
+            f"a statement against {target!r} materialised {neighbour!r}'s graph store at "
+            f"{neighbour_graph}")
+        rows = self._json(["graph", "execute", "-r", neighbour,
                            "--query", "MATCH (n) RETURN count(n)"])
-        assert rows["rows"][0][0] == 0, "a write clause leaked past the guard-rail"
+        assert rows["rows"][0][0] == 0, (
+            f"a statement against {target!r} leaked into {neighbour!r}: {rows!r}")
+
+        # The boundary that carries the isolation: 0700 on the directory, 0600
+        # on the lock file Groadmap maintains inside it.
+        target_graph = Path(self.test.roadmaps_dir) / target / "graph"
+        assert _mode(target_graph) == 0o700, (
+            f"graph store directory is {oct(_mode(target_graph))}, want 0700")
+        lock = target_graph / "write.lock"
+        assert lock.exists(), "the advisory lock file was not created by a write"
+        assert _mode(lock) == 0o600, (
+            f"graph store lock file is {oct(_mode(lock))}, want 0600")
 
     def test_defense_web_user_content_is_html_escaped(self):
         """Task titles/fields containing markup are HTML-escaped by
@@ -602,20 +638,38 @@ class TestSecurityAudit:
             f"OPEN #78: WAL/SHM sidecars created group/other-accessible: "
             f"{sorted(set(insecure))}; expected 0600")
 
-    def test_finding_79_ddl_blocked_on_read_path(self):
-        """#79 CWE-863: schema DDL (CREATE/DROP INDEX, CREATE CONSTRAINT) must
-        be rejected by the read-only `graph query` guard-rail, not executed."""
+    def test_finding_79_ddl_control_withdrawn_and_ddl_now_executes(self):
+        """#79 CWE-863, WITHDRAWN. The finding was "DDL bypasses the read-only
+        guard-rail". There is no read-only guard-rail and no read path: `rmp
+        graph` publishes one subcommand, it does not classify a statement, and
+        schema DDL is one of the classes it is specified to run
+        (SPEC/COMMANDS.md section "Graph Management").
+
+        The probe is kept and inverted rather than deleted. Its job now is to
+        notice a refusal being REINTRODUCED without a change to the
+        specification: schema DDL must execute and take effect, and a well
+        formed statement must not be answered with the validation exit code the
+        withdrawn control used.
+        """
         rm = self.test.create_roadmap()
-        ddl = [
-            "CREATE INDEX idx FOR (n:L) ON (n.k)",
-            "DROP INDEX idx IF EXISTS",
-            "CREATE CONSTRAINT uq ON (n:N) ASSERT n.id IS UNIQUE",
-        ]
-        for q in ddl:
-            code, _, _ = self._run(["graph", "query", "-r", rm, "--query", q])
-            assert code != 0, (
-                f"OPEN #79: DDL accepted on read path: {q!r} (exit {code}); "
-                "the read-only guard-rail must reject DDL")
+        code, _, err = self._run(["graph", "execute", "-r", rm, "--query",
+                                  "CREATE INDEX spec_key FOR (n:Spec) ON (n.key)"])
+        assert code == 0, (
+            f"schema DDL must execute (exit {code}, stderr={err!r}); the operation-class "
+            f"refusal was withdrawn and must not be reintroduced without a SPEC change")
+
+        listing = self._json(["graph", "execute", "-r", rm, "--query", "SHOW INDEXES"])
+        names = {row[listing["columns"].index("name")] for row in listing["rows"]}
+        assert "spec_key" in names, (
+            f"the DDL exited 0 without taking effect; SHOW INDEXES reports {names!r}")
+
+        code, _, err = self._run(["graph", "execute", "-r", rm, "--query",
+                                  "DROP INDEX spec_key IF EXISTS"])
+        assert code == 0, f"DROP INDEX must execute (exit {code}, stderr={err!r})"
+        listing = self._json(["graph", "execute", "-r", rm, "--query", "SHOW INDEXES"])
+        names = {row[listing["columns"].index("name")] for row in listing["rows"]}
+        assert "spec_key" not in names, (
+            f"the DROP exited 0 without taking effect; SHOW INDEXES reports {names!r}")
 
     def test_finding_82_ansi_escape_rejected_or_sanitised(self):
         """#82 CWE-116/150: ANSI terminal control bytes (ESC, 0x1b) must not be
@@ -738,7 +792,7 @@ class TestSecurityAudit:
         self._run(["roadmap", "create", rm], check=True)
         # Seed a graph node whose property carries a </script> breakout token.
         code, _, _ = self._run([
-            "graph", "create", "-r", rm, "--query",
+            "graph", "execute", "-r", rm, "--query",
             "CREATE (n:Note {key:'</script><img src=x onerror=alert(1)>'})"])
         if code != 0:
             # Fallback: some builds expose graph writes differently; the finding

@@ -414,7 +414,7 @@ func TestSprintAssignment_TaskIDParseRunsAgainstTaskExistence(t *testing.T) {
 	err = runAssignment(t, func() error {
 		return sprintAddTasks([]string{"-r", f.roadmap, itoa(f.planned), itoa(absentTask)})
 	})
-	assertRefusal(t, err, exitAbsentEntity, fmt.Sprintf("[%d]", absentTask),
+	assertRefusal(t, err, exitAbsentEntity, fmt.Sprintf("task %d not found", absentTask),
 		"control: the task-existence step refuses this id when every token parses, so the probe "+
 			"above really did suppress a second failure")
 }
@@ -451,7 +451,7 @@ func TestSprintAssignment_MembershipRunsBeforeExecution(t *testing.T) {
 		return
 	}
 
-	assertRefusal(t, err, exitNotMember, fmt.Sprintf("task(s) not in sprint #%d", f.running),
+	assertRefusal(t, err, exitNotMember, fmt.Sprintf("is not in sprint #%d", f.running),
 		fmt.Sprintf("%s %s puts %s ahead of %s", assignmentSpecRelPath, assignmentHeading,
 			stepMembership, stepExecute))
 

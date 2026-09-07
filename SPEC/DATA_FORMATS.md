@@ -26,7 +26,7 @@
 ### Input
 
 **Application inputs are via CLI parameters. Exactly two flag values may also
-arrive on standard input: the Cypher query of the `graph` subcommands, and the
+arrive on standard input: the Cypher statement of `graph execute`, and the
 comment body of the comment subcommands of the `task` and `sprint` families.**
 
 - No JSON input
@@ -34,7 +34,7 @@ comment body of the comment subcommands of the `task` and `sprint` families.**
 - No interactive input
 - **Standard input:** used as an alternative source for exactly two flag values,
   and by no other command:
-  - the `--query` Cypher string of the `graph` subcommands (see
+  - the `--query` Cypher string of `graph execute` (see
     `GRAPH.md § Cypher Input Source and Precedence`);
   - the `--body` comment text of `comment-add` and `comment-edit` under `task`
     and `sprint` (see
@@ -119,6 +119,44 @@ YYYY-MM-DDTHH:mm:ss.sssZ
 2. **With milliseconds**: 3 digits after the dot
 3. **Z suffix**: Explicit UTC indicator
 4. **T separator**: Between date and time
+
+### Scope
+
+The format binds **every timestamp Groadmap generates**, wherever the product
+writes it — not only the ones that reach a JSON object on stdout. It governs a
+roadmap database's stored timestamps, an audit entry's `timestamp`, those same
+values rendered into JSON output, and the `time` attribute of every diagnostic
+record the two long-lived surfaces write to stderr: `rmp web` (see
+`WEB.md § Logger Configuration`, rule 5) and `rmp graph serve` (see
+`GRAPH.md § Server Diagnostics on Stderr`).
+
+It does **not** govern a temporal value that is data a caller stored in the
+knowledge graph. Those are the caller's values, of six distinct types, and each
+is rendered in the ISO 8601 form of its own type; see
+[Graph Query Result](#graph-query-result), **Temporal values**, which states that
+boundary in full.
+
+**A record whose message came from a dependency is inside this rule rather than
+outside it.** The graph server's stderr carries records the graph engine
+produces, and it is tempting to read those as output the product merely relays
+and is therefore not answerable for. That reading fails on the point that
+matters: the engine supplies the message and its attributes, and Groadmap's own
+handler supplies the timestamp, because `log/slog` builds the `time` attribute
+inside the handler rather than at the call site. Groadmap generates those
+timestamps, so this rule binds them. The narrower reading — that the rule covers
+only output whose **message** the product wrote — would also exempt the web
+server's records, which carry database and engine error text inside them and
+which `WEB.md` already requires to be UTC.
+
+**One realisation of the format, not the rule restated in each place.** Every
+surface that stamps a timestamp MUST use the project's single implementation of
+this format rather than expressing it again locally
+(`ARCHITECTURE.md § Modules and Responsibilities` names the module that owns date
+handling). Two expressions of one format is how two surfaces come to answer one
+question differently: one of them is corrected and the other is not, and nothing
+between them notices. A surface that expresses the rule locally satisfies it for
+itself and for nothing else, which is the failure this requirement exists
+against.
 
 ---
 
@@ -387,10 +425,20 @@ receives.
 
 ## Graph Query Result
 
-The read graph subcommands (`rmp graph query` and `rmp graph search`) return the
-result of a Cypher query as a single JSON object to stdout. The shape exposes the
-result's columns and its rows, mirroring the GoGraph engine result, which exposes
-the ordered column names (`Columns()`) and an iterable sequence of records.
+`rmp graph execute` returns the result of a Cypher statement that produces result
+columns as a single JSON object to stdout, and `rmp graph client` returns the same
+object for the same statement (see [Graph Client Result](#graph-client-result)). The shape exposes the result's columns
+and its rows, mirroring the GoGraph engine result, which exposes the ordered
+column names (`Columns()`) and an iterable sequence of records. A statement that
+produces no columns returns the shape in [Graph Write Result](#graph-write-result)
+instead, unless it was written with an `EXPLAIN` or `PROFILE` prefix, which
+always returns this shape.
+
+A statement written with one of those two prefixes adds exactly one member to
+this object: `plan` for an `EXPLAIN`, `profile` for a `PROFILE`. Both are
+optional, at most one is ever present, and each holds the recursive object
+[Graph Plan Node](#graph-plan-node) defines. A statement written with neither
+prefix carries neither key, and its object is unchanged in every byte.
 
 This is the canonical specification of the graph read-result shape. The command
 contract that references it is `COMMANDS.md § Graph Management`; the feature
@@ -408,28 +456,61 @@ design is in `GRAPH.md`.
 }
 ```
 
+The same statement written with an `EXPLAIN` prefix, which executes nothing and
+so returns the declared columns with no rows:
+
+```json
+{
+  "columns": ["s.key", "c.path"],
+  "rows": [],
+  "plan": {
+    "operator": "Project",
+    "detail": "s.key, c.path",
+    "estimatedRows": 12,
+    "estimatedRowsSource": "stats"
+  }
+}
+```
+
 Field reference:
 
 | Field | Type | Description |
 |-------|------|-------------|
 | `columns` | array of string | The ordered return-column names of the query (the engine's `Columns()`). One entry per returned expression, in the order the query declares them. |
 | `rows` | array of array | One inner array per record, in the order the engine yields records. Each inner array has exactly `columns.length` cells, positionally aligned with `columns`. |
+| `plan` | object, omitted unless present | The plan the engine built for a statement written with an `EXPLAIN` prefix, as [Graph Plan Node](#graph-plan-node) defines it. Its figures are the planner's **estimates**: the statement was not executed. |
+| `profile` | object, omitted unless present | The plan the engine ran for a statement written with a `PROFILE` prefix, as [Graph Plan Node](#graph-plan-node) defines it. Its figures are **measurements** of that run. |
 
 Rules:
 
 1. `columns` and `rows` are always present. A query that matches nothing returns
    its declared `columns` and an empty `rows` array (`[]`), never `null`.
-2. A query that returns no columns (for example a write run through a read path,
-   which the guard rail forbids) is not a valid read result; read subcommands
-   always declare at least one return column.
+2. A statement that returns no columns does not produce this shape at all; it
+   produces the `{"ok": true}` object of
+   [Graph Write Result](#graph-write-result). This shape is the answer to a
+   statement that declares at least one result column. The one exception is a
+   statement written with an `EXPLAIN` or `PROFILE` prefix, which produces this
+   shape whether or not it declares a column: rule 6 below.
 3. Each row cell is a JSON value produced by the property-type mapping below.
 4. The result is pretty-printed with two-space indentation and a trailing
    newline, consistent with all other JSON output (see
    [Implementation Notes](#implementation-notes)).
+5. `plan` and `profile` are mutually exclusive and both are optional. At most one
+   appears in any object, and neither appears for a statement written with no
+   prefix. A consumer decides which kind of figure it is holding by **which key
+   carried the tree**, and by nothing inside the tree: an estimate and a
+   measurement are otherwise written identically, and the two keys are what keep
+   them apart (see
+   `GRAPH.md § Query Plans: The EXPLAIN and PROFILE Prefixes`, rule 7).
+6. A prefixed statement that declares no result columns publishes `columns` and
+   `rows` as empty arrays alongside its plan, rather than the `{"ok": true}`
+   object. `EXPLAIN CREATE (n:Spec {key:'auth'})` is the case that arises: it
+   executes nothing, so `{"ok": true}` would report a success identical to the
+   one a committed `CREATE` reports.
 
 ### Property-Type Mapping
 
-GoGraph property values carry Go types. Each maps to JSON as follows:
+GoGraph property values are typed. Each type maps to JSON as follows:
 
 | GoGraph value type | JSON representation | Notes |
 |--------------------|---------------------|-------|
@@ -437,9 +518,72 @@ GoGraph property values carry Go types. Each maps to JSON as follows:
 | `int64` | JSON number (integer) | Emitted without a decimal point. JSON numbers are IEEE-754 doubles in many consumers; values outside the safe integer range (beyond ±2^53) may lose precision on the consumer side. The CLI emits the exact integer; precision loss, if any, is the consumer's concern. |
 | `float64` | JSON number | Emitted in the standard Go float format. `NaN`, positive infinity, and negative infinity are not valid JSON numbers; when the engine produces any of them, they are emitted as JSON `null`. |
 | `bool` | JSON boolean | `true` / `false`. |
-| `time.Time` | JSON string | ISO 8601 UTC with milliseconds and a `Z` suffix, identical to every other timestamp in Groadmap (see [Dates - ISO 8601 with UTC](#dates---iso-8601-with-utc)). |
+| A temporal value | JSON string | One of six kinds, each written in the ISO 8601 form of **its own type** rather than as an instant in UTC. The six do not share one shape, and none of them is the timestamp format of [Dates - ISO 8601 with UTC](#dates---iso-8601-with-utc). See **Temporal values** below. |
 | `[]byte` | JSON string | Base64-standard-encoded (RFC 4648) so arbitrary bytes survive JSON transport. |
 | absent / null property | JSON `null` | A returned expression that has no value is `null`. |
+
+**Temporal values.** The engine's value model has six temporal kinds, and each is
+written in the ISO 8601 form of its own type. These are the renderings:
+
+| Temporal kind | Rendering | Examples |
+|---------------|-----------|----------|
+| Date | The calendar date alone. | `2026-03-05` |
+| Time | The time of day, followed by the offset the value itself carries. | `14:23:47+02:00`, `14:23:47.12+02:00`, `14:23:47Z` |
+| Local time | The time of day, with no offset. | `14:23:47`, `14:23:47.12` |
+| Date and time | Converted to UTC first, then written as the date, `T`, the time, and a `Z` suffix. | `2026-03-05T12:23:47.123456789Z`, `2026-03-05T14:23:47.12Z`, `2026-03-05T14:23:47Z` |
+| Local date and time | The date, `T`, and the time, with no offset. | `2026-03-05T14:23:47`, `2026-03-05T14:23:47.12` |
+| Duration | The ISO 8601 duration form. | `P1Y2M3DT4H5M6S`, `PT0S` |
+
+**Why the mapping is per kind rather than one shape.** A graph temporal is a value
+the caller's own statement produced, of one of six distinct types. It is not a
+Groadmap-generated instant, and the six do not share an instant's shape: writing
+them all as an instant in UTC is impossible for a duration, which is not an
+instant at all, and false for the three kinds that carry no offset. Rendering each
+kind in the ISO 8601 form of its own type is also what the query language's own
+string conversion of a temporal produces, so the published format follows the
+language rather than departing from it.
+
+Four consequences bind a consumer, and none may be assumed away:
+
+1. **The fractional second is variable-width, and it is often absent.** Every
+   kind that can carry one — a time, a local time, a date and time, and a local
+   date and time — writes it with between zero and nine digits: trailing zeros are
+   trimmed, and a whole second is written with no fraction and no dot at all. A
+   date and time of `2026-03-05T14:23:47.120Z` is published as
+   `2026-03-05T14:23:47.12Z`; the same value with a zero fraction is published as
+   `2026-03-05T14:23:47Z`; and one with nanosecond precision keeps all nine
+   digits. Nothing rounds and nothing pads: the width follows the value. A
+   consumer MUST parse the fraction as optional and of variable length, and MUST
+   NOT expect the three digits of
+   [Dates - ISO 8601 with UTC](#dates---iso-8601-with-utc). The variable width is
+   a hazard rather than a convenience — a consumer written against a fixed `.sss`
+   field parses the three-digit case and breaks on every other — and it is
+   published plainly here for that reason.
+2. **Three of the six kinds carry no offset, and none is written for them.** A
+   date, a local time, and a local date and time are zoneless by definition;
+   appending `Z` to any of them would assert an offset the value does not hold.
+3. **A time keeps its own offset; a date and time does not.** A date and time is
+   converted to UTC before it is written, so a value at `+02:00` is published with
+   a `Z` and a shifted clock reading. A time is written with the offset it
+   carries, so a value at `+02:00` is published with `+02:00` and an unshifted
+   clock reading. The mapping is not uniform across those two kinds, and a
+   consumer that reads an offset MUST read the one it is given rather than assume
+   UTC.
+4. **A duration is not an instant** and has no timestamp form at all. It is
+   written in the ISO 8601 duration form, which no timestamp parser accepts.
+
+**This is not the format Groadmap uses for its own timestamps.**
+[Dates - ISO 8601 with UTC](#dates---iso-8601-with-utc) fixes the shape of every
+timestamp Groadmap generates — a task's `created_at`, an audit entry's
+`timestamp` — and that shape is a fixed-width instant in UTC. A graph temporal is
+a caller's value carried through the engine and published as the kind it is. The
+two formats coincide only for a date and time whose fractional second happens to
+have exactly three significant digits.
+
+The renderings above govern every surface that publishes a graph value: the
+`{columns, rows}` shape of this section, the identical shape
+[Graph Client Result](#graph-client-result) requires of `rmp graph client`, and
+the node and edge properties of [Graph View Data](#graph-view-data).
 
 ### Graph element mapping
 
@@ -473,11 +617,261 @@ Rules:
    `name`) for stable identity, following the conventions in
    `GRAPH.md § Multi-Layer Modelling Conventions`.
 
+### One Realisation of the Mapping
+
+The two sections above are canonical for **what** the mapping produces, and this
+section changes none of it. It fixes the question they do not answer: **how many
+times the mapping may be written**. The answer is once.
+
+**One realisation of the mapping, not the mapping restated per surface.** Every
+surface that turns an engine value into published JSON MUST use the project's
+single implementation of [Property-Type Mapping](#property-type-mapping), and of
+the Node and Relationship rows of
+[Graph element mapping](#graph-element-mapping), rather than expressing either
+again locally. Three surfaces are bound by the rule: `rmp graph execute`,
+`rmp graph client` (see [Graph Client Result](#graph-client-result)), and the web
+interface's graph data endpoint (see [Graph View Data](#graph-view-data)).
+`ARCHITECTURE.md § Modules and Responsibilities` is canonical for the package
+that holds the realisation and for why it is a package rather than a function
+inside one of its callers.
+
+Two expressions of one mapping is how two surfaces come to answer one question
+differently: one of them is corrected and the other is not, and nothing between
+them notices. Every side a test normally watches stays quiet while it happens.
+Both copies keep compiling, because neither calls the other; both keep passing,
+because each is exercised against itself where it is exercised at all; and the
+divergence becomes visible only to a reader holding a CLI row and a web node's
+properties side by side. A surface that expresses the mapping locally satisfies
+this specification for itself and for nothing else, which is the failure this
+requirement exists against.
+
+**The rule is enforced rather than described.** `internal/testenv` fails the
+build if a second realisation of either mapping appears anywhere in production
+source, in the way it already fails the build for a second engine construction
+and a second snapshot write (`ARCHITECTURE.md § Modules and Responsibilities`,
+module 8). A static gate is the instrument this class of rule takes in this
+project, and it is the right instrument here rather than a test that compares two
+implementations and asserts they agree: once the second copy is gone there is
+nothing left to compare, and what remains to be prevented is a third copy
+appearing later.
+
+**What each surface still owns.** The rule binds the mapping from a value to its
+JSON. It does not bind the document that JSON is placed in, and the two documents
+are not the same one.
+
+| Surface | The document it publishes | What it takes from the single realisation |
+|---------|---------------------------|-------------------------------------------|
+| `rmp graph execute` and `rmp graph client` | The `{columns, rows}` object of [Graph Query Result](#graph-query-result) | Every top-level result cell, of whatever kind, and everything nested inside one |
+| The graph data endpoint | The node-and-edge object of [Graph View Data](#graph-view-data) | The Node and Relationship shapes, and the `properties` object inside each |
+
+**Only the CLI publishes a path, so the Path row is not shared.** The graph data
+endpoint publishes no path object at all: a path in a result is decomposed into
+the nodes and relationships it contains, each collected once and placed in the
+node and edge arrays (see [Graph View Data](#graph-view-data), rule 3). The Path
+rendering of [Graph element mapping](#graph-element-mapping) therefore already
+has one realisation, because one surface produces it, and it stays with the
+surface that does.
+
+**A property value is never a graph element, and sharing the mapping does not
+make it one.** Two independent grounds establish it, and the conclusion needs
+only one of them. The storage boundary: the store's property representation has
+no encoding for a node, a relationship, a path, or a map, and the conversion back
+from it cannot construct one, so a property read back is never one of the four
+whatever a statement attempted to write. And measurement: a statement that
+assigns a node, a relationship, or a path to a property leaves that key absent
+from the entity when a later process reads it.
+
+**Do not read that as a uniform refusal.** How the attempt is turned away depends
+on the form of the statement rather than on the value: on some write paths the
+engine raises `InvalidPropertyType`, and on others the statement is accepted,
+reports success, and stores nothing. Which paths do which is engine behaviour of
+the class `GRAPH.md § What Groadmap Does Not Check` exists to catalogue; this
+section neither settles it nor rests on it, because the conclusion above holds on
+every path either way. What this section settles is that conclusion alone: the
+element rows of the shared realisation are reached from a top-level result cell
+and from nowhere else.
+
+Giving a surface that only ever maps property bags a realisation which also
+carries those rows therefore widens neither what that surface can publish nor any
+JSON a request can produce. It changes exactly one thing, and only in a case no
+input can construct: an element found where a property belongs is rendered as the
+object this specification requires, instead of as whatever a surface that never
+expected one fell back to.
+
+**What preserves the byte identity.**
+[Graph Client Result](#graph-client-result) requires the bytes `rmp graph client`
+writes to be the bytes `rmp graph execute` writes for the same statement — bar
+the one measured duration named in that section's rule 5, which is a property of
+the execution rather than of the mapping — and that identity holds by
+construction rather than by inspection: a result that
+crossed the protocol is mapped back onto the engine's value model rather than
+onto JSON, so both paths run one serialiser over one representation. The single
+realisation gives the third surface the same standing. What the graph data
+endpoint must match is not a whole document — it publishes a different one — but
+every value and every element object inside it, and under this rule those match
+because one piece of code produced them, not because two pieces were compared and
+found to agree.
+
+## Graph Plan Node
+
+A plan node is the recursive object that the `plan` and `profile` members of
+[Graph Query Result](#graph-query-result) carry. It is one operator of the query
+plan the engine built, together with the operators that feed it. The same shape
+serves both members: what differs between an `EXPLAIN` and a `PROFILE` is which
+keys are present, never what a present key means.
+
+This is the canonical specification of the plan-node shape. The behaviour that
+produces it — what each prefix does, which statements each admits, and why the
+two members are two rather than one — is in
+`GRAPH.md § Query Plans: The EXPLAIN and PROFILE Prefixes`; the command contract
+is `COMMANDS.md § Graph Management`.
+
+### Shape
+
+A `profile` tree, which carries every key the shape defines:
+
+```json
+{
+  "operator": "Project",
+  "detail": "s.key",
+  "estimatedRows": 12,
+  "estimatedRowsSource": "stats",
+  "rows": 9,
+  "timeNs": 1482310,
+  "children": [
+    {
+      "operator": "Filter",
+      "detail": "s.status = 'implemented'",
+      "estimatedRows": 12,
+      "estimatedRowsSource": "heuristic",
+      "rows": 9,
+      "timeNs": 1104986,
+      "rowsRemovedByFilter": 35,
+      "children": [
+        {
+          "operator": "NodeByLabelScan",
+          "detail": "s:Spec",
+          "estimatedRows": 44,
+          "estimatedRowsSource": "exact",
+          "rows": 44,
+          "timeNs": 815402,
+          "dbHits": 44
+        }
+      ]
+    }
+  ]
+}
+```
+
+### Field reference
+
+| Field | Type | Presence | Description |
+|-------|------|----------|-------------|
+| `operator` | string | Always | The operator's type name, for example `NodeByLabelScan` or `HashJoin`. It is the name of the operator that actually runs, taken from the operator itself rather than reconstructed from the planner's decisions. |
+| `detail` | string | Omitted when empty | The physical decision the operator took, worth reading beside its name: the label it scans, the index it seeks, the pattern it expands. An operator with nothing to add carries no key. |
+| `children` | array of plan node | Omitted when empty | The operators this one draws its rows from, in **execution** order. For an asymmetric operator that is the order that explains the cost: a join's build side before its probe side, an apply's outer before its inner. A leaf carries no key. |
+| `estimatedRows` | integer | Present only with `estimatedRowsSource` | The planner's predicted row count for this operator. It is a prediction made before anything ran, and it is the only figure an `EXPLAIN` has. |
+| `estimatedRowsSource` | string | Present only with `estimatedRows` | Where the estimate came from, and therefore how far it may be trusted. Exactly one of `exact`, `stats`, `heuristic`. |
+| `rows` | integer | `profile` only | The number of rows the operator emitted. Measured. |
+| `timeNs` | integer | `profile` only | The wall-clock time attributed to the operator, in whole nanoseconds. Measured, and **inclusive of the operator's children**. |
+| `dbHits` | integer | `profile` only, and omitted when the figure was not counted | The number of storage record accesses charged to the operator. |
+| `rowsRemovedByFilter` | integer | `profile` only, and omitted when the operator has no rejection mechanism | The number of candidate rows the operator read and then discarded because a predicate said no. |
+
+### Rules
+
+1. **`operator` is always present and is never empty.** Every other key may be
+   absent, and a consumer must treat every other key as optional.
+2. **No key beyond the nine above appears.** The engine's plan node carries
+   information this shape does not publish, and the protocol carries fields of
+   its own; neither is passed through. A consumer may rely on the key set being
+   closed, and an addition to it is a change to this section.
+3. **`children` is ordered and the order is meaningful.** It is execution order,
+   not an arbitrary traversal, and a consumer that reorders it destroys the one
+   thing the order was carrying.
+4. **`estimatedRows` and `estimatedRowsSource` appear together or not at all.**
+   An estimate with no provenance is a bare number a reader cannot weigh, and a
+   provenance with no number says nothing; the pair is written as a pair.
+5. **An absent estimate is an absent estimate, not a zero.** An operator the
+   planner attributed no estimate to, and an operator whose backing statistic was
+   absent or stale, both omit the pair. Publishing a number for either would
+   fabricate one. A genuine estimate of zero is published as `0`.
+6. **`estimatedRows` is published for an `EXPLAIN` as well as for a `PROFILE`,
+   and it is the same number in both.** It is what the planner predicted, and the
+   planner predicted it before either statement ran. Placing it beside the
+   measured `rows` of a `profile` tree is the point: the two are readable against
+   each other in one object, which is what makes a bad estimate visible.
+7. **`rows`, `timeNs`, `dbHits` and `rowsRemovedByFilter` never appear in a
+   `plan` tree.** An `EXPLAIN` executes nothing, so it measured nothing; a `rows`
+   of `0` on an operator that never ran would read as an operator that produced
+   no rows. The four keys are the measured figures, and only a `profile` tree has
+   any.
+8. **`dbHits` is omitted when the figure was never counted, and is never
+   published as `0` in its place.** The engine distinguishes an operator whose
+   accesses were counted and came to zero — which publishes `0` — from an
+   operator whose accesses nobody counted, which publishes no key. A reader must
+   read an absent `dbHits` as "not counted" and never as "none". This is the
+   distinction the engine's own text rendering draws by printing `?`, and
+   collapsing it here would give a caller a measurement that was never taken.
+9. **`dbHits` counts access-path record reads and never property reads.** This
+   diverges from Neo4j, which additionally charges one hit per property read, and
+   the divergence is published because a caller comparing figures across the two
+   products otherwise concludes this one is wrong. It is not: it counts a
+   different quantity, and it counts that quantity exactly. A present `dbHits` is
+   in some cases counted by the operator and in others derived from the rows it
+   emitted, under a contract that asserts one record read per row; the published
+   key does not say which, and a consumer must not infer it. The distinction the
+   key does carry is the one rule 8 fixes — present against absent — and that is
+   the distinction a reader acts on.
+10. **`rowsRemovedByFilter` is published as `0` when the operator rejected
+    nothing, and is omitted only when the operator has no rejection mechanism at
+    all.** The asymmetry against rule 8 is deliberate and must not be
+    "harmonised". There, an absent key admits a figure exists and was not
+    counted. Here, an absent key states there is no figure to have — and a
+    present `0` is a finding in its own right, because a filter that rejected
+    nothing is exactly what a reader of a slow plan wants to see.
+11. **`timeNs` is inclusive of the node's children.** An operator's figure covers
+    everything it drew from the operators beneath it. Summing the `timeNs` of a
+    tree's nodes double-counts every level; the root's figure is the one that
+    describes the statement.
+12. **`timeNs` publishes the engine's whole-nanosecond figure and derives
+    nothing from it.** The engine measures a duration in nanoseconds and the
+    protocol carries that same integer, so both surfaces that publish this key
+    already hold one identical whole number, and publishing it unchanged makes
+    the byte identity
+    [Graph Client Result](#graph-client-result) requires **exact by
+    construction**. A millisecond value would have been friendlier to read and
+    would have put that guarantee at the mercy of two floating-point formatters
+    agreeing on a last digit — a guarantee the specification would then be
+    asserting rather than holding. A consumer that wants milliseconds divides;
+    the division is a consumer's rounding decision, and it is not one this
+    format takes on its behalf.
+13. **A logical plan node carries `operator` and `children` and nothing else.**
+    A writing statement has no physical operator tree outside a transaction, so
+    `EXPLAIN` captures its logical plan instead
+    (`GRAPH.md § Query Plans: The EXPLAIN and PROFILE Prefixes`, rule 5). In such
+    a tree `operator` is the plan line as the engine writes it, with any detail
+    already inside that string, and neither `detail` nor the estimate pair is
+    present. A consumer that parses `operator` as a bare operator type name is
+    correct for every reading statement and wrong for this one, which is why the
+    case is published here rather than left to be discovered.
+14. **The tree has one realisation, shared by `rmp graph execute` and
+    `rmp graph client`.** A plan that crossed the protocol is mapped back onto
+    the engine's own plan representation and then serialised by the same code
+    that serialises a plan captured in process — the same construction, and for
+    the same reason, that
+    [One Realisation of the Mapping](#one-realisation-of-the-mapping) applies to
+    values. The byte identity
+    [Graph Client Result](#graph-client-result) requires is therefore a property
+    of the code rather than an assertion policed by comparison. Mapping the
+    protocol's own plan encoding straight to JSON would create a second
+    realisation of this section, free to drift from the first.
+
 ## Graph Write Result
 
-The write graph subcommands (`rmp graph create`, `rmp graph update`,
-`rmp graph delete`) mirror what the executed statement returns. The discriminator
-is whether the statement produces **result columns**:
+`rmp graph execute` mirrors what the executed statement returns, and
+`rmp graph client` mirrors it identically (see
+[Graph Client Result](#graph-client-result)). The discriminator is whether the
+statement produces **result columns**:
 
 1. **The statement produces result columns:** the output is the standard
    read-result shape defined in [Graph Query Result](#graph-query-result) — a
@@ -497,16 +891,29 @@ one. The `{"ok": true}` object is the success signal for a statement that return
 data.
 
 **Why the discriminator is the columns and not the `RETURN` clause.** For every
-data-writing query the two coincide exactly: a `CREATE`, `MERGE`, `SET`,
-`REMOVE`, `DELETE`, or `DETACH DELETE` query produces columns when, and only
+data-writing statement the two coincide exactly: a `CREATE`, `MERGE`, `SET`,
+`REMOVE`, `DELETE`, or `DETACH DELETE` statement produces columns when, and only
 when, it carries a `RETURN` clause. They part company on the schema statements
-`rmp graph update` also accepts (see `GRAPH.md § Schema Management`). A
-schema-introspection command — `SHOW INDEXES` and its siblings — produces columns
-while carrying no `RETURN` clause, so it returns the `{columns, rows}` shape, and
-the listing it returns is identical to the one the same command returns under
-`rmp graph query`. A schema-mutating statement — `CREATE INDEX`, `DROP INDEX`,
-`CREATE CONSTRAINT`, `DROP CONSTRAINT` — produces no columns and returns
-`{"ok": true}`.
+(see `GRAPH.md § Schema Management`). A schema-introspection command —
+`SHOW INDEXES` and its siblings — produces columns while carrying no `RETURN`
+clause, so it returns the `{columns, rows}` shape. A schema-mutating statement —
+`CREATE INDEX`, `DROP INDEX`, `CREATE CONSTRAINT`, `DROP CONSTRAINT` — produces no
+columns and returns `{"ok": true}`.
+
+**A statement written with an `EXPLAIN` or `PROFILE` prefix never produces this
+shape.** It is the one statement class the discriminator above does not govern:
+whatever it declares, it returns the shape of
+[Graph Query Result](#graph-query-result) carrying its plan, with `columns` and
+`rows` empty where it declares no column. The reason is that `{"ok": true}` is a
+claim, not a placeholder — it says a statement succeeded in committing what it
+was asked to commit — and an `EXPLAIN` commits nothing and was not asked to.
+Publishing it here would make `EXPLAIN CREATE (n:Spec)` indistinguishable on
+stdout from the `CREATE` that ran, which is the confusion the prefix exists to
+prevent. The exception costs nothing in compatibility, because the output of a
+prefixed statement has no earlier contract to break while an unprefixed
+statement's output is unchanged byte for byte;
+`GRAPH.md § Query Plans: The EXPLAIN and PROFILE Prefixes`, rules 8 and 9, is
+canonical for that reasoning and this section does not restate it.
 
 Field reference (no-columns case):
 
@@ -542,35 +949,165 @@ A write query that ends with `RETURN n` (same shape as a read result):
 
 ---
 
+## Graph Client Result
+
+`rmp graph client` writes the result of the statement it sent to a running graph
+server as JSON to stdout. **The shape is not a new one: it is exactly the shape
+`rmp graph execute` writes for the same statement against the same graph**, and
+this section exists to fix that identity and the mapping that makes it hold, not
+to describe a second format.
+
+1. A statement that produces result columns returns the `{columns, rows}` shape of
+   [Graph Query Result](#graph-query-result).
+2. A statement that produces none returns exactly `{"ok": true}`, the shape of
+   [Graph Write Result](#graph-write-result).
+3. A statement written with an `EXPLAIN` or `PROFILE` prefix returns the shape of
+   [Graph Query Result](#graph-query-result) carrying its `plan` or `profile`
+   member, whether or not it declares a result column.
+4. All three are pretty-printed with two-space indentation and a trailing newline,
+   consistent with all other JSON output (see
+   [Implementation Notes](#implementation-notes)).
+
+**The identity is a requirement, not an observation.** For any statement and any
+graph, the bytes `rmp graph client` writes to stdout are the bytes
+`rmp graph execute` writes for that statement against that graph, with the single
+exception rule 5 below states. The same requirement binds `rmp graph execute`
+itself when it reaches a running server rather than the store, which it does
+whenever one is listening (see `GRAPH.md § Server Resolution`): the surface a
+statement was executed through is not observable in the JSON. A caller may
+therefore parse one shape and change nothing when a server is started or stopped.
+
+5. **The identity binds every value that is a property of the statement and the
+   graph. It does not bind `timeNs`, and no implementation could make it.** That
+   key is a wall-clock measurement of the execution that produced it (see
+   [Graph Plan Node](#graph-plan-node), rules 11 and 12). `rmp graph execute` and
+   `rmp graph client` are two executions, so they measure two durations, and two
+   correct measurements of two runs are not obliged to agree. A figure that
+   differs between them is not a defect in either: it is the key doing what it
+   exists to do.
+
+   **What a caller may rely on is therefore everything but the clock.** For any
+   statement, the two surfaces publish the same key set, the same structure, the
+   same member order, the same plan-tree shape, and the same value under every
+   key other than `timeNs` — including `rows`, `dbHits`, `rowsRemovedByFilter`
+   and the estimate pair, each of which describes the statement and the graph
+   rather than the run's duration. A consumer comparing the two surfaces compares
+   everything except the clock, and a statement carrying neither prefix, or
+   carrying `EXPLAIN`, has no `timeNs` at all and is therefore identical in every
+   byte.
+
+   **This is narrower than the guarantee stated in the paragraph above, and it is
+   narrow on purpose.** A wider claim would be one the specification could not
+   hold: a test written against it verbatim would compare two clocks and fail
+   whenever they disagreed, which is a flaky test asserting a false requirement
+   rather than a real one going unchecked. What is genuinely identical is the
+   **mapping** — one realisation over one representation, as the paragraphs below
+   establish — and the mapping is exactly what governs every key the exception
+   does not name.
+
+**Why the identity holds, and where the work is.** A result that crossed the
+protocol arrives in the protocol's own encoding rather than as the engine's
+values, so something has to map it back. What it is mapped back onto is **the
+engine's value model, not JSON**: the client inverts the protocol encoding and
+hands its caller the same values an in-process engine would have handed it. The
+step from those values to the published JSON is then the one realisation every
+surface shares (see
+[One Realisation of the Mapping](#one-realisation-of-the-mapping)), run unchanged
+over one representation — which is what makes the identity above a property of the
+code rather than a coincidence that has to be policed. Mapping straight to JSON
+here instead would have created another copy of both mappings, free to drift from
+the one that already exists, and the identity would then be an assertion rather
+than a consequence.
+
+The mapping this section fixes is therefore the protocol's encoding onto the
+values [Property-Type Mapping](#property-type-mapping) and
+[Graph element mapping](#graph-element-mapping) already govern. Those two sections
+state the JSON once; the client's obligation is to land on them:
+
+| Value carried over the protocol | JSON it MUST produce |
+|---------------------------------|----------------------|
+| A string, an integer, a floating-point number, a boolean, or a null | The representation [Property-Type Mapping](#property-type-mapping) gives it, including that representation's treatment of a non-finite floating-point value as JSON `null` |
+| A byte string | A base64-standard-encoded JSON string, as [Property-Type Mapping](#property-type-mapping) requires |
+| A temporal value | The string [Property-Type Mapping](#property-type-mapping) gives that temporal kind, under **Temporal values** — which is per kind, is not an instant in UTC, and has no fixed-width fractional second |
+| A node | `{"id": <int>, "labels": [<string>, ...], "properties": {<object>}}` |
+| A relationship | `{"id": <int>, "type": "<string>", "startId": <int>, "endId": <int>, "properties": {<object>}}` |
+| A path | `{"nodes": [<node>, ...], "relationships": [<relationship>, ...]}` |
+| A list or a dictionary | A JSON array or object whose members are mapped by these same rules, recursively |
+
+Rules:
+
+1. **`id`, `startId`, and `endId` carry the same identifiers, and the same
+   caveat.** They are the engine's internal storage identifiers, emitted as JSON
+   numbers, ephemeral, and never to be persisted or used as long-lived references
+   (see [Graph element mapping](#graph-element-mapping), rule 4). A protocol node
+   may carry a second, string-shaped element identifier alongside the numeric one;
+   this shape does not publish it, because publishing it would make a result
+   depend on which path carried it.
+2. **A key the protocol's encoding adds is not added to the JSON.** The mapping is
+   defined by the table above and by the two sections it points at, and nothing
+   else appears. A field the protocol carries which those sections do not name is
+   dropped rather than passed through.
+3. **A value the mapping cannot represent is a failure of the statement, not a
+   silently different result.** The client does not substitute a placeholder for a
+   value it could not map; it fails with `utils.ErrGraphServer` and exit code 1, so
+   that a caller never reads a result that is quietly not the one the graph holds.
+
+**The query plan crosses the protocol the same way, and lands the same way.** A
+statement written with an `EXPLAIN` or `PROFILE` prefix comes back with its plan
+in the protocol's own summary metadata — one field for a plan and a second for a
+profile, which is where a Bolt driver already looks for them — rather than as
+rows. The client inverts that encoding onto **the engine's plan representation,
+not onto JSON**, and the step from there to the published object is the one
+[Graph Plan Node](#graph-plan-node) fixes, run by the same code the direct path
+runs. Three consequences follow, and each is a requirement:
+
+1. **Which member the object carries is decided by which metadata field carried
+   the tree**, so a plan reported over the protocol cannot arrive under the key a
+   measurement belongs to, or the reverse.
+2. **A key the protocol's plan encoding adds is not added to the JSON**, exactly
+   as rule 2 above requires of a value. The protocol nests some of the plan's
+   figures inside its own argument map and names them in its own spelling; the
+   published object names the nine keys of [Graph Plan Node](#graph-plan-node)
+   and no others.
+3. **An absent figure stays absent.** The protocol omits a storage-access count
+   nobody measured rather than sending a zero, and the client MUST carry that
+   omission through instead of reading the missing field as `0`. A client that
+   defaults it would publish a measurement the graph never took, and would break
+   the byte identity against the direct path in the same stroke (see
+   [Graph Plan Node](#graph-plan-node), rule 8).
+
+---
+
 ## Graph View Data
 
 The web interface's graph data endpoint (`GET /roadmaps/{name}/graph/data`, see
 `WEB.md § Graph Data Endpoint`) returns a roadmap's knowledge graph as a single
 JSON object describing its nodes and edges, shaped for an interactive node-link
-visualisation. The endpoint reads the graph **read-only**, the same way
-`rmp graph query`/`search` do (see `GRAPH.md § Engine Construction and
-Lifecycle`); it never writes and never checkpoints.
+visualisation. The endpoint runs the statement it is given exactly as
+`rmp graph execute` runs it (see `GRAPH.md § Engine Construction and Lifecycle`),
+so a statement that writes is committed and checkpointed like any other.
 
-The endpoint accepts two optional URL query parameters, `q` (the Cypher query to
-run, URL-encoded) and `limit` (the node-limit value), that the graph page's query
-bar sends. When `q` is absent or empty, the endpoint runs the default query
+The endpoint accepts two optional URL query parameters, `q` (the Cypher statement
+to run, URL-encoded) and `limit` (the node-limit value), that the graph page's
+query bar sends. When `q` is absent or empty, the endpoint runs the default query
 `MATCH (n) OPTIONAL MATCH (n)-[r]->(m) RETURN n, r, m`, which yields the same
 full-graph view a request with no parameters always produced (backward
-compatible). User-supplied `q` is validated as **read-only** before execution
-(reusing the graph guard-rail) and the resolved `limit` is applied as a `LIMIT`
-clause only when the query both lacks a top-level `LIMIT` of its own and is a
-statement form that admits a `LIMIT` clause. The full parameter contract, the
-read-only guard-rail, the limit-injection and suppression rules, and the
-failure modes are specified in `WEB.md § Graph Data Endpoint` and
+compatible). A user-supplied `q` is executed as written, and the resolved `limit`
+is applied as a `LIMIT` clause only when the statement both lacks a top-level
+`LIMIT` of its own and is a form that admits a `LIMIT` clause. The full parameter
+contract, the limit-injection and suppression rules, and the failure modes are
+specified in `WEB.md § Graph Data Endpoint` and
 `WEB.md § Query-Bar Error Handling`; this section specifies the response shapes —
-the successful one below, which is identical regardless of which query produced
-it, and the error one in [Error Shape](#error-shape) — and not the behaviour that
-selects between them.
+the successful one below, which is identical regardless of which statement
+produced it, and the error one in [Error Shape](#error-shape) — and not the
+behaviour that selects between them.
 
 This is the canonical specification of the graph view-data shape. It **reuses**
 the graph-element and property-type conventions already defined in
 [Graph Query Result](#graph-query-result); it does not introduce a new element
-encoding.
+encoding. The reuse binds the code as well as the page: the endpoint calls the one
+realisation of that mapping rather than holding a copy of it (see
+[One Realisation of the Mapping](#one-realisation-of-the-mapping)).
 
 ### Shape
 
@@ -596,12 +1133,15 @@ Field reference:
 Rules:
 
 1. `nodes` and `edges` are always present **in a successful response**. An empty
-   graph returns `{"nodes": [], "edges": []}` (empty arrays, never `null`). A
-   roadmap that has never used the `graph` command is treated as an empty graph and
-   returns this empty object; it is not an error (see
-   `GRAPH.md § Persistence Layout`, rule 2). A response that is not successful
-   carries neither field: it carries the object in [Error Shape](#error-shape)
-   below, or, for an internal read error, no JSON at all.
+   graph returns `{"nodes": [], "edges": []}` (empty arrays, never `null`), and so
+   does any statement whose result carries no node and no edge — a count, a schema
+   listing, or a write with no `RETURN` clause among them (see
+   `WEB.md § Query-Bar Error Handling`, rule 9). A roadmap that has never used the
+   `graph` command is treated as an empty graph and returns this empty object; it
+   is not an error (see `GRAPH.md § Persistence Layout`, rule 2). A response that
+   is not successful carries neither field: it carries the object in
+   [Error Shape](#error-shape) below, or, for an internal read error, no JSON at
+   all.
 2. Each node object follows the Node mapping and each edge object follows the
    Relationship mapping in [Graph element mapping](#graph-element-mapping),
    including the `properties` object, whose values follow the
@@ -632,17 +1172,17 @@ Rules:
 
 ### Error Shape
 
-A request the graph data endpoint refuses, and a query that fails, are answered
-with this object in place of the node-and-edge object above. The endpoint returns
-it for each of the five query-bar failures, always with HTTP `400 Bad Request`.
-The status, the failure classes, and the rules that select between them are
-specified in `WEB.md § Query-Bar Error Handling`, which is canonical for them; this
-section is canonical for the shape.
+A request the graph data endpoint refuses, and a statement that fails, are
+answered with this object in place of the node-and-edge object above. The endpoint
+returns it for each of the two query-bar failures, always with HTTP
+`400 Bad Request`. The status, the failure classes, and the rule that selects
+between them are specified in `WEB.md § Query-Bar Error Handling`, which is
+canonical for them; this section is canonical for the shape.
 
 ```json
 {
-  "error": "query rejected: not read-only",
-  "kind": "not_read_only"
+  "error": "invalid limit: 7",
+  "kind": "invalid_limit"
 }
 ```
 
@@ -651,47 +1191,33 @@ Field reference:
 | Field | Type | Description |
 |-------|------|-------------|
 | `error` | string | The human-readable reason. The graph page shows it in place as its failure message. |
-| `kind` | string | The machine-readable failure class. `WEB.md § Query-Bar Error Handling`, rule 5, enumerates the value set and is canonical for it; this file does not repeat it. |
+| `kind` | string | The machine-readable failure class. `WEB.md § Query-Bar Error Handling`, rule 4, enumerates the value set and is canonical for it; this file does not repeat it. |
 
 Rules:
 
 1. Both fields are always present and both are always strings. The object carries
    these two fields and no others, and it carries neither `nodes` nor `edges`.
 2. `kind` carries one value per failure class, drawn from the closed set
-   `WEB.md § Query-Bar Error Handling`, rule 5, publishes; that rule is canonical
+   `WEB.md § Query-Bar Error Handling`, rule 4, publishes; that rule is canonical
    for which values exist and how many, and this file deliberately does not carry
    a second copy of the list, so the two cannot disagree. What each value means is
-   fixed there too: a read-only guard-rail rejection, an invalid `limit`, a
-   schema-introspection command the endpoint renders no listing for (see
-   `GRAPH.md § Schema Introspection`), a relationship read through an incoming or
-   undirected fixed-length pattern (see `GRAPH.md § Relationship Read Direction`),
-   and a query accepted as read-only that then failed once running. A query
-   cancelled for exhausting the endpoint's query time budget is an execution
-   failure and carries the execution value; the budget adds no value of its own
-   (see `WEB.md § Graph Query Time Budget`).
+   fixed there too: an invalid `limit`, and a statement that failed once running. A
+   statement cancelled for exhausting the endpoint's query time budget is an
+   execution failure and carries the execution value; the budget adds no value of
+   its own (see `WEB.md § Graph Query Time Budget`).
 3. `error` is written to be read by a person and is not parsed. For an execution
-   failure it carries the engine's own diagnostic text, so a given query produces
-   the same diagnostic here as it produces on the CLI (see
+   failure it carries the engine's own diagnostic text, so a given statement
+   produces the same diagnostic here as it produces on the CLI (see
    `GRAPH.md § Error Handling and Exit Codes`, rule 2). For an invalid limit it
-   names the rejected value. For
-   a relationship-read-direction rejection it names the relationship variable, the
-   direction of the pattern that bound it, and the outgoing rewrite, and likewise
-   never describes the query as not read-only: such a query carries no writing
-   clause and no DDL clause, and only the orientation of its pattern is refused.
-   For a schema-introspection rejection it states that the page draws a graph and
-   names `rmp graph query` as the command that reports the schema; it likewise
-   never describes the query as not read-only, because the statement reads the
-   registered schema and writes nothing, and it never names the statement's keyword
-   spacing, because the refusal holds at every spacing and correcting the spacing
-   would change nothing.
+   names the rejected value.
 4. The object is serialized exactly as every other response of this endpoint is:
    HTML-safe, so `<`, `>`, and `&` are escaped (see `WEB.md § Graph Data Endpoint`),
    pretty-printed with two-space indentation, and terminated by a newline (see
    [Implementation Notes](#implementation-notes)).
-5. This is the endpoint's error contract for the five query-bar failures only. An
+5. This is the endpoint's error contract for the two query-bar failures only. An
    internal read error — a graph store that cannot be opened, for example — is
    answered HTTP `500` as on every other route of the web interface and does not
-   carry this shape (see `WEB.md § Query-Bar Error Handling`, rule 7).
+   carry this shape (see `WEB.md § Query-Bar Error Handling`, rule 6).
 
 ---
 
@@ -1242,14 +1768,14 @@ MUST NOT show `null` in place of an empty array.
 | `min_length` | integer or absent | no | Minimum string length when applicable. |
 | `description` | string | yes | One-sentence description of the flag's purpose. |
 | `mutually_exclusive_with` | array of string or absent | no | Long flag names that cannot be combined with this one. |
-| `stdin_fallback` | boolean or absent | no | `true` when the flag's value is read from standard input if the flag is omitted. Present and `true` on the `graph` subcommands' `--query` flag and on the `--body` flag of the `comment-add` and `comment-edit` subcommands of the `task` and `sprint` families. When `stdin_fallback` is `true`, `required` is `false` (the value may come from stdin instead), but the value is mandatory from one source or the other; supplying neither is an error. The flag's own `description` states any condition under which the fallback does not apply: on `comment-edit` the body is read from stdin only when `--type` is absent as well, so a type-only edit does not wait for input. See `GRAPH.md § Cypher Input Source and Precedence` and `COMMANDS.md § Comment Body Input Source and Precedence`. |
+| `stdin_fallback` | boolean or absent | no | `true` when the flag's value is read from standard input if the flag is omitted. Present and `true` on the `--query` flag of `graph execute` and on the `--body` flag of the `comment-add` and `comment-edit` subcommands of the `task` and `sprint` families. When `stdin_fallback` is `true`, `required` is `false` (the value may come from stdin instead), but the value is mandatory from one source or the other; supplying neither is an error. The flag's own `description` states any condition under which the fallback does not apply: on `comment-edit` the body is read from stdin only when `--type` is absent as well, so a type-only edit does not wait for input. See `GRAPH.md § Cypher Input Source and Precedence` and `COMMANDS.md § Comment Body Input Source and Precedence`. |
 
 ### Field reference: subcommand-level fields
 
 | Field | Type | Description |
 |-------|------|-------------|
 | `usage` | string | One-line usage signature. |
-| `reads_stdin` | boolean or absent | `true` when the subcommand reads standard input as an input source: the `graph` subcommands, and the `comment-add` and `comment-edit` subcommands of the `task` and `sprint` families. Absent or `false` for every other subcommand, which ignores stdin. |
+| `reads_stdin` | boolean or absent | `true` when the subcommand reads standard input as an input source: `graph execute`, and the `comment-add` and `comment-edit` subcommands of the `task` and `sprint` families. Absent or `false` for every other subcommand, which ignores stdin. |
 | `positional_arguments` | array of object | Each entry: `{name, type, required, description}`. |
 | `mutual_exclusion_groups` | array of array of string | Each inner array is a set of long flag names of which at most one may be supplied. |
 | `stdout_on_success.kind` | string | One of `object`, `array`, `empty`. `empty` is used by mutating commands that return no body. |

@@ -713,9 +713,9 @@ class TestAIContractErrorParity:
 
         # Locus 1: the Cypher engine's own parse diagnostic.
         rc, out, err = self.fx.run(
-            ["graph", "query", "-r", self.fx.roadmap, "--query", "MATCH ("])
+            ["graph", "execute", "-r", self.fx.roadmap, "--query", "MATCH ("])
         actual = err.splitlines()[0] if err else ""
-        published = "Error: database error: graph query failed: <engine diagnostic>"
+        published = "Error: graph engine error: graph query failed: <engine diagnostic>"
         mode, prefix = classify(published)
         assert mode == "prefix", f"the engine-diagnostic marker no longer classifies: {published!r}"
         ok, _mode, expectation = compare(published, actual)
@@ -743,7 +743,7 @@ class TestAIContractErrorParity:
         finally:
             holder.close()
         actual = err.splitlines()[0] if err else ""
-        published = f"Error: database error: cannot bind 127.0.0.1:{port}: <detail>"
+        published = f"Error: I/O error: cannot bind 127.0.0.1:{port}: <detail>"
         mode, prefix = classify(published)
         assert mode == "prefix", f"the bind marker no longer classifies: {published!r}"
         ok, _mode, expectation = compare(published, actual)

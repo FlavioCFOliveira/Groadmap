@@ -104,7 +104,7 @@ exit 22
 # carries ANSI escapes around that prefix, so assertions compare the message
 # text rather than the raw line.
 ARCH_MESSAGE = (
-    "is not supported. Supported targets: amd64, arm64, armv6, armv7. "
+    "is not supported. Supported targets: amd64, arm64. "
     "See SPEC/BUILD.md for the build matrix."
 )
 OS_MESSAGE = (
@@ -118,9 +118,14 @@ SUPPORTED_ARCHITECTURES = [
     ("amd64", "amd64"),
     ("aarch64", "arm64"),
     ("arm64", "arm64"),
-    ("armv6l", "armv6"),
-    ("armv7l", "armv7"),
 ]
+
+# 32-bit ARM is recognised by detect_arch and deliberately resolves to
+# `unsupported`, exactly as i386 does: SPEC/BUILD.md ships no 32-bit target, so
+# mapping these to an asset would fail late on the download instead of at
+# detection. A Raspberry Pi 3, 4, 5 or Zero 2 W running a 64-bit OS reports
+# aarch64 and is unaffected.
+UNSUPPORTED_ARM32 = ["armv6l", "armv6", "armv7l", "armv7", "armv5tel"]
 
 
 class InstallPlatformGuardTests:
@@ -201,6 +206,13 @@ class InstallPlatformGuardTests:
     def test_unrecognised_architecture_is_rejected(self):
         """detect_arch returns `unknown` here; the guard must reject it too."""
         self._assert_rejected("sparc64", "sparc64", ARCH_MESSAGE)
+
+    def test_32_bit_arm_is_rejected_before_anything_is_downloaded(self):
+        """32-bit ARM stopped being a supported target when the graph engine's
+        dependency stopped compiling for it, and it was never verified there.
+        It must fail at detection like i386, not late on a missing asset."""
+        for uname_m in UNSUPPORTED_ARM32:
+            self._assert_rejected(uname_m, uname_m, ARCH_MESSAGE)
 
     def test_unsupported_operating_system_is_rejected(self):
         """The OS guard follows the same contract as the architecture guard."""

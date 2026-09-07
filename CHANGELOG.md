@@ -5,7 +5,537 @@ All notable changes to **Groadmap** (`rmp`) are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [2.0.0] - 2026-09-06
+
+### Added
+
+- **`rmp graph serve` turns a roadmap's knowledge graph into a service.** It opens
+  that roadmap's store once, holds it and its exclusive advisory lock for the life
+  of the process, and answers Cypher over a **Unix domain socket** until it is
+  stopped, printing the socket it bound as `{"socket": "<path>"}` on stdout. The
+  protocol is **Bolt version 5**, served by the graph engine's own server; Groadmap
+  defines no protocol of its own and binds no network port. It is the second
+  long-lived command, after `rmp web`: `SIGINT` or `SIGTERM` drains the work in
+  flight, shuts the server down, checkpoints, releases the lock, removes the socket
+  and exits `0`.
+  - **One server per roadmap**, enforced by the store lock: a second
+    `rmp graph serve` against the same roadmap fails with exit code `1` and leaves
+    the incumbent's socket untouched. A server asked to bind a socket another
+    roadmap's server owns is refused by a socket probe instead.
+  - **Access control is the filesystem and there is no other.** The socket is
+    created with mode `0600`, set explicitly rather than left to the umask, inside
+    a roadmap home that is `0700`. **The server authenticates nobody and uses no
+    transport security**, both deliberately, and the engine prints a warning for
+    each at startup. Any caller that can open the socket can read, write, delete
+    and change the schema of that roadmap's graph.
+  - **What it buys is measured, not asserted.** A caller pays one store open for a
+    whole session instead of one per invocation, and statements that used to
+    serialise on the store's exclusive lock run concurrently under the store's
+    MVCC. On an 8-core / 16-thread workstation, read throughput rises to roughly
+    seven to eight times the single-client rate and stops rising at about **16**
+    concurrent clients; past that knee another client buys under 5% more
+    throughput and multiplies the 99th-percentile latency nearly fivefold. The
+    server's connection ceiling is 128, set well above the knee because a refused
+    connection is dropped without a protocol answer and is not retried.
+
+- **`rmp graph client` sends one statement to a running server.** It resolves the
+  same socket `serve` binds, sends the statement, and writes **byte for byte** what
+  `rmp graph execute` writes for that statement against that graph. It reads and
+  writes alike, and it **requires** a server: with nothing listening it fails with
+  exit code `1` rather than opening the store, because a subcommand that quietly
+  became `execute` would report a success that says nothing about whether a server
+  was reached. A serialisation conflict — two clients writing the same nodes at
+  once, which is ordinary inside a server — is retried under the project's retry
+  policy rather than reported.
+
+- **`--socket <path>` on `graph execute`, `graph serve` and `graph client`.** All
+  three default it to `~/.roadmaps/<name>/graph.sock`, derived from the roadmap.
+  The flag names **which socket is looked at** and nothing else: it does not force
+  a server, does not forbid one, and does not select the store.
+
+- **`EXPLAIN` and `PROFILE` publish the query plan, on `rmp graph execute` and
+  `rmp graph client` alike.** A statement written with an `EXPLAIN` prefix is **planned
+  and not executed**, and the invocation returns the statement's declared columns, no
+  rows, and the plan under a new `plan` member. Written with a `PROFILE` prefix it is
+  executed and returns its real rows together with what each operator cost, under a new
+  `profile` member. **The two members are never both present**, which is what stops an
+  estimate being read as a measurement: an `EXPLAIN` tree carries only `estimatedRows`
+  and `estimatedRowsSource`, and never `rows`, `timeNs`, `dbHits` or
+  `rowsRemovedByFilter`, because it ran nothing and a figure there would be invented.
+  - **A statement written with neither prefix produces exactly the bytes it produced
+    before**, so no existing caller is affected. Both members are omitted when empty.
+  - **The two surfaces agree by construction rather than by vigilance.** The client
+    inverts the Bolt encoding back onto the engine's own plan node rather than onto
+    JSON, so both surfaces then run one mapping, in `internal/graphjson`. Measured
+    across five statement classes, `EXPLAIN` output is byte-identical between
+    `graph execute` and `graph client` with nothing excused; a `PROFILE` differs in
+    `timeNs` alone, and it must, because that member measures the execution and the two
+    subcommands are two executions. The specification's byte-identity claim was narrowed
+    in five places to say so.
+  - **Four measured keys are pointers rather than plain integers**, so that
+    `omitempty` cannot collapse a counted zero into an uncounted one. Which is built is
+    decided by the engine's own known-flags, never by the value. `timeNs` publishes
+    whole nanoseconds rather than a millisecond float, so that the identity above holds
+    on the integer instead of on two float formatters agreeing.
+  - `SPEC/DATA_FORMATS.md § Graph Plan Node` is canonical for the shape;
+    `SPEC/GRAPH.md § Query Plans: The EXPLAIN and PROFILE Prefixes` for the behaviour.
+  - **A `PROFILE` of a writing statement is refused**, because profiling it would mean
+    committing it, and neither prefix is accepted on a schema statement. Both exit `1`
+    and carry the engine's own diagnostic.
+
+### Changed
+
+- **`rmp graph execute` and the web graph data endpoint route through a running
+  server automatically.** Both now resolve the roadmap's socket before they open
+  anything. With a server answering there, the statement is sent to it and the
+  store is never opened locally; with nothing answering, the store is opened
+  directly under the exclusive lock exactly as before. **No flag and no
+  configuration selects this**, and the statement, the result, the output shape and
+  the exit code are the same either way.
+  - **Why it had to change.** A server holds the store's exclusive lock for its
+    whole process lifetime, and no finite wait can be sized against a hold with no
+    upper bound. Left on the direct path, both surfaces would have failed
+    deterministically — every invocation and every graph page request — for as long
+    as a server ran. Resolving the socket first is what stops a running server from
+    disabling the two surfaces that existed before it.
+  - **A leftover socket file is not an error.** A killed server leaves one behind;
+    the refused connection is read as evidence that the roadmap is not served, and
+    the caller proceeds on the direct path without removing the file.
+  - **A probe that answers but yields no server is a failure, not a fallback.**
+    Falling back there would send the caller at a lock a server may be holding, so
+    `graph execute` fails with exit code `1`, and the web endpoint answers HTTP
+    `500`. A connection lost after the statement was sent is likewise a failure and
+    is **not** retried against the store: a commit is durable before it is
+    acknowledged, so the statement's outcome is genuinely unknown and the error
+    line says exactly that.
+  - **The web interface cannot follow `--socket`, and the consequence is stated
+    rather than buried.** It is an HTTP handler with no command line, and no request
+    parameter carries a socket path. A server started with `--socket` therefore
+    leaves that roadmap's graph page answering HTTP `500` on every request for as
+    long as it runs. Start a server without the flag whenever the roadmap is also
+    browsed.
+
+### Changed — BREAKING
+
+- **`rmp graph`'s five original subcommands are gone, and `execute` replaces all
+  five.**
+  `rmp graph create`, `rmp graph query`, `rmp graph update`, `rmp graph delete`
+  and `rmp graph search` are **removed and are not aliases**: each is now an
+  unresolved subcommand name and is answered as a dispatch failure — exit code
+  `127`, the `graph` help on stderr, nothing on stdout. Every script, agent
+  prompt and stored recipe that names one of them stops working, and the
+  replacement is textual: `rmp graph execute` runs what any of the five ran.
+  - **Why they could not survive as aliases.** The five differed in exactly one
+    thing: the operation class each accepted, enforced before execution. That
+    enforcement was withdrawn in this same cycle, and with it the only
+    distinction between them — five names for one behaviour is a difference the
+    CLI can no longer honour, and keeping them would have published a choice
+    that no longer decides anything.
+  - **`execute` runs what it is given, and the caller owns what that does.** No
+    subcommand's contract says a statement cannot delete. Groadmap checks the
+    statement's length and nothing else about its content, so a statement's
+    effect is decided by its Cypher alone. `SPEC/GRAPH.md § What Groadmap Does
+    Not Check` enumerates the hazards that follow, each of which reports
+    success.
+  - **Exit code `6` no longer means an operation-class mismatch.** On
+    `graph execute` its only cause is a statement longer than the maximum query
+    length of 1 MiB. The five refusal lines the classes published —
+    `graph create accepts only CREATE/MERGE queries` and its four siblings — are
+    withdrawn with them.
+  - **The store lock collapses to one mode with one contention policy.**
+    Groadmap cannot know before running a statement whether it will write, so
+    every invocation takes the advisory lock **exclusively**, across the whole
+    open, execution, commit, checkpoint and write-ahead-log truncation sequence,
+    and an invocation that finds it held now **waits** under the project's
+    bounded backoff instead of failing on the first collision. The cost is
+    stated rather than hidden: two statements against the same roadmap serialise
+    even when neither of them writes, where a shared reader hold let them
+    overlap.
+  - **A statement that appends nothing to the write-ahead log does not
+    checkpoint.** With every statement now on the transactional path, the
+    checkpoint is gated on the log having grown, so an ordinary read leaves
+    `snapshot/` and `wal` exactly as it found them.
+  - **The `--ai-help` contract changed shape**: the `graph` family publishes
+    `execute`, `serve` and `client` where it published five, and the
+    `graph_guard_rail_mismatch` pitfall is replaced by
+    `graph_statement_is_not_checked`.
+
+- **The web graph data endpoint executes the statement it is given, writes
+  included, over an unauthenticated `GET`.** `GET /roadmaps/{name}/graph/data`
+  no longer validates the `q` parameter. A `CREATE`, a `SET`, a `DETACH DELETE`
+  or a schema `CREATE INDEX` submitted through the knowledge-graph page's query
+  bar is executed, committed and checkpointed, exactly as `rmp graph execute`
+  would run it. `?q=MATCH (n) DETACH DELETE n` empties the roadmap's knowledge
+  graph. **This is an owner decision taken with the consequence stated**, and it
+  is recorded in full in `SPEC/WEB.md § Security and Constraints`, rule 3: the
+  server has no login, no token and no session, so the only access control is
+  the bind address, and `--host 0.0.0.0` is now a **write** grant over every
+  roadmap's knowledge graph rather than a read grant.
+  - **The endpoint moved onto the transactional path**, which is what makes the
+    write real rather than merely permitted. It now takes the store's exclusive
+    lock before the open and holds it across the statement, the commit and the
+    checkpoint, opens a write-ahead-log writer, and constructs the engine
+    through `cypher.NewEngineWithStoreAndRecovery` — the same construction
+    `rmp graph execute` performs. Without it, withdrawing the guard rail would
+    have replaced one refusal with another: the read-path engine answers a write
+    with `Run does not execute write or DDL statements`.
+  - **A slow statement through the query bar now blocks the CLI**, and two graph
+    pages open on the same roadmap serialise. The hold spans the statement, so
+    an `rmp graph execute` against the same roadmap waits for it, bounded, and
+    fails with exit code 1 when that wait is exhausted.
+  - **The published `kind` set drops from five values to two.**
+    `not_read_only`, `schema_introspection` and `relationship_read_direction`
+    are **removed**, along with the four-deep precedence rule between them. What
+    remains is `invalid_limit` and `execution`, and the only ordering left is
+    that the `limit` is resolved before the statement runs.
+  - **`SHOW INDEXES` is answered `200` with `{"nodes": [], "edges": []}`** —
+    executed, not refused — because the rows it returns carry no node and no
+    edge. The schema listing itself is read from `rmp graph execute`. A
+    schema-introspection command written with anything but a single space
+    between its two keywords is not routed to the engine's schema parser and
+    fails there: `400` with `kind` `execution` and the engine's own diagnostic.
+    The endpoint states no spacing correction of its own.
+  - **A statement that writes nothing still changes nothing on disk.** The
+    checkpoint is gated on the write-ahead log having grown, so an ordinary page
+    load leaves `snapshot/` and `wal` byte for byte as it found them, and a
+    roadmap with no `graph/` directory is still served as an empty graph without
+    one being created — for a statement that would have written as much as for a
+    read.
+  - **`internal/graphlock` loses its shared mode.** `AcquireShared` had one
+    caller left, this endpoint, and goes with it. There is one lock mode because
+    there is one execution path.
+
+### Removed — BREAKING
+
+- **The two 32-bit ARM build targets are gone: `linux-armv6` and `linux-armv7`.** The
+  release ships **nine** archives where it shipped eleven, and `install.sh` now refuses a
+  32-bit ARM host **at architecture detection**, before any release asset is requested —
+  the same treatment `i386` and `i686` already received. The refusal line's target list
+  narrows from `amd64, arm64, armv6, armv7` to `amd64, arm64`, and the `/proc/cpuinfo`
+  ARM-version fallback is deleted, because with no 32-bit ARM target left to choose
+  between it has nothing to decide.
+  - **A user on 32-bit-only hardware cannot upgrade.** That is Raspberry Pi Zero,
+    Zero W, Pi 1 and Pi 2. `linux-arm64` is unaffected and covers the Pi 3, 4, 5 and
+    Zero 2 W; a Pi 3 or later running a 32-bit operating system recovers by installing a
+    64-bit one. Nothing else is affected: every other target is unchanged, and because no
+    ARM variant remains, every archive is now named `{goos}-{goarch}` with no ARM
+    exception.
+  - **Three independent facts put 32-bit out of reach, and each alone is sufficient.**
+    (1) *It does not compile.* GoGraph v0.13.0 pads its Bolt transaction registry entry
+    to a hard-coded 128 bytes and asserts that size from both directions at compile time;
+    on a 32-bit platform the structure reaches 80 bytes, one assertion resolves to an
+    array of negative length, and `internal/graphserve` — which `rmp` cannot link
+    without — fails to build. Measured per version: v0.12.0 builds for `GOARCH=arm` and
+    `GOARCH=386`, v0.13.0 and v0.14.0 do not. (2) *It was never a verified
+    configuration*, and this is about the version being replaced, not the new one: at
+    **v0.12.0**, GoGraph's own suite compiled for 386 already failed three size-pinning
+    tests and would not compile its packstream tests at all, while a control run of the
+    same tests on `amd64` at the same commit passed — so the word size is the cause and
+    not flakiness. (3) *The stored graph would not be portable.* GoGraph persists `int`,
+    `uint` and `uintptr` as u64, so a graph written by a 64-bit build is misread by a
+    32-bit one.
+  - **Restoring the compile would have restored a build, not a working target.**
+    Shipping those two binaries was a data-safety problem rather than a build problem,
+    which is why they are withdrawn instead of repaired.
+
+### Changed — BREAKING (error message text)
+
+- **`database error: ` no longer covers the knowledge graph, and four new sentinels
+  carve up what it used to.** The prefix survives, **narrowed to a roadmap's SQLite
+  database** — its contents, its schema, a statement against it, or the `project.db`
+  file. Everything else that used to arrive under it now carries one of:
+
+  | Prefix | What failed | What the reader acts on |
+  |--------|-------------|-------------------------|
+  | `graph engine error: ` | The statement reached the engine and did not complete there: a parse failure, a refusal, an exhausted time budget, a lost write conflict | The **statement** |
+  | `graph store error: ` | The graph store, its directory, or its exclusive advisory lock | The **filesystem** or the **lock holder** |
+  | `graph server error: ` | A graph server, its socket, or the connection to it | The **server**, or `--socket` |
+  | `I/O error: ` | Any other stream, socket, file or directory that is not a roadmap's database | The **stream or path** named |
+
+  **The dividing line is the artefact, not the layer**, and one consequence looks
+  inconsistent until that rule is read: moving a legacy `project.db`, or failing to
+  secure it to `0600`, stays `database error:` although both are file operations,
+  because the artefact is the database.
+
+  **Anything that matches on the old text breaks.** This project treats a published
+  error string as part of its contract — `tests/test_55_error_string_parity.py` builds
+  a corpus of **138** published strings from `SPEC/COMMANDS.md` and drives them against
+  the compiled binary: **131** are compared character for character after placeholder
+  substitution, three are compared up to a placeholder whose tail is operating-system or
+  SQLite text, and four have no deterministic hermetic trigger and are declared exempt.
+  So this is a contract change, and it is recorded as one.
+
+  **No exit code moved.** All four new sentinels reach exit `1` by the same fall-through
+  `database error:` uses; `cmd/rmp/main.go` is byte-identical across the two commits that
+  made the change, and `SPEC/ARCHITECTURE.md § Adding New Error Types` now **forbids** an
+  exit-1 sentinel from having a `handleError` case at all, so the two can never disagree.
+  The web interface is unaffected: its graph endpoint branches on its own error kind, so
+  no HTTP status changed.
+
+  One line also **inverts**: `Error: reading data directory <path>: database error`
+  published the class where the operating system's diagnostic belongs, and is now
+  `Error: I/O error: reading data directory <path>`. A new wrapping rule binds every
+  wrap in the tree, published or not, to render the sentinel first.
+
+- **The store-contention line stops naming a holder it cannot know.** It was
+  `graph store is busy: another invocation still holds it after the bounded wait`; it is
+  now `graph store is busy: still held when the bounded wait was exhausted, and nothing
+  records the holder.` followed by the remedy for each of the two possible holders. The
+  old line contradicted its own function's documented reasoning — a bounded wait is
+  sized against the maximum lawful hold, and a server has none — and the two holders
+  imply **opposite** remedies: an ordinary invocation releases shortly, so retrying
+  works; an `rmp graph serve` holds for its whole lifetime, so retrying never will.
+  Probing for a server was rejected rather than overlooked, because a server can start or
+  stop between the probe and the print.
+
+- **A batch refusal names the ids it is about.** `some tasks not found`, published at six
+  sites for every shape, becomes `task N not found` for one and `tasks N, M not found`
+  for several, naming exactly the missing ids in the caller's order, each once. The
+  singular form follows the number **missing**, not the number supplied. Two sibling
+  lines change with it: `task(s) not found: [999999 999998]` — Go's slice printer,
+  bracketed and space-separated — becomes the same `tasks ... not found` form, and
+  `task(s) not in sprint #N: [...]` becomes `task N is not in sprint #N` /
+  `tasks N, M are not in sprint #N`. Nine commands publish these lines: `task get`,
+  `task prio`, `task sev`, `task reopen`, `task remove`, `task stat`,
+  `sprint add-tasks`, `sprint remove-tasks` and `sprint move-tasks`.
+
+### Fixed
+
+- **An `EXPLAIN` of a writing statement reported `{"ok": true}`** — byte-identical to
+  what a real committed write reports — **over a statement that had written nothing**.
+  The output was not merely uninformative, it was false, and nothing distinguished it
+  from the real thing. Two sibling defects went with it: an `EXPLAIN` of a read returned
+  an empty row set indistinguishable from a query that matched nothing, and a `PROFILE`
+  discarded its measurement entirely. The cause was one discriminator — an output shape
+  chosen on "does the statement declare columns", which an `EXPLAIN CREATE` does not.
+  A prefixed statement now always returns the `{columns, rows}` shape, with empty arrays
+  beside its plan where it declares no column of its own.
+
+- **A repeated task id produced a false `resource not found` on all nine batch
+  commands.** The membership guard compared a **count** where it meant a **set**, and the
+  database returns one row per distinct id, so `rmp task get -r X 1,1` failed at exit `4`
+  with nothing missing. `rmp sprint add-tasks 1 4,4` was worse still: it printed
+  `task(s) not found: []` — a message asserting that ids were missing and then naming
+  none — and `sprint move-tasks` refused a valid move at exit `6`. A repeated id is now
+  accepted: the list is reduced to the set it denotes, each distinct task is acted on
+  once, and one audit entry is written per distinct id. The arithmetic lives once, in
+  `internal/utils/idlist.go`, so the two questions — *which ids are missing* and *how
+  many are there* — cannot be answered inconsistently. Deduplication is applied at the
+  call site rather than inside the shared id parser, deliberately: `sprint reorder`
+  shares that parser and a repeat is a genuine error there.
+  - **No invocation that previously succeeded now fails.** The only movement is
+    failures becoming successes.
+
+- **A `SET` or `REMOVE` on a relationship bound by a `CREATE` or `MERGE` clause in the
+  same statement no longer loses the write.** The statement exited 0, created the
+  relationship, and wrote none of the properties; `SET e = {…}` was worse still, because
+  its `RETURN` echoed the value it had not written. The defect was the graph engine's and
+  the move to **GoGraph v0.14.0** closed it. Proven by building the commit immediately
+  before the dependency bump and the released tree and running the same eight statement
+  shapes against both: **all eight lose the write before and all eight persist after** —
+  `CREATE` with a scalar `SET`, with `SET e = {…}`, with `SET e += {…}`, through a `WITH`,
+  inside a `FOREACH`, `MERGE` creating a new relationship, `MERGE` matching one that
+  already existed, and both hops of a multi-hop `MERGE`.
+  - **It was never reachable from a released Groadmap binary.** On `1.15.2` the guard rail
+    refused a `CREATE … SET` on every one of the five subcommands, so the statement never
+    reached the engine. The hazard became reachable when the guard rail was withdrawn
+    earlier in this same window and was closed by the dependency bump later in it, so no
+    released version both admits the statement and loses the write.
+  - **One narrow case survives the repair and is not claimed as fixed.** A `SET` on a
+    relationship bound by a `MERGE` that **matched** rather than created still loses the
+    write when the ordered node pair already carries a parallel relationship in the same
+    direction. It is published under Known Issues with its full precondition.
+  - The hazard on an **undirected or incoming** `SET` is a different defect and remains
+    open; see Known Issues.
+  - **`SPEC/GRAPH.md § What Groadmap Does Not Check` item 8 still publishes the hazard in
+    its original, broader form and is inaccurate as shipped.** Correcting a specification
+    file belongs to the `specification-manager` and is deliberately not done here;
+    `DOCS/commands/graph.md` carries the corrected scope.
+
+### Changed — toolchain and dependencies
+
+- **`modernc.org/sqlite` moves from v1.57.0 to v1.58.0, and its coupling moves with
+  it.** The new driver requires `modernc.org/libc` v1.75.6 and `modernc.org/memory`
+  v1.12.1, and both pins were set to exactly those — read from the driver's own
+  `go.mod` inside the module cache, which `SPEC/BUILD.md § SQLite Driver Rules` Rule 4
+  names as the authority, rather than floated by a `go get -u`. `modernc.org/libc` has a **newer**
+  release, v1.75.7, which Rule 2 forbids adopting, and the driver's own changelog
+  restates that instruction upstream. No gate can detect a mismatch here, which is why
+  the two pins were read back out of that file after the fact rather than assumed.
+
+  The release carries **SQLite 3.53.4** and drops the local super-journal patch that
+  v1.56.0 had added, because upstream shipped its own fix for the journal-rollback
+  data-corruption bug that patch worked around; recovery behaviour is unchanged. It
+  also adds Linux **OFD locking**, which Groadmap does **not** enable: the mode is
+  opt-in through `MODERNC_SQLITE_OFD_LOCK` or `OFDLocking(true)`, and with neither set
+  the locking behaviour is byte for byte that of previous releases.
+
+- **`github.com/RoaringBitmap/roaring/v2` moves from v2.26.0 to v2.27.0**, reached
+  through `GoGraph/cypher`. The release carries a single change and it is additive — a
+  portable 64-bit serialization API in `roaring64` — so nothing the dependency chain
+  calls was removed or renamed.
+
+- **`golang.org/x/exp` moves to v0.0.0-20260824195058-e88cd73687aa**, reached through
+  `GoGraph/cypher/parser` and `antlr4-go/antlr/v4`, which imports `x/exp/slices`.
+
+  `golang.org/x/sys` v0.47.0 and `golang.org/x/text` v0.41.0 were checked and are
+  already at their latest published versions, so they did not move. GoGraph was at its
+  latest when that check was made and moved afterwards, in the same release window —
+  see the GoGraph entry below. The
+  modules that only a dependency's own test binary reaches — `klauspost/compress`,
+  `neo4j-go-driver/v5`, `testify`, `go-cmp`, `pprof`, `golang.org/x/mod`, and
+  `modernc.org/cc`, `ccgo` and `gc` — are in the module graph but in neither the build
+  nor `go.mod`, and did not move either.
+
+- **`github.com/FlavioCFOliveira/GoGraph` moves from v0.12.0 to v0.14.0**, absorbing two
+  upstream releases. **v0.13.0** made `EXPLAIN` and `PROFILE` parseable Cypher statement
+  prefixes — until then the engine's plan renderers were reachable only from Go, so no
+  Bolt client could ask for a plan — and carried seven changes marked breaking, every one
+  of which turns a previously silent failure loud. **v0.14.0** made the plan's db-hits
+  figure tri-state, so that a counted zero is no longer printed identically to a figure
+  that was never counted, added a `RowsRemovedByFilter` column, and taught the planner to
+  consume its own property statistics when ordering a disjoint-component join. Both
+  releases leave `go.mod` and `go.sum` byte-identical to their predecessor, and the
+  engine's openCypher TCK gate is unchanged at 3897/3897 across both.
+
+  **One consequence is worth stating because it surprises.** Now that the planner reads
+  its own statistics, **the plan a statement runs can differ according to whether the
+  engine's statistics have been refreshed**. The result the statement returns is
+  identical either way; only the plan that produced it, and therefore what an `EXPLAIN`
+  or a `PROFILE` reports, may differ.
+
+### Notes
+
+- **Why this is `2.0.0` and not `1.16.0`.** `SPEC/VERSION.md` defines `MAJOR` as
+  "incompatible API changes or major architectural changes", and this release contains
+  three independent incompatibilities, any one of which would carry the bump on its own:
+  1. **Five subcommands were removed with no aliases.** `rmp graph create`,
+     `query`, `update`, `delete` and `search` are each now an unresolved subcommand name
+     answered with exit `127`. Every script, agent prompt and stored recipe that names
+     one of them stops working, and no compatibility shim exists.
+  2. **Two published build targets were withdrawn.** A user on 32-bit ARM hardware
+     cannot upgrade at all, because the release no longer produces an archive for them.
+     That is the strongest form of incompatibility a distributed binary has.
+  3. **Published error strings changed across many lines.** Anything matching on the
+     `database error: ` text for a graph or I/O failure breaks. This project treats
+     those strings as contract and drives a 138-string corpus against the binary, 131 of
+     them matched character for character, which is what makes them API rather than
+     incidental output.
+
+  Two further changes are incompatible in effect if not in signature: the web graph data
+  endpoint now **executes writes** over an unauthenticated `GET`, so `--host 0.0.0.0` has
+  become a write grant where it was a read grant; and the endpoint's published `kind`
+  enum drops from five values to two.
+
+- **What did NOT change, and why it does not soften the above.** No exit code moved
+  anywhere. No flag was removed. The JSON success shapes are unchanged except for two
+  additive, mutually exclusive members, `plan` and `profile`, which appear only for a
+  statement written with an `EXPLAIN` or `PROFILE` prefix — and those prefixes only
+  became parseable in this same release window, so no consumer can have depended on
+  their earlier output. A statement written with neither prefix produces exactly the
+  bytes it produced before. These are reasons the release is not *more* disruptive than
+  it is; none of them is a reason to call it `MINOR`.
+
+- **This is the first Groadmap release whose number is the strict SemVer reading rather
+  than an owner's decision.** `1.15.0` shipped breaking changes as a `MINOR` and `1.15.2`
+  shipped them as a `PATCH`, each by explicit decision recorded at the time. Nothing here
+  overrides SemVer, so this entry records the reasoning rather than an exception to it.
+
+- **There is no database migration.** The SQLite schema version is unchanged, and the
+  graph store's on-disk format takes no version step — the snapshot manifest declares
+  `version: 3` under both binaries. The round trip was measured in both directions with
+  binaries built from the two tags, rather than assumed: a graph plus a registered index
+  written by `2.0.0` reads back correctly under `1.15.2`, and a graph plus an index
+  written by `1.15.2` reads back correctly under `2.0.0` with the index still `ONLINE`. The one additive
+  change that an older reader cannot consume — two new columnar wire values for 1- and
+  2-byte edge-weight kinds — makes it **refuse the file** rather than misread it, and
+  Groadmap writes no edge weights, so it is not reachable through `rmp`.
+
+### Known Issues
+
+Every entry below was **re-measured against the released binary immediately before the
+tag**, not carried forward. That discipline changed three of the six entries this cycle
+had accumulated: one was **narrowed to a precondition** after the dependency bump repaired
+most of it, one specification contradiction had already been repaired, and one could not
+be reproduced at all. The last two are recorded under *Withdrawn after re-measurement*
+rather than deleted in silence.
+
+- **One statement can drive the process to gigabytes of resident memory.** Every mutation
+  a statement has applied is retained until its rollback finishes, across four
+  accumulators — the write-ahead-log operation buffer, the applied graph state, the undo
+  log, and an index buffer — and nothing bounds how many mutations it applies before the
+  time budget cuts it. Re-measured for this release under a 4 GB cgroup limit against a
+  ~100 KB store: `MATCH (a),(b),(c) CREATE ()` reached a peak resident set of
+  **2.6 GB** and the process took **~25 seconds** to exit, against a 5-second statement
+  budget — the gap being the undo replay. An earlier run in this same cycle measured
+  3.3 GB. **Neither figure is a maximum**; the cost tracks the budget and the hardware
+  rather than the size of the graph. There is a ceiling: given a budget long enough, the
+  engine's own row cap cuts the statement at roughly 20 GB. A pure read of the same
+  Cartesian shape is cut at the budget and costs about 30 MB, so the memory cost belongs
+  to the write path and the two are distinct defects rather than one seen twice. Nothing
+  was written in any run, and the store was byte-identical afterwards: this is an
+  availability defect, not a durability one. A short-lived `rmp graph execute` returns the
+  memory by exiting; `rmp graph serve` and `rmp web` have no exit to return it at.
+
+- **A server's shutdown is not bounded.** A statement the budget cut while it was writing
+  is inside an undo replay that takes no cancellation, and the store cannot close until it
+  returns. Re-measured for this release: `SIGTERM` to a server with one such statement in
+  flight held for **16.2 s and 27.3 s** across two trials; an earlier run in this cycle
+  measured 35.6 s. **These are the largest observed, not a maximum**, and no ceiling has
+  been established. The socket is still removed and the store is still intact afterwards.
+  A supervisor that escalates `SIGTERM` to `SIGKILL` after a short grace period may kill
+  the server mid-replay; every acknowledged commit is still durable and the next open
+  replays the log, but the shutdown checkpoint is lost.
+
+- **A `SET` on a relationship bound by a `MERGE` that matched an existing relationship is
+  silently discarded when the ordered node pair already carries a parallel relationship.**
+  This is what survives of a broader hazard the move to GoGraph v0.14.0 otherwise closed
+  (see **Fixed**), and the surviving precondition is narrow: all three of the following
+  must hold. The relationship variable is bound by a `MERGE` clause in the same statement;
+  that `MERGE` **matched** rather than created; and the same ordered pair
+  `(source, target)` already carries another relationship **in the same direction**. When
+  all three hold the statement exits 0, reports `{"ok": true}`, and writes nothing, while
+  a following read shows the previous value. Measured: with `(a)-[:OTHER]->(b)` present,
+  `MERGE (a)-[e:T]->(b) SET e = {c:2}` over an existing `T` leaves `c` at `1`; the scalar
+  form behaves identically. Removing any one of the three restores the write — an isolated
+  pair is correct, a parallel edge in the **reverse** direction does not trigger it, and a
+  plain `MATCH ... SET` writes correctly with the parallel edge present. **Bind with
+  `MATCH` rather than `MERGE`** when you intend to update a relationship that already
+  exists, or set the properties in a second statement after a fresh `MATCH`.
+
+- **An undirected or incoming `SET` on a relationship does not write every relationship it
+  matched, and how much it loses depends on the data.** A write persists only where the
+  row's left-hand node is the relationship's stored source and its right-hand node the
+  stored target. Re-measured for this release on a single stored
+  `(alice)-[:MENTORS]->(bob)`: the pattern anchored with `alice` on the left writes
+  correctly; the same pattern written with `bob` on the left **silently writes nothing**,
+  exits 0, reports the value it did not write, and leaves the property at its previous
+  value. A fully unanchored sweep is **safe**, because each relationship is then emitted
+  twice — `count(e)` returns 2 for one stored edge — and one of the two rows is correctly
+  oriented. **The selective statement is the hazardous one and the sweeping one is safe**,
+  which inverts a careful reader's intuition. Write through an outgoing pattern, which can
+  be anchored on either endpoint. `DELETE` is unaffected and removes everything it
+  matched, verified through the reversed pattern.
+
+#### Withdrawn after re-measurement
+
+- **The `SPEC/DATA_FORMATS.md § Graph Client Result` contradiction is gone.** It was
+  published as requiring both byte-identical client output and a millisecond-precision UTC
+  rendering for temporal values, which `rmp graph execute` has never produced. The file as
+  released states neither: the byte-identity rule explicitly excludes `timeNs` and nothing
+  else, and the temporal rule renders each of the six kinds in the ISO 8601 form of **its
+  own type** rather than as an instant in UTC. Verified against the binary as well as the
+  text: the same temporal statement through `graph execute` and `graph client` produces
+  byte-identical output.
+
+- **The retry-ladder exhaustion could not be reproduced.** It was published as "about 1% of
+  writers to a single hot node exhaust the client's retry ladder", on a sample of 2
+  failures in 200. Re-measured at 16 concurrent `rmp graph client` writers to one node over
+  100 rounds — **1,600 invocations, 0 failures**, with the final counter matching the number
+  of successful writes exactly, so no update was lost either. Under a stable 1% rate, zero
+  failures in 1,600 trials has probability of order 10⁻⁷. **This is reported as not
+  reproduced rather than as fixed**, because the original harness is not available to rule
+  out a difference in how simultaneous the writers were.
 
 ## [1.15.2] - 2026-09-01
 
@@ -2558,6 +3088,7 @@ behaviour.
   AI-contract E2E suite (`tests/test_30_aihelp_contract.py`) to lock in the
   revised help text and contract invariants.
 
+[2.0.0]: https://github.com/FlavioCFOliveira/Groadmap/compare/v1.15.2...v2.0.0
 [1.15.2]: https://github.com/FlavioCFOliveira/Groadmap/compare/v1.15.1...v1.15.2
 [1.15.1]: https://github.com/FlavioCFOliveira/Groadmap/compare/v1.15.0...v1.15.1
 [1.15.0]: https://github.com/FlavioCFOliveira/Groadmap/compare/v1.14.0...v1.15.0

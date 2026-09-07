@@ -5,7 +5,7 @@
 // flag is absent MUST refuse a terminal WITHOUT reading it. Reading it is the
 // defect: the process waits for a query nobody is going to type, prints nothing,
 // and never returns. That failure was observed rather than imagined — an
-// invocation of `rmp graph query` that omitted --query, with a terminal on
+// invocation of `rmp graph execute` that omitted --query, with a terminal on
 // standard input, hung for roughly forty minutes before it was killed
 // (SPEC/GRAPH.md § Standard Input That Supplies No Query). The refusal is part
 // of the contract, not a remark about how fast a check happens to be, so the
@@ -15,7 +15,7 @@
 // own: that bit says "character device", and a terminal is only one kind. Both
 // os.DevNull and /dev/zero are character devices too, so the bit cannot tell an
 // interactive terminal from either. Answering with it would make
-// `rmp graph query < /dev/zero` report "no query supplied" (exit code 2) about a
+// `rmp graph execute < /dev/zero` report "no query supplied" (exit code 2) about a
 // source that does supply bytes — a megabyte of them per millisecond, which the
 // maximum query length refuses with exit code 6. The two verdicts are
 // deliberately distinct (SPEC/GRAPH.md § Standard Input That Supplies No Query),

@@ -185,6 +185,15 @@ func taskGet(args []string) error {
 		return err
 	}
 
+	// A repeated id names the same task each time, so the list is reduced to the
+	// set it denotes before the query is built: the IN clause carries one
+	// placeholder per distinct id, and the array published below therefore never
+	// holds two elements with the same id (SPEC/COMMANDS.md § Task ID Lists
+	// (Batch Commands)). Deduplicating here rather than inside
+	// ParseCommaSeparatedIDs is deliberate -- `sprint reorder` shares that parser
+	// and a repeat is a real error there, which silent deduplication would hide.
+	ids = utils.DistinctIDs(ids)
+
 	database, err := db.OpenExisting(roadmapName)
 	if err != nil {
 		return err
@@ -204,8 +213,8 @@ func taskGet(args []string) error {
 	// SPEC/ARCHITECTURE.md error example, any unknown ID — including the
 	// all-invalid case, which previously returned null/exit 0 — must fail with
 	// exit 4 (utils.ErrNotFound) rather than silently dropping the missing IDs.
-	if len(tasks) != len(ids) {
-		return fmt.Errorf("%w: some tasks not found", utils.ErrNotFound)
+	if err := utils.TasksNotFoundError(utils.MissingIDs(ids, taskIDsOf(tasks))); err != nil {
+		return err
 	}
 
 	return utils.PrintJSON(tasks)

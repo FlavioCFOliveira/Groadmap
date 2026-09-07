@@ -7,7 +7,7 @@
 // exit codes on purpose:
 //
 //   - a producer that writes too much. The query read from standard input was
-//     io.ReadAll with no bound, so 256 MiB offered to `rmp graph query` reached
+//     io.ReadAll with no bound, so 256 MiB offered to `rmp graph execute` reached
 //     867 MB of resident memory and 15.9 s of wall time before anything rejected
 //     it. That is now a validation failure, exit code 6.
 //   - a producer that writes NOTHING. The same unbounded read, given a terminal,

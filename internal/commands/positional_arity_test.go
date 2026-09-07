@@ -357,9 +357,9 @@ func TestPositionalArity_SelfRefusingCommandsKeepTheirWording(t *testing.T) {
 		want   string
 	}{
 		{
-			label:  "graph query with a bare Cypher query",
+			label:  "graph execute with a bare Cypher query",
 			family: "graph",
-			args:   []string{"query", "-r", f.roadmap, "MATCH (n:Incident) RETURN n"},
+			args:   []string{"execute", "-r", f.roadmap, "MATCH (n:Incident) RETURN n"},
 			want:   `invalid input: unexpected argument "MATCH (n:Incident) RETURN n" (graph queries use --query or stdin)`,
 		},
 		{

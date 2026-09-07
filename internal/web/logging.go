@@ -5,16 +5,9 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
-)
 
-// logTimeFormat is the single canonical Groadmap timestamp: ISO 8601, always
-// UTC, exactly three digits of milliseconds, and an explicit Z suffix
-// (SPEC/DATA_FORMATS.md § Dates - ISO 8601 with UTC). Applied to a time already
-// converted with UTC(), the trailing "Z07:00" renders as the literal "Z", so a
-// log record and a task's created_at are directly comparable and a log read in
-// one time zone means the same instant as the same log read anywhere else
-// (SPEC/WEB.md § Logger Configuration, rule 5).
-const logTimeFormat = "2006-01-02T15:04:05.000Z07:00"
+	"github.com/FlavioCFOliveira/Groadmap/internal/utils"
+)
 
 // logger is the web server's diagnostic logger: the console counterpart of the
 // deliberately opaque HTTP responses. Every failure the server absorbs into an
@@ -33,7 +26,8 @@ var logger = newLogger(os.Stderr)
 
 // newLogger builds the server's logger over w: a slog.TextHandler emitting one
 // line of key=value pairs per record, with DEBUG suppressed and every timestamp
-// rewritten to UTC.
+// rewritten to the project's canonical ISO 8601 UTC
+// (SPEC/WEB.md § Logger Configuration, rules 1, 3 and 5).
 //
 // TextHandler is what makes the log safe to read as an account of what
 // happened: it quotes any value containing whitespace, a quotation mark, or a
@@ -42,24 +36,19 @@ var logger = newLogger(os.Stderr)
 // `level=ERROR msg="..."` therefore stays inside its own quoted value and
 // cannot terminate the record, so a crafted request cannot write a second,
 // invented record onto the operator's console (SPEC/WEB.md § Log Integrity).
+//
+// The timestamp hook is internal/utils' rather than this package's. It was this
+// package's until rmp task #386, which found `rmp graph serve` stamping its own
+// stderr in local time because the rule had been implemented HERE instead of
+// where the format lives: internal/utils already owned ISO8601Format and
+// FormatISO8601, and a second expression of one format is how two surfaces come
+// to answer the same question differently. Both long-lived surfaces now install
+// the same hook, and there is one definition of the format in the module.
 func newLogger(w io.Writer) *slog.Logger {
 	return slog.New(slog.NewTextHandler(w, &slog.HandlerOptions{
 		Level:       slog.LevelInfo,
-		ReplaceAttr: utcTimestamp,
+		ReplaceAttr: utils.SlogTimestampUTC,
 	}))
-}
-
-// utcTimestamp is the handler's ReplaceAttr hook. slog.TextHandler timestamps
-// in the machine's LOCAL zone with a numeric offset by default, which satisfies
-// neither the "always UTC" nor the "Z suffix" rule; this rewrites the top-level
-// time attribute to the canonical format. It touches only the built-in time key
-// at the top level (len(groups) == 0), so an attribute a caller happens to name
-// "time" inside a group is left alone.
-func utcTimestamp(groups []string, a slog.Attr) slog.Attr {
-	if len(groups) == 0 && a.Key == slog.TimeKey && a.Value.Kind() == slog.KindTime {
-		a.Value = slog.StringValue(a.Value.Time().UTC().Format(logTimeFormat))
-	}
-	return a
 }
 
 // logServerError records the one ERROR that accompanies every HTTP 500 the

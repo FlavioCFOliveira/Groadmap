@@ -230,8 +230,10 @@ func TestNosecRegisterAccountsForEverySuppressionInTheSource(t *testing.T) {
 	}
 	if register.totalNonTest != totalNonTest {
 		t.Errorf("%s declares %d suppressions outside _test.go; the sweep finds %d.\n"+
-			"That is the figure gosec's summary prints as `Nosec:` and the release notes quote, "+
-			"because gosec does not scan test files without -tests",
+			"Both figures count RULES, not directives: a directive naming two rules counts once "+
+			"under each. gosec's summary prints `Nosec:` as a count of the DIRECTIVES it honoured, "+
+			"so the two agree only while every directive names one rule; gosec also does not scan "+
+			"test files without -tests",
 			gosecRegisterRelPath, register.totalNonTest, totalNonTest)
 	}
 }

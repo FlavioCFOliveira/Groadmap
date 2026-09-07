@@ -301,21 +301,29 @@ func TestEncodeFailureIsLogged(t *testing.T) {
 // Acceptance Criterion 142: the graph query bar's 400 is a WARN
 // ---------------------------------------------------------------------------
 
-// TestGraphQueryBarFailureIsWarnLogged asserts the query-bar rejection is
-// recorded at WARN rather than ERROR — the server did not fail, the user's
-// query did — and that the record carries the same kind the JSON response body
-// carries, so console and page agree on the classification.
+// TestGraphQueryBarFailureIsWarnLogged asserts a query-bar failure is recorded
+// at WARN rather than ERROR — the server did not fail, the user's statement did
+// — and that the record carries the same kind the JSON response body carries, so
+// console and page agree on the classification.
+//
+// The probe is an unexecutable statement. It used to be a CREATE, which the
+// endpoint refused as not read-only; the endpoint now runs a CREATE and answers
+// 200, so that probe would assert nothing (SPEC/WEB.md Acceptance Criterion 142).
 func TestGraphQueryBarFailureIsWarnLogged(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 
 	const name = "graph-query-roadmap"
 	seedRoadmap(t, name)
+	// A roadmap with no graph directory is an empty graph and is answered 200
+	// without the statement ever running, so the store has to exist for this
+	// failure to be reachable at all.
+	seedGraph(t, name, `CREATE (s:Spec {key:'seeded'})`)
 
 	buf := captureLog(t)
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet,
-		"/roadmaps/"+name+"/graph/data?q="+url.QueryEscape("CREATE (n:Injected) RETURN n"), nil)
+		"/roadmaps/"+name+"/graph/data?q="+url.QueryEscape("MATCH (n) RETURN"), nil)
 	handler().ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusBadRequest {
@@ -326,30 +334,26 @@ func TestGraphQueryBarFailureIsWarnLogged(t *testing.T) {
 		"level=WARN",
 		`msg="graph query bar request failed"`,
 		"roadmap="+name,
-		"kind="+graphErrNotReadOnly,
+		"kind="+graphErrExecution,
 		"status=400",
 		"err=",
 	)
 	if strings.Contains(record, "level=ERROR") {
-		t.Errorf("a rejected user query must not be recorded as a server error\nrecord: %s", record)
+		t.Errorf("a failed user statement must not be recorded as a server error\nrecord: %s", record)
 	}
 	// The page's own classification must match the console's.
-	if !strings.Contains(rec.Body.String(), graphErrNotReadOnly) {
-		t.Errorf("response body does not carry kind %q: %s", graphErrNotReadOnly, rec.Body.String())
+	if !strings.Contains(rec.Body.String(), graphErrExecution) {
+		t.Errorf("response body does not carry kind %q: %s", graphErrExecution, rec.Body.String())
 	}
 }
 
-// TestGraphSchemaIntrospectionRefusalIsWarnLogged asserts the same for the
-// schema-introspection refusal, the newest member of the endpoint's failure set
-// (rmp task #344). Acceptance Criterion 142 binds EVERY query-bar failure
-// "whatever its kind", so a class added to the contract has to arrive on the
-// console under the same rule as the others: exactly one WARN, carrying that
-// kind and the same reason the JSON body carries.
-//
-// It is asserted separately rather than assumed from the sibling above, because
-// the refusal is decided at a different point in loadGraphView and a refusal
-// that returned an unclassified error would answer 500 and log an ERROR.
-func TestGraphSchemaIntrospectionRefusalIsWarnLogged(t *testing.T) {
+// TestGraphInvalidLimitIsWarnLogged asserts the same for the other kind the
+// endpoint publishes. Acceptance Criterion 142 binds EVERY query-bar failure
+// "whatever its kind", and the two are decided at different points in
+// loadGraphView — the limit before the store is opened, the execution failure
+// once the statement is running — so a rejection that returned an unclassified
+// error would answer 500 and log an ERROR.
+func TestGraphInvalidLimitIsWarnLogged(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 
@@ -358,8 +362,7 @@ func TestGraphSchemaIntrospectionRefusalIsWarnLogged(t *testing.T) {
 
 	buf := captureLog(t)
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet,
-		"/roadmaps/"+name+"/graph/data?q="+url.QueryEscape("SHOW INDEXES"), nil)
+	req := httptest.NewRequest(http.MethodGet, "/roadmaps/"+name+"/graph/data?limit=7", nil)
 	handler().ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusBadRequest {
@@ -370,15 +373,43 @@ func TestGraphSchemaIntrospectionRefusalIsWarnLogged(t *testing.T) {
 		"level=WARN",
 		`msg="graph query bar request failed"`,
 		"roadmap="+name,
-		"kind="+graphErrSchemaIntrospection,
+		"kind="+graphErrInvalidLimit,
 		"status=400",
 		"err=",
 	)
 	if strings.Contains(record, "level=ERROR") {
-		t.Errorf("a refused user query must not be recorded as a server error\nrecord: %s", record)
+		t.Errorf("a rejected limit must not be recorded as a server error\nrecord: %s", record)
 	}
-	if !strings.Contains(rec.Body.String(), graphErrSchemaIntrospection) {
-		t.Errorf("response body does not carry kind %q: %s", graphErrSchemaIntrospection, rec.Body.String())
+	if !strings.Contains(rec.Body.String(), graphErrInvalidLimit) {
+		t.Errorf("response body does not carry kind %q: %s", graphErrInvalidLimit, rec.Body.String())
+	}
+}
+
+// TestGraphStatementThatWritesIsNotLogged pins the boundary the other way: a
+// statement that SUCCEEDS is an ordinary outcome and leaves the console silent,
+// even though it changed the roadmap's knowledge graph. The endpoint writes no
+// audit entry and logs no record for a successful write; what a caller did
+// through the query bar is not recorded anywhere (SPEC/WEB.md § Server Logging,
+// what is not logged).
+func TestGraphStatementThatWritesIsNotLogged(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	const name = "graph-query-roadmap"
+	seedRoadmap(t, name)
+	seedGraph(t, name, `CREATE (s:Spec {key:'seeded'})`)
+
+	buf := captureLog(t)
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet,
+		"/roadmaps/"+name+"/graph/data?q="+url.QueryEscape("MATCH (n) DETACH DELETE n"), nil)
+	handler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+	if got := strings.TrimSpace(buf.String()); got != "" {
+		t.Errorf("a successful statement left a log record; the console carries failures only\nrecord: %s", got)
 	}
 }
 

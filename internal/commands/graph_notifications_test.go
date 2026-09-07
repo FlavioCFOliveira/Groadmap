@@ -99,11 +99,11 @@ func captureStdStreams(t *testing.T, fn func()) (stdout, stderr string) {
 // Cartesian-product advisory.
 func seedSpecAndTask(t *testing.T, name string) {
 	t.Helper()
-	if err := runGraphCreate([]string{"-r", name, "--query",
+	if err := runGraphExecute([]string{"-r", name, "--query",
 		"CREATE (s:Spec {key:'query-notifications'})"}); err != nil {
 		t.Fatalf("seed Spec: %v", err)
 	}
-	if err := runGraphCreate([]string{"-r", name, "--query",
+	if err := runGraphExecute([]string{"-r", name, "--query",
 		"CREATE (t:Task {key:'wire-notifications'})"}); err != nil {
 		t.Fatalf("seed Task: %v", err)
 	}
@@ -135,7 +135,7 @@ func TestGraphNotifications_DisconnectedMatch(t *testing.T) {
 	seedSpecAndTask(t, name)
 
 	stdout, stderr := captureStdStreams(t, func() {
-		if err := runGraphQuery([]string{"-r", name, "--query",
+		if err := runGraphExecute([]string{"-r", name, "--query",
 			"MATCH (a:Spec), (b:Task) RETURN a.key, b.key"}); err != nil {
 			t.Errorf("disconnected query returned error: %v", err)
 		}
@@ -167,7 +167,7 @@ func TestGraphNotifications_ConnectedQueryQuiet(t *testing.T) {
 	seedSpecAndTask(t, name)
 
 	stdout, stderr := captureStdStreams(t, func() {
-		if err := runGraphQuery([]string{"-r", name, "--query",
+		if err := runGraphExecute([]string{"-r", name, "--query",
 			"MATCH (s:Spec) RETURN s.key"}); err != nil {
 			t.Errorf("connected query returned error: %v", err)
 		}
@@ -204,7 +204,7 @@ func TestGraphNotifications_WritePathWired(t *testing.T) {
 	// it under graph create, and the form would trigger the advisory on the
 	// read path.
 	stdout, stderr := captureStdStreams(t, func() {
-		if err := runGraphCreate([]string{"-r", name, "--query",
+		if err := runGraphExecute([]string{"-r", name, "--query",
 			"MATCH (a:Spec), (b:Task) CREATE (l:Link {note:'join'})"}); err != nil {
 			t.Errorf("write query returned error: %v", err)
 		}

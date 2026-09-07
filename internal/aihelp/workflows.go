@@ -255,19 +255,19 @@ func staticWorkflows() []Workflow {
 			},
 			Steps: []WorkflowStep{
 				{
-					Command: "rmp graph create -r <name> --query \"CREATE (s:Spec {key:'<key>', title:'<title>', status:'pending'})\"",
+					Command: "rmp graph execute -r <name> --query \"CREATE (s:Spec {key:'<key>', title:'<title>', status:'pending'})\"",
 					Purpose: "Add a specification node. Repeat once per element (Spec, Module, Decision, Dependency). Use MERGE instead of CREATE to make the operation idempotent.",
 				},
 				{
-					Command: "rmp graph create -r <name> --query \"MATCH (a:Spec {key:'<from>'}), (b:Module {path:'<to>'}) CREATE (a)-[:IMPLEMENTED_BY]->(b)\"",
+					Command: "rmp graph execute -r <name> --query \"MATCH (a:Spec {key:'<from>'}), (b:Module {path:'<to>'}) CREATE (a)-[:IMPLEMENTED_BY]->(b)\"",
 					Purpose: "Link two existing nodes with a typed, directed relationship. Repeat for each relationship to add.",
 				},
 				{
-					Command: "rmp graph query -r <name> --query \"MATCH (s:Spec)-[:IMPLEMENTED_BY]->(m:Module) RETURN s.key AS spec, m.path AS module\"",
+					Command: "rmp graph execute -r <name> --query \"MATCH (s:Spec)-[:IMPLEMENTED_BY]->(m:Module) RETURN s.key AS spec, m.path AS module\"",
 					Purpose: "Read and verify the recorded relationships. Any MATCH ... RETURN query can be used here.",
 				},
 				{
-					Command: "rmp graph search -r <name> --query \"MATCH (a)-[*1..3]->(dep:Dependency) WHERE a.key='<key>' RETURN dep.name AS transitive_dep\"",
+					Command: "rmp graph execute -r <name> --query \"MATCH (a)-[*1..3]->(dep:Dependency) WHERE a.key='<key>' RETURN dep.name AS transitive_dep\"",
 					Purpose: "Traverse the graph up to N hops to discover transitive dependencies or impacts not visible from direct relationships.",
 				},
 			},

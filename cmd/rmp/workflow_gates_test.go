@@ -379,7 +379,7 @@ func TestWorkflowBuildMatricesMatchSpec(t *testing.T) {
 		if got := built[i]; got.goos != want.goos || got.goarch != want.goarch || got.goarm != want.goarm {
 			t.Errorf(".github/workflows/release.yml: build matrix entry %d is %s/%s (GOARM %q), but "+
 				"SPEC/BUILD.md § Supported Build Targets has %s there. § Release Workflow requires the "+
-				"eleven Primary Platforms in the same order.",
+				"nine Primary Platforms in the same order.",
 				i, got.goos, got.goarch, got.goarm, want.name)
 		}
 	}

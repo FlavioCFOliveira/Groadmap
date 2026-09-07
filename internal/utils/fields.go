@@ -112,7 +112,7 @@ func (f Field) String() string {
 //
 // The eight fields are addressed by FLAGS and their names are a closed table, so
 // Field can be a closed integer enum and the refusal can be built from it. A
-// Cypher property value written by `rmp graph create` / `graph update` is
+// Cypher property value written by `rmp graph execute` is
 // subject to the very same two rules (SPEC/GRAPH.md § Property Value Content
 // Rules), but the name that identifies it — the property key — is chosen by the
 // caller at the keyboard. It is unbounded, so it cannot be a Field, and the type

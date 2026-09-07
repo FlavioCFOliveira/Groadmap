@@ -474,9 +474,18 @@ class TestContractFlagsAreFullyDocumented(_ContractFixture):
                 contract_flags -= EXEMPT_FLAGS
 
                 if contract_flags and not found.get(sub_name, False):
+                    # sorted() over (short, long) pairs cannot compare a missing
+                    # short form against a present one -- the contract emits
+                    # `short: null`, and None is not orderable against a string.
+                    # This branch is the only place the pairs are sorted, so it
+                    # crashed with a TypeError instead of reporting the missing
+                    # section the moment a subcommand with a short-form-less flag
+                    # went undocumented. Sorting on the long name alone is what
+                    # the message reads by anyway.
+                    listed = sorted(contract_flags, key=lambda pair: pair[1])
                     problems.append(
                         f"DOCS/commands/{doc_file}: no '### {sub_name}' section found, "
-                        f"but the contract publishes {sorted(contract_flags)} for "
+                        f"but the contract publishes {listed} for "
                         f"`rmp {family} {sub_name}`"
                     )
                     continue

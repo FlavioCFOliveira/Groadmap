@@ -55,6 +55,7 @@ import (
 	"github.com/FlavioCFOliveira/GoGraph/store/wal"
 
 	"github.com/FlavioCFOliveira/Groadmap/internal/graphkeys"
+	"github.com/FlavioCFOliveira/Groadmap/internal/graphstore"
 )
 
 const (
@@ -512,21 +513,6 @@ func readAuditQuery(t *testing.T) string {
 	return strings.TrimSpace(fences[0])
 }
 
-// TestKeyUniqueness_PublishedAuditQueryIsAcceptedByBothReadSubcommands holds the
-// specification's claim that step 1 "is accepted by both read subcommands" to
-// the guard rail that decides it. The query is parsed out of the specification,
-// so editing it into something the guard rail refuses fails here.
-func TestKeyUniqueness_PublishedAuditQueryIsAcceptedByBothReadSubcommands(t *testing.T) {
-	query := readAuditQuery(t)
-
-	for _, subcmd := range []string{"query", "search"} {
-		if err := validateGuardRail(subcmd, "read-only", query); err != nil {
-			t.Errorf("graph %s rejects the audit query published by %s: %v\nquery:\n%s",
-				subcmd, graphSpecPath, err, query)
-		}
-	}
-}
-
 // TestKeyUniqueness_PublishedAuditQueryRunsAndReturnsEveryKeyedNode runs the
 // published query against a real GoGraph store holding the canonical witness of
 // the defect: one file path written with a precomposed E-acute and the same path
@@ -711,7 +697,7 @@ var keyUniquenessSeed = []string{
 	"CREATE (:Doc {key:'" + keyDecomposed + "'})",
 	"CREATE (:Spec {key:'SPEC/GRAPH.md'})",
 	"CREATE (:CodeFile {key:'internal/commands/graph.go'})",
-	"CREATE (:Component {key:'internal/cypherguard'})",
+	"CREATE (:Component {key:'internal/graphlock'})",
 }
 
 // seedKeyUniquenessGraph builds the witness graph in a temporary directory.
@@ -735,7 +721,7 @@ func seedKeyUniquenessGraph(t *testing.T) string {
 func writeKeyUniquenessTx(t *testing.T, graphDir, query string) {
 	t.Helper()
 
-	res, err := recovery.Open[string, float64](graphDir, graphReadOpts)
+	res, err := recovery.Open[string, float64](graphDir, graphstore.RecoveryOptions())
 	if err != nil {
 		t.Fatalf("opening the witness graph for seeding: %v", err)
 	}
@@ -761,13 +747,13 @@ func writeKeyUniquenessTx(t *testing.T, graphDir, query string) {
 }
 
 // runGraphQueryForTest executes a read query against the witness graph exactly
-// as `rmp graph query` does — recovery.Open then cypher.NewEngine — and
+// as a graph read did before the collapse — recovery.Open then cypher.NewEngine — and
 // serialises the result through the CLI's own serializeGraphResult, so what the
 // gate inspects is what the command would print.
 func runGraphQueryForTest(t *testing.T, graphDir, query string) ([]string, [][]any) {
 	t.Helper()
 
-	res, err := recovery.Open[string, float64](graphDir, graphReadOpts)
+	res, err := recovery.Open[string, float64](graphDir, graphstore.RecoveryOptions())
 	if err != nil {
 		t.Fatalf("opening the witness graph: %v", err)
 	}

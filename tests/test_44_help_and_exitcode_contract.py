@@ -26,7 +26,7 @@ C. Help content structural checks (binary-level):
        --title, --description, --order, "CLOSED", "immutable".
    10. rmp sprint --help mentions exit code 5 (order collision).
    11. rmp sprint tasks --help mentions -s / --status.
-   12. Every graph subcommand (create/query/update/delete/search) help
+   12. Every graph subcommand (execute) help
        contains "Output (stdout JSON):" and "-q" / "--query".
    13. No hard TAB character in any help output for any command.
    14. rmp sprint --help, rmp sprint create --help and rmp sprint update --help
@@ -70,7 +70,11 @@ TASK_SUBS = [
     "subtasks",
     "add-dep", "remove-dep", "blockers", "blocking",
 ]
-GRAPH_SUBS = ["create", "query", "update", "delete", "search"]
+# `rmp graph` publishes exactly one subcommand
+# (SPEC/COMMANDS.md section "Graph Management"). The list is kept as a list
+# because every use below iterates it, and because a second subcommand added
+# tomorrow belongs here rather than in five places.
+GRAPH_SUBS = ["execute"]
 
 # Sentences that every surface documenting the sprint -d/--description flag
 # must carry (plain-text help and the --ai-help JSON contract alike), per
@@ -136,7 +140,7 @@ class TestBannerInvariantsBinary:
             ("roadmap", "create"),
             ("backlog", "list"),
             ("audit", "history"),
-            ("graph", "query"),
+            ("graph", "execute"),
         ]
         for family, sub in samples:
             _, out, _ = _run(self.cli, [family, sub, "--help"], {"HOME": self.home})

@@ -67,7 +67,7 @@ class TestAuditStatsKeys:
             "Refine flag-like detection in graph query parsing",
             "Operators must be able to query the graph with negative numeric literals",
             "Replace the leading-dash heuristic in readQuery with a precise flag-like check",
-            "rmp graph query --query '-1 RETURN 1' reaches the engine instead of failing as a missing value",
+            "rmp graph execute --query '-1 RETURN 1' reaches the engine instead of failing as a missing value",
             priority=7,
         )
         self.test.run_cmd(["task", "prio", "-r", self.roadmap, str(task_id), "8"])

@@ -418,12 +418,30 @@ func publishedKeyLists() []keyListCase {
 	return slices.Concat(modelSurfaces, graphKeyLists())
 }
 
-// graphKeyLists covers the graph family, where every help surface publishes the
-// same two result envelopes.
+// graphKeyLists covers the graph family, whose three help surfaces that publish
+// a result envelope — the family help and the two subcommands that run a
+// statement — publish the same two.
 //
 // Each surface introduces them with its own wording, so the phrase is given per
-// surface. A read-only subcommand has no no-RETURN form to publish, which an
-// empty okMarker records.
+// surface. The family help sketches the pair by what a statement produces, and
+// `graph execute` and `graph client` name the same discriminator: "produces
+// result columns" and "carries a RETURN clause" coincide for a data statement but
+// part company on the schema statements those subcommands also run, where
+// SHOW INDEXES produces columns while carrying no RETURN
+// (DATA_FORMATS.md § Graph Write Result, "Why the discriminator is the columns
+// and not the RETURN clause"). There is no surface with only one envelope to
+// publish: the read-only subcommands that had no no-RETURN form are gone.
+//
+// `graph client` is here for a reason beyond completeness.
+// SPEC/DATA_FORMATS.md § Graph Client Result requires the bytes it writes to be
+// the bytes `graph execute` writes for the same statement, so the two helps
+// publishing the same key set is the documented half of that identity — and
+// TestPublishedKeyLists_CoverEveryHelpThatPublishesOne is what would have caught
+// its omission had it been left out.
+//
+// `graph serve` publishes an envelope of its own — the startup object — and it is
+// not here, because it is not a result shape and no marker on this list reads it;
+// registry_schema_parity_test.go holds it against graphServeResult instead.
 func graphKeyLists() []keyListCase {
 	surfaces := []struct {
 		name          string
@@ -432,27 +450,12 @@ func graphKeyLists() []keyListCase {
 		okMarker      string
 	}{
 		{"graph family help", printGraphHelp,
-			"Read subcommands and write subcommands with RETURN:",
-			"Write subcommands without RETURN:"},
-		{"graph create help", printGraphCreateHelp,
-			"With a RETURN clause:", "Without a RETURN clause:"},
-		{"graph query help", printGraphQueryHelp,
-			"Output (stdout JSON):", ""},
-		// `graph update` publishes the pair under a different phrase from its two
-		// sibling write subcommands, and the difference is the specification's.
-		// For a data-writing query "produces result columns" and "carries a
-		// RETURN clause" coincide exactly, so `create` and `delete` may say
-		// either; they part company on the schema statements only `update`
-		// accepts, where SHOW INDEXES produces columns while carrying no RETURN
-		// (DATA_FORMATS.md § Graph Write Result, "Why the discriminator is the
-		// columns and not the RETURN clause"). Its help therefore names the
-		// discriminator that is true of every statement it runs.
-		{"graph update help", printGraphUpdateHelp,
+			"Statement that produces result columns:",
+			"Statement that produces none:"},
+		{"graph execute help", printGraphExecuteHelp,
 			"With result columns:", "Without result columns:"},
-		{"graph delete help", printGraphDeleteHelp,
-			"With a RETURN clause:", "Without a RETURN clause:"},
-		{"graph search help", printGraphSearchHelp,
-			"Output (stdout JSON):", ""},
+		{"graph client help", printGraphClientHelp,
+			"With result columns:", "Without result columns:"},
 	}
 
 	cases := make([]keyListCase, 0, 2*len(surfaces))

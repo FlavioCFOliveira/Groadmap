@@ -30,7 +30,7 @@ End-to-end backstop against the compiled ./bin/rmp for three audit findings:
   query is refused at once. Both halves of one unbounded read, and they carry
   DIFFERENT exit codes on purpose:
 
-  - a producer that writes too much. 256 MiB offered to `rmp graph query`
+  - a producer that writes too much. 256 MiB offered to `rmp graph execute`
     reached 867 MB of resident memory and 15.9 s of wall time before anything
     rejected it. A query over 1 MiB is now refused with exit 6 after the read has
     consumed a bounded amount (SPEC/GRAPH.md § Maximum Query Length, § Bounded
@@ -96,7 +96,7 @@ class TestGraphConcurrencyInput:
         env["HOME"] = str(self.test.home_dir)
         return subprocess.Popen(
             [
-                self.test.cli_path, "graph", "create", "-r", self.roadmap,
+                self.test.cli_path, "graph", "execute", "-r", self.roadmap,
                 "--query", f'CREATE (n:Conc {{k:"{key}"}})',
             ],
             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env,
@@ -126,7 +126,7 @@ class TestGraphConcurrencyInput:
         # set of writers that returned exit 0 — no acknowledged write was lost,
         # and no failed write left a phantom node.
         result = self.test.run_cmd_json(
-            ["graph", "query", "-r", self.roadmap,
+            ["graph", "execute", "-r", self.roadmap,
              "--query", "MATCH (n:Conc) RETURN n.k"]
         )
         present = {row[0] for row in result.get("rows", [])}
@@ -139,13 +139,13 @@ class TestGraphConcurrencyInput:
 
     def test_query_flag_without_value_fails_exit_2(self):
         code, _, _ = self.test.run_cmd(
-            ["graph", "query", "-r", self.roadmap, "--query"], check=False
+            ["graph", "execute", "-r", self.roadmap, "--query"], check=False
         )
         assert code == EXIT_MISUSE, f"--query with no value must exit 2, got {code}"
 
     def test_query_flag_followed_by_flag_fails_exit_2(self):
         code, _, _ = self.test.run_cmd(
-            ["graph", "query", "-r", self.roadmap, "--query", "--bogus"], check=False
+            ["graph", "execute", "-r", self.roadmap, "--query", "--bogus"], check=False
         )
         assert code == EXIT_MISUSE, (
             f"--query whose value is a flag must exit 2 (not swallow it), got {code}"
@@ -158,7 +158,7 @@ class TestGraphConcurrencyInput:
         # accepted as the query value and handed to the engine, which rejects it
         # as invalid Cypher (exit 1) — NOT rejected as a missing value (exit 2).
         code, _, _ = self.test.run_cmd(
-            ["graph", "query", "-r", self.roadmap, "--query", "-1 RETURN 1"],
+            ["graph", "execute", "-r", self.roadmap, "--query", "-1 RETURN 1"],
             check=False,
         )
         assert code == EXIT_DB, (
@@ -172,7 +172,7 @@ class TestGraphConcurrencyInput:
         # exercising the decimal-point branch of the flag-like check — never the
         # missing-value exit 2.
         code, _, _ = self.test.run_cmd(
-            ["graph", "query", "-r", self.roadmap, "--query", "-.5"],
+            ["graph", "execute", "-r", self.roadmap, "--query", "-.5"],
             check=False,
         )
         assert code == EXIT_DB, (
@@ -187,7 +187,7 @@ class TestGraphConcurrencyInput:
         env = os.environ.copy()
         env["HOME"] = str(self.test.home_dir)
         result = subprocess.run(
-            [self.test.cli_path, "graph", "query", "-r", self.roadmap, "--bogus"],
+            [self.test.cli_path, "graph", "execute", "-r", self.roadmap, "--bogus"],
             input="MATCH (n) RETURN n", capture_output=True, text=True, env=env,
         )
         assert result.returncode == EXIT_MISUSE, (
@@ -210,7 +210,7 @@ class TestGraphConcurrencyInput:
         so the graph must be byte-for-byte the graph it was.
         """
         result = self.test.run_cmd_json(
-            ["graph", "query", "-r", self.roadmap,
+            ["graph", "execute", "-r", self.roadmap,
              "--query", "MATCH (n:Bounded) RETURN n.key ORDER BY n.key"]
         )
         return sorted(row[0] for row in result.get("rows", []))
@@ -221,7 +221,7 @@ class TestGraphConcurrencyInput:
 
         The bound is the security property. The unbounded read this replaces let
         whoever was writing decide how much this process buffered: 256 MiB
-        offered to `rmp graph query` produced 867 MB of peak resident memory and
+        offered to `rmp graph execute` produced 867 MB of peak resident memory and
         15.9 s of wall time, all spent on a query that was never going to be
         accepted. Any pipeline feeding rmp from an untrusted source -- a fetched
         file, an agent's tool output -- could drive the machine into swap through
@@ -235,7 +235,7 @@ class TestGraphConcurrencyInput:
         proves the read stopped; 64 MiB proves it did not.
         """
         self.test.run_cmd(
-            ["graph", "create", "-r", self.roadmap,
+            ["graph", "execute", "-r", self.roadmap,
              "--query", "CREATE (n:Bounded {key:'sentinel-before-the-refusal'})"]
         )
         before = self._graph_node_keys()
@@ -244,7 +244,7 @@ class TestGraphConcurrencyInput:
         chunk = b"a" * (64 * 1024)
         offered = 64 * 1024 * 1024
         proc = subprocess.Popen(
-            [self.test.cli_path, "graph", "query", "-r", self.roadmap],
+            [self.test.cli_path, "graph", "execute", "-r", self.roadmap],
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
             env=self._graph_env(),
         )
@@ -317,7 +317,7 @@ class TestGraphConcurrencyInput:
         )
 
         result = subprocess.run(
-            [self.test.cli_path, "graph", "create", "-r", self.roadmap],
+            [self.test.cli_path, "graph", "execute", "-r", self.roadmap],
             input=query.encode(), capture_output=True, env=self._graph_env(),
         )
         assert result.returncode == EXIT_OK, (
@@ -336,7 +336,7 @@ class TestGraphConcurrencyInput:
         print(f"✓ a {len(query)}-byte query from standard input executes normally")
 
     def _assert_no_query_refusal(self, stdin_arg, description):
-        """Run `rmp graph query` with the given standard input and assert the
+        """Run `rmp graph execute` with the given standard input and assert the
         missing-query refusal: exit 2, the exact message, nothing on stdout, and
         a process that did NOT wait.
 
@@ -346,7 +346,7 @@ class TestGraphConcurrencyInput:
         """
         start = time.monotonic()
         proc = subprocess.Popen(
-            [self.test.cli_path, "graph", "query", "-r", self.roadmap],
+            [self.test.cli_path, "graph", "execute", "-r", self.roadmap],
             stdin=stdin_arg, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
             env=self._graph_env(),
         )
