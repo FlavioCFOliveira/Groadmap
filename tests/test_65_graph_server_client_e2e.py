@@ -106,7 +106,8 @@ import time
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from tests.base_test import GroadmapTestBase, assert_graph_write_shape
+from tests.base_test import (GroadmapTestBase, assert_graph_write_shape,
+                             measure_socket_path_bound)
 
 
 EXIT_OK = 0
@@ -177,26 +178,47 @@ STATEMENT_BUDGET_S = 5.0
 # and 9.2s.
 BACKSTOP_FREEZE_DELAYS_S = (0.4, 1.0, 2.0)
 
-# A Unix domain socket path is capped at 108 bytes on Linux -- sun_path's
-# size -- and a HOME rooted under a long build/session directory blows past
-# it the moment a roadmap name is appended (rmp task #367 FINDING #266,
-# measured there against exactly this failure). tempfile.mkdtemp() defaults
-# to $TMPDIR or /tmp, which is short; this constant is the guard that turns a
-# violation into a diagnosable setup failure instead of a mysterious "bind:
-# invalid argument" deep inside a signal-handling test.
-_MAX_SUN_PATH = 108
+# A Unix domain socket path is bounded by sun_path, and a HOME rooted under a
+# long build/session directory blows past it the moment a roadmap name is
+# appended (rmp task #367 FINDING #266, measured there against exactly this
+# failure). tempfile.mkdtemp() defaults to $TMPDIR or /tmp, which is short;
+# this guard turns a violation into a diagnosable setup failure instead of a
+# mysterious "bind: invalid argument" deep inside a signal-handling test.
+#
+# The bound is MEASURED rather than written down. This module used to declare
+# 108 -- Linux's sun_path size -- which is right here and too PERMISSIVE on
+# macOS, FreeBSD and OpenBSD, where the bound is 103 (rmp task #412). A guard
+# that is too permissive is worse than none: it passes, and then the failure it
+# exists to explain arrives anyway, with the errno it exists to replace.
+# base_test owns the one measurement; the result is cached because binding a
+# few hundred sockets once per module is cheap and once per call is not.
+_measured_bound = None
+
+
+def _max_sun_path() -> int:
+    """The greatest socket-path length this platform binds, measured once."""
+    global _measured_bound
+    if _measured_bound is None:
+        probe = tempfile.mkdtemp(prefix="sunpath-")
+        try:
+            _measured_bound = measure_socket_path_bound(probe)
+        finally:
+            os.rmdir(probe)
+    return _measured_bound
 
 
 def _assert_socket_path_fits(path: str):
-    """Guard the trap SPEC/GRAPH.md documents: a derived socket path over 108
-    bytes fails to bind for a reason ("bind: invalid argument") that gives no
-    hint the path itself is the cause. Failing here, with the path and its
-    length spelled out, is what makes that diagnosable instead of mysterious.
+    """Guard the trap SPEC/GRAPH.md documents: a derived socket path over the
+    platform's bound fails to bind for a reason ("bind: invalid argument") that
+    gives no hint the path itself is the cause. Failing here, with the path and
+    its length spelled out, is what makes that diagnosable instead of
+    mysterious.
     """
     encoded = os.fsencode(path)
-    assert len(encoded) < _MAX_SUN_PATH, (
-        f"derived socket path is {len(encoded)} bytes, at or over the "
-        f"AF_UNIX sun_path limit of {_MAX_SUN_PATH}: {path!r}. The harness "
+    bound = _max_sun_path()
+    assert len(encoded) <= bound, (
+        f"derived socket path is {len(encoded)} bytes, over this platform's "
+        f"measured AF_UNIX sun_path bound of {bound}: {path!r}. The harness "
         f"must use a short HOME (tempfile.mkdtemp() under $TMPDIR/tmp) and a "
         f"short roadmap name."
     )

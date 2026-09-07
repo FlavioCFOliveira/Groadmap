@@ -3591,7 +3591,11 @@ statement is refused, and neither prefix is accepted on a schema statement — a
   answering there takes the statement, and a path that is absent or refuses the
   connection sends the invocation to the store under the exclusive lock, exactly
   as before the flag existed (see `GRAPH.md § Server Resolution`). Supplying the
-  flag with an empty value is a missing parameter (exit code 2). It is the flag
+  flag with an empty value is a missing parameter (exit code 2). Supplying a path
+  longer than the platform allows fails the invocation with exit code 1 and does
+  **not** send it to the store: it is the one case in which this flag's value
+  decides more than which socket is looked at, because the caller named a socket
+  no process can create (`GRAPH.md § Socket Path Length`, rule 5). It is the flag
   that lets the CLI follow a server started with `--socket`; the web graph data
   endpoint has no equivalent and cannot (see
   `GRAPH.md § Serving on a Non-Default Socket`).
@@ -3672,6 +3676,7 @@ original the day the original changed, which is the outcome
 | 3 | No roadmap selected and none provided via `-r` (`utils.ErrNoRoadmap`). |
 | 4 | Selected roadmap does not exist (`utils.ErrNotFound`). |
 | 6 | The statement is longer than the maximum query length of 1 MiB (1048576 bytes), whether it arrived through `--query` or through standard input (`utils.ErrValidation`). See `GRAPH.md § Maximum Query Length`. This is the only cause of exit code 6 the command has. |
+| 1 | `--socket` was supplied with a path longer than the platform allows a socket path to be, so no socket can exist there (`utils.ErrGraphServer`). The store was not opened and no lock was taken: the invocation does not fall back to it, because the caller named a socket rather than merely finding none. See `GRAPH.md § Socket Path Length`, rule 5. |
 | 1 | The roadmap's socket answers, but no server could be reached through it within the resolution probe, or the connection failed for a reason other than the socket being absent or refusing (`utils.ErrGraphServer`). The store was not opened and no lock was taken. See `GRAPH.md § Server Resolution`. |
 | 1 | The connection to a server was lost after the statement had been sent (`utils.ErrGraphServer`). Whether the statement committed is unknown, and the invocation does not retry it against the store. See `GRAPH.md § Server Resolution`, rule 4. |
 | 1 | Every attempt of the retry policy lost a serialisation conflict against a server (`utils.ErrGraphEngine`). Nothing was written: a losing transaction commits nothing. The statement is valid and may be run again. See `GRAPH.md § Concurrency Inside the Server`. |
@@ -3817,6 +3822,7 @@ rather than published as zero.
 | No statement supplied | 2 | "Error: required parameter missing: no query supplied" |
 | The statement was to come from standard input and the read of it failed | 1 | "Error: I/O error: reading query from stdin: <detail>" |
 | `--socket` supplied with an empty value | 2 | "Error: required parameter missing: --<flag>" |
+| `--socket` supplied with a path longer than the platform allows | 1 | The path-length line of `§ Graph Server Socket Error Lines` |
 | Stray positional argument, such as a bare Cypher statement written without `--query` | 2 | "Error: invalid input: unexpected argument \"X\" (graph queries use --query or stdin)" |
 | Statement above the maximum length | 6 | "Error: validation error: query exceeds maximum length of 1048576 bytes" |
 | Cypher parse/execution error | 1 | "Error: graph engine error: graph query failed: <engine diagnostic>" |
@@ -3848,22 +3854,36 @@ The conflict row is not one of them either, and for the same reason: it carries 
 
 ### Graph Server Socket Error Lines
 
-Seven failure conditions belong to the graph server rather than to the roadmap,
+Eight failure conditions belong to the graph server rather than to the roadmap,
 the statement, or anything the caller wrote, and three of this section's error
 tables refer here for their exact lines instead of each publishing a copy. Every
 line is complete, as `§ Published Error Strings Are Exact` requires, and every one
-exits 1. Six carry `utils.ErrGraphServer`. The seventh, the store-lock line,
-carries `utils.ErrGraphStore`, because the lock it reports belongs to the store
-rather than to the socket; it is published here with the other two `graph serve`
-startup lines because a reader meets all three in the same startup sequence
+exits 1. Seven carry `utils.ErrGraphServer`. The remaining one, the store-lock
+line, carries `utils.ErrGraphStore`, because the lock it reports belongs to the
+store rather than to the socket; it is published here with the other three
+`graph serve` startup lines because a reader meets all four in the same startup
+sequence
 (`GRAPH.md § Error Handling and Exit Codes`). `<socket>` is the resolved socket
-path and `<detail>` is the operating system's own diagnostic; the placeholder
-table under `§ Published Error Strings Are Exact` declares both.
+path, `<detail>` is the operating system's own diagnostic, and `N` and `M` are the
+two byte counts the path-length line carries; the placeholder table under
+`§ Published Error Strings Are Exact` declares all four.
 
 - **A live server already answers on the socket `graph serve` resolved.** The line
   is `Error: graph server error: a graph server is already serving <socket>`. The
   incumbent's socket is left exactly as it was found, and the incumbent keeps
   serving (`GRAPH.md § Server Startup`, step 3).
+- **A resolved socket path is longer than the platform allows.** The line is
+  `Error: graph server error: socket path is too long: <socket> is N bytes and this platform allows at most M. Use --socket to name a shorter path.`
+  `N` is the resolved path's length in bytes and `M` is the limit the platform
+  yields, so the published line carries no figure of its own and is one line on
+  every target: the limit is 107 on Linux and Windows and 103 on macOS, FreeBSD
+  and OpenBSD, and the binary interpolates the one in force. Everything outside
+  the three placeholders is `rmp`'s own text, and the line is compared in full.
+  All three subcommands that publish `--socket` write it for a path the caller
+  supplied; `graph serve` and `graph client` write it for a derived path as well,
+  while `graph execute` and the web graph data endpoint read a derived path over
+  the limit as evidence that the roadmap is not served and open the store
+  (`GRAPH.md § Socket Path Length`, rules 5 and 6).
 - **`graph serve` could not bind its socket.** The line is
   `Error: graph server error: cannot bind <socket>: <detail>`. The part `rmp`
   fixes is everything up to and including `cannot bind <socket>: `; the text after it is
@@ -3918,7 +3938,13 @@ table under `§ Published Error Strings Are Exact` declares both.
 - `--socket <path>` - Path of the Unix domain socket to bind. Default
   `~/.roadmaps/<name>/graph.sock`, derived from the selected roadmap. Supplying
   the flag with an empty value is a missing parameter (exit code 2); supplying a
-  path that cannot be bound is a bind failure (exit code 1). A non-default path is
+  path that cannot be bound is a bind failure (exit code 1). A path longer than
+  the platform allows is the one unbindable path that never reaches the bind: it
+  is refused while the path is resolved, and the line it writes names the path's
+  length and the platform's limit instead of the operating system's errno. That
+  bound is the platform's rather than Groadmap's, and it binds the derived default
+  path exactly as it binds this flag's value;
+  `GRAPH.md § Socket Path Length` is canonical for it. A non-default path is
   followed by the two CLI subcommands that take the same flag, `graph execute` and
   `graph client`, and by nothing else: the web graph data endpoint has no way to
   receive it, resolves the default path, finds nothing there, and fails against
@@ -4032,6 +4058,7 @@ several servers, one per roadmap, each on its own socket.
 | Unknown flag | 2 | "Error: invalid input: unknown flag: --foo" |
 | Unexpected positional argument | 2 | "Error: invalid input: unexpected argument \"X\"" |
 | `--socket` supplied with an empty value | 2 | "Error: required parameter missing: --<flag>" |
+| The resolved socket path is longer than the platform allows, whether derived or supplied | 1 | The path-length line of `§ Graph Server Socket Error Lines` |
 | Graph store lock could not be taken within the bounded wait | 1 | The lock line of `§ Graph Server Socket Error Lines` |
 | A live server already answers on the resolved socket | 1 | The already-serving line of `§ Graph Server Socket Error Lines` |
 | Socket could not be bound | 1 | The bind line of `§ Graph Server Socket Error Lines` |
@@ -4045,7 +4072,12 @@ several servers, one per roadmap, each on its own socket.
   statement is sent to.
 - `--socket <path>` - Path of the server's Unix domain socket. Default
   `~/.roadmaps/<name>/graph.sock`, the same derivation `graph serve` uses.
-  Supplying the flag with an empty value is a missing parameter (exit code 2).
+  Supplying the flag with an empty value is a missing parameter (exit code 2). A
+  socket path longer than the platform allows fails the invocation with exit code
+  1, naming the path's length and the platform's limit rather than reporting that
+  nothing is listening; the same line is written when the derived default path is
+  over that bound, because no server can exist at either
+  (`GRAPH.md § Socket Path Length`).
 - `-q, --query <cypher>` - The Cypher statement to send. When omitted, the
   statement is read from standard input under a bound; it is not read to EOF.
   There is no `--statement` flag: the statement reaches `client` through exactly
@@ -4172,6 +4204,7 @@ why they differ.
 | `--socket` supplied with an empty value | 2 | "Error: required parameter missing: --<flag>" |
 | Stray positional argument, such as a bare Cypher statement written without `--query` | 2 | "Error: invalid input: unexpected argument \"X\" (graph queries use --query or stdin)" |
 | Statement above the maximum length | 6 | "Error: validation error: query exceeds maximum length of 1048576 bytes" |
+| The resolved socket path is longer than the platform allows, whether derived or supplied | 1 | The path-length line of `§ Graph Server Socket Error Lines` |
 | No server listening on the resolved socket | 1 | The no-server line of `§ Graph Server Socket Error Lines` |
 | A server could not be reached through a socket that answered | 1 | The unreachable line of `§ Graph Server Socket Error Lines` |
 | Connection lost after the statement was sent | 1 | The lost-connection line of `§ Graph Server Socket Error Lines` |

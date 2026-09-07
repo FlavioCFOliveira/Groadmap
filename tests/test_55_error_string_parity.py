@@ -88,6 +88,7 @@ module does not know how to reach is a bug in this module, not a silent gap.
 
 import json
 import os
+import tempfile
 import re
 import socket as socketlib
 import sqlite3
@@ -99,7 +100,14 @@ import uuid
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from tests.base_test import GroadmapTestBase, REPO_ROOT, COMMIT_OPEN_HASH, COMMIT_CLOSE_HASH
+from tests.base_test import (GroadmapTestBase, REPO_ROOT, COMMIT_OPEN_HASH,
+                             COMMIT_CLOSE_HASH, measure_socket_path_bound)
+# The socket-path bound is MEASURED, never written down: it is 107 bytes on
+# Linux and Windows and 103 on macOS, FreeBSD and OpenBSD, so a literal here
+# would agree with a hard-coded implementation on one host and confirm the
+# defect on the others. test_68 owns the one measurement (it binds real AF_UNIX
+# listeners at increasing path lengths until one is refused) and this module
+# reuses it rather than growing a second copy that could drift from it.
 
 
 SPEC_PATH = REPO_ROOT / "SPEC" / "COMMANDS.md"
@@ -169,11 +177,30 @@ _CONFLICT_MESSAGE = (
     "committed first"
 )
 
-# A Unix domain socket path is capped at 108 bytes (sun_path). The derived
-# path here is about 80, but a HOME under a long build directory would blow
-# past it and bind would fail with "invalid argument", which reads as a defect
-# in the binary rather than in the harness.
-_MAX_SUN_PATH = 108
+# A Unix domain socket path is bounded by sun_path. The derived path here is
+# about 80 bytes, but a HOME under a long build directory would blow past the
+# bound and bind would fail with "invalid argument", which reads as a defect in
+# the binary rather than in the harness.
+#
+# The bound is MEASURED rather than written down: it is 107 on Linux and Windows
+# and 103 on macOS, FreeBSD and OpenBSD, so the literal 108 this module used to
+# carry was too PERMISSIVE on three of the five operating systems (rmp task
+# #412). base_test owns the one measurement; the result is cached because
+# binding a few hundred sockets once per module is cheap and once per call
+# is not.
+_measured_bound = None
+
+
+def _max_sun_path():
+    """The greatest socket-path length this platform binds, measured once."""
+    global _measured_bound
+    if _measured_bound is None:
+        probe = tempfile.mkdtemp(prefix="sunpath-")
+        try:
+            _measured_bound = measure_socket_path_bound(probe)
+        finally:
+            os.rmdir(probe)
+    return _measured_bound
 
 
 def _pack_string(text):
@@ -268,9 +295,10 @@ class ConflictingBoltServer:
 
     def __enter__(self):
         encoded = os.fsencode(self.socket_path)
-        assert len(encoded) < _MAX_SUN_PATH, (
+        bound = _max_sun_path()
+        assert len(encoded) <= bound, (
             f"the derived socket path is {len(encoded)} bytes, at or over the "
-            f"AF_UNIX sun_path limit of {_MAX_SUN_PATH}: {self.socket_path!r}"
+            f"measured AF_UNIX sun_path bound of {bound}: {self.socket_path!r}"
         )
         self._listener = socketlib.socket(socketlib.AF_UNIX, socketlib.SOCK_STREAM)
         self._listener.bind(self.socket_path)
@@ -497,6 +525,19 @@ SUPPLEMENTAL_CORPUS = [
     # ('Error: validation error: invalid entity type: "X"'), naming the exact
     # literal value (-e) the prose describes.
     ('Error: validation error: invalid entity type: "-e"', 'Error: validation error: invalid entity type: "-e"'),
+    # The socket-path-length line (rmp task #412). It is published in a PROSE
+    # BULLET of `Graph Server Socket Error Lines`, which is that section's
+    # convention -- the section publishes every one of its eight lines that way,
+    # and three of the file's error tables point at it instead of each carrying
+    # a copy. Extraction reads table cells and fenced blocks, so the whole
+    # section is invisible to it and the line arrived as a full contractual
+    # obligation with nothing carrying it forward. This entry is what gates it;
+    # test_graph_socket_path_length_line drives it against all three
+    # subcommands that publish `--socket`.
+    (
+        'Error: graph server error: socket path is too long: <socket> is N bytes and this platform allows at most M. Use --socket to name a shorter path.',
+        'Error: graph server error: socket path is too long: <socket> is N bytes and this platform allows at most M. Use --socket to name a shorter path.',
+    ),
 ]
 
 # Three prose spans that ARE complete, well-formed "Error:" strings but are
@@ -2545,6 +2586,59 @@ class TestErrorStringParity:
     # ------------------------------------------------------------------
     # `rmp web`
     # ------------------------------------------------------------------
+
+    def test_graph_socket_path_length_line(self):
+        """The line a socket path longer than the platform allows publishes.
+
+        The defect it replaced (rmp task #412) printed the operating system's
+        own `bind: invalid argument`, which named the path twice and the cause
+        not at all. The line that replaces it names the path once, the number of
+        bytes it occupies, the number the platform allows, and `--socket` as the
+        remedy.
+
+        BOTH numbers are values this module fixes BEFORE the command runs, as
+        every other placeholder in this corpus is. The length is the length of
+        the path constructed here; the limit is measured by binding real
+        sockets, because it is 107 bytes on Linux and Windows and 103 on macOS,
+        FreeBSD and OpenBSD -- a literal would pass here and confirm the defect
+        on three of the five operating systems the project targets.
+
+        All three subcommands that publish `--socket` are driven, because all
+        three publish this line and the section's contract is one line for one
+        condition (SPEC/GRAPH.md § Socket Path Length, rule 5).
+        """
+        r = self.roadmap
+        key = (
+            "Error: graph server error: socket path is too long: <socket> is N "
+            "bytes and this platform allows at most M. "
+            "Use --socket to name a shorter path."
+        )
+
+        # `graph serve` refuses a roadmap with no graph store before it resolves
+        # the socket, so materialise one -- otherwise that subcommand would never
+        # reach the line under test.
+        code, _, err = self.run_stdin(
+            ["graph", "execute", "-r", r, "--query", "CREATE (:SocketProbe {k: 1})"])
+        assert code == 0, f"seeding the graph failed: exit={code} stderr={err!r}"
+
+        home = str(self.test.home_dir)
+        bound = measure_socket_path_bound(home)
+        socket = os.path.join(home, "s" * (bound + 1 - len(home) - 1))
+        assert len(socket) == bound + 1, (len(socket), bound + 1)
+
+        # N and M are substituted before <socket>, and both as whole words, so a
+        # path cannot have a letter of its own rewritten.
+        subs = {"N": str(len(socket)), "M": str(bound), "<socket>": socket}
+
+        for note, args in (
+            ("graph serve with a socket path over the platform's bound",
+             ["graph", "serve", "-r", r, "--socket", socket]),
+            ("graph client with a socket path over the platform's bound",
+             ["graph", "client", "-r", r, "--socket", socket, "--query", "RETURN 1"]),
+            ("graph execute with a socket path over the platform's bound",
+             ["graph", "execute", "-r", r, "--socket", socket, "--query", "RETURN 1"]),
+        ):
+            self.check(key, args, 1, subs=subs, note=note)
 
     def test_graph_store_lock_busy_line(self):
         """The lock line an `execute` meets when a server holds the store.

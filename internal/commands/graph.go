@@ -853,15 +853,22 @@ func runGraphExecute(args []string) error {
 	if err != nil {
 		return err
 	}
-	state, err := resolveGraphServer(socket)
+	// The path's LENGTH is settled inside this call and before the probe, and it
+	// is the one point at which the second path is not always taken: a --socket
+	// value the platform cannot hold fails the invocation rather than falling
+	// back, while a DERIVED path over the bound resolves as not served and takes
+	// the direct path exactly as an absent socket does (SPEC/GRAPH.md § Socket
+	// Path Length, rules 5 and 6; § Server Resolution, rule 12).
+	served, err := servedOnResolvedSocket(socket, socketFlag)
 	if err != nil {
-		// The socket answered and yielded no server. This is a FAILURE and not a
-		// fall back: the socket may belong to a server holding the lock, so
-		// opening the store here would wait the whole wait budget and then fail
-		// (rule 2).
+		// Either the socket answered and yielded no server, or the caller named a
+		// path no socket can occupy. Neither is a fall back: the answering socket
+		// may belong to a server holding the lock, so opening the store on it
+		// would wait the whole wait budget and then fail (rule 2), and the named
+		// path was named rather than merely found.
 		return err
 	}
-	if state.Served() {
+	if served {
 		output, sendErr := runOnGraphServer(socket, query)
 		if sendErr != nil {
 			return sendErr

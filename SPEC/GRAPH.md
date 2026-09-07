@@ -32,6 +32,7 @@
 - [Error Handling and Exit Codes](#error-handling-and-exit-codes)
 - [The Dedicated Graph Server](#the-dedicated-graph-server)
   - [Socket Path and Permissions](#socket-path-and-permissions)
+  - [Socket Path Length](#socket-path-length)
   - [Server Startup](#server-startup)
   - [Server Shutdown and the Drain](#server-shutdown-and-the-drain)
   - [Server Options](#server-options)
@@ -2101,6 +2102,7 @@ it.
 | The connection to a server is lost after the statement has been sent (see [Server Resolution](#server-resolution), rule 4) | `utils.ErrGraphServer` | 1 |
 | A server does not answer within the caller's backstop deadline (see [Server Resolution](#server-resolution), rule 7) | `utils.ErrGraphServer` | 1 |
 | `graph client` finds no server listening for the selected roadmap (see [The Bolt Client](#the-bolt-client)) | `utils.ErrGraphServer` | 1 |
+| A resolved socket path is longer than the platform's bound, whether derived from the roadmap or supplied through `--socket` (see [Socket Path Length](#socket-path-length)) | `utils.ErrGraphServer` | 1 |
 | `graph serve` cannot bind its socket, or a live server already answers on the resolved socket (see [Server Startup](#server-startup)) | `utils.ErrGraphServer` | 1 |
 | Successful execution, and a server stopped by `SIGINT` or `SIGTERM` after a graceful shutdown | — | 0 |
 
@@ -2273,13 +2275,117 @@ and not inside `graph/`: the contents of that directory belong to GoGraph, and
    and every resolver reads it as evidence that the roadmap is not served (see
    [Server Resolution](#server-resolution)).
 
+### Socket Path Length
+
+A Unix domain socket is named by a path in the filesystem, and the operating
+system bounds how long that path may be. The bound belongs to the platform and
+not to Groadmap: the kernel copies the path into the fixed-size `sun_path` field
+of its socket address structure, and a path that does not fit there — terminator
+included — can be neither bound nor connected to. A path over the bound therefore
+names a socket that no process can create and no caller can reach, and it stays
+that way for as long as the path stays what it is. Left unchecked, it surfaces as
+the kernel's own `invalid argument`, which names neither the length, nor the
+limit, nor anything the reader can act on.
+
+**The bound is derived from the platform, never declared here.** It is the
+capacity of the `sun_path` field, less one byte for the terminator that must have
+somewhere to go. That expression is what this specification fixes; the number it
+yields is not, because the number is not the same everywhere. Across the
+operating systems the project's targets span (`BUILD.md § Primary Platforms`) the
+same expression yields **107 bytes on Linux and Windows** and **103 bytes on
+macOS, FreeBSD and OpenBSD** — two figures over nine targets, from one
+expression. An implementation that hard-codes 107 is correct on two of the five
+operating systems and silently wrong on the other three, where it would accept
+four paths the platform cannot bind and hand the caller back the very errno this
+section exists to replace. The figures above are what the derivation produces;
+they are evidence for it, and they are not a substitute for it.
+
+Behaviour:
+
+1. **The check runs on the resolved path, not on what the caller typed.** It is
+   applied after `~/.roadmaps/<name>/graph.sock` has been derived from the
+   roadmap, and after a `--socket` value has been expanded to the absolute path
+   the invocation will actually use. The kernel measures the resolved string, so
+   a check that measured anything earlier would be measuring something else. The
+   derived default path is therefore checked exactly as a supplied one is: the
+   bound is a property of the path, not of how the path was chosen.
+2. **The length is counted in bytes.** `sun_path` holds bytes, and a roadmap name
+   may carry multi-byte UTF-8, so a path of a hundred characters can be well over
+   the bound. A check that counted runes would pass paths the kernel refuses, and
+   would do so only for callers whose roadmap names are not ASCII — the worst way
+   for a bound to be wrong, because it would look correct everywhere it was
+   tested.
+3. **The check runs before the socket is used.** `rmp graph serve` performs it
+   while it resolves the path, before it takes the store lock, probes the path,
+   removes a stale file, or binds anything (see
+   [Server Startup](#server-startup), step 1). A caller performs it before it
+   probes. The purpose is to report the cause instead of the errno, and a check
+   placed after the attempt would be too late to replace anything.
+4. **The published line names the actual length, the derived limit, and the
+   remedy.** It reports the resolved path once, the number of bytes that path
+   occupies, and the number of bytes this platform allows, and it names
+   `--socket` as the way to put the socket somewhere shorter. Both numbers are
+   values the binary interpolates: the limit is the derived figure for the
+   platform the binary is running on, so the same published line is correct on
+   all nine targets. `COMMANDS.md § Graph Server Socket Error Lines` publishes
+   the exact line.
+5. **Where the caller named the path, an over-long value fails the invocation.**
+   All three subcommands that publish `--socket` refuse it — `graph serve`,
+   `graph client` and `graph execute` — with exit code 1 and the line above. The
+   caller named a socket no process on this platform can create: there is nothing
+   to bind, nothing to reach, and no honest way to carry on as though the request
+   had been understood. `graph execute` in particular does **not** fall back to
+   the store here, and this is the single point at which an over-long path departs
+   from the resolution rule. An absent socket is evidence that a roadmap is not
+   served; a socket the caller asked for by name and that cannot exist is evidence
+   that the invocation was misunderstood. Falling back would repeat, silently, the
+   outcome [Serving on a Non-Default Socket](#serving-on-a-non-default-socket),
+   rule 6, records for a mistyped path — with the difference that here the product
+   can tell, and a product that can tell and says nothing is choosing not to.
+6. **Where the path was derived, the outcome follows what the surface needs the
+   socket for, and no reading surface is lost.** `graph serve` must create the
+   socket and cannot, so it fails at startup with the same line. `graph client`
+   speaks to a server and to nothing else, so it fails with the same line as well,
+   which tells the caller why no server can ever answer there rather than
+   reporting that none happens to be listening at the moment. `graph execute` and
+   the web graph data endpoint have a second path and take it: a derived path over
+   the bound is a definite negative — no server can exist there — so the roadmap
+   resolves as **not served** and the statement runs against the store under the
+   exclusive lock, exactly as it does for a socket that is absent (see
+   [Server Resolution](#server-resolution), rule 12). A roadmap whose home
+   directory is deep enough to push the derived path over the bound loses the
+   server and keeps both of the surfaces that existed before the server did.
+   Refusing those two as well would withdraw a working path over a constraint that
+   binds sockets alone, and the store is not a socket.
+7. **The failure class and the exit code are unchanged; only the message
+   differs.** The refusal carries `utils.ErrGraphServer` and exit code 1 — the
+   same sentinel and the same code the unqualified bind failure already carried.
+   This section adds no exit code, moves no condition between sentinels, and
+   changes no classification (see
+   [Error Handling and Exit Codes](#error-handling-and-exit-codes)). What it
+   changes is what the reader is told: a length, a limit and a remedy, in place of
+   a diagnostic that named the path twice and the cause not at all.
+8. **The derived path reaches the bound without an unusual roadmap name.** The
+   default path is the home directory, 22 fixed bytes for `/.roadmaps/` and
+   `/graph.sock`, and the roadmap name. A roadmap name may be 50 bytes, so a home
+   directory of 36 bytes puts the derived path one byte over the 107-byte figure
+   Linux and Windows yield, and one of 32 bytes puts it over the 103-byte figure
+   macOS, FreeBSD and OpenBSD yield. It has been reached in practice on a three-character roadmap name under
+   a deep home directory, at 139 bytes — 32 over the limit in force there. The
+   bound is a live constraint on ordinary installations, and not a limit only a
+   deliberately long `--socket` can find.
+
 ### Server Startup
 
 `rmp graph serve` performs this sequence in this order. The order is load-bearing:
 each step is what makes a later one safe.
 
-1. **Resolve the roadmap and the socket path.** A roadmap that does not exist
-   fails here, before anything is opened, created, or removed.
+1. **Resolve the roadmap and the socket path, and check the path's length.** A
+   roadmap that does not exist fails here, before anything is opened, created, or
+   removed. So does a resolved socket path longer than the platform's bound,
+   whether it was derived from the roadmap or supplied through `--socket` (see
+   [Socket Path Length](#socket-path-length)). Both refusals precede the lock, the
+   probe, the unlink and the bind, so a server that cannot start touches nothing.
 2. **Take the graph store's exclusive advisory lock under the bounded wait**
    [Lock Contention](#lock-contention) specifies. The wait is the ordinary one: a
    server starting while a short-lived `rmp graph execute` invocation holds the
@@ -3131,6 +3237,18 @@ Rules:
 11. **`rmp graph client` resolves the same socket but has no second path.** For
     that subcommand the first two states are failures rather than fallbacks; see
     [The Bolt Client](#the-bolt-client).
+12. **A resolved path longer than the platform's socket-path bound is settled
+    before the probe, and it is settled differently depending on who chose it.**
+    A path that cannot be bound cannot be listened on, so probing it can tell a
+    caller nothing it does not already know. Where the path was derived, it is the
+    strongest of the definite negatives the first two states describe, and the two
+    surfaces with a second path take it: `rmp graph execute` and the web graph data
+    endpoint open the store directly, exactly as they do for a socket that does not
+    exist. Where the caller supplied it through `--socket`, the invocation fails
+    instead, on all three subcommands that publish the flag. `rmp graph client`
+    fails either way, having no second path at all.
+    [Socket Path Length](#socket-path-length) is canonical for the bound, for the
+    line each of these failures publishes, and for why the two cases differ.
 
 ### The Bolt Client
 
@@ -3196,7 +3314,13 @@ this section is about.**
    invocation to the store rather than to the server it meant, silently and
    successfully. That is rule 2 of [Server Resolution](#server-resolution) applied
    to a caller-supplied path, and it is stated here because a typo is a likelier
-   cause of it than a deliberate choice.
+   cause of it than a deliberate choice. One class of mistyped value is caught
+   rather than followed: a path longer than the platform's socket-path bound
+   cannot name a socket at all, so every subcommand given it refuses the
+   invocation and says why, instead of resolving it (see
+   [Socket Path Length](#socket-path-length), rule 5). Every other typo still falls
+   through as this rule describes, because every other typo names a path a socket
+   could lawfully occupy.
 
 ## Concurrency and Recovery
 
@@ -4535,6 +4659,49 @@ Groadmap's usage model and expectations:
     pass, whose `propertiesWritten` is the sum of the two effects on both paths;
     a check that compared only a pure `SET` would pass on an implementation that
     folded on one path and not the other.
+
+64. **A path one byte over the bound is refused and a path exactly at the bound
+    serves, and the criterion MUST assert both halves.** Against one roadmap,
+    `rmp graph serve --socket <path>` is invoked twice: once with a path whose
+    length is exactly the platform's bound, which binds the socket, announces it
+    on stdout, answers a statement sent to it, and stops cleanly on `SIGINT`; and
+    once with a path one byte longer, which exits 1, writes zero bytes to stdout,
+    and leaves no file at that path. The criterion MUST construct both lengths
+    from the bound it measured rather than from a literal, and it MUST keep the
+    at-the-bound half: a check of the refusal alone passes on an implementation
+    that is one byte too strict, and such an implementation refuses a path the
+    kernel accepts on every platform at once.
+65. **The refusal names the length and the limit, and the criterion MUST assert
+    both numbers separately.** The line the over-long invocation writes to stderr
+    reports the resolved path, the number of bytes that path occupies, and the
+    number of bytes the platform allows, and the invocation exits 1. The criterion
+    MUST assert that the length reported is the length of the path it supplied
+    **and** that the limit reported is the bound it measured, as two distinct
+    checks, because a message that printed the limit in both places — or the
+    path's length in both — would satisfy a check that merely found two numbers.
+    It MUST also assert that the operating system's own text is absent: an
+    `invalid argument` in that line is the defect the criterion exists against.
+66. **The derived default path is validated on the same rule, and the reading
+    surfaces survive it.** Against a roadmap whose derived path
+    `~/.roadmaps/<name>/graph.sock` is longer than the bound, `rmp graph serve`
+    invoked with **no `--socket` flag at all** exits 1 with the same line, naming
+    the derived path. In that same state `rmp graph execute` runs a statement
+    against that roadmap, returns its result, and exits 0, while `rmp graph
+    client` exits 1 with the same line. The criterion MUST assert all three,
+    because the whole value of the rule is in the split: an implementation that
+    refused every surface would pass a check of the server alone while withdrawing
+    the two surfaces that still work (see
+    [Socket Path Length](#socket-path-length), rule 6).
+67. **The limit is derived from the platform, and the criterion MUST be capable of
+    failing a hard-coded one.** The criterion MUST establish the bound
+    empirically — by binding real sockets at increasing path lengths until one is
+    refused — and MUST compare that measured figure against the figure the refusal
+    line reports. A criterion that asserted the literal 107 would confirm the
+    defect on the three operating systems whose bound is 103, and would confirm it
+    silently, because it would then agree with an implementation that is wrong
+    everywhere the criterion does not run. The measured comparison fails against
+    any hard-coded value on at least one supported platform, and against a correct
+    derivation on none.
 
 ## See Also
 

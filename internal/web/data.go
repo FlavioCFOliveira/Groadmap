@@ -2069,6 +2069,22 @@ func resolveGraphServerForRequest(ctx context.Context, name string) (string, err
 	if err != nil {
 		return "", err
 	}
+	// A derived path longer than the platform allows a socket path to be is the
+	// strongest of the definite negatives: no process can bind it, so no server
+	// can be listening there, and probing it could tell this handler nothing it
+	// does not already know. It is therefore settled BEFORE the probe and read as
+	// "not served", which sends the request to the store under the exclusive lock
+	// exactly as an absent socket does (SPEC/GRAPH.md § Socket Path Length,
+	// rule 6; § Server Resolution, rule 12).
+	//
+	// This surface publishes no --socket flag and has nowhere to receive one
+	// (§ Socket Path and Permissions, rule 2), so the caller-supplied half of the
+	// rule cannot arise here and the derived path is the only path there is. A
+	// refusal would withdraw a working page over a constraint that binds sockets
+	// alone, and the store is not a socket.
+	if graphclient.SocketPathTooLong(socket) {
+		return "", nil
+	}
 	state, probeErr := graphclient.Resolve(ctx, socket)
 	switch {
 	case state.Served():

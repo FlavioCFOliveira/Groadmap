@@ -172,6 +172,15 @@ func runGraphClient(args []string) error {
 	if err != nil {
 		return err
 	}
+	// Settled before the probe, and settled the same way whoever chose the path.
+	// This subcommand speaks to a server and to nothing else, so a path the
+	// platform cannot hold is a failure however it was arrived at — and the line
+	// it publishes tells the caller why no server can EVER answer there, rather
+	// than reporting that none happens to be listening at the moment
+	// (SPEC/GRAPH.md § Socket Path Length, rule 6; § Server Resolution, rule 12).
+	if err := refuseOverLongSocket(socket); err != nil {
+		return err
+	}
 
 	state, err := resolveGraphServer(socket)
 	if err != nil {
