@@ -372,7 +372,7 @@ These are the exit codes of the `rmp web` **process** (distinct from the per-req
 | Exit Code | Meaning |
 |-----------|---------|
 | 0 | Server started and was later stopped by `SIGINT` / `SIGTERM` (graceful shutdown) |
-| 1 | Requested host/port could not be bound (explicit `--port` in use, or host not assignable), or the data directory could not be read |
+| 1 | Requested host/port could not be bound (explicit `--port` in use, or host not assignable); or the data directory `~/.roadmaps/` exists but could not be read or created; or the listener stopped accepting connections after the server had started, for a reason other than a graceful shutdown |
 | 2 | Unknown flag or unexpected positional argument |
 | 6 | `--port` value out of range 0-65535 or not an integer |
 

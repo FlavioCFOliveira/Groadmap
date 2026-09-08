@@ -103,12 +103,12 @@ There is no alias for `backlog show-next`.
 
 - Both subcommands operate exclusively on tasks whose status is `BACKLOG`.
 - `-r` / `--roadmap` is mandatory on every subcommand. There is no default or active roadmap and no command to set one, so omitting `-r` is always an error (exit code 3).
-- `list` applies its `--limit` after filtering and sorting; `show-next` ignores `--limit` and uses its own positional `count`.
+- `list` applies its `--limit` after filtering and sorting; `show-next` has its own positional `count` and takes no notice of `--limit`. The two are not interchangeable: `--limit` written **before** the count is read as the count itself, and refused with `count must be a positive integer` (exit code 6). It is ignored only when a valid count precedes it, as in `show-next 5 --limit 2`, which returns five.
 - `--priority` on `list` is a `>=` lower-bound filter and is not validated against the `0-9` range; the `0-9` validation that `task create`/`edit` apply does not apply here.
 
 ## Output Format
 
-Both subcommands write a JSON array of task objects to stdout. Every returned task has `status` equal to `BACKLOG`. Each task object carries the standard task keys: `id`, `title`, `status`, `type`, `functional_requirements`, `technical_requirements`, `acceptance_criteria`, `created_at`, `started_at`, `tested_at`, `closed_at`, `completion_summary`, `parent_task_id`, `priority`, `severity`, `subtask_count`, `depends_on`, and `blocks`. See `DOCS/commands/task.md` (Output Format) for the full key reference.
+Both subcommands write a JSON array of task objects to stdout. Every returned task has `status` equal to `BACKLOG`. Each task object carries the standard task keys: `id`, `title`, `status`, `type`, `functional_requirements`, `technical_requirements`, `acceptance_criteria`, `created_at`, `started_at`, `tested_at`, `closed_at`, `completion_summary`, `commit_open`, `commit_close`, `parent_task_id`, `priority`, `severity`, `subtask_count`, `depends_on`, and `blocks` - twenty keys, the same set `DOCS/commands/task.md` publishes. See `DOCS/commands/task.md` (Output Format) for the full key reference.
 
 ## Exit Codes
 
@@ -117,6 +117,7 @@ Both subcommands write a JSON array of task objects to stdout. Every returned ta
 | 0 | Success |
 | 2 | Misuse: non-integer `--limit` on `list` (rejected by the flag parser) |
 | 3 | No roadmap specified (`-r` / `--roadmap` missing) |
+| 4 | The named roadmap does not exist |
 | 6 | Validation error: bad `--type` or `--sort` value; out-of-range `--limit`; non-positive or non-numeric `count` on `show-next` |
 | 127 | Unknown subcommand |
 
