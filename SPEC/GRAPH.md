@@ -1840,15 +1840,43 @@ is the whole reason both exist:
    rather than a token `rmp` scans for, and `rmp` does not inspect the statement
    here any more than it does anywhere else (see
    [What Groadmap Does Not Check](#what-groadmap-does-not-check)).
-4. **`PROFILE` refuses a statement that writes.** Measuring a write would mean
-   performing it, and the engine refuses the statement rather than perform a
-   write a caller asked only to have measured. The
-   invocation fails with `utils.ErrGraphEngine` and exit code 1, through the same
-   parse-and-execution failure class every other engine refusal uses, and the
-   engine's own diagnostic names the remedy: use `EXPLAIN` for the statement's
-   plan, or run the statement with no prefix to execute it. No new exit code is
-   introduced (see
-   [Error Handling and Exit Codes](#error-handling-and-exit-codes)).
+4. **`PROFILE` refuses a statement that writes, and at the pinned engine the
+   caller is not told why.** Measuring a write would mean performing it, and the
+   engine refuses the statement rather than perform a write a caller asked only
+   to have measured. The invocation fails with `utils.ErrGraphEngine` and exit
+   code 1, through the same parse-and-execution failure class every other engine
+   refusal uses, and no new exit code is introduced (see
+   [Error Handling and Exit Codes](#error-handling-and-exit-codes)). What
+   arrives in place of the engine's diagnostic is generic internal-error text
+   naming only the session. Every statement runs inside `rmp graph serve` and
+   every result crosses a Bolt connection, and the engine's Bolt server
+   classifies this refusal as a **server** fault: its failure-code mapping
+   carries no case for it — the refusal carries no sentinel and none of the
+   categorised message forms the mapping recognises — so the mapping falls back
+   to its generic database-error code, and the session then replaces the message
+   of every failure so classified. The diagnostic itself is not destroyed. The
+   engine writes it in full, under the same session, as a record of the kind
+   [Server Diagnostics on Stderr](#server-diagnostics-on-stderr), rule 1,
+   governs, and that record does name the remedy — use `EXPLAIN` for the
+   statement's plan, or run the statement with no prefix to execute it. It is
+   therefore readable by whoever can read the server's stderr, and unreadable by
+   the caller who ran the statement.
+
+   **This is the same substitution, for the same reason, that
+   [Field Length Limits](#field-length-limits), rule 13, records for an
+   over-long field, and it is above Groadmap's reach for the same reason.**
+   There is no interception point to close it at: the engine's server exposes no
+   error-mapping option, and Groadmap runs no statement of its own between the
+   caller and the server. The one remaining lever would be matching the
+   substituted text, which names no statement, no prefix and no remedy, so it
+   would yield nothing worth publishing even before it broke silently at the
+   next version bump. **The remedy belongs in the engine**: a case in its Bolt
+   failure-code mapping that resolves this refusal to a client-error code, after
+   which the engine's own message reaches the caller intact, exactly as a parse
+   diagnostic already does (rule 6). **What is unaffected**: the sentinel is
+   `utils.ErrGraphEngine` and the exit code is 1, the statement is still refused
+   and still writes nothing, and no condition moves between sentinels. Only the
+   message the caller reads is less informative than the refusal deserves.
 5. **A writing statement's plan is a logical plan, and it is published as one.**
    A write's operators bind to an open transaction, so there is no physical
    operator tree to walk outside one, and opening one is precisely what `EXPLAIN`
