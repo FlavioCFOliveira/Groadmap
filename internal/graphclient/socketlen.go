@@ -1,9 +1,9 @@
 // Package graphclient — the bound the platform puts on a socket path.
 //
 // It lives beside the derivation and the probe rather than in the server
-// package, and the reason is the set of callers. Four surfaces resolve a socket
-// — `rmp graph serve`, `rmp graph execute`, `rmp graph client` and the web graph
-// data endpoint — and all four already reach this package for SocketPath and
+// package, and the reason is the set of callers. Three surfaces resolve a socket
+// — `rmp graph serve`, `rmp graph client` and the web graph data endpoint — and
+// all three already reach this package for SocketPath and
 // Resolve, which is what makes it the one place a caller and a server agree on
 // what a roadmap's socket IS. internal/graphserve is reached by exactly one of
 // them: putting the bound there would make internal/web import the Bolt server,

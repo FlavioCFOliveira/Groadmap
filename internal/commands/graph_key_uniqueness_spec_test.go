@@ -50,6 +50,7 @@ import (
 	"testing"
 
 	"github.com/FlavioCFOliveira/GoGraph/cypher"
+	"github.com/FlavioCFOliveira/GoGraph/cypher/expr"
 	"github.com/FlavioCFOliveira/GoGraph/store/recovery"
 	"github.com/FlavioCFOliveira/GoGraph/store/txn"
 	"github.com/FlavioCFOliveira/GoGraph/store/wal"
@@ -746,10 +747,29 @@ func writeKeyUniquenessTx(t *testing.T, graphDir, query string) {
 	}
 }
 
-// runGraphQueryForTest executes a read query against the witness graph exactly
-// as a graph read did before the collapse — recovery.Open then cypher.NewEngine — and
-// serialises the result through the CLI's own serializeGraphResult, so what the
-// gate inspects is what the command would print.
+// runGraphQueryForTest executes a read query against the WITNESS graph — a store
+// of this test's own, outside any roadmap — and returns its columns and rows with
+// every value mapped by serializeValue, the CLI's own value mapping.
+//
+// # Why the witness store is opened directly, and why that is not a shortcut
+//
+// The subject of every test that calls this is the QUERY that
+// `knowledge-model.md` publishes for the key-uniqueness audit: whether it reports
+// every keyed node, and whether the byte-wise form is blind to a pair that
+// differs only in Unicode normalisation form. That is a property of the Cypher
+// and of the engine, not of any surface, and the witness graph is deliberately
+// not a roadmap's: it holds a defect on purpose, and putting it inside a roadmap
+// would make it reachable from the rest of the suite.
+//
+// It used to call the command's serializeGraphResult, which walked an engine
+// result into the published envelope. That function is gone with the store open
+// it served: the CLI now assembles the same envelope from a PROTOCOL result, in
+// runOnGraphServer, and there is no engine result on that path to hand it. What
+// survives unchanged is the part that matters here and the part
+// SPEC/DATA_FORMATS.md § One Realisation of the Mapping fixes — serializeValue,
+// through which every value the CLI publishes passes — so the cells below are the
+// cells the command would print. The envelope around them is assembled here, and
+// the tests below assert columns and cells rather than bytes.
 func runGraphQueryForTest(t *testing.T, graphDir, query string) ([]string, [][]any) {
 	t.Helper()
 
@@ -761,15 +781,33 @@ func runGraphQueryForTest(t *testing.T, graphDir, query string) ([]string, [][]a
 	if err != nil {
 		t.Fatalf("running %q against the witness graph: %v", query, err)
 	}
-	out, err := serializeGraphResult(result)
-	if err != nil {
-		_ = result.Close() //nolint:errcheck // the serialisation error is the one that matters
-		t.Fatalf("serialising the result of %q: %v", query, err)
+
+	cols := result.Columns()
+	if cols == nil {
+		cols = []string{}
+	}
+	rows := [][]any{}
+	for result.Next() {
+		rec := result.Record()
+		row := make([]any, len(cols))
+		for i, col := range cols {
+			raw := rec[col]
+			if v, ok := raw.(expr.Value); ok {
+				row[i] = serializeValue(v)
+			} else {
+				row[i] = raw
+			}
+		}
+		rows = append(rows, row)
+	}
+	if err := result.Err(); err != nil {
+		_ = result.Close() //nolint:errcheck // the walk's error is the one that matters
+		t.Fatalf("walking the result of %q: %v", query, err)
 	}
 	if err := result.Close(); err != nil {
 		t.Fatalf("closing the result of %q: %v", query, err)
 	}
-	return out.Columns, out.Rows
+	return cols, rows
 }
 
 // equalStrings reports whether two string slices are equal element for element.

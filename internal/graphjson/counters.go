@@ -5,10 +5,12 @@ import "github.com/FlavioCFOliveira/GoGraph/cypher/exec"
 // Counters is the published JSON shape of what one statement changed in the
 // graph, canonical in SPEC/DATA_FORMATS.md § Graph Query Counters. It is the
 // target of the ONE mapping this package exists to hold, exactly as PlanNode is:
-// both surfaces that publish counters — `rmp graph execute` and `rmp graph
-// client` — arrive here over the engine's own [exec.QueryCounters], so the byte
-// identity SPEC/DATA_FORMATS.md § Graph Client Result requires is a property of
-// the code rather than something a test has to keep policing.
+// the one surface that publishes counters — `rmp graph client` — arrives here
+// over the engine's own [exec.QueryCounters], so the fidelity
+// SPEC/DATA_FORMATS.md § Graph Client Result requires is a property of the code
+// rather than something a test has to keep policing. The web graph data
+// endpoint publishes a graph view and no counters, which is why it is not a
+// second surface here.
 //
 // # Why these fields are NOT pointers, where PlanNode's are
 //

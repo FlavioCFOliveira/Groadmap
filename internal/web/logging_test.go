@@ -310,15 +310,17 @@ func TestEncodeFailureIsLogged(t *testing.T) {
 // endpoint refused as not read-only; the endpoint now runs a CREATE and answers
 // 200, so that probe would assert nothing (SPEC/WEB.md Acceptance Criterion 142).
 func TestGraphQueryBarFailureIsWarnLogged(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
+	// shortHome rather than t.TempDir: the roadmap's socket path is derived from
+	// HOME, and t.TempDir names its directory after the test, which pushes the
+	// derived path past what a Unix domain socket may be.
+	t.Setenv("HOME", shortHome(t))
 
 	const name = "graph-query-roadmap"
-	seedRoadmap(t, name)
-	// A roadmap with no graph directory is an empty graph and is answered 200
-	// without the statement ever running, so the store has to exist for this
-	// failure to be reachable at all.
-	seedGraph(t, name, `CREATE (s:Spec {key:'seeded'})`)
+	// A roadmap nothing is serving is answered 503 without the statement ever
+	// running, so a server has to be there for this failure to be reachable at
+	// all — and the graph has to hold something, so the statement fails on its
+	// own syntax rather than on an empty graph.
+	servedRoadmap(t, name, `CREATE (s:Spec {key:'seeded'})`)
 
 	buf := captureLog(t)
 	rec := httptest.NewRecorder()
@@ -350,14 +352,17 @@ func TestGraphQueryBarFailureIsWarnLogged(t *testing.T) {
 // TestGraphInvalidLimitIsWarnLogged asserts the same for the other kind the
 // endpoint publishes. Acceptance Criterion 142 binds EVERY query-bar failure
 // "whatever its kind", and the two are decided at different points in
-// loadGraphView — the limit before the store is opened, the execution failure
-// once the statement is running — so a rejection that returned an unclassified
-// error would answer 500 and log an ERROR.
+// loadGraphView — the limit before the socket is probed, the execution failure
+// once the statement is running in the server — so a rejection that returned an
+// unclassified error would answer 500 and log an ERROR.
 func TestGraphInvalidLimitIsWarnLogged(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 
 	const name = "graph-query-roadmap"
+	// No server, and none needed: the limit is rejected before the socket is
+	// probed, which is exactly the ordering this test's sibling
+	// TestHandleGraphData_TheResolutionBoundary pins.
 	seedRoadmap(t, name)
 
 	buf := captureLog(t)
@@ -392,12 +397,12 @@ func TestGraphInvalidLimitIsWarnLogged(t *testing.T) {
 // through the query bar is not recorded anywhere (SPEC/WEB.md § Server Logging,
 // what is not logged).
 func TestGraphStatementThatWritesIsNotLogged(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
+	// shortHome rather than t.TempDir, for the socket-path reason
+	// TestGraphQueryBarFailureIsWarnLogged gives.
+	t.Setenv("HOME", shortHome(t))
 
 	const name = "graph-query-roadmap"
-	seedRoadmap(t, name)
-	seedGraph(t, name, `CREATE (s:Spec {key:'seeded'})`)
+	servedRoadmap(t, name, `CREATE (s:Spec {key:'seeded'})`)
 
 	buf := captureLog(t)
 	rec := httptest.NewRecorder()

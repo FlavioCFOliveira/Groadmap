@@ -450,8 +450,9 @@ class TestSecurityAudit:
 
         This test replaces `test_defense_graph_guardrail_blocks_dml_writes`,
         which asserted that the read path refused every DML write clause. That
-        control was WITHDRAWN by owner decision rather than broken: `rmp graph`
-        has one subcommand, it does not classify a statement, and a statement
+        control was WITHDRAWN by owner decision rather than broken: the graph is
+        reached only through a running `rmp graph serve`, spoken to by `rmp
+        graph client`, neither of them classifies a statement, and a statement
         that writes is executed whatever it says
         (SPEC/GRAPH.md section "What Groadmap Does Not Check", item 1). Keeping
         the old assertion would have been asserting a control that the
@@ -461,42 +462,54 @@ class TestSecurityAudit:
         statement reaches one roadmap's graph directory, the directory is 0700,
         and the lock file beside it is 0600. A caller who can read another
         roadmap's graph already has the filesystem access to read it directly.
+
+        The neighbour is served LAST, and deliberately so. Starting a server is
+        what creates a roadmap's graph store -- nothing else does -- so the
+        neighbour's directory has to be observed absent while only the target
+        has ever been served. Serving both up front would make the fixture,
+        rather than the statement under test, the thing that materialised it.
         """
         target = self.test.create_roadmap()
         neighbour = self.test.create_roadmap()
 
+        self.test.start_graph_server(target)
+
         # A write against `target`, of the shape the withdrawn guard rail used
         # to refuse. It is expected to SUCCEED: the point of the test is where
         # it lands, not whether it runs.
-        code, _, err = self._run(["graph", "execute", "-r", target, "--query",
-                                  "CREATE (s:Spec {key:'isolation-probe'})"])
+        code, _, err = self.test.graph_client(
+            target, query="CREATE (s:Spec {key:'isolation-probe'})")
         assert code == 0, (
-            f"a write must execute: `rmp graph execute` refuses no statement for what "
-            f"it does (exit {code}, stderr={err!r})")
+            f"a write must execute: the served graph path refuses no statement for "
+            f"what it does (exit {code}, stderr={err!r})")
 
-        rows = self._json(["graph", "execute", "-r", target,
-                           "--query", "MATCH (n:Spec) RETURN n.key"])
+        rows = self.test.graph_ok(target, query="MATCH (n:Spec) RETURN n.key")
         assert rows["rows"] == [["isolation-probe"]], (
             f"the write did not land in the roadmap it named: {rows!r}")
 
         # The neighbour's graph is untouched, and the neighbour's graph
-        # directory was not even created by the write above.
+        # directory was not even created by the write above: nothing has served
+        # the neighbour yet, and nothing but a server creates a graph store.
         neighbour_graph = Path(self.test.roadmaps_dir) / neighbour / "graph"
         assert not neighbour_graph.exists(), (
             f"a statement against {target!r} materialised {neighbour!r}'s graph store at "
             f"{neighbour_graph}")
-        rows = self._json(["graph", "execute", "-r", neighbour,
-                           "--query", "MATCH (n) RETURN count(n)"])
+
+        # Only now is the neighbour served, which creates its store empty. A
+        # statement against it must find nothing the target's write put there.
+        self.test.start_graph_server(neighbour)
+        rows = self.test.graph_ok(neighbour, query="MATCH (n) RETURN count(n)")
         assert rows["rows"][0][0] == 0, (
             f"a statement against {target!r} leaked into {neighbour!r}: {rows!r}")
 
         # The boundary that carries the isolation: 0700 on the directory, 0600
-        # on the lock file Groadmap maintains inside it.
+        # on the lock file Groadmap maintains inside it (the server takes it
+        # when it opens the store, before any statement arrives).
         target_graph = Path(self.test.roadmaps_dir) / target / "graph"
         assert _mode(target_graph) == 0o700, (
             f"graph store directory is {oct(_mode(target_graph))}, want 0700")
         lock = target_graph / "write.lock"
-        assert lock.exists(), "the advisory lock file was not created by a write"
+        assert lock.exists(), "the advisory lock file was not created by the server"
         assert _mode(lock) == 0o600, (
             f"graph store lock file is {oct(_mode(lock))}, want 0600")
 
@@ -640,8 +653,9 @@ class TestSecurityAudit:
 
     def test_finding_79_ddl_control_withdrawn_and_ddl_now_executes(self):
         """#79 CWE-863, WITHDRAWN. The finding was "DDL bypasses the read-only
-        guard-rail". There is no read-only guard-rail and no read path: `rmp
-        graph` publishes one subcommand, it does not classify a statement, and
+        guard-rail". There is no read-only guard-rail and no read path: the
+        graph is reached only through a running `rmp graph serve`, spoken to by
+        `rmp graph client`, that client does not classify a statement, and
         schema DDL is one of the classes it is specified to run
         (SPEC/COMMANDS.md section "Graph Management").
 
@@ -652,21 +666,21 @@ class TestSecurityAudit:
         withdrawn control used.
         """
         rm = self.test.create_roadmap()
-        code, _, err = self._run(["graph", "execute", "-r", rm, "--query",
-                                  "CREATE INDEX spec_key FOR (n:Spec) ON (n.key)"])
+        self.test.start_graph_server(rm)
+        code, _, err = self.test.graph_client(
+            rm, query="CREATE INDEX spec_key FOR (n:Spec) ON (n.key)")
         assert code == 0, (
             f"schema DDL must execute (exit {code}, stderr={err!r}); the operation-class "
             f"refusal was withdrawn and must not be reintroduced without a SPEC change")
 
-        listing = self._json(["graph", "execute", "-r", rm, "--query", "SHOW INDEXES"])
+        listing = self.test.graph_ok(rm, query="SHOW INDEXES")
         names = {row[listing["columns"].index("name")] for row in listing["rows"]}
         assert "spec_key" in names, (
             f"the DDL exited 0 without taking effect; SHOW INDEXES reports {names!r}")
 
-        code, _, err = self._run(["graph", "execute", "-r", rm, "--query",
-                                  "DROP INDEX spec_key IF EXISTS"])
+        code, _, err = self.test.graph_client(rm, query="DROP INDEX spec_key IF EXISTS")
         assert code == 0, f"DROP INDEX must execute (exit {code}, stderr={err!r})"
-        listing = self._json(["graph", "execute", "-r", rm, "--query", "SHOW INDEXES"])
+        listing = self.test.graph_ok(rm, query="SHOW INDEXES")
         names = {row[listing["columns"].index("name")] for row in listing["rows"]}
         assert "spec_key" not in names, (
             f"the DROP exited 0 without taking effect; SHOW INDEXES reports {names!r}")
@@ -787,24 +801,38 @@ class TestSecurityAudit:
 
     def test_finding_73_graph_json_html_escaped(self):
         """#73 CWE-116: /graph/data JSON must HTML-escape '<'/'>' (\\u003c) so a
-        `</script>` token in node data can never break out if inlined in HTML."""
+        `</script>` token in node data can never break out if inlined in HTML.
+
+        The endpoint reaches the graph through that roadmap's running graph
+        server and answers HTTP 503 when none is listening, so the server
+        started here stays up for the whole request. Both halves of the
+        assertion depend on it: a 503 carries no node data at all, and a probe
+        that let one pass would be certifying the encoder without ever having
+        exercised it.
+        """
         rm = "secgraphjson"
         self._run(["roadmap", "create", rm], check=True)
         # Seed a graph node whose property carries a </script> breakout token.
-        code, _, _ = self._run([
-            "graph", "execute", "-r", rm, "--query",
-            "CREATE (n:Note {key:'</script><img src=x onerror=alert(1)>'})"])
-        if code != 0:
-            # Fallback: some builds expose graph writes differently; the finding
-            # is about encoder config, still assert on whatever data is served.
-            pass
+        # Starting the server is what creates this roadmap's graph store, so it
+        # precedes the seed rather than following it.
+        self.test.start_graph_server(rm)
+        self.test.graph_ok(
+            rm, query="CREATE (n:Note {key:'</script><img src=x onerror=alert(1)>'})")
+
         proc, host, port = self._start_web()
         status, headers, body = self._http_get(port, f"/roadmaps/{rm}/graph/data")
-        if status != 200:
-            return
+        assert status == 200, (
+            f"a graph server is listening for {rm!r}, so the endpoint must serve the "
+            f"graph rather than report it unavailable; got {status} {body!r}")
         assert "</script>" not in body, (
             "OPEN #73: raw '</script>' present in graph/data JSON; "
             "enable SetEscapeHTML so '<' is emitted as \\u003c")
+        # The escaped token is present, which is what proves the seeded node
+        # actually reached the response: without this the previous assertion
+        # would also hold for a payload that carried no node at all.
+        assert "\\u003c/script\\u003e" in body, (
+            f"the seeded node must appear in the served payload with its '<' "
+            f"encoded as \\u003c; got {body!r}")
 
     def test_finding_76_default_bind_is_loopback(self):
         """#76 CWE-668: the default `rmp web` bind address must be loopback

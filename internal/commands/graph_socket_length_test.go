@@ -22,10 +22,16 @@
 // divergence SPEC/DATA_FORMATS.md § Graph Client Result forbids as a requirement
 // rather than merely observes.
 //
-// TestGraphExecute_RefusesAnOverLongResolvedSocketHoweverThePathWasChosen is
-// where that inversion lands, because `graph execute` is the only command-line
-// surface the change reaches: `serve` must create the socket and `client` speaks
-// to nothing else, so for those two the refusal was never in question.
+// The subcommand that inversion was ABOUT is gone with the split it belonged to.
+// `graph execute` was the only command-line surface with somewhere else to go,
+// and it is withdrawn: `serve` must create the socket, `client` speaks to nothing
+// else, and neither ever had a second path for the uniform rule to close. What
+// the rule is worth on the command line is therefore no longer that it removes a
+// fall back — there is none — but that the refusal is settled from the path
+// ALONE, before the probe, so a roadmap whose derived path cannot be bound is
+// told that no server can ever listen there rather than that none happens to be
+// listening now. TestGraphClient_RefusesAnOverLongResolvedSocketHoweverThePathWasChosen
+// is where that lands.
 package commands
 
 import (
@@ -259,22 +265,23 @@ func assertTooLongRefusal(t *testing.T, err error, stdout, socket string) {
 	}
 }
 
-// TestGraphExecute_RefusesAnOverLongResolvedSocketHoweverThePathWasChosen is
-// SPEC/GRAPH.md § Socket Path Length, rules 5 and 6, for the ONE command-line
-// surface the uniform rule actually changes.
+// TestGraphClient_RefusesAnOverLongResolvedSocketHoweverThePathWasChosen is
+// SPEC/GRAPH.md § Socket Path Length, rules 5 and 6, on the client.
 //
-// `graph execute` is the surface that had somewhere else to go. Under the split
-// it took that second path for a DERIVED path over the bound and refused only a
-// supplied one; it now refuses both, and the value of the rule is entirely in
-// that: an implementation that checked only the two subcommands which need a
-// socket would pass a check of the server alone while letting `graph execute`
-// resolve a path no socket can occupy.
+// Where the path came from is never asked: a supplied path over the bound and a
+// derived one are refused alike, with the same line and the same exit code. The
+// third subtest is what makes that a statement about the ORDER of the checks
+// rather than about their agreement — an ordinary file sits at the derived path,
+// which a probe would read as a server that could not be reached, and the
+// published line must still be the one about the path's length.
 //
 // The last subtest is the control, and without it the three above would also pass
-// on an implementation that had simply stopped reaching the store — which would
-// withdraw the direct path from every roadmap rather than from the ones whose
-// resolved path cannot be bound.
-func TestGraphExecute_RefusesAnOverLongResolvedSocketHoweverThePathWasChosen(t *testing.T) {
+// on an implementation that had simply stopped reaching a server — which would
+// break every roadmap rather than the ones whose resolved path cannot be bound.
+// It is also the remedy the published line names, driven end to end: --socket
+// pointed at a server listening on a lawful path reaches that server, from a
+// roadmap whose own derived path never can.
+func TestGraphClient_RefusesAnOverLongResolvedSocketHoweverThePathWasChosen(t *testing.T) {
 	const read = "MATCH (s:Spec) RETURN s.key"
 
 	t.Run("a supplied path over the bound", func(t *testing.T) {
@@ -288,7 +295,7 @@ func TestGraphExecute_RefusesAnOverLongResolvedSocketHoweverThePathWasChosen(t *
 
 		var runErr error
 		stdout, _ := captureStdStreams(t, func() {
-			runErr = runGraphExecute([]string{"-r", roadmap, "--socket", over, "--query", read})
+			runErr = runGraphClient([]string{"-r", roadmap, "--socket", over, "--query", read})
 		})
 		assertTooLongRefusal(t, runErr, stdout, over)
 	})
@@ -317,7 +324,7 @@ func TestGraphExecute_RefusesAnOverLongResolvedSocketHoweverThePathWasChosen(t *
 		// asserts the case that already failed.
 		var runErr error
 		stdout, _ := captureStdStreams(t, func() {
-			runErr = runGraphExecute([]string{"-r", roadmap, "--query", read})
+			runErr = runGraphClient([]string{"-r", roadmap, "--query", read})
 		})
 		assertTooLongRefusal(t, runErr, stdout, derived)
 	})
@@ -345,19 +352,23 @@ func TestGraphExecute_RefusesAnOverLongResolvedSocketHoweverThePathWasChosen(t *
 
 		var runErr error
 		stdout, _ := captureStdStreams(t, func() {
-			runErr = runGraphExecute([]string{"-r", roadmap, "--query", read})
+			runErr = runGraphClient([]string{"-r", roadmap, "--query", read})
 		})
 		assertTooLongRefusal(t, runErr, stdout, derived)
 	})
 
-	t.Run("a supplied path inside the bound still reaches the store", func(t *testing.T) {
-		// Acceptance Criterion 66's recovery half, at unit level. The roadmap's
-		// DERIVED path is unusable, and --socket names a path that is lawful and
-		// that nothing is listening on: it passes the length check, resolves as
-		// not served, and the statement runs against the store — which is the
-		// remedy the published line names, and the reason the refusal above is
+	t.Run("a supplied path inside the bound still reaches a server", func(t *testing.T) {
+		// Acceptance Criterion 66's recovery half, at unit level, and the control
+		// for the three refusals above. The roadmap's DERIVED path is unusable, so
+		// no server can be started for it in the ordinary way and no client can
+		// reach one; --socket names a path that is lawful, a server is started on
+		// it, and the same roadmap is then read and written through it. That is
+		// the remedy the published line names, and the reason the refusal above is
 		// recoverable on the command line without moving the roadmap
 		// (SPEC/GRAPH.md § Socket Path Length, rule 6).
+		//
+		// Without this subtest the three above would pass against a client that
+		// had simply stopped reaching any server at all.
 		const roadmap = "ctc"
 		t.Setenv("HOME", deepGraphHome(t, roadmap))
 		defer setupTestGraphRoadmap(t, roadmap)()
@@ -377,24 +388,29 @@ func TestGraphExecute_RefusesAnOverLongResolvedSocketHoweverThePathWasChosen(t *
 				"too long for this fixture: %s", len(lawful), graphclient.MaxSocketPathLen, lawful)
 		}
 
+		// The server binds the lawful path and serves the roadmap whose own
+		// derived path cannot be bound. Its graph directory is the roadmap's, so
+		// what is read back below is that roadmap's graph and not another.
+		defer serveGraphOn(t, roadmap, graphDirOf(t, roadmap), lawful)()
+
 		captureStdStreams(t, func() {
-			if writeErr := runGraphExecute([]string{"-r", roadmap, "--socket", lawful, "--query",
+			if writeErr := runGraphClient([]string{"-r", roadmap, "--socket", lawful, "--query",
 				"CREATE (:Spec {key:'reached-through-a-lawful-socket'})"}); writeErr != nil {
-				t.Fatalf("a lawful socket path nothing is listening on must send the statement to "+
-					"the store, as it did before the flag existed: %v", writeErr)
+				t.Fatalf("a lawful socket path with a server behind it must carry the statement to "+
+					"it, whatever the roadmap's derived path is: %v", writeErr)
 			}
 		})
 
 		var runErr error
 		stdout, _ := captureStdStreams(t, func() {
-			runErr = runGraphExecute([]string{"-r", roadmap, "--socket", lawful, "--query", read})
+			runErr = runGraphClient([]string{"-r", roadmap, "--socket", lawful, "--query", read})
 		})
 		if runErr != nil {
 			t.Fatalf("reading back through the lawful socket path failed: %v", runErr)
 		}
 		if !strings.Contains(stdout, "reached-through-a-lawful-socket") {
 			t.Errorf("stdout = %q, want the row the write committed; the invocation exited without "+
-				"error but the write never reached the store", stdout)
+				"error but the write never reached the server", stdout)
 		}
 	})
 }

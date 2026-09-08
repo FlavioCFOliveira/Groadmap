@@ -246,32 +246,38 @@ func staticWorkflows() []Workflow {
 		},
 		{
 			Name: "build_knowledge_graph",
-			Description: "Populate a roadmap's knowledge graph with the project's structural elements " +
-				"(specifications, modules, decisions, dependencies) and query relationships between them. " +
-				"Use when an agent needs to record or retrieve non-task knowledge about a project's architecture.",
+			Description: "Start the roadmap's graph server, then populate its knowledge graph with the project's " +
+				"structural elements (specifications, modules, decisions, dependencies) and query relationships " +
+				"between them. Use when an agent needs to record or retrieve non-task knowledge about a project's " +
+				"architecture. Every statement is sent to a running server; there is no way to run one without one.",
 			Prerequisites: []string{
 				"Roadmap `<name>` exists.",
-				"The graph starts empty on first use; no setup required.",
+				"No graph server is already running for `<name>`: one server runs per roadmap, and a second is refused with exit code 1.",
+				"The graph need not exist yet; starting the server is what creates it, and it is served empty.",
 			},
 			Steps: []WorkflowStep{
 				{
-					Command: "rmp graph execute -r <name> --query \"CREATE (s:Spec {key:'<key>', title:'<title>', status:'pending'})\"",
+					Command: "rmp graph serve -r <name>",
+					Purpose: "Start the roadmap's graph server and leave it running for the whole sequence. It is long-lived: run it in the background, or in another terminal, because it does not exit until it receives SIGINT or SIGTERM. It prints {\"socket\": \"<path>\"} once it has bound, and that line is the signal that the steps below can proceed. Against a roadmap that has never had a graph, this step creates it.",
+				},
+				{
+					Command: "rmp graph client -r <name> --query \"CREATE (s:Spec {key:'<key>', title:'<title>', status:'pending'})\"",
 					Purpose: "Add a specification node. Repeat once per element (Spec, Module, Decision, Dependency). Use MERGE instead of CREATE to make the operation idempotent.",
 				},
 				{
-					Command: "rmp graph execute -r <name> --query \"MATCH (a:Spec {key:'<from>'}), (b:Module {path:'<to>'}) CREATE (a)-[:IMPLEMENTED_BY]->(b)\"",
+					Command: "rmp graph client -r <name> --query \"MATCH (a:Spec {key:'<from>'}), (b:Module {path:'<to>'}) CREATE (a)-[:IMPLEMENTED_BY]->(b)\"",
 					Purpose: "Link two existing nodes with a typed, directed relationship. Repeat for each relationship to add.",
 				},
 				{
-					Command: "rmp graph execute -r <name> --query \"MATCH (s:Spec)-[:IMPLEMENTED_BY]->(m:Module) RETURN s.key AS spec, m.path AS module\"",
+					Command: "rmp graph client -r <name> --query \"MATCH (s:Spec)-[:IMPLEMENTED_BY]->(m:Module) RETURN s.key AS spec, m.path AS module\"",
 					Purpose: "Read and verify the recorded relationships. Any MATCH ... RETURN query can be used here.",
 				},
 				{
-					Command: "rmp graph execute -r <name> --query \"MATCH (a)-[*1..3]->(dep:Dependency) WHERE a.key='<key>' RETURN dep.name AS transitive_dep\"",
+					Command: "rmp graph client -r <name> --query \"MATCH (a)-[*1..3]->(dep:Dependency) WHERE a.key='<key>' RETURN dep.name AS transitive_dep\"",
 					Purpose: "Traverse the graph up to N hops to discover transitive dependencies or impacts not visible from direct relationships.",
 				},
 			},
-			ExpectedOutcome: "The graph contains the recorded nodes and relationships, queryable via Cypher across future invocations (the store is durable).",
+			ExpectedOutcome: "The graph contains the recorded nodes and relationships, and every write committed inside the server before its acknowledgement crossed back. The data is durable and survives the server: stopping it with SIGINT checkpoints the store, releases its lock and removes the socket, and a later `rmp graph serve` for the same roadmap serves the same graph. While no server runs, the graph is unreachable rather than empty.",
 		},
 	}
 }

@@ -288,7 +288,7 @@ func TestHelpContent_GraphSubcommandsOutputAndQueryShortForm(t *testing.T) {
 	}
 	if withQuery == 0 {
 		t.Error("no graph subcommand declares --query, so the flag half of this gate checked nothing. " +
-			"`graph execute` takes it (SPEC/COMMANDS.md § Execute Options); if it has moved, move this " +
+			"`graph client` takes it (SPEC/COMMANDS.md § Client Options); if it has moved, move this " +
 			"gate with it rather than leaving a clause nothing can violate")
 	}
 }

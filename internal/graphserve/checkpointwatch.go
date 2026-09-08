@@ -1,7 +1,8 @@
 // Package graphserve — the in-flight checkpoint watch.
 //
-// A short-lived `rmp graph execute` invocation takes its checkpoint itself and
-// prints the failure, and the server's SHUTDOWN checkpoint is reported by
+// The withdrawn `rmp graph execute` took its checkpoint itself and printed the
+// failure; no surface does that any more, because none but a server opens the
+// store. The server's SHUTDOWN checkpoint is reported by
 // [shutdownCloser.Close]. Between those two, the in-flight checkpointer runs on a
 // cadence nobody watches: its failures are recorded in checkpoint.Stats().LastError
 // and, until this file, nothing in Groadmap ever read that field. A server could

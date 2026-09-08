@@ -189,8 +189,8 @@ func TestGraphSocket_TheBackstopLiteralMatchesTheDeclaredBudget(t *testing.T) {
 // difference between this function and readSocketFlag.
 //
 // `graph serve` takes no other flag and refuses whatever is left where it stands.
-// `graph execute` and `graph client` take --query as well and read a statement
-// out of what remains, so the socket flag has to be removed from the arguments
+// `graph client` takes --query as well and reads a statement out of what remains,
+// so the socket flag has to be removed from the arguments
 // WITHOUT an opinion about the rest — and the leftovers must arrive at readQuery
 // in their original order, or a query would be read from the wrong token.
 func TestExtractSocketFlag_ConsumesTheFlagAndLeavesEverythingElse(t *testing.T) {
@@ -258,8 +258,8 @@ func TestExtractSocketFlag_ConsumesTheFlagAndLeavesEverythingElse(t *testing.T) 
 // A flag supplied with an empty — or whitespace-only — value names no socket at
 // all, which is the same condition as writing the flag with nothing after it. It
 // is a MISSING parameter (exit code 2 through utils.ErrRequired) and not a
-// validation failure, which is what SPEC/COMMANDS.md § Execute Exit Codes and
-// § Client Exit Codes both publish for it.
+// validation failure, which is what SPEC/COMMANDS.md § Client Exit Codes and
+// § Serve Exit Codes both publish for it.
 func TestExtractSocketFlag_AnEmptyValueIsAMissingParameter(t *testing.T) {
 	cases := []struct {
 		name string
@@ -360,17 +360,21 @@ func TestGraphSocketInForce_DerivesTheDefaultAndAbsolutisesTheFlag(t *testing.T)
 // through the CLI's wrapper, which is where the ONE failing state becomes a
 // published line and the other three are left to the caller.
 //
-// The two negatives must arrive as states and NOT as errors, because for
-// `graph execute` they are the direct path: a wrapper that reported them as
-// failures would turn an unserved roadmap into a broken one.
+// The two negatives must arrive as states and NOT as errors, because what a
+// surface does with each of them is the surface's own business: `graph client`
+// turns both into the no-server line, and `graph serve` reads the same two as
+// permission to bind. A wrapper that reported them as failures here would decide
+// that for both.
 func TestResolveGraphServer_ReportsTheStatesTheSurfacesActOn(t *testing.T) {
 	dir := t.TempDir()
 
 	t.Run("an absent socket is a state and not an error", func(t *testing.T) {
 		state, err := resolveGraphServer(filepath.Join(dir, "absent.sock"))
 		if err != nil {
-			t.Fatalf("resolveGraphServer reported %v for an absent socket; for `graph execute` "+
-				"that state is the direct path, not a failure", err)
+			t.Fatalf("resolveGraphServer reported %v for an absent socket; an absent socket "+
+				"is one of the two definite negatives, which a caller answers for itself "+
+				"-- exit 1 at `graph client`, HTTP 503 at the web endpoint -- not a "+
+				"resolution failure", err)
 		}
 		if !state.NotServed() {
 			t.Errorf("state = %v, want one of the two definite negatives", state)

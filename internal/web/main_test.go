@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/FlavioCFOliveira/Groadmap/internal/testenv"
+	"github.com/FlavioCFOliveira/Groadmap/internal/testenv/graphserver"
 )
 
 // TestMain makes every test in this package hermetic by pointing HOME at a
@@ -22,7 +23,18 @@ import (
 // The existing per-test t.Setenv("HOME", ...) calls keep working unchanged and
 // still take precedence: t.Setenv restores the value installed here when the
 // test finishes.
+//
+// It also doubles as the entry point of the CHILD GRAPH SERVER this package's
+// tests re-execute. The graph data endpoint reaches a graph only through a
+// running server, so a test that means to assert what the endpoint returns needs
+// one; graphserver.RunChild turns a run of this binary into that server when the
+// parent asked for it, and reports false on every ordinary run. See
+// internal/testenv/graphserver for why the child is a process and why it is this
+// binary.
 func TestMain(m *testing.M) {
+	if code, isChild := graphserver.RunChild(); isChild {
+		os.Exit(code)
+	}
 	os.Exit(runTests(m))
 }
 

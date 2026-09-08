@@ -3,7 +3,7 @@
 // # The criterion
 //
 // SPEC/GRAPH.md acceptance criterion 28: "The rule is one rule across the two
-// families that publish it. The line `graph execute` emits is the line
+// families that publish it. The line `graph client` emits is the line
 // COMMANDS.md § Positional Arguments publishes for the whole CLI with this
 // family's hint appended, and the line the comment subcommands emit is that same
 // line without a hint (COMMANDS.md § Comment Positional Argument Contract). A
@@ -524,13 +524,13 @@ func TestPositionalRefusal_TheThreeProducersStandInThePublishedRelation(t *testi
 
 			got := errorLine(err)
 			if got != canonicalLive+hint {
-				t.Errorf("`graph execute` given a %s statement emits\n  %q\nbut the canonical line plus "+
+				t.Errorf("`graph client` given a %s statement emits\n  %q\nbut the canonical line plus "+
 					"this family's hint is\n  %q\nSPEC/GRAPH.md acceptance criterion 28 makes the "+
 					"`graph` line the canonical CLI-wide line with the hint appended, so the shared "+
 					"half must be the shared half", c.class, got, canonicalLive+hint)
 			}
 			if got != wantGraph {
-				t.Errorf("`graph execute` given a %s statement emits %q; %s publishes %q",
+				t.Errorf("`graph client` given a %s statement emits %q; %s publishes %q",
 					c.class, got, commandsSpecPath, wantGraph)
 			}
 		})

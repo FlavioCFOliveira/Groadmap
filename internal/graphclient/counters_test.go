@@ -6,8 +6,8 @@ package graphclient
 // map back into the ENGINE's [exec.QueryCounters], so that the single mapping in
 // internal/graphjson publishes it. It is deliberately the mirror of plan.go's
 // tests: what needs proving is the inverse mapping, because the step from the
-// engine representation to the published JSON is shared with `graph execute` and
-// has no second opinion in it.
+// engine representation to the published JSON is shared with the web graph data
+// endpoint and has no second opinion in it.
 //
 // The one property that could silently diverge between the two surfaces is the
 // property figure — the wire carries the engine's two property counters already
@@ -201,8 +201,8 @@ func TestCountersOf_TheFoldedPropertyFigureAgreesWithTheDirectPath(t *testing.T)
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			// What `rmp graph execute` publishes: the engine's counters straight
-			// into the shared mapping.
+			// What a surface holding the engine's own counters publishes: them,
+			// straight into the shared mapping.
 			direct := graphjson.CountersOf(&tc.engine)
 			// What `rmp graph client` publishes: the same counters folded by the
 			// server onto the wire, inverted here, then through the SAME mapping.
@@ -269,7 +269,8 @@ func TestSend_CarriesTheServersWriteCounters(t *testing.T) {
 	published := graphjson.CountersOf(result.Counters)
 	want := graphjson.CountersOf(&effects)
 	if published == nil || want == nil || *published != *want {
-		t.Errorf("the served result must publish the object `graph execute` publishes.\n"+
+		t.Errorf("the served result must publish the object the shared mapping publishes for the\n"+
+			"engine's own counters.\n"+
 			"got:  %+v\nwant: %+v", published, want)
 	}
 }

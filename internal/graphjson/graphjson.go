@@ -5,9 +5,9 @@
 // canonical for WHAT the mapping produces; this package neither adds to that nor
 // departs from it. What it settles is the question those sections do not:
 // § One Realisation of the Mapping fixes how many times the mapping may be
-// written, and the answer is once. Three surfaces are bound by that rule —
-// `rmp graph execute`, `rmp graph client` and the web interface's graph data
-// endpoint — and all three arrive here.
+// written, and the answer is once. Two surfaces are bound by that rule —
+// `rmp graph client` and the web interface's graph data endpoint — and both
+// arrive here.
 //
 // # Why a package rather than a function inside one of the callers
 //

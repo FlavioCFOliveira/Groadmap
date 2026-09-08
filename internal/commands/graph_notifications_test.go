@@ -8,8 +8,12 @@
 //     success JSON unchanged (AC 20).
 //   - A connected query that produces no notification writes nothing extra
 //     to stderr (AC 21).
-//   - Notifications are surfaced on both the read path (query/search) and the
-//     write path (create/update/delete) (AC 22).
+//   - Notifications are surfaced whether the statement reads or writes (AC 22).
+//
+// Every statement below crosses the protocol: `rmp graph client` is the only
+// subcommand that runs one, so what these tests assert is that a notification
+// the SERVER attached survives the crossing and reaches this process's stderr
+// unchanged (SPEC/GRAPH.md § The Dedicated Graph Server).
 package commands
 
 import (
@@ -99,11 +103,11 @@ func captureStdStreams(t *testing.T, fn func()) (stdout, stderr string) {
 // Cartesian-product advisory.
 func seedSpecAndTask(t *testing.T, name string) {
 	t.Helper()
-	if err := runGraphExecute([]string{"-r", name, "--query",
+	if err := runGraphClient([]string{"-r", name, "--query",
 		"CREATE (s:Spec {key:'query-notifications'})"}); err != nil {
 		t.Fatalf("seed Spec: %v", err)
 	}
-	if err := runGraphExecute([]string{"-r", name, "--query",
+	if err := runGraphClient([]string{"-r", name, "--query",
 		"CREATE (t:Task {key:'wire-notifications'})"}); err != nil {
 		t.Fatalf("seed Task: %v", err)
 	}
@@ -131,11 +135,11 @@ func assertColumnsRows(t *testing.T, raw string) {
 // code, description, one line) while stdout stays the normal columns/rows JSON.
 func TestGraphNotifications_DisconnectedMatch(t *testing.T) {
 	name := "graph-notif-disconnected"
-	defer setupTestGraphRoadmap(t, name)()
+	defer servedRoadmap(t, name)()
 	seedSpecAndTask(t, name)
 
 	stdout, stderr := captureStdStreams(t, func() {
-		if err := runGraphExecute([]string{"-r", name, "--query",
+		if err := runGraphClient([]string{"-r", name, "--query",
 			"MATCH (a:Spec), (b:Task) RETURN a.key, b.key"}); err != nil {
 			t.Errorf("disconnected query returned error: %v", err)
 		}
@@ -163,11 +167,11 @@ func TestGraphNotifications_DisconnectedMatch(t *testing.T) {
 // the normal result.
 func TestGraphNotifications_ConnectedQueryQuiet(t *testing.T) {
 	name := "graph-notif-connected"
-	defer setupTestGraphRoadmap(t, name)()
+	defer servedRoadmap(t, name)()
 	seedSpecAndTask(t, name)
 
 	stdout, stderr := captureStdStreams(t, func() {
-		if err := runGraphExecute([]string{"-r", name, "--query",
+		if err := runGraphClient([]string{"-r", name, "--query",
 			"MATCH (s:Spec) RETURN s.key"}); err != nil {
 			t.Errorf("connected query returned error: %v", err)
 		}
@@ -180,31 +184,31 @@ func TestGraphNotifications_ConnectedQueryQuiet(t *testing.T) {
 }
 
 // TestGraphNotifications_WritePathWired covers the write-path half of AC 22:
-// the write subcommands route every result through printGraphNotifications, so
-// whatever notifications the engine attaches to a transactional result are
-// surfaced on stderr, with the normal {"ok": true} success output unchanged.
+// a writing statement's result is carried back over the protocol with whatever
+// notifications the engine attached to it, and `rmp graph client` writes them
+// to stderr with the normal {"ok": true} success output unchanged.
 //
-// NOTE on GoGraph v0.3.2: the transactional read-back result produced by
-// RunInTx does not currently carry plan-time notifications (only the read-path
-// Run result does), so a disconnected MATCH under graph create emits no notice
-// line on this pinned version. The assertion below therefore verifies the
-// invariant that holds regardless of how many notifications the engine emits:
-// the write path is wired through the helper, the stdout success output is the
-// exact {"ok": true} shape, and the exit code is success. When a future GoGraph
-// release attaches notifications to transactional results, this same wiring
+// NOTE on the pinned engine: a writing statement's result does not currently
+// carry plain-time notifications the way a read's does, so a disconnected MATCH
+// with a writing clause emits no notice line here. The assertion below
+// therefore verifies the invariant that holds regardless of how many
+// notifications the engine emits: the write path passes whatever arrives
+// through the same loop the read path uses, the stdout success output is the
+// exact {"ok": true} shape, and the exit code is success. When a future engine
+// release attaches notifications to writing statements, this same wiring
 // surfaces them with no Groadmap change. The end-to-end suite
 // (tests/test_40_graph_notifications.py) asserts the live write-path behaviour
 // against the built binary.
 func TestGraphNotifications_WritePathWired(t *testing.T) {
 	name := "graph-notif-write"
-	defer setupTestGraphRoadmap(t, name)()
+	defer servedRoadmap(t, name)()
 	seedSpecAndTask(t, name)
 
-	// A CREATE with two disconnected MATCH patterns: the writing clause keeps
-	// it under graph create, and the form would trigger the advisory on the
+	// A CREATE with two disconnected MATCH patterns: the writing clause is what
+	// makes the result a write's, and the form would trigger the advisory on the
 	// read path.
 	stdout, stderr := captureStdStreams(t, func() {
-		if err := runGraphExecute([]string{"-r", name, "--query",
+		if err := runGraphClient([]string{"-r", name, "--query",
 			"MATCH (a:Spec), (b:Task) CREATE (l:Link {note:'join'})"}); err != nil {
 			t.Errorf("write query returned error: %v", err)
 		}

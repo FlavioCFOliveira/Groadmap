@@ -656,7 +656,8 @@ func runSequential(b *testing.B, op func(i int) error) {
 // It runs in process. It therefore excludes the fork and exec of ./bin/rmp, the
 // dynamic loading and Go runtime start-up that follow, the argument parsing, and
 // the JSON serialisation of the result — all of which a real
-// `rmp graph execute` pays and none of which is here. That makes this a LOWER
+// per-invocation run paid — the withdrawn `rmp graph execute` — and none of
+// which is here. That makes this a LOWER
 // BOUND on what the per-invocation path costs, and it makes the comparison it
 // supports CONSERVATIVE in exactly the direction that matters: the server path's
 // advantage over a real invocation can only be LARGER than these rows show, never

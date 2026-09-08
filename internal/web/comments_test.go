@@ -230,49 +230,8 @@ func editSprintCommentBody(t *testing.T, database *db.DB, id int, body, updatedA
 	}
 }
 
-// modalSlice returns the substring of body covering exactly ONE task's detail
-// modal: from that modal's id attribute to the next modal's, or to the end of the
-// document for the last one. Every page renders its modals consecutively after
-// the page body, so this isolates one task's markup and an assertion about it can
-// never accidentally read another task's modal.
-func modalSlice(t *testing.T, body string, taskID int) string {
-	t.Helper()
-
-	// The opening tag of the modal, not the bare id: the modal's title element
-	// carries id="task-modal-<id>-title", so matching the whole opening tag is what
-	// keeps the region from being cut short at the modal header.
-	marker := modalOpenTag + ` id="task-modal-` + itoa(taskID) + `"`
-	start := strings.Index(body, marker)
-	if start < 0 {
-		t.Fatalf("no detail modal for task #%d in the rendered page", taskID)
-	}
-	rest := body[start+len(marker):]
-	if next := strings.Index(rest, modalOpenTag); next >= 0 {
-		return rest[:next]
-	}
-	return rest
-}
-
 // modalOpenTag is the opening tag every task detail modal starts with.
 const modalOpenTag = `<div class="modal modal-blur fade"`
-
-// modalCommentsSlice returns the comments block of one task's detail modal: from
-// the block's own title to the modal footer, which follows the modal body. It is
-// the region Acceptance Criteria 64, 65, 67, 71 and 72 speak about.
-func modalCommentsSlice(t *testing.T, body string, taskID int) string {
-	t.Helper()
-
-	modal := modalSlice(t, body, taskID)
-	start := strings.Index(modal, `<div class="datagrid-title mb-1">Comments</div>`)
-	if start < 0 {
-		t.Fatalf("task #%d detail modal has no comments block", taskID)
-	}
-	rest := modal[start:]
-	if end := strings.Index(rest, `modal-footer`); end >= 0 {
-		return rest[:end]
-	}
-	return rest
-}
 
 // sprintCommentsCardSlice returns the sprint page's Comments card: from its card
 // header to the first task detail modal, which the page renders after the whole

@@ -7,27 +7,36 @@ SPEC/GRAPH.md "Query Plans: The EXPLAIN and PROFILE Prefixes",
 SPEC/DATA_FORMATS.md "Graph Plan Node" and "Graph Client Result", and
 SPEC/COMMANDS.md "Graph Management" are canonical for every assertion here.
 
-## What this module proves that the Go suites cannot
+## What this module is for
 
-`internal/graphjson` already pins the mapping's rules and `internal/commands`
-already pins the envelope, both mutation-checked. Neither can prove the one
-property that is the whole point of the design:
+The prefixes, and the write counters beside them, asserted END TO END: real
+processes, a real `rmp graph serve`, a real Unix domain socket, and the bytes
+`rmp graph client` writes to stdout. `internal/graphjson` already pins the
+mapping's rules and `internal/commands` already pins the envelope, both
+mutation-checked, and neither runs the binary or crosses the Bolt protocol.
+What this module adds is that the plan a statement carries, and the counters a
+write reports, survive that crossing intact -- the plan tree's keys and shape,
+the measured figures a PROFILE carries and an EXPLAIN must not, the
+case-insensitivity of the prefixes, the unprefixed envelope left exactly as it
+was, and, hardest of all, that an EXPLAIN of a writing statement does not run
+the write, asserted against the graph rather than against the output.
 
-    for the same statement against the same graph, `rmp graph client` writes
-    the bytes `rmp graph execute` writes
+## What this module used to be for as well, and no longer is
 
-because that identity spans two PROCESSES reaching the graph two different
-ways -- one opening the store in-process, the other crossing a Unix domain
-socket and the Bolt protocol -- and it is asserted on the bytes on stdout,
-not on a Go value. A test that could see both sides in one process would be
-testing something else.
+Its stated reason to exist was a second property: that for the same statement
+against the same graph, `rmp graph client` wrote the bytes `rmp graph execute`
+wrote. That identity spanned two surfaces reaching the graph two different ways
+-- one opening the store in-process, the other crossing a socket -- and it was
+worth asserting on stdout because a Go test could not see both sides.
 
-The identity holds exactly for every key whose value is a property of the
-statement and the graph. It does NOT bind `timeNs`, and cannot: that key
-measures the execution, and two executions measure two durations. The
-comparison below therefore strips `timeNs` and asserts everything else --
-which is the guarantee a caller actually relies on, since it means the
-surface a statement ran through is not observable in the result.
+`rmp graph execute` is withdrawn: `rmp graph <anything but serve|client>` exits
+127, and the graph is reachable only through a running server. There is one
+surface, so there is no identity left to assert, and every comparison of the
+two is RETIRED rather than rewritten -- a comparison of a surface with itself
+asserts nothing. The retirements are recorded at the point where the code was:
+see the block where `TestPlanPrefixParityAcrossSurfaces` stood, and the
+docstring of `TestWriteCounters`, which keeps everything that class asserted
+ABOUT the objects and drops only the second side of each comparison.
 
 ## The three defects this guards
 
@@ -44,17 +53,12 @@ the node count back to prove the statement did not run.
 """
 
 import inspect
-import json
-import os
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from tests.base_test import GroadmapTestBase
-from tests.test_65_graph_server_client_e2e import GraphServeProcess
-
-EXIT_OK = 0
 
 # Three specs, two of which pass the predicate the tests filter on. Two-of-three
 # is deliberate: it makes `rowsRemovedByFilter` a number that could not have been
@@ -69,67 +73,48 @@ SEED = (
 READ = "MATCH (s:Spec) WHERE s.status = 'implemented' RETURN s.key"
 
 
-def _strip_timing(node):
-    """Remove every `timeNs` from a decoded plan tree, in place.
-
-    `timeNs` is the one key the execute/client identity does not bind: it
-    measures the run, and the two surfaces run the statement twice.
-    """
-    node.pop("timeNs", None)
-    for child in node.get("children", []):
-        _strip_timing(child)
-    return node
-
-
 class PlanPrefixBase:
-    """A roadmap whose graph carries SEED, plus a tracked server when needed."""
+    """A roadmap whose graph carries SEED, served for the whole of each test.
+
+    The server is started BEFORE the seed, and it has to be. `rmp graph client`
+    is the only way to run a statement and it needs something listening for
+    every one, while starting a server is itself what creates the graph store
+    (SPEC/COMMANDS.md "Serve"). The old fixture seeded through `rmp graph
+    execute` and started a server over what that left behind; the ordering
+    described a subcommand that no longer exists, and the chicken-and-egg it
+    worked around has dissolved with it.
+    """
+
+    # A realistic roadmap for a graph of specifications: each test gets its own
+    # temporary HOME, so one name serves them all.
+    ROADMAP = "documentation-index"
 
     def setup_method(self):
         self.test = GroadmapTestBase()
         self.test.setup()
-        self.roadmap = self.test.create_roadmap()
-        rc, out, err = self.run_cli(["graph", "execute", "-r", self.roadmap, "--query", SEED])
-        assert rc == EXIT_OK, f"seeding failed: exit={rc} out={out!r} err={err!r}"
-        self._servers = []
+        self.roadmap = self.ROADMAP
+        self.server = self.test.served_roadmap(self.roadmap, SEED)
 
     def teardown_method(self):
-        for server in self._servers:
-            try:
-                server.stop()
-            except Exception:  # noqa: BLE001 - teardown must not mask a failure
-                pass
+        # GroadmapTestBase.teardown() kills the server before it removes the
+        # temporary HOME the server is serving out of.
         self.test.teardown()
 
-    def run_cli(self, args, timeout=20.0):
-        """One ./bin/rmp invocation, returning (exit_code, stdout, stderr)."""
-        import subprocess
-
-        env = os.environ.copy()
-        env["HOME"] = str(self.test.home_dir)
-        result = subprocess.run(
-            [self.test.cli_path] + args,
-            capture_output=True, text=True, env=env, timeout=timeout,
-        )
-        return result.returncode, result.stdout, result.stderr
-
-    def execute(self, query):
-        """Run a statement through `graph execute` and return its parsed stdout."""
-        rc, out, err = self.run_cli(["graph", "execute", "-r", self.roadmap, "--query", query])
-        assert rc == EXIT_OK, f"`graph execute {query!r}` failed: exit={rc} stderr={err!r}"
-        return json.loads(out)
-
-    def start_server(self):
-        server = GraphServeProcess(self.test, self.roadmap)
-        self._servers.append(server)
-        server.start()
-        return server
+    def statement(self, query):
+        """Run one statement through `rmp graph client` against the running
+        server, and return its parsed stdout. Fails loudly, with the
+        invocation's own streams, when the statement did not succeed.
+        """
+        return self.test.graph_ok(self.roadmap, query=query)
 
 
-class TestPlanPrefixesOnExecute(PlanPrefixBase):
-    """The direct path, against the compiled binary."""
+class TestPlanPrefixes(PlanPrefixBase):
+    """The prefixes themselves, through `rmp graph client` against a running
+    server -- which is the only path to a graph there is.
+    """
 
     def test_explain_publishes_a_plan_and_no_measurement(self):
-        result = self.execute(f"EXPLAIN {READ}")
+        result = self.statement(f"EXPLAIN {READ}")
 
         assert "plan" in result, (
             "an EXPLAIN must publish a `plan` member; without it its output is "
@@ -154,7 +139,7 @@ class TestPlanPrefixesOnExecute(PlanPrefixBase):
         assert_unmeasured(result["plan"])
 
     def test_profile_publishes_the_measurement(self):
-        result = self.execute(f"PROFILE {READ}")
+        result = self.statement(f"PROFILE {READ}")
 
         assert "profile" in result and "plan" not in result, (
             f"a PROFILE publishes `profile` and never `plan`. Got {result!r}")
@@ -181,10 +166,79 @@ class TestPlanPrefixesOnExecute(PlanPrefixBase):
                 "the predicate rejected one of the three seeded specs, so "
                 f"rowsRemovedByFilter is 1 and not an echo of the 2 emitted rows. Got {removed!r}")
 
+    def test_two_executions_of_one_statement_agree_where_the_clock_cannot_reach(self):
+        """Acceptance Criterion 60: DETERMINISM, which no per-field assertion sees.
+
+        The retired TestPlanPrefixParityAcrossSurfaces compared two SURFACES and
+        was rightly deleted with the second of them. This compares two
+        EXECUTIONS through the one client, which is a different property, and it
+        is the one SPEC/DATA_FORMATS.md "Graph Client Result" rule 5 actually
+        states: a statement carrying EXPLAIN is identical in every byte between
+        runs, and a PROFILE is identical everywhere the clock does not reach.
+
+        It catches what the detailed assertions in this class cannot. Each of
+        those checks one field at a time, so output whose plan children arrive
+        in a different order on each run, or whose object keys are emitted
+        straight from a map, satisfies every one of them and is still
+        non-deterministic. A consumer diffing two runs would see churn that
+        means nothing, and a real change would hide in it.
+        """
+        first_rc, first_out, first_err = self.test.graph_client(
+            self.roadmap, query=f"EXPLAIN {READ}")
+        second_rc, second_out, second_err = self.test.graph_client(
+            self.roadmap, query=f"EXPLAIN {READ}")
+        assert first_rc == 0 and second_rc == 0, (
+            f"both runs must succeed: {first_rc}/{first_err!r}, {second_rc}/{second_err!r}")
+        assert first_out == second_out, (
+            "two EXPLAINs of one statement against an unchanged graph must be identical "
+            "byte for byte -- an EXPLAIN runs nothing, so there is no measurement to "
+            f"differ and nothing else may.\nfirst:  {first_out!r}\nsecond: {second_out!r}")
+
+        # A PROFILE ran, so exactly one thing may differ: the clock. Everything
+        # else it publishes is a property of the graph and the plan, and two runs
+        # over an unchanged graph must agree on all of it.
+        def without_timing(node, path="profile"):
+            """The node with every `timeNs` removed at every depth, and the paths
+            where one was found -- so an absent measurement fails loudly instead
+            of making the comparison vacuously true."""
+            found = []
+            if "timeNs" in node:
+                found.append(path)
+            stripped = {k: v for k, v in node.items() if k not in ("timeNs", "children")}
+            children = []
+            for i, child in enumerate(node.get("children", [])):
+                child_stripped, child_found = without_timing(child, f"{path}.children[{i}]")
+                children.append(child_stripped)
+                found.extend(child_found)
+            if "children" in node:
+                stripped["children"] = children
+            return stripped, found
+
+        first = self.statement(f"PROFILE {READ}")
+        second = self.statement(f"PROFILE {READ}")
+        first_profile, first_timed = without_timing(first["profile"])
+        second_profile, second_timed = without_timing(second["profile"])
+
+        assert first_timed and second_timed, (
+            "a PROFILE measured the run it published, so `timeNs` must be PRESENT in "
+            "both -- without this the comparison below would pass over two outputs "
+            f"that simply carry no measurement. first={first_timed!r} second={second_timed!r}")
+        assert first_timed == second_timed, (
+            "the two runs measured the same plan, so a `timeNs` must appear at the same "
+            f"places in both. first={first_timed!r} second={second_timed!r}")
+        assert first_profile == second_profile, (
+            "two PROFILEs of one statement against an unchanged graph must agree "
+            "everywhere the clock does not reach: the rows, the dbHits, the operators "
+            "and the shape of the tree are properties of the graph and the plan, not of "
+            f"when it ran.\nfirst:  {first_profile!r}\nsecond: {second_profile!r}")
+        assert first["rows"] == second["rows"], (
+            f"the same read over an unchanged graph returns the same rows. "
+            f"first={first['rows']!r} second={second['rows']!r}")
+
     def test_explain_of_a_write_neither_claims_success_nor_runs(self):
         """The worst of the three defects: {"ok": true} over a statement that
         wrote nothing, byte-identical to a real committed write."""
-        result = self.execute("EXPLAIN CREATE (n:ShouldNeverExist)")
+        result = self.statement("EXPLAIN CREATE (n:ShouldNeverExist)")
 
         assert "ok" not in result, (
             "an EXPLAIN of a writing statement must not publish {\"ok\": true}: that is "
@@ -198,14 +252,14 @@ class TestPlanPrefixesOnExecute(PlanPrefixBase):
             f"and an empty `rows` array. Got {result.get('rows')!r}")
 
         # The decisive assertion, made against the graph rather than the output.
-        count = self.execute("MATCH (n:ShouldNeverExist) RETURN count(n)")
+        count = self.statement("MATCH (n:ShouldNeverExist) RETURN count(n)")
         assert count["rows"][0][0] == 0, (
             "EXPLAIN reports a plan and executes nothing, but the node exists: "
             f"the prefix ran the statement. Count was {count['rows'][0][0]!r}")
 
     def test_prefixes_are_case_insensitive(self):
         for prefix in ("explain", "ExPlAiN", "EXPLAIN"):
-            result = self.execute(f"{prefix} {READ}")
+            result = self.statement(f"{prefix} {READ}")
             assert "plan" in result, (
                 f"the {prefix!r} prefix must be recognised; the engine accepts it "
                 f"case-insensitively. Got {result!r}")
@@ -213,13 +267,13 @@ class TestPlanPrefixesOnExecute(PlanPrefixBase):
     def test_unprefixed_output_is_unchanged(self):
         """The compatibility guard. The envelope departure is safe only because
         it is confined to prefixed statements."""
-        read = self.execute(READ)
+        read = self.statement(READ)
         assert "plan" not in read and "profile" not in read, (
             f"an unprefixed read publishes neither member. Got {read!r}")
         assert set(read) == {"columns", "rows"}, (
             f"and exactly the two keys it always published. Got {sorted(read)!r}")
 
-        write = self.execute("CREATE (:Spec {key:'DEPLOY.md', status:'draft'})")
+        write = self.statement("CREATE (:Spec {key:'DEPLOY.md', status:'draft'})")
         assert "plan" not in write and "profile" not in write, (
             f"an unprefixed write publishes neither member either. Got {write!r}")
         # `ok` keeps its meaning, its value and its position, and the one member
@@ -236,166 +290,114 @@ class TestPlanPrefixesOnExecute(PlanPrefixBase):
             f"only where a plan must be carried. Got {write!r}")
 
 
-class TestPlanPrefixParityAcrossSurfaces(PlanPrefixBase):
-    """The identity `execute` and `client` are required to hold, asserted on the
-    bytes of two separate processes reaching the graph two different ways."""
-
-    def test_explain_is_byte_identical_across_both_surfaces(self):
-        direct_rc, direct_out, _ = self.run_cli(
-            ["graph", "execute", "-r", self.roadmap, "--query", f"EXPLAIN {READ}"])
-        assert direct_rc == EXIT_OK
-
-        server = self.start_server()
-        client_rc, client_out, client_err = self.run_cli(
-            ["graph", "client", "-r", self.roadmap, "--socket", server.socket,
-             "--query", f"EXPLAIN {READ}"])
-        assert client_rc == EXIT_OK, f"client failed: exit={client_rc} stderr={client_err!r}"
-
-        assert direct_out == client_out, (
-            "`rmp graph client` must write the bytes `rmp graph execute` writes for the "
-            "same statement against the same graph. An EXPLAIN carries no measured "
-            "figure, so the two are identical byte for byte with nothing excused "
-            "(SPEC/DATA_FORMATS.md 'Graph Client Result').\n"
-            f"execute:\n{direct_out}\nclient:\n{client_out}")
-
-    def test_profile_agrees_across_both_surfaces_except_the_clock(self):
-        direct = self.execute(f"PROFILE {READ}")
-
-        server = self.start_server()
-        rc, out, err = self.run_cli(
-            ["graph", "client", "-r", self.roadmap, "--socket", server.socket,
-             "--query", f"PROFILE {READ}"])
-        assert rc == EXIT_OK, f"client failed: exit={rc} stderr={err!r}"
-        via_client = json.loads(out)
-
-        _strip_timing(direct["profile"])
-        _strip_timing(via_client["profile"])
-        assert direct == via_client, (
-            "a PROFILE must agree across both surfaces in every key except `timeNs`, "
-            "which measures the run rather than describing the result and therefore "
-            "differs between two executions. Everything else -- the operators, the "
-            "structure, the ordering, the measured rows and db-hits -- is identical.\n"
-            f"execute: {direct!r}\nclient:  {via_client!r}")
-
-    def test_explain_of_a_write_is_identical_across_both_surfaces(self):
-        """The envelope departure must be the same departure on both paths: two
-        discriminators that disagreed would make the surface observable."""
-        direct_rc, direct_out, _ = self.run_cli(
-            ["graph", "execute", "-r", self.roadmap, "--query", "EXPLAIN CREATE (n:ShouldNeverExist)"])
-        assert direct_rc == EXIT_OK
-
-        server = self.start_server()
-        client_rc, client_out, client_err = self.run_cli(
-            ["graph", "client", "-r", self.roadmap, "--socket", server.socket,
-             "--query", "EXPLAIN CREATE (n:ShouldNeverExist)"])
-        assert client_rc == EXIT_OK, f"client failed: exit={client_rc} stderr={client_err!r}"
-
-        assert direct_out == client_out, (
-            "both surfaces must depart from the columns discriminator identically for a "
-            f"prefixed writing statement.\nexecute:\n{direct_out}\nclient:\n{client_out}")
-        assert "ok" not in json.loads(client_out), (
-            "and neither may claim a write that did not happen")
+# --------------------------------------------------------------------------
+# RETIRED: TestPlanPrefixParityAcrossSurfaces
+#
+# All three of its cases compared the stdout of `rmp graph execute` with the
+# stdout of `rmp graph client` for one statement: an EXPLAIN of a read, a
+# PROFILE of a read with `timeNs` stripped, and an EXPLAIN of a write. The
+# second side of every one of those comparisons no longer exists -- `rmp graph
+# execute` is withdrawn, and `rmp graph <anything but serve|client>` exits 127
+# -- and a comparison of one surface with itself asserts nothing at all. They
+# are deleted rather than reduced to a single-sided check, because the single
+# side is already asserted, in more detail than the comparison ever was:
+#
+#   test_explain_is_byte_identical_across_both_surfaces
+#       The EXPLAIN itself is covered by
+#       TestPlanPrefixes.test_explain_publishes_a_plan_and_no_measurement,
+#       which asserts the plan member, the absence of the profile member, the
+#       non-empty operator, and the absence of every measured key at every
+#       depth of the tree -- where the comparison only required the two
+#       surfaces to agree, whatever they printed.
+#
+#   test_profile_agrees_across_both_surfaces_except_the_clock
+#       Covered by TestPlanPrefixes.test_profile_publishes_the_measurement,
+#       which asserts the profile member, the absence of the plan member, the
+#       real rows, and the measured rows/timeNs/rowsRemovedByFilter figures.
+#       `_strip_timing` went with the comparison: it existed only to excuse the
+#       one key two runs cannot share.
+#
+#   test_explain_of_a_write_is_identical_across_both_surfaces
+#       Covered by
+#       TestPlanPrefixes.test_explain_of_a_write_neither_claims_success_nor_runs,
+#       which is the stronger case of the two: besides refusing the {"ok": true}
+#       shape it reads the graph back and proves the write did not happen.
+# --------------------------------------------------------------------------
 
 
-class TestWriteCounterParityAcrossSurfaces(PlanPrefixBase):
-    """The counters identity, asserted on complete stdout.
+class TestWriteCounters(PlanPrefixBase):
+    """What a write reports it changed, asserted on the object `rmp graph
+    client` publishes (SPEC/DATA_FORMATS.md "Graph Client Result", rule 6;
+    SPEC/GRAPH.md "Write Counters: What a Statement Changed").
 
-    Unlike the plan comparison above there is no clock in this object, so
-    nothing is excused and nothing is stripped: the two surfaces publish the
-    same bytes or one of them is wrong
-    (SPEC/DATA_FORMATS.md "Graph Client Result", rule 6;
-    SPEC/GRAPH.md "Write Counters: What a Statement Changed", rule 2).
+    This class used to be TestWriteCounterParityAcrossSurfaces, and each of its
+    three cases ran the same statement through `rmp graph execute` and through
+    `rmp graph client` and compared the two stdouts byte for byte. That second
+    side is gone with the subcommand, and the comparison with it: there is one
+    surface, and comparing it with itself would assert nothing.
+
+    NOTHING ELSE WAS DROPPED. Every case already asserted the object itself
+    beside the comparison -- the complete key set and the exact counters -- and
+    that is what remains, unchanged and still asserted in full, so a stray
+    third member or a wrong figure fails here exactly as it did before.
     """
 
     # A gauge carrying both a property to reassign and a property to remove, so
     # that one statement exercises BOTH engine property counters.
     GAUGE = "CREATE (:Gauge {serial:'G-1', reading:1, spare:'x'})"
-    # The mixed statement. A check over a pure SET would pass on an
-    # implementation that folded the two property counters on one path and not
-    # the other, which is the one way these two surfaces could still disagree.
+    # The mixed statement. A check over a pure SET would not reach the fold: the
+    # Bolt protocol carries one property counter and no counterpart for a
+    # removal, so an assignment and a removal have to arrive as ONE figure.
     MIXED = "MATCH (g:Gauge {serial:'G-1'}) SET g.reading = 12 REMOVE g.spare"
-    # Puts the gauge back exactly as the seed left it, so the second surface
-    # runs the same statement against the same graph state rather than against
-    # what the first surface left behind.
-    RESTORE = "MATCH (g:Gauge {serial:'G-1'}) SET g.reading = 1, g.spare = 'x'"
 
-    def test_a_write_is_byte_identical_across_both_surfaces(self):
-        """A CREATE runs identically twice, so no restoration is needed: each
-        surface creates its own node and each reports the same effects."""
+    def test_a_write_publishes_the_counters_of_what_it_created(self):
         create = "CREATE (:Widget {serial:'A-1', batch:7})"
 
-        direct_rc, direct_out, direct_err = self.run_cli(
-            ["graph", "execute", "-r", self.roadmap, "--query", create])
-        assert direct_rc == EXIT_OK, f"execute failed: exit={direct_rc} stderr={direct_err!r}"
+        result = self.statement(create)
 
-        server = self.start_server()
-        client_rc, client_out, client_err = self.run_cli(
-            ["graph", "client", "-r", self.roadmap, "--socket", server.socket,
-             "--query", create])
-        assert client_rc == EXIT_OK, f"client failed: exit={client_rc} stderr={client_err!r}"
-
-        assert direct_out == client_out, (
-            "`rmp graph client` must write the bytes `rmp graph execute` writes for "
-            "the same writing statement, counters included and with nothing "
-            "excluded.\n"
-            f"execute:\n{direct_out}\nclient:\n{client_out}")
-        assert json.loads(direct_out) == {
+        assert result == {
             "ok": True,
             "counters": {"nodesCreated": 1, "propertiesWritten": 2, "labelsAdded": 1},
-        }, f"and the object itself must be the specified one. Got {direct_out!r}"
-
-    def test_a_mixed_property_write_is_byte_identical_across_both_surfaces(self):
-        rc, _out, err = self.run_cli(
-            ["graph", "execute", "-r", self.roadmap, "--query", self.GAUGE])
-        assert rc == EXIT_OK, f"seeding the gauge failed: exit={rc} stderr={err!r}"
-
-        direct_rc, direct_out, direct_err = self.run_cli(
-            ["graph", "execute", "-r", self.roadmap, "--query", self.MIXED])
-        assert direct_rc == EXIT_OK, f"execute failed: exit={direct_rc} stderr={direct_err!r}"
-
-        rc, _out, err = self.run_cli(
-            ["graph", "execute", "-r", self.roadmap, "--query", self.RESTORE])
-        assert rc == EXIT_OK, f"restoring the gauge failed: exit={rc} stderr={err!r}"
-
-        server = self.start_server()
-        client_rc, client_out, client_err = self.run_cli(
-            ["graph", "client", "-r", self.roadmap, "--socket", server.socket,
-             "--query", self.MIXED])
-        assert client_rc == EXIT_OK, f"client failed: exit={client_rc} stderr={client_err!r}"
-
-        assert direct_out == client_out, (
-            "a statement that assigns one property and removes another must publish "
-            "the same folded figure on both surfaces. The protocol carries one "
-            "property counter and no counterpart for a removal, so a surface that "
-            "did not fold would report 1 here where the other reports 2 "
-            '(SPEC/GRAPH.md "Write Counters: What a Statement Changed", rules 6 '
-            "to 9).\n"
-            f"execute:\n{direct_out}\nclient:\n{client_out}")
-        assert json.loads(direct_out) == {
-            "ok": True, "counters": {"propertiesWritten": 2},
         }, (
-            "the assignment and the removal are ONE figure of 2, published under a "
-            f"key named for the sum. Got {direct_out!r}")
+            "a write publishes {\"ok\": true} beside the counters of exactly what "
+            "it applied -- one labelled node carrying two properties -- and "
+            f"nothing else. Got {result!r}")
 
-    def test_a_read_carries_no_counters_on_either_surface(self):
-        """The compatibility half, across both surfaces: a read is unchanged in
-        every byte, and it was the bytes an existing consumer parsed."""
-        direct_rc, direct_out, direct_err = self.run_cli(
-            ["graph", "execute", "-r", self.roadmap, "--query", READ])
-        assert direct_rc == EXIT_OK, f"execute failed: exit={direct_rc} stderr={direct_err!r}"
+    def test_a_mixed_property_write_folds_both_counters_into_one_figure(self):
+        self.statement(self.GAUGE)
 
-        server = self.start_server()
-        client_rc, client_out, client_err = self.run_cli(
-            ["graph", "client", "-r", self.roadmap, "--socket", server.socket,
-             "--query", READ])
-        assert client_rc == EXIT_OK, f"client failed: exit={client_rc} stderr={client_err!r}"
+        result = self.statement(self.MIXED)
 
-        assert direct_out == client_out, (
-            f"a read must be identical across both surfaces.\n"
-            f"execute:\n{direct_out}\nclient:\n{client_out}")
-        assert set(json.loads(direct_out)) == {"columns", "rows"}, (
-            "a statement that changed nothing carries no `counters` key at all, on "
-            f"either surface. Got {direct_out!r}")
+        assert result == {"ok": True, "counters": {"propertiesWritten": 2}}, (
+            "the assignment and the removal are ONE figure of 2, published under "
+            "a key named for the sum: the protocol carries one property counter "
+            "and no counterpart for a removal, so an implementation that did not "
+            "fold would report 1 here "
+            '(SPEC/GRAPH.md "Write Counters: What a Statement Changed", rules 6 '
+            f"to 9). Got {result!r}")
+
+        # Non-vacuity: the statement really did both halves. A MATCH that
+        # matched nothing would publish no counters at all, and the assertion
+        # above would then be about a statement that did not run.
+        gauge = self.statement(
+            "MATCH (g:Gauge {serial:'G-1'}) RETURN g.reading, g.spare")
+        assert gauge == {
+            "columns": ["g.reading", "g.spare"], "rows": [[12, None]],
+        }, (
+            "the reassignment must be on the node and the removed property must "
+            f"be gone from it. Got {gauge!r}")
+
+    def test_a_read_carries_no_counters(self):
+        """The compatibility half: a read is unchanged in every byte, and it was
+        the bytes an existing consumer parsed."""
+        result = self.statement(READ)
+
+        assert set(result) == {"columns", "rows"}, (
+            "a statement that changed nothing carries no `counters` key at all. "
+            f"Got {result!r}")
+        assert result == {
+            "columns": ["s.key"], "rows": [["GRAPH.md"], ["BUILD.md"]],
+        }, f"and it returns the seeded specs the predicate passes. Got {result!r}"
 
 
 def _run_all():

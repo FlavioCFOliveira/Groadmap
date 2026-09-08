@@ -1,5 +1,5 @@
-// Regression fence for the field-length refusal on `rmp graph execute`
-// (rmp task #413).
+// Regression fence for the field-length refusal on `rmp graph client`
+// (rmp task #413, written against `rmp graph execute` before it was withdrawn).
 //
 // Before this class existed, a statement writing a label or a property key
 // longer than the write-ahead log's length prefix could carry reached the caller
@@ -37,16 +37,17 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"regexp"
 	"strconv"
 	"strings"
 	"testing"
 	"time"
 
-	ggsnap "github.com/FlavioCFOliveira/GoGraph/store/snapshot"
 	ggtxn "github.com/FlavioCFOliveira/GoGraph/store/txn"
 	ggwal "github.com/FlavioCFOliveira/GoGraph/store/wal"
 	"github.com/FlavioCFOliveira/Groadmap/internal/graphlock"
+	"github.com/FlavioCFOliveira/Groadmap/internal/graphstore"
 	"github.com/FlavioCFOliveira/Groadmap/internal/utils"
 )
 
@@ -232,58 +233,29 @@ func TestGraphStatementError_BudgetStillWinsOverEverything(t *testing.T) {
 	}
 }
 
-// TestGraphCheckpointWarning fences the SECOND half of the condition: a field
-// that commits and is then refused by every checkpoint.
+// The SECOND half of the condition — a field that commits and is then refused by
+// every CHECKPOINT — is no longer this package's to report, and the test that
+// used to assert it here is retired rather than adapted.
 //
-// It reaches the caller as a diagnostic beside exit code 0 rather than as an
-// error, so no literal for it is published anywhere and what is fixed is the
-// CONTENT (SPEC/GRAPH.md § Field Length Limits, rule 9). The four things it must
-// carry are asserted below by what they say, not by their wording.
-func TestGraphCheckpointWarning(t *testing.T) {
-	t.Run("an ordinary checkpoint failure keeps the general warning", func(t *testing.T) {
-		err := errors.New("snapshot write: mkdir /roadmaps/x/graph/snapshot.tmp: no space left on device")
-		got := graphCheckpointWarning(err)
-		want := "Warning: graph checkpoint failed: " + err.Error()
-		if got != want {
-			t.Errorf("\n got:  %q\n want: %q", got, want)
-		}
-	})
-
-	t.Run("a refused field is reported as the condition that cannot heal", func(t *testing.T) {
-		err := fmt.Errorf("snapshot write: %w: property value is 2147483648 bytes, maximum 1073741824",
-			ggsnap.ErrFieldTooLong)
-		got := graphCheckpointWarning(err)
-
-		if !strings.HasPrefix(got, "Warning: ") {
-			t.Errorf("the diagnostic lost its stderr prefix: %q", got)
-		}
-		// Rule 9's four contents. Each is asserted by a phrase that carries the
-		// MEANING; a rewording that kept the meaning keeps these passing, and a
-		// rewrite that dropped one of the four does not.
-		for _, required := range []struct{ why, fragment string }{
-			{"the commits are still durable", "still durable in the write-ahead log"},
-			{"recovery still restores them", "the next open recovers it"},
-			{"the log was not folded", "was not folded into the snapshot"},
-			{"the log therefore grows", "keeps growing"},
-			{"the next open replays more of it", "replays more of it"},
-			{"the condition persists through every later checkpoint", "every later checkpoint"},
-			{"the remedy is to shorten or remove the field", "shortens or removes the field"},
-		} {
-			if !strings.Contains(got, required.fragment) {
-				t.Errorf("the diagnostic does not say %s (looked for %q):\n%s",
-					required.why, required.fragment, got)
-			}
-		}
-		// The general warning's promise is the one thing it must NOT make.
-		if strings.Contains(got, "graph checkpoint failed") {
-			t.Errorf("the unhealable condition was reported as the general failure: %q", got)
-		}
-		// The engine's own error ends it, because it names which field.
-		if !strings.HasSuffix(got, err.Error()) {
-			t.Errorf("the diagnostic does not end in the engine's own error:\n%s", got)
-		}
-	})
-}
+// `rmp graph client` opens no store and takes no checkpoint, so there is no
+// checkpoint error for it to hold and rule 8 of SPEC/GRAPH.md § Field Length
+// Limits says in as many words that a surface which does not hold the error MUST
+// NOT pretend to. graphCheckpointWarning went with the store open it belonged to.
+//
+// Its coverage is accounted for in two places and neither is a weakening:
+//
+//   - internal/graphstore's TestFieldTooLongCheckpointDiagnostic asserts all four
+//     of rule 9's contents against FieldTooLongCheckpointDiagnostic, which is now
+//     the ONE wording of this diagnostic and the one every holder of the error
+//     reports through — the same assertions this test made, made against the
+//     shared producer instead of against a copy of it;
+//   - internal/graphserve's TestShutdownCheckpointMessage asserts that the
+//     surface which DOES still hold the error — the server's shutdown checkpoint
+//     — selects that wording for a refused field and the general wording for
+//     everything else.
+//
+// What no longer exists anywhere, because the condition no longer exists, is the
+// short-lived invocation's per-write repetition of the diagnostic.
 
 // walMaximumPattern reads the maximum the engine reports back out of its own
 // refusal. The figure is the ENGINE's, a version bump may move it, and a test
@@ -300,78 +272,97 @@ func overLongLabelStatement(n int) string {
 	return "CREATE (n:FieldLengthFence {name:'kept'}) CREATE (m:`" + strings.Repeat("L", n) + "`)"
 }
 
-// TestGraphExecute_FieldTooLongAgainstTheRealEngine drives the whole path — the
-// engine, the wrapping every layer between it and the classifier applies, the
-// published line, and the store afterwards — with a REAL over-long field.
+// TestGraphClient_FieldTooLongAgainstTheRealEngine drives a REAL over-long field
+// against the real engine, in the two places the condition is now observable,
+// and it is the one test in this file that can fail on something the fabricated
+// cases cannot see.
 //
-// Every other test in this file fabricates the engine's error, which is what
-// makes them cheap and what makes them blind to the one thing they cannot
-// fabricate: whether the engine still wraps the sentinel at all. A version bump
-// that stopped wrapping it, or a layer that re-wrapped it with %v instead of %w,
-// would leave every fabricated case passing and silently return the condition to
-// the parse/execution line it was separated from. This is the test that fails
-// then.
+// # What the served path can and cannot report, MEASURED
+//
+// The engine's Bolt server does not carry this refusal's diagnostic across the
+// protocol. Measured against the pinned engine through a running server, a
+// 70000-byte label comes back as
+//
+//	graph engine error: graph query failed: An internal error occurred. See server logs for details (session: <id>).
+//
+// while an ordinary parse failure and an ordinary execution failure both cross
+// with their full text — `cypher: parse: parse error at 1:16, expected one of
+// {...}` and `exec: DropIndex "nope": index: no index by that name: "nope"`. The
+// server classifies this one as an internal error and replaces its message.
+//
+// Two things follow, and both are stated rather than worked around. The published
+// field-length line has NO PRODUCER on the served path: the sentinel does not
+// cross a protocol, and neither does the engine's diagnostic that names the field
+// and the two figures. And what a caller sees is the ordinary parse-or-execution
+// line, carrying nothing it can act on beyond "the statement failed". The
+// specification retains the line (SPEC/GRAPH.md § Field Length Limits, rules 2 to
+// 5); nothing produces it while the only route to a graph is a server that
+// replaces the message. This is recorded here, in
+// tests/test_55_error_string_parity.py's exemption for the same line, and nowhere
+// else — matching the engine's replacement text to recover the class is exactly
+// what rule 3 forbids.
+//
+// # What is therefore asserted, and in which of the two places
+//
+// The bound is measured IN PROCESS, against a store this test opens itself, which
+// is the one place the sentinel and the diagnostic both survive. That half is not
+// a convenience: it is the live check that the engine still wraps
+// store/txn.ErrFieldTooLong at all, which every fabricated case in this file
+// assumes and none can verify. A version bump that stopped wrapping it, or a layer
+// that re-wrapped it with %v, would leave those cases passing and this one failing.
+//
+// The BEHAVIOUR is then asserted through the CLI, against a server, at the
+// measured bound: one byte over is refused with exit code 1, the refused statement
+// leaves nothing behind — not even the well-formed element it created before the
+// over-long label — the store stays usable, and a label of exactly the maximum is
+// accepted. The last of those is what makes the refusal a statement about the
+// BOUND rather than about "a long label".
 //
 // It is cheap because the reachable bound is small: 65536 bytes of label fits
 // comfortably inside the 1 MiB maximum query length, and the whole case costs
-// milliseconds. The bounds that govern a property value are NOT reachable this
-// way and are not attempted here — a gigabyte of literal does not fit in a
-// statement, and a test that tried would measure the machine
+// milliseconds. The bounds that govern a property value are NOT reachable this way
+// and are not attempted here — a gigabyte of literal does not fit in a statement,
+// and a test that tried would measure the machine
 // (SPEC/GRAPH.md § Field Length Limits, rule 12).
-func TestGraphExecute_FieldTooLongAgainstTheRealEngine(t *testing.T) {
+func TestGraphClient_FieldTooLongAgainstTheRealEngine(t *testing.T) {
 	t.Setenv("HOME", shortHome(t))
 	const name = "field-length-fence"
 	t.Cleanup(setupTestGraphRoadmap(t, name))
+
+	// Step 1, in process and before any server exists: provoke a refusal with a
+	// label grossly over any plausible bound, confirm the engine still carries
+	// the sentinel, and read the maximum the engine itself reports. Nothing below
+	// is a literal.
+	maxLen := measureFieldLengthBound(t, name)
+
+	// Everything from here runs through the command, against a server over the
+	// same store.
+	defer serveGraph(t, name)()
 
 	execute := func(query string) (string, string, error) {
 		t.Helper()
 		var err error
 		stdout, stderr := captureStdStreams(t, func() {
-			err = runGraphExecute([]string{"-r", name, "--query", query})
+			err = runGraphClient([]string{"-r", name, "--query", query})
 		})
 		return stdout, stderr, err
 	}
 
-	// Step 1: provoke a refusal with a label grossly over any plausible bound,
-	// and read the maximum the engine itself reports. Nothing below is a literal.
-	_, _, provoked := execute(overLongLabelStatement(70000))
-	if provoked == nil {
-		t.Fatal("a 70000-byte label was accepted; the engine's bound has moved beyond what " +
-			"this test provokes and the figures below cannot be derived")
-	}
-	match := walMaximumPattern.FindStringSubmatch(provoked.Error())
-	if match == nil {
-		t.Fatalf("the refusal reports no maximum, so a caller cannot learn what to shorten "+
-			"to: %q", provoked.Error())
-	}
-	maxLen, convErr := strconv.Atoi(match[1])
-	if convErr != nil || maxLen <= 0 {
-		t.Fatalf("the reported maximum %q is not a length", match[1])
-	}
-
-	// Step 2: one byte over. The published line, the sentinel, and the engine's
-	// own figures.
+	// Step 2: one byte over is refused, with the class and the exit code the
+	// specification fixes.
 	_, _, refused := execute(overLongLabelStatement(maxLen + 1))
 	if refused == nil {
-		t.Fatalf("a label of %d bytes was accepted against a reported maximum of %d",
+		t.Fatalf("a label of %d bytes was accepted against a measured maximum of %d",
 			maxLen+1, maxLen)
 	}
 	if !errors.Is(refused, utils.ErrGraphEngine) {
 		t.Errorf("err = %v, want it to wrap utils.ErrGraphEngine (exit code 1)", refused)
 	}
-	if !strings.HasPrefix(refused.Error(), publishedFieldTooLongHead) {
-		t.Fatalf("the real engine's refusal does not produce the published line\n got:  %q\n"+
-			" want prefix: %q", refused.Error(), publishedFieldTooLongHead)
-	}
-	tail := strings.TrimPrefix(refused.Error(), publishedFieldTooLongHead)
-	for _, fragment := range []string{
-		"label",                  // the field kind, which rmp's half deliberately does not name
-		strconv.Itoa(maxLen + 1), // the length the field occupies
-		strconv.Itoa(maxLen),     // the maximum in force
-	} {
-		if !strings.Contains(tail, fragment) {
-			t.Errorf("the engine's diagnostic lost %q: %q", fragment, tail)
-		}
+	// The line a caller actually gets. It is the ordinary parse-or-execution one,
+	// for the reason this test's documentation measures; asserting it is what
+	// makes the loss visible rather than merely absent.
+	if !strings.HasPrefix(refused.Error(), "graph engine error: graph query failed: ") {
+		t.Errorf("the refusal does not write the parse/execution line: %q", refused.Error())
 	}
 
 	// Step 3: nothing was written — not even the well-formed element the refused
@@ -414,9 +405,11 @@ func TestGraphExecute_FieldTooLongAgainstTheRealEngine(t *testing.T) {
 		t.Errorf("the at-the-limit write wrote to stderr: %q", atErr)
 	}
 
-	// Step 6: a genuine syntax error still writes the parse/execution line. An
-	// implementation that routed every engine failure to the new line would pass
-	// every check above and fail this one.
+	// Step 6: a genuine syntax error still writes the parse/execution line WITH
+	// the engine's own diagnostic. This is the non-vacuity control for the
+	// measurement above: it establishes that the protocol carries an engine
+	// diagnostic in general, so the field-length refusal's replacement message is
+	// a property of THAT class and not of every failure.
 	_, _, syntaxErr := execute("CREATE (n:Broken")
 	if syntaxErr == nil {
 		t.Fatal("a malformed statement was accepted")
@@ -424,7 +417,74 @@ func TestGraphExecute_FieldTooLongAgainstTheRealEngine(t *testing.T) {
 	if !strings.HasPrefix(syntaxErr.Error(), "graph engine error: graph query failed: ") {
 		t.Errorf("a syntax error no longer writes the parse/execution line: %q", syntaxErr.Error())
 	}
+	if !strings.Contains(syntaxErr.Error(), "parse") {
+		t.Errorf("the engine's own parse diagnostic no longer crosses the protocol: %q. If EVERY "+
+			"engine failure is now replaced by the server, the measurement this test's "+
+			"documentation records is stale and the field-length line's loss is no longer specific "+
+			"to that class", syntaxErr.Error())
+	}
 	if strings.Contains(syntaxErr.Error(), "graph field too long") {
 		t.Errorf("a syntax error was reported as a field-length refusal: %q", syntaxErr.Error())
 	}
+}
+
+// measureFieldLengthBound opens the roadmap's store in this process, provokes the
+// write-ahead log's length refusal, and returns the maximum the engine reported.
+//
+// It is the only place left where the whole of the condition is observable: the
+// engine wraps store/txn.ErrFieldTooLong around the refusal and formats the field
+// kind and both figures into its message, and neither the sentinel nor the message
+// survives the Bolt server (see the caller's documentation for the measurement).
+// Opening the store directly is lawful here for one reason and only that reason:
+// no server is running yet — the caller starts one afterwards, over the store this
+// leaves behind.
+//
+// Three things are asserted on the way, and each is a live check the fabricated
+// cases in this file cannot make: that the engine still refuses a grossly
+// over-long label at all, that graphstore.CommitRefusedFieldTooLong still
+// recognises the real refusal, and that the message still names a maximum a caller
+// could shorten to.
+func measureFieldLengthBound(t *testing.T, roadmap string) int {
+	t.Helper()
+
+	graphDir := graphDirOf(t, roadmap)
+	if err := os.MkdirAll(graphDir, 0700); err != nil {
+		t.Fatalf("creating %s: %v", graphDir, err)
+	}
+	st, err := graphstore.Open(graphDir)
+	if err != nil {
+		t.Fatalf("opening the graph store at %s: %v", graphDir, err)
+	}
+	defer st.Close() //nolint:errcheck // the measurement is what matters; the close releases the hold
+
+	result, runErr := st.Engine().RunInTx(context.Background(), overLongLabelStatement(70000), nil)
+	if runErr == nil {
+		for result.Next() { //nolint:revive // drain so Close performs the commit that is refused
+		}
+		runErr = result.Err()
+		if runErr == nil {
+			runErr = result.Close()
+		}
+	}
+	if runErr == nil {
+		t.Fatal("a 70000-byte label was accepted; the engine's bound has moved beyond what this " +
+			"test provokes and the figures below cannot be measured")
+	}
+	if !graphstore.CommitRefusedFieldTooLong(runErr) {
+		t.Fatalf("the real engine's refusal is no longer recognised by "+
+			"graphstore.CommitRefusedFieldTooLong: %v. Every fabricated case in this file assumes "+
+			"the engine wraps store/txn.ErrFieldTooLong, and this is the only test that checks it",
+			runErr)
+	}
+
+	match := walMaximumPattern.FindStringSubmatch(runErr.Error())
+	if match == nil {
+		t.Fatalf("the refusal reports no maximum, so a caller could not learn what to shorten "+
+			"to: %q", runErr.Error())
+	}
+	maxLen, convErr := strconv.Atoi(match[1])
+	if convErr != nil || maxLen <= 0 {
+		t.Fatalf("the reported maximum %q is not a length", match[1])
+	}
+	return maxLen
 }

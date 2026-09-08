@@ -1,37 +1,52 @@
-// Regression fence for the graph store's single lock mode
-// (SPEC/GRAPH.md § Concurrency and Recovery; § Lock Contention; acceptance
-// criteria 19 and 20).
+// Regression fence for what `rmp graph client` does about the graph store's
+// exclusive lock, which is now NOTHING
+// (SPEC/GRAPH.md § Concurrency and Recovery; § Lock Contention;
+// SPEC/GRAPH.md § The Bolt Client).
 //
-// What this file used to be, and why it is not that any more. The store lock had
-// two modes because the subcommand's operation class told the CLI, before it ran
-// anything, whether an invocation would write: `graph create`, `graph update` and
-// `graph delete` took an exclusive hold spanning the whole open, commit,
-// checkpoint and truncation sequence, while `graph query` and `graph search` took
-// a SHARED hold spanning the store open ALONE. The narrowness of that reader hold
-// was load-bearing, and this file was the tripwire for the anti-widening clause
-// that protected it.
+// # What this file used to assert, and why none of it can be asserted any more
 //
-// The five subcommands collapsed onto `rmp graph execute`, and the operation
-// class went with them. Groadmap does not examine a statement, so it cannot learn
-// whether one will write, and a lock mode chosen on that guess would be a shared
-// hold released while a statement was still to commit. There is ONE mode now,
-// exclusive, held across the whole sequence, and ONE contention policy, the
-// bounded wait.
+// The store lock once had two modes, chosen from the subcommand's operation
+// class: `graph create`, `graph update` and `graph delete` took an exclusive hold
+// spanning the whole open, commit, checkpoint and truncation sequence, while
+// `graph query` and `graph search` took a SHARED hold spanning the store open
+// alone. Those five collapsed onto one subcommand that ran any statement, the
+// operation class went with them, and one exclusive mode replaced the two —
+// held by the invocation, for the length of the invocation, under a bounded
+// wait when another invocation held it.
 //
-// Two tests that used to live here are gone rather than adapted, and it is worth
-// recording which:
+// That is gone too, and this time the lock did not change hands: THE CLI STOPPED
+// TAKING IT. `rmp graph client` sends a statement to a running server and opens
+// no store, so it takes no lock, and there is nothing left for it to contend
+// with. The lock is held by `rmp graph serve`, once, for that process's whole
+// lifetime (SPEC/GRAPH.md § Server Startup, step 2).
 //
-//   - the one asserting that the store is not read after the open. It was the
-//     premise the narrow reader hold rested on; nothing rests on it now, and the
-//     specification no longer states it.
-//   - the one asserting that a write issued during an in-flight read SUCCEEDS.
-//     That property is now the opposite of the contract: acceptance criterion 19
-//     requires the second invocation to wait, "whether or not either statement
-//     writes". Keeping the test would have been asserting a defect.
+// # The two tests that are retired here, and where their subject now lives
 //
-// What is asserted instead is the cost the collapse imposes, stated in the
-// specification rather than discovered later: two statements against the same
-// roadmap serialise even when neither of them writes.
+//   - TestGraphExecute_WaitsForTheLockRatherThanFailingFast asserted that an
+//     invocation which met a held lock waited for it instead of failing. There is
+//     no invocation that takes the lock, so there is no invocation that can wait
+//     for one. The bounded wait it exercised still exists and is still tested,
+//     against the package that owns it: internal/graphlock's own suite drives the
+//     ladder and the budget directly, and internal/graphserve's
+//     TestLockRefusal_RewordsOnlyTheExhaustedWait covers the one surface that
+//     still meets a held lock — a second `rmp graph serve` for a roadmap that
+//     already has one.
+//   - TestGraphExecute_FailsAfterTheBoundedWait asserted that an exhausted wait
+//     surfaced as utils.ErrGraphStore and exit code 1 rather than hanging. Same
+//     reason, same replacement: the exhausted wait is now reachable only through
+//     `rmp graph serve`, where internal/graphserve asserts both the sentinel and
+//     the reworded line.
+//
+// # What is asserted instead
+//
+// The inverse property, which is the one the collapse bought and the one a later
+// change could silently undo: a client statement runs against a roadmap whose
+// lock is held for the whole of the request, and does not wait for it. It is the
+// command-line twin of internal/web's TestHandleGraphData_TakesNoStoreLock, and
+// the two exist for the same reason — a surface that fell back to opening the
+// store would wait its entire wait budget against a hold that has no upper bound,
+// and would then fail, which is exactly the state resolution exists to prevent
+// (SPEC/GRAPH.md § Server Resolution, rule 2).
 package commands
 
 import (
@@ -47,7 +62,7 @@ import (
 )
 
 // testGraphDir resolves the roadmap's graph store directory the same way
-// openGraphStore does.
+// resolveGraphDir does.
 func testGraphDir(t *testing.T, roadmap string) string {
 	t.Helper()
 	roadmapDir, err := utils.GetRoadmapDir(roadmap)
@@ -70,34 +85,27 @@ func fileSize(t *testing.T, path string) int64 {
 	return info.Size()
 }
 
-// lockHoldRelease is how long the test holds the store lock before releasing it.
-// It must be comfortably longer than the backoff ladder's first delay, so that
-// an invocation which failed on the first collision is distinguishable from one
-// that waited, and comfortably shorter than the bounded wait, so that the
-// invocation genuinely succeeds rather than exhausting its budget.
-const lockHoldRelease = 250 * time.Millisecond
-
-// waitedAtLeast is the floor an invocation's elapsed time must clear for the
-// test to conclude that it contended for the lock at all. It sits below
-// lockHoldRelease with room for a coarse timer.
-const waitedAtLeast = 100 * time.Millisecond
-
-// TestGraphExecute_WaitsForTheLockRatherThanFailingFast covers SPEC/GRAPH.md
-// acceptance criterion 19: an invocation that finds the exclusive lock held does
-// not fail on the first collision — it waits, and succeeds once the holder
-// releases.
+// TestGraphClient_RunsAgainstAHeldLockWithoutWaitingForIt is the property that
+// replaced lock contention on this surface.
 //
-// **Both statement kinds are asserted, and the non-writing one is the point.**
-// Criterion 19 says the property holds "whether or not either statement writes",
-// and it says so because that is exactly what the single lock mode costs: a
-// statement that changes nothing used to take a shared hold and overlap freely,
-// and now serialises. A test that only exercised a writing statement would pass
-// unchanged against an implementation that quietly reintroduced a read path, and
-// would therefore assert nothing about the mode that was chosen.
+// The server holds the store's exclusive lock for its whole lifetime, so the
+// lock IS held for the whole of every statement below — this test does not have
+// to arrange that, only to prove it. Three things are asserted and each is
+// needed:
 //
-// The holder is the lock itself rather than a second `rmp graph execute`, because
-// the test must control exactly when it is released.
-func TestGraphExecute_WaitsForTheLockRatherThanFailingFast(t *testing.T) {
+//   - the lock really is held, established by trying to take it and failing.
+//     Without this the rest would pass against a server that had crashed;
+//   - the statement succeeds, and produces the value its own Cypher names, so a
+//     client that answered from nowhere would be caught;
+//   - it completes well inside the lock's wait budget, because an implementation
+//     that fell back to opening the store would spend that budget in full before
+//     failing, and the elapsed time is the only thing that separates the two from
+//     outside.
+//
+// Both statement kinds are driven. A read and a write take the same route now —
+// the server does not examine the statement — and asserting only one would leave
+// a reintroduced write-side store open unnoticed.
+func TestGraphClient_RunsAgainstAHeldLockWithoutWaitingForIt(t *testing.T) {
 	for _, tc := range []struct {
 		name    string
 		roadmap string
@@ -106,47 +114,44 @@ func TestGraphExecute_WaitsForTheLockRatherThanFailingFast(t *testing.T) {
 	}{
 		{
 			name:    "a statement that writes nothing",
-			roadmap: "graph-execute-waits-read",
+			roadmap: "graph-client-held-lock-read",
 			query:   "MATCH (s:Spec) RETURN s.key",
 			want:    "lock-contention",
 		},
 		{
 			name:    "a statement that writes",
-			roadmap: "graph-execute-waits-write",
+			roadmap: "graph-client-held-lock-write",
 			query:   "CREATE (c:Component {key:'written-under-contention'}) RETURN c.key",
 			want:    "written-under-contention",
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			roadmap := tc.roadmap
-			defer setupTestGraphRoadmap(t, roadmap)()
+			defer servedRoadmap(t, roadmap)()
 
 			captureStdStreams(t, func() {
-				if err := runGraphExecute([]string{"-r", roadmap, "--query",
+				if err := runGraphClient([]string{"-r", roadmap, "--query",
 					"CREATE (s:Spec {key:'lock-contention'})"}); err != nil {
 					t.Fatalf("seeding the graph: %v", err)
 				}
 			})
+
+			// The server's hold, observed rather than assumed. AcquireExclusive
+			// waits the bounded wait and then reports a busy store, which is what
+			// a hold with no upper bound looks like to anyone who tries to take
+			// it — and is precisely the outcome this command must never reach.
 			graphDir := testGraphDir(t, roadmap)
-
-			release, err := graphlock.AcquireExclusive(graphDir)
-			if err != nil {
-				t.Fatalf("taking the exclusive lock: %v", err)
-			}
-
-			// Released well inside the invocation's bounded wait, on a
-			// goroutine, so the invocation is genuinely contending when it
-			// starts.
-			go func() {
-				time.Sleep(lockHoldRelease)
+			if release, err := graphlock.AcquireExclusive(graphDir); err == nil {
 				release()
-			}()
+				t.Fatalf("the exclusive lock on %s was free while a server was running for %q. "+
+					"Every assertion below would then be about an unheld lock", graphDir, roadmap)
+			}
 
 			start := time.Now()
 			stdout, _ := captureStdStreams(t, func() {
-				if runErr := runGraphExecute([]string{"-r", roadmap, "--query", tc.query}); runErr != nil {
-					t.Errorf("an invocation must WAIT for a current holder, not fail on the first "+
-						"collision (SPEC/GRAPH.md § Lock Contention rule 1): %v", runErr)
+				if runErr := runGraphClient([]string{"-r", roadmap, "--query", tc.query}); runErr != nil {
+					t.Errorf("a client statement must run in the server that holds the lock, not "+
+						"contend for it (SPEC/GRAPH.md § The Bolt Client): %v", runErr)
 				}
 			})
 			elapsed := time.Since(start)
@@ -154,54 +159,45 @@ func TestGraphExecute_WaitsForTheLockRatherThanFailingFast(t *testing.T) {
 			if !strings.Contains(stdout, tc.want) {
 				t.Errorf("the invocation returned %q, want it to contain %q", stdout, tc.want)
 			}
-			if elapsed < waitedAtLeast {
-				t.Errorf("the invocation completed in %v, less than the %v the lock was held for; "+
-					"it cannot have waited, so it did not take the exclusive lock at all",
-					elapsed, lockHoldRelease)
+			if elapsed >= graphlock.WaitBudget() {
+				t.Errorf("the invocation took %v, reaching the lock's %v wait budget. A client "+
+					"takes no lock and waits for none; an invocation that spent the budget was "+
+					"contending for the store rather than speaking to the server",
+					elapsed, graphlock.WaitBudget())
 			}
 		})
 	}
 }
 
-// TestGraphExecute_FailsAfterTheBoundedWait covers SPEC/GRAPH.md acceptance
-// criterion 20 for the CLI half: an invocation that cannot take the lock within
-// the bounded wait exits 1 rather than hanging. utils.ErrGraphStore is the
-// sentinel the exit-code mapping turns into 1.
-func TestGraphExecute_FailsAfterTheBoundedWait(t *testing.T) {
-	const roadmap = "graph-execute-bounded-wait"
+// TestGraphClient_CreatesNoLockFileOfItsOwn is the structural half of the same
+// property, and it is what catches a fall back that happened to be fast.
+//
+// A roadmap with no server has no graph directory at all, because nothing but
+// `rmp graph serve` creates one. A refused client invocation must leave it that
+// way: no directory, and therefore no lock file inside one
+// (SPEC/GRAPH.md § Server Startup, step 1; § The Bolt Client).
+func TestGraphClient_CreatesNoLockFileOfItsOwn(t *testing.T) {
+	const roadmap = "graph-client-creates-no-lock"
 	defer setupTestGraphRoadmap(t, roadmap)()
 
+	var err error
 	captureStdStreams(t, func() {
-		if err := runGraphExecute([]string{"-r", roadmap, "--query",
-			"CREATE (s:Spec {key:'bounded-wait'})"}); err != nil {
-			t.Fatalf("seeding the graph: %v", err)
-		}
+		err = runGraphClient([]string{"-r", roadmap, "--query", "MATCH (s:Spec) RETURN s.key"})
 	})
-	graphDir := testGraphDir(t, roadmap)
-
-	release, err := graphlock.AcquireExclusive(graphDir)
-	if err != nil {
-		t.Fatalf("taking the exclusive lock: %v", err)
+	if err == nil {
+		t.Fatal("a client statement succeeded against a roadmap nothing is serving; there is no " +
+			"direct path left for it to have taken")
 	}
-	defer release()
+	if !errors.Is(err, utils.ErrGraphServer) {
+		t.Errorf("err = %v, want it to wrap utils.ErrGraphServer: nothing was listening, which is a "+
+			"failure of the SERVER's absence rather than of the store", err)
+	}
 
-	done := make(chan error, 1)
-	go func() {
-		_, _ = captureStdStreams(t, func() {
-			done <- runGraphExecute([]string{"-r", roadmap, "--query", "MATCH (s:Spec) RETURN s.key"})
-		})
-	}()
-
-	select {
-	case runErr := <-done:
-		if runErr == nil {
-			t.Fatal("the invocation succeeded while another holder held the exclusive lock")
-		}
-		if !errors.Is(runErr, utils.ErrGraphStore) {
-			t.Errorf("an exhausted wait must surface as utils.ErrGraphStore (exit 1), got: %v", runErr)
-		}
-	case <-time.After(30 * time.Second):
-		t.Fatal("the invocation never returned; the wait must be BOUNDED and end in a failure, " +
-			"never an indefinite block (SPEC/GRAPH.md § Lock Contention rule 2)")
+	if graphDirExists(t, roadmap) {
+		t.Errorf("%s exists after a refused client invocation. The client opens no store, so it "+
+			"creates no directory and writes no lock file", graphDirOf(t, roadmap))
+	}
+	if size := fileSize(t, filepath.Join(testGraphDir(t, roadmap), graphlock.LockFileName)); size != 0 {
+		t.Errorf("a lock file of %d bytes exists after a refused client invocation", size)
 	}
 }

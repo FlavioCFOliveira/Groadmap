@@ -1,7 +1,6 @@
 package web
 
 import (
-	"context"
 	"html"
 	"net/http"
 	"net/http/httptest"
@@ -498,10 +497,4 @@ func renameTask(t *testing.T, roadmap string, taskID int, title string) {
 	); err != nil {
 		t.Fatalf("renaming task %d: %v", taskID, err)
 	}
-}
-
-// testContext is the context the test write path uses.
-func testContext(t *testing.T) context.Context {
-	t.Helper()
-	return context.Background()
 }

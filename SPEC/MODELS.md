@@ -430,7 +430,7 @@ The two constraints above are stated here for the free-text fields of the `Task`
 `Sprint`, `TaskComment`, and `SprintComment` models, and this file stays canonical
 for what each rule forbids.
 
-**Neither constraint reaches the knowledge graph.** The Cypher `rmp graph execute`
+**Neither constraint reaches the knowledge graph.** The Cypher `rmp graph client`
 runs is not inspected for either rule, and neither is a property value that Cypher
 writes: a statement whose raw bytes are not valid UTF-8 is executed with `U+FFFD`
 substituted for each undecodable byte, and a property value carrying a control
