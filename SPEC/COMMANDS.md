@@ -121,7 +121,7 @@ The rules are:
 2. **The first offending token is named, and only that one.** When several positional arguments exceed the maximum, the command names the first of them in command-line order and stops.
 3. **The position of the offending token does not matter.** What is refused is whatever positional arguments remain once the command's flags and their values have been consumed, not a particular slot on the command line. An extra token written between two flags and one written at the end of the line are the same error.
 4. **A comma-separated list is one positional argument.** Every command that takes a list of ids takes it as a single token, without spaces. `rmp task get -r <name> 12,13,14` supplies one positional argument and is within an arity of one; `rmp task get -r <name> 12 13 14` supplies three and is refused.
-5. **A token that begins with `-` is normally a flag, not a positional argument.** An unrecognised one is refused as an unknown flag — `Error: invalid input: unknown flag: --foo` — under the same exit code `2`. Two commands refine that classification and each states its own rule: the comment subcommands treat every `-`-prefixed token as a flag, digits included (`Comment Positional Argument Contract` below, rule 2), while the two subcommands that read a Cypher statement, `graph execute` and `graph client`, treat a `-` followed by a digit or a decimal point as a numeric value rather than a flag (`GRAPH.md § Cypher Input Source and Precedence`, rule 4). A stray `-1` is therefore an excess positional argument on either of those two and an unknown flag on a comment subcommand.
+5. **A token that begins with `-` is normally a flag, not a positional argument.** An unrecognised one is refused as an unknown flag — `Error: invalid input: unknown flag: --foo` — under the same exit code `2`. Two commands refine that classification and each states its own rule: the comment subcommands treat every `-`-prefixed token as a flag, digits included (`Comment Positional Argument Contract` below, rule 2), while the subcommand that reads a Cypher statement, `graph client`, treats a `-` followed by a digit or a decimal point as a numeric value rather than a flag (`GRAPH.md § Cypher Input Source and Precedence`, rule 4). A stray `-1` is therefore an excess positional argument on that subcommand and an unknown flag on a comment subcommand.
 6. **The refusal precedes every side effect.** It happens while the arguments are parsed: before the roadmap database is opened, before the graph store is opened, and before standard input is read. A refused invocation therefore creates nothing, changes nothing, deletes nothing, writes no audit entry, and writes zero bytes to stdout. It is refused even when it also carries a value that would fail validation on its own with exit code `6`, and even when it names a roadmap, task, sprint, or comment that does not exist, which on its own would be exit code `4`.
 7. **No help follows the refusal.** An excess positional argument is not a dispatch failure, so stderr carries the error line and the AI-agent hint alone (`HELP.md § Error message format`).
 8. **The rule governs the maximum only.** A required positional argument that is absent is refused by the command's own contract, with the message that command's block publishes.
@@ -132,10 +132,10 @@ An unresolved command or subcommand name is resolved before any of this and stay
 
 | Command | Error line |
 |---------|-----------|
-| `rmp graph execute` | `Error: invalid input: unexpected argument "X" (graph queries use --query or stdin)` |
+| `rmp graph client` | `Error: invalid input: unexpected argument "X" (graph queries use --query or stdin)` |
 | `rmp ai-help` | `Error: ai-help accepts no positional arguments or flags other than --help` |
 
-The `graph execute` line is the canonical line with a hint appended naming the two sources a Cypher query may come from; the exit code and the rest of the line are unchanged. **The hint is part of the published line and not an incidental remark**: a caller matching that line matches it in full, for the reason `§ Published Error Strings Are Exact` gives for every other error line. It stays confined to the two subcommands that read a Cypher statement, `graph execute` and `graph client`, because it names the two sources such a statement may come from and no other command has them; `graph serve` reads no statement and publishes the canonical line of rule 1 instead. `GRAPH.md § No Positional Query: A Stray Token Is Refused` is canonical for those subcommands' whole rule — the line, the classification of a `-`-prefixed token, and where the refusal lands in its order. The `ai-help` line carries no sentinel and covers an unrecognised flag as well as a positional argument; `§ AI Help` is canonical for it. The third is `rmp web`, whose line writes the offending token after a colon and without quotes; `§ Web Interface` publishes it, in that command's own error table.
+The `graph client` line is the canonical line with a hint appended naming the two sources a Cypher query may come from; the exit code and the rest of the line are unchanged. **The hint is part of the published line and not an incidental remark**: a caller matching that line matches it in full, for the reason `§ Published Error Strings Are Exact` gives for every other error line. It stays confined to the one subcommand that reads a Cypher statement, `graph client`, because it names the two sources such a statement may come from and no other command has them; `graph serve` reads no statement and publishes the canonical line of rule 1 instead. `GRAPH.md § No Positional Query: A Stray Token Is Refused` is canonical for that subcommand's whole rule — the line, the classification of a `-`-prefixed token, and where the refusal lands in its order. The `ai-help` line carries no sentinel and covers an unrecognised flag as well as a positional argument; `§ AI Help` is canonical for it. The third is `rmp web`, whose line writes the offending token after a colon and without quotes; `§ Web Interface` publishes it, in that command's own error table.
 
 ### Positional Arity by Command
 
@@ -198,15 +198,14 @@ The table publishes the declared maximum for every command in the CLI. It is can
 | `backlog list` | 0 | - |
 | `backlog show-next` | 1 | `[count]` |
 | `stats` | 0 | - |
-| `graph execute` | 0 | - |
 | `graph serve` | 0 | - |
 | `graph client` | 0 | - |
 | `web` | 0 | - |
 
 Three consequences of the table are worth stating, because each is a case a reader may expect to behave differently:
 
-- **A maximum of zero is a contract, not an absence of one.** Every listing, statistics, and creation command that takes all of its input through flags accepts no positional argument at all, and refuses the first one it is given. `stats` and `graph execute` are in this class: their whole input is `-r` and, for `graph execute`, `--query` or standard input.
-- **`graph execute` takes no positional query.** A Cypher query reaches it through `--query` or through standard input and never as a positional argument, so a bare query on the command line is an excess positional argument and is refused (`GRAPH.md § No Positional Query: A Stray Token Is Refused`).
+- **A maximum of zero is a contract, not an absence of one.** Every listing, statistics, and creation command that takes all of its input through flags accepts no positional argument at all, and refuses the first one it is given. `stats` and `graph client` are in this class: their whole input is `-r` and, for `graph client`, `--query` or standard input.
+- **`graph client` takes no positional query.** A Cypher query reaches it through `--query` or through standard input and never as a positional argument, so a bare query on the command line is an excess positional argument and is refused (`GRAPH.md § No Positional Query: A Stray Token Is Refused`).
 - **An arity above one is real and is not a licence for more.** `sprint move-tasks`, `sprint move-to`, and `sprint swap` each take three positional arguments; `task stat`, `task prio`, and `task sev` each take two. The rule refuses what exceeds a command's own maximum, never everything after the first argument.
 
 ### Acceptance Criteria
@@ -216,7 +215,7 @@ Three consequences of the table are worth stating, because each is a case a read
 3. Every command's declared maximum equals the number `§ Positional Arity by Command` publishes for it. A test that reads the declarations and compares them against this section fails when a command declares an arity the table does not state, and when the table names a command that declares none. The comparison covers the commands the registry holds. The six global forms named in `§ Declared Arity`, and `rmp` with no arguments, are outside the registry and are therefore outside this comparison; criterion 9 checks them at their own enforcement point.
 4. A refused invocation performs no work: the target roadmap's task, sprint, and comment rows are identical before and after, the `audit` table gains no entry, and the graph store's snapshot and write-ahead log are unchanged on disk.
 5. An invocation carrying both an excess positional argument and a value that would otherwise fail with exit code `6`, or a roadmap that would otherwise fail with exit code `4`, exits `2`.
-6. The commands that already refused an excess positional argument are unchanged: the eight comment subcommands, `graph execute`, `rmp web`, and `rmp ai-help` produce the same exit code and the same stderr line as they did before this section was written.
+6. The commands that already refused an excess positional argument are unchanged: the eight comment subcommands, `graph client`, `rmp web`, and `rmp ai-help` produce the same exit code and the same stderr line as they did before this section was written.
 7. An unresolved command or subcommand name accompanied by excess positional arguments still exits `127` and still writes its recovery help, so the arity rule never converts a dispatch failure into a misuse error.
 8. No invocation that stays within its declared arity changes in any way: its stdout, its stderr, and its exit code are what they were.
 9. Each of the six global forms refuses a trailing token. `rmp version check` and `rmp help sprint` each exit `2` and write `Error: invalid input: unexpected argument "check"` and `Error: invalid input: unexpected argument "sprint"` to stderr, and stdout stays empty: no version line and no help body. `rmp --version check`, `rmp -v check`, `rmp --help sprint`, and `rmp -h sprint` behave identically. Each of the six invoked on its own still exits `0` and still writes what it has always written.
@@ -257,14 +256,14 @@ A `type` value outside the set the entity accepts is rejected with exit code 6 a
 
 ### Comment Body Input Source and Precedence
 
-The comment `body` is supplied either through the `--body` flag or on standard input. This is the same input mechanism `graph execute` uses for `--query` (see `GRAPH.md § Cypher Input Source and Precedence`); there is no `--body-file` flag and no path argument, so the commands open no file. The rules are:
+The comment `body` is supplied either through the `--body` flag or on standard input. This is the same input mechanism `graph client` uses for `--query` (see `GRAPH.md § Cypher Input Source and Precedence`); there is no `--body-file` flag and no path argument, so the commands open no file. The rules are:
 
 1. When `--body` is present and its value is neither empty nor whitespace only, that value is the body and standard input is **not** read.
 2. When `--body` is absent **and no other change was requested**, the body is read from standard input. The read is bounded and is not a read to EOF: see **Bounded standard-input read** below. On `comment-add` no other change is ever possible, so an absent `--body` always means "read standard input". On `comment-edit` the body is read from standard input only when `--type` is also absent; when `--type` is present and `--body` is absent, only the type changes and standard input is not read, so a type-only edit never blocks waiting for input.
 3. When the body must come from standard input and standard input is empty, whitespace only, or not connected, the command fails with exit code 2. The message differs by subcommand, because the two subcommands are missing different things: on `comment-add` a body is mandatory and the message is "Error: required parameter missing: no comment body supplied"; on `comment-edit` the absent body means no change was requested at all, and the message is "Error: required parameter missing: at least one of --type or --body is required".
 4. When `--body` is present but its value is empty, whitespace only, or missing (no following token, or the following token is itself a flag), the command fails with exit code 2 and the message "Error: required parameter missing: no comment body supplied", in both subcommands. The command does not silently fall back to standard input in this case.
 5. Leading and trailing whitespace is trimmed before validation and before storage. Interior line breaks are preserved: a comment body is expected to be multi-line.
-6. When the body is to come from standard input and the read of the stream itself fails, the command fails with exit code 1 and the message "Error: I/O error: reading the comment body from standard input: <detail>", identically in all four subcommands. The part `rmp` fixes is everything up to and including `reading the comment body from standard input: `; `<detail>` is the operating system's own text and is not specified here. This is a failure of the stream and not of the body: a stream that carries nothing is refused by rule 3 with exit code 2, and one that carries too much by the bounded read below with exit code 6, and neither of those reaches this rule. Nothing about the process's standard input is a database, so the line does not name one; `ARCHITECTURE.md § Sentinel Error Catalogue` is canonical for the class, and `graph execute` reports the same failure of the same stream in its own wording (`§ Execute Error Cases`).
+6. When the body is to come from standard input and the read of the stream itself fails, the command fails with exit code 1 and the message "Error: I/O error: reading the comment body from standard input: <detail>", identically in all four subcommands. The part `rmp` fixes is everything up to and including `reading the comment body from standard input: `; `<detail>` is the operating system's own text and is not specified here. This is a failure of the stream and not of the body: a stream that carries nothing is refused by rule 3 with exit code 2, and one that carries too much by the bounded read below with exit code 6, and neither of those reaches this rule. Nothing about the process's standard input is a database, so the line does not name one; `ARCHITECTURE.md § Sentinel Error Catalogue` is canonical for the class, and `graph client` reports the same failure of the same stream in its own wording (`§ Client Error Cases`).
 
 **Bounded standard-input read.** When the body comes from standard input, the command does NOT read the stream to EOF. It reads only until the outcome is already decided, and it never retains more than the 4096-character cap while doing so:
 
@@ -296,7 +295,7 @@ Each of the eight comment subcommands takes **exactly one** positional argument,
 A declared maximum of one is what `§ Positional Arity by Command` publishes for all eight, and the CLI-wide rule in `§ Positional Arguments` refuses a second positional argument with exit code 2 and the line `Error: invalid input: unexpected argument "X"`. This section is canonical for what the one id identifies on each subcommand, and for the four points on which these subcommands need a rule of their own:
 
 1. The positional id is required. An invocation that supplies none fails with exit code 2 and a message naming the id the subcommand expects, as each subcommand's own block below states.
-2. A leftover token that begins with `-` is a flag and not a positional argument, so it is reported as an unknown flag — `Error: invalid input: unknown flag: --foo` — and not as an unexpected argument. This holds for every `-`-prefixed token, digits included: on these subcommands `-1` is an unknown flag, unlike `graph execute`, which does not classify a negative numeric token as a flag at all and refuses a stray `-1` as an unexpected argument (`GRAPH.md § No Positional Query: A Stray Token Is Refused`, rule 1). The value of `--body` is the one exception, and it is not a leftover token at all: `--body -1` supplies the body `-1`, under rule 4 of `Comment Body Input Source and Precedence` above.
+2. A leftover token that begins with `-` is a flag and not a positional argument, so it is reported as an unknown flag — `Error: invalid input: unknown flag: --foo` — and not as an unexpected argument. This holds for every `-`-prefixed token, digits included: on these subcommands `-1` is an unknown flag, unlike `graph client`, which does not classify a negative numeric token as a flag at all and refuses a stray `-1` as an unexpected argument (`GRAPH.md § No Positional Query: A Stray Token Is Refused`, rule 1). The value of `--body` is the one exception, and it is not a leftover token at all: `--body -1` supplies the body `-1`, under rule 4 of `Comment Body Input Source and Precedence` above.
 3. The refusal lands at a defined point in the subcommand's own validation order: after the positional id has been parsed, before the `--type` value is validated, and before the body is resolved. An invocation carrying an extra positional argument is therefore refused with exit code 2 even when it also carries an invalid `--type` value, which on its own would be exit code 6, and it never leaves the command waiting on standard input for a body it is going to reject.
 4. The whole "positive integer" constraint on the positional id is **exit code 2** on all eight subcommands, including the range half of it. Every other surface in the CLI reports an out-of-range id as a validation failure with exit code 6 (`§ Entity Identifier Range (All Positional Ids and --entity-id)`); these eight report it as misuse, because on them a malformed positional argument is a malformed argument list. The sentence is the shared one and only the sentinel differs:
 
@@ -310,9 +309,9 @@ A declared maximum of one is what `§ Positional Arity by Command` publishes for
 
 What the general rule already settles for these subcommands, and what this section therefore does not restate: only the first extra token is named; the position of the extra token on the command line does not matter; and nothing happens before the refusal — standard input is not read, the roadmap database is not opened, no comment is added, changed, deleted, or listed, and stdout stays empty.
 
-**The other command that publishes this refusal.** `graph execute` refuses a stray positional argument under the same CLI-wide rule, with the same sentinel and the same exit code 2, and `GRAPH.md § No Positional Query: A Stray Token Is Refused` is canonical for it. The two are one rule with two published lines, and they differ on exactly two points, both of them deliberate:
+**The other command that publishes this refusal.** `graph client` refuses a stray positional argument under the same CLI-wide rule, with the same sentinel and the same exit code 2, and `GRAPH.md § No Positional Query: A Stray Token Is Refused` is canonical for it. The two are one rule with two published lines, and they differ on exactly two points, both of them deliberate:
 
-- The `graph execute` line appends a hint that names the two sources of a Cypher query: `Error: invalid input: unexpected argument "X" (graph queries use --query or stdin)`. That hint is contractual on `graph execute` and is correctly absent here, because a comment body comes from `--body` or standard input and never from `--query` (`§ Positional Arguments`, "Commands that publish a different line").
+- The `graph client` line appends a hint that names the two sources of a Cypher query: `Error: invalid input: unexpected argument "X" (graph queries use --query or stdin)`. That hint is contractual on `graph client` and is correctly absent here, because a comment body comes from `--body` or standard input and never from `--query` (`§ Positional Arguments`, "Commands that publish a different line").
 - The two families classify a `-`-prefixed token differently, as rule 2 above states.
 
 Neither section may be edited as though its wording were its own invention: a change to the shared part of the line is a change to both families, and a reader who finds one of these two sections must be able to reach the other from it.
@@ -3484,335 +3483,137 @@ GoGraph engine. The design, persistence layout, and multi-layer conventions are
 specified in `GRAPH.md`. This section is the CLI contract for the command.
 
 Each roadmap owns one graph, stored under that roadmap's home directory at
-`~/.roadmaps/<name>/graph/` (a directory, mode `0700`). The graph is created on
-first use of the `graph` command. The graph is independent of the roadmap's
-SQLite tasks and sprints data in this version.
+`~/.roadmaps/<name>/graph/` (a directory, mode `0700`). The graph is created by
+`rmp graph serve` when it starts for a roadmap that has none, and by nothing else.
+The graph is independent of the roadmap's SQLite tasks and sprints data in this
+version.
 
-`graph` has three subcommands. `execute` and `client` each accept any Cypher
-statement the engine accepts and run it; they differ only in where the statement
-runs. `serve` runs no statement of its own: it makes the graph available to the
-other two.
+`graph` has two subcommands. `serve` opens the roadmap's graph and makes it
+available over a Unix domain socket; `client` sends a Cypher statement to a
+running server and prints what comes back. `serve` runs no statement of its own,
+and `client` opens no store of its own.
 
 | Subcommand | Operation | Accepts |
 |------------|-----------|---------|
-| `execute` | Run a Cypher statement against the roadmap's graph | Any statement the engine accepts: reads, writes, deletions, schema DDL, and schema introspection alike |
-| `serve` | Serve the roadmap's graph over a Unix domain socket until stopped | No statement. It takes a roadmap and, optionally, a socket path |
-| `client` | Send a Cypher statement to a running server and print its result | Any statement the engine accepts, exactly as `execute` does |
+| `serve` | Open the roadmap's graph and serve it over a Unix domain socket until stopped | No statement. It takes a roadmap and, optionally, a socket path |
+| `client` | Send a Cypher statement to a running server and print its result | Any statement the engine accepts: reads, writes, deletions, schema DDL, and schema introspection alike |
 
 **There is no operation-class check and there are no aliases.** `rmp graph`
-publishes exactly three subcommand names, `execute`, `serve` and `client`.
+publishes exactly two subcommand names, `serve` and `client`. `execute`,
 `create`, `query`, `update`, `delete`, and `search` are not subcommand names of
 `rmp graph`: each is an unresolved subcommand and is answered as a dispatch
 failure — exit code `127`, the `graph` help on stderr, nothing on stdout (see
 `§ Dispatch Failures (Unresolved Command or Subcommand Names)`). They are named
 here because an agent that has one of them in memory needs to be told, in the
-specification, that it will not resolve.
+specification, that it will not resolve. `execute` is listed with the other five
+rather than apart from them: it resolved once, it takes no alias, and it has no
+deprecation path.
 
-**A running server changes where a statement executes, and nothing else.** When a
-server is serving the selected roadmap, `rmp graph execute` sends its statement to
-that server instead of opening the store itself, and so does the web interface's
-graph data endpoint; with no server listening, both open the store directly, as
-they always have. The statement, the result, the output shape and the exit code
-are the same either way. `GRAPH.md § Server Resolution` fixes the rule, its four
-states, and the outcome each surface reports for each state. What a caller gains
-from starting a server is throughput and latency — one store open instead of one
-per invocation, and concurrent sessions the store's MVCC resolves — not a
-different contract.
+**The graph is reached through a running server and through nothing else.** A
+statement cannot be run against a roadmap that is not being served. `rmp graph
+serve` is the only process that opens the store, `rmp graph client` is the only
+CLI subcommand that runs a statement, and the web interface's graph data endpoint
+reaches the graph through the same client the subcommand does — the same socket,
+the same protocol, the same code (see `GRAPH.md § The Bolt Client`). With no
+server listening, `client` fails and the web endpoint reports the graph as
+unavailable; neither opens the store. `GRAPH.md § Server Resolution` fixes the
+rule, its four states, and the outcome each surface reports for each state. What a
+caller gains from the pair is a graph that is open once rather than once per
+statement, and concurrent sessions the store's MVCC resolves.
 
-**No flag chooses between the two paths; one flag chooses which socket is
-looked at.** All three subcommands that reach a graph take `--socket <path>`, and
-all three default it to the same path derived from the roadmap. The flag names the
-socket the invocation resolves — it does not force a server, does not forbid one,
-and does not select the direct path. Whether the statement ends up at a server is
-decided by what answers on the path in force, and by nothing the caller writes.
+**Using the graph therefore begins by starting a server.** For a roadmap that has
+never had a graph, `rmp graph serve -r <name>` creates the store and serves it;
+for one that has, it opens what is there. Statements follow, through
+`rmp graph client -r <name>` against that server. There is no one-shot form and
+none is planned: a subcommand that opened the store for a single statement is
+exactly what was withdrawn, because it could not coexist with a server holding
+that store for its process lifetime.
 
-**`rmp graph client` is not `rmp graph execute` with a socket.** It speaks to a
-server and only to a server. Against a roadmap with no server listening it fails;
-it never falls back to opening the store, because a subcommand that did would
-report a success that says nothing about whether a server was reached (see
-`GRAPH.md § The Bolt Client`).
+**One flag chooses which socket is used, on both subcommands.** `serve` and
+`client` each take `--socket <path>` and each default it to the same path derived
+from the roadmap. On `serve` the flag names the socket to bind; on `client`, the
+socket to connect to. A server started with the flag is reached by giving the same
+path to the client. Nothing else selects where a statement runs, because there is
+one place it can run.
 
-**`execute` runs what it is given, and the caller owns what that does.** No
+**`client` runs what it is given, and the caller owns what that does.** No
 subcommand's contract says that a statement cannot delete. A statement's effect is
 decided by its Cypher and by nothing `rmp` inspects, so the guarantee an agent
 needs about a statement is a guarantee about the text it supplies.
 `GRAPH.md § What Groadmap Does Not Check` enumerates the hazards that follow, each
 of which reports success.
 
-**`execute` runs what it is given, but not for as long as it takes.** The
-statement runs under a time budget of **5 seconds** — the same budget, carrying
-the same value, that the web graph data endpoint applies. A statement that
+**`client` runs what it is given, but not for as long as it takes.** The statement
+runs under a time budget of **5 seconds**, enforced by the server that executes it
+and carrying the same value for the web graph data endpoint. A statement that
 exhausts it is cancelled; its transaction rolls back whole, no snapshot is
-written, the write-ahead log is left as the statement found it, and the command
-fails with exit code 1 and the budget line this section's error table publishes.
-This is a limit on what a caller may run, and it is published here for that
-reason: a statement whose work takes longer than five seconds fails, however
-valid its Cypher is and however healthy the store, and the remedy is to narrow it
-— a label, an indexed property filter, or a `LIMIT` — or to split it into smaller
-statements. `GRAPH.md § Statement Time Budget` is canonical for what a cut
-statement leaves behind, and `WEB.md § Graph Query Time Budget` for the value.
+written, the write-ahead log is left as the statement found it, and the caller
+fails with exit code 1 and the budget line `§ Client Error Cases` publishes. This
+is a limit on what a caller may run, and it is published here for that reason: a
+statement whose work takes longer than five seconds fails, however valid its
+Cypher is and however healthy the store, and the remedy is to narrow it — a label,
+an indexed property filter, or a `LIMIT` — or to split it into smaller statements.
+`GRAPH.md § Statement Time Budget` is canonical for what a cut statement leaves
+behind, and `WEB.md § Graph Query Time Budget` for the value.
+
+**A statement that changes the graph says what it changed.** Beside its result it
+publishes a `counters` object naming the effects it applied — nodes and
+relationships created and deleted, properties written, labels added and removed,
+indexes and constraints added and dropped — so that a caller can tell a `MERGE`
+that created from one that matched, and a `DELETE` that removed a thousand
+relationships from one that removed none, without issuing a second statement to
+find out. A counter that is zero is omitted, and a statement that changed nothing
+publishes no such member and produces exactly the bytes it produced before, so no
+existing caller is affected.
+`GRAPH.md § Write Counters: What a Statement Changed` is canonical for the
+behaviour and `DATA_FORMATS.md § Graph Query Counters` for the shape.
 
 **A statement may ask for its plan instead of, or as well as, its answer.**
 Written with an `EXPLAIN` prefix, a statement is planned and **not executed**, and
-`execute` and `client` return its declared columns, no rows, and the plan under a
-`plan` member. Written with a `PROFILE` prefix, it is executed and returns its
-real rows together with what each operator cost, under a `profile` member. The
-two members are never both present, which is what keeps an estimate from being
-read as a measurement. A statement written with neither prefix produces exactly
-the bytes it produced before, so no existing caller is affected.
+`client` returns its declared columns, no rows, and the plan under a `plan`
+member. Written with a `PROFILE` prefix, it is executed and returns its real rows
+together with what each operator cost, under a `profile` member. The two members
+are never both present, which is what keeps an estimate from being read as a
+measurement. A statement written with neither prefix produces exactly the bytes it
+produced before, so no existing caller is affected.
 `GRAPH.md § Query Plans: The EXPLAIN and PROFILE Prefixes` is canonical for what
 each prefix does and which statements each admits — a `PROFILE` of a writing
 statement is refused, and neither prefix is accepted on a schema statement — and
 `DATA_FORMATS.md § Graph Plan Node` for the published shape.
 
-### Execute Options
-
-- `-r, --roadmap <name>` - REQUIRED. Target roadmap (see
-  `COMMANDS.md § Roadmap Selection (Always Required)`).
-- `-q, --query <cypher>` - The Cypher statement to run. When omitted, the
-  statement is read from standard input under a bound; it is not read to EOF.
-- `--socket <path>` - Path of the graph server socket this invocation resolves.
-  Default `~/.roadmaps/<name>/graph.sock`, derived from the selected roadmap and
-  identical to the derivation `graph serve` and `graph client` use. The flag
-  changes **which socket is looked at**, never what happens next: a server
-  answering there takes the statement, and a path that is absent or refuses the
-  connection sends the invocation to the store under the exclusive lock, exactly
-  as before the flag existed (see `GRAPH.md § Server Resolution`). Supplying the
-  flag with an empty value is a missing parameter (exit code 2). It is the flag
-  that lets the CLI follow a server started with `--socket`; the web graph data
-  endpoint has no equivalent and cannot (see
-  `GRAPH.md § Serving on a Non-Default Socket`).
-- `-h, --help` - Show the subcommand help.
-
-**Query input source and precedence.** The statement has exactly two sources,
-`--query` and standard input, and omitting `--query` selects the second. Every
-rule over those sources is specified in
-`GRAPH.md § Cypher Input Source and Precedence`, which is canonical for it: which
-source wins, the maximum query length and the bounded read that enforces it, what
-happens when no statement is supplied at all, and the refusal of a statement
-written as a positional argument instead of through either source. This section
-does not restate those rules. It restated them once, and the copy contradicted the
-original the day the original changed, which is the outcome
-`README.md § 3. Canonical Sources` exists to prevent.
-
-### Execute Output
-
-- On success the output mirrors what the executed statement returns. When the
-  statement produces result columns, the output is the `{columns, rows}` shape
-  defined in `DATA_FORMATS.md § Graph Query Result`; when it produces none, the
-  output is exactly `{"ok": true}`. For a data-writing statement the two cases are
-  exactly "has a `RETURN` clause" and "has none". A schema-introspection command
-  produces columns while carrying no `RETURN` clause, and therefore returns the
-  `{columns, rows}` shape; a `CREATE INDEX`, `DROP INDEX`, `CREATE CONSTRAINT`, or
-  `DROP CONSTRAINT` produces no columns and returns `{"ok": true}`. There is no
-  affected-element count, because the engine reports none. Exit code 0. The shape
-  is fixed in `DATA_FORMATS.md § Graph Write Result`.
-- On success for a statement written with an `EXPLAIN` or `PROFILE` prefix, the
-  output is the `{columns, rows}` shape carrying one further member: `plan` for an
-  `EXPLAIN`, `profile` for a `PROFILE`, never both. This is the one statement
-  class for which the "produces result columns" discriminator above does not
-  select the shape: a prefixed statement that declares no column returns empty
-  `columns` and `rows` arrays beside its plan rather than `{"ok": true}`, because
-  an `EXPLAIN` executed nothing and `{"ok": true}` is what a committed write
-  reports. Exit code 0. The shape is fixed in
-  `DATA_FORMATS.md § Graph Plan Node`; the behaviour in
-  `GRAPH.md § Query Plans: The EXPLAIN and PROFILE Prefixes`.
-- Side effect of a statement that wrote: after committing, the invocation
-  produces an on-disk snapshot under `~/.roadmaps/<name>/graph/snapshot/` and
-  truncates the write-ahead log, synchronously, before exit (see
-  `GRAPH.md § Synchronous Checkpoint on Write`). A statement whose transaction
-  appended nothing to the write-ahead log neither snapshots nor truncates. A
-  snapshot failure after a durable commit does not change the success output or
-  the exit code; it is reported as a diagnostic on stderr while the command still
-  exits 0.
-- Query notifications: the subcommand surfaces, as a plain-text diagnostic line
-  per notification on stderr, exactly the advisory notifications the engine
-  returns for the executed statement (for example a Cartesian-product warning on a
-  disconnected multi-pattern `MATCH`). The engine alone decides which statements
-  carry notifications, so a statement may produce none. Notifications do not
-  change the stdout success output or the exit code, and when the engine returns
-  none the subcommand writes nothing extra to stderr (see
-  `GRAPH.md § Query Notifications as Diagnostics`).
-- Errors: plain text to stderr, with the standard AI-agent hint.
-
-### Execute Exit Codes
-
-| Exit Code | Cause |
-|-----------|-------|
-| 0 | The statement executed successfully. |
-| 1 | Cypher failed to parse or execute (`utils.ErrGraphEngine`), or the graph store could not be opened, read, or written, or its exclusive lock could not be taken within the bounded wait (`utils.ErrGraphStore`). A schema statement the engine refuses is in the first class, including one whose keyword spacing the engine does not route to its schema parser. See `GRAPH.md § Schema Failure Classes` and `GRAPH.md § Lock Contention`. |
-| 1 | The statement exhausted the 5-second statement time budget and was cancelled (`utils.ErrGraphEngine`). Nothing was written: the transaction rolled back, no snapshot was produced, and the write-ahead log was left unchanged. See `GRAPH.md § Statement Time Budget`. |
-| 2 | No statement supplied: `--query` absent and standard input empty, whitespace only, or a terminal; or `--query` present with an empty, whitespace-only, or absent value; or `--socket` supplied with an empty value (`utils.ErrRequired`). |
-| 2 | A positional argument was supplied. `graph execute` accepts none, so a bare Cypher statement on the command line, or any other token that is neither a flag nor a flag's value, is refused (`utils.ErrInvalidInput`). See `GRAPH.md § No Positional Query: A Stray Token Is Refused`. |
-| 3 | No roadmap selected and none provided via `-r` (`utils.ErrNoRoadmap`). |
-| 4 | Selected roadmap does not exist (`utils.ErrNotFound`). |
-| 6 | The statement is longer than the maximum query length of 1 MiB (1048576 bytes), whether it arrived through `--query` or through standard input (`utils.ErrValidation`). See `GRAPH.md § Maximum Query Length`. This is the only cause of exit code 6 the command has. |
-| 1 | The roadmap's socket answers, but no server could be reached through it within the resolution probe, or the connection failed for a reason other than the socket being absent or refusing (`utils.ErrGraphServer`). The store was not opened and no lock was taken. See `GRAPH.md § Server Resolution`. |
-| 1 | The connection to a server was lost after the statement had been sent (`utils.ErrGraphServer`). Whether the statement committed is unknown, and the invocation does not retry it against the store. See `GRAPH.md § Server Resolution`, rule 4. |
-| 1 | Every attempt of the retry policy lost a serialisation conflict against a server (`utils.ErrGraphEngine`). Nothing was written: a losing transaction commits nothing. The statement is valid and may be run again. See `GRAPH.md § Concurrency Inside the Server`. |
-
-A socket file with nothing listening behind it is **not** in that table, because it
-is not a failure: the invocation reads the refused connection as evidence that the
-roadmap is not served, opens the store directly, and exits 0 (see
-`GRAPH.md § Server Resolution`, rule 1).
-
-The canonical exit-code catalogue is in `ARCHITECTURE.md § Exit Codes`; the graph
-feature introduces no new codes.
-`ARCHITECTURE.md § Exit Codes of the Graph Server and Client` enumerates the codes
-`serve` and `client` can return.
-
-### Execute
-
-```bash
-rmp graph execute -r <name> --query "<cypher>"
-echo "<cypher>" | rmp graph execute -r <name>
-```
-
-**Description:** Runs one Cypher statement against the roadmap's knowledge graph
-and returns its result. A statement that changes the graph runs inside a single
-transaction and is persisted durably before the process exits — or, when a graph
-server is serving the roadmap, it is sent to that server and persisted there.
-
-**Where the statement runs is resolved, not chosen.** The invocation resolves the
-socket in force — the default derived from the roadmap, or the value of
-`--socket` — and sends the statement to whatever server answers there. With
-nothing answering, it opens the store itself under the exclusive lock, which is
-what every invocation did before a server existed, and the paragraphs below
-describe that path. `GRAPH.md § Server Resolution` is canonical for the rule.
-`--socket` is written only when the server was started with it; an ordinary
-invocation against an ordinary server needs no flag at all.
-
-**Reading:**
-
-```bash
-rmp graph execute -r backend-platform \
-  --query "MATCH (s:Spec)-[:IMPLEMENTED_BY]->(c:Code) RETURN s.key, c.path"
-```
-
-Output (success): JSON in the shape defined in
-`DATA_FORMATS.md § Graph Query Result`, for example:
-
-```json
-{
-  "columns": ["s.key", "c.path"],
-  "rows": [
-    ["user-authentication", "internal/auth/jwt.go"]
-  ]
-}
-```
-
-**Writing:**
-
-```bash
-rmp graph execute -r backend-platform \
-  --query "MERGE (s:Spec {key:'user-authentication'}) MERGE (c:Code {path:'internal/auth/jwt.go'}) MERGE (s)-[:IMPLEMENTED_BY]->(c)"
-rmp graph execute -r backend-platform \
-  --query "MATCH (s:Spec {key:'user-authentication'}) SET s.status = 'implemented'"
-rmp graph execute -r backend-platform \
-  --query "MATCH (d:Decision {key:'use-sessions'}) DETACH DELETE d"
-```
-
-Output (success): `{"ok": true}`, exit code 0. None of the three carries a
-`RETURN` clause, so none produces result columns. Appending `RETURN` to any of
-them (for example `... RETURN s`) returns the affected elements in the
-`{columns, rows}` shape instead (see `DATA_FORMATS.md § Graph Write Result`).
-
-**Traversal:**
-
-```bash
-rmp graph execute -r backend-platform \
-  --query "MATCH path = (s:Spec {key:'user-authentication'})-[:DEPENDS_ON*1..3]->(d:Dependency) RETURN path"
-```
-
-**Managing the schema:**
-
-```bash
-rmp graph execute -r backend-platform \
-  --query "CREATE INDEX spec_key FOR (n:Spec) ON (n.key)"
-rmp graph execute -r backend-platform --query "SHOW INDEXES"
-rmp graph execute -r backend-platform --query "DROP INDEX spec_key"
-```
-
-The `CREATE INDEX` and `DROP INDEX` invocations output `{"ok": true}` and exit 0.
-The `SHOW INDEXES` invocation outputs the schema listing in the `{columns, rows}`
-shape and exits 0. `GRAPH.md § Schema Management` is canonical for the schema
-statements: which forms the engine accepts, how a schema object is named, why
-changing an index is two invocations rather than one, and how a schema failure
-surfaces.
-
-**Asking for the plan:**
-
-```bash
-rmp graph execute -r backend-platform \
-  --query "EXPLAIN MATCH (s:Spec)-[:IMPLEMENTED_BY]->(c:Code) RETURN s.key"
-rmp graph execute -r backend-platform \
-  --query "PROFILE MATCH (s:Spec)-[:IMPLEMENTED_BY]->(c:Code) RETURN s.key"
-```
-
-The `EXPLAIN` invocation runs nothing: it returns the statement's declared
-columns, an empty `rows` array, and the plan under `plan`, whose row counts are
-the planner's estimates. The `PROFILE` invocation runs the statement and returns
-its real rows together with the same plan under `profile`, whose figures are
-measurements of that run. Both exit 0. `DATA_FORMATS.md § Graph Plan Node` is
-canonical for the plan's keys and for the rules under which a figure is omitted
-rather than published as zero.
-
-### Execute Error Cases
-
-| Scenario | Exit Code | stderr Output (illustrative) |
-|----------|-----------|------------------------------|
-| Roadmap not specified | 3 | "Error: no roadmap selected: use -r <name> or --roadmap <name>" |
-| Roadmap not found | 4 | "Error: resource not found: roadmap \"X\" not found" |
-| No statement supplied | 2 | "Error: required parameter missing: no query supplied" |
-| The statement was to come from standard input and the read of it failed | 1 | "Error: I/O error: reading query from stdin: <detail>" |
-| `--socket` supplied with an empty value | 2 | "Error: required parameter missing: --<flag>" |
-| Stray positional argument, such as a bare Cypher statement written without `--query` | 2 | "Error: invalid input: unexpected argument \"X\" (graph queries use --query or stdin)" |
-| Statement above the maximum length | 6 | "Error: validation error: query exceeds maximum length of 1048576 bytes" |
-| Cypher parse/execution error | 1 | "Error: graph engine error: graph query failed: <engine diagnostic>" |
-| Statement cancelled for exhausting the 5-second statement time budget | 1 | "Error: graph engine error: graph query exceeded the 5s statement time budget; nothing was written. Narrow the statement — add a label, an indexed property filter, or a LIMIT — or split it into smaller statements." |
-| Graph store open/read/write failure | 1 | "Error: graph store error: graph store unavailable: <detail>" |
-| The graph store's exclusive lock was still held when the bounded wait was exhausted | 1 | "Error: graph store error: graph store is busy: still held when the bounded wait was exhausted, and nothing records the holder. Another rmp invocation releases it shortly, so run the statement again; an rmp graph serve holds it for its whole lifetime, so reach that server with --socket, or stop it." |
-| A server could not be reached through a socket that answered | 1 | The unreachable line of `§ Graph Server Socket Error Lines` |
-| Connection to a server lost after the statement was sent | 1 | The lost-connection line of `§ Graph Server Socket Error Lines` |
-| A server did not answer within the caller's backstop deadline | 1 | The unanswered line of `§ Graph Server Socket Error Lines` |
-| Every attempt of the retry policy lost a serialisation conflict on a served roadmap | 1 | "Error: graph engine error: graph write conflict: another writer committed first on every attempt within the 2.5s retry budget; nothing was written. The statement is valid — run it again, and spread concurrent writes across distinct nodes." |
-
-The last four rows arise only against a roadmap a graph server is serving; a
-socket file with nothing listening behind it produces none of them, because the
-invocation reads it as evidence that the roadmap is not served and opens the
-store. The conflict row is the one of the four that is not about the socket: it
-reports contention inside the server, which is unreachable on the direct path
-because a direct invocation runs exactly one transaction
-(`GRAPH.md § Concurrency Inside the Server`).
-
-The parse/execution row and the store-failure row end in a diagnostic the Cypher engine produces, not `rmp`. The part `rmp` fixes is everything up to and including `graph query failed: ` and `graph store unavailable: `; what follows is the engine's own text and is not specified here.
-
-The standard-input row ends the same way, in the operating system's own text rather than `rmp`'s: the part `rmp` fixes is everything up to and including `reading query from stdin: `. It is the only row of this table that reports something other than the roadmap, the statement, the store, or a server — the stream the statement was to arrive on. Nothing about it is a database, and it does not say it is; `ARCHITECTURE.md § Sentinel Error Catalogue` is canonical for the class. It is reached only when the read itself fails: a stream that is empty, whitespace only, or a terminal supplies no statement and is refused with exit code 2 by the row above, and a stream that supplies more than the maximum is refused with exit code 6 by the row below (`GRAPH.md § Cypher Input Source and Precedence`). The identical row under `§ Client Error Cases` is the same condition on the same read: both subcommands take their statement from the same two sources.
-
-The budget row is not one of them: it carries no engine diagnostic and no placeholder, and every character of it is `rmp`'s own text, so it is compared in full. `5s` is the budget itself, rendered as a duration; it is a fixed value and not a value the binary interpolates from the invocation. The line says the three things a caller who has just lost a statement needs: what was exceeded, that nothing was written, and what to do next. `GRAPH.md § Statement Time Budget` is canonical for the behaviour it reports.
-
-The lock row is not one of them either: it carries no engine diagnostic and no placeholder, every character of it is `rmp`'s own text, and it is compared in full. It reports the exclusive store lock of `GRAPH.md § Lock Contention`, and it names no holder because nothing records one — the two possible holders call for opposite actions, and rule 3 of that section is canonical for why the line gives both rather than guessing at one. It is reached on the direct path only; a statement a server executed never takes this lock.
-
-The conflict row is not one of them either, and for the same reason: it carries no engine diagnostic and no placeholder, every character of it is `rmp`'s own text, and it is compared in full. `2.5s` is the retry policy's total wait, rendered as a duration; it is a fixed value and not one the binary interpolates. The line exists because the condition it reports was otherwise indistinguishable from the parse/execution row above — both printed the same `graph query failed: ` text, and the only thing separating them was the engine's diagnostic tail, which the paragraph above deliberately declines to specify and which a caller therefore cannot lawfully match. The decision a caller must make on reading it is the opposite of the one an invalid statement calls for: run the statement again, rather than correct it. `GRAPH.md § Concurrency Inside the Server` is canonical for the behaviour it reports.
-
 ### Graph Server Socket Error Lines
 
-Seven failure conditions belong to the graph server rather than to the roadmap,
-the statement, or anything the caller wrote, and three of this section's error
+Eight failure conditions belong to the graph server rather than to the roadmap,
+the statement, or anything the caller wrote, and both of this section's error
 tables refer here for their exact lines instead of each publishing a copy. Every
 line is complete, as `§ Published Error Strings Are Exact` requires, and every one
-exits 1. Six carry `utils.ErrGraphServer`. The seventh, the store-lock line,
-carries `utils.ErrGraphStore`, because the lock it reports belongs to the store
-rather than to the socket; it is published here with the other two `graph serve`
-startup lines because a reader meets all three in the same startup sequence
+exits 1. Seven carry `utils.ErrGraphServer`. The remaining one, the store-lock
+line, carries `utils.ErrGraphStore`, because the lock it reports belongs to the
+store rather than to the socket; it is published here with the other three
+`graph serve` startup lines because a reader meets all four in the same startup
+sequence
 (`GRAPH.md § Error Handling and Exit Codes`). `<socket>` is the resolved socket
-path and `<detail>` is the operating system's own diagnostic; the placeholder
-table under `§ Published Error Strings Are Exact` declares both.
+path, `<detail>` is the operating system's own diagnostic, and `N` and `M` are the
+two byte counts the path-length line carries; the placeholder table under
+`§ Published Error Strings Are Exact` declares all four.
 
 - **A live server already answers on the socket `graph serve` resolved.** The line
   is `Error: graph server error: a graph server is already serving <socket>`. The
   incumbent's socket is left exactly as it was found, and the incumbent keeps
   serving (`GRAPH.md § Server Startup`, step 3).
+- **A resolved socket path is longer than the platform allows.** The line is
+  `Error: graph server error: socket path is too long: <socket> is N bytes and this platform allows at most M. Use --socket to name a shorter path.`
+  `N` is the resolved path's length in bytes and `M` is the limit the platform
+  yields, so the published line carries no figure of its own and is one line on
+  every target: the limit is 107 on Linux and Windows and 103 on macOS, FreeBSD
+  and OpenBSD, and the binary interpolates the one in force. Everything outside
+  the three placeholders is `rmp`'s own text, and the line is compared in full.
+  Both subcommands that publish `--socket` write it, for a path the caller
+  supplied and for the derived default path alike; the web graph data endpoint,
+  which publishes no such flag, refuses its request on the same condition. No
+  surface reads a path over the limit as evidence that no server happens to be
+  listening: it is evidence that none can ever listen there, and the two are
+  reported apart (`GRAPH.md § Socket Path Length`, rules 5 and 6).
 - **`graph serve` could not bind its socket.** The line is
   `Error: graph server error: cannot bind <socket>: <detail>`. The part `rmp`
   fixes is everything up to and including `cannot bind <socket>: `; the text after it is
@@ -3825,10 +3626,10 @@ table under `§ Published Error Strings Are Exact` declares both.
   so rather than reporting an unavailable store, because a second server is the
   overwhelmingly likely cause and the reader can act on it. It says "may": the
   lock records no holder, so the invocation reports the likely cause and does not
-  assert it (`GRAPH.md § Server Startup`, step 2). It is `graph serve`'s wording
-  of the same exhausted wait that `graph execute` reports through the lock row of
-  `§ Execute Error Cases`; the two differ because only here is a second server
-  the likely holder, and only here is the reader already starting one.
+  assert it (`GRAPH.md § Server Startup`, step 2). It is the only published line
+  for an exhausted wait on this lock, and the only one there can be: no caller
+  takes the lock, so a second `rmp graph serve` is the only thing that can meet it
+  held (`GRAPH.md § Lock Contention`, rules 2 and 3).
 - **`graph client` found no server listening.** The line is
   `Error: graph server error: no graph server is listening on <socket>`. It covers
   both the socket that does not exist and the socket file a killed server left
@@ -3839,9 +3640,10 @@ table under `§ Published Error Strings Are Exact` declares both.
   `Error: graph server error: graph server unreachable at <socket>: <detail>`.
   This is the `Unreachable` state of `GRAPH.md § Server Resolution`: the connection was
   accepted but the handshake did not complete inside the probe, or it failed for a
-  reason other than the socket being absent or refusing. `graph execute` reports
-  it and does **not** fall back to the store, because a socket that answers may
-  belong to a server holding the lock.
+  reason other than the socket being absent or refusing. It is reported apart from
+  the no-server line because the two call for different actions: that one says to
+  start a server, this one says that something is answering on the path and is not
+  serving this graph.
 - **The connection was lost after the statement had been sent.** The line is
   `Error: graph server error: the connection to the graph server at <socket> was lost; the statement's outcome is unknown`.
   It is deliberately not a claim that nothing was written: a commit is durable
@@ -3867,8 +3669,14 @@ table under `§ Published Error Strings Are Exact` declares both.
 - `--socket <path>` - Path of the Unix domain socket to bind. Default
   `~/.roadmaps/<name>/graph.sock`, derived from the selected roadmap. Supplying
   the flag with an empty value is a missing parameter (exit code 2); supplying a
-  path that cannot be bound is a bind failure (exit code 1). A non-default path is
-  followed by the two CLI subcommands that take the same flag, `graph execute` and
+  path that cannot be bound is a bind failure (exit code 1). A path longer than
+  the platform allows is the one unbindable path that never reaches the bind: it
+  is refused while the path is resolved, and the line it writes names the path's
+  length and the platform's limit instead of the operating system's errno. That
+  bound is the platform's rather than Groadmap's, and it binds the derived default
+  path exactly as it binds this flag's value;
+  `GRAPH.md § Socket Path Length` is canonical for it. A non-default path is
+  followed by the one other CLI subcommand that takes the same flag,
   `graph client`, and by nothing else: the web graph data endpoint has no way to
   receive it, resolves the default path, finds nothing there, and fails against
   the running server's lock for as long as it runs.
@@ -3981,6 +3789,7 @@ several servers, one per roadmap, each on its own socket.
 | Unknown flag | 2 | "Error: invalid input: unknown flag: --foo" |
 | Unexpected positional argument | 2 | "Error: invalid input: unexpected argument \"X\"" |
 | `--socket` supplied with an empty value | 2 | "Error: required parameter missing: --<flag>" |
+| The resolved socket path is longer than the platform allows, whether derived or supplied | 1 | The path-length line of `§ Graph Server Socket Error Lines` |
 | Graph store lock could not be taken within the bounded wait | 1 | The lock line of `§ Graph Server Socket Error Lines` |
 | A live server already answers on the resolved socket | 1 | The already-serving line of `§ Graph Server Socket Error Lines` |
 | Socket could not be bound | 1 | The bind line of `§ Graph Server Socket Error Lines` |
@@ -3994,15 +3803,19 @@ several servers, one per roadmap, each on its own socket.
   statement is sent to.
 - `--socket <path>` - Path of the server's Unix domain socket. Default
   `~/.roadmaps/<name>/graph.sock`, the same derivation `graph serve` uses.
-  Supplying the flag with an empty value is a missing parameter (exit code 2).
+  Supplying the flag with an empty value is a missing parameter (exit code 2). A
+  socket path longer than the platform allows fails the invocation with exit code
+  1, naming the path's length and the platform's limit rather than reporting that
+  nothing is listening; the same line is written when the derived default path is
+  over that bound, because no server can exist at either
+  (`GRAPH.md § Socket Path Length`).
 - `-q, --query <cypher>` - The Cypher statement to send. When omitted, the
   statement is read from standard input under a bound; it is not read to EOF.
   There is no `--statement` flag: the statement reaches `client` through exactly
-  the two sources it reaches `execute` through.
+  two sources, this flag and standard input.
 - `-h, --help` - Show the subcommand help.
 
-**Query input source and precedence.** The statement has the same two sources
-`execute` has, under the same rules, and
+**Query input source and precedence.** The statement has two sources, and
 `GRAPH.md § Cypher Input Source and Precedence` is canonical for every one of
 them: which source wins, the maximum query length and the bounded read that
 enforces it, what happens when no statement is supplied at all, and the refusal of
@@ -4011,16 +3824,26 @@ This section does not restate them.
 
 ### Client Output
 
-- On success the output is byte-for-byte the output `rmp graph execute` produces
-  for the same statement against the same graph: the `{columns, rows}` shape when
-  the statement produces result columns, exactly `{"ok": true}` when it produces
-  none, and the same shape carrying a `plan` or `profile` member when the
-  statement was written with an `EXPLAIN` or `PROFILE` prefix. One key is outside
-  that identity and only one: a `profile` tree's `timeNs` measures the execution
-  that produced it, and the two subcommands are two executions, so they measure
-  two durations. Every other key, the structure, and the member order are
-  identical; `DATA_FORMATS.md § Graph Client Result`, rule 5, is canonical for the
-  boundary and this section does not restate it.
+- On success the output is the `{columns, rows}` shape when the statement
+  produces result columns, `{"ok": true}` when it produces none, the same shape
+  carrying a `plan` or `profile` member when the statement was written with an
+  `EXPLAIN` or `PROFILE` prefix, and either shape carrying a `counters` member
+  when the statement changed the graph. The shapes are the engine's values mapped
+  back out of the protocol, and the mapping is required to be faithful: the same
+  statement against the same graph produces the same bytes on every run, with one
+  key excepted and only one — a `profile` tree's `timeNs` measures the execution
+  that produced it, and two runs are two executions, so they measure two
+  durations. `DATA_FORMATS.md § Graph Client Result`, rule 5, is canonical for
+  that boundary and this section does not restate it.
+- The counters take no exception from that identity. They describe the statement
+  and the graph rather than the duration of a run, so the two subcommands publish
+  the same `counters` object, key for key and value for value. One member,
+  `propertiesWritten`, carries the engine's property assignments and property
+  removals as a single figure: the protocol a result crosses carries one property
+  counter and no second channel for a removal, so the two cannot be told apart on
+  this side. That is a property of the protocol rather than a choice Groadmap
+  makes; `DATA_FORMATS.md § Graph Client Result`, rule 6, and
+  `GRAPH.md § Write Counters: What a Statement Changed` are canonical for it.
   `DATA_FORMATS.md § Graph Client Result` is canonical for the
   mapping that makes the two identical — for the plan as much as for the rows,
   since both cross the protocol and both are mapped back onto the engine's own
@@ -4031,8 +3854,7 @@ This section does not restate them.
   themselves.
 - Query notifications: the subcommand surfaces, as one plain-text diagnostic line
   per notification on stderr, the advisory notifications the server returns for
-  the executed statement, exactly as `execute` surfaces the ones the engine
-  returns to it (see `GRAPH.md § Query Notifications as Diagnostics`).
+  the executed statement (see `GRAPH.md § Query Notifications as Diagnostics`).
 - A retriable serialisation conflict is **not** an error and is not printed. It is
   retried, and only an exhausted retry policy or an exhausted statement budget
   produces a failure (see `GRAPH.md § Concurrency Inside the Server`). Each of the
@@ -4045,9 +3867,9 @@ This section does not restate them.
 | Exit Code | Cause |
 |-----------|-------|
 | 0 | The statement was sent to a server, ran, and its result was written to stdout. |
-| 1 | No server is listening for the roadmap; or a server could not be reached through the socket; or the connection was lost, or went unanswered, after the statement was sent; or a value the server returned could not be mapped onto the published result shape (`utils.ErrGraphServer`, see `DATA_FORMATS.md § Graph Client Result`, rule 3). Or the statement failed to parse or execute in the engine, or exhausted the 5-second statement time budget, or every attempt of the retry policy lost a serialisation conflict (`utils.ErrGraphEngine`). |
+| 1 | No server is listening for the roadmap; or a server could not be reached through the socket; or the connection was lost, or went unanswered, after the statement was sent; or a value the server returned could not be mapped onto the published result shape (`utils.ErrGraphServer`, see `DATA_FORMATS.md § Graph Client Result`, rule 3). Or the statement failed to parse or execute in the engine, or wrote a field the engine refused as too long for its durable format, or exhausted the 5-second statement time budget, or every attempt of the retry policy lost a serialisation conflict (`utils.ErrGraphEngine`). |
 | 2 | No statement supplied: `--query` absent and standard input empty, whitespace only, or a terminal; or `--query` present with an empty, whitespace-only, or absent value; or `--socket` supplied with an empty value (`utils.ErrRequired`). |
-| 2 | A positional argument was supplied. `graph client` accepts none, exactly as `graph execute` accepts none (`utils.ErrInvalidInput`). |
+| 2 | A positional argument was supplied. `graph client` accepts none: a bare Cypher statement on the command line, or any other token that is neither a flag nor a flag's value, is refused (`utils.ErrInvalidInput`). See `GRAPH.md § No Positional Query: A Stray Token Is Refused`. |
 | 3 | No roadmap selected and none provided via `-r` (`utils.ErrNoRoadmap`). |
 | 4 | Selected roadmap does not exist (`utils.ErrNotFound`). |
 | 6 | The statement is longer than the maximum query length of 1 MiB (1048576 bytes), whether it arrived through `--query` or through standard input (`utils.ErrValidation`). |
@@ -4065,13 +3887,12 @@ codes.
 
 **Description:** Sends one Cypher statement to a running graph server over its
 Unix domain socket and prints the result. It reads and writes alike: the server
-does not examine the statement any more than `execute` does, so a statement that
-creates, changes, deletes, or alters the schema is executed and committed.
+does not examine the statement at all, so a statement that creates, changes,
+deletes, or alters the schema is executed and committed.
 
 **It requires a server.** With none listening, the invocation fails; it does not
-open the store. That is the whole difference between this subcommand and
-`execute`, which resolves the same socket but has a second path to fall back on
-(`GRAPH.md § The Bolt Client`).
+open the store, and no subcommand does. This is the only way to run a statement
+against a roadmap's graph (`GRAPH.md § The Bolt Client`).
 
 **A serialisation conflict is retried, not reported.** Two clients writing to the
 same nodes at the same time is an ordinary situation inside a server, and the
@@ -4090,12 +3911,12 @@ the statement again, and to spread concurrent writes across distinct nodes, whic
 is what removes the collisions rather than moving the point at which they start
 (`GRAPH.md § Concurrency Inside the Server`, rule 8).
 
-**The statement runs under the same 5-second time budget** `execute` runs under.
-The server is the end that enforces it, and the client keeps a later deadline of
-its own purely as a backstop against a server that answers nothing, so that a
-statement which committed just before the budget expired is never reported as one
-that wrote nothing. A statement the budget genuinely cut fails with exit code 1
-and the budget line `§ Execute Error Cases` publishes;
+**The statement runs under a 5-second time budget.** The server is the end that
+enforces it, and the client keeps a later deadline of its own purely as a backstop
+against a server that answers nothing, so that a statement which committed just
+before the budget expired is never reported as one that wrote nothing. A statement
+the budget genuinely cut fails with exit code 1 and the budget line
+`§ Client Error Cases` publishes;
 `GRAPH.md § Server Resolution`, rule 7, is canonical for the two deadlines and for
 why they differ.
 
@@ -4110,28 +3931,56 @@ why they differ.
 | `--socket` supplied with an empty value | 2 | "Error: required parameter missing: --<flag>" |
 | Stray positional argument, such as a bare Cypher statement written without `--query` | 2 | "Error: invalid input: unexpected argument \"X\" (graph queries use --query or stdin)" |
 | Statement above the maximum length | 6 | "Error: validation error: query exceeds maximum length of 1048576 bytes" |
+| The resolved socket path is longer than the platform allows, whether derived or supplied | 1 | The path-length line of `§ Graph Server Socket Error Lines` |
 | No server listening on the resolved socket | 1 | The no-server line of `§ Graph Server Socket Error Lines` |
 | A server could not be reached through a socket that answered | 1 | The unreachable line of `§ Graph Server Socket Error Lines` |
 | Connection lost after the statement was sent | 1 | The lost-connection line of `§ Graph Server Socket Error Lines` |
 | The server did not answer within the backstop deadline | 1 | The unanswered line of `§ Graph Server Socket Error Lines` |
 | Cypher parse/execution error reported by the server | 1 | "Error: graph engine error: graph query failed: <engine diagnostic>" |
+| The engine refuses a field the statement writes as too long for its durable format. **Not reachable at the pinned engine**: see the note below | 1 | "Error: graph engine error: graph field too long; nothing was written. Shorten the field the engine names: <engine diagnostic>" |
 | Statement cancelled for exhausting the 5-second statement time budget | 1 | "Error: graph engine error: graph query exceeded the 5s statement time budget; nothing was written. Narrow the statement — add a label, an indexed property filter, or a LIMIT — or split it into smaller statements." |
 | Every attempt of the retry policy lost a serialisation conflict | 1 | "Error: graph engine error: graph write conflict: another writer committed first on every attempt within the 2.5s retry budget; nothing was written. The statement is valid — run it again, and spread concurrent writes across distinct nodes." |
 
 The parse/execution row carries the engine's own diagnostic after
-`graph query failed: `, exactly as the same row does under
-`§ Execute Error Cases`: the statement ran in the engine either way, and the
-diagnostic the caller reads is the engine's in both.
+`graph query failed: `. The part `rmp` fixes is everything up to and including
+`graph query failed: `; what follows is the engine's own text and is not specified
+here.
 
-The conflict row is the one that used to share it. A serialisation conflict
-whose every attempt collided was reported through the parse/execution row above,
-so the two conditions printed the same line and the only text separating them
-was the engine's diagnostic tail — which is outside this file's contract and
-which a caller therefore cannot match. It now has a line of its own, published
-identically here and under `§ Execute Error Cases`, because both subcommands
-reach it through the same client against the same server
-(`GRAPH.md § The Bolt Client`). Every character of that line is `rmp`'s own and
-it is compared in full.
+The budget row and the conflict row used to share that line. Each was reported
+through the parse/execution row above, so three conditions printed one line and
+the only text separating them was the engine's diagnostic tail — which is outside
+this file's contract and which a caller therefore cannot match. Each now has a
+line of its own, and every character of those two lines is `rmp`'s own text,
+compared in full.
+
+**The field-length row is published and is not reachable at the pinned engine,
+and both halves of that are deliberate.** The line is a hybrid: `rmp` writes the
+class, the fact that nothing was written and the remedy, and then hands over — the
+part `rmp` fixes is everything up to and including
+`Shorten the field the engine names: `, and the engine's diagnostic ends the line,
+because only the engine knows which field is at fault and by how much. That is why
+`rmp`'s half and the engine's half both say the field is too long, and why the
+repetition is not a defect to tidy away: trimming it would mean parsing it, and a
+match on the engine's wording fails silently at the next version bump.
+
+**What no caller can do today is read it.** Every statement crosses a server, and
+at the pinned engine the refusal does not survive the crossing: the server
+classifies it as its own fault rather than the caller's and replaces the message
+with generic internal-error text, so no sentinel, no distinguishing code and no
+field kind reaches this side. The condition arrives through the parse/execution
+row above instead — the very outcome this line was published to end. The rest
+still holds: the sentinel is `utils.ErrGraphEngine`, the exit code is 1, and
+nothing was written.
+
+The row is kept rather than withdrawn because the class is real, the remedy is
+known and small, and a line withdrawn now would have to be re-specified,
+re-agreed and re-tested the moment the engine gains the case for it. What the
+scenario column must never do is imply the line is reachable, which is why it says
+it is not. `GRAPH.md § Field Length Limits`, rule 13, is canonical for the
+limitation, for why Groadmap MUST NOT close it by matching the replaced text, and
+for the engine-side change that ends it. **Nothing in this repository can drive
+this line**, so no test asserts it and none can; that is a property of the pinned
+engine and not of the specification.
 
 ---
 
@@ -4244,7 +4093,7 @@ exiting; the other is `rmp graph serve` (see `§ Serve`). Sending `SIGINT`
 ### Exit Codes
 
 These are the exit codes of the `rmp web` **process**. They are distinct from the
-per-request HTTP status codes the running server returns (200, 400, 404, 405, 500),
+per-request HTTP status codes the running server returns (200, 400, 404, 405, 500, 503),
 which are specified in `WEB.md § Routes and Pages`.
 
 | Exit Code | Cause |

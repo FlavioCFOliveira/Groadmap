@@ -159,9 +159,8 @@ func TestGraphQueryBudget_StatementAndWaitFitTheWriteTimeout(t *testing.T) {
 // budget introduces no new knob, and the endpoint's only parameters remain q
 // and limit).
 func TestHandleGraphData_BudgetIsNotCallerControlled(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
-	name := seedRoadmap(t, "web-ui-rollout")
-	seedGraph(t, name, graphSeedQueries()...)
+	t.Setenv("HOME", shortHome(t))
+	name := servedRoadmap(t, "web-ui-rollout", graphSeedQueries()...)
 
 	// Parameters that would disable or shorten a budget if any of them were
 	// wired to it. All must be ignored: the request is served normally.
@@ -197,16 +196,20 @@ func TestHandleGraphData_BudgetIsNotCallerControlled(t *testing.T) {
 // classification an engine failure gets, not a new one), and the server keeps
 // serving afterwards.
 func TestHandleGraphData_ExpensiveQueryHitsTimeBudget(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	t.Setenv("HOME", shortHome(t))
 	name := seedRoadmap(t, "web-ui-rollout")
 	nodes := seedExpensiveGraph(t, name)
 
 	// Unbounded, this query costs about six seconds against this store — more
 	// than the production budget itself. Lowering the budget keeps the test fast
-	// without changing what it proves: the endpoint stops the work when its own
-	// deadline elapses, whatever that deadline is.
+	// without changing what it proves: the statement is stopped when the deadline
+	// elapses, whatever that deadline is.
+	//
+	// The budget is installed in the SERVER, which is where the statement runs
+	// and therefore where it is cut; the same value is installed here so the
+	// message names the duration the run actually had.
 	const budget = 150 * time.Millisecond
-	setGraphQueryBudget(t, budget)
+	serveGraphAtBudget(t, name, budget)
 
 	started := time.Now()
 	rec := doGraphData(t, name, url.Values{"q": {expensiveGraphQuery}, "limit": {"3000"}})
@@ -273,9 +276,14 @@ func TestHandleGraphData_ExpensiveQueryHitsTimeBudget(t *testing.T) {
 // fresh read after the failure must still return exactly the seeded graph, with
 // no node or edge added, removed, or altered.
 func TestHandleGraphData_BudgetExhaustionWritesNothing(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	t.Setenv("HOME", shortHome(t))
 	name := seedRoadmap(t, "web-ui-rollout")
 	nodes := seedExpensiveGraph(t, name)
+
+	// One server, at the short budget from its first instant: a server's budget
+	// is fixed when it starts, and the two reads either side of the cancelled
+	// query are cheap enough to finish well inside it.
+	serveGraphAtBudget(t, name, 150*time.Millisecond)
 
 	// The seeded graph as it must still look afterwards.
 	before := doGraphData(t, name, url.Values{"limit": {"3000"}})
@@ -284,12 +292,10 @@ func TestHandleGraphData_BudgetExhaustionWritesNothing(t *testing.T) {
 	}
 	baseline := before.Body.String()
 
-	setGraphQueryBudget(t, 150*time.Millisecond)
 	rec := doGraphData(t, name, url.Values{"q": {expensiveGraphQuery}, "limit": {"3000"}})
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("expensive query status = %d, want 400; body=%q", rec.Code, rec.Body.String())
 	}
-	setGraphQueryBudget(t, graphlock.DefaultStatementBudget)
 
 	after := doGraphData(t, name, url.Values{"limit": {"3000"}})
 	if after.Code != http.StatusOK {
@@ -314,7 +320,7 @@ func TestHandleGraphData_BudgetExhaustionWritesNothing(t *testing.T) {
 // The payload is also asserted against the seeded graph, so the comparison
 // cannot pass by both sides being empty.
 func TestHandleGraphData_OrdinaryQueryUnaffectedByBudget(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	t.Setenv("HOME", shortHome(t))
 	name := seedRoadmap(t, "web-ui-rollout")
 	seedGraph(t, name, graphSeedQueries()...)
 
@@ -330,17 +336,23 @@ func TestHandleGraphData_OrdinaryQueryUnaffectedByBudget(t *testing.T) {
 
 	for _, tc := range queries {
 		t.Run(tc.name, func(t *testing.T) {
+			// Each subtest owns both of its servers from end to end. A budget is
+			// fixed when a server starts, so the two arms are two servers over the
+			// same store, started and stopped in turn — the store being the same
+			// one is what makes the two bodies comparable at all.
+			stopProduction := serveGraphAtBudget(t, name, graphlock.DefaultStatementBudget)
 			withBudget := doGraphData(t, name, tc.param)
+			stopProduction()
 			if withBudget.Code != http.StatusOK {
 				t.Fatalf("status = %d, want 200 under the production budget; body=%q", withBudget.Code, withBudget.Body.String())
 			}
 
 			// A budget that cannot possibly fire stands in for "before the budget
-			// existed": the deadline is still derived and still installed, it just
-			// never elapses.
-			setGraphQueryBudget(t, time.Hour)
+			// existed": the deadline is still derived and still installed in the
+			// server, it just never elapses.
+			stopUnbounded := serveGraphAtBudget(t, name, time.Hour)
 			unbounded := doGraphData(t, name, tc.param)
-			setGraphQueryBudget(t, graphlock.DefaultStatementBudget)
+			stopUnbounded()
 
 			if unbounded.Code != withBudget.Code {
 				t.Fatalf("status = %d under the production budget, %d effectively unbounded", withBudget.Code, unbounded.Code)
@@ -353,6 +365,7 @@ func TestHandleGraphData_OrdinaryQueryUnaffectedByBudget(t *testing.T) {
 
 	// The comparison above is not vacuous: the default query really does return
 	// the seeded graph in full.
+	serveGraph(t, name)
 	rec := doGraphData(t, name, nil)
 	var view graphView
 	if err := json.Unmarshal(rec.Body.Bytes(), &view); err != nil {
@@ -372,12 +385,12 @@ func TestHandleGraphData_OrdinaryQueryUnaffectedByBudget(t *testing.T) {
 // must still be an execution failure (rule 4: no new kind), but reported as the
 // cancellation it is, never as budget exhaustion.
 func TestLoadGraphView_ClientDisconnectIsNotReportedAsTheBudget(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
-	name := seedRoadmap(t, "web-ui-rollout")
-	seedGraph(t, name, graphSeedQueries()...)
-
-	// A generous budget, so nothing but the disconnect can cancel this query.
-	setGraphQueryBudget(t, time.Hour)
+	t.Setenv("HOME", shortHome(t))
+	// A REACHABLE graph, because the point of the test is what a disconnect is
+	// reported as and not what an unserved roadmap is. Without a server the
+	// request would fail at the resolution and the classification below would be
+	// about the missing server.
+	name := servedRoadmapAtBudget(t, "web-ui-rollout", time.Hour, graphSeedQueries()...)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // the client went away before the query could run

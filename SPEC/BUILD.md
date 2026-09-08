@@ -773,6 +773,18 @@ make lint
 | `ineffassign` | Dead assignments | Detects assignments whose values are never read |
 | `perfsprint` | Sprintf hotspots | Replaces `fmt.Sprintf("%s", s)` with cheaper alternatives |
 | `prealloc` | Slice preallocation | Loops with known iteration count must preallocate slice capacity |
+| `unused` | Dead code | Every declared symbol must have a reachable caller; a package is analysed together with its tests, so a helper used only by a test is live and one used by nothing is not |
+
+**The set is closed, and nothing is enabled implicitly.** `.golangci.yml` opens
+with `linters: default: none`, so a linter absent from the table above is not
+running and the analyses this gate performs are exactly the ones enumerated
+there. `unused` is in the set because no other member of it looks for a
+declaration nothing reaches — `ineffassign` reports an assignment whose value is
+never read, which is a different finding about live code — and without it a
+symbol with no caller compiles, passes `go vet`, passes the tests, and passes
+this gate. Dead code is not a style question here: a reader who finds a function
+reasonably assumes something calls it, and the specification it appears to
+implement is the one nothing implements.
 
 ### Error Policy Rules (err113)
 

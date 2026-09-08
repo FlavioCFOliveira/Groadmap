@@ -98,7 +98,7 @@ func servePage(t *testing.T, mux *http.ServeMux, path string) string {
 // Tabler's dark theme with no toggle (SPEC/WEB.md Functional Requirement 12,
 // Acceptance Criterion 23).
 func TestPages_DarkThemeAttribute(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	t.Setenv("HOME", shortHome(t))
 	name := seedRoadmap(t, "platform-core")
 	mux := buildMux()
 
@@ -122,7 +122,7 @@ func TestPages_DarkThemeAttribute(t *testing.T) {
 // TestShell_TopNavbarNamesTheSelectedRoadmap rather than by this sweep, which
 // covers only what every page shares.
 func TestPages_AdminShellMarkup(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	t.Setenv("HOME", shortHome(t))
 	name := seedRoadmap(t, "platform-core")
 	mux := buildMux()
 
@@ -152,7 +152,7 @@ func TestPages_AdminShellMarkup(t *testing.T) {
 // Criterion 16). The index page (no active roadmap) must NOT render those
 // roadmap-scoped links.
 func TestPages_RoadmapSidebarLinks(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	t.Setenv("HOME", shortHome(t))
 	name := seedRoadmap(t, "platform-core")
 	mux := buildMux()
 
@@ -202,7 +202,7 @@ var remoteOriginRe = regexp.MustCompile(`(?i)(href|src)\s*=\s*["'](https?:)?//`)
 // served from /static/ on the same server (SPEC/WEB.md Acceptance Criteria
 // 16/22, Functional Requirement 10).
 func TestPages_NoRemoteOrigin(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	t.Setenv("HOME", shortHome(t))
 	name := seedRoadmap(t, "platform-core")
 	mux := buildMux()
 
@@ -238,7 +238,7 @@ func TestPages_NoRemoteOrigin(t *testing.T) {
 // Framework, § Knowledge-Graph Visualisation Library; task asset-wiring
 // requirement 4).
 func TestPages_AssetChainOrderAndLocality(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	t.Setenv("HOME", shortHome(t))
 	name := seedRoadmap(t, "platform-core")
 	mux := buildMux()
 
@@ -279,7 +279,7 @@ func TestPages_AssetChainOrderAndLocality(t *testing.T) {
 // § Roadmap Knowledge-Graph Page, Functional Requirement 7, Acceptance
 // Criterion 10).
 func TestGraphPage_LayoutDropdown(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	t.Setenv("HOME", shortHome(t))
 	name := seedRoadmap(t, "platform-core")
 	mux := buildMux()
 
@@ -348,7 +348,7 @@ func TestGraphPage_LayoutDropdown(t *testing.T) {
 // this is the server-side-testable surface of the feature (SPEC/WEB.md § Graph
 // Labels Sidebar, Acceptance Criteria 43/44).
 func TestGraphPage_LabelsSidebar(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	t.Setenv("HOME", shortHome(t))
 	name := seedRoadmap(t, "platform-core")
 	mux := buildMux()
 
@@ -808,7 +808,7 @@ func TestServerTimeouts(t *testing.T) {
 // to /roadmaps/{name}/tasks). The page groups sprints into three tabs
 // (SPEC/WEB.md § Roadmap Sprints Page, Acceptance Criterion 8).
 func TestSprintsPage_PreservesSprintCards(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	t.Setenv("HOME", shortHome(t))
 	name := seedRoadmap(t, "platform-core")
 	mux := buildMux()
 

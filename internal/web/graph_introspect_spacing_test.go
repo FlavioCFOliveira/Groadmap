@@ -69,8 +69,8 @@ var spacingPairs = []struct {
 // decided before execution could not carry an engine diagnostic at all, which is
 // why the diagnostic is asserted and not only the status.
 func TestHandleGraphData_KeywordSpacingIsTheEnginesVerdict(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
-	name := seedGraphWithSchema(t, "web-ui-rollout")
+	t.Setenv("HOME", shortHome(t))
+	name := servedGraphWithSchema(t, "web-ui-rollout")
 
 	for _, tc := range spacingPairs {
 		t.Run(tc.name, func(t *testing.T) {
@@ -116,8 +116,8 @@ func TestHandleGraphData_KeywordSpacingIsTheEnginesVerdict(t *testing.T) {
 // asked for a correction would be this endpoint speaking for the engine
 // (SPEC/WEB.md Acceptance Criteria 123 and 151).
 func TestHandleGraphData_PublishesNoKeywordSpacingKind(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
-	name := seedGraphWithSchema(t, "web-ui-rollout")
+	t.Setenv("HOME", shortHome(t))
+	name := servedGraphWithSchema(t, "web-ui-rollout")
 
 	probes := []url.Values{
 		{"q": {"SHOW INDEXES"}},
@@ -165,8 +165,8 @@ func TestHandleGraphData_PublishesNoKeywordSpacingKind(t *testing.T) {
 // the engine rejects those at the parser whether or not a LIMIT is appended, so
 // they reach the engine and fail there like any other unsupported statement.
 func TestHandleGraphData_SpacingDoesNotWidenTheSuppressedClass(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
-	name := seedGraphWithSchema(t, "web-ui-rollout")
+	t.Setenv("HOME", shortHome(t))
+	name := servedGraphWithSchema(t, "web-ui-rollout")
 
 	for _, query := range []string{
 		"SHOW  INDEXER",

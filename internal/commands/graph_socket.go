@@ -1,13 +1,12 @@
-// Package commands — the socket half the three graph subcommands share.
+// Package commands — the socket half the two graph subcommands share.
 //
-// `graph execute`, `graph client` and `graph serve` all name a socket, and the
-// first two both send statements to whatever answers on it. This file holds what
-// is common to them: the `--socket` flag, the derivation of the path in force,
-// and the lines SPEC/COMMANDS.md § Graph Server Socket Error Lines publishes for
-// a failure that belongs to the socket rather than to the roadmap, the statement,
-// or the store.
+// `graph serve` and `graph client` both name a socket: one binds it, the other
+// connects to it. This file holds what is common to them: the `--socket` flag,
+// the derivation of the path in force, and the lines
+// SPEC/COMMANDS.md § Graph Server Socket Error Lines publishes for a failure that
+// belongs to the socket rather than to the roadmap, the statement, or the store.
 //
-// It holds the lines ONCE. Each is published as a single sentence, and three of
+// It holds the lines ONCE. Each is published as a single sentence, and both of
 // the error tables in SPEC/COMMANDS.md refer to this section rather than each
 // carrying a copy; the code mirrors that arrangement, because two copies of a
 // published line are two things to keep in step with one specification.
@@ -53,9 +52,9 @@ const backstopLine = "7.5s"
 //
 // It refuses NOTHING else, and that is the difference between it and
 // readSocketFlag. `graph serve` takes no other flag and can refuse whatever is
-// left where it stands; `graph execute` and `graph client` take --query as well
-// and read a statement out of what remains, so the socket flag has to be removed
-// from the arguments without an opinion about the rest.
+// left where it stands; `graph client` takes --query as well and reads a
+// statement out of what remains, so the socket flag has to be removed from the
+// arguments without an opinion about the rest.
 //
 // A flag supplied with an empty — or whitespace-only — value is a MISSING
 // parameter and not a validation failure: it names no socket at all, which is the
@@ -119,14 +118,76 @@ func graphSocketInForce(roadmapName, socketFlag string) (string, error) {
 	return abs, nil
 }
 
+// graphSocketTooLong is the published line for a resolved socket path longer
+// than the platform allows a socket path to be.
+//
+// It is the line SPEC/COMMANDS.md § Graph Server Socket Error Lines publishes,
+// and it carries three interpolations and no figure of its own: the resolved
+// path, the number of bytes that path occupies, and the bound in force on the
+// platform the binary is running on. The bound is read from
+// internal/graphclient, the one place it is derived, so the SAME published line
+// is correct on all nine targets SPEC/BUILD.md declares — 107 bytes on Linux and
+// Windows, 103 on macOS, FreeBSD and OpenBSD — and no call site can come to
+// report a limit the check did not apply.
+//
+// What it replaces is worth stating, because it is the whole of rmp task #412:
+// the kernel's own `bind: invalid argument`, which named the path twice, named
+// the cause not at all, and gave the reader nothing to act on. This line names a
+// length, a limit, and the flag that moves the socket somewhere shorter.
+//
+// The failure class does not change with the message. It carries
+// utils.ErrGraphServer and exit code 1, the same sentinel and the same code the
+// unqualified bind failure already carried (SPEC/GRAPH.md § Socket Path Length,
+// rules 4 and 7).
+func graphSocketTooLong(socket string) error {
+	return fmt.Errorf("%w: socket path is too long: %s is %d bytes and this platform "+
+		"allows at most %d. Use --socket to name a shorter path.",
+		utils.ErrGraphServer, socket, len(socket), graphclient.MaxSocketPathLen)
+}
+
+// refuseOverLongSocket returns that line when socket is over the platform's
+// bound, and nil otherwise.
+//
+// It is what BOTH subcommands call, in the same position and to the same effect:
+// `graph serve`, which must create the socket, and `graph client`, which speaks
+// to a server and to nothing else. Where the path came from is never asked. A
+// derived path over the bound is refused exactly as a supplied one is
+// (SPEC/GRAPH.md § Socket Path Length, rules 5 and 6).
+//
+// The rule is uniform because the condition it reports is not a moment but a
+// defect. A roadmap whose derived socket path cannot be bound has a real and
+// permanent fault in its layout: the path is what it is, no server can ever be
+// started for that roadmap, and nothing the caller does at the moment of the call
+// changes it. A surface that read such a path as evidence that no server happens
+// to be listening would report a permanent fault as a transient one, and the two
+// call for opposite actions.
+//
+// The web graph data endpoint publishes no `--socket` flag and applies the same
+// refusal to the path it derives, so the fault is reported at every surface
+// rather than at some of them. An operator who saw one surface fail while
+// another worked would have no reason to connect the two, because from where
+// they stand the two are answering different questions.
+//
+// The check runs on the RESOLVED path and before the socket is used — before the
+// lock, the probe, the unlink and the bind on the server side, and before the
+// probe on the caller's (§ Server Startup, step 1; § Server Resolution, rule 12).
+// A check placed after the attempt would be too late to replace anything, and one
+// placed after the probe would report an ordinary file sitting at such a path as
+// a server that could not be reached, which names the wrong thing entirely.
+func refuseOverLongSocket(socket string) error {
+	if graphclient.SocketPathTooLong(socket) {
+		return graphSocketTooLong(socket)
+	}
+	return nil
+}
+
 // resolveGraphServer probes the socket in force and reports whether a server is
 // answering there.
 //
 // The probe is internal/graphclient's, unchanged and unwrapped: this function
 // exists to turn the ONE failing state into the line a command-line surface
-// prints for it, and to leave the other three to the caller, which reports each
-// differently — `graph execute` falls back on the two negatives and `graph client`
-// fails on them.
+// prints for it, and to leave the other three to the caller. `graph client` is
+// the only caller now, and it fails on both negatives with the no-server line.
 func resolveGraphServer(socket string) (graphclient.State, error) {
 	state, probeErr := graphclient.Resolve(context.Background(), socket)
 	if state == graphclient.StateUnreachable {
@@ -151,9 +212,8 @@ func graphSocketUnreachable(socket string, cause error) error {
 // roadmap nothing is serving.
 //
 // It covers the socket that does not exist and the socket file a killed server
-// left behind alike, because the two are one condition for that subcommand: there
-// is nothing to send the statement to. `graph execute` never reaches this line —
-// for it the same two states are the direct path.
+// left behind alike, because the two are one condition: there is nothing to send
+// the statement to, and there is no second place to send it.
 func graphNoServerListening(socket string) error {
 	return fmt.Errorf("%w: no graph server is listening on %s", utils.ErrGraphServer, socket)
 }
@@ -223,28 +283,25 @@ func graphServerSilent(socket string) error {
 // runOnGraphServer sends one statement to the server at socket and returns the
 // value to print for it.
 //
-// It is the served half of `graph execute` and the whole of `graph client`, and
-// the two share it rather than each calling the client for themselves, so that
-// the output shape, the notifications and the classification of every failure are
-// decided once. SPEC/DATA_FORMATS.md § Graph Client Result requires the bytes the
-// two write to be identical; sharing the call is what makes that true of the
-// bytes rather than merely asserted about them.
+// It is the whole of `graph client`'s execution, and it stays a function of its
+// own rather than being folded into that handler because the output shape, the
+// notifications and the classification of every failure are decided here, once,
+// for the one path a statement can take.
 //
-// The result is serialised through serializeValue — the SAME function the direct
-// path uses — because the client hands back the engine's own value model rather
-// than JSON. The published shape is therefore produced by one mapping on both
-// paths, and the surface a statement was executed through is not observable in
-// it.
+// The result is serialised through serializeValue because the client hands back
+// the engine's own value model rather than JSON, and that function is the single
+// mapping SPEC/DATA_FORMATS.md § Graph Client Result fixes — the same one the web
+// graph data endpoint's values pass through.
 func runOnGraphServer(socket, query string) (any, error) {
 	result, err := graphclient.Send(context.Background(), socket, query)
 	if err != nil {
 		return nil, graphServerFailure(socket, err)
 	}
 
-	// Notifications are advisory and reach stderr exactly as the engine's own do
-	// on the direct path: one plain-text line each, changing neither the stdout
-	// output nor the exit code (SPEC/GRAPH.md § Query Notifications as
-	// Diagnostics).
+	// Notifications are advisory and reach stderr in the shape
+	// printGraphNotifications gives the engine's own: one plain-text line each,
+	// changing neither the stdout output nor the exit code
+	// (SPEC/GRAPH.md § Query Notifications as Diagnostics).
 	for _, n := range result.Notifications {
 		fmt.Fprintf(os.Stderr, "%s %s: %s\n", n.Severity, n.Code, n.Description)
 	}
@@ -252,19 +309,18 @@ func runOnGraphServer(socket, query string) (any, error) {
 	// The discriminator is the columns and not the RETURN clause, which is what
 	// lets a schema introspection produce the listing while a CREATE INDEX
 	// produces {"ok": true} (SPEC/DATA_FORMATS.md § Graph Write Result). A
-	// prefixed statement departs from it for the reason the direct path departs
-	// from it: it has a plan to carry, and {"ok": true} has nowhere to put one
-	// and would report a write that never happened
-	// (SPEC/GRAPH.md § Query Plans, rule 8).
+	// prefixed statement departs from it because it has a plan to carry, and
+	// {"ok": true} has nowhere to put one and would report a write that never
+	// happened (SPEC/GRAPH.md § Query Plans, rule 8).
 	prefixed := result.Plan != nil || result.Profile != nil
 	if len(result.Columns) == 0 && !prefixed {
-		return graphOKResult{OK: true}, nil
+		return graphOKResult{OK: true, Counters: graphjson.CountersOf(result.Counters)}, nil
 	}
 
 	columns := result.Columns
 	if columns == nil {
-		// See the direct path: a prefixed statement with no result column
-		// publishes an empty array, never null.
+		// A prefixed statement with no result column publishes an empty array,
+		// never null (SPEC/DATA_FORMATS.md § Graph Query Result).
 		columns = []string{}
 	}
 	out := graphQueryResult{Columns: columns, Rows: make([][]any, 0, len(result.Rows))}
@@ -275,29 +331,35 @@ func runOnGraphServer(socket, query string) (any, error) {
 		}
 		out.Rows = append(out.Rows, cells)
 	}
-	// The same mapping the direct path runs, over the same representation: the
-	// client inverted the protocol encoding onto the engine's plan node, so this
-	// step is shared rather than reimplemented, and the byte identity
-	// SPEC/DATA_FORMATS.md § Graph Client Result requires holds by construction.
+	// The plan is mapped by internal/graphjson, over the engine's own plan node:
+	// the client inverted the protocol encoding back onto that type, so this step
+	// is the shared mapping rather than a second one, and the identity
+	// SPEC/DATA_FORMATS.md § Graph Client Result requires holds by construction —
+	// the web graph data endpoint's plans pass through the same call.
 	out.Plan = graphjson.Plan(result.Plan, false)
 	out.Profile = graphjson.Plan(result.Profile, true)
+	// And the same for the counters, over the same shared mapping. The client
+	// inverted the protocol's statistics map onto the engine's own counters, with
+	// the property assignments and removals already folded into one figure by the
+	// protocol itself — a property of the protocol rather than a choice made here
+	// (SPEC/DATA_FORMATS.md § Graph Client Result, rule 6).
+	out.Counters = graphjson.CountersOf(result.Counters)
 	return out, nil
 }
 
 // graphServerFailure words a failure the shared Bolt client classified, in the
 // terms a command-line surface publishes.
 //
-// The two failures that are the STATEMENT's are worded by the same helper the
-// direct path uses, deliberately: a statement that failed to parse and a
-// statement the budget cut read identically whether they ran in this process or
-// in a server, and SPEC/COMMANDS.md publishes one line for each across both
-// subcommands. The three that are the CONNECTION's have lines of their own, which
-// this file holds.
+// The two failures that are the STATEMENT's are worded by graphStatementError: a
+// statement that failed to parse and a statement the budget cut are the
+// statement's own failures wherever they ran, and SPEC/COMMANDS.md publishes one
+// line for each. The three that are the CONNECTION's have lines of their own,
+// which this file holds.
 //
 // The exhausted serialisation retry is the fourth line this file holds, and it is
-// the one that is neither the connection's nor shared with the direct path: it
-// reports contention INSIDE a server, which one invocation running one
-// transaction cannot produce (SPEC/COMMANDS.md § Execute Error Cases).
+// the one that is neither the connection's nor the statement's: it reports
+// contention INSIDE a server, between two clients writing at once
+// (SPEC/COMMANDS.md § Client Error Cases).
 func graphServerFailure(socket string, err error) error {
 	var sendErr *graphclient.SendError
 	if !errors.As(err, &sendErr) {
@@ -316,10 +378,14 @@ func graphServerFailure(socket string, err error) error {
 	case graphclient.FailureUnanswered:
 		return graphServerSilent(socket)
 	case graphclient.FailureConflict:
-		// Contention, not a bad statement. It is worded here rather than by the
-		// direct path's helper because the direct path cannot reach it: one
-		// invocation runs one transaction, so there is nothing for it to collide
-		// with (SPEC/IMPLEMENTATION.md § Graph Store Concurrency).
+		// Contention, not a bad statement. It is worded here rather than by
+		// graphStatementError because it is not the statement's own failure:
+		// the statement is valid and the store healthy, and what it met was
+		// another client's transaction committing first
+		// (SPEC/GRAPH.md § Concurrency Inside the Server, which is canonical for
+		// the conflict now that every statement runs inside one server process;
+		// SPEC/IMPLEMENTATION.md § Transactional Model and Writer Serialisation
+		// for the retry policy it runs under).
 		return graphWriteConflict()
 	case graphclient.FailureBudget:
 		// The published budget line, produced by the one function that owns it.
@@ -341,8 +407,8 @@ func graphServerFailure(socket string, err error) error {
 
 // graphStatementBudget reads the statement time budget the served path reports.
 //
-// It is the SAME declaration the direct path reads and the same one the server
-// enforces (internal/graphserve builds its options from it), so a test that moves
-// the budget moves the message on every path together and the three can never
-// report different figures for one quantity.
+// It is the SAME declaration the server enforces (internal/graphserve builds its
+// options from it) and the same one the web graph data endpoint applies, so a
+// test that moves the budget moves the message on every surface together and the
+// three can never report different figures for one quantity.
 func graphStatementBudget() time.Duration { return graphlock.StatementBudget }

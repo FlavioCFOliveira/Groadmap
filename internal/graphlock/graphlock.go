@@ -14,11 +14,11 @@
 // There is exactly ONE lock file, `write.lock`, and SPEC/GRAPH.md § Concurrency
 // and Recovery now gives it exactly ONE mode:
 //
-//   - AcquireExclusive — for every `rmp graph execute` invocation. Held across
-//     the whole open, execution, commit, checkpoint, and write-ahead-log
-//     truncation sequence. An invocation that finds it held WAITS, under the
-//     project's bounded backoff policy, and fails only once that wait is
-//     exhausted.
+//   - AcquireExclusive — for every process that opens the store. Held across the
+//     whole open, execution, commit, checkpoint, and write-ahead-log truncation
+//     sequence; in `rmp graph serve` that is the life of the process. A caller
+//     that finds it held WAITS, under the project's bounded backoff policy, and
+//     fails only once that wait is exhausted.
 //
 // One mode, because there is one execution path. Groadmap does not examine a
 // statement, so it cannot learn from it whether the statement will write, and a
@@ -165,8 +165,9 @@ func WaitBudget() time.Duration { return StatementBudget + backoff.Total() }
 const LockFileName = "write.lock"
 
 // AcquireExclusive takes the graph store's advisory lock exclusively for the
-// duration of one `rmp graph execute` invocation, waiting a bounded time for a
-// current holder, and returns a closure that releases it.
+// life of the process that opens the store — which is now only `rmp graph serve`
+// — waiting a bounded time for a current holder, and returns a closure that
+// releases it.
 //
 // The caller MUST hold it across the whole open -> execute -> commit ->
 // checkpoint -> WAL-truncate sequence. Two invocations must NOT interleave those
@@ -205,11 +206,14 @@ const LockFileName = "write.lock"
 // come out of the graph data endpoint's own query budget (SPEC/WEB.md § Graph
 // Query Time Budget).
 //
-// Every holder that is not a long-lived server is bounded, and the wait rests on
-// that. Both surfaces run their statement under StatementBudget: the web graph
-// data endpoint (internal/web.runGraphViewQuery) and `rmp graph execute`
-// (internal/commands.runGraphExecute) alike, so a hold has a lawful maximum and
-// a contender is served (SPEC/GRAPH.md § Statement Time Budget). The CLI ran its
+// THE SET OF HOLDERS IS NOW ONE: a server, for its whole life. The two
+// short-lived holders this sizing was derived against are gone — the web graph
+// data endpoint no longer opens the store, and `rmp graph execute` is withdrawn
+// — so the wait no longer rests on a statement budget bounding the holder. What
+// it rests on is the outgoing server's drain plus its fixed tail. A residual is
+// known and deliberately written down rather than papered over: a server that
+// arrives at the START of a drain can need the drain budget plus that tail, which
+// exceeds this wait (SPEC/GRAPH.md § Lock Contention). The CLI ran its
 // statement under context.Background() until rmp task #377, which is what made
 // the sizing above asymmetric: it was sound against a web holder and vacuous
 // against a CLI one.
@@ -256,23 +260,23 @@ func AcquireExclusive(graphDir string) (func(), error) {
 		// Close before returning: the handle must not leak on the contention
 		// path.
 		_ = f.Close()
-		// The line does NOT name a holder, because nothing here knows one. The
-		// old wording said "another invocation still holds it", which is the one
-		// holder the doc comment above has already excluded: a bounded wait is
-		// sized against the maximum lawful hold, and a server has none. The two
-		// statements contradicted each other inside one function, and they imply
-		// OPPOSITE remedies -- an invocation releases shortly so retrying works,
-		// a server holds for its lifetime so retrying never will.
+		// The message states the fact and stops there. It used to carry a remedy
+		// naming two possible holders and the opposite actions each called for,
+		// and that whole paragraph was a published line of the error table
+		// `rmp graph execute` had. Both the subcommand and its table are gone,
+		// so there is no section left to name for the old wording. No caller
+		// takes this lock any more, so the only thing that can be holding it is
+		// another `rmp graph serve`, and the one line the specification now
+		// publishes for an exhausted wait is the one internal/graphserve words
+		// from ErrBusy
+		// (SPEC/COMMANDS.md § Graph Server Socket Error Lines, the store-lock
+		// line; SPEC/GRAPH.md § Lock Contention, rules 2 and 3).
 		//
-		// Probing for a server was rejected rather than overlooked: a server can
-		// start or stop between the probe and the print, so the line would assert
-		// a holder it cannot know it still has, and the web graph endpoint reaches
-		// this same lock with no socket flag to probe with
-		// (SPEC/GRAPH.md § Lock Contention, rule 3).
-		return nil, fmt.Errorf("%w: %w: still held when the bounded wait was "+
-			"exhausted, and nothing records the holder. Another rmp invocation releases it "+
-			"shortly, so run the statement again; an rmp graph serve holds it for its whole "+
-			"lifetime, so reach that server with --socket, or stop it.", utils.ErrGraphStore, ErrBusy)
+		// It still names no holder, because nothing here knows one: the lock is
+		// advisory and records no owner, and probing for a server would assert a
+		// holder that can start or stop between the probe and the print.
+		return nil, fmt.Errorf("%w: %w: still held when the bounded wait was exhausted",
+			utils.ErrGraphStore, ErrBusy)
 	}
 	return release, nil
 }

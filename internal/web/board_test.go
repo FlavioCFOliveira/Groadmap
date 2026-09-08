@@ -346,7 +346,7 @@ func cardSlice(t *testing.T, column string, taskID int) string {
 // model. The enum itself is pinned against the SPEC's five values first, so a
 // change to the model cannot silently redefine what this test asserts.
 func TestTaskBoard_RendersFiveFixedColumnsFromTheEnum(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	t.Setenv("HOME", shortHome(t))
 
 	want := []models.TaskStatus{
 		models.StatusBacklog,
@@ -406,7 +406,7 @@ func TestTaskBoard_RendersFiveFixedColumnsFromTheEnum(t *testing.T) {
 // the column of its own status, and the five column counts sum to the roadmap's
 // task count.
 func TestTaskBoard_PlacesEveryTaskOnceInItsStatusColumn(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	t.Setenv("HOME", shortHome(t))
 	f := seedBoardFixture(t, "payment-platform")
 	mux := buildMux()
 
@@ -451,7 +451,7 @@ func TestTaskBoard_PlacesEveryTaskOnceInItsStatusColumn(t *testing.T) {
 // 83: the badge on a column header carries the number of tasks in that column,
 // which equals the number of cards rendered in it, and an empty column shows 0.
 func TestTaskBoard_ColumnCountMatchesItsCards(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	t.Setenv("HOME", shortHome(t))
 	f := seedBoardFixture(t, "payment-platform")
 	mux := buildMux()
 
@@ -498,7 +498,7 @@ func TestTaskBoard_ColumnCountMatchesItsCards(t *testing.T) {
 // created_at order; both alternatives are asserted to be DIFFERENT sequences
 // here, so the test cannot pass against a board that preserved the wrong one.
 func TestTaskBoard_CardOrderIsPriorityThenCreatedAt(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	t.Setenv("HOME", shortHome(t))
 	f := seedBoardFixture(t, "payment-platform")
 	mux := buildMux()
 
@@ -545,7 +545,7 @@ func TestTaskBoard_CardOrderIsPriorityThenCreatedAt(t *testing.T) {
 // task actually has — and it shows no status badge, because the column already
 // states the status.
 func TestTaskBoard_CardContent(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	t.Setenv("HOME", shortHome(t))
 	f := seedBoardFixture(t, "payment-platform")
 	mux := buildMux()
 
@@ -702,7 +702,7 @@ func spanWithRole(t *testing.T, html, role string) string {
 // value is absent, empty, or zero renders nothing at all — no dash and no
 // placeholder — and a task with none of the five renders no metadata footer.
 func TestTaskBoard_AbsentMetadataRendersNothing(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	t.Setenv("HOME", shortHome(t))
 	f := seedBoardFixture(t, "payment-platform")
 	mux := buildMux()
 
@@ -750,7 +750,7 @@ func TestTaskBoard_AbsentMetadataRendersNothing(t *testing.T) {
 // "Sprint #<id>", as plain text and not as a link, exactly once and never as a
 // list; the card of a task that belongs to no sprint names none at all.
 func TestTaskBoard_SprintIndicator(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	t.Setenv("HOME", shortHome(t))
 	f := seedBoardFixture(t, "payment-platform")
 	mux := buildMux()
 
@@ -805,7 +805,7 @@ func TestTaskBoard_SprintIndicator(t *testing.T) {
 // carries the same keyboard and ARIA treatment as the sprint page's clickable
 // task rows, and the board itself offers no control that changes anything.
 func TestTaskBoard_CardOpensTheReadOnlyModal(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	t.Setenv("HOME", shortHome(t))
 	f := seedBoardFixture(t, "payment-platform")
 	mux := buildMux()
 
@@ -902,7 +902,7 @@ func statusIndex(t *testing.T, status models.TaskStatus) int {
 // all five columns present, each showing that empty state — never a page-level
 // empty state in place of the board, and never a dropped column.
 func TestTaskBoard_EmptyStates(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	t.Setenv("HOME", shortHome(t))
 	f := seedBoardFixture(t, "payment-platform")
 	if err := createEmptyRoadmap("payment-platform-empty"); err != nil {
 		t.Fatalf("creating the empty roadmap: %v", err)
@@ -983,7 +983,7 @@ func TestTaskBoard_EmptyStates(t *testing.T) {
 // most of the card's classes and icons never reach it. This test runs the same
 // check over a board where every indicator is present.
 func TestTaskBoard_MarkupObeysTheRulesInForce(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	t.Setenv("HOME", shortHome(t))
 	f := seedBoardFixture(t, "payment-platform")
 	mux := buildMux()
 
@@ -1050,7 +1050,7 @@ func TestTaskBoard_MarkupObeysTheRulesInForce(t *testing.T) {
 // It measures on the same counting source Acceptance Criterion 70 is measured
 // with, so the two counts are taken on one instrument rather than two.
 func TestTasksPage_IssuesThreeReadsAndNoneMore(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	t.Setenv("HOME", shortHome(t))
 
 	// A board with tasks spread over two sprints and five columns.
 	f := seedBoardFixture(t, "payment-platform")
@@ -1226,7 +1226,7 @@ func equalIDs(a, b []int) bool {
 // The seed is deliberately larger than the cap, and larger by an amount that
 // spreads across several columns, so a truncated read cannot pass by accident.
 func TestTaskBoard_ReadsEveryTaskBeyondTheListingLimit(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	t.Setenv("HOME", shortHome(t))
 
 	const (
 		name  = "settlement-platform"

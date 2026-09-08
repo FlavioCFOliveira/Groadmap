@@ -133,3 +133,35 @@ func sweepStaleHomes(root string, now time.Time) {
 		_ = os.RemoveAll(filepath.Join(root, entry.Name()))
 	}
 }
+
+// ShortHome creates a fresh, private home directory whose path is short enough
+// that a roadmap's socket path derived under it can be bound, and returns it with
+// a function that removes it.
+//
+// It is the per-test companion to HermeticHome, and it exists because of a bound
+// that has nothing to do with home directories. A Unix domain socket path must
+// fit in the kernel's fixed-size sun_path field — 107 bytes on Linux and Windows,
+// 103 on macOS, FreeBSD and OpenBSD — and rmp derives a roadmap's socket as
+// <home>/.roadmaps/<name>/graph.sock. t.TempDir names its directory after the
+// TEST, so a descriptive test name spends dozens of those bytes on itself: a test
+// called TestGraphExecute_BudgetIsTheSharedDeclaration yields a 117-byte derived
+// path, and an over-long resolved socket path is refused by every surface at once
+// (SPEC/GRAPH.md § Socket Path Length, rules 5 and 6).
+//
+// Two things make that worth a helper. The failure belongs to the harness and
+// reads as a defect in the code under test; and whether a test meets it depends
+// on how long its own name happens to be, so renaming an unrelated test can break
+// one. Naming the directory here rather than after the test removes the
+// dependency altogether: the prefix is two characters, the rest is the temporary
+// directory's own, and the derived path's length is then decided by the roadmap
+// name alone.
+//
+// It takes no *testing.T because no non-test file in this package imports
+// "testing"; a caller wires the two return values into t.Setenv and t.Cleanup.
+func ShortHome() (home string, remove func(), err error) {
+	home, err = os.MkdirTemp("", "gr")
+	if err != nil {
+		return "", nil, fmt.Errorf("testenv: creating a short HOME: %w", err)
+	}
+	return home, func() { _ = os.RemoveAll(home) }, nil
+}

@@ -278,7 +278,7 @@ const densityMembers = 5
 func setupDensityRoadmap(t *testing.T, name string) *densityFixture {
 	t.Helper()
 
-	t.Setenv("HOME", t.TempDir())
+	t.Setenv("HOME", shortHome(t))
 
 	database, cleanup := setupTestTaskRoadmap(t, name)
 	t.Cleanup(cleanup)

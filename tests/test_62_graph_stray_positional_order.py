@@ -3,36 +3,51 @@
 Test 62: where the `graph` family's stray-positional refusal lands in the
 subcommand's order, measured against the compiled ./bin/rmp (rmp task #291).
 
-SPEC/GRAPH.md § No Positional Query: A Stray Token Is Refused is canonical. Rule
-5 of that section places the refusal precisely, and acceptance criterion 59
-requires the placement to be MEASURED rather than reasoned about:
+SPEC/GRAPH.md § No Positional Query: A Stray Token Is Refused is canonical, and
+acceptance criterion 59 requires the placement to be MEASURED rather than
+reasoned about. `rmp graph execute` is withdrawn, so the subcommand that
+publishes this refusal is `rmp graph client`, and the order its published exit
+codes describe is:
 
-    roadmap selection
-      -> THE REFUSAL
-        -> the graph store is opened
-        -> standard input is read
-        -> the maximum-length check
-        -> the guard rail and the two content rules
+    roadmap selection                            (exit 3)
+      -> --socket given with an empty value      (exit 2)
+        -> THE REFUSAL                           (exit 2)
+          -> standard input is read
+          -> the maximum-length check            (exit 6)
+          -> the roadmap's existence             (exit 4)
+          -> the socket, and the server behind it (exit 1)
+            -> the engine, inside that server    (exit 1)
 
-Each neighbour in that order carries a DIFFERENT exit code, which is what makes
-the placement observable from outside the process at all:
+Each neighbour carries a DIFFERENT exit code, or a different published line at
+the same code, which is what makes the placement observable from outside the
+process at all:
 
     exit 3   no roadmap named and none selected      (precedes the refusal)
+    exit 2   --socket with an empty value            (precedes the refusal)
     exit 2   the refusal itself
     exit 4   the roadmap named does not exist        (follows it)
-    exit 6   the query is of the wrong class         (follows it)
+    exit 6   the statement is longer than the maximum (follows it)
+    exit 1   no server is listening for the roadmap  (follows it)
+    exit 1   the server's engine refused the statement (follows it)
 
 Every case below therefore drives an invocation that carries BOTH the stray
 token and a second fault, and asserts which of the two verdicts comes out. A
 control invocation proves the second fault really does produce its own verdict
 on its own, so each assertion distinguishes two live outcomes rather than one.
 
-Standard input is the fourth neighbour and needs a different instrument: there
-is no exit code for "the stream was read", so the case drives a producer that
-keeps writing and measures how much the command consumed before exiting. The
-SPEC notes why the neighbouring maximum-length check is exercised in that form
-too: a `--query` value above 1 MiB cannot reach the binary through a shell on
-Linux, where MAX_ARG_STRLEN caps a single argument at 128 KiB, so the
+The last two neighbours are what replaced "the graph store is opened". No
+subcommand opens a store any more: `graph client` sends the statement to a
+running `graph serve` and fails when none answers (SPEC/GRAPH.md § The Bolt
+Client), so the strongest reachable ordering is that the refusal precedes the
+SOCKET -- measured twice, once against a roadmap nothing is serving and once
+against a statement a live server's engine would refuse.
+
+Standard input is another neighbour and needs a different instrument: there is
+no exit code for "the stream was read", so the case drives a producer that keeps
+writing and measures how much the command consumed before exiting. The SPEC
+notes why the neighbouring maximum-length check is exercised in that form too: a
+`--query` value above 1 MiB cannot reach the binary through a shell on Linux,
+where MAX_ARG_STRLEN caps a single argument at 128 KiB, so the
 stray-beats-the-limit ordering is written as a standard-input case.
 
 What every case asserts, beyond the exit code:
@@ -44,15 +59,21 @@ What every case asserts, beyond the exit code:
   * the roadmap's `graph/` directory -- its snapshot directory and its
     write-ahead log -- is byte-identical before and after. This is the half that
     makes the module about the ordering rather than about the message: a refusal
-    that had moved to AFTER the store open would still exit 2 and would still
-    print the right line, and only the bytes on disk would say so.
+    that had moved to AFTER the statement was sent would still exit 2 and would
+    still print the right line, and only the bytes on disk would say so. The
+    directory exists, and holds a real seeded graph, because a server was
+    started for it in setup: `graph serve` is the only thing that creates a
+    graph store, so without one the fingerprint would be an empty dict and every
+    comparison of it vacuous.
 
 The module also carries the end-to-end half of acceptance criteria 57, 58 and
-28. The lines every statement class produces are compared against each other and against the
-CANONICAL line plus this family's HINT, and the comment subcommands' line is
-compared against that same canonical line without the hint. The two constants
-below are written once and every expectation is derived from them, so no
-expectation in this file is a second copy of the other family's wording.
+28. The lines every statement class produces are compared against each other and
+against the CANONICAL line plus this family's HINT; the comment subcommands'
+line is compared against that same canonical line without the hint; and so is
+`graph serve`'s, which is the family's own second subcommand and does NOT
+publish the hint. The two constants below are written once and every expectation
+is derived from them, so no expectation in this file is a second copy of another
+subcommand's wording.
 """
 
 import hashlib
@@ -68,7 +89,7 @@ from tests.base_test import GroadmapTestBase
 
 
 EXIT_OK = 0
-EXIT_DATABASE = 1
+EXIT_SERVER_OR_ENGINE = 1
 EXIT_MISUSE = 2
 EXIT_NO_ROADMAP = 3
 EXIT_NOT_FOUND = 4
@@ -76,12 +97,12 @@ EXIT_VALIDATION = 6
 
 # The refusal, in the two pieces SPEC/GRAPH.md acceptance criterion 28 names:
 # the line SPEC/COMMANDS.md § Positional Arguments publishes for the WHOLE CLI,
-# and the hint the `graph` family appends to it. Neither family's line is
-# written out anywhere below; both are DERIVED from these two, so the
+# and the hint `graph client` appends to it. No other subcommand's line is
+# written out anywhere below; all of them are DERIVED from these two, so the
 # relationship between them is what this module asserts and a change to either
 # has to be made here, once, in the open.
 CANONICAL_REFUSAL = 'Error: invalid input: unexpected argument "{token}"'
-GRAPH_HINT = " (graph queries use --query or stdin)"
+GRAPH_CLIENT_HINT = " (graph queries use --query or stdin)"
 
 # The AI-agent hint that closes stderr on every failing invocation
 # (SPEC/HELP.md § Stderr part order, part 4).
@@ -91,6 +112,12 @@ AI_HINT = "AI agents: run `rmp --ai-help` for a machine-readable command contrac
 # (SPEC/COMMANDS.md; the angle brackets are literal characters the binary
 # prints, not placeholders).
 NO_ROADMAP_LINE = "Error: no roadmap selected: use -r <name> or --roadmap <name>"
+
+# The refusal for `--socket` written with an empty value. It is the OTHER exit-2
+# verdict `graph client` can reach, and it is settled before the tokens are
+# examined, so it is the one check at the refusal's own exit code that still
+# precedes it.
+EMPTY_SOCKET_LINE = "Error: required parameter missing: --socket"
 
 # The offending token every case supplies. A plausible report name a caller
 # might really append by mistake, carrying no character any parser treats
@@ -109,35 +136,60 @@ NO_WAIT_BUDGET_SECONDS = 30.0
 # anything at or below this ceiling proves the read never happened.
 UNREAD_PIPE_CEILING_BYTES = 512 * 1024
 
+# The ceiling on any single invocation this module drives. Every one of them is
+# expected to refuse and exit at once; `graph serve` is the reason the bound is
+# written down rather than left off, because a regression that let it past its
+# argument check would start a long-lived server and hang the run instead of
+# failing it.
+INVOCATION_TIMEOUT_SECONDS = 30.0
+
 
 def canonical_line(token):
     """The refusal SPEC/COMMANDS.md § Positional Arguments publishes CLI-wide."""
     return CANONICAL_REFUSAL.format(token=token)
 
 
-def graph_line(token):
-    """The `graph` family's line: the canonical line with this family's hint."""
-    return canonical_line(token) + GRAPH_HINT
+def client_line(token):
+    """`graph client`'s line: the canonical line with its hint.
+
+    It is the only line in the CLI that carries this hint. `graph client` reads
+    a statement from `--query` and from standard input, so the hint names the
+    two sources a caller should have used (SPEC/COMMANDS.md § Client Error
+    Cases, the stray-positional row).
+    """
+    return canonical_line(token) + GRAPH_CLIENT_HINT
+
+
+def serve_line(token):
+    """`graph serve`'s line: the canonical line, without a hint.
+
+    `graph serve` runs no statement and reads none, so the hint naming the two
+    sources of a Cypher statement would be false on it. It declares an arity of
+    zero and is refused by the shared enforcement point (SPEC/COMMANDS.md
+    § Positional Arguments).
+    """
+    return canonical_line(token)
 
 
 def comment_line(token):
     """The comment subcommands' line: the canonical line, without a hint.
 
     A comment body comes from `--body` or from standard input and never from
-    `--query`, so the `graph` family's hint would be false here
+    `--query`, so `graph client`'s hint would be false here as well
     (SPEC/COMMANDS.md § Comment Positional Argument Contract, "The other family
     that publishes this refusal").
     """
     return canonical_line(token)
 
 
-# `rmp graph` has one subcommand, `execute`
-# (SPEC/COMMANDS.md section "Graph Management"). This table used to hold the
-# five it had, each paired with a query of its own operation class; what it
-# varies now is the STATEMENT CLASS, because that is the only dimension left and
-# because the refusal must not depend on it. Every entry would SUCCEED were the
-# stray token removed, and the statements act on different nodes of the same
-# seeded graph so the controls do not undo one another.
+# `rmp graph` has two subcommands, `serve` and `client`, and `client` is the one
+# that runs a statement (SPEC/COMMANDS.md section "Graph Management"). This table
+# varies the STATEMENT CLASS, because that is the dimension the refusal must not
+# depend on: `client` holds no opinion about what a statement does, so its
+# refusal of a stray token must not vary with the statement either. Every entry
+# would SUCCEED were the stray token removed, and the statements act on
+# different nodes of the same seeded graph so the controls do not undo one
+# another.
 ENGINE_REFUSED_QUERY = "MATCH (n:Spec RETURN n"
 
 GRAPH_STATEMENT_CLASSES = [
@@ -162,10 +214,17 @@ def stderr_parts(stderr):
 
 
 class GraphStrayBase:
-    """Fixture shared by every class in the module: one roadmap with a real
-    graph, and the helpers that drive the binary and fingerprint the store."""
+    """Fixture shared by every class in the module.
+
+    One roadmap with a REAL graph -- created by starting a server for it, which
+    is the only thing that creates one -- seeded through the client that server
+    answers; one further roadmap deliberately left UNSERVED, so the ordering
+    against the socket has a live neighbour to be measured against; and the
+    helpers that drive the binary and fingerprint the store.
+    """
 
     ROADMAP = "settlement-platform"
+    UNSERVED_ROADMAP = "treasury-reporting"
 
     SEED_QUERIES = [
         "CREATE (:Spec {key:'payment-capture'})-[:DEPENDS_ON]->(:Spec {key:'ledger-posting'})",
@@ -175,9 +234,17 @@ class GraphStrayBase:
     def setup_method(self):
         self.test = GroadmapTestBase()
         self.test.setup()
-        self.roadmap = self.test.create_roadmap(self.ROADMAP)
-        for query in self.SEED_QUERIES:
-            self.test.run_cmd(["graph", "execute", "-r", self.roadmap, "--query", query])
+        # served_roadmap creates the roadmap, starts the server (which creates
+        # ~/.roadmaps/<name>/graph/ and serves it empty) and then runs the seeds
+        # through `graph client`. The order is not a convenience: nothing but a
+        # server creates a graph store, so a seed sent before one is listening
+        # has nowhere to go.
+        self.server = self.test.served_roadmap(self.ROADMAP, *self.SEED_QUERIES)
+        self.roadmap = self.ROADMAP
+        # A second roadmap, real but unserved. `graph client` against it exits 1
+        # with the no-server line, which is the neighbour the refusal is shown
+        # to precede.
+        self.unserved = self.test.create_roadmap(self.UNSERVED_ROADMAP)
 
     def teardown_method(self):
         self.test.teardown()
@@ -190,11 +257,17 @@ class GraphStrayBase:
         return env
 
     def run(self, args):
-        """Run the binary with standard input closed.
+        """Run the binary with standard input closed, under a bound.
 
         DEVNULL rather than an inherited stream: a case here must never be able
         to block on the terminal the suite happens to run under, and the one
         case that is ABOUT standard input opens its own pipe instead.
+
+        The timeout matters most for `graph serve`, which this module drives for
+        its stray-token refusal. Every invocation here is expected to be refused
+        during argument parsing; a regression that let `graph serve` through
+        would bind a socket and run until it was signalled, so the bound turns
+        that into a failed test rather than a hung suite.
         """
         result = subprocess.run(
             [self.test.cli_path] + args,
@@ -202,6 +275,7 @@ class GraphStrayBase:
             capture_output=True,
             text=True,
             env=self.env(),
+            timeout=INVOCATION_TIMEOUT_SECONDS,
         )
         return result.returncode, result.stdout, result.stderr
 
@@ -217,6 +291,14 @@ class GraphStrayBase:
         that rewrote a snapshot with identical bytes would be a checkpoint that
         changed nothing. Relative paths are included so a file appearing or
         disappearing is caught as well as one changing.
+
+        The directory is never empty here. The fixture's server created it and
+        the seeds wrote into it, which is what makes a comparison of two
+        fingerprints an assertion rather than a comparison of two empty dicts.
+        Nothing else moves it while a case runs: the server's in-flight
+        checkpointer runs on a 75-second interval (internal/graphserve,
+        productionCadence), far longer than any case here, and the socket itself
+        lives beside this directory rather than inside it.
         """
         root = self.graph_dir()
         prints = {}
@@ -230,12 +312,17 @@ class GraphStrayBase:
 
     def assert_store_untouched(self, before, label):
         after = self.graph_fingerprint()
+        assert before, (
+            f"{label}: the fixture's graph/ directory is empty, so this comparison would "
+            f"pass whatever the invocation did. A server must have been started for "
+            f"{self.roadmap!r} and the seeds must have run through it.")
         assert after == before, (
             f"{label}: the roadmap's graph/ directory changed across a refused invocation.\n"
             f"  before: {before}\n"
             f"  after:  {after}\n"
-            f"A refused invocation opens no store: it creates, changes and deletes nothing, and "
-            f"leaves the snapshot directory and the write-ahead log exactly as they were.")
+            f"A refused invocation sends nothing to a server: it creates, changes and deletes "
+            f"nothing, and leaves the snapshot directory and the write-ahead log exactly as "
+            f"they were.")
 
     def assert_refused_cleanly(self, code, stdout, stderr, want_code, want_line, label):
         """The whole contract of a refused invocation, in one place."""
@@ -272,7 +359,7 @@ class TestGraphStrayRefusalOrder(GraphStrayBase):
         """The control for the case below: without the stray token, a roadmap
         that does not exist really is an exit-4 verdict."""
         code, stdout, stderr = self.run(
-            ["graph", "execute", "-r", "roadmap-that-does-not-exist",
+            ["graph", "client", "-r", "roadmap-that-does-not-exist",
              "--query", "MATCH (s:Spec) RETURN s.key"])
         assert code == EXIT_NOT_FOUND, (
             f"a missing roadmap alone exits {code}, want {EXIT_NOT_FOUND}; the ordering case below "
@@ -280,17 +367,17 @@ class TestGraphStrayRefusalOrder(GraphStrayBase):
         assert stdout == ""
 
     def test_a_stray_beats_a_roadmap_that_does_not_exist(self):
-        """The refusal precedes opening the graph store, so exit 2 and not 4."""
+        """The refusal precedes resolving the roadmap, so exit 2 and not 4."""
         before = self.graph_fingerprint()
         code, stdout, stderr = self.run(
-            ["graph", "execute", STRAY, "-r", "roadmap-that-does-not-exist",
+            ["graph", "client", STRAY, "-r", "roadmap-that-does-not-exist",
              "--query", "MATCH (s:Spec) RETURN s.key"])
 
         self.assert_refused_cleanly(
-            code, stdout, stderr, EXIT_MISUSE, graph_line(STRAY),
+            code, stdout, stderr, EXIT_MISUSE, client_line(STRAY),
             "a stray token on a roadmap that does not exist")
         assert code != EXIT_NOT_FOUND, (
-            "exit 4 means the store open ran first; the refusal must precede it")
+            "exit 4 means the roadmap was resolved first; the refusal must precede it")
         assert not (self.test.home_dir / ".roadmaps" / "roadmap-that-does-not-exist").exists(), (
             "a refused invocation created the roadmap directory it named")
         self.assert_store_untouched(before, "a stray token on a roadmap that does not exist")
@@ -304,51 +391,128 @@ class TestGraphStrayRefusalOrder(GraphStrayBase):
         roadmaps_before = sorted(os.listdir(self.test.home_dir / ".roadmaps"))
 
         code, stdout, stderr = self.run(
-            ["graph", "execute", STRAY, "--query", "MATCH (s:Spec) RETURN s.key"])
+            ["graph", "client", STRAY, "--query", "MATCH (s:Spec) RETURN s.key"])
 
         self.assert_refused_cleanly(
             code, stdout, stderr, EXIT_NO_ROADMAP, NO_ROADMAP_LINE,
             "a stray token with no roadmap named and none selected")
-        assert graph_line(STRAY) not in stderr, (
+        assert client_line(STRAY) not in stderr, (
             f"the stray-token refusal was reported instead of the roadmap one: {stderr!r}; "
             f"roadmap selection runs first, so its verdict is the one the caller reads")
         assert sorted(os.listdir(self.test.home_dir / ".roadmaps")) == roadmaps_before, (
             "a refused invocation changed the set of roadmaps")
         self.assert_store_untouched(before, "a stray token with no roadmap selected")
 
+    def test_an_empty_socket_value_precedes_the_refusal(self):
+        """The second check that comes first, and the only one that shares the
+        refusal's own exit code.
+
+        `--socket ""` names no socket at all, which is a MISSING parameter and
+        exits 2 -- exactly what the stray token exits. Nothing but the wording
+        separates the two verdicts, so this is the neighbour an assertion on the
+        exit code alone cannot place, and the one that would go unnoticed if the
+        flag check were ever moved after the token scan.
+        """
+        before = self.graph_fingerprint()
+
+        # The control: the empty value alone really does produce this verdict.
+        code, stdout, stderr = self.run(
+            ["graph", "client", "-r", self.roadmap, "--socket", "",
+             "--query", "MATCH (s:Spec) RETURN s.key"])
+        self.assert_refused_cleanly(
+            code, stdout, stderr, EXIT_MISUSE, EMPTY_SOCKET_LINE,
+            "--socket with an empty value, alone")
+
+        # And beside a stray token, it is still the verdict the caller reads.
+        code, stdout, stderr = self.run(
+            ["graph", "client", "-r", self.roadmap, "--socket", "",
+             "--query", "MATCH (s:Spec) RETURN s.key", STRAY])
+        self.assert_refused_cleanly(
+            code, stdout, stderr, EXIT_MISUSE, EMPTY_SOCKET_LINE,
+            "--socket with an empty value beside a stray token")
+        assert GRAPH_CLIENT_HINT not in stderr, (
+            f"the stray-token refusal was reported instead of the socket one: {stderr!r}; "
+            f"the flags are settled before the remaining tokens are examined")
+        self.assert_store_untouched(before, "--socket with an empty value beside a stray token")
+
+    def test_a_roadmap_nobody_is_serving_alone_exits_one(self):
+        """The control for the case below: without the stray token, a roadmap
+        with no server listening really is an exit-1 verdict, and it names the
+        socket nothing answered on."""
+        socket = self.test.default_socket_path(self.unserved)
+        code, stdout, stderr = self.run(
+            ["graph", "client", "-r", self.unserved, "--query", "MATCH (s:Spec) RETURN s.key"])
+        assert code == EXIT_SERVER_OR_ENGINE, (
+            f"an unserved roadmap alone exits {code}, want {EXIT_SERVER_OR_ENGINE}; "
+            f"stderr={stderr!r}")
+        assert stdout == ""
+        assert stderr_parts(stderr)[0] == (
+            f"Error: graph server error: no graph server is listening on {socket}"), (
+            f"the no-server line must name the socket that was resolved; got {stderr!r}")
+
+    def test_a_stray_beats_a_roadmap_nobody_is_serving(self):
+        """The refusal precedes the socket being resolved and probed, so exit 2
+        and not the 1 a roadmap with no server carries.
+
+        This is one half of what replaced "the refusal precedes the graph store
+        being opened". No subcommand opens a store any more, so the check the
+        refusal must be shown to precede is the SOCKET.
+        """
+        socket = self.test.default_socket_path(self.unserved)
+        code, stdout, stderr = self.run(
+            ["graph", "client", "-r", self.unserved,
+             "--query", "MATCH (s:Spec) RETURN s.key", STRAY])
+
+        self.assert_refused_cleanly(
+            code, stdout, stderr, EXIT_MISUSE, client_line(STRAY),
+            "a stray token on a roadmap nobody is serving")
+        assert code != EXIT_SERVER_OR_ENGINE, (
+            "exit 1 means the socket was resolved and probed; the refusal must precede that")
+        assert socket not in stderr, (
+            f"the socket was named, so it was resolved before the token scan: {stderr!r}")
+        assert not os.path.exists(socket), (
+            "a refused invocation created a socket file")
+
     def test_a_statement_the_engine_refuses_alone_exits_one(self):
         """The control for the case below: without the stray token, this
-        statement really does reach the engine and fail there.
+        statement really does reach the running server's engine and fail there.
 
         This pair used to be written with a query of the WRONG OPERATION CLASS,
-        whose verdict was exit 6 from the guard rail. There is no operation
-        class and no guard rail (SPEC/COMMANDS.md section "Graph Management"),
-        so the check the stray token must be shown to precede is the ENGINE
-        itself -- which is the stronger of the two orderings anyway, because
-        reaching the engine means the store was opened.
+        whose verdict was exit 6 from a guard rail. There is no operation class
+        and no guard rail (SPEC/COMMANDS.md section "Graph Management"), so the
+        check the stray token must be shown to precede is the ENGINE itself --
+        which is the stronger of the two socket orderings, because reaching the
+        engine means the statement crossed the socket and was executed by a
+        server.
         """
         before = self.graph_fingerprint()
         code, stdout, stderr = self.run(
-            ["graph", "execute", "-r", self.roadmap, "--query", ENGINE_REFUSED_QUERY])
-        assert code == EXIT_DATABASE, (
-            f"an unparseable statement alone exits {code}, want {EXIT_DATABASE}; "
+            ["graph", "client", "-r", self.roadmap, "--query", ENGINE_REFUSED_QUERY])
+        assert code == EXIT_SERVER_OR_ENGINE, (
+            f"an unparseable statement alone exits {code}, want {EXIT_SERVER_OR_ENGINE}; "
             f"stderr={stderr!r}")
         assert stdout == ""
+        assert "graph engine error" in stderr, (
+            f"the control must fail IN THE ENGINE, not before reaching it, or it does not "
+            f"establish the neighbour it is the control for; got {stderr!r}")
         self.assert_store_untouched(before, "an unparseable statement alone")
 
     def test_a_stray_beats_a_statement_the_engine_would_refuse(self):
-        """Criterion 27: the refusal precedes the graph store being opened, so
-        exit 2 and not the 1 the engine's own refusal carries."""
+        """Criterion 27: the refusal precedes the statement being sent to the
+        server at all, so exit 2 and not the 1 the engine's own refusal carries.
+        """
         before = self.graph_fingerprint()
         code, stdout, stderr = self.run(
-            ["graph", "execute", "-r", self.roadmap, "--query", ENGINE_REFUSED_QUERY, STRAY])
+            ["graph", "client", "-r", self.roadmap, "--query", ENGINE_REFUSED_QUERY, STRAY])
 
         self.assert_refused_cleanly(
-            code, stdout, stderr, EXIT_MISUSE, graph_line(STRAY),
+            code, stdout, stderr, EXIT_MISUSE, client_line(STRAY),
             "a stray token beside a statement the engine would refuse")
-        assert code != EXIT_DATABASE, (
-            "exit 1 means the statement reached the engine, so the store was opened; "
+        assert code != EXIT_SERVER_OR_ENGINE, (
+            "exit 1 means the statement crossed the socket and reached the engine; "
             "the refusal must precede that")
+        assert "graph engine error" not in stderr, (
+            f"the engine answered, so the statement was sent: {stderr!r}")
         self.assert_store_untouched(before, "a stray token beside an unparseable statement")
 
     def test_a_stray_refuses_before_standard_input_is_read(self):
@@ -374,7 +538,7 @@ class TestGraphStrayRefusalOrder(GraphStrayBase):
 
         started = time.time()
         proc = subprocess.Popen(
-            [self.test.cli_path, "graph", "execute", "-r", self.roadmap, STRAY],
+            [self.test.cli_path, "graph", "client", "-r", self.roadmap, STRAY],
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
             env=self.env(),
         )
@@ -408,7 +572,7 @@ class TestGraphStrayRefusalOrder(GraphStrayBase):
         elapsed = time.time() - started
 
         self.assert_refused_cleanly(
-            proc.returncode, stdout, stderr, EXIT_MISUSE, graph_line(STRAY),
+            proc.returncode, stdout, stderr, EXIT_MISUSE, client_line(STRAY),
             "a stray token with a producer still writing to standard input")
         assert proc.returncode != EXIT_VALIDATION, (
             "exit 6 means the stream was read and measured against the maximum; the refusal must "
@@ -430,12 +594,13 @@ class TestGraphStrayRefusalWording(GraphStrayBase):
     directions."""
 
     def test_every_statement_class_would_succeed_without_the_stray_token(self):
-        """The control half of criterion 25. Each statement executes on its own,
-        so every refusal asserted below is caused by the stray token and not by
-        a statement that was going to fail anyway."""
+        """The control half of criterion 25. Each statement executes on its own
+        against the fixture's running server, so every refusal asserted below is
+        caused by the stray token and not by a statement that was going to fail
+        anyway."""
         for statement_class, query in GRAPH_STATEMENT_CLASSES:
             code, stdout, stderr = self.run(
-                ["graph", "execute", "-r", self.roadmap, "--query", query])
+                ["graph", "client", "-r", self.roadmap, "--query", query])
             assert code == EXIT_OK, (
                 f"a {statement_class} statement was refused: exit={code} "
                 f"stderr={stderr!r}")
@@ -445,16 +610,16 @@ class TestGraphStrayRefusalWording(GraphStrayBase):
     def test_every_statement_class_refuses_with_one_wording(self):
         """Criterion 25. The whole line, the parenthetical included, identical
         across the statement classes -- and the lines compared against EACH
-        OTHER, because `graph execute` holds no opinion about what a statement
+        OTHER, because `graph client` holds no opinion about what a statement
         does, so its refusal of a stray token must not vary with the statement
         either."""
         before = self.graph_fingerprint()
-        want = graph_line(STRAY)
+        want = client_line(STRAY)
         produced = {}
 
         for statement_class, query in GRAPH_STATEMENT_CLASSES:
             code, stdout, stderr = self.run(
-                ["graph", "execute", "-r", self.roadmap, "--query", query, STRAY])
+                ["graph", "client", "-r", self.roadmap, "--query", query, STRAY])
             self.assert_refused_cleanly(
                 code, stdout, stderr, EXIT_MISUSE, want, f"a {statement_class} statement")
             produced[statement_class] = stderr_parts(stderr)[0]
@@ -463,10 +628,10 @@ class TestGraphStrayRefusalWording(GraphStrayBase):
         for statement_class, line in produced.items():
             distinct.setdefault(line, []).append(statement_class)
         assert len(distinct) == 1, (
-            f"the family no longer has one wording; every statement class shares one argument "
+            f"the subcommand no longer has one wording; every statement class shares one argument "
             f"parser, so a divergence here is a divergence in that parser: {distinct!r}")
 
-        self.assert_store_untouched(before, "the five refusals")
+        self.assert_store_untouched(before, "the six refusals")
 
     def test_hyphen_prefixed_tokens_are_classified_in_both_directions(self):
         """Criterion 58. On this family a `-` followed by a digit or a decimal
@@ -485,14 +650,14 @@ class TestGraphStrayRefusalWording(GraphStrayBase):
         for statement_class, query in GRAPH_STATEMENT_CLASSES:
             for token in unexpected_tokens:
                 code, stdout, stderr = self.run(
-                    ["graph", "execute", "-r", self.roadmap, "--query", query, token])
+                    ["graph", "client", "-r", self.roadmap, "--query", query, token])
                 self.assert_refused_cleanly(
-                    code, stdout, stderr, EXIT_MISUSE, graph_line(token),
+                    code, stdout, stderr, EXIT_MISUSE, client_line(token),
                     f"a {statement_class} statement with the stray token {token!r}")
 
             for token in flag_tokens:
                 code, stdout, stderr = self.run(
-                    ["graph", "execute", "-r", self.roadmap, "--query", query, token])
+                    ["graph", "client", "-r", self.roadmap, "--query", query, token])
                 assert code == EXIT_MISUSE, (
                     f"a {statement_class} statement with {token}: exit={code}, want {EXIT_MISUSE}; stderr={stderr!r}")
                 assert stdout == ""
@@ -509,14 +674,14 @@ class TestGraphStrayRefusalWording(GraphStrayBase):
         the first positional argument ends the invocation, and the position of
         the stray on the command line does not change which one is named."""
         first, second = STRAY, "settlement-summary"
-        want = graph_line(first)
+        want = client_line(first)
 
         for statement_class, query in GRAPH_STATEMENT_CLASSES:
             layouts = [
                 ("both strays after the flags",
-                 ["graph", "execute", "-r", self.roadmap, "--query", query, first, second]),
+                 ["graph", "client", "-r", self.roadmap, "--query", query, first, second]),
                 ("the first stray written before the flags",
-                 ["graph", "execute", first, "-r", self.roadmap, "--query", query, second]),
+                 ["graph", "client", first, "-r", self.roadmap, "--query", query, second]),
             ]
             for label, args in layouts:
                 code, stdout, stderr = self.run(args)
@@ -528,14 +693,20 @@ class TestGraphStrayRefusalWording(GraphStrayBase):
 
 
 class TestGraphStrayRefusalAcrossFamilies(GraphStrayBase):
-    """Acceptance criterion 60 at binary level: one rule, two families.
+    """Acceptance criterion 60 at binary level: one rule, several subcommands.
 
-    The `graph` line and the comment line are both derived from CANONICAL_REFUSAL
-    in this module, so what is asserted below is the RELATION between them --
-    the `graph` line is the canonical CLI-wide line with this family's hint
-    appended, and the comment line is that same line without a hint. Nothing
-    here is a second literal copy of the other family's wording, which is what
-    the criterion forbids: two copies drift one at a time and nothing objects.
+    `graph client`'s line, `graph serve`'s line and the comment line are all
+    derived from CANONICAL_REFUSAL in this module, so what is asserted below is
+    the RELATION between them -- `graph client`'s line is the canonical CLI-wide
+    line with its hint appended, and the other two are that same line without a
+    hint. Nothing here is a second literal copy of another subcommand's wording,
+    which is what the criterion forbids: two copies drift one at a time and
+    nothing objects.
+
+    `graph serve` is the newest member of the comparison and the most valuable
+    one, because it is inside the same family as the subcommand that DOES carry
+    the hint: it runs no statement and reads none, so the hint naming the two
+    sources of a Cypher statement would be false on it.
     """
 
     def setup_method(self):
@@ -548,32 +719,65 @@ class TestGraphStrayRefusalAcrossFamilies(GraphStrayBase):
             "A deliberately unbalanced batch is reported within one run")
 
     def test_the_canonical_line_is_what_the_shared_enforcement_point_emits(self):
-        """The line the other two are measured against. `roadmap list` belongs
-        to neither family, so it reaches the shared enforcement point and emits
-        the CLI-wide wording unchanged."""
+        """The line the others are measured against. `roadmap list` belongs to
+        no family that publishes a refusal of its own, so it reaches the shared
+        enforcement point and emits the CLI-wide wording unchanged."""
         code, stdout, stderr = self.run(["roadmap", "list", STRAY])
         self.assert_refused_cleanly(
             code, stdout, stderr, EXIT_MISUSE, canonical_line(STRAY), "roadmap list")
 
-    def test_the_graph_line_is_the_canonical_line_plus_this_familys_hint(self):
+    def test_the_client_line_is_the_canonical_line_plus_its_hint(self):
         """One direction of the relation, measured on every statement class."""
         for statement_class, query in GRAPH_STATEMENT_CLASSES:
             code, stdout, stderr = self.run(
-                ["graph", "execute", "-r", self.roadmap, "--query", query, STRAY])
+                ["graph", "client", "-r", self.roadmap, "--query", query, STRAY])
             first = stderr_parts(stderr)[0]
             assert code == EXIT_MISUSE, f"a {statement_class} statement: exit={code}; stderr={stderr!r}"
-            assert first == canonical_line(STRAY) + GRAPH_HINT, (
-                f"a {statement_class} statement emits {first!r}; the canonical CLI-wide line plus this "
-                f"family's hint is {canonical_line(STRAY) + GRAPH_HINT!r}. The shared half of the "
-                f"two families' lines must stay shared character for character.")
+            assert first == canonical_line(STRAY) + GRAPH_CLIENT_HINT, (
+                f"a {statement_class} statement emits {first!r}; the canonical CLI-wide line plus "
+                f"this subcommand's hint is {canonical_line(STRAY) + GRAPH_CLIENT_HINT!r}. The "
+                f"shared half of these lines must stay shared character for character.")
             assert stdout == ""
 
-    def test_the_comment_line_is_that_same_line_without_a_hint(self):
-        """The reciprocal direction, so neither family can be edited alone.
+    def test_graph_serve_publishes_the_canonical_line_without_the_hint(self):
+        """The reciprocal direction INSIDE the graph family.
 
-        Without this half the module would pin the `graph` line and say nothing
-        about the family that shares its first half, which is exactly how two
-        copies come to be maintained separately.
+        `graph serve` declares an arity of zero and publishes no refusal of its
+        own, so the shared enforcement point refuses a positional argument on it
+        with the canonical line. The hint belongs to `graph client` alone: it
+        names --query and standard input, and `graph serve` accepts neither.
+
+        Both subcommands exit 2, so the difference is invisible to any assertion
+        that reads only the exit code, and an "alignment" of the two would pass
+        unnoticed without this half asserted. The token is also checked in the
+        position BEFORE the flags, because that is where a caller who typed the
+        roadmap name without -r would put it.
+        """
+        layouts = [
+            ("after the flags", ["graph", "serve", "-r", self.roadmap, STRAY]),
+            ("before the flags", ["graph", "serve", STRAY, "-r", self.roadmap]),
+        ]
+        for label, args in layouts:
+            code, stdout, stderr = self.run(args)
+            self.assert_refused_cleanly(
+                code, stdout, stderr, EXIT_MISUSE, serve_line(STRAY),
+                f"graph serve with a stray token {label}")
+            assert GRAPH_CLIENT_HINT not in stderr, (
+                f"graph serve ({label}) emits `graph client`'s hint {GRAPH_CLIENT_HINT!r}. The "
+                f"hint names the two sources of a Cypher statement; graph serve runs no "
+                f"statement and reads none, so the hint would be false here.")
+
+        # And the refusal really did stop the server: nothing was bound, and the
+        # roadmap's socket is still the one the fixture's own server holds.
+        assert self.server.is_alive(), (
+            "the fixture's server exited while `graph serve` was being refused")
+
+    def test_the_comment_line_is_that_same_line_without_a_hint(self):
+        """The other reciprocal direction, so neither family can be edited alone.
+
+        Without this half the module would pin `graph client`'s line and say
+        nothing about the family that shares its first half, which is exactly
+        how two copies come to be maintained separately.
         """
         subcommands = [
             (["task", "comment-add", "-r", self.roadmap, str(self.task_id), STRAY,
@@ -588,16 +792,17 @@ class TestGraphStrayRefusalAcrossFamilies(GraphStrayBase):
             assert first == comment_line(STRAY), (
                 f"rmp {' '.join(args)} emits {first!r}; the comment subcommands publish the "
                 f"canonical CLI-wide line unchanged: {comment_line(STRAY)!r}")
-            assert GRAPH_HINT not in first, (
-                f"rmp {' '.join(args)} emits the `graph` family's hint {GRAPH_HINT!r}. The hint "
-                f"names the two sources of a Cypher query; a comment body comes from --body or "
-                f"standard input and never from --query, so the hint would be false here.")
+            assert GRAPH_CLIENT_HINT not in first, (
+                f"rmp {' '.join(args)} emits `graph client`'s hint {GRAPH_CLIENT_HINT!r}. The "
+                f"hint names the two sources of a Cypher statement; a comment body comes from "
+                f"--body or standard input and never from --query, so the hint would be false "
+                f"here.")
             assert stdout == ""
 
     def test_the_comment_subcommands_classify_minus_one_as_a_flag(self):
-        """The one point on which the two families deliberately disagree about
-        the SAME token. On a comment subcommand `-1` is an unknown flag; on a
-        `graph` subcommand it is an unexpected argument
+        """The one point on which two families deliberately disagree about the
+        SAME token. On a comment subcommand `-1` is an unknown flag; on `graph
+        client` it is an unexpected argument
         (test_hyphen_prefixed_tokens_are_classified_in_both_directions).
 
         Both refusals carry exit code 2, so this difference is invisible to any
@@ -617,14 +822,14 @@ class TestGraphStrayRefusalAcrossFamilies(GraphStrayBase):
             f"got {first!r}")
         assert stdout == ""
 
-        # And the same token on the `graph` family, so the divergence is read as
-        # a divergence rather than as two unrelated facts.
+        # And the same token on `graph client`, so the divergence is read as a
+        # divergence rather than as two unrelated facts.
         code, stdout, stderr = self.run(
-            ["graph", "execute", "-r", self.roadmap, "--query", "MATCH (s:Spec) RETURN s.key", "-1"])
+            ["graph", "client", "-r", self.roadmap, "--query", "MATCH (s:Spec) RETURN s.key", "-1"])
         first = stderr_parts(stderr)[0]
         assert code == EXIT_MISUSE, f"exit={code}, want {EXIT_MISUSE}; stderr={stderr!r}"
-        assert first == graph_line("-1"), (
-            f"on the `graph` family `-1` is a negative numeric literal and therefore a stray "
+        assert first == client_line("-1"), (
+            f"on `graph client` `-1` is a negative numeric literal and therefore a stray "
             f"positional argument, not a flag; got {first!r}")
 
 

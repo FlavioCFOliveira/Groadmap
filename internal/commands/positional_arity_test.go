@@ -357,9 +357,13 @@ func TestPositionalArity_SelfRefusingCommandsKeepTheirWording(t *testing.T) {
 		want   string
 	}{
 		{
-			label:  "graph execute with a bare Cypher query",
+			// No server is needed and none is started: the stray token is refused
+			// while the arguments are still being read, before the roadmap is
+			// resolved and long before a socket is derived. The refusal is
+			// therefore the arity rule's alone, which is what this case is about.
+			label:  "graph client with a bare Cypher query",
 			family: "graph",
-			args:   []string{"execute", "-r", f.roadmap, "MATCH (n:Incident) RETURN n"},
+			args:   []string{"client", "-r", f.roadmap, "MATCH (n:Incident) RETURN n"},
 			want:   `invalid input: unexpected argument "MATCH (n:Incident) RETURN n" (graph queries use --query or stdin)`,
 		},
 		{

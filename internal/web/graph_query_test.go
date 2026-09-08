@@ -26,10 +26,15 @@ import (
 
 // seedGraph writes a small knowledge graph into the roadmap's GoGraph store via
 // the engine's transactional write path, so the graph data endpoint has genuine
-// nodes and edges to extract. It mirrors the minimal write sequence
-// commands/graph.go runGraphExecute performs (recovery.Open -> wal.Open ->
-// NewStoreWithOptions -> RunInTx -> Close commits). It runs each CREATE in its
-// own committed transaction. The caller must have redirected HOME first.
+// nodes and edges to extract. It is the minimal write sequence a store open
+// performs (recovery.Open -> wal.Open -> NewStoreWithOptions -> RunInTx -> Close
+// commits), run here directly because the endpoint under test opens no store and
+// cannot seed one. It runs each CREATE in its own committed transaction.
+//
+// It MUST run before any server is started for the roadmap: it takes no advisory
+// lock, and a server holds the store for its whole lifetime. See
+// graph_server_test.go, which seeds first and serves second for that reason.
+// The caller must have redirected HOME first.
 func seedGraph(t *testing.T, name string, queries ...string) {
 	t.Helper()
 
@@ -115,9 +120,8 @@ func doGraphData(t *testing.T, name string, params url.Values) *httptest.Respons
 // and edge, exactly as the endpoint behaved before the query bar existed
 // (SPEC/WEB.md § Graph Data Endpoint; Acceptance Criterion 46).
 func TestHandleGraphData_DefaultQueryBackwardCompatible(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
-	name := seedRoadmap(t, "web-ui-rollout")
-	seedGraph(t, name, graphSeedQueries()...)
+	t.Setenv("HOME", shortHome(t))
+	name := servedRoadmap(t, "web-ui-rollout", graphSeedQueries()...)
 
 	rec := doGraphData(t, name, nil)
 	if rec.Code != http.StatusOK {
@@ -189,9 +193,10 @@ func nodeKeys(t *testing.T, rec *httptest.ResponseRecorder) []string {
 // "Run does not execute write or DDL statements" — a 400 with kind execution.
 // Both are refusals; the criterion is met only by a 200 plus a read-back.
 func TestHandleGraphData_ExecutesWriteStatements(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	t.Setenv("HOME", shortHome(t))
 	name := seedRoadmap(t, "web-ui-rollout")
 	seedGraph(t, name, graphSeedQueries()...)
+	stopServer := serveGraph(t, name)
 
 	before := nodeKeys(t, doGraphData(t, name, nil))
 	if slices.Contains(before, "web-probe") {
@@ -209,18 +214,6 @@ func TestHandleGraphData_ExecutesWriteStatements(t *testing.T) {
 			"The statement executed against the request's own in-memory graph and was discarded, which is "+
 			"a 200 reporting a write that does not exist (SPEC/WEB.md Acceptance Criterion 47)", after)
 	}
-
-	// The store is checkpointed: the snapshot exists and the log is truncated
-	// (SPEC/GRAPH.md § Synchronous Checkpoint on Write).
-	graphDir := webGraphDir(t, name)
-	if _, err := os.Stat(filepath.Join(graphDir, "snapshot", "manifest.json")); err != nil {
-		t.Errorf("no snapshot/manifest.json after a write through the endpoint: %v", err)
-	}
-	walInfo, err := os.Stat(filepath.Join(graphDir, "wal"))
-	if err != nil {
-		t.Fatalf("stat wal: %v", err)
-	}
-	walAfterWrite := walInfo.Size()
 
 	// SET: the property change is committed and visible to a later request.
 	rec = doGraphData(t, name, url.Values{"q": {`MATCH (n:WebProbe {key:'web-probe'}) SET n.key = 'web-probe-renamed'`}})
@@ -245,40 +238,95 @@ func TestHandleGraphData_ExecutesWriteStatements(t *testing.T) {
 		t.Errorf("the seeded graph did not survive the three writes: %v, want %v", gone, before)
 	}
 
-	// Each write checkpointed, so the log never grew without bound.
-	walInfo, err = os.Stat(filepath.Join(graphDir, "wal"))
+	// The writes are DURABLE and not merely visible, which the read-backs above
+	// cannot distinguish: every one of them was answered by the same server
+	// process, so a graph held only in that process's memory would satisfy all of
+	// them. Stopping the server is what settles it — the shutdown checkpoint
+	// folds the log into the snapshot and truncates it — and a NEW server, which
+	// recovers the store from disk and shares nothing with the first, is what
+	// reads it back.
+	//
+	// The checkpoint used to be asserted mid-test, after the first write, because
+	// every write checkpointed synchronously in this process. None does now: the
+	// endpoint opens no store, and the server folds on its cadence and at
+	// shutdown (SPEC/GRAPH.md § Durability and Checkpointing in a Long-Lived
+	// Process). The assertion moved to the point where a fold is owed rather than
+	// being dropped.
+	stopServer()
+
+	graphDir := webGraphDir(t, name)
+	if _, err := os.Stat(filepath.Join(graphDir, "snapshot", "manifest.json")); err != nil {
+		t.Errorf("no snapshot/manifest.json after the server that ran three writes stopped: %v", err)
+	}
+	walInfo, err := os.Stat(filepath.Join(graphDir, "wal"))
 	if err != nil {
 		t.Fatalf("stat wal: %v", err)
 	}
-	if walInfo.Size() > walAfterWrite*4 {
-		t.Errorf("the write-ahead log is %d bytes after three writes and was %d after the first; "+
-			"a write that did not checkpoint leaves the log growing", walInfo.Size(), walAfterWrite)
+	if walInfo.Size() != 0 {
+		t.Errorf("the write-ahead log holds %d bytes after the shutdown checkpoint; it was expected "+
+			"to be folded into the snapshot and truncated, so what the new server recovers below "+
+			"would no longer prove the SNAPSHOT carries the writes", walInfo.Size())
+	}
+
+	serveGraph(t, name)
+	recovered := nodeKeys(t, doGraphData(t, name, nil))
+	if !slices.Equal(recovered, before) {
+		t.Errorf("a server that recovered the store from disk reports %v, want the %v the three "+
+			"writes left. The writes were visible to the process that ran them and did not survive "+
+			"it", recovered, before)
 	}
 }
 
 // TestHandleGraphData_StatementThatWritesNothingLeavesTheStoreByteIdentical is
-// SPEC/WEB.md Acceptance Criterion 19 and the other half of the checkpoint rule:
-// the checkpoint is gated on the write-ahead log having grown, so an ordinary
-// read neither snapshots nor truncates.
+// SPEC/WEB.md Acceptance Criterion 19: a request that runs a statement changing
+// nothing leaves the store on disk exactly as it found it — no snapshot rewritten
+// and no write-ahead log truncated.
 //
-// Without the gate every page load would rewrite a full snapshot of the whole
-// graph — a cost proportional to the graph, paid for no change at all — and
-// would shorten the history a later recovery replays.
+// # What changed under it, and what did not
+//
+// The rule used to be about a GATE this process applied: the endpoint opened the
+// store and checkpointed per write, and the checkpoint was gated on the log
+// having grown so a read neither snapshotted nor truncated. This process opens no
+// store now, so the gate it applied is not the thing under test any more. The
+// property is: nothing this endpoint does to serve a read reaches the store's
+// files at all.
+//
+// It is still worth a fence, because the two ways of breaking it are both live: a
+// re-introduced direct path in this process, and a server that folded per
+// statement rather than at the cadence and at shutdown. Either would rewrite a
+// full snapshot of the whole graph on every page load — a cost proportional to
+// the graph, paid for no change — and would shorten the history a later recovery
+// replays.
+//
+// # The premise, and how it is established now
+//
+// A snapshot has to exist, or "the snapshot is unchanged" is satisfied vacuously.
+// Nothing checkpoints per write any more, so the snapshot is made by STOPPING a
+// server: its shutdown checkpoint folds the log into the snapshot and truncates
+// it (SPEC/GRAPH.md § Server Shutdown and the Drain, step 4). A second server is
+// then started over what the first left, and the reads are driven against that.
 func TestHandleGraphData_StatementThatWritesNothingLeavesTheStoreByteIdentical(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	t.Setenv("HOME", shortHome(t))
 	name := seedRoadmap(t, "web-ui-rollout")
 	seedGraph(t, name, graphSeedQueries()...)
 
 	graphDir := webGraphDir(t, name)
 
-	// One write first, so the store HAS a snapshot: a store that never
-	// checkpointed would satisfy "snapshot unchanged" vacuously.
+	// One write through the endpoint, and then the server that ran it stops:
+	// that shutdown is what writes the snapshot the assertions below compare.
+	stopFirst := serveGraph(t, name)
 	if rec := doGraphData(t, name, url.Values{"q": {`CREATE (n:WebProbe {key:'settle'})`}}); rec.Code != http.StatusOK {
 		t.Fatalf("seeding write status = %d, want 200; body=%q", rec.Code, rec.Body.String())
 	}
+	stopFirst()
 	if _, err := os.Stat(filepath.Join(graphDir, "snapshot", "manifest.json")); err != nil {
-		t.Fatalf("the premise fails: no snapshot after a write: %v", err)
+		t.Fatalf("the premise fails: no snapshot after a write and a shutdown checkpoint: %v", err)
 	}
+
+	// A second server, over the folded store. It is still running when the
+	// comparison is made, so what the comparison sees is what serving the reads
+	// did — not what a shutdown did afterwards.
+	serveGraph(t, name)
 
 	before := storeFingerprint(t, graphDir)
 
@@ -338,9 +386,8 @@ func storeFingerprint(t *testing.T, graphDir string) map[string]string {
 // classification, and the query is not executed (SPEC/WEB.md § Graph Data
 // Endpoint; Acceptance Criterion 48).
 func TestHandleGraphData_InvalidLimitRejected(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
-	name := seedRoadmap(t, "web-ui-rollout")
-	seedGraph(t, name, graphSeedQueries()...)
+	t.Setenv("HOME", shortHome(t))
+	name := servedRoadmap(t, "web-ui-rollout", graphSeedQueries()...)
 
 	for _, bad := range []string{"7", "0", "-50", "5000", "100x", "abc"} {
 		t.Run(bad, func(t *testing.T) {
@@ -370,9 +417,8 @@ func TestHandleGraphData_InvalidLimitRejected(t *testing.T) {
 // not a read-only rejection (SPEC/WEB.md § Query-Bar Error Handling, rule 3;
 // Acceptance Criterion 50).
 func TestHandleGraphData_ExecutionFailure(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
-	name := seedRoadmap(t, "web-ui-rollout")
-	seedGraph(t, name, graphSeedQueries()...)
+	t.Setenv("HOME", shortHome(t))
+	name := servedRoadmap(t, "web-ui-rollout", graphSeedQueries()...)
 
 	// Read-only (no writing/DDL clause) but syntactically invalid Cypher.
 	rec := doGraphData(t, name, url.Values{"q": {`MATCH (n) RETURN`}})
@@ -392,9 +438,8 @@ func TestHandleGraphData_ExecutionFailure(t *testing.T) {
 // still carries Cache-Control: no-store (it is a data-derived response) and the
 // JSON content type (SPEC/WEB.md § Cache Policy; § Query-Bar Error Handling).
 func TestHandleGraphData_CacheControlOnError(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
-	name := seedRoadmap(t, "web-ui-rollout")
-	seedGraph(t, name, graphSeedQueries()...)
+	t.Setenv("HOME", shortHome(t))
+	name := servedRoadmap(t, "web-ui-rollout", graphSeedQueries()...)
 
 	// Use the full handler chain so the security/cache middleware runs.
 	srv := httptest.NewServer(handler())
@@ -434,9 +479,8 @@ func TestHandleGraphData_CacheControlOnError(t *testing.T) {
 // above all — means a refusal was reintroduced without a change to the
 // specification, and that is what this test fails on.
 func TestHandleGraphData_SpoofedDDLKeywordsAreNoLongerRefused(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
-	name := seedRoadmap(t, "web-ui-rollout")
-	seedGraph(t, name, graphSeedQueries()...)
+	t.Setenv("HOME", shortHome(t))
+	name := servedRoadmap(t, "web-ui-rollout", graphSeedQueries()...)
 
 	spoofed := []string{
 		"CREATE ıNDEX evil FOR (n:Spec) ON (n.key)",
@@ -476,7 +520,7 @@ func TestHandleGraphData_SpoofedDDLKeywordsAreNoLongerRefused(t *testing.T) {
 	if rec := doGraphData(t, name, url.Values{"q": {"CREATE INDEX web_spec_key FOR (n:Spec) ON (n.key)"}}); rec.Code != http.StatusOK {
 		t.Fatalf("an ASCII CREATE INDEX status = %d, want 200; body=%q", rec.Code, rec.Body.String())
 	}
-	if names := schemaNamesOnTheStore(t, name, "SHOW INDEXES"); !slices.Contains(names, "web_spec_key") {
+	if names := schemaNamesThroughTheServer(t, name, "SHOW INDEXES"); !slices.Contains(names, "web_spec_key") {
 		t.Fatalf("SHOW INDEXES over the store reports %v: an index created through the endpoint must persist", names)
 	}
 }
@@ -487,9 +531,8 @@ func TestHandleGraphData_SpoofedDDLKeywordsAreNoLongerRefused(t *testing.T) {
 // swallowed it and the endpoint returned the WHOLE graph instead of the resolved
 // limit (proven against a 252-node store, which returned all 252 nodes).
 func TestHandleGraphData_LimitAppliesDespiteTrailingComment(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
-	name := seedRoadmap(t, "web-ui-rollout")
-	seedGraph(t, name, `UNWIND range(1,120) AS i CREATE (:Bulk {i:i})`)
+	t.Setenv("HOME", shortHome(t))
+	name := servedRoadmap(t, "web-ui-rollout", `UNWIND range(1,120) AS i CREATE (:Bulk {i:i})`)
 
 	for _, q := range []string{
 		"MATCH (n) RETURN n //",
@@ -512,40 +555,6 @@ func TestHandleGraphData_LimitAppliesDespiteTrailingComment(t *testing.T) {
 	}
 }
 
-// corruptGraphWAL makes the roadmap's graph store fail to OPEN, by flipping a
-// byte in the middle of its write-ahead log. The seeded graph commits each CREATE
-// in its own transaction, so a byte in the middle of the log lands inside a frame
-// that has committed transactions on both sides of it: that is genuine mid-WAL
-// corruption, not a torn tail, and GoGraph's recovery.Open surfaces it as a hard
-// error rather than truncating to the last good frame.
-//
-// This is the fixture for the internal-read-error side of the boundary in
-// SPEC/WEB.md § Query-Bar Error Handling, rule 7. It is deliberately a data
-// fault, not a permission fault: it needs no chmod, behaves identically for an
-// unprivileged and a privileged test process, and is the same fault GoGraph's own
-// recovery suite uses to prove Open fails hard.
-func corruptGraphWAL(t *testing.T, name string) {
-	t.Helper()
-
-	roadmapDir, err := utils.GetRoadmapDir(name)
-	if err != nil {
-		t.Fatalf("resolving roadmap dir: %v", err)
-	}
-	walPath := filepath.Join(roadmapDir, "graph", "wal")
-
-	raw, err := os.ReadFile(walPath) //nolint:gosec // path derives from t.TempDir via HOME
-	if err != nil {
-		t.Fatalf("reading graph WAL: %v", err)
-	}
-	if len(raw) < 64 {
-		t.Fatalf("graph WAL is %d bytes: too small to corrupt a middle frame", len(raw))
-	}
-	raw[len(raw)/2] ^= 0xFF
-	if err := os.WriteFile(walPath, raw, 0o600); err != nil {
-		t.Fatalf("writing corrupted graph WAL: %v", err)
-	}
-}
-
 // TestHandleGraphData_InvalidLimitIsResolvedBeforeTheStatementRuns pins the one
 // ordering the endpoint still has between its two failure kinds: the `limit` is
 // resolved first, so a request carrying both an invalid `limit` and a statement
@@ -560,9 +569,8 @@ func corruptGraphWAL(t *testing.T, name string) {
 // endpoint used to publish is withdrawn with the guard rail that produced it;
 // there is nothing else left to order.
 func TestHandleGraphData_InvalidLimitIsResolvedBeforeTheStatementRuns(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
-	name := seedRoadmap(t, "web-ui-rollout")
-	seedGraph(t, name, graphSeedQueries()...)
+	t.Setenv("HOME", shortHome(t))
+	name := servedRoadmap(t, "web-ui-rollout", graphSeedQueries()...)
 
 	const writeQuery = `CREATE (n:WebProbe {key:'never-created'})`
 	const badLimit = "7"
@@ -610,32 +618,42 @@ func TestHandleGraphData_InvalidLimitIsResolvedBeforeTheStatementRuns(t *testing
 	}
 }
 
-// TestHandleGraphData_TheStoreOpenBoundary pins the two halves of the boundary
-// in SPEC/WEB.md § Query-Bar Error Handling, rule 6, against a roadmap whose
-// graph store cannot be opened:
+// TestHandleGraphData_TheResolutionBoundary pins the two halves of the boundary
+// in SPEC/WEB.md § Query-Bar Error Handling, rules 5 and 6, against a roadmap
+// nothing is serving:
 //
-//   - The 500 half: a request the endpoint accepts reaches the open, the open
-//     fails, and that is an internal read error — HTTP 500, and NOT a 400 with
-//     kind execution. The boundary is drawn at the moment the failure surfaces,
-//     and a failure to open surfaces before the statement runs.
-//   - The 400 half: an invalid limit still answers 400 over the very same
-//     unopenable store, which can only be true if the limit is resolved BEFORE
-//     the store is opened (rule 5). The 500 above is what makes this
-//     non-vacuous: it proves the store really is unopenable, so the 400 cannot
-//     have come from a successful read.
+//   - The 503 half: a request the endpoint accepts reaches the resolution, finds
+//     no server, and is answered HTTP 503 with NO kind — not a 400 with kind
+//     execution. The boundary is drawn at the moment the failure surfaces, and a
+//     graph that cannot be reached surfaces before any statement is sent.
+//   - The 400 half: an invalid limit still answers 400 against the very same
+//     unreachable roadmap, which can only be true if the limit is resolved BEFORE
+//     the socket is probed (rule 5). The 503 above is what makes this
+//     non-vacuous: it proves the roadmap really is unreachable, so the 400 cannot
+//     have come from a request that was served.
 //
-// The 400 half used to carry four more cases, each a guard-rail refusal decided
-// before the open. They are withdrawn, and the endpoint now opens the store for
-// every request whose limit it accepted — which is why the 500 cases below
-// include a statement that would once have been refused without the store ever
-// being touched.
-func TestHandleGraphData_TheStoreOpenBoundary(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+// # What this test used to be, and why the shape survives its subject
+//
+// It was TestHandleGraphData_TheStoreOpenBoundary, and its 500 half corrupted the
+// roadmap's write-ahead log so that the store would fail to OPEN. This endpoint
+// opens no store, so there is no open to fail: a corrupt log is now the concern of
+// whichever `rmp graph serve` next tries to recover it, and internal/graphserve's
+// suite owns that. What the test was really pinning is the ORDER of the two
+// checks, and that order is unchanged — only the second check moved, from an open
+// to a probe. The corruption fixture went with the half it served.
+//
+// The 400 half also used to carry four more cases, each a guard-rail refusal
+// decided before the open. Those refusals are withdrawn, which is why the 5xx
+// cases below include a statement that would once have been refused without
+// anything being touched.
+func TestHandleGraphData_TheResolutionBoundary(t *testing.T) {
+	t.Setenv("HOME", shortHome(t))
+	// Seeded but NOT served: the store holds a graph, and no process is offering
+	// it. A fall back to reading it would answer 200 and fail every case below.
 	name := seedRoadmap(t, "web-ui-rollout")
 	seedGraph(t, name, graphSeedQueries()...)
-	corruptGraphWAL(t, name)
 
-	// The 500 half.
+	// The 503 half.
 	for label, params := range map[string]url.Values{
 		"the default query":       nil,
 		"an ordinary read":        {"q": {"MATCH (n) RETURN n"}},
@@ -644,20 +662,22 @@ func TestHandleGraphData_TheStoreOpenBoundary(t *testing.T) {
 	} {
 		t.Run(label, func(t *testing.T) {
 			rec := doGraphData(t, name, params)
-			if rec.Code != http.StatusInternalServerError {
-				t.Fatalf("status = %d, want 500 over an unopenable store; body=%q", rec.Code, rec.Body.String())
+			if rec.Code != http.StatusServiceUnavailable {
+				t.Fatalf("status = %d, want 503 against a roadmap nothing is serving; body=%q",
+					rec.Code, rec.Body.String())
 			}
 			if strings.Contains(rec.Body.String(), `"kind"`) {
-				t.Errorf("the 500 of an internal read error must not carry the query-bar error shape; body=%q", rec.Body.String())
+				t.Errorf("the 503 of an unreachable graph must not carry the query-bar error shape, "+
+					"which names a fault in what the caller submitted; body=%q", rec.Body.String())
 			}
 		})
 	}
 
-	// The 400 half: the only rejection that still precedes the store open.
-	t.Run("an invalid limit is still decided before the open", func(t *testing.T) {
+	// The 400 half: the only rejection that still precedes the resolution.
+	t.Run("an invalid limit is still decided before the probe", func(t *testing.T) {
 		rec := doGraphData(t, name, url.Values{"limit": {"7"}})
 		if rec.Code != http.StatusBadRequest {
-			t.Fatalf("status = %d, want 400: the limit is resolved before the store is opened; body=%q", rec.Code, rec.Body.String())
+			t.Fatalf("status = %d, want 400: the limit is resolved before the socket is probed; body=%q", rec.Code, rec.Body.String())
 		}
 		if kind, _ := decodeQueryError(t, rec.Body.Bytes()); kind != graphErrInvalidLimit {
 			t.Errorf("kind = %q, want %q", kind, graphErrInvalidLimit)
@@ -677,9 +697,8 @@ func TestHandleGraphData_TheStoreOpenBoundary(t *testing.T) {
 // field, or that leaked an empty `nodes`/`edges` pair from the success shape,
 // would satisfy every existing assertion and only this one would catch it.
 func TestHandleGraphData_ErrorBodyShape(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
-	name := seedRoadmap(t, "web-ui-rollout")
-	seedGraph(t, name, graphSeedQueries()...)
+	t.Setenv("HOME", shortHome(t))
+	name := servedRoadmap(t, "web-ui-rollout", graphSeedQueries()...)
 
 	cases := []struct {
 		name     string
@@ -742,9 +761,8 @@ func TestHandleGraphData_ErrorBodyShape(t *testing.T) {
 // the rejected value verbatim, so a crafted limit is the one place request-derived
 // text reaches the response body of this endpoint.
 func TestHandleGraphData_ErrorBodySerialization(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
-	name := seedRoadmap(t, "web-ui-rollout")
-	seedGraph(t, name, graphSeedQueries()...)
+	t.Setenv("HOME", shortHome(t))
+	name := servedRoadmap(t, "web-ui-rollout", graphSeedQueries()...)
 
 	rec := doGraphData(t, name, url.Values{"limit": {`<script>alert(1)</script>`}})
 	if rec.Code != http.StatusBadRequest {
@@ -794,9 +812,8 @@ func TestHandleGraphData_ErrorBodySerialization(t *testing.T) {
 // fail. Each is either served or fails in the engine; none of them may produce a
 // kind of its own.
 func TestHandleGraphData_PublishesExactlyTwoKinds(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
-	name := seedRoadmap(t, "web-ui-rollout")
-	seedGraph(t, name, graphSeedQueries()...)
+	t.Setenv("HOME", shortHome(t))
+	name := servedRoadmap(t, "web-ui-rollout", graphSeedQueries()...)
 
 	published := map[string]bool{graphErrInvalidLimit: true, graphErrExecution: true}
 	withdrawn := []string{"not_read_only", "schema_introspection", "relationship_read_direction", "invalid_keyword_spacing"}

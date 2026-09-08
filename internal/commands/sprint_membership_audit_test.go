@@ -56,7 +56,7 @@ type membershipFixture struct {
 func setupMembershipRoadmap(t *testing.T, name string) *membershipFixture {
 	t.Helper()
 
-	t.Setenv("HOME", t.TempDir())
+	t.Setenv("HOME", shortHome(t))
 
 	database, cleanup := setupTestTaskRoadmap(t, name)
 	t.Cleanup(cleanup)

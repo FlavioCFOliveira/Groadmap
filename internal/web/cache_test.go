@@ -16,8 +16,12 @@ import (
 // The full handler() stack is exercised so the assertion proves the header
 // is set by the authoritative securityHeaders middleware.
 func TestCachePolicy_NoStoreOnDataDerivedResponses(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
-	name := seedRoadmap(t, "web-ui-rollout")
+	t.Setenv("HOME", shortHome(t))
+	// A server, because the graph data endpoint below must answer 200 for the
+	// header to be asserted on it at all: with nothing serving the roadmap it
+	// answers 503, which is a data-state-dependent error and is covered by the
+	// test beside this one rather than by this one.
+	name := servedRoadmap(t, "web-ui-rollout")
 
 	// seedRoadmap inserts exactly one sprint into a fresh database, so the
 	// seeded sprint's id is 1; the sprint-page probe therefore hits a real
@@ -57,7 +61,7 @@ func TestCachePolicy_NoStoreOnDataDerivedResponses(t *testing.T) {
 // for a non-existent sprint id of an existing roadmap, and a 405 for a
 // non-read method on a known route.
 func TestCachePolicy_NoStoreOnDataStateDependentErrors(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	t.Setenv("HOME", shortHome(t))
 	name := seedRoadmap(t, "web-ui-rollout")
 
 	h := handler()

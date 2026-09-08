@@ -49,10 +49,15 @@ import (
 // platform once its bounded wait is exhausted (SPEC/GRAPH.md § Lock Contention
 // rule 2). It names no operation class, because the holder may not have been
 // writing: one mode carries one message, and it says only that the store is held.
-const busyExclusiveMessage = "graph store is busy: still held when the bounded wait was " +
-	"exhausted, and nothing records the holder. Another rmp invocation releases it " +
-	"shortly, so run the statement again; an rmp graph serve holds it for its whole " +
-	"lifetime, so reach that server with --socket, or stop it."
+//
+// It names no holder and offers no remedy either, and that is the whole of what
+// changed when `rmp graph execute` was withdrawn. The remedy it used to carry was
+// a published line of a table that named two possible holders calling for
+// opposite actions; no caller takes this lock now, so the only lawful holder is
+// another `rmp graph serve` and the one published line for an exhausted wait is
+// the one internal/graphserve words from ErrBusy
+// (SPEC/COMMANDS.md § Graph Server Socket Error Lines).
+const busyExclusiveMessage = "graph store is busy: still held when the bounded wait was exhausted"
 
 // firstRung is the ladder's first delay, used by the assertions that an
 // acquisition did NOT wait. It comes from the shared policy, so no test in this

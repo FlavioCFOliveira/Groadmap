@@ -68,7 +68,7 @@ type commitTrackingFixture struct {
 func setupCommitTrackingRoadmap(t *testing.T, name string) *commitTrackingFixture {
 	t.Helper()
 
-	t.Setenv("HOME", t.TempDir())
+	t.Setenv("HOME", shortHome(t))
 
 	database, cleanup := setupTestTaskRoadmap(t, name)
 	t.Cleanup(cleanup)

@@ -126,7 +126,7 @@ func TestTaskCardBody_IsTighterThanTheVendoredSmallCard(t *testing.T) {
 // while every assertion above still passes and the card silently returns to
 // Tabler's 1rem.
 func TestTaskCard_BodyIsADirectChildOfTheCard(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	t.Setenv("HOME", shortHome(t))
 	name := seedRoadmap(t, "platform-core")
 	page := servePage(t, buildMux(), "/roadmaps/"+name+"/tasks")
 

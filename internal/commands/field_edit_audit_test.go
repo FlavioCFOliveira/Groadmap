@@ -81,7 +81,7 @@ const (
 func setupFieldEditRoadmap(t *testing.T, name string) *fieldEditFixture {
 	t.Helper()
 
-	t.Setenv("HOME", t.TempDir())
+	t.Setenv("HOME", shortHome(t))
 
 	database, cleanup := setupTestTaskRoadmap(t, name)
 	t.Cleanup(cleanup)

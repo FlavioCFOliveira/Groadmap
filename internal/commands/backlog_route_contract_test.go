@@ -58,7 +58,7 @@ const (
 func setupBacklogRouteRoadmap(t *testing.T, name string) *backlogRouteFixture {
 	t.Helper()
 
-	t.Setenv("HOME", t.TempDir())
+	t.Setenv("HOME", shortHome(t))
 
 	database, cleanup := setupTestTaskRoadmap(t, name)
 	t.Cleanup(cleanup)

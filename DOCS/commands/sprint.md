@@ -306,13 +306,13 @@ rmp sprint stats -r project1 1
 | `task_order` | array of integers | Task IDs in sprint position order |
 | `burndown` | array | One entry per day on which tasks completed; empty when none completed |
 | `velocity` | float | Tasks completed per day |
-| `days_elapsed` | integer or null | Days the sprint has run |
+| `days_elapsed` | integer or null | Days an OPEN sprint has run since `started_at`; `null` for every other status |
 | `days_remaining` | integer or null | Always `null` (the Sprint model has no end date) |
 
 **Notes:**
 
 - `velocity` is `0.0` for PENDING and OPEN sprints, and for CLOSED sprints with zero completed tasks. It is only meaningful for CLOSED sprints.
-- `days_elapsed` is `null` for PENDING sprints and for OPEN sprints with no `started_at`. For CLOSED sprints it spans `started_at` to `closed_at`.
+- `days_elapsed` counts the days since an OPEN sprint started, and is `null` everywhere else: for PENDING sprints, for CLOSED sprints, and for OPEN sprints with no `started_at`. A closed sprint reports `null`, not the span it ran for.
 - `days_remaining` is ALWAYS `null`, because the Sprint model has no end date to count down to.
 - `burndown` is empty when no tasks have been completed in the sprint.
 
@@ -928,7 +928,7 @@ PENDING → OPEN → CLOSED
 - `comment-add` and `comment-list` take the SPRINT's id; `comment-edit` and `comment-remove` take the COMMENT's own id
 - Sprint and task comment ids are separate sequences, so `rmp sprint comment-edit 7` and `rmp task comment-edit 7` address two unrelated comments
 - Comment operations are audited against the parent sprint, as `SPRINT_COMMENT_CREATE`, `SPRINT_COMMENT_UPDATE`, and `SPRINT_COMMENT_DELETE`; `comment-list` is a read and writes no audit entry
-- Every command above that changes a sprint writes at least one audit entry; those whose entries name a counterpart task list them under **Audit** in the command's own section. Listing commands are reads and write none, and a rejected command writes none, because the entry is written in the same transaction as the change it records. The full operation catalogue, and the meaning of the `commit_hash` and `related_entity_id` fields an entry can carry, are in [DOCS/commands/audit.md](audit.md)
+- Every command above that changes a sprint writes at least one audit entry. An **Audit** block appears in a command's own section where the entries it writes are worth spelling out, and its presence tracks nothing else: five of the eight blocks describe entries that name no counterpart task, and `create`, `start`, `close`, `reorder`, `swap` and the comment commands each write entries while carrying no block. To learn what a command wrote, read the audit log itself rather than inferring it from whether a block is present. Listing commands are reads and write none, and a rejected command writes none, because the entry is written in the same transaction as the change it records. The full operation catalogue, and the meaning of the `commit_hash` and `related_entity_id` fields an entry can carry, are in [DOCS/commands/audit.md](audit.md)
 
 ## Field Limits and Constraints
 

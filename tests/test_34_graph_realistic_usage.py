@@ -53,7 +53,7 @@ from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from tests.base_test import GroadmapTestBase
+from tests.base_test import GroadmapTestBase, assert_graph_write_shape
 
 
 EXIT_OK = 0
@@ -151,6 +151,11 @@ class TestGraphRealisticUsage:
         self.test = GroadmapTestBase()
         self.test.setup()
         self.roadmap = self.test.create_roadmap("platform-modernization")
+        # Every statement below reaches the graph through a server, because
+        # that is now the only way in. Starting it against a roadmap with no
+        # graph is also what creates one (SPEC/GRAPH.md "Server Startup",
+        # step 1). teardown() kills it before it removes the temporary HOME.
+        self.server = self.test.start_graph_server(self.roadmap)
         self.model = GraphModel()
         self.calls = 0
 
@@ -160,20 +165,23 @@ class TestGraphRealisticUsage:
     # ---- low-level call wrappers (each counts exactly one invocation) ----
 
     # `_write` and `_read` name what the CALLER is doing, not which command
-    # is run: `rmp graph` has one subcommand and it runs both
+    # is run: `rmp graph client` runs both against the running server
     # (SPEC/COMMANDS.md § Graph Management). The distinction is kept because
     # the two assert different things -- a write must emit {"ok": true}, a
     # read returns the columns/rows envelope the callers below index into.
 
     def _write(self, query: str):
         self.calls += 1
-        result = self.test.run_cmd_json(["graph", "execute", "-r", self.roadmap, "--query", query])
-        assert result == {"ok": True}, (
-            f"write without RETURN must emit {{'ok': true}}; {query!r} -> {result!r}")
+        result = self.test.run_cmd_json(["graph", "client", "-r", self.roadmap, "--query", query])
+        # The shape, not the counters: this helper runs statements of every
+        # write class, so what it can assert for all of them is that the object
+        # is `ok` plus at most the counters member. The counter VALUES are
+        # asserted where a caller knows what its statement changed.
+        assert_graph_write_shape(result, f"write without RETURN {query!r}")
 
     def _read(self, query: str):
         self.calls += 1
-        return self.test.run_cmd_json(["graph", "execute", "-r", self.roadmap, "--query", query])
+        return self.test.run_cmd_json(["graph", "client", "-r", self.roadmap, "--query", query])
 
     def scalar(self, query: str, col: str):
         result = self._read(query)
@@ -464,7 +472,7 @@ class TestGraphRealisticUsage:
             "MATCH (t:Task {key:'task-oauth'}) RETURN t.review_flag AS f", "f") == "needs-design"
         self.calls += 1
         self.test.run_cmd_json(
-            ["graph", "execute", "-r", self.roadmap, "--query",
+            ["graph", "client", "-r", self.roadmap, "--query",
              "MATCH (t:Task {key:'task-oauth'}) REMOVE t.review_flag"])
         assert self.scalar(
             "MATCH (t:Task {key:'task-oauth'}) RETURN t.review_flag AS f", "f") is None
@@ -525,8 +533,16 @@ class TestGraphRealisticUsage:
         # the long write session, and the >= 100 distinct-call requirement.
         # ---------------------------------------------------------------
         self.assert_consistent("final")
+        # The WAL is bounded by the CHECKPOINT, and a server checkpoints when it
+        # shuts down rather than after every write -- it holds the store open for
+        # its whole life, which is the point of it. Under `graph execute` each
+        # invocation opened, wrote and checkpointed, so the WAL was 0 between
+        # calls; asserting that here now would be asserting the old process
+        # model, not durability. The subject survives intact by driving the
+        # shutdown the SPEC specifies and measuring after it.
+        assert self.server.stop() == 0, "a graceful shutdown must exit 0"
         assert self.wal_size() == 0, (
-            f"after the last write the checkpoint must truncate the WAL to 0; got {self.wal_size()}")
+            f"the shutdown checkpoint must truncate the WAL to 0; got {self.wal_size()}")
         assert self.calls >= 100, (
             f"realistic session must issue >= 100 distinct graph calls; issued {self.calls}")
 
@@ -590,9 +606,18 @@ class TestGraphRealisticUsage:
         self.create_node("Decision", "dec-temp", rationale="placeholder")
         assert self.scalar("MATCH (n) RETURN count(n) AS c", "c") == 1
         self.detach_delete_node("dec-temp")
-        # The checkpoint after the delete truncated the WAL, so the next
-        # read reconstructs purely from the snapshot's tombstone set.
+        # The subject is that the tombstone is DURABLE -- that a fresh process
+        # reading from the snapshot alone does not resurrect the node. Under
+        # `graph execute` every call was already a fresh process, so deleting and
+        # reading was enough. A server is one long-lived process, so the delete
+        # and the read would be served from the same open store and would prove
+        # nothing about durability. Stopping the server checkpoints (truncating
+        # the WAL) and starting a new one is what makes the next read reconstruct
+        # purely from the snapshot's tombstone set -- a stricter test of the same
+        # thing, not a weaker one.
+        assert self.server.stop() == 0, "a graceful shutdown must exit 0"
         assert self.wal_size() == 0
+        self.server = self.test.start_graph_server(self.roadmap)
         assert self.scalar("MATCH (n) RETURN count(n) AS c", "c") == 0, (
             "deleted node resurrected (tombstone not durable)")
         ghosts = self._read("MATCH (n) RETURN labels(n) AS l, n.key AS k")
@@ -658,7 +683,7 @@ class TestGraphRealisticUsage:
         self._write("CREATE INDEX spec_key FOR (n:Spec) ON (n.key)")
         self.calls += 1
         listing = self.test.run_cmd_json(
-            ["graph", "execute", "-r", self.roadmap, "--query", "SHOW INDEXES"])
+            ["graph", "client", "-r", self.roadmap, "--query", "SHOW INDEXES"])
         names = {row[listing["columns"].index("name")] for row in listing["rows"]}
         assert "spec_key" in names, f"the index was not registered: {names!r}"
 

@@ -74,9 +74,8 @@ func relreadSeedQueries() []string {
 // carries the relationship itself. A 400 carrying a kind of its own is what a
 // reintroduced refusal would look like, and is what this test fails on.
 func TestHandleGraphData_MisresolvedRelationshipReadsAreNoLongerRefused(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
-	name := seedRoadmap(t, "web-ui-rollout")
-	seedGraph(t, name, relreadSeedQueries()...)
+	t.Setenv("HOME", shortHome(t))
+	name := servedRoadmap(t, "web-ui-rollout", relreadSeedQueries()...)
 
 	for label, q := range map[string]string{
 		"undirected, type projected":  `MATCH (s:Spec)-[e]-(x) RETURN type(e), x.key`,
@@ -151,9 +150,8 @@ func resolvedEdges(t *testing.T, view graphView) []string {
 // reported the forward leg for a reverse traversal fails on the type; one that
 // inverted the endpoint pair fails on the orientation.
 func TestHandleGraphData_IncomingAndUndirectedReadsResolveCorrectly(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
-	name := seedRoadmap(t, "web-ui-rollout")
-	seedGraph(t, name, relreadSeedQueries()...)
+	t.Setenv("HOME", shortHome(t))
+	name := servedRoadmap(t, "web-ui-rollout", relreadSeedQueries()...)
 
 	const (
 		forward = "VERIFIED_BY user-authentication->auth-token-expiry"
@@ -228,9 +226,8 @@ func TestHandleGraphData_IncomingAndUndirectedReadsResolveCorrectly(t *testing.T
 // specification names if the pinned engine is ever replaced by one that resolves
 // the undirected reads differently.
 func TestHandleGraphData_OutgoingAndRewrittenFormsReturnTheGraph(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
-	name := seedRoadmap(t, "web-ui-rollout")
-	seedGraph(t, name, relreadSeedQueries()...)
+	t.Setenv("HOME", shortHome(t))
+	name := servedRoadmap(t, "web-ui-rollout", relreadSeedQueries()...)
 
 	t.Run("the endpoint default query still runs", func(t *testing.T) {
 		rec := doGraphData(t, name, nil)
@@ -303,9 +300,8 @@ func TestHandleGraphData_OutgoingAndRewrittenFormsReturnTheGraph(t *testing.T) {
 // property of every response this endpoint writes, and this is the statement most
 // likely to put markup into one.
 func TestHandleGraphData_BacktickIdentifiersReachTheEngine(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
-	name := seedRoadmap(t, "web-ui-rollout")
-	seedGraph(t, name, relreadSeedQueries()...)
+	t.Setenv("HOME", shortHome(t))
+	name := servedRoadmap(t, "web-ui-rollout", relreadSeedQueries()...)
 
 	const hostile = "<script>alert(1)</script>"
 	rec := doGraphData(t, name, url.Values{

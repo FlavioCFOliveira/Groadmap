@@ -449,12 +449,11 @@ mechanism. Reads observe a consistent committed snapshot. Independent write
 transactions are not excluded from one another inside a single process: a
 write-write collision is detected rather than prevented, on a first-updater-wins
 basis, and the losing transaction receives a retriable serialization-conflict
-error. On the **direct** path Groadmap does not rely on that intra-process behaviour,
-because each `rmp graph execute` invocation and each web graph request runs
-exactly one transaction; that one-transaction-per-invocation model is why the
-conflict path is not reachable there. It **is** reachable inside
-`rmp graph serve`, which runs many transactions concurrently in one process, so a
-client of that server retries a serialisation conflict rather than surfacing it.
+error. Every statement now runs inside `rmp graph serve`, which runs many
+transactions concurrently in one process, so the conflict path is reachable for
+any statement and a client retries a serialisation conflict rather than surfacing
+it. It was unreachable only while a caller could run its own single transaction in
+a process of its own, which no caller does now.
 `GRAPH.md § Concurrency Inside the Server` is canonical for that. The retry runs
 under the loop of [Retry Logic](#retry-logic) like every other retry in this
 project, and under that policy's **full-jitter** delay shape rather than its fixed
@@ -462,16 +461,16 @@ ladder, because a conflict is a contention failure whose rate is a function of t
 load the retries themselves offer; that section is canonical for both shapes and
 for the measurements that separate them.
 
-Groadmap does not depend on the engine to serialise access to the store. It
-serialises it itself, at the process level, on a lock file that Groadmap maintains
-in the roadmap's graph directory (`write.lock`). Every invocation and every web
-graph request that opens the store takes that lock **exclusively** before opening
-it and holds it until after any checkpoint. A caller that reached a running graph
-server instead opens no store and takes no lock (`GRAPH.md § Server Resolution`),
-and `rmp graph serve` takes the lock once and holds it for its process lifetime. There is one mode, because Groadmap does not examine
-a statement and so cannot know before running one whether it will write. The
-operating system releases the lock when the holding process exits, so a crashed
-invocation does not strand it. This is the lock referred to throughout
+Groadmap does not depend on the engine to serialise access to the store between
+processes. It serialises it itself, at the process level, on a lock file that
+Groadmap maintains in the roadmap's graph directory (`write.lock`).
+**`rmp graph serve` is the only process that takes it**: it takes the lock
+**exclusively** before it opens the store and holds it for its process lifetime.
+No caller takes it, because no caller opens a store
+(`GRAPH.md § Server Resolution`). There is one mode, because there is one holder,
+and the lock's remaining purpose is to admit one server per roadmap. The operating
+system releases the lock when the holding process exits, so a crashed server does
+not strand it. This is the lock referred to throughout
 [Write Contention and Recovery](#write-contention-and-recovery); the contract it
 implements is specified in `GRAPH.md § Concurrency and Recovery`, which is
 canonical.
@@ -519,10 +518,11 @@ same one realisation.
 The same reasoning applies a second time to the two things the graph server
 introduced. Deciding whether a roadmap is served, and speaking the protocol to a
 server that is, are implemented **once**, in `internal/graphclient`, and reached by
-`rmp graph client`, by `rmp graph execute`, and by `internal/web` alike. A second
-resolution rule fails in exactly the silent way the sequence above does: a probe
-that read an unanswered socket as "not served" still runs, still returns a result,
-and goes wrong only when a server is holding the lock it then waits on.
+`rmp graph client` and by `internal/web` alike — the second by calling the package
+in its own process, never by spawning the subcommand
+(`GRAPH.md § The Bolt Client`). A second resolution rule would be a second set of
+answers to the questions `GRAPH.md § Server Resolution` settles, and the two copies
+would diverge silently.
 `ARCHITECTURE.md § 9. internal/graphclient/ and reaching a graph server` records
 the boundary.
 
@@ -530,36 +530,38 @@ the boundary.
 
 1. The `rmp` CLI is a short-lived process, with one exception: `rmp graph serve`
    holds the store, its engine, and its lock for the life of the process
-   (`GRAPH.md § The Dedicated Graph Server`). Each `rmp graph execute` invocation
-   opens the roadmap's graph store, runs exactly one statement, commits,
-   checkpoints when that transaction wrote (see
-   [Synchronous Checkpoint on Write](#synchronous-checkpoint-on-write)), closes the
-   store, and exits. The store is **not** held open across invocations, and it
-   shares no connections, locks, or transactions with the SQLite layer. The two
-   persistence mechanisms are fully independent. A web graph request follows the
-   same sequence within the request.
-2. Every invocation takes the store lock exclusively, opens the store, runs the
-   statement through the engine's transactional path so that a change it makes is
-   committed atomically, checkpoints synchronously if that transaction appended to
-   the write-ahead log, and releases the lock only after that. Opening the store is
-   not a read-only operation on disk even for a statement that writes nothing:
-   recovery repairs an interrupted checkpoint on open, which is why the lock is
-   taken before the open (see
+   (`GRAPH.md § The Dedicated Graph Server`). It opens the store once, at startup,
+   and closes it at shutdown. No other process opens a graph store: an
+   `rmp graph client` invocation resolves the roadmap's socket, sends one
+   statement, reads the answer and exits, and a web graph request does the same
+   within the request. The graph store shares no connections, locks, or
+   transactions with the SQLite layer; the two persistence mechanisms are fully
+   independent.
+2. The server takes the store lock exclusively, opens the store, and thereafter
+   runs each statement it is sent through the engine's transactional path so that
+   a change it makes is committed atomically. It folds the write-ahead log on its
+   own cadence and at shutdown, and releases the lock last. Opening the store is
+   not a read-only operation on disk: recovery repairs an interrupted checkpoint on
+   open, which is why the lock is taken before the open — and, since the open now
+   happens once per server rather than once per statement, that repair happens once
+   per server too (see
    `GRAPH.md § What a Statement That Writes Nothing Changes on Disk`).
 
 ### Write Contention and Recovery
 
-1. Because every invocation acquires Groadmap's graph store lock exclusively
-   before opening the store, two concurrent statements against the **same**
-   roadmap contend for that lock, whatever those statements do, and so do a CLI
-   invocation and a web graph request in either direction. The losing invocation
-   MUST wait a bounded time and then fail; it MUST never hang indefinitely and
-   MUST never corrupt the store.
+1. Because `rmp graph serve` acquires Groadmap's graph store lock exclusively
+   before opening the store, and holds it for its process lifetime, two servers
+   started against the **same** roadmap contend for that lock and exactly one of
+   them runs. No statement contends for it, because no caller takes it. The losing
+   server MUST wait a bounded time and then fail; it MUST never hang indefinitely
+   and MUST never corrupt the store.
 2. The contention/lock failure surfaces as `utils.ErrGraphStore` (exit code 1),
-   the sentinel that names the store whose lock could not be taken. For a
-   web graph request, it surfaces as an internal read error (HTTP 500), the status
-   that endpoint already returns for a graph store that cannot be opened.
-3. Every caller waits, and waits a bounded time. It retries the lock under the
+   the sentinel that names the store whose lock could not be taken. No web graph
+   request can reach this failure, because no request takes the lock; a request
+   whose roadmap has no server running is answered HTTP 503 for the different
+   reason that the graph is unavailable until a server is started
+   (`WEB.md § Knowledge Graph from the GoGraph Store`).
+3. A server that finds the lock held waits, and waits a bounded time. It retries the lock under the
    **loop and the fixed-ladder delay shape** of the project's single retry
    policy, the one specified for SQLite in [Retry Logic](#retry-logic): the
    first attempt is immediate, each retry is preceded by the next delay of that
@@ -575,28 +577,24 @@ the boundary.
    those either. The SQLite total is not reused because the two locks do not
    cover the same thing: no SQLite lock is held across a statement whose cost a
    caller chooses, since Groadmap issues every SQL statement itself, while the
-   graph store lock is held across the statement its invocation carries. A wait
-   sized against the SQLite total is therefore shorter than the hold it has to
-   cover, and it starves the waiter. The caller retries only on lock/contention
-   conditions and never on parse or execution errors. When the bounded wait is
-   exhausted the invocation fails as rule 2 describes. The contract is a bounded
-   wait and then failure, never an unbounded block: a caller that blocked without
-   a bound would let a long statement hang a web request until the server's write
-   timeout fired (see `WEB.md § HTTP Server Timeouts`). The wait is spent before
-   the statement starts, so it does not consume the graph data endpoint's own
-   query time budget (see `WEB.md § Graph Query Time Budget`); what has to fit
-   inside that timeout is the wait and the statement together, which
-   `GRAPH.md § Lock Contention` states. The reasoning behind the single policy is
-   there too.
-4. **A holder whose statement is a read, or runs to completion, is bounded, and
-   the wait rests on that.** The variable part of a hold is the statement, and
-   both surfaces run their statement under one statement time budget: the web
-   graph data endpoint and `rmp graph execute` alike.
-   `WEB.md § Graph Query Time Budget` is canonical for the value and this rule
-   does not restate it; `GRAPH.md § Statement Time Budget` is canonical for what a
-   cut statement leaves behind and for how long a cut statement holds the lock.
-   Such a hold therefore has a lawful maximum, which is the precondition rule 3's
-   derivation rests on, and a waiter contending with one is served.
+   graph store lock is held across an outgoing server's whole drain and shutdown.
+   A wait sized against the SQLite total is therefore shorter than the tail it has
+   to cover. The server retries only on lock/contention conditions and never on
+   parse or execution errors. When the bounded wait is exhausted the server does
+   not start, as rule 2 describes. The contract is a bounded wait and then
+   failure, never an unbounded block. Nothing in a web request is exposed to this
+   wait, because no request takes the lock (see rule 2); what a request spends is
+   fixed by `WEB.md § HTTP Server Timeouts` and consists of the resolution probe
+   and the backstop deadline alone.
+4. **What the wait must cover is an outgoing server's tail, and that tail is
+   bounded by the statement budget plus the fixed part.** The only contention left
+   on this lock is between two `rmp graph serve` processes for the same roadmap:
+   an incoming one waits for an outgoing one to finish draining, fold its
+   write-ahead log and close the store. The drain is bounded by the statement time
+   budget, `WEB.md § Graph Query Time Budget` being canonical for the value, and
+   the fold and close are the fixed part.
+   `GRAPH.md § Statement Time Budget` is canonical for what a cut statement leaves
+   behind.
 
    Three limits survive that, and none is fixed by bounding the statement.
    `GRAPH.md § Lock Contention` states all three and is canonical for them, with
@@ -615,88 +613,82 @@ the boundary.
    - A finite wait can cover only a hold that has an upper bound, and
      `rmp graph serve` holds the lock for its process lifetime, which has none, so
      no finite wait can be derived from it. That limit is not reached by bounding
-     the statement and is not meant to be: every caller resolves the roadmap's
-     socket before it takes the lock, and against a served roadmap it sends the
-     statement to the server and takes no lock at all
-     (`GRAPH.md § Server Resolution`). `GRAPH.md § Lock Contention` names the three
-     narrow windows in which a caller still meets a server on the lock, and each
-     ends in this rule's bounded wait and this section's rule 2.
+     the statement and is not meant to be: no caller takes this lock at all, so no
+     caller waits on a running server (`GRAPH.md § Server Resolution`). What is
+     still exposed to it is a second server started against a roadmap the first is
+     already serving, which is refused rather than queued, and that refusal is the
+     interlock rather than a defect.
 5. Recovery on open is expected to be transparent for a consistently committed
    store. A corrupt or unreadable store surfaces as `utils.ErrGraphStore` (exit
    code 1); there is no automatic graph-store repair in this version.
 
 ### Synchronous Checkpoint on Write
 
-After a transaction that appended to the write-ahead log commits durably, the
-implementation produces a self-sufficient on-disk snapshot of the committed graph
-state and truncates the write-ahead log, synchronously within the same short-lived
-invocation, before closing the store. A transaction that appended nothing never
-checkpoints. The feature-level behaviour is specified in
-`GRAPH.md § Synchronous Checkpoint on Write`; this section records the runtime
-implications.
+After a transaction that appended to the write-ahead log commits durably, a fold
+of that log into a self-sufficient on-disk snapshot is owed. `rmp graph serve` is
+the only process that runs one, because it is the only process that opens a store;
+it folds on a cadence while it runs and again at shutdown when the log has grown.
+A transaction that appended nothing owes no fold. The feature-level behaviour is
+specified in `GRAPH.md § Synchronous Checkpoint on Write` and
+`GRAPH.md § Durability and Checkpointing in a Long-Lived Process`; this section
+records the runtime implications.
 
-1. **Checkpoint ordering.** The checkpoint runs inside the invocation that already
-   holds the graph store lock. It runs after the transaction commit and acquires no
-   separate lock. Two concurrent invocations against
-   the same roadmap still serialise on that one lock exactly as specified in
-   [Write Contention and Recovery](#write-contention-and-recovery); the checkpoint
-   does not introduce a new contention point beyond the statement itself. Holding the
-   lock until the checkpoint completes is what makes the sequence safe, as described
-   in [Transactional Model and Writer Serialisation](#transactional-model-and-writer-serialisation).
-2. **Durability boundary.** The transaction commit is the durability boundary. The
-   committed change survives recovery from the write-ahead log regardless of the
-   checkpoint outcome. The snapshot is self-sufficient (it carries the
-   node-identifier-to-key mapping) so that truncating the log after the snapshot
-   loses no committed data and recovery can rebuild from the snapshot plus any log
-   tail alone.
+1. **Checkpoint ordering.** A fold runs inside the process that already holds the
+   graph store lock, and acquires no separate lock. The in-flight fold is driven
+   through the engine's own commit serialiser, so what it captures is a real
+   transaction boundary rather than a graph caught mid-commit; the shutdown fold
+   runs after the drain, when no statement is in flight. Holding the lock across
+   the whole sequence is what makes it safe, as described in
+   [Transactional Model and Writer Serialisation](#transactional-model-and-writer-serialisation).
+2. **Durability boundary.** The transaction commit is the durability boundary, and
+   it precedes the acknowledgement the client reads. The committed change survives
+   recovery from the write-ahead log regardless of the fold's outcome. The snapshot
+   is self-sufficient — it carries the node-identifier-to-key mapping, the
+   tombstone set and the registered schema — so that truncating the log after the
+   snapshot loses no committed data and recovery can rebuild from the snapshot plus
+   any log tail alone.
 3. **Write-ahead-log truncation.** After the self-sufficient snapshot is durable,
-   the write-ahead log is truncated. Without truncation the log would grow with
-   every write for the life of the graph, and every invocation (read or write)
-   would replay the full write history on open, degrading open latency in
-   proportion to total history. Truncation bounds log size and keeps recovery cost
-   proportional to the live graph size.
-4. **Failure policy.** A checkpoint failure that occurs after the commit is
-   already durable MUST NOT fail the user-visible write. The command returns its
-   normal success output and exit code 0; the checkpoint failure is reported as a
-   diagnostic on stderr (per `HELP.md § Error message format`) without changing the
-   exit code. This is a degraded-but-correct state: the intact write-ahead log
-   still recovers the committed state, and the next successful write checkpoints
-   again and reconciles the snapshot. A failure before or during the commit is an
-   ordinary write failure (`utils.ErrGraphEngine`, exit code 1), not a checkpoint
-   failure, and no checkpoint is attempted.
-5. **Performance trade-off.** A synchronous full snapshot on every write makes each
-   write cost proportional to the live graph size, because the snapshot rewrites
-   the committed state. The deliberate trade is bounded write-ahead-log growth and
-   a recovery cost proportional to live graph size rather than to total write
-   history. This version intentionally does **not** use a size-thresholded or
-   background checkpoint; a thresholded checkpoint that snapshots only after the
-   log crosses a size bound is a possible future optimisation and is out of scope
-   here.
+   the write-ahead log is truncated. Without truncation the log would grow for the
+   whole life of the server, and the next server to open the store would replay
+   that history, degrading open latency in proportion to it. Truncation bounds log
+   size and keeps recovery cost proportional to the live graph size.
+4. **Failure policy.** A fold that fails after the commit is already durable MUST
+   NOT fail the write the client was acknowledged for. The client's result and exit
+   code are unchanged; the failure is reported on the server's own stderr without
+   reaching the caller. This is a degraded-but-correct state: the intact
+   write-ahead log still recovers the committed state, and the next successful fold
+   reconciles the snapshot. A failure before or during the commit is an ordinary
+   write failure (`utils.ErrGraphEngine`, exit code 1 at the caller), not a fold
+   failure, and no fold is attempted.
+5. **Performance trade-off.** A full snapshot makes each fold cost proportional to
+   the live graph size, because the snapshot rewrites the committed state. That
+   cost is why a long-lived server folds on a cadence rather than after every
+   committed write: doing the latter would make every write cost the whole live
+   graph while its neighbours waited for the quiesce the capture takes. The
+   cadence's value is set on measurement and is not fixed in this specification
+   (`GRAPH.md § Durability and Checkpointing in a Long-Lived Process`, rule 6).
 
 ### Statements Against a Contended Store
 
-An invocation observes the last committed state, reconstructed from the snapshot
-plus the write-ahead-log tail, and that state is fixed at the moment its own store
-open returned.
+A statement observes the last committed state as the store's MVCC presents it,
+inside the one server process that holds the store open.
 
-An invocation is **not** independent of another that holds the store. Groadmap
-adds no second lock: every caller takes the one graph store lock exclusively,
-before the store is opened, and holds it until after any checkpoint (see
+**Statements no longer contend on the graph store lock, because no caller takes
+it.** That lock is taken once by `rmp graph serve` and held for its process
+lifetime, so it serialises servers rather than statements (see
 [Transactional Model and Writer Serialisation](#transactional-model-and-writer-serialisation)).
-A caller therefore waits, for a bounded time, on whichever invocation holds the
-store when it tries to open it. This is not an optimisation the implementation may
-skip: opening the store runs recovery, recovery repairs an interrupted checkpoint
-on disk, and an unlocked open could delete or race the staging directory a
-concurrent checkpoint is publishing from. The full contract, including what a
-statement that writes nothing does and does not change on disk, is
-`GRAPH.md § Concurrency and Recovery`.
+Concurrency between statements is resolved inside the server by the store's MVCC:
+readers never block, writers do not exclude one another, and a write-write
+collision is detected rather than prevented, on a first-updater-wins basis. The
+client retries the loser. `GRAPH.md § Concurrency Inside the Server` is canonical
+for that, and `GRAPH.md § Concurrency and Recovery` for the lock's contract.
 
-Two consequences follow from the single mode, and both are stated rather than
-discovered. A long-running statement blocks every other statement against the same
-roadmap for as long as it runs, because the hold spans the execution and not only
-the open. And two statements that each write nothing still serialise, where a
-shared mode would have let them overlap; nothing about a statement is known before
-it runs, so there is no mode to choose between.
+Two consequences follow, and both are stated rather than discovered. A
+long-running statement no longer blocks every other statement against the same
+roadmap: two statements against one server run at the same time. And a caller that
+meets a serialisation conflict on every attempt is meeting contention over one hot
+node rather than concurrency in general, which is what makes spreading writes
+across distinct nodes the remedy rather than reducing the writer count.
 
 ## Performance Considerations
 

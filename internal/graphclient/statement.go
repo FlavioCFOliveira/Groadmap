@@ -2,9 +2,9 @@
 // Client.
 //
 // [Send] is the ONE realisation of "run this statement on that server" in the
-// product. `rmp graph client` is a thin command-line wrapper over it,
-// `rmp graph execute` calls it whenever resolution reports a server, and so does
-// the web graph data endpoint. A second implementation would be a second set of
+// product. `rmp graph client` is a thin command-line wrapper over it, and the
+// web graph data endpoint calls it too — the two surfaces that reach a graph,
+// now that a server is the only way in. A second implementation would be a second set of
 // answers to every question that section settles — which retry, which deadline,
 // which mapping — so there is one.
 //
@@ -14,9 +14,9 @@
 // of expr.Value, the engine's OWN value model, not JSON.
 //
 // That choice is what makes SPEC/DATA_FORMATS.md § Graph Client Result's central
-// requirement — that the bytes `rmp graph client` writes are the bytes
-// `rmp graph execute` writes for the same statement — hold by construction rather
-// than by inspection. The step from those values to the published JSON is the ONE
+// requirement — that the bytes `rmp graph client` writes render faithfully what
+// the engine returned for the statement, losing nothing on the way through the
+// wire — hold by construction rather than by inspection. The step from those values to the published JSON is the ONE
 // realisation every surface shares, internal/graphjson, and each caller runs it
 // over a served result exactly as it runs it over a result the engine handed it
 // in-process (SPEC/DATA_FORMATS.md § One Realisation of the Mapping). Mapping to
@@ -238,6 +238,16 @@ type Result struct {
 	// (SPEC/DATA_FORMATS.md § Graph Client Result).
 	Plan    *exec.PlanNode
 	Profile *exec.PlanNode
+
+	// Counters is what the statement changed in the graph, nil when it changed
+	// nothing — which is what the server's omission of the statistics map means
+	// and what a read produces (SPEC/GRAPH.md § Write Counters: What a Statement Changed, rule 4).
+	//
+	// It joins the pointer prefix for the alignment reason the two plan pointers
+	// are there for, and it is the engine's own representation for the reason
+	// they are: the step from here to the published JSON is the one realisation
+	// every surface shares, so this surface adds no second opinion about it.
+	Counters *exec.QueryCounters
 
 	Columns       []string
 	Rows          [][]expr.Value
@@ -521,6 +531,12 @@ func (s *session) run(ctx context.Context, statement string) (*Result, error) {
 			// is. At most one of the two keys is ever written.
 			result.Plan = planOf(m.Metadata, "plan")
 			result.Profile = planOf(m.Metadata, "profile")
+			// Same message, same window, same reason: the write effects are
+			// final only once the statement is, so the server computes them for
+			// the SUCCESS that terminates the stream and writes them beside the
+			// notifications and the plan. The key is absent whenever the
+			// statement changed nothing.
+			result.Counters = countersOf(m.Metadata)
 			return result, nil
 		default:
 			return nil, s.responseFailure(ctx, response)

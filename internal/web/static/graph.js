@@ -32,6 +32,12 @@
 
   var dataUrl = graphEl.getAttribute("data-graph-url");
   var emptyEl = document.getElementById("empty-graph");
+  // The graph that cannot be reached is a DISTINCT state from the empty one:
+  // the endpoint answers 503 when no graph server is running for the roadmap,
+  // and an interface that showed "no data" for both would tell an operator whose
+  // server is not running that their graph is empty (SPEC/WEB.md Acceptance
+  // Criterion 161; § Roadmap Knowledge-Graph Page).
+  var unreachableEl = document.getElementById("unreachable-graph");
   var panelEl = document.getElementById("detail-panel");
   var panelTitle = document.getElementById("detail-title");
   var panelBody = document.getElementById("detail-body");
@@ -115,7 +121,26 @@
   // source/target into objects) never corrupts the next layout.
   var graphModel = null;
 
+  // showUnreachable and hideUnreachable drive the "cannot reach" state. It is
+  // mutually exclusive with the empty state: showing one hides the other, so the
+  // page never presents an unreachable graph as an empty one.
+  function showUnreachable() {
+    if (unreachableEl) {
+      unreachableEl.hidden = false;
+    }
+    if (emptyEl) {
+      emptyEl.hidden = true;
+    }
+  }
+
+  function hideUnreachable() {
+    if (unreachableEl) {
+      unreachableEl.hidden = true;
+    }
+  }
+
   function showEmpty() {
+    hideUnreachable();
     if (emptyEl) {
       emptyEl.hidden = false;
     }
@@ -1663,16 +1688,39 @@
       .then(function (resp) {
         // The endpoint returns a structured JSON error with HTTP 400 for a
         // classified query-bar failure (an invalid limit, or a statement that
-        // failed once running). Parse the body either way so the distinct
-        // message can be shown; only a non-OK, non-400 status is treated as a
-        // hard failure.
-        return resp.json().then(function (body) {
-          return { ok: resp.ok, status: resp.status, body: body };
-        });
+        // failed once running), and an opaque plain-text body for its 5xx. Parse
+        // the JSON body when there is one and tolerate its absence, so a 503 is
+        // read as the state it is rather than as a parse failure.
+        return resp
+          .json()
+          .catch(function () {
+            return null;
+          })
+          .then(function (body) {
+            return { ok: resp.ok, status: resp.status, body: body };
+          });
       })
       .then(function (res) {
         if (res.ok) {
+          hideUnreachable();
           applyData(res.body);
+          return;
+        }
+        // 503 is the one failure that is not about the statement: no graph
+        // server is running for this roadmap, so there is nothing to read and
+        // the remedy is to start one. It is shown as its own state rather than
+        // as a query error, and never as an empty graph (SPEC/WEB.md Acceptance
+        // Criterion 161; § Knowledge Graph from the GoGraph Store, rule 1).
+        if (res.status === 503) {
+          // The in-memory model is emptied rather than left stale, so switching
+          // layout after an unreachable answer cannot re-render a graph that was
+          // read before the server stopped.
+          graphModel = buildModel({ nodes: [], edges: [] });
+          focusedNodeId = null;
+          hidePanel();
+          clearGraph();
+          renderSidebar(graphModel);
+          showUnreachable();
           return;
         }
         // A classified query-bar error carries { error, kind }. Show the

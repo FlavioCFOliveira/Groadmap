@@ -1186,7 +1186,7 @@ const (
 // platform's, and in opposite directions: U+0085 is stripped here and kept by the
 // platform's trimming, U+FEFF is kept here and stripped by it.
 func TestTaskSearch_DivergentCodePointsSelectTheSameCardsOnBothPaths(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	t.Setenv("HOME", shortHome(t))
 	f := seedFoldFixture(t, "multilingual-settlement")
 	mux := buildMux()
 

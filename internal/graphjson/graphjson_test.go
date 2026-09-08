@@ -17,7 +17,7 @@ import (
 // three publishing surfaces were collapsed onto this package (rmp task #394). It
 // travelled because it was the only fence the mapping had anywhere:
 // internal/commands.serializeValue, which publishes every top-level result cell
-// `rmp graph execute` and `rmp graph client` write, had no direct test at all.
+// `rmp graph client` writes, had no direct test at all.
 // Deleting the copy without carrying its tests across would have left the
 // surviving realisation less tested than the one that was removed.
 
@@ -30,7 +30,7 @@ import (
 // statement about reachability: every kind below is reachable through the CLI,
 // and the temporal ones persist. Measured against ./bin/rmp:
 //
-//	rmp graph execute -q "RETURN datetime('2026-09-04T10:11:12.123456789Z') AS dt,
+//	rmp graph client -q "RETURN datetime('2026-09-04T10:11:12.123456789Z') AS dt,
 //	  date('2026-09-04') AS d, localdatetime('2026-09-04T10:11:12.5') AS ldt,
 //	  localtime('10:11:12.25') AS lt, time('10:11:12.75Z') AS t,
 //	  duration({months:1, days:2, seconds:3, nanoseconds:400000000}) AS dur"
@@ -295,7 +295,7 @@ func TestValue_NestedMap(t *testing.T) {
 
 // TestValue_Node exercises the KindNode branch: a node carries its storage id,
 // its labels, and a recursively mapped property bag. This is the element shape
-// `rmp graph execute` publishes for a node in a result cell AND the one the
+// `rmp graph client` publishes for a node in a result cell AND the one the
 // graph data endpoint publishes in its nodes array — one shape, because one
 // piece of code produces both (SPEC/DATA_FORMATS.md § Graph element mapping;
 // § Graph View Data).

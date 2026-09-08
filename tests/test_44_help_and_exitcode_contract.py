@@ -26,8 +26,9 @@ C. Help content structural checks (binary-level):
        --title, --description, --order, "CLOSED", "immutable".
    10. rmp sprint --help mentions exit code 5 (order collision).
    11. rmp sprint tasks --help mentions -s / --status.
-   12. Every graph subcommand (execute) help
-       contains "Output (stdout JSON):" and "-q" / "--query".
+   12. Every graph subcommand (serve, client) help contains
+       "Output (stdout JSON):"; client, the only one that takes a statement,
+       also publishes "-q" / "--query", and serve publishes neither.
    13. No hard TAB character in any help output for any command.
    14. rmp sprint --help, rmp sprint create --help and rmp sprint update --help
        document the macro-goal semantics of the -d/--description flag.
@@ -70,11 +71,18 @@ TASK_SUBS = [
     "subtasks",
     "add-dep", "remove-dep", "blockers", "blocking",
 ]
-# `rmp graph` publishes exactly one subcommand
-# (SPEC/COMMANDS.md section "Graph Management"). The list is kept as a list
-# because every use below iterates it, and because a second subcommand added
-# tomorrow belongs here rather than in five places.
-GRAPH_SUBS = ["execute"]
+# `rmp graph` publishes exactly two subcommands, serve and client
+# (SPEC/COMMANDS.md section "Graph Management"). `execute` was withdrawn: the
+# graph is reachable only through a running server, spoken to by a client, so
+# `rmp graph <anything else>` is now an unknown subcommand and exits 127. The
+# list is kept as a list because every use below iterates it, and because a
+# third subcommand added tomorrow belongs here rather than in five places.
+GRAPH_SUBS = ["serve", "client"]
+
+# The one graph subcommand that carries a Cypher statement. serve runs none of
+# its own, so it publishes no --query at all, and the flag assertions below are
+# keyed on this name rather than on the whole family.
+GRAPH_STATEMENT_SUB = "client"
 
 # Sentences that every surface documenting the sprint -d/--description flag
 # must carry (plain-text help and the --ai-help JSON contract alike), per
@@ -140,7 +148,8 @@ class TestBannerInvariantsBinary:
             ("roadmap", "create"),
             ("backlog", "list"),
             ("audit", "history"),
-            ("graph", "execute"),
+            ("graph", "serve"),
+            ("graph", "client"),
         ]
         for family, sub in samples:
             _, out, _ = _run(self.cli, [family, sub, "--help"], {"HOME": self.home})
@@ -470,20 +479,35 @@ class TestHelpContentBinary:
         print("✓ sprint create / sprint update --ai-help: --description macro-goal documented")
 
     def test_graph_subcommand_helps_have_output_block_and_query_short_form(self):
-        """Every graph subcommand help has 'Output (stdout JSON):' and -q/--query."""
+        """Every graph subcommand help has 'Output (stdout JSON):'; only the
+        statement-carrying one publishes -q/--query.
+
+        Both halves are owed. serve and client each write JSON to stdout -- the
+        bound socket path for one, the statement result for the other -- so the
+        Output block belongs on both. The query flag belongs to client alone:
+        serve runs no statement of its own, and a --query advertised on it
+        would offer back the one-shot form the family withdrew.
+        """
         for sub in GRAPH_SUBS:
             out = self._help(["graph", sub, "--help"])
             lower = out.lower()
             assert "output (stdout json)" in lower, (
                 f"graph {sub} --help: missing 'Output (stdout JSON):' block"
             )
-            assert "-q" in out, (
-                f"graph {sub} --help: missing -q short form for --query"
-            )
-            assert "--query" in out, (
-                f"graph {sub} --help: missing --query flag"
-            )
-        print(f"✓ all {len(GRAPH_SUBS)} graph subcommand helps: Output block and -q/--query")
+            if sub == GRAPH_STATEMENT_SUB:
+                assert "-q, --query" in out, (
+                    f"graph {sub} --help: missing the -q short form beside --query"
+                )
+                assert "--query <cypher>" in out, (
+                    f"graph {sub} --help: missing the --query flag and its argument"
+                )
+            else:
+                assert "--query" not in out, (
+                    f"graph {sub} --help: publishes a --query flag, but "
+                    f"{GRAPH_STATEMENT_SUB} is the only subcommand that carries a statement"
+                )
+        print(f"✓ all {len(GRAPH_SUBS)} graph subcommand helps: Output block, "
+              f"--query on {GRAPH_STATEMENT_SUB} alone")
 
     def test_no_hard_tab_in_any_help_output(self):
         """No help output for any command or subcommand must contain a hard TAB."""

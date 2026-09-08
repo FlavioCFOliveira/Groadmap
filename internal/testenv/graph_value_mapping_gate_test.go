@@ -21,8 +21,8 @@ import (
 //
 // THE DEFECT IT CLOSES. One mapping from an engine value to published JSON was
 // written twice, in two packages, with nothing that failed when they disagreed:
-// internal/commands.serializeValue served `rmp graph execute` and
-// `rmp graph client`, and internal/web.serializeGraphValue served the graph data
+// internal/commands.serializeValue served the CLI's statement-running
+// subcommand, and internal/web.serializeGraphValue served the graph data
 // endpoint. Every side a test normally watches stayed quiet. Both copies
 // compiled, because neither called the other. Both passed, because each was
 // exercised against itself where it was exercised at all — and only ONE of them

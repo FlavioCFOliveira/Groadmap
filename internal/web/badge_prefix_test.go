@@ -46,7 +46,7 @@ import (
 // task's own priority and severity, so the two agreeing on the UNPREFIXED form
 // cannot pass either.
 func TestBadgePrefix_BothBoardsRenderOnePairForm(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	t.Setenv("HOME", shortHome(t))
 	f := seedSprintBoardFixture(t, "settlement-platform")
 	mux := buildMux()
 
@@ -132,7 +132,7 @@ func TestBadgePrefix_BothBoardsRenderOnePairForm(t *testing.T) {
 //
 // Both boards are checked, because both carry the pair.
 func TestBadgePrefix_ColourFollowsTheValueNotThePrefixedText(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	t.Setenv("HOME", shortHome(t))
 	f := seedSprintBoardFixture(t, "settlement-platform")
 	mux := buildMux()
 
@@ -229,7 +229,7 @@ func TestBadgePrefix_ColourFollowsTheValueNotThePrefixedText(t *testing.T) {
 // prefix could only reach the modal's badge as a literal in the expression that
 // builds it, and the check is that the expression is the bare field reference.
 func TestBadgePrefix_TaskDetailModalRendersTheValuesBare(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	t.Setenv("HOME", shortHome(t))
 	f := seedSprintBoardFixture(t, "settlement-platform")
 	mux := buildMux()
 
@@ -320,7 +320,7 @@ func TestBadgePrefix_TaskDetailModalRendersTheValuesBare(t *testing.T) {
 // analogy: a badge whose text is a status name must render that name and nothing
 // else, and no badge may render a letter followed by a status name.
 func TestBadgePrefix_NoOtherBadgeTakesAPrefix(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	t.Setenv("HOME", shortHome(t))
 
 	// Two roadmaps, because no single one exercises every badge in the interface:
 	// the board fixture supplies the cards and the sprint page's board, and the

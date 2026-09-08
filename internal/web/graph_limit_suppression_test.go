@@ -26,7 +26,7 @@ import (
 // that can carry no LIMIT clause at all — a schema-introspection command and a
 // standalone procedure call. Both failed in the PARSER instead of running, so
 // the endpoint was stricter than the contract it publishes and stricter than
-// `rmp graph execute`, which runs both.
+// `rmp graph client`, which runs both.
 
 // distinctLabelCount is the number of extra single-node labels the suppression
 // tests seed. It must exceed the smallest allowed node limit (50) so a projected
@@ -392,7 +392,11 @@ func TestApplyGraphLimit_SuppressedForNonLimitableForms(t *testing.T) {
 // the node limit: the standalone call returns every label, more than the
 // resolved limit allows.
 func TestApplyGraphLimit_SuppressedFormsExecute(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	t.Setenv("HOME", shortHome(t))
+	// No server, deliberately: this test drives the ENGINE's read path over the
+	// store directly and never touches the endpoint, so what it measures is what
+	// applyGraphLimit produced and what the engine does with it. Starting a
+	// server would take the store's exclusive lock and leave nothing to open.
 	name := seedRoadmap(t, "web-ui-rollout")
 	labels := seedLabelledGraph(t, name)
 	engine := openGraphReadEngine(t, name)
@@ -467,9 +471,12 @@ func TestApplyGraphLimit_SuppressedFormsExecute(t *testing.T) {
 // Acceptance Criterion 157. The sibling test below asserts that refusal, so the
 // form is covered rather than dropped.
 func TestHandleGraphData_NonLimitableFormsRunThroughTheEndpoint(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	t.Setenv("HOME", shortHome(t))
+	// The store is seeded first and served second: seedGraph opens the store
+	// unlocked, and a server holds it for its whole lifetime.
 	name := seedRoadmap(t, "web-ui-rollout")
 	seedLabelledGraph(t, name)
+	serveGraph(t, name)
 
 	queries := []string{
 		// Standalone procedure calls, projected and not.
@@ -528,9 +535,12 @@ func TestHandleGraphData_NonLimitableFormsRunThroughTheEndpoint(t *testing.T) {
 // 400 with a kind of its own, which Acceptance Criterion 111 states MUST fail:
 // "asserting that either form is refused MUST fail this criterion".
 func TestHandleGraphData_SchemaIntrospectionIsSuppressedAndExecuted(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	t.Setenv("HOME", shortHome(t))
+	// The store is seeded first and served second: seedGraph opens the store
+	// unlocked, and a server holds it for its whole lifetime.
 	name := seedRoadmap(t, "web-ui-rollout")
 	seedLabelledGraph(t, name)
+	serveGraph(t, name)
 
 	for _, q := range []string{
 		"SHOW INDEXES",
@@ -568,9 +578,8 @@ func TestHandleGraphData_SchemaIntrospectionIsSuppressedAndExecuted(t *testing.T
 // it. The call projects node values so the bound is observable in the response's
 // own node array, which is the endpoint's only measurable output.
 func TestHandleGraphData_ProjectedCallIsNotStandalone(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
-	name := seedRoadmap(t, "web-ui-rollout")
-	seedGraph(t, name, `UNWIND range(1,120) AS i CREATE (:Bulk {i:i})`)
+	t.Setenv("HOME", shortHome(t))
+	name := servedRoadmap(t, "web-ui-rollout", `UNWIND range(1,120) AS i CREATE (:Bulk {i:i})`)
 
 	// db.labels() yields one row per label; the MATCH re-expands each label's
 	// nodes, so the projected result carries real nodes and the endpoint can be

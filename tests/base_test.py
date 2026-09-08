@@ -5,10 +5,15 @@ Provides common utilities and setup/teardown functionality.
 """
 
 import re
+import queue
+import signal
 import subprocess
 import json
 import os
+import socket as socketlib
 import tempfile
+import threading
+import time
 import shutil
 import uuid
 from datetime import datetime, timezone
@@ -312,7 +317,15 @@ class GroadmapTestBase:
         self.roadmaps_dir = self.home_dir / ".roadmaps"
 
     def teardown(self):
-        """Clean up test environment."""
+        """Clean up test environment.
+
+        Any graph server this fixture started is killed FIRST. A server holds
+        its roadmap's store open for its whole lifetime, so removing the
+        temporary HOME out from under a live one leaves a process writing into
+        a directory that no longer exists -- and, worse, leaves it running for
+        the rest of the suite holding a lock nothing else can take.
+        """
+        self.stop_graph_servers()
         if self.test_dir and os.path.exists(self.test_dir):
             shutil.rmtree(self.test_dir)
 
@@ -522,3 +535,598 @@ class GroadmapTestBase:
         if status:
             cmd.extend(["--status", status])
         return self.run_cmd_json(cmd)
+
+    # ----------------------------------------------------------------------
+    # The graph server, and reaching a graph through it
+    #
+    # `rmp graph execute` is withdrawn. The graph is reachable only through a
+    # running `rmp graph serve`, spoken to by `rmp graph client`
+    # (SPEC/GRAPH.md "The Dedicated Graph Server"), so every module that
+    # touches a graph now needs a server before it can assert anything about
+    # one. The three things that takes -- start it, wait for it to bind, stop
+    # it -- live here rather than in each module, because fifteen copies of a
+    # process lifecycle is fifteen places for a leaked child to hide.
+    #
+    # The wait is on the STARTUP OBJECT the server prints, never on a sleep.
+    # SPEC/GRAPH.md "Server Startup" step 7 writes that line only after the
+    # store has been opened and the socket bound, so reading it is observing
+    # the whole startup sequence complete; a sleep is a guess about a machine
+    # that passes on a fast one and flakes on a loaded one.
+    # ----------------------------------------------------------------------
+
+    def _graph_servers(self) -> List["GraphServeProcess"]:
+        """The servers this fixture has started, created on first use so a
+        subclass that does not call setup() still tears down cleanly."""
+        if not hasattr(self, "_servers"):
+            self._servers = []
+        return self._servers
+
+    def start_graph_server(self, roadmap: str, socket_path: Optional[str] = None,
+                           timeout: float = 15.0) -> "GraphServeProcess":
+        """Start `rmp graph serve` for `roadmap`, block until it has announced
+        its socket, track it for teardown, and return the handle.
+
+        The roadmap must exist; its GRAPH need not. Starting a server against
+        a roadmap that has never had a graph is what CREATES one
+        (SPEC/GRAPH.md "Server Startup", step 1), which is why nothing has to
+        materialise a store first any more.
+        """
+        server = GraphServeProcess(self, roadmap, socket_path=socket_path)
+        self._graph_servers().append(server)
+        server.start(timeout=timeout)
+        return server
+
+    def stop_graph_servers(self):
+        """Force-kill every server this fixture started that is still running.
+
+        It is a KILL and not a signal: this runs in teardown, where the point
+        is that nothing outlives the test, and a server wedged badly enough to
+        ignore SIGINT is exactly the case a graceful stop would hang on. A
+        test whose subject is the graceful shutdown drives it itself.
+        """
+        for server in self._graph_servers():
+            try:
+                if server.is_alive():
+                    server.kill_dash_9()
+            except Exception:
+                pass
+        self._servers = []
+
+    def default_socket_path(self, roadmap: str) -> str:
+        """The socket `rmp graph serve` and `rmp graph client` both derive for
+        `roadmap` under this fixture's HOME, when neither is given --socket."""
+        return str(self.home_dir / ".roadmaps" / roadmap / "graph.sock")
+
+    def run_cli(self, args: List[str], stdin_text: Optional[str] = None,
+                timeout: float = 20.0) -> Tuple[int, str, str]:
+        """One `rmp` invocation against this fixture's HOME, returning
+        (exit_code, stdout, stderr).
+
+        It is distinct from run_cmd, which every non-graph module uses: this
+        NEVER raises on a non-zero exit -- a graph module inspects the code
+        itself in almost every case -- it can feed standard input, which the
+        graph family reads a statement from, and it is bounded by a timeout so
+        a wedged invocation fails the test instead of the run.
+        """
+        env = os.environ.copy()
+        env["HOME"] = str(self.home_dir)
+        result = subprocess.run(
+            [self.cli_path] + args,
+            input=stdin_text,
+            capture_output=True,
+            text=True,
+            env=env,
+            timeout=timeout,
+        )
+        return result.returncode, result.stdout, result.stderr
+
+    def graph_client(self, roadmap: str, query: Optional[str] = None,
+                     stdin_text: Optional[str] = None, socket: Optional[str] = None,
+                     extra: Optional[List[str]] = None,
+                     timeout: float = 20.0) -> Tuple[int, str, str]:
+        """Send one Cypher statement to the roadmap's graph server through
+        `rmp graph client`, returning (exit_code, stdout, stderr).
+
+        `query` supplies it through --query and `stdin_text` through standard
+        input; SPEC/GRAPH.md "Cypher Input Source and Precedence" makes the two
+        equally valid, and a caller with a very long statement wants the second
+        because Linux caps a single argv entry at 128 KiB. Supplying neither is
+        itself a case some modules drive, so it is permitted here.
+        """
+        args = ["graph", "client", "-r", roadmap]
+        if socket is not None:
+            args += ["--socket", socket]
+        if query is not None:
+            args += ["--query", query]
+        if extra:
+            args += extra
+        return self.run_cli(args, stdin_text=stdin_text, timeout=timeout)
+
+    def graph_ok(self, roadmap: str, query: Optional[str] = None,
+                 stdin_text: Optional[str] = None, socket: Optional[str] = None,
+                 timeout: float = 20.0) -> Any:
+        """Run a statement that must succeed and return its parsed stdout.
+
+        It fails loudly with the invocation's own streams rather than returning
+        a value a caller would then assert about, because a statement that did
+        not run is not a result worth comparing.
+        """
+        rc, out, err = self.graph_client(roadmap, query=query, stdin_text=stdin_text,
+                                         socket=socket, timeout=timeout)
+        statement = query if query is not None else stdin_text
+        assert rc == 0, (
+            f"the statement {statement!r} failed against roadmap {roadmap!r}: "
+            f"exit={rc} stdout={out!r} stderr={err!r}"
+        )
+        try:
+            return json.loads(out)
+        except json.JSONDecodeError as exc:
+            raise AssertionError(
+                f"the statement {statement!r} wrote non-JSON to stdout: {out!r} ({exc})"
+            ) from exc
+
+    def served_roadmap(self, name: str, *seed_queries: str,
+                       socket_path: Optional[str] = None) -> "GraphServeProcess":
+        """Create `name`, start a server for it, run every seed statement
+        through the client, and return the running server.
+
+        This is the whole fixture most graph cases need. The server is started
+        BEFORE the seeds because it is what creates the graph store: nothing
+        else does, and a roadmap that has never had a graph is served an empty
+        one whose first node the first seed creates.
+        """
+        self.create_roadmap(name)
+        server = self.start_graph_server(name, socket_path=socket_path)
+        for statement in seed_queries:
+            rc, out, err = self.graph_client(name, query=statement, socket=socket_path)
+            assert rc == 0, (
+                f"seeding {name!r} with {statement!r} failed: "
+                f"exit={rc} stdout={out!r} stderr={err!r}"
+            )
+        return server
+
+
+class _StreamDrain:
+    """Reads one subprocess pipe (stdout or stderr) on a background thread so
+    the writer never blocks on a full OS pipe buffer, and hands the reader a
+    thread-safe, timeout-capable view of what has arrived.
+
+    A graph server's own stdout carries exactly one line (the startup JSON)
+    and then nothing until it exits; its stderr carries the two engine
+    warnings early and nothing else on the happy path. Both must be drained
+    continuously regardless, because a client-under-test can print to either
+    at any point in the process's life, and an un-drained pipe backs up and
+    wedges the child the moment its buffer fills.
+    """
+
+    def __init__(self, stream):
+        self._lines = []
+        self._lock = threading.Lock()
+        self._queue: "queue.Queue[str]" = queue.Queue()
+        self._thread = threading.Thread(target=self._run, args=(stream,), daemon=True)
+        self._thread.start()
+
+    def _run(self, stream):
+        try:
+            for line in iter(stream.readline, ""):
+                with self._lock:
+                    self._lines.append(line)
+                self._queue.put(line)
+        finally:
+            # A sentinel so a blocked waiter (wait_for / wait_for_json_object)
+            # unblocks the instant the pipe reaches EOF -- typically because
+            # the child has exited -- instead of sitting out its whole
+            # timeout for a line that will never arrive.
+            self._queue.put(None)
+            try:
+                stream.close()
+            except OSError:
+                pass
+
+    def snapshot(self):
+        with self._lock:
+            return list(self._lines)
+
+    def text(self):
+        return "".join(self.snapshot())
+
+    def wait_for(self, predicate, timeout):
+        """Block until a line already collected -- or a new one -- satisfies
+        predicate, or timeout elapses. Returns the matching line, or None.
+        """
+        deadline = time.monotonic() + timeout
+        for line in self.snapshot():
+            if predicate(line):
+                return line
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return None
+            try:
+                line = self._queue.get(timeout=remaining)
+            except queue.Empty:
+                return None
+            if line is None:
+                return None
+            if predicate(line):
+                return line
+
+    def wait_for_json_object(self, timeout):
+        """Block until the lines collected so far (from the start of the
+        stream) parse as one JSON value, or timeout elapses.
+
+        `rmp graph serve`'s startup object is pretty-printed across several
+        lines (two-space indentation, per DATA_FORMATS.md "Implementation
+        Notes"), so a single-line read never sees a complete object; this
+        accumulates lines and re-attempts the parse after each one, which
+        works for a pretty-printed object of any number of lines without
+        this harness hardcoding how many `rmp` happens to emit today.
+        """
+        deadline = time.monotonic() + timeout
+        buf = "".join(self.snapshot())
+        while True:
+            candidate = buf.strip()
+            if candidate:
+                try:
+                    return json.loads(candidate)
+                except json.JSONDecodeError:
+                    pass
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return None
+            try:
+                line = self._queue.get(timeout=remaining)
+            except queue.Empty:
+                return None
+            if line is None:
+                return None
+            buf += line
+
+
+class GraphServeProcess:
+    """One `rmp graph serve` child process, spawned and torn down by hand.
+
+    This is the harness every module that needs a live server builds on: it
+    owns the subprocess, the two drained pipes, parsing the startup JSON off
+    stdout, and sending a signal or a kill with a bounded wait for the exit
+    that must follow. Nothing here talks Bolt -- the tests reach the server
+    exclusively through `rmp graph client` -- which is what makes this an
+    end-to-end suite for the CLI contract rather than a second, private
+    protocol client.
+
+    It lives in base_test.py rather than in the module that first needed it
+    because fifteen modules need it now, and a process lifecycle copied
+    fifteen times is fifteen places for a leaked child holding a store lock to
+    hide.
+    """
+
+    def __init__(self, harness: "GroadmapTestBase", roadmap: str, socket_path: str = None):
+        self.harness = harness
+        self.roadmap = roadmap
+        self.socket_path_flag = socket_path
+        self.proc = None
+        self.socket = None
+        self._out = None
+        self._err = None
+
+    def start(self, timeout: float = 15.0):
+        """Launch the server and block until its startup JSON line has been
+        read off stdout (SPEC/GRAPH.md "Server Startup" step 7: the line is
+        written only after the store has been opened, so seeing it is seeing
+        the whole startup sequence complete, not merely the socket bound).
+
+        Raises AssertionError, with the process's own stdout/stderr attached,
+        on early exit or on a startup that never announces within `timeout`.
+        """
+        args = [self.harness.cli_path, "graph", "serve", "-r", self.roadmap]
+        if self.socket_path_flag is not None:
+            args += ["--socket", self.socket_path_flag]
+
+        env = os.environ.copy()
+        env["HOME"] = str(self.harness.home_dir)
+
+        self.proc = subprocess.Popen(
+            args, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env,
+        )
+        self._out = _StreamDrain(self.proc.stdout)
+        self._err = _StreamDrain(self.proc.stderr)
+
+        obj = self._out.wait_for_json_object(timeout)
+        if obj is None:
+            self.proc.poll()
+            self._finish_teardown_if_dead()
+            raise AssertionError(
+                f"rmp graph serve -r {self.roadmap} printed no complete startup "
+                f"object within {timeout}s (exited={self.proc.returncode}); "
+                f"stdout={self._out.text()!r} stderr={self._err.text()!r}"
+            )
+        self.socket = obj["socket"]
+        return obj
+
+    def _finish_teardown_if_dead(self):
+        if self.proc.poll() is not None:
+            return
+        try:
+            self.proc.wait(timeout=1.0)
+        except subprocess.TimeoutExpired:
+            pass
+
+    def stop(self, sig=signal.SIGINT, timeout: float = 15.0) -> int:
+        """Signal the server and block for its exit. Returns the exit code.
+
+        Raises AssertionError, rather than leaving a wedged child behind, if
+        the process does not exit inside `timeout`.
+        """
+        assert self.proc is not None, "start() was never called"
+        if self.proc.poll() is not None:
+            return self.proc.returncode
+        self.proc.send_signal(sig)
+        try:
+            self.proc.wait(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            self.proc.kill()
+            self.proc.wait(timeout=5.0)
+            raise AssertionError(
+                f"rmp graph serve -r {self.roadmap} did not exit within {timeout}s "
+                f"of signal {sig!r}; it was force-killed. "
+                f"stdout={self._out.text()!r} stderr={self._err.text()!r}"
+            )
+        return self.proc.returncode
+
+    def kill_dash_9(self, timeout: float = 10.0):
+        """SIGKILL the server -- uncatchable, no drain, no checkpoint -- and
+        wait for the process table entry to clear. Used by every scenario
+        that needs a stale socket or a genuinely severed connection rather
+        than a graceful stop, and by the fixture's own teardown.
+        """
+        assert self.proc is not None, "start() was never called"
+        if self.proc.poll() is None:
+            self.proc.kill()
+        self.proc.wait(timeout=timeout)
+        return self.proc.returncode
+
+    def pause(self, timeout: float = 5.0) -> str:
+        """SIGSTOP the server, wait for the stop to be OBSERVABLE, and return
+        the process state last seen.
+
+        The signal is uncatchable and unmaskable, so the process leaves the run
+        queue wherever it happens to be -- including inside an engine call --
+        and cannot answer anything at all until it is resumed. What it does NOT
+        touch is the connection: nothing is closed, no FIN or RST reaches the
+        peer, and the kernel goes on holding both ends of the socket. That is
+        the difference between "the server is alive and not answering" and "the
+        connection was lost", and it is the difference the two published lines
+        for those two states are told apart by.
+
+        DELIVERY IS NOT ARRIVAL, and reading the state once is not enough. The
+        kernel marks the signal pending and the thread group leaves the run
+        queue when its threads are next scheduled, so /proc still reports 'R'
+        for a short while after os.kill returns: measured against a server busy
+        executing a write, the stop became observable between 0.108 ms and
+        2.183 ms later (median 0.146 ms, 30 samples), and reading the state
+        once instead of polling for it reported 'R' on two of the first three
+        runs of that case. Polling until 'T' is what turns "the signal was
+        sent" into "the process is stopped", which is the property a caller
+        asserting on a server that cannot answer actually needs. The wait is
+        bounded so that a server which never stops fails the caller's assertion
+        with the state it was really in, rather than hanging here.
+        """
+        assert self.proc is not None, "start() was never called"
+        assert self.is_alive(), (
+            f"rmp graph serve -r {self.roadmap} had already exited "
+            f"({self.proc.returncode}) before it could be frozen; "
+            f"stderr={self.stderr_text()!r}"
+        )
+        os.kill(self.proc.pid, signal.SIGSTOP)
+        deadline = time.monotonic() + timeout
+        while True:
+            state = self.state()
+            if state == "T" or time.monotonic() >= deadline:
+                return state
+            time.sleep(0.001)
+
+    def resume(self) -> str:
+        """SIGCONT a frozen server, putting it back on the run queue with its
+        statement, its session and its socket exactly as it left them.
+        """
+        assert self.proc is not None, "start() was never called"
+        os.kill(self.proc.pid, signal.SIGCONT)
+        return self.state()
+
+    def state(self) -> str:
+        """The process state character Linux publishes as field 3 of
+        /proc/<pid>/stat: 'R' running, 'S' sleeping, 'D' in uninterruptible
+        sleep, 'T' stopped by a signal, 'Z' exited and not yet reaped.
+
+        Read from the LAST ')' rather than by splitting the whole line, because
+        field 2 is the executable name in parentheses and a name may itself
+        contain a space or a ')'. Returns 'Z' for a process that has exited and
+        whose entry Popen has not yet collected, and raises FileNotFoundError
+        for one that has been reaped -- both of which are states a caller here
+        wants to see fail loudly rather than be smoothed over.
+        """
+        assert self.proc is not None, "start() was never called"
+        with open(f"/proc/{self.proc.pid}/stat", "rb") as fh:
+            raw = fh.read()
+        return raw[raw.rindex(b")") + 2:].split(b" ", 1)[0].decode()
+
+    def is_alive(self) -> bool:
+        return self.proc is not None and self.proc.poll() is None
+
+    def drain_stderr_to_eof(self, timeout: float = 5.0):
+        """Block until the server's stderr pipe reaches EOF, so a caller that
+        has already seen the process exit can read the WHOLE stream rather
+        than whatever the draining thread happened to have collected.
+
+        The drain runs on its own thread, so `proc.wait()` returning does not
+        mean the last line has been appended. Every assertion that compares the
+        COMPLETE stderr -- rather than searching it for a fragment -- has to
+        close that window first, or it races the thread and fails
+        intermittently on a line that did arrive.
+
+        `_StreamDrain._run` puts a `None` sentinel on the queue at EOF, so
+        waiting for a predicate nothing satisfies returns exactly when the pipe
+        closes (or when `timeout` elapses, which a caller that has already
+        observed the exit can treat as a drained stream).
+        """
+        if self._err is not None:
+            self._err.wait_for(lambda _line: False, timeout)
+
+    def stderr_text(self) -> str:
+        return self._err.text() if self._err else ""
+
+    def stdout_text(self) -> str:
+        return self._out.text() if self._out else ""
+
+    def wait_for_exit(self, timeout: float):
+        """Block for a NATURAL exit -- no signal sent -- returning the exit
+        code, or None if it is still running when `timeout` elapses.
+        """
+        try:
+            return self.proc.wait(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            return None
+
+
+# --------------------------------------------------------------------------
+# The graph write-result shape
+#
+# `rmp graph client` answers a statement that produces no
+# result columns with {"ok": true}, and a statement that CHANGED the graph adds
+# one further member, `counters`, naming what it changed
+# (SPEC/DATA_FORMATS.md § Graph Write Result and § Graph Query Counters;
+# SPEC/GRAPH.md § Write Counters: What a Statement Changed).
+#
+# The member is additive, so `ok` keeps its meaning, its value and its position.
+# What it broke is the IDIOM these suites used to assert that shape:
+# `result == {"ok": True}` compares the whole object and therefore fails on a
+# correct result the moment the statement changed something. Relaxing each site
+# to `result["ok"] is True` would fix the failure and lose what the comparison
+# was worth -- it would stop noticing a stray third member, which is exactly the
+# drift a whole-object comparison exists to catch.
+#
+# This is the one place the rule is written, so the suites cannot come to
+# disagree about what the shape is: `ok` is true, and the only other member the
+# object may carry is `counters`, whose value is asserted when the caller knows
+# what the statement changed.
+# --------------------------------------------------------------------------
+
+
+def assert_graph_write_shape(result: Any, context: str = "",
+                             counters: Optional[Dict[str, int]] = None):
+    """Assert the {"ok": true} write shape, with its optional counters member.
+
+    counters, when given, is the COMPLETE expected block: every counter the
+    statement produced, and no other, because a zero is omitted rather than
+    published. Pass {} to require that the statement changed nothing and
+    therefore carries no `counters` key at all.
+    """
+    where = f"{context}: " if context else ""
+    assert isinstance(result, dict), f"{where}the write shape is a JSON object; got {result!r}"
+    assert result.get("ok") is True, (
+        f"{where}a statement that produces no result columns returns "
+        f'{{"ok": true}}; got {result!r}')
+    extra = set(result) - {"ok", "counters"}
+    assert not extra, (
+        f"{where}the only member additive to the write shape is 'counters'; "
+        f"got the unexpected {sorted(extra)!r} in {result!r}")
+    if counters is None:
+        return
+    if counters == {}:
+        assert "counters" not in result, (
+            f"{where}a statement that changed nothing carries no 'counters' key at "
+            f"all, and produces exactly the bytes it produced before the member "
+            f"existed; got {result!r}")
+        return
+    assert result.get("counters") == counters, (
+        f"{where}expected the counters {counters!r} -- a zero is omitted, not "
+        f"published; got {result.get('counters')!r}")
+
+
+# --------------------------------------------------------------------------
+# The platform's socket-path bound
+#
+# A Unix domain socket path is bounded by the size of the kernel's sun_path
+# field, and the bound is NOT the same everywhere: across the nine targets
+# SPEC/BUILD.md declares it is 107 bytes on Linux and Windows and 103 on
+# macOS, FreeBSD and OpenBSD. A test that writes either figure down is wrong
+# on the other platforms, and wrong in the PERMISSIVE direction on three of
+# the five -- it would let a harness build a path the kernel refuses and then
+# fail with the bare "bind: invalid argument" that SPEC/GRAPH.md
+# "Socket Path Length" exists to replace.
+#
+# So the bound is MEASURED, once, here, by binding real sockets until one is
+# refused, and every module that needs it reads this one function. It lives in
+# base_test rather than in the module that first needed it because two modules
+# need it, and importing one test module from another merely to share a number
+# makes the two a cycle.
+# --------------------------------------------------------------------------
+
+
+def _bind_at(directory: str, length: int) -> bool:
+    """Bind a real AF_UNIX listener whose absolute path is exactly `length`
+    bytes, and report whether the platform accepted it.
+
+    The socket is created and immediately removed, so the measurement leaves
+    nothing behind. A successful return is a real kernel bind -- the half that
+    could not be faked by any check running before the syscall.
+    """
+    padding = length - len(directory) - 1
+    assert padding >= 1, (
+        f"the measurement directory {directory!r} is {len(directory)} bytes, "
+        f"too long to build a path of {length} bytes inside it. This module "
+        f"needs a short $TMPDIR."
+    )
+    path = os.path.join(directory, "b" * padding)
+    assert len(path) == length, (len(path), length)
+
+    sock = socketlib.socket(socketlib.AF_UNIX, socketlib.SOCK_STREAM)
+    try:
+        sock.bind(path)
+    except OSError:
+        return False
+    finally:
+        sock.close()
+    os.unlink(path)
+    return True
+
+
+def measure_socket_path_bound(directory: str, floor: int = 64, ceiling: int = 400) -> int:
+    """Return the greatest socket-path length this platform will bind, found by
+    binding real sockets at increasing lengths until one is refused.
+
+    Acceptance Criterion 67 requires exactly this and forbids the alternative:
+    a criterion asserting the literal 107 would confirm the defect on the three
+    operating systems whose bound is 103, and would confirm it silently.
+
+    The figure returned is the largest length that SUCCEEDED, which is a pure
+    kernel observation. The refusals above it are corroboration, and four of
+    them are required so a single anomalous length cannot be mistaken for the
+    boundary.
+    """
+    largest_bound = None
+    for length in range(floor, ceiling + 1):
+        if _bind_at(directory, length):
+            largest_bound = length
+            continue
+
+        assert largest_bound is not None, (
+            f"no socket path bound at any length from {floor} bytes upward; the "
+            f"measurement directory {directory!r} is unusable"
+        )
+        assert largest_bound == length - 1, (
+            f"the boundary is not contiguous: the largest length that bound was "
+            f"{largest_bound} but {length} is the first refused"
+        )
+        for over in range(length, min(length + 4, ceiling) + 1):
+            assert not _bind_at(directory, over), (
+                f"a path of {over} bytes bound after {length} was refused, so the "
+                f"refusal at {length} was not the platform's bound"
+            )
+        return largest_bound
+
+    raise AssertionError(
+        f"no socket path was refused at any length up to {ceiling} bytes; this "
+        f"platform appears to have no sun_path bound, which contradicts every "
+        f"target SPEC/BUILD.md declares"
+    )

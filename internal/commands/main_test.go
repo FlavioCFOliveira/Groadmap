@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/FlavioCFOliveira/Groadmap/internal/testenv"
+	"github.com/FlavioCFOliveira/Groadmap/internal/testenv/graphserver"
 )
 
 // TestMain makes every test in this package hermetic by pointing HOME at a
@@ -25,7 +26,18 @@ import (
 // covers tests added later automatically. Tests that need a home of their own
 // still call t.Setenv("HOME", ...) and keep working — t.Setenv restores the
 // value installed here when the test finishes.
+//
+// It also doubles as the entry point of the CHILD GRAPH SERVER this package's
+// tests re-execute. `rmp graph client` sends its statement to a running server
+// and has no second path, so a test that runs a statement needs one;
+// graphserver.RunChild turns a run of this binary into that server when the
+// parent asked for it, and reports false on every ordinary run. See
+// internal/testenv/graphserver for why the child is a process and why it is this
+// binary rather than ./bin/rmp.
 func TestMain(m *testing.M) {
+	if code, isChild := graphserver.RunChild(); isChild {
+		os.Exit(code)
+	}
 	os.Exit(runTests(m))
 }
 
@@ -37,4 +49,30 @@ func runTests(m *testing.M) int {
 	defer restore()
 
 	return m.Run()
+}
+
+// shortHome is a HOME under which a roadmap's DERIVED socket path fits, for a
+// test that needs a home of its own rather than the package-wide one TestMain
+// installs.
+//
+// t.TempDir() is the obvious way to get one and is the wrong way here: it names
+// its directory after the TEST, so a descriptive name spends dozens of the bytes
+// sun_path allows and <home>/.roadmaps/<name>/graph.sock lands over the platform's
+// bound — at which point every graph surface refuses the roadmap outright
+// (SPEC/GRAPH.md § Socket Path Length, rules 5 and 6). The refusal is correct and
+// has nothing to do with what such a test is asserting, and whether a test meets
+// it depends on how long its own name happens to be.
+//
+// The directory is testenv's, shared with internal/web's helper of the same name,
+// so there is one implementation of "a home short enough to hold a socket"; what
+// is here is the t.Fatalf and the t.Cleanup.
+func shortHome(t *testing.T) string {
+	t.Helper()
+
+	home, remove, err := testenv.ShortHome()
+	if err != nil {
+		t.Fatalf("creating a short HOME: %v", err)
+	}
+	t.Cleanup(remove)
+	return home
 }

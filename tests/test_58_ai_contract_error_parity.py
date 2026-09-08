@@ -267,8 +267,9 @@ def to_argv(cmd, roadmap):
 EXTERNAL_TAIL_MARKERS = [
     (
         "graph query failed: ",
-        "internal/commands/graph.go wraps the Cypher engine's own parse or "
-        "execution diagnostic. SPEC/COMMANDS.md declines to specify it "
+        "internal/commands/graph_socket.go wraps the Cypher engine's own parse "
+        "or execution diagnostic as the server hands it back. SPEC/COMMANDS.md "
+        "declines to specify it "
         '("what follows is the engine\'s own text and is not specified '
         'here"), it tracks the engine version rather than rmp, and it names '
         "grammar tokens no rmp source file owns. Only the fixed prefix "
@@ -711,9 +712,20 @@ class TestAIContractErrorParity:
         equality against the prefix alone does NOT -- which is what makes the
         prefix comparison necessary rather than merely lenient."""
 
-        # Locus 1: the Cypher engine's own parse diagnostic.
-        rc, out, err = self.fx.run(
-            ["graph", "execute", "-r", self.fx.roadmap, "--query", "MATCH ("])
+        # Locus 1: the Cypher engine's own parse diagnostic. Reaching the
+        # engine at all now means reaching a SERVER: `rmp graph execute` was
+        # withdrawn, and `rmp graph client` is the only way to run a statement,
+        # so one is started for the fixture roadmap and stopped again here. It
+        # is stopped rather than left for teardown because the rest of this
+        # module drives a corpus that presumes nothing is listening, and a
+        # server left running would be a change in the module's own state that
+        # no later test declares.
+        server = self.fx.test.start_graph_server(self.fx.roadmap)
+        try:
+            rc, out, err = self.fx.run(
+                ["graph", "client", "-r", self.fx.roadmap, "--query", "MATCH ("])
+        finally:
+            server.stop()
         actual = err.splitlines()[0] if err else ""
         published = "Error: graph engine error: graph query failed: <engine diagnostic>"
         mode, prefix = classify(published)

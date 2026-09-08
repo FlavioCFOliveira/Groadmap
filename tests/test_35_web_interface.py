@@ -344,15 +344,43 @@ class TestWebInterface:
         self.closed_task_id = t_closed
 
         # A small knowledge graph: two nodes and one relationship.
-        self._run(["graph", "execute", "-r", ROADMAP,
-                   "--query", "CREATE (s:Spec {key:'passwordless-auth'})"])
-        self._run(["graph", "execute", "-r", ROADMAP,
-                   "--query", "CREATE (c:Code {path:'internal/auth/magiclink.go'})"])
-        self._run(["graph", "execute", "-r", ROADMAP,
-                   "--query",
-                   "MATCH (s:Spec {key:'passwordless-auth'}), "
-                   "(c:Code {path:'internal/auth/magiclink.go'}) "
-                   "CREATE (s)-[:IMPLEMENTED_BY]->(c)"])
+        #
+        # The graph is reachable only through a running `rmp graph serve`,
+        # spoken to by `rmp graph client` (SPEC/GRAPH.md § The Dedicated Graph
+        # Server), and starting that server is also what CREATES a roadmap's
+        # graph store. So the server comes first and the seeds go through the
+        # client, and the server is left RUNNING for the whole scenario: the
+        # graph data endpoint reaches the graph the same way and answers HTTP
+        # 503 while nothing is serving the roadmap, so every case that reads the
+        # graph over HTTP needs this server listening for its requests.
+        self.graph_server = self._serve_graph(
+            ROADMAP,
+            "CREATE (s:Spec {key:'passwordless-auth'})",
+            "CREATE (c:Code {path:'internal/auth/magiclink.go'})",
+            "MATCH (s:Spec {key:'passwordless-auth'}), "
+            "(c:Code {path:'internal/auth/magiclink.go'}) "
+            "CREATE (s)-[:IMPLEMENTED_BY]->(c)",
+        )
+
+    # ---- knowledge-graph helpers ---------------------------------------
+
+    def _serve_graph(self, roadmap, *statements):
+        """Start a graph server for an EXISTING roadmap, run every statement
+        through `rmp graph client`, and return the running server.
+
+        The server is tracked by the shared fixture and force-killed in
+        teardown, so nothing outlives the scenario holding a store lock.
+        """
+        server = self.test.start_graph_server(roadmap)
+        for statement in statements:
+            self.test.graph_ok(roadmap, query=statement)
+        return server
+
+    def _graph(self, statement, roadmap=ROADMAP):
+        """Run one statement against a served roadmap's graph and return its
+        parsed JSON result. It must succeed; a statement that did not run is
+        not a result worth comparing."""
+        return self.test.graph_ok(roadmap, query=statement)
 
     def _fresh_home(self):
         """A separate empty HOME (no roadmaps) for empty-state tests."""
@@ -4952,25 +4980,62 @@ class TestWebInterface:
             assert isinstance(node["labels"], list)
 
     def test_graph_reads_create_no_snapshot(self):
+        """A read over the endpoint owes no checkpoint, so no snapshot appears.
+
+        Nothing here can create one by accident: the web server never opens a
+        graph store, and the graph server folds a snapshot only when the
+        write-ahead log has grown since the last fold (SPEC/GRAPH.md
+        § Synchronous Checkpoint on Write). Five reads append nothing, so the
+        snapshot directory the fixture's server left absent must stay absent.
+        """
         graph_dir = Path(self.home) / ".roadmaps" / ROADMAP / "graph"
         snap = graph_dir / "snapshot"
-        snap_existed = snap.exists()
+        assert not snap.exists(), (
+            "precondition: the fixture's seeding writes leave no snapshot behind, "
+            "so an absent snapshot afterwards is evidence about the reads"
+        )
         proc, port = self._start(["--port", "0"])
         for _ in range(5):
             assert self._req(port, f"/roadmaps/{ROADMAP}/graph/data")[0] == 200
-        # A web read must not trigger a checkpoint: no snapshot newly created.
-        if not snap_existed:
-            assert not snap.exists(), "web graph reads must not create a snapshot/ dir"
+        assert not snap.exists(), "web graph reads must not create a snapshot/ dir"
 
-    def test_empty_graph_returns_empty_and_creates_nothing(self):
-        # A roadmap that never used `graph`: empty graph, no graph/ dir created.
+    def test_unserved_roadmap_is_unavailable_and_creates_no_graph(self):
+        """A roadmap nothing is serving: HTTP 503, and no graph/ directory.
+
+        This is what became of the old "an absent graph reads as the empty
+        graph" case. The web server no longer opens a store at all -- the graph
+        is reachable only through a running `rmp graph serve` -- so a roadmap
+        with no server is a dependency that is not up, answered 503, and the
+        request never touches the filesystem where a store would live
+        (SPEC/WEB.md § Knowledge Graph from the GoGraph Store).
+
+        The second half is what keeps the first honest. Serving the same roadmap
+        creates its store, empty, and the endpoint then answers the empty graph
+        the criterion has always asked for -- so the 503 above was the absence of
+        a server and not an endpoint that had stopped serving empty graphs.
+        """
         self._run(["roadmap", "create", "blankspace"])
         graph_dir = Path(self.home) / ".roadmaps" / "blankspace" / "graph"
         proc, port = self._start(["--port", "0"])
+
         status, _, body = self._req(port, "/roadmaps/blankspace/graph/data")
-        assert status == 200
-        assert json.loads(body) == {"nodes": [], "edges": []}
-        assert not graph_dir.exists(), "reading an absent graph must not create graph/"
+        assert status == 503, (
+            f"a roadmap no server is serving must be answered 503; got "
+            f"{status} {body!r}")
+        assert "internal server error" in body.lower(), (
+            f"the 503 body stays opaque and names no path; got {body!r}")
+        assert not graph_dir.exists(), (
+            "the web server must not open or create a graph store: reading an "
+            "absent graph created graph/")
+
+        # Now serve it. Starting the server is what creates the store, empty.
+        self._serve_graph("blankspace")
+        assert graph_dir.exists(), "the server must have created the graph store"
+        status, _, body = self._req(port, "/roadmaps/blankspace/graph/data")
+        assert status == 200, (
+            f"a served roadmap must be answered 200; got {status} {body!r}")
+        assert json.loads(body) == {"nodes": [], "edges": []}, (
+            f"an empty graph is served as the empty graph; got {body!r}")
 
     # ====================================================================
     # AC45-AC50: graph query bar (q / limit parameters on graph/data)
@@ -5061,13 +5126,13 @@ class TestWebInterface:
         whatever it does, its change is committed, and a SEPARATE process finds
         it afterwards.
 
-        The read-back through `rmp graph execute` is what the criterion asks
-        for, and it is not a courtesy. The endpoint opens the store per request,
-        so a write executed against the request's own in-memory graph and
-        discarded when the request ended would answer 200 exactly as a real
-        write does; only a second reader, over a second store open, tells the
-        two apart. That is precisely what an endpoint built without a
-        transactional store does.
+        The read-back through a SEPARATE `rmp graph client` process is what the
+        criterion asks for, and it is not a courtesy. The endpoint answers 200
+        for any statement the graph server ran without error, so a write that
+        was executed and then rolled back -- or one answered out of a per-request
+        graph that never reached the store -- would answer 200 exactly as a
+        committed write does. Only a second process, over its own connection and
+        its own transaction, tells the two apart.
 
         The status alone establishes nothing in the other direction either.
         Before this change the endpoint answered 400 with kind not_read_only,
@@ -5075,53 +5140,58 @@ class TestWebInterface:
         place it answered 400 with kind execution and the engine's own "Run does
         not execute write or DDL statements". Both are refusals; only a 200 plus
         a read-back meets the criterion.
+
+        Durability is asserted on the write-ahead log and NOT on the snapshot.
+        The commit is the durability boundary, and a server does not fold a
+        snapshot per write: it has later opportunities, and a full snapshot after
+        every committed write would make every write cost the whole live graph
+        (SPEC/GRAPH.md § Durability and Checkpointing in a Long-Lived Process,
+        rules 1 and 3). Asserting a snapshot after each write would be asserting
+        the short-lived invocation's rule against a process the specification
+        exempts from it.
         """
         proc, port = self._start(["--port", "0"])
 
-        # CREATE: executed, committed, and found by the CLI afterwards.
+        graph_dir = Path(self.home) / ".roadmaps" / ROADMAP / "graph"
+        wal_before = (graph_dir / "wal").stat().st_size
+
+        # CREATE: executed, committed, and found by a separate client process
+        # afterwards.
         status, _, body = self._req(
             port, self._graph_data(port, q="CREATE (n:WebProbe {key:'p'})"))
         assert status == 200, (
             f"AC47: a CREATE through the query bar must be executed, not "
             f"refused; got {status} {body!r}")
-        _, out, _ = self._run(["graph", "execute", "-r", ROADMAP, "--query",
-                               "MATCH (n:WebProbe {key:'p'}) RETURN count(n)"])
-        assert json.loads(out)["rows"][0][0] == 1, (
+        result = self._graph("MATCH (n:WebProbe {key:'p'}) RETURN count(n)")
+        assert result["rows"][0][0] == 1, (
             "AC47: the node the endpoint created must be present on a separate "
             "read; a 200 that stored nothing is the silent-wrong-data failure "
-            f"this criterion exists against; got {out!r}")
+            f"this criterion exists against; got {result!r}")
 
-        # The store is checkpointed: the snapshot exists and the log is
-        # truncated (SPEC/GRAPH.md section Synchronous Checkpoint on Write).
-        graph_dir = Path(self.home) / ".roadmaps" / ROADMAP / "graph"
-        assert (graph_dir / "snapshot" / "manifest.json").exists(), (
-            "AC47: a write through the endpoint must checkpoint")
+        # The commit reached the write-ahead log, which is where a committed
+        # change is durable before it is acknowledged.
         wal_after_write = (graph_dir / "wal").stat().st_size
+        assert wal_after_write > wal_before, (
+            f"AC47: the committed write must have been appended to the "
+            f"write-ahead log; it is {wal_after_write} bytes and was "
+            f"{wal_before} before the request")
 
         # SET: the property change is committed and visible afterwards.
         status, _, body = self._req(port, self._graph_data(
             port, q="MATCH (n:WebProbe {key:'p'}) SET n.state = 'seen'"))
         assert status == 200, f"a SET must execute; got {status} {body!r}"
-        _, out, _ = self._run(["graph", "execute", "-r", ROADMAP, "--query",
-                               "MATCH (n:WebProbe {key:'p'}) RETURN n.state"])
-        assert json.loads(out)["rows"][0][0] == "seen", (
-            f"AC47: the property change must persist; got {out!r}")
+        result = self._graph("MATCH (n:WebProbe {key:'p'}) RETURN n.state")
+        assert result["rows"][0][0] == "seen", (
+            f"AC47: the property change must persist; got {result!r}")
 
         # DETACH DELETE: the node is gone afterwards.
         status, _, body = self._req(
             port, self._graph_data(port, q="MATCH (n:WebProbe) DETACH DELETE n"))
         assert status == 200, (
             f"AC47: a DETACH DELETE must execute; got {status} {body!r}")
-        _, out, _ = self._run(["graph", "execute", "-r", ROADMAP, "--query",
-                               "MATCH (n:WebProbe) RETURN count(n)"])
-        assert json.loads(out)["rows"][0][0] == 0, (
-            f"AC47: the delete must persist; got {out!r}")
-
-        # Every write checkpointed, so the log never grew without bound.
-        assert (graph_dir / "wal").stat().st_size <= wal_after_write * 4, (
-            "AC47: each write must checkpoint and truncate the log; it is "
-            f"{(graph_dir / 'wal').stat().st_size} bytes and was "
-            f"{wal_after_write} after the first write")
+        result = self._graph("MATCH (n:WebProbe) RETURN count(n)")
+        assert result["rows"][0][0] == 0, (
+            f"AC47: the delete must persist; got {result!r}")
 
         # The seeded graph is intact: the writes above touched only their own
         # nodes.
@@ -5179,7 +5249,7 @@ class TestWebInterface:
     def test_schema_listing_is_read_from_the_cli_not_the_endpoint(self):
         """AC157 and AC156: a schema-introspection command is EXECUTED and
         answered HTTP 200 with {"nodes": [], "edges": []}, while
-        `rmp graph execute` answers the identical statement with the rows naming
+        `rmp graph client` answers the identical statement with the rows naming
         the index the caller declared.
 
         Both halves are required together. The endpoint's answer is empty
@@ -5197,11 +5267,8 @@ class TestWebInterface:
         # The store must hold a schema, or "the endpoint answers an empty graph"
         # would be true for the wrong reason and the distinction AC157 turns on
         # would be unobservable.
-        self._run(["graph", "execute", "-r", ROADMAP, "--query",
-                   "CREATE INDEX spec_key FOR (n:Spec) ON (n.key)"])
-        _, out, _ = self._run(["graph", "execute", "-r", ROADMAP,
-                               "--query", "SHOW INDEXES"])
-        listing = json.loads(out)
+        self._graph("CREATE INDEX spec_key FOR (n:Spec) ON (n.key)")
+        listing = self._graph("SHOW INDEXES")
         declared = [row[listing["columns"].index("name")] for row in listing["rows"]]
         assert "spec_key" in declared, (
             f"AC157: the store must hold the declared index; SHOW INDEXES "
@@ -5222,12 +5289,12 @@ class TestWebInterface:
                 f"cannot carry, so the answer is the empty graph; got {body!r}")
 
         # The other half: the CLI answers the same statement with the rows.
-        _, out, _ = self._run(["graph", "execute", "-r", ROADMAP,
-                               "--query", "SHOW INDEXES"])
-        assert "spec_key" in out, (
-            f"AC157: `rmp graph execute` must report the declared index, which "
+        listing = self._graph("SHOW INDEXES")
+        declared = [row[listing["columns"].index("name")] for row in listing["rows"]]
+        assert "spec_key" in declared, (
+            f"AC157: `rmp graph client` must report the declared index, which "
             f"is what makes the endpoint's empty answer a property of its "
-            f"response shape rather than of the store; got {out!r}")
+            f"response shape rather than of the store; got {listing!r}")
 
     def test_schema_keyword_spacing_is_the_engines_verdict(self):
         """AC151: a schema-introspection command written with anything but a
@@ -5286,14 +5353,12 @@ class TestWebInterface:
 
         # THE CLI ANSWERS THE SAME WAY, which is the point: with the guard rail
         # withdrawn on both surfaces there is no divergence left to reconcile.
-        # `rmp graph execute` hands the badly spaced statement to the engine,
-        # which rejects it as a syntax error -- exit 1, and a diagnostic naming
-        # SHOW rather than the spacing.
-        code, _out, err = self._run(
-            ["graph", "execute", "-r", ROADMAP, "--query", "SHOW  INDEXES"],
-            check=False)
+        # `rmp graph client` hands the badly spaced statement to the server,
+        # whose engine rejects it as a syntax error -- exit 1, and a diagnostic
+        # naming SHOW rather than the spacing.
+        code, _out, err = self.test.graph_client(ROADMAP, query="SHOW  INDEXES")
         assert code == 1, (
-            f"AC151: `rmp graph execute` must let the engine refuse a badly "
+            f"AC151: `rmp graph client` must let the engine refuse a badly "
             f"spaced SHOW, which is exit 1; got {code} with stderr={err!r}")
         assert "validation error" not in err, (
             f"AC151: the refusal is the engine's, not a validation refusal of "
@@ -5305,18 +5370,16 @@ class TestWebInterface:
         unauthenticated GET creates an index in the roadmap's knowledge graph,
         and a separate process finds it under the name the caller declared.
 
-        The pre-existing schema surviving is asserted too: the checkpoint that
-        follows a DDL statement must carry the WHOLE registered schema, not just
-        the new definition. A snapshot that omitted it, followed by the
-        truncation that always follows, destroys every index and constraint the
-        graph had (SPEC/GRAPH.md section Synchronous Checkpoint on Write,
-        step 2).
+        The pre-existing schema surviving is asserted too: whenever the server
+        does fold a snapshot, that snapshot must carry the WHOLE registered
+        schema and not just the newest definition. A snapshot that omitted it,
+        followed by the log truncation that always follows a fold, destroys
+        every index and constraint the graph had (SPEC/GRAPH.md section
+        Synchronous Checkpoint on Write, step 2).
         """
-        self._run(["graph", "execute", "-r", ROADMAP, "--query",
-                   "CREATE INDEX spec_key FOR (n:Spec) ON (n.key)"])
-        self._run(["graph", "execute", "-r", ROADMAP, "--query",
-                   "CREATE CONSTRAINT spec_key_unique FOR (n:Spec) "
-                   "REQUIRE n.key IS UNIQUE"])
+        self._graph("CREATE INDEX spec_key FOR (n:Spec) ON (n.key)")
+        self._graph("CREATE CONSTRAINT spec_key_unique FOR (n:Spec) "
+                    "REQUIRE n.key IS UNIQUE")
 
         proc, port = self._start(["--port", "0"])
 
@@ -5325,29 +5388,25 @@ class TestWebInterface:
         assert status == 200, (
             f"schema DDL through the endpoint must execute; got {status} {body!r}")
 
-        _, out, _ = self._run(["graph", "execute", "-r", ROADMAP,
-                               "--query", "SHOW INDEXES"])
-        listing = json.loads(out)
+        listing = self._graph("SHOW INDEXES")
         names = [row[listing["columns"].index("name")] for row in listing["rows"]]
         assert "audit_key" in names, (
             f"an index created through the endpoint must persist under the name "
             f"the caller declared; SHOW INDEXES reported {names!r}")
         assert "spec_key" in names, (
-            f"the pre-existing index was lost by the checkpoint that followed "
-            f"the DDL, which is the snapshot-without-schema defect; SHOW "
-            f"INDEXES reported {names!r}")
-        _, out, _ = self._run(["graph", "execute", "-r", ROADMAP,
-                               "--query", "SHOW CONSTRAINTS"])
-        assert "spec_key_unique" in out, (
-            f"the declared constraint was lost by the checkpoint; got {out!r}")
+            f"the pre-existing index was lost after the DDL, which is the "
+            f"snapshot-without-schema defect; SHOW INDEXES reported {names!r}")
+        constraints = self._graph("SHOW CONSTRAINTS")
+        declared = [row[constraints["columns"].index("name")]
+                    for row in constraints["rows"]]
+        assert "spec_key_unique" in declared, (
+            f"the declared constraint was lost; got {constraints!r}")
 
         # And the DROP is symmetric.
         status, _, body = self._req(
             port, self._graph_data(port, q="DROP INDEX audit_key"))
         assert status == 200, f"a DROP must execute; got {status} {body!r}"
-        _, out, _ = self._run(["graph", "execute", "-r", ROADMAP,
-                               "--query", "SHOW INDEXES"])
-        listing = json.loads(out)
+        listing = self._graph("SHOW INDEXES")
         names = [row[listing["columns"].index("name")] for row in listing["rows"]]
         assert "audit_key" not in names, (
             f"the DROP must persist; SHOW INDEXES reported {names!r}")
@@ -5362,8 +5421,7 @@ class TestWebInterface:
         returns a non-empty nodes array, so an empty answer is a property of the
         statement rather than of the endpoint.
         """
-        self._run(["graph", "execute", "-r", ROADMAP, "--query",
-                   "CREATE INDEX spec_key FOR (n:Spec) ON (n.key)"])
+        self._graph("CREATE INDEX spec_key FOR (n:Spec) ON (n.key)")
         proc, port = self._start(["--port", "0"])
 
         statements = [
@@ -5385,11 +5443,10 @@ class TestWebInterface:
 
         # The CREATE really created: the empty answer is the response shape, not
         # a statement that did nothing.
-        _, out, _ = self._run(["graph", "execute", "-r", ROADMAP, "--query",
-                               "MATCH (n:Probe {key:'ac156'}) RETURN count(n)"])
-        assert json.loads(out)["rows"][0][0] == 1, (
+        result = self._graph("MATCH (n:Probe {key:'ac156'}) RETURN count(n)")
+        assert result["rows"][0][0] == 1, (
             f"AC156: the CREATE that answered an empty graph must have "
-            f"persisted; got {out!r}")
+            f"persisted; got {result!r}")
 
         # The control.
         status, _, body = self._req(port, self._graph_data(
@@ -5423,14 +5480,17 @@ class TestWebInterface:
         """
         name = "identity-platform"
         self._run(["roadmap", "create", name])
-        for query in [
+        # This roadmap gets a server of its own, left running for the whole
+        # scenario: the endpoint reads it through that server and would answer
+        # 503 without one.
+        self._serve_graph(
+            name,
             "CREATE (s:Spec {key:'session-revocation'}), (v:Test {key:'revoke-on-logout'})",
             "MATCH (s:Spec {key:'session-revocation'}), (v:Test {key:'revoke-on-logout'}) "
             "MERGE (s)-[:VERIFIED_BY]->(v)",
             "MATCH (s:Spec {key:'session-revocation'}), (v:Test {key:'revoke-on-logout'}) "
             "MERGE (v)-[:COVERS]->(s)",
-        ]:
-            self._run(["graph", "execute", "-r", name, "--query", query])
+        )
 
         proc, port = self._start(["--port", "0"])
 
@@ -5501,7 +5561,7 @@ class TestWebInterface:
         that admit NO top-level LIMIT clause at all -- the SHOW schema-
         introspection commands, standalone procedure calls, and every statement
         with no top-level RETURN for a LIMIT to attach to -- so a statement that
-        `rmp graph execute` runs stays usable through the endpoint
+        `rmp graph client` runs stays usable through the endpoint
         (SPEC/WEB.md section Graph Data Endpoint, Suppression 2).
 
         Appending a LIMIT to one of those bounds nothing: it makes the statement
@@ -5528,11 +5588,8 @@ class TestWebInterface:
         # visible as a cap. The module fixture's own graph is two nodes, which
         # no limit in the allowed set could narrow. Each test method runs against
         # its own temporary HOME, so this widening is local to this scenario.
-        self._run(["graph", "execute", "-r", ROADMAP,
-                   "--query", "UNWIND range(1,60) AS i CREATE (:Bulk {i:i})"])
-        _, out, _ = self._run(["graph", "execute", "-r", ROADMAP,
-                               "--query", "MATCH (n) RETURN count(n)"])
-        total = json.loads(out)["rows"][0][0]
+        self._graph("UNWIND range(1,60) AS i CREATE (:Bulk {i:i})")
+        total = self._graph("MATCH (n) RETURN count(n)")["rows"][0][0]
         assert total > 50, (
             f"the control needs a store larger than the 50-node cap; got {total}"
         )
@@ -5645,12 +5702,13 @@ class TestWebInterface:
         scenario alone, so the module's shared fixture stays two nodes and every
         other scenario stays fast.
 
-        That store is sized from measurement. Unbounded — measured through
-        `rmp graph execute` while that surface still ran its statement under no
-        budget of its own, before rmp task #377 gave it the same 5s deadline this
-        endpoint applies — the three-way Cartesian product below costs 61.2s
-        over these 799 nodes against a 5s budget: a twelvefold margin, so the query still cannot finish inside the budget on hardware an
-        order of magnitude faster than the machine this was measured on. The
+        That store is sized from measurement. Measured UNBOUNDED — on a surface
+        that at the time ran its statement under no deadline of its own, before
+        rmp task #377 put every statement under the same 5s budget this endpoint
+        applies — the three-way Cartesian product below costs 61.2s over these
+        799 nodes against a 5s budget: a twelvefold margin, so the query still
+        cannot finish inside the budget on hardware an order of magnitude faster
+        than the machine this was measured on. The
         margin is free: the request is cut at the budget whatever the store size,
         so a larger store buys robustness and costs no wall time. A 399-node
         store, for comparison, costs 7.5s unbounded — a 1.5x margin, which any
@@ -5660,32 +5718,30 @@ class TestWebInterface:
         regression that disabled the budget and failed the request for some other
         reason, instantly, would satisfy an upper bound on its own.
         """
-        # 797 bulk nodes on top of the two-node, one-edge seed the module builds
-        # for its fixture, giving a 799-node store. Seeding is one CLI call and
-        # costs 0.03s.
+        # 797 bulk nodes on top of a two-node, one-edge seed of the same shape
+        # the module fixture builds, giving a 799-node store. The bulk arrives
+        # in a single statement, so the whole seed costs a handful of client
+        # round trips.
         name = "telemetry"
         bulk = 797
         self._run(["roadmap", "create", name])
-        self._run(["graph", "execute", "-r", name,
-                   "--query", "CREATE (s:Spec {key:'passwordless-auth'})"])
-        self._run(["graph", "execute", "-r", name,
-                   "--query", "CREATE (c:Code {path:'internal/auth/magiclink.go'})"])
-        self._run(["graph", "execute", "-r", name,
-                   "--query",
-                   "MATCH (s:Spec {key:'passwordless-auth'}), "
-                   "(c:Code {path:'internal/auth/magiclink.go'}) "
-                   "CREATE (s)-[:IMPLEMENTED_BY]->(c)"])
-        self._run(["graph", "execute", "-r", name,
-                   "--query",
-                   "UNWIND range(1," + str(bulk) + ") AS i CREATE (:Bulk {i:i})"])
+        # Its own server, left running: the endpoint reaches this store the same
+        # way the seeds below do, and the budget under test is the server's.
+        self._serve_graph(
+            name,
+            "CREATE (s:Spec {key:'passwordless-auth'})",
+            "CREATE (c:Code {path:'internal/auth/magiclink.go'})",
+            "MATCH (s:Spec {key:'passwordless-auth'}), "
+            "(c:Code {path:'internal/auth/magiclink.go'}) "
+            "CREATE (s)-[:IMPLEMENTED_BY]->(c)",
+            "UNWIND range(1," + str(bulk) + ") AS i CREATE (:Bulk {i:i})",
+        )
 
         # Ground truth for the store, read from the engine rather than assumed,
         # so the completeness assertion below cannot silently drift with the
         # seed. The reader limit must sit above it, or a capped read would be
         # mistaken for a complete one.
-        _, out, _ = self._run(["graph", "execute", "-r", name,
-                               "--query", "MATCH (n) RETURN count(n)"])
-        seeded = json.loads(out)["rows"][0][0]
+        seeded = self._graph("MATCH (n) RETURN count(n)", roadmap=name)["rows"][0][0]
         assert seeded == bulk + 2, (
             f"the seed must produce {bulk + 2} nodes; got {seeded}"
         )
@@ -5792,11 +5848,10 @@ class TestWebInterface:
         assert status == 200, (
             f"control A: a CREATE under an allowed limit must execute; got "
             f"{status} {body!r}")
-        _, out, _ = self._run(["graph", "execute", "-r", ROADMAP, "--query",
-                               "MATCH (n:WebProbe {key:'control'}) RETURN count(n)"])
-        assert json.loads(out)["rows"][0][0] == 1, (
+        result = self._graph("MATCH (n:WebProbe {key:'control'}) RETURN count(n)")
+        assert result["rows"][0][0] == 1, (
             f"control A: the write did not land, so this test cannot tell an "
-            f"unexecuted statement from an executed one; got {out!r}")
+            f"unexecuted statement from an executed one; got {result!r}")
 
         # Control B: the limit alone is classified invalid_limit.
         status, _, body = self._req(port, self._graph_data(port, limit=bad_limit))
@@ -5814,11 +5869,10 @@ class TestWebInterface:
             f"the invalid-limit message must name the rejected value: {err!r}")
 
         # The statement never ran.
-        _, out, _ = self._run(["graph", "execute", "-r", ROADMAP, "--query",
-                               "MATCH (n:WebProbe {key:'never-created'}) RETURN count(n)"])
-        assert json.loads(out)["rows"][0][0] == 0, (
+        result = self._graph("MATCH (n:WebProbe {key:'never-created'}) RETURN count(n)")
+        assert result["rows"][0][0] == 0, (
             f"the CREATE executed despite the invalid limit; the request must "
-            f"be rejected before the statement runs; got {out!r}")
+            f"be rejected before the statement runs; got {result!r}")
 
     def test_query_bar_error_body_carries_exactly_error_and_kind(self):
         """AC123: every query-bar failure is answered with a JSON body of exactly
@@ -6795,9 +6849,19 @@ class TestWebInterface:
         SO THE ANTECEDENT IS DRIVEN INSTEAD, which is the observable half and
         the half that can actually regress. After the server has served both a
         SQLite-backed page and a knowledge-graph request, a competing CLI
-        process must be able to take the roadmap's graph lock and write to the
-        roadmap's database WHILE THE SERVER IS STILL RUNNING. A server holding
-        either handle open would make that write wait on the lock and then fail.
+        process must be able to write to the roadmap's database and to its
+        knowledge graph WHILE THE SERVER IS STILL RUNNING, and be answered
+        promptly. A server holding the database open would make the task
+        creation wait on SQLite's lock and then fail.
+
+        The graph half of the promise is now kept a step earlier: the web server
+        never opens a graph store at all, because the only process that opens one
+        is `rmp graph serve` and every other surface reaches the graph through it
+        (SPEC/GRAPH.md § Engine Constructor by Path). What the graph write proves
+        here is therefore that nothing the web server holds delays it -- the same
+        observable, over an architecture in which the handle it must not hold no
+        longer exists to be held.
+
         The server is then signalled, and both writes are read back afterwards.
         """
         proc, port = self._start(["--port", "0"])
@@ -6811,13 +6875,11 @@ class TestWebInterface:
         # A competing writer, while the server is still up. Both of these take
         # the very resources the server just used.
         started = time.time()
-        self._run(["graph", "execute", "-r", ROADMAP, "--query",
-                   "CREATE (t:Test {path:'tests/test_35_web_interface.py'})"])
+        self._graph("CREATE (t:Test {path:'tests/test_35_web_interface.py'})")
         graph_write = time.time() - started
         assert graph_write < SHUTDOWN_GRACE_SECONDS, (
-            f"a graph write took {graph_write:.3f}s while the server was up. It waited "
-            f"on the store's lock, so the server was holding the graph store open across "
-            f"requests"
+            f"a graph write took {graph_write:.3f}s while the web server was up, so "
+            f"something it holds across requests delayed a write it has no part in"
         )
         audit_task = self.test.create_task(
             ROADMAP,
@@ -6835,10 +6897,9 @@ class TestWebInterface:
         self._assert_clean_exit(code, signal.SIGTERM, "the store/handle case")
 
         # Both writes survive, and the roadmap is fully usable afterwards.
-        _, out, _ = self._run(["graph", "execute", "-r", ROADMAP, "--query",
-                               "MATCH (t:Test) RETURN t.path"])
-        assert "tests/test_35_web_interface.py" in out, (
-            f"the graph write made while the server was running did not survive: {out}"
+        result = self._graph("MATCH (t:Test) RETURN t.path")
+        assert result["rows"] == [["tests/test_35_web_interface.py"]], (
+            f"the graph write made while the server was running did not survive: {result!r}"
         )
         _, out, _ = self._run(["task", "get", str(audit_task), "-r", ROADMAP])
         assert "Rotate the session signing key quarterly" in out, (

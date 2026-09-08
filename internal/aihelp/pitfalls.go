@@ -22,8 +22,8 @@ package aihelp
 
 // staticPitfalls returns the canonical pitfalls: the twelve mandated by
 // SPEC/DATA_FORMATS.md § AI Agent Contract plus the curated additions for
-// the surfaces the mandatory table predates (the graph statement surface, the
-// comment subcommands). Fresh slice on every call, matching the
+// the surfaces the mandatory table predates (the graph server-and-client pair,
+// the comment subcommands). Fresh slice on every call, matching the
 // defensive-copy semantics of the other static helpers.
 func staticPitfalls() []Pitfall {
 	return []Pitfall{
@@ -142,22 +142,22 @@ func staticPitfalls() []Pitfall {
 		},
 		{
 			ID: "graph_statement_is_not_checked",
-			Description: "Expecting `rmp graph` to refuse a statement for what it does. It has ONE subcommand, " +
-				"execute, and no operation-class check: the same invocation runs a MATCH, a CREATE, a SET, a " +
-				"DETACH DELETE, index and constraint DDL, and the SHOW INDEXES / SHOW CONSTRAINTS listings. " +
-				"There is no subcommand whose contract is \"this cannot delete\", so the protection against " +
-				"deleting through a command believed to be read-only is care with the text supplied, not the " +
-				"subcommand chosen. The names create, query, update, delete and search were subcommands of " +
-				"rmp graph and are not any more: each is now an unresolved subcommand and exits 127. Exit code " +
-				"6 no longer means a class mismatch; on graph execute its only cause is a statement longer than " +
-				"1048576 bytes.",
-			WrongExample:   "rmp graph execute -r myproject --query \"MATCH (n:Spec) DETACH DELETE n\"  # nothing refuses this; it deletes",
-			CorrectExample: "rmp graph execute -r myproject --query \"MATCH (n:Spec) RETURN n.key\"",
-			Reference:      "graph execute; SPEC/COMMANDS.md § Graph Management; SPEC/GRAPH.md § What Groadmap Does Not Check.",
+			Description: "Expecting `rmp graph` to refuse a statement for what it does. The family has TWO " +
+				"subcommands, serve and client, only client runs a statement, and there is no operation-class " +
+				"check: the same invocation runs a MATCH, a CREATE, a SET, a DETACH DELETE, index and " +
+				"constraint DDL, and the SHOW INDEXES / SHOW CONSTRAINTS listings. There is no subcommand " +
+				"whose contract is \"this cannot delete\", so the protection against deleting through a " +
+				"command believed to be read-only is care with the text supplied, not the subcommand chosen. " +
+				"The names create, query, update, delete, search and execute were subcommands of rmp graph and " +
+				"are not any more: each is now an unresolved subcommand and exits 127. Exit code 6 no longer " +
+				"means a class mismatch; on graph client its only cause is a statement longer than 1048576 bytes.",
+			WrongExample:   "rmp graph client -r myproject --query \"MATCH (n:Spec) DETACH DELETE n\"  # nothing refuses this; it deletes",
+			CorrectExample: "rmp graph client -r myproject --query \"MATCH (n:Spec) RETURN n.key\"",
+			Reference:      "graph client; SPEC/COMMANDS.md § Graph Management; SPEC/GRAPH.md § What Groadmap Does Not Check.",
 		},
 		{
 			ID: "graph_schema_two_statements_in_one_query",
-			Description: "Putting a second clause after a schema statement in one `rmp graph execute` " +
+			Description: "Putting a second clause after a schema statement in one `rmp graph client` " +
 				"invocation, as in \"CREATE INDEX ix FOR (n:Spec) ON (n.key) MATCH (m:Spec) SET m.reviewed = true\". " +
 				"The engine's schema parser stops when its grammar is satisfied and discards whatever follows " +
 				"without an error and without a notification, so the trailing clause NEVER RUNS while the " +
@@ -166,24 +166,25 @@ func staticPitfalls() []Pitfall {
 				"code says success. Issue the two statements as two invocations. The same applies to altering " +
 				"an index: there is no ALTER INDEX, so a change of kind or definition is a DROP INDEX and then " +
 				"a CREATE INDEX, two invocations that are not atomic — the index is absent between them.",
-			WrongExample:   "rmp graph execute -r myproject --query \"CREATE INDEX spec_key FOR (n:Spec) ON (n.key) MATCH (m:Spec) SET m.reviewed = true\"",
-			CorrectExample: "rmp graph execute -r myproject --query \"CREATE INDEX spec_key FOR (n:Spec) ON (n.key)\" && rmp graph execute -r myproject --query \"MATCH (m:Spec) SET m.reviewed = true\"",
-			Reference:      "graph execute; SPEC/GRAPH.md § What Groadmap Does Not Check, item 6; § Altering and Recreating an Index.",
+			WrongExample:   "rmp graph client -r myproject --query \"CREATE INDEX spec_key FOR (n:Spec) ON (n.key) MATCH (m:Spec) SET m.reviewed = true\"",
+			CorrectExample: "rmp graph client -r myproject --query \"CREATE INDEX spec_key FOR (n:Spec) ON (n.key)\" && rmp graph client -r myproject --query \"MATCH (m:Spec) SET m.reviewed = true\"",
+			Reference:      "graph client; SPEC/GRAPH.md § What Groadmap Does Not Check, item 6; § Altering and Recreating an Index.",
 		},
 		{
 			ID: "graph_schema_failure_exit_code",
 			Description: "Reading a failed schema statement as a validation error. A duplicate CREATE INDEX " +
 				"or CREATE CONSTRAINT, a DROP INDEX or DROP CONSTRAINT naming an object that does not exist, a " +
 				"definition the engine does not support, and a CREATE CONSTRAINT the data already in the graph " +
-				"does not satisfy all exit 1, not 6: Groadmap cannot know whether an object exists without " +
-				"opening the store, so the check belongs to the engine. A SHOW whose two keywords are not " +
-				"separated by exactly one space also exits 1, as a syntax error from the general Cypher " +
-				"grammar, and its message names SHOW rather than the spacing. The only cause of exit code 6 on " +
-				"graph execute is a statement longer than 1048576 bytes. Write IF NOT EXISTS or IF EXISTS to " +
-				"make a create or a drop a silent no-op instead of a failure.",
-			WrongExample:   "rmp graph execute -r myproject --query \"DROP INDEX spec_key\"  # exits 1 when spec_key is not registered",
-			CorrectExample: "rmp graph execute -r myproject --query \"DROP INDEX spec_key IF EXISTS\"",
-			Reference:      "graph execute; SPEC/GRAPH.md § Schema Failure Classes.",
+				"does not satisfy all exit 1, not 6: whether an object exists is knowable only inside the " +
+				"graph, which only the server has open, so the check belongs to the engine and arrives as the " +
+				"server's own parse/execution failure. A SHOW whose two keywords are not separated by exactly " +
+				"one space also exits 1, as a syntax error from the general Cypher grammar, and its message " +
+				"names SHOW rather than the spacing. The only cause of exit code 6 on graph client is a " +
+				"statement longer than 1048576 bytes. Write IF NOT EXISTS or IF EXISTS to make a create or a " +
+				"drop a silent no-op instead of a failure.",
+			WrongExample:   "rmp graph client -r myproject --query \"DROP INDEX spec_key\"  # exits 1 when spec_key is not registered",
+			CorrectExample: "rmp graph client -r myproject --query \"DROP INDEX spec_key IF EXISTS\"",
+			Reference:      "graph client; SPEC/GRAPH.md § Schema Failure Classes.",
 		},
 		{
 			ID: "task_only_comment_type_on_sprint",
@@ -211,13 +212,31 @@ func staticPitfalls() []Pitfall {
 		},
 		{
 			ID: "graph_missing_query",
-			Description: "Invoking `rmp graph execute` without --query and without piping a statement on " +
+			Description: "Invoking `rmp graph client` without --query and without piping a statement on " +
 				"stdin. When --query is absent the subcommand reads stdin; if stdin is also empty (terminal, " +
 				"no pipe) the command fails with exit code 2. Either pass --query or pipe the Cypher: " +
-				"`echo '<cypher>' | rmp graph execute -r <name>`.",
-			WrongExample:   "rmp graph execute -r myproject",
-			CorrectExample: "rmp graph execute -r myproject --query \"MATCH (n) RETURN count(n)\"",
-			Reference:      "graph execute; SPEC/GRAPH.md § Cypher Input Source and Precedence.",
+				"`echo '<cypher>' | rmp graph client -r <name>`.",
+			WrongExample:   "rmp graph client -r myproject",
+			CorrectExample: "rmp graph client -r myproject --query \"MATCH (n) RETURN count(n)\"",
+			Reference:      "graph client; SPEC/GRAPH.md § Cypher Input Source and Precedence.",
+		},
+		{
+			ID: "graph_client_without_a_server",
+			Description: "Running `rmp graph client` for a roadmap nothing is serving. The graph is reached " +
+				"through a running server and through nothing else: client opens no store and has no second " +
+				"route in, so with nothing listening on the socket it exits 1 with " +
+				"\"no graph server is listening on <socket>\", writes nothing to stdout, and leaves the " +
+				"roadmap's graph/ directory byte-identical. It does NOT fall back to reading the store, and a " +
+				"socket file a killed server left behind is the same condition as no socket at all. The remedy " +
+				"is to start the server first with `rmp graph serve -r <name>` and leave it running: it is " +
+				"long-lived and exits only on SIGINT or SIGTERM, so run it in the background or in another " +
+				"terminal, and wait for the {\"socket\": \"<path>\"} line before sending a statement. " +
+				"Starting a server against a roadmap that has never had a graph is also what creates one. A " +
+				"server started with --socket is invisible to a client that omits the flag, so pass the same " +
+				"--socket to both ends of the pair.",
+			WrongExample:   "rmp graph client -r myproject --query \"MATCH (n) RETURN count(n)\"  # exits 1: nothing is listening",
+			CorrectExample: "rmp graph serve -r myproject & rmp graph client -r myproject --query \"MATCH (n) RETURN count(n)\"",
+			Reference:      "graph serve; graph client; SPEC/COMMANDS.md § Graph Server Socket Error Lines; SPEC/GRAPH.md § Server Resolution; § The Bolt Client.",
 		},
 	}
 }

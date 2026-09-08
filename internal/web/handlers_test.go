@@ -12,7 +12,6 @@ import (
 
 	"github.com/FlavioCFOliveira/Groadmap/internal/db"
 	"github.com/FlavioCFOliveira/Groadmap/internal/models"
-	"github.com/FlavioCFOliveira/Groadmap/internal/utils"
 )
 
 // seedRoadmap creates a real on-disk roadmap under the test's temporary HOME
@@ -73,7 +72,7 @@ func seedRoadmap(t *testing.T, name string) string {
 // + ordered member tasks + classification) and renderHTML's success branch
 // (SPEC/WEB.md § Roadmap Sprints Page; Tasks and Sprints from SQLite).
 func TestHandleSprints_HappyPath(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	t.Setenv("HOME", shortHome(t))
 	name := seedRoadmap(t, "web-ui-rollout")
 
 	mux := buildMux()
@@ -112,7 +111,7 @@ func TestHandleSprints_HappyPath(t *testing.T) {
 // read path (the full, unfiltered task list) and renderHTML's success branch
 // (SPEC/WEB.md § Roadmap Tasks Page; Tasks and Sprints from SQLite).
 func TestHandleTasks_HappyPath(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	t.Setenv("HOME", shortHome(t))
 	name := seedRoadmap(t, "web-ui-rollout")
 
 	mux := buildMux()
@@ -150,7 +149,7 @@ func TestHandleTasks_HappyPath(t *testing.T) {
 // a read method the routes register explicitly alongside GET (SPEC/WEB.md
 // § Routes and Pages: all routes serve GET and HEAD only).
 func TestHandleSprintsAndTasks_Head(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	t.Setenv("HOME", shortHome(t))
 	name := seedRoadmap(t, "web-ui-rollout")
 	mux := buildMux()
 
@@ -174,7 +173,7 @@ func TestHandleSprintsAndTasks_Head(t *testing.T) {
 // labelled "Sprints", not the retired "Tasks & sprints" (SPEC/WEB.md § Roadmap
 // Index Page, Acceptance Criterion 6).
 func TestHandleIndex_WithRoadmaps(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	t.Setenv("HOME", shortHome(t))
 	name := seedRoadmap(t, "web-ui-rollout")
 
 	mux := buildMux()
@@ -212,15 +211,23 @@ func TestHandleIndex_WithRoadmaps(t *testing.T) {
 	}
 }
 
-// TestHandleGraphData_EmptyGraph drives handleGraphData against a roadmap that
-// has never used the graph command. The graph directory is absent, so the
-// handler must return 200 with the empty Graph View Data shape
-// ({"nodes":[],"edges":[]}) WITHOUT creating any graph file. This covers
-// loadGraphView's no-graph-yet path and renderJSON's success branch
-// (SPEC/DATA_FORMATS.md § Graph View Data; SPEC/WEB.md § empty graph).
+// TestHandleGraphData_EmptyGraph drives handleGraphData against a SERVED roadmap
+// whose graph holds nothing: the server created the store and no statement has
+// put anything in it. The handler must return 200 with the empty Graph View Data
+// shape ({"nodes":[],"edges":[]}), covering the success branch of renderJSON and
+// the non-nil empty arrays SPEC/DATA_FORMATS.md § Graph View Data requires.
+//
+// It used to drive a roadmap with no graph DIRECTORY at all, on the strength of
+// loadGraphView's no-graph-yet path. That path is gone: nothing but
+// `rmp graph serve` creates a graph, and a roadmap nothing is serving is answered
+// 503 rather than read as an empty one (SPEC/WEB.md § Knowledge Graph from the
+// GoGraph Store, rule 1; Acceptance Criterion 161 requires the page to
+// distinguish the two). The empty-graph SUCCESS is still a state the endpoint
+// publishes — it is what criterion 156 is about — and this is the state that
+// reaches it now.
 func TestHandleGraphData_EmptyGraph(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
-	name := seedRoadmap(t, "web-ui-rollout")
+	t.Setenv("HOME", shortHome(t))
+	name := servedRoadmap(t, "web-ui-rollout")
 
 	mux := buildMux()
 	req := httptest.NewRequest(http.MethodGet, "/roadmaps/"+name+"/graph/data", nil)
@@ -246,46 +253,27 @@ func TestHandleGraphData_EmptyGraph(t *testing.T) {
 	}
 }
 
-// TestHandleGraphData_GraphPathIsFile covers loadGraphView's "graph is not a
-// directory" branch (data.go: the stat succeeds but info.IsDir() is false).
-// A stray regular file named "graph" in the roadmap home is treated as "no
-// graph yet", so the endpoint returns the empty Graph View Data shape (200)
-// rather than erroring. This guards the read path against a non-directory
-// collision without creating or touching any store.
-func TestHandleGraphData_GraphPathIsFile(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
-	name := seedRoadmap(t, "web-ui-rollout")
-
-	roadmapDir, err := utils.GetRoadmapDir(name)
-	if err != nil {
-		t.Fatalf("resolving roadmap dir: %v", err)
-	}
-	if werr := os.WriteFile(filepath.Join(roadmapDir, "graph"), []byte("stray file"), 0o600); werr != nil {
-		t.Fatalf("writing stray graph file: %v", werr)
-	}
-
-	mux := buildMux()
-	req := httptest.NewRequest(http.MethodGet, "/roadmaps/"+name+"/graph/data", nil)
-	rec := httptest.NewRecorder()
-	mux.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusOK {
-		t.Fatalf("graph data status = %d, want 200 when graph path is a file; body=%q", rec.Code, rec.Body.String())
-	}
-	var view graphView
-	if derr := json.Unmarshal(rec.Body.Bytes(), &view); derr != nil {
-		t.Fatalf("decoding graph data: %v", derr)
-	}
-	if len(view.Nodes) != 0 || len(view.Edges) != 0 {
-		t.Errorf("graph = %+v, want empty nodes/edges", view)
-	}
-}
+// TestHandleGraphData_GraphPathIsFile is RETIRED, and its subject with it.
+//
+// It covered loadGraphView's "graph is not a directory" branch: a stray regular
+// file named `graph` in the roadmap home was treated as "no graph yet" and
+// answered with the empty shape. That branch no longer exists. This endpoint
+// never stats the graph path — it opens no store, resolves a socket instead, and
+// answers 503 when nothing is serving — so there is no collision for it to guard
+// against and no code path a test could reach.
+//
+// The condition itself did not disappear with the branch, it MOVED: a stray file
+// at `~/.roadmaps/<name>/graph` now stops `rmp graph serve`, which is the only
+// thing that creates that directory. That is where the coverage went —
+// internal/commands' TestGraphServe_RefusesAGraphPathThatIsNotADirectory drives
+// it against createGraphDir and asserts the classified refusal and the exit code.
+// Nothing is left uncovered by this retirement.
 
 // TestHandleGraphPage_HappyPath drives handleGraphPage against an existing
 // roadmap: it renders the graph page shell (200 HTML) that bootstraps the
 // client-side visualisation. This covers the renderHTML call for graph.html.
 func TestHandleGraphPage_HappyPath(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	t.Setenv("HOME", shortHome(t))
 	name := seedRoadmap(t, "web-ui-rollout")
 
 	mux := buildMux()

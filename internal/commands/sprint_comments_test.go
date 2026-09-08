@@ -53,7 +53,7 @@ func setupSprintCommentRoadmap(t *testing.T, name string) *db.DB {
 
 	// Hermetic: ~/.roadmaps resolves under the test's own HOME, so a run never
 	// touches (or depends on) the developer's real roadmaps.
-	t.Setenv("HOME", t.TempDir())
+	t.Setenv("HOME", shortHome(t))
 
 	database, cleanup := setupTestTaskRoadmap(t, name)
 	t.Cleanup(cleanup)

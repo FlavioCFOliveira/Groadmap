@@ -449,7 +449,7 @@ var allCardRoles = []string{
 // which pins the predicate away from the page, this covers both the case where
 // other metadata is present and the case where none is.
 func TestSpecialistsRemoval_MetadataFooterRendersPerContributor(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	t.Setenv("HOME", shortHome(t))
 	f := seedSingleIndicatorFixture(t, "settlement-platform")
 	mux := buildMux()
 
@@ -540,7 +540,7 @@ func cardAnywhere(t *testing.T, columns []string, taskID int) string {
 // the script no longer reads would be dead weight on every modal open
 // (SPEC/WEB.md § Task Detail Endpoint; Acceptance Criterion 15).
 func TestSpecialistsRemoval_TaskDetailJSONHasNoKeyForTheField(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	t.Setenv("HOME", shortHome(t))
 	f := seedSingleIndicatorFixture(t, "settlement-platform")
 	mux := buildMux()
 

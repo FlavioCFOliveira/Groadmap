@@ -183,7 +183,7 @@ func TestSprintBoard_ScrollsPerColumnInsideThatHeight(t *testing.T) {
 // board carries no `--bounded` modifier, so the move of that property left the
 // full-height board taking the space the page body leaves, exactly as before.
 func TestSprintBoard_IsNotAFullHeightRegion(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	t.Setenv("HOME", shortHome(t))
 	f := seedSprintBoardFixture(t, "settlement-platform")
 	mux := buildMux()
 
@@ -359,7 +359,7 @@ func TestSprintBoard_ColumnsDivideTheBoardWidthEqually(t *testing.T) {
 // columns would divide the viewport too and lose the 19rem the measure of a card's
 // title depends on (Acceptance Criterion 129 continues to hold).
 func TestSprintBoard_OverrideReachesTheSprintBoardAndOnlyIt(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	t.Setenv("HOME", shortHome(t))
 	f := seedSprintBoardFixture(t, "settlement-platform")
 	mux := buildMux()
 
@@ -417,7 +417,7 @@ func TestSprintBoard_OverrideReachesTheSprintBoardAndOnlyIt(t *testing.T) {
 // requires them unchanged: `19rem` with `flex: 0 0 auto`, on the shared rule, which
 // is what the sprint board's rule overrides and what every other board keeps.
 func TestBoards_ShareTheMinimumGapAndCardPadding(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	t.Setenv("HOME", shortHome(t))
 	f := seedSprintBoardFixture(t, "settlement-platform")
 	mux := buildMux()
 
