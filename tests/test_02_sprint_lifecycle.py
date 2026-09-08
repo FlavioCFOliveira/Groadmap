@@ -163,6 +163,103 @@ class TestSprintLifecycle:
 
         print("✓ Remove sprint test passed")
 
+    def test_remove_sprint_accepts_every_status(self):
+        """Regression: sprint remove has NO status precondition.
+
+        README.md claimed "The sprint must be CLOSED" for `sprint remove`. The
+        binary enforces no such precondition -- PENDING, OPEN and CLOSED are all
+        removable -- so the claim told a reader an OPEN sprint was protected when
+        it was not. This pins the real contract so the documentation cannot drift
+        back to it.
+        """
+        roadmap = self.test.create_roadmap()
+
+        # PENDING: removable without ever being started.
+        pending = self.test.create_sprint(
+            roadmap, "Retire the deprecated token endpoint"
+        )
+        self.test.assert_sprint_status(roadmap, pending, "PENDING")
+        exit_code, _, _ = self.test.run_cmd(
+            ["sprint", "remove", "-r", roadmap, str(pending)], check=False
+        )
+        assert exit_code == 0, f"remove of a PENDING sprint must exit 0, got {exit_code}"
+        self.test.assert_exit_code(
+            ["sprint", "get", "-r", roadmap, str(pending)], expected_code=4
+        )
+
+        # OPEN: removable without being closed first.
+        opened = self.test.create_sprint(
+            roadmap, "Migrate the session store onto the new schema"
+        )
+        self.test.run_cmd(["sprint", "start", "-r", roadmap, str(opened)])
+        self.test.assert_sprint_status(roadmap, opened, "OPEN")
+        exit_code, _, _ = self.test.run_cmd(
+            ["sprint", "remove", "-r", roadmap, str(opened)], check=False
+        )
+        assert exit_code == 0, f"remove of an OPEN sprint must exit 0, got {exit_code}"
+        self.test.assert_exit_code(
+            ["sprint", "get", "-r", roadmap, str(opened)], expected_code=4
+        )
+
+        # CLOSED: removable, as it always was.
+        closed = self.test.create_sprint(
+            roadmap, "Publish the rate-limit headers on every write route"
+        )
+        self.test.run_cmd(["sprint", "start", "-r", roadmap, str(closed)])
+        self.test.run_cmd(["sprint", "close", "-r", roadmap, str(closed)])
+        self.test.assert_sprint_status(roadmap, closed, "CLOSED")
+        exit_code, _, _ = self.test.run_cmd(
+            ["sprint", "remove", "-r", roadmap, str(closed)], check=False
+        )
+        assert exit_code == 0, f"remove of a CLOSED sprint must exit 0, got {exit_code}"
+
+        print("\u2713 sprint remove accepts PENDING, OPEN and CLOSED alike")
+
+    def test_remove_sprint_reverts_a_completed_member(self):
+        """Regression: a COMPLETED member returns to BACKLOG on sprint remove.
+
+        The README documents that returning to BACKLOG clears `commit_close` and
+        preserves `commit_open`. `sprint remove` is one of the four routes back to
+        BACKLOG, and it applies to a COMPLETED member too -- the member is not
+        exempt from the revert because its work finished.
+        """
+        roadmap = self.test.create_roadmap()
+        task = self.test.create_task(
+            roadmap,
+            "Verify the removal path clears the closing commit",
+            "A removed sprint must not leave a member claiming it was concluded.",
+            "Drive the task to COMPLETED, then remove the sprint that holds it.",
+            "The task is BACKLOG, commit_close is null and commit_open survives.",
+        )
+        sprint = self.test.create_sprint(
+            roadmap, "Confirm what sprint remove does to a completed member"
+        )
+        self.test.run_cmd(["sprint", "add-tasks", "-r", roadmap, str(sprint), str(task)])
+        self.test.run_cmd(["sprint", "start", "-r", roadmap, str(sprint)])
+        self.test.run_cmd(
+            ["task", "stat", "-r", roadmap, str(task), "DOING", "--commit-open", "5f93b51"]
+        )
+        self.test.run_cmd(["task", "stat", "-r", roadmap, str(task), "TESTING"])
+        self.test.run_cmd(
+            ["task", "stat", "-r", roadmap, str(task), "COMPLETED", "--commit-close", "2578d18"]
+        )
+        self.test.assert_task_status(roadmap, task, "COMPLETED")
+
+        self.test.run_cmd(["sprint", "remove", "-r", roadmap, str(sprint)])
+
+        after = self.test.run_cmd_json(["task", "get", "-r", roadmap, str(task)])[0]
+        assert after["status"] == "BACKLOG", (
+            f"a COMPLETED member must revert to BACKLOG, got {after['status']}"
+        )
+        assert after.get("commit_close") in (None, ""), (
+            f"sprint remove must clear commit_close, got {after.get('commit_close')}"
+        )
+        assert after.get("commit_open") == "5f93b51", (
+            f"sprint remove must preserve commit_open, got {after.get('commit_open')}"
+        )
+
+        print("\u2713 sprint remove reverts a COMPLETED member and clears only commit_close")
+
     def test_sprint_with_tasks_lifecycle(self):
         """Test sprint lifecycle with tasks."""
         roadmap = self.test.create_roadmap()
