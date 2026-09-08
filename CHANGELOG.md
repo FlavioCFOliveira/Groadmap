@@ -5,6 +5,201 @@ All notable changes to **Groadmap** (`rmp`) are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.17.0] - 2026-09-08
+
+### Added
+
+- **A write says what it changed.** Every statement that changes the graph now
+  publishes a `counters` object beside its result, naming the effects it applied:
+  `nodesCreated`, `nodesDeleted`, `relationshipsCreated`, `relationshipsDeleted`,
+  `propertiesWritten`, `labelsAdded`, `labelsRemoved`, `indexesAdded`,
+  `indexesRemoved`, `constraintsAdded` and `constraintsRemoved`. Until now a write
+  answered `{"ok": true}`, which says a statement succeeded and not the thing a
+  caller writing to a graph most needs to know: two invocations that both printed
+  it may have created a node and matched an existing one, or deleted a thousand
+  relationships and deleted none.
+  - **The member is additive and costs no existing caller a byte.** A counter that
+    is zero is left out, and a statement that changed **nothing** carries no
+    `counters` key at all - every read, every `EXPLAIN`, a `MERGE` that matched an
+    existing element, a `DELETE` whose pattern matched no row. Those produce
+    exactly the bytes they produced before. `ok` keeps its meaning, its value and
+    its position.
+  - **`propertiesWritten` folds two engine counters into one, and the reason is
+    published rather than hidden.** openCypher counts a property assignment and a
+    property removal separately; the Bolt statistics vocabulary has one property
+    counter and no counterpart for a removal, so a served result arrives with the
+    two already summed and the split cannot be recovered. A `REMOVE` that reports
+    `propertiesWritten` is therefore correct and not a defect. Telling a `MERGE`
+    that created from one that matched rests on the node and relationship
+    counters, which cross the protocol faithfully.
+
+- **A field the durable format refuses says so, and a failed checkpoint says
+  whether it can heal.** GoGraph's write-ahead log and its snapshot each refuse a
+  field too long for their length prefix, and Groadmap recognised neither, so a
+  caller had to read English to tell a length refusal from a Cypher syntax error.
+  Each now has its own published line.
+  - **Four limits, and the one that binds is not the one a reader expects.** The
+    log bounds a label or property key at 65535 bytes and a property value at
+    4294967295; the snapshot bounds a label or key at 1 MiB and a property value
+    at 1 GiB. So for a **value** the snapshot binds at a quarter of the log's
+    figure, and **1 GiB is the number to write under**.
+  - **One of the two failures cannot heal, and that is what separates it.** A
+    property value between 1 GiB and 4 GiB commits durably, exits `0`, and then
+    fails **every checkpoint of that graph from that moment on**, because the
+    offending field is committed state. The write-ahead log is never folded again
+    and never reclaimed, so it grows and every open replays more of it. Every
+    other checkpoint failure may succeed next time, and the general message says
+    so; this one now says the opposite, because telling an operator to wait for a
+    reconciliation that can never happen is worse than saying nothing.
+
+### Changed - BREAKING
+
+- **`rmp graph execute` is withdrawn. The graph is reached only through a running
+  server.** The `graph` command keeps exactly two subcommands, `serve` and
+  `client`, and every statement now travels from `client` to a `serve`. No surface
+  opens the store on its own any more. `rmp graph execute` exits `127` with
+  `unknown graph subcommand`, following the precedent set for the five
+  subcommands withdrawn in `1.16.0`. **There is no one-shot form and none is
+  planned.**
+  - **Using the graph now begins by starting a server**, and starting one against
+    a roadmap that has never had a graph is what **creates** it. `serve` is the
+    only process that opens the store; a `serve` that is refused creates nothing.
+  - **`rmp graph client` requires a server and will not quietly become
+    `execute`.** With nothing listening it fails with exit code `1` rather than
+    opening the store, because a subcommand that silently fell back would report a
+    success that says nothing about whether a server was reached.
+  - **Why.** A server holds the store's exclusive advisory lock for its whole
+    life, and no finite wait can be sized against a hold with no upper bound. That
+    is why a two-path resolution existed at all, and it still bit any surface that
+    reached the store without resolving first. Withdrawing every such surface
+    makes the resolution concept unnecessary rather than merely unused.
+
+- **The web interface's graph page answers HTTP `503` instead of reading the
+  store.** The endpoint reaches the graph in-process through the same client
+  mechanism and through nothing else. With no server running for that roadmap it
+  answers `503` at `WARN`, because starting a server clears the condition and
+  nothing in the server is at fault. A socket path over the platform bound stays
+  `500` at `ERROR`: one is a dependency awaiting an operator, the other is a
+  layout that can never work.
+
+- **Every surface refuses an over-long socket path, however the path was chosen.**
+  The rule previously split on the **provenance** of the path: a `--socket` value
+  over the platform's bound failed everywhere, while a **derived** path over the
+  bound failed only `serve` and `client` and left the other surfaces to open the
+  store. The uniform rule replaces it, by the owner's decision. The split was
+  breaking a requirement stated elsewhere - that the surface a statement ran
+  through is not observable in what it writes - and it reported a roadmap's broken
+  layout at two surfaces while concealing it at two others.
+  - **The cost is real and is not softened.** A sufficiently deep home directory
+    now makes a graph unreachable through every surface at once. On the command
+    line the way back is `--socket` naming a path inside the bound, given to both
+    ends of the pair. The web page has no such flag, so its only remedy is a
+    shorter home directory or a shorter roadmap name.
+
+- **The store-busy lock line is withdrawn from the caller-facing surface.**
+  Nothing but a server takes the store lock now, so the only contender a server
+  can meet is another server.
+
+- **The AI Agent Contract loses its `execute` entry.** `rmp --ai-help` describes
+  two graph subcommands where it described three, and the `graph` command's own
+  description is rewritten around the server-and-client pair. A machine consumer
+  that enumerated graph subcommands from the contract sees one fewer.
+
+### Fixed
+
+- **An over-long socket path says so, instead of reporting the bare errno.**
+  `rmp graph serve --socket <path>` with an unbindable path reported
+  `cannot bind <path>: listen unix <path>: bind: invalid argument`, which prints
+  the path twice, names neither its length nor the limit, and sends a reader
+  looking at the roadmap, the store, or the permissions. It now names both figures
+  and the remedy. **The default path is reachable**: with no `--socket` flag at
+  all, a three-character roadmap name under a deep home directory produced a
+  139-byte path and the server refused to start.
+  - **The bound is derived, not written down**, because it is not one number:
+    107 bytes on Linux and Windows, 103 on macOS, FreeBSD and OpenBSD. A literal
+    `107` would have been correct on two of the five operating systems and would
+    have silently accepted four unbindable paths on each of the other three.
+    Length is counted in **bytes**, never in runes, so a multi-byte roadmap name
+    cannot slip a path past the check.
+
+- **`rmp sprint stats --help` described `days_elapsed` backwards.** The published
+  help text said "For CLOSED sprints it spans `started_at` -> `closed_at`". A
+  CLOSED sprint reports `null`: the field is set only while a sprint is `OPEN`.
+  The same false sentence had been copied into `DOCS/commands/sprint.md`. This was
+  published contract rather than prose, and a regression test now pins the help
+  text to what the model computes.
+
+- **`README.md` claimed `sprint remove` required a `CLOSED` sprint.** It does not:
+  `PENDING`, `OPEN` and `CLOSED` are all removable, and every member task returns
+  to `BACKLOG` whatever status it held. The claim was false in the dangerous
+  direction, telling a reader an `OPEN` sprint was protected when it was not.
+
+- **Four further documentation defects, each measured against the binary.**
+  `DOCS/commands/stats.md` typed `sprints.current` as an integer described as an
+  "identifier or count" when it is the open sprint's id or `null` and never a
+  count, and carried an example whose sprint counts were arithmetically impossible
+  while a sprint was open. `DOCS/commands/backlog.md` omitted `commit_open` and
+  `commit_close` from the task-key list, disagreeing with `task.md`; described a
+  leading `--limit` on `show-next` as ignored when it is read as the `count` and
+  refused with exit `6`; and had no exit-`4` row. `DOCS/commands/web.md` omitted
+  the listener-stopped cause from its exit-`1` row, and omitted
+  `/roadmaps/{name}/tasks/{id}/data` from a route table the README calls the full
+  route list. `DOCS/commands/sprint.md` carried a sentence classifying which
+  commands carry an **Audit** block that was false in both directions.
+
+- **`SPEC/GRAPH.md` promised a remedy the refused `PROFILE` never delivers.** The
+  specification said the engine's diagnostic "names the remedy" when `PROFILE`
+  refuses a writing statement. The caller in fact receives generic internal-error
+  text naming only the session, because the refusal carries no sentinel and the
+  engine's Bolt server classifies it as a server fault. The real diagnostic goes
+  to the **server's** stderr. The rule now says so and names the remedy as the
+  engine's rather than claiming it for Groadmap.
+
+### Notes
+
+- **Why this is `1.17.0`, and what the number does not tell you.**
+  `SPEC/VERSION.md` defines `MAJOR` as "incompatible API changes or major
+  architectural changes". This release contains one, and it is not a small one:
+
+  1. **`rmp graph execute` was removed with no alias and no fallback.** Every
+     script, agent prompt and stored recipe that reaches a graph without first
+     starting a server stops working, and the failure is immediate rather than
+     silent. This is the whole of the incompatibility, and it is enough to carry
+     the bump on its own.
+
+  Two further changes are incompatible in effect rather than in signature: the web
+  graph page answers `503` where it used to read the store, and a roadmap whose
+  derived socket path is over the platform bound is now refused at every surface
+  rather than at two of them.
+
+- **The number is the owner's decision and not the strict reading.** A strict
+  reading gives `MAJOR`. The project publishes `1.17.0`, by the owner's explicit
+  decision recorded here, on the same footing as its three predecessors: `1.15.0`
+  shipped breaking changes as a `MINOR`, `1.15.2` shipped them as a `PATCH`, and
+  `1.16.0` was published as a `MINOR` after being cut as `2.0.0`. Each was
+  recorded at the time rather than inferred later. This entry is that record.
+
+  **So do not read the minor digit as a promise that nothing breaks.** The test to
+  apply is short: **upgrading is safe unless you invoke `rmp graph execute`, rely
+  on the web graph page reaching a store with no server running, or run under a
+  home directory deep enough that the derived socket path exceeds 107 bytes on
+  Linux and Windows or 103 elsewhere.**
+
+- **What did NOT change.** No exit code moved. No flag was removed or added
+  outside the `graph` family. The top-level help is byte-identical to `v1.16.0`,
+  and so is every subcommand help but one: `rmp sprint stats --help`, whose
+  `days_elapsed` description was corrected because it was false. The published
+  error-string corpus, measured on this release, is 139 distinct strings: 131
+  driven against the binary and matched character for character, 3 matched on
+  their head with the operating system's own tail narrowed, and 5 named and
+  reasoned exemptions.
+
+- **There is no database migration and no dependency change.** The SQLite schema
+  version is unchanged at `1.14.0` and no migration was added. `go.mod` and
+  `go.sum` are byte-identical to `v1.16.0`, so the graph engine is the same
+  GoGraph `v0.14.0` and the graph store's on-disk format takes no version step. A
+  graph written by either binary is read by the other.
+
 ## [1.16.0] - 2026-09-07
 
 ### Added
@@ -3095,6 +3290,7 @@ behaviour.
   AI-contract E2E suite (`tests/test_30_aihelp_contract.py`) to lock in the
   revised help text and contract invariants.
 
+[1.17.0]: https://github.com/FlavioCFOliveira/Groadmap/compare/v1.16.0...v1.17.0
 [1.16.0]: https://github.com/FlavioCFOliveira/Groadmap/compare/v1.15.2...v1.16.0
 [1.15.2]: https://github.com/FlavioCFOliveira/Groadmap/compare/v1.15.1...v1.15.2
 [1.15.1]: https://github.com/FlavioCFOliveira/Groadmap/compare/v1.15.0...v1.15.1

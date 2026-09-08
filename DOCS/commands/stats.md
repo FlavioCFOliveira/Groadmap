@@ -54,7 +54,7 @@ On success, `rmp stats` writes a single JSON object to stdout:
   "sprints": {
     "current": 5,
     "total": 12,
-    "completed": 10,
+    "completed": 9,
     "pending": 2
   },
   "tasks": {
@@ -71,10 +71,10 @@ On success, `rmp stats` writes a single JSON object to stdout:
 | Field | Type | Description |
 |-------|------|-------------|
 | `roadmap` | string | Name of the roadmap the statistics describe |
-| `sprints.current` | integer | Identifier or count of the current sprint |
+| `sprints.current` | integer or null | ID of the currently open sprint, or `null` when no sprint is open. It is an identifier and never a count |
 | `sprints.total` | integer | Total number of sprints in the roadmap |
-| `sprints.completed` | integer | Number of completed sprints |
-| `sprints.pending` | integer | Number of pending (not yet completed) sprints |
+| `sprints.completed` | integer | Number of sprints with status `CLOSED` |
+| `sprints.pending` | integer | Number of sprints with status `PENDING` (created but never started). An OPEN sprint is counted by neither this field nor `completed`, which is why `total` exceeds their sum while one is open |
 | `tasks.backlog` | integer | Tasks in `BACKLOG` status |
 | `tasks.sprint` | integer | Tasks assigned to a sprint but not yet started |
 | `tasks.doing` | integer | Tasks in progress |

@@ -424,7 +424,7 @@ func printSprintStatsHelp() {
 
 Returns the SprintStats object: per-status counts, completion
 percentage, ordered task ids, burndown series (one entry per day),
-velocity (tasks/day), and elapsed days when the sprint has been started.
+velocity (tasks/day), and elapsed days while the sprint is OPEN.
 
 Required:
   -r, --roadmap <name>            Target roadmap
@@ -447,8 +447,9 @@ Output (stdout JSON):
 Notes for callers:
   - velocity is 0.0 for OPEN and PENDING sprints, and for CLOSED sprints
     with zero completed tasks. Only meaningful for CLOSED sprints.
-  - days_elapsed is null for PENDING sprints, and for OPEN sprints with
-    no started_at. For CLOSED sprints it spans started_at -> closed_at.
+  - days_elapsed counts the days since an OPEN sprint started, and is null
+    everywhere else: for PENDING sprints, for CLOSED sprints, and for OPEN
+    sprints with no started_at.
   - days_remaining is ALWAYS null. The Sprint model has no end_date
     field, so there is no target completion date to count down to.
   - burndown is empty when no tasks have been completed in the sprint.

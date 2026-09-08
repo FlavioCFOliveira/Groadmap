@@ -680,7 +680,21 @@ what a real committed write reports, over a statement that had written nothing.
 
 **Two statements are refused rather than planned.** A `PROFILE` of a **writing**
 statement is refused, because profiling it would mean committing it. Neither prefix is
-accepted on a **schema** statement. Both refusals exit `1`.
+accepted on a **schema** statement. Both refusals exit `1`, and they differ in what
+they tell you.
+
+- **A schema statement with either prefix names its own cause.** The refusal is the
+  parser's, and it reads `cypher: parse: unexpected "FOR" at 1:21, expected one of
+  {...}` -- the position and the expected set are there to act on.
+- **A `PROFILE` of a writing statement does not.** The engine's Bolt server classifies
+  this refusal as its own fault and replaces the message with generic text naming only
+  the session: `graph engine error: graph query failed: An internal error occurred. See
+  server logs for details (session: <id>)`. The cause reaches the **server's** stderr
+  and not the caller. This is the same substitution the over-long-field refusal meets
+  (see [How Long a Field May Be](#how-long-a-field-may-be)), for the same reason, and it
+  is a property of the pinned engine rather than of Groadmap. So an unexplained internal
+  error from a `PROFILE` is worth reading as this refusal before it is read as a
+  defect.
 
 `SPEC/DATA_FORMATS.md § Graph Plan Node` is canonical for the shape and for when each
 key is present; `SPEC/GRAPH.md § Query Plans: The EXPLAIN and PROFILE Prefixes` for the

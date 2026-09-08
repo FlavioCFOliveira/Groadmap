@@ -147,6 +147,7 @@ rmp graph client -r myproject \
 │   ├── graphstore/          # Graph store lifecycle (open, checkpoint, close)
 │   ├── graphlock/           # The graph store's advisory lock
 │   ├── graphjson/           # Graph value and query-plan JSON rendering
+│   ├── aihelp/              # The AI Agent Contract (rmp --ai-help)
 │   └── utils/               # JSON, ISO 8601 dates, paths, error sentinels
 ├── bin/                     # Build output
 ├── tests/                   # End-to-end test suite (Python, against ./bin/rmp)
@@ -405,7 +406,11 @@ rmp sprint reopen -r <name> <id>
 rmp sprint remove -r <name> <id>
 rmp sprint rm -r <name> <id>
 ```
-- The sprint must be `CLOSED`. Tasks return to `BACKLOG`.
+- A sprint is removable in **any** status. `PENDING`, `OPEN` and `CLOSED` are all
+  accepted, so removing does not first require closing, and an `OPEN` sprint is not
+  protected from it.
+- Every member task returns to `BACKLOG`, whatever status it held - `COMPLETED`
+  included - and the sprint record is deleted.
 
 **Can I have multiple open sprints?**
 No. Only one sprint can be `OPEN` at a time. Close the current sprint before starting another.
