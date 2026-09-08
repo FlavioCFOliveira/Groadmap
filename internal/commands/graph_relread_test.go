@@ -67,7 +67,7 @@ func seedBidirectionalPair(t *testing.T, roadmap string) {
 		"MATCH (s:Spec {key:'" + relReadSpecKey + "'}), (c:Code {path:'" + relReadCodePath + "'}) " +
 			"MERGE (s)-[:IMPLEMENTED_BY]->(c)",
 	} {
-		if err := runGraphExecute([]string{"-r", roadmap, "--query", q}); err != nil {
+		if err := runGraphClient([]string{"-r", roadmap, "--query", q}); err != nil {
 			t.Fatalf("seed %q: %v", q, err)
 		}
 	}
@@ -78,7 +78,7 @@ func seedBidirectionalPair(t *testing.T, roadmap string) {
 func graphQueryRows(t *testing.T, roadmap, query string) [][]any {
 	t.Helper()
 	stdout, _ := captureStdStreams(t, func() {
-		if err := runGraphExecute([]string{"-r", roadmap, "--query", query}); err != nil {
+		if err := runGraphClient([]string{"-r", roadmap, "--query", query}); err != nil {
 			t.Fatalf("read failed: %v\nquery=%s", err, query)
 		}
 	})
@@ -107,7 +107,7 @@ func typeCounts(rows [][]any) map[string]int {
 // one statement as the UNION ALL of the two outgoing legs.
 func TestGraphRead_OutgoingFormsResolveCorrectly(t *testing.T) {
 	const roadmap = "graph-relread-core"
-	defer setupTestGraphRoadmap(t, roadmap)()
+	defer servedRoadmap(t, roadmap)()
 	seedBidirectionalPair(t, roadmap)
 
 	t.Run("the UNION ALL of the two outgoing legs reports both", func(t *testing.T) {
@@ -155,7 +155,7 @@ func TestGraphRead_OutgoingFormsResolveCorrectly(t *testing.T) {
 // does not depend on which.
 func TestGraphRead_IncomingAndUndirectedResolveCorrectly(t *testing.T) {
 	const roadmap = "graph-relread-direction"
-	defer setupTestGraphRoadmap(t, roadmap)()
+	defer servedRoadmap(t, roadmap)()
 	seedBidirectionalPair(t, roadmap)
 
 	// stale names the specification that must be corrected if one of these
@@ -253,7 +253,7 @@ func TestGraphRead_IncomingAndUndirectedResolveCorrectly(t *testing.T) {
 		// The value is written to the NODE, deliberately: writing it to the
 		// relationship would run into the write-direction hazard of item 4 and
 		// could not measure the read.
-		if err := runGraphExecute([]string{"-r", roadmap, "--query",
+		if err := runGraphClient([]string{"-r", roadmap, "--query",
 			"MATCH (s:Spec {key:'" + relReadSpecKey + "'})<-[e]-(x:Test) SET x.resolved_type = type(e)"}); err != nil {
 			t.Fatalf("the SET must execute: %v", err)
 		}
@@ -266,7 +266,7 @@ func TestGraphRead_IncomingAndUndirectedResolveCorrectly(t *testing.T) {
 
 	// Last, because it removes an edge the cases above depend on.
 	t.Run("a predicate-gated DELETE removes the named leg and leaves the other", func(t *testing.T) {
-		if err := runGraphExecute([]string{"-r", roadmap, "--query",
+		if err := runGraphClient([]string{"-r", roadmap, "--query",
 			"MATCH (s:Spec {key:'" + relReadSpecKey + "'})-[e]-(x:Test) WHERE type(e) = 'COVERS' DELETE e"}); err != nil {
 			t.Fatalf("the predicate-gated DELETE must execute: %v", err)
 		}
@@ -291,7 +291,7 @@ func TestGraphRead_IncomingAndUndirectedResolveCorrectly(t *testing.T) {
 // value at all, and a bare DELETE that names the relationship as its target.
 func TestGraphRead_ShapesThatResolveCorrectly(t *testing.T) {
 	const roadmap = "graph-relread-scope"
-	defer setupTestGraphRoadmap(t, roadmap)()
+	defer servedRoadmap(t, roadmap)()
 	seedBidirectionalPair(t, roadmap)
 
 	t.Run("an anonymous undirected relationship reaches the right node", func(t *testing.T) {
@@ -304,7 +304,7 @@ func TestGraphRead_ShapesThatResolveCorrectly(t *testing.T) {
 
 	t.Run("a named path over an undirected pattern reports both types", func(t *testing.T) {
 		stdout, _ := captureStdStreams(t, func() {
-			if err := runGraphExecute([]string{"-r", roadmap, "--query",
+			if err := runGraphClient([]string{"-r", roadmap, "--query",
 				"MATCH p=(s:Spec {key:'" + relReadSpecKey + "'})-[e]-(v:Test) RETURN p"}); err != nil {
 				t.Fatalf("named-path read failed: %v", err)
 			}
@@ -318,7 +318,7 @@ func TestGraphRead_ShapesThatResolveCorrectly(t *testing.T) {
 
 	t.Run("a variable-length undirected relationship reports both types", func(t *testing.T) {
 		stdout, _ := captureStdStreams(t, func() {
-			if err := runGraphExecute([]string{"-r", roadmap, "--query",
+			if err := runGraphClient([]string{"-r", roadmap, "--query",
 				"MATCH (s:Spec {key:'" + relReadSpecKey + "'})-[e*1..1]-(v:Test) RETURN e"}); err != nil {
 				t.Fatalf("variable-length read failed: %v", err)
 			}
@@ -331,7 +331,7 @@ func TestGraphRead_ShapesThatResolveCorrectly(t *testing.T) {
 	})
 
 	t.Run("a bare DELETE through an undirected pattern removes the right edge", func(t *testing.T) {
-		if err := runGraphExecute([]string{"-r", roadmap, "--query",
+		if err := runGraphClient([]string{"-r", roadmap, "--query",
 			"MATCH (s:Spec {key:'" + relReadSpecKey + "'})-[e:COVERS]-(v:Test) DELETE e"}); err != nil {
 			t.Fatalf("bare undirected delete failed: %v", err)
 		}

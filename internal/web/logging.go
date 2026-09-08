@@ -64,11 +64,19 @@ func logServerError(r *http.Request, msg string, err error, attrs ...slog.Attr) 
 	logRequest(slog.LevelError, r, msg, http.StatusInternalServerError, err, attrs...)
 }
 
-// logClientWarn records the one WARN that accompanies a failure the client
-// caused and the server survived — today, the HTTP 400 the graph data endpoint
-// returns for a rejected or failing query-bar query. The server did not fail,
-// but the operator still needs to see what was refused and why
-// (SPEC/WEB.md § Levels).
+// logClientWarn records the one WARN that accompanies a failure this server
+// survived: the HTTP 400 the graph data endpoint returns for a rejected or
+// failing query-bar statement, and the HTTP 503 it returns when no graph server
+// can be reached. The server did not fail, but the operator still needs to see
+// what was refused and why (SPEC/WEB.md § Levels).
+//
+// **The 503 belongs at this level and not at ERROR**, and the reason is what the
+// condition is: a graph server is a dependency the operator starts, so a missing
+// one is not a fault of this server. Recording it at ERROR would emit an ERROR on
+// every page load of a roadmap whose server is not running, which trains an
+// operator to ignore the level that means something is broken — and it would
+// break the one-ERROR-per-500 count in the same stroke (SPEC/WEB.md Acceptance
+// Criteria 141 and 165).
 func logClientWarn(r *http.Request, msg string, status int, err error, attrs ...slog.Attr) {
 	logRequest(slog.LevelWarn, r, msg, status, err, attrs...)
 }

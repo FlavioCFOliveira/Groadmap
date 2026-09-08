@@ -1,9 +1,18 @@
 // Package commands — graph family handler.
 //
-// Each rmp graph invocation is a short-lived process that opens the
-// GoGraph store rooted at ~/.roadmaps/<name>/graph/, runs exactly one
-// Cypher query, commits any write, and exits. The store is not held
-// open across invocations and is independent of the SQLite database.
+// No rmp graph invocation opens the GoGraph store rooted at
+// ~/.roadmaps/<name>/graph/. `rmp graph serve` is the only process that opens
+// one, and `rmp graph client` is the only subcommand that runs a statement,
+// which it sends to that server over a Unix domain socket
+// (SPEC/GRAPH.md § The Dedicated Graph Server).
+//
+// What remains in this file is therefore everything the family shares and
+// nothing that executes: the family help, the roadmap-to-graph-directory
+// resolution both subcommands perform, the creation `serve` performs on it, the
+// two sources a Cypher statement may come from and the bound on its length, and
+// the mapping of engine values onto the published JSON — which is applied to a
+// result that crossed the protocol, in graph_socket.go, rather than to one
+// produced here.
 package commands
 
 import (
@@ -16,10 +25,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/FlavioCFOliveira/GoGraph/cypher"
 	"github.com/FlavioCFOliveira/GoGraph/cypher/expr"
 	"github.com/FlavioCFOliveira/Groadmap/internal/graphjson"
-	"github.com/FlavioCFOliveira/Groadmap/internal/graphlock"
 	"github.com/FlavioCFOliveira/Groadmap/internal/graphstore"
 	"github.com/FlavioCFOliveira/Groadmap/internal/terminal"
 	"github.com/FlavioCFOliveira/Groadmap/internal/utils"
@@ -120,45 +127,47 @@ func queryTooLongError() error {
 // list every subcommand with a verb-first description AND to make the distinction
 // between them explicit in one sentence rather than leaving it to be inferred
 // from the summaries. The sentence below is that one.
+//
+// The same item forbids this help to name `execute`, and the prohibition is not
+// pedantry about a withdrawn feature: naming it, even to say that it no longer
+// resolves, puts in front of an agent a token the dispatcher answers with exit
+// code 127. The five names withdrawn before it are out for the same reason, and
+// the sentence that used to list them went with them
+// (SPEC/GRAPH.md acceptance criterion 74).
 func printGraphHelp() {
 	fmt.Fprint(helpDst(), `Usage: rmp graph <subcommand> -r <roadmap> [-q <cypher>]
 
 Operate the knowledge graph of a roadmap using Cypher. The graph is stored
-under ~/.roadmaps/<name>/graph/ and is created on first use. The three
-subcommands differ in one thing: execute runs a statement against the roadmap
-graph, serve makes that graph available over a socket until it is stopped, and
-client sends a statement to a running server. create, query, update, delete and
-search are not subcommand names of rmp graph and do not resolve.
+under ~/.roadmaps/<name>/graph/. The two subcommands differ in one thing: serve
+opens that graph and makes it available over a Unix domain socket until it is
+stopped, and client sends a statement to a running server and prints what comes
+back.
 
-execute and client each run any statement the engine accepts -- a read, a write,
-a deletion, a schema change, a schema listing -- and rmp does not examine the
-statement or refuse it for what it does. The statement comes from --query, or
-from standard input when that flag is absent; supplying neither is an error.
+Using the graph begins by starting a server. serve is the only process that
+opens the store, and starting one against a roadmap that has never had a graph
+is what creates it; client is the only way to run a statement, and it needs a
+running server for every one. With nothing listening, client fails and opens
+nothing.
 
-A running server is used automatically. When a server is serving the selected
-roadmap, execute sends its statement to that server instead of opening the
-store, with no flag and no configuration, and the result and the exit code are
-the same either way. client always requires one and fails when none answers;
-execute opens the store instead. --socket names the socket an invocation
-resolves and neither forces nor forbids a server.
+client runs any statement the engine accepts -- a read, a write, a deletion, a
+schema change, a schema listing -- and rmp does not examine the statement or
+refuse it for what it does. The statement comes from --query, or from standard
+input when that flag is absent; supplying neither is an error.
 
-serve holds one roadmap graph open and answers Cypher statements over a Unix
-domain socket until it is stopped, so a caller pays one store open instead of
-one per invocation. It runs no statement of its own and creates no graph
-directory that does not already exist.
+--socket names the socket a subcommand uses: the path serve binds, and the path
+client connects to. It defaults to the same path derived from the roadmap on
+both, so a server started without the flag is reached without it.
 
 Commands:
-  execute   Run one Cypher statement against the roadmap knowledge graph
   serve     Serve the roadmap knowledge graph over a Unix domain socket
   client    Send one Cypher statement to a running server and print its result
 
 Options:
   -r, --roadmap <name>    REQUIRED. Target roadmap
-  -q, --query <cypher>    execute and client. Cypher statement; read from stdin
-                          when this flag is absent
-      --socket <path>     All three. Socket bound by serve and resolved by
-                          execute and client; default
-                          ~/.roadmaps/<name>/graph.sock
+  -q, --query <cypher>    client. Cypher statement; read from stdin when this
+                          flag is absent
+      --socket <path>     Both. Socket bound by serve and connected to by
+                          client; default ~/.roadmaps/<name>/graph.sock
   -h, --help              Show this help message
 
 Output (stdout JSON):
@@ -171,7 +180,7 @@ Output (stdout JSON):
 
   A statement written with the EXPLAIN or PROFILE prefix carries its plan and
   always produces the columns shape, whether or not it declares a column.
-  EXPLAIN executes nothing and reports the plan the engine would run; PROFILE
+  EXPLAIN runs nothing and reports the plan the engine would run; PROFILE
   runs the statement and reports what the run measured.
 
   A statement that changed the graph adds a counters block naming what it
@@ -184,11 +193,12 @@ Output (stdout JSON):
 
 Exit codes:
   0   Success
-  1   Graph store unavailable or Cypher parse/execution error; also a valid
+  1   For serve, the graph store could not be created, opened or recovered, its
+      lock could not be taken, or the socket could not be bound; for client, no
+      server is listening, or a Cypher parse/execution error, or a valid
       statement cancelled for running past the 5s statement time budget, which
-      writes nothing -- narrow the statement, or split it; also, for client, no
-      server listening, and for any of the three a server that could not be
-      reached through the socket
+      writes nothing -- narrow the statement, or split it; for either, a server
+      that could not be reached through the socket
   2   No query supplied, --socket with an empty value, or a positional argument
       was given
   3   No roadmap selected
@@ -197,176 +207,27 @@ Exit codes:
   127 Unknown subcommand
 
 Examples:
-  rmp graph execute -r myproject --query "MATCH (n:Spec) RETURN n.key"
-  rmp graph execute -r myproject --query "CREATE (n:Spec {key:'auth'})"
-  echo "MATCH (n) RETURN count(n)" | rmp graph execute -r myproject
   rmp graph serve -r myproject
   rmp graph client -r myproject --query "MATCH (n:Spec) RETURN n.key"
+  rmp graph client -r myproject --query "CREATE (n:Spec {key:'auth'})"
+  echo "MATCH (n) RETURN count(n)" | rmp graph client -r myproject
 `)
 }
 
-// printGraphExecuteHelp prints the help for rmp graph execute.
+// createGraphDir brings the graph store directory into being at 0700.
 //
-// The graph-specific behaviours SPEC/HELP.md § Graph family help specifics
-// requires are all stated below: where the statement comes from, that execute
-// runs any statement without examining it, and that the schema DDL and the schema
-// listings run through this same subcommand. In particular the help MUST NOT
-// describe any statement as rejected before execution on the ground of its
-// operation class, because none is.
+// It has exactly ONE caller and is meant to: `rmp graph serve` is the only thing
+// that creates a roadmap's graph, because it is the only thing that opens one
+// (SPEC/GRAPH.md § Server Startup, step 1). `rmp graph client` calls
+// resolveGraphDir and stops at the resolution — it runs its statement in the
+// server's store, so a directory created here would be an empty second store
+// beside a graph that is already open.
 //
-// Item 6 adds one more, and it is the one an agent cannot infer: a running server
-// takes the statement AUTOMATICALLY, with no flag and no configuration, and
-// --socket names the socket the invocation resolves rather than switching between
-// the two paths. The help states both halves deliberately. An agent told only
-// that it is automatic would have no way to reach a server on a non-default
-// socket; an agent told only that there is a flag would write it on every
-// invocation.
-//
-// Item 10 adds the second cause of exit code 1 that "a Cypher parse or execution
-// error" does not cover, and it sits beside the statement budget of item 4 for
-// that reason: an exhausted serialisation conflict is a valid statement against a
-// healthy store, so the exit-code-1 line names it, states that nothing was
-// written, and states the remedy in the published error line's own terms. It is
-// the one cause in the block whose remedy is to run the SAME statement again —
-// the budget asks the caller to rewrite a working statement, a parse error to
-// correct a broken one, and this asks it to change nothing — which is why the
-// clause says so rather than leaving "run it again" to be read as "try
-// something else".
-//
-// The clause does NOT write the retry budget's figure. graphWriteConflict
-// renders it from backoff.Total() so that one quantity keeps one expression, and
-// a figure spelled out here would be a second expression of it that disagreed
-// with the policy silently the moment the policy moved. Nothing the caller
-// decides needs the figure, and the error line carries it at the moment it is
-// relevant.
-func printGraphExecuteHelp() {
-	fmt.Fprint(helpDst(), `Usage: rmp graph execute -r <roadmap> [-q <cypher>] [--socket <path>]
-
-Run one Cypher statement against the roadmap knowledge graph, and print what it
-returns. A statement that changes the graph runs inside a single transaction and
-is persisted durably before the process exits.
-
-Where the statement runs is resolved, not chosen. When a graph server is serving
-the selected roadmap, the statement is sent to that server instead of the store
-being opened -- automatically, with no flag and no configuration -- and the
-result, the output shape and the exit code are the same either way. With nothing
-listening, the store is opened directly under its exclusive lock, which is what
-every invocation did before a server existed.
-
-execute accepts every statement the engine accepts and runs it as given:
-  - a read, such as MATCH ... RETURN, including variable-length traversals;
-  - a write, such as CREATE, MERGE, SET or REMOVE;
-  - a deletion, such as DELETE or DETACH DELETE;
-  - schema DDL: CREATE INDEX [name] [IF NOT EXISTS] FOR (n:Label) ON (n.property)
-    [OPTIONS {indexType:'hash'|'btree'}], DROP INDEX <name> [IF EXISTS],
-    CREATE CONSTRAINT [name] [IF NOT EXISTS] FOR (n:Label)
-    REQUIRE n.property IS UNIQUE | IS NOT NULL, DROP CONSTRAINT <name> [IF EXISTS];
-  - schema introspection: SHOW INDEXES and SHOW CONSTRAINTS, and their singular
-    aliases, each optionally followed by a YIELD / WHERE / RETURN projection.
-
-rmp does not examine the statement and refuses none for what it does: what a
-statement reads, writes or deletes is decided by its Cypher alone, so the
-guarantee you need about a statement is a guarantee about the text you supply.
-
-One statement per invocation. There is no ALTER INDEX: changing an index is a
-DROP INDEX followed by a CREATE INDEX, as two separate invocations, and the
-index is absent between them. An index or a constraint covers a single node
-property; removal is by name, and SHOW INDEXES reports the name an unnamed
-object was given.
-
-Required:
-  -r, --roadmap <name>    Target roadmap
-  -q, --query <cypher>    Cypher statement; read from stdin when this flag is
-                          absent. Supplying neither is an error (exit code 2)
-
-Optional:
-      --socket <path>     Socket this invocation resolves. Default
-                          ~/.roadmaps/<name>/graph.sock, the same derivation
-                          graph serve and graph client use. It names which
-                          socket is looked at and nothing else: it does not
-                          force a server, does not forbid one, and does not
-                          select the store. Write it only when the server was
-                          started with the same flag
-  -h, --help              Show this help message
-
-Output (stdout JSON):
-  With result columns:      {"columns": [...], "rows": [[...], ...], "plan": <plan node, EXPLAIN only>, "profile": <plan node, PROFILE only>, "counters": <write counters, only when the statement changed the graph>}
-  Without result columns:   {"ok": true, "counters": <write counters, only when the statement changed the graph>}
-  A statement carrying a RETURN clause produces columns and one without it does
-  not; SHOW INDEXES and SHOW CONSTRAINTS produce columns although they carry no
-  RETURN clause.
-  A statement written with the EXPLAIN or PROFILE prefix always produces the
-  columns shape so that it can carry its plan, even with no column of its own.
-  A statement that changed the graph adds a counters block naming what it
-  changed -- nodes and relationships created and deleted, properties written,
-  labels added and removed, indexes and constraints added and removed. A zero
-  counter is left out, and a statement that changed nothing carries no counters
-  key at all, so a MERGE that created is distinguishable from one that matched.
-
-Exit codes:
-  0   Success
-  1   Graph store unavailable, or a Cypher parse or execution error, including
-      a schema statement the engine refused: a duplicate create, a drop of an
-      object that does not exist, an unsupported definition, or a constraint
-      the data does not satisfy. Also a statement cancelled for running past
-      the 5s statement time budget, where the Cypher was valid and the store
-      healthy: the transaction rolls back and nothing is written, so the remedy
-      is to narrow the statement -- add a label, an indexed property filter, or
-      a LIMIT -- or split it into smaller statements. Also a statement on which
-      every attempt of the retry policy lost a serialisation conflict against a
-      server, the Cypher again valid and the store again healthy: the losing
-      transaction commits nothing and nothing is written, so the remedy is to
-      run the same statement again -- it needs no change -- and to spread
-      concurrent writes across distinct nodes. Also a socket that answers but
-      yields no server, and a connection lost or unanswered after the statement
-      was sent: neither falls back to the store
-  2   No query supplied, --socket given with an empty value, or a positional
-      argument was given: a bare Cypher statement on the command line is
-      refused, not executed
-  3   No roadmap selected
-  4   Roadmap not found
-  6   Query longer than the maximum length of 1048576 bytes
-
-Examples:
-  rmp graph execute -r myproject --query "MATCH (n:Spec) RETURN n.key"
-  rmp graph execute -r myproject --query "CREATE (n:Spec {key:'auth'})"
-  rmp graph execute -r myproject --query "CREATE INDEX spec_key FOR (n:Spec) ON (n.key)"
-  echo "MATCH (n) RETURN count(n)" | rmp graph execute -r myproject
-  rmp graph execute -r myproject --socket /run/user/1000/myproject-graph.sock -q "SHOW INDEXES"
-`)
-}
-
-// openGraphStore validates that roadmapName exists, resolves the graph
-// directory, and creates it on first use with 0700 permissions. It
-// returns the graphDir path. The caller is responsible for opening the
-// GoGraph store after this call.
-//
-// Creating the directory is what makes `rmp graph execute` work against a
-// roadmap that has never had a graph. It is deliberately NOT shared with
-// `rmp graph serve`, which creates no graph directory that does not already
-// exist (SPEC/COMMANDS.md § Serve, "What the server does not do"); that
-// subcommand calls resolveGraphDir and stops at the resolution.
-func openGraphStore(roadmapName string) (graphDir string, err error) {
-	graphDir, err = resolveGraphDir(roadmapName)
-	if err != nil {
-		return "", err
-	}
-	if err := createGraphDir(graphDir); err != nil {
-		return "", err
-	}
-	return graphDir, nil
-}
-
-// createGraphDir brings the graph store directory into being at 0700, and is the
-// half of openGraphStore that a SERVED invocation must not perform.
-//
-// `rmp graph execute` creates the directory on first use because a statement has
-// to have somewhere to run. When a server answers, the statement runs in that
-// server's store and this process opens nothing, so creating a directory here
-// would leave an empty store beside a graph that is already open — and it would
-// do so in the one case where the store is guaranteed to exist already
-// (SPEC/GRAPH.md § Server Resolution: on the served path the caller does not open
-// the store).
+// The mode is set twice on purpose. MkdirAll applies the process umask to the
+// permission bits it is given, so a umask of 022 would leave 0755 behind; the
+// explicit Chmod is what makes the 0700 CLAUDE.md § 10 fixes for the
+// ~/.roadmaps tree a property of the directory rather than of the environment
+// that created it.
 func createGraphDir(graphDir string) error {
 	if mkErr := os.MkdirAll(graphDir, 0700); mkErr != nil {
 		return fmt.Errorf("%w: creating graph directory: %v", utils.ErrGraphStore, mkErr)
@@ -380,9 +241,10 @@ func createGraphDir(graphDir string) error {
 // resolveGraphDir validates roadmapName, confirms the roadmap exists, and
 // returns the path of its graph store directory WITHOUT creating anything.
 //
-// It is the half of openGraphStore that every graph surface needs, split out
-// because one of them must not perform the other half: `rmp graph serve` makes an
-// existing graph available and does not bring one into being.
+// It is what BOTH graph subcommands need and all that `graph client` needs: the
+// resolution is what produces exit code 4 for a roadmap that does not exist, on
+// a subcommand that then opens nothing. `graph serve` follows it with
+// createGraphDir; nothing else in the CLI does.
 func resolveGraphDir(roadmapName string) (string, error) {
 	roadmapDir, valErr := utils.GetRoadmapDir(roadmapName)
 	if valErr != nil {
@@ -393,7 +255,8 @@ func resolveGraphDir(roadmapName string) (string, error) {
 		// together with the sentinel naming WHICH rule the name broke
 		// (reserved, hyphen-leading, too long, bad characters). Restating the
 		// classification here therefore added nothing to the chain and cost the
-		// reader a second prefix: `rmp graph execute -r CON` rendered
+		// reader a second prefix: `rmp graph execute -r CON`, on the statement
+		// subcommand since withdrawn, rendered
 		// "validation error: validation error: ...", and the roadmap-name
 		// messages SPEC/COMMANDS.md § Roadmap Name Validation publishes WITHOUT
 		// a sentinel gained one on the graph paths alone. Every other command
@@ -546,8 +409,10 @@ func readQueryStdin(src *os.File) (string, error) {
 // # Why this is not io.ReadAll
 //
 // The previous implementation drained the stream to EOF, so a hostile or runaway
-// writer decided how much this process buffered: 256 MiB offered to
-// `rmp graph execute` produced 867 MB of peak resident memory and 15.9 s of wall
+// writer decided how much this process buffered: 256 MiB offered to the
+// statement subcommand of the day (`rmp graph execute`, since withdrawn; the
+// read this guards is now `rmp graph client`'s) produced 867 MB of peak resident
+// memory and 15.9 s of wall
 // time, all of it spent on a "query" that was never going to be accepted (the
 // time went into the engine's parse attempt over 256 MB of input; a literal-
 // masking pass that no longer exists took the rest). That is CWE-400 / CWE-789 — an allocation
@@ -656,73 +521,6 @@ func serializePath(v expr.Value) any {
 	}
 }
 
-// printGraphNotifications writes each advisory notification attached to
-// result as a plain-text diagnostic line on stderr, one line per
-// notification (SPEC/GRAPH.md § Query Notifications as Diagnostics). The
-// line carries the notification's severity, its stable machine-readable
-// code, and its description. Notifications are advisory: they never change
-// the stdout success output or the exit code. A result with no
-// notifications writes nothing.
-//
-// It is surfaced generically: whatever notifications the engine attaches to
-// the result are emitted, whatever their code, severity, or category, so the
-// behaviour is not tied to any specific notification. The representative line
-// for the Cartesian-product warning reads:
-//
-//	INFORMATION Neo.ClientNotification.Statement.CartesianProductWarning: <description>
-func printGraphNotifications(result *cypher.Result) {
-	for _, n := range result.Notifications() {
-		fmt.Fprintf(os.Stderr, "%s %s: %s\n", n.Severity, n.Code, n.Description)
-	}
-}
-
-// serializeGraphResult drains result into a graphQueryResult. The
-// caller must close the result after this function returns.
-func serializeGraphResult(result *cypher.Result) (graphQueryResult, error) {
-	cols := result.Columns()
-	if cols == nil {
-		// A prefixed statement that declares no result column reaches here, and
-		// the published shape is an empty array rather than null: the envelope
-		// says the statement produced no columns, not that the key is absent
-		// (SPEC/DATA_FORMATS.md § Graph Query Result, rule 6).
-		cols = []string{}
-	}
-	out := graphQueryResult{
-		Columns: cols,
-		Rows:    [][]any{},
-	}
-	for result.Next() {
-		rec := result.Record()
-		row := make([]any, len(cols))
-		for i, col := range cols {
-			raw := rec[col]
-			if v, ok := raw.(expr.Value); ok {
-				row[i] = serializeValue(v)
-			} else {
-				row[i] = raw
-			}
-		}
-		out.Rows = append(out.Rows, row)
-	}
-	if err := result.Err(); err != nil {
-		return graphQueryResult{}, err
-	}
-	// The plan is read after the rows are drained: for a PROFILE the tree is the
-	// measurement of the run that just finished. At most one accessor is ever
-	// non-nil, so an estimate can never be published as a measurement.
-	out.Plan = graphjson.Plan(result.Plan(), false)
-	out.Profile = graphjson.Plan(result.Profile(), true)
-	// The counters are read in the same window and for the same two reasons: the
-	// write path accumulates them as the operators run, so they are final only
-	// once every operator has been driven to exhaustion, and the commit releases
-	// the result, so a read after it is a read of something that no longer exists
-	// (SPEC/GRAPH.md § Write Counters: What a Statement Changed, rule 1). The mapping returns nil for a
-	// statement that changed nothing, so the accessor's result is handed over
-	// unconditionally.
-	out.Counters = graphjson.CountersOf(result.Counters())
-	return out, nil
-}
-
 // graphStatementError classifies a failure raised while the statement was
 // executing — whether it surfaced from the engine call, from the walk over the
 // result, or from the commit — and words it truthfully.
@@ -793,286 +591,20 @@ func graphStatementError(budget time.Duration, stage string, err error) error {
 			"written. Narrow the statement — add a label, an indexed property filter, or a "+
 			"LIMIT — or split it into smaller statements.", utils.ErrGraphEngine, budget)
 	}
+	// THIS BRANCH CANNOT FIRE AT THE PINNED ENGINE, AND IT IS KEPT DELIBERATELY.
+	// It is not dead code to tidy away. A statement now reaches a graph only
+	// through a server, and the server classifies this refusal as its own fault
+	// rather than the caller's and replaces the message, so the condition arrives
+	// at the caller through the ordinary parse/execution line below instead. The
+	// sentinel, the exit code and the fact that nothing is written are the same
+	// either way; only the message differs. SPEC/GRAPH.md § Field Length Limits,
+	// rule 13, is canonical for the limitation and for the engine-side change
+	// that ends it -- after which this branch produces the line again with no
+	// change here. Deleting it would leave SPEC/COMMANDS.md § Client Error Cases
+	// publishing a line that nothing in the product can produce.
 	if graphstore.CommitRefusedFieldTooLong(err) {
 		return fmt.Errorf("%w: graph field too long; nothing was written. Shorten the field the "+
 			"engine names: %v", utils.ErrGraphEngine, err)
 	}
 	return fmt.Errorf("%w: %s: %v", utils.ErrGraphEngine, stage, err)
-}
-
-// runGraphExecute is the implementation of `rmp graph execute`.
-//
-// It has TWO paths and resolves between them rather than choosing. When a server
-// answers on the socket in force, the statement is sent to it and this process
-// opens nothing and takes no lock; when nothing answers, it opens the store under
-// the exclusive advisory lock, runs the statement inside a transaction,
-// serialises the result, and checkpoints — which is what every invocation did
-// before a server existed. The statement, the result, the output shape and the
-// exit code are the same either way, and which path carried it is not observable
-// (SPEC/GRAPH.md § Server Resolution, rule 6). No flag chooses between them:
-// --socket names the socket that is looked at and decides nothing else.
-//
-// The paragraphs below describe the direct path.
-//
-// There is ONE execution path here, and it is the transactional one, because
-// nothing in Groadmap decides between two: Groadmap does not examine the
-// statement, so it cannot learn from it whether it reads or writes
-// (SPEC/GRAPH.md § Engine Construction and Lifecycle). Every statement goes to
-// the same store-backed engine, built with a transactional store over a
-// write-ahead-log writer, which is what the hazard the specification names
-// requires — a writing statement run on an engine built WITHOUT a transactional
-// store executes against the recovered in-memory graph, commits nothing, and
-// still reports success, so the write is lost in silence.
-//
-// A read-only path used to exist beside this one and was reachable through
-// `graph query` and `graph search`. It went with the five subcommand names,
-// because the operation-class check was the only thing that could route a
-// statement to it (SPEC/COMMANDS.md § Graph Management).
-//
-// The single engine call is RunAny, and the choice is measured rather than
-// stylistic. RunAny is the engine's OWN transactional dispatcher: it routes a
-// statement carrying a writing clause to RunInTx and every other statement to
-// Run, so a write is still committed atomically through exactly the call the
-// specification names, and Groadmap still makes one call for every statement.
-// Calling RunInTx directly for everything was tried first and loses a published
-// behaviour: at the pinned engine, a Result produced by RunInTx carries NO
-// plan-time notifications, while the same statement through Run or RunAny
-// carries the Cartesian-product advisory. Measured on GoGraph v0.12.0, against
-// this project's own store, with `MATCH (a:Spec), (b:Task) RETURN a.key, b.key`:
-// Run and RunAny each returned one notification, RunInTx returned nil. Groadmap
-// surfaces exactly what the engine attaches (SPEC/GRAPH.md § Query Notifications
-// as Diagnostics), so RunInTx-for-everything would silently withdraw the
-// stderr diagnostic that acceptance criterion 21 requires. The specification
-// fixes the behaviour and leaves the Go API to the implementation, which is what
-// this comment is spending its words on.
-func runGraphExecute(args []string) error {
-	roadmapName, remaining, err := requireRoadmap(args)
-	if err != nil {
-		return err
-	}
-
-	// --socket is consumed BEFORE the statement is read, because readQuery
-	// refuses every token it does not recognise: the two flags are read in
-	// sequence rather than by one parser that knows both, so each keeps the
-	// refusal SPEC/COMMANDS.md publishes for it.
-	socketFlag, remaining, err := extractSocketFlag(remaining)
-	if err != nil {
-		return err
-	}
-
-	query, err := readQuery(remaining)
-	if err != nil {
-		return err
-	}
-
-	// The roadmap's existence is checked on BOTH paths and before either is
-	// taken, so exit code 4 stays reachable for a roadmap that does not exist
-	// whatever answers on the socket. resolveGraphDir creates nothing: the
-	// directory is brought into being further down, on the direct path alone.
-	graphDir, err := resolveGraphDir(roadmapName)
-	if err != nil {
-		return err
-	}
-
-	// Resolution decides WHERE the statement runs, and it runs before any lock
-	// is taken and before any store is opened, so this invocation takes exactly
-	// one of the two paths and never both (SPEC/GRAPH.md § Server Resolution,
-	// rule 3). A server holds the store's exclusive lock for its whole process
-	// lifetime, and no finite wait can be sized against such a hold — resolving
-	// first is what stops a running server from disabling this subcommand
-	// against the roadmap it serves.
-	socket, err := graphSocketInForce(roadmapName, socketFlag)
-	if err != nil {
-		return err
-	}
-	// The path's LENGTH is settled first, before the probe, and it is the one
-	// point at which the second path is not taken: a resolved path over the
-	// platform's bound fails the invocation rather than falling back, whether the
-	// caller named it through --socket or it was derived from the roadmap
-	// (SPEC/GRAPH.md § Socket Path Length, rules 5 and 6; § Server Resolution,
-	// rule 12).
-	//
-	// These two calls used to be one helper, servedOnResolvedSocket, and it is
-	// gone rather than repaired. The whole of its content was the branch on WHO
-	// CHOSE THE PATH; with that branch withdrawn what remained was a wrapper over
-	// the two calls below — and runGraphClient writes those same two calls out, in
-	// the same order, in graph_client.go. Two spellings of one sequence is how the
-	// two come to differ, and the sequence is now identical by rule rather than by
-	// coincidence: refuse the path, then probe it. What separates the two
-	// subcommands is the LAST step alone — this one takes the direct path against
-	// a roadmap nothing is serving, and `graph client` fails there — and that
-	// difference is better read here than folded into a name.
-	if err := refuseOverLongSocket(socket); err != nil {
-		return err
-	}
-	state, err := resolveGraphServer(socket)
-	if err != nil {
-		// The socket answered and yielded no server. It is not a fall back: the
-		// answering socket may belong to a server holding the store's lock, so
-		// opening the store on it would wait the whole wait budget and then fail
-		// (§ Server Resolution, rule 2).
-		return err
-	}
-	if state.Served() {
-		output, sendErr := runOnGraphServer(socket, query)
-		if sendErr != nil {
-			return sendErr
-		}
-		return utils.PrintJSON(output)
-	}
-
-	// Not served: the direct path, which is what every invocation did before a
-	// server existed. The graph directory is created here and not above, because
-	// a served invocation opens nothing and must bring no store into being.
-	if err := createGraphDir(graphDir); err != nil {
-		return err
-	}
-
-	// The store's whole lifecycle — the exclusive advisory hold, the recovery
-	// open, the write-ahead-log writer, the transactional store, the engine over
-	// them, and the checkpoint below — belongs to internal/graphstore, which owns
-	// the one copy of it. Close releases the log and then the lock, in that
-	// order, so the log is never closed outside the hold that covers this store.
-	st, err := graphstore.Open(graphDir)
-	if err != nil {
-		return err
-	}
-	defer st.Close() //nolint:errcheck // the close error is moot once the commit has been reported
-
-	engine := st.Engine()
-
-	// The whole of the statement's execution runs under the graph store's
-	// statement time budget (SPEC/GRAPH.md § Statement Time Budget). The deadline
-	// is derived HERE, and not around the whole invocation, because rule 1
-	// defines the budget as covering exactly what follows — the run against the
-	// engine and the walk over the result that run produces — and nothing else:
-	// taking the lock, opening the store, the recovery repair the open performs,
-	// and the checkpoint below are not statement execution.
-	//
-	// The budget is graphlock.StatementBudget, and this call site READS it rather
-	// than declaring one of its own. It is the same declaration, carrying the
-	// same value, that the web graph data endpoint applies
-	// (internal/web.runGraphViewQuery), so the two surfaces cannot come to
-	// disagree and the CLI carries no second constant to drift from the first.
-	// It lives in the package that owns the lock because the same quantity bounds
-	// the VARIABLE part of a lock hold, and the party that has to know how long a
-	// hold may lawfully last is the one waiting for it (SPEC/GRAPH.md
-	// § Lock Contention).
-	//
-	// It is read ONCE, into a local, so that the deadline which fires and the
-	// message that reports it can never disagree.
-	budget := graphlock.StatementBudget
-	ctx, cancel := context.WithTimeout(context.Background(), budget)
-	// Releasing the timer here keeps the budget strictly per invocation; the
-	// checkpoint below does not run under it and is not cancelled by it.
-	defer cancel()
-
-	result, err := engine.RunAny(ctx, query, nil)
-	if err != nil {
-		return graphStatementError(budget, "graph query failed", err)
-	}
-
-	// Build the output value first by draining the result. The write
-	// transaction is not yet committed here: result.Close() performs the
-	// commit and returns its error, so the result MUST be fully consumed
-	// and serialised BEFORE Close, not via a deferred Close.
-	var output any
-	cols := result.Columns()
-	// A prefixed statement always publishes the columns/rows envelope so that it
-	// can carry its plan, even when it declares no result column. Without this
-	// the columns discriminator would route `EXPLAIN CREATE (n:X)` to
-	// {"ok": true} -- byte-identical to a real committed write, over a statement
-	// that wrote nothing (SPEC/GRAPH.md § Query Plans, rule 8).
-	prefixed := result.Plan() != nil || result.Profile() != nil
-	if len(cols) == 0 && !prefixed {
-		// No RETURN clause: drain to allow the commit and emit {"ok": true}.
-		for result.Next() {
-		}
-		if iterErr := result.Err(); iterErr != nil {
-			_ = result.Close() //nolint:errcheck // roll back; commit error is moot on iteration failure
-			return graphStatementError(budget, "graph query failed", iterErr)
-		}
-		// The counters are read here — after the drain, before Close commits —
-		// for the reason serializeGraphResult reads them there: they are final
-		// only once every operator has run, and the commit releases the result
-		// (SPEC/GRAPH.md § Write Counters: What a Statement Changed, rule 1). A statement that changed
-		// nothing maps to nil and publishes exactly {"ok": true}.
-		output = graphOKResult{OK: true, Counters: graphjson.CountersOf(result.Counters())}
-	} else {
-		out, serErr := serializeGraphResult(result)
-		if serErr != nil {
-			_ = result.Close() //nolint:errcheck // roll back; commit error is moot on iteration failure
-			return graphStatementError(budget, "graph query failed", serErr)
-		}
-		output = out
-	}
-
-	// Surface any advisory notifications attached to the result as stderr
-	// diagnostics, after the result is fully drained and the output value is
-	// built, but BEFORE Close commits and releases the result. Notifications
-	// are parse-time advisories available as soon as RunInTx returns; they
-	// never change the stdout success output or the exit code (SPEC FR10).
-	printGraphNotifications(result)
-
-	// Commit is the durability boundary: Result.Close applies and commits
-	// the write transaction and returns the commit error. A commit failure
-	// here is a normal write failure (SPEC FR7 §4): no checkpoint runs and
-	// the command fails with ErrDatabase (exit 1).
-	if cerr := result.Close(); cerr != nil {
-		return graphStatementError(budget, "graph commit failed", cerr)
-	}
-
-	// The transaction has committed durably. Checkpoint synchronously: write a
-	// self-sufficient snapshot and truncate the WAL. Per SPEC FR7, a checkpoint
-	// failure AFTER a durable commit MUST NOT fail the write: the WAL is intact,
-	// recovery still works, and the next write reconciles the snapshot. Surface
-	// the failure as a diagnostic on stderr but return success with exit code 0.
-	//
-	// Store.Checkpoint carries the gate: a statement whose transaction appended
-	// nothing leaves `snapshot/` and `wal` exactly as it found them, which is what
-	// makes an ordinary read cost no snapshot rewrite now that every statement
-	// runs here. The decision is the store's, not this call site's, so the two
-	// surfaces that take this checkpoint cannot come to disagree about when it
-	// runs.
-	if _, cperr := st.Checkpoint(); cperr != nil {
-		fmt.Fprintln(os.Stderr, graphCheckpointWarning(cperr))
-	}
-
-	return utils.PrintJSON(output)
-}
-
-// graphCheckpointWarning words a failed synchronous checkpoint for stderr, and
-// chooses between the two conditions a checkpoint can be in.
-//
-// A checkpoint failure after a durable commit never fails the write and never
-// changes the exit code: the commit is the durability boundary, the log is
-// intact, and recovery still restores everything acknowledged
-// (SPEC/GRAPH.md § Synchronous Checkpoint on Write, failure policy). What differs
-// between the two branches is what the operator is told to expect NEXT.
-//
-// The general branch is built on an expectation that usually holds: a disk that
-// filled, a permission that was wrong, a write that was interrupted — all may
-// succeed the next time a checkpoint runs, and the next successful one
-// reconciles the snapshot. The other branch is the one case where that
-// expectation is false. The field the snapshot format refuses is committed graph
-// state, so every later capture captures it again and every later checkpoint
-// refuses for the same reason; on this surface the warning then accompanies EVERY
-// subsequent write, because every subsequent write checkpoints. A line that
-// recurred that often saying only that a checkpoint had failed would train an
-// operator to ignore the one message naming an unbounded, permanent cost
-// (SPEC/GRAPH.md § Field Length Limits, rules 6 and 9).
-//
-// The wording of that branch is graphstore's and not this file's, because the
-// same four things have to be said by the web endpoint and by the graph server's
-// shutdown checkpoint, and three copies of a paragraph are three chances for one
-// of them to stop being true. The engine's own error ends both branches: it is
-// the half that names which field is at fault.
-//
-// The returned string carries no trailing newline; the caller supplies it.
-func graphCheckpointWarning(err error) string {
-	if graphstore.CheckpointRefusedFieldTooLong(err) {
-		return fmt.Sprintf("Warning: %s: %v",
-			graphstore.FieldTooLongCheckpointDiagnostic("the graph checkpoint"), err)
-	}
-	return fmt.Sprintf("Warning: graph checkpoint failed: %v", err)
 }

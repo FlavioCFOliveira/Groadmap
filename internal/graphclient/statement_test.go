@@ -19,9 +19,9 @@
 // # Why the value mapping is tested separately from the exchange
 //
 // SPEC/DATA_FORMATS.md § Graph Client Result requires the bytes `graph client`
-// writes to be the bytes `graph execute` writes for the same statement. That
-// holds by construction here, because [Send] returns the engine's own value model
-// and both callers keep the serialiser they already had — so what actually needs
+// writes to come from the ONE mapping every surface publishes through. That holds
+// by construction here, because [Send] returns the engine's own value model and
+// its callers keep the serialiser they already had — so what actually needs
 // proving is the inverse mapping this file owns: that a protocol value comes back
 // as the expr.Value the engine put on the wire. Those tests are pure and
 // exhaustive over the structure tags, which an exchange-level test could never be.

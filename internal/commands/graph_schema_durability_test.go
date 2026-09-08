@@ -1,34 +1,45 @@
-// Regression fence for the durability of a graph's registered schema across
-// the synchronous checkpoint, and for the schema the read path reports
-// (SPEC/GRAPH.md § Synchronous Checkpoint on Write, step 2; § Engine
-// Constructor by Path; § Recovered Schema on Both Paths; acceptance criteria
-// 63 and 64).
+// Regression fence for the durability of a graph's registered schema across a
+// checkpoint, and for the schema a reader reports afterwards
+// (SPEC/GRAPH.md § Durability and Checkpointing in a Long-Lived Process;
+// § Engine Constructor by Path; § Recovered Schema on Every Surface; acceptance
+// criteria 63 and 64).
 //
-// The defect these tests close. The checkpoint wrote the snapshot with a
-// writer that persists no schema at all and then truncated the write-ahead
-// log, which was where the CREATE INDEX and CREATE CONSTRAINT records lived.
-// Every successful write checkpoints, so a single write was enough to erase
-// every index and every constraint the graph carried — not to hide them from
-// the wrong engine, but to remove them from disk, leaving even the correct
-// constructor nothing to recover. For a UNIQUE constraint the loss is silent
-// and costs integrity: the constraint stops being enforced while the data it
-// was declared to protect is still there.
+// # The defect these tests close
 //
-// Why these tests drive the Go entry points rather than the compiled binary.
-// The guard rail still refuses every DDL clause on `graph update`, so no `rmp`
-// invocation can create an index yet; widening it is a separate task, and the
-// end-to-end coverage of criteria 63 and 64 belongs with it. What is testable
-// now — and what the defect actually is — lives below the guard rail: the
-// checkpoint, the constructors, and what recovery finds afterwards. The write
-// sequence used here is assembled from the same entry points runGraphWrite
-// uses, in the same order, so a change to that sequence that broke this
-// property would break these tests too.
+// The checkpoint wrote the snapshot with a writer that persists no schema at all
+// and then truncated the write-ahead log, which was where the CREATE INDEX and
+// CREATE CONSTRAINT records lived. A single checkpoint was therefore enough to
+// erase every index and every constraint the graph carried — not to hide them
+// from the wrong engine, but to remove them from disk, leaving even the correct
+// constructor nothing to recover. For a UNIQUE constraint the loss is silent and
+// costs integrity: the constraint stops being enforced while the data it was
+// declared to protect is still there.
 //
-// Each test crosses a process-equivalent boundary. Asserting inside the
-// invocation that created the schema establishes nothing: an implementation
-// whose snapshot carries no schema passes that check and loses the object at
-// the boundary. Every assertion below is therefore made against a store the
-// checkpoint has already truncated the log of, reopened from scratch.
+// # Which checkpoint runs now, and why these tests changed shape rather than home
+//
+// The defect used to be reachable through a short-lived invocation, because every
+// successful write checkpointed. No invocation checkpoints now: the server opens
+// the store, and its SHUTDOWN checkpoint is what folds the log into the snapshot
+// and truncates it (internal/graphserve, shutdownCloser.Close). The hazard is
+// unchanged and so is the remedy — the checkpointer must be constructed with the
+// engine's registered index and constraint specifications, or it writes a
+// schemaless snapshot over a schema-carrying log and truncates behind it — but
+// the thing that has to run for the hazard to be reachable is a server stopping.
+//
+// These tests therefore stop a server where they used to call a checkpoint, and
+// they stay in this package because what they drive end to end is the CLI pair:
+// `rmp graph client` writes the schema and reads it back, and `rmp graph serve`
+// is what checkpoints in between. internal/graphserve's own suite asserts the
+// server's lifecycle; nothing there asserts what its checkpoint carries, and
+// nothing else in the tree does either.
+//
+// # The boundary every assertion is made across
+//
+// Asserting inside the process that created the schema establishes nothing: an
+// implementation whose snapshot carries no schema passes that check and loses the
+// object at the boundary. Every assertion below is made after a server has
+// stopped — against the store on disk, or against a NEW server that opened it —
+// so what is inspected is what survived.
 package commands
 
 import (
@@ -38,84 +49,61 @@ import (
 	"testing"
 
 	"github.com/FlavioCFOliveira/GoGraph/cypher"
+	"github.com/FlavioCFOliveira/GoGraph/cypher/expr"
 	"github.com/FlavioCFOliveira/GoGraph/store/recovery"
 
 	"github.com/FlavioCFOliveira/Groadmap/internal/graphstore"
 )
 
-// runSchemaStatement executes one statement through the production store
-// sequence — graphstore.Open (the advisory hold, recovery, the write-ahead-log
-// writer, the transactional store and cypher.NewEngineWithStoreAndRecovery),
-// RunInTx, the commit performed by Result.Close, and finally
-// graphstore.Store.Checkpoint — and returns the engine's error, or nil.
+// statementsThroughAServer runs every statement through `rmp graph client`
+// against a server it starts, and then stops that server — which is what takes
+// the shutdown checkpoint that folds the write-ahead log into the snapshot and
+// truncates it.
 //
-// It bypasses only the guard rail, which today refuses the DDL these tests
-// need and is widened by a separate task. Everything after the guard rail is
-// the production sequence, and the checkpoint is the production method: a
-// test that reimplemented the checkpoint would prove nothing about the one the
-// command runs. That is why this helper was rewired rather than kept when the
-// sequence moved into internal/graphstore (rmp task #375); a copy left here
-// would have been a third implementation of exactly what that task removed.
-//
-// An engine refusal (a constraint violation, a duplicate index name) is
-// returned so the caller can assert on it. An infrastructure failure — the
-// store not opening, the checkpoint failing or declining to run — fails the
-// test, because it means the harness, not the behaviour under test, is broken.
-func runSchemaStatement(t *testing.T, graphDir, query string) error {
+// The stop is the point of the helper. A test that left the server running would
+// be asserting about a graph held in a live process's memory; what these tests
+// are about is what a checkpoint wrote to disk, and the store is not on disk in
+// its folded form until the server that owns it has stopped.
+func statementsThroughAServer(t *testing.T, roadmap string, statements ...string) {
 	t.Helper()
 
-	st, err := graphstore.Open(graphDir)
-	if err != nil {
-		t.Fatalf("opening the graph store at %s: %v", graphDir, err)
+	stop := serveGraph(t, roadmap)
+	for _, statement := range statements {
+		var err error
+		captureStdStreams(t, func() {
+			err = runGraphClient([]string{"-r", roadmap, "--query", statement})
+		})
+		if err != nil {
+			stop()
+			t.Fatalf("%q was refused: %v", statement, err)
+		}
 	}
-	defer st.Close() //nolint:errcheck // test cleanup; the assertions are made against the reopened store
-
-	result, runErr := st.Engine().RunInTx(context.Background(), query, nil)
-	if runErr != nil {
-		return runErr
-	}
-	// Draining the result is what allows Close to commit.
-	for result.Next() {
-	}
-	if iterErr := result.Err(); iterErr != nil {
-		_ = result.Close() //nolint:errcheck // rolling back; the commit error is moot once iteration failed
-		return iterErr
-	}
-	// Close is the durability boundary: it applies and commits the transaction.
-	if cerr := result.Close(); cerr != nil {
-		return cerr
-	}
-
-	// The checkpoint under test. Its failure is non-fatal in production
-	// (SPEC/GRAPH.md FR7) but is fatal here: these tests exist to assert what
-	// the checkpoint persisted, and a checkpoint that did not run persisted
-	// nothing to assert about. Checkpoint reports whether it ran, so "did not
-	// run" is now a distinguishable outcome rather than a silent one: every
-	// statement these tests pass are schema DDL, which appends, so a false here
-	// means the write-ahead-log gate has stopped seeing what a write does.
-	ran, cperr := st.Checkpoint()
-	if cperr != nil {
-		t.Fatalf("checkpoint after %q: %v", query, cperr)
-	}
-	if !ran {
-		t.Fatalf("the checkpoint after %q declined to run: the write-ahead log did not grow, so the "+
-			"statement appended nothing and there is nothing on disk for this test to assert about", query)
-	}
-	return nil
+	stop()
 }
 
-// checkpointedSchemaStatement runs a statement that is expected to succeed and
-// fails the test if the engine refuses it.
-func checkpointedSchemaStatement(t *testing.T, graphDir, query string) {
+// requireFoldedLog is the non-vacuity assertion every test here needs.
+//
+// The shutdown checkpoint truncates the write-ahead log, so after it the log
+// cannot be what carries a definition; anything recovered afterwards came from
+// the snapshot. Without this assertion a change that stopped truncating would
+// turn every assertion that follows into a statement about the log tail, and
+// nothing would say so.
+func requireFoldedLog(t *testing.T, graphDir string) {
 	t.Helper()
-	if err := runSchemaStatement(t, graphDir, query); err != nil {
-		t.Fatalf("%q was refused by the engine: %v", query, err)
+	if size := fileSize(t, filepath.Join(graphDir, "wal")); size != 0 {
+		t.Fatalf("the write-ahead log holds %d bytes after the server stopped; it was expected to be "+
+			"folded and truncated, so what recovery finds below would no longer prove the SNAPSHOT "+
+			"carries the schema (SPEC/GRAPH.md § Server Shutdown and the Drain, steps 4 and 5)", size)
 	}
 }
 
-// reopenGraphStore reopens the store from disk, exactly as the next `rmp`
-// invocation would. Everything the previous invocation left in memory is gone;
+// reopenGraphStore reopens the store from disk, exactly as the next
+// `rmp graph serve` would. Everything the stopped server held in memory is gone;
 // what comes back is what is on disk.
+//
+// It is safe to open directly here for one reason and only that reason: no server
+// is running. Every caller has stopped one first, which is also what released the
+// store's exclusive advisory lock.
 func reopenGraphStore(t *testing.T, graphDir string) recovery.Result[string, float64] {
 	t.Helper()
 	res, err := recovery.Open[string, float64](graphDir, graphstore.RecoveryOptions())
@@ -125,8 +113,8 @@ func reopenGraphStore(t *testing.T, graphDir string) recovery.Result[string, flo
 	return res
 }
 
-// recoveredSchemaEngine builds the engine the read path builds: the recovered
-// graph plus the recovered schema, and no store and no write-ahead-log writer.
+// recoveredSchemaEngine builds the engine a reader builds: the recovered graph
+// plus the recovered schema, and no store and no write-ahead-log writer.
 func recoveredSchemaEngine(res recovery.Result[string, float64]) *cypher.Engine {
 	return cypher.NewEngineWithOptions(res.Graph, cypher.EngineOptions{
 		RecoveredConstraints: cypher.ConstraintDefsFromRecovery(res.Constraints),
@@ -134,8 +122,12 @@ func recoveredSchemaEngine(res recovery.Result[string, float64]) *cypher.Engine 
 	})
 }
 
-// schemaNames runs a SHOW statement and returns the value of its `name` column
-// for every row, in the order the engine reported them.
+// schemaNames runs a SHOW statement against an engine and returns the value of
+// its `name` column for every row, in the order the engine reported them.
+//
+// The cells pass through serializeValue, the CLI's own value mapping, so a name
+// this reads is the string the command would print for it
+// (SPEC/DATA_FORMATS.md § One Realisation of the Mapping).
 func schemaNames(t *testing.T, engine *cypher.Engine, query string) []string {
 	t.Helper()
 
@@ -143,15 +135,11 @@ func schemaNames(t *testing.T, engine *cypher.Engine, query string) []string {
 	if err != nil {
 		t.Fatalf("%q failed: %v", query, err)
 	}
-	defer result.Close() //nolint:errcheck
+	defer result.Close() //nolint:errcheck // the assertions are made on the rows already read
 
-	out, err := serializeGraphResult(result)
-	if err != nil {
-		t.Fatalf("serialising the result of %q: %v", query, err)
-	}
-
+	columns := result.Columns()
 	nameCol := -1
-	for i, column := range out.Columns {
+	for i, column := range columns {
 		if column == "name" {
 			nameCol = i
 			break
@@ -159,16 +147,24 @@ func schemaNames(t *testing.T, engine *cypher.Engine, query string) []string {
 	}
 	if nameCol < 0 {
 		t.Fatalf("%q returned columns %v, which do not include `name`; the engine's schema listing "+
-			"has changed shape and these tests can no longer read it", query, out.Columns)
+			"has changed shape and these tests can no longer read it", query, columns)
 	}
 
-	names := make([]string, 0, len(out.Rows))
-	for _, row := range out.Rows {
-		name, ok := row[nameCol].(string)
+	var names []string
+	for result.Next() {
+		raw := result.Record()[columns[nameCol]]
+		cell := raw
+		if v, ok := raw.(expr.Value); ok {
+			cell = serializeValue(v)
+		}
+		name, ok := cell.(string)
 		if !ok {
-			t.Fatalf("%q returned a non-string in the `name` column: %#v", query, row[nameCol])
+			t.Fatalf("%q returned a non-string in the `name` column: %#v", query, cell)
 		}
 		names = append(names, name)
+	}
+	if err := result.Err(); err != nil {
+		t.Fatalf("walking the result of %q: %v", query, err)
 	}
 	return names
 }
@@ -186,51 +182,34 @@ func containsName(names []string, want string) bool {
 // TestCheckpointPreservesIndexDefinition is the criterion-63 fence for an
 // index: a definition created before a checkpoint is still on disk after it.
 //
-// It fails against the writer this task replaced. With
-// WriteSnapshotFullWithMapperCodec the snapshot carries no index definitions,
-// the truncation that follows destroys the CREATE INDEX record in the log, and
-// the reopen below reports no index at all.
+// It fails against a checkpointer built without the engine's index
+// specifications: the snapshot then carries no index definitions, the truncation
+// that follows destroys the CREATE INDEX record in the log, and the reopen below
+// reports no index at all.
 func TestCheckpointPreservesIndexDefinition(t *testing.T) {
 	const roadmap = "graph-schema-checkpoint-index"
 	defer setupTestGraphRoadmap(t, roadmap)()
 
-	// Seed through the ordinary write path, which creates the store directory
-	// and leaves a checkpointed graph behind.
-	captureStdStreams(t, func() {
-		if err := runGraphExecute([]string{"-r", roadmap, "--query",
-			"CREATE (:Spec {key:'user-authentication'})"}); err != nil {
-			t.Fatalf("seeding the graph: %v", err)
-		}
-	})
+	statementsThroughAServer(t, roadmap,
+		"CREATE (:Spec {key:'user-authentication'})",
+		"CREATE INDEX spec_key FOR (n:Spec) ON (n.key)")
 
 	graphDir := testGraphDir(t, roadmap)
-	walPath := filepath.Join(graphDir, "wal")
-
-	checkpointedSchemaStatement(t, graphDir, "CREATE INDEX spec_key FOR (n:Spec) ON (n.key)")
-
-	// Non-vacuity. The checkpoint truncates the write-ahead log, so after it
-	// the log cannot be what carries the definition; anything recovered below
-	// came from the snapshot. Without this assertion a change that stopped
-	// truncating would turn every assertion that follows into a statement
-	// about the log tail, and nothing would say so.
-	if size := fileSize(t, walPath); size != 0 {
-		t.Fatalf("the write-ahead log holds %d bytes after the checkpoint; it was expected to be "+
-			"truncated, so what the reopen recovers below would no longer prove the SNAPSHOT carries "+
-			"the schema", size)
-	}
+	requireFoldedLog(t, graphDir)
 
 	res := reopenGraphStore(t, graphDir)
 
-	// What recovery finds on disk. This is the assertion the old writer fails.
+	// What recovery finds on disk. This is the assertion a schemaless snapshot
+	// fails.
 	recovered := make([]string, 0, len(res.Indexes))
 	for _, record := range res.Indexes {
 		recovered = append(recovered, record.Name)
 	}
 	if !containsName(recovered, "spec_key") {
-		t.Fatalf("after a checkpoint and a reopen, recovery reports the indexes %v, which do not "+
-			"include `spec_key`. The definition was created before the checkpoint and is now gone "+
+		t.Fatalf("after a shutdown checkpoint and a reopen, recovery reports the indexes %v, which do "+
+			"not include `spec_key`. The definition was created before the checkpoint and is now gone "+
 			"from disk: the snapshot did not carry it and the truncation destroyed the log record "+
-			"(SPEC/GRAPH.md § Synchronous Checkpoint on Write, step 2)", recovered)
+			"(SPEC/GRAPH.md § Durability and Checkpointing in a Long-Lived Process)", recovered)
 	}
 
 	// And what an engine built from that recovery reports, which is what a user
@@ -247,43 +226,34 @@ func TestCheckpointPreservesIndexDefinition(t *testing.T) {
 //
 // The distinction is the whole point. A constraint that is merely listed is not
 // a constraint that is applied, and the failure mode this guards against is
-// silent: against an implementation whose checkpoint dropped the constraint,
-// the duplicate write below exits 0 reporting {"ok": true} and the duplicate is
+// silent: against an implementation whose checkpoint dropped the constraint, the
+// duplicate write below exits 0 reporting {"ok": true} and the duplicate is
 // stored. Nothing errors; the graph simply stops being what it was declared to
 // be.
+//
+// The enforcement half is driven against a SECOND server, started over the store
+// the first one left, which is what makes it a statement about what survived
+// rather than about what the first server still had registered in memory.
 func TestCheckpointPreservesConstraintEnforcement(t *testing.T) {
 	const roadmap = "graph-schema-checkpoint-constraint"
 	defer setupTestGraphRoadmap(t, roadmap)()
 
-	captureStdStreams(t, func() {
-		if err := runGraphExecute([]string{"-r", roadmap, "--query",
-			"CREATE (:Spec {key:'user-authentication'})"}); err != nil {
-			t.Fatalf("seeding the graph: %v", err)
-		}
-	})
-
-	graphDir := testGraphDir(t, roadmap)
-	walPath := filepath.Join(graphDir, "wal")
-
-	checkpointedSchemaStatement(t, graphDir,
+	statementsThroughAServer(t, roadmap,
+		"CREATE (:Spec {key:'user-authentication'})",
 		"CREATE CONSTRAINT spec_key_uq FOR (n:Spec) REQUIRE n.key IS UNIQUE")
 
-	if size := fileSize(t, walPath); size != 0 {
-		t.Fatalf("the write-ahead log holds %d bytes after the checkpoint; it was expected to be "+
-			"truncated, so what the reopen recovers below would no longer prove the SNAPSHOT carries "+
-			"the schema", size)
-	}
+	graphDir := testGraphDir(t, roadmap)
+	requireFoldedLog(t, graphDir)
 
 	res := reopenGraphStore(t, graphDir)
-
 	recovered := make([]string, 0, len(res.Constraints))
 	for _, record := range res.Constraints {
 		recovered = append(recovered, record.Name)
 	}
 	if !containsName(recovered, "spec_key_uq") {
-		t.Fatalf("after a checkpoint and a reopen, recovery reports the constraints %v, which do not "+
-			"include `spec_key_uq`. The declaration was made before the checkpoint and is now gone "+
-			"from disk (SPEC/GRAPH.md § Synchronous Checkpoint on Write, step 2)", recovered)
+		t.Fatalf("after a shutdown checkpoint and a reopen, recovery reports the constraints %v, which "+
+			"do not include `spec_key_uq`. The declaration was made before the checkpoint and is now "+
+			"gone from disk", recovered)
 	}
 
 	// The declared name, not one the engine synthesised for a constraint it
@@ -295,11 +265,14 @@ func TestCheckpointPreservesConstraintEnforcement(t *testing.T) {
 			"declared name `spec_key_uq`", listed)
 	}
 
-	// Enforcement, through the real command, in what is a separate invocation
-	// as far as the store is concerned: the duplicate MUST be refused.
+	// Enforcement, through the real command, against a server that recovered the
+	// constraint rather than one that registered it: the duplicate MUST be
+	// refused.
+	defer serveGraph(t, roadmap)()
+
 	var writeErr error
 	stdout, _ := captureStdStreams(t, func() {
-		writeErr = runGraphExecute([]string{"-r", roadmap, "--query",
+		writeErr = runGraphClient([]string{"-r", roadmap, "--query",
 			"CREATE (:Spec {key:'user-authentication'})"})
 	})
 	if writeErr == nil {
@@ -317,14 +290,14 @@ func TestCheckpointPreservesConstraintEnforcement(t *testing.T) {
 	}
 }
 
-// specKeyCount reads back, through the production read subcommand, how many
-// Spec nodes carry key.
+// specKeyCount reads back, through `rmp graph client`, how many Spec nodes carry
+// key. A server must already be running for the roadmap.
 func specKeyCount(t *testing.T, roadmap, key string) int {
 	t.Helper()
 
 	var readErr error
 	stdout, _ := captureStdStreams(t, func() {
-		readErr = runGraphExecute([]string{"-r", roadmap, "--query",
+		readErr = runGraphClient([]string{"-r", roadmap, "--query",
 			"MATCH (s:Spec) WHERE s.key = '" + key + "' RETURN count(s)"})
 	})
 	if readErr != nil {
@@ -345,81 +318,69 @@ func specKeyCount(t *testing.T, roadmap, key string) int {
 	return int(count)
 }
 
-// TestReadPathReportsRecoveredSchema is the criterion-64 fence: the read
-// subcommands report the schema the store actually holds.
+// TestReadPathReportsRecoveredSchema is the criterion-64 fence: a reader reports
+// the schema the store actually holds.
 //
 // The control is what gives the test its teeth. `cypher.NewEngine` — the
-// constructor both read paths used before this task — answers the identical
-// query on the identical store with zero rows and no error, so an exit code
-// proves nothing here and the ROWS must be compared. The test asserts both
-// sides: the production read path reports the object, and the old constructor
-// on the same store reports nothing, which is what makes the first assertion a
-// statement about the constructor rather than about the store.
+// constructor given the graph alone — answers the identical query on the
+// identical store with zero rows and no error, so an exit code proves nothing
+// here and the ROWS must be compared. The test asserts both sides: a server
+// started over the recovered store reports the objects through the client, and
+// the plain constructor on the same store reports nothing, which is what makes
+// the first assertion a statement about the constructor rather than about the
+// store.
+//
+// The subcommand table that used to sit here is gone with the subcommands it
+// named. It held two entries, `query` and `search`, which had already collapsed
+// onto one function: a table whose rows all call the same thing tests the same
+// path twice and reports it as two. There is one statement-running subcommand.
 func TestReadPathReportsRecoveredSchema(t *testing.T) {
 	const roadmap = "graph-schema-read-path"
 	defer setupTestGraphRoadmap(t, roadmap)()
 
-	captureStdStreams(t, func() {
-		if err := runGraphExecute([]string{"-r", roadmap, "--query",
-			"CREATE (:Spec {key:'user-authentication'})"}); err != nil {
-			t.Fatalf("seeding the graph: %v", err)
-		}
-	})
-
-	graphDir := testGraphDir(t, roadmap)
-	checkpointedSchemaStatement(t, graphDir, "CREATE INDEX spec_key FOR (n:Spec) ON (n.key)")
-	checkpointedSchemaStatement(t, graphDir,
+	statementsThroughAServer(t, roadmap,
+		"CREATE (:Spec {key:'user-authentication'})",
+		"CREATE INDEX spec_key FOR (n:Spec) ON (n.key)",
 		"CREATE CONSTRAINT spec_key_uq FOR (n:Spec) REQUIRE n.key IS UNIQUE")
 
-	// The control, first, so a store that somehow held no schema at all could
-	// not be mistaken for a correct read path further down.
+	graphDir := testGraphDir(t, roadmap)
+	requireFoldedLog(t, graphDir)
+
+	// The control, first and while nothing holds the store, so a store that
+	// somehow held no schema at all could not be mistaken for a correct read
+	// path further down.
 	res := reopenGraphStore(t, graphDir)
-	t.Run("the plain constructor reports an empty schema", func(t *testing.T) {
-		if names := schemaNames(t, cypher.NewEngine(res.Graph), "SHOW INDEXES"); len(names) != 0 {
-			t.Errorf("cypher.NewEngine, given the graph alone, reports %v for SHOW INDEXES on a store "+
-				"that holds `spec_key`. This test relies on that constructor reporting NOTHING: it is "+
-				"the control that makes the assertions below statements about the read path's "+
-				"constructor rather than about the store. The engine has changed, and until this is "+
-				"reconciled the rest of this test distinguishes a read path carrying the recovered "+
-				"schema from one that does not only by accident", names)
-		}
-	})
+	if names := schemaNames(t, cypher.NewEngine(res.Graph), "SHOW INDEXES"); len(names) != 0 {
+		t.Errorf("cypher.NewEngine, given the graph alone, reports %v for SHOW INDEXES on a store "+
+			"that holds `spec_key`. This test relies on that constructor reporting NOTHING: it is "+
+			"the control that makes the assertions below statements about the constructor the "+
+			"server builds rather than about the store. The engine has changed, and until this is "+
+			"reconciled the rest of this test distinguishes a reader carrying the recovered schema "+
+			"from one that does not only by accident", names)
+	}
 
-	for _, subcommand := range []struct {
-		name string
-		run  func(args []string) error
-	}{
-		{"query", runGraphExecute},
-		{"search", runGraphExecute},
-	} {
-		t.Run(subcommand.name+" reports the index", func(t *testing.T) {
-			names := readSchemaNames(t, subcommand.run, roadmap, "SHOW INDEXES")
-			if !containsName(names, "spec_key") {
-				t.Errorf("`graph %s --query \"SHOW INDEXES\"` reported %v, which does not include "+
-					"`spec_key`. Zero rows and exit 0 is exactly what a read path constructed without "+
-					"the recovered schema returns (SPEC/GRAPH.md § Recovered Schema on Both Paths)",
-					subcommand.name, names)
-			}
-		})
+	defer serveGraph(t, roadmap)()
 
-		t.Run(subcommand.name+" reports the constraint under its declared name", func(t *testing.T) {
-			names := readSchemaNames(t, subcommand.run, roadmap, "SHOW CONSTRAINTS")
-			if !containsName(names, "spec_key_uq") {
-				t.Errorf("`graph %s --query \"SHOW CONSTRAINTS\"` reported %v, which does not include "+
-					"the declared name `spec_key_uq`", subcommand.name, names)
-			}
-		})
+	if names := readSchemaNames(t, roadmap, "SHOW INDEXES"); !containsName(names, "spec_key") {
+		t.Errorf("`rmp graph client --query \"SHOW INDEXES\"` reported %v, which does not include "+
+			"`spec_key`. Zero rows and exit 0 is exactly what a reader constructed without the "+
+			"recovered schema returns (SPEC/GRAPH.md § Recovered Schema on Every Surface)", names)
+	}
+	if names := readSchemaNames(t, roadmap, "SHOW CONSTRAINTS"); !containsName(names, "spec_key_uq") {
+		t.Errorf("`rmp graph client --query \"SHOW CONSTRAINTS\"` reported %v, which does not include "+
+			"the declared name `spec_key_uq`", names)
 	}
 }
 
-// readSchemaNames drives a read subcommand with a SHOW statement and returns
-// the `name` column of every row it printed.
-func readSchemaNames(t *testing.T, run func(args []string) error, roadmap, query string) []string {
+// readSchemaNames drives `rmp graph client` with a SHOW statement and returns the
+// `name` column of every row it printed. A server must already be running for the
+// roadmap.
+func readSchemaNames(t *testing.T, roadmap, query string) []string {
 	t.Helper()
 
 	var runErr error
 	stdout, _ := captureStdStreams(t, func() {
-		runErr = run([]string{"-r", roadmap, "--query", query})
+		runErr = runGraphClient([]string{"-r", roadmap, "--query", query})
 	})
 	if runErr != nil {
 		t.Fatalf("%q failed: %v", query, runErr)
@@ -452,74 +413,61 @@ func readSchemaNames(t *testing.T, run func(args []string) error, roadmap, query
 	return names
 }
 
-// TestOrdinaryWriteCheckpointPreservesSchema is the end of the chain, and the
-// one test here that runs entirely through production entry points.
+// TestOrdinaryWriteCheckpointPreservesSchema is the end of the chain, and it
+// covers the case that will be the common one by far: a plain data write, issued
+// by a caller that knows nothing about the schema, is folded by a checkpoint over
+// a graph that carries one.
 //
-// The two tests above establish that the checkpoint persists the schema when
-// the statement that ran WAS the schema statement. This one asserts the case
-// that will be the common one by far: a plain data write, issued by a command
-// that knows nothing about the schema, checkpoints over a graph that carries
-// one. `runGraphWrite` builds its own engine, so the schema that engine holds
-// registered — and hands to the checkpoint — comes from the recovery result it
-// was constructed with and from nowhere else. A write path constructed without
-// that result would checkpoint a schema it never re-registered, and the index
-// and constraint would be erased by a command that never mentioned them.
+// The two tests above register a schema and then stop the server that registered
+// it. Here the schema is registered by one server, RECOVERED by a second, and the
+// second is the one whose shutdown checkpoint folds an ordinary data write. The
+// specifications that checkpoint carries therefore come from what the second
+// server recovered and from nowhere else, so a server whose checkpointer was
+// built without them would erase an index and a constraint it never mentioned.
 //
-// Its assertions are deliberately made through the read subcommand rather than
-// against recovery.Result, so the property asserted is the user-visible one.
+// Its assertions are made through the client rather than against recovery.Result,
+// so the property asserted is the user-visible one.
 func TestOrdinaryWriteCheckpointPreservesSchema(t *testing.T) {
 	const roadmap = "graph-schema-survives-data-write"
 	defer setupTestGraphRoadmap(t, roadmap)()
 
-	captureStdStreams(t, func() {
-		if err := runGraphExecute([]string{"-r", roadmap, "--query",
-			"CREATE (:Spec {key:'user-authentication'})"}); err != nil {
-			t.Fatalf("seeding the graph: %v", err)
-		}
-	})
-
-	graphDir := testGraphDir(t, roadmap)
-	checkpointedSchemaStatement(t, graphDir, "CREATE INDEX spec_key FOR (n:Spec) ON (n.key)")
-	checkpointedSchemaStatement(t, graphDir,
+	statementsThroughAServer(t, roadmap,
+		"CREATE (:Spec {key:'user-authentication'})",
+		"CREATE INDEX spec_key FOR (n:Spec) ON (n.key)",
 		"CREATE CONSTRAINT spec_key_uq FOR (n:Spec) REQUIRE n.key IS UNIQUE")
 
-	// A plain data write, through the real command. It succeeds, so it
-	// checkpoints, and its checkpoint rewrites the snapshot and truncates the
-	// log over a graph that carries a schema this statement never names.
-	captureStdStreams(t, func() {
-		if err := runGraphExecute([]string{"-r", roadmap, "--query",
-			"CREATE (:Spec {key:'session-management'})"}); err != nil {
-			t.Fatalf("writing a second Spec node: %v", err)
-		}
-	})
+	graphDir := testGraphDir(t, roadmap)
+	requireFoldedLog(t, graphDir)
 
-	// Non-vacuity: that write must actually have checkpointed, or this test is
-	// a second copy of the two above.
-	if size := fileSize(t, filepath.Join(graphDir, "wal")); size != 0 {
-		t.Fatalf("the write-ahead log holds %d bytes after an ordinary write; the write did not "+
-			"checkpoint, so this test asserts nothing about a checkpoint that ran over a schema it "+
-			"did not create", size)
-	}
+	// A second server, and a plain data write through it. Its shutdown
+	// checkpoint rewrites the snapshot and truncates the log over a graph that
+	// carries a schema this server recovered rather than registered.
+	statementsThroughAServer(t, roadmap, "CREATE (:Spec {key:'session-management'})")
+	requireFoldedLog(t, graphDir)
 
-	if names := readSchemaNames(t, runGraphExecute, roadmap, "SHOW INDEXES"); !containsName(names, "spec_key") {
-		t.Errorf("after an ordinary data write checkpointed, SHOW INDEXES reports %v, which does not "+
-			"include `spec_key`. A command that never mentioned the index erased it", names)
+	// A third, which recovered whatever the second's checkpoint left.
+	defer serveGraph(t, roadmap)()
+
+	if names := readSchemaNames(t, roadmap, "SHOW INDEXES"); !containsName(names, "spec_key") {
+		t.Errorf("after an ordinary data write was folded by a shutdown checkpoint, SHOW INDEXES "+
+			"reports %v, which does not include `spec_key`. A server that never mentioned the index "+
+			"erased it", names)
 	}
-	if names := readSchemaNames(t, runGraphExecute, roadmap, "SHOW CONSTRAINTS"); !containsName(names, "spec_key_uq") {
-		t.Errorf("after an ordinary data write checkpointed, SHOW CONSTRAINTS reports %v, which does "+
-			"not include `spec_key_uq`", names)
+	if names := readSchemaNames(t, roadmap, "SHOW CONSTRAINTS"); !containsName(names, "spec_key_uq") {
+		t.Errorf("after an ordinary data write was folded by a shutdown checkpoint, SHOW CONSTRAINTS "+
+			"reports %v, which does not include `spec_key_uq`", names)
 	}
 
 	// Enforcement again, because a listed constraint is not an applied one, and
 	// because this is the path on which the loss would be silent.
 	var writeErr error
 	stdout, _ := captureStdStreams(t, func() {
-		writeErr = runGraphExecute([]string{"-r", roadmap, "--query",
+		writeErr = runGraphClient([]string{"-r", roadmap, "--query",
 			"CREATE (:Spec {key:'session-management'})"})
 	})
 	if writeErr == nil {
-		t.Errorf("creating a duplicate Spec keyed `session-management` succeeded (stdout %q) after an "+
-			"ordinary write had checkpointed over the UNIQUE constraint", stdout)
+		t.Errorf("creating a duplicate Spec keyed `session-management` succeeded (stdout %q) after a "+
+			"shutdown checkpoint had folded an ordinary write over the UNIQUE constraint", stdout)
 	}
 	if got := specKeyCount(t, roadmap, "session-management"); got != 1 {
 		t.Errorf("the graph holds %d Spec nodes keyed `session-management`; exactly 1 is expected", got)

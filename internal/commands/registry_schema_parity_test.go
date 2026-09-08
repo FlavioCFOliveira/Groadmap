@@ -346,19 +346,19 @@ func registrySchemaCases() []schemaCase {
 
 		// --- quoted JSON sketches ----------------------------------------------
 		//
-		// `graph execute` publishes both result envelopes in one string, the
-		// with-columns form first. There is one graph subcommand and it can
-		// produce either envelope, so both are read off the same schema; the
-		// five-subcommand table this replaces had a row per subcommand and a
-		// group order that varied with whether the subcommand could carry a
-		// RETURN clause at all.
-		{"graph", "execute", "query result", graphQueryResult{}, quotedMembers(0)},
-		{"graph", "execute", "ok result", graphOKResult{}, quotedMembers(1)},
-		// `graph client` publishes the SAME pair, in the same order and from the
-		// same two structs, which is the contract half of
-		// SPEC/DATA_FORMATS.md § Graph Client Result: the bytes it writes are the
-		// bytes `graph execute` writes for the same statement, so a reader of the
-		// machine-readable contract must find one shape rather than two.
+		// `graph client` publishes both result envelopes in one string, the
+		// with-columns form first. It is the one subcommand that runs a statement
+		// and it can produce either envelope, so both are read off the same
+		// schema; the five-subcommand table this replaces had a row per
+		// subcommand and a group order that varied with whether the subcommand
+		// could carry a RETURN clause at all.
+		//
+		// The pair of rows that used to precede these two, for `graph execute`,
+		// went with that subcommand. What their presence used to establish is the
+		// contract half of SPEC/DATA_FORMATS.md § Graph Client Result — that the
+		// bytes the client writes are the bytes `execute` wrote for the same
+		// statement — and that identity has no second side left to have: there is
+		// one producer of these envelopes now, and it is this one.
 		{"graph", "client", "query result", graphQueryResult{}, quotedMembers(0)},
 		{"graph", "client", "ok result", graphOKResult{}, quotedMembers(1)},
 		// `graph serve` publishes one envelope, written once at startup rather

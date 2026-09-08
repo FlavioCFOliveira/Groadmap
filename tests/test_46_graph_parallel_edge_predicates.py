@@ -108,6 +108,10 @@ class TestGraphParallelEdgePredicates:
         # Dedicated scratch roadmap under the temporary HOME; the real
         # `groadmap` roadmap is never touched.
         self.roadmap = self.test.create_roadmap("kg-parallel-edge-audit")
+        # The server is the only route to the graph, and starting it is what
+        # creates the store for a roadmap that has none (SPEC/GRAPH.md
+        # "Server Startup", step 1). It must be up before the seed writes.
+        self.server = self.test.start_graph_server(self.roadmap)
         self._seed_knowledge_graph()
 
     def teardown_method(self):
@@ -117,18 +121,19 @@ class TestGraphParallelEdgePredicates:
 
     # ---- helpers -----------------------------------------------------
 
-    # `write` and `read` name what the caller is doing. `rmp graph` has one
-    # subcommand and it runs both (SPEC/COMMANDS.md section "Graph Management");
+    # `write` and `read` name what the caller is doing. `rmp graph client`
+    # runs both against the running server (SPEC/COMMANDS.md section
+    # "Graph Management");
     # the two helpers survive because they assert different things.
 
     def write(self, query):
-        result = self.test.run_cmd_json(["graph", "execute", "-r", self.roadmap, "--query", query])
+        result = self.test.run_cmd_json(["graph", "client", "-r", self.roadmap, "--query", query])
         # See test_34's helper: the shape is what a general-purpose write helper
         # can assert, and the counters member is additive to it.
         assert_graph_write_shape(result, f"write without RETURN {query!r}")
 
     def read(self, query):
-        return self.test.run_cmd_json(["graph", "execute", "-r", self.roadmap, "--query", query])
+        return self.test.run_cmd_json(["graph", "client", "-r", self.roadmap, "--query", query])
 
     def col_list(self, query, col):
         """Ordered list of one column's values — the actual rows returned."""

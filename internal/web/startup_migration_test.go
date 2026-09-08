@@ -457,8 +457,11 @@ func TestReadOnlyInvariant_PerRequestLoadersUseOpenReadOnly(t *testing.T) {
 
 	const roadmapName = "event-sourcing-refactor"
 	// Seed the roadmap with current schema and a sprint so the sprints page has
-	// data to render and is not vacuously empty.
-	initial := seedRoadmap(t, roadmapName)
+	// data to render and is not vacuously empty, and serve its graph so the
+	// graph-data endpoint below answers 200 rather than 503 — a request that
+	// never reached a statement would exercise less of the loader path than this
+	// test is about.
+	initial := servedRoadmap(t, roadmapName)
 
 	// Capture audit row count and schema_version BEFORE any GET request.
 	measureDB := func(label string) (auditCount int, version string) {

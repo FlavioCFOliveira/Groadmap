@@ -28,7 +28,7 @@ Before extracting anything, the script verifies the downloaded archive against t
 - **Audit Trail**: Automatic, append-only logging of every change to a task or a sprint, across a catalogue of 43 operations. Each entry names the operation, the entity it belongs to and when it happened, and, where the operation has one, the counterpart entity involved and the git commit that bracketed the work
 - **State Machine**: Validated task and sprint status transitions with automatic date tracking
 - **Bulk Operations**: Support for multiple task IDs in single commands
-- **Knowledge Graph**: Per-roadmap queryable graph (nodes, edges, Cypher) for capturing project elements and their relationships, optionally held open by a dedicated server (`rmp graph serve`) that answers Cypher over a Unix domain socket
+- **Knowledge Graph**: Per-roadmap queryable graph (nodes, edges, Cypher) for capturing project elements and their relationships, held open by a dedicated server (`rmp graph serve`) that answers Cypher over a Unix domain socket and reached with `rmp graph client`
 - **Web Interface**: Self-contained, mobile-first browser view of all roadmaps, their sprints, their tasks on a searchable and filterable Kanban board, and an interactive knowledge-graph visualisation, built on the Tabler admin-shell UI in a dark theme (`rmp web`)
 
 ## Roadmap Selection (Always Required)
@@ -51,7 +51,7 @@ The only commands that do **not** take `-r` are:
 | `backlog` | Backlog planning views (list and show-next) | [DOCS/commands/backlog.md](DOCS/commands/backlog.md) |
 | `stats` | Roadmap-wide statistics and velocity | [DOCS/commands/stats.md](DOCS/commands/stats.md) |
 | `audit` | Audit log and entity history | [DOCS/commands/audit.md](DOCS/commands/audit.md) |
-| `graph` | Knowledge graph: run one Cypher statement (`execute`), serve the graph over a Unix domain socket (`serve`), or send a statement to a running server (`client`) | [DOCS/commands/graph.md](DOCS/commands/graph.md) |
+| `graph` | Knowledge graph: hold a roadmap's graph open over a Unix domain socket (`serve`) and send Cypher statements to that server (`client`) | [DOCS/commands/graph.md](DOCS/commands/graph.md) |
 | `web` | Self-contained web interface for all roadmaps and their knowledge graphs; read-only except the graph query bar, which executes the statement it is given | [DOCS/commands/web.md](DOCS/commands/web.md) |
 | `ai-help` | Emit the AI Agent Contract (machine-readable JSON for automated callers) | [DOCS/commands/ai-help.md](DOCS/commands/ai-help.md) |
 
@@ -116,17 +116,18 @@ rmp sprint reorder -r myproject 1 3,1,2
 # Show the sprint report
 rmp sprint show -r myproject 1
 
+# Start the roadmap's graph server. It holds the graph open until Ctrl+C, and
+# starting it is also what creates the graph the first time. Run it in another
+# terminal, or in the background: every statement below needs it.
+rmp graph serve -r myproject
+
 # Record project knowledge in the roadmap's graph
-rmp graph execute -r myproject \
+rmp graph client -r myproject \
   --query "MERGE (s:Spec {key:'user-authentication'}) MERGE (c:Code {path:'internal/auth/jwt.go'}) MERGE (s)-[:IMPLEMENTED_BY]->(c)"
 
 # Read the graph
-rmp graph execute -r myproject \
+rmp graph client -r myproject \
   --query "MATCH (s:Spec)-[:IMPLEMENTED_BY]->(c:Code) RETURN s.key, c.path"
-
-# Optional: hold the graph open for a working session (Ctrl+C stops it).
-# While it runs, the two commands above go through it automatically.
-rmp graph serve -r myproject
 ```
 
 ## Project Structure
@@ -142,7 +143,7 @@ rmp graph serve -r myproject
 │   ├── web/                 # Embedded web interface (read-only except the graph
 │   │                        #   query bar)
 │   ├── graphserve/          # The rmp graph serve Bolt server
-│   ├── graphclient/         # Socket resolution and the rmp graph client
+│   ├── graphclient/         # Socket resolution and the shared Bolt client
 │   ├── graphstore/          # Graph store lifecycle (open, checkpoint, close)
 │   ├── graphlock/           # The graph store's advisory lock
 │   ├── graphjson/           # Graph value and query-plan JSON rendering
@@ -163,7 +164,7 @@ The `internal/` entries above are the principal packages, not the complete set.
 - **Dates**: ISO 8601 UTC (with milliseconds, suffix `Z`)
 - **List arguments**: comma-separated, no spaces (e.g. `1,2,3`)
 - **Roadmaps**: Each roadmap is a directory `~/.roadmaps/<name>/` (permissions `0700`) holding its SQLite database `project.db` (permissions `0600`)
-- **Knowledge graph**: Each roadmap may hold a graph store under `~/.roadmaps/<name>/graph/` (a directory, permissions `0700`), created on first use of `rmp graph execute` — including by a statement that only reads. `rmp graph serve` creates no store: against a roadmap that has none it exits 1 rather than making one. While a server is running for that roadmap, its socket sits beside the store at `~/.roadmaps/<name>/graph.sock` (permissions `0600`) and is removed when the server stops
+- **Knowledge graph**: Each roadmap may hold a graph store under `~/.roadmaps/<name>/graph/` (a directory, permissions `0700`), created by `rmp graph serve` and by nothing else: a server started against a roadmap that has no graph creates it and serves it empty. While that server runs, its socket sits beside the store at `~/.roadmaps/<name>/graph.sock` (permissions `0600`) and is removed when the server stops
 
 ## Exit Codes
 
@@ -576,25 +577,35 @@ that introduced the two columns.
 
 Each roadmap owns one free-form, queryable graph backed by GoGraph. It captures the project's elements (specs, code, decisions, dependencies) and the relationships between them, so an AI agent can answer questions about the project without re-reading every source file. The graph is independent of the SQLite tasks/sprints data and is accessed through Cypher.
 
+**How do I start using it?**
+
+Start the roadmap's graph server and leave it running. It is the only process that opens the graph, and starting one against a roadmap that has never had a graph is what creates it:
+
+```bash
+rmp graph serve -r myproject
+```
+
+It is long-lived and prints the socket it bound, so run it in another terminal or in the background and wait for that line before sending anything. Every statement then goes through `rmp graph client`, which needs that server for every statement and opens nothing itself.
+
 **How do I record knowledge in the graph?**
 ```bash
-rmp graph execute -r myproject \
+rmp graph client -r myproject \
   --query "MERGE (s:Spec {key:'user-authentication'}) MERGE (c:Code {path:'internal/auth/jwt.go'}) MERGE (s)-[:IMPLEMENTED_BY]->(c)"
 ```
 
 **How do I read or traverse the graph?**
 ```bash
-rmp graph execute -r myproject \
+rmp graph client -r myproject \
   --query "MATCH (s:Spec)-[:IMPLEMENTED_BY]->(c:Code) RETURN s.key, c.path"
-rmp graph execute -r myproject \
+rmp graph client -r myproject \
   --query "MATCH path = (s:Spec {key:'user-authentication'})-[:DEPENDS_ON*1..3]->(d:Dependency) RETURN path"
 ```
 
 **How do I update or delete graph elements?**
 ```bash
-rmp graph execute -r myproject \
+rmp graph client -r myproject \
   --query "MATCH (s:Spec {key:'user-authentication'}) SET s.status = 'implemented'"
-rmp graph execute -r myproject \
+rmp graph client -r myproject \
   --query "MATCH (d:Decision {key:'use-sessions'}) DETACH DELETE d"
 ```
 
@@ -605,7 +616,7 @@ naming the effects it applied — nodes and relationships created and deleted, p
 written, labels added and removed, indexes and constraints added and dropped.
 
 ```bash
-rmp graph execute -r myproject \
+rmp graph client -r myproject \
   --query "CREATE (:Spec {key:'rate-limiting', status:'draft'})"
 ```
 ```json
@@ -622,36 +633,37 @@ rmp graph execute -r myproject \
 A counter that is zero is left out, and a statement that changed **nothing** carries no
 `counters` key at all — every read, a `MERGE` that matched an existing element, a
 `DELETE` whose pattern matched no row — so it produces exactly the bytes it produced
-before the member existed and no existing script needs a change. `execute` and `client`
-publish the same object for the same statement.
+before the member existed and no existing script needs a change. The figures are a
+property of the statement and the graph, so they do not move between runs; they are
+published on the command line and nowhere else, because the web interface's graph page
+renders a `{nodes, edges}` document that carries no `counters` member.
 
 One member, `propertiesWritten`, carries property assignments and property removals as a
-single figure. The protocol a served result crosses has one property counter and no
-counterpart for a removal, so the split cannot survive the trip to `client`; both
-surfaces publish the sum rather than report different keys for one statement, and the
-key is named for what it carries. So a `REMOVE` that reports `propertiesWritten` is
-correct, not a defect. See
+single figure. The Bolt protocol every result crosses has one property counter and no
+counterpart for a removal, so the split does not survive the trip; the key is named for
+what it carries. So a `REMOVE` that reports `propertiesWritten` is correct, not a defect.
+See
 [DOCS/commands/graph.md](DOCS/commands/graph.md#what-a-statement-changed-the-counters-member).
 
 **How many graph subcommands are there?**
 
-Three: `execute`, `serve` and `client`. `execute` and `client` each run any Cypher statement the engine accepts — a read, a write, a deletion, index and constraint DDL, and the `SHOW INDEXES` / `SHOW CONSTRAINTS` listings — and differ only in where the statement runs. `serve` runs no statement of its own: it makes the graph available to the other two.
+Two: `serve` and `client`. `serve` runs no statement of its own — it opens the roadmap's graph, holds it, and answers over a Unix domain socket. `client` runs any Cypher statement the engine accepts — a read, a write, a deletion, index and constraint DDL, and the `SHOW INDEXES` / `SHOW CONSTRAINTS` listings — by sending it to that server.
 
-`create`, `query`, `update`, `delete` and `search` were subcommands of `rmp graph` and are not any more: each is now an unresolved subcommand name and exits 127. They existed to enforce an operation class, and once that enforcement was withdrawn nothing distinguished them.
+`execute`, `create`, `query`, `update`, `delete` and `search` were subcommands of `rmp graph` and are not any more: each is now an unresolved subcommand name and exits 127. Five of them existed to enforce an operation class, and once that enforcement was withdrawn nothing distinguished them. `execute` went for a different reason: it opened the store for a single statement, which cannot coexist with a server that holds that store for its whole lifetime. There is no one-shot form and none is planned.
 
 Because nothing is checked, the effect of a statement is decided by its Cypher alone. There is no subcommand whose contract is "this cannot delete", so the guarantee you need about a statement is a guarantee about the text you supply.
 
 **How do I see what a statement will do before running it?**
 
 Prefix it with `EXPLAIN` to have it planned and **not executed**, or with `PROFILE` to
-run it and measure every operator. Both work on `execute` and on `client`.
+run it and measure every operator.
 
 ```bash
 # Plan only: declared columns, no rows, and the plan under "plan"
-rmp graph execute -r myproject --query "EXPLAIN MATCH (s:Spec) RETURN s.key"
+rmp graph client -r myproject --query "EXPLAIN MATCH (s:Spec) RETURN s.key"
 
 # Run and measure: real rows, and the cost of each operator under "profile"
-rmp graph execute -r myproject --query "PROFILE MATCH (s:Spec) RETURN s.key"
+rmp graph client -r myproject --query "PROFILE MATCH (s:Spec) RETURN s.key"
 ```
 
 The two members are never both present, so an estimate can never be read as a
@@ -681,59 +693,56 @@ log's figure, and 1 GiB is the number to write under.**
 The two bounds fail differently, and that is the part worth knowing:
 
 - **Too long for the log** and the commit is refused. Nothing is written, the store stays
-  usable, and the invocation exits 1 with a line of its own rather than the general
-  parse-or-execution one:
-  `Error: graph engine error: graph field too long; nothing was written. Shorten the field the engine names: <engine diagnostic>`
+  usable, and the invocation exits 1. A line of its own is specified for this class so
+  that "shorten a value" can be told from "correct your syntax", but at the pinned engine
+  it is not reachable: every statement crosses a server, and the engine's Bolt server
+  classifies this refusal as its own fault and replaces the message with generic
+  internal-error text naming only the session. The field and the figures reach that
+  server's stderr rather than the caller.
 - **Short enough to commit and too long to fold** — a property value between 1 GiB and
   4 GiB — and the write succeeds and exits 0, and then **every checkpoint of that graph
   fails from that moment on**. Unlike every other checkpoint failure this one cannot
   heal, because the offending field is committed graph state: the write-ahead log is
   never folded again and never reclaimed, so it grows and every open replays more of it.
-  A diagnostic beside the success says so, and it recurs on every subsequent write until
-  a statement shortens or removes the field.
+  The report is on the server's stderr, and it persists until a statement shortens or
+  removes the field.
 
-Through a **running server** the first of the two prints the general `graph query
-failed: ` line carrying generic internal-error text instead: the engine's Bolt server
-classifies the refusal as its own fault and replaces the message, so the field and the
-figures reach that server's stderr rather than the caller. It is the same failure — exit
-code 1, nothing written — and `rmp graph client`, which always crosses a server, never
-prints the specific line. See
-[DOCS/commands/graph.md](DOCS/commands/graph.md#how-long-a-field-may-be).
+See [DOCS/commands/graph.md](DOCS/commands/graph.md#how-long-a-field-may-be).
 
 **What does `rmp graph serve` do, and do I need it?**
 
-You do not need it: everything the graph can do works without one. `rmp graph serve` opens a roadmap's graph once and answers Cypher over a Unix domain socket until you stop it, so a caller pays one store open for the whole session instead of one per invocation, and statements that would otherwise serialise on the store's exclusive lock run concurrently under the store's MVCC instead.
-
-It serves a graph that already exists and creates none: against a roadmap whose store has never been written, it exits 1. Run one `rmp graph execute` first.
+You do need it. `rmp graph serve` opens a roadmap's graph once and answers Cypher over a Unix domain socket until you stop it, and it is the only process that opens that store — so a caller pays one store open for a whole working session instead of one per statement, and statements that would otherwise serialise on the store's exclusive lock run concurrently under the store's MVCC instead. While no server runs for a roadmap, that roadmap's graph is unreachable rather than empty: `rmp graph client` fails with exit code 1, and the graph page is unavailable. The data is untouched throughout.
 
 ```bash
 # Hold the graph open until Ctrl+C; it prints the socket it bound
 rmp graph serve -r myproject
 
-# Send a statement to that server explicitly
+# Send a statement to that server
 rmp graph client -r myproject --query "MATCH (n:Spec) RETURN n.key"
 ```
 
-**A running server is used automatically.** With one serving `myproject`, an ordinary `rmp graph execute -r myproject ...` sends its statement to that server instead of opening the store, with no flag and no configuration, and so does the web interface's graph page. The result, the output shape and the exit code are the same either way. `rmp graph client` is the one that *requires* a server and fails when none answers, which is what makes it useful in a script that must know a server was reached.
+Starting a server is also what **creates** a roadmap's graph: against a roadmap that has never had one, `serve` creates `~/.roadmaps/<name>/graph/` and serves it empty. A `serve` that is refused creates nothing.
+
+**One server per roadmap.** The store's lock is the interlock: a second `rmp graph serve` for the same roadmap cannot take it, exits 1, and leaves the first server's socket untouched. Stopping a server with `Ctrl+C` drains the work in flight, checkpoints if the log has grown, releases the lock and removes the socket, and exits 0.
 
 **Access control is the filesystem and nothing else.** The socket is mode `0600` inside a roadmap home that is `0700`, there is no authentication and no transport security (the server prints a warning for each at startup), and any caller that can open the socket can read, write, delete and change the schema of that roadmap's graph.
 
-**`--socket` is accepted by all three subcommands** — `execute`, `serve` and `client` — and all three default it to `~/.roadmaps/<name>/graph.sock`. It names *which socket is looked at*: it does not force a server, does not forbid one, and does not select the store. Write it on `execute` or `client` when the server was started with the same flag.
+**`--socket` is accepted by both subcommands** and both default it to `~/.roadmaps/<name>/graph.sock`. It names *which socket is bound and which socket is connected to*, and nothing else — there is nothing else for it to select. Write it on `client` when the server was started with the same flag.
 
-**The socket path has a length limit, and the default path can cross it.** The operating system bounds how long a Unix domain socket path may be — 107 bytes on Linux and Windows, 103 on macOS, FreeBSD and OpenBSD, counted in bytes rather than characters. A resolved path over that bound names a socket no process can create, so `execute`, `serve` and `client` all refuse the invocation with exit code 1 and the web interface's graph data endpoint answers HTTP 500; none of them falls back to opening the store. This is not only a `--socket` concern: `~/.roadmaps/<name>/graph.sock` crosses the bound on its own under a deep enough home directory, with no unusual roadmap name, and it then makes that roadmap's graph unreachable through every surface at once — `rmp graph execute` included, which needs no socket of its own. On the command line the way back is `--socket` naming a path inside the bound: it passes the check, nothing is listening there, so `execute` opens the store as usual. The web page has no such flag, so its only remedy is a shorter home directory or a shorter roadmap name. See [DOCS/commands/graph.md](DOCS/commands/graph.md#the-socket-path-has-a-length-limit).
+**The socket path has a length limit, and the default path can cross it.** The operating system bounds how long a Unix domain socket path may be — 107 bytes on Linux and Windows, 103 on macOS, FreeBSD and OpenBSD, counted in bytes rather than characters. A resolved path over that bound names a socket no process can create, so `serve` and `client` both refuse the invocation with exit code 1 and the web interface's graph data endpoint answers HTTP 500. This is not only a `--socket` concern: `~/.roadmaps/<name>/graph.sock` crosses the bound on its own under a deep enough home directory, with no unusual roadmap name. On the command line the way back is `--socket` naming a path inside the bound, given to both ends of the pair: the server binds it and the client reaches it, and that roadmap works normally. The web page has no such flag, so its only remedy is a shorter home directory or a shorter roadmap name. See [DOCS/commands/graph.md](DOCS/commands/graph.md#the-socket-path-has-a-length-limit).
 
-**One caution.** `--socket` moves the socket off the default path, and the web interface cannot follow it: it is an HTTP handler with no command line, and no request parameter carries a socket path, so a server started with `--socket` leaves that roadmap's graph page failing with HTTP 500 for as long as it runs. Start a server without the flag whenever the same roadmap is also browsed. See [DOCS/commands/graph.md](DOCS/commands/graph.md#running-a-graph-server).
+**One caution.** `--socket` moves the socket off the default path, and the web interface cannot follow it: it is an HTTP handler with no command line, and no request parameter carries a socket path, so a server started with `--socket` leaves that roadmap's graph page unavailable — HTTP 503, the same answer it gives for a roadmap nobody is serving — for as long as it runs. Start a server without the flag whenever the same roadmap is also browsed. See [DOCS/commands/graph.md](DOCS/commands/graph.md#running-a-graph-server).
 
 **Can I pipe a statement instead of using `--query`?**
 ```bash
-echo "MATCH (n) RETURN count(n)" | rmp graph execute -r myproject
-cat query.cypher | rmp graph execute -r myproject
+echo "MATCH (n) RETURN count(n)" | rmp graph client -r myproject
+cat query.cypher | rmp graph client -r myproject
 ```
 When `--query` is absent, the statement is read from standard input under a bound. See [DOCS/commands/graph.md](DOCS/commands/graph.md) for full details.
 
 **Where is the graph stored?**
 
-Under the roadmap's home directory at `~/.roadmaps/<name>/graph/` (a directory, permissions `0700`), created on first use of `rmp graph execute`. Removing the roadmap deletes its graph along with the rest of the home directory.
+Under the roadmap's home directory at `~/.roadmaps/<name>/graph/` (a directory, permissions `0700`), created by `rmp graph serve`. Removing the roadmap deletes its graph along with the rest of the home directory.
 
 ---
 
@@ -761,13 +770,13 @@ On startup the served URL is printed as JSON (`{"url": "http://127.0.0.1:8787"}`
 
 **What makes it different from every other command?**
 
-- **Read-only, with one exception.** No route creates, edits or deletes a roadmap, task, sprint, comment or audit entry, and serving a page writes no rows and no audit-log entry. Only `GET`/`HEAD` are accepted (any other method returns HTTP 405). The exception is the graph data endpoint: it runs the statement the query bar gives it, so a statement that writes is committed and checkpointed against the roadmap's knowledge graph. A page load that runs no write leaves the graph store byte for byte as it found it.
+- **Read-only, with one exception.** No route creates, edits or deletes a roadmap, task, sprint, comment or audit entry, and serving a page writes no rows and no audit-log entry. Only `GET`/`HEAD` are accepted (any other method returns HTTP 405). The exception is the graph data endpoint: it sends the statement the query bar gives it to the roadmap's graph server, so a statement that writes is committed there. The endpoint opens no store and takes no lock of its own, and a page load that runs no write leaves the graph store byte for byte as it found it.
 - **No `-r` flag.** It is the one command exempt from the always-required-roadmap rule; it lists all roadmaps and you pick one in the browser.
 - **Long-lived.** It keeps serving until interrupted; `Ctrl+C` (`SIGINT`) or `SIGTERM` shuts it down gracefully (exit 0).
-- **It tells you what went wrong.** Because a per-request failure never stops the server, the browser is given a deliberately opaque `internal server error` and the detail goes to the console instead: one structured `log/slog` line on stderr per failure, naming the request, the status, and the underlying error, with UTC timestamps. A rejected query-bar query is a `WARN`; a server failure is an `ERROR`. Successful requests, 404s and 405s stay silent, and stdout still carries only the URL object. See [DOCS/commands/web.md](DOCS/commands/web.md#console-log).
+- **It tells you what went wrong.** Because a per-request failure never stops the server, the browser is given a deliberately opaque `internal server error` and the detail goes to the console instead: one structured `log/slog` line on stderr per failure, naming the request, the status, and the underlying error, with UTC timestamps. A rejected query-bar query is a `WARN`, and so is a graph server that is not running — the page reports HTTP 503 for it, because starting the server clears the condition and nothing in this server is at fault. A server failure is an `ERROR`. Successful requests, 404s and 405s stay silent, and stdout still carries only the URL object. See [DOCS/commands/web.md](DOCS/commands/web.md#console-log).
 - **A Kanban tasks board.** The Tasks page lays every task of the roadmap out on a board of five fixed status columns - `BACKLOG`, `SPRINT`, `DOING`, `TESTING`, `COMPLETED` - each with a count badge, all five always present whatever the data holds. There is no pagination: whatever the roadmap holds, the board shows. Each card carries the task's `#id` and type, its title, its priority and severity badges, and only the metadata it actually has (sprint, subtask, dependency and comment counts); clicking a card opens the read-only task detail modal.
 - **The board's header controls.** A search box matches the task title and the `#id` reference, and three dropdowns filter by type (an equality over the ten task types), by minimum priority and by minimum severity (both thresholds, `>= n`, exactly as the `rmp task list` flags of the same names). They combine conjunctively, and each is a URL query parameter (`q`, `type`, `priority`, `severity`), so a narrowed board is a link you can share and opening it cold renders the same board the live controls produced. An unknown value simply applies no filter on its dimension. There is no status filter, because the columns already are the status.
-- **A graph query bar with a time budget.** The knowledge-graph page is driven by an editable Cypher statement with a node-limit dropdown. The statement is executed as written — the endpoint does not examine it, so a `CREATE`, a `SET` or a `DETACH DELETE` typed into the box is executed and committed against the roadmap's knowledge graph. Each statement runs under a 5-second budget: the budget bounds the **work** the statement causes, while the node limit bounds only the **result** it returns, so a query that scans a Cartesian product is stopped even though its response would be tiny. A cancelled or failed statement is reported in place and the page keeps working. When `rmp graph serve` is running for that roadmap on its default socket, the endpoint sends the statement to that server instead of opening the store; a server started with `--socket` cannot be reached from here at all, and leaves the page failing for as long as it runs.
+- **A graph query bar with a time budget.** The knowledge-graph page is driven by an editable Cypher statement with a node-limit dropdown. The statement is executed as written — the endpoint does not examine it, so a `CREATE`, a `SET` or a `DETACH DELETE` typed into the box is executed and committed against the roadmap's knowledge graph. Each statement runs under a 5-second budget: the budget bounds the **work** the statement causes, while the node limit bounds only the **result** it returns, so a query that scans a Cartesian product is stopped even though its response would be tiny. A cancelled or failed statement is reported in place and the page keeps working. The statement is sent to the roadmap's graph server, on the socket path derived from the roadmap name; with no server running there the page reports HTTP 503, which starting one clears. A server started with `--socket` cannot be reached from here at all, because the endpoint has no way to receive a path, and it leaves the page unavailable for as long as it runs.
 - **Tabler dark-theme UI.** The interface is built on the vendored Tabler admin-dashboard framework in its dark theme: a navigation sidebar (which collapses to a hamburger menu on small viewports), a top navbar naming the selected roadmap, page headers whose title names the view you are on (Sprints, Tasks, Audit, Knowledge graph), and Tabler cards, tables, and badges. On the Sprints page each of the three tabs carries a count badge in the colour of the sprint status that tab groups.
 - **Self-contained and offline.** Every asset (HTML, CSS, JavaScript, the vendored Tabler framework and D3.js graph library with the d3-sankey plugin, the Tabler Icons webfont, and the Inter font) is embedded in the binary via `go:embed` and served only from `/static/`; no page references a CDN, a remote font host, or any other remote origin, and the server makes no outbound request.
 - **Loopback by default, and that bind is the only access control.** It binds the loopback interface (`127.0.0.1`), so the interface is reachable only from the local machine. Exposing it on the network is the explicit opt-in via `--host 0.0.0.0` (or any other non-loopback address), which also prints a network-exposure warning to stderr. Because the graph data endpoint executes the statement it is given, that opt-in is a **write** grant over every roadmap's knowledge graph and not a read grant: the server has no login, no token and no session. Roadmap names from the URL are validated before any filesystem path is built (path-traversal guard).
@@ -848,6 +857,27 @@ The contract is pretty-printed JSON on stdout (2-space indent, trailing newline,
 - Every `--help` output is prepended with `AI agents: run \`rmp --ai-help\` for a machine-readable command contract.` as its first line.
 - Every `Error: ...` line on stderr is followed by the same hint after a blank line.
 - Setting `AI_AGENT=1` in the environment prepends the same hint as the first line of stderr on every invocation. Only the literal string `1` enables this; other values (including `true`, `yes`, `0`) are silent. When `AI_AGENT=1` is active and an error occurs, the hint is emitted exactly once at the top.
+
+**The `.rmp` file: how an agent learns which roadmap and which socket to use.**
+
+A project may carry a `.rmp` file at its root. It is a small key-value file: one `key = value` per line, `#` starting a comment, blank lines ignored. Two keys are defined:
+
+| Key | Value |
+|-----|-------|
+| `roadmap` | The roadmap name to pass as `-r` |
+| `socket` | The Unix domain socket to pass as `--socket`, to `rmp graph serve` and `rmp graph client` alike |
+
+```ini
+# the roadmap this repository plans against
+roadmap = groadmap
+
+# the socket both ends of the graph pair bind and connect to
+socket = /run/user/1000/groadmap-graph.sock
+```
+
+A file whose entire content is a bare name on one line is still read as the roadmap name, so a `.rmp` written before the keys existed keeps working unchanged.
+
+**The `rmp` binary does not read this file.** No command looks for it, no flag defaults from it, and nothing in the binary would behave differently if it were deleted; there is no reference to `.rmp` anywhere in the source. The convention belongs to the agent-side skill that drives the CLI: the skill reads the file and puts what it finds on the command line, passing a declared `socket` as `--socket` to `rmp graph serve` and to `rmp graph client` alike, so that the server and the client of one project agree on a socket without either being told a path by hand. Documenting it as a CLI feature would be false, which is why it is documented here as what it is — a convention between a project and the agent working on it, honoured by the agent and not by the tool.
 
 **What are the shorthand aliases?**
 - `rmp t` = `rmp task`

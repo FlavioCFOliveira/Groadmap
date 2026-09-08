@@ -2,7 +2,12 @@
 """
 Test 56: reading a relationship through an undirected or incoming pattern.
 
-End-to-end backstop against the compiled ./bin/rmp and a real graph store.
+End-to-end backstop against the compiled ./bin/rmp and a real graph store,
+reached the only way a graph is reachable: a running `rmp graph serve`, spoken
+to by `rmp graph client` (SPEC/GRAPH.md section "The Dedicated Graph Server").
+Every statement below -- the fixture's seeds included -- crosses the Bolt socket,
+so what is asserted is what a CALLER sees after the server's result has been
+mapped onto the published JSON, not what the engine holds in process.
 
 What this module used to be. `rmp graph` refused an undirected or incoming
 FIXED-LENGTH read of a bound relationship before opening the store, because
@@ -12,9 +17,10 @@ below asserted that refusal and its message.
 
 The refusal was withdrawn with the rest of the guard rail, and withdrawing it
 made the underlying claim testable from the CLI for the first time since it was
-written. It does not reproduce at the pinned engine: measured on GoGraph
+written. It does not reproduce at the pinned engine: first measured on GoGraph
 v0.12.0 against the canonical bidirectional fixture, every one of the shapes the
-specification names answers CORRECTLY (rmp task #362, FINDING). Correcting
+specification names answers CORRECTLY (rmp task #362, FINDING), and this module
+re-measures it on every run against whatever version go.mod pins. Correcting
 `SPEC/GRAPH.md` section "What Groadmap Does Not Check", item 5, is rmp task
 #373's, not this module's.
 
@@ -56,8 +62,13 @@ class TestGraphRelationshipReadDirection:
     def setup_method(self):
         self.test = GroadmapTestBase()
         self.test.setup()
-        self.roadmap = self.test.create_roadmap()
-        for query in [
+        self.roadmap = self.test.generate_roadmap_name()
+        # The server is started BEFORE the seeds, because starting one is what
+        # creates the graph: a roadmap that has never had a graph is served an
+        # empty one, and the first seed writes its first node
+        # (SPEC/GRAPH.md section "Server Startup", step 1).
+        self.server = self.test.served_roadmap(
+            self.roadmap,
             f"CREATE (:Spec {{key:'{self.SPEC_KEY}'}}), (:Test {{key:'{self.TEST_KEY}'}}), "
             f"(:Code {{key:'{self.CODE_PATH}'}})",
             # The two-way pair, with DIFFERENT types in the two directions.
@@ -69,22 +80,21 @@ class TestGraphRelationshipReadDirection:
             # resolving correctly when only one direction exists.
             f"MATCH (s:Spec {{key:'{self.SPEC_KEY}'}}), (c:Code {{key:'{self.CODE_PATH}'}}) "
             "MERGE (s)-[:IMPLEMENTED_BY]->(c)",
-        ]:
-            self.test.run_cmd(
-                ["graph", "execute", "-r", self.roadmap, "--query", query], check=True)
+        )
 
     def teardown_method(self):
         self.test.teardown()
 
     # ---- helpers -----------------------------------------------------
 
-    def run(self, query, check=False):
-        return self.test.run_cmd(
-            ["graph", "execute", "-r", self.roadmap, "--query", query], check=check)
+    def run(self, query):
+        """Send one statement to the running server, returning its
+        (exit code, stdout, stderr) without asserting anything about them."""
+        return self.test.graph_client(self.roadmap, query=query)
 
     def json(self, query):
-        return self.test.run_cmd_json(
-            ["graph", "execute", "-r", self.roadmap, "--query", query])
+        """Send one statement that must succeed and return its parsed result."""
+        return self.test.graph_ok(self.roadmap, query=query)
 
     def node_property(self, label, key, name):
         result = self.json(f"MATCH (n:{label} {{key:'{key}'}}) RETURN n.{name}")
@@ -180,7 +190,8 @@ class TestGraphRelationshipReadDirection:
 
     def test_delete_through_an_undirected_traversal_is_admitted(self):
         # DELETE resolves the edge itself rather than through the endpoint
-        # columns, so it removes the right one. `graph execute` is untouched.
+        # columns, so it removes the right one. Nothing about the statement is
+        # examined before it is sent: the server runs it as given.
         code, stdout, stderr = self.run(f"MATCH (s:Spec {{key:'{self.SPEC_KEY}'}})-[e:COVERS]-(v:Test) DELETE e")
         assert code == 0, (
             f"an undirected DELETE must stay accepted; "

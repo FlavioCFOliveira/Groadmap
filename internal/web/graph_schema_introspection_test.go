@@ -15,7 +15,7 @@ package web
 // given, so the empty graph is back — and it is now the specified answer, with
 // the reason stated rather than left to be inferred: it is empty because the
 // response SHAPE carries nodes and edges, not because the store's schema is
-// empty, and a schema listing is read from `rmp graph execute`, which returns the
+// empty, and a schema listing is read from the graph server, which returns the
 // rows (Acceptance Criterion 157).
 //
 // That is why the store these tests seed really does hold a named index and a
@@ -42,6 +42,7 @@ import (
 	"github.com/FlavioCFOliveira/GoGraph/store/txn"
 	"github.com/FlavioCFOliveira/GoGraph/store/wal"
 
+	"github.com/FlavioCFOliveira/Groadmap/internal/graphclient"
 	"github.com/FlavioCFOliveira/Groadmap/internal/graphjson"
 	"github.com/FlavioCFOliveira/Groadmap/internal/utils"
 )
@@ -56,7 +57,8 @@ var schemaSeedStatements = []string{
 
 // seedGraphSchema commits each schema statement through the transactional write
 // path, so the definitions reach the write-ahead log and are recovered when the
-// store is next opened — which is how `rmp graph execute` persists them.
+// store is next opened — which is how a statement run through a server persists
+// them.
 func seedGraphSchema(t *testing.T, name string, statements ...string) {
 	t.Helper()
 
@@ -109,54 +111,52 @@ func graphDirOf(t *testing.T, name string) string {
 	return filepath.Join(roadmapDir, "graph")
 }
 
-// schemaNamesOnTheStore opens the roadmap's store and runs a SHOW statement
-// against it directly, returning the `name` column of every row. It is what
-// `rmp graph execute` does for the caller, performed in-process so a Go test can
-// read the rows the HTTP response shape cannot carry.
+// schemaNamesThroughTheServer sends a SHOW statement to the roadmap's running
+// graph server and returns the `name` column of every row it answered with.
 //
-// It is what makes the empty-graph assertions non-vacuous. The store answers
-// these statements with real rows, so the empty graph the endpoint returns is the
+// It is the OTHER half of Acceptance Criterion 157, which requires both halves to
+// be asserted together: the endpoint answers an empty graph, and the identical
+// statement sent to the same server comes back carrying the rows. It is what
+// makes the empty-graph assertions non-vacuous — the server answers these
+// statements with real rows, so the empty graph the endpoint returns is the
 // response shape swallowing a result it cannot carry, and not a report that the
 // store holds no schema.
-func schemaNamesOnTheStore(t *testing.T, name, query string) []string {
+//
+// It used to open the store directly, in this process, which is no longer
+// lawful and no longer what the criterion asks for. A server holds the store's
+// exclusive advisory lock for its whole lifetime, and criterion 157 now names
+// `rmp graph client` against that same server as the reader. This is that reader's
+// mechanism — internal/graphclient, the one realisation both the CLI and this
+// endpoint reach a server through (SPEC/ARCHITECTURE.md module 9) — used in
+// process, because criterion 162 forbids this package to spawn one. The E2E suite
+// drives the command itself.
+//
+// The values pass through graphjson.Value, the ONE value mapping the endpoint
+// publishes through, so a name this reads is rendered exactly as a response would
+// have rendered it. The nil graphjson.Unmapped matches what the endpoint passes.
+func schemaNamesThroughTheServer(t *testing.T, name, query string) []string {
 	t.Helper()
 
-	res, err := recovery.Open[string, float64](graphDirOf(t, name), recovery.Options[string, float64]{
-		Codec:       txn.NewStringCodec(),
-		WeightCodec: txn.NewFloat64WeightCodec(),
-	})
+	socket, err := graphclient.SocketPath(name)
 	if err != nil {
-		t.Fatalf("opening graph store: %v", err)
+		t.Fatalf("deriving the socket path of roadmap %q: %v", name, err)
 	}
-	engine := cypher.NewEngineWithOptions(res.Graph, cypher.EngineOptions{
-		RecoveredConstraints: cypher.ConstraintDefsFromRecovery(res.Constraints),
-		RecoveredIndexes:     cypher.IndexDefsFromRecovery(res.Indexes),
-	})
-
-	result, err := engine.Run(context.Background(), query, nil)
+	result, err := graphclient.Send(context.Background(), socket, query)
 	if err != nil {
-		t.Fatalf("running %q on the read path: %v", query, err)
+		t.Fatalf("sending %q to the graph server at %s: %v", query, socket, err)
 	}
-	defer result.Close() //nolint:errcheck // read path; close commits nothing
 
-	nameCol := slices.Index(result.Columns(), "name")
+	nameCol := slices.Index(result.Columns, "name")
 	if nameCol < 0 {
 		t.Fatalf("%q returned columns %v, which do not include `name`: the engine's schema listing has changed shape and this helper can no longer read it",
-			query, result.Columns())
+			query, result.Columns)
 	}
 
 	var names []string
-	for result.Next() {
-		// graphjson.Value is the ONE value mapping the endpoint publishes
-		// through, reused here rather than reimplemented, so the helper reads a
-		// value exactly as the response would have rendered it. The nil
-		// graphjson.Unmapped matches what the endpoint passes.
-		if s, ok := graphjson.Value(result.ValueAt(nameCol), nil).(string); ok {
+	for _, row := range result.Rows {
+		if s, ok := graphjson.Value(row[nameCol], nil).(string); ok {
 			names = append(names, s)
 		}
-	}
-	if err := result.Err(); err != nil {
-		t.Fatalf("iterating %q: %v", query, err)
 	}
 	return names
 }
@@ -196,13 +196,13 @@ var introspectionQueries = []string{
 // RESPONSE SHAPE and not of the store — would be unobservable.
 func TestHandleGraphData_StoreReallyHoldsTheSchema(t *testing.T) {
 	t.Setenv("HOME", shortHome(t))
-	name := seedGraphWithSchema(t, "web-ui-rollout")
+	name := servedGraphWithSchema(t, "web-ui-rollout")
 
-	if names := schemaNamesOnTheStore(t, name, "SHOW INDEXES"); !slices.Contains(names, "spec_key") {
-		t.Fatalf("SHOW INDEXES over the store reported %v, want it to contain the declared index %q", names, "spec_key")
+	if names := schemaNamesThroughTheServer(t, name, "SHOW INDEXES"); !slices.Contains(names, "spec_key") {
+		t.Fatalf("SHOW INDEXES through the server reported %v, want it to contain the declared index %q", names, "spec_key")
 	}
-	if names := schemaNamesOnTheStore(t, name, "SHOW CONSTRAINTS"); !slices.Contains(names, "spec_key_unique") {
-		t.Fatalf("SHOW CONSTRAINTS over the store reported %v, want it to contain the declared constraint %q", names, "spec_key_unique")
+	if names := schemaNamesThroughTheServer(t, name, "SHOW CONSTRAINTS"); !slices.Contains(names, "spec_key_unique") {
+		t.Fatalf("SHOW CONSTRAINTS through the server reported %v, want it to contain the declared constraint %q", names, "spec_key_unique")
 	}
 }
 
@@ -217,7 +217,7 @@ func TestHandleGraphData_StoreReallyHoldsTheSchema(t *testing.T) {
 // `kind` fails.
 func TestHandleGraphData_SchemaListingIsReadFromTheStoreNotTheEndpoint(t *testing.T) {
 	t.Setenv("HOME", shortHome(t))
-	name := seedGraphWithSchema(t, "web-ui-rollout")
+	name := servedGraphWithSchema(t, "web-ui-rollout")
 
 	for _, query := range introspectionQueries {
 		t.Run(query, func(t *testing.T) {
@@ -247,12 +247,12 @@ func TestHandleGraphData_SchemaListingIsReadFromTheStoreNotTheEndpoint(t *testin
 	// The other half, without which the empty answers above are consistent with
 	// a store that simply has no schema: the same statements over the store
 	// return the declared names.
-	if names := schemaNamesOnTheStore(t, name, "SHOW INDEXES"); !slices.Contains(names, "spec_key") {
-		t.Errorf("SHOW INDEXES over the store reported %v, want the declared index: the endpoint's "+
+	if names := schemaNamesThroughTheServer(t, name, "SHOW INDEXES"); !slices.Contains(names, "spec_key") {
+		t.Errorf("SHOW INDEXES through the server reported %v, want the declared index: the endpoint's "+
 			"empty answer must be a property of its response shape, not of the store", names)
 	}
-	if names := schemaNamesOnTheStore(t, name, "SHOW CONSTRAINTS"); !slices.Contains(names, "spec_key_unique") {
-		t.Errorf("SHOW CONSTRAINTS over the store reported %v, want the declared constraint", names)
+	if names := schemaNamesThroughTheServer(t, name, "SHOW CONSTRAINTS"); !slices.Contains(names, "spec_key_unique") {
+		t.Errorf("SHOW CONSTRAINTS through the server reported %v, want the declared constraint", names)
 	}
 }
 
@@ -267,7 +267,7 @@ func TestHandleGraphData_SchemaListingIsReadFromTheStoreNotTheEndpoint(t *testin
 // statement rather than of the endpoint.
 func TestHandleGraphData_EmptyGraphAnswersAreIndistinguishable(t *testing.T) {
 	t.Setenv("HOME", shortHome(t))
-	name := seedGraphWithSchema(t, "web-ui-rollout")
+	name := servedGraphWithSchema(t, "web-ui-rollout")
 
 	statements := []string{
 		`MATCH (n:Absent) RETURN n`,  // matched nothing
@@ -323,7 +323,7 @@ func TestHandleGraphData_EmptyGraphAnswersAreIndistinguishable(t *testing.T) {
 // node-and-edge shape, populated.
 func TestHandleGraphData_OrdinaryReadUnaffected(t *testing.T) {
 	t.Setenv("HOME", shortHome(t))
-	name := seedGraphWithSchema(t, "web-ui-rollout")
+	name := servedGraphWithSchema(t, "web-ui-rollout")
 
 	for _, query := range []string{
 		defaultGraphQuery,
@@ -371,9 +371,9 @@ func TestHandleGraphData_OrdinaryReadUnaffected(t *testing.T) {
 // graph (SPEC/WEB.md § Security and Constraints, rule 3).
 func TestHandleGraphData_SchemaDDLThroughTheEndpointPersists(t *testing.T) {
 	t.Setenv("HOME", shortHome(t))
-	name := seedGraphWithSchema(t, "web-ui-rollout")
+	name := servedGraphWithSchema(t, "web-ui-rollout")
 
-	if names := schemaNamesOnTheStore(t, name, "SHOW INDEXES"); slices.Contains(names, "audit_key") {
+	if names := schemaNamesThroughTheServer(t, name, "SHOW INDEXES"); slices.Contains(names, "audit_key") {
 		t.Fatalf("the index exists before anything created it: %v", names)
 	}
 
@@ -382,7 +382,7 @@ func TestHandleGraphData_SchemaDDLThroughTheEndpointPersists(t *testing.T) {
 		kind, reason := decodeQueryError(t, rec.Body.Bytes())
 		t.Fatalf("CREATE INDEX status = %d, want 200 (kind=%q, reason=%q)", rec.Code, kind, reason)
 	}
-	names := schemaNamesOnTheStore(t, name, "SHOW INDEXES")
+	names := schemaNamesThroughTheServer(t, name, "SHOW INDEXES")
 	if !slices.Contains(names, "audit_key") {
 		t.Fatalf("SHOW INDEXES over the store reports %v: an index created through the endpoint must "+
 			"persist, under the name the caller declared", names)
@@ -394,7 +394,7 @@ func TestHandleGraphData_SchemaDDLThroughTheEndpointPersists(t *testing.T) {
 		t.Errorf("SHOW INDEXES reports %v: the pre-existing index was lost by the checkpoint that "+
 			"followed the DDL, which is the snapshot-without-schema defect", names)
 	}
-	if constraints := schemaNamesOnTheStore(t, name, "SHOW CONSTRAINTS"); !slices.Contains(constraints, "spec_key_unique") {
+	if constraints := schemaNamesThroughTheServer(t, name, "SHOW CONSTRAINTS"); !slices.Contains(constraints, "spec_key_unique") {
 		t.Errorf("SHOW CONSTRAINTS reports %v: the declared constraint was lost by the checkpoint", constraints)
 	}
 
@@ -402,7 +402,7 @@ func TestHandleGraphData_SchemaDDLThroughTheEndpointPersists(t *testing.T) {
 	if rec := doGraphData(t, name, url.Values{"q": {"DROP INDEX audit_key"}}); rec.Code != http.StatusOK {
 		t.Fatalf("DROP INDEX status = %d, want 200; body=%q", rec.Code, rec.Body.String())
 	}
-	if names := schemaNamesOnTheStore(t, name, "SHOW INDEXES"); slices.Contains(names, "audit_key") {
+	if names := schemaNamesThroughTheServer(t, name, "SHOW INDEXES"); slices.Contains(names, "audit_key") {
 		t.Errorf("SHOW INDEXES reports %v after a DROP through the endpoint", names)
 	}
 }
@@ -413,7 +413,7 @@ func TestHandleGraphData_SchemaDDLThroughTheEndpointPersists(t *testing.T) {
 // (SPEC/WEB.md Acceptance Criteria 35 and 157).
 func TestHandleGraphData_EmptyGraphAnswerIsHTMLSafe(t *testing.T) {
 	t.Setenv("HOME", shortHome(t))
-	name := seedGraphWithSchema(t, "web-ui-rollout")
+	name := servedGraphWithSchema(t, "web-ui-rollout")
 
 	const crafted = `SHOW INDEXES WHERE name = '<script>alert(1)</script>'`
 	rec := doGraphData(t, name, url.Values{"q": {crafted}})

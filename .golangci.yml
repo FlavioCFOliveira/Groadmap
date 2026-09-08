@@ -10,6 +10,7 @@ linters:
     - ineffassign
     - perfsprint
     - prealloc
+    - unused
   settings:
     errcheck:
       check-type-assertions: false

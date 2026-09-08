@@ -31,7 +31,7 @@ import (
 func readMemoryBody(t *testing.T, roadmap, key string) (string, bool) {
 	t.Helper()
 	stdout, _ := captureStdStreams(t, func() {
-		if err := runGraphExecute([]string{"-r", roadmap, "--query",
+		if err := runGraphClient([]string{"-r", roadmap, "--query",
 			"MATCH (n:Memory {key:'" + key + "'}) RETURN n.body"}); err != nil {
 			t.Fatalf("read back %q: %v", key, err)
 		}
@@ -66,7 +66,7 @@ func readMemoryBody(t *testing.T, roadmap, key string) (string, bool) {
 // and it carries U+FFFD where the offending bytes were.
 func TestGraphWrite_MalformedUTF8ExecutesAndStoresReplacementChars(t *testing.T) {
 	const roadmap = "graph-propvalue-utf8"
-	defer setupTestGraphRoadmap(t, roadmap)()
+	defer servedRoadmap(t, roadmap)()
 
 	corpus := testenv.MalformedUTF8Corpus()
 	if len(corpus) < 4 {
@@ -79,7 +79,7 @@ func TestGraphWrite_MalformedUTF8ExecutesAndStoresReplacementChars(t *testing.T)
 			escaped := strings.ReplaceAll(c.Value, `\`, `\\`)
 			escaped = strings.ReplaceAll(escaped, "'", `\'`)
 
-			if err := runGraphExecute([]string{"-r", roadmap, "--query",
+			if err := runGraphClient([]string{"-r", roadmap, "--query",
 				"CREATE (n:Memory {key: '" + key + "', body: '" + escaped + "'})"}); err != nil {
 				t.Fatalf("the statement must execute; Groadmap checks a statement's length and "+
 					"nothing else about its content (SPEC/GRAPH.md § What Groadmap Does Not "+
@@ -147,7 +147,7 @@ func firstInvalidRun(s string) string {
 // knowledge-graph property values.
 func TestGraphWrite_CypherEscapeStoresARealControlCharacter(t *testing.T) {
 	const roadmap = "graph-propvalue-control"
-	defer setupTestGraphRoadmap(t, roadmap)()
+	defer servedRoadmap(t, roadmap)()
 
 	// A raw string literal: the six characters `\u001b` reach the engine, which is
 	// what makes this an escape decoded by Cypher rather than a byte Go put here.
@@ -158,7 +158,7 @@ func TestGraphWrite_CypherEscapeStoresARealControlCharacter(t *testing.T) {
 		}
 	}
 
-	if err := runGraphExecute([]string{"-r", roadmap, "--query", query}); err != nil {
+	if err := runGraphClient([]string{"-r", roadmap, "--query", query}); err != nil {
 		t.Fatalf("the statement must execute (SPEC/GRAPH.md § What Groadmap Does Not Check, "+
 			"item 3); got %v", err)
 	}
@@ -188,7 +188,7 @@ func TestGraphWrite_CypherEscapeStoresARealControlCharacter(t *testing.T) {
 // knowledge-graph text is stored byte for byte.
 func TestGraphWrite_AcceptsLegitimateValues(t *testing.T) {
 	const roadmap = "graph-propvalue-accepted"
-	defer setupTestGraphRoadmap(t, roadmap)()
+	defer servedRoadmap(t, roadmap)()
 
 	cases := []struct {
 		name string
@@ -209,7 +209,7 @@ func TestGraphWrite_AcceptsLegitimateValues(t *testing.T) {
 			escaped = strings.ReplaceAll(escaped, "\n", `\n`)
 			escaped = strings.ReplaceAll(escaped, "\t", `\t`)
 
-			if err := runGraphExecute([]string{"-r", roadmap, "--query",
+			if err := runGraphClient([]string{"-r", roadmap, "--query",
 				"CREATE (n:Memory {key: '" + tc.key + "', body: '" + escaped + "'})"}); err != nil {
 				t.Fatalf("a legitimate value failed: %v", err)
 			}

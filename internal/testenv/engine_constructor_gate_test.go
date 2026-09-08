@@ -41,10 +41,10 @@ import (
 // specification rather than the correspondence between the specification and the
 // code, and would stay green through exactly the drift that produced #149.
 //
-// Why the file lives in internal/testenv. The gate spans two packages
-// (internal/commands and internal/web) plus a SPEC file, so no single audited
-// package is its home, and internal/testenv already holds the module-wide AST
-// gate (hermetic_gate_test.go), whose repository walk, skip list and formatting
+// Why the file lives in internal/testenv. The gate sweeps the whole production
+// tree and reads a SPEC file, so no single audited package is its home, and
+// internal/testenv already holds the module-wide AST gate
+// (hermetic_gate_test.go), whose repository walk, skip list and formatting
 // helpers this file reuses instead of duplicating. The choice also buys a real
 // property: internal/testenv has no first-party dependencies, so this audit
 // compiles and runs against a tree in which the audited packages do not — which
@@ -82,7 +82,7 @@ const (
 // remains to check is the claim the section makes in its own words, so the gate
 // reads that claim and holds the table to it. A reworded marker fails the test
 // rather than quietly narrowing what it inspects.
-const onePathMarker = "There is **one** path, and both surfaces run on it."
+const onePathMarker = "There is **one** path and **one** surface on it."
 
 // noOtherConstructorMarker opens the paragraph of § Engine Constructor by Path
 // that names the constructors Groadmap does not use. The scan for those names is
@@ -116,12 +116,20 @@ const (
 	engineTypeName = "Engine"
 
 	// webPackageName is the package that serves the web graph page and the web
-	// graph data endpoint, which is the surface the table's second row names.
+	// graph data endpoint. The table no longer carries a row for it — that
+	// surface reaches a graph through internal/graphclient — and the constant is
+	// kept because claimRow still answers for a row that names no subcommand,
+	// which is the shape such a row had.
 	webPackageName = "web"
 
-	// storeOpenFunc is the entry point of the package that owns the store's
-	// lifecycle. A surface is on the path by calling it.
-	storeOpenFunc = "Open"
+	// graphServePackageName is the package that runs `rmp graph serve`, which is
+	// the surface the table's single row names. internal/commands holds that
+	// subcommand's flags, its help, its store creation and its exit code, and
+	// none of its store lifecycle, so the opener that claims the row is here.
+	graphServePackageName = "graphserve"
+
+	// storeEntryFuncsDoc renders the entry points in a failure message.
+	storeEntryFuncsDoc = "Open or Acquire"
 )
 
 // oneConstructionMarker opens the sentence of § Engine Constructor by Path that
@@ -185,15 +193,31 @@ func (s *constructionSite) where() string {
 }
 
 // mustReachTheStoreFrom are the directories that MUST contain a function
-// reaching the store's Open. They are the two surfaces the table names, and
-// without this anchor the sweep could stop matching — a renamed import, a changed
-// AST shape — and the gate would report success over an empty set, which is how a
-// guard quietly becomes decoration.
+// reaching the store's Open. Without this anchor the sweep could stop matching —
+// a renamed import, a changed AST shape — and the gate would report success over
+// an empty set, which is how a guard quietly becomes decoration.
 //
-// It replaces a list of directories that had to hold a CONSTRUCTION. There is one
-// construction now and it is in neither of them, so the anchor moved to the thing
-// that still distinguishes a surface on this path from one that is not: the call.
-var mustReachTheStoreFrom = []string{"internal/commands", "internal/web"}
+// It is now one directory because there is now one surface. It used to name
+// internal/commands and internal/web, each of which opened a store for itself;
+// § Engine Constructor by Path withdrew both rows when `rmp graph execute` was
+// withdrawn, and the CLI and the web interface reach a graph through
+// internal/graphclient. What remains is the server, which is the only process
+// that opens a store at all.
+// storeEntryFuncs are the entry points of the package that owns the store's
+// lifecycle. A surface is on the transactional path by calling one of them.
+//
+// There are two and both belong here, because both take the graph directory's
+// exclusive advisory lock and begin the one lifecycle that package owns. Open
+// takes the lock and opens the store in a single call; Acquire takes the lock and
+// returns the hold without opening anything inside it, which exists for the one
+// caller that has work to do between the two — `rmp graph serve` binds its
+// listener there, and the order is load-bearing (SPEC/GRAPH.md § Server Startup,
+// steps 2 to 6). Matching only Open would leave the server, which is now the ONLY
+// surface on this path, invisible to the sweep, and the gate would report success
+// over a table row nothing had matched.
+var storeEntryFuncs = map[string]bool{"Open": true, "Acquire": true}
+
+var mustReachTheStoreFrom = []string{"internal/graphserve"}
 
 // Cell scanners. Backticked spans carry every name the table states, so all
 // three read the same span and differ only in what they accept inside it.
@@ -388,7 +412,7 @@ func TestGraphEngineConstructionsMatchSpec(t *testing.T) {
 			t.Errorf("nothing in %s reaches %s.%s, and %s § Engine Constructor by Path lists a surface "+
 				"served from there. Either the surface moved — in which case the table's Surface column "+
 				"needs amending — or it has stopped running on the transactional path",
-				dir, storePkg, storeOpenFunc, specGraphRelPath)
+				dir, storePkg, storeEntryFuncsDoc, specGraphRelPath)
 		}
 	}
 	for _, row := range rows {
@@ -401,7 +425,7 @@ func TestGraphEngineConstructionsMatchSpec(t *testing.T) {
 			"  The table claims to cover every Cypher engine Groadmap constructs; a row nothing "+
 			"matches means the surface was removed, renamed, or has stopped opening the store, and "+
 			"until it is reconciled this gate is checking one surface fewer than it reports",
-			specGraphRelPath, row.line, row.path, row.surface, storePkg, storeOpenFunc)
+			specGraphRelPath, row.line, row.path, row.surface, storePkg, storeEntryFuncsDoc)
 	}
 }
 
@@ -515,10 +539,10 @@ func parseConstructorTable(t *testing.T, spec string) []*specConstructorRow {
 		rows = append(rows, row)
 	}
 
-	if len(rows) < 2 {
-		t.Fatalf("%s § Engine Constructor by Path parsed only %d rows; the table covers at least the "+
-			"`graph execute` surface and the web surface, so the parse has drifted from the table's "+
-			"shape", specGraphRelPath, len(rows))
+	if len(rows) == 0 {
+		t.Fatalf("%s § Engine Constructor by Path parsed no data rows; the table covers the "+
+			"`graph serve` surface, which is the one surface that opens a store, so the parse has "+
+			"drifted from the table's shape", specGraphRelPath)
 	}
 	return rows
 }
@@ -1246,7 +1270,7 @@ func scanStoreOpeners(t *testing.T, root, storePkg string) []*storeOpenerSite {
 				switch fun := unwrapGenericCall(call.Fun).(type) {
 				case *ast.SelectorExpr:
 					qualifier, isIdent := fun.X.(*ast.Ident)
-					if isIdent && local != "" && qualifier.Name == local && fun.Sel.Name == storeOpenFunc {
+					if isIdent && local != "" && qualifier.Name == local && storeEntryFuncs[fun.Sel.Name] {
 						scan.direct[enclosing] = true
 					}
 				case *ast.Ident:
@@ -1287,19 +1311,50 @@ func scanStoreOpeners(t *testing.T, root, storePkg string) []*storeOpenerSite {
 }
 
 // claimRow reports whether any function that reaches the store serves the surface
-// this row names: the same set of graph subcommands, or — for the row naming no
-// subcommand — a function in the web package.
+// this row names.
+//
+// A row is claimed three ways, and the order is from the most specific to the
+// least. The first is the attribution the sweep computes for itself: the opener
+// is a function the registry names as the Handler of exactly these subcommands,
+// or a shared handler called with their names as literals. The second is the
+// package that runs the subcommand's server, for a surface whose store lifetime
+// outlives the invocation that started it — `rmp graph serve` hands the whole of
+// it to internal/graphserve, so its opener carries no subcommand name of its own
+// and the package is what identifies it. The third answers a row that names no
+// subcommand at all, which is the shape the withdrawn web row had.
+//
+// None of the three looks at the constructor, so the constructor check upstream
+// stays a real comparison rather than a tautology.
 func claimRow(row *specConstructorRow, openers []*storeOpenerSite) bool {
 	for _, site := range openers {
-		if len(row.subcommands) > 0 {
-			if equalStrings(site.subcommands, row.subcommands) {
+		if len(row.subcommands) == 0 {
+			if site.pkg == webPackageName {
 				return true
 			}
 			continue
 		}
-		if site.pkg == webPackageName {
+		if equalStrings(site.subcommands, row.subcommands) {
 			return true
+		}
+		for _, sub := range row.subcommands {
+			if serverPackageFor(sub) == site.pkg {
+				return true
+			}
 		}
 	}
 	return false
+}
+
+// serverPackageFor maps a graph subcommand onto the production package that
+// opens the store on its behalf, or returns the empty string when none does.
+//
+// It is deliberately a lookup and not a name derived from the subcommand: a rule
+// that turned "serve" into "graphserve" by concatenation would keep matching
+// after the package was renamed or the subcommand withdrawn, which is the drift
+// this whole file exists against.
+func serverPackageFor(subcommand string) string {
+	if subcommand == "serve" {
+		return graphServePackageName
+	}
+	return ""
 }

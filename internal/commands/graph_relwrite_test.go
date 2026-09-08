@@ -45,11 +45,11 @@ import (
 // reads back proves the write reached storage rather than a phantom pair.
 func seedProvenanceEdge(t *testing.T, roadmap string) {
 	t.Helper()
-	if err := runGraphExecute([]string{"-r", roadmap, "--query",
+	if err := runGraphClient([]string{"-r", roadmap, "--query",
 		"CREATE (:Spec {key:'graph-write-direction'}), (:Test {key:'graph_relwrite_test.go'})"}); err != nil {
 		t.Fatalf("seed nodes: %v", err)
 	}
-	if err := runGraphExecute([]string{"-r", roadmap, "--query",
+	if err := runGraphClient([]string{"-r", roadmap, "--query",
 		"MATCH (s:Spec {key:'graph-write-direction'}), (v:Test {key:'graph_relwrite_test.go'}) " +
 			"MERGE (s)-[:VERIFIED_BY]->(v)"}); err != nil {
 		t.Fatalf("seed edge: %v", err)
@@ -67,7 +67,7 @@ func seedProvenanceEdge(t *testing.T, roadmap string) {
 func readEdgeProperty(t *testing.T, roadmap, key string) (string, bool) {
 	t.Helper()
 	stdout, _ := captureStdStreams(t, func() {
-		if err := runGraphExecute([]string{"-r", roadmap, "--query",
+		if err := runGraphClient([]string{"-r", roadmap, "--query",
 			"MATCH (s:Spec {key:'graph-write-direction'})-[e:VERIFIED_BY]->(v) RETURN e." + key}); err != nil {
 			t.Fatalf("read back %q: %v", key, err)
 		}
@@ -98,12 +98,12 @@ func readEdgeProperty(t *testing.T, roadmap, key string) (string, bool) {
 // edge against the stored arrow report success and write nothing.
 func TestGraphUpdate_RelationshipWriteDirection(t *testing.T) {
 	const roadmap = "graph-relwrite-direction"
-	defer setupTestGraphRoadmap(t, roadmap)()
+	defer servedRoadmap(t, roadmap)()
 	seedProvenanceEdge(t, roadmap)
 
 	// -- Source node, outgoing: the write the engine honours --------------------
 	t.Run("from the source node, outgoing, writes and reads back", func(t *testing.T) {
-		err := runGraphExecute([]string{"-r", roadmap, "--query",
+		err := runGraphClient([]string{"-r", roadmap, "--query",
 			"MATCH (s:Spec {key:'graph-write-direction'})-[e:VERIFIED_BY]->(v) " +
 				"SET e.from_source = 'commit-aaa111'"})
 		if err != nil {
@@ -120,7 +120,7 @@ func TestGraphUpdate_RelationshipWriteDirection(t *testing.T) {
 
 	// -- Target node, outgoing: the whole of the reach, anchored the other way --
 	t.Run("from the target node, outgoing, writes and reads back", func(t *testing.T) {
-		err := runGraphExecute([]string{"-r", roadmap, "--query",
+		err := runGraphClient([]string{"-r", roadmap, "--query",
 			"MATCH (other)-[e:VERIFIED_BY]->(v:Test {key:'graph_relwrite_test.go'}) " +
 				"SET e.from_target = 'commit-bbb222'"})
 		if err != nil {
@@ -139,7 +139,7 @@ func TestGraphUpdate_RelationshipWriteDirection(t *testing.T) {
 
 	// -- Target node, incoming: acceptance criterion 38's third bullet ----------
 	t.Run("from the target node, incoming, reports success and writes nothing", func(t *testing.T) {
-		err := runGraphExecute([]string{"-r", roadmap, "--query",
+		err := runGraphClient([]string{"-r", roadmap, "--query",
 			"MATCH (v:Test {key:'graph_relwrite_test.go'})<-[e:VERIFIED_BY]-(s) " +
 				"SET e.last_commit = 'commit-ddd444'"})
 		if err != nil {
@@ -155,7 +155,7 @@ func TestGraphUpdate_RelationshipWriteDirection(t *testing.T) {
 
 	// -- Target node, undirected: the half of the traversal that runs backwards -
 	t.Run("from the target node, undirected, reports success and writes nothing", func(t *testing.T) {
-		err := runGraphExecute([]string{"-r", roadmap, "--query",
+		err := runGraphClient([]string{"-r", roadmap, "--query",
 			"MATCH (v:Test {key:'graph_relwrite_test.go'})-[e]-(x) " +
 				"SET e.undirected = 'commit-ccc333'"})
 		if err != nil {
@@ -174,7 +174,7 @@ func TestGraphUpdate_RelationshipWriteDirection(t *testing.T) {
 	// The two undirected subtests differ only in which endpoint they anchor on,
 	// and they end in opposite states.
 	t.Run("from the source node, undirected, writes because every matched row runs forwards", func(t *testing.T) {
-		err := runGraphExecute([]string{"-r", roadmap, "--query",
+		err := runGraphClient([]string{"-r", roadmap, "--query",
 			"MATCH (s:Spec {key:'graph-write-direction'})-[e]-(x) " +
 				"SET e.undirected_from_source = 'commit-eee555'"})
 		if err != nil {
@@ -198,15 +198,15 @@ func TestGraphUpdate_RelationshipWriteDirection(t *testing.T) {
 // the pattern walked it (SPEC/GRAPH.md § What Groadmap Does Not Check, item 5).
 func TestGraphDelete_UndirectedBareDeleteRemovesTheEdge(t *testing.T) {
 	const roadmap = "graph-relwrite-scope"
-	defer setupTestGraphRoadmap(t, roadmap)()
+	defer servedRoadmap(t, roadmap)()
 	seedProvenanceEdge(t, roadmap)
 
-	if err := runGraphExecute([]string{"-r", roadmap, "--query",
+	if err := runGraphClient([]string{"-r", roadmap, "--query",
 		"MATCH (v:Test {key:'graph_relwrite_test.go'})-[e]-(x) DELETE e"}); err != nil {
 		t.Fatalf("undirected delete failed: %v", err)
 	}
 	stdout, _ := captureStdStreams(t, func() {
-		if err := runGraphExecute([]string{"-r", roadmap, "--query",
+		if err := runGraphClient([]string{"-r", roadmap, "--query",
 			"MATCH (s:Spec {key:'graph-write-direction'})-[e:VERIFIED_BY]->(v) RETURN e"}); err != nil {
 			t.Fatalf("post-delete read: %v", err)
 		}

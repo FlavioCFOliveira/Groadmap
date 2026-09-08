@@ -339,7 +339,14 @@ func TestHandleGraphData_ADerivedPathOverTheBoundRefusesTheRequest(t *testing.T)
 		}
 	})
 
-	t.Run("the control: a short derived path answers the empty graph", func(t *testing.T) {
+	// The second and third answers of Acceptance Criterion 160. The criterion
+	// drives ONE request three times and turns on all three: 500 alone is
+	// satisfied by an endpoint that fails for any reason, 503 alone by one that
+	// never reaches a server, and 200 alone by one that ignores the bound
+	// entirely. What the triple establishes is that the endpoint tells a
+	// permanent defect in the roadmap's layout apart from a dependency the
+	// operator has not started, and both apart from success.
+	t.Run("a short derived path with NO server is 503, not 500", func(t *testing.T) {
 		t.Setenv("HOME", shortHome(t))
 		name := seedRoadmap(t, "backend-platform")
 
@@ -353,16 +360,47 @@ func TestHandleGraphData_ADerivedPathOverTheBoundRefusesTheRequest(t *testing.T)
 		}
 
 		rec := doGraphData(t, name, nil)
-		if rec.Code != http.StatusOK {
-			t.Fatalf("status = %d, want 200 for a roadmap whose derived path fits; body=%q",
+		if rec.Code != http.StatusServiceUnavailable {
+			t.Fatalf("status = %d, want 503 for a roadmap whose derived path fits and which no "+
+				"server is serving. The path is bindable, so the condition is a dependency the "+
+				"operator has not started, and it is transitory; body=%q",
 				rec.Code, rec.Body.String())
+		}
+		if strings.Contains(rec.Body.String(), "kind") {
+			t.Errorf("the 503 body names a kind: %q; neither 5xx reached a statement",
+				rec.Body.String())
+		}
+	})
+
+	t.Run("a short derived path WITH a server is 200", func(t *testing.T) {
+		t.Setenv("HOME", shortHome(t))
+		name := seedRoadmap(t, "backend-platform")
+
+		derived, err := graphclient.SocketPath(name)
+		if err != nil {
+			t.Fatalf("deriving the socket path: %v", err)
+		}
+		if len(derived) > bound {
+			t.Fatalf("the derived path is %d bytes and the measured bound is %d: %s",
+				len(derived), bound, derived)
+		}
+		scriptedGraphServer(t, derived)
+
+		rec := doGraphData(t, name, nil)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status = %d, want 200 for a roadmap whose derived path fits and which a "+
+				"server is serving; body=%q", rec.Code, rec.Body.String())
 		}
 		var view graphView
 		if decodeErr := json.Unmarshal(rec.Body.Bytes(), &view); decodeErr != nil {
 			t.Fatalf("decoding the graph view: %v; body=%q", decodeErr, rec.Body.String())
 		}
-		if len(view.Nodes) != 0 || len(view.Edges) != 0 {
-			t.Errorf("graph = %+v, want the empty shape for a roadmap with no graph yet", view)
+		// The scripted server answers with one node, so this half asserts the
+		// RESULT and not merely that nothing failed: an endpoint that answered
+		// 200 with an empty graph would have proved only the former.
+		if len(view.Nodes) != 1 {
+			t.Errorf("graph carries %d node(s), want the one the server answered with: %+v",
+				len(view.Nodes), view)
 		}
 	})
 }

@@ -13,10 +13,11 @@
 // two packages, or made one import the other for it.
 //
 // Three surfaces call them and none of them writes a second copy:
-// `rmp graph execute` and the web graph data endpoint resolve first and send only
-// when a server answers, `rmp graph client` resolves and never falls back, and
-// `rmp graph serve` resolves alone — it has a store to open rather than a
-// statement to send (SPEC/GRAPH.md § Server Startup, step 3).
+// `rmp graph client` and the web graph data endpoint resolve and neither falls
+// back — with nothing listening the first exits 1 and the second answers 503,
+// because a store no server holds open is a store no surface but the server may
+// open — and `rmp graph serve` resolves alone: it has a store to open rather
+// than a statement to send (SPEC/GRAPH.md § Server Startup, step 3).
 //
 // # Why the probe is a handshake and not a connect
 //

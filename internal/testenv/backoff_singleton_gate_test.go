@@ -95,6 +95,22 @@ var exemptWaits = map[string]string{
 		"internal/backoff owns how many times and how long to wait before giving up, and neither " +
 		"quantity exists here: routing this through it would mean asking a bounded retry ladder to " +
 		"express an unbounded fixed-period poll",
+
+	"internal/testenv/graphserver/graphserver.go: time.Sleep": "the readiness poll that waits for " +
+		"a child `rmp graph serve` to announce the socket it bound. It is an OBSERVATION of a state " +
+		"transition and not a retry: nothing is being attempted and nothing fails, so there is no " +
+		"attempt to count and no failure to give up on — the child is starting either way, and the " +
+		"loop only decides how often to look. Its period is fixed at 20ms and its end is a wall-clock " +
+		"deadline, not an exhausted ladder. Routing it through internal/backoff would make startup " +
+		"detection progressively SLOWER the longer a machine takes to start a server, which is the " +
+		"opposite of what a growing delay is for: a backoff grows to relieve a contended resource, " +
+		"and there is no contention here to relieve",
+
+	"internal/testenv/graphserver/graphserver.go: time.After": "the deadline on waiting for a child " +
+		"server to exit after SIGTERM. It is a TIMEOUT and not a retry: it fires once, it is raced " +
+		"against the wait rather than looped, and what follows it is a kill and a failure — never " +
+		"another attempt. internal/backoff owns how many times to try and how long to pause between " +
+		"tries, and this site does neither",
 }
 
 // TestOnlyTheBackoffPackageWaits asserts that internal/backoff is the only

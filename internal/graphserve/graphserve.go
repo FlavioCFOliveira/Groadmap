@@ -171,11 +171,15 @@ const connTimeoutMultiple = 12
 //     10,000,000 and it already binds — see the ceiling below — and lowering it
 //     lowers peak resident memory in proportion on every shape measured: at a cap
 //     of 10,000 every write shape peaks under 80 MB and finishes under 3 s.
-//     DECLINED for this server on rmp task #380, on coherence rather than cost:
-//     `rmp graph execute` routes through a running server automatically and with
-//     byte-identical output (rmp task #368), so a ceiling that differed behind
-//     that routing would make the same statement pass or fail depending on whether
-//     a server happened to be running.
+//     DECLINED for this server on rmp task #380. The ground given at the time was
+//     coherence rather than cost: `rmp graph execute` routed through a running
+//     server automatically and with byte-identical output (rmp task #368), so a
+//     ceiling that differed behind that routing would have made the same statement
+//     pass or fail depending on whether a server happened to be running. THAT
+//     GROUND IS GONE with the subcommand — a server is now the only way to reach a
+//     graph, so there is no second path left to stay coherent with. The decision
+//     stands on the measurement above alone, which is a narrower base than it had
+//     and worth revisiting on its own terms rather than by inheritance.
 //  2. GOMEMLIMIT. Measured 16,149 MB down to 3,429 MB at 1 GiB on eight concurrent
 //     served reads. DECLINED: on the WRITE path it buys memory with availability —
 //     the same cut write's hold rises from 35.6 s to 172.8 s, 4.9x — it still
@@ -222,8 +226,9 @@ const connTimeoutMultiple = 12
 //
 // # And the memory is not returned when the statement ends
 //
-// A short-lived `rmp graph execute` returns it by exiting. The two long-lived
-// surfaces do not. This server reached 3618 MB, held it for 38 seconds after the
+// A short-lived invocation returned it by exiting, which is how the withdrawn
+// `rmp graph execute` disposed of it. Neither long-lived surface can: this
+// server reached 3618 MB, held it for 38 seconds after the
 // response was written, and settled at a floor of 1064 MB — 58x its 18 MB
 // baseline — where it stayed for the remaining 105 seconds of observation. `rmp
 // web` is worse: 3088 MB reached, and 3088 MB still resident 130 seconds later,
@@ -310,7 +315,7 @@ const maxConnections = 128
 // # Who it binds
 //
 // Not Groadmap. internal/graphclient.Send sends autocommit statements and opens
-// no explicit transaction, so neither `rmp graph execute` nor the web graph data
+// no explicit transaction, so neither `rmp graph client` nor the web graph data
 // endpoint ever counts against this. It binds a foreign Bolt client connecting to
 // the socket, which is the only party that issues a BEGIN here.
 const maxOpenTxPerPrincipal = maxConnections
@@ -572,8 +577,12 @@ type Options struct {
 	// directory.
 	RoadmapName string
 
-	// GraphDir is that roadmap's graph store directory. It MUST already exist:
-	// `rmp graph serve` creates no graph directory (SPEC/COMMANDS.md § Serve).
+	// GraphDir is that roadmap's graph store directory. It MUST already exist
+	// when Run is called: `rmp graph serve` creates it, and the creation is the
+	// last action of step 1 of the startup sequence, which the CLI performs
+	// before it reaches this package (SPEC/GRAPH.md § Server Startup, step 1).
+	// The order matters to this package because the advisory lock step 2 takes
+	// lives inside this directory.
 	GraphDir string
 
 	// SocketPath is the absolute path of the socket to bind: the default derived
@@ -595,10 +604,11 @@ type Options struct {
 //     neither is relied on to do the other's work.
 //   - The listener is bound BEFORE the store is opened. The open costs up to
 //     about a second on a large graph, and a caller that resolved the roadmap
-//     during that second would find no socket, conclude the roadmap is not
-//     served, and take the direct path into a lock this process is already
-//     holding. Binding first spends that second with the socket already
-//     accepting.
+//     during that second would find no socket, conclude that nothing is
+//     listening, and fail — against a server that was, at that moment, starting
+//     for it. Binding first spends that second with the socket already
+//     accepting: a caller that arrives connects, waits for the handshake, and is
+//     served.
 //
 // One window remains and is stated rather than hidden: between the lock and the
 // bind no socket answers, so a caller that resolves inside it takes the direct
@@ -618,9 +628,10 @@ func Run(opts Options) error {
 	// [dropSink.Flush] for why it must be.
 	defer stderrSink.Flush()
 
-	// Step 2. The exclusive advisory hold, under the ordinary bounded wait. A
-	// server starting while a short-lived `rmp graph execute` invocation holds
-	// the lock waits for it rather than failing on the first collision.
+	// Step 2. The exclusive advisory hold, under the ordinary bounded wait. The
+	// only holder that can be met here is another server, since no other surface
+	// opens the store: a server starting while an outgoing one is still draining
+	// waits for it rather than failing on the first collision.
 	hold, err := graphstore.Acquire(opts.GraphDir)
 	if err != nil {
 		return lockRefusal(opts.RoadmapName, err)
@@ -920,7 +931,7 @@ func build(st *graphstore.Store, graphDir string, cadence checkpointCadence, log
 // and 670 MB against 0.01 s and 21.6 MB on a clean store. The control isolates it:
 // one cut READ over the same store left it at 80 KB.
 //
-// `rmp graph execute` and `rmp web` were never exposed to any of that, and the
+// The withdrawn `rmp graph execute` and `rmp web` were never exposed to any of that, and the
 // gate is the whole of the difference — which is why this reuses theirs instead of
 // growing a second one here.
 //
@@ -1064,7 +1075,7 @@ func shutdownCheckpointMessage(err error) string {
 //   - The statement bound is the graph store's, read from the one declaration the
 //     other two surfaces already read, so a change to it changes all three
 //     together. The MAXIMUM carries the same value, so a client cannot raise its
-//     own statement timeout above the bound `rmp graph execute` and the web graph
+//     own statement timeout above the bound `rmp graph client` and the web graph
 //     data endpoint obey. The consequence is stated rather than left to be
 //     discovered: the engine clamps an explicit transaction's total life by that
 //     same maximum, so a BEGIN-to-COMMIT sequence has the same 5 seconds in total
@@ -1084,7 +1095,7 @@ func shutdownCheckpointMessage(err error) string {
 // What is deliberately NOT fixed:
 //
 //   - The inbound message and decode bounds. The requirement on them is a floor,
-//     not a value: a statement `rmp graph execute` accepts is a statement this
+//     not a value: a statement `rmp graph client` accepts is a statement this
 //     server must accept, so they must leave room for a query of the maximum
 //     length together with the protocol framing around it. The engine's defaults
 //     already do, and lowering either would be a narrowing of the statement

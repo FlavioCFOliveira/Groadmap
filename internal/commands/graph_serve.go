@@ -10,7 +10,6 @@ package commands
 
 import (
 	"fmt"
-	"os"
 
 	"github.com/FlavioCFOliveira/Groadmap/internal/graphserve"
 	"github.com/FlavioCFOliveira/Groadmap/internal/utils"
@@ -51,6 +50,12 @@ the life of the process, and answer Cypher statements over a Unix domain socket
 until stopped. The protocol is Bolt version 5, served by the graph engine's own
 server; rmp defines no protocol of its own.
 
+Starting a server is how a roadmap graph comes into being, and nothing else
+creates one. Against a roadmap that has never had a graph, serve creates
+~/.roadmaps/<name>/graph/ with mode 0700 and serves it empty; the first
+statement a client sends creates the first node in it. A serve that is refused
+creates nothing and leaves no directory behind.
+
 serve is long-lived. It does not complete and exit like every other command
 except rmp web: it keeps running until it receives Ctrl+C (SIGINT) or SIGTERM,
 then drains the work in flight, shuts the server down, checkpoints, releases
@@ -61,10 +66,9 @@ One server per roadmap. The roadmap store lock is the interlock: a second
 rmp graph serve against the same roadmap cannot take it, fails with exit code
 1, and leaves the first server's socket untouched. It does not queue.
 
-serve runs no statement of its own, creates no graph directory that does not
-already exist, and never reads or writes a roadmap project.db. It serves one
-roadmap; serving several means running several servers, one per roadmap, each
-on its own socket.
+serve runs no statement of its own and never reads or writes a roadmap
+project.db. It serves one roadmap; serving several means running several
+servers, one per roadmap, each on its own socket.
 
 Access control is the filesystem and there is no other. The socket is created
 with mode 0600, set explicitly rather than left to the process umask, inside a
@@ -82,8 +86,9 @@ Optional:
                           roadmap. A non-default path is followed by the CLI
                           through the same flag and by nothing else: the web
                           interface has no way to receive it, resolves the
-                          default path, finds nothing there, and fails against
-                          this server lock for as long as it runs
+                          default path and finds nothing there, so that
+                          roadmap graph page is unavailable for as long as the
+                          server runs here
   -h, --help              Show this help message
 
 Output (stdout JSON):
@@ -96,7 +101,7 @@ Output (stdout JSON):
 
 Exit codes:
   0   The server started, served, and was stopped by SIGINT or SIGTERM
-  1   The graph store could not be opened or recovered; or its exclusive lock
+  1   The graph store could not be created, opened or recovered; or its lock
       could not be taken within the bounded wait, which is what refuses a
       second server against the same roadmap; or the socket could not be
       bound; or a live server already answers on the resolved socket
@@ -113,17 +118,17 @@ Examples:
 // readSocketFlag extracts --socket from args and refuses everything else.
 //
 // It returns the empty string when the flag is absent, which the caller reads as
-// "derive the default path". The two refusals mirror the ones `graph execute`
-// already publishes for its own flag, because the classification is the CLI's and
-// not this subcommand's: a flag-like token that is not --socket is an unknown
-// flag, and anything else is an unexpected argument.
+// "derive the default path". The two refusals mirror the ones `graph client`
+// publishes for the same flag, because the classification is the CLI's and not
+// this subcommand's: a flag-like token that is not --socket is an unknown flag,
+// and anything else is an unexpected argument.
 //
 // The unexpected-argument branch is defence in depth rather than the live path.
 // `graph serve` declares an arity of zero and does NOT publish a refusal of its
 // own, so the shared enforcement point refuses a positional argument with the
 // canonical line before this function is ever reached (SPEC/COMMANDS.md
 // § Positional Arguments; the paragraph naming `graph serve` as the subcommand
-// that publishes the canonical line rather than `graph execute`'s hinted one).
+// that publishes the canonical line rather than `graph client`'s hinted one).
 //
 // A flag supplied with an empty — or whitespace-only — value is a MISSING
 // parameter and not a validation failure: it names no socket at all, which is the
@@ -159,11 +164,22 @@ func announceServeSocket(socket string) error {
 // only then anything that touches the filesystem (exit 1). A refused invocation
 // therefore binds nothing, removes nothing, and takes no lock.
 //
-// It resolves the graph directory WITHOUT creating it. `rmp graph execute`
-// creates one on first use because a statement has to have somewhere to run;
-// serving a graph that does not exist has no such justification, and a server
-// that materialised an empty store would report a roadmap as served whose graph
-// nobody had ever written to (SPEC/COMMANDS.md § Serve).
+// It is this subcommand that brings a roadmap's graph into being, and it is the
+// only thing that does. A roadmap that has never had a graph is served an empty
+// one, created here, and the first statement a client sends creates the first
+// node in it (SPEC/GRAPH.md § Server Startup, step 1).
+//
+// The creation is the LAST action of the resolution rather than the first. Both
+// refusals that can still stop the invocation — a roadmap that does not exist,
+// and a resolved socket path over the platform's bound — are passed before the
+// directory is made, so a server that cannot start leaves nothing behind: no
+// partial store, and no directory for a roadmap that can never be served. The
+// two alternative orderings are each worse in their own direction. Creating
+// first and refusing afterwards strands an empty store for a roadmap no server
+// can ever serve; leaving the creation to the store open inside graphserve.Run
+// reports a missing graph as a lock file that could not be opened, because the
+// advisory lock the server takes at step 2 lives inside the directory this call
+// makes.
 func runGraphServe(args []string) error {
 	roadmapName, remaining, err := requireRoadmap(args)
 	if err != nil {
@@ -179,9 +195,6 @@ func runGraphServe(args []string) error {
 	if err != nil {
 		return err
 	}
-	if err := requireGraphStore(roadmapName, graphDir); err != nil {
-		return err
-	}
 
 	socketPath, err := graphSocketInForce(roadmapName, socketFlag)
 	if err != nil {
@@ -190,14 +203,20 @@ func runGraphServe(args []string) error {
 	// The path's length is settled HERE, in the CLI, and not inside
 	// internal/graphserve. SPEC/GRAPH.md § Server Startup, step 1, puts the
 	// refusal with the resolution of the path rather than with the use of it,
-	// and requires it to precede the lock, the probe, the unlink and the bind —
-	// every one of which lives behind graphserve.Run below. A server that cannot
-	// start therefore touches nothing: no lock taken, no stale file removed, no
-	// listener bound. The refusal is the same for a derived path as for a
-	// supplied one, and the same as the one every other surface applies: the
-	// bound is a property of the path, and where the path came from is not asked
+	// and requires it to precede the creation below as well as the lock, the
+	// probe, the unlink and the bind — every one of which lives behind
+	// graphserve.Run. A server that cannot start therefore touches nothing: no
+	// directory created, no lock taken, no stale file removed, no listener
+	// bound. The refusal is the same for a derived path as for a supplied one,
+	// and the same as the one every other surface applies: the bound is a
+	// property of the path, and where the path came from is not asked
 	// (§ Socket Path Length, rules 5 and 6).
 	if err := refuseOverLongSocket(socketPath); err != nil {
+		return err
+	}
+
+	// Both refusals are behind us, so the graph may be brought into being.
+	if err := createGraphDir(graphDir); err != nil {
 		return err
 	}
 
@@ -207,20 +226,4 @@ func runGraphServe(args []string) error {
 		GraphDir:    graphDir,
 		SocketPath:  socketPath,
 	})
-}
-
-// requireGraphStore refuses to serve a roadmap that has no graph store yet.
-//
-// The refusal is stated here, before the lock is taken, because the alternative
-// is worse in both directions: creating the directory is what the specification
-// forbids this subcommand, and letting the open fail on it reports the absence as
-// a lock file that could not be opened — which names the wrong thing entirely.
-// The line carries the published prefix of the store-failure row, so a reader
-// matching that row matches this too (SPEC/COMMANDS.md § Serve Error Cases).
-func requireGraphStore(roadmapName, graphDir string) error {
-	if info, err := os.Stat(graphDir); err == nil && info.IsDir() {
-		return nil
-	}
-	return fmt.Errorf("%w: graph store unavailable: roadmap %q has no graph store at %s, "+
-		"and rmp graph serve creates none", utils.ErrGraphStore, roadmapName, graphDir)
 }

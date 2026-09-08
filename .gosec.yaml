@@ -100,7 +100,7 @@
 # chmod, which is both a directory-permission finding and a taint-analysis one —
 # so the totals below are the number of directives plus one.
 #
-# totals: 55 suppressions, 41 outside _test.go
+# totals: 56 suppressions, 42 outside _test.go
 #
 # G104 Audit errors not checked (CWE-703)  [11]
 #   internal/db/connection.go                          6
@@ -166,7 +166,8 @@
 #     shapes when the guard is removed, and the column being looked for is bound.
 #     (d) A column name in one test helper, literal at both call sites.
 #
-# G204 Audit use of command execution (CWE-78)  [3]
+# G204 Audit use of command execution (CWE-78)  [4]
+#   internal/testenv/graphserver/graphserver.go        1
 #   internal/web/server.go                             3
 #   Reason: openBrowser runs the conventional per-platform launcher (xdg-open,
 #     open, rundll32) through exec.Command, which execs the program directly with
@@ -175,10 +176,18 @@
 #     it always begins with the scheme and can never be read as an option by the
 #     launcher. host comes from this user's own --host flag on their own machine;
 #     no privilege boundary is crossed.
+#     The internal/testenv/graphserver one is test support and reaches no
+#     production binary: it re-executes the TEST BINARY as a graph server, and the
+#     path it execs is os.Executable()'s — this process's own — with no argument
+#     at all. Nothing a caller supplies reaches the command line; the graph
+#     directory, the socket and the roadmap name are passed as environment
+#     variables the child reads. See that package for why the child is a process
+#     and why it is this binary rather than ./bin/rmp.
 #
-# G302 Poor file permissions used when creating file or using chmod (CWE-276)  [2]
+# G302 Poor file permissions used when creating file or using chmod (CWE-276)  [3]
 #   internal/commands/graph.go                         1
 #   internal/graphstore/graphstore.go                  1
+#   internal/testenv/graphserver/graphserver.go        1
 #   Reason: The 0700 is applied to DIRECTORIES — the graph store and its snapshot
 #     directory — where owner-only access requires the execute bit, and 0700 on
 #     the ~/.roadmaps tree is what CLAUDE.md § 10 and SPEC/ARCHITECTURE.md
@@ -186,7 +195,11 @@
 #     not distinguish the two. A 0700 applied to a FILE would not be covered by
 #     this reason. The internal/commands one narrows the graph store directory
 #     the CLI creates; the internal/graphstore one narrows the snapshot directory
-#     the synchronous checkpoint publishes into.
+#     the synchronous checkpoint publishes into; the
+#     internal/testenv/graphserver one performs the same two steps the CLI
+#     performs, on a test's store directory, so a store a test serves carries the
+#     permissions a real one carries rather than the permissions the process
+#     umask happens to leave.
 #     There were three. Two of them were the SAME chmod, in the two copies of the
 #     checkpoint that internal/commands and internal/web each carried, and they
 #     went with the copies when rmp task #375 moved the store's lifecycle into
@@ -238,22 +251,27 @@
 #     so a failure is reproducible. No key, token, identifier or security decision
 #     derives from either.
 #
-# G703 Path traversal via taint analysis (CWE-22)  [2]
+# G703 Path traversal via taint analysis (CWE-22)  [1]
 #   internal/graphstore/graphstore.go                  1
-#   internal/web/data.go                               1
-#   Reason: Both paths are built under ~/.roadmaps/<name>/graph, where <name> was
-#     validated by utils.GetRoadmapDir — and, on the web path, by the route guard
-#     before that — so no path outside the data directory is reachable. The
-#     internal/web one is the os.Stat that decides whether the roadmap has a graph
-#     store yet; the read never creates one. The internal/graphstore one is the
-#     chmod narrowing the snapshot directory the checkpoint publishes into, whose
-#     parent is the graph directory the caller has already resolved.
+#   Reason: The path is built under ~/.roadmaps/<name>/graph, where <name> was
+#     validated by utils.GetRoadmapDir, so no path outside the data directory is
+#     reachable. It is the chmod narrowing the snapshot directory the checkpoint
+#     publishes into, whose parent is the graph directory the caller has already
+#     resolved.
+#
+#     internal/web/data.go carried the second one and does not any more. It
+#     guarded the os.Stat that decided whether a roadmap had a graph store yet, on
+#     the direct-store path the graph data endpoint used to fall back to. That
+#     path is withdrawn: the endpoint reaches a graph only through a running
+#     `rmp graph serve`, opens no store and touches no path under graph/, so there
+#     is no longer a filesystem path in that package for the rule to taint
+#     (SPEC/WEB.md § Knowledge Graph from the GoGraph Store, rule 1).
 #
 # TWO OBSERVATIONS THIS REGISTER MAKES DELIBERATELY, because a reviewer who
 # trusts the list should also know what the list does not mean.
 #
-# A suppression is not evidence that gosec had a finding. Of the 40 rules
-# suppressed outside test files, 26 suppress a reported finding and 14 currently
+# A suppression is not evidence that gosec had a finding. Of the 41 rules
+# suppressed outside test files, 27 suppress a reported finding and 14 currently
 # suppress nothing: gosec's G201 does not follow fmt.Sprintf through a query
 # issued on the embedded *sql.DB or through a function that only returns the
 # assembled string, and G104 does not report an error discarded by an explicit
@@ -263,7 +281,7 @@
 #
 # The split is MEASURED rather than counted by hand, and it is reproducible:
 # `gosec -nosec=true -exclude-dir=.claude/worktrees ./...` disables suppression
-# handling and reports 26 issues where the ordinary run reports 0.
+# handling and reports 25 issues where the ordinary run reports 0.
 #
 # A #nosec is a permanent blindfold over one node. Every G201 line above means
 # that if the statement at that site is ever edited to interpolate a value

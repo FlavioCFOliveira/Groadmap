@@ -1,8 +1,8 @@
-// Regression fence for the statement time budget on `rmp graph execute`
-// (SPEC/GRAPH.md § Statement Time Budget; SPEC/COMMANDS.md § Graph Management;
-// acceptance criteria 39 and 40).
+// Regression fence for the statement time budget as `rmp graph client` reports
+// it (SPEC/GRAPH.md § Statement Time Budget; SPEC/COMMANDS.md § Graph
+// Management; acceptance criteria 39 and 40).
 //
-// The defect this closes. `rmp graph execute` ran its statement under
+// The defect this closes. The graph statement once ran under
 // context.Background(), so a CLI hold on the graph store lock had no lawful
 // maximum, and the bounded wait internal/graphlock derives — statement budget
 // plus backoff total — rests on every holder having one. One pathological
@@ -11,20 +11,37 @@
 // product over a real 44,906-node knowledge graph had not finished after 300
 // seconds.
 //
+// # Where the budget is enforced now, and what that changes about these tests
+//
+// The statement runs in the SERVER, so the server is what enforces the deadline
+// and the server is what must be given the budget under test. That is what
+// [budgetServer] does: it starts a child server told to serve under a named
+// budget and sets the same value in THIS process, because the client renders the
+// published line from its own copy of the declaration. Both halves are needed and
+// each catches a different defect — a server carrying the wrong budget cuts at
+// the wrong moment, and a client carrying the wrong one prints a duration the run
+// did not have.
+//
+// The client keeps a later deadline of its own, the wait budget, purely as a
+// backstop against a server that answers nothing. It is deliberately NOT the
+// quantity under test here: what these tests provoke is a typed failure the
+// server sends back, not a silence.
+//
 // What is asserted here, and what is asserted elsewhere:
 //
 //   - that the deadline exists, fires, and is the SHARED declaration rather
 //     than a literal of this package's own — here;
 //   - that a cut statement leaves the store exactly as it found it — here,
-//     from disk, by reopening rather than by trusting the error;
+//     read back through the server and compared on disk file by file;
 //   - that the message the user reads equals the line SPEC/COMMANDS.md
 //     § Graph Management publishes, character for character, at the production
 //     budget — here at the unit level, and end to end against the built binary
 //     by tests/test_55_error_string_parity.py, which reads the expected text out
 //     of SPEC/COMMANDS.md itself rather than restating it.
 //
-// The web half of the same budget is fenced by internal/web/graph_budget_test.go.
-// The two surfaces read one declaration, so a change to it moves both.
+// The web half of the same budget is fenced by internal/web/graph_budget_test.go,
+// and the server's own half by internal/graphserve/residue_test.go. All three
+// read one declaration, so a change to it moves them together.
 package commands
 
 import (
@@ -42,7 +59,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/FlavioCFOliveira/Groadmap/internal/graphclient"
 	"github.com/FlavioCFOliveira/Groadmap/internal/graphlock"
+	"github.com/FlavioCFOliveira/Groadmap/internal/testenv/graphserver"
 	"github.com/FlavioCFOliveira/Groadmap/internal/utils"
 )
 
@@ -128,30 +147,88 @@ const budgetSeedNodes = 600
 // seedBudgetGraph creates the roadmap under a temporary HOME and fills its graph
 // store with budgetSeedNodes nodes in one UNWIND, which costs a few
 // milliseconds. It returns the roadmap name.
+//
+// The server it seeds through is stopped before it returns, so the store is on
+// disk and unheld when the test starts the server it actually means to measure.
+// The seed runs under the PRODUCTION budget deliberately: it is not what is being
+// timed, and seeding under a 300 ms budget would make the fixture itself a race.
 func seedBudgetGraph(t *testing.T, name string) string {
 	t.Helper()
 	t.Setenv("HOME", shortHome(t))
 	t.Cleanup(setupTestGraphRoadmap(t, name))
 
+	stop := serveGraph(t, name)
 	seed := fmt.Sprintf("UNWIND range(1,%d) AS i CREATE (:Bulk {i:i})", budgetSeedNodes)
 	var err error
 	_, _ = captureStdStreams(t, func() {
-		err = runGraphExecute([]string{"-r", name, "--query", seed})
+		err = runGraphClient([]string{"-r", name, "--query", seed})
 	})
 	if err != nil {
 		t.Fatalf("seeding %d nodes: %v", budgetSeedNodes, err)
 	}
+	stop()
 	return name
 }
 
-// countNodes runs a counting statement in a SEPARATE invocation — a fresh store
-// open, reading what is actually on disk — and returns the count.
+// budgetServer starts a server for roadmap that enforces budget, and installs the
+// same budget in this process so the published line names the value the run
+// actually had.
+//
+// It returns the function that stops the server, which a caller defers when it
+// needs to run a second server under a different budget — a budget is fixed when
+// a server starts, so moving it means replacing the server.
+func budgetServer(t *testing.T, roadmap string, budget time.Duration) func() {
+	t.Helper()
+	setGraphStatementBudget(t, budget)
+
+	graphDir, err := resolveGraphDir(roadmap)
+	if err != nil {
+		t.Fatalf("resolving the graph directory of roadmap %q: %v", roadmap, err)
+	}
+	socket, err := graphclient.SocketPath(roadmap)
+	if err != nil {
+		t.Fatalf("deriving the socket path of roadmap %q: %v", roadmap, err)
+	}
+
+	server, err := graphserver.Start(graphserver.Options{
+		GraphDir:        graphDir,
+		Socket:          socket,
+		RoadmapName:     roadmap,
+		CaptureDir:      t.TempDir(),
+		StatementBudget: budget,
+	})
+	if err != nil {
+		t.Fatalf("starting a graph server for roadmap %q under a %v budget: %v", roadmap, budget, err)
+	}
+
+	stopped := false
+	stop := func() {
+		if stopped {
+			return
+		}
+		stopped = true
+		if stopErr := server.Stop(); stopErr != nil {
+			t.Errorf("stopping the graph server for roadmap %q: %v", roadmap, stopErr)
+		}
+	}
+	t.Cleanup(stop)
+	return stop
+}
+
+// countNodes runs a counting statement in a SEPARATE invocation, crossing the
+// protocol to the server that holds the graph, and returns the count.
+//
+// It used to reopen the store, which is what a short-lived invocation did. It
+// cannot now — the server holds the store open for its lifetime and nothing else
+// may open it — so the disk half of the same question is answered by
+// storeFingerprint below, which reads the store's files directly and compares
+// them byte for byte.
 func countNodes(t *testing.T, roadmap, label string) int64 {
 	t.Helper()
 	var out string
 	var err error
 	out, _ = captureStdStreams(t, func() {
-		err = runGraphExecute([]string{"-r", roadmap, "--query",
+		err = runGraphClient([]string{"-r", roadmap, "--query",
 			fmt.Sprintf("MATCH (n:%s) RETURN count(n)", label)})
 	})
 	if err != nil {
@@ -217,12 +294,12 @@ func TestGraphExecute_StatementBudgetCutsAnExpensiveStatement(t *testing.T) {
 	name := seedBudgetGraph(t, "graph-budget-cuts-read")
 
 	const budget = 300 * time.Millisecond
-	setGraphStatementBudget(t, budget)
+	budgetServer(t, name, budget)
 
 	var err error
 	started := time.Now()
 	stdout, stderr := captureStdStreams(t, func() {
-		err = runGraphExecute([]string{"-r", name, "--query", budgetCartesianRead})
+		err = runGraphClient([]string{"-r", name, "--query", budgetCartesianRead})
 	})
 	elapsed := time.Since(started)
 
@@ -277,6 +354,12 @@ func TestGraphExecute_StatementBudgetCutsAnExpensiveStatement(t *testing.T) {
 func TestGraphExecute_BudgetCutWritesNothing(t *testing.T) {
 	name := seedBudgetGraph(t, "graph-budget-cut-writes-nothing")
 
+	// The budget is short from the server's first instant, because a budget is
+	// fixed when a server starts. The reads below are cheap — a count over 600
+	// nodes — so they finish inside it comfortably.
+	const budget = 300 * time.Millisecond
+	budgetServer(t, name, budget)
+
 	// Ground truth first, so the comparisons below cannot pass by both sides
 	// being empty.
 	if seeded := countNodes(t, name, "Bulk"); seeded != budgetSeedNodes {
@@ -284,12 +367,9 @@ func TestGraphExecute_BudgetCutWritesNothing(t *testing.T) {
 	}
 	before := storeFingerprint(t, name)
 
-	const budget = 300 * time.Millisecond
-	setGraphStatementBudget(t, budget)
-
 	var err error
 	stdout, _ := captureStdStreams(t, func() {
-		err = runGraphExecute([]string{"-r", name, "--query", budgetCartesianWrite})
+		err = runGraphClient([]string{"-r", name, "--query", budgetCartesianWrite})
 	})
 	if err == nil {
 		t.Fatalf("the writing statement completed under a %v budget over %d nodes; stdout=%q", budget, budgetSeedNodes, stdout)
@@ -297,12 +377,9 @@ func TestGraphExecute_BudgetCutWritesNothing(t *testing.T) {
 	if got, want := err.Error(), wantBudgetLine(budget); got != want {
 		t.Fatalf("message mismatch\n got:  %q\n want: %q", got, want)
 	}
-	// Restore the production budget before the assertions read the store back,
-	// so the reads below are not themselves racing a deadline.
-	setGraphStatementBudget(t, graphlock.DefaultStatementBudget)
 
-	// (i) Nothing the statement was creating survived, read back through a fresh
-	// store open.
+	// (i) Nothing the statement was creating survived, read back in a separate
+	// invocation that crosses the protocol.
 	if survivors := countNodes(t, name, budgetProbeLabel); survivors != 0 {
 		t.Errorf("%d :%s nodes survived a cut write, want 0: the transaction did not roll back whole", survivors, budgetProbeLabel)
 	}
@@ -346,12 +423,16 @@ func TestGraphExecute_BudgetIsTheSharedDeclaration(t *testing.T) {
 
 	for _, budget := range []time.Duration{200 * time.Millisecond, 700 * time.Millisecond} {
 		t.Run(budget.String(), func(t *testing.T) {
-			setGraphStatementBudget(t, budget)
+			// One server per value, because a server's budget is fixed when it
+			// starts. Stopping the previous one before starting the next is what
+			// lets the second take the store's exclusive lock at all.
+			stop := budgetServer(t, name, budget)
+			defer stop()
 
 			var err error
 			started := time.Now()
 			_, _ = captureStdStreams(t, func() {
-				err = runGraphExecute([]string{"-r", name, "--query", budgetCartesianRead})
+				err = runGraphClient([]string{"-r", name, "--query", budgetCartesianRead})
 			})
 			elapsed := time.Since(started)
 
@@ -458,9 +539,11 @@ func TestGraphExecute_OrdinaryStatementUnaffectedByTheBudget(t *testing.T) {
 	} {
 		t.Run(query, func(t *testing.T) {
 			var err error
+			stopBudgeted := budgetServer(t, name, graphlock.DefaultStatementBudget)
 			budgeted, _ := captureStdStreams(t, func() {
-				err = runGraphExecute([]string{"-r", name, "--query", query})
+				err = runGraphClient([]string{"-r", name, "--query", query})
 			})
+			stopBudgeted()
 			if err != nil {
 				t.Fatalf("under the production budget: %v", err)
 			}
@@ -469,13 +552,13 @@ func TestGraphExecute_OrdinaryStatementUnaffectedByTheBudget(t *testing.T) {
 			}
 
 			// A budget that cannot possibly fire stands in for "before the budget
-			// existed": the deadline is still derived and still installed, it just
-			// never elapses.
-			setGraphStatementBudget(t, time.Hour)
+			// existed": the deadline is still derived and still installed in the
+			// server, it just never elapses.
+			stopUnbounded := budgetServer(t, name, time.Hour)
 			unbounded, _ := captureStdStreams(t, func() {
-				err = runGraphExecute([]string{"-r", name, "--query", query})
+				err = runGraphClient([]string{"-r", name, "--query", query})
 			})
-			setGraphStatementBudget(t, graphlock.DefaultStatementBudget)
+			stopUnbounded()
 			if err != nil {
 				t.Fatalf("effectively unbounded: %v", err)
 			}

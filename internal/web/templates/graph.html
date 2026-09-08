@@ -128,12 +128,37 @@
               <div id="empty-graph" class="graph-empty" hidden>
                 <div class="empty">
                   <div class="empty-icon"><i class="ti ti-hierarchy-off empty-icon-glyph"></i></div>
-                  <p class="empty-title">No knowledge graph yet</p>
+                  <p class="empty-title">This graph is empty</p>
                   <p class="empty-subtitle text-secondary">
-                    This roadmap has no knowledge graph yet. Add nodes and edges with the CLI, for example:
+                    A graph server is serving this roadmap and its graph holds no elements yet. Add nodes and edges through that server, for example:
                   </p>
                   <div class="empty-action">
-                    <pre class="text-secondary mb-0"><code>rmp graph execute -r {{.Name}} --query "CREATE (n:Spec {key:'auth'})"</code></pre>
+                    <pre class="text-secondary mb-0"><code>rmp graph client -r {{.Name}} --query "CREATE (n:Spec {key:'auth'})"</code></pre>
+                  </div>
+                </div>
+              </div>
+
+              <!--
+                The graph that cannot be reached is a DIFFERENT state from the
+                empty one above, and the page says which it is in. An interface
+                that showed "no data" for both would tell an operator whose
+                server is not running that their graph is empty, when the remedy
+                for the second is to start a server and there is none for the
+                first (SPEC/WEB.md Acceptance Criterion 161; § Roadmap
+                Knowledge-Graph Page, "Empty graph, and the roadmap that has
+                none"). The endpoint answers 503 for it and withholds the socket
+                path from the body, so the command below names the roadmap and
+                lets the server report its own socket.
+              -->
+              <div id="unreachable-graph" class="graph-empty" hidden>
+                <div class="empty">
+                  <div class="empty-icon"><i class="ti ti-plug-connected-x empty-icon-glyph"></i></div>
+                  <p class="empty-title">This graph cannot be reached</p>
+                  <p class="empty-subtitle text-secondary">
+                    No graph server is running for this roadmap, so its graph cannot be read. This is not an empty graph: start a server and reload the page.
+                  </p>
+                  <div class="empty-action">
+                    <pre class="text-secondary mb-0"><code>rmp graph serve -r {{.Name}}</code></pre>
                   </div>
                 </div>
               </div>

@@ -1,10 +1,15 @@
 #!/usr/bin/env python3
 """
-Test 59: what `rmp graph execute` stores when the statement carries bytes or
-escapes Groadmap does not inspect.
+Test 59: what a graph server stores when the statement carries bytes or escapes
+Groadmap does not inspect.
 
 End-to-end backstop for SPEC/GRAPH.md acceptance criterion 38, bullets 1, 2 and
-5, against the compiled ./bin/rmp and a real graph store.
+5, against the compiled ./bin/rmp and a real graph store. The store is reached
+the only way it can be reached: a running `rmp graph serve`, spoken to by
+`rmp graph client` (SPEC/GRAPH.md section "The Dedicated Graph Server"). Every
+statement here -- the seed, the writes under test, and the read-backs that judge
+them -- crosses the Bolt socket, so what is asserted is what a caller gets back
+from a server rather than what an engine holds in process.
 
 WHAT THIS MODULE USED TO BE. Groadmap applied two free-text content rules to a
 Cypher property value -- the UTF-8 Encoding Constraint and the Control-Character
@@ -13,12 +18,13 @@ exit code 6, before the store was opened. Twenty-two of the tests below asserted
 those refusals, their precedence against the other guard-rail rules, and the
 subcommands each rule reached.
 
-Both rules were WITHDRAWN. `rmp graph execute` checks a statement's LENGTH and
+Both rules were WITHDRAWN. `rmp graph client` checks a statement's LENGTH and
 nothing else about its content (SPEC/GRAPH.md section "What Groadmap Does Not
-Check"), so what has to be asserted now is not a refusal but an OUTCOME -- and
-the specification says so in as many words: the criterion is stated "asserting
-the outcome rather than the absence of a check", because an absence cannot be
-tested and an outcome can.
+Check"), and the server it sends to does not examine the statement at all, so
+what has to be asserted now is not a refusal but an OUTCOME -- and the
+specification says so in as many words: the criterion is stated "asserting the
+outcome rather than the absence of a check", because an absence cannot be tested
+and an outcome can.
 
 The three outcomes, each of which exits 0 and reports success:
 
@@ -48,13 +54,14 @@ enumeration and a shape added there is exercised here without an edit.
 """
 
 import inspect
+import json
 import os
 import re
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from tests.base_test import GroadmapTestBase
+from tests.base_test import GroadmapTestBase, assert_graph_write_shape
 
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -155,12 +162,16 @@ class TestGraphPropertyValueContent:
     def setup_method(self):
         self.test = GroadmapTestBase()
         self.test.setup()
-        self.roadmap = self.test.create_roadmap()
-        # A realistic seed the update cases write to.
+        self.roadmap = self.test.generate_roadmap_name()
+        # A realistic seed the update cases write to. The server is started
+        # BEFORE it, because starting one is what creates the graph: a roadmap
+        # that has never had a graph is served an empty one and the seed writes
+        # its first node (SPEC/GRAPH.md section "Server Startup", step 1).
         self.seed_body = "Sprint 41 replaces five graph subcommands with one."
-        self.run_query(
+        self.server = self.test.served_roadmap(
+            self.roadmap,
             "CREATE (n:Memory {key:'" + self.SEED_KEY + "', body:'" + self.seed_body + "'})",
-            expect=0)
+        )
 
     def teardown_method(self):
         self.test.teardown()
@@ -168,24 +179,25 @@ class TestGraphPropertyValueContent:
     # ---- helpers -----------------------------------------------------
 
     def run_query(self, query, expect=None):
-        code, stdout, stderr = self.test.run_cmd(
-            ["graph", "execute", "-r", self.roadmap, "--query", query], check=False)
+        """Send one statement to the running server, optionally asserting the
+        exit code it must come back with."""
+        code, stdout, stderr = self.test.graph_client(self.roadmap, query=query)
         if expect is not None:
             assert code == expect, (
-                f"rmp graph execute exited {code}, want {expect}\n"
+                f"rmp graph client exited {code}, want {expect}\n"
                 f"  query={query!r}\n  stdout={stdout!r}\n  stderr={stderr!r}")
         return code, stdout, stderr
 
     def body_of(self, key):
         """Return the stored body of a Memory node, or None when it has none.
 
-        Reading through the binary is deliberate: the assertion is about what a
-        LATER invocation sees, which is what makes a silent replacement a defect
-        rather than a rendering question.
+        Reading through a second invocation of the binary is deliberate: the
+        assertion is about what a LATER caller sees, which is what makes a silent
+        replacement a defect rather than a rendering question.
         """
-        result = self.test.run_cmd_json(
-            ["graph", "execute", "-r", self.roadmap,
-             "--query", "MATCH (n:Memory {key:'" + key + "'}) RETURN n.body"])
+        result = self.test.graph_ok(
+            self.roadmap,
+            query="MATCH (n:Memory {key:'" + key + "'}) RETURN n.body")
         if not result["rows"]:
             return None
         return result["rows"][0][0]
@@ -218,8 +230,13 @@ class TestGraphPropertyValueContent:
                 f"withdrawn and no statement is refused for its content "
                 f"(SPEC/GRAPH.md section \"What Groadmap Does Not Check\", item 2); "
                 f"stderr={stderr!r}")
-            assert '"ok": true' in stdout, (
-                f"shape {name!r} did not report success; stdout={stdout!r}")
+            # What was acknowledged, not merely that something was: one node,
+            # its two properties, its label.
+            assert_graph_write_shape(
+                json.loads(stdout),
+                context=f"shape {name!r}",
+                counters={"nodesCreated": 1, "propertiesWritten": 2, "labelsAdded": 1},
+            )
 
             stored = self.body_of(key)
             assert stored is not None, f"shape {name!r} stored no node at all"
@@ -249,9 +266,9 @@ class TestGraphPropertyValueContent:
         # that was never supplied, finds nothing, and exits 0.
         _name, argv_value, _raw = malformed_utf8_corpus()[0]
         literal = cypher_escape(self.seed_body[:10] + argv_value)
-        result = self.test.run_cmd_json(
-            ["graph", "execute", "-r", self.roadmap,
-             "--query", "MATCH (n:Memory {body:'" + literal + "'}) RETURN n.key"])
+        result = self.test.graph_ok(
+            self.roadmap,
+            query="MATCH (n:Memory {body:'" + literal + "'}) RETURN n.key")
         assert result["rows"] == [], (
             f"the malformed literal matched something: {result!r}")
         # And the seeded node is still there, so the empty answer is the
@@ -303,17 +320,23 @@ class TestGraphPropertyValueContent:
         assert code == 0, (
             f"the statement must execute rather than be refused (exit {code}, "
             f"stderr={stderr!r}); the trailing-clause refusal was withdrawn")
-        assert '"ok": true' in stdout, f"stdout={stdout!r}"
+        # The acknowledgement names ONE index and nothing else: no property was
+        # written, so the counters themselves already show the second half of the
+        # statement never ran.
+        assert_graph_write_shape(
+            json.loads(stdout),
+            context="the schema statement with a trailing clause",
+            counters={"indexesAdded": 1},
+        )
 
-        listing = self.test.run_cmd_json(
-            ["graph", "execute", "-r", self.roadmap, "--query", "SHOW INDEXES"])
+        listing = self.test.graph_ok(self.roadmap, query="SHOW INDEXES")
         names = {row[listing["columns"].index("name")] for row in listing["rows"]}
         assert "memory_key" in names, (
             f"the index half of the statement did not run; SHOW INDEXES reports {names!r}")
 
-        reviewed = self.test.run_cmd_json(
-            ["graph", "execute", "-r", self.roadmap,
-             "--query", "MATCH (n:Memory {key:'" + self.SEED_KEY + "'}) RETURN n.reviewed"])
+        reviewed = self.test.graph_ok(
+            self.roadmap,
+            query="MATCH (n:Memory {key:'" + self.SEED_KEY + "'}) RETURN n.reviewed")
         assert reviewed["rows"] == [[None]], (
             f"the MATCH ... SET half must have been discarded, leaving `reviewed` "
             f"absent; got {reviewed!r}. The engine reported success for a statement "
@@ -341,22 +364,22 @@ def _run_all():
             try:
                 getattr(instance, m)()
                 passed += 1
-                print(f"\u2713 {label}")
+                print(f"✓ {label}")
             except AssertionError as exc:
                 failed += 1
                 failures.append((label, exc))
-                print(f"\u2717 {label}")
+                print(f"✗ {label}")
             except Exception as exc:  # noqa: BLE001
                 failed += 1
                 failures.append((label, exc))
-                print(f"\u2717 {label} (error)")
+                print(f"✗ {label} (error)")
             finally:
                 instance.teardown_method()
     print("\n" + "=" * 60)
     print(f"Graph property-value content tests: {passed} passed, {failed} failed")
     print("=" * 60)
     for label, exc in failures:
-        print(f"\n\u2717 {label}\n  {exc}")
+        print(f"\n✗ {label}\n  {exc}")
     return failed == 0
 
 

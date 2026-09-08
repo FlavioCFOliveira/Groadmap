@@ -17,7 +17,11 @@ import (
 // is set by the authoritative securityHeaders middleware.
 func TestCachePolicy_NoStoreOnDataDerivedResponses(t *testing.T) {
 	t.Setenv("HOME", shortHome(t))
-	name := seedRoadmap(t, "web-ui-rollout")
+	// A server, because the graph data endpoint below must answer 200 for the
+	// header to be asserted on it at all: with nothing serving the roadmap it
+	// answers 503, which is a data-state-dependent error and is covered by the
+	// test beside this one rather than by this one.
+	name := servedRoadmap(t, "web-ui-rollout")
 
 	// seedRoadmap inserts exactly one sprint into a fresh database, so the
 	// seeded sprint's id is 1; the sprint-page probe therefore hits a real

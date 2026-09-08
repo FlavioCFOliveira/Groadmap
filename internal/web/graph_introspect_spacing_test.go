@@ -70,7 +70,7 @@ var spacingPairs = []struct {
 // why the diagnostic is asserted and not only the status.
 func TestHandleGraphData_KeywordSpacingIsTheEnginesVerdict(t *testing.T) {
 	t.Setenv("HOME", shortHome(t))
-	name := seedGraphWithSchema(t, "web-ui-rollout")
+	name := servedGraphWithSchema(t, "web-ui-rollout")
 
 	for _, tc := range spacingPairs {
 		t.Run(tc.name, func(t *testing.T) {
@@ -117,7 +117,7 @@ func TestHandleGraphData_KeywordSpacingIsTheEnginesVerdict(t *testing.T) {
 // (SPEC/WEB.md Acceptance Criteria 123 and 151).
 func TestHandleGraphData_PublishesNoKeywordSpacingKind(t *testing.T) {
 	t.Setenv("HOME", shortHome(t))
-	name := seedGraphWithSchema(t, "web-ui-rollout")
+	name := servedGraphWithSchema(t, "web-ui-rollout")
 
 	probes := []url.Values{
 		{"q": {"SHOW INDEXES"}},
@@ -166,7 +166,7 @@ func TestHandleGraphData_PublishesNoKeywordSpacingKind(t *testing.T) {
 // they reach the engine and fail there like any other unsupported statement.
 func TestHandleGraphData_SpacingDoesNotWidenTheSuppressedClass(t *testing.T) {
 	t.Setenv("HOME", shortHome(t))
-	name := seedGraphWithSchema(t, "web-ui-rollout")
+	name := servedGraphWithSchema(t, "web-ui-rollout")
 
 	for _, query := range []string{
 		"SHOW  INDEXER",

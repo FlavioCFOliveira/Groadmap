@@ -596,16 +596,46 @@ CORPUS = build_corpus()
 
 EXEMPT_KEYS = {
     "Error: graph engine error: graph query failed: <engine diagnostic>": (
-        "internal/commands/graph.go: the tail is text the Cypher engine "
+        "internal/commands/graph_socket.go: the tail is text the Cypher engine "
         "itself produces for a parse/execution failure and is not "
-        "specified by COMMANDS.md:3261 (\"what follows is the engine's own "
+        "specified by COMMANDS.md (\"what follows is the engine's own "
         "text and is not specified here\")."
     ),
+    "Error: graph engine error: graph field too long; nothing was written. Shorten the field the engine names: <engine diagnostic>": (
+        "NOT REACHABLE AT THE PINNED ENGINE, and the specification says so in "
+        "the scenario column of the row itself. Every statement now crosses a "
+        "graph server, and the engine's Bolt server classifies this refusal as "
+        "its own fault rather than the caller's: it replaces the diagnostic "
+        "with generic internal-error text, so no sentinel, no distinguishing "
+        "code and no field kind reaches this side. MEASURED through a running "
+        "server, a 70000-byte label comes back as \"Error: graph engine error: "
+        "graph query failed: An internal error occurred. See server logs for "
+        "details (session: <id>).\" -- the parse/execution row above, which is "
+        "the very outcome this line was published to end. An ordinary parse "
+        "failure and an ordinary execution failure both cross with their full "
+        "text, so the replacement is specific to this class. "
+        "Recovering the class by matching the engine's replacement text is "
+        "forbidden by GRAPH.md \"Field Length Limits\", rule 3: that text is "
+        "the engine's to reword and a match on it fails silently at the next "
+        "version bump. COMMANDS.md keeps the row rather than withdrawing it "
+        "because the class is real and the remedy is an engine-side change, and "
+        "it states in as many words that nothing in this repository can drive "
+        "the line. What IS still driven, in tests/test_69_graph_field_length.py: "
+        "that an over-long field of either kind is refused with exit code 1, "
+        "that a shorter one is accepted, that the refusal leaves nothing behind "
+        "and the store stays usable, and that a syntax error still writes the "
+        "parse/execution line WITH the engine's own diagnostic -- which is what "
+        "keeps this exemption's account of the loss honest rather than a "
+        "guess. internal/commands/graph_fieldlength_test.go measures the bound "
+        "in process, where the sentinel still survives."
+    ),
     "Error: graph store error: graph store unavailable: <detail>": (
-        "Derived from internal/commands/graph.go:847,917,1023 and "
-        "internal/web/data.go:1978: an internal graph-store open/read/write "
-        "failure, not reachable through ordinary CLI execution against a "
-        "healthy filesystem."
+        "internal/commands/graph_socket.go (graphServerFailure) and "
+        "internal/web/data.go (servedGraphError): the branch each takes for a "
+        "failure the shared Bolt client did not classify. Both are defence "
+        "rather than a live path -- the client returns nothing else -- so "
+        "reaching it through ordinary CLI execution against a healthy "
+        "filesystem is not possible by construction."
     ),
     "Error: I/O error: cannot bind 127.0.0.1:8787: listen tcp 127.0.0.1:8787: bind: address already in use": (
         "internal/web: the tail after \"cannot bind 127.0.0.1:8787: \" is "
@@ -644,24 +674,6 @@ TAIL_EXEMPT_KEYS = {
         "The same failure on the four comment subcommands, narrowed for the "
         "same reason: the head is rmp's and the tail is the operating "
         "system's."
-    ),
-    "Error: graph engine error: graph field too long; nothing was written. Shorten the field the engine names: <engine diagnostic>": (
-        "<engine diagnostic>",
-        "internal/commands/graph.go: the head -- everything up to and "
-        "including \"Shorten the field the engine names: \" -- is rmp's own "
-        "text and is asserted character for character, which is the whole "
-        "point of the row: it is what tells a caller to shorten a value "
-        "rather than to correct the statement's syntax, and it is what the "
-        "parse/execution line above could not distinguish. The tail is the "
-        "engine's own guard message and is not specified by COMMANDS.md, for "
-        "the reason GRAPH.md gives -- it names which field is at fault and by "
-        "how much, and rmp neither trims it nor rewrites it, because trimming "
-        "it would mean parsing it and a match on the engine's wording fails "
-        "silently at the next version bump (GRAPH.md 'Field Length Limits', "
-        "rules 3 and 4). What the tail IS required to carry is the field "
-        "kind, which is the one thing the caller acts on and the one thing "
-        "rmp's half deliberately does not name; the driver writes an "
-        "over-long LABEL and requires the engine to say so."
     ),
     "Error: database error: <detail>": (
         "<detail>",
@@ -2407,7 +2419,15 @@ class TestErrorStringParity:
         )
 
     # ------------------------------------------------------------------
-    # `graph execute`
+    # `graph client`
+    #
+    # Every case below is refused BEFORE a socket is derived or probed, so none
+    # of them needs a server. That is a property of the order `graph client`
+    # checks in -- the roadmap selector, then the flags, then the statement, then
+    # the roadmap's existence, and only then the socket
+    # (SPEC/COMMANDS.md § Client Exit Codes) -- and it is worth stating, because
+    # a case that silently started needing one would be asserting about a
+    # different failure.
     # ------------------------------------------------------------------
 
     def test_graph_errors(self):
@@ -2415,7 +2435,7 @@ class TestErrorStringParity:
         # #106: no query supplied (neither --query nor stdin).
         self.check(
             "Error: required parameter missing: no query supplied",
-            ["graph", "execute", "-r", r], 2, note="graph execute no query supplied",
+            ["graph", "client", "-r", r], 2, note="graph client no query supplied",
         )
         # #107: query above the maximum length (1 MiB). Fed on stdin rather
         # than as a --query argument: an argv entry this large trips the
@@ -2435,106 +2455,68 @@ class TestErrorStringParity:
         assert len(oversized) == 1048578
         self.check(
             "Error: validation error: query exceeds maximum length of 1048576 bytes",
-            ["graph", "execute", "-r", r], 6, stdin=oversized,
-            note="graph execute oversized",
+            ["graph", "client", "-r", r], 6, stdin=oversized,
+            note="graph client oversized",
         )
         # Roadmap not found, on the graph subcommand (WITH "not found",
         # distinct from #104's stats/backlog wording).
         self.check(
             'Error: resource not found: roadmap "X" not found',
-            ["graph", "execute", "-r", "ghost-roadmap-9182", "--query", "MATCH (n) RETURN n"], 4,
-            subs={"X": "ghost-roadmap-9182"}, note="graph execute roadmap not found",
+            ["graph", "client", "-r", "ghost-roadmap-9182", "--query", "MATCH (n) RETURN n"], 4,
+            subs={"X": "ghost-roadmap-9182"}, note="graph client roadmap not found",
         )
-        # A Cypher query written as a positional argument. `graph execute`
+        # A Cypher query written as a positional argument. `graph client`
         # declares a maximum of zero positional arguments (COMMANDS.md
-        # § Positional Arity by Command), and it is one of the three commands
-        # that publish a line of their own for the refusal: the canonical
+        # § Positional Arity by Command), and it is the one graph subcommand
+        # that publishes a line of its own for the refusal: the canonical
         # wording with a parenthetical naming the two sources a query may
-        # come from. The roadmap named here EXISTS, so the exit code proves
-        # the refusal precedes opening the graph store rather than following
+        # come from. `graph serve` reads no statement, so it gets the canonical
+        # line without the hint. The roadmap named here EXISTS, so the exit code
+        # proves the refusal precedes resolving the socket rather than following
         # a lookup failure.
         self.check(
             'Error: invalid input: unexpected argument "X" (graph queries use --query or stdin)',
-            ["graph", "execute", "-r", r, "MATCH (n:Incident) RETURN n"], 2,
+            ["graph", "client", "-r", r, "MATCH (n:Incident) RETURN n"], 2,
             subs={"X": "MATCH (n:Incident) RETURN n"},
-            note="graph execute bare positional query",
+            note="graph client bare positional query",
         )
 
-    def test_graph_field_too_long_line(self):
-        """The field-length refusal (rmp task #413).
-
-        A statement writing a label longer than the write-ahead log's length
-        prefix can carry is refused at commit, and the line it writes is a
-        class of its own rather than the parse/execution line beside it: the
-        two were separated only by the engine's diagnostic tail, which
-        COMMANDS.md deliberately declines to specify and which a caller
-        therefore cannot lawfully match, so a caller had to parse English to
-        learn whether to correct the statement's syntax or to shorten one of
-        its values.
-
-        The statement is fed on STDIN rather than as a --query argument. The
-        label alone is 70000 bytes, which is under Linux's 128 KiB
-        MAX_ARG_STRLEN and would probably fit in argv on this host, but
-        nothing in this module needs it to: GRAPH.md's Cypher Input Source and
-        Precedence makes standard input an equally valid source for the same
-        statement, and stdin has no per-argument bound to be near.
-
-        The 70000 bytes are chosen to be over the engine's bound rather than
-        derived from it, and that is a deliberate division of labour: this
-        module asserts the published LINE, and test_69_graph_field_length
-        owns the bound itself, deriving both the refused length and the
-        accepted one from the maximum the refusal reports. If the engine's
-        bound ever rose above 70000 this case would fail loudly here -- the
-        statement would succeed and the head would never be written -- which
-        is the right failure rather than a silent one.
-        """
-        r = self.roadmap
-        over_long_label = "L" * 70000
-        self.check_head(
-            "Error: graph engine error: graph field too long; nothing was written. "
-            "Shorten the field the engine names: <engine diagnostic>",
-            ["graph", "execute", "-r", r], 1,
-            tail_contains=["label"],
-            stdin="CREATE (n:FieldLengthProbe {name:'kept'}) CREATE (m:`" + over_long_label + "`)",
-            note="graph execute writing a label over the log's length prefix",
-        )
-        # The refusal left NOTHING behind -- not even the well-formed element
-        # the statement created before the over-long label. A caller told
-        # "nothing was written" must be able to rely on it
-        # (GRAPH.md "Field Length Limits", rule 5).
-        rc, out, err = self.run_stdin(
-            ["graph", "execute", "-r", r, "--query",
-             "MATCH (n:FieldLengthProbe) RETURN count(n) AS c"])
-        assert rc == 0, f"counting after the refusal failed: rc={rc} err={err!r}"
-        assert '"c"' in out and json.loads(out)["rows"] == [[0]], (
-            f"the refused statement left something behind: {out!r}"
-        )
-        # And a genuine syntax error still writes the parse/execution line,
-        # which is the string EXEMPT_KEYS names: an implementation that routed
-        # every engine failure to the new line would satisfy every assertion
-        # above and break this one.
-        rc, out, err = self.run_stdin(
-            ["graph", "execute", "-r", r, "--query", "CREATE (n:Broken"])
-        assert rc == 1, f"a malformed statement was accepted: rc={rc} out={out!r}"
-        first = err.splitlines()[0] if err else ""
-        assert first.startswith("Error: graph engine error: graph query failed: "), (
-            f"a syntax error no longer writes the parse/execution line: {first!r}"
-        )
-        assert "graph field too long" not in first, (
-            f"a syntax error was reported as a field-length refusal: {first!r}"
-        )
+    # test_graph_field_too_long_line is RETIRED, and the line it drove is
+    # exempted instead (see EXEMPT_KEYS, which carries the whole reason).
+    #
+    # The condition is real and the row is still published; what changed is that
+    # nothing can produce the line. Every statement crosses a graph server, and
+    # the engine's Bolt server replaces this refusal's diagnostic with generic
+    # internal-error text, so the sentinel that selects the line never reaches
+    # this side and the condition arrives on the parse/execution row instead.
+    # SPEC/COMMANDS.md § Client Error Cases says so in the scenario column of the
+    # row itself and states that nothing in this repository can drive it.
+    #
+    # What this test asserted BESIDES the line is not dropped. It also asserted
+    # that the refused statement left nothing behind -- not even the well-formed
+    # element it created before the over-long label -- and that a genuine syntax
+    # error still writes the parse/execution line. Both are driven by
+    # tests/test_69_graph_field_length.py, against the same shape, and that
+    # module also holds the account of what the withdrawal cost.
 
     def test_graph_statement_time_budget(self):
         """The statement time budget line, driven rather than exempted
         (SPEC/GRAPH.md § Statement Time Budget; SPEC/COMMANDS.md
         § Graph Management; GRAPH.md acceptance criterion 39).
 
-        `rmp graph execute` runs its statement under a 5-second deadline. A
-        statement that exhausts it is cancelled, its transaction rolls back
-        whole, no checkpoint runs, and the invocation exits 1 with a line that
-        is rmp's own text from end to end -- no engine diagnostic, no
+        A statement runs under a 5-second deadline. The SERVER enforces it,
+        because the server is where the statement runs; a statement that
+        exhausts it is cancelled, its transaction rolls back whole, and the
+        typed failure crosses the protocol to the client, which exits 1 with a
+        line that is rmp's own text from end to end -- no engine diagnostic, no
         placeholder -- so it is compared in full, exactly as this module
         compares every other published line.
+
+        **That the line survives the crossing is not an assumption here, it is
+        the assertion.** The budget failure is one of the few the engine's Bolt
+        server carries across as a TYPED failure rather than replacing (unlike
+        the field-length refusal, which EXEMPT_KEYS records), and this case is
+        what would fail if that stopped being true.
 
         **Driven, not exempted, and deliberately so.** The budget is provokable
         through the binary, unlike the four strings EXEMPT_KEYS names, whose
@@ -2581,10 +2563,17 @@ class TestErrorStringParity:
             f"this exact text: {key!r}"
         )
 
+        # The server the whole case runs against. It creates the store for a
+        # roadmap that has never had a graph, so nothing has to materialise one
+        # first, and it holds that store open for every statement below --
+        # including the read-back at the end, which is a separate invocation
+        # crossing the protocol rather than a fresh store open.
+        self.test.start_graph_server(r)
+
         # One UNWIND, one invocation: 2000 nodes for about 70 ms.
         bulk = 2000
         rc, out, err = self.run_stdin(
-            ["graph", "execute", "-r", r, "--query",
+            ["graph", "client", "-r", r, "--query",
              "UNWIND range(1," + str(bulk) + ") AS i CREATE (:Bulk {i:i})"]
         )
         assert rc == 0, f"seeding {bulk} nodes failed: rc={rc} stderr={err!r}"
@@ -2592,7 +2581,7 @@ class TestErrorStringParity:
         # Ground truth read from the engine rather than assumed, so the size
         # the margin rests on cannot silently drift with the seed.
         rc, out, err = self.run_stdin(
-            ["graph", "execute", "-r", r, "--query", "MATCH (n) RETURN count(n)"]
+            ["graph", "client", "-r", r, "--query", "MATCH (n) RETURN count(n)"]
         )
         assert rc == 0, f"counting the seed failed: rc={rc} stderr={err!r}"
         seeded = json.loads(out)["rows"][0][0]
@@ -2604,7 +2593,7 @@ class TestErrorStringParity:
         started = time.monotonic()
         try:
             proc = subprocess.run(
-                [self.test.cli_path, "graph", "execute", "-r", r,
+                [self.test.cli_path, "graph", "client", "-r", r,
                  "--query", expensive],
                 input="",
                 capture_output=True,
@@ -2614,7 +2603,7 @@ class TestErrorStringParity:
             )
         except subprocess.TimeoutExpired:
             raise AssertionError(
-                f"`graph execute` was still running 60s into a three-way "
+                f"`graph client` was still running 60s into a three-way "
                 f"Cartesian product over {seeded} nodes: the 5s statement time "
                 f"budget did not bound the work at all (SPEC/GRAPH.md "
                 f"§ Statement Time Budget)"
@@ -2652,11 +2641,12 @@ class TestErrorStringParity:
         )
         REACHED.add(key)
 
-        # (iv) Nothing was written and nothing on disk was rewritten: the
-        # store still holds exactly the seed, read back through a fresh open
-        # in a separate invocation.
+        # (iv) Nothing was written: the store still holds exactly the seed,
+        # read back in a separate invocation. It is the same server's graph,
+        # which is the authoritative one -- there is no other copy for a
+        # rolled-back write to have survived in.
         rc, out, err = self.run_stdin(
-            ["graph", "execute", "-r", r, "--query", "MATCH (n) RETURN count(n)"]
+            ["graph", "client", "-r", r, "--query", "MATCH (n) RETURN count(n)"]
         )
         assert rc == 0, f"reading the store back failed: rc={rc} stderr={err!r}"
         after = json.loads(out)["rows"][0][0]
@@ -2685,9 +2675,14 @@ class TestErrorStringParity:
         FreeBSD and OpenBSD -- a literal would pass here and confirm the defect
         on three of the five operating systems the project targets.
 
-        All three subcommands that publish `--socket` are driven, because all
-        three publish this line and the section's contract is one line for one
-        condition (SPEC/GRAPH.md § Socket Path Length, rule 5).
+        BOTH subcommands that publish `--socket` are driven, because both publish
+        this line and the section's contract is one line for one condition
+        (SPEC/GRAPH.md § Socket Path Length, rule 5). There were three; the third
+        was `graph execute`, and it is withdrawn. Its row was the interesting one
+        while the rule was split on WHO chose the path -- it was the surface that
+        had somewhere else to go -- and with it gone the two that remain are the
+        two that were never in doubt: `serve` must create the socket and `client`
+        speaks to nothing else.
         """
         r = self.roadmap
         key = (
@@ -2696,13 +2691,11 @@ class TestErrorStringParity:
             "Use --socket to name a shorter path."
         )
 
-        # `graph serve` refuses a roadmap with no graph store before it resolves
-        # the socket, so materialise one -- otherwise that subcommand would never
-        # reach the line under test.
-        code, _, err = self.run_stdin(
-            ["graph", "execute", "-r", r, "--query", "CREATE (:SocketProbe {k: 1})"])
-        assert code == 0, f"seeding the graph failed: exit={code} stderr={err!r}"
-
+        # Nothing has to be materialised first. `graph serve` CREATES the store
+        # for a roadmap that has never had a graph, and it settles the socket
+        # path's length before it creates anything, so the refusal below is
+        # reached whether or not a store exists (SPEC/GRAPH.md § Server Startup,
+        # step 1).
         home = str(self.test.home_dir)
         bound = measure_socket_path_bound(home)
         socket = os.path.join(home, "s" * (bound + 1 - len(home) - 1))
@@ -2717,83 +2710,30 @@ class TestErrorStringParity:
              ["graph", "serve", "-r", r, "--socket", socket]),
             ("graph client with a socket path over the platform's bound",
              ["graph", "client", "-r", r, "--socket", socket, "--query", "RETURN 1"]),
-            ("graph execute with a socket path over the platform's bound",
-             ["graph", "execute", "-r", r, "--socket", socket, "--query", "RETURN 1"]),
         ):
             self.check(key, args, 1, subs=subs, note=note)
 
-    def test_graph_store_lock_busy_line(self):
-        """The lock line an `execute` meets when a server holds the store.
-
-        It is the one line in this corpus that cannot be reached without a
-        SECOND process, and reaching it is the whole point: the wording it
-        replaced asserted a holder the code had already ruled out. The doc
-        comment on graphlock.AcquireExclusive says a bounded wait is sized
-        against the maximum lawful hold and that a server has none -- and the
-        line then printed "another invocation still holds it", naming the one
-        holder the wait cannot resolve. The two disagreed inside one function,
-        and they imply opposite remedies: an invocation releases shortly so
-        retrying works, a server holds for its lifetime so retrying never will.
-
-        The shape below is the one that reproduces it. A server is started on a
-        NON-DEFAULT socket, so the `execute` that follows resolves the derived
-        path, finds nothing listening, takes the direct path, and meets the lock
-        the server is holding (SPEC/GRAPH.md § Lock Contention, residual case 3).
-
-        It costs the wait budget -- the statement budget plus the backoff total,
-        about 7.5s -- and that is irreducible: the line is what an EXHAUSTED wait
-        prints, so the wait has to be exhausted.
-        """
-        r = self.roadmap
-        key = (
-            "Error: graph store error: graph store is busy: still held when the "
-            "bounded wait was exhausted, and nothing records the holder. Another "
-            "rmp invocation releases it shortly, so run the statement again; an "
-            "rmp graph serve holds it for its whole lifetime, so reach that "
-            "server with --socket, or stop it."
-        )
-        assert key in CORPUS, (
-            f"the lock-busy line is no longer published under this text: {key!r}")
-
-        # `graph serve` refuses a roadmap with no graph store, so materialise one.
-        code, _, err = self.run_stdin(
-            ["graph", "execute", "-r", r, "--query", "CREATE (:LockProbe {k: 1})"])
-        assert code == 0, f"seeding the graph failed: exit={code} stderr={err!r}"
-
-        socket = str(self.test.home_dir / "held.sock")
-        env = os.environ.copy()
-        env["HOME"] = str(self.test.home_dir)
-        server = subprocess.Popen(
-            [self.test.cli_path, "graph", "serve", "-r", r, "--socket", socket],
-            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env)
-        try:
-            # The startup object is written only after the store is open and the
-            # lock is held, so seeing it is seeing the lock taken.
-            deadline = time.time() + 20
-            announced = ""
-            while time.time() < deadline:
-                if server.poll() is not None:
-                    raise AssertionError(
-                        f"graph serve exited early: {server.stderr.read()!r}")
-                line = server.stdout.readline()
-                announced += line
-                if "socket" in announced and "}" in announced:
-                    break
-            assert "socket" in announced, (
-                f"graph serve never announced its socket; got {announced!r}")
-
-            # No --socket here: the derived path has nothing listening, so this
-            # takes the direct path and meets the held lock.
-            self.check(key, ["graph", "execute", "-r", r,
-                             "--query", "MATCH (n) RETURN count(n)"], 1,
-                       note="graph execute against a store a server holds")
-        finally:
-            server.terminate()
-            try:
-                server.wait(timeout=20)
-            except subprocess.TimeoutExpired:
-                server.kill()
-                server.wait(timeout=10)
+    # test_graph_store_lock_busy_line is RETIRED, with its subject.
+    #
+    # It drove the line an invocation printed when it met the store lock a
+    # server was holding: it started a server on a NON-DEFAULT socket, so the
+    # invocation that followed resolved the derived path, found nothing
+    # listening, took the direct path, and exhausted its wait against the
+    # server's hold.
+    #
+    # There is no direct path. No invocation opens the graph store, so no
+    # invocation contends for its lock, and the line is no longer published by
+    # SPEC/COMMANDS.md at all -- which is why leaving the case here would have
+    # failed on its own `key in CORPUS` assertion rather than on the binary.
+    # What a client meeting a served roadmap does now is send its statement to
+    # that server, and what it does meeting an unserved one is fail with the
+    # no-server line, which is driven by tests/test_65_graph_server_client_e2e.py.
+    #
+    # The bounded wait itself still exists and is still exercised: it is what
+    # `rmp graph serve` spends when a second server is started for a roadmap that
+    # already has one, and internal/graphserve's TestLockRefusal_RewordsOnlyTheExhaustedWait
+    # holds the wording it publishes for that. internal/graphlock's own suite
+    # drives the ladder and the budget.
 
     def test_stdin_read_failures_name_the_stream_not_a_database(self):
         """The two lines a failed read of standard input publishes.
@@ -2805,16 +2745,20 @@ class TestErrorStringParity:
         The failure is forced hermetically by handing the command a DIRECTORY
         as its standard input: read(2) on a directory descriptor is EISDIR on
         Linux, so the read fails without a fixture, a permission change, or a
-        race. The graph case needs no roadmap either -- the read precedes the
-        roadmap resolution, so a name that does not exist still reaches it.
+        race. The graph case needs no roadmap and no server either -- the read
+        precedes both the roadmap resolution and the socket, so a name that does
+        not exist still reaches it.
+
+        It used to drive two graph rows, `execute` and `client`, against the one
+        published string; `execute` is withdrawn and `client` reads its statement
+        from the same two sources through the same reader, so the string keeps a
+        driver and the row that went was a second copy of one.
         """
         query_key = "Error: I/O error: reading query from stdin: <detail>"
         body_key = (
             "Error: I/O error: reading the comment body from standard input: <detail>")
 
         for key, args, note in (
-            (query_key, ["graph", "execute", "-r", self.roadmap],
-             "graph execute reading a directory as its query"),
             (query_key, ["graph", "client", "-r", self.roadmap],
              "graph client reading a directory as its query"),
             (body_key, ["task", "comment-add", "-r", self.roadmap, "1", "--type", "NOTE"],

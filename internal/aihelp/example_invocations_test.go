@@ -189,11 +189,12 @@ const (
 // what was added really is a synopsis or a transcript.
 const (
 	exampleCommandSlotSynopses = 6
-	// Five, not six: DOCS/commands/graph.md's synopsis names its subcommand
-	// (`rmp graph execute ...`) rather than leaving the slot a placeholder,
-	// because the family has exactly one subcommand to name
-	// (SPEC/COMMANDS.md § Graph Management). That line is therefore CHECKED
-	// rather than skipped, which is the direction this count wants to move in.
+	// Five, not six: DOCS/commands/graph.md's synopsis names its subcommands
+	// (`rmp graph serve ...`, `rmp graph client ...`) rather than leaving the
+	// slot a placeholder, because the family has few enough subcommands to name
+	// them all (SPEC/COMMANDS.md § Graph Management). Those two lines are
+	// therefore CHECKED rather than skipped, which is the direction this count
+	// wants to move in.
 	exampleSubcommandSlotSynopses = 5
 	examplePromptedTranscripts    = 6
 	// Three of the six prompted transcripts document exit 127 and are invalid
@@ -1663,10 +1664,13 @@ func TestExampleInvocations_OracleShape(t *testing.T) {
 
 	const (
 		wantCommands = 9
-		// 57: 59 minus the five `graph` subcommands that collapsed onto one, plus
-		// the three the family publishes now — `graph execute`, `graph serve` and
-		// `graph client` (SPEC/COMMANDS.md § Graph Management).
-		wantSubcommands = 57
+		// 56: 59 minus the six `graph` subcommands withdrawn over the two passes —
+		// create, query, update, delete and search first, then execute — plus the
+		// two the family publishes now, `graph serve` and `graph client`
+		// (SPEC/COMMANDS.md § Graph Management; SPEC/DATA_FORMATS.md § AI Agent
+		// Contract, design principle 3: a withdrawn subcommand is absent from the
+		// contract rather than marked, so this count moves with the withdrawal).
+		wantSubcommands = 56
 	)
 	if len(oracle.commandOrder) != wantCommands {
 		t.Errorf("the contract declares %d command families, this gate was written against %d: %v",

@@ -475,10 +475,11 @@ class TestPositionalArityGlobalForms:
 
 
 class TestPositionalArityAlreadyCompliantFamilies:
-    """The four families that already refused, one invocation of each.
+    """The four families that already refused, one invocation of each -- and
+    both graph subcommands, because they do not refuse with the same words.
 
-    Three of them publish wording of their own, which the shared enforcement
-    point defers to instead of overriding.
+    Three of the families publish wording of their own, which the shared
+    enforcement point defers to instead of overriding.
     """
 
     def setup_method(self):
@@ -495,14 +496,42 @@ class TestPositionalArityAlreadyCompliantFamilies:
     def teardown_method(self):
         self.test.teardown()
 
-    def test_graph_keeps_its_parenthetical_hint(self):
+    def test_graph_client_keeps_its_parenthetical_hint(self):
+        # `graph client` is where a bare Cypher string is a plausible mistake --
+        # it is the only subcommand that carries a statement -- so it is the one
+        # that appends the hint naming the two ways to supply one. No server is
+        # started here and none is needed: the argument-level refusal precedes
+        # the socket entirely (SPEC/COMMANDS.md, the graph client check order),
+        # which the roadmap's untouched home below is the evidence for.
+        query = "MATCH (n:Incident) RETURN n"
         code, stdout, stderr = self.test.run_cmd(
-            ["graph", "execute", "-r", self.roadmap, "MATCH (n:Incident) RETURN n"], check=False)
+            ["graph", "client", "-r", self.roadmap, query], check=False)
         assert code == 2, f"exit={code}, want 2; stderr={stderr!r}"
         assert stderr.splitlines()[0] == (
-            'Error: invalid input: unexpected argument "MATCH (n:Incident) RETURN n" '
-            '(graph queries use --query or stdin)'), stderr
+            f'{canonical_line(query)} (graph queries use --query or stdin)'), stderr
         assert stdout == ""
+        graph_dir = self.test.home_dir / ".roadmaps" / self.roadmap / "graph"
+        assert not graph_dir.exists(), (
+            f"the refusal created {graph_dir}; a refused invocation must reach neither "
+            f"the socket nor the store")
+
+    def test_graph_serve_gets_the_canonical_line_without_the_hint(self):
+        # The hint belongs to `graph client` alone. serve takes no statement at
+        # all, so telling its caller to use --query or stdin would point at a
+        # flag serve does not have; it gets the canonical line unadorned.
+        query = "MATCH (n:Incident) RETURN n"
+        code, stdout, stderr = self.test.run_cmd(
+            ["graph", "serve", "-r", self.roadmap, query], check=False)
+        assert code == 2, f"exit={code}, want 2; stderr={stderr!r}"
+        assert stderr.splitlines()[0] == canonical_line(query), stderr
+        assert "--query" not in stderr, (
+            f"graph serve appended the client's hint, naming a flag it does not "
+            f"publish; stderr={stderr!r}")
+        assert stdout == ""
+        graph_dir = self.test.home_dir / ".roadmaps" / self.roadmap / "graph"
+        assert not graph_dir.exists(), (
+            f"the refusal created {graph_dir}; a refused serve must create no graph, "
+            f"which is the one thing a successful serve does create")
 
     def test_web_keeps_its_colon_and_unquoted_token(self):
         code, stdout, stderr = self.test.run_cmd(

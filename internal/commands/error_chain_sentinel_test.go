@@ -164,19 +164,22 @@ type roadmapEntryPoint struct {
 }
 
 // roadmapNameEntryPoints spans the families that reach utils.GetRoadmapDir by
-// two different routes: the graph family calls it directly from openGraphStore,
+// two different routes: the graph family calls it directly from resolveGraphDir,
 // while task, sprint, backlog and audit reach it through db.OpenExisting. Both
 // routes refuse the name before touching the filesystem, so these invocations
 // create nothing and need no roadmap to exist.
 //
-// The graph family contributes ONE entry, not two: `graph query` and
-// `graph search` used to be listed beside each other and are no longer
-// subcommand names at all — `rmp graph execute` is the whole family
-// (SPEC/COMMANDS.md § Graph Management).
+// The graph entry needs NO SERVER, and that is a property of the order
+// `rmp graph client` checks in rather than an accident: the roadmap is resolved
+// before the socket is derived or probed, so an invalid name is refused without
+// anything being connected to (SPEC/COMMANDS.md § Client Exit Codes). The entry
+// is `graph client` because that is the only subcommand that carries a
+// statement; `graph serve` reaches the same refusal by the same route and is
+// covered by the roadmap-name parity suite in tests/.
 func roadmapNameEntryPoints() []roadmapEntryPoint {
 	return []roadmapEntryPoint{
-		{"graph execute", func(r string) error {
-			return runGraphExecute([]string{"-r", r, "--query", "MATCH (n) RETURN n"})
+		{"graph client", func(r string) error {
+			return runGraphClient([]string{"-r", r, "--query", "MATCH (n) RETURN n"})
 		}},
 		{"task list", func(r string) error { return HandleTask([]string{"list", "-r", r}) }},
 		{"sprint list", func(r string) error { return HandleSprint([]string{"list", "-r", r}) }},
@@ -225,7 +228,8 @@ func TestGraphStoreRejectionCarriesRoadmapNameSentinel(t *testing.T) {
 // #325.
 //
 // The defect: openGraphStore restated utils.ErrValidation over an error
-// utils.GetRoadmapDir had already classified, so `rmp graph execute -r CON` read
+// utils.GetRoadmapDir had already classified, so `rmp graph execute -r CON` --
+// the statement subcommand since withdrawn -- read
 //
 //	Error: validation error: validation error: "CON": roadmap name is a reserved system name
 //
@@ -381,9 +385,10 @@ func TestRefusalsStateTheirClassificationOnce(t *testing.T) {
 // fail; the sweep asserts that, so a case that silently starts succeeding is a
 // test failure rather than a hole.
 //
-// Nothing here writes: the graph entry is refused while its flags are still
-// being read, and the rest fail on missing or unresolvable arguments. No entry
-// reads standard input.
+// Nothing here writes, and nothing here connects: the graph entry is refused
+// while its flags are still being read, before a socket is derived or probed,
+// and the rest fail on missing or unresolvable arguments. No entry reads
+// standard input.
 //
 // Four graph entries used to sit here, one per operation-class mismatch. They
 // are gone because the mismatch is gone: `rmp graph` runs the statement it is
@@ -392,8 +397,8 @@ func TestRefusalsStateTheirClassificationOnce(t *testing.T) {
 // store, which is also what would have broken this corpus's no-write property.
 func crossFamilyRefusalCases() []enumRejection {
 	return []enumRejection{
-		{name: "graph execute with an unknown flag", run: func(r string) error {
-			return runGraphExecute([]string{"-r", r, "--depth", "3", "--query", "MATCH (n) RETURN n"})
+		{name: "graph client with an unknown flag", run: func(r string) error {
+			return runGraphClient([]string{"-r", r, "--depth", "3", "--query", "MATCH (n) RETURN n"})
 		}},
 		{name: "task get with no id", run: func(r string) error {
 			return HandleTask([]string{"get", "-r", r})

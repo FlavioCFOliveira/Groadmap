@@ -197,8 +197,8 @@ func TestCounters_AZeroIsOmittedAndTheBlockIsNeverEmpty(t *testing.T) {
 // encoding/json emits struct fields in DECLARATION order and both surfaces
 // marshal this same struct, so this literal is the published key order of both.
 // A field reordered — by a linter, by a merge, by a well-meant alphabetisation —
-// changes the bytes `rmp graph execute` and `rmp graph client` write, and this
-// is the only place that would say so.
+// changes the bytes `rmp graph client` and the web graph data endpoint write,
+// and this is the only place that would say so.
 func TestCounters_KeyOrderIsTheSpecifiedOrder(t *testing.T) {
 	// Every counter is non-zero so that none is omitted and the full order is
 	// visible. The values are distinct so a reordering cannot coincidentally

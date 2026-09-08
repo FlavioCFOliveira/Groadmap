@@ -75,8 +75,7 @@ func relreadSeedQueries() []string {
 // reintroduced refusal would look like, and is what this test fails on.
 func TestHandleGraphData_MisresolvedRelationshipReadsAreNoLongerRefused(t *testing.T) {
 	t.Setenv("HOME", shortHome(t))
-	name := seedRoadmap(t, "web-ui-rollout")
-	seedGraph(t, name, relreadSeedQueries()...)
+	name := servedRoadmap(t, "web-ui-rollout", relreadSeedQueries()...)
 
 	for label, q := range map[string]string{
 		"undirected, type projected":  `MATCH (s:Spec)-[e]-(x) RETURN type(e), x.key`,
@@ -152,8 +151,7 @@ func resolvedEdges(t *testing.T, view graphView) []string {
 // inverted the endpoint pair fails on the orientation.
 func TestHandleGraphData_IncomingAndUndirectedReadsResolveCorrectly(t *testing.T) {
 	t.Setenv("HOME", shortHome(t))
-	name := seedRoadmap(t, "web-ui-rollout")
-	seedGraph(t, name, relreadSeedQueries()...)
+	name := servedRoadmap(t, "web-ui-rollout", relreadSeedQueries()...)
 
 	const (
 		forward = "VERIFIED_BY user-authentication->auth-token-expiry"
@@ -229,8 +227,7 @@ func TestHandleGraphData_IncomingAndUndirectedReadsResolveCorrectly(t *testing.T
 // the undirected reads differently.
 func TestHandleGraphData_OutgoingAndRewrittenFormsReturnTheGraph(t *testing.T) {
 	t.Setenv("HOME", shortHome(t))
-	name := seedRoadmap(t, "web-ui-rollout")
-	seedGraph(t, name, relreadSeedQueries()...)
+	name := servedRoadmap(t, "web-ui-rollout", relreadSeedQueries()...)
 
 	t.Run("the endpoint default query still runs", func(t *testing.T) {
 		rec := doGraphData(t, name, nil)
@@ -304,8 +301,7 @@ func TestHandleGraphData_OutgoingAndRewrittenFormsReturnTheGraph(t *testing.T) {
 // likely to put markup into one.
 func TestHandleGraphData_BacktickIdentifiersReachTheEngine(t *testing.T) {
 	t.Setenv("HOME", shortHome(t))
-	name := seedRoadmap(t, "web-ui-rollout")
-	seedGraph(t, name, relreadSeedQueries()...)
+	name := servedRoadmap(t, "web-ui-rollout", relreadSeedQueries()...)
 
 	const hostile = "<script>alert(1)</script>"
 	rec := doGraphData(t, name, url.Values{

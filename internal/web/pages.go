@@ -333,23 +333,42 @@ func handleGraphPage(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleGraphData serves the roadmap's graph as JSON in the Graph View Data
-// shape. The graph is read read-only; a roadmap with no graph yet returns
-// {"nodes":[],"edges":[]} (SPEC/DATA_FORMATS.md § Graph View Data). The
-// {name} is validated and confirmed to exist before any read.
+// shape (SPEC/DATA_FORMATS.md § Graph View Data). The {name} is validated and
+// confirmed to exist before any read.
 //
 // The endpoint accepts two optional URL query parameters the page's query bar
-// sends: q (the Cypher query to run; the default full-graph query when absent)
-// and limit (the node limit; default 100 when absent). It stays GET/HEAD only;
-// there is no POST and no request body (SPEC/WEB.md § Graph Data Endpoint;
-// § Graph Query Bar). The user-supplied query is validated as read-only by the
-// shared guard-rail BEFORE execution, so a writing or DDL query never runs.
+// sends: q (the Cypher statement to run; the default full-graph query when
+// absent) and limit (the node limit; default 100 when absent). It stays GET/HEAD
+// only; there is no POST and no request body (SPEC/WEB.md § Graph Data Endpoint;
+// § Graph Query Bar). The statement is not examined and may write, in the graph
+// server that runs it.
 //
-// A classified query-bar failure is returned to the client as a structured,
-// read-only JSON error with HTTP 400 so the page can surface the distinct
-// in-place, non-fatal message; the failure triggers no write, no checkpoint, and
-// no navigation. The failure classes are enumerated in one place only —
-// SPEC/WEB.md § Query-Bar Error Handling, rule 5 — which this comment names
-// rather than repeats. Any other (internal I/O) error is a 500.
+// # Three answers to a failure, and the two 5xx are deliberately not one
+//
+//   - **A classified query-bar failure is HTTP 400 at WARN.** It is a
+//     client-visible, non-fatal condition returned as a structured JSON error so
+//     the page can show the distinct in-place message. It is the user's statement
+//     that failed and not this server, so the record carries the same kind the
+//     response body does. The failure classes are enumerated in one place only —
+//     SPEC/WEB.md § Query-Bar Error Handling, rule 5 — which this comment names
+//     rather than repeats.
+//   - **No graph server reachable is HTTP 503 at WARN.** The graph is a
+//     dependency the operator starts with `rmp graph serve`, and starting it
+//     clears the condition; this server is working correctly and goes on serving
+//     every other route. The body is the opaque `internal server error` and
+//     carries no path; the line naming the socket goes to the log, where the
+//     operator reads it (§ Knowledge Graph from the GoGraph Store, rules 1 and 2;
+//     Acceptance Criteria 149 and 164).
+//   - **Anything else is HTTP 500 at ERROR**, including the one graph failure
+//     that is not transitory: a derived socket path over the platform's bound, on
+//     which no server can EVER listen.
+//
+// **The levels are not decoration.** Acceptance Criterion 165 drives both 5xx
+// against one server and requires the 503 to produce exactly one WARN and ZERO
+// ERROR records. Recording the 503 at ERROR would put an ERROR on every page load
+// of a roadmap whose server is not running, which trains an operator to ignore
+// the level that means something is broken — and it would break Acceptance
+// Criterion 141's count of one ERROR per 500 in the same stroke.
 func handleGraphData(w http.ResponseWriter, r *http.Request) {
 	name, ok := resolveRoadmap(w, r)
 	if !ok {
@@ -359,15 +378,19 @@ func handleGraphData(w http.ResponseWriter, r *http.Request) {
 	view, err := loadGraphView(r.Context(), name, r.URL.Query().Get("q"), r.URL.Query().Get("limit"))
 	if err != nil {
 		if qe, isQE := asGraphQueryError(err); isQE {
-			// A classified query-bar failure is a client-visible, non-fatal
-			// condition: return it as a structured JSON error with 400 so the
-			// page can show the distinct in-place message. No write occurred.
-			// It is the user's query that failed, not the server, so it is a
-			// WARN and carries the same kind the response body does
-			// (SPEC/WEB.md § Levels).
 			logClientWarn(r, "graph query bar request failed", http.StatusBadRequest, qe,
 				slog.String("roadmap", name), slog.String("kind", qe.Kind))
 			renderJSONStatus(w, r, http.StatusBadRequest, map[string]any{"error": qe.Reason, "kind": qe.Kind})
+			return
+		}
+		if ue, isUE := asGraphUnavailable(err); isUE {
+			// No kind: the query-bar error shape belongs to the 400s and names a
+			// fault in what the caller submitted. Nothing the caller submitted is
+			// at fault when no server is running, and the request never reached a
+			// statement (SPEC/WEB.md § Query-Bar Error Handling, rule 6).
+			logClientWarn(r, "graph server unavailable", http.StatusServiceUnavailable, ue,
+				slog.String("roadmap", name))
+			http.Error(w, "internal server error", http.StatusServiceUnavailable)
 			return
 		}
 		logServerError(r, "graph view load failed", err, slog.String("roadmap", name))

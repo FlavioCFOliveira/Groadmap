@@ -1,9 +1,9 @@
 // Regression fence for SPEC/HELP.md § Graph family help specifics, item 10:
 // the exhausted serialisation conflict is named in the exit-code-1 entry of
-// `rmp graph execute --help` and of `rmp graph client --help`.
+// `rmp graph client --help`, the one subcommand that runs a statement.
 //
-// The defect this closes. SPEC/COMMANDS.md § Execute Exit Codes and
-// § Client Exit Codes have carried the cause since task #384 published the line
+// The defect this closes. SPEC/COMMANDS.md § Client Exit Codes
+// has carried the cause since task #384 published the line
 // graphWriteConflict prints, but the two helps enumerated the causes of exit 1
 // without it. A caller who reads the block — which is where a caller goes to
 // learn why a command exited 1 — found "a Cypher parse or execution error" and
@@ -22,16 +22,17 @@
 // the assertion about the obligation item 10 actually places, and it is why
 // DECISION #423 declined to rely on that paragraph.
 //
-// Why both helps. `client` always reaches a server and `execute` reaches one
-// whenever the roadmap is served, so both subcommands have the cause. Naming it
-// in one was the second option DECISION #423 declined, on the ground that two
-// sibling helps disagreeing about a cause both commands have is the asymmetry
-// item 4 exists to prevent. A table over both is what fences that.
+// Why a table over one help. It carried two, `execute` and `client`, because
+// both subcommands reached a server and a cause both commands have must be named
+// by both or by neither — the asymmetry item 4 exists to prevent. `execute` is
+// withdrawn, so the table is one row; it stays a table because what it holds is
+// "every help item 10 binds", which the registry decides, and a row disappearing
+// is not a reason to stop enumerating.
 //
-// The two helps state it in different registers on purpose — `execute` chains
-// "Also …" clauses, `client` chains semicolon-separated "or …" clauses — so the
-// fragments asserted here are the ones item 10 and the published error line fix
-// between them, not a transcription of either help's prose.
+// The fragments asserted here are the ones item 10 and the published error line
+// fix between them, not a transcription of the help's prose: the surviving help
+// chains semicolon-separated "or …" clauses, and a transcription would break on a
+// rewording that kept every obligation.
 package commands
 
 import (
@@ -46,14 +47,13 @@ import (
 	"github.com/FlavioCFOliveira/Groadmap/internal/backoff"
 )
 
-// conflictHelpSurfaces are the two helps item 10 binds, each reached the way a
-// user reaches it — through the registry's dispatch, so a subcommand rewired to
-// a different printer is followed rather than missed.
+// conflictHelpSurfaces are the helps item 10 binds, each reached the way a user
+// reaches it — through the registry's dispatch, so a subcommand rewired to a
+// different printer is followed rather than missed.
 var conflictHelpSurfaces = []struct {
 	label string
 	argv  []string
 }{
-	{"rmp graph execute --help", []string{"execute", "--help"}},
 	{"rmp graph client --help", []string{"client", "--help"}},
 }
 
@@ -66,7 +66,9 @@ var conflictHelpSurfaces = []struct {
 //     SAME statement again, and spread concurrent writes across distinct nodes.
 //
 // The fact that nothing was written is asserted separately, by
-// conflictNothingWritten, because the two helps are in different tenses.
+// conflictNothingWritten, which admits either tense: the claim is what matters
+// and a help may report it beside a statement that was sent or one that would
+// have been.
 var conflictClauseFragments = []string{
 	"every attempt of the retry policy lost a serialisation conflict against",
 	"run the same statement again",
@@ -75,8 +77,7 @@ var conflictClauseFragments = []string{
 
 // conflictNothingWritten matches the claim item 10 requires the entry to make —
 // a fact rather than a hope, the conflict being detected before anything is
-// applied — in either tense, `execute` reporting it beside a transaction that
-// commits nothing and `client` beside a statement that was sent.
+// applied — in either tense.
 var conflictNothingWritten = regexp.MustCompile(`nothing (is|was) written`)
 
 // exitCodeEntryLine matches the first line of an entry in an `Exit codes:`
@@ -129,8 +130,8 @@ func exitCodeEntry(help, want string) string {
 }
 
 // TestGraphHelps_ExitCode1NamesTheExhaustedConflict is the content half of the
-// fence: both helps must name the cause, claim that nothing was written, and
-// give both halves of the remedy, INSIDE the entry for code 1.
+// fence: every help item 10 binds must name the cause, claim that nothing was
+// written, and give both halves of the remedy, INSIDE the entry for code 1.
 func TestGraphHelps_ExitCode1NamesTheExhaustedConflict(t *testing.T) {
 	graphCmd := AppRegistry().FindCommand("graph")
 	if graphCmd == nil {
@@ -182,16 +183,15 @@ func TestGraphHelps_ExitCode1NamesTheExhaustedConflict(t *testing.T) {
 	}
 }
 
-// conflictHelpSources are the files holding the two help literals, keyed by the
-// printer whose body carries the text.
+// conflictHelpSources are the files holding the help literals item 10 binds,
+// keyed by the printer whose body carries the text.
 var conflictHelpSources = map[string]string{
-	"printGraphExecuteHelp": "graph.go",
-	"printGraphClientHelp":  "graph_client.go",
+	"printGraphClientHelp": "graph_client.go",
 }
 
 // TestGraphHelps_DoNotWriteTheRetryBudgetFigure is the prohibition half.
 //
-// Item 10 forbids the helps from writing the retry budget's figure into their own
+// Item 10 forbids the help from writing the retry budget's figure into its own
 // text: graphWriteConflict renders it from backoff.Total() precisely so that one
 // quantity keeps one expression, and a figure spelled out in a help string would
 // be a second expression of it that disagreed with the policy silently the moment

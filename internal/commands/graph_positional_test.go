@@ -5,7 +5,7 @@
 // # What is pinned here
 //
 // SPEC/GRAPH.md § No Positional Query: A Stray Token Is Refused is canonical.
-// `graph execute` and `graph client` accept no positional argument at all — the
+// `graph client` accepts no positional argument at all — the
 // Cypher each runs comes from `--query` or from standard input and from nowhere
 // else — so a bare query written on the command line is an excess positional
 // argument and is refused with exit code 2 and one published line, the SAME line
@@ -63,11 +63,12 @@
 // running each control first. Without that half, a case could be passing on a
 // missing-query refusal that happened to carry the right sentinel, and the suite
 // would be asserting nothing about the stray token at all. What "known" means
-// differs by subcommand and graphControlExpectation is where that is decided:
-// `graph execute` must succeed, while `graph client` — which requires a server
-// no unit test starts — must fail with something that is not this refusal.
+// differs by subcommand and graphControlExpectation is where that is decided.
+// It is one subcommand now, `graph client`, and it gets the STRONG control: this
+// package starts a real server (see graph_server_test.go), so the control runs
+// the statement and succeeds rather than merely failing differently.
 //
-// Dispatch goes through Command.DispatchFamily, never through runGraphExecute
+// Dispatch goes through Command.DispatchFamily, never through runGraphClient
 // directly, because the shared arity enforcement point sits on that path and
 // must be proven to DEFER to this family's own wording rather than override it
 // (checkPositionalArity, positional_arity.go).
@@ -83,12 +84,12 @@ import (
 
 // graphFamilyName is the family every case below dispatches through.
 // graphSubcommandName is the subcommand the SEEDS run through: seeding needs a
-// statement that reaches the store, which is the one thing `graph client` cannot
-// do without a server. The probes themselves are driven over every subcommand
-// that publishes the hinted refusal, read from the registry.
+// statement that reaches the graph, and `graph client` is the only subcommand
+// that runs one. The probes themselves are driven over every subcommand that
+// publishes the hinted refusal, read from the registry.
 const (
 	graphFamilyName     = "graph"
-	graphSubcommandName = "execute"
+	graphSubcommandName = "client"
 )
 
 // graphStrayCase pairs one class of Cypher statement with a query of that class,
@@ -127,6 +128,10 @@ func seedGraphStrayRoadmap(t *testing.T, name string) string {
 	t.Helper()
 
 	t.Cleanup(setupTestGraphRoadmap(t, name))
+	// The server the seeds and every control invocation below reach. It is
+	// started AFTER the roadmap's cleanup is registered, so it is stopped BEFORE
+	// the roadmap directory is removed.
+	serveGraph(t, name)
 
 	for _, seed := range []string{
 		"CREATE (:Spec {key:'payment-capture'})-[:DEPENDS_ON]->(:Spec {key:'ledger-posting'})",
@@ -204,8 +209,8 @@ func registeredGraphSubcommands(t *testing.T) (hinted, canonical []string) {
 // it the canonical line instead.
 //
 // What the gate asserts is the SPEC's own rule, in both directions rather than a
-// count: the hint is confined to "the subcommands that read a Cypher statement,
-// `graph execute` and `graph client`", so a subcommand publishes the hinted
+// count: the hint is confined to the subcommands that read a Cypher statement, so
+// a subcommand publishes the hinted
 // refusal EXACTLY when it declares the flag through which such a statement is
 // supplied. A count would have had to be bumped when `graph client` landed; this
 // does not, and it fails just as loudly if a subcommand ever publishes the hint
@@ -265,29 +270,28 @@ func TestGraphPositional_TableCoversTheWholeFamily(t *testing.T) {
 // probe's refusal is known to be the stray token's doing and not a failure the
 // invocation was going to have anyway.
 //
-// The two subcommands need different controls, and the difference is their whole
-// contract rather than a testing convenience:
+// There is one hinted subcommand and it gets the STRONG control: `graph client`
+// runs the statement against the server seedGraphStrayRoadmap started, so its
+// control SUCCEEDS and writes a result. That is the strongest control there is —
+// it establishes that the invocation minus the stray token does the whole of what
+// it was asked to do, so the probe's refusal can only be the token's doing.
 //
-//   - `graph execute` runs the statement against the store when nothing is
-//     serving the roadmap, so its control SUCCEEDS and writes a result. That is
-//     the strongest control there is.
-//   - `graph client` requires a server and there is none in a unit test, so its
-//     control cannot succeed. What it must do instead is fail with something
-//     OTHER than the arity refusal — the no-server line, which is a different
-//     class and a different exit code — which establishes exactly what the strong
-//     control establishes: that the refusal the probe reads is caused by the
-//     stray token. Running a server here to make it succeed would make this file
-//     an end-to-end suite, which is rmp task #371's, not this one's.
+// It used to be the WEAK one, for a reason that has expired. `graph client`
+// needed a server and this package started none, so the best its control could do
+// was fail with something that was not the arity refusal. That is no longer the
+// best available: the package runs a real server per test now, and the weak
+// control is kept only in the sense that the function still admits one — a
+// subcommand that publishes the hinted refusal without being able to run a
+// statement would return false rather than being driven with a control it cannot
+// pass.
 //
 // It is total by construction: a hinted subcommand it has no entry for fails,
 // rather than being driven with an expectation somebody guessed.
 func graphControlExpectation(t *testing.T, subcommand string) (mustSucceed bool) {
 	t.Helper()
 	switch subcommand {
-	case "execute":
-		return true
 	case "client":
-		return false
+		return true
 	default:
 		t.Fatalf("graph %s publishes the hinted arity refusal and this file does not know what a "+
 			"control invocation of it must do. Add it to graphControlExpectation rather than "+
@@ -317,10 +321,13 @@ func runGraphStrayControl(t *testing.T, subcommand, roadmap string, c graphStray
 		return
 	}
 
-	// The weaker control: the invocation is expected to fail, but NOT with the
+	// The weaker control, for a subcommand that publishes the hinted refusal and
+	// cannot run a statement: the invocation is expected to fail, but NOT with the
 	// refusal the probe is about. A control that already produced that refusal
 	// would make the probe vacuous, which is the one thing this half exists to
-	// rule out.
+	// rule out. No subcommand takes this branch today; it is what
+	// graphControlExpectation would return for one that could not be controlled
+	// strongly.
 	if err == nil {
 		t.Fatalf("the control invocation of `graph %s` with the %s statement succeeded, and this "+
 			"file was written expecting it to fail for want of a server. Give it the strong control "+
@@ -352,15 +359,16 @@ func runGraphStrayControl(t *testing.T, subcommand, roadmap string, c graphStray
 //
 // The probe lines are then compared AGAINST EACH OTHER, across statement classes
 // AND across the subcommands that publish the hinted line. That comparison is
-// what survives the collapse of the five subcommands: `graph execute` holds no
+// what survives the collapse of the five subcommands: `graph client` holds no
 // opinion about what a statement does, so its refusal of a stray token must not
 // vary with the statement either — a refusal that named the class, or that
 // reached a different branch for a write than for a read, would be a class
 // distinction reappearing in the one place the family has left to put one. The
-// cross-SUBCOMMAND half is the same property one level up: `graph client` reads
-// its statement from the same two sources through the same reader, so a wording
-// that drifted on one of them would be the drift the five-subcommand version of
-// this file was written to catch.
+// cross-SUBCOMMAND half is the same property one level up, over whichever
+// subcommands the registry says publish the hinted line: they read their
+// statement from the same two sources through the same reader, so a wording that
+// drifted on one of them would be the drift the five-subcommand version of this
+// file was written to catch.
 func TestGraphPositional_EveryStatementClassRefusesWithOneWording(t *testing.T) {
 	roadmap := seedGraphStrayRoadmap(t, "graph-stray-wording")
 	hinted, _ := registeredGraphSubcommands(t)
@@ -373,7 +381,9 @@ func TestGraphPositional_EveryStatementClassRefusesWithOneWording(t *testing.T) 
 	// Read once from the SPEC so this file carries no second copy of the line;
 	// the two families' relationship is held by
 	// positional_refusal_families_test.go, which this test shares the reader
-	// with (see SPEC/GRAPH.md acceptance criterion 60).
+	// with (SPEC/COMMANDS.md § Positional Arguments, which is what that reader
+	// actually reads; this cited GRAPH.md acceptance criterion 60 until it was
+	// checked, and that criterion has never been about positional refusals).
 	want := refusalLineWithToken(t, publishedGraphRefusalLine(t), stray)
 
 	// subcommand/statement class -> the line it produced, so a drifting member
@@ -462,12 +472,12 @@ func TestGraphPositional_HyphenPrefixedTokensAreClassifiedBothWays(t *testing.T)
 		{
 			token:          "--include-archived",
 			wantUnexpected: false,
-			why:            "a long flag graph execute does not define is an unknown flag, not a positional argument",
+			why:            "a long flag graph client does not define is an unknown flag, not a positional argument",
 		},
 		{
 			token:          "-x",
 			wantUnexpected: false,
-			why:            "'-' followed by an ASCII letter is a short flag, and graph execute does not define this one",
+			why:            "'-' followed by an ASCII letter is a short flag, and graph client does not define this one",
 		},
 	}
 
