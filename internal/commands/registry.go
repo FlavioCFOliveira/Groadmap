@@ -100,6 +100,32 @@ type Flag struct {
 	StdinFallback bool
 }
 
+// ExitCodeEntry pairs one exit code with the conditions that produce it
+// under one subcommand.
+//
+// The registry used to carry a bare []int here, and a bare list of
+// integers tells a caller that a subcommand can fail without telling it
+// when. The top-level catalogue resolves 6 to EXIT_INVALID_DATA,
+// "Invalid input data (validation failure: dates, ranges, enums)", which
+// is true of every subcommand that validates anything and therefore
+// actionable for none. The condition is the part the caller needs, and it
+// exists per subcommand or nowhere
+// (SPEC/DATA_FORMATS.md § Field reference: per-subcommand exit code entry).
+//
+// The name and the meaning of a code are NOT repeated here: both are
+// published once, in the contract's top-level exit-code catalogue, and a
+// reader resolves them from there by code.
+type ExitCodeEntry struct {
+	// Conditions names each condition, under this subcommand, that
+	// produces Code. At least one element; every element a single
+	// sentence naming the CONDITION and not the stderr line, which is
+	// published by Examples and by SPEC/COMMANDS.md.
+	Conditions []string
+	// Code is the exit code. It must be one of the codes published in
+	// SPEC/ARCHITECTURE.md § Exit Codes.
+	Code int
+}
+
 // Example is one invocation example for help and the AI contract.
 type Example struct {
 	// Title is a short identifier of the scenario.
@@ -175,9 +201,32 @@ type Subcommand struct {
 	// SideEffects documents DB / FS / network side effects.
 	SideEffects SideEffects
 	// ExitCodes lists every exit code this subcommand can emit, in
-	// ascending order. Always includes 0.
-	ExitCodes []int
-	// Prerequisites lists agent-visible preconditions.
+	// ascending order by Code, each paired with the conditions that
+	// produce it. Always includes 0, and the conditions for 0 state what
+	// success means for this subcommand. A code appears exactly once:
+	// two conditions that produce the same code are two elements of one
+	// entry's Conditions, never two entries carrying the same Code.
+	ExitCodes []ExitCodeEntry
+	// Prerequisites lists this subcommand's OWN agent-visible
+	// preconditions on state: conditions that exist before the
+	// invocation, that the invocation does not itself create, and that
+	// the caller must bring about before invoking.
+	//
+	// It carries only what is true of THIS subcommand: the preconditions
+	// of the owning Command apply to every subcommand of the family, are
+	// published once on the family, and are never repeated here. It is
+	// nil — and the contract omits the key entirely rather than emitting
+	// `[]` — when the subcommand has none of its own
+	// (SPEC/DATA_FORMATS.md § Subcommand prerequisites).
+	//
+	// An argument rule is NOT a prerequisite. Whether a flag is required,
+	// what range a value must fall in, which enum it belongs to, which
+	// flags exclude one another and how many positional arguments are
+	// accepted are declared by Flags, Positional and MutexGroups, and
+	// must not be restated here. The test is mechanical: a prerequisite
+	// can be satisfied only by consulting or changing state outside this
+	// command line — running a different command first, or waiting — while
+	// an argument rule is answerable from the command line text alone.
 	Prerequisites []string
 	// Examples lists worked examples; the AI contract requires at
 	// least one success and one failure example per subcommand.

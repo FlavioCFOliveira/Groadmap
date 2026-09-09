@@ -424,10 +424,24 @@ func TestGenerate_CommentSubcommandsDescribeThemselvesFully(t *testing.T) {
 					t.Errorf("%s: %s is empty", label, k)
 				}
 			}
-			for _, k := range []string{"aliases", "positional_arguments", "flags", "mutual_exclusion_groups", "prerequisites", "examples", "exit_codes"} {
+			for _, k := range []string{"aliases", "positional_arguments", "flags", "mutual_exclusion_groups", "examples", "exit_codes"} {
 				if _, present := entry[k]; !present {
 					t.Errorf("%s: %s key missing (arrays are always present, never null)", label, k)
 				}
+			}
+			// prerequisites is the one array-typed key of a subcommand entry
+			// that is OMITTED rather than emitted empty: present means a real
+			// precondition, absent means none, and `[]` means neither
+			// (SPEC/DATA_FORMATS.md § Subcommand prerequisites, rule 2).
+			// These eight all name a parent entity or a comment that has to
+			// exist first, so here the key must be present AND non-empty.
+			prereqs, present := entry["prerequisites"]
+			if !present {
+				t.Errorf("%s: prerequisites key missing; every comment subcommand names an entity that must "+
+					"exist before the call", label)
+			} else if list, ok := prereqs.([]any); !ok || len(list) == 0 {
+				t.Errorf("%s: prerequisites = %v, want a non-empty array; the key is omitted when there is "+
+					"nothing to carry and is never emitted as []", label, prereqs)
 			}
 			if _, present := entry["idempotent"]; !present {
 				t.Errorf("%s: idempotent key missing", label)
@@ -453,10 +467,27 @@ func TestGenerate_CommentSubcommandsDescribeThemselvesFully(t *testing.T) {
 			if len(codes) == 0 {
 				t.Errorf("%s: exit_codes is empty", label)
 			}
+			// Each element is an object carrying the code and the conditions
+			// that produce it, not a bare integer (SPEC/DATA_FORMATS.md
+			// § Field reference: per-subcommand exit code entry).
 			hasZero := false
-			for _, rc := range codes {
-				if n, ok := rc.(float64); ok && n == 0 {
+			for i, rc := range codes {
+				obj, ok := rc.(map[string]any)
+				if !ok {
+					t.Errorf("%s: exit_codes[%d] = %v, want an object carrying code and conditions", label, i, rc)
+					continue
+				}
+				n, ok := obj["code"].(float64)
+				if !ok {
+					t.Errorf("%s: exit_codes[%d].code missing or not a number: %v", label, i, obj["code"])
+					continue
+				}
+				if n == 0 {
 					hasZero = true
+				}
+				conds, ok := obj["conditions"].([]any)
+				if !ok || len(conds) == 0 {
+					t.Errorf("%s: exit_codes[%d] (code %v) carries no condition", label, i, n)
 				}
 			}
 			if !hasZero {

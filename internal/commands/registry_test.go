@@ -13,6 +13,7 @@
 package commands
 
 import (
+	"strings"
 	"testing"
 )
 
@@ -184,16 +185,123 @@ func TestRegistry_EveryHandlerHasHelpPrinter(t *testing.T) {
 }
 
 // TestRegistry_EverySubcommandHasExitCodeZero codifies the invariant
-// that every subcommand's ExitCodes slice begins with 0 (the success
-// code). The AI contract requires this; see
+// that every subcommand's ExitCodes slice begins with the entry for 0
+// (the success code). The AI contract requires this; see
 // SPEC/DATA_FORMATS.md § AI Agent Contract.
 func TestRegistry_EverySubcommandHasExitCodeZero(t *testing.T) {
 	reg := AppRegistry()
 	for _, cmd := range reg.Commands {
 		for _, sub := range cmd.Subcommands {
-			if len(sub.ExitCodes) == 0 || sub.ExitCodes[0] != 0 {
+			if len(sub.ExitCodes) == 0 || sub.ExitCodes[0].Code != 0 {
 				t.Errorf("%s %s: ExitCodes does not start with 0 (got %v)",
-					cmd.Name, sub.Name, sub.ExitCodes)
+					cmd.Name, sub.Name, exitCodeNumbers(sub.ExitCodes))
+			}
+		}
+	}
+}
+
+// exitCodeNumbers reduces an entry list to the codes it carries, for a
+// failure message that reads like the list it used to be.
+func exitCodeNumbers(entries []ExitCodeEntry) []int {
+	out := make([]int, len(entries))
+	for i := range entries {
+		out[i] = entries[i].Code
+	}
+	return out
+}
+
+// TestRegistry_ExitCodeEntriesAreWellFormed pins the five rules
+// SPEC/DATA_FORMATS.md § Field reference: per-subcommand exit code entry
+// publishes, at the source the contract is generated from. Rule 5
+// (exhaustiveness) is a claim about the binary rather than about the shape
+// and is not checkable from the declaration alone; the other four are, and
+// they are the ones a hand-written condition list gets wrong:
+//
+//  1. Ascending by code, with each code declared exactly once. A repeated
+//     code is two entries where the SPEC requires one entry with two
+//     conditions, and an unordered list is one a reader cannot scan.
+//  2. Every code carries at least one condition, 0 included. A code with an
+//     empty condition list is the bare integer this shape replaced.
+//  3. No condition is empty or whitespace only.
+//  4. Every code is one the top-level catalogue publishes. A subcommand
+//     that claims a code the catalogue does not carry cannot be resolved by
+//     a reader, which is the whole reason the name and the meaning are not
+//     repeated per subcommand.
+func TestRegistry_ExitCodeEntriesAreWellFormed(t *testing.T) {
+	// The catalogue from SPEC/ARCHITECTURE.md § Exit Codes. Restated here
+	// rather than imported because internal/aihelp imports this package and
+	// not the other way round; the two are held in agreement by
+	// TestGenerate_SubcommandExitCodesResolveAgainstTheCatalogue, which
+	// reads the emitted contract and compares the two sides of the same
+	// document.
+	catalogue := map[int]bool{0: true, 1: true, 2: true, 3: true, 4: true, 5: true, 6: true, 126: true, 127: true, 130: true}
+
+	for _, cmd := range AppRegistry().Commands {
+		for _, sub := range cmd.Subcommands {
+			label := cmd.Name + " " + sub.Name
+			seen := make(map[int]bool, len(sub.ExitCodes))
+			prev := -1
+			for i, entry := range sub.ExitCodes {
+				if entry.Code <= prev {
+					t.Errorf("%s: exit_codes[%d] is code %d after code %d; the array must ascend by code",
+						label, i, entry.Code, prev)
+				}
+				prev = entry.Code
+
+				if seen[entry.Code] {
+					t.Errorf("%s: code %d is declared more than once; two conditions for one code are two "+
+						"elements of that code's Conditions, not two entries", label, entry.Code)
+				}
+				seen[entry.Code] = true
+
+				if !catalogue[entry.Code] {
+					t.Errorf("%s: code %d is not published by SPEC/ARCHITECTURE.md § Exit Codes", label, entry.Code)
+				}
+
+				if len(entry.Conditions) == 0 {
+					t.Errorf("%s: code %d carries no condition; a code that says nothing about itself is the "+
+						"bare integer list this shape replaced", label, entry.Code)
+				}
+				for j, cond := range entry.Conditions {
+					if strings.TrimSpace(cond) == "" {
+						t.Errorf("%s: code %d condition %d is empty", label, entry.Code, j)
+					}
+				}
+			}
+		}
+	}
+}
+
+// TestRegistry_SubcommandPrerequisitesAreOwnAndNonEmpty pins the two rules
+// that bound Subcommand.Prerequisites (SPEC/DATA_FORMATS.md § Subcommand
+// prerequisites):
+//
+//   - A subcommand carries only its OWN. A prerequisite of the owning family
+//     applies to every sibling, is published once on the family, and must not
+//     be repeated on the subcommand.
+//   - Absent, never empty. The registry expresses absence as a nil slice; a
+//     declared-but-empty slice would reach the emitter as something to
+//     decide about, and the emitter's job is to omit, not to interpret.
+func TestRegistry_SubcommandPrerequisitesAreOwnAndNonEmpty(t *testing.T) {
+	for _, cmd := range AppRegistry().Commands {
+		family := make(map[string]bool, len(cmd.Prerequisites))
+		for _, p := range cmd.Prerequisites {
+			family[p] = true
+		}
+		for _, sub := range cmd.Subcommands {
+			label := cmd.Name + " " + sub.Name
+			if sub.Prerequisites != nil && len(sub.Prerequisites) == 0 {
+				t.Errorf("%s: Prerequisites is a declared empty slice; leave it nil so the contract omits "+
+					"the key rather than publishing []", label)
+			}
+			for _, p := range sub.Prerequisites {
+				if strings.TrimSpace(p) == "" {
+					t.Errorf("%s: an empty prerequisite is declared", label)
+				}
+				if family[p] {
+					t.Errorf("%s: prerequisite %q is already published on the %q family and must not be "+
+						"repeated on a subcommand", label, p, cmd.Name)
+				}
 			}
 		}
 	}
@@ -346,14 +454,26 @@ func TestRegistry_CommentSubcommandsDeclareTheirContract(t *testing.T) {
 			if sub.ReadsStdin != c.readsStdin {
 				t.Errorf("ReadsStdin = %v, want %v", sub.ReadsStdin, c.readsStdin)
 			}
-			if len(sub.ExitCodes) != len(c.exitCodes) {
-				t.Errorf("ExitCodes = %v, want %v", sub.ExitCodes, c.exitCodes)
+			// The codes, in order. The conditions each one carries are the
+			// business of TestRegistry_ExitCodeEntriesAreWellFormed; what
+			// this case pins is that the SPEC's code set has not moved.
+			got := exitCodeNumbers(sub.ExitCodes)
+			if len(got) != len(c.exitCodes) {
+				t.Errorf("ExitCodes = %v, want %v", got, c.exitCodes)
 			} else {
 				for i, code := range c.exitCodes {
-					if sub.ExitCodes[i] != code {
-						t.Errorf("ExitCodes = %v, want %v", sub.ExitCodes, c.exitCodes)
+					if got[i] != code {
+						t.Errorf("ExitCodes = %v, want %v", got, c.exitCodes)
 						break
 					}
+				}
+			}
+			// Every code of these eight subcommands states its own
+			// conditions: they are the entries a caller most often reaches
+			// through an agent rather than by hand.
+			for _, entry := range sub.ExitCodes {
+				if len(entry.Conditions) == 0 {
+					t.Errorf("exit code %d carries no condition", entry.Code)
 				}
 			}
 

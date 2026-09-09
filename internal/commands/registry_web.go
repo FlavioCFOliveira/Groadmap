@@ -63,7 +63,19 @@ func buildWebCommand() Command {
 					Network:    "Serves a local HTTP server on the bound host/port; makes no outbound request.",
 				},
 				Idempotent: false,
-				ExitCodes:  []int{0, 1, 2, 6},
+				Prerequisites: []string{
+					"When --port names a port explicitly, that port is free on the bind host: an explicit port is never replaced by an ephemeral one, and a busy one is a failure rather than a fallback.",
+				},
+				ExitCodes: []ExitCodeEntry{
+					ec(0, "The server bound its host and port, wrote the served URL to stdout, and served read-only routes until SIGINT or SIGTERM."),
+					ec(1,
+						"The requested host and port could not be bound: an explicit --port is already in use, or the host is not assignable.",
+						"The data directory ~/.roadmaps/ could not be read.",
+						"The listener stopped accepting connections after the server had started.",
+					),
+					ec(2, "An unrecognised flag was supplied, or a positional argument was supplied; this command accepts none."),
+					ec(6, "--port falls outside 0-65535, or is not an integer."),
+				},
 				Examples: []Example{
 					{
 						Title:  "Start on the default loopback address and port",

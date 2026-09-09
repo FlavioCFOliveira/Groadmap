@@ -87,6 +87,7 @@ On success, `rmp stats` writes a single JSON object to stdout:
 | Exit Code | Meaning |
 |-----------|---------|
 | 0 | Success |
+| 2 | Unrecognised flag, or a positional argument (this command takes none) |
 | 3 | No roadmap specified (`-r` / `--roadmap` missing) |
 | 4 | Roadmap not found |
 

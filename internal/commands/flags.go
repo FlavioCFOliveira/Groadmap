@@ -23,6 +23,49 @@ func hasHelpFlag(args []string) bool {
 	return false
 }
 
+// errUnknownFlag words the CLI-wide refusal of a token that begins with "-"
+// and names none of the flags of the command it was written on
+// (SPEC/COMMANDS.md § Positional Arguments, rule 5). flagName is the token as
+// the command line spelled it, with a GNU-style "=value" suffix already
+// removed, so "--limit=3" is reported as "--limit".
+//
+// The sentence exists once, here, and both refusal sites call it: the parser
+// below, which is reached by every command that declares flags of its own,
+// and rejectUnknownFlags, which is reached by the commands that declare none
+// and therefore never build a parser. A second literal would be a second
+// sentence to keep in step with SPEC/COMMANDS.md, and the two would drift.
+func errUnknownFlag(flagName string) error {
+	return fmt.Errorf("%w: unknown flag: %s", utils.ErrInvalidInput, flagName)
+}
+
+// rejectUnknownFlags refuses the first "-"-prefixed token in args, with the
+// line errUnknownFlag words and exit code 2.
+//
+// It is the refusal for a command that declares no flag of its own: every
+// token it can legitimately receive has already been consumed before this
+// runs — the help tokens by the dispatcher (Command.DispatchFamily), the
+// roadmap selector and its value by requireRoadmap where the command takes
+// one — so a "-"-prefixed token that survives to here names nothing the
+// command accepts. A command that DOES declare flags of its own must not use
+// this: it refuses through FlagParser.Parse, which knows its flag table.
+//
+// Positional arguments are not this function's concern; the shared arity
+// point (checkPositionalArity, positional_arity.go) refuses those before the
+// handler runs. The two together are why a command with neither flags nor
+// positional arguments accepts nothing beyond its selector.
+func rejectUnknownFlags(args []string) error {
+	for _, arg := range args {
+		if !strings.HasPrefix(arg, "-") {
+			continue
+		}
+		// Report the flag as written, without the GNU-style "=value" tail,
+		// exactly as FlagParser.Parse reports it.
+		flagName, _, _ := strings.Cut(arg, "=")
+		return errUnknownFlag(flagName)
+	}
+	return nil
+}
+
 // FlagDef defines a command-line flag.
 type FlagDef struct {
 	Validator   func(any) error // Optional validation function
@@ -98,7 +141,7 @@ func (fp *FlagParser) Parse(args []string) (*ParseResult, error) {
 
 		def := fp.findDef(flagName)
 		if def == nil {
-			return nil, fmt.Errorf("%w: unknown flag: %s", utils.ErrInvalidInput, flagName)
+			return nil, errUnknownFlag(flagName)
 		}
 
 		// Handle boolean flags (no value required, but '--flag=true|false' tolerated)

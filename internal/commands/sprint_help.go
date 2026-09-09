@@ -565,7 +565,8 @@ Required:
   <sprint-id>                     Integer sprint id
   <task-ids-csv>                  Comma-separated task ids in the desired order (no spaces, e.g. "3,1,7,2")
 
-Output: empty (exit 0). Audits SPRINT_REORDER_TASKS once.
+Output: a JSON success object naming the sprint and the order its members now
+hold (exit 0). Audits SPRINT_REORDER_TASKS once.
 
 Exit codes:
   0  Success
@@ -595,7 +596,8 @@ Required:
   <task-id>                       Integer id of the task to move
   <position>                      Zero-based target index
 
-Output: empty (exit 0). Audits SPRINT_TASK_MOVE_POSITION.
+Output: a JSON success object naming the sprint, the task, and the position it
+now holds (exit 0). Audits SPRINT_TASK_MOVE_POSITION.
 
 Exit codes:
   0  Success
@@ -621,7 +623,8 @@ Required:
   <task-id-1>                     Integer id of first task
   <task-id-2>                     Integer id of second task (must differ)
 
-Output: empty (exit 0). Audits SPRINT_TASK_SWAP.
+Output: a JSON success object naming the sprint and the two tasks that
+exchanged positions (exit 0). Audits SPRINT_TASK_SWAP.
 
 Exit codes:
   0  Success
@@ -646,7 +649,8 @@ Required:
   <sprint-id>                     Integer sprint id
   <task-id>                       Integer id of the task
 
-Output: empty (exit 0). Audits SPRINT_TASK_MOVE_POSITION.
+Output: a JSON success object naming the sprint, the task, and the position it
+now holds (exit 0). Audits SPRINT_TASK_MOVE_POSITION.
 
 Exit codes:
   0  Success
@@ -672,7 +676,8 @@ Required:
   <sprint-id>                     Integer sprint id
   <task-id>                       Integer id of the task
 
-Output: empty (exit 0). Audits SPRINT_TASK_MOVE_POSITION.
+Output: a JSON success object naming the sprint, the task, and the position it
+now holds (exit 0). Audits SPRINT_TASK_MOVE_POSITION.
 
 Exit codes:
   0  Success

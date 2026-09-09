@@ -18,8 +18,24 @@ func HandleStats(args []string) error {
 		return nil
 	}
 
-	roadmapName, _, err := requireRoadmap(args)
+	roadmapName, remaining, err := requireRoadmap(args)
 	if err != nil {
+		return err
+	}
+
+	// `stats` declares no flag of its own beyond the roadmap selector, which
+	// requireRoadmap has just consumed, and no positional argument, which the
+	// shared arity point refused before this handler ran. A "-"-prefixed token
+	// left in remaining therefore names nothing this command accepts, and is
+	// refused with the CLI-wide line rather than discarded
+	// (SPEC/COMMANDS.md § Roadmap Statistics). Discarding it is what this
+	// command used to do: `rmp stats -r <name> --nosuchflag` returned the full
+	// report and exit 0, alone with `roadmap list` among every command of the
+	// CLI (rmp task 461).
+	//
+	// The refusal sits after requireRoadmap and before the database is opened,
+	// which is the order every other roadmap-scoped command checks these in.
+	if err := rejectUnknownFlags(remaining); err != nil {
 		return err
 	}
 
@@ -73,6 +89,7 @@ Output (stdout JSON):
 
 Exit codes:
   0   Success
+  2   Unrecognised flag, or a positional argument (this command takes none)
   3   No roadmap specified (-r missing)
   4   Roadmap not found
 

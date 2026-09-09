@@ -277,6 +277,29 @@ machine-readable AI Agent Contract (`rmp --ai-help`) MUST document them:
 `COMMANDS.md § Change Status (stat)` remains canonical for the flags, the
 validation order, and the exact error text.
 
+The `task next` subcommand help carries one requirement of its own, for the same
+reason the seven above exist: the generic Required / Optional split cannot express
+it, and a reader who is not told assumes the opposite. Both the plain-text help and
+the machine-readable AI Agent Contract (`rmp --ai-help`) MUST state that **`task
+next` does not filter blocked tasks**. The listing is selected on sprint membership
+and task status alone, so a task whose declared dependencies are not yet `COMPLETED`
+is returned like any other, at its own planned rank, and nothing in the returned
+object marks it as blocked. Two further requirements follow:
+
+- The statement MUST appear in the contract's `description` for the subcommand, not
+  only in the plain-text help. An agent driving the CLI from the contract reads no
+  other prose about this subcommand, and a `description` that describes only the
+  ordering is the description that produced the wrong belief.
+- The help and the `description` MUST name `task blockers` as the command that
+  answers the question `task next` does not, so the reader is left with a route and
+  not only with a warning.
+
+Without the statement an agent takes the first returned task as work it may start
+and finish, and learns otherwise only at the transition to `COMPLETED`, which the
+dependency guard rejects with exit code `6`
+(`STATE_MACHINE.md § Dependency Guard`). `COMMANDS.md § Get Next Tasks (next)`
+remains canonical for the ordering guarantee and the output shape.
+
 ### Sprint family help specifics
 
 The `sprint` family help and the `sprint create` / `sprint update` subcommand

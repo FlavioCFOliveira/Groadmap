@@ -418,9 +418,14 @@ def contract_exit_code_union(command):
     """The union of every subcommand's exit_codes in one contract command
     object -- the quantity a family's single DOCS Exit Codes table is
     compared against (see module docstring, "WHAT IS COMPARED")."""
+    # Each entry is an object {code, conditions} since contract schema 2.0.0
+    # (SPEC/DATA_FORMATS.md § Field reference: per-subcommand exit code entry);
+    # before that the array held bare integers. The union is over the CODES,
+    # which is the quantity a DOCS Exit Codes table publishes.
     union = set()
     for sub in command["subcommands"]:
-        union.update(sub.get("exit_codes", []))
+        for entry in sub.get("exit_codes", []):
+            union.add(entry["code"])
     return union
 
 
