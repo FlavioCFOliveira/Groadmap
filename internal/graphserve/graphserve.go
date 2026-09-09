@@ -67,11 +67,12 @@ import (
 // loop is busy executing the previous statement: a statement that runs longer
 // than it destroys its own connection mid-flight, whatever the statement's own
 // budget says. Measured on rmp task #360, the cut tracked the connection timeout
-// exactly and ignored a statement timeout four times its size. The engine's
-// default for it EQUALS its default statement timeout, so a server left at both
-// defaults is one whose slowest permitted statement is guaranteed to die as a
-// transport error rather than as a typed failure. This is the one option whose
-// default is actively wrong here.
+// exactly and ignored a statement timeout four times its size. That mechanism is
+// why Groadmap fixes this value rather than inheriting it. The engine's own
+// default for the option is neither restated here nor relied on: it is a value
+// the engine owns, and restating one would give this project a fact a dependency
+// bump can falsify in silence (SPEC/GRAPH.md § Server Options). The multiple
+// below is Groadmap's own, and it holds whatever that default is.
 //
 // Twelve is derived and not picked. A statement the deadline cuts while it is
 // writing holds the engine call open for the budget multiplied by a factor the
@@ -307,10 +308,15 @@ const maxConnections = 128
 // snapshot and holds the reclamation horizon back for its whole lifetime, in read
 // mode and in write mode alike. That lifetime is bounded HERE at the statement
 // budget, because MaxStatementTimeout clamps an explicit transaction's TOTAL life
-// and serverOptions sets it to the graph store's 5 seconds — six times tighter
-// than the engine's own 30 s default for a transaction. That clamp, and not this
-// quota, is what bounds the resource; the quota bounds only how many may be held
-// at once.
+// and serverOptions sets it to the graph store's 5 seconds. The engine's own
+// default for a transaction's total life is neither restated here nor relied on:
+// the clamp is what bounds this, and it binds whatever that default is. Measured
+// on rmp task #454 against this server's own configuration, a BEGIN that asks for
+// no timeout and a BEGIN that asks for an hour are both terminated at 5.0 seconds
+// with Neo.ClientError.Transaction.TransactionTimedOut, which is the clamp
+// overriding a value the client supplied rather than a default filling one it
+// omitted. That clamp, and not this quota, is what bounds the resource; the quota
+// bounds only how many may be held at once.
 //
 // # Who it binds
 //
@@ -1080,8 +1086,10 @@ func shutdownCheckpointMessage(err error) string {
 //     discovered: the engine clamps an explicit transaction's total life by that
 //     same maximum, so a BEGIN-to-COMMIT sequence has the same 5 seconds in total
 //     that a single statement has, however many statements it carries.
-//   - ConnTimeout is the one option whose default is actively wrong here; see
-//     connTimeoutMultiple. It also bounds a session that sends nothing, so a
+//   - ConnTimeout is set rather than inherited, because it reaches both
+//     directions of the socket and is armed as a read deadline that stays in
+//     force while a statement runs; see connTimeoutMultiple for the measurement
+//     that fixes the multiple. It also bounds a session that sends nothing, so a
 //     client that holds a session open without using it loses it after the same
 //     60 seconds and must reconnect.
 //   - MaxConnections is the capacity decision, and it is the only one: every

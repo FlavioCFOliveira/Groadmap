@@ -248,15 +248,15 @@ Go version and of the build implications.
 
 ### Dependency Maturity Risk
 
-GoGraph is consumed at the exact tag **v0.14.0**. Because
-v0.14.0 is a v0 (pre-1.0) version, it is consumable directly at the bare module path
-`github.com/FlavioCFOliveira/GoGraph`, and `go.mod` pins the clean exact tag `v0.14.0`.
+GoGraph is consumed at the exact tag **v0.14.1**. Because
+v0.14.1 is a v0 (pre-1.0) version, it is consumable directly at the bare module path
+`github.com/FlavioCFOliveira/GoGraph`, and `go.mod` pins the clean exact tag `v0.14.1`.
 This exact-tag pin satisfies the pinning mitigation below directly. The pinned version
 is recorded in `BUILD.md § External Dependencies`, which is the table that carries it;
 `BUILD.md § Go Toolchain` records the Go minor-version floor GoGraph imposes, which is
 a different fact about the same dependency.
 
-As a `0.y.z` release, v0.14.0 signals under Semantic Versioning that GoGraph's public
+As a `0.y.z` release, v0.14.1 signals under Semantic Versioning that GoGraph's public
 API is not yet stable: it may change while the module matures toward `1.0.0`, and such
 changes can land without a major-version bump. The following residual risks remain:
 
@@ -314,7 +314,7 @@ Mitigations required by this specification:
 
 1. Groadmap MUST pin GoGraph to an exact version in `go.mod` (a specific immutable
    reference, not a floating or branch reference), so builds are reproducible. The
-   pinned exact tag is recorded in `BUILD.md § Go Toolchain`.
+   pinned exact tag is recorded in `BUILD.md § External Dependencies`.
 2. The graph feature MUST be implemented behind Groadmap's own command and
    error-handling boundary (this specification), so that an upstream API change
    is absorbed in one integration layer rather than spread across the codebase.
@@ -3083,18 +3083,18 @@ same 5 seconds in total that a single statement has, however many statements it
 carries. That is the price of having one bound rather than two that can disagree;
 a caller with more work than fits splits it across transactions.
 
-**The connection timeout MUST sit well above the statement bound, and this is the
-one option whose default is actively wrong here.** The engine documents that
-timeout as the silent gap between messages, but it reaches both directions of the
-socket and it reaches them while a statement is running. On the read side it is
-armed as a read deadline that stays in force while the message loop is busy
-executing the previous statement. A statement that runs longer than it destroys
-its own connection mid-flight, whatever the statement's own budget says.
-Measured, the cut tracks the connection timeout exactly and ignores a statement
-timeout four times its size. The engine's default for the connection timeout
-equals its default statement timeout, so a server left at both defaults is one
-whose slowest permitted statement is guaranteed to die as a transport error
-rather than as a typed failure.
+**The connection timeout MUST sit well above the statement bound, and Groadmap
+MUST set it rather than inherit it.** The engine documents that timeout as the
+silent gap between messages, but it reaches both directions of the socket and it
+reaches them while a statement is running. On the read side it is armed as a read
+deadline that stays in force while the message loop is busy executing the previous
+statement. A statement that runs longer than it destroys its own connection
+mid-flight, whatever the statement's own budget says. Measured, the cut tracks the
+connection timeout exactly and ignores a statement timeout four times its size.
+That mechanism is why the value is fixed here and not left to the engine. The
+engine's own default for this option is neither restated here nor relied on: it is
+a value the engine owns, and the rule at the head of this section governs it. The
+bound below is Groadmap's own, and it holds whatever that default is.
 
 Groadmap therefore sets the connection timeout to **twelve times the statement
 budget**, which is 60 seconds at the budget in force. The multiple is derived
