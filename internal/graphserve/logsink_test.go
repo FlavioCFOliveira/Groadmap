@@ -638,8 +638,9 @@ func waitFor(t *testing.T, condition func() bool) {
 // serving path and a destination that has stopped accepting, those goroutines
 // never come back, so that wait never ends: MEASURED at more than 90 seconds
 // after SIGTERM, against 2.5 seconds with the sink in place (rmp task #389,
-// FINDING #410). A supervisor meeting that has no option but SIGKILL, which
-// skips the shutdown checkpoint, the socket removal and the lock release.
+// FINDING #410). A supervisor meeting that has no option but SIGKILL, whose cost
+// this package words in one place: see [sigkillSkips], for what that kill skips
+// and — as importantly — for what it does not.
 //
 // # Why a child process
 //
@@ -738,11 +739,10 @@ func TestDropSink_ASignalStillStopsAServerWhoseStderrIsNotRead(t *testing.T) {
 	select {
 	case waitErr = <-exited:
 	case <-timeoutAfter(t, 60*time.Second):
-		t.Fatalf("the server had not exited 60s after SIGTERM, with its stderr still unread. " +
-			"A blocked diagnostic write is holding the engine's connection goroutines, and Serve " +
-			"waits for them, so the shutdown cannot complete: a supervisor's only remaining option " +
-			"is SIGKILL, which skips the shutdown checkpoint, the socket removal and the lock " +
-			"release (rmp task #389)")
+		t.Fatalf("the server had not exited 60s after SIGTERM, with its stderr still unread. "+
+			"A blocked diagnostic write is holding the engine's connection goroutines, and Serve "+
+			"waits for them, so the shutdown cannot complete: a supervisor's only remaining option "+
+			"is SIGKILL, %s (rmp task #389)", sigkillSkips)
 	}
 	if waitErr != nil {
 		t.Errorf("the server exited %v after SIGTERM, want a clean exit 0. It stopped, but not by "+

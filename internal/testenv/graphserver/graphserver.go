@@ -161,8 +161,18 @@ const StartDeadline = 60 * time.Second
 // It is sized on what a shutdown can lawfully take rather than on what it usually
 // takes. A statement the budget cut while it was writing holds the engine open
 // inside an undo replay that takes no cancellation — measured at up to 35.6
-// seconds with no ceiling established (internal/graphserve, connTimeoutMultiple)
-// — and the store cannot close until that call returns.
+// seconds, the largest measured and not a maximum, with no ceiling established
+// (see internal/graphserve.stop) — and the store cannot close until that call
+// returns. Ninety seconds clears that measurement by more than twice.
+//
+// What it is NOT is a bound on the shutdown, and no constant here could be one.
+// A shutdown held by a peer that parked in a socket write after the drain took
+// its mark has no upper bound at all: Groadmap leaves the engine's connection
+// timeout at the engine's own default, so nothing arms a deadline on that write
+// (SPEC/GRAPH.md § Server Options). This deadline therefore decides how long a
+// TEST waits before it kills the child and reports errChildLingered, and an
+// expiry is a diagnosis rather than a proof that the server was wrong to still
+// be running.
 const StopDeadline = 90 * time.Second
 
 // RunChild runs the production graph server in this process when the process was

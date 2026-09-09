@@ -58,37 +58,6 @@ import (
 	"github.com/FlavioCFOliveira/Groadmap/internal/utils"
 )
 
-// connTimeoutMultiple is how many statement budgets the server's connection
-// timeout is, and it is a MULTIPLE rather than a constant of its own so the two
-// move together and cannot drift apart (SPEC/GRAPH.md § Server Options).
-//
-// The engine documents its connection timeout as the silent gap between
-// messages, but it is armed as a read deadline on the socket while the message
-// loop is busy executing the previous statement: a statement that runs longer
-// than it destroys its own connection mid-flight, whatever the statement's own
-// budget says. Measured on rmp task #360, the cut tracked the connection timeout
-// exactly and ignored a statement timeout four times its size. That mechanism is
-// why Groadmap fixes this value rather than inheriting it. The engine's own
-// default for the option is neither restated here nor relied on: it is a value
-// the engine owns, and restating one would give this project a fact a dependency
-// bump can falsify in silence (SPEC/GRAPH.md § Server Options). The multiple
-// below is Groadmap's own, and it holds whatever that default is.
-//
-// Twelve is derived and not picked. A statement the deadline cuts while it is
-// writing holds the engine call open for the budget multiplied by a factor the
-// statement itself sets, measured from 1.005x to 7.13x, and the longest such hold
-// measured at the budget in force is 35.6 seconds (rmp task #380). That figure is
-// the largest measured and NOT a maximum: the same shape at the same budget over
-// the same store measured 34.5 seconds earlier and 35.6 seconds later, which is
-// itself the evidence that nothing establishes a ceiling. Sixty seconds clears the
-// largest measured by 1.7x, and it clears the longest statement the server
-// actually permits, 5 seconds, by twelve.
-//
-// The residual is stated rather than removed, because no multiple removes it:
-// nothing measured establishes a ceiling on that factor, so no finite connection
-// timeout guarantees that a cut write is answered rather than disconnected.
-const connTimeoutMultiple = 12
-
 // maxConnections is the ceiling on the connections the server accepts at once,
 // and it is the ONE count that bounds every per-statement and per-transaction
 // resource the server holds (SPEC/GRAPH.md § Server Options).
@@ -1080,18 +1049,19 @@ func shutdownCheckpointMessage(err error) string {
 //   - Closer is the composed durability stack, torn down after the drain.
 //   - The statement bound is the graph store's, read from the one declaration the
 //     other two surfaces already read, so a change to it changes all three
-//     together. The MAXIMUM carries the same value, so a client cannot raise its
-//     own statement timeout above the bound `rmp graph client` and the web graph
-//     data endpoint obey. The consequence is stated rather than left to be
-//     discovered: the engine clamps an explicit transaction's total life by that
-//     same maximum, so a BEGIN-to-COMMIT sequence has the same 5 seconds in total
-//     that a single statement has, however many statements it carries.
-//   - ConnTimeout is set rather than inherited, because it reaches both
-//     directions of the socket and is armed as a read deadline that stays in
-//     force while a statement runs; see connTimeoutMultiple for the measurement
-//     that fixes the multiple. It also bounds a session that sends nothing, so a
-//     client that holds a session open without using it loses it after the same
-//     60 seconds and must reconnect.
+//     together. The MAXIMUM alone carries it, and that is enough: the engine
+//     clamps a client-supplied timeout to the maximum and applies the maximum
+//     unconditionally to a statement that supplies none, so a client can neither
+//     raise its own statement timeout above the bound `rmp graph client` and the
+//     web graph data endpoint obey nor escape that bound by naming no timeout at
+//     all. A DEFAULT equal to the maximum is therefore one bound written twice: it
+//     adds no bound and adds a second copy of the budget to this configuration —
+//     a second thing that can be changed alone, and so a second thing that can
+//     disagree with the first. The consequence of capping the maximum is stated
+//     rather than left to be discovered: the engine clamps an explicit
+//     transaction's total life by that same maximum, so a BEGIN-to-COMMIT sequence
+//     has the same 5 seconds in total that a single statement has, however many
+//     statements it carries.
 //   - MaxConnections is the capacity decision, and it is the only one: every
 //     other count the engine caps is reached through a connection first. See
 //     maxConnections, which states both what it bounds and what it cannot.
@@ -1102,6 +1072,39 @@ func shutdownCheckpointMessage(err error) string {
 //
 // What is deliberately NOT fixed:
 //
+//   - The connection timeout, and of everything left at the engine's own default
+//     this is the one whose absence has consequences worth naming here. The engine
+//     documents it as the silent gap between messages, but it reaches both
+//     directions of the socket and it reaches them while a statement is running:
+//     on the read side it is armed as a read deadline that stays in force while
+//     the message loop executes the previous statement, and on the write side it
+//     is armed afresh before every response the server writes, every record of a
+//     streamed result included. One value would therefore govern a statement, an
+//     idle session and a parked write, because all three are the same deadline.
+//     Three bounds are absent in consequence, and each is stated rather than left
+//     to be discovered. FIRST, no second, unrelated deadline sits over a
+//     statement, which is the one absence that is a benefit: a statement that
+//     overruns the budget is answered whenever the engine returns rather than
+//     losing its connection first, so the statement bound above is the only
+//     deadline over a statement. SECOND, a session that sends nothing is not
+//     reclaimed — it keeps that session, and the connection slot it occupies,
+//     until it disconnects or the server stops; `rmp graph client` sends one
+//     statement per invocation and then disconnects, so this product's own client
+//     never reaches the case and a longer-lived Bolt client is what does. What
+//     that absence does NOT reach is the unauthenticated version-negotiation
+//     handshake, which the engine bounds separately, unconditionally, and with a
+//     deadline this option does not configure and Groadmap cannot set: MEASURED
+//     against this server, a peer that connected and then said nothing at all was
+//     dropped by the engine, so the absence above begins once a peer has spoken
+//     Bolt. THIRD, and this is the consequential one, a write to a peer that has
+//     stopped reading never fails on a deadline, and that parked write holds the
+//     server's shutdown: step 3 of the shutdown closes the socket of a peer that
+//     was already parked when the drain began, but a peer that parks AFTER that
+//     mark is not selected and nothing else releases it, so a signalled server
+//     may never exit at all and `SIGKILL` is then the only remedy left. See
+//     [serverListener.cutBlockedWrites] for exactly what the cut reaches, and
+//     SPEC/GRAPH.md § Server Options for why replacing the lost bound with a
+//     Groadmap-owned one is deliberately not specified.
 //   - The inbound message and decode bounds. The requirement on them is a floor,
 //     not a value: a statement `rmp graph client` accepts is a statement this
 //     server must accept, so they must leave room for a query of the maximum
@@ -1111,16 +1114,13 @@ func shutdownCheckpointMessage(err error) string {
 //   - The database name. A server serves one roadmap's graph and exposes exactly
 //     one database, under the engine's own default name.
 func serverOptions(closer io.Closer, log *slog.Logger) server.Options {
-	budget := graphlock.StatementBudget
 	return server.Options{
-		Auth:                    server.NoAuthHandler{},
-		Closer:                  closer,
-		Logger:                  log,
-		DefaultStatementTimeout: budget,
-		MaxStatementTimeout:     budget,
-		ConnTimeout:             connTimeoutMultiple * budget,
-		MaxConnections:          maxConnections,
-		MaxOpenTxPerPrincipal:   maxOpenTxPerPrincipal,
+		Auth:                  server.NoAuthHandler{},
+		Closer:                closer,
+		Logger:                log,
+		MaxStatementTimeout:   graphlock.StatementBudget,
+		MaxConnections:        maxConnections,
+		MaxOpenTxPerPrincipal: maxOpenTxPerPrincipal,
 	}
 }
 
@@ -1131,8 +1131,12 @@ func serverOptions(closer io.Closer, log *slog.Logger) server.Options {
 // announcement. This command interprets a signal as an instruction to stop
 // rather than as an interruption of unfinished work, so it drains, checkpoints
 // and exits 0 where cmd/rmp/main.go's default action would exit 130 and skip the
-// drain, the checkpoint and the lock release. `rmp web` takes the same signals
-// over, through the same package, for the same reason.
+// drain and the checkpoint. The lock is deliberately absent from that list: exit
+// 130 does skip the explicit release, but the lock is flock(2) held by the open
+// file description, so the kernel drops it however the process exits. Naming it
+// as a cost reads as a lock left stranded, which does not happen — see
+// internal/graphlock and SPEC/GRAPH.md § Concurrency and Recovery. `rmp web`
+// takes the same signals over, through the same package, for the same reason.
 //
 // The channel arrives as a parameter rather than being registered here because
 // the take-over has to happen before the announcement and the announcement
@@ -1263,8 +1267,8 @@ func stop(srv *server.Server, ln *serverListener, serveErr <-chan error) error {
 		// before the process returns (SPEC/GRAPH.md § Server Diagnostics on
 		// Stderr).
 		logger.Warn("the graph server's shutdown closed connections whose peer had stopped "+
-			"reading; each had held one socket write open for the whole drain, so nothing "+
-			"else would have ended those sessions before the connection timeout",
+			"reading; each had held one socket write open for the whole drain, and no deadline "+
+			"is armed on such a write, so nothing else would have ended those sessions at all",
 			slog.Int("connections", cut))
 	}
 
@@ -1312,9 +1316,10 @@ func stop(srv *server.Server, ln *serverListener, serveErr <-chan error) error {
 // blocked in a read almost all of the time — including throughout a statement's
 // execution. A drain keyed on "blocked in a read" is therefore vacuously
 // satisfied, and it cut a statement that had been running for 1.5 seconds inside
-// a shutdown that took 20 milliseconds. The same read-ahead is why the engine's
-// connection timeout doubles as a statement bound (see connTimeoutMultiple):
-// one goroutine's read deadline is armed across another's execution.
+// a shutdown that took 20 milliseconds. The same read-ahead is why an ARMED
+// connection timeout would double as a statement bound — one goroutine's read
+// deadline arms across another's execution — which is one of the reasons Groadmap
+// leaves that option at the engine's own default (see serverOptions).
 //
 // The finer signal that WOULD distinguish the two — matching each message read
 // against the terminal response written for it — is available only by telling a
@@ -1518,10 +1523,11 @@ func (l *serverListener) markWrites() {
 //     established (rmp task #380). The store genuinely cannot close until it
 //     returns, so waiting is the only correct answer and stop waits.
 //   - a session parked in a socket write because the peer stopped reading. It is
-//     not slow, it is stopped, and it holds the shutdown for the engine's write
-//     deadline — ConnTimeout, 60 seconds here — which is longer than the grace
-//     period of two of the three commonest supervisors. Waiting for it buys
-//     nothing at all.
+//     not slow, it is stopped, and NOTHING releases it: the engine arms its
+//     per-message write deadline from the connection timeout, which Groadmap
+//     leaves at the engine's own default (see serverOptions), so that write
+//     carries no deadline at all and the peer holds it for as long as it declines
+//     to read. Waiting for it buys nothing and may never end.
 //
 // The engine cannot tell them apart and neither can a deadline. This package can,
 // because the socket is its own: a blocked session is inside [drainConn.Write]
@@ -1557,18 +1563,22 @@ func (l *serverListener) markWrites() {
 // still holds the shutdown, and so does one that trickles — reading just enough
 // that each individual write completes and the next one parks.
 //
-// The worst case is named rather than left as "longer": that shutdown lasts until
-// the engine's per-message write deadline expires, which is ConnTimeout — twelve
-// statement budgets, 60 seconds at the values in force — because the engine arms
-// it before every response it writes, streamed records included. Measured end to
-// end at 60.035 s (rmp task #396). It is the same 60 seconds either way; what the
-// cut removes is the case where the peer had already stopped before the signal,
-// which is the reachable one.
+// That residual has NO upper bound, and the honest statement of it is that there
+// is no worst case to name. The engine arms its per-message write deadline from
+// the connection timeout, which Groadmap leaves at the engine's own default (see
+// serverOptions), so nothing expires on such a write: the peer is under no
+// obligation to read, it holds the write for as long as it declines to, and no
+// timer, deadline or quota in this product or in the engine takes it away. A
+// signalled server in that state may never exit at all, and `SIGKILL` is then the
+// only remedy left. What the cut removes is the case where the peer had already
+// stopped before the signal, which is the reachable one, and removing it is the
+// difference between a shutdown bounded by the drain and one with no bound.
 //
-// Closing the residual would need a SECOND interval and a second constant, and it
-// would trade a bounded, named worst case for the risk of cutting a connection
-// that was still making progress — the false positive this selector holds at
-// zero. It is recorded rather than chased (rmp task #396, the owner's decision).
+// Closing the residual would need a SECOND interval and a second constant of
+// Groadmap's own, and a selector that cut on elapsed time rather than on observed
+// parking would also cut a connection that was still making progress — the false
+// positive this selector holds at zero. It is recorded rather than chased
+// (rmp task #396, the owner's decision; SPEC/GRAPH.md § Server Options).
 //
 // # Why the underlying socket is closed rather than the wrapper
 //

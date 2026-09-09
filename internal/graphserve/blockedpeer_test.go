@@ -9,9 +9,9 @@
 //
 // [TestSignalledServer_StopsWhenAPeerHasStoppedReading] pins the OUTCOME against
 // a real server process and a real signal: a peer that stopped reading no longer
-// holds the shutdown for the engine's write deadline, and the shutdown that
-// results is a whole one — the checkpoint is still taken, the socket still goes,
-// and the exit code is still 0.
+// holds the shutdown open without limit, the shutdown that follows is bounded by
+// the drain, and it is a whole one — the checkpoint is still taken, the socket
+// still goes, and the exit code is still 0.
 //
 // # Why the cause is a peer and not a sink
 //
@@ -42,6 +42,7 @@ import (
 	"github.com/FlavioCFOliveira/GoGraph/bolt/packstream"
 	"github.com/FlavioCFOliveira/GoGraph/bolt/proto"
 	"github.com/FlavioCFOliveira/Groadmap/internal/graphclient"
+	"github.com/FlavioCFOliveira/Groadmap/internal/graphlock"
 )
 
 // blockedPeerRows is how many nodes the wedging statement returns. It has to
@@ -60,13 +61,24 @@ const blockedPeerFloor = 128 * 1024
 
 // blockedPeerShutdownBound is how long the signalled server may take to exit.
 //
-// It sits between the two measured outcomes and touches neither. With the cut it
-// is the drain's own bound plus a teardown — 7.5 s and change. Without it the
-// server holds until the engine's per-message write deadline expires, which is
-// ConnTimeout, 60 s at connTimeoutMultiple times the statement budget: MEASURED
-// at 60.035 s (rmp task #396, FINDING #416). Thirty seconds clears the first by
-// four times and is only half the second.
-const blockedPeerShutdownBound = 30 * time.Second
+// It is DERIVED from the only bound this shutdown has, and it is written as that
+// derivation rather than as the 30 seconds it currently yields, so that moving
+// the statement budget moves this with it — which is the reason
+// internal/graphlock exports the wait budget instead of publishing a figure for
+// each of its readers to restate.
+//
+// The bound it is derived from is the drain's own: with the cut, a shutdown held
+// by a peer that stopped reading lasts the drain's budget plus a teardown, 7.5 s
+// and change at the values in force. Four times that budget is the allowance.
+//
+// There is NO second outcome for it to sit between any more, and that is what
+// this test now separates. Groadmap does not set the engine's connection timeout
+// (see serverOptions), so no deadline is armed on a parked socket write: WITHOUT
+// the cut this shutdown has no upper bound at all. This bound therefore divides
+// "the cut released the write" from "the server never exits", where before rmp
+// task #455 it divided the same 7.5 s from a 60.035 s ceiling the engine's own
+// default supplied (rmp task #396, FINDING #416).
+func blockedPeerShutdownBound() time.Duration { return 4 * graphlock.WaitBudget() }
 
 // TestServerListener_CutsOnlyTheWriteThatSpannedTheDrain pins the whole of the
 // selector, in both directions, without an engine anywhere near it.
@@ -332,11 +344,14 @@ func acceptOne(t *testing.T) (*serverListener, *drainConn, net.Conn) {
 //
 // The engine's Serve returns only when every connection goroutine has, and
 // internal/graphserve.stop waits for Serve. A session parked in a socket write
-// comes back when the engine's per-message write deadline expires and not
-// before — ConnTimeout, 60 s here — so the whole shutdown waits that long. The
-// drain cannot shorten it: a live connection is not quiescent, so the drain
-// spends its entire budget and then cuts, and the engine's own cut is a context
-// cancellation, which does not release a goroutine parked in a write.
+// does not come back on a deadline, because Groadmap arms none on it: the engine
+// takes its per-message write deadline from the connection timeout and Groadmap
+// leaves that option at the engine's own default (see serverOptions). The peer is
+// under no obligation to read, so it holds that write — and the whole shutdown —
+// for as long as it declines to. The drain cannot shorten it either: a live
+// connection is not quiescent, so the drain spends its entire budget and then
+// cuts, and the engine's own cut is a context cancellation, which does not
+// release a goroutine parked in a write. The cut is the only thing that does.
 //
 // # What is asserted beyond the bound
 //
@@ -349,8 +364,13 @@ func acceptOne(t *testing.T) (*serverListener, *drainConn, net.Conn) {
 // two and fail the third.
 //
 // Shown to fail without the change: with ln.cutBlockedWrites() removed from stop,
-// the child had not exited 30 s after SIGTERM and the test fails on its bound;
-// the same run measured 60.0 s to exit unaided.
+// the child had not exited when the bound expired and the test fails on it. What
+// the unaided server does has itself changed, and the failure is the stronger for
+// it. While Groadmap armed a connection timeout of its own, the unaided server
+// exited at 60.0 s (rmp task #396). With that option left at the engine's default
+// the same neutralised run was still going when a 120-second bound expired
+// (MEASURED on rmp task #455), which is what "no ceiling at all" looks like from
+// the outside.
 func TestSignalledServer_StopsWhenAPeerHasStoppedReading(t *testing.T) {
 	root := graphRoot(t)
 	socket := filepath.Join(root, "graph.sock")
@@ -389,14 +409,15 @@ func TestSignalledServer_StopsWhenAPeerHasStoppedReading(t *testing.T) {
 	var waitErr error
 	select {
 	case waitErr = <-exited:
-	case <-timeoutAfter(t, blockedPeerShutdownBound):
+	case <-timeoutAfter(t, blockedPeerShutdownBound()):
 		t.Fatalf("the server had not exited %s after SIGTERM, with one client parked on a "+
 			"result it stopped reading. The engine's Serve waits for that connection's "+
-			"goroutine and it does not come back until the write deadline expires "+
-			"(ConnTimeout, %s), so the shutdown cannot complete inside a supervisor's grace "+
-			"period and its only remaining option is SIGKILL — which skips the shutdown "+
-			"checkpoint, the socket removal and the lock release (rmp task #396)",
-			blockedPeerShutdownBound, connTimeoutMultiple*5*time.Second)
+			"goroutine, and no deadline is armed on a socket write, so the cut at step 3 of "+
+			"the shutdown is the ONLY thing that releases it: without the cut this shutdown "+
+			"has no upper bound at all rather than a longer one, and the peer holds it for as "+
+			"long as it declines to read. A supervisor's only remaining option is then "+
+			"SIGKILL, %s (rmp tasks #396 and #455)",
+			blockedPeerShutdownBound(), sigkillSkips)
 	}
 	elapsed := time.Since(start)
 
