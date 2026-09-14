@@ -43,10 +43,17 @@ func errUnknownFlag(flagName string) error {
 //
 // It is the refusal for a command that declares no flag of its own: every
 // token it can legitimately receive has already been consumed before this
-// runs — the help tokens by the dispatcher (Command.DispatchFamily), the
-// roadmap selector and its value by requireRoadmap where the command takes
-// one — so a "-"-prefixed token that survives to here names nothing the
-// command accepts. A command that DOES declare flags of its own must not use
+// runs — the help tokens by hasHelpFlag, the roadmap selector and its value
+// by requireRoadmap where the command takes one — so a "-"-prefixed token
+// that survives to here names nothing the command accepts.
+//
+// Who calls hasHelpFlag depends on the command's shape. For a family's
+// subcommand, such as `roadmap list`, Command.DispatchFamily calls it before
+// the handler runs. For a leaf command, such as `stats`, DispatchFamily passes
+// the arguments through untouched, so the handler itself must call it over
+// its whole argument list before calling this. A leaf handler that checks
+// only its first token lets a help token written after the selector reach
+// this function, which refuses it as an unknown flag (rmp task 474). A command that DOES declare flags of its own must not use
 // this: it refuses through FlagParser.Parse, which knows its flag table.
 //
 // Positional arguments are not this function's concern; the shared arity

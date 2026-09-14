@@ -9,11 +9,22 @@ import (
 
 // HandleStats handles the stats command.
 func HandleStats(args []string) error {
-	if len(args) > 0 && (args[0] == "-h" || args[0] == "--help" || args[0] == "help") {
-		// Route through invokeHelpPrinter so the SPEC-mandated AI-agent
-		// banner (SPEC/HELP.md § AI agent banner) is prepended uniformly.
-		// `stats` is a leaf command and bypasses DispatchFamily's help
-		// path, so the banner wrapping has to happen here explicitly.
+	// A help token anywhere in the argument list is served before any other
+	// parsing runs, so the help is reachable even when -r is missing
+	// (SPEC/HELP.md § Help levels). `stats` is a leaf command: DispatchFamily
+	// hands it the arguments untouched and never runs the hasHelpFlag
+	// short-circuit it runs for a family's subcommands, so this handler
+	// applies that same predicate to the same span itself. That is what makes
+	// `rmp stats -r <name> --help` indistinguishable from
+	// `rmp task list -r <name> --help` (SPEC/COMMANDS.md § Roadmap Statistics).
+	//
+	// The check used to read args[0] alone. A help token written after the
+	// selector then survived requireRoadmap and reached rejectUnknownFlags
+	// below, which refused it as an unknown flag with exit 2 (rmp task 474).
+	//
+	// Route through invokeHelpPrinter so the SPEC-mandated AI-agent banner
+	// (SPEC/HELP.md § AI agent banner) is prepended uniformly.
+	if hasHelpFlag(args) {
 		invokeHelpPrinter(printStatsHelp)
 		return nil
 	}
