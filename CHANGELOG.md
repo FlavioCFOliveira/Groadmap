@@ -5,6 +5,188 @@ All notable changes to **Groadmap** (`rmp`) are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.17.1] - 2026-09-14
+
+### Changed - BREAKING
+
+- **The AI Agent Contract moves to `schema_version` `2.0.0`, and a consumer of the
+  `1.0.0` shape cannot read it.** `rmp --ai-help` changes shape in two places.
+  - **Each subcommand's `exit_codes` is a list of objects, not of integers.** Every
+    entry is `{"code": <integer>, "conditions": [<string>, ...]}`, on all 56
+    subcommands, and each condition says when that code is produced. The lists were
+    also incomplete and are now widened: the subcommands declaring code `2` go from
+    18 to 56, code `4` from 44 to 52, and code `6` from 38 to 41, for 268 entries
+    where there were 219.
+  - **A subcommand's `prerequisites` key is omitted when it has none.** Under
+    `1.0.0` every subcommand carried the key, always as an empty list. Now 46
+    subcommands carry a populated list and 10 carry no key at all.
+  - **Additive, and breaking nothing on its own:** each pitfall gains `wrong_exit`
+    and `wrong_stderr`, the exit code and the exact stderr line its wrong example
+    produces.
+  - **Unchanged:** the top-level `exit_codes` catalogue, `conventions`, `enums`,
+    `global_flags`, and the set of 56 subcommands.
+  - **The test to apply:** you are unaffected unless a program reads
+    `rmp --ai-help`. Such a program must accept objects in `exit_codes` and a missing
+    `prerequisites` key, and it can tell the two shapes apart by `schema_version`.
+
+- **`rmp graph serve` no longer bounds an idle session or its own shutdown.** The
+  graph engine, GoGraph `v0.14.1`, ships its connection timeout disabled, and
+  Groadmap now leaves it so rather than setting it to 60 seconds as `1.17.0` did.
+  - **A session that sends nothing is no longer closed after 60 seconds.** It keeps
+    its connection, and the connection slot it occupies, until the client
+    disconnects or the server stops.
+  - **A signalled server may never exit.** A client that stops reading a result
+    after the shutdown has begun, or that reads just enough for each write to
+    complete and the next to park, is released by nothing, because no deadline is
+    armed on a socket write. `SIGKILL` is then the only remedy. Under `1.17.0` the
+    connection timeout ended that case after 60 seconds.
+  - **One stderr line changes its closing clause.** The `WARN` record for the
+    connections the shutdown closed keeps its identifying message, "the graph
+    server's shutdown closed connections whose peer had stopped reading", and its
+    `connections=` count. Its last clause, "so nothing else would have ended those
+    sessions before the connection timeout", now reads "and no deadline is armed on
+    such a write, so nothing else would have ended those sessions at all".
+  - **Unchanged:** a client that had already stopped reading when the signal arrived
+    is still cut by the drain; the 5-second statement budget still applies to a
+    client that asks for no timeout of its own; and a peer that connects and never
+    speaks Bolt is still dropped by the engine's handshake timeout.
+  - **The test to apply:** you are unaffected unless a Bolt client other than
+    `rmp graph client` holds a session open without using it and relies on the
+    server to close it, or a supervisor waits for `rmp graph serve` to exit after
+    `SIGTERM` without escalating to `SIGKILL`. `rmp graph client` sends one statement
+    per invocation and then disconnects.
+
+- **`rmp stats` and `rmp roadmap list` refuse an unrecognised flag.** Both used to
+  discard it and print their normal result at exit `0`, alone among the commands of
+  the CLI. Each now exits `2` with `Error: invalid input: unknown flag: <flag>` and
+  writes nothing to stdout, as the rule in `SPEC/COMMANDS.md § Positional Arguments`
+  already required.
+  - **`rmp roadmap list` declares no flag, so `-r <name>` is refused too**, as
+    `unknown flag: -r`.
+  - **The refusal comes before the roadmap is looked up.**
+    `rmp stats -r <missing> --nosuchflag` exits `2`, where it exited `4`.
+  - **A help token after the selector now prints help on `stats`.**
+    `rmp stats -r <name> --help`, `-h` and `help` print the command's help at exit
+    `0`, where `1.17.0` ignored the token and printed the report. A help token is
+    served before any other check: `rmp stats -r <name> --zzz --help` prints help
+    where `1.17.0` printed the report, and `rmp stats --zzz --help` prints help where
+    `1.17.0` exited `3`. See **Fixed**.
+  - **Unchanged:** `rmp stats -r <name>` and `rmp stats --roadmap <name>` print the
+    same report, and `rmp roadmap list` the same listing, byte for byte.
+  - **The test to apply:** you are unaffected unless an invocation passes
+    `rmp roadmap list` any flag other than a help token, or passes `rmp stats`
+    anything besides `-r <name>` or `--roadmap <name>`. Run the invocation once: an
+    exit `2` naming an unknown flag names the token to remove, and help printed where
+    you expected the report names a help token to remove.
+
+### Fixed
+
+- **An indexed `MATCH` could return a wrong answer.** GoGraph `v0.14.1` fixes the
+  equality index seek, which was blind to writes the same statement had made: it
+  lost rows the statement had written, and returned rows whose indexed value had
+  changed away from the one sought, with no explicit transaction involved. An
+  equality lookup of a node by an indexed property is such a seek. The same
+  release closes four index-build paths that could put a row in an index that the
+  graph does not contain, or leave one out.
+  - **A graph store written before `v0.14.1` rebuilds its secondary indexes once
+    when a server first opens it**, and the snapshot manifest gains an additive
+    `index_builder_epoch` field at the next checkpoint. No data changes and no
+    migration step is needed.
+
+- **The AI Agent Contract published claims the binary contradicted.**
+  - **The declared exit codes were incomplete.** A subcommand could exit `2`, `4` or
+    `6` without declaring it; the widened lists are described above.
+  - **Four pitfall examples did not demonstrate their own lesson.**
+    `graph_client_without_a_server` published a socket path that exists only on the
+    machine that wrote it, and now uses the `<socket>` placeholder.
+    `missing_commit_hash_on_transition` took its argument from `git` rather than
+    from `rmp`, and now carries a literal hash. `complete_with_open_dependencies`
+    could not reach the dependency guard it describes, and now does.
+    `invalid_roadmap_name` was split by the shell before `rmp` saw it, and is now
+    quoted.
+  - **The `record_task_working_log` workflow omitted two prerequisites of its final
+    step:** the task must be in `TESTING` with no open dependency, and the caller
+    must supply the commit hash.
+  - **`rmp task next` did not say that a task it returns may be blocked.** The help
+    text and the contract now state that the listing ignores dependencies, and name
+    `rmp task blockers` as the command that answers whether a task can be finished.
+
+- **Five `sprint` help texts said the command prints nothing.** `sprint reorder`,
+  `move-to`, `swap`, `top` and `bottom` each print a JSON success object, and their
+  help now says so. `SPEC/COMMANDS.md § Move Task to Top/Bottom` made the same false
+  claim and is corrected.
+
+- **Published error strings disagreed with the binary.** The `SPEC/COMMANDS.md`
+  Task Ordering tables now publish the seven lines the binary really prints, and
+  both completion-guard strings in `SPEC/STATE_MACHINE.md` recover the
+  `validation error: ` prefix they had dropped.
+
+- **`rmp roadmap list --help` and `rmp stats --help` did not list exit code `2`.**
+  Both now do, matching the refusal described above.
+
+- **`rmp stats` ignored a help token written after the roadmap selector.**
+  `SPEC/HELP.md` requires a handler to serve `--help`, `-h` and `help` anywhere in
+  its arguments before any other parsing, as `task list` already did. `rmp stats`
+  looked only at its first argument, so `rmp stats -r <name> --help` printed the
+  report, and a help token after an unknown flag or a stray argument never reached
+  the help. It now serves the three tokens in any position, printing byte for byte
+  what `rmp stats --help` prints; `--helpful` and `-help` are still refused, and an
+  unknown flag without a help token still exits `2`.
+
+- **`rmp web` printed its help without the AI-agent banner when the help token was
+  not first.** `rmp web --no-open --help`, `--port 0 --help` and
+  `--host 127.0.0.1 --help` printed the help without the banner that
+  `SPEC/HELP.md § AI agent banner` requires on every help printer; they now print
+  what `rmp web --help` prints, byte for byte. Because the help is now served before
+  any other parsing, `rmp web --zzz --help` and `rmp web <stray-argument> --help`
+  (exit `2`), and `rmp web --port abc --help` and `rmp web --port --help` (exit `6`),
+  print the help and exit `0`. `--helpful` and `-help` are still refused.
+
+- **`SPEC/DATA_FORMATS.md` required each subcommand's exit codes to be exhaustive
+  without saying over what.** The rule now covers the conditions a caller controls
+  (flags, standard input, positional arguments, the roadmap selector and the
+  roadmap's state), and does not enumerate faults in the environment.
+
+### Notes
+
+- **Why this is `1.17.1`, and what the number does not tell you.** A strict reading
+  of Semantic Versioning 2.0.0 gives `MAJOR`. The contract's new shape cannot be
+  read by a consumer of the old one, which `SPEC/DATA_FORMATS.md` itself classifies
+  as a major change of the contract. `rmp graph serve` withdraws a published bound
+  on idle sessions and on shutdown. And two commands refuse invocations that
+  succeeded on `1.17.0`. None of these is a backward-compatible bug fix, which is
+  all a `PATCH` may contain.
+
+- **The number is the owner's decision, against the strict `2.0.0` reading.** The
+  project publishes `1.17.1` by the owner's explicit decision, taken on 2026-09-14
+  and recorded here; `1.18.0` and `2.0.0` were considered and not taken. This is the
+  sixth consecutive release published under a smaller digit than the strict reading
+  gives: `1.15.0` as a `MINOR`, `1.15.1` and `1.15.2` as a `PATCH`, and `1.16.0` and
+  `1.17.0` as a `MINOR`.
+
+  **So do not read the patch digit as a promise that nothing breaks.** The test to
+  apply is short: **upgrading is safe unless a program of yours reads
+  `rmp --ai-help`, a Bolt client of yours holds a session to `rmp graph serve` open
+  without using it or your supervisor waits for the server to exit without
+  escalating to `SIGKILL`, or you pass `rmp stats` anything besides its roadmap
+  selector or `rmp roadmap list` any flag.**
+
+- **What did NOT change.** No command, subcommand or flag was added or removed. The
+  production code that changed is confined to the flag refusal in `stats` and
+  `roadmap list`, help-token routing in `stats` and `web`, the options
+  `rmp graph serve` passes the engine, the contract `rmp --ai-help` generates, and
+  help text. The top-level exit-code catalogue is unchanged. Of the 64 distinct help
+  invocations, 55 print byte for byte what `1.17.0` printed; the nine that differ are
+  the eight help texts named above and `rmp ai-help --help`, which embeds the
+  contract.
+
+- **There is no database migration; the graph engine moves to GoGraph `v0.14.1`.**
+  The SQLite schema version is unchanged at `1.14.0`. The graph store's manifest
+  gains one additive field and takes no version step. A store round-trips between
+  `1.17.0` and `1.17.1` in both directions with its data, its indexes and its
+  UNIQUE constraints intact. A downgrade to `1.17.0`, however, brings back the
+  index-seek defect this release fixes.
+
 ## [1.17.0] - 2026-09-08
 
 ### Added
@@ -3290,6 +3472,7 @@ behaviour.
   AI-contract E2E suite (`tests/test_30_aihelp_contract.py`) to lock in the
   revised help text and contract invariants.
 
+[1.17.1]: https://github.com/FlavioCFOliveira/Groadmap/compare/v1.17.0...v1.17.1
 [1.17.0]: https://github.com/FlavioCFOliveira/Groadmap/compare/v1.16.0...v1.17.0
 [1.16.0]: https://github.com/FlavioCFOliveira/Groadmap/compare/v1.15.2...v1.16.0
 [1.15.2]: https://github.com/FlavioCFOliveira/Groadmap/compare/v1.15.1...v1.15.2
