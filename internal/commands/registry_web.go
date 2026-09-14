@@ -5,15 +5,23 @@ import "github.com/FlavioCFOliveira/Groadmap/internal/web"
 
 // runWeb is the dispatch adapter for `rmp web`. web is a leaf command
 // (HasSubcommand: false), so DispatchFamily routes the raw args straight to
-// this handler and bypasses the family-level help path that prepends the
-// SPEC AI-agent banner. Mirroring HandleStats, the leaf handler must detect
-// the help token itself and route web.PrintHelp through invokeHelpPrinter so
-// the banner is emitted uniformly (SPEC/HELP.md § AI agent banner). Keeping
-// this wrapper here — rather than in the web package — preserves the
+// this handler and never runs the hasHelpFlag short-circuit it runs for a
+// family's subcommands, which is the path that prepends the SPEC AI-agent
+// banner. The handler therefore applies that same predicate to its whole
+// argument list itself, as HandleStats does, and routes web.PrintHelp through
+// invokeHelpPrinter so the banner is emitted uniformly, wherever the help
+// token is written (SPEC/HELP.md § Help levels, § AI agent banner).
+//
+// The check used to read args[0] alone. A help token written after another
+// flag, as in `rmp web --no-open --help`, then fell through to web.Run, whose
+// own parser serves the help by calling web.PrintHelp directly, without the
+// banner (rmp task 475).
+//
+// Keeping this wrapper here — rather than in the web package — preserves the
 // commands -> web dependency direction and keeps the banner string a
 // single-source commands-package concern; web.PrintHelp stays banner-free.
 func runWeb(args []string) error {
-	if len(args) > 0 && isHelpToken(args[0]) {
+	if hasHelpFlag(args) {
 		invokeHelpPrinter(web.PrintHelp)
 		return nil
 	}
