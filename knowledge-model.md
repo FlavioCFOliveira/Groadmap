@@ -360,50 +360,57 @@ reported, are held in the same memory as the constraint state.
 
 The engine's index is single-property, node-only and hash, and therefore equality-only: a
 range predicate (`>`, `<`) ignores it and falls back to a label scan. Composite indexes and
-relationship-property indexes are not supported. An index is consequently worth declaring
-exactly where a statement performs an equality lookup on one property, which is what every
-identity lookup against this graph is.
+relationship-property indexes are not supported. An index can consequently serve only a
+statement that performs an equality lookup on one property, which is what every identity
+lookup against this graph is.
 
-**Decision criterion.** Every label carries an enforced UNIQUE constraint on `key` (see
-Constraints), so `key` is distinct within every label by construction and selectivity decides
-nothing: label size decides. An index is declared on a label large enough that a scan would
-cost more than the index saves, and is not declared on a label small enough that its scan is
-already cheap.
+**What serves an identity lookup.** Every label carries a UNIQUE constraint on `key` (see
+Constraints), and the engine creates a hash index with each UNIQUE constraint to back it.
+`SHOW INDEXES` lists that backing index as `__uniq__<Label>.key`, with empty `labelsOrTypes`
+and `properties` -- a reporting quirk, not a stray index to drop. The planner uses it for the
+identity lookup `MATCH (n:<Label> {key:'...'})`, which plans as `NodeByIndexSeek`.
 
-| Label | Property | Index | Recommendation |
+**Why no separate key index is declared.** A `CREATE INDEX` on `key` would duplicate the
+backing index the label's UNIQUE constraint already provides, and would add nothing to the
+lookup the constraint's index already turns into a seek. No label therefore declares an index
+of its own on `key`. A separate index is warranted only for an equality lookup on a property
+that no UNIQUE constraint covers, and only once a plan has shown that the lookup would
+otherwise scan.
+
+| Label | Property | Serves the identity lookup | Declared index |
 |---|---|---|---|
-| `Test` | `key` | `test_key` | declared |
-| `Memory` | `key` | `memory_key` | declared |
-| `Requirement` | `key` | `requirement_key` | declared |
-| `CodeFile` | `key` | `codefile_key` | declared |
-| `Component` | `key` | none | not declared: label too small to pay |
-| `Doc` | `key` | none | not declared: label too small to pay |
-| `Spec` | `key` | none | not declared: label too small to pay |
-| `Release` | `key` | none | not declared: label too small to pay |
+| `Test` | `key` | `__uniq__Test.key`, backing `test_key_unique` | none |
+| `Memory` | `key` | `__uniq__Memory.key`, backing `memory_key_unique` | none |
+| `Requirement` | `key` | `__uniq__Requirement.key`, backing `requirement_key_unique` | none |
+| `CodeFile` | `key` | `__uniq__CodeFile.key`, backing `codefile_key_unique` | none |
+| `Component` | `key` | `__uniq__Component.key`, backing `component_key_unique` | none |
+| `Doc` | `key` | `__uniq__Doc.key`, backing `doc_key_unique` | none |
+| `Spec` | `key` | `__uniq__Spec.key`, backing `spec_key_unique` | none |
+| `Release` | `key` | `__uniq__Release.key`, backing `release_key_unique` | none |
 
-The DDL for a declared index is
-`CREATE INDEX <label lowercased>_key FOR (x:<Label>) ON (x.key)`, and `SHOW INDEXES` reads
-which indexes the engine holds.
+The DDL for a separate index, where one is warranted, is
+`CREATE INDEX <name> FOR (x:<Label>) ON (x.<property>)`, and `SHOW INDEXES` reads which
+indexes the engine holds.
 
-**Proof, not assertion.** A recommendation is measured, and the figures a measurement returns
-are graph content rather than part of this file. Two statements re-measure it:
+**Proof, not assertion.** What serves a lookup is measured, and the figures a measurement
+returns are graph content rather than part of this file. Two statements re-measure it:
 
 - label size and distinctness:
   `MATCH (n:<Label>) WHERE n.key IS NOT NULL RETURN count(n) AS tot, count(DISTINCT n.key) AS dv`;
 - the plan and its cost: `EXPLAIN` or `PROFILE` of `MATCH (n:<Label> {key:'<key>'}) RETURN n.key`.
 
 A lookup no index serves plans as `NodeByLabelScan` plus a filter; a lookup an index serves
-plans as `NodeByIndexSeek`, with no filter. The figures measured when the four indexes above
-were declared -- per-label node counts, and the dbHits and timings of the plans before and
-after -- are held in the graph:
+plans as `NodeByIndexSeek`, with no filter. The measurements behind this section -- per-label
+node counts, the indexes `SHOW INDEXES` listed, and the operators, dbHits and timings of the
+plans -- are held in the graph:
 `MATCH (m:Memory {key:'mem-kg-index-measurement'}) RETURN m.body`.
 
 **The lookup Conventions recommends cannot be indexed at all.** `MATCH (n {key:'...'})`
 without a label plans as `AllNodesScan` plus a filter, reading every node of the graph,
-because an index is declared on a label and a label-less pattern reaches none of them. The
-label-less form remains correct and remains the form that expresses the global-uniqueness
-convention, but a statement on a hot path should name the label it expects and pay the seek
-instead.
+because every index, a constraint's backing index included, belongs to one label and a
+label-less pattern reaches none of them. The label-less form remains correct and remains the
+form that expresses the global-uniqueness convention, but a statement on a hot path should
+name the label it expects and pay the seek instead.
 
 ## Maintenance
 
