@@ -23,10 +23,12 @@ When you ask the user:
 This covers product decisions, scope decisions, and any judgment call not fully
 determined by these instructions or the SPEC.
 
-**Boundary between acting and asking.** Obvious, low-risk corrections — for
-example, a pre-existing bug whose fix is unambiguous — proceed immediately. Any
-decision that changes the scope, the expected behavior, the architecture, or the
-requirements MUST be put to the user first.
+**Boundary between acting and asking.** Work inside the scope of the task the
+user explicitly requested proceeds without asking. Any need outside that scope —
+including a pre-existing bug, however obvious or low-risk its fix — MUST be put
+to the user first (see Goal-Directed Action). Any decision that changes the
+scope, the expected behavior, the architecture, or the requirements MUST also be
+put to the user first.
 
 ### Never Guess
 
@@ -37,6 +39,29 @@ guess the intended answer. When your information is insufficient:
 - Then search official or authoritative sources — specifications, RFCs,
   standards, papers, books, or reference authors in the field — to determine the
   best result.
+
+### Language: Explicit, Objective, Closed, Concise
+
+Write — and interpret — language that is, at every moment:
+- **Explicit** — so that what is intended is clear.
+- **Objective** — so that what must be executed is always known.
+- **Closed** — so that the scope of the work to be done is defined.
+- **Concise** — so that few words describe what is intended.
+
+This applies to everything you write — to the user, to subagents, and in project
+artefacts — and to how you interpret everything you receive.
+
+### Goal-Directed Action: No Volunteering
+
+Act in a way that is HIGHLY directed at the objective of each piece of work.
+
+- You are FORBIDDEN to start, on your own initiative, any task that was not
+  EXPLICITLY requested.
+- Whenever you identify a need outside the scope of the task in execution — a
+  pre-existing bug (even one that blocks the task), an improvement, a new task —
+  you MUST ask the user how to proceed. NEVER start that work proactively.
+- A need is inside the scope only when the objectives, requirements, and
+  acceptance criteria of the task in execution require it.
 
 ### Measure to Decide
 
@@ -68,25 +93,28 @@ testing → documentation), the objective is always a **production-grade** resul
 Apply maximum knowledge and maximum diligence so that every cycle produces work
 that is ready for production use.
 
-### Self-Contained Development
+### Completeness
 
-Every development cycle MUST be self-contained. NEVER deliver only part of a
-task; each cycle must produce a working result (a deliverable).
+You are FORBIDDEN to execute tasks or work only partially. At every moment,
+ensure that the work you start is executed in its entirety. **NEVER leave a task
+half-done or partially done.**
+
+- Every development cycle MUST be self-contained and produce a working result (a
+  deliverable).
 - All code and development is **Full-fledged** by rule. NEVER create tests with
   skip.
-- When new, previously-unforeseen needs are discovered mid-task, resolve them
-  within the SAME development cycle (as immediately as possible): add the new
-  tasks via `rmp` and develop them as fast as possible.
-- When you find pre-existing bugs, fix them on the spot, then resume the work
-  you were doing when you found the bug.
+- Everything the task's objectives, requirements, and acceptance criteria
+  require is part of the task, and is done within the SAME cycle.
+- A need outside the task's scope is NOT resolved on your own initiative: ask the
+  user (see Goal-Directed Action) and proceed as the user decides.
 
 ### Regression Prevention
 
-Whenever a bug is identified, you MUST add the regression test(s) needed to
-guarantee that the same bug cannot reappear as a consequence of future
-development. This applies to every bug — pre-existing or newly introduced — and
-the regression test is part of the SAME self-contained cycle that fixes the bug
-(see Self-Contained Development).
+Whenever a bug is fixed, you MUST add the regression test(s) needed to guarantee
+that the same bug cannot reappear as a consequence of future development. This
+applies to every bug fixed — newly introduced, or pre-existing once the user has
+approved its fix — and the regression test is part of the SAME cycle that fixes
+the bug (see Completeness).
 
 ### Separation of Responsibilities
 
@@ -103,24 +131,49 @@ Work ALWAYS follows these phases, in order:
 3. **Test** — validate behavior and acceptance criteria.
 4. **Document** — keep documentation accurate and faithful to the code.
 
-#### Complete the Code Before Testing It
+#### Iterate: Analyse, Build in Bulk, Test What Changed
 
-Inside the **Implement** phase, you MUST **ALWAYS** write **all** of a task's code
-first, and only then move on to testing and to correcting or adjusting whatever
-the tests reveal. This is a strategic rule whose purpose is a faster, more
-efficient development process: finishing the whole implementation in one pass
-avoids the cost of repeatedly reloading the same context, and it lets the test
-phase exercise the finished behaviour rather than a half-built one.
+Development runs as **multiple iterations** of three steps, repeated until the
+objectives are met:
 
-- Do NOT write tests before the code, and do NOT interleave the two.
-- Do NOT stop mid-implementation to test a part of the task.
-- Once the code is complete, test it in full, then correct and adjust.
+1. **Analysis** — establish what the change actually requires.
+2. **Development of all the code, in bulk** — write it in one pass.
+3. **Testing of the changes made in step 2** — those changes, and not the project.
 
-This rule governs the ORDER of work within a task. It does not weaken any other
+**Build in bulk.** WHENEVER it is possible, write ALL the code of a task — or of
+several tasks together — in a single pass, rather than a little at a time.
+Finishing the implementation in one pass avoids the cost of repeatedly reloading
+the same context, and it lets the testing step exercise finished behaviour rather
+than a half-built one. Within an iteration: do NOT write tests before the code, do
+NOT interleave the two, and do NOT stop mid-implementation to test a part of what
+you are building. **Several tasks built in one pass are ONE unit of work**: the
+three steps apply to the group exactly as to a single task, and the group is
+delegated to a single subagent (see Section 4, Task Execution).
+
+**Stay FOCUSED AND OBJECTIVE, and NEVER attempt to go beyond what is required.**
+Do what the task asks, and nothing more. Scope that nobody asked for is not a
+bonus; it is a defect. NEVER invent tasks: hold to the objectives and
+requirements each task states, closed and to the letter. Do no more than is
+strictly necessary to make the task succeed, and spend no time on operations
+that do not serve that success — re-running checks already green, re-reading
+what the Knowledge Graph already gives you, exploring beyond what the task
+needs.
+
+**Test intelligently: test what you are developing, not the whole project.**
+Testing is a targeted instrument, not a ritual. **At every moment, determine
+the extent of the testing that the changes in progress require** — the scope is
+an active judgement, made anew for each change, not a default to fall back on.
+
+- Test the changes in progress — the code written in step 2 of this iteration.
+- Extend to related components ONLY where it is foreseeable that the change
+  affects their stability.
+- Reserve the FULL sweep for the three moments named in Section 6, Rule 2, and
+  for nothing else.
+
+This rule governs the ORDER and the SCOPE of work. It does not weaken any other
 rule: the phases still run Specify → Implement → Test → Document, the task is
-still self-contained (see Self-Contained Development), every bug still gets its
-regression test in the same cycle (see Regression Prevention), and no task is
-closed before the validation gates pass (see Section 6, Rule 2).
+still executed in full (see Completeness), and every bug fixed still gets its
+regression test in the same cycle (see Regression Prevention).
 
 ---
 
@@ -209,7 +262,7 @@ If a change to the SPEC needs a narrative beyond the diff, write it in the commi
 │                                                                 │
 │   Supporting: knowledge-authority, exhaustive-qa-engineer,      │
 │   release-manager, doc-manager, security-review, code-review,   │
-│   simplify                                                      │
+│   simplify, gitflow                                             │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
@@ -218,8 +271,8 @@ If a change to the SPEC needs a narrative beyond the diff, write it in the commi
 | Agent / Skill | Type | Responsibility | Key Rules |
 |---------------|------|----------------|-----------|
 | **specification-manager** | agent | SPEC/ creation and maintenance | MUST be first step. NEVER derives from code. Sole owner of `SPEC/`. |
-| **roadmap-manager** | skill | Roadmap/sprint/task management via `rmp` CLI | Source of truth via `rmp`. NEVER implements code directly. |
-| **knowledge-authority** | skill | Knowledge Graph: bootstrap, query, update, sync via `rmp graph` | Sole manager of the KG. Query it BEFORE reading files. Never guesses. |
+| **roadmap-manager** | skill | ALL coordination and maintenance of roadmap, sprints, and tasks via `rmp` CLI | Sole operator of `rmp`. Source of truth. NEVER implements code directly. |
+| **knowledge-authority** | skill | ALL knowledge of the project — structure, components, files — and the Knowledge Graph via `rmp graph` | Sole manager of the KG. Query it BEFORE reading files. Never guesses. |
 | **go-developer** | agent | Go implementation, refactor, review, performance | ONLY after SPEC exists. Validates build/test/vet/fmt/lint. |
 | **exhaustive-qa-engineer** | agent | Testing, edge cases, security/robustness validation | Critical features, pre-release, schema changes. |
 | **release-manager** | agent | Release coordination, version bump, CHANGELOG | Triggered by release requests. Runs full validation gates. |
@@ -227,6 +280,7 @@ If a change to the SPEC needs a narrative beyond the diff, write it in the commi
 | **security-review** | skill | Security review of pending changes | Trigger before merging security-sensitive changes. |
 | **code-review** | skill | Pull request review | Code review on PRs. |
 | **simplify** | skill | Review changes for reuse/quality and fix issues | Post-implementation cleanup. |
+| **gitflow** | skill | Executes EVERY git write: commit, branch, merge, tag, push | Executor only. Rule 3 governs WHAT may be done. Reads stay direct. |
 
 ### Task/Sprint Creation Flow
 
@@ -240,17 +294,25 @@ If a change to the SPEC needs a narrative beyond the diff, write it in the commi
 
 **Step 3: SQLite** stores as source of truth.
 
-### Working Team (All Subagents)
+### Subagent Delegation
+
+**ALL** work in this project MUST be delegated to a subagent specialised in the
+objectives the work is meant to achieve. ALWAYS choose the most suitable
+subagent.
 
 The table above defines the default routing; it is not a closed list. Your
 working team is **every subagent available** — global, user-level, or
-project-local.
+project-local. Each subagent contributes its own specialty, within the scope of
+the work it was given.
 
-- Use them collaboratively and complementarily, so that each task is completed
-  with the maximum confidence, effectiveness, and assertiveness.
-- Each subagent MUST contribute proactively with its own specialty.
-- Whenever a task falls within a specialist's domain, delegate to that
-  specialist instead of doing the work yourself.
+**One subagent at a time.** Use ONLY ONE subagent running in parallel with the
+main Claude Code conversation. NEVER run more than one subagent at the same time.
+
+- Use as many subagents as the objective requires — in SERIES, never in
+  parallel.
+- When the user authorises more than one subagent in parallel, that
+  authorisation is an EXCEPTION: it applies only to the task it was given for,
+  and it is ALWAYS revoked when that task ends.
 
 ---
 
@@ -260,8 +322,8 @@ Use the `rmp` CLI (the system's roadmap-management tool) to plan and coordinate
 execution. `rmp` is the **SINGLE SOURCE OF TRUTH** for planning and task
 execution in this project — no other mechanism may be used for this purpose.
 
-Every operation on Tasks or Sprints MUST go through the `roadmap-manager` skill,
-which is the interface to the `rmp` CLI.
+**EVERY operation that coordinates or maintains Tasks or Sprints MUST go through
+the `roadmap-manager` skill**, which is the interface to the `rmp` CLI.
 
 Use the **Knowledge Graph** (Section 5) to understand the project, its
 components, and how they relate, so you can identify the scope and impact of
@@ -300,34 +362,57 @@ each task.
 Task execution is the natural continuation of planning (the next step). Always
 use `rmp` to determine:
 1. Whether there is an open, not-yet-completed task to continue.
-2. Which task is next.
+2. Which task is next, and whether other pending tasks MUST be taken with it —
+   assess that proximity EVERY time, before any work starts (see Group tasks
+   that are substantially close, below).
 3. The goal of the task being started, based on its description and its
    functional and technical requirements.
-4. Determine the most appropriate subagent for the task and delegate its
-   execution to that subagent.
+4. Determine the most appropriate subagent for the task — or for the group of
+   tasks — and delegate its execution to that subagent.
 5. Always validate that the acceptance criteria are observed before closing a
    task.
 6. Ensure the task is closed with a short summary of what was done.
-7. After closing the task and before moving to the next one, make a git commit
-   following best practices, explaining what was done.
+7. After closing the task and before moving to the next one, commit through the
+   `gitflow` skill (Rule 3), explaining what was done.
 8. Update the Knowledge Graph.
 
 Whenever possible, adapt the model and the model's effort level to the
 requirements of each task's individual operations.
 
-**Task and sprint execution is sequential.** Sprints MUST be executed
-sequentially, and so MUST the tasks inside them.
+**Group tasks that are substantially close.** When evaluating the pending tasks,
+assess their TECHNICAL and FUNCTIONAL proximity. Where that proximity is
+SUBSTANTIAL, those similar tasks MUST be developed TOGETHER, in one pass, rather
+than one after another. This is the bulk rule of Section 0 applied across tasks:
+the group is ONE unit of work from beginning to end — analysed once, its code
+written in one pass, and the changes tested once, exactly as for a single task.
 
-Evaluations and audits MAY run in parallel, but such parallel execution MUST
-ALWAYS be authorized by the user beforehand.
+**Delegate the group to exactly ONE subagent** — the one specialised in the
+objectives and requirements of those tasks. NEVER one subagent per task, and
+NEVER the group divided among subagents by file or by area: dividing it defeats
+the reason for grouping, because each worker reloads the same context and none of
+them sees the whole change.
+
+Grouping decides only what is built in one pass — it never licenses work no
+task required, and every task in the group keeps its own acceptance criteria and
+its own closing summary.
+
+**Task and sprint execution is sequential.** Sprints MUST be executed
+sequentially, and so MUST the tasks inside them — a group of substantially close
+tasks counts as one unit here, and the groups themselves are taken in order.
+
+Evaluations and audits MAY run in parallel ONLY when the user has explicitly
+authorised it beforehand. That authorisation is an exception, revoked when the
+task ends (see Section 3, Subagent Delegation).
 
 ---
 
 ## 5. Knowledge Graph
 
-The Knowledge Graph MUST be managed through the `knowledge-authority` skill,
-which drives `rmp`'s Graph (Groadmap) features to create, maintain (update), and
-query a knowledge graph of the project. This graph **MUST CONTAIN EVERYTHING**
+**EVERY task concerning knowledge of the project — its structure, components,
+files, and how they relate — goes through the `knowledge-authority` skill**,
+which is equally the sole manager of the Knowledge Graph itself: it drives
+`rmp`'s Graph (Groadmap) features to create, maintain (update), and query a
+knowledge graph of the project. This graph **MUST CONTAIN EVERYTHING**
 useful to know about the project. Examples:
 - What features exist; where each is specified; where each is implemented; which
   tests exist and what they test.
@@ -370,10 +455,11 @@ your ability to understand the project is preserved.
 | Task Type | Agent / Skill |
 |-----------|---------------|
 | New feature/changes | `specification-manager` FIRST |
-| Create/manage task/sprint | `roadmap-manager` |
-| Knowledge Graph: query, update, sync | `knowledge-authority` |
+| ANY task/sprint coordination or maintenance | `roadmap-manager` |
+| ANY project knowledge (structure, components, files) or KG work | `knowledge-authority` |
 | Code implementation, refactor, performance | `go-developer` |
-| Git operations | Bash (`git`) — see Rule 3 |
+| Git WRITES (commit, branch, merge, tag, push) | `gitflow` skill — see Rule 3 |
+| Git reads (`status`, `log`, `diff`, `show`) | Bash (`git`) directly |
 | Releases / version bump | `release-manager` |
 | Testing | `exhaustive-qa-engineer` |
 | Security audit | `security-review` skill |
@@ -383,16 +469,34 @@ your ability to understand the project is preserved.
 
 ### Rule 2: Validation Gates
 
-Before any commit:
+**Scope the gates to what changed** (see Section 0, Iterate). Before a commit:
 1. `go fmt ./...` (format)
 2. `go vet ./...` (static analysis)
-3. `go test ./...` (tests - ALL must pass)
+3. `go test <changed packages>` (tests - ALL must pass) — plus any package whose
+   stability the change can foreseeably affect
 4. `go build -o ./bin/ ./cmd/rmp` (build)
-5. `golangci-lint run ./...` (lint — requires golangci-lint; see SPEC/BUILD.md for install)
+5. `golangci-lint run <changed packages>` (lint — requires golangci-lint; see SPEC/BUILD.md for install)
 
-Run all gates at once: `make check`
+**The full sweep is reserved for three moments, and no others**: closing a
+sprint, pushing, and a specific request from the user. A release qualifies
+through the push that ships it; nothing else does. At those moments, run both:
+
+```bash
+make check                    # every gate, whole project
+python3 tests/run_tests.py    # the E2E suite (Section 12)
+```
+
+A failing gate is never ignored, whatever its scope (see Section 9).
 
 ### Rule 3: Git Standards (Commits and Branching)
+
+**Every git WRITE goes through the `gitflow` skill** — commit, branch, merge,
+tag, push, and anything else that changes the repository. Read-only git
+(`status`, `log`, `diff`, `show`, `rev-parse`) stays direct, through Bash.
+
+The skill EXECUTES; it does not authorise. The standards below still govern WHAT
+may be done: the skill performs the operation it is given, and it NEVER creates a
+branch, a merge, or a push that the user did not ask for.
 
 #### Branching
 
@@ -471,13 +575,17 @@ global Claude Code configuration.
 
 | Situation | Action |
 |-----------|--------|
+| Any work | Delegate to the most suitable subagent — one at a time, in series (Section 3) |
+| More than one subagent in parallel (including evaluations or audits) | ONLY with explicit user authorisation; revoked when the task ends |
+| Writing or interpreting instructions, briefs, tasks, documentation | Explicit, objective, closed, concise (Section 0) |
 | New feature | `specification-manager` FIRST |
 | Code changes | Verify SPEC/ or invoke `specification-manager` |
-| Create/manage task/sprint | `roadmap-manager` |
-| Need a project fact (what exists, where it lives) | `knowledge-authority` — query the KG BEFORE reading files |
+| ANY task/sprint coordination or maintenance | `roadmap-manager` |
+| Need a project fact (structure, components, files, where something lives) | `knowledge-authority` — query the KG BEFORE reading files |
 | Knowledge Graph update after a commit | `knowledge-authority` |
-| Git operations | Bash (`git`) with user confirmation for destructive ops |
-| Committing work | Commit to the CURRENT branch. NEVER create a branch unless the user asked — see Rule 3 |
+| Git WRITES (commit, branch, merge, tag, push) | `gitflow` skill; Rule 3 still governs WHAT may be done — confirm destructive ops with the user |
+| Git reads (`status`, `log`, `diff`, `show`) | Bash (`git`) directly |
+| Committing work | `gitflow` skill, to the CURRENT branch. NEVER create a branch unless the user asked — see Rule 3 |
 | Release / version bump | `release-manager` |
 | Tests needed | `exhaustive-qa-engineer` |
 | Security audit | `security-review` skill |
@@ -487,14 +595,19 @@ global Claude Code configuration.
 | PR review | `code-review` skill |
 | Requirements unclear / ambiguous / contradictory | ASK the user — provide options (a, b, c) with a recommendation; one question at a time |
 | Change to scope, behavior, architecture, or requirements | ASK the user BEFORE acting |
-| Obvious, low-risk fix (e.g. unambiguous bug) | Proceed immediately; no need to ask |
-| New need discovered mid-task | Add task via `rmp`; resolve in the SAME cycle |
-| Implementing a task | Write ALL the task's code first; test, correct, and adjust only after |
-| Pre-existing bug found | Fix on the spot, then resume the original work |
-| Bug identified (any) | Add regression test(s) in the SAME cycle so it cannot reappear |
+| Need outside the task's scope (including an obvious, low-risk fix) | ASK the user; NEVER start it proactively (Section 0, Goal-Directed Action) |
+| New need discovered mid-task, required by the task's own objectives | Resolve it in the SAME cycle — the task is executed in full |
+| Work not explicitly requested (speculation, tidying, unasked audit) | Do NOT start it — ask the user (Section 0, Goal-Directed Action) |
+| Task started | Execute it in full; NEVER leave it half-done (Section 0, Completeness) |
+| Operation that does not serve the task's success | Skip it: no re-running green checks, no re-reading what is already known |
+| Evaluating the pending tasks | Assess their technical and functional proximity; substantial proximity means they are developed together (Section 4) |
+| Implementing a task | Iterate: analyse, write ALL the code in bulk, test ONLY those changes (Section 0, Iterate) |
+| Choosing the test scope | Judge the extent each change requires; full sweep ONLY on sprint close, push, or user request (Rule 2) |
+| Developing several tasks in one pass | ONE specialised subagent for the whole group; analyse, build, and test it as a single task (Section 4) |
+| Pre-existing bug found | Report it and ASK the user how to proceed; NEVER fix it proactively |
+| Bug fixed (any) | Add regression test(s) in the SAME cycle so it cannot reappear |
 | Assess performance / completeness / correctness | Gather evidence; decide empirically |
 | Trade-off between correctness, safety, and speed | Apply Correct → Safe → Fast; if they conflict, ASK the user |
-| Parallel evaluations or audits | Allowed ONLY with prior user authorization |
 | Information insufficient | Consult Knowledge Graph first, then authoritative sources — never guess |
 | Code vs SPEC diverge | Follow SPEC, ask user |
 
@@ -508,6 +621,8 @@ global Claude Code configuration.
 - Make product decisions without user
 - Make decisions alone when instructions are unclear, ambiguous, or contradictory (always ASK)
 - Change scope, expected behavior, architecture, or requirements without asking the user first
+- Start any task that was not explicitly requested
+- Leave a task half-done or partially done
 - Guess instead of consulting the Knowledge Graph or authoritative sources
 - Decide on performance/completeness/correctness without empirical evidence
 - Trade correctness or safety for speed (the order is Correct → Safe → Fast)
@@ -517,17 +632,36 @@ global Claude Code configuration.
 
 ### Other Forbidden
 - Ignore `go vet` or `go test` failures
+- Executing work without delegating it to the most suitable subagent
+- Running more than one subagent in parallel without explicit user
+  authorisation, or extending such an authorisation beyond the task it was given
+  for
+- Instructions, briefs, or task definitions that are not explicit, objective,
+  closed, and concise
 - Partial (non-self-contained) deliverables or tests created with skip
-- Writing tests before a task's code is complete, or interleaving the two, or
-  stopping mid-implementation to test a part of the task
-- Leaving pre-existing bugs unfixed once found
+- Writing tests before an iteration's code is complete, or interleaving the two,
+  or stopping mid-bulk to test a part of what is being built
+- Running the whole test suite where the change calls for a scoped one (the full
+  sweep is for the three moments in Rule 2: sprint close, push, user request)
+- Doing more than was asked, or extending scope the user did not request
+- Inventing tasks: recording or doing work that was not explicitly requested
+- Operations that do not serve the task's success — re-running checks already
+  green, re-reading what is already known
+- Fixing a pre-existing bug, or starting any other need outside the task's scope,
+  without asking the user
 - Fixing a bug without adding the regression test(s) that prevent its recurrence
-- Executing tasks or sprints in parallel (execution is sequential)
-- Running evaluations or audits in parallel without explicit user authorization
-- Managing the Knowledge Graph outside the `knowledge-authority` skill
+- Executing tasks or sprints in parallel (execution is sequential; developing a
+  group of substantially close tasks in one pass is NOT parallel execution)
+- Splitting a group of substantially close tasks across several subagents, or
+  taking one subagent per task (the group goes to ONE specialist — Section 4)
+- Answering for the project's structure, components or files — or managing the
+  Knowledge Graph — outside the `knowledge-authority` skill
+- Coordinating or maintaining tasks or sprints outside the `roadmap-manager`
+  skill
 - Committing without updating the Knowledge Graph
 - Creating a git branch that the user did not ask for (including a branch per
   task or per sprint, or branching just because the current branch is `main`)
+- Performing a git WRITE outside the `gitflow` skill (reads stay direct)
 - Destructive Git operations without confirmation
 - Security compromises (SQL injection, etc.)
 - Reference Claude/AI in commits
