@@ -109,14 +109,15 @@ A non-test source file authored by the project. Test sources are `Test` nodes, n
 `CodeFile`; vendored third-party files are `Component`s, never `CodeFile`.
 
 Build and deployment artefacts are `CodeFile`s on the same terms as program source. The
-`Makefile`, `install.sh`, the workflow files under `.github/workflows/`, `.gitignore`, and
-`.gosec.yaml` are each a file the project authored and maintains, each realises a requirement
-the SPEC states, and each is verified by a test; nothing about them justifies a label of their
-own. Their `package` is the directory that owns them -- `.` for a repository-root file, and
-`.github/workflows` for a workflow -- rather than a Go import path, because `package` on
-this label means "the component this file belongs to" and not "a compilation unit". No
+`Makefile`, `install.sh`, the workflow files under `.github/workflows/`, `.gitignore`,
+`.gosec.yaml` and `.golangci.yml` are each a file the project authored and maintains, each
+realises a requirement the SPEC states, and each is verified by a test; nothing about them
+justifies a label of their own. Their `package` is the directory that owns them -- `.` for a
+repository-root file, and `.github/workflows` for a workflow -- rather than a Go import path,
+because `package` on this label means "the component this file belongs to" and not "a
+compilation unit". No
 `Component` node exists for either directory, and none is invented to satisfy a query: those
-six files therefore carry a `package` and no `PART_OF` edge, and they are the only
+files therefore carry a `package` and no `PART_OF` edge, and they are the only
 `CodeFile`s that do.
 
 `.gosec.yaml` was labelled `Doc` until it was tested against `Doc`'s own definition, which is
@@ -302,31 +303,35 @@ write is rejected with exit 1 and nothing is created -- which makes it the only 
 engine offers against the duplication that a pattern-`MERGE` produces when it creates the
 nodes it was expected to match.
 
-### Declared and enforced
+### Declared constraints
 
 Every label identifies its nodes by `key`, so every label carries a UNIQUE constraint on
-that property. All eight exist in the engine today, because the data satisfies all eight:
-`key` is 100% distinct within every label.
+that property. The table states the rule and the DDL that declares it; whether the engine
+holds a constraint today is live state, read with `SHOW CONSTRAINTS`, and is not written here.
 
-| Constraint | Label | DDL | Status |
-|---|---|---|---|
-| `test_key_unique` | `Test` | `CREATE CONSTRAINT test_key_unique FOR (x:Test) REQUIRE x.key IS UNIQUE` | enforced |
-| `memory_key_unique` | `Memory` | `CREATE CONSTRAINT memory_key_unique FOR (x:Memory) REQUIRE x.key IS UNIQUE` | enforced |
-| `requirement_key_unique` | `Requirement` | `CREATE CONSTRAINT requirement_key_unique FOR (x:Requirement) REQUIRE x.key IS UNIQUE` | enforced |
-| `codefile_key_unique` | `CodeFile` | `CREATE CONSTRAINT codefile_key_unique FOR (x:CodeFile) REQUIRE x.key IS UNIQUE` | enforced |
-| `component_key_unique` | `Component` | `CREATE CONSTRAINT component_key_unique FOR (x:Component) REQUIRE x.key IS UNIQUE` | enforced |
-| `doc_key_unique` | `Doc` | `CREATE CONSTRAINT doc_key_unique FOR (x:Doc) REQUIRE x.key IS UNIQUE` | enforced |
-| `spec_key_unique` | `Spec` | `CREATE CONSTRAINT spec_key_unique FOR (x:Spec) REQUIRE x.key IS UNIQUE` | enforced |
-| `release_key_unique` | `Release` | `CREATE CONSTRAINT release_key_unique FOR (x:Release) REQUIRE x.key IS UNIQUE` | enforced |
+| Constraint | Label | DDL |
+|---|---|---|
+| `test_key_unique` | `Test` | `CREATE CONSTRAINT test_key_unique FOR (x:Test) REQUIRE x.key IS UNIQUE` |
+| `memory_key_unique` | `Memory` | `CREATE CONSTRAINT memory_key_unique FOR (x:Memory) REQUIRE x.key IS UNIQUE` |
+| `requirement_key_unique` | `Requirement` | `CREATE CONSTRAINT requirement_key_unique FOR (x:Requirement) REQUIRE x.key IS UNIQUE` |
+| `codefile_key_unique` | `CodeFile` | `CREATE CONSTRAINT codefile_key_unique FOR (x:CodeFile) REQUIRE x.key IS UNIQUE` |
+| `component_key_unique` | `Component` | `CREATE CONSTRAINT component_key_unique FOR (x:Component) REQUIRE x.key IS UNIQUE` |
+| `doc_key_unique` | `Doc` | `CREATE CONSTRAINT doc_key_unique FOR (x:Doc) REQUIRE x.key IS UNIQUE` |
+| `spec_key_unique` | `Spec` | `CREATE CONSTRAINT spec_key_unique FOR (x:Spec) REQUIRE x.key IS UNIQUE` |
+| `release_key_unique` | `Release` | `CREATE CONSTRAINT release_key_unique FOR (x:Release) REQUIRE x.key IS UNIQUE` |
 
-Enforcement is verified rather than assumed. Re-creating an existing `Test` key is refused:
+A constraint the data violates cannot be created -- `CREATE CONSTRAINT` exits 1 against
+violating data -- but it stays the model's rule. Two statements measure the gap on a label:
 
-```
-Error: graph engine error: graph query failed: exec: constraint violation:
-UNIQUE constraint on (Test).key: value "internal/web/graph_lock_test.go" already exists
-```
+- duplicated keys:
+  `MATCH (n:<Label>) WHERE n.key IS NOT NULL WITH n.key AS v, count(*) AS c WHERE c > 1 RETURN count(v) AS dup_values, sum(c) AS dup_nodes`;
+- missing keys: `MATCH (n:<Label>) WHERE n.key IS NULL RETURN count(n) AS null_key`.
 
-and the node count is unchanged afterwards.
+Enforcement is probed rather than assumed: a write that re-creates an existing `key` under
+the same label must be refused with exit 1 by a constraint-violation error naming the label
+and the value, and must leave the node count unchanged. The constraint state measured when
+this section was reduced to form, and the last enforcement probe recorded, are held in the
+graph: `MATCH (m:Memory {key:'mem-kg-constraint-measurement'}) RETURN m.body`.
 
 ### The rule the engine cannot hold: global key uniqueness
 
@@ -337,10 +342,8 @@ two different labels satisfies every one of them and still breaks the convention
 uniqueness therefore remains what Conventions says it is -- something whoever writes to this
 graph must honour -- and no DDL can be declared for it.
 
-**Status: violated, once.** `tests/run_tests.py` is carried by both a `CodeFile` and a
-`Test` node. It is the same shape as the `README.md` pair that `rmp` task 155 closed by
-rekeying, and it is a defect in the model rather than a duplicate to delete: the file is
-genuinely both the harness source and the registry the e2e suite runs. The measured count:
+Whether the convention holds is graph content, not part of this file. This statement lists
+every key carried by more than one node:
 
 ```
 MATCH (n) WHERE n.key IS NOT NULL WITH n.key AS v, count(*) AS c
@@ -350,7 +353,8 @@ WHERE c > 1 RETURN v, c ORDER BY c DESC
 That query groups on the STORED BYTES, so it cannot see a pair whose keys differ only in
 Unicode normalisation form. `SPEC/GRAPH.md` section Node Key Uniqueness is canonical for the
 comparison that decides sameness and publishes the two-step audit that does detect such a
-pair.
+pair. The status the query last returned, and the decision recorded for each key it
+reported, are held in the same memory as the constraint state.
 
 ## Indexes
 
@@ -396,9 +400,10 @@ after -- are held in the graph:
 
 **The lookup Conventions recommends cannot be indexed at all.** `MATCH (n {key:'...'})`
 without a label plans as `AllNodesScan` plus a filter, reading every node of the graph,
-because an index is declared on a label and a label-less pattern reaches none of them. The label-less form remains correct and remains the
-form that expresses the global-uniqueness convention, but a statement on a hot path should
-name the label it expects and pay the seek instead.
+because an index is declared on a label and a label-less pattern reaches none of them. The
+label-less form remains correct and remains the form that expresses the global-uniqueness
+convention, but a statement on a hot path should name the label it expects and pay the seek
+instead.
 
 ## Maintenance
 
