@@ -2832,7 +2832,27 @@ rmp sprint bottom -r <name> <sprint-id> <task-id>
 - `top`: Equivalent to `move-to <task-id> 0`
 - `bottom`: Equivalent to `move-to <task-id> <task_count>`
 
-**JSON Output (success):** No output, exit code 0.
+**JSON Output (success):** A JSON success object is written to stdout, exit code 0. The `position` field is the position the task holds once the command has run: `0` for `top`, and the sprint's last position, one less than its member count, for `bottom`. It is therefore not the `<task_count>` the equivalence above names, and a task that already holds the target position is reported at that position all the same:
+
+```json
+{
+  "success": true,
+  "sprint_id": 1,
+  "task_id": 5,
+  "position": 0
+}
+```
+
+The same object for `bottom`, on a sprint of five members:
+
+```json
+{
+  "success": true,
+  "sprint_id": 1,
+  "task_id": 5,
+  "position": 4
+}
+```
 
 **Error Output:**
 

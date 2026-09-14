@@ -2130,9 +2130,30 @@ The rules are:
    `0` states what success means for that subcommand — what was created, changed,
    or returned. A subcommand whose success is an empty stdout says so, so that a
    caller reading only this array can tell an empty success from a silent failure.
-5. **The array is exhaustive for the subcommand.** A code the subcommand can emit
-   and that this array omits is a defect, and so is a code the array publishes that
-   the subcommand cannot emit.
+5. **The array is exhaustive over the conditions a caller controls.** Those
+   conditions are the command line — its flags and the values they carry, a value
+   read from standard input in place of an absent flag included, its positional
+   arguments, and the roadmap selector — and the state of the roadmap the
+   invocation acts on: whether the roadmap exists, and what its database records.
+   A code the subcommand can emit under such a condition and that this array omits
+   is a defect, and so is a code the array publishes that the subcommand cannot
+   emit. The boundary is drawn on the condition and never on the code: a code a
+   caller can produce from the command line or the roadmap's state is required
+   whatever its number, `1` included.
+
+   **The array does not enumerate faults in the environment.** The environment is
+   everything outside those conditions: whether the roadmap's database can be read
+   or written at all, the standard input stream as a stream, the ports and sockets
+   the invocation binds or connects to, and the other processes running beside it.
+   A subcommand that meets a fault there can exit with a code its array does not
+   publish, and that omission is not a defect. Where a subcommand does publish a
+   code for an environment fault, the condition beside the code names that fault,
+   and the gate that holds the arrays to this rule drives the code by reproducing
+   the named fault rather than a generic one: for the subcommands that add, edit
+   and remove a comment, a roadmap database that is not a SQLite database; for
+   `web`, an explicit `--port` another process already holds; for `graph client`,
+   no server listening on the resolved socket; and for a second `graph serve`, a
+   server already live for the same roadmap.
 
 **The entry is an object, and a consumer written against a bare list of integers
 cannot read it.** The shape therefore belongs to a major `schema_version`, on the

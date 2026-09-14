@@ -13,11 +13,12 @@ Two gates live here, on two SPEC sections, over one fixture.
    with its reason, and the exemption list is itself checked for staleness.
 
 2. SPEC/DATA_FORMATS.md § Field reference: per-subcommand exit code entry,
-   rule 5: a subcommand's `exit_codes` array is exhaustive. Every one of the
-   56 subcommands is driven into every code it declares, and swept with a
-   closed family of command-line probes; a code the binary emits that the
-   subcommand does not declare fails the gate, and so does a declared code
-   nothing can drive.
+   rule 5: a subcommand's `exit_codes` array is exhaustive over the
+   conditions a caller controls, and does not enumerate faults in the
+   environment. Every one of the 56 subcommands is driven into every code it
+   declares, and swept with a closed family of command-line probes; a code the
+   binary emits that the subcommand does not declare fails the gate, and so
+   does a declared code nothing can drive.
 
 # Why the corpus is read from the binary
 
@@ -28,21 +29,25 @@ exist to detect.
 
 # What bounds the exhaustiveness sweep, and what does not
 
+Rule 5 draws the boundary, and this gate takes it from the SPEC rather than
+drawing one of its own: the array is exhaustive over the conditions a caller
+controls -- the command line and the state of the roadmap -- and does not
+enumerate faults in the environment. The rule is the source; what follows is
+only how this gate applies it.
+
 The sweep of gate 2 is over the COMMAND LINE: an unrecognised flag, a
 malformed positional id, a missing or surplus positional argument, a flag
 written with no value, a value outside its range, a value outside its enum, an
-absent roadmap selector, and a roadmap that does not exist. That is the surface
-a caller controls and the surface the contract's `exit_codes` describes.
+absent roadmap selector, and a roadmap that does not exist.
 
-It is NOT a sweep over the environment. Every roadmap-scoped subcommand exits 1
-if its SQLite database is unreadable, and only the six comment subcommands
-declare that code; widening the sweep to environment faults would report fifty
-subcommands as under-declaring, which is a different question from the one
-rule 5 asks and a decision no gate should take on its own. Where a subcommand
-DOES declare a code whose condition is an environment fault, the driver
-reproduces exactly the fault that subcommand's own condition names -- a
-corrupted database for the comment subcommands, a bound port for `web`, a
-socket nothing listens on for `graph client`.
+It is NOT a sweep over the environment, because rule 5 does not ask for one: a
+code a subcommand emits only on an environment fault, and does not declare, is
+not a defect under the rule. Where a subcommand DOES declare a code for such a
+fault, rule 5 requires its condition to name the fault and this gate to
+reproduce that fault rather than a generic one, and the drivers below do: a
+corrupted database for the subcommands that add, edit and remove a comment, a
+bound port for `web`, a socket nothing listens on for `graph client`, and a
+live server for a second `graph serve`.
 
 # Isolation
 
@@ -1514,9 +1519,11 @@ def _server_starts(home, which):
 
 class TestSubcommandExitCodesAreExhaustive:
     """SPEC/DATA_FORMATS.md § Field reference: per-subcommand exit code entry,
-    rule 5: the array is exhaustive for the subcommand. A code the subcommand
-    can emit and the array omits is a defect, and so is a code the array
-    publishes that the subcommand cannot emit."""
+    rule 5: the array is exhaustive over the conditions a caller controls. A
+    code such a condition produces and the array omits is a defect, and so is
+    a code the array publishes that the subcommand cannot emit. The rule, not
+    this docstring, draws the boundary with the environment; the module
+    docstring says how this gate applies it."""
 
     def setup_method(self):
         self.contract = Workspace.contract()
