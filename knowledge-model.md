@@ -360,33 +360,43 @@ relationship-property indexes are not supported. An index is consequently worth 
 exactly where a statement performs an equality lookup on one property, which is what every
 identity lookup against this graph is.
 
-Measured on 2026-09-08 at 878 nodes and 2852 edges. Selectivity decides nothing here,
-because `key` is 100% distinct within every label; label size decides, and the threshold is
-whether the label is large enough for a scan to cost more than the index saves.
+**Decision criterion.** Every label carries an enforced UNIQUE constraint on `key` (see
+Constraints), so `key` is distinct within every label by construction and selectivity decides
+nothing: label size decides. An index is declared on a label large enough that a scan would
+cost more than the index saves, and is not declared on a label small enough that its scan is
+already cheap.
 
-| Label | Nodes | Distinct `key` | Index | Verdict |
-|---|---:|---:|---|---|
-| `Test` | 328 | 328 | `test_key` | declared |
-| `Memory` | 185 | 185 | `memory_key` | declared |
-| `Requirement` | 164 | 164 | `requirement_key` | declared |
-| `CodeFile` | 134 | 134 | `codefile_key` | declared |
-| `Component` | 27 | 27 | none | skipped: the scan costs 27 dbHits and 175 us |
-| `Doc` | 14 | 14 | none | skipped: label too small to pay |
-| `Spec` | 14 | 14 | none | skipped: label too small to pay |
-| `Release` | 12 | 12 | none | skipped: the scan costs 12 dbHits and 113 us |
+| Label | Property | Index | Recommendation |
+|---|---|---|---|
+| `Test` | `key` | `test_key` | declared |
+| `Memory` | `key` | `memory_key` | declared |
+| `Requirement` | `key` | `requirement_key` | declared |
+| `CodeFile` | `key` | `codefile_key` | declared |
+| `Component` | `key` | none | not declared: label too small to pay |
+| `Doc` | `key` | none | not declared: label too small to pay |
+| `Spec` | `key` | none | not declared: label too small to pay |
+| `Release` | `key` | none | not declared: label too small to pay |
 
 The DDL for a declared index is
-`CREATE INDEX <label lowercased>_key FOR (x:<Label>) ON (x.key)`.
+`CREATE INDEX <label lowercased>_key FOR (x:<Label>) ON (x.key)`, and `SHOW INDEXES` reads
+which indexes the engine holds.
 
-The benefit is measured with `EXPLAIN` and `PROFILE`, not asserted. Before the index, a
-`Memory` identity lookup planned as `NodeByLabelScan` plus `Filter` and cost 185 dbHits in
-995 us; after it, the `Filter` disappears and the plan is a `NodeByIndexSeek` costing 1
-dbHit in 17 us.
+**Proof, not assertion.** A recommendation is measured, and the figures a measurement returns
+are graph content rather than part of this file. Two statements re-measure it:
+
+- label size and distinctness:
+  `MATCH (n:<Label>) WHERE n.key IS NOT NULL RETURN count(n) AS tot, count(DISTINCT n.key) AS dv`;
+- the plan and its cost: `EXPLAIN` or `PROFILE` of `MATCH (n:<Label> {key:'<key>'}) RETURN n.key`.
+
+A lookup no index serves plans as `NodeByLabelScan` plus a filter; a lookup an index serves
+plans as `NodeByIndexSeek`, with no filter. The figures measured when the four indexes above
+were declared -- per-label node counts, and the dbHits and timings of the plans before and
+after -- are held in the graph:
+`MATCH (m:Memory {key:'mem-kg-index-measurement'}) RETURN m.body`.
 
 **The lookup Conventions recommends cannot be indexed at all.** `MATCH (n {key:'...'})`
-without a label plans as `AllNodesScan` plus `Filter` -- 878 dbHits in 4523 us, some 200
-times the cost of the equivalent seek -- because an index is declared on a label and a
-label-less pattern reaches none of them. The label-less form remains correct and remains the
+without a label plans as `AllNodesScan` plus a filter, reading every node of the graph,
+because an index is declared on a label and a label-less pattern reaches none of them. The label-less form remains correct and remains the
 form that expresses the global-uniqueness convention, but a statement on a hot path should
 name the label it expects and pay the seek instead.
 
