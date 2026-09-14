@@ -41,8 +41,8 @@ confirmed to be true:
 
 | Property | Type | Meaning |
 |---|---|---|
-| `last_commit` | string | Full 40-character SHA of the commit at which the element was last confirmed. |
-| `last_commit_date` | string | Calendar date of that commit, ISO 8601, `YYYY-MM-DD`. |
+| `gitCommit` | string | Full 40-character SHA of the commit at which the element was last confirmed. |
+| `gitDate` | string | Calendar date of that commit, ISO 8601, `YYYY-MM-DD`. |
 
 For nodes backed by a file (`CodeFile`, `Test`, `Spec`, `Doc`) the confirmed commit is the
 LAST commit that touched the file, as reported by `git log -1 -- <path>` -- which is why
@@ -54,14 +54,16 @@ commit among the artefacts the requirement is linked to. For an edge it is the c
 which the relationship itself was last verified to hold.
 
 Provenance is distinct from an artefact's own facts. A `Release` legitimately owns the
-commit it was cut from, and a `Memory` owns the commit at which its content was recorded;
-those are stored under their own property names (`commit`/`date` and
-`source_commit`/`source_date`) and never under `last_commit`.
+commit it was cut from, and a `Memory` owns the commit at which its content was recorded
+and, when it records a decision, the commits that delivered and merged that decision;
+those are stored under their own property names (`commit`/`date` on a `Release`;
+`source_commit`/`source_date` and `commit`/`merge_commit` on a `Memory`) and never under
+`gitCommit`.
 
 A stamp is a claim, not a formality: it asserts that somebody confirmed the element against
 the repository at that commit. It follows that an element whose truth could not be
 established MUST be left unstamped rather than given a plausible commit. **An absent
-`last_commit` therefore means UNVERIFIED, and never "overlooked"**: it is the one honest
+`gitCommit` therefore means UNVERIFIED, and never "overlooked"**: it is the one honest
 way the graph can say it does not know. A node or an edge may therefore lack a stamp -- the
 rule above licences it and this file must not contradict it by also promising that every node
 carries one. Never bulk-stamp elements to make a completeness query come out clean: that
@@ -70,10 +72,10 @@ hides.
 
 Two corollaries the maintenance pass keeps running into. A stamp is written in FULL: an
 abbreviated SHA is not a shorter spelling of the same value but a different string, which no
-`last_commit = '<full sha>'` predicate matches and which a later reader cannot tell from a
+`gitCommit = '<full sha>'` predicate matches and which a later reader cannot tell from a
 typo. And a stamp is not a means of reconciliation: bringing a node into conformance with
 this file -- filling a required property, renaming one, normalising a vocabulary -- changes
-nothing about when the node's claims were last checked against the code, so `last_commit`
+nothing about when the node's claims were last checked against the code, so `gitCommit`
 stays where it was. A stale claim carrying a fresh stamp is worse than one carrying an old
 stamp, because it asserts a verification that did not happen.
 
@@ -93,9 +95,8 @@ depends on, or a third-party web asset vendored into the binary.
 | `version` | no | Pinned version. Omitted when upstream declares none, as the Inter webfont does; never inferred. |
 | `licence` | no | Upstream licence of an `external-dependency`, as recorded in `internal/web/static/vendor/LICENSES.md`. |
 | `summary` | no | What the component is and what it owns. |
-| `released_in` | no | Release tag that first shipped the pinned version. |
 | `release_commit`, `release_date` | no | Commit and date at which the pinned version was adopted. The dependency's own facts, not provenance. |
-| `last_commit`, `last_commit_date` | yes | Provenance. |
+| `gitCommit`, `gitDate` | yes | Provenance. |
 
 Third-party code is never a `CodeFile`. The files vendored under
 `internal/web/static/vendor/` (Tabler, Tabler Icons, Inter, D3, d3-sankey) are modelled as
@@ -136,7 +137,7 @@ form.
 | `file` | yes | Base name. |
 | `package` | yes | Owning component's path. |
 | `language` | yes | `Go`, `Python`, `HTML`, `CSS`, `JavaScript`, `SVG`, `Bash`, `YAML`, `Make` or `Gitignore`. The last four are the build and deployment artefacts described above. |
-| `last_commit`, `last_commit_date` | yes | Provenance. |
+| `gitCommit`, `gitDate` | yes | Provenance. |
 
 ### Spec
 
@@ -148,7 +149,7 @@ One specification document under `SPEC/`.
 | `path` | yes | Same as `key`. |
 | `area` | yes | Functional area the document owns, per CLAUDE.md section 2. |
 | `summary` | yes | One-line description of what the document specifies. |
-| `last_commit`, `last_commit_date` | yes | Provenance. |
+| `gitCommit`, `gitDate` | yes | Provenance. |
 
 ### Test
 
@@ -163,7 +164,7 @@ enforces.
 | `name` | no | Base name, for file-backed tests. |
 | `summary` | no | What the test asserts. Expected on `contract` tests, which have no file to read. |
 | `runner_registered` | no | `e2e` only: `true` when the module is registered in `tests/run_tests.py`, which `assert_no_dormant_modules` enforces. |
-| `last_commit`, `last_commit_date` | yes | Provenance. |
+| `gitCommit`, `gitDate` | yes | Provenance. |
 
 ### Requirement
 
@@ -174,7 +175,7 @@ A capability the binary loses is marked `superseded` and kept, never deleted and
 asserting itself. Deleting it destroys the record that the capability once existed and why
 it was withdrawn, which is exactly what anyone proposing to reintroduce it needs; leaving it
 `implemented` makes the graph assert something the code no longer does. The `superseded_note`
-carries the evidence, and the node is NOT restamped: `last_commit` goes on naming the commit
+carries the evidence, and the node is NOT restamped: `gitCommit` goes on naming the commit
 at which the capability was last confirmed to work, because a fresh stamp on a withdrawn
 capability would assert a verification that did not happen.
 
@@ -189,7 +190,7 @@ capability would assert a verification that did not happen.
 | `superseded_note` | no | Required companion to `status: superseded`: why the capability went away, at which commit, what was measured to establish that it is gone, and why the node is kept rather than deleted. |
 | `rmp_task` | no | Integer id of the `rmp` task that delivered the capability. The task itself lives in the roadmap database, not in the graph. |
 | `rmp_task_verified_by` | no | Integer id of a later `rmp` task that re-established the capability against the code, where that is a different task from the one that delivered it. |
-| `last_commit`, `last_commit_date` | yes | Provenance. |
+| `gitCommit`, `gitDate` | yes | Provenance. |
 
 ### Release
 
@@ -209,7 +210,7 @@ A published version of the binary.
 | `url` | no | Published release URL. |
 | `published`, `published_at`, `assets` | no | Publication state. |
 | `verified` | no | What was checked against the *published* artefacts after the release went out: checksums, archive contents, the version the shipped binary reports, and the release workflow run. The release's own fact, not provenance, and distinct from the validation gates that ran before the tag. |
-| `last_commit`, `last_commit_date` | yes | Provenance. |
+| `gitCommit`, `gitDate` | yes | Provenance. |
 
 ### Doc
 
@@ -231,7 +232,7 @@ with the rest of the user-facing documentation.
 | `key` | yes | Repository-relative path, e.g. `DOCS/commands/task.md`. |
 | `path` | yes | Same as `key`. |
 | `file` | yes | Base name. |
-| `last_commit`, `last_commit_date` | yes | Provenance. |
+| `gitCommit`, `gitDate` | yes | Provenance. |
 
 ### Memory
 
@@ -246,11 +247,18 @@ rediscovered. Per CLAUDE.md section 5 this layer is the only memory the project 
 | `title` | no | Human-readable name. |
 | `type` | no | Category of the memory. |
 | `source_commit`, `source_date` | no | Commit and date at which the fact was recorded. The memory's own fact, not provenance. |
-| `last_commit`, `last_commit_date` | yes | Provenance. |
+| `sprint` | no | Integer id of the `rmp` sprint during which a recorded decision was taken. |
+| `decided_at` | no | Date a recorded decision was taken, `YYYY-MM-DD`. |
+| `status` | no | Delivery state of a recorded decision, written upper-case, e.g. `DELIVERED`. |
+| `delivered_at` | no | Date a recorded decision was delivered, `YYYY-MM-DD`. |
+| `commit` | no | Full SHA of the commit that delivered a recorded decision. The memory's own fact, not provenance. |
+| `merge_commit` | no | Commit of the merge that brought the delivering commit into `develop`. The memory's own fact, not provenance. It may be stored abbreviated, which diverges from the full-SHA rule above; `MATCH (m:Memory) WHERE m.merge_commit IS NOT NULL AND size(m.merge_commit) <> 40 RETURN m.key` lists the divergent nodes. |
+| `evidence` | no | What was measured to establish that a recorded decision was delivered. |
+| `gitCommit`, `gitDate` | yes | Provenance. |
 
 ## Edge types
 
-An edge carries `last_commit` and `last_commit_date` once the relationship has been verified
+An edge carries `gitCommit` and `gitDate` once the relationship has been verified
 to hold; see Provenance above, where an absent stamp means unverified. Many edges predate the
 practice and carry none, and that backlog is a known gap rather than a per-edge decision: only
 where an edge was DELIBERATELY left unstamped, having been looked at and not confirmed, is the
@@ -284,6 +292,103 @@ Spec -[:SPECIFIES]-> Requirement -[:IMPLEMENTED_BY]-> CodeFile -[:PART_OF]-> Com
 A requirement with no `IMPLEMENTED_BY` edge is not implemented; a requirement with no
 `VERIFIED_BY` edge is not tested. Both are defects in the graph or in the project, and the
 graph is expected to make them visible rather than hide them.
+
+## Constraints
+
+The engine enforces exactly two kinds of constraint, each on a single node property:
+`IS UNIQUE` and `IS NOT NULL`. Composite `NODE KEY`, `ASSERT exists(...)` and type
+constraints are not supported. A UNIQUE constraint is genuinely enforced -- a violating
+write is rejected with exit 1 and nothing is created -- which makes it the only defence the
+engine offers against the duplication that a pattern-`MERGE` produces when it creates the
+nodes it was expected to match.
+
+### Declared and enforced
+
+Every label identifies its nodes by `key`, so every label carries a UNIQUE constraint on
+that property. All eight exist in the engine today, because the data satisfies all eight:
+`key` is 100% distinct within every label.
+
+| Constraint | Label | DDL | Status |
+|---|---|---|---|
+| `test_key_unique` | `Test` | `CREATE CONSTRAINT test_key_unique FOR (x:Test) REQUIRE x.key IS UNIQUE` | enforced |
+| `memory_key_unique` | `Memory` | `CREATE CONSTRAINT memory_key_unique FOR (x:Memory) REQUIRE x.key IS UNIQUE` | enforced |
+| `requirement_key_unique` | `Requirement` | `CREATE CONSTRAINT requirement_key_unique FOR (x:Requirement) REQUIRE x.key IS UNIQUE` | enforced |
+| `codefile_key_unique` | `CodeFile` | `CREATE CONSTRAINT codefile_key_unique FOR (x:CodeFile) REQUIRE x.key IS UNIQUE` | enforced |
+| `component_key_unique` | `Component` | `CREATE CONSTRAINT component_key_unique FOR (x:Component) REQUIRE x.key IS UNIQUE` | enforced |
+| `doc_key_unique` | `Doc` | `CREATE CONSTRAINT doc_key_unique FOR (x:Doc) REQUIRE x.key IS UNIQUE` | enforced |
+| `spec_key_unique` | `Spec` | `CREATE CONSTRAINT spec_key_unique FOR (x:Spec) REQUIRE x.key IS UNIQUE` | enforced |
+| `release_key_unique` | `Release` | `CREATE CONSTRAINT release_key_unique FOR (x:Release) REQUIRE x.key IS UNIQUE` | enforced |
+
+Enforcement is verified rather than assumed. Re-creating an existing `Test` key is refused:
+
+```
+Error: graph engine error: graph query failed: exec: constraint violation:
+UNIQUE constraint on (Test).key: value "internal/web/graph_lock_test.go" already exists
+```
+
+and the node count is unchanged afterwards.
+
+### The rule the engine cannot hold: global key uniqueness
+
+Conventions above requires `key` to be unique across the WHOLE graph, so that
+`MATCH (n {key:'...'})` without a label is unambiguous. The engine's constraint is
+per-label, and eight per-label constraints do not add up to that rule: one key used under
+two different labels satisfies every one of them and still breaks the convention. Global
+uniqueness therefore remains what Conventions says it is -- something whoever writes to this
+graph must honour -- and no DDL can be declared for it.
+
+**Status: violated, once.** `tests/run_tests.py` is carried by both a `CodeFile` and a
+`Test` node. It is the same shape as the `README.md` pair that `rmp` task 155 closed by
+rekeying, and it is a defect in the model rather than a duplicate to delete: the file is
+genuinely both the harness source and the registry the e2e suite runs. The measured count:
+
+```
+MATCH (n) WHERE n.key IS NOT NULL WITH n.key AS v, count(*) AS c
+WHERE c > 1 RETURN v, c ORDER BY c DESC
+```
+
+That query groups on the STORED BYTES, so it cannot see a pair whose keys differ only in
+Unicode normalisation form. `SPEC/GRAPH.md` section Node Key Uniqueness is canonical for the
+comparison that decides sameness and publishes the two-step audit that does detect such a
+pair.
+
+## Indexes
+
+The engine's index is single-property, node-only and hash, and therefore equality-only: a
+range predicate (`>`, `<`) ignores it and falls back to a label scan. Composite indexes and
+relationship-property indexes are not supported. An index is consequently worth declaring
+exactly where a statement performs an equality lookup on one property, which is what every
+identity lookup against this graph is.
+
+Measured on 2026-09-08 at 878 nodes and 2852 edges. Selectivity decides nothing here,
+because `key` is 100% distinct within every label; label size decides, and the threshold is
+whether the label is large enough for a scan to cost more than the index saves.
+
+| Label | Nodes | Distinct `key` | Index | Verdict |
+|---|---:|---:|---|---|
+| `Test` | 328 | 328 | `test_key` | declared |
+| `Memory` | 185 | 185 | `memory_key` | declared |
+| `Requirement` | 164 | 164 | `requirement_key` | declared |
+| `CodeFile` | 134 | 134 | `codefile_key` | declared |
+| `Component` | 27 | 27 | none | skipped: the scan costs 27 dbHits and 175 us |
+| `Doc` | 14 | 14 | none | skipped: label too small to pay |
+| `Spec` | 14 | 14 | none | skipped: label too small to pay |
+| `Release` | 12 | 12 | none | skipped: the scan costs 12 dbHits and 113 us |
+
+The DDL for a declared index is
+`CREATE INDEX <label lowercased>_key FOR (x:<Label>) ON (x.key)`.
+
+The benefit is measured with `EXPLAIN` and `PROFILE`, not asserted. Before the index, a
+`Memory` identity lookup planned as `NodeByLabelScan` plus `Filter` and cost 185 dbHits in
+995 us; after it, the `Filter` disappears and the plan is a `NodeByIndexSeek` costing 1
+dbHit in 17 us.
+
+**The lookup Conventions recommends cannot be indexed at all.** `MATCH (n {key:'...'})`
+without a label plans as `AllNodesScan` plus `Filter` -- 878 dbHits in 4523 us, some 200
+times the cost of the equivalent seek -- because an index is declared on a label and a
+label-less pattern reaches none of them. The label-less form remains correct and remains the
+form that expresses the global-uniqueness convention, but a statement on a hot path should
+name the label it expects and pay the seek instead.
 
 ## Maintenance
 
