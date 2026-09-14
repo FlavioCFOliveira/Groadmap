@@ -2232,10 +2232,13 @@ func servedGraphError(ctx context.Context, socket string, err error) error {
 // graphExecutionError words a statement the time budget cut as the single
 // execution-failure kind, truthfully about which cancellation source fired.
 //
-// The budget is enforced by the graph server, which takes the value as both its
-// default and its maximum statement timeout (SPEC/GRAPH.md § Server Options), so
-// the failure this function words arrives typed over the protocol rather than
-// from an engine in this process. It stays graphErrExecution and HTTP 400:
+// The budget is enforced by the graph server, which takes the value as its
+// MAXIMUM statement timeout and sets no default beside it (SPEC/GRAPH.md § Server
+// Options; SPEC/WEB.md § Graph Query Time Budget, rule 1). The maximum alone
+// carries the budget to every caller: the engine clamps a client-supplied timeout
+// to it and applies it unconditionally to a statement that supplies none, so the
+// failure this function words arrives typed over the protocol rather than from an
+// engine in this process. It stays graphErrExecution and HTTP 400:
 // exhausting the budget is a query execution failure, case 3 of SPEC/WEB.md
 // § Query-Bar Error Handling, exactly as a query that fails in the graph is. No
 // new kind, no new sentinel, no new status (§ Graph Query Time Budget, rules 4

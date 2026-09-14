@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Test 55: SPEC/COMMANDS.md published error strings vs. what the binary prints
-(rmp task #277).
+Test 55: the published error strings of SPEC/COMMANDS.md and
+SPEC/STATE_MACHINE.md vs. what the binary prints (rmp tasks #277, #419, #456).
 
 SPEC/COMMANDS.md § "Published Error Strings Are Exact" (line ~44) states the
 convention: every error string the file publishes is the COMPLETE line the
@@ -16,8 +16,24 @@ string the file publishes, drives the compiled binary to reach as many of them
 as it can in a throwaway roadmap, and compares captured stderr against the
 published string CHARACTER FOR CHARACTER after placeholder substitution.
 
+The corpus reads TWO files. SPEC/COMMANDS.md is the original one. Since rmp
+task #456 it also reads SPEC/STATE_MACHINE.md, which publishes four strings:
+the two completion guards of the transition to COMPLETED, which are published
+NOWHERE else, and the deletion precondition and the immutability of a CLOSED
+sprint's order, which SPEC/COMMANDS.md publishes too. The file was invisible to
+this gate until then, and both completion guards had drifted -- each published
+its message body with the `validation error: ` sentinel dropped, and nothing
+detected it.
+
+That a string published in both files is ONE corpus key rather than two is
+itself the parity proof between them: a single character of divergence splits
+the key, and the half no case claims is reported by test_zz_coverage_report as
+reached by nothing. Every source file is listed in SPEC_SOURCES, and a
+published string carries the file AND the line it was read from, so a failure
+names which file to open.
+
 Extraction (see extract_table_corpus / extract_fenced_corpus below) recognises
-two structural loci the file itself uses to publish a string:
+two structural loci a file uses to publish a string:
 
   1. Markdown tables: a data row whose column count matches its own separator
      row, scanning EVERY cell (not just the last -- some tables carry the
@@ -31,9 +47,16 @@ two structural loci the file itself uses to publish a string:
 A handful of genuine, distinct published strings live only in prose (not in
 any table or fence) -- verified by sweeping every remaining "Error:" line
 in the file and checking whether its quoted content already appears in the
-table/fence corpus. SUPPLEMENTAL_CORPUS lists exactly those, each pinned to
-its line number with a runtime assertion that the source text has not moved
-out from under it. Three prose spans are deliberately NOT promoted: they
+table/fence corpus. SUPPLEMENTAL_CORPUS lists exactly those for
+SPEC/COMMANDS.md and STATE_MACHINE_SUPPLEMENTAL_CORPUS for
+SPEC/STATE_MACHINE.md, each pinned to its line number with a runtime assertion
+that the source text has not moved out from under it. A hand list goes stale
+in silence, so STATE_MACHINE.md's is swept:
+test_state_machine_error_lines_are_accounted_for requires every "Error:" line
+of that file to contribute a string the corpus carries, which is what stops a
+fifth string from arriving there as invisibly as the first four did.
+
+Three prose spans of SPEC/COMMANDS.md are deliberately NOT promoted: they
 restate a rule already published concretely by a table row (the numbered
 list under "Messages this rule governs", COMMANDS.md:218-232) rather than
 naming a new condition; EXCLUDED_TEMPLATE_LINES documents each one.
@@ -79,6 +102,19 @@ row is now driven; only the SQLite diagnostic in the tail stays unasserted.
 That mistake is why the defect #319 fixed went unnoticed -- the binary printed
 no sentinel at all on those six rows and this gate reported green over them.
 
+One check in this module compares nothing against the binary, because there is
+nothing to compare: test_published_stderr_rows_carry_the_error_prefix refuses a
+table row that publishes a failure's stderr WITHOUT the `Error: ` prefix. Such a
+row never enters CORPUS at all -- extraction collects only a quoted span
+containing "Error:" -- so every other assertion here passes over it in silence.
+That blindness is what let `sprint move-to`'s position line publish a bare
+message body until rmp task #331, and what let EVERY string of § Task
+Ordering stay a paraphrase until rmp task #419 -- eight lines across four
+tables, none of which this module could see. The rows known to violate
+it today are declared in UNPREFIXED_STDERR_ROWS with what was measured against
+the binary; each is outside the scope of the task that added the check, and the
+declaration is required to stay accurate in both directions.
+
 The module's own final test method (test_zz_coverage_report, alphabetically
 last so it runs after every other check has had the chance to mark its key
 "reached") asserts that CORPUS is fully accounted for: every key is either in
@@ -111,6 +147,18 @@ from tests.base_test import (GroadmapTestBase, REPO_ROOT, COMMIT_OPEN_HASH,
 
 
 SPEC_PATH = REPO_ROOT / "SPEC" / "COMMANDS.md"
+
+# SPEC/STATE_MACHINE.md publishes four error strings (rmp task #456). Two of
+# them -- the completion guards -- are published nowhere else; the other two
+# are published identically by COMMANDS.md and merge with it into one corpus
+# key each, which is what makes the two files' agreement an assertion rather
+# than a hope.
+STATE_MACHINE_PATH = REPO_ROOT / "SPEC" / "STATE_MACHINE.md"
+
+
+def _rel(path):
+    """`path` written the way this repository writes it, for a message."""
+    return str(path.relative_to(REPO_ROOT))
 
 # A distinctive prefix so every roadmap this module creates is unmistakably
 # its own -- never confused with another module's fixture, and never the
@@ -443,13 +491,19 @@ def _extract_error_spans(text):
             yield content
 
 
-def extract_table_corpus(text):
-    """Return {published_string: [1-based line numbers]} for every quoted
-    Error: span found in ANY cell of a data row whose column count matches
-    its own separator row (extraction rule 1). This is the primary,
-    structural locus SPEC/COMMANDS.md uses to publish an error string."""
+def iter_table_rows(text):
+    """Yield `(line_number, header_cells, row_cells)` for every DATA row of
+    every well-formed markdown table in `text`: a row whose column count
+    matches the count of the separator row under the table's header, with the
+    empty leading and trailing cells of the pipe syntax dropped from both.
+
+    One walk serves the two readers that need it -- extract_table_corpus,
+    which collects the strings a table publishes, and
+    test_published_stderr_rows_carry_the_error_prefix, which judges the cells
+    that publish none. A second copy of this loop could disagree with the
+    first about what counts as a table, and then a row would be governed by
+    one reader and invisible to the other."""
     lines = text.split("\n")
-    corpus = {}
     i, n = 0, len(lines)
     while i < n:
         line = lines[i]
@@ -458,18 +512,29 @@ def extract_table_corpus(text):
             cells = _split_table_row(line)
             if _is_separator_row(sep_cells) and len(sep_cells) == len(cells):
                 ncols = len(cells)
+                header = cells[1:-1] if len(cells) >= 2 else cells
                 j = i + 2
                 while j < n and _is_row(lines[j]):
                     row_cells = _split_table_row(lines[j])
                     if len(row_cells) == ncols:
-                        content_cells = row_cells[1:-1] if len(row_cells) >= 2 else row_cells
-                        for cell in content_cells:
-                            for s in _extract_error_spans(cell):
-                                corpus.setdefault(s.strip(), []).append(j + 1)
+                        content = row_cells[1:-1] if len(row_cells) >= 2 else row_cells
+                        yield j + 1, header, content
                     j += 1
                 i = j
                 continue
         i += 1
+
+
+def extract_table_corpus(text):
+    """Return {published_string: [1-based line numbers]} for every quoted
+    Error: span found in ANY cell of a data row (extraction rule 1). This is
+    the primary, structural locus both source files use to publish an error
+    string."""
+    corpus = {}
+    for lineno, _header, cells in iter_table_rows(text):
+        for cell in cells:
+            for s in _extract_error_spans(cell):
+                corpus.setdefault(s.strip(), []).append(lineno)
     return corpus
 
 
@@ -561,30 +626,80 @@ EXCLUDED_TEMPLATE_LINES = {
 }
 
 
-def build_corpus():
-    """Build the full {published_string: [line numbers]} corpus this module
-    tests against, and validate SUPPLEMENTAL_CORPUS is still anchored to the
-    text it was read from."""
-    text = SPEC_PATH.read_text(encoding="utf-8")
+# SPEC/STATE_MACHINE.md publishes its two completion-guard strings in tables,
+# which extraction reads on its own. Its other two live in prose, in the same
+# `"..."` backtick form COMMANDS.md uses for the strings SUPPLEMENTAL_CORPUS
+# carries, and reach the corpus the same way. The anchor is the published
+# string itself, which appears verbatim in the sentence that publishes it.
+#
+# This list is not trusted to be complete on its own:
+# test_state_machine_error_lines_are_accounted_for sweeps every "Error:" line
+# of the file and fails on one the corpus does not carry.
+STATE_MACHINE_SUPPLEMENTAL_CORPUS = [
+    # § Task Deletion Precondition. `X` is the status the task actually holds,
+    # which the binary reads from the row rather than from the command line.
+    (
+        'Error: validation error: task #N cannot be deleted \u2014 status is X, must be BACKLOG',
+        'Error: validation error: task #N cannot be deleted \u2014 status is X, must be BACKLOG',
+    ),
+    # § Sprint Order (rule 2): a CLOSED sprint's order is immutable.
+    (
+        'Error: validation error: sprint #N order cannot be changed \u2014 sprint is CLOSED',
+        'Error: validation error: sprint #N order cannot be changed \u2014 sprint is CLOSED',
+    ),
+]
+
+
+# Every file whose published strings this module gates, with the prose list
+# that file needs. Adding a file here is all it takes for its tables and its
+# fences to be read; only its prose needs a hand list.
+SPEC_SOURCES = (
+    (SPEC_PATH, SUPPLEMENTAL_CORPUS),
+    (STATE_MACHINE_PATH, STATE_MACHINE_SUPPLEMENTAL_CORPUS),
+)
+
+
+def corpus_of(path, supplemental):
+    """Build {published_string: [(file, line), ...]} for ONE source file, and
+    validate that file's prose anchors still resolve against its text."""
+    text = path.read_text(encoding="utf-8")
     lines = text.split("\n")
+    name = _rel(path)
 
-    corpus = extract_table_corpus(text)
+    found = extract_table_corpus(text)
     for s, line_nos in extract_fenced_corpus(text).items():
-        corpus.setdefault(s, []).extend(line_nos)
+        found.setdefault(s, []).extend(line_nos)
 
-    for anchor, s in SUPPLEMENTAL_CORPUS:
+    for anchor, s in supplemental:
         lineno = next((i + 1 for i, line in enumerate(lines) if anchor in line), None)
         assert lineno is not None, (
-            f"SUPPLEMENTAL_CORPUS anchor no longer found anywhere in "
-            f"SPEC/COMMANDS.md: {anchor!r} -- the prose moved, was reworded, "
+            f"a prose anchor is no longer found anywhere in "
+            f"{name}: {anchor!r} -- the prose moved, was reworded, "
             f"or was removed, and this entry must be re-anchored or dropped."
         )
-        corpus.setdefault(s, []).append(lineno)
+        found.setdefault(s, []).append(lineno)
 
+    return {s: [(name, n) for n in sorted(set(nos))] for s, nos in found.items()}
+
+
+def build_corpus():
+    """Build the full {published_string: [(file, line), ...]} corpus this
+    module tests against, across every file in SPEC_SOURCES."""
+    corpus = {}
+    for path, supplemental in SPEC_SOURCES:
+        for s, where in corpus_of(path, supplemental).items():
+            corpus.setdefault(s, []).extend(where)
     return {k: sorted(set(v)) for k, v in corpus.items()}
 
 
 CORPUS = build_corpus()
+
+
+def _where(key):
+    """Every place the corpus publishes `key`, as `file:line`, for a failure
+    message: a string may be published in more than one file, and a reader
+    who is told only the line number has to guess which."""
+    return ", ".join(f"{name}:{lineno}" for name, lineno in CORPUS[key])
 
 
 # ---------------------------------------------------------------------------
@@ -686,6 +801,53 @@ TAIL_EXEMPT_KEYS = {
         "table, \"SQL logic error: no such table: task_comments (1)\" -- whose "
         "exact wording belongs to modernc.org/sqlite and is not specified by "
         "COMMANDS.md."
+    ),
+}
+
+
+# A column header under which a table publishes what the user reads on stderr.
+# The spellings are MEASURED, not guessed: across the two files SPEC_SOURCES
+# names, the headers of cells that carry an `Error:` string are `stderr
+# Output`, `stderr`, `Error Message (stderr)`, `Error line`, `Output`,
+# `Message`, `Message on stderr` and `Error`, and this predicate accepts
+# exactly that set without enumerating it.
+def _publishes_stderr(header_cell):
+    h = header_cell.strip().lower()
+    return "stderr" in h or "error" in h or "message" in h or h == "output"
+
+
+# Rows that publish a failure's stderr WITHOUT the `Error: ` prefix, and are
+# therefore invisible to extraction: no string of theirs enters CORPUS, so no
+# assertion in this module compares them against anything. Each is declared
+# with what was MEASURED against the binary.
+#
+# Both are OUTSIDE the scope of rmp task #419, which added this check and owns
+# `§ Task Ordering` alone; they are reported to the roadmap owner rather than
+# corrected here. The declaration is required to stay accurate in BOTH
+# directions -- a row corrected without its entry being deleted fails
+# test_published_stderr_rows_carry_the_error_prefix as a stale declaration --
+# so this table cannot quietly become a list of things nobody is fixing.
+UNPREFIXED_STDERR_ROWS = {
+    "Sprint not found": (
+        "SPEC/COMMANDS.md \u00a7 Show Sprint Status Report. MEASURED: "
+        "`rmp sprint show -r <name> 900000001` writes "
+        "'Error: resource not found: sprint 900000001' and exits 4, so the "
+        "published cell is a paraphrase that carries neither the prefix, nor "
+        "the sentinel, nor the id -- three of the four things a reader would "
+        "compare. This section is reported as owned by rmp tasks #458/#459; verify with `rmp task get` before assuming the row is unowned."
+    ),
+    "invalid input: sprint #N has M active task(s) still in progress: "
+    "#ID (STATUS), ... \u2014 use --force to close anyway": (
+        "SPEC/COMMANDS.md \u00a7 Sprint Lifecycle, the active-task safety check of "
+        "`sprint close`. MEASURED against a sprint holding three active "
+        "tasks: 'Error: validation error: sprint #1 has 3 active task(s) "
+        "still in progress: #1 (TESTING), #6 (TESTING), #7 (SPRINT) \u2014 use "
+        "--force to close anyway', exit 6. TWO defects, not one: the "
+        "`Error: ` prefix is missing, AND the published sentinel "
+        "`invalid input: ` is not the one the binary writes "
+        "(`validation error: `) -- which is also the sentinel this row's own "
+        "exit code 6 implies, so the row contradicts itself as well as the "
+        "binary. Reported to the roadmap owner."
     ),
 }
 
@@ -805,7 +967,7 @@ class TestErrorStringParity:
         )
         assert actual_line == expected, (
             f"[{note or key}] published string does not match the binary\n"
-            f"  file:     {SPEC_PATH} line(s) {CORPUS[key]}\n"
+            f"  published at: {_where(key)}\n"
             f"  published: {expected!r}\n"
             f"  captured:  {actual_line!r}\n"
             f"  args:      {args}\n"
@@ -864,7 +1026,7 @@ class TestErrorStringParity:
         )
         assert actual_line.startswith(head), (
             f"[{note or key}] the published head does not match the binary\n"
-            f"  file:      {SPEC_PATH} line(s) {CORPUS[key]}\n"
+            f"  published at: {_where(key)}\n"
             f"  published: {head!r} (then {token})\n"
             f"  captured:  {actual_line!r}\n"
             f"  args:      {args}\n  full stderr: {err!r}"
@@ -2220,6 +2382,336 @@ class TestErrorStringParity:
             )
 
     # ------------------------------------------------------------------
+    # SPEC/COMMANDS.md § Task Ordering: the five commands that set the order
+    # of a sprint's tasks (rmp task #419)
+    # ------------------------------------------------------------------
+
+    def test_task_ordering_errors(self):
+        """Every string § Task Ordering publishes, driven against the ordering
+        command that publishes it.
+
+        Until rmp task #419 the section published paraphrases -- text no
+        invocation of the binary could produce -- and NOT ONE of them carried
+        the `Error: ` prefix. The reorder table read, in full: "Sprint not
+        found", "Task ID N is not in sprint", "Duplicate task ID: N", "Task
+        list incomplete: expected N tasks, got M", "Invalid task ID: X"; the
+        other three tables were the same shape, plus "Cannot swap a task with
+        itself". Extraction collects only a quoted span CONTAINING "Error:",
+        so none of them entered CORPUS, no case here could claim one, and the
+        coverage report had nothing to report: this module ran green over the
+        whole section while every line in it was wrong. That is why
+        test_published_stderr_rows_carry_the_error_prefix landed in the same
+        change as these drivers: a coverage report cannot report a string
+        that was never extracted, so the eight measured lines below would have
+        closed the section only until the next edit dropped a prefix again.
+
+        The section states that four of its lines are ONE string published in
+        five tables rather than five strings that happen to agree. That claim
+        is PROVED here rather than trusted: each shared line is driven from
+        every one of the five commands, so a command that grew a wording of
+        its own fails instead of being ratified by a single-command case.
+        """
+        r = self.roadmap
+        sprint_id = self.mk_sprint(
+            "Checkout resilience",
+            "Keep the checkout path serving orders through a provider outage, "
+            "with every payment either captured or safely retried.",
+        )
+        first = self.mk_task(
+            "Emit checkout latency histograms to the metrics pipeline",
+            self.FR, self.TR, self.AC,
+        )
+        second = self.mk_task(
+            "Add a dead-letter queue for payouts the provider rejects twice",
+            self.FR, self.TR, self.AC,
+        )
+        third = self.mk_task(
+            "Retry provider webhooks with exponential backoff and a cap",
+            self.FR, self.TR, self.AC,
+        )
+        outsider = self.mk_task(
+            "Reconcile settlement totals against the provider daily report",
+            self.FR, self.TR, self.AC,
+        )
+        self.test.run_cmd(
+            ["sprint", "add-tasks", "-r", r, str(sprint_id),
+             f"{first},{second},{third}"]
+        )
+
+        commands = ("reorder", "move-to", "swap", "top", "bottom")
+
+        def ordering_argv(command, sprint_token, task_token):
+            """The invocation that puts `task_token` under test on `command`.
+
+            `reorder` is handed a FULL-LENGTH list, because it refuses a list
+            that is not the whole membership before it looks at membership at
+            all (internal/commands/sprint_order.go: duplicates, then the
+            sprint, then the count, then membership); a one-id list would
+            reach the count refusal instead of the line under test. `swap` is
+            handed a partner that is always a resolvable member other than the
+            token under test, so nothing it drives is also a self-swap."""
+            if command == "reorder":
+                return ["sprint", "reorder", "-r", r, sprint_token,
+                        f"{first},{second},{task_token}"]
+            if command == "move-to":
+                return ["sprint", "move-to", "-r", r, sprint_token, task_token, "0"]
+            if command == "swap":
+                return ["sprint", "swap", "-r", r, sprint_token, task_token, str(second)]
+            return ["sprint", command, "-r", r, sprint_token, task_token]
+
+        # Shared line 1: no sprint holds the id. Resolved against the database.
+        for command in commands:
+            self.check(
+                "Error: resource not found: sprint N",
+                ordering_argv(command, str(self.missing_id), str(third)), 4,
+                subs={"N": str(self.missing_id)},
+                note=f"sprint {command}: sprint not found",
+            )
+
+        # Shared line 2: a task named on the command line is not a member.
+        # This is the line the section warns is NOT the batch-assignment
+        # commands' `task N is not in sprint #M`; both are driven in this
+        # module, from their own commands, so the divergence the section
+        # documents stays a documented divergence rather than a drift.
+        for command in commands:
+            self.check(
+                "Error: validation error: task N does not belong to sprint M",
+                ordering_argv(command, str(sprint_id), str(outsider)), 6,
+                subs={"N": str(outsider), "M": str(sprint_id)},
+                note=f"sprint {command}: task is not a member",
+            )
+        # `swap` verifies its two task arguments at two distinct call sites
+        # (sprint_order.go, the taskID1 and taskID2 branches), so the second
+        # positional is driven as well: a divergence in the second would
+        # otherwise hide behind the first.
+        self.check(
+            "Error: validation error: task N does not belong to sprint M",
+            ["sprint", "swap", "-r", r, str(sprint_id), str(first), str(outsider)], 6,
+            subs={"N": str(outsider), "M": str(sprint_id)},
+            note="sprint swap: second task argument is not a member",
+        )
+
+        # Shared lines 3 and 4: the two lexical refusals, which happen before
+        # the roadmap is opened.
+        for command in commands:
+            self.check(
+                'Error: invalid input: invalid sprint ID: "X" (must be a positive integer)',
+                ordering_argv(command, "Q3", str(third)), 2,
+                subs={"X": "Q3"},
+                note=f"sprint {command}: sprint id is not a positive integer",
+            )
+            self.check(
+                'Error: invalid input: invalid task ID: "X" (must be a positive integer)',
+                ordering_argv(command, str(sprint_id), "seventeen"), 2,
+                subs={"X": "seventeen"},
+                note=f"sprint {command}: task id is not a positive integer",
+            )
+
+        # `reorder` alone: an id named twice. Driven at TWO different ids,
+        # because a message that ignored the value it was given would pass a
+        # single case.
+        for repeated in (first, third):
+            self.check(
+                "Error: validation error: duplicate task ID N",
+                ["sprint", "reorder", "-r", r, str(sprint_id),
+                 f"{repeated},{repeated},{second}"], 6,
+                subs={"N": str(repeated)},
+                note=f"sprint reorder: task {repeated} named twice",
+            )
+
+        # `reorder` alone: a list that is not the sprint's whole membership.
+        # Driven SHORT and LONG against the SAME three-member sprint, so the
+        # second number is proved to count the list supplied rather than to
+        # repeat the first: a template that echoed one number twice would
+        # match the short case and fail the long one.
+        self.check(
+            "Error: validation error: expected N task IDs, got M (must include all sprint tasks)",
+            ["sprint", "reorder", "-r", r, str(sprint_id), f"{first},{second}"], 6,
+            subs={"N": "3", "M": "2"},
+            note="sprint reorder: list shorter than the membership",
+        )
+        self.check(
+            "Error: validation error: expected N task IDs, got M (must include all sprint tasks)",
+            ["sprint", "reorder", "-r", r, str(sprint_id),
+             f"{first},{second},{third},{outsider}"], 6,
+            subs={"N": "3", "M": "4"},
+            note="sprint reorder: list longer than the membership",
+        )
+
+        # `swap` alone: the same task named twice.
+        self.check(
+            "Error: validation error: cannot swap a task with itself",
+            ["sprint", "swap", "-r", r, str(sprint_id), str(second), str(second)], 6,
+            note="sprint swap: the same task named twice",
+        )
+
+        # The eighth string, `move-to`'s position line, is driven by
+        # test_sprint_task_management_errors against that same command, at all
+        # three input forms that produce it (a negative position, a
+        # non-numeric token, and an integer above MaxInt32). Driving it a
+        # fourth time here would assert nothing the section has not already
+        # had asserted about it.
+
+    # ------------------------------------------------------------------
+    # SPEC/STATE_MACHINE.md (rmp task #456)
+    # ------------------------------------------------------------------
+
+    def test_completion_guards_name_the_blocking_ids(self):
+        """The two guards on the transition to COMPLETED, driven at a list of
+        several ids AND at a list of one.
+
+        Both strings are published by SPEC/STATE_MACHINE.md alone, and that
+        file was invisible to this gate until rmp task #456: the corpus read
+        SPEC/COMMANDS.md only, so both guards could publish their message body
+        with the `validation error: ` sentinel dropped and nothing detected
+        it. Two lengths rather than one, because `<id-list>` publishes the
+        SAME sentence for one id and for several -- unlike `<ids>`, which
+        switches to a singular wording -- and a case driven at one length
+        alone would leave that claim untested.
+
+        The other two strings SPEC/STATE_MACHINE.md publishes, the deletion
+        precondition and a CLOSED sprint's immutable order, are published
+        identically by SPEC/COMMANDS.md and are driven by
+        test_task_remove_errors and test_sprint_update_errors. That they are
+        ONE corpus key rather than two is itself the proof that the two files
+        agree character for character: a single character of divergence would
+        split the key in two, and the STATE_MACHINE.md half would be reported
+        by test_zz_coverage_report as reached by nothing.
+        """
+        r = self.roadmap
+        sprint_id = self.mk_sprint(
+            "Ledger correctness",
+            "Move settlement onto a double-entry ledger and verify every "
+            "payout webhook before acting on it.",
+        )
+
+        def mk_subtask(title, parent_id):
+            return self.test.run_cmd_json(
+                ["task", "create", "-r", r, "-t", title, "-fr", self.FR,
+                 "-tr", self.TR, "-ac", self.AC, "--parent", str(parent_id)]
+            )["id"]
+
+        def to_testing(task_id):
+            """Walk a task to TESTING, which is the only state either guard is
+            reached from: from SPRINT the transition to COMPLETED is refused
+            as an illegal transition before either guard runs, so a case
+            driven from SPRINT would assert a different line entirely."""
+            self.test.run_cmd(
+                ["sprint", "add-tasks", "-r", r, str(sprint_id), str(task_id)])
+            self.test.run_cmd(
+                ["task", "stat", "-r", r, str(task_id), "DOING",
+                 "--commit-open", COMMIT_OPEN_HASH])
+            self.test.run_cmd(["task", "stat", "-r", r, str(task_id), "TESTING"])
+
+        def complete(task_id):
+            self.test.run_cmd(
+                ["task", "stat", "-r", r, str(task_id), "COMPLETED",
+                 "--commit-close", COMMIT_CLOSE_HASH])
+
+        # --- the sub-task hierarchy guard, evaluated first ---
+        parent = self.mk_task(
+            "Migrate the settlement ledger to double-entry bookkeeping",
+            self.FR, self.TR, self.AC,
+        )
+        sub_first = mk_subtask(
+            "Backfill historical ledger rows into the double-entry schema", parent)
+        sub_second = mk_subtask(
+            "Switch the reconciliation report to read the double-entry ledger", parent)
+        to_testing(parent)
+        subtask_guard = ("Error: validation error: cannot mark task #N as "
+                         "COMPLETED: incomplete subtasks: <id-list>")
+        self.check(
+            subtask_guard,
+            ["task", "stat", "-r", r, str(parent), "COMPLETED",
+             "--commit-close", COMMIT_CLOSE_HASH], 6,
+            subs={"N": str(parent), "<id-list>": f"#{sub_first}, #{sub_second}"},
+            note="completion guard: two incomplete subtasks",
+        )
+        # Complete one of the two, leaving a single-member list and the same
+        # sentence around it.
+        to_testing(sub_first)
+        complete(sub_first)
+        self.check(
+            subtask_guard,
+            ["task", "stat", "-r", r, str(parent), "COMPLETED",
+             "--commit-close", COMMIT_CLOSE_HASH], 6,
+            subs={"N": str(parent), "<id-list>": f"#{sub_second}"},
+            note="completion guard: one incomplete subtask",
+        )
+
+        # --- the dependency guard, evaluated once no subtask blocks ---
+        blocker_first = self.mk_task(
+            "Publish the provider webhook signature verification helper",
+            self.FR, self.TR, self.AC,
+        )
+        blocker_second = self.mk_task(
+            "Provision the payouts dead-letter queue in staging",
+            self.FR, self.TR, self.AC,
+        )
+        dependent = self.mk_task(
+            "Consume payout webhooks through the verified signature path",
+            self.FR, self.TR, self.AC,
+        )
+        self.test.run_cmd(
+            ["task", "add-dep", "-r", r, str(dependent), str(blocker_first)])
+        self.test.run_cmd(
+            ["task", "add-dep", "-r", r, str(dependent), str(blocker_second)])
+        to_testing(dependent)
+        dependency_guard = ("Error: validation error: cannot mark task #N as "
+                            "COMPLETED: incomplete dependencies: <id-list>")
+        self.check(
+            dependency_guard,
+            ["task", "stat", "-r", r, str(dependent), "COMPLETED",
+             "--commit-close", COMMIT_CLOSE_HASH], 6,
+            subs={"N": str(dependent),
+                  "<id-list>": f"#{blocker_first}, #{blocker_second}"},
+            note="completion guard: two incomplete dependencies",
+        )
+        to_testing(blocker_first)
+        complete(blocker_first)
+        self.check(
+            dependency_guard,
+            ["task", "stat", "-r", r, str(dependent), "COMPLETED",
+             "--commit-close", COMMIT_CLOSE_HASH], 6,
+            subs={"N": str(dependent), "<id-list>": f"#{blocker_second}"},
+            note="completion guard: one incomplete dependency",
+        )
+
+    def test_state_machine_error_lines_are_accounted_for(self):
+        """Every "Error:" line of SPEC/STATE_MACHINE.md contributes a string
+        the corpus carries.
+
+        Extraction reads table cells and fenced blocks. Two of this file's
+        four strings live in prose and reach the corpus only through
+        STATE_MACHINE_SUPPLEMENTAL_CORPUS, which is a hand list, and a hand
+        list goes stale in silence. The sweep is what stops a fifth string
+        published in this file's prose from arriving as invisibly as the first
+        four did -- which would be rmp task #456's own defect, reinstated one
+        line further down the file."""
+        name = _rel(STATE_MACHINE_PATH)
+        published = [s for s, where in CORPUS.items()
+                     if any(f == name for f, _ in where)]
+        assert published, (
+            f"SPEC_SOURCES names {name} but the corpus carries nothing from "
+            f"it: extraction, or the file, changed shape"
+        )
+        for lineno, line in enumerate(
+                STATE_MACHINE_PATH.read_text(encoding="utf-8").split("\n"), 1):
+            if "Error:" not in line:
+                continue
+            assert any(s in line for s in published), (
+                f"{name}:{lineno} publishes an error string the corpus does "
+                f"not carry, so nothing drives it against the binary:\n"
+                f"  {line.strip()}\n"
+                f"If it is a new published string, add it to "
+                f"STATE_MACHINE_SUPPLEMENTAL_CORPUS with an anchor and drive "
+                f"it; if it is prose restating a string published elsewhere, "
+                f"it must say so in the words the corpus already carries."
+            )
+        print(f"\n  {name}: {len(published)} published string(s); every "
+              f'"Error:" line in the file is accounted for')
+
+    # ------------------------------------------------------------------
     # `sprint comment-add` / `comment-edit`
     # ------------------------------------------------------------------
 
@@ -2634,7 +3126,7 @@ class TestErrorStringParity:
         actual_line = proc.stderr.splitlines()[0] if proc.stderr else ""
         assert actual_line == key, (
             "published string does not match the binary\n"
-            f"  file:      {SPEC_PATH} line(s) {CORPUS[key]}\n"
+            f"  published at: {_where(key)}\n"
             f"  published: {key!r}\n"
             f"  captured:  {actual_line!r}\n"
             f"  full stderr: {proc.stderr!r}"
@@ -3082,7 +3574,7 @@ class TestErrorStringParity:
         )
         assert actual_line == key, (
             f"the contention line does not match SPEC/COMMANDS.md\n"
-            f"  file:      {SPEC_PATH} line(s) {CORPUS[key]}\n"
+            f"  published at: {_where(key)}\n"
             f"  published: {key!r}\n"
             f"  captured:  {actual_line!r}\n"
             f"  full stderr: {err!r}"
@@ -3180,6 +3672,83 @@ class TestErrorStringParity:
     # its own key reached.
     # ------------------------------------------------------------------
 
+    def test_published_stderr_rows_carry_the_error_prefix(self):
+        """A table row that publishes the stderr of a FAILURE publishes the
+        whole line, `Error: ` prefix included (rmp task #419).
+
+        Every other assertion in this module compares a published string
+        against the binary. This one compares nothing, because a row that
+        drops the prefix publishes no string this module can see: extraction
+        collects only a quoted span CONTAINING "Error:", so such a cell enters
+        no corpus, is claimed by no case, and is reported by no coverage
+        report. It is the one shape of defect that is invisible by
+        construction -- it is how `sprint move-to`'s position line published a
+        bare message body until rmp task #331, and how four of the eight
+        strings of § Task Ordering stayed paraphrases until #419 -- so it is
+        refused structurally instead of compared.
+
+        Only a row that publishes a FAILURE is governed. A row whose own exit
+        code is `0` publishes what the user reads on a SUCCESS path -- the
+        `--force` warning of `sprint close` is the one such row in these two
+        files -- and § Published Error Strings Are Exact governs error
+        strings, not every byte that reaches stderr. Requiring the prefix
+        there would demand text the binary must not print.
+        """
+        violations = []
+        for path, _supplemental in SPEC_SOURCES:
+            name = _rel(path)
+            text = path.read_text(encoding="utf-8")
+            for lineno, header, cells in iter_table_rows(text):
+                exit_col = next(
+                    (k for k, h in enumerate(header) if "exit" in h.strip().lower()),
+                    None,
+                )
+                if (exit_col is not None and exit_col < len(cells)
+                        and cells[exit_col].strip().strip("`") == "0"):
+                    continue
+                for k, cell in enumerate(cells):
+                    if k >= len(header) or not _publishes_stderr(header[k]):
+                        continue
+                    if "Error:" in cell:
+                        continue
+                    spans = ([m.group(1) for m in _DQUOTE_RE.finditer(cell)] +
+                             [m.group(1) for m in _BACKTICK_RE.finditer(cell)])
+                    for span in spans:
+                        span = span.strip()
+                        # A span that opens with the section mark is a
+                        # cross-reference to where the line IS published, not
+                        # a line: nine rows of the graph tables point at
+                        # `§ Graph Server Socket Error Lines` this way rather
+                        # than each carrying a copy of the same eight strings.
+                        if not span or span.startswith("\u00a7"):
+                            continue
+                        violations.append((name, lineno, header[k].strip(), span))
+
+        undeclared = [v for v in violations if v[3] not in UNPREFIXED_STDERR_ROWS]
+        assert not undeclared, (
+            f"{len(undeclared)} table row(s) publish the stderr of a failure "
+            f"without the `Error: ` prefix § Published Error Strings Are Exact "
+            f"requires. Nothing in this module can compare such a row against "
+            f"the binary, because there is no complete line to compare:\n" +
+            "\n".join(f"  - {n}:{ln} (column {h!r}): {s!r}"
+                       for n, ln, h, s in undeclared)
+        )
+
+        found = {v[3] for v in violations}
+        stale = sorted(set(UNPREFIXED_STDERR_ROWS) - found)
+        assert not stale, (
+            f"UNPREFIXED_STDERR_ROWS declares {len(stale)} row(s) that are no "
+            f"longer published that way. If they were corrected, delete the "
+            f"entries -- a declaration kept past its defect is a claim about "
+            f"the file that is no longer true:\n" +
+            "\n".join(f"  - {s!r}" for s in stale)
+        )
+
+        for name, lineno, header_cell, span in violations:
+            print(f"  UNPREFIXED (declared): {name}:{lineno} column "
+                  f"{header_cell!r}\n    span: {span!r}\n"
+                  f"    {UNPREFIXED_STDERR_ROWS[span]}")
+
     def test_yy_exemptions_are_named(self):
         """Every exemption and every tail narrowing is declared by name with
         its reason (NON-VACUITY requirement 3d): nothing is silently dropped
@@ -3231,7 +3800,8 @@ class TestErrorStringParity:
         missing = sorted(set(CORPUS.keys()) - accounted)
         stale_exemptions = sorted((exempted | narrowed) - set(CORPUS.keys()))
 
-        print(f"\nSPEC/COMMANDS.md published-string corpus: {len(CORPUS)} distinct strings")
+        sources = ", ".join(_rel(path) for path, _ in SPEC_SOURCES)
+        print(f"\npublished-string corpus ({sources}): {len(CORPUS)} distinct strings")
         print(f"  reached (driven against the binary and matched exactly): {len(REACHED - narrowed)}")
         print(f"  reached, compared by head only (tail narrowed):          {len(REACHED & narrowed)}")
         print(f"  exempted (named, reasoned, never executed):               {len(exempted)}")
@@ -3248,7 +3818,7 @@ class TestErrorStringParity:
         assert not missing, (
             f"{len(missing)} published string(s) are neither reached nor exempted "
             f"-- a gap in this module's own coverage, not a silent pass:\n" +
-            "\n".join(f"  - {m!r} (lines {CORPUS[m]})" for m in missing)
+            "\n".join(f"  - {m!r} ({_where(m)})" for m in missing)
         )
 
         # NON-VACUITY requirement 3b's floor: comfortably below the actual

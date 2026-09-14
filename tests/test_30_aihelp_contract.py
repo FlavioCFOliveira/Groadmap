@@ -161,8 +161,12 @@ class TestAIHelpContractShape:
         doc = json.loads(out)
         sv = doc.get("schema_version")
         assert isinstance(sv, str), f"schema_version must be string, got {type(sv).__name__}"
-        # SPEC pins 1.0.0 today; bumping requires a SPEC change.
-        assert sv == "1.0.0", f"schema_version regressed: got {sv!r}, expected '1.0.0'"
+        # SPEC/DATA_FORMATS.md § AI Agent Contract pins the number, and it is
+        # 2.0.0: `exit_codes` became a list of {code, conditions} objects and
+        # `prerequisites` stopped always being present, and a consumer written
+        # against the 1.x structure cannot read either. Bumping it again
+        # requires the same SPEC change this one had.
+        assert sv == "2.0.0", f"schema_version regressed: got {sv!r}, expected '2.0.0'"
         print(f"✓ schema_version stable at {sv}")
 
     def test_tool_block_well_formed(self):
@@ -288,7 +292,7 @@ class TestAIHelpScopeFiltering:
         _, out_cmd, _ = _run_raw(self.cli, ["task", "--ai-help"])
         _, out_sub, _ = _run_raw(self.cli, ["task", "create", "--ai-help"])
         sv = lambda b: json.loads(b)["schema_version"]
-        assert sv(out_root) == sv(out_cmd) == sv(out_sub) == "1.0.0"
+        assert sv(out_root) == sv(out_cmd) == sv(out_sub) == "2.0.0"
         print("✓ schema_version identical across all scopes")
 
 

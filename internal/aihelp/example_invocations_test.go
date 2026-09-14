@@ -36,7 +36,8 @@
 // measured. The contract publishes 153 examples of its own, of which 68 declare
 // a non-zero exit, and every one of those 68 fails on a VALUE or a MISSING FLAG
 // — `--sort foo`, `task get 99999`, a `task create` with no `--title` — with a
-// single deliberate exception, `rmp web --foo`, which demonstrates an unknown
+// two deliberate exceptions, `rmp web --foo` and `rmp roadmap list --foo`,
+// which demonstrate an unknown
 // FLAG. Not one fails on an unknown command or subcommand NAME. A checker that
 // also judged values or required flags would therefore start reporting correct,
 // deliberately-failing examples as defects.
@@ -1763,11 +1764,15 @@ func TestExampleInvocations_ContractExamplesFailOnValuesRatherThanNames(t *testi
 	const (
 		minContractExamples = 120
 		minFailureExamples  = 50
-		// `rmp web --foo`, titled "Unknown flag", is the single documented
-		// failure that fails by a NAME. It demonstrates the exit code for an
-		// unknown flag, so it is the one example whose whole point is the thing
-		// this gate reports.
-		wantNameFailures = 1
+		// Two documented failures fail by a NAME, and both are named here:
+		// `rmp web --foo`, titled "Unknown flag", and `rmp roadmap list --foo`,
+		// titled "Unrecognised flag". Each demonstrates the exit code for a flag
+		// the command does not have, so the thing this gate reports IS their
+		// whole point. `roadmap list` joined the class when it stopped accepting
+		// an unrecognised flag silently (rmp task 461): a subcommand that refuses
+		// one has to publish a failure example, and no VALUE can produce that
+		// refusal.
+		wantNameFailures = 2
 	)
 
 	total, failures := 0, 0

@@ -137,7 +137,19 @@ Returns the next <num> incomplete tasks from the currently OPEN sprint
 the sprint dictates. Used as the "what should I pick up next?"
 planning shortcut.
 
+The listing is NOT filtered by dependencies, and a task it returns may be
+blocked. Selection is on sprint membership and task status alone: a task
+whose declared dependencies are not yet COMPLETED is returned like any
+other, at its own planned rank, and nothing in the returned object marks it
+as blocked. The refusal arrives later and from a different command -- the
+transition to COMPLETED is rejected with exit code 6 while a declared
+dependency is not itself COMPLETED. Ask 'task blockers <task-id>' before
+starting work on a task this command returns; it is the command that answers
+what this one does not. The guarantee here is the order, not the readiness.
+
 Compared to:
+  - 'task blockers <task-id>': the dependencies of one task that are not yet
+    COMPLETED -- the readiness question this command does not answer.
   - 'sprint open-tasks <id>': scope is "this sprint", any priority.
   - 'backlog show-next [count]': BACKLOG status only; sprint membership is
     not consulted, so a BACKLOG sprint member is returned.

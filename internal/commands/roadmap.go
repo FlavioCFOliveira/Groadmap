@@ -40,6 +40,7 @@ Output (stdout JSON):
 
 Exit codes:
   0   Success
+  2   Unrecognised flag, or a positional argument (this command takes none)
 
 Examples:
   rmp roadmap list
@@ -116,7 +117,22 @@ Examples:
 // once; for every candidate subdirectory we stat its project.db to obtain the
 // reported size. A subdirectory without a project.db (or one that disappears
 // between ReadDir and Stat) is silently skipped — it is not a roadmap.
-func roadmapList() error {
+//
+// args are the tokens written after the subcommand name. This command reads
+// the data directory rather than one roadmap's database, so it takes neither
+// the roadmap selector nor any flag of its own, and every token it can
+// legitimately receive has already been consumed: the help tokens by the
+// dispatcher, and a positional argument by the shared arity point. What
+// survives to here is refused rather than discarded
+// (SPEC/COMMANDS.md § List Roadmaps). It taking args at all is the fix: the
+// handler used to be registered as a closure that dropped them, so
+// `rmp roadmap list --nosuchflag` returned the whole listing and exit 0
+// (rmp task 461).
+func roadmapList(args []string) error {
+	if err := rejectUnknownFlags(args); err != nil {
+		return err
+	}
+
 	dataDir, err := utils.GetDataDir()
 	if err != nil {
 		return err

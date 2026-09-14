@@ -211,6 +211,8 @@ func staticWorkflows() []Workflow {
 				"Roadmap `<name>` exists.",
 				"The target task exists. Comments are accepted in every task status, including COMPLETED, and no comment changes or gates a task's status.",
 				"Each `--type` value is one of the seven task comment types (see enums.TaskCommentType); a TaskType value such as BUG is rejected with exit code 6.",
+				"The target task is in TESTING status by the time the final step runs, and has no dependency that is not itself COMPLETED. The comment steps hold in every status; the closing transition does not.",
+				"You can supply the git commit hash the closing transition requires. rmp runs no git command and reads no repository, so obtain it yourself, for example with `git rev-parse HEAD`.",
 			},
 			Steps: []WorkflowStep{
 				{
@@ -238,8 +240,8 @@ func staticWorkflows() []Workflow {
 					Purpose: "Read the whole log back, oldest first, to verify the record before closing the task. Add --type <TYPE> to read one class of entry only (for example just the decisions).",
 				},
 				{
-					Command: "rmp task stat -r <name> <task-id> COMPLETED --summary \"<one-paragraph completion summary>\"",
-					Purpose: "Close the task. The completion summary states the outcome; the comment log preserves the route taken to it, and stays readable and appendable after the task is COMPLETED.",
+					Command: "rmp task stat -r <name> <task-id> COMPLETED --commit-close <hash> --summary \"<one-paragraph completion summary>\"",
+					Purpose: "Close the task. The completion summary states the outcome; the comment log preserves the route taken to it, and stays readable and appendable after the task is COMPLETED. --commit-close is mandatory on this transition: the subcommand entry cannot mark the flag required, because it is required only for this target status, so the step is the only place the obligation can be seen — published without the hash it is refused with exit code 6 and the summary is never recorded.",
 				},
 			},
 			ExpectedOutcome: "The task carries a chronological, typed working log — hypothesis, test, finding, decision — readable oldest-first with `task comment-list`, and that log remains attached and appendable after the task reaches COMPLETED.",

@@ -1640,7 +1640,7 @@ other document**. Concretely:
 
 ```json
 {
-  "schema_version": "1.0.0",
+  "schema_version": "2.0.0",
   "tool": {
     "name": "rmp",
     "display_name": "Groadmap",
@@ -1661,7 +1661,7 @@ other document**. Concretely:
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `schema_version` | string | Semantic version of the contract schema itself. Bumped only when the structure of the contract changes. Independent of the binary version. |
+| `schema_version` | string | Semantic version of the contract schema itself. Bumped only when the structure of the contract changes. Independent of the binary version. A change that a consumer of the previous structure cannot read — a field that changes type, or one that stops being emitted — is a major bump; a field added beside the existing ones is a minor one. |
 | `tool.name` | string | Canonical binary name (`rmp`). |
 | `tool.display_name` | string | Human-readable product name (`Groadmap`). |
 | `tool.binary_version` | string | Bare semver string of the `rmp` binary that produced this contract (e.g. `"1.3.0"`). This is the value extracted from the application version constant, NOT the formatted output of `rmp --version` (which is plain text such as `Groadmap version 1.3.0`). The contract MUST strip the `Groadmap version ` prefix and emit only the semver. |
@@ -1954,11 +1954,21 @@ without special-casing the commands that happen to have a single action.
 
 Whenever a contract field of array type has no elements, it MUST
 serialize as an empty JSON array `[]`, never as `null`. This applies to
-every array-typed field, including `subcommands`, `aliases`,
-`prerequisites`, `positional_arguments`, `mutual_exclusion_groups`, and
+every array-typed field that is present, including `subcommands`,
+`aliases`, `positional_arguments`, `mutual_exclusion_groups`, and
 `examples`. This is the contract-level statement of the general rule in
 `Implementation Notes` (Empty arrays). Examples in this specification
 MUST NOT show `null` in place of an empty array.
+
+**The rule governs a field that is present; it does not require a field to be
+present.** One field is omitted rather than emitted empty: the `prerequisites` of
+a `subcommands` entry, for the reason `Subcommand prerequisites` below gives. Where
+that field has nothing to carry, the key is absent from the object; where it is
+present, it is a non-empty array of strings and never `[]`. Every other array-typed
+field named above is always present, and serializes as `[]` when it is empty. The
+`prerequisites` of a `commands` entry and of a `common_workflows` entry are
+unaffected by the carve-out and keep the general rule: both are always present, and
+both serialize as `[]` when the command family or the workflow has no precondition.
 
 #### `subcommands` array entry
 
@@ -2013,9 +2023,20 @@ MUST NOT show `null` in place of an empty array.
     "network": "None."
   },
   "idempotent": false,
-  "exit_codes": [0, 2, 3, 4, 6],
-  "prerequisites": [
-    "An existing roadmap selected via -r/--roadmap."
+  "exit_codes": [
+    {"code": 0, "conditions": ["The task was created and its id was written to stdout."]},
+    {"code": 2, "conditions": [
+      "A required flag was omitted, or supplied with an empty value.",
+      "An unrecognised flag was supplied.",
+      "A positional argument was supplied; this subcommand declares an arity of zero."
+    ]},
+    {"code": 3, "conditions": ["Neither -r nor --roadmap was supplied."]},
+    {"code": 4, "conditions": ["The roadmap named by -r/--roadmap does not exist."]},
+    {"code": 6, "conditions": [
+      "--priority or --severity carries a value outside 0-9.",
+      "--type carries a value that is not a member of TaskType.",
+      "A free-text field exceeds its cap, is not valid UTF-8, or carries a control character."
+    ]}
   ],
   "examples": [
     {
@@ -2068,9 +2089,128 @@ MUST NOT show `null` in place of an empty array.
 | `side_effects.filesystem` | string | Plain-language description of FS writes; `"None."` when none. |
 | `side_effects.network` | string | Always `"None."` for Groadmap; field kept for forward compatibility. |
 | `idempotent` | boolean | True when repeated invocations with the same arguments produce the same end state. |
-| `exit_codes` | array of integer | Exit codes the subcommand can emit, in ascending order. Always includes `0`. |
-| `prerequisites` | array of string | Preconditions the agent must ensure before invoking (e.g. roadmap exists, sprint is open). |
-| `examples` | array of object | Each entry: `{title, cmd, stdout, stderr, exit}`. Must contain at least one success example, and at least one failure example for every subcommand that has a failure mode (i.e. whose `exit_codes` include a non-zero code). A subcommand whose only exit code is 0 (e.g. `roadmap list`) is exempt from the failure-example requirement. |
+| `exit_codes` | array of object | Exit codes the subcommand can emit, in ascending order by `code`, each paired with the conditions that produce it. Always includes `0`. See `Field reference: per-subcommand exit code entry` below. |
+| `prerequisites` | array of string or absent | Preconditions on state that the caller must satisfy before invoking. Present only when the subcommand has at least one of its own; **absent**, never empty, when it has none. See `Subcommand prerequisites` below. |
+| `examples` | array of object | Each entry: `{title, cmd, stdout, stderr, exit}`. Must contain at least one success example, and at least one failure example for every subcommand that has a failure mode (i.e. whose `exit_codes` carry an entry whose `code` is non-zero). A subcommand whose only exit code is 0 would be exempt from the failure-example requirement, and none is: every subcommand of the CLI can be refused, if only by an argument it does not accept (`COMMANDS.md § Positional Arguments`). Every entry is executed against the compiled binary, or is individually exempted with a published reason; see `Published Examples Are Executed` below. |
+
+#### Field reference: per-subcommand exit code entry
+
+A subcommand's `exit_codes` is an array of objects, one per code the subcommand
+can emit, ordered ascending by `code`:
+
+```json
+{
+  "code": 6,
+  "conditions": [
+    "The target status is not reachable from the task's current status.",
+    "--summary was supplied on a transition whose target is not COMPLETED."
+  ]
+}
+```
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `code` | integer | yes | The exit code. It MUST be one of the codes published in the top-level `exit_codes` catalogue. |
+| `conditions` | array of string | yes | The conditions, under this subcommand, that produce this code. At least one element; every element non-empty after trimming whitespace. |
+
+The rules are:
+
+1. **The array is keyed by code, and a code appears once.** Two conditions that
+   produce the same code are two elements of one entry's `conditions`, never two
+   entries carrying the same `code`.
+2. **`code` carries no name and no meaning text.** Both are published once, in the
+   top-level `exit_codes` catalogue, and a reader resolves them from there by code.
+   Repeating them per subcommand would be the same sentence in fifty-odd places,
+   which is a sentence that will disagree with itself.
+3. **A condition names the condition, not the message.** It states what the caller
+   did, or what the state was, in one sentence. It does not reproduce the stderr
+   line: the line is published by `examples[].stderr` and by this specification's
+   sibling documents, and a third copy would drift from both.
+4. **Every code carries at least one condition, `0` included.** The condition for
+   `0` states what success means for that subcommand — what was created, changed,
+   or returned. A subcommand whose success is an empty stdout says so, so that a
+   caller reading only this array can tell an empty success from a silent failure.
+5. **The array is exhaustive over the conditions a caller controls.** Those
+   conditions are the command line — its flags and the values they carry, a value
+   read from standard input in place of an absent flag included, its positional
+   arguments, and the roadmap selector — and the state of the roadmap the
+   invocation acts on: whether the roadmap exists, and what its database records.
+   A code the subcommand can emit under such a condition and that this array omits
+   is a defect, and so is a code the array publishes that the subcommand cannot
+   emit. The boundary is drawn on the condition and never on the code: a code a
+   caller can produce from the command line or the roadmap's state is required
+   whatever its number, `1` included.
+
+   **The array does not enumerate faults in the environment.** The environment is
+   everything outside those conditions: whether the roadmap's database can be read
+   or written at all, the standard input stream as a stream, the ports and sockets
+   the invocation binds or connects to, and the other processes running beside it.
+   A subcommand that meets a fault there can exit with a code its array does not
+   publish, and that omission is not a defect. Where a subcommand does publish a
+   code for an environment fault, the condition beside the code names that fault,
+   and the gate that holds the arrays to this rule drives the code by reproducing
+   the named fault rather than a generic one: for the subcommands that add, edit
+   and remove a comment, a roadmap database that is not a SQLite database; for
+   `web`, an explicit `--port` another process already holds; for `graph client`,
+   no server listening on the resolved socket; and for a second `graph serve`, a
+   server already live for the same roadmap.
+
+**The entry is an object, and a consumer written against a bare list of integers
+cannot read it.** The shape therefore belongs to a major `schema_version`, on the
+rule stated in the top-level field reference; the same applies to a `prerequisites`
+key that is no longer always present.
+
+**Why the condition is published per subcommand.** A bare list of integers tells a
+caller that a subcommand can fail, and nothing about when. The top-level catalogue resolves `6` to
+`EXIT_INVALID_DATA`, "Invalid input data (validation failure: dates, ranges,
+enums)", which is true of every subcommand that validates anything and therefore
+actionable for none: an agent that reads `[0, 3, 4, 6]` on `sprint start` learns
+that the call may fail with a validation error, and cannot learn that the
+validation in question is that another sprint is already `OPEN`. The condition is
+the part the caller needs, and it exists per subcommand or nowhere.
+
+#### Subcommand prerequisites
+
+A **subcommand prerequisite** is a condition on state that exists before the
+invocation, that the invocation does not itself create, and that the caller must
+bring about before invoking. Examples: a roadmap exists; no other sprint is `OPEN`;
+the target task is in a status from which the requested transition is legal; a
+graph server is running for the roadmap.
+
+**A prerequisite is not an argument rule.** Whether a flag is required, what range
+a value must fall in, which enum a value must belong to, which flags exclude one
+another, and how many positional arguments are accepted are all declared elsewhere
+in the same entry — by `flags`, `positional_arguments` and
+`mutual_exclusion_groups` — and MUST NOT be restated as prerequisites. The test
+that separates the two is mechanical, and it is the test an audit applies:
+
+> A prerequisite can be satisfied only by doing something other than rewriting this
+> command line: running a different command first, or waiting, or choosing a
+> different target. An argument rule is satisfied by rewriting this command line
+> and nothing else.
+
+Two further rules bound the field:
+
+1. **A subcommand carries only its own.** The `prerequisites` of the `commands`
+   entry that owns the subcommand apply to every subcommand in that family and are
+   published once, on the family. A subcommand MUST NOT repeat them. The
+   subcommand's array carries what is true of that subcommand and not of its
+   siblings.
+2. **Absent when there is none.** A subcommand with no prerequisite of its own
+   omits the key entirely. It MUST NOT publish `[]`.
+
+Rule 2 is the point of the field. A key that is present and empty on every
+subcommand is worse than a key that is absent, because it is read as an assertion:
+a consumer that finds `"prerequisites": []` on `sprint start` concludes that the
+subcommand has no precondition, and the conclusion is false — only one sprint may
+be `OPEN` at a time, and the prose `description` says so where no structured
+consumer looks. An always-empty field invites exactly the trust it cannot honour.
+An absent key asserts nothing, and a present one is then worth reading.
+
+**The information exists already and MUST be moved, not invented.** Where a
+subcommand's `description` states a precondition in prose, that precondition
+belongs in `prerequisites` as well, in its own sentence. The `description` keeps
+its prose; the field makes the same fact reachable without reading it.
 
 ### `common_workflows` array entry
 
@@ -2138,6 +2278,43 @@ entries. Each follows the shape shown above.
 | `steps[].purpose` | string | yes | One sentence stating why this step is necessary in the sequence. |
 | `expected_outcome` | string | yes | One sentence describing the end state once the final step succeeds. |
 
+#### A workflow step MUST be an invocation the binary accepts
+
+Resolving to a real subcommand is necessary and not sufficient. A step is a line an
+agent is told to run, so the whole line MUST be one the binary accepts once its
+placeholder tokens are replaced by values of the kind the placeholder names. Three
+rules follow, and they hold for every step of every workflow:
+
+1. **A step carries every flag that is mandatory for what it does.** A flag whose
+   `required` is `false` at the subcommand level because it is mandatory only for
+   some values of a positional argument is mandatory in a step that supplies such a
+   value. `task stat`'s `--commit-open` and `--commit-close` are the case in point:
+   a step that transitions a task to `DOING` carries `--commit-open`, and a step
+   that transitions a task to `COMPLETED` carries `--commit-close`. The subcommand
+   entry cannot mark either flag required, so the step is the only place the
+   obligation can be seen, and a step that omits it publishes an invocation the
+   binary refuses with exit code `6`.
+2. **A step that would be refused is a defect, not a lesson.** `common_workflows`
+   is the array an agent copies from. An invocation that fails belongs in
+   `pitfalls`, as a `wrong_example` beside the correction; it never belongs in a
+   workflow step, where nothing marks it as wrong.
+3. **A workflow's steps are consistent with the rest of the contract.** A step that
+   contradicts a mandatory-flag rule the same contract publishes — in a flag's
+   `description`, or in a pitfall — is a contradiction the contract makes with
+   itself, and the workflow is the side that is wrong: the flag rule describes the
+   binary, the step only describes an intention.
+
+**The step that closes a task in `record_task_working_log` MUST carry
+`--commit-close`.** That workflow ends by transitioning the task to `COMPLETED`
+with a completion summary. Published without the hash, the step is refused with
+exit code `6` and `Error: --commit-close is required when transitioning to
+COMPLETED`, and the summary is never recorded. The step therefore reads
+`rmp task stat -r <name> <task-id> COMPLETED --commit-close <hash> --summary "<one-paragraph completion summary>"`.
+The same obligation is already published twice elsewhere in this contract — by the
+`--commit-close` flag's own `description` and by the `missing_commit_hash_on_transition`
+pitfall — which is what makes the step's omission a self-contradiction rather than a
+gap.
+
 ### `pitfalls` array entry
 
 Each entry documents a mistake that an agent driving this CLI is likely
@@ -2151,6 +2328,8 @@ generated from the command registry.
   "id": "manual_sprint_status",
   "description": "Manually setting a task's status to SPRINT via `task stat` is rejected. The SPRINT status is owned by sprint operations and is set atomically when a task is added to a sprint.",
   "wrong_example": "rmp task stat -r myproject 42 SPRINT",
+  "wrong_exit": 6,
+  "wrong_stderr": "Error: validation error: status SPRINT can only be set automatically via 'sprint add-tasks'",
   "correct_example": "rmp sprint add-tasks -r myproject 7 42",
   "reference": "sprint add-tasks; see also enums.TaskStatus and the SPRINT entry."
 }
@@ -2180,10 +2359,80 @@ Each follows the shape shown above.
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `id` | string | yes | Stable `snake_case` identifier. Used by agents to refer to the pitfall. |
-| `description` | string | yes | One or two sentences explaining the mistake and why the CLI rejects it. |
-| `wrong_example` | string | yes | A concrete `rmp` invocation (or short shell snippet) that triggers the pitfall. |
-| `correct_example` | string | yes | A concrete `rmp` invocation that achieves the user's actual intent. |
+| `description` | string | yes | One or two sentences explaining the mistake and its consequence: why the CLI rejects it, or, where it does not, what the accepted invocation does instead of what the caller intended. |
+| `wrong_example` | string | yes | A concrete `rmp` invocation (or short shell snippet) that triggers the pitfall. It MUST produce the outcome the pitfall names; see `A wrong_example MUST fail for the reason the pitfall names` below. |
+| `wrong_exit` | integer | yes | The exit code `wrong_example` actually produces. It is non-zero for a pitfall the CLI refuses, and `0` for a pitfall whose lesson is that nothing refuses the invocation; see `A pitfall whose wrong_example is not refused` below. |
+| `wrong_stderr` | string | yes | The complete first line of stderr `wrong_example` produces, `Error: ` prefix and sentinel included, on the discipline of `COMMANDS.md § Published Error Strings Are Exact`. The empty string where the example writes nothing to stderr, which is every entry whose `wrong_exit` is `0`. |
+| `correct_example` | string | yes | A concrete `rmp` invocation that achieves the user's actual intent. It MUST succeed. Like every published invocation, it takes no argument from a program other than `rmp`; see `Published Examples Are Executed` below, under `State, isolation and side effects`. |
 | `reference` | string | yes | The command, enum, or convention in this contract that governs the rule (e.g. `sprint add-tasks`, `enums.TaskStatus`, `conventions.datetime_format`). |
+
+#### A `wrong_example` MUST fail for the reason the pitfall names
+
+A pitfall teaches by demonstration, so the demonstration has to be of the mistake
+in the pitfall's own title. The heading's *fail* is the common case rather than the
+whole rule: a pitfall may exist precisely because nothing fails, and that class is
+governed by `A pitfall whose wrong_example is not refused` below. Two rules apply
+to every entry:
+
+1. **The outcome the `wrong_example` produces is the outcome the pitfall names.**
+   Where the pitfall names a refusal, running the example MUST reach the rejection
+   the `description` describes, and MUST NOT be stopped earlier by an unrelated
+   refusal. An example that never reaches the guard it is meant to illustrate
+   teaches the wrong lesson twice over: the reader is shown a rejection that has
+   nothing to do with the pitfall, and is left with the belief that the pitfall's
+   own guard is what produced it. Where the pitfall names no refusal, the mirror
+   obligation holds: the example MUST NOT be refused at all, because a refusal for
+   any reason, related or not, contradicts the claim the entry is making.
+2. **A pitfall whose outcome is reachable only from a particular state says so.**
+   Where the rejection, or the accepted mistake, requires the target to be in some
+   status, or some other entity to exist, the `description` MUST state that
+   precondition. A single command line cannot establish state it does not create,
+   so without the stated precondition neither a reader nor a gate can put the
+   example in the position where it behaves as advertised.
+
+**`complete_with_open_dependencies` MUST carry the commit hash, and MUST state the
+status its example starts from.** The pitfall is about the dependency guard, but the
+transition to `COMPLETED` is refused twice before that guard is ever consulted:
+without `--commit-close` the invocation is refused with
+`Error: --commit-close is required when transitioning to COMPLETED`, and from a
+status other than `TESTING` it is refused as an illegal transition. Its
+`wrong_example` therefore MUST supply a literal commit hash, and its `description`
+MUST state that the task is in `TESTING` and has a declared dependency that is not
+`COMPLETED`. Only then does the invocation reach the guard and produce the
+`incomplete dependencies` refusal the pitfall exists to show
+(`STATE_MACHINE.md § Dependency Guard` is canonical for the guard and its message).
+
+#### A pitfall whose `wrong_example` is not refused
+
+Not every mistake worth publishing is one the CLI rejects, and some of the most
+damaging are the ones it accepts. The binary runs the invocation, exits `0`, writes
+nothing to stderr, and quietly does something other than what the caller intended:
+a mutation whose stdout the caller was about to parse, a statement no
+operation-class check inspects, a schema statement whose trailing clause the
+engine's parser discards. A pitfall of that kind exists to publish that **there is
+no guard**, so requiring its `wrong_example` to be refused would be requiring the
+class not to exist. The class is legitimate, and an entry belonging to it MUST
+declare itself rather than leave the reader to infer it from a surprising `0`:
+
+1. **`wrong_exit` publishes the exit code the example actually produces, `0`
+   included.** The field records an observation, not a promise of refusal.
+2. **`wrong_stderr` is the empty string, and the empty string means empty.** It
+   asserts that the example writes no bytes to stderr; it never means
+   "unspecified". Publishing `0` alongside a non-empty line, or a non-zero code
+   alongside an empty one, is a defect in the entry.
+3. **The `description` states that the invocation succeeds, and names the harm.**
+   The damage is in what the command did, not in a refusal, so the sentence that
+   carries the lesson is the one describing the outcome: that the command is not
+   refused, and what it changed, printed, or silently discarded while exiting `0`.
+
+The gate has no refusal to compare against, so what it asserts for such an entry is
+the acceptance itself: that the observed exit code equals the published
+`wrong_exit`, which is `0`; that stderr is empty, as the published empty
+`wrong_stderr` claims; and that the entry publishes those two fields consistently,
+`wrong_exit` being `0` exactly when `wrong_stderr` is empty. It does not attempt to
+observe the harm: whether the deleted nodes are gone, or the discarded clause never
+ran, is what the `description` is for, and asserting it would require the gate to
+re-specify the engine's behaviour rather than the contract's honesty about it.
 
 ### Scope filtering
 
@@ -2202,3 +2451,195 @@ filtered as follows:
 The filtering rule guarantees that any contract slice is still
 self-contained: an agent receiving a subcommand-scoped contract still
 has the enums it references and the exit-code catalogue it relies on.
+
+### Published Examples Are Executed
+
+Every invocation this contract publishes is a claim about the compiled binary, and
+a claim nothing checks is a claim that drifts. The contract is generated from the
+command registry, so its *structure* cannot disagree with the registry; its
+*example text* is hand-written and can, and has. The project MUST therefore carry
+an automated gate that runs every published invocation against the compiled binary
+and asserts what the contract published for it.
+
+**The corpus is read from the binary's own output.** The gate obtains the contract
+by running `rmp --ai-help` against the compiled binary and reading the JSON it
+emits. It MUST NOT recover the corpus by parsing the Go source that builds the
+contract: a gate that reads the source agrees with a generator that is itself
+wrong, which is the failure it exists to detect.
+
+#### The three surfaces the gate covers
+
+| Surface | Field carrying the invocation | Oracle published beside it |
+|---------|-------------------------------|----------------------------|
+| Subcommand examples | `commands[].subcommands[].examples[].cmd` | `exit`, `stdout`, `stderr` |
+| Workflow steps | `common_workflows[].steps[].command` | the workflow's `prerequisites` and the order of its steps |
+| Pitfall examples | `pitfalls[].wrong_example`, `pitfalls[].correct_example` | `wrong_exit` and `wrong_stderr` for the first; exit `0` for the second |
+
+No fourth surface publishes an invocation. Should one be added, it joins this table
+and the gate before it reaches a reader.
+
+#### What the gate asserts
+
+**For a subcommand example**, the gate runs `cmd` and asserts:
+
+1. The observed exit code equals the published `exit`.
+2. When `exit` is non-zero: stdout is empty, and the first line of stderr equals
+   the published `stderr` in full, on the discipline of
+   `COMMANDS.md § Published Error Strings Are Exact`. Where the line ends in text
+   produced outside `rmp` — an operating-system message, or a Cypher engine
+   diagnostic — only the fixed prefix through the last text `rmp` owns is
+   compared, and the marker that ends that prefix is published with its reason.
+
+   A second and narrower carve-out covers a value **`rmp` itself interpolates**
+   which the gate cannot know when the contract is written because it depends on
+   the environment the gate creates. The resolved socket path of a graph server is
+   the case in point: it is derived from the home directory the gate redirects and
+   from the roadmap name the gate substitutes, so no literal path can be published
+   that is true anywhere but on the machine that wrote it. Such a line is published
+   carrying the placeholder that
+   `COMMANDS.md § Published Error Strings Are Exact` declares for that value —
+   `<socket>` for this one — and never an invented literal, which would be a
+   published falsehood dressed as an exact string. Only a placeholder from that
+   section's closed set may appear, and the entry's `description` says what it
+   stands for, so a reader holding the contract alone can resolve it.
+
+   What the gate compares is then the **whole line**, against the value it resolved
+   from the fixture it built: the text before the placeholder and the text after it
+   are compared character for character, and the placeholder's own span is compared
+   against that resolved value. Nothing is skipped and nothing is matched loosely,
+   which is what keeps the two carve-outs distinct and keeps this one from becoming
+   a licence to compare less. In the first, the trailing text is not `rmp`'s and the
+   gate cannot reconstruct it, so a prefix is all there is to compare; in this one
+   every byte of the line is `rmp`'s and every byte is compared. A line carrying a
+   placeholder the gate cannot resolve from its own fixture is not eligible for this
+   carve-out, and MUST be exempted by name instead.
+3. When `exit` is `0`: stdout conforms to the subcommand's `stdout_on_success`.
+   `kind: "empty"` requires stdout to be empty; `kind: "object"` requires a JSON
+   object carrying the keys of `schema`; `kind: "array"` requires a JSON array
+   whose elements carry them. The published `stdout` string, when non-empty, is
+   asserted to be a document of that same shape, and **not** to be byte-identical
+   to what was observed: ids, timestamps and durations differ from run to run, and
+   a byte comparison would either fail or force the examples to publish values no
+   caller will ever see.
+
+**For a workflow**, the gate establishes the workflow's own `prerequisites` in a
+throwaway roadmap, then runs the steps in the published order and asserts that
+every one of them exits `0`. `expected_outcome` is prose written for a human and
+is not asserted; what the gate guarantees is that an agent following the recipe
+line by line is never refused by the binary. A step refused for any reason fails
+the gate, and the gate reports the step's index, its command, and the stderr it
+produced.
+
+**For a pitfall**, the gate runs `wrong_example` and asserts that the observed exit
+code equals `wrong_exit` and that stderr matches `wrong_stderr`: where that field is
+non-empty, the first line of stderr equals it, compared exactly as a subcommand
+example's `stderr` is; where it is the empty string, stderr is empty. The second
+case is the pitfall whose lesson is that nothing refuses the invocation, whose
+`wrong_exit` is `0`; `A pitfall whose wrong_example is not refused` above is
+canonical for that class and for what the gate asserts in place of a refusal. The
+gate then runs `correct_example` and asserts exit `0`; where that field publishes a
+sequence of invocations, each element is run in order and each MUST exit `0`. The
+two fields beside `wrong_example` exist because a pitfall without them has no
+oracle: a gate that could assert only "the wrong example did something" would pass
+an example that fails for the wrong reason, or one that is refused when the whole
+point of the entry is that it is not, which is precisely the defect this rule exists
+to exclude.
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `wrong_exit` | integer | yes | The exit code `wrong_example` produces: non-zero where the CLI refuses it, `0` where the pitfall's lesson is that nothing does. |
+| `wrong_stderr` | string | yes | The complete first line of stderr `wrong_example` produces, `Error: ` prefix and sentinel included; the empty string where it writes nothing to stderr. |
+
+#### State, isolation and side effects
+
+The gate runs against a **throwaway roadmap under a temporary home directory**,
+created before the run and removed after it. Nothing the gate runs may reach a real
+roadmap, and the gate MUST fail rather than proceed if it cannot establish that
+isolation. That directory MUST also be short enough that the socket path derived
+under it still fits the platform's limit (`GRAPH.md § Socket Path Length`): past
+that limit every graph invocation is refused for the length of its path instead of
+for the reason its example publishes, and the gate would be measuring the length of
+its own temporary directory.
+
+**The fixture is built to fit the examples, not the examples trimmed to fit the
+fixture.** Subcommand examples and pitfall examples name entities by literal id
+(`42`, `7`), so the gate creates entities until those ids exist, and puts the
+entities an example acts on into the status that example requires. A fresh roadmap
+issues ids from `1` upward, so this is deterministic. Exactly one token is
+substituted rather than taken literally: the roadmap stand-in the examples use in
+place of a real roadmap name. Every other token in a subcommand or pitfall example
+is literal and is passed to the binary unchanged.
+
+**A published example takes its arguments from the contract, not from another
+program.** No published invocation may obtain an argument by running something
+other than `rmp`: a shell command substitution such as `$(git rev-parse HEAD)` is
+forbidden wherever its result reaches the command line. An example built that way
+is not a claim about `rmp` at all — it succeeds or fails on whether the machine
+running it happens to be inside a git checkout, and the gate asserting it would be
+asserting the behaviour of the other program. Where the correct invocation needs a
+value a caller would fetch from elsewhere, a commit hash being the case in point,
+the example publishes a literal in its place and the prose beside it says where a
+caller obtains such a value; prose is not executed, so the lesson survives at no
+cost to the gate. The rule bears on where an argument comes from and not on shell
+syntax as such: an operator that sequences or backgrounds one `rmp` invocation
+beside another is unaffected, and so is a substitution that captures the output of
+`rmp` itself, which is how a pitfall about parsing stdout demonstrates the mistake
+it names. In each of those the outcome is still determined by `rmp` alone.
+
+**Workflow steps are the exception, and their placeholders are a declared
+vocabulary.** A step is written to be adapted by its reader, so it carries tokens
+such as `<name>`, `<task-id>` and `<sprint-id>` rather than literal values. Each
+token names the kind of value it takes, and the gate fills each one from the
+fixture. A step carrying a token that is not in the vocabulary fails the gate,
+which is what keeps the vocabulary closed and the steps runnable.
+
+**Side effects are contained, not avoided.** A published invocation that mutates
+the roadmap is run and its mutation kept; the throwaway roadmap exists to absorb
+it. An invocation that starts a long-running process — the web server, the graph
+server — is started by the gate on a port or socket the gate itself chose, asserted
+to have started, and stopped before the run continues. Being destructive is not a
+reason to exempt an example, because a destructive command's example is exactly the
+one a reader most needs to be correct.
+
+#### Examples that cannot be run as published
+
+An example that the gate cannot run MUST be **exempted individually and by name,
+with its reason published beside it**. The rules are absolute:
+
+1. **No silent skip.** No skip marker, no conditional that quietly drops a case, no
+   "not applicable". An example is executed, or it is named in the exemption list.
+2. **An exemption names one example and states why.** A category-wide exemption is
+   forbidden: it grows to cover the cases nobody looked at.
+3. **The exemption list is itself gated against staleness.** An entry naming an
+   example the contract no longer publishes fails the gate. An exemption that
+   outlives its example is an exemption nobody will re-examine.
+4. **The gate reports its coverage and fails on a shortfall.** It counts the
+   invocations it executed against the invocations the contract published, and
+   fails when any published invocation is neither executed nor exempted. A gate
+   that passes because it found nothing to run is a gate that has stopped working.
+5. **The gate proves it can fail.** It MUST assert that its comparator rejects a
+   deliberately degraded copy of a real published string — one with the sentinel
+   removed, one with the `Error: ` prefix removed — and accepts the undegraded one.
+   Without that check a comparator that has silently become permissive reports a
+   contract that has silently become wrong.
+
+#### Acceptance criteria
+
+1. Every invocation published by the three surfaces above is executed against the
+   compiled binary, or is individually exempted with a published reason.
+2. Each executed subcommand example reproduces its published exit code, and its
+   published stderr line when it fails, and stdout of its published shape when it
+   succeeds.
+3. Each workflow's steps run in order, after the workflow's own prerequisites are
+   established, and every step exits `0`.
+4. Each pitfall's `wrong_example` reproduces `wrong_exit` and `wrong_stderr`, and
+   each `correct_example` exits `0`.
+5. The exemption list carries no entry for an example the contract no longer
+   publishes.
+6. The gate's coverage report accounts for every published invocation, and the gate
+   fails when it does not.
+7. The gate's comparator is shown to reject a degraded copy of a published string
+   and to accept the undegraded one, and to reject a line whose placeholder span
+   differs from the value the gate resolved for it.
+8. The whole run leaves no roadmap, database, socket, or listening process behind.
+9. The end-to-end suite exercises criteria 1 to 8 against the compiled binary.

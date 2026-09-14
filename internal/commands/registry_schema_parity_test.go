@@ -420,6 +420,20 @@ func unguardedRegistrySchemas(t *testing.T) map[string]string {
 			entries: []string{"roadmap remove"},
 		},
 		{
+			reason: "a success envelope emitted from a bare map literal in " +
+				"sprint_order.go / sprint_position.go; no struct backs it, so there " +
+				"is no object for a key list to be held in parity WITH. The five " +
+				"entries declared `empty` until the gate over the published examples " +
+				"measured them writing a body (rmp task 417), and they name the " +
+				"object they return rather than enumerating it, because a key list " +
+				"nothing checks is the second copy this file exists to prevent. " +
+				"SPEC/COMMANDS.md § Task Ordering publishes the keys",
+			entries: []string{
+				"sprint reorder", "sprint move-to", "sprint swap",
+				"sprint top", "sprint bottom",
+			},
+		},
+		{
 			reason: "points at DATA_FORMATS.md for a document whose shape is specified " +
 				"there; it is not the key list of a struct this package returns",
 			entries: []string{"ai-help"},

@@ -641,14 +641,18 @@ class TestGraphSchemaFailureClasses(SchemaTestBase):
             f"AC68: DROP INDEX of an absent object exits {EXIT_ENGINE}, not "
             f"{EXIT_VALIDATION}; exit={code} stderr={stderr!r}")
         # The shape only, deliberately, and NOT the counters. Measured against
-        # GoGraph v0.14.0, this statement removes nothing and still reports
-        # indexesRemoved 1, because runDropIndex increments the counter before
-        # its own IF-EXISTS check decides there was nothing to drop. That
-        # contradicts SPEC/DATA_FORMATS.md § Graph Query Counters rule 7 -- every
-        # value is a count of an effect actually applied -- and the figure comes
-        # from the engine, so nothing in this repository can correct it. The
-        # sibling DROP CONSTRAINT ... IF EXISTS returns cleanly with no counter,
-        # which is what makes it an engine asymmetry rather than a design.
+        # GoGraph v0.14.1, this statement removes nothing and still reports
+        # indexesRemoved 1, because the IF-EXISTS miss is absorbed INSIDE the
+        # operator -- DropIndexOp.Next returns the same silent success for a real
+        # drop and for a name that was never there -- while the counter is
+        # recorded above it, after the operator succeeds, by a caller that cannot
+        # tell the two apart. That contradicts SPEC/DATA_FORMATS.md § Graph Query
+        # Counters rule 7 -- every value is a count of an effect actually applied
+        # -- and the figure comes from the engine, so nothing in this repository
+        # can correct it. The sibling DROP CONSTRAINT ... IF EXISTS returns
+        # cleanly with no counter, because it tests IF EXISTS ABOVE the counted
+        # path and returns before reaching it, which is what makes it an engine
+        # asymmetry rather than a design.
         # Asserting either number here would be wrong: {"indexesRemoved": 1}
         # would enshrine the defect, and {} would fail on today's engine.
         assert_graph_write_shape(
@@ -663,7 +667,7 @@ class TestGraphSchemaFailureClasses(SchemaTestBase):
         """Definitions the engine's DDL parser will not accept.
 
         The exit code and the empty stdout are what is asserted, and the message
-        deliberately is not. Measured against GoGraph v0.14.0 through the Bolt
+        deliberately is not. Measured against GoGraph v0.14.1 through the Bolt
         server, these three fail with `cypher: DDL parse: ir: ...` diagnostics
         that the server's own error sanitiser does not classify as a client
         fault, so what reaches the caller is the generic "An internal error
@@ -706,7 +710,7 @@ class TestGraphSchemaFailureClasses(SchemaTestBase):
 
         # Presence rules fail the same way, on a property some node lacks. The
         # exit code and the empty registry are asserted and the message is not:
-        # measured against GoGraph v0.14.0, this one is the case whose
+        # measured against GoGraph v0.14.1, this one is the case whose
         # diagnostic the Bolt server's sanitiser replaces with the generic
         # internal-error text, unlike the UNIQUE rule above. See
         # test_ac68_unsupported_definitions_are_engine_failures for the same

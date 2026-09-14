@@ -605,12 +605,13 @@ work with an explicit time budget.
    begins and covers that execution and the walk over the result it produces (see
    [Graph Data Endpoint](#graph-data-endpoint)).
    **The party that enforces it is the graph server**, which takes this value as
-   both its default and its maximum statement timeout, so no client can raise its
-   own above it (see `GRAPH.md § Server Options`). This section is canonical for
-   the value; `GRAPH.md § Statement Time Budget` is canonical for what the budget
-   does to a statement and for what a cut statement leaves on disk. Every surface
-   reads one declaration, so the value cannot drift between them, and changing it
-   here changes it for `rmp graph client` too.
+   its maximum statement timeout — clamping a client that asks for longer and
+   applying the value unconditionally to a client that asks for nothing — so no
+   client can raise its own above it (see `GRAPH.md § Server Options`). This
+   section is canonical for the value; `GRAPH.md § Statement Time Budget` is
+   canonical for what the budget does to a statement and for what a cut statement
+   leaves on disk. Every surface reads one declaration, so the value cannot drift
+   between them, and changing it here changes it for `rmp graph client` too.
 
    **The value is justified against real graphs, because it has to carry the CLI
    as well.** On a small store a three-way Cartesian product spent 1.32 seconds of
