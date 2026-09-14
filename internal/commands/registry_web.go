@@ -5,15 +5,23 @@ import "github.com/FlavioCFOliveira/Groadmap/internal/web"
 
 // runWeb is the dispatch adapter for `rmp web`. web is a leaf command
 // (HasSubcommand: false), so DispatchFamily routes the raw args straight to
-// this handler and bypasses the family-level help path that prepends the
-// SPEC AI-agent banner. Mirroring HandleStats, the leaf handler must detect
-// the help token itself and route web.PrintHelp through invokeHelpPrinter so
-// the banner is emitted uniformly (SPEC/HELP.md § AI agent banner). Keeping
-// this wrapper here — rather than in the web package — preserves the
+// this handler and never runs the hasHelpFlag short-circuit it runs for a
+// family's subcommands, which is the path that prepends the SPEC AI-agent
+// banner. The handler therefore applies that same predicate to its whole
+// argument list itself, as HandleStats does, and routes web.PrintHelp through
+// invokeHelpPrinter so the banner is emitted uniformly, wherever the help
+// token is written (SPEC/HELP.md § Help levels, § AI agent banner).
+//
+// The check used to read args[0] alone. A help token written after another
+// flag, as in `rmp web --no-open --help`, then fell through to web.Run, whose
+// own parser serves the help by calling web.PrintHelp directly, without the
+// banner (rmp task 475).
+//
+// Keeping this wrapper here — rather than in the web package — preserves the
 // commands -> web dependency direction and keeps the banner string a
 // single-source commands-package concern; web.PrintHelp stays banner-free.
 func runWeb(args []string) error {
-	if len(args) > 0 && isHelpToken(args[0]) {
+	if hasHelpFlag(args) {
 		invokeHelpPrinter(web.PrintHelp)
 		return nil
 	}
@@ -63,7 +71,19 @@ func buildWebCommand() Command {
 					Network:    "Serves a local HTTP server on the bound host/port; makes no outbound request.",
 				},
 				Idempotent: false,
-				ExitCodes:  []int{0, 1, 2, 6},
+				Prerequisites: []string{
+					"When --port names a port explicitly, that port is free on the bind host: an explicit port is never replaced by an ephemeral one, and a busy one is a failure rather than a fallback.",
+				},
+				ExitCodes: []ExitCodeEntry{
+					ec(0, "The server bound its host and port, wrote the served URL to stdout, and served read-only routes until SIGINT or SIGTERM."),
+					ec(1,
+						"The requested host and port could not be bound: an explicit --port is already in use, or the host is not assignable.",
+						"The data directory ~/.roadmaps/ could not be read.",
+						"The listener stopped accepting connections after the server had started.",
+					),
+					ec(2, "An unrecognised flag was supplied, or a positional argument was supplied; this command accepts none."),
+					ec(6, "--port falls outside 0-65535, or is not an integer."),
+				},
 				Examples: []Example{
 					{
 						Title:  "Start on the default loopback address and port",

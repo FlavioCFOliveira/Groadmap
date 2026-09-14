@@ -296,8 +296,13 @@ func TestGenerate_SchemaVersionMatchesSPEC(t *testing.T) {
 	out := generateOrFatal(t, ScopeAll())
 	m := unmarshalAsMap(t, out)
 	got, _ := m["schema_version"].(string)
-	// SPEC/DATA_FORMATS.md § AI Agent Contract declares "1.0.0".
-	const want = "1.0.0"
+	// SPEC/DATA_FORMATS.md § AI Agent Contract declares "2.0.0". The major
+	// bump is the subcommand entry: exit_codes stopped being an array of
+	// integers and became an array of {code, conditions} objects, and
+	// prerequisites stopped always being present. Both are changes a
+	// consumer written against 1.0.0 cannot read, which is what the
+	// document's own rule makes a major version.
+	const want = "2.0.0"
 	if got != want {
 		t.Errorf("schema_version = %q, want %q (SPEC/DATA_FORMATS.md § AI Agent Contract)", got, want)
 	}

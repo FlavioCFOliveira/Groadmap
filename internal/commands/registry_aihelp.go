@@ -71,7 +71,13 @@ func buildAIHelpCommand() Command {
 				Output:                   SuccessOutput{Kind: "object", Schema: "AI Agent Contract — see DATA_FORMATS.md § AI Agent Contract."},
 				SideEffects:              SideEffects{Database: "Read-only.", Filesystem: "None.", Network: "None."},
 				Idempotent:               true,
-				ExitCodes:                []int{0, 2},
+				ExitCodes: []ExitCodeEntry{
+					ec(0, "The whole-CLI contract was written to stdout as pretty-printed JSON with a trailing newline."),
+					ec(2,
+						"A positional argument was supplied, or a flag other than --help; this command accepts neither.",
+						"A scope was requested for a command or subcommand name the registry does not resolve.",
+					),
+				},
 				Examples: []Example{
 					{Title: "Emit the whole-CLI contract", Cmd: "rmp ai-help", Exit: 0},
 					{Title: "Same payload via the global flag", Cmd: "rmp --ai-help", Exit: 0},

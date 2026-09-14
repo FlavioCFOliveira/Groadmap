@@ -87,6 +87,7 @@ TEST_MODULES = [
     "test_67_batch_id_lists",
     "test_68_graph_socket_path_length",
     "test_69_graph_field_length",
+    "test_70_published_contract_execution",
 ]
 
 # Stress tests (run separately due to time/data volume)

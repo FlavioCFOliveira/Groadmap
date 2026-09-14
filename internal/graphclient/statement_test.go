@@ -11,10 +11,15 @@
 // engine's own proto package is what encodes and decodes both sides, so the
 // scripts are protocol-faithful rather than approximate.
 //
-// The one thing a scripted server cannot establish — that the retry actually
-// saves two REAL overlapping writers — is established where it can be, against a
-// real server: TestServer_TwoOverlappingWritersBothSucceed, in
-// internal/graphserve.
+// The one thing a scripted server cannot establish — that the code the REAL
+// engine reports for a lost conflict is the code this file matches as a string —
+// is established where it can be, against a real server:
+// TestServer_TwoOverlappingWritersEitherCommitOrReportTheConflict, in
+// internal/graphserve. That test holds two overlapping writers to the two
+// outcomes the contract publishes; that a conflict is RETRIED rather than
+// surfaced is pinned here instead, by
+// [TestSend_RetriesASerialisationConflictAndDoesNotSurfaceIt], because only a
+// scripted server can guarantee the conflict happens at all.
 //
 // # Why the value mapping is tested separately from the exchange
 //

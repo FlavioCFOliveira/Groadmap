@@ -21,6 +21,8 @@
 
 This document defines the state machines for entities that progress through discrete lifecycle states in Groadmap. It covers both Task entities (BACKLOG, SPRINT, DOING, TESTING, COMPLETED) and Sprint entities (PENDING, OPEN, CLOSED). Each state machine specifies the legal transitions, the side effects on tracking fields, the values a transition requires the caller to supply, and the conditions under which a transition is rejected.
 
+Every error string this document publishes is the complete line the user reads on stderr, following the convention stated in `COMMANDS.md § Published Error Strings Are Exact`.
+
 ## Task State Machine
 
 ### States
@@ -134,7 +136,7 @@ sprint's `BACKLOG` and `SPRINT` member tasks together (see
 
 ### Task Deletion Precondition
 
-A task may be removed (`task remove` / `task rm`) only while it is in `BACKLOG` status. Attempts to delete a task in any other status (`SPRINT`, `DOING`, `TESTING`, `COMPLETED`) are rejected with exit code 6 and the message `"Error: task #N cannot be deleted — status is X, must be BACKLOG"`. To delete a non-BACKLOG task, the caller MUST first transition the task back to `BACKLOG`: via `sprint remove-tasks` or `sprint remove` from any of the four states, via `task stat <id> BACKLOG` from `SPRINT` or `COMPLETED`, or via `task reopen` from any of the four states.
+A task may be removed (`task remove` / `task rm`) only while it is in `BACKLOG` status. Attempts to delete a task in any other status (`SPRINT`, `DOING`, `TESTING`, `COMPLETED`) are rejected with exit code 6 and the message `"Error: validation error: task #N cannot be deleted — status is X, must be BACKLOG"`. To delete a non-BACKLOG task, the caller MUST first transition the task back to `BACKLOG`: via `sprint remove-tasks` or `sprint remove` from any of the four states, via `task stat <id> BACKLOG` from `SPRINT` or `COMPLETED`, or via `task reopen` from any of the four states.
 
 The precondition tests the status alone. A task in `BACKLOG` status that is still a member of a sprint can be deleted, and the deletion removes its `sprint_tasks` row through the `ON DELETE CASCADE` on that table.
 
@@ -201,7 +203,7 @@ When transitioning any task to **COMPLETED**, the system checks whether the task
 
 | Scenario | Error |
 |----------|-------|
-| Task has incomplete subtasks | `Error: cannot mark task #N as COMPLETED: incomplete subtasks: #A, #B` |
+| Task has incomplete subtasks | `Error: validation error: cannot mark task #N as COMPLETED: incomplete subtasks: <id-list>` |
 
 #### Dependency Guard
 
@@ -211,7 +213,7 @@ The sub-task hierarchy guard is evaluated first; if no subtask violations are fo
 
 | Scenario | Error |
 |----------|-------|
-| Task has incomplete dependencies | `Error: cannot mark task #N as COMPLETED: incomplete dependencies: #A, #B` |
+| Task has incomplete dependencies | `Error: validation error: cannot mark task #N as COMPLETED: incomplete dependencies: <id-list>` |
 
 ### Date Tracking Fields
 
@@ -406,7 +408,7 @@ depends on the sprint lifecycle state.
 2. Once a sprint is `CLOSED`, its `order` becomes immutable: it permanently
    records the historical execution position of the sprint. Any attempt to change
    the `order` of a `CLOSED` sprint is rejected with exit code 6 and the message
-   `"Error: sprint #N order cannot be changed — sprint is CLOSED"`. The constraint
+   `"Error: validation error: sprint #N order cannot be changed — sprint is CLOSED"`. The constraint
    is enforced by the application layer; the SQLite DDL does not include a `CHECK`
    or trigger for this rule.
 3. Reordering is a single-sprint operation. Changing one sprint's `order` does not

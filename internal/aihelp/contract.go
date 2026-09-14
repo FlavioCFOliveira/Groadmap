@@ -15,7 +15,7 @@
 //     conventions/exit-codes blocks defined in this package, and
 //     returns a `[]byte` of pretty-printed JSON ready for stdout.
 //
-// SchemaVersion ("1.0.0") is the version of the contract schema
+// SchemaVersion ("2.0.0") is the version of the contract schema
 // itself, not of the rmp binary. Bump it only when the *shape* of the
 // JSON changes in a way that breaks existing AI-agent consumers
 // (renamed field, removed key, changed type). The binary version
@@ -32,7 +32,22 @@ package aihelp
 // SchemaVersion is the semantic version of the AI Agent Contract
 // schema. Independent of the rmp binary version. Matches the value
 // declared in SPEC/DATA_FORMATS.md § AI Agent Contract.
-const SchemaVersion = "1.0.0"
+//
+// 2.0.0 is a MAJOR bump because two changes to the subcommand entry
+// cannot be read by a consumer written against 1.0.0
+// (SPEC/DATA_FORMATS.md § Field reference: per-subcommand exit code
+// entry, and § Subcommand prerequisites):
+//
+//   - exit_codes stopped being an array of integers and became an array
+//     of {code, conditions} objects. A consumer that read the elements
+//     as numbers reads objects instead.
+//   - prerequisites stopped always being present on a subcommand entry.
+//     A consumer that indexed the key unconditionally finds it absent on
+//     the subcommands that have no precondition of their own.
+//
+// A field added beside the existing ones would have been a minor bump;
+// a field that changes type, or that stops being emitted, is a major one.
+const SchemaVersion = "2.0.0"
 
 // Contract is the top-level JSON document returned by `rmp --ai-help`.
 // Field order in the struct is intentional: it matches the canonical
@@ -273,22 +288,67 @@ type ExampleEntry struct {
 	Exit   int    `json:"exit"`
 }
 
+// SubcommandExitCode is one entry of a subcommand's exit_codes array:
+// one exit code paired with the conditions that produce it under that
+// subcommand (SPEC/DATA_FORMATS.md § Field reference: per-subcommand
+// exit code entry).
+//
+// The code's NAME and MEANING are deliberately absent. Both are published
+// once, in the contract's top-level exit_codes catalogue, and a reader
+// resolves them from there by code; repeating them here would be the same
+// sentence in fifty-odd places, which is a sentence that will disagree
+// with itself.
+//
+// Field order is intentional and NOT alignment-optimal: the SPEC's
+// examples emit `code` before `conditions`, and encoding/json emits in
+// struct-field order. The eight bytes fieldalignment would save are
+// irrelevant — the value is marshalled at most once per subcommand per
+// process — while the key order is part of how the document reads.
+//
+//nolint:govet // fieldalignment: SPEC-mandated JSON field order wins.
+type SubcommandExitCode struct {
+	// Code is the exit code, resolvable against the top-level catalogue.
+	Code int `json:"code"`
+	// Conditions are the conditions, under this subcommand, that produce
+	// Code. Never empty, and never carrying an empty string: a code with
+	// nothing to say about itself is the bare integer list this shape
+	// replaced.
+	Conditions []string `json:"conditions"`
+}
+
 // SubcommandEntry projects internal/commands.Subcommand. For leaf
 // families (e.g. `stats`) the registry stores a single Subcommand with
 // Name == ""; the generator surfaces such families as a top-level
 // CommandEntry without a Subcommands array, so SubcommandEntry only
 // appears under genuine sub-tokens.
 type SubcommandEntry struct {
-	ReadsStdin            *bool                `json:"reads_stdin,omitempty"`
-	SideEffects           SideEffects          `json:"side_effects"`
-	StdoutOnSuccess       SuccessOutput        `json:"stdout_on_success"`
-	Usage                 string               `json:"usage"`
-	Description           string               `json:"description"`
-	Summary               string               `json:"summary"`
-	Name                  string               `json:"name"`
-	Flags                 []FlagEntry          `json:"flags"`
-	Prerequisites         []string             `json:"prerequisites"`
-	ExitCodes             []int                `json:"exit_codes"`
+	ReadsStdin      *bool         `json:"reads_stdin,omitempty"`
+	SideEffects     SideEffects   `json:"side_effects"`
+	StdoutOnSuccess SuccessOutput `json:"stdout_on_success"`
+	Usage           string        `json:"usage"`
+	Description     string        `json:"description"`
+	Summary         string        `json:"summary"`
+	Name            string        `json:"name"`
+	Flags           []FlagEntry   `json:"flags"`
+	// Prerequisites is ABSENT from the JSON when the subcommand has no
+	// precondition of its own, and is a non-empty array of strings when
+	// it has. It is the ONE array-typed contract field that is omitted
+	// rather than emitted as `[]`, and the reason is that an always-empty
+	// key is read as an assertion: a consumer that found
+	// `"prerequisites": []` on `sprint start` concluded the subcommand
+	// had no precondition, and the conclusion was false — only one sprint
+	// may be OPEN at a time. An absent key asserts nothing, and a present
+	// one is then worth reading (SPEC/DATA_FORMATS.md § Subcommand
+	// prerequisites, rule 2).
+	//
+	// The `prerequisites` of a commands entry and of a common_workflows
+	// entry are NOT part of this carve-out: both keep the general rule and
+	// are always present, `[]` when empty.
+	Prerequisites []string `json:"prerequisites,omitempty"`
+	// ExitCodes is ascending by Code, one entry per code the subcommand
+	// can emit, each carrying the conditions that produce it under this
+	// subcommand.
+	ExitCodes             []SubcommandExitCode `json:"exit_codes"`
 	MutualExclusionGroups [][]string           `json:"mutual_exclusion_groups"`
 	PositionalArguments   []PositionalArgument `json:"positional_arguments"`
 	Aliases               []string             `json:"aliases"`
@@ -336,10 +396,33 @@ type WorkflowStep struct {
 // Pitfall is the JSON shape of a `pitfalls` entry. The curated list
 // of twelve pitfalls mandated by SPEC/DATA_FORMATS.md § AI Agent
 // Contract is supplied by staticPitfalls() in pitfalls.go.
+//
+// WrongExit and WrongStderr are the oracle the catalogue used to lack.
+// Without them a gate could assert only "the wrong example failed", which
+// passes an example that fails for the wrong reason — precisely the defect
+// they exist to exclude (SPEC/DATA_FORMATS.md § A wrong_example MUST fail
+// for the reason the pitfall names, and § Published Examples Are Executed).
+// Both are MEASURED against the compiled binary, never written from memory.
+//
+// Field order is intentional and not alignment-optimal: the SPEC's example
+// emits wrong_exit and wrong_stderr between wrong_example and
+// correct_example, so the reader meets the oracle beside the invocation it
+// judges.
+//
+//nolint:govet // fieldalignment: SPEC-mandated JSON field order wins.
 type Pitfall struct {
-	ID             string `json:"id"`
-	Description    string `json:"description"`
-	WrongExample   string `json:"wrong_example"`
+	ID           string `json:"id"`
+	Description  string `json:"description"`
+	WrongExample string `json:"wrong_example"`
+	// WrongExit is the exit code WrongExample produces.
+	WrongExit int `json:"wrong_exit"`
+	// WrongStderr is the COMPLETE first line of stderr WrongExample
+	// produces, `Error: ` prefix and sentinel included, on the discipline
+	// of SPEC/COMMANDS.md § Published Error Strings Are Exact. It is the
+	// empty string for a pitfall whose wrong example is not refused at all
+	// — the mistake those entries teach is a wrong belief about a command
+	// that succeeds, not a rejection.
+	WrongStderr    string `json:"wrong_stderr"`
 	CorrectExample string `json:"correct_example"`
 	Reference      string `json:"reference"`
 }

@@ -222,14 +222,49 @@ func buildSubcommand(s *commands.Subcommand, name string) SubcommandEntry {
 		StdoutOnSuccess:       so,
 		SideEffects:           se,
 		Idempotent:            s.Idempotent,
-		ExitCodes:             s.ExitCodes,
-		Prerequisites:         emptySliceIfNil(s.Prerequisites),
-		Examples:              buildExampleList(s.Examples),
+		ExitCodes:             buildExitCodeList(s.ExitCodes),
+		// The subcommand-level prerequisites key is OMITTED when there is
+		// nothing to carry rather than emitted as `[]`
+		// (SPEC/DATA_FORMATS.md § Subcommand prerequisites, rule 2). It is
+		// the one array-typed field of this entry that behaves that way;
+		// every sibling here is always-present.
+		//
+		// The omission itself is done by `omitempty` on the struct tag,
+		// which drops a zero-length slice whether or not it is nil.
+		// nilSliceIfEmpty is used all the same, so the Go value says the
+		// same thing as the JSON — absent, not empty — and so the projection
+		// allocates nothing for the subcommands that have no precondition.
+		// TestGenerate_SubcommandPrerequisitesAreAbsentOrNonEmpty is what
+		// holds the published side of this, and it fails if the tag loses
+		// omitempty.
+		Prerequisites: nilSliceIfEmpty(s.Prerequisites),
+		Examples:      buildExampleList(s.Examples),
 	}
 	if s.ReadsStdin {
 		entry.ReadsStdin = boolPtr(true)
 	}
 	return entry
+}
+
+// buildExitCodeList projects the per-subcommand exit-code entries. The
+// order is carried through unchanged rather than sorted here: the SPEC
+// requires ascending order by code, the registry declares them that way,
+// and TestRegistry_ExitCodeEntriesAreWellFormed together with
+// TestGenerate_SubcommandExitCodesAreObjects pin it at both ends. Sorting
+// defensively would hide a registry that had stopped being ordered, which
+// is the thing worth being told about.
+//
+// The Conditions slice is copied rather than aliased so a consumer that
+// mutates the emitted contract cannot reach back into the process-wide
+// registry singleton.
+func buildExitCodeList(entries []commands.ExitCodeEntry) []SubcommandExitCode {
+	out := make([]SubcommandExitCode, len(entries))
+	for i := range entries {
+		conditions := make([]string, len(entries[i].Conditions))
+		copy(conditions, entries[i].Conditions)
+		out[i] = SubcommandExitCode{Code: entries[i].Code, Conditions: conditions}
+	}
+	return out
 }
 
 // buildFlagList projects every flag, applying the null/absent
