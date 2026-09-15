@@ -414,7 +414,7 @@ func TestHandleGraphData_InvalidLimitRejected(t *testing.T) {
 
 // TestHandleGraphData_ExecutionFailure asserts a query accepted as read-only but
 // invalid in the engine surfaces the distinct execution-failure classification,
-// not a read-only rejection (SPEC/WEB.md § Query-Bar Error Handling, rule 3;
+// not a read-only rejection (SPEC/WEB.md § Query-Bar Error Handling, rule 2;
 // Acceptance Criterion 50).
 func TestHandleGraphData_ExecutionFailure(t *testing.T) {
 	t.Setenv("HOME", shortHome(t))
@@ -504,8 +504,8 @@ func TestHandleGraphData_SpoofedDDLKeywordsAreNoLongerRefused(t *testing.T) {
 			case http.StatusBadRequest:
 				kind, reason := decodeQueryError(t, rec.Body.Bytes())
 				if kind != graphErrExecution {
-					t.Fatalf("kind = %q, want %q: this endpoint publishes exactly invalid_limit and "+
-						"execution, and refuses nothing on the ground of what a statement does "+
+					t.Fatalf("kind = %q, want %q: none of these statements carries an EXPLAIN or PROFILE "+
+						"prefix, and this endpoint refuses nothing on the ground of what a statement does "+
 						"(SPEC/WEB.md Acceptance Criterion 123); reason=%q", kind, graphErrExecution, reason)
 				}
 			default:
@@ -555,19 +555,20 @@ func TestHandleGraphData_LimitAppliesDespiteTrailingComment(t *testing.T) {
 	}
 }
 
-// TestHandleGraphData_InvalidLimitIsResolvedBeforeTheStatementRuns pins the one
-// ordering the endpoint still has between its two failure kinds: the `limit` is
-// resolved first, so a request carrying both an invalid `limit` and a statement
-// that would have written is answered `invalid_limit` and the statement is not
-// executed (SPEC/WEB.md § Query-Bar Error Handling, rule 5; Acceptance
-// Criterion 123).
+// TestHandleGraphData_InvalidLimitIsResolvedBeforeTheStatementRuns pins the
+// first half of the endpoint's one ordering: the `limit` is resolved first, so a
+// request carrying both an invalid `limit` and a statement that would have
+// written is answered `invalid_limit` and the statement is not executed
+// (SPEC/WEB.md § Query-Bar Error Handling, rule 5; Acceptance Criterion 123).
 //
 // The write is what makes the assertion decisive. "The statement was not
 // executed" is observable only through a statement whose execution leaves a
 // trace, and a read leaves none — so the probe is a CREATE, and the read-back
 // afterwards is what proves nothing ran. The four-deep precedence rule the
-// endpoint used to publish is withdrawn with the guard rail that produced it;
-// there is nothing else left to order.
+// endpoint used to publish is withdrawn with the guard rail that produced it. The
+// ordering's second half — a limit resolved before an EXPLAIN or PROFILE prefix
+// is examined — is TestHandleGraphData_AnInvalidLimitOutranksAPlanPrefix
+// (Acceptance Criterion 170).
 func TestHandleGraphData_InvalidLimitIsResolvedBeforeTheStatementRuns(t *testing.T) {
 	t.Setenv("HOME", shortHome(t))
 	name := servedRoadmap(t, "web-ui-rollout", graphSeedQueries()...)
@@ -673,7 +674,11 @@ func TestHandleGraphData_TheResolutionBoundary(t *testing.T) {
 		})
 	}
 
-	// The 400 half: the only rejection that still precedes the resolution.
+	// The 400 half: an invalid limit is decided before the resolution. It is one
+	// of the two rejections that precede it; the other, a statement carrying an
+	// EXPLAIN or PROFILE prefix, is pinned by
+	// TestHandleGraphData_ARefusedPrefixIsNeverSentAndNeedsNoServer (Acceptance
+	// Criterion 167).
 	t.Run("an invalid limit is still decided before the probe", func(t *testing.T) {
 		rec := doGraphData(t, name, url.Values{"limit": {"7"}})
 		if rec.Code != http.StatusBadRequest {
@@ -706,6 +711,7 @@ func TestHandleGraphData_ErrorBodyShape(t *testing.T) {
 		wantKind string
 	}{
 		{"invalid limit", url.Values{"limit": {"7"}}, graphErrInvalidLimit},
+		{"plan prefix", url.Values{"q": {"EXPLAIN MATCH (n) RETURN n"}}, graphErrPlanPrefix},
 		{"execution failure", url.Values{"q": {`MATCH (n) RETURN`}}, graphErrExecution},
 	}
 
@@ -800,22 +806,27 @@ func TestHandleGraphData_ErrorBodySerialization(t *testing.T) {
 	}
 }
 
-// TestHandleGraphData_PublishesExactlyTwoKinds asserts the CLOSED value set of
+// TestHandleGraphData_PublishesExactlyThreeKinds asserts the CLOSED value set of
 // SPEC/WEB.md § Query-Bar Error Handling, rule 4, which Acceptance Criterion 123
-// requires to be asserted as a closed set and not only as two members present:
-// "a third value is exactly what an endpoint that started refusing statements
-// again would publish".
+// requires to be asserted as a closed set and not only as three members present:
+// "a further value is exactly what an endpoint that started refusing statements
+// on the ground of what they do would publish".
 //
 // The corpus is deliberately made of the statements the withdrawn guard rail
 // refused — a write, a DDL statement, a schema-introspection command at both
-// spacings, and an undirected relationship read — plus the two that genuinely
-// fail. Each is either served or fails in the engine; none of them may produce a
-// kind of its own.
-func TestHandleGraphData_PublishesExactlyTwoKinds(t *testing.T) {
+// spacings, and an undirected relationship read — plus the probes that produce
+// each kind: two statements that genuinely fail, an EXPLAIN and a PROFILE prefix,
+// and an invalid limit. Each of the guard rail's statements is either served or
+// fails in the engine; none of them may produce a kind of its own. Every member of
+// the set must also be observed, so what is asserted is the set the endpoint
+// produces and not merely a bound on it. The set is written as the values the
+// specification publishes rather than as the constants, so a constant that
+// drifted from its published value fails here.
+func TestHandleGraphData_PublishesExactlyThreeKinds(t *testing.T) {
 	t.Setenv("HOME", shortHome(t))
 	name := servedRoadmap(t, "web-ui-rollout", graphSeedQueries()...)
 
-	published := map[string]bool{graphErrInvalidLimit: true, graphErrExecution: true}
+	published := map[string]bool{"invalid_limit": true, "plan_prefix": true, "execution": true}
 	withdrawn := []string{"not_read_only", "schema_introspection", "relationship_read_direction", "invalid_keyword_spacing"}
 
 	probes := []url.Values{
@@ -830,9 +841,12 @@ func TestHandleGraphData_PublishesExactlyTwoKinds(t *testing.T) {
 		{"q": {`MATCH (a)<-[e]-(b) RETURN type(e)`}},
 		{"q": {`MATCH (n) RETURN`}},
 		{"q": {"SHOW DATABASES"}},
+		{"q": {"EXPLAIN MATCH (n) RETURN n"}},
+		{"q": {"PROFILE MATCH (n) RETURN n"}},
 		{"limit": {"7"}},
 	}
 
+	observed := map[string]bool{}
 	for _, params := range probes {
 		t.Run(params.Encode(), func(t *testing.T) {
 			rec := doGraphData(t, name, params)
@@ -844,14 +858,20 @@ func TestHandleGraphData_PublishesExactlyTwoKinds(t *testing.T) {
 			}
 			kind, reason := decodeQueryError(t, rec.Body.Bytes())
 			if !published[kind] {
-				t.Fatalf("kind = %q, which is outside the closed set {invalid_limit, execution} "+
+				t.Fatalf("kind = %q, which is outside the closed set {invalid_limit, plan_prefix, execution} "+
 					"SPEC/WEB.md § Query-Bar Error Handling rule 4 publishes; reason=%q", kind, reason)
 			}
+			observed[kind] = true
 			for _, gone := range withdrawn {
 				if strings.Contains(rec.Body.String(), gone) {
 					t.Errorf("the body names the withdrawn kind %q; body=%q", gone, rec.Body.String())
 				}
 			}
 		})
+	}
+
+	if !maps.Equal(observed, published) {
+		t.Errorf("the probes produced the kinds %v, want every member of the closed set %v",
+			slices.Sorted(maps.Keys(observed)), slices.Sorted(maps.Keys(published)))
 	}
 }

@@ -5200,18 +5200,24 @@ class TestWebInterface:
         assert json.loads(body)["nodes"], (
             "the roadmap's own graph must survive the probe writes")
 
-    def test_query_bar_publishes_exactly_two_failure_kinds(self):
-        """AC123: the endpoint's `kind` takes exactly two values,
-        invalid_limit and execution, and the criterion requires the CLOSED set to
-        be asserted rather than only the two members -- "a third value is exactly
-        what an endpoint that started refusing statements again would publish".
+    def test_query_bar_publishes_exactly_three_failure_kinds(self):
+        """AC123: the endpoint's `kind` takes exactly three values,
+        invalid_limit, plan_prefix and execution, and the criterion requires the
+        CLOSED set to be asserted rather than only the three members -- "a
+        further value is exactly what an endpoint that started refusing
+        statements on the ground of what they do would publish".
 
         The corpus is made of the statements the withdrawn guard rail refused: a
         write, schema DDL, a schema-introspection command at both spacings, and
         an undirected relationship read. Each is either served or fails in the
-        engine; none of them may produce a kind of its own.
+        engine; none of them may produce a kind of its own. Beside them stand
+        the probes that produce each kind -- an invalid limit, an EXPLAIN and a
+        PROFILE prefix, and an unexecutable statement -- and every member of the
+        set must be observed, so what is asserted is the set the endpoint
+        produces and not merely a bound on it.
         """
         proc, port = self._start(["--port", "0"])
+        published = {"invalid_limit", "plan_prefix", "execution"}
         withdrawn = ("not_read_only", "schema_introspection",
                      "relationship_read_direction", "invalid_keyword_spacing")
 
@@ -5226,8 +5232,11 @@ class TestWebInterface:
             ("MATCH (a)<-[e]-(b) RETURN type(e)", None),
             ("MATCH (n) RETURN", None),
             ("SHOW DATABASES", None),
+            ("EXPLAIN MATCH (n) RETURN n", None),
+            ("PROFILE MATCH (n) RETURN n", None),
             (None, "7"),
         ]
+        observed = set()
         for query, limit in probes:
             status, _, body = self._req(
                 port, self._graph_data(port, q=query, limit=limit))
@@ -5237,14 +5246,191 @@ class TestWebInterface:
             if status == 200:
                 continue
             err = json.loads(body)
-            assert err.get("kind") in ("invalid_limit", "execution"), (
+            assert err.get("kind") in published, (
                 f"AC123: {query!r} limit={limit!r} carries kind "
                 f"{err.get('kind')!r}, outside the closed set "
-                f"{{invalid_limit, execution}}: {err!r}")
+                f"{sorted(published)}: {err!r}")
+            observed.add(err["kind"])
             for gone in withdrawn:
                 assert gone not in body, (
                     f"AC123: the body for {query!r} names the withdrawn kind "
                     f"{gone!r}: {body!r}")
+        assert observed == published, (
+            f"AC123: the probes must produce every member of the closed set "
+            f"{sorted(published)}; they produced {sorted(observed)}")
+
+    # ====================================================================
+    # AC166, AC167, AC170: the query bar refuses EXPLAIN and PROFILE
+    # ====================================================================
+
+    # The spellings AC166 names, each paired with the member `rmp graph client`
+    # publishes for its prefix: `plan` for EXPLAIN, `profile` for PROFILE. A
+    # PROFILE of a write is left out because the engine refuses it wherever it
+    # runs, so the client could not confirm its premise; its EXPLAIN executes
+    # nothing and can.
+    _PLAN_PREFIX_CASES = (
+        ("EXPLAIN MATCH (n) RETURN n", "plan"),
+        ("PROFILE MATCH (n) RETURN n", "profile"),
+        ("explain match (n) return n", "plan"),
+        ("profile match (n) return n", "profile"),
+        ("ExPlAiN MATCH (n) RETURN n", "plan"),
+        ("pRoFiLe MATCH (n) RETURN n", "profile"),
+        ("EXPLAIN\nMATCH (s:Spec)\nWHERE s.key = 'passwordless-auth'\nRETURN s", "plan"),
+        ("PROFILE\nMATCH (s:Spec)-[:IMPLEMENTED_BY]->(c:Code)\nRETURN s, c", "profile"),
+        (" \t\n\t EXPLAIN MATCH (n) RETURN n", "plan"),
+        ("\n  \t PROFILE MATCH (n) RETURN n", "profile"),
+        ("// plan the full read first\nEXPLAIN MATCH (n) RETURN n", "plan"),
+        ("// measure the full read\nPROFILE MATCH (n) RETURN n", "profile"),
+        ("/* plan the full read first */ EXPLAIN MATCH (n) RETURN n", "plan"),
+        ("/* measure the full read */\nPROFILE MATCH (n) RETURN n", "profile"),
+        ("EXPLAIN MATCH (n) RETURN n LIMIT 5", "plan"),
+        ("PROFILE MATCH (n) RETURN n LIMIT 5", "profile"),
+        ("EXPLAIN MATCH (n) DETACH DELETE n", "plan"),
+        ("EXPLAIN CALL db.labels() YIELD label RETURN label", "plan"),
+        ("PROFILE CALL db.labels() YIELD label RETURN label", "profile"),
+    )
+
+    # A second roadmap of the fixture's HOME that no graph server ever serves.
+    _UNSERVED_ROADMAP = "incident-response"
+
+    @staticmethod
+    def _published_plan_prefix_line():
+        """The refusal line SPEC/WEB.md section "Query-Bar Error Handling",
+        rule 12, publishes, read out of the specification itself so the
+        assertions cannot agree with a wrong copy of it. The specification
+        publishes it once, on a line of its own, as one code span."""
+        text = (REPO_ROOT / "SPEC" / "WEB.md").read_text(encoding="utf-8")
+        found = re.findall(r"(?m)^[ \t]*`(query not run: [^`]+)`[ \t]*$", text)
+        assert len(found) == 1, (
+            f"SPEC/WEB.md publishes {len(found)} plan-prefix refusal lines, want "
+            f"exactly one")
+        return found[0]
+
+    def _unserved_roadmap(self):
+        """Create the roadmap no graph server serves, and confirm nothing is
+        listening for it: no socket file exists at its derived path."""
+        self._run(["roadmap", "create", self._UNSERVED_ROADMAP])
+        socket_path = Path(self.test.default_socket_path(self._UNSERVED_ROADMAP))
+        assert not socket_path.exists(), (
+            f"the unserved roadmap has a socket at {socket_path}; the cases "
+            f"that need no graph server would not be about one")
+        return self._UNSERVED_ROADMAP
+
+    def test_query_bar_refuses_plan_prefixes(self):
+        """AC166: against a served roadmap, a statement carrying an EXPLAIN or
+        PROFILE prefix, in every spelling the engine's parser recognises, is
+        answered HTTP 400 with a body of exactly two fields -- kind plan_prefix
+        and the line rule 12 publishes -- with no limit and with an allowed one,
+        and the two answers are the same bytes.
+
+        The cases come from the engine's grammar, so the premise is confirmed
+        first, through the engine: `rmp graph client` sends each statement to
+        the same server and publishes the plan member its prefix selects. A
+        grammar change at a future pin then fails the premise instead of
+        silently changing what is asserted.
+        """
+        line = self._published_plan_prefix_line()
+        for query, member in self._PLAN_PREFIX_CASES:
+            result = self._graph(query)
+            assert member in result, (
+                f"AC166 premise: the pinned engine does not report {query!r} as "
+                f"carrying its prefix -- `rmp graph client` published "
+                f"{sorted(result)!r} and no {member!r} member")
+
+        proc, port = self._start(["--port", "0"])
+        for query, _member in self._PLAN_PREFIX_CASES:
+            answers = []
+            for limit in (None, "250"):
+                status, headers, body = self._req(
+                    port, self._graph_data(port, q=query, limit=limit))
+                assert status == 400, (
+                    f"AC166: {query!r} limit={limit!r} must be refused with 400; "
+                    f"got {status} {body!r}")
+                assert headers.get("content-type", "").startswith("application/json"), (
+                    f"AC166: the refusal must be JSON; got {headers!r}")
+                err = json.loads(body)
+                assert set(err) == {"error", "kind"}, (
+                    f"AC166: the body must carry exactly error and kind; got {err!r}")
+                assert err["kind"] == "plan_prefix", (
+                    f"AC166: {query!r} must carry kind plan_prefix; got {err!r}")
+                assert err["error"] == line, (
+                    f"AC166: the error must be exactly the published line "
+                    f"{line!r}; got {err['error']!r}")
+                answers.append(body)
+            assert answers[0] == answers[1], (
+                f"AC166: {query!r} must be refused identically with and without "
+                f"an allowed limit; got {answers!r}")
+
+    def test_query_bar_plan_prefix_is_refused_with_no_graph_server(self):
+        """AC167, the no-server half: with no `rmp graph serve` running for the
+        roadmap, EXPLAIN MATCH (n) RETURN n and PROFILE MATCH (n) RETURN n are
+        each answered 400 with kind plan_prefix, while MATCH (n) RETURN n is
+        answered 503.
+
+        The pair is the assertion. The 503 proves nothing is serving the
+        roadmap, so the 400 beside it can only come from a refusal decided
+        before any graph server is resolved.
+        """
+        line = self._published_plan_prefix_line()
+        roadmap = self._unserved_roadmap()
+        proc, port = self._start(["--port", "0"])
+
+        for query in ("EXPLAIN MATCH (n) RETURN n", "PROFILE MATCH (n) RETURN n"):
+            status, _, body = self._req(
+                port, self._graph_data(port, q=query, roadmap=roadmap))
+            assert status == 400, (
+                f"AC167: {query!r} against a roadmap no server serves must be "
+                f"refused with 400, not answered as an unavailable graph; got "
+                f"{status} {body!r}")
+            assert json.loads(body) == {"error": line, "kind": "plan_prefix"}, (
+                f"AC167: {query!r} must carry kind plan_prefix and the published "
+                f"line; got {body!r}")
+
+        status, _, body = self._req(
+            port, self._graph_data(port, q="MATCH (n) RETURN n", roadmap=roadmap))
+        assert status == 503, (
+            f"AC167: the unprefixed statement against the same roadmap must be "
+            f"answered 503, or the 400s above cannot show that the refusal "
+            f"precedes the server lookup; got {status} {body!r}")
+
+    def test_query_bar_invalid_limit_outranks_plan_prefix(self):
+        """AC170: a request carrying an invalid limit -- 7, or the non-numeric
+        all -- and a prefixed statement is answered 400 with kind invalid_limit
+        and an error naming the rejected value, never plan_prefix, for EXPLAIN
+        and PROFILE alike, both against a served roadmap and against one no
+        graph server serves.
+
+        The control is the same prefixed statement under an allowed limit,
+        answered plan_prefix: without it a limit that outranked the prefix could
+        not be told from a prefix that was never recognised.
+        """
+        line = self._published_plan_prefix_line()
+        unserved = self._unserved_roadmap()
+        proc, port = self._start(["--port", "0"])
+
+        for roadmap in (ROADMAP, unserved):
+            for query in ("EXPLAIN MATCH (n) RETURN n", "PROFILE MATCH (n) RETURN n"):
+                status, _, body = self._req(
+                    port, self._graph_data(port, q=query, limit="250", roadmap=roadmap))
+                assert status == 400 and json.loads(body) == {
+                        "error": line, "kind": "plan_prefix"}, (
+                    f"AC170 control: {query!r} under an allowed limit on {roadmap!r} "
+                    f"must be refused as plan_prefix; got {status} {body!r}")
+
+                for bad in ("7", "all"):
+                    status, _, body = self._req(
+                        port, self._graph_data(port, q=query, limit=bad, roadmap=roadmap))
+                    assert status == 400, (
+                        f"AC170: {query!r} limit={bad!r} on {roadmap!r} must be "
+                        f"answered 400; got {status} {body!r}")
+                    err = json.loads(body)
+                    assert err.get("kind") == "invalid_limit", (
+                        f"AC170: the limit is resolved before the prefix is "
+                        f"examined, so {query!r} limit={bad!r} on {roadmap!r} must "
+                        f"carry kind invalid_limit; got {err!r}")
+                    assert bad in err.get("error", ""), (
+                        f"AC170: the error must name the rejected limit {bad!r}; "
+                        f"got {err!r}")
 
     def test_schema_listing_is_read_from_the_cli_not_the_endpoint(self):
         """AC157 and AC156: a schema-introspection command is EXECUTED and
@@ -5312,6 +5498,10 @@ class TestWebInterface:
         The engine diagnostic is asserted and not only the status: a refusal
         decided before execution could not carry one, so it is what
         distinguishes "the engine rejected it" from "the endpoint rejected it".
+
+        Any kind but execution fails the criterion, a member of the closed set
+        included: none of these commands carries an EXPLAIN or PROFILE prefix,
+        so plan_prefix is as much a failure here as invalid_limit.
         """
         proc, port = self._start(["--port", "0"])
 

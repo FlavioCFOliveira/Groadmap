@@ -1612,10 +1612,10 @@
 
   // showQueryError displays a clear, read-only, in-place message in the query
   // bar and leaves the graph already shown in place; it triggers no write and no
-  // navigation (SPEC/WEB.md § Query-Bar Error Handling, rule 4). The message
+  // navigation (SPEC/WEB.md § Query-Bar Error Handling, rule 3). The message
   // comes straight from the endpoint's classified error, so the user reads what
   // to fix whichever class the failure is. The classes are enumerated in one
-  // place only — SPEC/WEB.md § Query-Bar Error Handling, rule 5 — which this
+  // place only — SPEC/WEB.md § Query-Bar Error Handling, rule 4 — which this
   // comment names rather than repeats: the list this page renders is whatever
   // the endpoint sends, so a copy of it here could only go stale.
   function showQueryError(message) {
@@ -1686,9 +1686,9 @@
     clearQueryError();
     fetch(buildDataUrl(), { headers: { Accept: "application/json" } })
       .then(function (resp) {
-        // The endpoint returns a structured JSON error with HTTP 400 for a
-        // classified query-bar failure (an invalid limit, or a statement that
-        // failed once running), and an opaque plain-text body for its 5xx. Parse
+        // The endpoint returns a structured JSON error with HTTP 400 for every
+        // classified query-bar failure (SPEC/WEB.md § Query-Bar Error Handling,
+        // rule 4, enumerates them), and an opaque plain-text body for its 5xx. Parse
         // the JSON body when there is one and tolerate its absence, so a 503 is
         // read as the state it is rather than as a parse failure.
         return resp

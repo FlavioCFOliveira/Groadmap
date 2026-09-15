@@ -68,6 +68,11 @@ var spacingPairs = []struct {
 // endpoint's: the statement reached the engine and failed there. A refusal
 // decided before execution could not carry an engine diagnostic at all, which is
 // why the diagnostic is asserted and not only the status.
+//
+// Any other kind fails the criterion, whether it lies outside the closed set of
+// Acceptance Criterion 123 or is another member of it. None of these commands
+// carries an EXPLAIN or PROFILE prefix, so `plan_prefix` is as much a failure
+// here as `invalid_limit`, and the equality below rejects both.
 func TestHandleGraphData_KeywordSpacingIsTheEnginesVerdict(t *testing.T) {
 	t.Setenv("HOME", shortHome(t))
 	name := servedGraphWithSchema(t, "web-ui-rollout")

@@ -97,11 +97,15 @@ deliberately does not examine is stated in
 **The web graph data endpoint is the second surface onto the same graph, and it
 behaves the same way.** It sends the statement it is given to the same server,
 through the same client, so everything this file says about a statement holds of one
-submitted through the web query bar (see `WEB.md § Graph Data Endpoint`). The one
-thing that surface does with a statement which the CLI does not is decide whether to
-append a node `LIMIT` to it, which is a decision about the response's size and
+that surface sends from the web query bar (see `WEB.md § Graph Data Endpoint`). That
+surface does two things with a statement which the CLI does not. It decides whether
+to append a node `LIMIT` to it, which is a decision about the response's size and
 refuses nothing (see
-[Literal-Aware Normalization](#literal-aware-normalization)).
+[Literal-Aware Normalization](#literal-aware-normalization)). And it refuses,
+without sending it, a statement carrying an `EXPLAIN` or `PROFILE` prefix, because
+the graph it draws has no place for a plan (see
+[Query Plans: The EXPLAIN and PROFILE Prefixes](#query-plans-the-explain-and-profile-prefixes),
+rule 3). Neither examines what a statement does.
 
 ## Functional Requirements
 
@@ -316,8 +320,11 @@ Mitigations required by this specification:
    reference, not a floating or branch reference), so builds are reproducible. The
    pinned exact tag is recorded in `BUILD.md § External Dependencies`.
 2. The graph feature MUST be implemented behind Groadmap's own command and
-   error-handling boundary (this specification), so that an upstream API change
-   is absorbed in one integration layer rather than spread across the codebase.
+   error-handling boundary (this specification). Behind that boundary GoGraph is
+   not confined to one integration layer: it is imported by the production packages
+   that `ARCHITECTURE.md § 6. internal/commands/graph.go and the GoGraph dependency`
+   names, and an upstream API change is absorbed in whichever of those packages use
+   the API that changed.
 3. Upgrading GoGraph is a change that MUST be re-validated against the acceptance
    criteria in this file before release.
 
@@ -956,8 +963,13 @@ Notes:
 statement and running it, Groadmap checks its length and nothing else about its
 content: it does not parse it, does not classify it, does not inspect the patterns
 it binds, and does not inspect the values it would write. The web graph data
-endpoint is bound by this section identically, because it runs the statement it is
-given on the same path (see `WEB.md § Graph Data Endpoint`).
+endpoint is bound by this section identically for every statement it sends,
+because it runs that statement on the same path (see `WEB.md § Graph Data Endpoint`).
+Beyond its node-`LIMIT` decision, which refuses nothing, the one question that
+endpoint asks of a statement before sending it is whether the engine's parser
+reports an `EXPLAIN` or `PROFILE` prefix, and it refuses a statement that carries
+one rather than send it (`WEB.md § Query-Bar Error Handling`, rule 12). That
+question classifies nothing about what the statement does.
 
 This section enumerates what follows. Every item but one is a hazard: a real
 outcome of a real statement, silent, reporting success. They are stated here so
@@ -1845,9 +1857,18 @@ is the whole reason both exist:
 3. **Both prefixes are recognised without regard to case.** `EXPLAIN` and
    `explain` select the same behaviour, and so does any other mixture of cases;
    the same holds for `PROFILE`. The prefix is part of the engine's grammar
-   rather than a token `rmp` scans for, and `rmp` does not inspect the statement
-   here any more than it does anywhere else (see
+   rather than a token `rmp` scans for, and `rmp graph client` does not inspect
+   the statement here any more than it does anywhere else (see
    [What Groadmap Does Not Check](#what-groadmap-does-not-check)).
+
+   **The web graph data endpoint refuses both prefixes, and it recognises them
+   through the same grammar.** The node-and-edge document that endpoint answers
+   with has no place for a plan, so it asks the pinned engine's own parser
+   whether a statement carries a prefix and refuses one that does, without
+   sending it. It scans for no token of its own, so what counts as a prefix
+   there is exactly what counts as one here. What this section says a prefixed
+   statement produces is therefore reachable through `rmp graph client` alone;
+   `WEB.md § Query-Bar Error Handling`, rule 12, is canonical for the refusal.
 4. **`PROFILE` refuses a statement that writes, and at the pinned engine the
    caller is not told why.** Measuring a write would mean performing it, and the
    engine refuses the statement rather than perform a write a caller asked only

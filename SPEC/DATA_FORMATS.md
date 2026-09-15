@@ -1367,9 +1367,11 @@ to run, URL-encoded) and `limit` (the node-limit value), that the graph page's
 query bar sends. When `q` is absent or empty, the endpoint runs the default query
 `MATCH (n) OPTIONAL MATCH (n)-[r]->(m) RETURN n, r, m`, which yields the same
 full-graph view a request with no parameters always produced (backward
-compatible). A user-supplied `q` is executed as written, and the resolved `limit`
-is applied as a `LIMIT` clause only when the statement both lacks a top-level
-`LIMIT` of its own and is a form that admits a `LIMIT` clause. The full parameter
+compatible). A user-supplied `q` is executed as written, unless the engine's parser
+reports an `EXPLAIN` or `PROFILE` prefix on it, in which case it is refused and not
+sent. The resolved `limit` is applied as a `LIMIT` clause only when the statement
+both lacks a top-level `LIMIT` of its own and is a form that admits a `LIMIT`
+clause. The full parameter
 contract, the limit-injection and suppression rules, and the failure modes are
 specified in `WEB.md § Graph Data Endpoint` and
 `WEB.md § Query-Bar Error Handling`; this section specifies the response shapes —
@@ -1449,14 +1451,14 @@ Rules:
 
 A request the graph data endpoint refuses, and a statement that fails, are
 answered with this object in place of the node-and-edge object above. The endpoint
-returns it for each of the two query-bar failures, always with HTTP
-`400 Bad Request`. The status, the failure classes, and the rule that selects
-between them are specified in `WEB.md § Query-Bar Error Handling`, which is
-canonical for them; this section is canonical for the shape.
+returns it for every query-bar failure, always with HTTP `400 Bad Request`. The
+status, the failure classes, and the rules that select between them are specified
+in `WEB.md § Query-Bar Error Handling`, which is canonical for them; this section
+is canonical for the shape.
 
 ```json
 {
-  "error": "invalid limit: 7",
+  "error": "invalid limit 7: must be one of 50, 100, 250, 500, 1000, 3000",
   "kind": "invalid_limit"
 }
 ```
@@ -1476,7 +1478,8 @@ Rules:
    `WEB.md § Query-Bar Error Handling`, rule 4, publishes; that rule is canonical
    for which values exist and how many, and this file deliberately does not carry
    a second copy of the list, so the two cannot disagree. What each value means is
-   fixed there too: an invalid `limit`, and a statement that failed once running. A
+   fixed there too: an invalid `limit`, a statement carrying an `EXPLAIN` or
+   `PROFILE` prefix, and a statement that failed once running. A
    statement cancelled for exhausting the endpoint's query time budget is an
    execution failure and carries the execution value; the budget adds no value of
    its own (see `WEB.md § Graph Query Time Budget`).
@@ -1484,17 +1487,22 @@ Rules:
    failure it carries the engine's own diagnostic text, so a given statement
    produces the same diagnostic here as it produces on the CLI (see
    `GRAPH.md § Error Handling and Exit Codes`, rule 2). For an invalid limit it
-   names the rejected value.
+   names the rejected value. For a statement refused for an `EXPLAIN` or `PROFILE`
+   prefix it is the one fixed line `WEB.md § Query-Bar Error Handling`, rule 12,
+   publishes, which names neither the prefix nor the statement.
 4. The object is serialized exactly as every other response of this endpoint is:
    HTML-safe, so `<`, `>`, and `&` are escaped (see `WEB.md § Graph Data Endpoint`),
    pretty-printed with two-space indentation, and terminated by a newline (see
    [Implementation Notes](#implementation-notes)).
-5. This is the endpoint's error contract for the two query-bar failures only. A
-   failure that never reached a statement does not carry this shape: no graph
-   server listening, or none reachable, is answered HTTP `503`, and a roadmap
-   whose derived socket path is over the platform's bound HTTP `500`. Neither
-   carries a `kind` (see `WEB.md § Query-Bar Error Handling`, rule 6, and
-   `WEB.md § Knowledge Graph from the GoGraph Store`, rule 1).
+5. This is the endpoint's error contract for the query-bar failures only. A
+   request the endpoint cannot serve for want of a reachable graph server does not
+   carry this shape: no graph server listening, or none reachable, is answered
+   HTTP `503`, and a roadmap whose derived socket path is over the platform's bound
+   HTTP `500`. Neither carries a `kind` (see
+   `WEB.md § Query-Bar Error Handling`, rule 6, and
+   `WEB.md § Knowledge Graph from the GoGraph Store`, rule 1). Whether a request
+   reached a statement does not decide the shape: an invalid `limit` and a
+   plan-prefix refusal both carry it, and neither sends a statement.
 
 ---
 

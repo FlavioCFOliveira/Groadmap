@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/FlavioCFOliveira/GoGraph/cypher/expr"
+	"github.com/FlavioCFOliveira/GoGraph/cypher/parser"
 
 	"github.com/FlavioCFOliveira/Groadmap/internal/backoff"
 	"github.com/FlavioCFOliveira/Groadmap/internal/db"
@@ -38,7 +39,7 @@ const defaultGraphLimit = 100
 // allowedGraphLimits is the closed set of node-limit values the limit dropdown
 // offers and the endpoint accepts. A limit outside this set is rejected as an
 // invalid limit; the endpoint never clamps to the nearest value (SPEC/WEB.md
-// § Graph Data Endpoint, query parameters; § Query-Bar Error Handling, rule 2).
+// § Graph Data Endpoint, query parameters; § Query-Bar Error Handling, rule 1).
 var allowedGraphLimits = map[int]struct{}{
 	50: {}, 100: {}, 250: {}, 500: {}, 1000: {}, 3000: {},
 }
@@ -115,17 +116,17 @@ var reTopLevelReturn = regexp.MustCompile(`(?i)\bRETURN\b`)
 //
 // This is the one place in the module that recognises the class. It moved here
 // from the shared guard rail when the guard rail was withdrawn: nothing else
-// classifies a statement any more, and what remains is a question about a
-// STATEMENT FORM — "can it carry a LIMIT?" — which belongs beside the injection
-// rule it serves. It refuses nothing.
+// classifies a statement by what it does any more, and what remains is a
+// question about a STATEMENT FORM — "can it carry a LIMIT?" — which belongs
+// beside the injection rule it serves. It refuses nothing.
 var reIntrospect = regexp.MustCompile(`(?i)\A\s*SHOW (?:INDEX(?:ES)?|CONSTRAINTS?)\b`)
 
 // graphQueryError classifies a query-bar failure so the handler can map it to a
-// distinct, in-page message. The two kinds are kept separate so the user
-// understands what to fix, and the set of them is enumerated in exactly one
-// place: SPEC/WEB.md § Query-Bar Error Handling, rule 4. This comment names that
-// place instead of repeating the list, because a repeated list is what let the
-// count here drift out of step with the constants below it.
+// distinct, in-page message. The kinds are kept separate so the user understands
+// what to fix, and the set of them is enumerated in exactly one place:
+// SPEC/WEB.md § Query-Bar Error Handling, rule 4. This comment names that place
+// instead of repeating the list, because a repeated list is what let the count
+// here drift out of step with the constants below it.
 type graphQueryError struct {
 	// Reason is the user-facing message shown in place on the page.
 	Reason string
@@ -140,25 +141,39 @@ func (e *graphQueryError) Error() string { return e.Reason }
 // a value is added or removed there first, and no other comment in this file
 // restates the list.
 //
-// Both are answered with HTTP 400 and told apart by this field, not by the
+// Every one is answered with HTTP 400 and told apart by this field, not by the
 // status: RFC 9110 section 15.5 puts the explanation of an error in the
-// response representation, so one status serves them both and the kind carries
+// response representation, so one status serves them all and the kind carries
 // the class. Splitting them across different statuses would assert a distinction
 // HTTP does not carry, while the body already carries it precisely.
 //
-// There were five, and the other three — not_read_only, schema_introspection and
-// relationship_read_direction — were the classifications of a guard rail that
-// examined the statement before running it. That guard rail is withdrawn: the
-// endpoint executes what it is given and refuses nothing on the ground of what
-// the statement does, so there is no longer any verdict for those kinds to carry
-// (SPEC/WEB.md § Graph Data Endpoint, "The statement is executed as written").
-// The four-deep precedence rule between them went with them; what survives is
-// rule 5's single ordering, which is not a precedence at all but a consequence
-// of the limit being resolved before the statement runs.
+// A kind names the correction that clears the failure, and none of them is a
+// verdict on what a statement does. The plan-prefix kind is decided before
+// anything is sent, but it refuses a statement for the answer it asks for — a
+// query plan the node-and-edge response has no place for — and the same statement
+// written without its prefix is sent like any other (rule 12).
+//
+// Three further kinds were once published — not_read_only, schema_introspection
+// and relationship_read_direction — and they were the classifications of a guard
+// rail that examined what a statement does before running it. That guard rail is
+// withdrawn: the endpoint refuses nothing on the ground of what the statement
+// does, so there is no longer any verdict for those kinds to carry (SPEC/WEB.md
+// § Graph Data Endpoint, "The statement is executed as written"). The four-deep
+// precedence rule between them went with them; what survives is rule 5's
+// ordering — the limit first, the prefix second — which is not a precedence
+// between verdicts but the order the endpoint does its work in.
 const (
 	graphErrInvalidLimit = "invalid_limit" // limit not one of the six allowed values
+	graphErrPlanPrefix   = "plan_prefix"   // the statement carries an EXPLAIN or PROFILE prefix
 	graphErrExecution    = "execution"     // the statement failed once it was running
 )
+
+// graphPlanPrefixLine is the `error` of every plan-prefix refusal, exactly as
+// SPEC/WEB.md § Query-Bar Error Handling, rule 12, publishes it. It names neither
+// the prefix nor the statement, so it is the same for every refused request, and
+// it is `rmp`'s own text because nothing ran to produce a diagnostic (rule 7).
+const graphPlanPrefixLine = "query not run: the query bar cannot show a query plan; " +
+	"remove the EXPLAIN or PROFILE prefix, or run the statement with rmp graph client"
 
 // newGraphQueryError builds a classified query-bar error.
 func newGraphQueryError(kind, reason string) *graphQueryError {
@@ -1784,7 +1799,7 @@ func classifySprints(views []sprintView) (upcoming, current, closed []sprintView
 // MUST be one of the six allowed values; anything else (non-integer or
 // out-of-set) is rejected as an invalid limit and the query is NOT executed —
 // the endpoint never clamps to the nearest allowed value (SPEC/WEB.md
-// § Query-Bar Error Handling, rule 2). The returned error is a classified
+// § Query-Bar Error Handling, rule 1). The returned error is a classified
 // graphQueryError so the handler can surface a distinct in-page message.
 func resolveGraphLimit(raw string) (int, error) {
 	if raw == "" {
@@ -1809,6 +1824,53 @@ func resolveGraphQuery(raw string) string {
 		return q
 	}
 	return defaultGraphQuery
+}
+
+// planPrefixCheck is the step loadGraphView takes between resolving the limit
+// and resolving a graph server, and in production it is refusePlanPrefix and
+// nothing else. It is a variable only so that SPEC/WEB.md Acceptance Criterion
+// 168 can drive the endpoint with the prefix recognition left out of its path and
+// compare the bytes of the two answers; no production code assigns it.
+var planPrefixCheck = refusePlanPrefix
+
+// refusePlanPrefix refuses a statement the pinned engine's parser reports as
+// carrying an EXPLAIN or PROFILE prefix, and returns nil for every other
+// statement (SPEC/WEB.md § Query-Bar Error Handling, rule 12).
+//
+// **The endpoint's response has no place for a plan.** It carries nodes and
+// edges and nothing else, so a sent EXPLAIN would render as an empty graph that
+// cannot be told from a statement that matched nothing, and a sent PROFILE would
+// render its rows and discard the measurement the caller asked for.
+//
+// **Recognition is the engine's.** The prefix belongs to the engine's grammar, so
+// the question is put to the engine's own statement parser, the one the engine
+// consults to decide whether a statement carries a prefix, and this function
+// scans for no token of its own. Case, whitespace and a comment ahead of the
+// prefix count exactly as that grammar counts them, and `MATCH (explain) RETURN
+// explain`, where the word is an identifier, is a plain statement to it.
+//
+// **The parse is a question and nothing else.** Its tree is discarded, and the
+// statement the endpoint sends is the one it resolved, never text derived from
+// the parse. Text the parser cannot parse is not refused here: it is sent, and
+// the engine's own diagnostic reaches the caller as an execution failure, which
+// is the path it took before this refusal existed.
+//
+// **It refuses nothing on the ground of what a statement does.** The same
+// statement without its prefix is sent like any other, so the refusal withdraws
+// no write and is no security control (§ Security and Constraints, rule 3).
+//
+// **Its cost is the parse's, paid before any server is resolved.** On the
+// development machine the default query parsed in 39 µs and 22 KB. The costliest
+// input found at the parser's own 1 MiB ceiling, a flat list of integers, parsed
+// in 2.5 s and allocated 1.46 GiB; the parser rejects anything longer in one
+// linear pass before it builds a tree, and ParseStatement takes no context, so
+// that time is spent whatever the client does meanwhile.
+func refusePlanPrefix(statement string) error {
+	_, mode, err := parser.ParseStatement(statement)
+	if err != nil || mode == parser.PlanModeNone {
+		return nil
+	}
+	return newGraphQueryError(graphErrPlanPrefix, graphPlanPrefixLine)
 }
 
 // applyGraphLimit appends a top-level LIMIT clause to query, and is the single
@@ -1864,11 +1926,13 @@ func applyGraphLimit(query string, limit int) string {
 // passed in rather than recomputed because the caller already holds it.
 //
 // This is a SYNTAX question — "can this statement carry a LIMIT?" — and it is
-// the only question this endpoint asks about a statement. It is not a read-only
-// question and not a safety question: the endpoint refuses nothing on the ground
-// of what a statement does, and both forms below are executed exactly as the
-// caller wrote them. What the answer decides is whether five more characters are
-// appended (SPEC/WEB.md § Graph Data Endpoint, Suppression 2).
+// one of the two questions this endpoint asks about a statement; the other,
+// whether the engine's parser reports an EXPLAIN or PROFILE prefix, is
+// refusePlanPrefix's. It is not a read-only question and not a safety question:
+// the endpoint refuses nothing on the ground of what a statement does, and both
+// forms below are executed exactly as the caller wrote them. What the answer
+// decides is whether five more characters are appended (SPEC/WEB.md § Graph Data
+// Endpoint, Suppression 2).
 //
 // Two forms admit no LIMIT:
 //
@@ -1943,19 +2007,24 @@ func admitsLimitClause(masked string) bool {
 // binary is on a path rather than on the code it was built from (rule 3;
 // SPEC/ARCHITECTURE.md § 9. internal/graphclient/ and reaching a graph server).
 //
-// **The statement is sent as written, and may write.** Nothing here examines it.
-// A CREATE, a SET, a DETACH DELETE or a schema DDL submitted through the query
-// bar is executed and committed — in the server, which is the only process that
-// holds the graph open — over HTTP, with no authentication: the interface's
+// **The statement is sent as written, and may write.** What it does is not
+// examined. A CREATE, a SET, a DETACH DELETE or a schema DDL submitted through the
+// query bar is executed and committed — in the server, which is the only process
+// that holds the graph open — over HTTP, with no authentication: the interface's
 // principal security property, stated in full in SPEC/WEB.md § Security and
-// Constraints, rule 3, and granted there deliberately.
+// Constraints, rule 3, and granted there deliberately. The one statement not sent
+// is one the engine's parser reports as carrying an EXPLAIN or PROFILE prefix,
+// which is refused for the answer it asks for and not for what it does (see
+// refusePlanPrefix).
 //
 // rawQuery and rawLimit are the request's q and limit URL parameters (empty when
 // absent). The query is resolved (the default query when absent) and has a LIMIT
 // injected only when it has no top-level LIMIT of its own AND is a statement form
-// that admits a LIMIT clause. Resolving the limit is the one thing that can
-// reject a request before a statement is sent, and it is returned as a classified
-// graphQueryError for which nothing is resolved and nothing is sent.
+// that admits a LIMIT clause. Two things can reject a request before a statement
+// is sent, in this order: an invalid limit, and then a statement carrying a plan
+// prefix. Each is returned as a classified graphQueryError for which no graph
+// server is resolved and nothing is sent (SPEC/WEB.md § Query-Bar Error Handling,
+// rules 5 and 12).
 func loadGraphView(ctx context.Context, name, rawQuery, rawLimit string) (graphView, error) {
 	// Resolve and validate the limit first; an invalid limit rejects the
 	// request before the statement is sent and before the socket is probed
@@ -1965,6 +2034,16 @@ func loadGraphView(ctx context.Context, name, rawQuery, rawLimit string) (graphV
 		return graphView{}, err
 	}
 	query := resolveGraphQuery(rawQuery)
+
+	// Examine the prefix second: after the limit was accepted, and before the
+	// socket path is derived, checked against the platform's bound, or probed, so
+	// a refusal is the same 400 whether or not a server could ever be reached. The
+	// parse is of the resolved statement, before any LIMIT is appended, and the
+	// statement sent below is that same resolved statement (SPEC/WEB.md
+	// § Query-Bar Error Handling, rule 12).
+	if refusal := planPrefixCheck(query); refusal != nil {
+		return graphView{}, refusal
+	}
 
 	// Resolution runs once per request and its outcome is not cached: a cached
 	// outcome would act on a server that had since stopped (SPEC/WEB.md
@@ -2239,7 +2318,7 @@ func servedGraphError(ctx context.Context, socket string, err error) error {
 // to it and applies it unconditionally to a statement that supplies none, so the
 // failure this function words arrives typed over the protocol rather than from an
 // engine in this process. It stays graphErrExecution and HTTP 400:
-// exhausting the budget is a query execution failure, case 3 of SPEC/WEB.md
+// exhausting the budget is a query execution failure, case 2 of SPEC/WEB.md
 // § Query-Bar Error Handling, exactly as a query that fails in the graph is. No
 // new kind, no new sentinel, no new status (§ Graph Query Time Budget, rules 4
 // and 5).

@@ -892,6 +892,7 @@ HTTP status mapping for page and data routes:
 | Tasks `q` search parameter absent, empty, unmatched, or undecodable | 200 (never an error; see [Roadmap Tasks Page](#roadmap-tasks-page)) |
 | Tasks `type`, `priority`, or `severity` filter parameter absent, unknown, malformed, or undecodable | 200 (never an error; the dimension applies no filter; see [Roadmap Tasks Page](#roadmap-tasks-page)) |
 | Graph data `limit` not one of the six allowed values | 400 (`kind` `invalid_limit`; the query is not executed; see [Query-Bar Error Handling](#query-bar-error-handling)) |
+| Graph data `q` carries an `EXPLAIN` or `PROFILE` prefix the engine's parser recognises, and `limit` is allowed | 400 (`kind` `plan_prefix`; the statement is not sent, and the answer is the same with no graph server listening; see [Query-Bar Error Handling](#query-bar-error-handling)) |
 | Graph data query fails once running, a query cancelled for exhausting the time budget included | 400 (`kind` `execution`; see [Query-Bar Error Handling](#query-bar-error-handling)) |
 | Graph data request for a roadmap with no graph server listening, or one whose server cannot be reached through a socket that answered | 503 (the graph is unavailable until a server is started; the response carries no `kind`; see [Knowledge Graph from the GoGraph Store](#knowledge-graph-from-the-gograph-store)) |
 | Graph data request for a roadmap whose derived socket path is longer than the platform's bound | 500 (no server can **ever** exist there, so the condition is permanent rather than transitory; the response carries no `kind`; see [Knowledge Graph from the GoGraph Store](#knowledge-graph-from-the-gograph-store)) |
@@ -3045,12 +3046,17 @@ It lets the user drive the visualisation from a single editable Cypher statement
 instead of a fixed full-graph read. The query bar drives, and re-renders from, the
 same graph data endpoint the page already consumes; it adds no new endpoint.
 
-**The statement is executed as written.** The endpoint does not examine it, so a
-statement typed into the query bar may create, change, or delete graph data and
-may change the graph's schema, exactly as the same statement would under
+**The statement is executed as written.** The endpoint does not examine what it
+does, so a statement typed into the query bar may create, change, or delete graph
+data and may change the graph's schema, exactly as the same statement would under
 `rmp graph client`. Nothing in the page or the server prevents that, and nothing
 authenticates the request (see
-[Security and Constraints](#security-and-constraints)).
+[Security and Constraints](#security-and-constraints)). The one statement the
+endpoint refuses is one carrying an `EXPLAIN` or `PROFILE` prefix, which it
+recognises through the engine's own parser and refuses without sending, because
+the graph this page draws has no place for a query plan; the refusal concerns the
+answer a statement asks for, not what it does, and it withdraws no write (see
+[Query-Bar Error Handling](#query-bar-error-handling), rule 12).
 
 1. **One editable query drives the graph.** The page renders the graph from one
    Cypher query. This replaces the previous fixed pair of reads
@@ -3118,7 +3124,7 @@ authenticates the request (see
 
 7. **The bar submits whatever is typed into it.** The query box offers no create,
    edit, or delete affordance of its own — there is no button that writes — but
-   the statement it submits is not examined, so a `CREATE`, a `SET`, a
+   what the statement it submits does is not examined, so a `CREATE`, a `SET`, a
    `DETACH DELETE`, or a `DROP CONSTRAINT` typed into the box is executed and
    committed by the graph server, exactly as one sent by `rmp graph client` is
    (see [Graph Data Endpoint](#graph-data-endpoint),
@@ -3126,12 +3132,12 @@ authenticates the request (see
    [Knowledge Graph from the GoGraph Store](#knowledge-graph-from-the-gograph-store)).
    The page shows no confirmation and asks for no credential before running one.
 
-8. **Error surfacing.** When a search fails — because the limit is invalid, or
-   because the statement fails to execute, which includes exhausting the
-   endpoint's query time budget (see
-   [Graph Query Time Budget](#graph-query-time-budget)) — the page shows a clear
-   message in place and does not crash, exactly as the layout degradation does;
-   the two cases are specified in
+8. **Error surfacing.** When a search fails — because the limit is invalid,
+   because the statement carries an `EXPLAIN` or `PROFILE` prefix, or because the
+   statement fails to execute, which includes exhausting the endpoint's query time
+   budget (see [Graph Query Time Budget](#graph-query-time-budget)) — the page
+   shows a clear message in place and does not crash, exactly as the layout
+   degradation does; every case is specified in
    [Query-Bar Error Handling](#query-bar-error-handling).
 
 9. **Coexistence with the other graph controls.** The query bar coexists with the
@@ -3151,17 +3157,19 @@ authenticates the request (see
 
 ### Query-Bar Error Handling
 
-A search driven by the query bar can fail for two distinct reasons, and the page
-MUST surface each clearly and in place without crashing, consistent with the
-graceful layout degradation already specified (see
+A search driven by the query bar can fail for three distinct reasons: an invalid
+limit (case 1), a statement that fails to execute (case 2), and a statement
+carrying an `EXPLAIN` or `PROFILE` prefix, which the endpoint refuses before it
+sends anything (rule 12). The page MUST surface each clearly and in place without
+crashing, consistent with the graceful layout degradation already specified (see
 [Knowledge-Graph Visualisation Library](#knowledge-graph-visualisation-library),
-rule 5). The two are kept distinct so the user understands what to fix.
+rule 5). The three are kept distinct so the user understands what to fix.
 
-The endpoint answers both with HTTP `400 Bad Request` and a JSON body that names
+The endpoint answers each with HTTP `400 Bad Request` and a JSON body that names
 the failure's class in a `kind` field, in the shape specified in
 `DATA_FORMATS.md § Graph View Data`, **Error Shape**. Rules 3 to 7 below fix the
-status, the order in which the two are decided, the boundary against the `500` of
-an internal read error, and what the body carries.
+status, the order in which the three are decided, the boundary against the `500`
+of an internal read error, and what the body carries.
 
 1. **Invalid limit.** When the `limit` parameter is not one of the six allowed
    values (`50`, `100`, `250`, `500`, `1000`, `3000`), the endpoint rejects the
@@ -3184,25 +3192,27 @@ an internal read error, and what the body carries.
    case too, for the reason rule 10 gives. The endpoint answers HTTP
    `400 Bad Request` with `kind` `execution` in every case of this rule.
 
-3. **In-place, non-fatal.** In both cases the message is shown in place on the
+3. **In-place, non-fatal.** In every case the message is shown in place on the
    page, the page does not crash, and the failure triggers no navigation, exactly
    as the layout-degradation message does. The user can edit the statement or
    change the limit and search again. The graph already shown is left in place.
 
-4. **One status, two kinds — and this rule is the one place the set is
-   enumerated.** The endpoint's `kind` takes exactly these two values and no
-   others: `invalid_limit` and `execution`. Every other statement of the set in
-   this specification refers here rather than repeating it, so the count and the
-   list cannot drift apart across sections; a value is added or removed here
-   first. Both failures carry HTTP `400 Bad Request`, and the body's `kind` field
-   is what distinguishes them. One status fits both because in each of them the
-   server is able to serve the route and refuses the request the caller made: the
-   `limit` falls outside the closed set the endpoint publishes, or the statement
-   the caller wrote cannot be executed. RFC 9110, Section 15.5.1, defines `400` as
+4. **One status, three kinds — and this rule is the one place the set is
+   enumerated.** The endpoint's `kind` takes exactly these three values and no
+   others: `invalid_limit`, `plan_prefix`, and `execution`. Every other statement
+   of the set in this specification refers here rather than repeating it, so the
+   count and the list cannot drift apart across sections; a value is added or
+   removed here first. Every failure carries HTTP `400 Bad Request`, and the
+   body's `kind` field is what distinguishes them. One status fits all three
+   because in each of them the server is able to serve the route and refuses the
+   request the caller made: the `limit` falls outside the closed set the endpoint
+   publishes, the statement asks for a query plan the endpoint's response cannot
+   carry, or the statement the caller wrote cannot be executed. RFC 9110,
+   Section 15.5.1, defines `400` as
    the status for a request the server "cannot or will not process ... due to
    something that is perceived to be a client error", and RFC 9110, Section 15.5,
    puts the explanation of the error in the response representation, which is
-   exactly what the `kind` and `error` fields are. Splitting the two across
+   exactly what the `kind` and `error` fields are. Splitting the three across
    different statuses would assert a distinction HTTP does not carry, while the
    body already carries it precisely.
 
@@ -3253,12 +3263,18 @@ an internal read error, and what the body carries.
    carried in the body, by an `error` that names the contention (rule 11), and not
    by a status that would have to assert something else in order to carry it.
 
-5. **The `limit` is resolved before the statement runs, so the two kinds cannot
-   both apply.** One request can carry an invalid `limit` and an unexecutable
-   statement at once. The endpoint resolves the `limit` first and refuses the
-   request there, so such a request is answered `invalid_limit` and the statement
-   is never executed. There is no further precedence question: `execution` is
-   reached only by a request whose `limit` was accepted.
+5. **The `limit` is resolved first and the prefix is examined second, so no two
+   kinds can both apply.** One request can carry an invalid `limit` together with
+   a prefixed statement, or together with an unexecutable one. The endpoint
+   resolves the `limit` first and refuses the request there, so a request whose
+   `limit` is invalid is answered `invalid_limit` whatever its statement is, a
+   prefixed statement included, and its statement is neither examined for a
+   prefix nor executed. Only a request whose `limit` was accepted has its
+   statement examined for a prefix (rule 12), and a statement refused there as
+   `plan_prefix` is never sent, so it cannot also fail to execute. There is no
+   further precedence question: `execution` is reached only by a request whose
+   `limit` was accepted and whose statement the engine's parser reports as
+   carrying no prefix.
 
 6. **The boundary against the internal read error is drawn at when the failure
    surfaces, not at what the failure is.** This endpoint answers an internal read
@@ -3285,8 +3301,8 @@ an internal read error, and what the body carries.
    verifiable from outside the server, where drawing it at the cause would make the
    contract depend on which failures the engine happens to tell apart.
 
-7. **The response body.** Each of the two failures carries a JSON body of exactly
-   two string fields, `error` and `kind`, in the shape specified in
+7. **The response body.** Each failure carries a JSON body of exactly two string
+   fields, `error` and `kind`, in the shape specified in
    `DATA_FORMATS.md § Graph View Data`, **Error Shape**, which is canonical for it.
    `kind` is the machine-readable class; rule 4 above enumerates its value set and
    is canonical for it. `error` is the human-readable reason the page shows in
@@ -3294,7 +3310,11 @@ an internal read error, and what the body carries.
    text, so the user reads for a given statement the same diagnostic the CLI prints
    for it (see `GRAPH.md § Error Handling and Exit Codes`, rule 2) and can act on
    it; the `error` of an invalid limit names the rejected value, which is what
-   case 1's message requires. Two execution failures are the exception, and in
+   case 1's message requires; and the `error` of a plan-prefix refusal is the one
+   fixed line rule 12 publishes. That line is `rmp`'s own text, because nothing ran
+   to produce a diagnostic, and it has no CLI counterpart to read alike, because
+   `rmp graph client` publishes a plan rather than refusing the prefix. Two
+   execution failures are the exception to the engine's diagnostic, and in
    both of them the CLI prints its own text too, so the rule that the two surfaces
    read alike is kept rather than broken: a lost or silent server connection
    (rule 10) and an exhausted serialisation retry (rule 11) carry `rmp`'s own
@@ -3372,6 +3392,84 @@ an internal read error, and what the body carries.
     This is the fifth reason the `execution`
     kind arises, and it changes neither the status nor the kind set rule 4
     enumerates.
+
+12. **A statement carrying an `EXPLAIN` or `PROFILE` prefix is refused before
+    anything is sent, because this endpoint's response has no place for a query
+    plan.** The response carries nodes and edges and nothing else
+    (`DATA_FORMATS.md § Graph View Data`), while a prefixed statement asks for a
+    plan (`GRAPH.md § Query Plans: The EXPLAIN and PROFILE Prefixes`). Were one
+    sent, an `EXPLAIN` would execute nothing and return no row, so it would render
+    as the empty graph of rule 9, which cannot be told apart from a statement that
+    matched nothing, and its plan would be discarded; a `PROFILE` would render its
+    rows and discard the measurement the caller asked for. The endpoint therefore
+    refuses both, and its answer names the surface that does publish a plan.
+
+    **Recognition is the engine's, and nothing of it is restated here.** The
+    endpoint hands the statement it resolved from `q` — the trimmed `q`, before any
+    node `LIMIT` is appended — to the pinned engine's own statement parser, the one
+    the engine itself consults to decide whether a statement carries a prefix, and
+    refuses the statement when that parser reports that it does. Which spellings
+    carry a prefix is fixed by the engine's grammar: case, whitespace, and a
+    comment ahead of the prefix count exactly as that grammar counts them, and this
+    specification states no lexical rule of its own. The parse is a question and
+    nothing else. It changes nothing the endpoint sends: a statement that is sent
+    is the statement the endpoint resolved, never text derived from the parse. The
+    default query carries no prefix, so a request with no `q` is never refused.
+
+    **Text the parser cannot parse is not refused here.** It takes the path it
+    took before this rule existed: it is sent, and the engine's own diagnostic
+    reaches the caller as an execution failure (case 2). A prefixed schema
+    statement is such text, because the prefix grammar admits no schema statement
+    (`GRAPH.md § Query Plans: The EXPLAIN and PROFILE Prefixes`, rule 6). A
+    statement in which `EXPLAIN` or `PROFILE` appears other than as its prefix —
+    as a variable, a label, a property key, inside a string literal, or inside a
+    comment that follows the statement — is one the parser reports as carrying no
+    prefix, and it is sent like any other.
+
+    **The answer.** The endpoint answers HTTP `400 Bad Request` with `kind`
+    `plan_prefix` and, as its `error`, exactly this line, which names neither the
+    prefix nor the statement and is the same for every refused request:
+
+    `query not run: the query bar cannot show a query plan; remove the EXPLAIN or PROFILE prefix, or run the statement with rmp graph client`
+
+    **Nothing runs, and no server is needed.** The prefix is examined only once the
+    `limit` has been accepted (rule 5), and before the roadmap's graph server is
+    resolved: before the socket path is derived, before that path is checked
+    against the platform's bound, and before the socket is probed. The statement
+    is never sent, so it writes nothing, and neither `EXPLAIN CREATE ...` nor
+    `PROFILE CREATE ...` reaches a server. The refusal is the same `400` for a
+    roadmap with no graph server listening, and for one whose derived socket path
+    is over the platform's bound, as for one being served: the `503` and the `500`
+    of rule 6 are reached only by a request whose statement the parser reports as
+    carrying no prefix.
+
+    **The refusal withdraws no write, and it is not a guard rail.** The endpoint
+    still refuses nothing on the ground of what a statement does. Every write the
+    query bar could make before this rule existed it can make after it, written
+    without the prefix: an `EXPLAIN` of a write executes nothing wherever it runs,
+    and the engine refuses a `PROFILE` of a write wherever it runs
+    (`GRAPH.md § Query Plans: The EXPLAIN and PROFILE Prefixes`, rules 1 and 4).
+    The refusal is therefore no security control, and it does not narrow the
+    property [Security and Constraints](#security-and-constraints), rule 3,
+    states.
+
+    **One consequence is accepted.** A `PROFILE` of a read executes, and
+    `PROFILE MATCH (n) RETURN n` would render the same nodes the unprefixed
+    statement renders. It is refused all the same: a caller who wrote the prefix
+    asked for the measurement, and an answer that rendered the rows and silently
+    dropped it is the kind of answer this rule exists to prevent. Removing the
+    prefix renders the graph.
+
+    **A statement carrying no prefix is unaffected.** It is sent exactly as it was
+    sent before this rule existed, and its response is the same, byte for byte.
+
+    **Why a kind of its own.** Each `kind` names a distinct correction. An
+    `invalid_limit` is corrected by choosing another limit, and an `execution` by
+    correcting the statement or running it again; neither tells the caller to
+    remove a prefix, which is the only correction that clears this refusal. The
+    status is the one rule 4 settles for every query-bar failure, the page
+    surfaces the `error` in place as rule 3 requires, and the refusal is recorded
+    as every other query-bar failure is (see [What Is Logged](#what-is-logged)).
 
 ### Graph Labels Sidebar
 
@@ -3551,11 +3649,12 @@ write.
   and the property-type-to-JSON mapping) rather than inventing a new element
   encoding. A request that fails carries the error object instead, specified in
   the same file (see the next bullet).
-- **Failure responses.** The two ways a request to this endpoint fails — an
-  invalid `limit`, and a statement that fails to execute — are each answered with
-  HTTP `400 Bad Request` and a JSON body naming the failure's class in a `kind`
-  field, in the shape specified in `DATA_FORMATS.md § Graph View Data`,
-  **Error Shape**. The status, the `kind` values, the order in which the two are
+- **Failure responses.** The three query-bar failures of this endpoint — an
+  invalid `limit`, a statement carrying an `EXPLAIN` or `PROFILE` prefix, and a
+  statement that fails to execute — are each answered with HTTP
+  `400 Bad Request` and a JSON body naming the failure's class in a `kind` field,
+  in the shape specified in `DATA_FORMATS.md § Graph View Data`,
+  **Error Shape**. The status, the `kind` values, the order in which the three are
   decided, and the boundary against the `500` of an internal read error are
   specified in [Query-Bar Error Handling](#query-bar-error-handling); this section
   does not restate them.
@@ -3563,8 +3662,11 @@ write.
   that the graph page's query bar (see
   [Graph Query Bar](#graph-query-bar)) sends, and that drive which Cypher query
   runs and how many results it returns:
-  - `q` — the Cypher statement to run, URL-encoded. It is executed as written:
-    the endpoint does not examine it and refuses nothing on the ground of what it
+  - `q` — the Cypher statement to run, URL-encoded. It is executed as written,
+    with one exception: a statement the engine's parser reports as carrying an
+    `EXPLAIN` or `PROFILE` prefix is refused and never sent (see
+    [Query-Bar Error Handling](#query-bar-error-handling), rule 12). The endpoint
+    examines it for nothing else and refuses nothing on the ground of what it
     does, so a statement that writes, deletes, or changes the schema is executed
     and committed like any other. When `q` is absent or empty, the endpoint runs
     the **default query**
@@ -3583,10 +3685,14 @@ write.
     executed.
 - **The statement is executed as written (security-critical).** The endpoint
   performs no validation of `q` beyond the maximum query length that binds every
-  Cypher statement (`GRAPH.md § Maximum Query Length`). It does not classify the
-  statement, does not inspect the patterns it binds, and does not inspect the
-  values it would write. A statement carrying `CREATE`, `MERGE`, `SET`, `REMOVE`,
-  `DELETE`, `DETACH DELETE`, or any schema DDL is executed and committed.
+  Cypher statement (`GRAPH.md § Maximum Query Length`) and the recognition of an
+  `EXPLAIN` or `PROFILE` prefix, which asks the engine's parser whether the
+  statement carries one and nothing else (see
+  [Query-Bar Error Handling](#query-bar-error-handling), rule 12). It does not
+  classify the statement by what it does, does not inspect the patterns it binds,
+  and does not inspect the values it would write. A statement carrying `CREATE`,
+  `MERGE`, `SET`, `REMOVE`, `DELETE`, `DETACH DELETE`, or any schema DDL, and no
+  such prefix, is executed and committed.
 - **The endpoint sends the statement to a running graph server, and has no other
   way to run one.** It resolves the roadmap's socket and sends the statement to
   whatever server answers there. It opens no store, takes no lock, and constructs
@@ -4230,8 +4336,12 @@ re-presents an earlier, now-stale response in its place.
    a graph server` for the package that realises it.
 
 4. The endpoint sends the statement the request carries, or the default query when
-   the request carries none. It does not examine that statement, so the statement
-   may write. What crosses is the statement the request carried, with the
+   the request carries none. It does not examine what that statement does, so the
+   statement may write. The one statement it does not send is one the engine's
+   parser reports as carrying an `EXPLAIN` or `PROFILE` prefix, which it refuses
+   before resolving a server
+   ([Query-Bar Error Handling](#query-bar-error-handling), rule 12). What crosses
+   is the statement the request carried, with the
    node-`LIMIT` injection already applied and nothing else changed (see
    `GRAPH.md § Server Resolution`, rule 5).
 
@@ -5154,7 +5264,7 @@ states explicitly.
 | Level | Meaning | Examples |
 |-------|---------|----------|
 | `ERROR` | The server failed. The condition is answered with HTTP 500 and is a fault of the server or of the environment it cannot recover from. | A roadmap's database cannot be read; a page template fails to execute; a response body fails to encode; a roadmap's derived socket path is over the platform's bound, so no graph server can ever listen there. |
-| `WARN` | The server did not fail, but an operator needs to know what happened. The condition is caused by the client or by the environment and leaves the server serving. | A query-bar statement refused for an invalid limit or failing in the engine (HTTP 400); **a graph data request for a roadmap with no graph server running (HTTP 503)**; a roadmap skipped by the startup schema migration; the interface bound to a non-loopback address. |
+| `WARN` | The server did not fail, but an operator needs to know what happened. The condition is caused by the client or by the environment and leaves the server serving. | A query-bar request refused for an invalid limit or for an `EXPLAIN` or `PROFILE` prefix, or whose statement failed in the engine (HTTP 400); **a graph data request for a roadmap with no graph server running (HTTP 503)**; a roadmap skipped by the startup schema migration; the interface bound to a non-loopback address. |
 | `INFO` | Enabled, but unused in this version: a successful request and a successful startup write no record. | — |
 
 ### What Is Logged
@@ -5203,7 +5313,7 @@ original meaning and its original scope: a fault the server cannot recover from.
 | `GET /roadmaps/{name}/tasks/{id}/data` | the task detail cannot be loaded for a reason other than not-found | `ERROR` | 500 |
 | `GET /roadmaps/{name}/audit` | the audit page cannot be loaded | `ERROR` | 500 |
 | `GET /roadmaps/{name}/sprints/{id}` | the sprint cannot be loaded for a reason other than not-found | `ERROR` | 500 |
-| `GET /roadmaps/{name}/graph/data` | the request's limit was invalid, or its statement failed in the engine | `WARN` | 400 |
+| `GET /roadmaps/{name}/graph/data` | the request's limit was invalid, its statement carried an `EXPLAIN` or `PROFILE` prefix, or its statement failed in the engine | `WARN` | 400 |
 | `GET /roadmaps/{name}/graph/data` | no graph server is listening for the roadmap, or a server answered but could not be reached | `WARN` | 503 |
 | `GET /roadmaps/{name}/graph/data` | the roadmap's derived socket path is over the platform's bound, or the graph cannot be reached for any other reason | `ERROR` | 500 |
 | HTML rendering | the page template fails to execute | `ERROR` | 500 |
@@ -5353,9 +5463,13 @@ Rules:
    principal security property.** The graph page's query bar submits an editable
    Cypher statement to the graph data endpoint as the `q` parameter (see
    [Graph Query Bar](#graph-query-bar) and
-   [Graph Data Endpoint](#graph-data-endpoint)). The endpoint does not classify it,
-   does not refuse it on the ground of what it does, and executes it on the
-   transactional path. The consequences are stated plainly:
+   [Graph Data Endpoint](#graph-data-endpoint)). The endpoint does not classify it
+   by what it does, does not refuse it on that ground, and executes it on the
+   transactional path. The one statement it refuses, a statement carrying an
+   `EXPLAIN` or `PROFILE` prefix, is refused for the answer it asks for rather than
+   for what it does, and refusing it withdraws no write
+   ([Query-Bar Error Handling](#query-bar-error-handling), rule 12). The
+   consequences are stated plainly:
    - A `GET` of that endpoint can create, change, and delete nodes, relationships,
      properties, and labels, and can create and drop indexes and constraints.
      `MATCH (n) DETACH DELETE n` submitted through the query bar empties the
@@ -5854,9 +5968,9 @@ Rules:
     `DATA_FORMATS.md § Graph View Data`, rule 3).
 50. A statement submitted through the query bar that fails in the engine (for
     example, invalid Cypher syntax) surfaces a clear "query failed to execute"
-    message on the page, distinct from the invalid-limit message. In both
-    query-bar failure cases — invalid limit and execution failure — the message is
-    shown in place, the page does not crash, and the failure triggers no
+    message on the page, distinct from the invalid-limit message. In each of
+    these two query-bar failure cases — invalid limit and execution failure — the
+    message is shown in place, the page does not crash, and the failure triggers no
     navigation, consistent with the graceful layout degradation; the user can edit
     the statement or change the limit and search again. Both failures are answered
     HTTP `400 Bad Request`, and the body's `kind` is what tells them apart
@@ -6654,19 +6768,24 @@ Rules:
 123. Every query-bar failure of `GET /roadmaps/{name}/graph/data` is answered with
     HTTP `400 Bad Request` and a JSON body of exactly two string fields, `error`
     and `kind`, and never with HTTP 200 and never with the
-    `{"nodes": ..., "edges": ...}` shape. `kind` takes exactly two values, the set
-    [Query-Bar Error Handling](#query-bar-error-handling), rule 4, enumerates and
-    is canonical for: `invalid_limit` for a `limit` outside the six allowed values
-    (Acceptance Criterion 48), and `execution` for a statement that failed once
-    running, which includes one cancelled for exhausting the 5-second time budget
-    (Acceptance Criterion 110). One status serves both and the `kind` is what
-    distinguishes them. **A body carrying any other `kind` MUST fail this
-    criterion**, and the criterion MUST assert the closed set rather than only the
-    two members, because a third value is exactly what an endpoint that started
-    refusing statements again would publish. The order is fixed and testable: a
-    request carrying both an invalid `limit` and an unexecutable statement is
-    answered `invalid_limit`, because the endpoint resolves the limit before the
-    statement runs, and the statement is not executed. The boundary against the
+    `{"nodes": ..., "edges": ...}` shape. `kind` takes exactly three values, the
+    set [Query-Bar Error Handling](#query-bar-error-handling), rule 4, enumerates
+    and is canonical for: `invalid_limit` for a `limit` outside the six allowed
+    values (Acceptance Criterion 48), `plan_prefix` for a statement carrying an
+    `EXPLAIN` or `PROFILE` prefix (Acceptance Criterion 166), and `execution` for
+    a statement that failed once running, which includes one cancelled for
+    exhausting the 5-second time budget (Acceptance Criterion 110). One status
+    serves all three and the `kind` is what distinguishes them. **A body carrying
+    any other `kind` MUST fail this criterion**, and the criterion MUST assert the
+    closed set rather than only the three members, because a further value is
+    exactly what an endpoint that started refusing statements on the ground of
+    what they do would publish. The order is fixed and testable: a request
+    carrying an invalid `limit` is answered `invalid_limit` whether its statement
+    is prefixed, unexecutable, or neither, because the endpoint resolves the limit
+    before it examines the statement, and the statement is not executed; a
+    request whose `limit` is accepted and whose statement carries a prefix is
+    answered `plan_prefix`, and the statement is not sent (Acceptance
+    Criterion 170). The boundary against the
     internal read error is drawn at the moment the failure surfaces: a graph that
     cannot be reached at all, because no server is listening for the roadmap or
     none could be reached through a socket that answered, is
@@ -6674,7 +6793,8 @@ Rules:
     answered HTTP 400 with `kind` `execution`, a store corruption a scan discovers
     mid-statement included. The `error` of an execution failure carries the
     engine's diagnostic and the page renders it in place; the `error` of an invalid
-    limit names the rejected value (see
+    limit names the rejected value; and the `error` of a plan-prefix refusal is the
+    fixed line rule 12 of that section publishes (see
     [Query-Bar Error Handling](#query-bar-error-handling) and
     `DATA_FORMATS.md § Graph View Data`, **Error Shape**).
 124. Each full-height page region — the Kanban board of the roadmap tasks page and
@@ -7083,8 +7203,10 @@ Rules:
     (Acceptance Criterion 156), so the two spellings differ in the response, and
     the difference is the engine's routing rather than a rule of this endpoint's
     (see `GRAPH.md § What Groadmap Does Not Check`, item 7). A body carrying any
-    `kind` other than the two of Acceptance Criterion 123 MUST fail this
-    criterion.
+    `kind` other than `execution` MUST fail this criterion, whether that value
+    lies outside the closed set of Acceptance Criterion 123 or is another member
+    of it: the command carries no `EXPLAIN` or `PROFILE` prefix, so `plan_prefix`
+    is as much a failure here as `invalid_limit`.
 152. A term and a task's searchable text are normalised to Unicode's **Normalization
     Form C** before they are folded, and the pipeline for a term is trim, then NFC,
     then fold, then NFC, in that order, on both paths. The normalisation is for
@@ -7349,6 +7471,105 @@ Rules:
     drive both halves against the same server, because a level is only meaningful
     against the other levels that server emits (see
     [What Is Logged](#what-is-logged) and [Levels](#levels)).
+166. **Both prefixes are refused, in every spelling the engine's parser
+    recognises.** Against a roadmap served by `rmp graph serve`, each of the
+    following, submitted as `q`, is answered HTTP `400 Bad Request` with a body of
+    exactly two fields: `kind` `plan_prefix`, and `error` exactly the line
+    [Query-Bar Error Handling](#query-bar-error-handling), rule 12, publishes. The
+    cases are `EXPLAIN MATCH (n) RETURN n` and `PROFILE MATCH (n) RETURN n`; each
+    of the two in lower case and in mixed case; a prefix on a statement spread over
+    several lines; a prefix preceded by spaces, tabs and newlines; a prefix
+    preceded by a line comment, and one preceded by a block comment; a prefix on a
+    statement that carries its own `LIMIT`; a prefix on a write,
+    `EXPLAIN MATCH (n) DETACH DELETE n`; and a prefix on a procedure call projected
+    through a `RETURN`. Each case is submitted with no `limit` and with an allowed
+    one, and the answer is the same.
+
+    **The cases come from the engine's grammar, so the criterion MUST confirm its
+    premise.** Before asserting the answer, the criterion MUST confirm against the
+    pinned engine's parser that each case is one the parser reports as carrying a
+    prefix, and MUST fail if one is not. A grammar change at a future pin then
+    surfaces as a failed premise rather than silently changing what the criterion
+    asserts.
+167. **A refused statement is never sent, so it writes nothing and needs no
+    server.** The criterion has three halves. First, against a served roadmap,
+    `EXPLAIN CREATE (n:Probe {key:'p'})` and `PROFILE CREATE (n:Probe {key:'p'})`
+    are each answered `plan_prefix`, and a read-back through `rmp graph client`
+    finds no `Probe` node and the graph's node and relationship counts unchanged.
+    Second, with **no** `rmp graph serve` running for the roadmap,
+    `EXPLAIN MATCH (n) RETURN n` and `PROFILE MATCH (n) RETURN n` are each
+    answered HTTP `400` with `kind` `plan_prefix`, while `MATCH (n) RETURN n` is
+    answered HTTP `503`. Third, for a roadmap whose derived socket path is over the
+    platform's bound, established as Acceptance Criterion 160 establishes it, the
+    same two prefixed statements are each answered HTTP `400` with `kind`
+    `plan_prefix`, while `MATCH (n) RETURN n` is answered HTTP `500`.
+
+    **The no-write half alone asserts little.** An `EXPLAIN` executes nothing and
+    the engine refuses a `PROFILE` of a write wherever either runs, so an endpoint
+    that sent both statements would leave the graph unchanged too. The `kind`, and
+    the two pairs that set a `400` against a `503` and against a `500`, are what
+    establish that the refusal is decided before any graph server is resolved.
+168. **A statement carrying no prefix is answered byte for byte as before.**
+    Against a served roadmap, each of the following requests is answered with the
+    status and the exact response bytes that the same request produces when the
+    prefix recognition is left out of the endpoint's path, driven against the same
+    server holding the same graph: a request with no `q`; the default query with
+    each of the six allowed `limit` values; a read carrying its own `LIMIT`;
+    `SHOW INDEXES`; a standalone procedure call; a statement that fails in the
+    engine, whose `error` carries the same diagnostic; and a write with no
+    projection, `CREATE (n:Probe {key:'it\'s a "probe"'})`. For the write, the
+    criterion MUST also read the stored `key` back through `rmp graph client` and
+    find it equal to the value the literal denotes, which establishes that what was
+    sent is the resolved statement and not text derived from the parse.
+169. **A lookalike is not refused, and text the parser cannot parse keeps its old
+    answer.** Against a served roadmap, `MATCH (explain) RETURN explain`,
+    `MATCH (n) WHERE n.key = 'EXPLAIN' RETURN n`,
+    ``MATCH (n:`PROFILE`) RETURN n``, `MATCH (n) RETURN n // EXPLAIN`, and
+    `MATCH (n) RETURN n.explain AS profile` are each answered HTTP `200` with the
+    node-and-edge shape. `EXPLAINMATCH (n) RETURN n`, `EXPLAIN` alone,
+    `EXPLAIN EXPLAIN MATCH (n) RETURN n`, `EXPLAIN SHOW INDEXES`,
+    `EXPLAIN CREATE INDEX probe_idx FOR (n:Probe) ON (n.key)`, and
+    `EXPLAIN MATCH (n RETURN n` are each answered HTTP `400` with `kind`
+    `execution` and the engine's diagnostic in `error`, and never with
+    `plan_prefix`. With no graph server running, every statement of both groups is
+    answered HTTP `503`, which establishes that each reached server resolution
+    rather than being refused. As in Acceptance Criterion 166, the criterion MUST
+    first confirm against the pinned engine's parser that each statement of the
+    first group parses and carries no prefix, and that each statement of the
+    second group fails to parse, and MUST fail if one does not.
+170. **An invalid `limit` outranks a prefix.** A request carrying `limit=7` and
+    the `q` `EXPLAIN MATCH (n) RETURN n` is answered HTTP `400` with `kind`
+    `invalid_limit` and an `error` naming the rejected value, and never with
+    `plan_prefix`; so is the same request carrying `PROFILE` instead, so is each
+    of the two carrying the non-numeric `limit=all`, and so is each of those four
+    with no graph server running for the roadmap. The control is the same prefixed
+    statement with an allowed `limit`, which is answered `plan_prefix`: without it
+    the criterion cannot tell a limit that outranked the prefix from a prefix that
+    was never recognised (see
+    [Query-Bar Error Handling](#query-bar-error-handling), rule 5).
+171. **A refusal is recorded once, at `WARN`, with its kind and its line.** For a
+    request refused as `plan_prefix`, the server's complete stderr stream carries
+    exactly one record for that request: a `WARN` record naming the request
+    `method` and `path`, whose `status` is `400`, whose `kind` is `plan_prefix`,
+    and whose `err` is exactly the line
+    [Query-Bar Error Handling](#query-bar-error-handling), rule 12, publishes. The
+    stream carries **zero** `ERROR` records for it. The criterion MUST drive the
+    request once against a served roadmap and once against a roadmap with no graph
+    server running, and MUST find the same single record both times: an endpoint
+    that resolved the graph server before examining the prefix would answer the
+    second request with the record of a graph server that cannot be reached
+    instead, and counting records rather than searching for one is what detects
+    it (see [What Is Logged](#what-is-logged) and
+    [Record Content](#record-content)).
+172. **The page shows the refusal's line in place.** On the knowledge-graph page
+    of a served roadmap, with a graph already rendered, submitting
+    `EXPLAIN MATCH (n) RETURN n` through the query bar shows exactly the line
+    [Query-Bar Error Handling](#query-bar-error-handling), rule 12, publishes in
+    the query bar's in-place message, written as text. The graph already shown is
+    left in place, the page does not crash, and the failure triggers no
+    navigation. Removing the prefix and searching again renders the graph (see
+    Acceptance Criterion 50 and
+    [Query-Bar Error Handling](#query-bar-error-handling), rule 3).
 
 ## See Also
 

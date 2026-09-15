@@ -24,7 +24,7 @@ The SPEC is unversioned. Git is the source of truth for its evolution — recove
 | Web task detail modal (read-only task popup) | `WEB.md § Task Detail Modal` |
 | Web graph labels sidebar (node-label / edge-type inventory, counts, section totals, highlight, collapse/expand) | `WEB.md § Graph Labels Sidebar` |
 | Web graph query bar (editable Cypher query box, Search button, node-limit dropdown) | `WEB.md § Graph Query Bar` |
-| Web graph query-bar error handling (the two failure classes, the order they are decided in, and the boundary against the internal read error) | `WEB.md § Query-Bar Error Handling` |
+| Web graph query-bar error handling (the failure classes, the refusal of an `EXPLAIN` or `PROFILE` prefix among them, the order they are decided in, and the boundary against the internal read error) | `WEB.md § Query-Bar Error Handling` |
 | Web graph data endpoint `q` / `limit` parameters, limit injection, node/edge extraction | `WEB.md § Graph Data Endpoint` |
 | Web graph data endpoint executes writes over HTTP with no authentication (what a `GET` of it can change, and the only access control there is) | `WEB.md § Security and Constraints` |
 | Web startup schema migration (automatic, no-input, before serving) | `WEB.md § Startup Schema Migration` |
