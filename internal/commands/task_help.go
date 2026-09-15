@@ -42,15 +42,7 @@ Required:
 Output (stdout JSON):
   Array of task objects; see 'rmp task --help' for the full key list.
 
-Exit codes:
-  0  Success
-  2  Unknown flag, a flag without its value, a non-integer
-     --priority/--severity/--limit, or a positional argument (none accepted)
-  3  Missing -r
-  4  Roadmap not found
-  6  Invalid filter value (bad enum or date format)
-
-Examples:
+`+exitCodesBlock("task", "list")+`Examples:
   rmp task list -r myproject
   rmp task list -r myproject --status BACKLOG --priority 7
   rmp task list -r myproject --type BUG --sort severity --limit 20
@@ -85,14 +77,7 @@ Optional:
 Output (stdout JSON):
   {"id": <new-task-id>}
 
-Exit codes:
-  0  Success
-  2  Missing required flag
-  3  Missing -r
-  4  --parent points to a missing task
-  6  Validation error (oversize field, bad enum/range, bad type)
-
-Examples:
+`+exitCodesBlock("task", "create")+`Examples:
   rmp task create -r myproject -t "Fix JWT expiry bug" \
                   -fr "Tokens expire 1h early under DST"  \
                   -tr "Add timezone-aware expiry calc"     \
@@ -119,15 +104,7 @@ Output (stdout JSON):
   Array of task objects. Empty array (and exit 0) only if no ids were given;
   any unknown id raises exit 4.
 
-Exit codes:
-  0  Success
-  2  An id is not an integer, an argument is missing or extra, or an
-     unknown flag after the ids
-  3  Missing -r
-  4  At least one id does not exist
-  6  An id falls outside 1-2147483647
-
-Examples:
+`+exitCodesBlock("task", "get")+`Examples:
   rmp task get -r myproject 1
   rmp task get -r myproject 1,3,5
 `)
@@ -174,14 +151,7 @@ Output (stdout JSON):
   this listing and cannot promote a task above another.
   Empty array (exit 0) if the OPEN sprint has no SPRINT/DOING/TESTING tasks.
 
-Exit codes:
-  0  Success
-  2  An extra positional argument, or an unknown flag after [num]
-  3  Missing -r
-  4  No sprint is OPEN
-  6  Invalid <num> (non-numeric or < 1)
-
-Examples:
+`+exitCodesBlock("task", "next")+`Examples:
   rmp task next -r myproject              # returns the first 1 task
   rmp task next -r myproject 10
 `)
@@ -191,15 +161,17 @@ Examples:
 func printTaskEditHelp() {
 	fmt.Fprint(helpDst(), `Usage: rmp task edit -r <roadmap> <task-id> [options]
 
-Edits one or more fields on an existing task. At least one option must be
-provided; setting a text field to "" is rejected (use task remove instead
-of clearing required fields). Status is NOT editable here — use 'task stat'.
+Edits the supplied fields of an existing task; every other field is left
+unchanged. Supplying no field at all changes nothing, and is accepted only
+when the named task exists. Setting a text field to "" is rejected (use task
+remove instead of clearing required fields). Status is NOT editable here —
+use 'task stat'.
 
 Required:
   -r, --roadmap <name>            Target roadmap
   <task-id>                       Integer id of the task
 
-At least one of:
+Optional:
   -t, --title <text>              Max 255 chars (whitespace trimmed)
   -fr, --functional-requirements <text>   Max 4096 chars
   -tr, --technical-requirements <text>    Max 4096 chars
@@ -210,17 +182,7 @@ At least one of:
 
 Output: empty (exit 0 on success).
 
-Exit codes:
-  0  Success
-  2  Unknown flag, a flag without its value, a non-integer --priority or
-     --severity, a missing or non-integer <task-id>, or an extra positional
-     argument
-  3  Missing -r
-  4  Task not found
-  6  No fields supplied, empty value for required text field, oversize,
-     bad type/priority/severity
-
-Examples:
+`+exitCodesBlock("task", "edit")+`Examples:
   rmp task edit -r myproject 42 -t "Updated title"
   rmp task edit -r myproject 42 -p 8 --severity 3
   rmp task edit -r myproject 42 --type BUG -ac "Updated AC..."
@@ -243,14 +205,7 @@ Required:
 
 Output: empty (exit 0 on success).
 
-Exit codes:
-  0  Success
-  2  Invalid id syntax (non-integer or non-positive id)
-  3  Missing -r
-  4  At least one id does not exist
-  6  At least one task is not in BACKLOG, or has active subtasks
-
-Examples:
+`+exitCodesBlock("task", "remove")+`Examples:
   rmp task remove -r myproject 7
   rmp task rm -r myproject 1,3,5
 `)
@@ -325,20 +280,7 @@ Optional:
 
 Output: empty (exit 0 on success).
 
-Exit codes:
-  0  Success
-  2  Invalid id syntax (non-integer or non-positive id), missing <new-status>,
-     or --commit-open / --commit-close written with no value after it
-  3  Missing -r
-  4  At least one task id does not exist
-  6  Invalid status, invalid transition, manual SPRINT attempt, --summary
-     supplied for a non-COMPLETED target, summary too long, --commit-open
-     supplied for a non-DOING target or missing on a DOING target,
-     --commit-close supplied for a non-COMPLETED target or missing on a
-     COMPLETED target, a commit hash outside the 7-to-64 hexadecimal
-     character format, or subtask/dependency guard violation
-
-Examples:
+`+exitCodesBlock("task", "stat")+`Examples:
   rmp task stat -r myproject 1 DOING --commit-open 5f93b51
   rmp task stat -r myproject 3,7 TESTING
   rmp task stat -r myproject 7 COMPLETED -cc 2578d18 --summary "Shipped behind feature flag"
@@ -371,15 +313,7 @@ Required:
 
 Output: empty (exit 0 on success).
 
-Exit codes:
-  0  Success
-  2  An id is not an integer, an argument is missing or extra, or an
-     unknown flag after the ids
-  3  Missing -r
-  4  At least one id does not exist
-  6  An id falls outside 1-2147483647
-
-Examples:
+`+exitCodesBlock("task", "reopen")+`Examples:
   rmp task reopen -r myproject 7
   rmp task reopen -r myproject 1,3,5
 `)
@@ -401,14 +335,7 @@ Required:
 
 Output: empty (exit 0 on success).
 
-Exit codes:
-  0  Success
-  2  Invalid id syntax (non-integer or non-positive id)
-  3  Missing -r
-  4  Task not found
-  6  Priority out of range or non-numeric
-
-Examples:
+`+exitCodesBlock("task", "prio")+`Examples:
   rmp task prio -r myproject 1,2,3 8
   rmp task set-priority -r myproject 7 9
 `)
@@ -430,14 +357,7 @@ Required:
 
 Output: empty (exit 0 on success).
 
-Exit codes:
-  0  Success
-  2  Invalid id syntax (non-integer or non-positive id)
-  3  Missing -r
-  4  Task not found
-  6  Severity out of range or non-numeric
-
-Examples:
+`+exitCodesBlock("task", "sev")+`Examples:
   rmp task sev -r myproject 5 9
   rmp task set-severity -r myproject 1,2 6
 `)
@@ -458,13 +378,7 @@ Required:
 Output (stdout JSON):
   Array of task objects. Empty array (exit 0) if the parent has no subtasks.
 
-Exit codes:
-  0  Success
-  2  Invalid id syntax (non-integer or non-positive id)
-  3  Missing -r
-  4  Parent task not found
-
-Examples:
+`+exitCodesBlock("task", "subtasks")+`Examples:
   rmp task subtasks -r myproject 5
 `)
 }
@@ -486,14 +400,7 @@ Required:
 
 Output: empty (exit 0 on success).
 
-Exit codes:
-  0  Success
-  2  Invalid id syntax (non-integer or non-positive id), or a missing id argument
-  3  Missing -r
-  4  Either task does not exist
-  6  Self-dependency, or would create a cycle
-
-Examples:
+`+exitCodesBlock("task", "add-dep")+`Examples:
   rmp task add-dep -r myproject 10 7          # task 10 depends on task 7
   rmp task add-dep -r myproject 25 12
 `)
@@ -516,13 +423,7 @@ Required:
 
 Output: empty (exit 0 on success).
 
-Exit codes:
-  0  Success
-  2  Invalid id syntax (non-integer or non-positive id)
-  3  Missing -r
-  4  No such edge
-
-Examples:
+`+exitCodesBlock("task", "remove-dep")+`Examples:
   rmp task remove-dep -r myproject 10 7
 `)
 }
@@ -544,13 +445,7 @@ Output (stdout JSON):
   Array of task objects (incomplete dependencies). Empty array (exit 0)
   if all dependencies are COMPLETED — or if there are none.
 
-Exit codes:
-  0  Success
-  2  Invalid id syntax (non-integer or non-positive id)
-  3  Missing -r
-  4  Task not found
-
-Examples:
+`+exitCodesBlock("task", "blockers")+`Examples:
   rmp task blockers -r myproject 10
 `)
 }
@@ -572,13 +467,7 @@ Output (stdout JSON):
   'task blockers' returns only incomplete dependencies). Empty array
   (exit 0) if nothing depends on this task.
 
-Exit codes:
-  0  Success
-  2  Invalid id syntax (non-integer or non-positive id)
-  3  Missing -r
-  4  Task not found
-
-Examples:
+`+exitCodesBlock("task", "blocking")+`Examples:
   rmp task blocking -r myproject 7
 `)
 }
@@ -634,17 +523,7 @@ Validation order (a bad --type never leaves the command waiting on input):
 Output (stdout JSON):
   {"id": <new-comment-id>}
 
-Exit codes:
-  0  Success
-  1  Database failure
-  2  Invalid <task-id>, an extra positional argument, missing --type, or
-     no comment body supplied
-  3  Missing -r
-  4  Task not found (or roadmap not found)
-  6  Invalid --type value, body over 4096 characters, or control characters
-     in the body
-
-Examples:
+%sExamples:
   rmp task comment-add -r myproject 42 --type FINDING \
       --body "The expiry comparison is inclusive at the boundary second."
   rmp task comment-add -r myproject 42 --type DECISION < decision.txt
@@ -653,7 +532,7 @@ Examples:
 Compare with !time.Now().Before(exp) so the boundary second expires.
 Rejected widening the clock-skew allowance: it hides the boundary.
 BODY
-`, taskCommentTypes())
+`, taskCommentTypes(), exitCodesBlock("task", "comment-add"))
 }
 
 // printTaskCommentListHelp — `rmp task comment-list`.
@@ -694,18 +573,11 @@ Output (stdout JSON):
   Empty array (exit 0) when the task has no comments, or none of the
   requested type.
 
-Exit codes:
-  0  Success
-  2  Invalid <task-id>, an extra positional argument, or an unknown flag
-  3  Missing -r
-  4  Task not found (or roadmap not found)
-  6  Invalid --type value
-
-Examples:
+%sExamples:
   rmp task comment-list -r myproject 42
   rmp task comment-list -r myproject 42 --type DECISION
   rmp task c-ls -r myproject 42 -y FINDING
-`, taskCommentTypes())
+`, taskCommentTypes(), exitCodesBlock("task", "comment-list"))
 }
 
 // printTaskCommentEditHelp — `rmp task comment-edit`.
@@ -750,23 +622,13 @@ Optional:
 Output (stdout JSON):
   Empty (exit 0 on success), as for 'task edit' and 'sprint update'.
 
-Exit codes:
-  0  Success
-  1  Database failure
-  2  Invalid <comment-id>, an extra positional argument, an empty --body
-     value, or no change requested
-  3  Missing -r
-  4  Comment not found (or roadmap not found)
-  6  Invalid --type value, body over 4096 characters, or control characters
-     in the body
-
-Examples:
+%sExamples:
   rmp task comment-edit -r myproject 12 --type DECISION
   rmp task comment-edit -r myproject 12 \
       --body "Superseded: the boundary second is now defined, not skewed."
   rmp task comment-edit -r myproject 12 < revised.txt
   rmp task c-edit -r myproject 12 -y NOTE -b "Kept for context only."
-`, taskCommentTypes())
+`, taskCommentTypes(), exitCodesBlock("task", "comment-edit"))
 }
 
 // printTaskCommentRemoveHelp — `rmp task comment-remove`.
@@ -793,15 +655,7 @@ Required:
 Output (stdout JSON):
   Empty (exit 0 on success).
 
-Exit codes:
-  0  Success
-  1  Database failure
-  2  Invalid or missing <comment-id>, an extra positional argument, or an
-     unknown flag
-  3  Missing -r
-  4  Comment not found (or roadmap not found)
-
-Examples:
+`+exitCodesBlock("task", "comment-remove")+`Examples:
   rmp task comment-remove -r myproject 12
   rmp task c-rm -r myproject 12
 `)

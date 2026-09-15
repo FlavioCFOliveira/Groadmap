@@ -1,39 +1,33 @@
 #!/usr/bin/env python3
 """
-Test 55: the published error strings of SPEC/COMMANDS.md and
-SPEC/STATE_MACHINE.md vs. what the binary prints (rmp tasks #277, #419, #456).
+Test 55: the published error strings of every SPEC file that publishes one vs.
+what the binary prints (rmp tasks #277, #419, #456, #458, #459, #463, #464, #486,
+#488, #489).
 
-SPEC/COMMANDS.md § "Published Error Strings Are Exact" (line ~44) states the
-convention: every error string the file publishes is the COMPLETE line the
-user reads on stderr -- the `Error: ` prefix and the sentinel included, never
-a message body alone and never a paraphrase. Nothing in the project detected
-a violation of that convention until now: an earlier sweep found 121 distinct
-published strings that were not what the binary printed (a quoted message body
-with the sentinel silently dropped), all fixed by hand against captured output
-from real invocations. Hand reconciliation is a one-time fix; nothing stopped
-the next edit from drifting again. This module is the gate: it extracts every
-string the file publishes, drives the compiled binary to reach as many of them
-as it can in a throwaway roadmap, and compares captured stderr against the
-published string CHARACTER FOR CHARACTER after placeholder substitution.
+SPEC/COMMANDS.md § "Published Error Strings Are Exact" states the convention and
+names the files it governs: every error string ARCHITECTURE.md, COMMANDS.md,
+DATABASE.md, DATA_FORMATS.md, GRAPH.md, HELP.md, MODELS.md and STATE_MACHINE.md
+publish is the COMPLETE line the user reads on stderr -- the `Error: ` prefix and
+the sentinel included, never a message body alone and never a paraphrase. An
+early sweep found 121 distinct published strings that were not what the binary
+printed, all fixed by hand against captured output; hand reconciliation is a
+one-time fix, and this module is the gate that section describes. It extracts
+every string the governed files publish, drives the compiled binary to reach as
+many of them as it can in a throwaway roadmap, and compares captured stderr
+against the published string CHARACTER FOR CHARACTER after placeholder
+substitution.
 
-The corpus reads TWO files. SPEC/COMMANDS.md is the original one. Since rmp
-task #456 it also reads SPEC/STATE_MACHINE.md, which publishes four strings:
-the two completion guards of the transition to COMPLETED, which are published
-NOWHERE else, and the deletion precondition and the immutability of a CLOSED
-sprint's order, which SPEC/COMMANDS.md publishes too. The file was invisible to
-this gate until then, and both completion guards had drifted -- each published
-its message body with the `validation error: ` sentinel dropped, and nothing
-detected it.
+The corpus reads the eight files SPEC_SOURCES names. It read SPEC/COMMANDS.md
+alone at first; rmp task #456 added SPEC/STATE_MACHINE.md, whose two completion
+guards had drifted unseen, and tasks #459 and #463 settled that the one
+placeholder table governs the whole specification, which brought in the other
+six. That a string published in more than one file is ONE corpus key rather than
+two is itself the parity proof between them: a single character of divergence
+splits the key, and the half no case claims is reported by
+test_zz_coverage_report as reached by nothing. A published string carries the
+file AND the line it was read from, so a failure names which file to open.
 
-That a string published in both files is ONE corpus key rather than two is
-itself the parity proof between them: a single character of divergence splits
-the key, and the half no case claims is reported by test_zz_coverage_report as
-reached by nothing. Every source file is listed in SPEC_SOURCES, and a
-published string carries the file AND the line it was read from, so a failure
-names which file to open.
-
-Extraction (see extract_table_corpus / extract_fenced_corpus below) recognises
-two structural loci a file uses to publish a string:
+Extraction recognises three loci a file uses to publish a string:
 
   1. Markdown tables: a data row whose column count matches its own separator
      row, scanning EVERY cell (not just the last -- some tables carry the
@@ -42,39 +36,32 @@ two structural loci a file uses to publish a string:
      unescapes `\\"` to `"`; a backtick span whose content is itself a
      double-quoted string (`` `"..."` ``) unwraps the outer literal quotes,
      because those quotes are the author's markup, not stderr's own.
-  2. Fenced code blocks: a bare line containing "Error:".
+  2. Fenced code blocks: a line containing "Error:". A line of a fenced JSON
+     document, such as `"stderr": "Error: ...\\n\\nAI agents: ..."`, publishes the
+     JSON string's decoded value up to its first newline, which is the line the
+     user reads.
+  3. Prose: every paragraph outside tables and fences, its line breaks joined,
+     contributes each backtick span (unwrapped as a cell's is) and each
+     double-quoted span outside a backtick span that carries `Error: ` followed
+     by text. A span that quotes a line as the WRONG form, to state what is not
+     printed, publishes nothing: NOT_PUBLISHED_SPANS names each with its reason,
+     and a name extraction no longer finds fails.
 
-A handful of genuine, distinct published strings live only in prose (not in
-any table or fence) -- verified by sweeping every remaining "Error:" line
-in the file and checking whether its quoted content already appears in the
-table/fence corpus. SUPPLEMENTAL_CORPUS lists exactly those for
-SPEC/COMMANDS.md and STATE_MACHINE_SUPPLEMENTAL_CORPUS for
-SPEC/STATE_MACHINE.md, each pinned to its line number with a runtime assertion
-that the source text has not moved out from under it. A hand list goes stale
-in silence, so STATE_MACHINE.md's is swept:
-test_state_machine_error_lines_are_accounted_for requires every "Error:" line
-of that file to contribute a string the corpus carries, which is what stops a
-fifth string from arriving there as invisibly as the first four did.
+SUPPLEMENTAL_CORPUS and STATE_MACHINE_SUPPLEMENTAL_CORPUS add strings no locus
+yields verbatim -- concrete instances a prose sentence derives from a template --
+each anchored to the text that derives it, with a runtime assertion that the
+anchor has not moved. test_state_machine_error_lines_are_accounted_for still
+requires every "Error:" line of SPEC/STATE_MACHINE.md to contribute a string.
 
-Three prose spans of SPEC/COMMANDS.md are deliberately NOT promoted: they
-restate a rule already published concretely by a table row (the numbered
-list under "Messages this rule governs", COMMANDS.md:218-232) rather than
-naming a new condition; EXCLUDED_TEMPLATE_LINES documents each one.
-
-Placeholders are the ones COMMANDS.md itself declares, and the table under
-"Published Error Strings Are Exact" declares all twelve: X, N, M, Y,
-<entity>, <field>, <flag>, <sentinel>, <detail>, <engine diagnostic>, <ids>
-and <absolute path of ~/.roadmaps>. That table states it is the complete
-set, so a placeholder published anywhere in the file and missing from it is
-a defect in the file rather than an omission here. Three of the rows carry
-no value enumeration of their own and point at the section that does:
-<field> at "Published Field Names in Validation Messages", <entity> and
-<sentinel> at "Entity Identifier Range (All Positional Ids and
---entity-id)", which lists the five entity words and the two sentinels.
-X/N/M/Y count only as whole words, and two messages print literal
-`<name>`/`<id>` that are NOT placeholders (the module proves both directions
--- see test_placeholder_rule_both_directions below).
-Because this module CHOOSES the offending value for every X/N/M/Y it drives,
+Placeholders are the ones the table under "Published Error Strings Are Exact"
+declares, read from the table itself rather than restated here, and the table
+states it governs every file. Some rows carry no value enumeration of their own
+and point at the section that does: <field> at "Published Field Names in
+Validation Messages", <entity> and <sentinel> at "Entity Identifier Range (All
+Positional Ids and --entity-id)". X/N/M/Y count only as whole words, and two
+messages print literal `<name>`/`<id>` that are NOT placeholders (the module
+proves both directions -- see test_placeholder_rule_both_directions below).
+Because this module CHOOSES the offending value for every placeholder it drives,
 substitution is exact string replacement against a value fixed before the
 command runs, and the comparison is full string equality against the whole
 published line -- never a regex, never a prefix-only check -- except for the
@@ -101,19 +88,35 @@ deletes, is perfectly hermetic and touches no shared infrastructure, so the
 row is now driven; only the SQLite diagnostic in the tail stays unasserted.
 That mistake is why the defect #319 fixed went unnoticed -- the binary printed
 no sentinel at all on those six rows and this gate reported green over them.
+The migration-failure line of SPEC/DATABASE.md is driven the same way.
 
-One check in this module compares nothing against the binary, because there is
-nothing to compare: test_published_stderr_rows_carry_the_error_prefix refuses a
-table row that publishes a failure's stderr WITHOUT the `Error: ` prefix. Such a
-row never enters CORPUS at all -- extraction collects only a quoted span
-containing "Error:" -- so every other assertion here passes over it in silence.
-That blindness is what let `sprint move-to`'s position line publish a bare
-message body until rmp task #331, and what let EVERY string of § Task
-Ordering stay a paraphrase until rmp task #419 -- eight lines across four
-tables, none of which this module could see. The rows known to violate
-it today are declared in UNPREFIXED_STDERR_ROWS with what was measured against
-the binary; each is outside the scope of the task that added the check, and the
-declaration is required to stay accurate in both directions.
+Three checks compare nothing against the binary, because they govern what the
+files publish rather than what the binary prints (COMMANDS.md § Published Error
+Strings Are Exact, "The gate", rules 1 to 3):
+
+  * test_every_bracketed_form_is_a_declared_placeholder refuses a bracketed form
+    in a published string that the placeholder table does not declare, other
+    than the two literal lines. It is the permanent form of the sweep rmp task
+    #463 ran by hand.
+  * test_published_stderr_rows_carry_the_error_prefix refuses a table row that
+    publishes the stderr of a failure WITHOUT the `Error: ` prefix. Such a row
+    never enters CORPUS -- extraction collects only a span containing "Error:"
+    -- so every other assertion here passes over it in silence. That blindness
+    is what let `sprint move-to`'s position line publish a bare message body
+    until rmp task #331, and EVERY string of § Task Ordering stay a paraphrase
+    until #419. UNPREFIXED_STDERR_ROWS declares the rows known to violate it,
+    and is required to stay accurate in both directions; it is empty since
+    #458 and #464 corrected the last two.
+  * test_the_governed_file_set_is_the_published_one refuses a difference between
+    the files SPEC_SOURCES reads, the files COMMANDS.md names, and the files
+    under SPEC/ that publish an `Error:` string.
+
+test_governance_checks_can_fail proves each of the three refuses a mutant.
+
+One line is published for stderr on a SUCCESSFUL path, and it is reached and
+compared exactly as an error line is: the warning `sprint close --force` writes.
+A table row whose exit code is 0 and whose stderr column quotes a line
+contributes that line to the corpus (extract_success_stderr_rows).
 
 The module's own final test method (test_zz_coverage_report, alphabetically
 last so it runs after every other check has had the chance to mark its key
@@ -154,6 +157,16 @@ SPEC_PATH = REPO_ROOT / "SPEC" / "COMMANDS.md"
 # key each, which is what makes the two files' agreement an assertion rather
 # than a hope.
 STATE_MACHINE_PATH = REPO_ROOT / "SPEC" / "STATE_MACHINE.md"
+
+# The other six files COMMANDS.md § Published Error Strings Are Exact names as
+# publishing an error string (rmp tasks #459 and #463).
+SPEC_DIR = REPO_ROOT / "SPEC"
+ARCHITECTURE_PATH = SPEC_DIR / "ARCHITECTURE.md"
+DATABASE_PATH = SPEC_DIR / "DATABASE.md"
+DATA_FORMATS_PATH = SPEC_DIR / "DATA_FORMATS.md"
+GRAPH_PATH = SPEC_DIR / "GRAPH.md"
+HELP_PATH = SPEC_DIR / "HELP.md"
+MODELS_PATH = SPEC_DIR / "MODELS.md"
 
 
 def _rel(path):
@@ -324,8 +337,17 @@ class ConflictingBoltServer:
     """
 
     def __init__(self, socket_path, failure_code=_CONFLICT_CODE,
-                 failure_message=_CONFLICT_MESSAGE):
+                 failure_message=_CONFLICT_MESSAGE, on_run="fail"):
         self.socket_path = socket_path
+        # What the listener does with a RUN. "fail" answers the failure below;
+        # "close" drops the connection without answering, which is a
+        # connection lost after the statement was sent; "silent" keeps the
+        # connection open and answers nothing, which is a server that does not
+        # answer within the caller's backstop. The last two reach the two
+        # socket lines whose outcome is unknown (COMMANDS.md § Graph Server
+        # Socket Error Lines).
+        assert on_run in ("fail", "close", "silent"), on_run
+        self._on_run = on_run
         # The code answered to every RUN. It defaults to the conflict, and is
         # a parameter so the SAME listener can stand in for the other
         # server-reported failure -- a statement the engine refuses -- which
@@ -408,6 +430,11 @@ class ConflictingBoltServer:
                 if tag == _TAG_RUN:
                     with self._lock:
                         self.runs += 1
+                    if self._on_run == "close":
+                        return
+                    if self._on_run == "silent":
+                        self._stop.wait(30)
+                        return
                     conn.sendall(self._failure)
                     continue
                 if tag in (_TAG_HELLO, _TAG_LOGON):
@@ -538,8 +565,22 @@ def extract_table_corpus(text):
     return corpus
 
 
+# A line of a fenced JSON document that is one member whose value is a string.
+_JSON_STRING_MEMBER_RE = re.compile(r'^\s*"[^"\\]*"\s*:\s*("(?:[^"\\]|\\.)*")\s*,?\s*$')
+
+
+def _fenced_line_string(line):
+    """The string one fenced line publishes: the decoded value of a JSON string
+    member up to its first newline, which is the line the user reads, or else
+    the line itself (extraction rule 2)."""
+    member = _JSON_STRING_MEMBER_RE.match(line)
+    if member:
+        return json.loads(member.group(1)).split("\n", 1)[0].strip()
+    return line.strip()
+
+
 def extract_fenced_corpus(text):
-    """Return {published_string: [1-based line numbers]} for every bare line
+    """Return {published_string: [1-based line numbers]} for every line
     containing "Error:" inside a fenced (``` ```) code block (extraction
     rule 2)."""
     corpus = {}
@@ -549,8 +590,205 @@ def extract_fenced_corpus(text):
             in_fence = not in_fence
             continue
         if in_fence and "Error:" in line:
-            corpus.setdefault(line.strip(), []).append(idx + 1)
+            corpus.setdefault(_fenced_line_string(line), []).append(idx + 1)
     return corpus
+
+
+# A span publishes an error string when it carries the prefix followed by text; a
+# span that only names the prefix (`Error: `) publishes nothing.
+_PUBLISHED_ERROR_RE = re.compile(r"Error: \S")
+
+
+def iter_prose_paragraphs(text):
+    """Yield `(first line number, paragraph)` for every paragraph outside the
+    tables and fenced blocks of `text`, its lines joined with single spaces, so a
+    span the author wrapped across two lines is read whole."""
+    in_fence = False
+    paragraph, first = [], 0
+    for number, line in enumerate(text.split("\n"), 1):
+        stripped = line.strip()
+        if stripped.startswith("```"):
+            in_fence = not in_fence
+        if in_fence or stripped.startswith("```") or _is_row(line) or not stripped:
+            if paragraph:
+                yield first, " ".join(paragraph)
+                paragraph = []
+            continue
+        if not paragraph:
+            first = number
+        paragraph.append(stripped)
+    if paragraph:
+        yield first, " ".join(paragraph)
+
+
+def _prose_error_spans(paragraph):
+    """Every span of a prose paragraph that publishes an error string: each
+    backtick span, unwrapped as a table cell's is, then each double-quoted span
+    outside a backtick span (extraction rule 3)."""
+    spans = []
+    for m in _BACKTICK_RE.finditer(paragraph):
+        content = m.group(1).strip()
+        if len(content) >= 2 and content[0] == '"' and content[-1] == '"':
+            content = content[1:-1].replace('\\"', '"')
+        spans.append(content)
+    outside = _BACKTICK_RE.sub(" ", paragraph)
+    spans += [m.group(1).replace('\\"', '"').strip() for m in _DQUOTE_RE.finditer(outside)]
+    return [s for s in spans if _PUBLISHED_ERROR_RE.search(s)]
+
+
+def extract_prose_corpus(text):
+    """Return {published_string: [1-based line numbers]} for every span a prose
+    paragraph publishes (extraction rule 3)."""
+    corpus = {}
+    for number, paragraph in iter_prose_paragraphs(text):
+        for s in _prose_error_spans(paragraph):
+            corpus.setdefault(s, []).append(number)
+    return corpus
+
+
+# Prose spans that carry an error line without publishing it. Each quotes a line
+# the specification says is NOT printed, and a gate that drove it would be
+# asserting the defect. Named with the reason, and required to stay found.
+NOT_PUBLISHED_SPANS = {
+    "Error: reading data directory /home/user/.roadmaps: I/O error": (
+        "SPEC/ARCHITECTURE.md § Wrapping Rules, rule 4, quotes this line as the order a "
+        "wrap must NOT produce -- the failure class after the detail -- beside the "
+        "`fmt.Errorf` call that would produce it. It is the counter-example of a rule; "
+        "the line the binary publishes for the same failure is COMMANDS.md's "
+        "`Error: I/O error: reading data directory <absolute path of ~/.roadmaps>`."
+    ),
+}
+
+
+def _exit_column(header):
+    """The index of a table's exit-code column, or None."""
+    return next((k for k, h in enumerate(header) if "exit" in h.strip().lower()), None)
+
+
+def _row_exits_zero(header, cells):
+    column = _exit_column(header)
+    return column is not None and column < len(cells) and cells[column].strip().strip("`") == "0"
+
+
+def extract_success_stderr_rows(text):
+    """Return {line: [1-based line numbers]} for every line a table publishes
+    for stderr on a SUCCESSFUL path: a row whose exit code is 0 and whose stderr
+    column quotes a line. COMMANDS.md § Published Error Strings Are Exact holds
+    such a line to the same comparison as an error line."""
+    corpus = {}
+    for number, header, cells in iter_table_rows(text):
+        if not _row_exits_zero(header, cells):
+            continue
+        for k, cell in enumerate(cells):
+            if k >= len(header) or "stderr" not in header[k].lower():
+                continue
+            for m in _DQUOTE_RE.finditer(cell):
+                span = m.group(1).replace('\\"', '"').strip()
+                if span:
+                    corpus.setdefault(span, []).append(number)
+    return corpus
+
+
+def unprefixed_failure_rows(text):
+    """`[(line number, column header, span)]` for every table row of `text`
+    that publishes the stderr of a FAILURE without the `Error: ` prefix. A row
+    whose exit code is 0 publishes a success path and is not governed; a span
+    that opens with the section mark cross-references where the line IS
+    published and is not a line."""
+    found = []
+    for number, header, cells in iter_table_rows(text):
+        if _row_exits_zero(header, cells):
+            continue
+        for k, cell in enumerate(cells):
+            if k >= len(header) or not _publishes_stderr(header[k]):
+                continue
+            if "Error:" in cell:
+                continue
+            spans = ([m.group(1) for m in _DQUOTE_RE.finditer(cell)] +
+                     [m.group(1) for m in _BACKTICK_RE.finditer(cell)])
+            for span in spans:
+                span = span.strip()
+                if not span or span.startswith("\u00a7"):
+                    continue
+                found.append((number, header[k].strip(), span))
+    return found
+
+
+_BRACKETED_RE = re.compile(r"<[^<>]+>")
+
+
+def declared_placeholders(commands_text):
+    """The placeholders the table under `Published Error Strings Are Exact`
+    declares, read from its first column."""
+    section = commands_text.split("### Published Error Strings Are Exact", 1)[1]
+    declared = set()
+    in_table = False
+    for line in section.split("\n"):
+        if line.startswith("| Placeholder |"):
+            in_table = True
+            continue
+        if not in_table:
+            continue
+        if not _is_row(line):
+            break
+        cells = _split_table_row(line)
+        if _is_separator_row(cells):
+            continue
+        declared.update(_BACKTICK_RE.findall(cells[1]))
+    return declared
+
+
+def literal_bracket_lines(commands_text):
+    """The two lines whose angle brackets the binary prints literally, read from
+    the paragraph that names them."""
+    flat = re.sub(r"\s+", " ", commands_text)
+    paragraph = re.search(
+        r"\*\*Angle brackets are not always a placeholder\.\*\*(.*?)"
+        r"Only the bracketed forms", flat)
+    assert paragraph, (
+        "SPEC/COMMANDS.md no longer carries the paragraph naming the two literal "
+        "bracket lines; re-anchor literal_bracket_lines")
+    return {s for s in _BACKTICK_RE.findall(paragraph.group(1)) if s.startswith("Error: ")}
+
+
+def undeclared_bracketed_forms(corpus, declared, literal_lines):
+    """`[(where, form, string)]` for every bracketed form a published string
+    carries that the placeholder table does not declare, the two literal lines
+    excepted (COMMANDS.md § Published Error Strings Are Exact, "The gate",
+    rule 1)."""
+    found = []
+    for s, where in corpus.items():
+        if s in literal_lines:
+            continue
+        for form in _BRACKETED_RE.findall(s):
+            if form not in declared:
+                found.append((where, form, s))
+    return found
+
+
+def named_governed_files(commands_text):
+    """The files COMMANDS.md § Published Error Strings Are Exact names as the
+    ones that publish an error string."""
+    flat = re.sub(r"\s+", " ", commands_text)
+    sentence = re.search(r"The files that publish one are (.*?)\. No file defines", flat)
+    assert sentence, (
+        "SPEC/COMMANDS.md no longer carries the sentence naming the files that publish "
+        "an error string; re-anchor named_governed_files")
+    return set(_BACKTICK_RE.findall(sentence.group(1)))
+
+
+def published_error_strings(text):
+    """Every error string a file's tables, fences and prose publish, the
+    counter-examples NOT_PUBLISHED_SPANS names excluded."""
+    found = set(extract_table_corpus(text)) | set(extract_fenced_corpus(text)) | set(
+        extract_prose_corpus(text))
+    return {s for s in found if _PUBLISHED_ERROR_RE.search(s) and s not in NOT_PUBLISHED_SPANS}
+
+
+def files_publishing_error_strings(texts):
+    """The names, among `{name: text}`, of the files that publish an error
+    string (COMMANDS.md § Published Error Strings Are Exact, "The gate", rule 3)."""
+    return {name for name, text in texts.items() if published_error_strings(text)}
 
 
 # A handful of genuine published strings live only in prose: verified by hand
@@ -605,25 +843,6 @@ SUPPLEMENTAL_CORPUS = [
     ),
 ]
 
-# Three prose spans that ARE complete, well-formed "Error:" strings but are
-# deliberately NOT promoted into the corpus: COMMANDS.md:218-232, under the
-# heading "Messages this rule governs", restates -- as a numbered list, using
-# the same <field> placeholder -- the three message templates that
-# `Published Field Names in Validation Messages` already governs, and two of
-# the three (control-character and UTF-8) are ALSO published verbatim by
-# table rows 477 and 476. The third (length-cap, line 224) has no verbatim
-# table counterpart in generic <field>/N form, but every field the length cap
-# governs is already tested concretely via the CORPUS entries at lines
-# 469/472/473/474/475 (title/functional_requirements/technical_requirements/
-# acceptance_criteria/description/completion_summary/body, each with its own
-# concrete number) -- so the generic template adds no new condition to drive
-# against the binary, only a restatement of one already covered. Line numbers
-# are of the "Messages this rule governs" bullets themselves.
-EXCLUDED_TEMPLATE_LINES = {
-    223: "control-character rule statement, concretely published at table row 477",
-    225: "length-cap rule statement, concretely published at table rows 469/472/473/474/475",
-    328: "UTF-8 rule statement, concretely published at table row 476",
-}
 
 
 # SPEC/STATE_MACHINE.md publishes its two completion-guard strings in tables,
@@ -650,11 +869,19 @@ STATE_MACHINE_SUPPLEMENTAL_CORPUS = [
 ]
 
 
-# Every file whose published strings this module gates, with the prose list
-# that file needs. Adding a file here is all it takes for its tables and its
-# fences to be read; only its prose needs a hand list.
+# Every file whose published strings this module gates, with the derived
+# strings that file needs. Adding a file here is all it takes for its tables,
+# fences and prose to be read; test_the_governed_file_set_is_the_published_one
+# holds this tuple to the files COMMANDS.md names and to the files that do
+# publish a string.
 SPEC_SOURCES = (
+    (ARCHITECTURE_PATH, []),
     (SPEC_PATH, SUPPLEMENTAL_CORPUS),
+    (DATABASE_PATH, []),
+    (DATA_FORMATS_PATH, []),
+    (GRAPH_PATH, []),
+    (HELP_PATH, []),
+    (MODELS_PATH, []),
     (STATE_MACHINE_PATH, STATE_MACHINE_SUPPLEMENTAL_CORPUS),
 )
 
@@ -666,8 +893,14 @@ def corpus_of(path, supplemental):
     lines = text.split("\n")
     name = _rel(path)
 
-    found = extract_table_corpus(text)
-    for s, line_nos in extract_fenced_corpus(text).items():
+    found = {}
+    for extractor in (extract_table_corpus, extract_fenced_corpus, extract_prose_corpus):
+        for s, line_nos in extractor(text).items():
+            # A cell or a fence that only names the prefix (`Error:`) publishes
+            # no line, and a counter-example publishes none either.
+            if _PUBLISHED_ERROR_RE.search(s) and s not in NOT_PUBLISHED_SPANS:
+                found.setdefault(s, []).extend(line_nos)
+    for s, line_nos in extract_success_stderr_rows(text).items():
         found.setdefault(s, []).extend(line_nos)
 
     for anchor, s in supplemental:
@@ -763,6 +996,27 @@ EXEMPT_KEYS = {
         "like 10.0.0.5 is itself environment-dependent (routable only on "
         "hosts that do not own that address)."
     ),
+    "Error: database error: cannot secure <path> to 0600: <detail>": (
+        "SPEC/ARCHITECTURE.md § Database File Permissions: the line is written when "
+        "the database file cannot be brought to mode 0600 -- the mode change fails, "
+        "or reports success on a filesystem that records no POSIX permission bits. "
+        "The owner of a file on the local filesystems a test HOME lives on can always "
+        "change its mode, so reaching the line needs a foreign filesystem mounted for "
+        "the purpose, which no hermetic invocation has."
+    ),
+    "Error: database error: cannot secure /home/user/.roadmaps/project1/project.db to 0600: chmod /home/user/.roadmaps/project1/project.db: operation not permitted": (
+        "SPEC/ARCHITECTURE.md publishes this as the complete example of the line above, "
+        "for a HOME of /home/user; it is unreachable for the same reason, and its path "
+        "is not one a hermetic invocation owns."
+    ),
+    "Error: <detail>": (
+        "SPEC/HELP.md § Error message format publishes the SHAPE every failing "
+        "invocation's line takes, with <detail> standing for the whole message after "
+        "the prefix. It is not a line of its own: every line of that shape is published "
+        "in full by an error table, and each of those is a key of this corpus driven "
+        "on its own. A head of `Error: ` alone carries no sentinel, so the shape "
+        "cannot be narrowed either (see TAIL_EXEMPT_KEYS)."
+    ),
 }
 
 
@@ -802,54 +1056,59 @@ TAIL_EXEMPT_KEYS = {
         "exact wording belongs to modernc.org/sqlite and is not specified by "
         "COMMANDS.md."
     ),
+    "Error: graph server error: graph server unreachable at <socket>: <detail>": (
+        "<detail>",
+        "COMMANDS.md § Graph Server Socket Error Lines: what follows the resolved "
+        "socket is the operating system's or the protocol library's account of why "
+        "the handshake did not complete -- for a regular file at the socket path, a "
+        "connect refusal -- which this project does not word."
+    ),
+    "Error: graph server error: cannot bind <socket>: <detail>": (
+        "<detail>",
+        "COMMANDS.md § Graph Server Socket Error Lines states that the part rmp fixes "
+        "is everything up to and including `cannot bind <socket>: `; the text after it "
+        "is the operating system's."
+    ),
+    "Error: running migrations: migration <version> failed: applying migration: <step>: <detail>": (
+        "<detail>",
+        "SPEC/DATABASE.md § The failure surface: <detail> is the SQLite driver's "
+        "diagnostic, whose wording belongs to modernc.org/sqlite. The head, the "
+        "migration's version and the step it names in its own words, is asserted."
+    ),
 }
 
 
 # A column header under which a table publishes what the user reads on stderr.
-# The spellings are MEASURED, not guessed: across the two files SPEC_SOURCES
-# names, the headers of cells that carry an `Error:` string are `stderr
+# The spellings are MEASURED, not guessed: across the eight files SPEC_SOURCES
+# names, the stderr headers of cells that carry an `Error:` string are `stderr
 # Output`, `stderr`, `Error Message (stderr)`, `Error line`, `Output`,
 # `Message`, `Message on stderr` and `Error`, and this predicate accepts
-# exactly that set without enumerating it.
+# exactly that set without enumerating it. Two headers of those files carry
+# the same words and publish no error line: `Source Error` (SPEC/ARCHITECTURE.md,
+# the Go error a sentinel is mapped from) and `Recovery help written to stderr`
+# (SPEC/HELP.md, the help invocation whose body follows a dispatch failure).
+# A header naming a source or a help is therefore not a stderr line's column.
 def _publishes_stderr(header_cell):
     h = header_cell.strip().lower()
+    if "source" in h or "help" in h:
+        return False
     return "stderr" in h or "error" in h or "message" in h or h == "output"
 
 
 # Rows that publish a failure's stderr WITHOUT the `Error: ` prefix, and are
 # therefore invisible to extraction: no string of theirs enters CORPUS, so no
-# assertion in this module compares them against anything. Each is declared
-# with what was MEASURED against the binary.
+# assertion in this module compares them against anything. A row known to
+# violate the rule is declared here with what was MEASURED against the binary,
+# and the declaration is required to stay accurate in BOTH directions -- a row
+# corrected without its entry being deleted fails
+# test_published_stderr_rows_carry_the_error_prefix as a stale declaration.
 #
-# Both are OUTSIDE the scope of rmp task #419, which added this check and owns
-# `§ Task Ordering` alone; they are reported to the roadmap owner rather than
-# corrected here. The declaration is required to stay accurate in BOTH
-# directions -- a row corrected without its entry being deleted fails
-# test_published_stderr_rows_carry_the_error_prefix as a stale declaration --
-# so this table cannot quietly become a list of things nobody is fixing.
-UNPREFIXED_STDERR_ROWS = {
-    "Sprint not found": (
-        "SPEC/COMMANDS.md \u00a7 Show Sprint Status Report. MEASURED: "
-        "`rmp sprint show -r <name> 900000001` writes "
-        "'Error: resource not found: sprint 900000001' and exits 4, so the "
-        "published cell is a paraphrase that carries neither the prefix, nor "
-        "the sentinel, nor the id -- three of the four things a reader would "
-        "compare. This section is reported as owned by rmp tasks #458/#459; verify with `rmp task get` before assuming the row is unowned."
-    ),
-    "invalid input: sprint #N has M active task(s) still in progress: "
-    "#ID (STATUS), ... \u2014 use --force to close anyway": (
-        "SPEC/COMMANDS.md \u00a7 Sprint Lifecycle, the active-task safety check of "
-        "`sprint close`. MEASURED against a sprint holding three active "
-        "tasks: 'Error: validation error: sprint #1 has 3 active task(s) "
-        "still in progress: #1 (TESTING), #6 (TESTING), #7 (SPRINT) \u2014 use "
-        "--force to close anyway', exit 6. TWO defects, not one: the "
-        "`Error: ` prefix is missing, AND the published sentinel "
-        "`invalid input: ` is not the one the binary writes "
-        "(`validation error: `) -- which is also the sentinel this row's own "
-        "exit code 6 implies, so the row contradicts itself as well as the "
-        "binary. Reported to the roadmap owner."
-    ),
-}
+# It is empty. Its last two entries, the `Sprint not found` paraphrase of
+# § Show Sprint Status Report and the unprefixed active-tasks refusal of
+# § Sprint Lifecycle, were republished by rmp tasks #458 and #464 and are driven
+# by test_sprint_close_active_tasks_refusal_and_force_warning and
+# test_sprint_task_management_errors.
+UNPREFIXED_STDERR_ROWS = {}
 
 
 # X, N, M, Y count only as WHOLE WORDS (COMMANDS.md:54-66): a bare letter
@@ -918,7 +1177,7 @@ class TestErrorStringParity:
     # Invocation helpers
     # ------------------------------------------------------------------
 
-    def run_stdin(self, args, input_text=None, stdin_fd=None):
+    def run_stdin(self, args, input_text=None, stdin_fd=None, timeout=None):
         """Run the CLI with `input_text` (or a closed/empty stdin when None)
         piped in, returning (exit_code, stdout, stderr).
 
@@ -936,6 +1195,7 @@ class TestErrorStringParity:
                 capture_output=True,
                 text=True,
                 env=env,
+                timeout=timeout,
             )
             return result.returncode, result.stdout, result.stderr
         result = subprocess.run(
@@ -944,10 +1204,11 @@ class TestErrorStringParity:
             capture_output=True,
             text=True,
             env=env,
+            timeout=timeout,
         )
         return result.returncode, result.stdout, result.stderr
 
-    def check(self, key, args, exit_code, subs=None, stdin=None, note=""):
+    def check(self, key, args, exit_code, subs=None, stdin=None, note="", timeout=None):
         """The gate's core assertion: run `args` with stdin ALWAYS under this
         module's explicit control (empty by default -- never the inherited
         stdin of the process running the suite, which would make the result
@@ -959,7 +1220,7 @@ class TestErrorStringParity:
             f"SPEC/COMMANDS.md: {key!r} ({note})"
         )
         expected = subst(key, subs or {})
-        rc, out, err = self.run_stdin(args, stdin)
+        rc, out, err = self.run_stdin(args, stdin, timeout=timeout)
         actual_line = err.splitlines()[0] if err else ""
         assert rc == exit_code, (
             f"[{note or key}] exit code: expected {exit_code}, got {rc}\n"
@@ -979,7 +1240,7 @@ class TestErrorStringParity:
         REACHED.add(key)
 
     def check_head(self, key, args, exit_code, tail_contains, subs=None,
-                   stdin=None, note="", stdin_fd=None):
+                   stdin=None, note="", stdin_fd=None, timeout=None):
         """The narrowed form of `check`, for the keys TAIL_EXEMPT_KEYS names.
 
         Everything BEFORE the named placeholder is compared character for
@@ -1018,7 +1279,7 @@ class TestErrorStringParity:
             f"sentinel -- narrowing it would assert nothing of substance"
         )
 
-        rc, out, err = self.run_stdin(args, stdin, stdin_fd=stdin_fd)
+        rc, out, err = self.run_stdin(args, stdin, stdin_fd=stdin_fd, timeout=timeout)
         actual_line = err.splitlines()[0] if err else ""
         assert rc == exit_code, (
             f"[{note or key}] exit code: expected {exit_code}, got {rc}\n"
@@ -1756,6 +2017,37 @@ class TestErrorStringParity:
             ["task", "remove-dep", "-r", r, str(task_a), str(task_b)], 4,
             subs={"N": str(task_a), "M": str(task_b)}, note="remove-dep not found",
         )
+
+        # #486: each of the two ids is refused under both rules of § Entity
+        # Identifier Range, and the line names the id at fault -- `dependency
+        # task` in the format line and `dependency_task_id` in the range line for
+        # the second. Both subcommands publish all four rows, so both are driven,
+        # and every offending value is different so a line that ignored the value
+        # could not pass.
+        for sub, dep_token, dep_range, task_token, task_range in (
+            ("add-dep", "blocker7", "2147483648", "seventh", "0"),
+            ("remove-dep", "88x", "-4", "twelfth", "99999999999"),
+        ):
+            self.check(
+                'Error: invalid input: invalid dependency task ID: "X" (must be a positive integer)',
+                ["task", sub, "-r", r, str(task_a), dep_token], 2,
+                subs={"X": dep_token}, note=f"{sub} non-integer dependency id",
+            )
+            self.check(
+                "Error: validation error: dependency_task_id must be between 1 and 2147483647, got N",
+                ["task", sub, "-r", r, str(task_a), dep_range], 6,
+                subs={"N": dep_range}, note=f"{sub} dependency id out of range",
+            )
+            self.check(
+                'Error: invalid input: invalid task ID: "X" (must be a positive integer)',
+                ["task", sub, "-r", r, task_token, str(task_b)], 2,
+                subs={"X": task_token}, note=f"{sub} non-integer task id",
+            )
+            self.check(
+                "Error: validation error: task_id must be between 1 and 2147483647, got N",
+                ["task", sub, "-r", r, task_range, str(task_b)], 6,
+                subs={"N": task_range}, note=f"{sub} task id out of range",
+            )
 
     # ------------------------------------------------------------------
     # `task comment-add` / `comment-edit` / friends
@@ -3672,6 +3964,381 @@ class TestErrorStringParity:
     # its own key reached.
     # ------------------------------------------------------------------
 
+    # ------------------------------------------------------------------
+    # SPEC/COMMANDS.md § Sprint Lifecycle: the active-task refusal of
+    # `sprint close` and the warning `--force` writes (rmp tasks #458, #464)
+    # ------------------------------------------------------------------
+
+    def test_sprint_close_active_tasks_refusal_and_force_warning(self):
+        """The refusal and the warning name the same tasks the same way.
+
+        `<id-status-list>` names every task of the sprint in SPRINT, DOING or
+        TESTING with its status, in the order the tasks hold in the sprint, and
+        no member in any other status. The sprint is therefore built so that
+        each of those properties is observable: its members are added out of id
+        order, one of each active status is present, and a COMPLETED member sits
+        between them. The expected list is read back from `sprint tasks`, which
+        writes the members in sprint order, rather than assumed.
+        """
+        r = self.roadmap
+        refusal = ("Error: validation error: sprint #N has M active task(s) still in "
+                   "progress: <id-status-list> \u2014 use --force to close anyway")
+        warning = "warning: closing sprint #N with M incomplete task(s): <id-status-list>"
+
+        planned = self.mk_task("Add idempotency keys to the refund endpoint", self.FR, self.TR, self.AC)
+        started = self.mk_task("Page the on-call engineer on checkout 5xx bursts", self.FR, self.TR, self.AC)
+        in_review = self.mk_task("Emit checkout latency histograms to the metrics pipeline",
+                                 self.FR, self.TR, self.AC)
+        shipped = self.mk_task("Retire the legacy payment status poller", self.FR, self.TR, self.AC)
+
+        sprint_id = self.mk_sprint("Checkout reliability", self.SPRINT_DESC)
+        order = [in_review, shipped, planned, started]
+        self.test.run_cmd(["sprint", "add-tasks", "-r", r, str(sprint_id), ",".join(map(str, order))])
+        self.test.run_cmd(["sprint", "start", "-r", r, str(sprint_id)])
+        for task, statuses in ((started, ["DOING"]),
+                               (in_review, ["DOING", "TESTING"]),
+                               (shipped, ["DOING", "TESTING", "COMPLETED"])):
+            for status in statuses:
+                flags = (["--commit-open", COMMIT_OPEN_HASH] if status == "DOING" else
+                         ["--commit-close", COMMIT_CLOSE_HASH] if status == "COMPLETED" else [])
+                self.test.run_cmd(["task", "stat", "-r", r, str(task), status] + flags)
+
+        members = self.test.run_cmd_json(["sprint", "tasks", "-r", r, str(sprint_id)])
+        assert [m["id"] for m in members] == order, (
+            f"the sprint does not hold its members in the order they were added: "
+            f"{[m['id'] for m in members]}, want {order}")
+        active = [m for m in members if m["status"] in ("SPRINT", "DOING", "TESTING")]
+        listing = ", ".join(f"#{m['id']} ({m['status']})" for m in active)
+        assert listing == f"#{in_review} (TESTING), #{planned} (SPRINT), #{started} (DOING)", listing
+
+        subs = {"N": str(sprint_id), "M": str(len(active)), "<id-status-list>": listing}
+        self.check(refusal, ["sprint", "close", "-r", r, str(sprint_id)], 6, subs=subs,
+                   note="sprint close with three active tasks")
+        self.check(warning, ["sprint", "close", "-r", r, str(sprint_id), "--force"], 0, subs=subs,
+                   note="sprint close --force with three active tasks")
+        closed = self.test.run_cmd_json(["sprint", "get", "-r", r, str(sprint_id)])
+        assert closed["status"] == "CLOSED", f"--force did not close the sprint: {closed['status']}"
+
+        # One active task keeps the same wording.
+        lone = self.mk_task("Rotate the payment provider webhook secret", self.FR, self.TR, self.AC)
+        second = self.mk_sprint("Webhook hygiene", self.SPRINT_DESC)
+        self.test.run_cmd(["sprint", "add-tasks", "-r", r, str(second), str(lone)])
+        self.test.run_cmd(["sprint", "start", "-r", r, str(second)])
+        self.check(refusal, ["sprint", "close", "-r", r, str(second)], 6,
+                   subs={"N": str(second), "M": "1", "<id-status-list>": f"#{lone} (SPRINT)"},
+                   note="sprint close with one active task")
+
+    # ------------------------------------------------------------------
+    # SPEC/COMMANDS.md § Sprint Task Operations: the CLOSED refusals of
+    # `move-tasks` and `add-tasks`, and the capacity line (rmp tasks #488, #489)
+    # ------------------------------------------------------------------
+
+    def test_sprint_closed_and_capacity_refusals(self):
+        r = self.roadmap
+        member = self.mk_task("Add idempotency keys to the refund endpoint", self.FR, self.TR, self.AC)
+        outsider = self.mk_task("Reconcile settlement totals against the provider daily report",
+                                self.FR, self.TR, self.AC)
+        second = self.mk_task("Retry provider webhooks with exponential backoff and a cap",
+                              self.FR, self.TR, self.AC)
+        third = self.mk_task("Add a dead-letter queue for payouts the provider rejects twice",
+                             self.FR, self.TR, self.AC)
+
+        closed = self.mk_sprint("Payments hardening, second quarter", self.SPRINT_DESC)
+        self.test.run_cmd(["sprint", "start", "-r", r, str(closed)])
+        self.test.run_cmd(["sprint", "close", "-r", r, str(closed)])
+        planned = self.mk_sprint("Payments hardening, third quarter", self.SPRINT_DESC)
+        self.test.run_cmd(["sprint", "add-tasks", "-r", r, str(planned), str(member)])
+
+        from_line = "Error: validation error: cannot move tasks from sprint #N: sprint is CLOSED"
+        to_line = "Error: validation error: cannot move tasks to sprint #N: sprint is CLOSED"
+        self.check(from_line, ["sprint", "move-tasks", "-r", r, str(closed), str(planned), str(member)], 6,
+                   subs={"N": str(closed)}, note="move-tasks from a CLOSED sprint")
+        # The source is resolved and checked before the destination is looked up,
+        # so a CLOSED source is refused even when the destination does not exist.
+        self.check(from_line, ["sprint", "move-tasks", "-r", r, str(closed), str(self.missing_id),
+                               str(member)], 6,
+                   subs={"N": str(closed)}, note="move-tasks from a CLOSED sprint to an absent one")
+        self.check(to_line, ["sprint", "move-tasks", "-r", r, str(planned), str(closed), str(member)], 6,
+                   subs={"N": str(closed)}, note="move-tasks to a CLOSED sprint")
+        self.check("Error: validation error: cannot add tasks to sprint #N: sprint is CLOSED",
+                   ["sprint", "add-tasks", "-r", r, str(closed), str(outsider)], 6,
+                   subs={"N": str(closed)}, note="add-tasks to a CLOSED sprint")
+
+        capped = self.mk_sprint("Capacity-bounded refund work", self.SPRINT_DESC, extra=["--max-tasks", "2"])
+        self.test.run_cmd(["sprint", "add-tasks", "-r", r, str(capped), str(outsider)])
+        shown = self.test.run_cmd_json(["sprint", "show", "-r", r, str(capped)])
+        load, cap = shown["current_load"], shown["max_tasks"]
+        assert (load, cap) == (1, 2), f"the capped sprint reads {load}/{cap}, want 1/2"
+        # Three ids naming two distinct tasks: N is the number of DISTINCT ids.
+        self.check(
+            "Error: validation error: adding N task(s) would exceed sprint #M capacity (<load>/<cap> tasks active)",
+            ["sprint", "add-tasks", "-r", r, str(capped), f"{second},{third},{second}"], 6,
+            subs={"N": "2", "M": str(capped), "<load>": str(load), "<cap>": str(cap)},
+            note="add-tasks past the capacity cap")
+
+    # ------------------------------------------------------------------
+    # Lines published in prose, in COMMANDS.md and in the other governed files
+    # ------------------------------------------------------------------
+
+    def test_lines_published_in_prose(self):
+        r = self.roadmap
+        long_title = ("Reconcile settlement totals against the provider daily report " * 5)[:256]
+        assert len(long_title) == 256
+        self.check(
+            "Error: field exceeds maximum size: <field> exceeds maximum length of N characters",
+            ["task", "create", "-r", r, "-t", long_title, "-fr", self.FR, "-tr", self.TR, "-ac", self.AC], 6,
+            subs={"<field>": "title", "N": "255"}, note="length cap, stated as a rule")
+
+        # COMMANDS.md § Positional Arguments, the arity criteria and rule 5.
+        self.check('Error: invalid input: unexpected argument "beta-service"',
+                   ["roadmap", "create", "alpha-service", "beta-service"], 2, note="roadmap create surplus")
+        assert not (self.test.home_dir / ".roadmaps" / "alpha-service").exists(), (
+            "a refused roadmap create created alpha-service")
+        for argv in (["version", "check"], ["--version", "check"], ["-v", "check"]):
+            self.check('Error: invalid input: unexpected argument "check"', argv, 2, note=" ".join(argv))
+        for argv in (["help", "sprint"], ["--help", "sprint"], ["-h", "sprint"]):
+            self.check('Error: invalid input: unexpected argument "sprint"', argv, 2, note=" ".join(argv))
+        self.check('Error: invalid input: unexpected argument "10"',
+                   ["backlog", "show-next", "5", "10", "-r", r], 2, note="backlog show-next surplus")
+        for argv in (["task", "get", "-r", r, "--foo"], ["task", "prio", "-r", r, "--foo", "1", "3"]):
+            self.check('Error: invalid input: invalid task ID: "--foo" (must be a positive integer)',
+                       argv, 2, note=" ".join(argv))
+        self.check("Error: invalid input: unknown flag: -z", ["task", "list", "-r", r, "-z=1"], 2,
+                   note="joined unknown short flag")
+        for sub in ("serve", "client"):
+            self.check("Error: invalid input: unknown flag: --zzz", ["graph", sub, "-r", r, "--zzz=1"], 2,
+                       note=f"graph {sub} joined unknown flag", timeout=60)
+
+        # HELP.md § Help tokens: a help token joined to a value is an unknown flag.
+        self.check("Error: invalid input: unknown flag: --help", ["task", "list", "-r", r, "--help=1"], 2,
+                   note="--help=1")
+        self.check("Error: invalid input: unknown flag: -h", ["task", "list", "-r", r, "-h=1"], 2,
+                   note="-h=1")
+
+        # COMMANDS.md and HELP.md: `help` is a reserved roadmap name.
+        self.check('Error: validation error: "help": roadmap name is a reserved system name',
+                   ["task", "list", "-r", "help"], 6, note="-r help")
+
+        # COMMANDS.md § Note on assign and unassign: the template itself.
+        self.check("Error: unknown task subcommand: X", ["task", "reassign"], 127,
+                   subs={"X": "reassign"}, note="unresolved task subcommand template")
+
+        # GRAPH.md acceptance criterion 25.
+        self.check('Error: invalid input: unexpected argument "stray" (graph queries use --query or stdin)',
+                   ["graph", "client", "-r", r, "--query", "MATCH (n:Incident) RETURN n", "stray"], 2,
+                   note="graph client stray positional")
+
+        # ARCHITECTURE.md § Error Output, the general error example.
+        self.check("Error: resource not found: task 999 not found", ["task", "get", "-r", r, "999"], 4,
+                   note="task get of an absent id")
+
+    # ------------------------------------------------------------------
+    # SPEC/COMMANDS.md § Graph Server Socket Error Lines
+    # ------------------------------------------------------------------
+
+    def _another_roadmap(self, role):
+        name = f"{ROADMAP_PREFIX}{role}_{uuid.uuid4().hex[:6]}"
+        self.test.run_cmd(["roadmap", "create", name])
+        return name
+
+    def test_graph_server_socket_lines(self):
+        """Every line of the section, each by the condition the section names.
+
+        Two need a server that behaves as no real one can be made to on demand
+        -- one that drops the connection after the statement, and one that stays
+        silent -- and are driven against the scripted listener. The rest are
+        driven against real servers and real paths.
+        """
+        r = self.roadmap
+        home = str(self.test.home_dir)
+        statement = "MATCH (n:Component {key:'internal/graphclient'}) RETURN n.key"
+
+        derived = self.test.default_socket_path(r)
+        self.check("Error: graph server error: no graph server is listening on <socket>",
+                   ["graph", "client", "-r", r, "--query", statement], 1,
+                   subs={"<socket>": derived}, note="no server listening", timeout=60)
+
+        unserved = self._another_roadmap("regular_file")
+        not_a_socket = self.test.default_socket_path(unserved)
+        with open(not_a_socket, "w", encoding="utf-8") as fh:
+            fh.write("not a socket\n")
+        self.check_head("Error: graph server error: graph server unreachable at <socket>: <detail>",
+                        ["graph", "client", "-r", unserved, "--query", statement], 1, (),
+                        subs={"<socket>": not_a_socket}, note="a regular file at the socket path",
+                        timeout=60)
+
+        missing_directory = os.path.join(home, "no-such-directory", "graph.sock")
+        self.check_head("Error: graph server error: cannot bind <socket>: <detail>",
+                        ["graph", "serve", "-r", r, "--socket", missing_directory], 1, (),
+                        subs={"<socket>": missing_directory}, note="socket directory absent", timeout=60)
+
+        shared = os.path.join(home, "shared.sock")
+        self.test.start_graph_server(r, socket_path=shared)
+        neighbour = self._another_roadmap("neighbour")
+        self.check("Error: graph server error: a graph server is already serving <socket>",
+                   ["graph", "serve", "-r", neighbour, "--socket", shared], 1,
+                   subs={"<socket>": shared}, note="a live server on the socket", timeout=60)
+        self.check('Error: graph store error: cannot take the graph store lock for roadmap "X": '
+                   'another rmp graph serve may already be running for it',
+                   ["graph", "serve", "-r", r, "--socket", os.path.join(home, "second.sock")], 1,
+                   subs={"X": r}, note="a second server for the same roadmap", timeout=60)
+
+        lost = self._another_roadmap("lost")
+        lost_socket = self.test.default_socket_path(lost)
+        with ConflictingBoltServer(lost_socket, on_run="close") as server:
+            self.check("Error: graph server error: the connection to the graph server at <socket> "
+                       "was lost; the statement's outcome is unknown",
+                       ["graph", "client", "-r", lost, "--query", statement], 1,
+                       subs={"<socket>": lost_socket}, note="connection dropped after RUN", timeout=60)
+        assert server.runs == 1, f"the listener saw {server.runs} RUN message(s), want exactly one"
+
+        silent = self._another_roadmap("silent")
+        silent_socket = self.test.default_socket_path(silent)
+        with ConflictingBoltServer(silent_socket, on_run="silent") as server:
+            began = time.monotonic()
+            self.check("Error: graph server error: the graph server at <socket> did not answer "
+                       "within 7.5s; the statement's outcome is unknown",
+                       ["graph", "client", "-r", silent, "--query", statement], 1,
+                       subs={"<socket>": silent_socket}, note="server silent after RUN", timeout=60)
+            waited = time.monotonic() - began
+        assert server.runs == 1, f"the listener saw {server.runs} RUN message(s), want exactly one"
+        assert waited >= 7.0, (
+            f"the client gave up after {waited:.2f}s, before its 7.5s backstop: whatever "
+            f"ended the wait, it was not the backstop")
+
+    # ------------------------------------------------------------------
+    # SPEC/DATABASE.md § The failure surface: a migration that fails
+    # ------------------------------------------------------------------
+
+    def test_migration_failure_line(self):
+        """A migration that fails is reported through the ordinary path.
+
+        The database is this module's own: its schema version is set back to
+        1.12.0 and a TABLE is left under the name the 1.13.0 migration gives its
+        unique index, so the index step fails however the repair before it goes.
+        That is the SPEC's own example line, and it leaves the version where it
+        was.
+        """
+        r = self.roadmap
+        db_path = self.test.home_dir / ".roadmaps" / r / "project.db"
+        conn = sqlite3.connect(str(db_path))
+        try:
+            conn.execute("DROP INDEX IF EXISTS idx_sprint_tasks_order")
+            conn.execute("CREATE TABLE idx_sprint_tasks_order (blocks_the_index_name INTEGER)")
+            conn.execute("UPDATE _metadata SET value = '1.12.0' WHERE key = 'schema_version'")
+            conn.commit()
+        finally:
+            conn.close()
+
+        self.check_head(
+            "Error: running migrations: migration <version> failed: applying migration: <step>: <detail>",
+            ["task", "list", "-r", r], 1, (),
+            subs={"<version>": "1.13.0", "<step>": "creating unique idx_sprint_tasks_order"},
+            note="migration 1.13.0 index step fails")
+
+        conn = sqlite3.connect(str(db_path))
+        try:
+            version = conn.execute(
+                "SELECT value FROM _metadata WHERE key = 'schema_version'").fetchone()[0]
+        finally:
+            conn.close()
+        assert version == "1.12.0", (
+            f"the failed migration left schema_version {version!r}, want the previous 1.12.0")
+
+    # ------------------------------------------------------------------
+    # Governance: what the files publish (COMMANDS.md § Published Error
+    # Strings Are Exact, "The gate", rules 1 to 3)
+    # ------------------------------------------------------------------
+
+    def test_every_bracketed_form_is_a_declared_placeholder(self):
+        text = SPEC_PATH.read_text(encoding="utf-8")
+        declared = declared_placeholders(text)
+        literal = literal_bracket_lines(text)
+        assert {"<field>", "<detail>", "<socket>", "<ids>", "<id-status-list>"} <= declared, (
+            f"the placeholder table was not read: {sorted(declared)}")
+        assert len(literal) == 2, f"expected the two literal bracket lines, read {sorted(literal)}"
+        found = undeclared_bracketed_forms(CORPUS, declared, literal)
+        assert not found, (
+            f"{len(found)} bracketed form(s) in published strings are not declared by the "
+            f"placeholder table:\n" + "\n".join(
+                f"  - {', '.join(f'{n}:{l}' for n, l in where)}: {form} in {s!r}"
+                for where, form, s in found))
+        forms = sum(len(_BRACKETED_RE.findall(s)) for s in CORPUS)
+        print(f"\n  {forms} bracketed form(s) across {len(CORPUS)} strings; every one declared "
+              f"({len(declared)} placeholders, {len(literal)} literal lines)")
+
+    def test_the_governed_file_set_is_the_published_one(self):
+        named = named_governed_files(SPEC_PATH.read_text(encoding="utf-8"))
+        read = {path.name for path, _supplemental in SPEC_SOURCES}
+        texts = {str(path.relative_to(SPEC_DIR)): path.read_text(encoding="utf-8")
+                 for path in sorted(SPEC_DIR.rglob("*.md"))}
+        publishing = files_publishing_error_strings(texts)
+        assert len(named) >= 2, f"the sentence naming the governed files was not read: {named}"
+        problems = []
+        if read != named:
+            problems.append(f"SPEC_SOURCES reads {sorted(read)}, COMMANDS.md names {sorted(named)}")
+        if publishing != named:
+            problems.append(f"the files under SPEC/ that publish an `Error:` string are "
+                            f"{sorted(publishing)}, COMMANDS.md names {sorted(named)}")
+        assert not problems, "\n".join(problems)
+        for s in NOT_PUBLISHED_SPANS:
+            assert any(s in extract_prose_corpus(text) for text in texts.values()), (
+                f"NOT_PUBLISHED_SPANS names a span no file carries any longer: {s!r}")
+        print(f"\n  governed files: {', '.join(sorted(named))}")
+
+    def test_success_path_stderr_lines_are_the_force_warning(self):
+        lines = {}
+        for path, _supplemental in SPEC_SOURCES:
+            for s in extract_success_stderr_rows(path.read_text(encoding="utf-8")):
+                lines.setdefault(s, []).append(_rel(path))
+        assert list(lines) == ["warning: closing sprint #N with M incomplete task(s): <id-status-list>"], (
+            f"COMMANDS.md publishes one success-path stderr line, the --force warning; "
+            f"extraction found {lines}")
+        for s in lines:
+            assert s in CORPUS, f"the success-path line is not in the corpus: {s!r}"
+
+    def test_governance_checks_can_fail(self):
+        # Rule 1: an undeclared bracketed form, and a literal form outside its line.
+        corpus = {
+            "Error: validation error: <field> is out of range": [("SPEC/A.md", 1)],
+            "Error: validation error: <bogus> is out of range": [("SPEC/A.md", 2)],
+            "Error: invalid input: use -r <name>": [("SPEC/A.md", 3)],
+            "Error: no roadmap selected: use -r <name> or --roadmap <name>": [("SPEC/A.md", 4)],
+        }
+        found = undeclared_bracketed_forms(
+            corpus, {"<field>"}, {"Error: no roadmap selected: use -r <name> or --roadmap <name>"})
+        assert sorted(form for _where, form, _s in found) == ["<bogus>", "<name>"], found
+
+        # Rule 2: a failure row without the prefix; a success row and a
+        # cross-reference are not failures of the rule.
+        table = "\n".join([
+            "| Scenario | Exit Code | stderr Output |",
+            "|----------|-----------|---------------|",
+            '| Refused without the prefix | 6 | "validation error: sprint is CLOSED" |',
+            '| Refused with the prefix | 6 | "Error: validation error: sprint is CLOSED" |',
+            '| Closed with --force | 0 | "warning: closing sprint #N with M incomplete task(s)" |',
+            "| Socket refused | 1 | `\u00a7 Graph Server Socket Error Lines` |",
+            "",
+        ])
+        assert [span for _n, _h, span in unprefixed_failure_rows(table)] == [
+            "validation error: sprint is CLOSED"]
+        assert list(extract_success_stderr_rows(table)) == [
+            "warning: closing sprint #N with M incomplete task(s)"]
+
+        # Rule 3: a file publishing in prose, one publishing in a table, one that
+        # only names the prefix, and one quoting a counter-example.
+        texts = {
+            "PROSE.md": "The refusal is `Error: invalid input: unknown flag: --zzz`.\n",
+            "TABLE.md": table,
+            "MENTION.md": "Every failure line opens with `Error: ` and a sentinel.\n",
+            "COUNTER.md": "It would read `" + next(iter(NOT_PUBLISHED_SPANS)) + "` instead.\n",
+        }
+        assert files_publishing_error_strings(texts) == {"PROSE.md", "TABLE.md"}
+
+        # Fenced JSON publishes the decoded value up to its first newline.
+        fence = '```json\n  "stderr": "Error: required parameter missing: --title\\n\\nAI agents: run it",\n```\n'
+        assert list(extract_fenced_corpus(fence)) == ["Error: required parameter missing: --title"]
+
     def test_published_stderr_rows_carry_the_error_prefix(self):
         """A table row that publishes the stderr of a FAILURE publishes the
         whole line, `Error: ` prefix included (rmp task #419).
@@ -3689,40 +4356,16 @@ class TestErrorStringParity:
 
         Only a row that publishes a FAILURE is governed. A row whose own exit
         code is `0` publishes what the user reads on a SUCCESS path -- the
-        `--force` warning of `sprint close` is the one such row in these two
-        files -- and § Published Error Strings Are Exact governs error
-        strings, not every byte that reaches stderr. Requiring the prefix
-        there would demand text the binary must not print.
+        `--force` warning of `sprint close` is the one such row in the files
+        this module reads -- and it is compared as a success-path line, not
+        held to the prefix. Requiring the prefix there would demand text the
+        binary must not print.
         """
-        violations = []
-        for path, _supplemental in SPEC_SOURCES:
-            name = _rel(path)
-            text = path.read_text(encoding="utf-8")
-            for lineno, header, cells in iter_table_rows(text):
-                exit_col = next(
-                    (k for k, h in enumerate(header) if "exit" in h.strip().lower()),
-                    None,
-                )
-                if (exit_col is not None and exit_col < len(cells)
-                        and cells[exit_col].strip().strip("`") == "0"):
-                    continue
-                for k, cell in enumerate(cells):
-                    if k >= len(header) or not _publishes_stderr(header[k]):
-                        continue
-                    if "Error:" in cell:
-                        continue
-                    spans = ([m.group(1) for m in _DQUOTE_RE.finditer(cell)] +
-                             [m.group(1) for m in _BACKTICK_RE.finditer(cell)])
-                    for span in spans:
-                        span = span.strip()
-                        # A span that opens with the section mark is a
-                        # cross-reference to where the line IS published, not
-                        # a line: nine rows of the graph tables point at
-                        # `§ Graph Server Socket Error Lines` this way rather
-                        # than each carrying a copy of the same eight strings.
-                        if not span or span.startswith("\u00a7"):
-                            continue
-                        violations.append((name, lineno, header[k].strip(), span))
+        violations = [
+            (_rel(path), lineno, header, span)
+            for path, _supplemental in SPEC_SOURCES
+            for lineno, header, span in unprefixed_failure_rows(path.read_text(encoding="utf-8"))
+        ]
 
         undeclared = [v for v in violations if v[3] not in UNPREFIXED_STDERR_ROWS]
         assert not undeclared, (

@@ -33,15 +33,7 @@ Optional:
 Output (stdout JSON):
   Array of sprint objects. See 'rmp sprint --help' for the full key list.
 
-Exit codes:
-  0  Success
-  2  Unknown flag, --status without its value, or a positional argument
-     (none accepted)
-  3  Missing -r
-  4  Roadmap not found
-  6  Invalid --status value
-
-Examples:
+`+exitCodesBlock("sprint", "list")+`Examples:
   rmp sprint list -r myproject
   rmp sprint ls -r myproject --status OPEN
 `)
@@ -88,15 +80,7 @@ Optional:
 Output (stdout JSON):
   {"id": <new-sprint-id>}
 
-Exit codes:
-  0  Success
-  2  Missing -t or -d
-  3  Missing -r
-  4  Roadmap not found
-  5  --order value already used by another sprint
-  6  Title/description too long, --max-tasks outside 1-10000, or --order not a positive integer
-
-Examples:
+`+exitCodesBlock("sprint", "create")+`Examples:
   rmp sprint create -r myproject -t "Auth hardening" -d "Deliver session-based authentication for every write command."
   rmp sprint new -r myproject -t "Ordering fixes" -d "Fix the task-ordering defects reported in v1.12." --max-tasks 12
   rmp sprint create -r myproject -t "Storage refactor" -d "Refactor persistence onto a single write path." --order 3
@@ -119,14 +103,7 @@ Required:
 Output (stdout JSON):
   Single sprint object (see 'rmp sprint --help').
 
-Exit codes:
-  0  Success
-  2  <sprint-id> missing or not an integer, an extra positional argument,
-     or an unknown flag after <sprint-id>
-  3  Missing -r
-  4  Sprint not found
-
-Examples:
+`+exitCodesBlock("sprint", "get")+`Examples:
   rmp sprint get -r myproject 5
 `)
 }
@@ -163,14 +140,7 @@ Output (stdout JSON):
     severity_distribution    {"0-2": {count, percentage}, "3-5": ..., "6-7": ..., "8-9": ...}
     criticality_distribution {low: {count, percentage}, medium: ..., high: ..., critical: ...}
 
-Exit codes:
-  0  Success
-  2  <sprint-id> missing or not an integer, an extra positional argument,
-     or an unknown flag after <sprint-id>
-  3  Missing -r
-  4  Sprint not found
-
-Examples:
+`+exitCodesBlock("sprint", "show")+`Examples:
   rmp sprint show -r myproject 5
 `)
 }
@@ -218,15 +188,7 @@ At least one of:
 
 Output: empty (exit 0 on success).
 
-Exit codes:
-  0  Success
-  2  None of -t, -d, --max-tasks or --order given
-  3  Missing -r
-  4  Sprint not found
-  5  --order value already used by another sprint
-  6  --max-tasks outside 1-10000, title/description too long, --order not positive, or --order on a CLOSED sprint
-
-Examples:
+`+exitCodesBlock("sprint", "update")+`Examples:
   rmp sprint update -r myproject 5 -t "Auth + observability"
   rmp sprint update -r myproject 5 -d "Deliver authentication and request tracing for every write command."
   rmp sprint upd -r myproject 5 --max-tasks 15
@@ -256,14 +218,7 @@ Required:
 
 Output: empty (exit 0 on success).
 
-Exit codes:
-  0  Success
-  2  <sprint-id> missing or not an integer, an extra positional argument,
-     or an unknown flag after <sprint-id>
-  3  Missing -r
-  4  Sprint not found
-
-Examples:
+`+exitCodesBlock("sprint", "remove")+`Examples:
   rmp sprint remove -r myproject 5
   rmp sprint rm -r myproject 9
 `)
@@ -286,16 +241,7 @@ Required:
 
 Output: empty (exit 0 on success).
 
-Exit codes:
-  0  Success
-  2  <sprint-id> missing or not an integer, an extra positional argument,
-     or an unknown flag after <sprint-id>
-  3  Missing -r
-  4  Sprint not found
-  6  Current sprint state forbids starting (already OPEN, or another
-     sprint is currently OPEN)
-
-Examples:
+`+exitCodesBlock("sprint", "start")+`Examples:
   rmp sprint start -r myproject 5
 `)
 }
@@ -321,15 +267,7 @@ Optional:
 
 Output: empty (exit 0 on success).
 
-Exit codes:
-  0  Success
-  2  <sprint-id> missing or not an integer, an extra positional argument,
-     or an unknown flag after <sprint-id>
-  3  Missing -r
-  4  Sprint not found
-  6  Sprint not OPEN, or active tasks remain and --force was not given
-
-Examples:
+`+exitCodesBlock("sprint", "close")+`Examples:
   rmp sprint close -r myproject 5
   rmp sprint close -r myproject 5 --force
 `)
@@ -356,15 +294,7 @@ Required:
 
 Output: empty (exit 0 on success).
 
-Exit codes:
-  0  Success
-  2  <sprint-id> missing or not an integer, an extra positional argument,
-     or an unknown flag after <sprint-id>
-  3  Missing -r
-  4  Sprint not found
-  6  Sprint not in CLOSED state, or another sprint is OPEN
-
-Examples:
+`+exitCodesBlock("sprint", "reopen")+`Examples:
   rmp sprint reopen -r myproject 5
 `)
 }
@@ -392,15 +322,7 @@ Optional:
 Output (stdout JSON):
   Array of task objects.
 
-Exit codes:
-  0  Success
-  2  Unknown flag, --status without its value, <sprint-id> missing or not
-     an integer, or an extra positional argument
-  3  Missing -r
-  4  Sprint not found
-  6  Invalid --status value
-
-Examples:
+`+exitCodesBlock("sprint", "tasks")+`Examples:
   rmp sprint tasks -r myproject 5
   rmp sprint tasks -r myproject 5 -s DOING
   rmp sprint tasks -r myproject 5 --order-by-priority
@@ -425,14 +347,7 @@ Optional:
 Output (stdout JSON):
   Array of task objects (excludes BACKLOG and COMPLETED).
 
-Exit codes:
-  0  Success
-  2  Unknown flag, <sprint-id> missing or not an integer, or an extra
-     positional argument
-  3  Missing -r
-  4  Sprint not found
-
-Examples:
+`+exitCodesBlock("sprint", "open-tasks")+`Examples:
   rmp sprint open-tasks -r myproject 5
   rmp sprint open-tasks -r myproject 5 --order-by-priority
 `)
@@ -474,14 +389,7 @@ Notes for callers:
     field, so there is no target completion date to count down to.
   - burndown is empty when no tasks have been completed in the sprint.
 
-Exit codes:
-  0  Success
-  2  <sprint-id> missing or not an integer, an extra positional argument,
-     or an unknown flag after <sprint-id>
-  3  Missing -r
-  4  Sprint not found
-
-Examples:
+`+exitCodesBlock("sprint", "stats")+`Examples:
   rmp sprint stats -r myproject 5
 `)
 }
@@ -503,15 +411,7 @@ Required:
 
 Output: empty (exit 0). Audits SPRINT_ADD_TASK once per added task.
 
-Exit codes:
-  0  Success
-  2  An id is not an integer, an argument is missing or extra, or an unknown
-     flag is written between or after the arguments
-  3  Missing -r
-  4  Sprint or any task id not found
-  6  Sprint is CLOSED, or adding the tasks would exceed --max-tasks
-
-Examples:
+`+exitCodesBlock("sprint", "add-tasks")+`Examples:
   rmp sprint add-tasks -r myproject 5 1
   rmp sprint add -r myproject 5 1,3,7
 `)
@@ -533,15 +433,7 @@ Required:
 
 Output: empty (exit 0). Audits SPRINT_REMOVE_TASK per removed task.
 
-Exit codes:
-  0  Success
-  2  An id is not an integer, an argument is missing or extra, or an unknown
-     flag is written between or after the arguments
-  3  Missing -r
-  4  Sprint not found
-  6  A named task is not a member of the sprint
-
-Examples:
+`+exitCodesBlock("sprint", "remove-tasks")+`Examples:
   rmp sprint remove-tasks -r myproject 5 7
   rmp sprint rm-tasks -r myproject 5 1,3,7
 `)
@@ -564,15 +456,7 @@ Required:
 
 Output: empty (exit 0 on success).
 
-Exit codes:
-  0  Success
-  2  An id is not an integer, an argument is missing or extra, or an unknown
-     flag is written between or after the arguments
-  3  Missing -r
-  4  Either sprint not found, or some task ids aren't in <from-id>
-  6  Destination sprint is CLOSED or would exceed its --max-tasks
-
-Examples:
+`+exitCodesBlock("sprint", "move-tasks")+`Examples:
   rmp sprint move-tasks -r myproject 5 8 3,7
   rmp sprint mv-tasks -r myproject 5 8 12
 `)
@@ -597,15 +481,7 @@ Required:
 Output: a JSON success object naming the sprint and the order its members now
 hold (exit 0). Audits SPRINT_REORDER_TASKS once.
 
-Exit codes:
-  0  Success
-  2  An id is not an integer, an argument is missing or extra, or an unknown
-     flag is written between or after the arguments
-  3  Missing -r
-  4  Sprint not found, or unknown task id in list
-  6  List does not match the current set of tasks in the sprint
-
-Examples:
+`+exitCodesBlock("sprint", "reorder")+`Examples:
   rmp sprint reorder -r myproject 5 3,1,7,2
   rmp sprint order -r myproject 5 12,15,7
 `)
@@ -630,15 +506,7 @@ Required:
 Output: a JSON success object naming the sprint, the task, and the position it
 now holds (exit 0). Audits SPRINT_TASK_MOVE_POSITION.
 
-Exit codes:
-  0  Success
-  2  An id is not an integer, an argument is missing or extra, or an unknown
-     flag is written between or after the arguments
-  3  Missing -r
-  4  Task not in the sprint
-  6  <position> is negative or non-numeric
-
-Examples:
+`+exitCodesBlock("sprint", "move-to")+`Examples:
   rmp sprint move-to -r myproject 5 7 0    # task 7 to the top
   rmp sprint mvto -r myproject 5 12 3      # task 12 becomes position 3
 `)
@@ -659,15 +527,7 @@ Required:
 Output: a JSON success object naming the sprint and the two tasks that
 exchanged positions (exit 0). Audits SPRINT_TASK_SWAP.
 
-Exit codes:
-  0  Success
-  2  An id is not an integer, an argument is missing or extra, or an unknown
-     flag is written between or after the arguments
-  3  Missing -r
-  4  Either task not in the sprint
-  6  Same id supplied twice
-
-Examples:
+`+exitCodesBlock("sprint", "swap")+`Examples:
   rmp sprint swap -r myproject 5 3 7
 `)
 }
@@ -687,15 +547,7 @@ Required:
 Output: a JSON success object naming the sprint, the task, and the position it
 now holds (exit 0). Audits SPRINT_TASK_MOVE_POSITION.
 
-Exit codes:
-  0  Success
-  2  An id is not an integer, an argument is missing or extra, or an unknown
-     flag is written between or after the arguments
-  3  Missing -r
-  4  Sprint not found
-  6  The task is not a member of the sprint
-
-Examples:
+`+exitCodesBlock("sprint", "top")+`Examples:
   rmp sprint top -r myproject 5 7
 `)
 }
@@ -717,15 +569,7 @@ Required:
 Output: a JSON success object naming the sprint, the task, and the position it
 now holds (exit 0). Audits SPRINT_TASK_MOVE_POSITION.
 
-Exit codes:
-  0  Success
-  2  An id is not an integer, an argument is missing or extra, or an unknown
-     flag is written between or after the arguments
-  3  Missing -r
-  4  Sprint not found
-  6  The task is not a member of the sprint
-
-Examples:
+`+exitCodesBlock("sprint", "bottom")+`Examples:
   rmp sprint bottom -r myproject 5 7
   rmp sprint btm -r myproject 5 12
 `)
@@ -787,17 +631,7 @@ Validation order (a bad --type never leaves the command waiting on input):
 Output (stdout JSON):
   {"id": <new-comment-id>}
 
-Exit codes:
-  0  Success
-  1  Database failure
-  2  Invalid <sprint-id>, an extra positional argument, missing --type, or
-     no comment body supplied
-  3  Missing -r
-  4  Sprint not found (or roadmap not found)
-  6  Invalid --type value, body over 4096 characters, or control characters
-     in the body
-
-Examples:
+%sExamples:
   rmp sprint comment-add -r myproject 3 --type DECISION \
       --body "Dropped the second migration: its schema change is not settled."
   rmp sprint comment-add -r myproject 3 --type PROGRESS < progress.txt
@@ -806,7 +640,7 @@ Examples:
 Extended the sprint goal to cover the boundary-second regression test.
 The fix alone would have shipped without a guard against reintroduction.
 BODY
-`, sprintCommentTypes())
+`, sprintCommentTypes(), exitCodesBlock("sprint", "comment-add"))
 }
 
 // printSprintCommentListHelp — `rmp sprint comment-list`.
@@ -848,18 +682,11 @@ Output (stdout JSON):
   Empty array (exit 0) when the sprint has no comments, or none of the
   requested type.
 
-Exit codes:
-  0  Success
-  2  Invalid <sprint-id>, an extra positional argument, or an unknown flag
-  3  Missing -r
-  4  Sprint not found (or roadmap not found)
-  6  Invalid --type value
-
-Examples:
+%sExamples:
   rmp sprint comment-list -r myproject 3
   rmp sprint comment-list -r myproject 3 --type DECISION
   rmp sprint c-ls -r myproject 3 -y FINDING
-`, sprintCommentTypes())
+`, sprintCommentTypes(), exitCodesBlock("sprint", "comment-list"))
 }
 
 // printSprintCommentEditHelp — `rmp sprint comment-edit`.
@@ -904,23 +731,13 @@ Optional:
 Output (stdout JSON):
   Empty (exit 0 on success), as for 'sprint update'.
 
-Exit codes:
-  0  Success
-  1  Database failure
-  2  Invalid <comment-id>, an extra positional argument, an empty --body
-     value, or no change requested
-  3  Missing -r
-  4  Comment not found (or roadmap not found)
-  6  Invalid --type value, body over 4096 characters, or control characters
-     in the body
-
-Examples:
+%sExamples:
   rmp sprint comment-edit -r myproject 4 --type UPDATE
   rmp sprint comment-edit -r myproject 4 \
       --body "Superseded: the migration landed inside this sprint after all."
   rmp sprint comment-edit -r myproject 4 < revised.txt
   rmp sprint c-edit -r myproject 4 -y PROGRESS -b "Two of five tasks closed."
-`, sprintCommentTypes())
+`, sprintCommentTypes(), exitCodesBlock("sprint", "comment-edit"))
 }
 
 // printSprintCommentRemoveHelp — `rmp sprint comment-remove`.
@@ -947,15 +764,7 @@ Required:
 Output (stdout JSON):
   Empty (exit 0 on success).
 
-Exit codes:
-  0  Success
-  1  Database failure
-  2  Invalid or missing <comment-id>, an extra positional argument, or an
-     unknown flag
-  3  Missing -r
-  4  Comment not found (or roadmap not found)
-
-Examples:
+`+exitCodesBlock("sprint", "comment-remove")+`Examples:
   rmp sprint comment-remove -r myproject 4
   rmp sprint c-rm -r myproject 4
 `)

@@ -260,9 +260,10 @@ func graphConnectionLost(socket string) error {
 //
 // The remedy it names is the measured one. Spreading writes across distinct
 // nodes REMOVES the failure rather than moving the threshold at which it starts:
-// holding sixteen writers and varying only the number of nodes they touch, the
-// policy was exhausted on 0.33% of statements against one node, 0.03% against
-// four, and none at all against eight or more (rule 8).
+// holding the writer count fixed and varying only the number of nodes the
+// writers touch, only writers that all shared one node exhausted the retry at
+// all (rule 8). SPEC/IMPLEMENTATION.md § Retry Logic is canonical for that
+// measurement and its figures, and this comment does not restate them.
 // The budget it names is read from the policy rather than written out. It
 // renders "2.5s", the figure SPEC/COMMANDS.md publishes, and it is a FIXED value
 // in the sense that section requires — nothing about an invocation can move it,

@@ -63,7 +63,8 @@ var taskEditFieldOperations = map[string]models.AuditOperation{
 // Required arguments:
 //   - task ID: The ID of the task to edit (first positional argument)
 //
-// Optional flags (at least one required):
+// Optional flags (supplying none changes nothing, and is accepted only when the
+// task exists):
 //   - -t, --title: New task title (max 255 chars)
 //   - -fr, --functional-requirements: New functional requirements (max 4096 chars)
 //   - -tr, --technical-requirements: New technical requirements (max 4096 chars)
@@ -158,14 +159,6 @@ func taskEdit(args []string) error {
 		updates["type"] = string(parsed)
 	}
 
-	// No-op: per SPEC/COMMANDS.md § Edit Task ("If no fields are specified,
-	// command succeeds with no changes, exit code 0"), an edit with no fields
-	// is a successful no-op that produces no output and writes no audit entry —
-	// not a validation error (finding #48).
-	if len(updates) == 0 {
-		return nil
-	}
-
 	// The whole free-text sequence, through the one helper that owns its order
 	// (rmp task 302): the LENGTH cap on the value as it will be stored, then the
 	// encoding rule and then the control-character rule on the value AS
@@ -203,6 +196,26 @@ func taskEdit(args []string) error {
 		return err
 	}
 	defer database.Close()
+
+	// No field supplied. The no-op is reached only once the invocation has
+	// passed every check a field-carrying edit faces, bar the checks on field
+	// values, in the same order: OpenExisting has just refused an invalid
+	// roadmap name (exit 6) and a missing roadmap (exit 4), and the task is
+	// looked up here so a missing one is refused (exit 4) with the line the
+	// UPDATE path prints, rather than accepted. An existing task returns with no
+	// UPDATE, no audit entry, and no output (SPEC/COMMANDS.md § Edit Task, "A
+	// no-field edit resolves the roadmap and the task before the no-op").
+	if len(updates) == 0 {
+		ctx, cancel := db.WithQuickTimeout()
+		defer cancel()
+
+		ids := []int{taskID}
+		tasks, lookupErr := database.GetTasks(ctx, ids)
+		if lookupErr != nil {
+			return lookupErr
+		}
+		return utils.TasksNotFoundError(utils.MissingIDs(ids, taskIDsOf(tasks)))
+	}
 
 	// Capture timestamp once for the entire operation: every entry this
 	// invocation writes carries it, which is what makes the entries of one

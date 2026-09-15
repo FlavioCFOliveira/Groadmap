@@ -44,9 +44,9 @@ Errors follow typical CLI conventions (NOT JSON format):
 
 ### Published Error Strings Are Exact
 
-Every error string this file publishes is the **complete line the user reads on stderr**, including the `Error: ` prefix and including the sentinel text that follows it. A published string is never the message body alone, and never a paraphrase: a reader may compare a published string against captured stderr character for character, and a test may assert it verbatim.
+Every error string this file publishes, and every error string any other file of this specification publishes, is the **complete line the user reads on stderr**, including the `Error: ` prefix and including the sentinel text that follows it. A published string is never the message body alone, and never a paraphrase: a reader may compare a published string against captured stderr character for character, and a test may assert it verbatim.
 
-Three consequences follow, and they hold for every table and every code block in this file:
+Three consequences follow, and they hold for every table and every code block in every file that publishes one:
 
 1. **The `Error: ` prefix is part of the string.** `rmp` writes `Error: ` before every failure message, so a published string that omits it is incomplete.
 2. **The sentinel text is part of the string.** Most messages carry a sentinel word or phrase between the prefix and the detail — `validation error: `, `required parameter missing: `, `resource not found: `, `invalid input: `, `field exceeds maximum size: `, `resource already exists: `, `no roadmap selected: `, `database error: `, `I/O error: `, `graph engine error: `, `graph store error: `, `graph server error: `, `unknown command`. The sentinel names the failure class and determines the exit code; `ARCHITECTURE.md § Sentinel Error Catalogue` is canonical for the mapping. A message that carries no sentinel is published without one, because that is what the user sees.
@@ -63,13 +63,29 @@ Three consequences follow, and they hold for every table and every code block in
 | `<field>` | A published field name, resolved by `Published Field Names in Validation Messages` below. |
 | `<flag>` | A flag name, in its kebab-case spelling and without the leading dashes, which the string supplies. |
 | `<sentinel>` | The sentinel text of the failure class the surface reports, in the one published string whose sentinel varies by surface, resolved by `§ Entity Identifier Range (All Positional Ids and --entity-id)`. |
-| `<detail>`, `<engine diagnostic>` | Text produced by a component other than `rmp` — the operating system, or the Cypher engine. Not specified here. |
+| `<detail>` | Text at the end of a line whose wording the line does not fix. It is usually the diagnostic of a component other than `rmp` — the operating system, or the SQLite driver — and it may carry context `rmp` writes ahead of that diagnostic, or be a description `rmp` composes where one line stands for more than one message. A section that publishes a line carrying `<detail>` may state what it carries in that line. Nothing follows it. |
+| `<engine diagnostic>` | The Cypher engine's own diagnostic text. Not specified here. |
 | `<socket>` | The filesystem path of a graph server's Unix domain socket, as the invocation resolved it: the default derived from the roadmap, or the value of `--socket`. Resolved by `GRAPH.md § Socket Path and Permissions`. |
+| `<path>` | The absolute path at which `rmp` addresses the file a message names. The section that publishes the line names the file. |
+| `<version>` | The target schema version of the migration a message names, in its dotted form, such as `1.13.0`. |
+| `<step>` | The step of a migration that failed, in the words that migration gives the step, such as `creating unique idx_sprint_tasks_order`. |
 | `<ids>` | Two or more ids, separated by a comma and a space, in the order the user supplied them, with a repeated id named once. A message that names exactly one id carries `N` instead, in that message's own singular wording. `§ Task ID Lists (Batch Commands)` is canonical for how the list is built. |
 | `<id-list>` | One or more ids, each prefixed with `#`, separated by a comma and a space, in ascending id order. The list is produced by the system and not echoed from the command line, and the message's wording is the same whether it names one id or several — unlike `<ids>` above, which requires a singular wording for a single id. |
+| `<id-status-list>` | One or more tasks, each written as its id prefixed with `#`, a space, and the task's status in parentheses — `#7 (DOING)` — separated by a comma and a space, in the order the tasks hold in the sprint, first to last. The list is produced by the system and not echoed from the command line, and the message's wording is the same whether it names one task or several. `<id-list>` above does not fit such a list, because each element carries a status beside the id and the order is the sprint's rather than the ids'. |
+| `<load>`, `<cap>` | The two capacity figures of a sprint, in the one message that reports them: `<load>` is the number of the sprint's tasks that count against its capacity before the refused addition, the figure `§ Show Sprint Status Report` publishes as `current_load`, and `<cap>` is the cap its `--max-tasks` sets, the figure that section publishes as `max_tasks`. |
 | `<absolute path of ~/.roadmaps>` | The resolved data-directory path. |
 
 **Angle brackets are not always a placeholder.** Two messages print angle brackets literally, because the binary's own text contains them: `Error: no roadmap selected: use -r <name> or --roadmap <name>` and `Error: resource not found: no sprint is currently open. Use 'rmp sprint start <id>' to open a sprint first`. In those two lines `<name>` and `<id>` are characters the user sees, not values to substitute. Only the bracketed forms listed in the table above are placeholders.
+
+**One table governs the whole specification.** This section's convention and its placeholder table govern every file under `SPEC/` that publishes an error string, not this file alone. The files that publish one are `ARCHITECTURE.md`, `COMMANDS.md`, `DATABASE.md`, `DATA_FORMATS.md`, `GRAPH.md`, `HELP.md`, `MODELS.md` and `STATE_MACHINE.md`. No file defines a placeholder of its own. A file that publishes a string uses the placeholders the table declares, may state which value a declared placeholder carries in its own line, and adds a row to the table when it needs a placeholder the table lacks. A bracketed form in a published string, in any file, that the table does not declare and that is not one of the two literal forms above is a defect of the file that carries it.
+
+**The gate.** An end-to-end module in `tests/` holds every file named above to this section. It reads the strings each of them publishes — in table cells, in fenced blocks, and in prose — drives the compiled binary to reach each string, and compares captured stderr with the published string character for character, after substituting the values it chose for the placeholders. A string that no deterministic invocation can reach is exempted by name, with its reason, and a string that is neither reached nor exempted fails the gate. The module also fails:
+
+1. on a bracketed form in a published string that the placeholder table does not declare, other than the two literal forms named above;
+2. on a table row that publishes the stderr of a failure without the `Error: ` prefix;
+3. when the set of files under `SPEC/` that it finds publishing an `Error:` string differs from the files named above.
+
+A line a table publishes for stderr on a successful path is reached and compared in the same way, although it carries no `Error: ` prefix. The warning `sprint close --force` writes is the one such line (`§ Sprint Lifecycle`).
 
 This section states the convention once. The tables below do not restate it.
 
@@ -1597,8 +1613,8 @@ is the kebab-case name listed under **Options** above.
 | The `<id>` argument is omitted | 2 | `Error: required parameter missing: task ID required` |
 | Unrecognised flag | 2 | `Error: invalid input: unknown flag: --foo` |
 | Roadmap not specified | 3 | `Error: no roadmap selected: use -r <name> or --roadmap <name>` |
-| Roadmap not found | 4 | `Error: resource not found: roadmap "X"` |
-| Task not found | 4 | `Error: resource not found: task N not found` |
+| Roadmap not found, whether or not a field is supplied | 4 | `Error: resource not found: roadmap "X"` |
+| Task not found, whether or not a field is supplied | 4 | `Error: resource not found: task N not found` |
 
 The first row is also how an unrecognised flag written in the `<id>` position is
 refused: the token stands where the id is expected, so it is read as the id and
@@ -1611,11 +1627,28 @@ token to fall into.
 - **Empty strings:** Setting a required field to a value that is empty, or that is empty once trimmed, fails validation with exit code 6 and names the field
 - **Partial updates:** Only specified fields are validated and updated
 - **Type validation:** Non-integer values for priority/severity fail with exit code 2 (malformed input)
-- **No-op:** If no fields are specified, command succeeds with no changes (exit code 0)
+- **No-op:** If no field is specified, the command still resolves the roadmap and looks the task up, and succeeds with no changes (exit code 0) only when the task exists; a missing roadmap or task is refused with exit code 4 (see the paragraph below)
+
+**A no-field edit resolves the roadmap and the task before the no-op.** An invocation
+that supplies no field faces every check an invocation that supplies a field faces,
+except the checks on field values, and in the same order. The checks that need no
+roadmap come first and keep their place whether or not the roadmap or the task exists:
+an invocation that omits `-r` is refused with exit code `3`; an omitted `<id>`, a
+malformed `<id>`, an unrecognised flag, and an excess positional argument are refused
+with exit code `2`; and an out-of-range `<id>` is refused with exit code `6`. Each of
+them is refused by its own line. The roadmap is resolved next: a roadmap name that breaks
+`§ Roadmap Name Validation` is refused with exit code `6` and the line that section
+publishes, and a roadmap that does not exist is refused with exit code `4` and
+`Error: resource not found: roadmap "X"`. The task is looked up last, and a task the
+roadmap does not hold is refused with exit code `4` and
+`Error: resource not found: task N not found`. Each of these refusals changes nothing,
+writes no audit entry, and writes nothing to stdout. Only an invocation that passes
+every one of these checks is the no-op: it exits `0`, changes nothing in the task,
+writes no audit entry, and writes nothing to stdout or stderr.
 
 **Output (success):** No output, exit code 0.
 
-**Error Output:** Validation errors written to stderr with exit code 6.
+**Error Output:** Refusals written to stderr with exit code `2`, `3`, `4`, or `6`.
 
 **Audit:** One entry per field the invocation supplies. An invocation that supplies
 N fields writes N entries; an invocation that supplies none writes none.
@@ -1657,10 +1690,12 @@ the audit log by that operation finds every priority change however it was made.
 **Acceptance criteria:**
 
 1. `rmp task edit -r <name> <id> -t "New" -p 3` writes exactly two entries, one `TASK_TITLE_CHANGE` and one `TASK_PRIORITY_CHANGE`, sharing one `performed_at`.
-2. `rmp task edit -r <name> <id>` with no field flags writes zero entries and exits 0.
+2. `rmp task edit -r <name> <id>` with no field flags, where `<id>` names a task the roadmap holds, writes zero entries and exits 0.
 3. `rmp task edit -r <name> <id> -y BUG` writes one `TASK_TYPE_CHANGE` entry and no `TASK_UPDATE` entry.
 4. An edit rejected by any validation rule writes zero entries.
 5. `rmp audit list -r <name> --operation TASK_PRIORITY_CHANGE` returns the priority changes made through `task prio` and those made through `task edit -p` alike.
+6. `rmp task edit -r <name> <id>` with no field flags, where `<id>` names no task the roadmap holds, exits 4 with `Error: resource not found: task N not found`, writes nothing to stdout, and writes zero entries.
+7. `rmp task edit -r <a roadmap that does not exist> <id>` with no field flags exits 4 with `Error: resource not found: roadmap "X"` and writes nothing to stdout.
 
 ### Remove Task
 
@@ -1758,13 +1793,18 @@ rmp task add-dep -r <name> <task-id> <dep-id>
 | Self-dependency | 6 | `Error: validation error: task cannot depend on itself` |
 | Circular dependency | 6 | `Error: validation error: adding dependency would create a circular dependency between task #N and task #M` |
 | Missing arguments | 2 | `Error: required parameter missing: task ID and dependency ID required` |
-| An ID is not a positive integer | 2 | `Error: invalid input: invalid task ID: "X" (must be a positive integer)` |
+| `<task-id>` is not an integer | 2 | `Error: invalid input: invalid task ID: "X" (must be a positive integer)` |
+| `<dep-id>` is not an integer | 2 | `Error: invalid input: invalid dependency task ID: "X" (must be a positive integer)` |
+| `<task-id>` is an integer outside 1-2147483647 | 6 | `Error: validation error: task_id must be between 1 and 2147483647, got N` |
+| `<dep-id>` is an integer outside 1-2147483647 | 6 | `Error: validation error: dependency_task_id must be between 1 and 2147483647, got N` |
 | An unrecognised flag is written after `<dep-id>` | 2 | `Error: invalid input: unknown flag: --foo` |
 | An unrecognised flag is written between `<task-id>` and `<dep-id>` | 2 | `Error: invalid input: unknown flag: --foo` |
 
 The first row is the one message in the file that carries its sentinel in the middle rather than directly after `Error: `: the command wraps the lookup failure in its own context, so the reader sees `task #N not found: ` first and the `resource not found: ` sentinel after it. The exit code still follows the sentinel, and it is 4.
 
-The malformed-id row is also how an unrecognised flag standing in an id position is refused, written before `<task-id>` or with no `<dep-id>` after it: the token stands where an id is expected, so it is read as that id and refused as a malformed one (`§ Positional Arguments`). Written between the two ids, or after `<dep-id>`, the flag stands in no slot and is refused by one of the last two rows instead. `task remove-dep` publishes the same four exit-`2` rows for the same reasons.
+Each of the two ids is refused under the two rules of `§ Entity Identifier Range (All Positional Ids and --entity-id)`, and the line names the id at fault: a token that is not an integer is refused by the format line with exit code `2`, and an integer outside the range by the range line with exit code `6`. The dependency id is named `dependency task` in the format line and `dependency_task_id` in the range line, as that section provides.
+
+The two not-an-integer rows are also how an unrecognised flag standing in an id position is refused: the token stands where an id is expected, so it is read as that id and refused as a malformed one (`§ Positional Arguments`). Written before `<task-id>`, it is refused by the `<task-id>` row; written after `<task-id>` with no `<dep-id>` after it, by the `<dep-id>` row. Written between the two ids, or after `<dep-id>`, the flag stands in no slot and is refused by one of the last two rows instead. `task remove-dep` publishes the same five exit-`2` rows and the same two range rows, for the same reasons.
 
 **Audit:** Two `TASK_ADD_DEP` entries, one against each task of the pair, written in
 the same transaction as the insert:
@@ -1802,7 +1842,10 @@ rmp task remove-dep -r <name> <task-id> <dep-id>
 |----------|-----------|--------|
 | Dependency not found | 4 | `Error: resource not found: dependency from task #N to task #M not found` |
 | Missing arguments | 2 | `Error: required parameter missing: task ID and dependency ID required` |
-| An ID is not a positive integer | 2 | `Error: invalid input: invalid task ID: "X" (must be a positive integer)` |
+| `<task-id>` is not an integer | 2 | `Error: invalid input: invalid task ID: "X" (must be a positive integer)` |
+| `<dep-id>` is not an integer | 2 | `Error: invalid input: invalid dependency task ID: "X" (must be a positive integer)` |
+| `<task-id>` is an integer outside 1-2147483647 | 6 | `Error: validation error: task_id must be between 1 and 2147483647, got N` |
+| `<dep-id>` is an integer outside 1-2147483647 | 6 | `Error: validation error: dependency_task_id must be between 1 and 2147483647, got N` |
 | An unrecognised flag is written after `<dep-id>` | 2 | `Error: invalid input: unknown flag: --foo` |
 | An unrecognised flag is written between `<task-id>` and `<dep-id>` | 2 | `Error: invalid input: unknown flag: --foo` |
 
@@ -2076,7 +2119,7 @@ rmp task comment-edit -r <name> <comment-id> < revised.txt
 
 Step 3 precedes step 5 for the same reason step 4 does: a malformed argument list is reported at once, instead of leaving the command waiting on standard input for a body it is going to reject anyway.
 
-**No-op is not accepted.** Unlike `task edit`, which succeeds with exit code 0 when no field is given, `comment-edit` requires at least one change and fails with exit code 2 when none is requested. A change is requested by a `--type` value, by a `--body` value, or by a body arriving on standard input, so the flagless form `comment-edit <comment-id> < revised.txt` is a valid edit and not a no-op: the body on standard input is the change. Only the case where `--type` is absent, `--body` is absent, and standard input is empty, whitespace only, or not connected requests no change at all, and that is the case that fails with exit code 2 and the message "at least one of --type or --body is required". `task edit` can distinguish "no flags" from "flags to apply" without ambiguity; `comment-edit` cannot on the flags alone, because an absent `--body` with an absent `--type` is precisely the form that means "read the new body from standard input", so the decision is made after standard input has been resolved.
+**No-op is not accepted.** Unlike `task edit`, which succeeds with exit code 0 when no field is given and the task it names exists, `comment-edit` requires at least one change and fails with exit code 2 when none is requested. A change is requested by a `--type` value, by a `--body` value, or by a body arriving on standard input, so the flagless form `comment-edit <comment-id> < revised.txt` is a valid edit and not a no-op: the body on standard input is the change. Only the case where `--type` is absent, `--body` is absent, and standard input is empty, whitespace only, or not connected requests no change at all, and that is the case that fails with exit code 2 and the message "at least one of --type or --body is required". `task edit` can distinguish "no flags" from "flags to apply" without ambiguity; `comment-edit` cannot on the flags alone, because an absent `--body` with an absent `--type` is precisely the form that means "read the new body from standard input", so the decision is made after standard input has been resolved.
 
 **Output (success):** No output, exit code 0. This follows the convention for mutating commands (`task edit`, `sprint update`).
 
@@ -2546,7 +2589,7 @@ rmp sprint show -r <name> <id>
 
 | Scenario | Exit Code | stderr Output |
 |----------|-----------|---------------|
-| Sprint not found | 4 | "Sprint not found" |
+| Sprint not found | 4 | "Error: resource not found: sprint N" |
 | Roadmap not specified | 3 | "Error: no roadmap selected: use -r <name> or --roadmap <name>" |
 | `<id>` is not a positive integer | 2 | "Error: invalid input: invalid sprint ID: \"X\" (must be a positive integer)" |
 | An unrecognised flag is written after `<id>` | 2 | "Error: invalid input: unknown flag: --foo" |
@@ -2574,8 +2617,10 @@ rmp sprint reopen -r <name> <id>
 | Scenario | Exit Code | stderr Output |
 |----------|-----------|---------------|
 | No active tasks | 0 | None |
-| Active tasks exist, no `--force` | 6 | "invalid input: sprint #N has M active task(s) still in progress: #ID (STATUS), ... — use --force to close anyway" |
-| Active tasks exist, `--force` given | 0 | "warning: closing sprint #N with M incomplete task(s): #ID (STATUS), ..." |
+| Active tasks exist, no `--force` | 6 | "Error: validation error: sprint #N has M active task(s) still in progress: <id-status-list> — use --force to close anyway" |
+| Active tasks exist, `--force` given | 0 | "warning: closing sprint #N with M incomplete task(s): <id-status-list>" |
+
+`N` is the sprint's id and `M` is the number of its tasks in `SPRINT`, `DOING` or `TESTING`. `<id-status-list>` names each of those tasks with its status, in the order the tasks hold in the sprint, and names no member in any other status. Both lines keep the same wording when they name a single task. The refusal carries `utils.ErrValidation`, whose sentinel text `validation error: ` is what gives it exit code 6. The warning is not an error line, because the invocation succeeds, so it carries neither the `Error: ` prefix nor a sentinel. It is published exactly all the same, on the discipline `§ Published Error Strings Are Exact` states for error lines, and its placeholders are declared in that section's table.
 
 **Error Cases (all three commands):**
 
@@ -2623,6 +2668,10 @@ All sprint task operations validate ALL IDs before making any changes.
 | Sprint ID does not exist, on `add-tasks` or `remove-tasks` | 4 | **No changes made** | "Error: resource not found: sprint N" |
 | The source sprint ID does not exist, on `move-tasks` | 4 | **No changes made** | "Error: resource not found: from sprint N" |
 | The destination sprint ID does not exist, on `move-tasks` | 4 | **No changes made** | "Error: resource not found: to sprint N" |
+| The source sprint is CLOSED, on `move-tasks` | 6 | **No changes made** | "Error: validation error: cannot move tasks from sprint #N: sprint is CLOSED" |
+| The destination sprint is CLOSED, on `move-tasks` | 6 | **No changes made** | "Error: validation error: cannot move tasks to sprint #N: sprint is CLOSED" |
+| The sprint is CLOSED, on `add-tasks` | 6 | **No changes made** | "Error: validation error: cannot add tasks to sprint #N: sprint is CLOSED" |
+| The addition would take the sprint past the cap its `--max-tasks` sets, on `add-tasks` | 6 | **No changes made** | "Error: validation error: adding N task(s) would exceed sprint #M capacity (<load>/<cap> tasks active)" |
 | A task ID is not a positive integer | 2 | **No changes made** | "Error: invalid input: invalid task ID: \"X\" (must be a positive integer)" |
 | A sprint ID is not a positive integer | 2 | **No changes made** | "Error: invalid input: invalid sprint ID: \"X\" (must be a positive integer)" |
 | An unrecognised flag is written after `<task-ids>` | 2 | **No changes made** | "Error: invalid input: unknown flag: --foo" |
@@ -2646,6 +2695,18 @@ id. That word is the only thing in the line that says which of the two arguments
 was wrong, and it is the sole respect in which the line differs from the one
 `add-tasks` and `remove-tasks` print: the classification is stated once, by the
 same sentinel, in all three.
+
+Its refusal of a CLOSED sprint marks the two sprints the same way, `from sprint #N`
+for the source and `to sprint #N` for the destination. The source is resolved and
+checked before the destination is looked up, so a CLOSED source is refused even
+when the destination does not exist (Validation Order, step 4).
+
+`add-tasks` refuses a CLOSED sprint with a line of its own, and it is the only one
+of the three that checks capacity (Validation Order, steps 5 and 7). In the
+capacity line `N` is the number of distinct task ids the invocation names, `M` is
+the sprint's id, and `<load>` and `<cap>` are the figures the placeholder table
+declares. The line is the same whichever of the two capacity checks refuses the
+addition: the read before the transaction, or the enforcement inside it.
 
 **Validation Order:**
 

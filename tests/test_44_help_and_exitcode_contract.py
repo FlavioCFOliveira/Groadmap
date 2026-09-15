@@ -20,19 +20,25 @@ B. Exit-code empirical verification (help says X → binary does X):
    6.  task create --type INVALID_TYPE             → exit 6
    7.  task next with no open sprint               → exit 4
    8.  sprint tasks -s INVALID_STATUS              → exit 6
+   9.  task edit -r R <id> with no field           → exit 0, no output, nothing
+       changed, when the task exists; the help prose, the contract description
+       and the contract's exit-0 condition all state that outcome, and none says
+       "at least one". With no field, a task the roadmap does not hold and a
+       roadmap that does not exist exit 4, and an invalid roadmap name exits 6,
+       each with the line the same invocation prints when a field is supplied.
 
 C. Help content structural checks (binary-level):
-   9.  rmp sprint create --help and rmp sprint update --help mention
+   10. rmp sprint create --help and rmp sprint update --help mention
        --title, --description, --order, "CLOSED", "immutable".
-   10. rmp sprint --help mentions exit code 5 (order collision).
-   11. rmp sprint tasks --help mentions -s / --status.
-   12. Every graph subcommand (serve, client) help contains
+   11. rmp sprint --help mentions exit code 5 (order collision).
+   12. rmp sprint tasks --help mentions -s / --status.
+   13. Every graph subcommand (serve, client) help contains
        "Output (stdout JSON):"; client, the only one that takes a statement,
        also publishes "-q" / "--query", and serve publishes neither.
-   13. No hard TAB character in any help output for any command.
-   14. rmp sprint --help, rmp sprint create --help and rmp sprint update --help
+   14. No hard TAB character in any help output for any command.
+   15. rmp sprint --help, rmp sprint create --help and rmp sprint update --help
        document the macro-goal semantics of the -d/--description flag.
-   15. The --ai-help JSON contract carries the same --description semantics for
+   16. The --ai-help JSON contract carries the same --description semantics for
        both sprint create and sprint update.
 """
 
@@ -340,6 +346,165 @@ class TestEmpiricalExitCodes:
             f"stderr must describe the status error; got {err!r}"
         )
         print("✓ sprint tasks -s INVALID_STATUS → exit 6")
+
+    def test_task_edit_with_no_field_exits_0_and_changes_nothing(self):
+        """task edit -r R <id> with no field → exit 0, nothing changed (rmp task #491).
+
+        SPEC/COMMANDS.md § Edit Task publishes the no-field invocation as a
+        successful no-op that writes no audit entry. The help prose and the
+        registry description once said "At least one option must be provided"
+        while the binary accepted the invocation and the contract's exit-0
+        condition said so. Every published surface is read from the binary:
+        the help prose ahead of its `Exit codes:` block, and the contract's
+        description and exit-0 condition for `task edit`. Each must state the
+        no-field outcome in the published words, and none may say "at least
+        one".
+        """
+        env = {"HOME": self.home}
+        task_id = self.test.create_task(
+            self.roadmap,
+            "Reject expired JWT refresh tokens at the API gateway",
+            "A refresh token past its expiry must be refused with HTTP 401",
+            "Compare the exp claim against the gateway clock in UTC before minting",
+            "An expired refresh token yields HTTP 401 and no new access token",
+            priority=7,
+            severity=5,
+        )
+        task_get = ["task", "get", "-r", self.roadmap, str(task_id)]
+        audit_list = ["audit", "list", "-r", self.roadmap]
+        task_before = self.test.run_cmd(task_get)[1]
+        audit_before = self.test.run_cmd(audit_list)[1]
+
+        code, out, err = _run(self.cli, ["task", "edit", "-r", self.roadmap, str(task_id)], env)
+        assert code == 0, (
+            f"task edit with no field must exit 0 (SPEC/COMMANDS.md § Edit Task, No-op); "
+            f"got {code}, stderr={err!r}"
+        )
+        assert out == "", f"task edit with no field must write nothing to stdout; got {out!r}"
+        assert err == "", f"task edit with no field must write nothing to stderr; got {err!r}"
+        assert self.test.run_cmd(task_get)[1] == task_before, "task edit with no field changed the task"
+        assert self.test.run_cmd(audit_list)[1] == audit_before, (
+            "task edit with no field wrote to the audit log")
+
+        # The two snapshots can see a change: an edit that supplies one field
+        # moves both, so their equality above is not a comparison of outputs
+        # that never differ.
+        self.test.run_cmd(["task", "edit", "-r", self.roadmap, str(task_id), "-p", "2"])
+        assert self.test.run_cmd(task_get)[1] != task_before, "the task snapshot missed a real edit"
+        assert self.test.run_cmd(audit_list)[1] != audit_before, "the audit snapshot missed a real edit"
+
+        stated = "supplying no field at all changes nothing, and is accepted only when the named task exists"
+        code, help_out, help_err = _run(self.cli, ["task", "edit", "--help"], env)
+        assert code == 0, f"rmp task edit --help exited {code}; stderr={help_err!r}"
+        assert "\nExit codes:\n" in help_out, "rmp task edit --help carries no `Exit codes:` block"
+        prose = help_out.split("\nExit codes:\n", 1)[0]
+
+        code, contract_out, _ = _run(self.cli, ["--ai-help"], env)
+        assert code == 0, f"rmp --ai-help exited {code}"
+        edit = next(
+            sub for command in json.loads(contract_out)["commands"] if command["name"] == "task"
+            for sub in command["subcommands"] if sub["name"] == "edit"
+        )
+        exit_0 = [entry["conditions"] for entry in edit["exit_codes"] if entry["code"] == 0]
+        assert len(exit_0) == 1, f"the task edit contract carries {len(exit_0)} exit-0 entries, want 1"
+
+        surfaces = {
+            "the task edit --help prose": prose,
+            "the contract's task edit description": edit["description"],
+            "the contract's task edit exit-0 condition": " ".join(exit_0[0]),
+        }
+        for surface, text in surfaces.items():
+            flat = " ".join(text.split()).lower()
+            assert stated in flat, (
+                f"{surface} does not state the no-field outcome {stated!r}:\n{text}")
+            assert "at least one" not in flat, (
+                f"{surface} claims an option is required, which the binary contradicts:\n{text}")
+        print("✓ task edit with no field → exit 0, nothing changed, and every surface says so")
+
+    def test_task_edit_with_no_field_refuses_a_missing_task_exit_4(self):
+        """task edit -r R <missing id> with no field → exit 4 (rmp task #492).
+
+        SPEC/COMMANDS.md § Edit Task, criterion 6: a no-field edit looks the
+        task up before the no-op, so a task the roadmap does not hold is refused
+        with `Error: resource not found: task N not found`, nothing on stdout,
+        and no audit entry. The binary once returned before opening the roadmap
+        and exited 0 here, while the same invocation with a field exited 4.
+        """
+        env = {"HOME": self.home}
+        task_id = self.test.create_task(
+            self.roadmap,
+            "Rotate the webhook signing secret without dropping deliveries",
+            "Deliveries signed with the previous secret stay valid for 24 hours",
+            "Keep both secrets in the verifier and retire the old one on a timer",
+            "A delivery signed with either secret verifies during the overlap",
+        )
+        missing = task_id + 500
+        audit_list = ["audit", "list", "-r", self.roadmap]
+        audit_before = self.test.run_cmd(audit_list)[1]
+        args = ["task", "edit", "-r", self.roadmap, str(missing)]
+
+        code, out, err = _run(self.cli, args, env)
+        want = f"Error: resource not found: task {missing} not found"
+        assert code == 4, f"{args} must exit 4 (SPEC/COMMANDS.md § Edit Task); got {code}, stderr={err!r}"
+        assert err.splitlines()[:1] == [want], f"{args}: stderr must open with {want!r}; got {err!r}"
+        assert out == "", f"{args} must write nothing to stdout; got {out!r}"
+        assert self.test.run_cmd(audit_list)[1] == audit_before, f"{args} wrote to the audit log"
+
+        field_code, _, field_err = _run(self.cli, args + ["-p", "3"], env)
+        assert (field_code, field_err.splitlines()[:1]) == (4, [want]), (
+            f"the field path must refuse the same task with the same line; got {field_code}, {field_err!r}")
+
+        # The audit snapshot can see a change: an edit of the existing task adds
+        # an entry, so its equality above is not a comparison of outputs that
+        # never differ.
+        self.test.run_cmd(["task", "edit", "-r", self.roadmap, str(task_id), "-p", "3"])
+        assert self.test.run_cmd(audit_list)[1] != audit_before, "the audit snapshot missed a real edit"
+        print("✓ task edit with no field for a missing task → exit 4, the field path's line, nothing written")
+
+    def test_task_edit_with_no_field_refuses_a_missing_roadmap_exit_4(self):
+        """task edit -r <absent roadmap> <id> with no field → exit 4 (rmp task #492).
+
+        SPEC/COMMANDS.md § Edit Task, criterion 7: the roadmap is resolved
+        before the no-op, so a roadmap that does not exist is refused with
+        `Error: resource not found: roadmap "X"` and nothing on stdout, and the
+        refusal creates no roadmap.
+        """
+        env = {"HOME": self.home}
+        absent = "billing-ledger-archive"
+        roadmap_home = self.test.roadmaps_dir / absent
+        assert not roadmap_home.exists(), f"{roadmap_home} exists before the test; the premise fails"
+        args = ["task", "edit", "-r", absent, "12"]
+
+        code, out, err = _run(self.cli, args, env)
+        want = f'Error: resource not found: roadmap "{absent}"'
+        assert code == 4, f"{args} must exit 4 (SPEC/COMMANDS.md § Edit Task); got {code}, stderr={err!r}"
+        assert err.splitlines()[:1] == [want], f"{args}: stderr must open with {want!r}; got {err!r}"
+        assert out == "", f"{args} must write nothing to stdout; got {out!r}"
+        assert not roadmap_home.exists(), f"{args} created {roadmap_home}"
+        print("✓ task edit with no field for a missing roadmap → exit 4, nothing created")
+
+    def test_task_edit_with_no_field_refuses_an_invalid_roadmap_name_exit_6(self):
+        """task edit -r <invalid name> <id> with no field → exit 6 (rmp task #492).
+
+        SPEC/COMMANDS.md § Edit Task: a roadmap name that breaks § Roadmap Name
+        Validation is refused with exit 6 and the line that section publishes,
+        whether or not a field is supplied. A reserved name and a malformed one
+        reach that section by different rules, so both are driven, and each
+        no-field line is compared with the line of the same invocation carrying
+        a field.
+        """
+        env = {"HOME": self.home}
+        for name in ("con", "Bad Name!"):
+            args = ["task", "edit", "-r", name, "12"]
+            code, out, err = _run(self.cli, args, env)
+            field_code, _, field_err = _run(self.cli, args + ["-p", "3"], env)
+
+            assert field_code == 6, f"{args + ['-p', '3']} must exit 6; got {field_code}, stderr={field_err!r}"
+            assert code == 6, f"{args} must exit 6 (SPEC/COMMANDS.md § Edit Task); got {code}, stderr={err!r}"
+            assert err.splitlines()[:1] == field_err.splitlines()[:1], (
+                f"{args}: the no-field line {err!r} differs from the field path's {field_err!r}")
+            assert out == "", f"{args} must write nothing to stdout; got {out!r}"
+        print("✓ task edit with no field for an invalid roadmap name (reserved, malformed) → exit 6")
 
 
 # ===========================================================================

@@ -89,13 +89,13 @@ func TestHelpPrinters_WriteThroughHelpDst(t *testing.T) {
 // that matters: the families for which an unresolved subcommand — and
 // therefore a recovery help — can arise.
 //
-// The source scan covers this package. It cannot see a HelpPrinter that
-// lives in another package, and one does: the `web` command's printer is
-// internal/web.PrintHelp, which writes straight to stdout. `web` takes no
+// The source scan covers this package, and every HelpPrinter the registry
+// names now lives in it: the `web` command's printer is printWebHelp, which
+// writes the web package's help text through helpDst. `web` takes no
 // subcommand, so no dispatch failure reaches it and its printer is never
 // used as recovery help. This test pins that reasoning to the registry
 // rather than to a comment: if `web` (or any other family whose printer
-// bypasses helpDst) ever gained subcommands, the diversion would fail
+// bypassed helpDst) ever gained subcommands, the diversion would fail
 // here instead of leaking a help body onto the stdout of a failing
 // invocation.
 func TestCommandWriteHelpBody_DivertsEveryDispatchingFamily(t *testing.T) {

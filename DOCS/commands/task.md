@@ -148,7 +148,7 @@ rmp task next -r project1 5      # Returns up to 5 tasks
 
 ### edit
 
-Edits one or more fields of an existing task. Only specified fields are updated, and at least one field option must be provided. Status is NOT editable here (use `stat` or `reopen`).
+Edits one or more fields of an existing task. Only specified fields are updated. Supplying no field at all changes nothing, and is accepted only when the named task exists; a missing roadmap or task exits 4. Status is NOT editable here (use `stat` or `reopen`).
 
 **Usage:** `rmp task edit -r <roadmap> <task-id> [options]`
 
@@ -616,7 +616,7 @@ Changes the type and/or the body of one existing task comment, identified by the
 
 **Replacement semantics:** the edit replaces the stored body in place and stamps `updated_at` with the edit's timestamp, so a later listing shows that the comment was altered. The previous text is not retained anywhere and cannot be recovered; the audit log records that an edit happened, not what it replaced.
 
-**No-op is not accepted.** Unlike `task edit`, which succeeds when no field is given, `comment-edit` requires at least one change and fails with exit code 2 when none is requested. A change is requested by a `--type` value, by a `--body` value, or by a body arriving on standard input, so the flagless form `comment-edit <comment-id> < revised.txt` is a valid edit and not a no-op.
+**No-op is not accepted.** Unlike `task edit`, which succeeds with exit code 0 when no field is given and the task it names exists, `comment-edit` requires at least one change and fails with exit code 2 when none is requested. A change is requested by a `--type` value, by a `--body` value, or by a body arriving on standard input, so the flagless form `comment-edit <comment-id> < revised.txt` is a valid edit and not a no-op.
 
 **Output:** Empty on success (exit 0).
 

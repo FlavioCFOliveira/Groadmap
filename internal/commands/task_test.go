@@ -500,14 +500,35 @@ func TestTaskEdit_InvalidID(t *testing.T) {
 }
 
 // TestTaskEdit_NoFields is a regression gate for finding #48: per
-// SPEC/COMMANDS.md § Edit Task, an edit with no fields is a successful no-op
-// (exit 0, no output, no audit entry), NOT a validation error.
+// SPEC/COMMANDS.md § Edit Task, an edit with no fields of a task the roadmap
+// holds is a successful no-op (exit 0, no output, no audit entry), NOT a
+// validation error. The task is seeded first because a no-field edit of a task
+// the roadmap does not hold is refused with exit 4 (rmp task 492).
 func TestTaskEdit_NoFields(t *testing.T) {
 	testName := "testtaskeditnofields"
-	_, cleanup := setupTestTaskRoadmap(t, testName)
+	database, cleanup := setupTestTaskRoadmap(t, testName)
 	defer cleanup()
 
-	if err := HandleTask([]string{"edit", "-r", testName, "1"}); err != nil {
+	_ = captureStdout(t, func() {
+		if err := taskCreate([]string{
+			"-r", testName,
+			"-t", "Paginate the audit history endpoint",
+			"-fr", "The history endpoint returns at most 100 entries per page.",
+			"-tr", "Use keyset pagination on the audit id rather than OFFSET.",
+			"-ac", "A roadmap holding 250 entries is read in exactly three pages.",
+		}); err != nil {
+			t.Fatalf("seeding the task: %v", err)
+		}
+	})
+	tasks, err := database.ListTasks(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("reading the seeded task back: %v", err)
+	}
+	if len(tasks) != 1 {
+		t.Fatalf("seeded 1 task, found %d", len(tasks))
+	}
+
+	if err := HandleTask([]string{"edit", "-r", testName, itoa(tasks[0].ID)}); err != nil {
 		t.Errorf("taskEdit with no fields must be a no-op (exit 0), got error: %v", err)
 	}
 }

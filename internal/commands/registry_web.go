@@ -1,14 +1,26 @@
 // Package commands — web command registry entry.
 package commands
 
-import "github.com/FlavioCFOliveira/Groadmap/internal/web"
+import (
+	"fmt"
+
+	"github.com/FlavioCFOliveira/Groadmap/internal/web"
+)
+
+// printWebHelp writes the `rmp web` help through helpDst. The text is the web
+// package's; its `Exit codes:` block is rendered here, from this command's
+// registry entry, because the web package cannot import the registry
+// (SPEC/HELP.md § Agreement with the contract).
+func printWebHelp() {
+	fmt.Fprint(helpDst(), web.HelpText(exitCodesBlock("web", "")))
+}
 
 // runWeb is the dispatch adapter for `rmp web`. web is a leaf command
 // (HasSubcommand: false), so DispatchFamily routes the raw args straight to
 // this handler and never runs the hasHelpFlag short-circuit it runs for a
 // family's subcommands, which is the path that prepends the SPEC AI-agent
 // banner. The handler therefore applies that same predicate to its whole
-// argument list itself, as HandleStats does, and routes web.PrintHelp through
+// argument list itself, as HandleStats does, and routes printWebHelp through
 // invokeHelpPrinter so the banner is emitted uniformly, wherever the help
 // token is written in a token position (SPEC/HELP.md § Help levels, § Help
 // tokens, § AI agent banner). Which tokens are flag values is read from this
@@ -17,18 +29,18 @@ import "github.com/FlavioCFOliveira/Groadmap/internal/web"
 //
 // The check used to read args[0] alone. A help token written after another
 // flag, as in `rmp web --no-open --help`, then fell through to web.Run, whose
-// own parser serves the help by calling web.PrintHelp directly, without the
-// banner (rmp task 475).
+// own parser serves the help by calling the printer it is handed directly,
+// without the banner (rmp task 475).
 //
 // Keeping this wrapper here — rather than in the web package — preserves the
 // commands -> web dependency direction and keeps the banner string a
-// single-source commands-package concern; web.PrintHelp stays banner-free.
+// single-source commands-package concern; printWebHelp stays banner-free.
 func runWeb(args []string) error {
 	if hasHelpFlag(leafSubcommand("web"), args) {
-		invokeHelpPrinter(web.PrintHelp)
+		invokeHelpPrinter(printWebHelp)
 		return nil
 	}
-	return web.Run(args)
+	return web.Run(args, printWebHelp)
 }
 
 // buildWebCommand registers the `rmp web` command. Unlike every other
@@ -36,13 +48,14 @@ func runWeb(args []string) error {
 // roadmaps and the user selects one in the browser (SPEC/COMMANDS.md
 // § Roadmap Selection (Always Required), the web exemption). web is a leaf
 // command (HasSubcommand: false) with a single empty-name Subcommand whose
-// Handler and HelpPrinter live in the web package.
+// Handler adapts the web package's Run and whose HelpPrinter renders the
+// web package's help text with this entry's exit codes.
 func buildWebCommand() Command {
 	return Command{
 		Name:          "web",
 		Summary:       "Start a read-only web interface for the roadmaps under ~/.roadmaps/.",
 		Description:   "Starts a long-lived HTTP server embedded in the rmp binary that presents every roadmap under ~/.roadmaps/ as read-only HTML and an interactive knowledge-graph visualisation. It binds loopback 127.0.0.1 by default, so it is reachable only from the local machine; pass --host 0.0.0.0 to expose it on the network (which prints a network-exposure warning to stderr). It serves GET/HEAD only, prints the served URL, opens a browser unless --no-open is given, and runs until interrupted (Ctrl+C / SIGINT / SIGTERM). It does not take -r/--roadmap and never writes; the CLI remains the sole write path.",
-		HelpPrinter:   web.PrintHelp,
+		HelpPrinter:   printWebHelp,
 		HasSubcommand: false,
 		Subcommands: []Subcommand{
 			{
@@ -50,7 +63,7 @@ func buildWebCommand() Command {
 				Summary:     "Start the read-only web interface.",
 				Description: "Resolves the bind host/port (default 127.0.0.1:8787, with an ephemeral-port fallback when 8787 is busy and --port was not given), serves the read-only routes, prints the served URL as a JSON object, and runs until SIGINT/SIGTERM.",
 				Usage:       "rmp web [--host <address>] [--port <number>] [--no-open]",
-				HelpPrinter: web.PrintHelp,
+				HelpPrinter: printWebHelp,
 				Handler:     runWeb,
 				// `rmp web` publishes its own refusal for an excess positional
 				// argument — "unexpected argument: X", with a colon and no

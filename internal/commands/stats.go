@@ -100,13 +100,7 @@ Output (stdout JSON):
     "average_velocity": 2.5
   }
 
-Exit codes:
-  0   Success
-  2   Unrecognised flag, or a positional argument (this command takes none)
-  3   No roadmap specified (-r missing)
-  4   Roadmap not found
-
-Examples:
+`+exitCodesBlock("stats", "")+`Examples:
   rmp stats -r myproject
 `)
 }

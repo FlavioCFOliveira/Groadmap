@@ -283,15 +283,46 @@ single node:
 | Shape, all inside 2500ms | Exhausted, 16 writers | Exhausted, 64 writers | Worst observed wait | Attempts per statement |
 |--------------------------|----------------------|-----------------------|---------------------|------------------------|
 | The fixed ladder | 0.08-0.30% | 0.86-1.46% | 2.5s | 1.07-1.33 |
-| Full jitter, ceiling 5 to 250ms | 0.000% (0 in 18,000) | 0.07-0.22% | 1.6-2.5s | 2.19-3.48 |
+| Full jitter, ceiling 5 to 250ms | 0-0.017% | 0.07-0.22% | 1.6-2.5s | 2.19-3.48 |
 
-Full jitter removes the failure entirely at sixteen writers, cuts it by between
-four and thirteen times at sixty-four, holds a worst case **shorter** than the
-fixed ladder's rather than longer, halves the 99th-percentile wait at sixty-four
+The sixteen-writer figure for full jitter spans two samples of the same load. The
+head-to-head experiment saw no exhaustion in 18,000 statements; the later
+measurement of the shape in force, below, saw 4 in 60,000, and never more than
+one in a run of 6,000. A run that sees none is therefore no evidence that none
+occur, and neither figure is a bound.
+
+Full jitter cuts the failure at sixteen writers from 0.08-0.30% of statements to
+0-0.017%, cuts it by between four and thirteen times at sixty-four, holds a worst
+case **shorter** than the fixed ladder's rather than longer, halves the 99th-percentile wait at sixty-four
 writers, and raises throughput by 15-45%. What it costs is server work: about
 2.6 times the attempts per statement under contention, and nothing at all when
 there is no contention, because an uncontended statement never reaches a retry
 under either shape.
+
+**What full jitter leaves is a property of one hot node.** Measured against a
+real server built from the production composition and running the production
+checkpoint cadence, under the shape in force, with sixteen concurrent writers
+sending 6,000 statements per run — one connection per statement, each setting a
+property on one node, the writers rotating over the nodes — and only the number
+of distinct nodes varied:
+
+| Distinct nodes written | Runs | Exhausted | Statements per second |
+|------------------------|------|-----------|-----------------------|
+| 1 | 10 | 4 in 60,000 (0-0.017% per run) | 616-631 |
+| 2 | 3 | 0 in 18,000 | 762-772 |
+| 4 | 3 | 0 in 18,000 | 1,346-1,369 |
+| 8 | 3 | 0 in 18,000 | 2,426-2,594 |
+| 16 | 3 | 0 in 18,000 | 3,465-4,324 |
+| 32 | 3 | 0 in 18,000 | 5,886-6,168 |
+| 64 | 3 | 0 in 18,000 | 6,065-6,101 |
+
+Only the writers that shared a single node exhausted the retry at all, and
+throughput rose almost tenfold as the same sixteen writers spread over thirty-two
+nodes. The figures are samples from one sixteen-core machine and not bounds.
+What they establish is the shape — the failure belongs to writers converging on
+one node, and spreading them removes it — which
+`GRAPH.md § Concurrency Inside the Server`, rule 8, states for the caller. This
+section is canonical for these figures, and no other section restates them.
 
 **Two shapes that were measured and rejected, recorded so that they are not
 measured again.** Jitter with a ceiling that does not grow is adequate at sixteen

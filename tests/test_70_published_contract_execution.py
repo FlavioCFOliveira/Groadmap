@@ -1767,6 +1767,77 @@ RESIDUE_DRIVERS = {
         ["sprint", "update", "-r", FIXTURE_ROADMAP, "2", "--max-tasks", "0"]),
     ("graph serve", 0): lambda home: _server_starts(home, "graph serve"),
     ("web", 0): lambda home: _server_starts(home, "web"),
+    # The code-6 entries rmp task #489 added where a subcommand had none: an id
+    # outside 1-2147483647, refused while the positional is parsed. No published
+    # example and no generic probe reaches them.
+    ("task subtasks", 6): _driver_plain(["task", "subtasks", "-r", FIXTURE_ROADMAP, "0"]),
+    ("task blockers", 6): _driver_plain(["task", "blockers", "-r", FIXTURE_ROADMAP, "0"]),
+    ("task blocking", 6): _driver_plain(["task", "blocking", "-r", FIXTURE_ROADMAP, "0"]),
+    ("task remove-dep", 6): _driver_plain(
+        ["task", "remove-dep", "-r", FIXTURE_ROADMAP, "4", "0"]),
+    ("sprint get", 6): _driver_plain(["sprint", "get", "-r", FIXTURE_ROADMAP, "0"]),
+    ("sprint show", 6): _driver_plain(["sprint", "show", "-r", FIXTURE_ROADMAP, "0"]),
+    ("sprint remove", 6): _driver_plain(["sprint", "remove", "-r", FIXTURE_ROADMAP, "0"]),
+    ("sprint open-tasks", 6): _driver_plain(
+        ["sprint", "open-tasks", "-r", FIXTURE_ROADMAP, "0"]),
+    ("sprint stats", 6): _driver_plain(["sprint", "stats", "-r", FIXTURE_ROADMAP, "0"]),
+}
+
+
+# ---------------------------------------------------------------------------
+# The conditions rmp tasks #488 and #489 added, each driven by name
+# ---------------------------------------------------------------------------
+#
+# The sweep above drives one invocation per declared CODE, which shows a code
+# can be produced but not that each of its conditions can: a code with a
+# condition nothing produces would still pass. The conditions those two tasks
+# added are therefore driven one by one, and each is recognised by the exact
+# line it writes rather than by its exit code alone.
+
+# A range condition names the positional arguments whose value it refuses. Each
+# named slot is driven with 0 and every other slot keeps its valid fixture value,
+# so the line must name the field that slot is validated as.
+RANGE_CONDITION_SLOTS = {
+    "The task id falls outside 1-2147483647.": ("task-id",),
+    "The task id or the blocker id falls outside 1-2147483647.": ("task-id", "blocker-id"),
+    "The sprint id falls outside 1-2147483647.": ("sprint-id",),
+    "An id in the task list falls outside 1-2147483647.": ("task-ids",),
+    "The source or destination sprint id falls outside 1-2147483647.": ("from-id", "to-id"),
+    "The sprint id or the task id falls outside 1-2147483647.": ("sprint-id", "task-id"),
+    "The sprint id, or either task id, falls outside 1-2147483647.": (
+        "sprint-id", "task-id-1", "task-id-2"),
+}
+
+# The field name each slot's range refusal carries (SPEC/COMMANDS.md § Entity
+# Identifier Range (All Positional Ids and --entity-id)).
+RANGE_SLOT_FIELD = {
+    "task-id": "task_id", "task-ids": "task_id", "task-id-1": "task_id",
+    "task-id-2": "task_id", "blocker-id": "dependency_task_id",
+    "sprint-id": "sprint_id", "from-id": "sprint_id", "to-id": "sprint_id",
+}
+
+# Every other added condition: (subcommand, code, condition) -> the invocations
+# that produce it, each as (the arguments after the selector, the stderr line).
+# Sprint 3 of the fixture is CLOSED, sprint 5 holds tasks 1, 2, 3 and 7, and
+# sprint 2 exists and is PENDING.
+ADDED_CONDITION_DRIVERS = {
+    ("sprint move-tasks", 6, "The source sprint is CLOSED, and a CLOSED sprint gives up no member."): [
+        (["3", "5", "1"], "Error: validation error: cannot move tasks from sprint #3: sprint is CLOSED"),
+    ],
+    ("sprint move-tasks", 6, "The destination sprint is CLOSED, and a CLOSED sprint takes no new member."): [
+        (["5", "3", "1"], "Error: validation error: cannot move tasks to sprint #3: sprint is CLOSED"),
+    ],
+    ("sprint update", 2, "None of --title, --description, --max-tasks or --order was supplied."): [
+        (["2"], "Error: required parameter missing: at least one of --title, --description, "
+                "--max-tasks or --order is required"),
+    ],
+    ("task stat", 2, "A required positional argument was omitted."): [
+        (["1"], "Error: required parameter missing: task ID(s) and status required"),
+    ],
+    ("sprint move-to", 6, "The position is not an integer, or falls outside 0-2147483647."): [
+        (["5", "3", "abc"], "Error: validation error: position must be an integer between 0 and 2147483647"),
+        (["5", "3", "2147483648"], "Error: validation error: position must be an integer between 0 and 2147483647"),
+    ],
 }
 
 
@@ -1905,6 +1976,72 @@ class TestSubcommandExitCodesAreExhaustive:
             f"{len(problems)} declared exit code(s) were not produced by the "
             f"invocation that is meant to produce them:\n  " + "\n  ".join(problems)
         )
+
+    def test_every_added_condition_is_driven(self):
+        """Each condition rmp tasks #488 and #489 added is produced by name.
+
+        Every range condition the contract publishes, on whichever subcommand,
+        is driven once per positional slot it names, and must write the range
+        refusal for that slot's field; every other added condition is driven by
+        ADDED_CONDITION_DRIVERS and must write its own line. Both tables are
+        held to the contract in both directions: a condition they name that the
+        contract no longer publishes fails, and so does a range condition whose
+        slot the subcommand does not declare.
+        """
+        problems = []
+        driven = 0
+        seen_range, seen_added = set(), set()
+        for cmd_entry in self.contract["commands"]:
+            for sub in cmd_entry["subcommands"]:
+                label, argv = subcommand_label(cmd_entry, sub)
+                selector = [] if label in NO_ROADMAP else ["-r", FIXTURE_ROADMAP]
+                names = [p["name"] for p in (sub.get("positional_arguments") or [])]
+                for entry in sub["exit_codes"]:
+                    for condition in entry["conditions"]:
+                        invocations = []
+                        if condition in RANGE_CONDITION_SLOTS:
+                            seen_range.add(condition)
+                            for slot in RANGE_CONDITION_SLOTS[condition]:
+                                if slot not in names:
+                                    problems.append(
+                                        f"{label}: {condition!r} names the {slot} slot, which is "
+                                        f"not one of its positional arguments {names}")
+                                    continue
+                                values = list(VALID_POSITIONALS[label])
+                                values[names.index(slot)] = "0"
+                                # The positionals come before the flags: a flag
+                                # written ahead of the first positional stands in
+                                # its slot and is refused as that id.
+                                invocations.append((
+                                    argv + selector + values + EXTRA_FLAGS.get(label, []),
+                                    f"Error: validation error: {RANGE_SLOT_FIELD[slot]} must be "
+                                    f"between 1 and 2147483647, got 0"))
+                        key = (label, entry["code"], condition)
+                        if key in ADDED_CONDITION_DRIVERS:
+                            seen_added.add(key)
+                            for tail, line in ADDED_CONDITION_DRIVERS[key]:
+                                invocations.append((argv + selector + tail, line))
+                        for probe, line in invocations:
+                            home = Workspace.fresh()
+                            try:
+                                code, out, err = Workspace._rmp(probe, home, check=False)
+                            finally:
+                                shutil.rmtree(home, ignore_errors=True)
+                            driven += 1
+                            if code != entry["code"] or first_line(err) != line or out != "":
+                                problems.append(
+                                    f"{label}: {condition!r} (exit {entry['code']}) was not produced "
+                                    f"by `rmp {' '.join(probe)}`: exit {code}, stderr "
+                                    f"{first_line(err)!r}, stdout {out[:80]!r}; want {line!r}")
+        for condition in sorted(set(RANGE_CONDITION_SLOTS) - seen_range):
+            problems.append(f"RANGE_CONDITION_SLOTS names {condition!r}, which no subcommand publishes")
+        for key in sorted(set(ADDED_CONDITION_DRIVERS) - seen_added):
+            problems.append(f"ADDED_CONDITION_DRIVERS names {key}, which the contract does not publish")
+        assert not problems, (
+            f"{len(problems)} added condition(s) are not produced as published:\n  "
+            + "\n  ".join(problems))
+        # 36 range slots across the 23 subcommands, and six other invocations.
+        assert driven >= 42, f"only {driven} added-condition invocations ran; the traversal is broken"
 
     def _driver_for(self, label, argv, sub, code):
         """A driver for one (subcommand, code) pair.

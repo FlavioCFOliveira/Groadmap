@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/FlavioCFOliveira/Groadmap/internal/utils"
-	"github.com/FlavioCFOliveira/Groadmap/internal/web"
 )
 
 // webDispatchDeadline bounds one dispatch of `rmp web` in these tests. Help
@@ -47,7 +46,7 @@ func dispatchWebBounded(t *testing.T, args ...string) (string, error) {
 // correct. Every row carries --no-open, so a regression that starts the server
 // cannot also open a browser.
 func TestWebHelp_BannerWhereverTheTokenIsWritten(t *testing.T) {
-	want := captureStdout(t, func() { invokeHelpPrinter(web.PrintHelp) })
+	want := captureStdout(t, func() { invokeHelpPrinter(printWebHelp) })
 
 	cases := [][]string{
 		// The help token first: unchanged.

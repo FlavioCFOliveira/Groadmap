@@ -296,13 +296,14 @@ type Result struct {
 // holds: the winner committed before the loser learned it had lost, so there is
 // nothing left to wait for, and what the delay buys is the loser leaving the
 // contending set. That makes the conflict rate a function of the load the
-// retries themselves offer — measured, six immediate attempts exhaust on 79.9%
-// of statements where the fixed ladder exhausts on 0.15% — and it makes
-// identical ladders, walked by every loser at the same instant, the wrong shape:
-// they keep the contending set synchronised. Drawing each wait independently
-// spreads the losers out, and inside the SAME 2500 ms budget it removed the
-// failure entirely at sixteen writers on one node (0 in 18,000 against 0.15%)
-// with a worst case SHORTER than the ladder's (rmp task #384).
+// retries themselves offer — measured, immediate re-sending exhausts far more
+// often than the fixed ladder does — and it makes identical ladders, walked by
+// every loser at the same instant, the wrong shape: they keep the contending set
+// synchronised. Drawing each wait independently spreads the losers out, and
+// inside the SAME 2500 ms budget it cut the failure at sixteen writers on one
+// node below the ladder's, with a worst case SHORTER than the ladder's (rmp task
+// #384). SPEC/IMPLEMENTATION.md § Retry Logic is canonical for the measured
+// figures, and this comment does not restate them.
 //
 // The residual is stated rather than hidden: a deadline that expires DURING a
 // wait is observed at the end of it rather than at the instant it fires. Under

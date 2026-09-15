@@ -165,11 +165,14 @@ operate on it rather than warning and continuing.
   Error: database error: cannot secure <path> to 0600: <detail>
   ```
 
-  `<path>` is the absolute path of the database file. `<detail>` is the
-  underlying failure, in one of two forms: the operating system's error text when
-  the mode change itself failed, or `expected 0600, got <mode>` when the mode
+  Both placeholders are declared in `COMMANDS.md § Published Error Strings Are
+  Exact`, whose table governs every file of this specification. In this line
+  `<path>` is the absolute path of the roadmap's database file, and `<detail>` is
+  the underlying failure, in one of two forms: the operating system's error text
+  when the mode change itself failed, or `expected 0600, got N` when the mode
   change reported success but the file is still not `0600`, which happens on a
-  filesystem that does not record POSIX permission bits. A complete example:
+  filesystem that does not record POSIX permission bits. `N` is the mode the file
+  still carries, in four octal digits, such as `0644`. A complete example:
 
   ```
   Error: database error: cannot secure /home/user/.roadmaps/project1/project.db to 0600: chmod /home/user/.roadmaps/project1/project.db: operation not permitted

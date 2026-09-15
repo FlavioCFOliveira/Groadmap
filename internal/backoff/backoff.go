@@ -28,9 +28,10 @@
 // them. A serialisation conflict inside a graph server is a CONTENTION failure
 // whose rate is a function of the load the retries themselves offer, so the
 // delay is load shedding and synchronised retries defeat it. Measured against a
-// real server under identical load, the fixed ladder exhausted on 0.15% of
-// statements and re-sending immediately exhausted on 79.9%; full jitter inside
-// the same 2500 ms exhausted on none of 18,000 (rmp task #384).
+// real server under identical load, re-sending immediately exhausted far more
+// often than the fixed ladder, and full jitter inside the same 2500 ms exhausted
+// less often than either (rmp task #384). That section is canonical for the
+// figures, and this comment does not restate them.
 //
 // What the two shapes SHARE is everything except the draw: the loop, the wait
 // ordering, the rule that a caller supplies the classifier and nothing more, and
@@ -131,11 +132,11 @@ const (
 
 	// jitterMaxCeiling caps the doubling of the jitter ceiling. It is the
 	// measured quantity of this shape rather than a round number: a ceiling that
-	// stops at 100 ms is WORSE than the fixed ladder at sixty-four writers
-	// (1.21-1.48% exhausted against 0.86-1.46%), and a ceiling that does not
-	// grow at all collapses there (8.7-9.0%). The cap, and not the
-	// randomisation alone, is what sheds the load (rmp task #384;
-	// SPEC/IMPLEMENTATION.md § Retry Logic).
+	// stops at 100 ms is WORSE than the fixed ladder at sixty-four writers, and a
+	// ceiling that does not grow at all collapses there. The cap, and not the
+	// randomisation alone, is what sheds the load (rmp task #384).
+	// SPEC/IMPLEMENTATION.md § Retry Logic is canonical for the figures, and this
+	// comment does not restate them.
 	jitterMaxCeiling = 250 * time.Millisecond
 
 	// jitterMaxRetries bounds how many times the full-jitter loop may turn, and
@@ -442,9 +443,10 @@ func RetryWithin[T any](bound time.Duration, try func() (T, error), retryable fu
 // therefore a function of the load the retries themselves offer, and identical
 // ladders walked by every loser at once keep that load synchronised. Measured
 // against a real server (rmp task #384; SPEC/GRAPH.md § Concurrency Inside the
-// Server, rule 7), sixteen writers on one node exhausted the fixed ladder on
-// 0.15% of statements and exhausted this shape on none of 18,000, inside the
-// same 2500 ms and with a shorter worst case.
+// Server, rule 7), sixteen writers on one node exhausted this shape less often
+// than the fixed ladder, inside the same 2500 ms and with a shorter worst case.
+// SPEC/IMPLEMENTATION.md § Retry Logic is canonical for the figures, and this
+// comment does not restate them.
 //
 // A bound of zero or less makes exactly one attempt, as RetryWithin's does.
 func RetryJitteredWithin[T any](bound time.Duration, try func() (T, error), retryable func(error) bool) (T, error) {

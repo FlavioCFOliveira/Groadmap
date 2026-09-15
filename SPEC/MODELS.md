@@ -351,8 +351,10 @@ class and with the same exit code, 6, as a value that carries a forbidden contro
 character. It carries its own message. The message body is
 `<field>: the value is not valid UTF-8`, and the full line the application writes to
 standard error is
-`Error: validation error: <field>: the value is not valid UTF-8`. `<field>` is the
-field's published name, specified by `COMMANDS.md § Published Field Names in
+`Error: validation error: <field>: the value is not valid UTF-8`. `<field>` is a
+placeholder `COMMANDS.md § Published Error Strings Are Exact` declares, and that
+section's table governs every error string this file publishes. In this line it is
+the field's published name, specified by `COMMANDS.md § Published Field Names in
 Validation Messages`, which is canonical for it. That section provides for a rule
 added later over the same fields, and this constraint is one: the name resolves
 there, and this constraint does not restate the mapping. The application stores nothing and changes

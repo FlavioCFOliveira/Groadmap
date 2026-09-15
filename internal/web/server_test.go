@@ -59,21 +59,42 @@ func TestBindListener_ExplicitPortBusyIsFatal(t *testing.T) {
 }
 
 // TestRun_HelpShortCircuits covers Run's showHelp branch (web.go): a help
-// token makes Run print help and return nil WITHOUT starting a server, so the
-// call returns immediately. This is the only Run path that does not block.
+// token makes Run call the help printer it is handed and return nil WITHOUT
+// starting a server, so the call returns immediately. This is the only Run path
+// that does not block.
 func TestRun_HelpShortCircuits(t *testing.T) {
 	for _, tok := range []string{"-h", "--help", "help"} {
-		if err := Run([]string{tok}); err != nil {
+		calls := 0
+		if err := Run([]string{tok}, func() { calls++ }); err != nil {
 			t.Errorf("Run(%q) = %v, want nil", tok, err)
+		}
+		if calls != 1 {
+			t.Errorf("Run(%q) called the help printer %d times, want once", tok, calls)
 		}
 	}
 }
 
 // TestRun_ParseErrorPropagates covers Run's parse-error branch: a bad flag is
-// reported by parseArgs and Run returns that error without starting a server.
+// reported by parseArgs and Run returns that error without starting a server,
+// and without writing the help.
 func TestRun_ParseErrorPropagates(t *testing.T) {
-	if err := Run([]string{"--port", "not-a-number"}); err == nil {
+	if err := Run([]string{"--port", "not-a-number"}, func() {
+		t.Errorf("Run with bad --port wrote the help")
+	}); err == nil {
 		t.Errorf("Run with bad --port = nil, want a validation error")
+	}
+}
+
+// TestHelpText_CarriesTheSuppliedExitCodesBlock pins the one thing HelpText
+// takes from its caller: the `Exit codes:` block, rendered from the command
+// registry, stands between the output and the examples exactly as supplied.
+func TestHelpText_CarriesTheSuppliedExitCodesBlock(t *testing.T) {
+	block := "Exit codes:\n  0     A rendered condition.\n\n"
+	text := HelpText(block)
+	want := "  On startup: {\"url\": \"http://127.0.0.1:8787\"} (reflects the bound host/port)\n\n" +
+		block + "Examples:\n"
+	if !contains(text, want) {
+		t.Errorf("HelpText does not place the supplied block between the output and the examples:\n%s", text)
 	}
 }
 

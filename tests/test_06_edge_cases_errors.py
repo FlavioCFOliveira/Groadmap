@@ -494,10 +494,11 @@ class TestEdgeCasesErrors:
         print("✓ Remove already removed task test passed")
 
     def test_edit_with_no_changes(self):
-        """Editing a task with no fields is a successful no-op (finding #48).
+        """Editing an existing task with no fields is a successful no-op (finding #48).
 
-        Per SPEC/COMMANDS.md § Edit Task, "If no fields are specified, command
-        succeeds with no changes (exit code 0)" and produces no output.
+        SPEC/COMMANDS.md § Edit Task, No-op: an edit that supplies no field
+        changes nothing and exits 0 when the task exists, and writes nothing to
+        stdout.
         """
         roadmap = self.test.create_roadmap()
         task_id = self.test.create_task(roadmap, "Task", "Functional", "Technical", "Criteria")

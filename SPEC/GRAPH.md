@@ -2615,10 +2615,17 @@ and not inside `graph/`: the contents of that directory belong to GoGraph, and
 
    **The flag names a socket; it does not name a path through the product.** It
    changes which socket an invocation looks at, and nothing about what happens
-   once it has looked: a server answering there takes the statement, and a path
-   that is absent or refuses sends the caller to the store under the exclusive
-   lock. There is no flag that demands a server, and none that forbids one (see
-   [Server Resolution](#server-resolution)).
+   once it has looked. For `graph client`, a server answering there takes the
+   statement, and a path that is absent or refuses is reported as no server
+   listening, exactly as the derived path is: the invocation exits with code 1,
+   writes `Error: graph server error: no graph server is listening on <socket>`
+   with `<socket>` the absolute path the flag's value expands to (see
+   [Socket Path Length](#socket-path-length), rule 1), writes nothing to
+   stdout, and opens no store (see the two **Not served** states of
+   [Server Resolution](#server-resolution), and
+   `COMMANDS.md § Graph Server Socket Error Lines`, which publishes the line). No
+   flag selects between a server and anything else, because there is nothing
+   else.
 3. **The socket carries mode `0600`, set explicitly.** It MUST NOT be left at
    whatever the process umask happens to yield. Connecting to a Unix domain
    socket requires **write** permission on the socket file, so a permissive umask
@@ -3435,11 +3442,12 @@ process. What that means is fixed by the engine and is not Groadmap's to choose:
    rather than of concurrency, and that is the most useful thing a caller can be
    told.** Writers spread across distinct nodes barely collide; writers
    converging on one node collide steadily however few of them there are.
-   Measured against a real server, holding the writer count at sixteen and
-   varying only the number of distinct nodes written: on **one** node the retry
-   policy was exhausted on 0.33% of 6,000 statements, at 474 statements per
-   second; on **four** nodes, on 0.03%; on **eight or more**, on none at all,
-   with throughput rising to 3,494 statements per second at sixty-four nodes. A
+   Measured against a real server under the retry policy in force, holding the
+   writer count at sixteen and varying only the number of distinct nodes
+   written, only writers that all shared **one** node exhausted the retry at
+   all, and throughput rose steeply as the same writers spread over more nodes.
+   `IMPLEMENTATION.md § Retry Logic` is canonical for that measurement and for
+   its figures, and this rule does not restate them. A
    caller that meets this failure is therefore not being told to reduce its
    concurrency. It is being told that all of its writers are landing on one
    node — which is the shape this project produces itself when several agents

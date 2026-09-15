@@ -38,11 +38,7 @@ Output (stdout JSON):
     ]
   An empty array is returned when no roadmaps exist; exit is still 0.
 
-Exit codes:
-  0   Success
-  2   Unrecognised flag, or a positional argument (this command takes none)
-
-Examples:
+`+exitCodesBlock("roadmap", "list")+`Examples:
   rmp roadmap list
   rmp roadmap ls
 `)
@@ -67,13 +63,7 @@ Options: -h, --help
 Output (stdout JSON):
   {"name": "<name>"}
 
-Exit codes:
-  0   Success
-  2   Roadmap name argument missing
-  5   A roadmap with that name already exists
-  6   Invalid roadmap name (bad regex match, length, or reserved word)
-
-Examples:
+`+exitCodesBlock("roadmap", "create")+`Examples:
   rmp roadmap create mobile-app
   rmp roadmap new payment-api
 `)
@@ -97,13 +87,7 @@ Options: -h, --help
 
 Output: empty (exit 0 on success).
 
-Exit codes:
-  0   Success
-  2   Roadmap name argument missing
-  4   Roadmap not found
-  6   Invalid roadmap name
-
-Examples:
+`+exitCodesBlock("roadmap", "remove")+`Examples:
   rmp roadmap remove mobile-app
   rmp roadmap rm payment-api
   rmp roadmap delete legacy-project
