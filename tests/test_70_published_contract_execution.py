@@ -59,6 +59,12 @@ test, so an example beginning with the bare word `rmp` cannot silently reach an
 installed copy elsewhere on the machine -- which it did, and which made the
 first draft of this gate pass an example the binary under test refuses.
 
+Every command line runs in a process group of its own, which is killed and
+waited for when the line is done, and the module ends by asserting that no
+group it started still has a member. A line having exited does not mean that
+everything it started has: `rmp graph serve -r <name> & ...` leaves a server
+that belongs to no living shell.
+
 The temporary root is short so the graph socket path derived under it stays
 inside the platform's limit (SPEC/GRAPH.md § Socket Path Length); past that
 limit every graph invocation would be refused for the length of the gate's own
@@ -392,6 +398,32 @@ def _env_for(home):
     return env
 
 
+# Every command line the gate runs is started in a session of its own, and its
+# process group stays registered here until it is confirmed empty. The module
+# ends by asserting that no registered group still has a member (rmp task 478).
+
+_LIVE_GROUPS = {}
+
+GROUP_EXIT_TIMEOUT = 10.0
+
+
+def _spawn(line, home, env, stdout, stderr):
+    """Start one command line in a session of its own and register its group.
+
+    start_new_session=True makes the shell the leader of a new session and of
+    a new process group, so the group id is proc.pid by construction, and every
+    process the line starts is reachable through that group for as long as it
+    lives -- including after the shell itself has exited and been reaped.
+    """
+    proc = subprocess.Popen(
+        ["bash", "-c", line], stdout=stdout, stderr=stderr,
+        stdin=subprocess.DEVNULL, text=True, env=env, cwd=home,
+        start_new_session=True,
+    )
+    _LIVE_GROUPS[proc.pid] = (proc, line)
+    return proc
+
+
 def run_line(line, home, timeout=40.0):
     """Run one published invocation as a shell command line.
 
@@ -400,8 +432,9 @@ def run_line(line, home, timeout=40.0):
     semantics the SPEC asks of a published sequence: each element must exit 0
     for the next to run, and the line's own status is non-zero if any did not.
 
-    The process gets its own group, and the group is killed afterwards, so an
-    invocation that backgrounds a server leaves nothing running.
+    The process gets its own group, and the group is killed and waited for
+    afterwards, so an invocation that backgrounds a server leaves nothing
+    running.
     """
     env = _env_for(home)
     # The two streams go to FILES, not pipes. A published invocation may
@@ -414,11 +447,7 @@ def run_line(line, home, timeout=40.0):
     err_path = os.path.join(home, ".gate-stderr")
     with open(out_path, "w", encoding="utf-8") as out_fh, \
             open(err_path, "w", encoding="utf-8") as err_fh:
-        proc = subprocess.Popen(
-            ["bash", "-c", line], stdout=out_fh, stderr=err_fh,
-            stdin=subprocess.DEVNULL, text=True, env=env, cwd=home,
-            start_new_session=True,
-        )
+        proc = _spawn(line, home, env, stdout=out_fh, stderr=err_fh)
         try:
             code = proc.wait(timeout=timeout)
         except subprocess.TimeoutExpired:
@@ -432,11 +461,119 @@ def run_line(line, home, timeout=40.0):
     return code, out, err
 
 
-def _kill_group(proc):
+def _group_exists(pgid):
+    """Whether process group `pgid` still has a member, a zombie not yet reaped
+    included. Signal 0 performs the check without delivering anything."""
     try:
-        os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+        os.killpg(pgid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        # A member exists, and this user may not signal it.
+        return True
+    return True
+
+
+def _kill_group(proc, timeout=GROUP_EXIT_TIMEOUT):
+    """SIGKILL every process in the group `proc` leads, reap `proc`, wait --
+    bounded -- for the group to empty, and deregister it once it has.
+
+    The group id is proc.pid, never os.getpgid(proc.pid). The two are equal by
+    construction (see _spawn), and getpgid fails once the leader has been
+    reaped, which is exactly the state after a published line that backgrounds
+    a server has exited. Reading it there raised ProcessLookupError, the handler
+    swallowed it, and the backgrounded server outlived the gate, its fixture
+    directory and its binary (rmp task 478).
+
+    A group that does not empty within `timeout` stays registered, so the
+    module's closing check reports it rather than this helper hiding it.
+    """
+    deadline = time.monotonic() + timeout
+    try:
+        os.killpg(proc.pid, signal.SIGKILL)
     except (ProcessLookupError, PermissionError):
+        # Nothing left to signal, or nothing this user may signal: the wait
+        # below tells the two apart.
         pass
+    try:
+        proc.wait(timeout=max(0.0, deadline - time.monotonic()))
+    except subprocess.TimeoutExpired:
+        pass
+    while _group_exists(proc.pid):
+        if time.monotonic() >= deadline:
+            return
+        time.sleep(0.01)
+    if _LIVE_GROUPS.get(proc.pid, (None, None))[0] is proc:
+        del _LIVE_GROUPS[proc.pid]
+
+
+def _process_table():
+    """Every process on the machine as (pid, pgid, state, args), read from ps."""
+    listing = subprocess.run(
+        ["ps", "-A", "-o", "pid=,pgid=,stat=,args="],
+        capture_output=True, text=True, timeout=30,
+    )
+    assert listing.returncode == 0, (
+        f"the gate could not read the process table: exit={listing.returncode} "
+        f"stderr={listing.stderr.strip()!r}"
+    )
+    rows = []
+    for raw in listing.stdout.splitlines():
+        parts = raw.split(None, 3)
+        if len(parts) < 3 or not (parts[0].isdigit() and parts[1].isdigit()):
+            continue
+        rows.append((int(parts[0]), int(parts[1]), parts[2],
+                     parts[3] if len(parts) == 4 else ""))
+    return rows
+
+
+def surviving_groups(pgids=None):
+    """The registered groups -- or the given ones -- that still have a member,
+    each mapped to (the line that started it, the members ps lists for it)."""
+    candidates = list(_LIVE_GROUPS) if pgids is None else list(pgids)
+    alive = [pgid for pgid in candidates if _group_exists(pgid)]
+    if not alive:
+        return {}
+    members = {pgid: [] for pgid in alive}
+    for pid, pgid, state, args in _process_table():
+        if pgid in members:
+            members[pgid].append(f"pid {pid} [{state}] {args}")
+    return {
+        pgid: (_LIVE_GROUPS[pgid][1] if pgid in _LIVE_GROUPS else "(unregistered)",
+               members[pgid])
+        for pgid in alive
+    }
+
+
+def stop_every_started_group():
+    """Kill and reap every registered group not yet confirmed empty."""
+    for proc, _ in list(_LIVE_GROUPS.values()):
+        _kill_group(proc)
+
+
+def assert_no_started_process_outlives_the_module():
+    """No process the gate started is still running when the module ends.
+
+    The survivors are listed first, then stopped, then reported, so a failing
+    check still leaves nothing running behind it.
+    """
+    survivors = surviving_groups()
+    stop_every_started_group()
+    if not survivors:
+        return
+    unstopped = surviving_groups(survivors)
+    report = []
+    for pgid, (line, members) in sorted(survivors.items()):
+        report.append(f"  group {pgid}, started by `{line[:240]}`")
+        report.extend(f"    {member}"
+                      for member in (members or ["(exited while being listed)"]))
+    raise AssertionError(
+        f"{len(survivors)} process group(s) the gate started still had a member "
+        f"when the module ended; a test leaves no process it started running "
+        f"(rmp task 478). They were killed now"
+        + (f", and {len(unstopped)} did not exit" if unstopped else "")
+        + ":\n" + "\n".join(report)
+    )
 
 
 def start_server(line, home, key, timeout=SERVER_START_TIMEOUT):
@@ -445,31 +582,35 @@ def start_server(line, home, key, timeout=SERVER_START_TIMEOUT):
     The oracle is the JSON object the process writes to stdout at startup --
     {"socket": ...} for the graph server, {"url": ...} for the web server --
     which is what the subcommand's own stdout_on_success declares.
+
+    A process that does not announce itself -- or that is still being read when
+    an exception arrives -- is stopped here, before returning, so a caller's
+    assertion on the startup line cannot leave it running.
     """
     env = _env_for(home)
-    proc = subprocess.Popen(
-        ["bash", "-c", line], stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-        stdin=subprocess.DEVNULL, text=True, env=env, cwd=home,
-        start_new_session=True,
-    )
+    proc = _spawn(line, home, env, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     deadline = time.time() + timeout
     buffered = ""
     started = None
-    while time.time() < deadline:
-        if proc.poll() is not None:
-            break
-        line_read = proc.stdout.readline()
-        if not line_read:
-            time.sleep(0.02)
-            continue
-        buffered += line_read
-        try:
-            obj = json.loads(buffered)
-        except json.JSONDecodeError:
-            continue
-        if isinstance(obj, dict) and key in obj:
-            started = obj
-            break
+    try:
+        while time.time() < deadline:
+            if proc.poll() is not None:
+                break
+            line_read = proc.stdout.readline()
+            if not line_read:
+                time.sleep(0.02)
+                continue
+            buffered += line_read
+            try:
+                obj = json.loads(buffered)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(obj, dict) and key in obj:
+                started = obj
+                break
+    finally:
+        if started is None:
+            stop_server(proc)
     return started, buffered, proc
 
 
@@ -857,7 +998,7 @@ class TestPublishedExamplesAreExecuted:
         ran = 0
         for workflow in self.contract["common_workflows"]:
             home = Workspace.fresh()
-            server = None
+            servers = []
             try:
                 plan = WORKFLOW_PLANS.get(workflow["name"])
                 assert plan is not None, (
@@ -876,7 +1017,7 @@ class TestPublishedExamplesAreExecuted:
                             f"(`{line}`) starts a server that never announced "
                             f"itself; stdout was {buffered[:300]!r}"
                         )
-                        server = proc
+                        servers.append(proc)
                         # Started and asserted to have started, which is what
                         # this surface's oracle is; it counts as executed.
                         self.executed.append(step["command"])
@@ -892,7 +1033,7 @@ class TestPublishedExamplesAreExecuted:
                 self._assert_workflow_outcome(workflow["name"], plan, home)
                 ran += 1
             finally:
-                if server is not None:
+                for server in servers:
                     stop_server(server)
                 shutil.rmtree(home, ignore_errors=True)
         assert ran >= 8, f"only {ran} workflows ran; the traversal is broken"
@@ -981,6 +1122,70 @@ class TestPublishedExamplesAreExecuted:
         )
 
     # -- the gate's own guarantees ----------------------------------------
+
+    def test_a_backgrounded_server_is_seen_and_stopped(self):
+        """rmp task 478: nothing the gate starts outlives the module, and the
+        check that asserts it can fail.
+
+        A published line may background a server and exit, leaving the server
+        in no living shell. The same shape is run twice. Started with _spawn
+        and not stopped, its server must be seen by surviving_groups() -- the
+        module's closing check -- which proves that check is not vacuous. Run
+        through run_line, its server must be gone when run_line returns: that
+        is the defect this pins, where run_line read the group id from the
+        reaped shell, failed, and left the server running.
+
+        Each run names its own socket in the server's argv, so the server is
+        found in the process table without trusting the registry the closing
+        check reads.
+        """
+        def backgrounding_line(sock):
+            return (f"rmp graph serve -r {FIXTURE_ROADMAP} --socket {sock} & "
+                    f"until rmp graph client -r {FIXTURE_ROADMAP} --socket {sock} "
+                    f"--query 'RETURN 1' > /dev/null 2>&1; do sleep 0.2; done")
+
+        def servers_on(sock):
+            return [args for _, _, state, args in _process_table()
+                    if args.split()[:3] == ["rmp", "graph", "serve"]
+                    and sock in args.split() and not state.startswith("Z")]
+
+        left_home = Workspace.fresh()
+        left_sock = os.path.join(left_home, "left.sock")
+        try:
+            proc = _spawn(backgrounding_line(left_sock), left_home,
+                          _env_for(left_home), stdout=subprocess.DEVNULL,
+                          stderr=subprocess.DEVNULL)
+            try:
+                assert proc.wait(timeout=SERVER_START_TIMEOUT) == 0, (
+                    "the backgrounding line did not reach its server")
+                assert servers_on(left_sock), (
+                    "the line exited without leaving its server running, so "
+                    "nothing below is tested")
+                seen = surviving_groups({proc.pid})
+                assert proc.pid in seen and any(
+                    left_sock in member for member in seen[proc.pid][1]), (
+                    "the closing check did not see a server left running in a "
+                    "group the gate started; a check that cannot see a survivor "
+                    f"passes a gate that leaks. It saw {seen!r}")
+            finally:
+                _kill_group(proc)
+            assert not servers_on(left_sock), (
+                "_kill_group returned and the server the line left running is "
+                f"still running: {servers_on(left_sock)!r}")
+        finally:
+            shutil.rmtree(left_home, ignore_errors=True)
+
+        run_home = Workspace.fresh()
+        run_sock = os.path.join(run_home, "run.sock")
+        try:
+            code, _, err = run_line(backgrounding_line(run_sock), run_home)
+            assert code == 0, (
+                f"the backgrounding line exited {code}; stderr={err.strip()[:300]!r}")
+            assert not servers_on(run_sock), (
+                "run_line returned and the server its line backgrounded is still "
+                f"running (rmp task 478): {servers_on(run_sock)!r}")
+        finally:
+            shutil.rmtree(run_home, ignore_errors=True)
 
     def test_the_exemption_list_carries_no_stale_entry(self):
         published = set()
@@ -1757,6 +1962,16 @@ def _run_all():
                 print(f"✗ {cls.__name__}.{method} (error)")
             finally:
                 instance.teardown_method()
+    # The module's closing guarantee, checked once every test has run.
+    closing = "module: no process the gate started outlives it"
+    try:
+        assert_no_started_process_outlives_the_module()
+        passed += 1
+        print(f"✓ {closing}")
+    except AssertionError as exc:
+        failed += 1
+        failures.append((closing, exc))
+        print(f"✗ {closing}")
     print("\n" + "=" * 60)
     print(f"Published contract execution tests: {passed} passed, {failed} failed")
     print("=" * 60)
@@ -1769,5 +1984,8 @@ if __name__ == "__main__":
     try:
         ok = _run_all()
     finally:
+        # An interrupted run reaches here without the closing check; whatever
+        # it started is still stopped before the workspace is removed.
+        stop_every_started_group()
         Workspace.cleanup()
     sys.exit(0 if ok else 1)
