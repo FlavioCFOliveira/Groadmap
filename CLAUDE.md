@@ -475,7 +475,7 @@ your ability to understand the project is preserved.
 3. `go test <changed packages>` (tests - ALL must pass) — plus any package whose
    stability the change can foreseeably affect
 4. `go build -o ./bin/ ./cmd/rmp` (build)
-5. `golangci-lint run <changed packages>` (lint — requires golangci-lint; see SPEC/BUILD.md for install)
+5. `"$GOLANGCI_LINT" run <changed packages>` (lint — requires golangci-lint; see SPEC/BUILD.md for install)
 
 **The full sweep is reserved for three moments, and no others**: closing a
 sprint, pushing, and a specific request from the user. A release qualifies
@@ -705,10 +705,10 @@ go fmt ./...
 go vet ./...
 
 # Lint (requires golangci-lint at the pinned version; see SPEC/BUILD.md for install)
-golangci-lint run ./...
+make lint
 
 # Security scan (requires gosec at the pinned version; see SPEC/BUILD.md for install)
-gosec -exclude-dir=.claude/worktrees ./...
+make security
 
 # All validation gates in one command
 make check
