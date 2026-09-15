@@ -69,13 +69,18 @@ func parseArgs(args []string) (opts options, showHelp bool, err error) {
 	for i := 0; i < len(args); i++ {
 		arg := args[i]
 
+		// A help token is the whole token and nothing else: `--help=1` and
+		// `-h=` are unknown flags, never help (SPEC/HELP.md § Help tokens). The
+		// comparison therefore reads arg, before the split below removes an
+		// "=value" tail.
+		if arg == "-h" || arg == "--help" || arg == "help" {
+			return options{}, true, nil
+		}
+
 		// Split --flag=value once so both forms share one code path.
 		name, inlineVal, hasInline := splitFlag(arg)
 
 		switch name {
-		case "-h", "--help", "help":
-			return options{}, true, nil
-
 		case "--no-open":
 			if hasInline {
 				return options{}, false, fmt.Errorf("%w: --no-open does not take a value", utils.ErrInvalidInput)
@@ -108,7 +113,10 @@ func parseArgs(args []string) (opts options, showHelp bool, err error) {
 
 		default:
 			if strings.HasPrefix(arg, "-") {
-				return options{}, false, fmt.Errorf("%w: unknown flag: %s", utils.ErrInvalidInput, arg)
+				// The line names the flag without its "=value" tail, as every
+				// command's unknown-flag line does (SPEC/COMMANDS.md
+				// § Positional Arguments, rule 5): name is arg up to the first "=".
+				return options{}, false, fmt.Errorf("%w: unknown flag: %s", utils.ErrInvalidInput, name)
 			}
 			return options{}, false, fmt.Errorf("%w: unexpected argument: %s", utils.ErrInvalidInput, arg)
 		}

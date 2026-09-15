@@ -49,7 +49,7 @@ The SPEC is unversioned. Git is the source of truth for its evolution — recove
 | Task comment / sprint comment models and field constraints | `MODELS.md § Task Comment` and `MODELS.md § Sprint Comment` |
 | Comment subcommand syntax / flags (`comment-add`, `comment-list`, `comment-edit`, `comment-remove`) | `COMMANDS.md § Task Comments` and `COMMANDS.md § Sprint Comments` |
 | Comment body input via flag or stdin | `COMMANDS.md § Comment Body Input Source and Precedence` |
-| Positional argument count of any command, and the refusal of an invocation that supplies more than the command declares | `COMMANDS.md § Positional Arguments` |
+| Positional argument count of any command, the refusal of an invocation that supplies more than the command declares, and the refusal of an unrecognised flag written between or after the positional arguments | `COMMANDS.md § Positional Arguments` |
 | Comment positional argument count, and what the one id identifies on each comment subcommand | `COMMANDS.md § Comment Positional Argument Contract` |
 | Comment JSON shape | `DATA_FORMATS.md § Task Comment` and `DATA_FORMATS.md § Sprint Comment` |
 | Comment tables, DDL, and cascade rules | `DATABASE.md § task_comments Table` and `DATABASE.md § sprint_comments Table` |
@@ -110,6 +110,8 @@ The SPEC is unversioned. Git is the source of truth for its evolution — recove
 | Dispatch failure (an unresolved command or subcommand name): exit code `127`, the help written after the error, the excluded `--ai-help` scope case | `HELP.md § Error message format` and `COMMANDS.md § Dispatch Failures (Unresolved Command or Subcommand Names)` |
 | Which error classes append help, and which do not | `HELP.md § Recovery help after a dispatch failure` |
 | Stdout silence on a failing invocation, and the help invocations that exit `0` | `HELP.md § Stdout silence on failure` and `COMMANDS.md § Failing Invocations Write Nothing to Stdout` |
+| Help tokens (`--help`, `-h`, `help`): the positions in which each asks for help, the flag values in which none does, and the refusal of `--help=<value>` | `HELP.md § Help tokens` |
+| Which exit codes a subcommand help lists (exactly those of its contract entry), and the end-to-end gate that compares the two | `HELP.md § Agreement with the contract` |
 | Database schema (DDL) | `DATABASE.md § DDL - Table Creation` |
 | SQL queries | `DATABASE.md § Main SQL Queries` |
 | Audit operations catalogue (the canonical list, including the LEGACY values) | `DATABASE.md § audit Table` |
@@ -169,6 +171,8 @@ To prevent drift across SPEC files, the following topics have a single authorita
 | Timestamp format, and the scope of the UTC rule (which output it binds, including a log record whose message came from a dependency, and the requirement that one realisation of the format serve every surface) | `DATA_FORMATS.md § Dates - ISO 8601 with UTC` |
 | Sentinel errors and wrapping rules | `ARCHITECTURE.md § Error Handling` |
 | Error output shape (stderr parts and their order, which error classes append help, stdout silence on failure) | `HELP.md § Error message format` |
+| Help tokens, token positions, and the flag values that never ask for help | `HELP.md § Help tokens` |
+| The exit codes a subcommand help lists, their agreement with the subcommand's contract entry, and the gate that holds it | `HELP.md § Agreement with the contract` |
 | Filesystem permission model (`0700` directories, `0600` database, when enforced, failure mode) | `ARCHITECTURE.md § Open-Time Permission Enforcement` |
 | Enums (`TaskType`, `TaskStatus`, `SprintStatus`, `CommentType`) | `MODELS.md § Enums` |
 | Comment type per-entity valid subsets (task: 7 values, sprint: 4 values) | `MODELS.md § Comment Type` |
@@ -179,7 +183,7 @@ To prevent drift across SPEC files, the following topics have a single authorita
 | What Groadmap does not check about a Cypher statement, the outcome of each unchecked hazard, and the relationship-read direction measured correct at the pinned engine | `GRAPH.md § What Groadmap Does Not Check` |
 | Knowledge-graph node `key` uniqueness (what the invariant is, which comparison decides that two keys are the same, that the product does not enforce it, and the audit that detects a violation) | `GRAPH.md § Node Key Uniqueness` |
 | Knowledge-graph schema management (the index and constraint statements the engine accepts, schema object naming, the non-atomic drop-then-create, and the schema failure classes) | `GRAPH.md § Schema Management` |
-| Declared positional arity per command, and the refusal of an excess positional argument (exit code 2, the published line, no side effect) | `COMMANDS.md § Positional Arguments` |
+| Declared positional arity per command, the refusal of an excess positional argument, and the refusal of an unrecognised flag written between or after the positional arguments (exit code 2, the published line, no side effect) | `COMMANDS.md § Positional Arguments` |
 | Comment positional arguments (exactly one id per subcommand, and what that id identifies) | `COMMANDS.md § Comment Positional Argument Contract` |
 | Memory layout / struct field ordering | `MODELS.md § Memory Layout Optimization` |
 | Task state transitions | `STATE_MACHINE.md § Task State Machine` |

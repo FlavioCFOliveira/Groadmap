@@ -12,6 +12,7 @@ is modified.
 
 - [Audience and intent](#audience-and-intent)
 - [Help levels](#help-levels)
+  - [Help tokens](#help-tokens)
 - [AI agent banner](#ai-agent-banner)
 - [Help structure template](#help-structure-template)
 - [Family-help template](#family-help-template)
@@ -29,6 +30,7 @@ is modified.
   - [Stdout silence on failure](#stdout-silence-on-failure)
 - [AI_AGENT environment variable](#ai_agent-environment-variable)
 - [Exit codes](#exit-codes)
+  - [Agreement with the contract](#agreement-with-the-contract)
 
 ## Audience and intent
 
@@ -52,10 +54,13 @@ Three levels of help text exist, each at a different granularity:
 | Family | `rmp <family> --help` (and `rmp <family>` with no subcommand) | Enumerates the subcommands of a family, shared options, valid enum values, status workflow, output shapes, exit codes, families-wide examples. |
 | Subcommand | `rmp <family> <subcommand> --help` | Focused contract for a single subcommand: usage line, required vs optional, the JSON it returns, the exit codes it can emit, two or three worked examples. |
 
-Every family handler routes `--help` (and `-h` and the literal word
-`help`) anywhere in its argument list to the matching printer **before**
-any other parsing runs, so subcommand help is reachable even when the
-required `-r` flag is missing.
+Every family handler routes a help token — `--help`, `-h`, or the literal
+word `help` — written in a token position anywhere in its argument list to
+the matching printer **before** any other check runs, so subcommand help is
+reachable even when the required `-r` flag is missing. A help token written as
+the value of a flag is that flag's value and asks for no help, and a token
+such as `--help=1` is not a help token at all. `§ Help tokens` below defines
+both terms and is canonical for the rule.
 
 A separate machine-readable surface for the second audience exists in
 parallel to the plain-text help: the AI Agent Contract emitted by
@@ -64,6 +69,103 @@ parallel to the plain-text help: the AI Agent Contract emitted by
 `DATA_FORMATS.md § AI Agent Contract` (JSON shape). The plain-text help
 described in this document remains the primary surface for human
 operators.
+
+### Help tokens
+
+A **help token** is one of exactly three tokens: `--help`, `-h`, and `help`.
+The whole token is compared, byte for byte, and no other token is a help token:
+not another letter case, such as `--HELP`, and not a token that carries a value
+after an `=`, such as `--help=1`, `--help=`, or `-h=1`.
+
+A help token asks for help only where it stands in a **token position**. Every
+position after the command name is a token position except one: the position of
+a flag's value. A token written there is the value of that flag, like any other
+word written there, and asks for nothing. A help token in a token position is
+served before any other check runs, wherever it is written after the command
+name, before, between, or after the positional arguments and the flags: the
+invocation writes the help of its level (`§ Help levels`) to stdout, exits `0`,
+and does nothing else. Two invocations stand outside this paragraph, each under
+a rule of its own: `rmp help`, `rmp --help`, and `rmp -h` are the global help
+command, which refuses any token written after it
+(`COMMANDS.md § Positional Arguments`), and `rmp ai-help` followed by a help
+token writes the contract rather than a help (`COMMANDS.md § AI Help`).
+
+**A flag that takes a value** is a flag the subcommand declares with a type
+other than `boolean`. The declaration is the subcommand's entry in the command
+registry, which the AI Agent Contract publishes as that subcommand's `flags`
+array (`DATA_FORMATS.md § Field reference: flag entry`), and no other list
+decides the question. The long and the short spelling of a declared flag are
+the same flag, and the roadmap selector `-r` / `--roadmap` takes a value on every
+subcommand that declares it. Two consequences follow from the declaration being
+the source:
+
+- A flag declared `boolean` takes no value, so the token after it stands in a
+  token position: `rmp sprint tasks -r <name> 5 --order-by-priority help` writes
+  the help.
+- A flag the subcommand does not declare takes no value either, so the token
+  after it stands in a token position: `rmp task list -r <name> --foo help`
+  writes the help, and the unrecognised flag is not reported, because a help
+  token is served before any flag is refused.
+
+A flag's value is recognised in two forms, reading the command line from left to
+right:
+
+1. **The separate form, `--flag value` or `-f value`.** The token written
+   immediately after a flag that takes a value is that flag's value when it does
+   not begin with `-`, so the word `help` written there is the flag's value.
+   `--help` and `-h` written there are not values: a token that begins with `-`
+   is a flag in that position (`COMMANDS.md § Positional Arguments`, rule 5), so
+   each of them stands in a token position and asks for help.
+2. **The joined form, `--flag=value` or `-f=value`.** Where a command reads this
+   form, the value is the text after the first `=` of the same token. A token of
+   this form is never a help token, whatever that text is, on a command that does
+   not read the form as much as on one that does.
+
+The rule fixes, among others, these outcomes:
+
+- `rmp task create -r <name> -t help -fr <text> -tr <text> -ac <text>` creates a
+  task titled `help` and writes no help, and so does the same invocation with
+  `--title=help` in place of `-t help`.
+- `rmp sprint create -r <name> -t <title> -d help` creates a sprint whose
+  description is `help`.
+- `rmp task list -r help` reads `help` as the value of `-r`, and exits `6` with
+  `Error: validation error: "help": roadmap name is a reserved system name`: the
+  name is reserved, because no command could create or remove a roadmap of that
+  name (`COMMANDS.md § Roadmap Name Validation`).
+- `rmp task list -r <name> -s help` reads `help` as the value of `--status` and
+  refuses it as a status, with exit code `6`.
+- `rmp stats -r <name> help` and `rmp task list -r <name> --help` write the help
+  and exit `0`: `help` follows the value of the selector, not the selector, and
+  `--help` follows no flag that takes a value.
+- `rmp task create -r <name> -t --help` writes the help, because `--help` is not
+  a value in the separate form.
+- `rmp roadmap create help` and `rmp roadmap remove help` write the help of their
+  subcommand and create or remove nothing: a positional argument stands in a token
+  position, so the word `help` cannot be supplied as a roadmap name there. A
+  roadmap named `help` made outside the CLI is listed by `rmp roadmap list` and
+  reachable by no command, exactly as one named `con` is.
+
+**A token that carries a value after an `=` is refused, never served.**
+`--help=<value>` and `-h=<value>`, whatever the value and including the empty
+one, are unrecognised flags. Written among a command's arguments, either is
+refused under `COMMANDS.md § Positional Arguments`, rule 5, with exit code `2`:
+no help is written, nothing is written to stdout, and the command performs
+nothing. The line names the flag without the `=` and the text after it, as
+`COMMANDS.md § Positional Arguments`, rule 5, requires of every unrecognised
+flag on every command:
+
+| Token | Error line |
+|-------|-----------|
+| `--help=<value>` | `Error: invalid input: unknown flag: --help` |
+| `-h=<value>` | `Error: invalid input: unknown flag: -h` |
+
+`rmp web` follows the rule like every other command: `rmp web --help=1` exits
+`2` with the first line and writes no help. Two cases fall outside this
+paragraph, and neither writes help: `rmp ai-help` refuses every token other than
+a help token with the line `COMMANDS.md § AI Help` publishes, and a token written
+where a command or a subcommand name is expected, as in `rmp --help=1` or
+`rmp task --help=1`, names nothing and is a dispatch failure
+(`§ Recovery help after a dispatch failure`).
 
 ## AI agent banner
 
@@ -116,7 +218,11 @@ order:
    declare "empty (exit 0)" explicitly.
 8. **Exit codes** — every code the command can emit, each with a
    one-line cause. Exit code 0 is included so the reader sees the
-   success case without inference.
+   success case without inference. The help of a subcommand, and the
+   help of a command that takes no subcommand, lists exactly the codes
+   of its entry in the AI Agent Contract: every code that entry's
+   `exit_codes` array declares, each once, and no other code
+   (`§ Agreement with the contract`).
 9. **Examples** — two to four worked examples that cover the common
    paths (filter, mutate, error-recovery).
 
@@ -1057,3 +1163,68 @@ philosophy is that the catalogue stays single-sourced in
 `ARCHITECTURE.md`, but every help replicates the relevant subset so the
 reader doesn't have to cross-reference for the failure cases that apply
 to the call they're about to make.
+
+### Agreement with the contract
+
+The AI Agent Contract publishes, for every subcommand, the exit codes that
+subcommand can emit and the conditions that produce each
+(`DATA_FORMATS.md § Field reference: per-subcommand exit code entry`). The
+plain-text help of the same subcommand lists exactly those codes: every code of
+the entry's `exit_codes` array appears in the help's `Exit codes:` block, each
+once, and the block lists no code the array does not declare. This rule adds no
+exit code to any subcommand and removes none.
+
+The contract is the authority. Where the two disagree, the help is wrong and
+the correction is made to the help: which codes a subcommand emits, and under
+which conditions, is decided by its contract entry and by its command contract in
+`COMMANDS.md`, never by a help text. This is the non-duplication rule of
+`ARCHITECTURE.md § AI Agent Contract Generation`, which forbids a help printer to
+publish an exit code the registry does not declare, together with its converse:
+a help printer may not omit one the registry does declare.
+
+The help of a subcommand is what `rmp <command> <subcommand> --help` writes. For
+`stats` and `web`, which take no subcommand, it is what `rmp <command> --help`
+writes. A family help has no contract entry of its own and is not bound by this
+subsection; the rule above governs it.
+
+**`ai-help` has no plain-text help to compare.** `rmp ai-help --help` writes the
+contract itself, byte for byte what `rmp --ai-help` writes, as
+`COMMANDS.md § AI Help` provides: `rmp ai-help` is equivalent to
+`rmp --ai-help`, and the contract takes precedence over every other argument.
+The exit codes of `ai-help` are therefore published once, by the entry the
+contract carries for it, and no second surface exists to disagree with them.
+
+**The gate.** An end-to-end module in `tests/` holds every plain-text subcommand
+help to this subsection. It reads both surfaces from the compiled binary, for the
+reason `DATA_FORMATS.md § Published Examples Are Executed` gives for its own
+gate: a help token can be served by a path other than the printer the registry
+names, as `rmp ai-help --help` is, so a gate that called the printers directly
+could compare a help that no invocation writes. The gate:
+
+1. obtains the contract by running `rmp --ai-help`, and takes from it the
+   subcommands it publishes and the `exit_codes` array of each;
+2. runs the help invocation of every one of those subcommands other than
+   `ai-help`, and reads the `Exit codes:` block from its stdout;
+3. compares the set of codes the block lists with the set of `code` values the
+   subcommand's `exit_codes` array carries, and fails, naming the subcommand and
+   the codes, on a code the help lists that the array does not declare, on a code
+   the array declares that the help does not list, and on a code the help lists
+   twice;
+4. fails on a help that carries no `Exit codes:` block, or more than one;
+5. asserts that `rmp ai-help --help` writes exactly what `rmp --ai-help` writes,
+   so the one subcommand it does not compare is excluded by a checked fact rather
+   than skipped;
+6. counts the subcommands it compared, and fails unless the count equals the
+   number of subcommands the contract publishes less one, for `ai-help`; and
+7. proves it can fail: its comparator rejects a copy of a real `Exit codes:`
+   block with one entry removed, and a copy with one entry added, and accepts the
+   block unaltered.
+
+**How the block is read.** The block begins at the line `Exit codes:` and ends
+at the first empty line after it. A line of the block that is indented by
+exactly two spaces, and whose first field is a decimal number followed by at
+least two spaces, opens the entry for that code. Every other line of the block
+is indented by at least three spaces and continues the entry above it. A line in
+neither shape fails the gate rather than being skipped, because a block the gate
+cannot read is a block whose codes nobody has compared. Every plain-text
+subcommand help the CLI writes has this shape.

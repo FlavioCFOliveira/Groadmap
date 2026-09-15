@@ -122,7 +122,7 @@ The rules are:
 2. **The first offending token is named, and only that one.** When several positional arguments exceed the maximum, the command names the first of them in command-line order and stops.
 3. **The position of the offending token does not matter.** What is refused is whatever positional arguments remain once the command's flags and their values have been consumed, not a particular slot on the command line. An extra token written between two flags and one written at the end of the line are the same error.
 4. **A comma-separated list is one positional argument.** Every command that takes a list of ids takes it as a single token, without spaces. `rmp task get -r <name> 12,13,14` supplies one positional argument and is within an arity of one; `rmp task get -r <name> 12 13 14` supplies three and is refused.
-5. **A token that begins with `-` is normally a flag, not a positional argument.** An unrecognised one is refused as an unknown flag — `Error: invalid input: unknown flag: --foo` — under the same exit code `2`. Two commands refine that classification and each states its own rule: the comment subcommands treat every `-`-prefixed token as a flag, digits included (`Comment Positional Argument Contract` below, rule 2), while the subcommand that reads a Cypher statement, `graph client`, treats a `-` followed by a digit or a decimal point as a numeric value rather than a flag (`GRAPH.md § Cypher Input Source and Precedence`, rule 4). A stray `-1` is therefore an excess positional argument on that subcommand and an unknown flag on a comment subcommand.
+5. **A token that begins with `-` is normally a flag, not a positional argument.** An unrecognised one is refused as an unknown flag — `Error: invalid input: unknown flag: --foo` — under the same exit code `2`. The line names the flag as the command line spells it, up to and not including the first `=` the token carries, and it does so for every flag on every command that refuses with this line, `graph serve`, `graph client`, and `web` included: `--foo`, `--foo=1`, and `--foo=` are each refused with `Error: invalid input: unknown flag: --foo`, and `-z=1` with `Error: invalid input: unknown flag: -z`. `rmp ai-help`, whose refusal names no flag, is the one command that does not use this line (`§ AI Help`). Two commands refine that classification and each states its own rule: the comment subcommands treat every `-`-prefixed token as a flag, digits included (`Comment Positional Argument Contract` below, rule 2), while the subcommand that reads a Cypher statement, `graph client`, treats a `-` followed by a digit or a decimal point as a numeric value rather than a flag (`GRAPH.md § Cypher Input Source and Precedence`, rule 4). A stray `-1` is therefore an excess positional argument on that subcommand and an unknown flag on a comment subcommand.
 6. **The refusal precedes every side effect.** It happens while the arguments are parsed: before the roadmap database is opened, before the graph store is opened, and before standard input is read. A refused invocation therefore creates nothing, changes nothing, deletes nothing, writes no audit entry, and writes zero bytes to stdout. It is refused even when it also carries a value that would fail validation on its own with exit code `6`, and even when it names a roadmap, task, sprint, or comment that does not exist, which on its own would be exit code `4`.
 7. **No help follows the refusal.** An excess positional argument is not a dispatch failure, so stderr carries the error line and the AI-agent hint alone (`HELP.md § Error message format`).
 8. **The rule governs the maximum only.** A required positional argument that is absent is refused by the command's own contract, with the message that command's block publishes.
@@ -130,6 +130,12 @@ The rules are:
 **A `-`-prefixed token standing where a positional id is expected is refused as a malformed id, not as an unknown flag.** Rule 5 says how such a token is classified; this paragraph says which line the classification produces, because it is not always rule 5's own. Where the token stands in the slot of a positional id, the command reads it as that id, finds it is not an integer, and refuses it under the format rule of `§ Entity Identifier Range (All Positional Ids and --entity-id)`: `Error: invalid input: invalid <entity> ID: "X" (must be a positive integer)`, with `X` the token as the command line spelled it, its leading dashes included. Everywhere else rule 5's own line applies. The exit code is `2` on both paths, so the two lines are two conditions of one code, and a command's error table carries whichever of them that command can print — both, where the command declares a positional id and also parses flags of its own. `rmp task list --nosuchflag` prints the unknown-flag line because `task list` declares no positional argument for the token to fall into; `rmp task get -r <name> --nosuchflag` prints the malformed-id line because `task get` expects an id in that position.
 
 **A command that declares no positional argument is not excused from rule 5 for having nowhere to put the token.** Such a command has no slot into which an unrecognised token could fall, so rule 5 is the only rule that can refuse it, and it does: exit code `2`, the line rule 5 publishes, and zero bytes on stdout. `rmp stats` and `rmp roadmap list` are bound by this exactly as `rmp task list`, `rmp sprint list`, `rmp audit list` and `rmp backlog list` are. Neither of the two discards the token and returns its normal result: a token that is not one of the command's own flags is refused, and the command produces none of the output it would otherwise produce. Each carries the row in its own error table below. The six global forms of `§ Declared Arity` and `rmp ai-help` stand outside this paragraph, the first because they are answered before command lookup and the second because it publishes its own refusal line (`§ AI Help`).
+
+**A command that reads its positional arguments by position is not excused from rule 5 for a token written after them.** Once an invocation has supplied as many positional arguments as the command declares (`§ Positional Arity by Command`), a `-`-prefixed token written after the last of them stands in no positional slot, so rule 5 is the only rule that can refuse it, and it does, on every command of the CLI: exit code `2`, the line rule 5 publishes, `Error: invalid input: unknown flag: --foo`, and zero bytes on stdout. It makes no difference whether the command parses flags of its own or declares none beyond the roadmap selector: a token that names none of the command's flags is refused, never discarded. `rmp task remove -r <name> 8 --foo` therefore deletes nothing, `rmp task get -r <name> 8 --foo` writes no task, and `rmp sprint add-tasks -r <name> 5 8 --foo` is refused with the unknown-flag line and not with the malformed-id line of the paragraph above, because both of its positional slots are already filled. A `-`-prefixed token written before those slots are filled is not governed by this paragraph. Written between two positional arguments, it is governed by the next one. Written before the first positional argument, or where no later positional argument follows it, it stands in a positional slot and is refused by the checks that slot's value faces, as the paragraph above states for an id, so `rmp task next -r <name> --foo` is refused by the validation of `num`. `rmp ai-help` is the one command that refuses the trailing token with a line of its own (`§ AI Help`).
+
+**Nor is it excused for a token written between them.** An unrecognised flag written after one positional argument and before another stands in no positional slot either: the positional argument that follows it fills the next slot, so the token has nowhere to fall, and rule 5 refuses it on every command that declares two positional arguments or more, with exit code `2`, the line rule 5 publishes, and zero bytes on stdout. `rmp task prio -r <name> 12 --foo 3` therefore changes no priority and is refused with `Error: invalid input: unknown flag: --foo`, not as an invalid priority, and `rmp task add-dep -r <name> 4 --foo 5` is refused with the same line, not as a malformed dependency id. Where an invocation carries several unrecognised flags, between or after its positional arguments, the first of them in command-line order is named.
+
+**Where these refusals fall among a command's other checks.** Every command places them where the commands that parse flags of their own already place the trailing one. The roadmap selector is resolved first, so an invocation that also omits `-r` is refused with exit code `3`. The checks a command makes on its positional arguments without the roadmap come next, so a malformed or out-of-range positional argument is refused by its own line even when an unrecognised flag follows it: `rmp task remove -r <name> abc --foo` exits `2` with the malformed-id line, and `rmp task remove -r <name> 0 --foo` exits `6` with the range line, exactly as `rmp task edit -r <name> 0 --foo` does, and a flag written between the positional arguments is no different: `rmp task prio -r <name> 12 --foo 99` exits `6` with the range line. Either refusal then precedes every check that needs the roadmap — whether the roadmap exists, whether an id names an entity in it, whether the action is permitted in its current state — and every side effect: the command creates, changes, and deletes nothing, writes no audit entry, and writes nothing to stdout. `rmp task remove -r <a roadmap that does not exist> 8 --foo` and `rmp task prio -r <a roadmap that does not exist> 12 --foo 3` therefore exit `2`, not `4`. `roadmap create` and `roadmap remove` take no selector and open no roadmap database; for them the check that needs the roadmap is whether the named roadmap exists, and the refusal precedes it. On `task stat`, whose `--summary`, `--commit-open`, and `--commit-close` values are validated without the roadmap, either refusal also precedes that validation (`§ Change Status (stat)`).
 
 An unresolved command or subcommand name is resolved before any of this and stays a dispatch failure: `rmp task nadadisto 1 2 3` exits `127` with the `task` family help, not `2`, because the name never resolved to a command whose arity could be checked (`§ Dispatch Failures (Unresolved Command or Subcommand Names)`).
 
@@ -225,6 +231,14 @@ Three consequences of the table are worth stating, because each is a case a read
 8. No invocation that stays within its declared arity changes in any way: its stdout, its stderr, and its exit code are what they were.
 9. Each of the six global forms refuses a trailing token. `rmp version check` and `rmp help sprint` each exit `2` and write `Error: invalid input: unexpected argument "check"` and `Error: invalid input: unexpected argument "sprint"` to stderr, and stdout stays empty: no version line and no help body. `rmp --version check`, `rmp -v check`, `rmp --help sprint`, and `rmp -h sprint` behave identically. Each of the six invoked on its own still exits `0` and still writes what it has always written.
 10. `rmp backlog show-next 5 10 -r <name>` exits `2`, writes `Error: invalid input: unexpected argument "10"` to stderr, and writes no task list to stdout, while `rmp backlog show-next 5 -r <name>` returns its five tasks unchanged.
+11. `rmp task remove -r <name> <id> --foo`, on a task the same invocation without `--foo` removes, exits `2`, writes `Error: invalid input: unknown flag: --foo` to stderr and nothing to stdout, and leaves the task and the `audit` table as they were.
+12. For every command the registry holds other than `ai-help`, an invocation that succeeds as written exits `2` when `--foo` is appended after its last positional argument, writes the line criterion 11 names and nothing to stdout, and changes nothing. `rmp ai-help --foo` exits `2` with the line `§ AI Help` publishes.
+13. `rmp sprint add-tasks -r <name> <sprint-id> <task-ids> --foo` exits `2` with the line criterion 11 names, and not with the malformed-id line.
+14. A `-`-prefixed token written in a positional slot keeps the refusal that slot gives it: `rmp task get -r <name> --foo` exits `2` with `Error: invalid input: invalid task ID: "--foo" (must be a positive integer)`, and `rmp task next -r <name> --foo` exits `6`.
+15. The refusal follows the positional checks and precedes the roadmap: `rmp task remove -r <name> 0 --foo` exits `6`, and `rmp task remove -r <a roadmap that does not exist> <id> --foo` exits `2`.
+16. `rmp task prio -r <name> <id> --foo 3`, on a task the same invocation without `--foo` changes, exits `2`, writes the line criterion 11 names and nothing to stdout, and leaves the task's priority and the `audit` table as they were; `rmp task sev -r <name> <id> --foo 3` behaves identically for the severity.
+17. For every command in `§ Positional Arity by Command` whose maximum is two or more, an invocation that succeeds as written exits `2` with the line criterion 11 names, writes nothing to stdout, and changes nothing, when `--foo` is written between any two of its positional arguments.
+18. A `-`-prefixed token written before the first positional argument, or with no positional argument after it, keeps the refusal of the slot it stands in: `rmp task prio -r <name> --foo <id> 3` exits `2` with `Error: invalid input: invalid task ID: "--foo" (must be a positive integer)`, and `rmp task prio -r <name> <id> --foo` exits `6`.
 
 ---
 
@@ -760,6 +774,7 @@ All roadmap names must conform to the following validation rules:
 | Regex | `^[a-z0-9_-]+$` | Only lowercase letters, numbers, underscores, and hyphens |
 | Maximum length | 50 characters | Ensures filesystem compatibility |
 | Minimum length | 1 character | Name cannot be empty |
+| Reserved names | The device names the operating systems reserve, such as `con` and `nul`, and `help` | A reserved name is refused wherever a roadmap name is validated, the `-r` / `--roadmap` selector included; `§ Roadmap Name Validation` gives the reason for `help` |
 
 **Validation Error Messages:**
 
@@ -772,6 +787,8 @@ All roadmap names must conform to the following validation rules:
 | Name is a reserved system name | 6 | "Error: validation error: \"X\": roadmap name is a reserved system name" |
 
 Three of these five messages carry no sentinel between the `Error: ` prefix and the text: the roadmap-name checks that predate the sentinel catalogue construct their message directly, and the binary prints it as shown. The other two carry `validation error: `. All five exit 6.
+
+**`help` is reserved because no command could act on a roadmap of that name.** The name a roadmap is created or removed with is a positional argument, and a positional argument stands in a token position, where the word `help` is always a help token (`HELP.md § Help tokens`): `rmp roadmap create help` and `rmp roadmap remove help` write the help of their subcommand, exit `0`, and create or remove nothing. The name is reserved in that spelling alone; any other letter case is already refused by the character rule, with that rule's line. Like every reserved name, it is refused wherever a roadmap name is validated, the `-r` / `--roadmap` selector included, and every command refuses it with the same line: `rmp task list -r help` exits `6` with `Error: validation error: "help": roadmap name is a reserved system name`, the line `rmp task list -r con` writes for `con`. A roadmap directory named `help` made outside the CLI is therefore listed by `rmp roadmap list` and reachable by no command, exactly as one named `con` is: every command that selects it with `-r` refuses it with that line, and no command removes it.
 
 ---
 
@@ -982,6 +999,7 @@ rmp road new <name>
 | Regex | `^[a-z0-9_-]+$` | Only lowercase letters, numbers, underscores, and hyphens |
 | Maximum length | 50 characters | Ensures filesystem compatibility |
 | Minimum length | 1 character | Name cannot be empty |
+| Reserved names | The device names the operating systems reserve, such as `con` and `nul`, and `help` | A reserved name is refused wherever a roadmap name is validated, the `-r` / `--roadmap` selector included; `§ Roadmap Name Validation` gives the reason for `help` |
 
 **Error Cases:**
 
@@ -993,6 +1011,9 @@ rmp road new <name>
 | Name starts with a hyphen | 6 | "Error: validation error: roadmap name cannot start with '-'" |
 | Name is a reserved system name | 6 | "Error: validation error: \"X\": roadmap name is a reserved system name" |
 | Roadmap already exists | 5 | "Error: resource already exists: roadmap \"X\" already exists" |
+| Unrecognised flag written after `<name>` | 2 | "Error: invalid input: unknown flag: --foo" |
+
+No row publishes the reserved-name refusal for `help`, because it cannot be reached here: `rmp roadmap create help` writes the `roadmap create` help and creates nothing, `help` being a help token in that position (`§ Roadmap Name Validation`).
 
 **Output (success):** `{"name": "project1"}`, exit code 0.
 
@@ -1004,6 +1025,8 @@ rmp road rm <name>
 ```
 
 **Description:** Removes a roadmap by deleting its entire home directory `~/.roadmaps/<name>/` recursively. This removes the `project.db` database, its SQLite sidecars (`project.db-wal`, `project.db-shm`), and any other per-roadmap files the directory contains.
+
+An unrecognised flag written after `<name>` is refused with exit code `2` and `Error: invalid input: unknown flag: --foo`, before the command checks whether the roadmap exists and before anything is removed (`§ Positional Arguments`). `rmp roadmap remove help` writes the `roadmap remove` help and removes nothing, `help` being a help token in that position (`§ Roadmap Name Validation`).
 
 **Output (success):** No output, exit code 0.
 
@@ -1187,6 +1210,7 @@ All batch operations validate ALL IDs before executing any destructive operation
 | Two or more IDs do not exist | 4 | **No operation performed**, returns error | "Error: resource not found: tasks <ids> not found" |
 | An ID is not an integer | 2 | **No operation performed** | "Error: invalid input: invalid task ID: \"X\" (must be a positive integer)" |
 | An ID is an integer outside `1`-`2147483647` | 6 | **No operation performed** | "Error: validation error: task_id must be between 1 and 2147483647, got N" |
+| An unrecognised flag is written after the IDs | 2 | **No operation performed** | "Error: invalid input: unknown flag: --foo" |
 
 The message names every ID that was missing and nothing else, in the order the command line supplied them and with a repeated ID named once; `Task ID Lists (Batch Commands)` above is canonical for the list. Whether one ID or every ID was missing changes only the choice between the singular and the plural line: both exit `4` and both perform nothing. A caller that needs to know which ID is absent reads it from the message, and never has to query the IDs one at a time.
 
@@ -1291,12 +1315,15 @@ Success (no open tasks in sprint):
 | Roadmap not specified | 3 | "Error: no roadmap selected: use -r <name> or --roadmap <name>" |
 | Roadmap not found | 4 | "Error: resource not found: roadmap \"X\"" |
 | A second positional argument is supplied | 2 | "Error: invalid input: unexpected argument \"X\"" |
+| An unrecognised flag is written after `num` | 2 | "Error: invalid input: unknown flag: --foo" |
 
 `num` is this command's only positional argument, so a token written in its place is
 read as `num` whether or not it begins with a dash: `rmp task next -r <name> --foo`
 is refused by the second row, not by the unrecognised-flag rule of
-`§ Positional Arguments`, and exits `6`. The last row is reached only by a token
-written after `num`, and it is that section's own CLI-wide refusal.
+`§ Positional Arguments`, and exits `6`. The last two rows are reached only by a
+token written after `num`, and each is one of that section's CLI-wide refusals: the
+unrecognised-flag line for a token that begins with a dash, and the excess-argument
+line for any other.
 
 **Behavior Notes:**
 - Only returns tasks with status `SPRINT`, `DOING`, or `TESTING` (open tasks)
@@ -1391,6 +1418,10 @@ All batch operations validate ALL IDs and status transitions before applying any
 | `--commit-close` value is not a valid commit hash | 6 | **No changes made** | "Error: invalid commit hash for --commit-close: \"X\" (expected 7 to 64 hexadecimal characters)" |
 | `--commit-open` written with no value after it | 2 | **No changes made** | "Error: --commit-open requires a value" |
 | `--commit-close` written with no value after it | 2 | **No changes made** | "Error: --commit-close requires a value" |
+| An unrecognised flag is written after `<state>` | 2 | **No changes made** | "Error: invalid input: unknown flag: --foo" |
+| An unrecognised flag is written between `<ids>` and `<state>` | 2 | **No changes made** | "Error: invalid input: unknown flag: --foo" |
+
+The two unrecognised-flag rows are decided after steps 1 and 2 of the order below and before step 3, where `§ Positional Arguments` places them: ids and a target state that those two steps refuse are refused first, and no value of `--summary`, `--commit-open`, or `--commit-close` is validated once the flag has been refused.
 
 **Validation Order:**
 
@@ -1475,6 +1506,8 @@ Validates all IDs before updating any priorities. Follows same validation order 
 | Two or more IDs do not exist | 4 | "Error: resource not found: tasks <ids> not found" |
 | An ID is not an integer | 2 | "Error: invalid input: invalid task ID: \"X\" (must be a positive integer)" |
 | Priority out of range (0-9) | 6 | "Error: validation error: priority must be between 0 and 9, got N" |
+| An unrecognised flag is written after `<priority>` | 2 | "Error: invalid input: unknown flag: --foo" |
+| An unrecognised flag is written between `<ids>` and `<priority>` | 2 | "Error: invalid input: unknown flag: --foo" |
 
 **Output (success):** No output, exit code 0.
 
@@ -1502,6 +1535,8 @@ Validates all IDs before updating any severities. Follows same validation order 
 | Two or more IDs do not exist | 4 | "Error: resource not found: tasks <ids> not found" |
 | An ID is not an integer | 2 | "Error: invalid input: invalid task ID: \"X\" (must be a positive integer)" |
 | Severity out of range (0-9) | 6 | "Error: validation error: severity must be between 0 and 9, got N" |
+| An unrecognised flag is written after `<severity>` | 2 | "Error: invalid input: unknown flag: --foo" |
+| An unrecognised flag is written between `<ids>` and `<severity>` | 2 | "Error: invalid input: unknown flag: --foo" |
 
 **Output (success):** No output, exit code 0.
 
@@ -1647,6 +1682,7 @@ All batch operations validate ALL IDs before removing any tasks. This is especia
 | Exactly one ID does not exist | 4 | **No tasks removed** | "Error: resource not found: task N not found" |
 | Two or more IDs do not exist | 4 | **No tasks removed** | "Error: resource not found: tasks <ids> not found" |
 | Invalid ID format | 2 | **No tasks removed** | "Error: invalid input: invalid task ID: \"X\" (must be a positive integer)" |
+| An unrecognised flag is written after the IDs | 2 | **No tasks removed** | "Error: invalid input: unknown flag: --foo" |
 
 **Validation Order:**
 1. Parse all IDs and validate format (must be positive integers)
@@ -1692,6 +1728,7 @@ rmp task subtasks -r <name> <id>
 |----------|-----------|--------|
 | Task not found | 4 | `Error: resource not found: task N` |
 | Invalid ID format | 2 | `Error: invalid input: invalid task ID: "X" (must be a positive integer)` |
+| An unrecognised flag is written after `<id>` | 2 | `Error: invalid input: unknown flag: --foo` |
 
 ---
 
@@ -1722,10 +1759,12 @@ rmp task add-dep -r <name> <task-id> <dep-id>
 | Circular dependency | 6 | `Error: validation error: adding dependency would create a circular dependency between task #N and task #M` |
 | Missing arguments | 2 | `Error: required parameter missing: task ID and dependency ID required` |
 | An ID is not a positive integer | 2 | `Error: invalid input: invalid task ID: "X" (must be a positive integer)` |
+| An unrecognised flag is written after `<dep-id>` | 2 | `Error: invalid input: unknown flag: --foo` |
+| An unrecognised flag is written between `<task-id>` and `<dep-id>` | 2 | `Error: invalid input: unknown flag: --foo` |
 
 The first row is the one message in the file that carries its sentinel in the middle rather than directly after `Error: `: the command wraps the lookup failure in its own context, so the reader sees `task #N not found: ` first and the `resource not found: ` sentinel after it. The exit code still follows the sentinel, and it is 4.
 
-The last row is also how an unrecognised flag written in either id position is refused: the token stands where an id is expected, so it is read as that id and refused as a malformed one (`§ Positional Arguments`). `task remove-dep` publishes both exit-`2` rows for the same reasons.
+The malformed-id row is also how an unrecognised flag standing in an id position is refused, written before `<task-id>` or with no `<dep-id>` after it: the token stands where an id is expected, so it is read as that id and refused as a malformed one (`§ Positional Arguments`). Written between the two ids, or after `<dep-id>`, the flag stands in no slot and is refused by one of the last two rows instead. `task remove-dep` publishes the same four exit-`2` rows for the same reasons.
 
 **Audit:** Two `TASK_ADD_DEP` entries, one against each task of the pair, written in
 the same transaction as the insert:
@@ -1764,6 +1803,8 @@ rmp task remove-dep -r <name> <task-id> <dep-id>
 | Dependency not found | 4 | `Error: resource not found: dependency from task #N to task #M not found` |
 | Missing arguments | 2 | `Error: required parameter missing: task ID and dependency ID required` |
 | An ID is not a positive integer | 2 | `Error: invalid input: invalid task ID: "X" (must be a positive integer)` |
+| An unrecognised flag is written after `<dep-id>` | 2 | `Error: invalid input: unknown flag: --foo` |
+| An unrecognised flag is written between `<task-id>` and `<dep-id>` | 2 | `Error: invalid input: unknown flag: --foo` |
 
 **Audit:** Two `TASK_REMOVE_DEP` entries, one against each task of the pair, with the
 same `entity_id` / `related_entity_id` arrangement `task add-dep` uses above, written
@@ -1789,6 +1830,7 @@ rmp task blockers -r <name> <id>
 |----------|-----------|--------|
 | Task not found | 4 | `Error: resource not found: task N` |
 | Invalid ID format | 2 | `Error: invalid input: invalid task ID: "X" (must be a positive integer)` |
+| An unrecognised flag is written after `<id>` | 2 | `Error: invalid input: unknown flag: --foo` |
 
 ---
 
@@ -1810,6 +1852,7 @@ rmp task blocking -r <name> <id>
 |----------|-----------|--------|
 | Task not found | 4 | `Error: resource not found: task N` |
 | Invalid ID format | 2 | `Error: invalid input: invalid task ID: "X" (must be a positive integer)` |
+| An unrecognised flag is written after `<id>` | 2 | `Error: invalid input: unknown flag: --foo` |
 
 ---
 
@@ -1839,6 +1882,7 @@ All IDs are validated before any transitions are applied. If any ID is invalid, 
 | Two or more IDs do not exist | 4 | **No tasks modified** | "Error: resource not found: tasks <ids> not found" |
 | An ID is not an integer | 2 | **No tasks modified** | "Error: invalid input: invalid task ID: \"X\" (must be a positive integer)" |
 | An ID is an integer outside `1`-`2147483647` | 6 | **No tasks modified** | "Error: validation error: task_id must be between 1 and 2147483647, got N" |
+| An unrecognised flag is written after the IDs | 2 | **No tasks modified** | "Error: invalid input: unknown flag: --foo" |
 
 **Output (success):** No output to stdout, exit code 0.
 
@@ -2294,11 +2338,12 @@ unresolved. See `MODELS.md § Sprint Field Constraints`.
 | Scenario | Exit Code | stderr Output |
 |----------|-----------|---------------|
 | `<id>` is not a positive integer | 2 | `Error: invalid input: invalid sprint ID: "X" (must be a positive integer)` |
+| An unrecognised flag is written after `<id>` | 2 | `Error: invalid input: unknown flag: --foo` |
 | Roadmap not specified | 3 | `Error: no roadmap selected: use -r <name> or --roadmap <name>` |
 | Roadmap not found | 4 | `Error: resource not found: roadmap "X"` |
 | Sprint not found | 4 | `Error: resource not found: sprint N` |
 
-The first row is also how an unrecognised flag written in the `<id>` position is refused: the token stands where the id is expected, so it is read as the id and refused as a malformed one, with its dashes echoed inside the quotes (`§ Positional Arguments`). An `<id>` that is an integer outside `1`-`2147483647` is a different condition with a different code, published by `§ Entity Identifier Range (All Positional Ids and --entity-id)`.
+The first row is also how an unrecognised flag written in the `<id>` position is refused: the token stands where the id is expected, so it is read as the id and refused as a malformed one, with its dashes echoed inside the quotes (`§ Positional Arguments`). Written after `<id>`, where no positional slot is left, the flag is refused by the unrecognised-flag row instead. An `<id>` that is an integer outside `1`-`2147483647` is a different condition with a different code, published by `§ Entity Identifier Range (All Positional Ids and --entity-id)`.
 
 ### List Sprint Tasks
 
@@ -2411,11 +2456,12 @@ rmp sprint stats -r <name> <id>
 | Scenario | Exit Code | stderr Output |
 |----------|-----------|---------------|
 | `<id>` is not a positive integer | 2 | `Error: invalid input: invalid sprint ID: "X" (must be a positive integer)` |
+| An unrecognised flag is written after `<id>` | 2 | `Error: invalid input: unknown flag: --foo` |
 | Roadmap not specified | 3 | `Error: no roadmap selected: use -r <name> or --roadmap <name>` |
 | Roadmap not found | 4 | `Error: resource not found: roadmap "X"` |
 | Sprint not found | 4 | `Error: resource not found: sprint N` |
 
-The first row is also how an unrecognised flag written in the `<id>` position is refused, for the reason `Get Sprint` above gives. An `<id>` outside `1`-`2147483647` is refused under `§ Entity Identifier Range (All Positional Ids and --entity-id)`.
+The first row is also how an unrecognised flag written in the `<id>` position is refused, for the reason `Get Sprint` above gives, and the unrecognised-flag row is how one written after `<id>` is refused. An `<id>` outside `1`-`2147483647` is refused under `§ Entity Identifier Range (All Positional Ids and --entity-id)`.
 
 ### Show Sprint Status Report
 
@@ -2503,8 +2549,9 @@ rmp sprint show -r <name> <id>
 | Sprint not found | 4 | "Sprint not found" |
 | Roadmap not specified | 3 | "Error: no roadmap selected: use -r <name> or --roadmap <name>" |
 | `<id>` is not a positive integer | 2 | "Error: invalid input: invalid sprint ID: \"X\" (must be a positive integer)" |
+| An unrecognised flag is written after `<id>` | 2 | "Error: invalid input: unknown flag: --foo" |
 
-The `<id>` row is also how an unrecognised flag written in that position is refused, for the reason `Get Sprint` above gives.
+The `<id>` row is also how an unrecognised flag written in that position is refused, for the reason `Get Sprint` above gives, and the unrecognised-flag row is how one written after `<id>` is refused.
 
 ### Sprint Lifecycle
 
@@ -2535,11 +2582,12 @@ rmp sprint reopen -r <name> <id>
 | Scenario | Exit Code | stderr Output |
 |----------|-----------|---------------|
 | `<id>` is not a positive integer | 2 | "Error: invalid input: invalid sprint ID: \"X\" (must be a positive integer)" |
+| An unrecognised flag is written after `<id>` | 2 | "Error: invalid input: unknown flag: --foo" |
 | Roadmap not specified | 3 | "Error: no roadmap selected: use -r <name> or --roadmap <name>" |
 | Roadmap not found | 4 | "Error: resource not found: roadmap \"X\"" |
 | Sprint not found | 4 | "Error: resource not found: sprint N" |
 
-The three commands share every row of this table: each takes one sprint id and nothing else, and each resolves it the same way. The `<id>` row is also how an unrecognised flag written in that position is refused, for the reason `Get Sprint` above gives. What distinguishes the three is the status they demand of the sprint they resolved; a transition the sprint's current status does not permit is refused with exit code `6`, and `STATE_MACHINE.md § Sprint State Machine` is canonical for which transitions those are. `sprint close` adds the active-task check published in the table above, also exit code `6`.
+The three commands share every row of this table: each takes one sprint id and nothing else, and each resolves it the same way. The `<id>` row is also how an unrecognised flag written in that position is refused, for the reason `Get Sprint` above gives, and the unrecognised-flag row is how one written after `<id>` is refused. What distinguishes the three is the status they demand of the sprint they resolved; a transition the sprint's current status does not permit is refused with exit code `6`, and `STATE_MACHINE.md § Sprint State Machine` is canonical for which transitions those are. `sprint close` adds the active-task check published in the table above, also exit code `6`.
 
 **Output (success):** No output, exit code 0.
 
@@ -2577,7 +2625,11 @@ All sprint task operations validate ALL IDs before making any changes.
 | The destination sprint ID does not exist, on `move-tasks` | 4 | **No changes made** | "Error: resource not found: to sprint N" |
 | A task ID is not a positive integer | 2 | **No changes made** | "Error: invalid input: invalid task ID: \"X\" (must be a positive integer)" |
 | A sprint ID is not a positive integer | 2 | **No changes made** | "Error: invalid input: invalid sprint ID: \"X\" (must be a positive integer)" |
+| An unrecognised flag is written after `<task-ids>` | 2 | **No changes made** | "Error: invalid input: unknown flag: --foo" |
+| An unrecognised flag is written between two of the positional arguments | 2 | **No changes made** | "Error: invalid input: unknown flag: --foo" |
 | The roadmap does not exist | 4 | **No changes made** | "Error: resource not found: roadmap \"X\"" |
+
+A `-`-prefixed token written between two positional arguments, or after `<task-ids>`, stands in no positional slot, so each of the three refuses it with one of the two unrecognised-flag rows and none of them reads it as a sprint ID or a task ID (`§ Positional Arguments`).
 
 These three read their task-ID list exactly as the task-family batch commands read theirs, and refuse it on the same rules: the list is a set, a repeated ID is not an error, and a refusal names the IDs at fault, in the order the command line supplied them, with a repeated ID named once. `Task ID Lists (Batch Commands)` is canonical for all of it.
 
@@ -2703,9 +2755,9 @@ Commands for managing sprint task order within a sprint. Tasks are ordered by po
 
 **There is consequently no "position already in use" error in this section, and none of these commands repairs a collision.** A collision cannot be requested, so there is nothing for a command to reject or to repair. Should one ever reach the database it means a defect in a write path, not bad input, and it surfaces as a database failure (exit code `1`) rather than as a validation error — see `ARCHITECTURE.md § Exit Codes`. The error tables below are complete as they stand.
 
-**The five commands share four of their error lines, and the tables below publish eight distinct strings between them.** Two of the four are lexical and are refused before the roadmap is opened: every one of the five reads a sprint id and at least one task id from the command line, and all five publish the same line when the sprint id is not a positive integer, and the same line again when a task id is not. The other two are resolved against the database: all five publish the same line when no sprint holds the given id, and all five then verify that every task named on the command line is a member of that sprint and publish the same line when one is not. The remaining four strings each belong to a single command: two to `reorder` (a duplicate id in the list, and a list that does not name every member), one to `move-to` (a position outside the accepted range), and one to `swap` (the same task named twice). There is no per-command variant of any of the four shared lines: a reader who finds one of them in five tables is reading one string published five times, not five strings that happen to agree.
+**The five commands share five of their error lines, and the tables below publish nine distinct strings between them.** Three of the five are refused before the roadmap is opened. Two of those three are lexical: every one of the five reads a sprint id and at least one task id from the command line, and all five publish the same line when the sprint id is not a positive integer, and the same line again when a task id is not. The third is the unrecognised-flag line, which all five publish for a flag written between two of their positional arguments or after the last of them. The other two are resolved against the database: all five publish the same line when no sprint holds the given id, and all five then verify that every task named on the command line is a member of that sprint and publish the same line when one is not. The remaining four strings each belong to a single command: two to `reorder` (a duplicate id in the list, and a list that does not name every member), one to `move-to` (a position outside the accepted range), and one to `swap` (the same task named twice). There is no per-command variant of any of the five shared lines: a reader who finds one of them in five tables is reading one string published five times, not five strings that happen to agree.
 
-**The two lexical lines are also how an unrecognised flag is refused on these five commands.** A `-`-prefixed token written where a sprint id or a task id is expected is read as that id and refused as a malformed one, with its dashes echoed inside the quotes; `§ Positional Arguments` states that rule once for the whole CLI. None of the five publishes a separate unknown-flag line.
+**The two lexical lines are also how an unrecognised flag written in an id position is refused on these five commands.** A `-`-prefixed token that stands in the slot of a sprint id or a task id, written before the first positional argument or with no positional argument after it, is read as that id and refused as a malformed one, with its dashes echoed inside the quotes. Written between two positional arguments or after the last of them, where the positional arguments themselves fill every slot, the same token is refused with the unrecognised-flag line, which every table below publishes in two rows. `§ Positional Arguments` states both rules once for the whole CLI.
 
 **The membership line of these five commands is not the membership line of the batch assignment commands.** These five publish `Error: validation error: task N does not belong to sprint M`. The commands that add, remove and move sprint members publish `Error: validation error: task N is not in sprint #M` for the condition their own table names (`§ Task Assignment`). The two wordings are both exact, because the binary prints a different sentence on each of the two paths; neither table is paraphrasing the other, and neither is to be edited into agreement with the other here.
 
@@ -2752,6 +2804,8 @@ rmp sprint order -r <name> <sprint-id> <task-ids>
 | Missing task IDs | 6 | "Error: validation error: expected N task IDs, got M (must include all sprint tasks)" |
 | Invalid sprint ID format | 2 | "Error: invalid input: invalid sprint ID: \"X\" (must be a positive integer)" |
 | Invalid task ID format | 2 | "Error: invalid input: invalid task ID: \"X\" (must be a positive integer)" |
+| An unrecognised flag is written after `<task-ids>` | 2 | "Error: invalid input: unknown flag: --foo" |
+| An unrecognised flag is written between `<sprint-id>` and `<task-ids>` | 2 | "Error: invalid input: unknown flag: --foo" |
 
 #### Move Task to Position
 
@@ -2793,6 +2847,8 @@ rmp sprint mvto -r <name> <sprint-id> <task-id> <position>
 | Invalid position | 6 | "Error: validation error: position must be an integer between 0 and 2147483647" |
 | Invalid sprint ID format | 2 | "Error: invalid input: invalid sprint ID: \"X\" (must be a positive integer)" |
 | Invalid task ID format | 2 | "Error: invalid input: invalid task ID: \"X\" (must be a positive integer)" |
+| An unrecognised flag is written after `<position>` | 2 | "Error: invalid input: unknown flag: --foo" |
+| An unrecognised flag is written between two of `<sprint-id>`, `<task-id>`, and `<position>` | 2 | "Error: invalid input: unknown flag: --foo" |
 
 #### Swap Tasks
 
@@ -2832,6 +2888,8 @@ rmp sprint swap -r <name> <sprint-id> <task-id-1> <task-id-2>
 | Same task ID given twice | 6 | "Error: validation error: cannot swap a task with itself" |
 | Invalid sprint ID format | 2 | "Error: invalid input: invalid sprint ID: \"X\" (must be a positive integer)" |
 | Invalid task ID format | 2 | "Error: invalid input: invalid task ID: \"X\" (must be a positive integer)" |
+| An unrecognised flag is written after `<task-id-2>` | 2 | "Error: invalid input: unknown flag: --foo" |
+| An unrecognised flag is written between two of `<sprint-id>`, `<task-id-1>`, and `<task-id-2>` | 2 | "Error: invalid input: unknown flag: --foo" |
 
 #### Move Task to Top/Bottom
 
@@ -2880,6 +2938,8 @@ The same object for `bottom`, on a sprint of five members:
 | Task is not a member of the sprint | 6 | "Error: validation error: task N does not belong to sprint M" |
 | Invalid sprint ID format | 2 | "Error: invalid input: invalid sprint ID: \"X\" (must be a positive integer)" |
 | Invalid task ID format | 2 | "Error: invalid input: invalid task ID: \"X\" (must be a positive integer)" |
+| An unrecognised flag is written after `<task-id>` | 2 | "Error: invalid input: unknown flag: --foo" |
+| An unrecognised flag is written between `<sprint-id>` and `<task-id>` | 2 | "Error: invalid input: unknown flag: --foo" |
 
 #### Audit of the ordering commands
 
@@ -3082,8 +3142,9 @@ keeps the record that the sprint existed and was deleted.
 | Sprint not found | 4 | "Error: resource not found: sprint N not found" |
 | Roadmap not specified | 3 | "Error: no roadmap selected: use -r <name> or --roadmap <name>" |
 | `<id>` is not a positive integer | 2 | "Error: invalid input: invalid sprint ID: \"X\" (must be a positive integer)" |
+| An unrecognised flag is written after `<id>` | 2 | "Error: invalid input: unknown flag: --foo" |
 
-The `<id>` row is also how an unrecognised flag written in that position is refused, for the reason `Get Sprint` above gives.
+The `<id>` row is also how an unrecognised flag written in that position is refused, for the reason `Get Sprint` above gives, and the unrecognised-flag row is how one written after `<id>` is refused.
 
 ---
 
@@ -3418,13 +3479,16 @@ line — the two commands are the same query (see
 | Scenario | Exit Code | stderr Output |
 |----------|-----------|---------------|
 | A third positional argument is supplied | 2 | "Error: invalid input: unexpected argument \"X\"" |
+| An unrecognised flag is written after `<entity-id>` | 2 | "Error: invalid input: unknown flag: --foo" |
+| An unrecognised flag is written between `<entity-type>` and `<entity-id>` | 2 | "Error: invalid input: unknown flag: --foo" |
 | Roadmap not specified | 3 | "Error: no roadmap selected: use -r <name> or --roadmap <name>" |
 | Roadmap not found | 4 | "Error: resource not found: roadmap \"X\"" |
 
 Both positional arguments are required. A `-`-prefixed token written where neither has
 been supplied leaves both missing, and the refusal is the missing-argument one this
-command words for that case, not the unrecognised-flag line: `audit history` declares
-no flag of its own beyond the roadmap selector, so no token reaches the flag parser.
+command words for that case, not the unrecognised-flag line. A `-`-prefixed token
+written between `<entity-type>` and `<entity-id>`, or after `<entity-id>`, stands in no
+positional slot and is refused with an unrecognised-flag line (`§ Positional Arguments`).
 
 **JSON Output:** Array of AuditEntry objects, with the same seven keys `audit list`
 returns.
@@ -3594,11 +3658,13 @@ rmp backlog show-next 10 -r groadmap
 | Roadmap not specified | 3 | `Error: no roadmap selected: use -r <name> or --roadmap <name>` |
 | `count` is not a positive integer | 6 | `Error: validation error: count must be a positive integer` |
 | Extra positional argument | 2 | `Error: invalid input: unexpected argument "X"` |
+| Unrecognised flag written after `count` | 2 | `Error: invalid input: unknown flag: --foo` |
 
 `backlog show-next` takes no `--type` and no `--sort`. It accepts one optional
 positional `count` and the roadmap flags, and nothing else: a `--type` or `--sort`
 written before the `count` position is read as the `count` value and refused as a
-non-positive integer. A second positional argument is refused exactly as an excess
+non-positive integer, and a `-`-prefixed token written after `count` is refused by the
+unrecognised-flag row. A second positional argument is refused exactly as an excess
 positional argument is refused everywhere else in the CLI (`§ Positional Arguments`),
 with the exit code and the error line the table above publishes. `show-next` claims
 no exception here: a token the command accepted in silence would be a token the
@@ -3908,6 +3974,8 @@ two byte counts the path-length line carries; the placeholder table under
   `GRAPH.md § Serving on a Non-Default Socket` is canonical for that boundary.
 - `-h, --help` - Show the subcommand help.
 
+**Both forms of `--socket`.** The flag is read in the separate form, `--socket <path>`, and in the joined form, `--socket=<path>`, exactly as `task create` reads `--title=<text>`: in the joined form the value is the text after the first `=` of the same token, later `=` characters included. `rmp graph serve -r <name> --socket=/tmp/x.sock` therefore binds `/tmp/x.sock`, as `--socket /tmp/x.sock` does, and `--socket=` supplies the empty value, which is the missing parameter above. The roadmap selector is read in the separate form only, on this subcommand as on every roadmap-scoped command: `--roadmap=<name>` selects no roadmap, and the invocation is refused as one that names none (exit code `3`). A flag-like token that names no flag of this subcommand is refused under `§ Positional Arguments`, rule 5, which names it without its `=value`: `rmp graph serve -r <name> --zzz=1` exits `2` with `Error: invalid input: unknown flag: --zzz`.
+
 `rmp graph serve` accepts no positional argument; `§ Positional Arguments` is
 canonical for the refusal and for the line it writes. It takes no `--query`: it
 runs no statement of its own.
@@ -4039,6 +4107,8 @@ several servers, one per roadmap, each on its own socket.
   There is no `--statement` flag: the statement reaches `client` through exactly
   two sources, this flag and standard input.
 - `-h, --help` - Show the subcommand help.
+
+**Both forms of a flag.** `--socket` and `-q` / `--query` are read in the separate form and in the joined form alike — `--socket=<path>`, `--query=<cypher>`, and `-q=<cypher>` — exactly as `task create` reads `--title=<text>`: in the joined form the value is the text after the first `=` of the same token, later `=` characters included. `rmp graph client -r <name> --query=help` therefore sends the statement `help`, which is the flag's value and asks for no help (`HELP.md § Help tokens`), and a running server's engine refuses it as a statement that does not parse, with exit code `1` and the parse-or-execution line `§ Client Error Cases` publishes. The roadmap selector is read in the separate form only, on this subcommand as on every roadmap-scoped command. A flag-like token that names no flag of this subcommand is refused under `§ Positional Arguments`, rule 5, which names it without its `=value`: `rmp graph client -r <name> --zzz=1` exits `2` with `Error: invalid input: unknown flag: --zzz`. `GRAPH.md § Cypher Input Source and Precedence`, rule 4, is canonical for the value of `--query` in either form.
 
 **Query input source and precedence.** The statement has two sources, and
 `GRAPH.md § Cypher Input Source and Precedence` is canonical for every one of

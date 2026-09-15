@@ -10,7 +10,10 @@ import "github.com/FlavioCFOliveira/Groadmap/internal/web"
 // banner. The handler therefore applies that same predicate to its whole
 // argument list itself, as HandleStats does, and routes web.PrintHelp through
 // invokeHelpPrinter so the banner is emitted uniformly, wherever the help
-// token is written (SPEC/HELP.md § Help levels, § AI agent banner).
+// token is written in a token position (SPEC/HELP.md § Help levels, § Help
+// tokens, § AI agent banner). Which tokens are flag values is read from this
+// command's own registry declaration, so `rmp web --host help` binds a host
+// named `help` rather than writing the help.
 //
 // The check used to read args[0] alone. A help token written after another
 // flag, as in `rmp web --no-open --help`, then fell through to web.Run, whose
@@ -21,7 +24,7 @@ import "github.com/FlavioCFOliveira/Groadmap/internal/web"
 // commands -> web dependency direction and keeps the banner string a
 // single-source commands-package concern; web.PrintHelp stays banner-free.
 func runWeb(args []string) error {
-	if hasHelpFlag(args) {
+	if hasHelpFlag(leafSubcommand("web"), args) {
 		invokeHelpPrinter(web.PrintHelp)
 		return nil
 	}

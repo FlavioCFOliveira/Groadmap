@@ -15,6 +15,7 @@ func taskAddDep(args []string) error {
 	if err != nil {
 		return err
 	}
+	remaining, strays := splitPositionals(remaining, 2)
 
 	if len(remaining) < 2 {
 		return fmt.Errorf("%w: task ID and dependency ID required", utils.ErrRequired)
@@ -27,6 +28,13 @@ func taskAddDep(args []string) error {
 
 	depID, err := utils.ValidateIDString(strings.TrimSpace(remaining[1]), utils.FieldDependencyTaskID)
 	if err != nil {
+		return err
+	}
+
+	// A "-"-prefixed token between or after the two ids stands in no slot and is
+	// refused here, after the checks on the ids and before the roadmap is opened
+	// (SPEC/COMMANDS.md § Positional Arguments).
+	if err := rejectUnknownFlags(strays); err != nil {
 		return err
 	}
 
@@ -57,6 +65,7 @@ func taskRemoveDep(args []string) error {
 	if err != nil {
 		return err
 	}
+	remaining, strays := splitPositionals(remaining, 2)
 
 	if len(remaining) < 2 {
 		return fmt.Errorf("%w: task ID and dependency ID required", utils.ErrRequired)
@@ -69,6 +78,11 @@ func taskRemoveDep(args []string) error {
 
 	depID, err := utils.ValidateIDString(strings.TrimSpace(remaining[1]), utils.FieldDependencyTaskID)
 	if err != nil {
+		return err
+	}
+
+	// See taskAddDep: a stray "-"-prefixed token is refused before the roadmap.
+	if err := rejectUnknownFlags(strays); err != nil {
 		return err
 	}
 
@@ -92,6 +106,7 @@ func taskBlockers(args []string) error {
 	if err != nil {
 		return err
 	}
+	remaining, strays := splitPositionals(remaining, 1)
 
 	if len(remaining) == 0 {
 		return fmt.Errorf("%w: task ID required", utils.ErrRequired)
@@ -99,6 +114,11 @@ func taskBlockers(args []string) error {
 
 	taskID, err := utils.ValidateIDString(strings.TrimSpace(remaining[0]), utils.FieldTaskID)
 	if err != nil {
+		return err
+	}
+
+	// See taskAddDep: a stray "-"-prefixed token is refused before the roadmap.
+	if err := rejectUnknownFlags(strays); err != nil {
 		return err
 	}
 
@@ -131,6 +151,7 @@ func taskBlocking(args []string) error {
 	if err != nil {
 		return err
 	}
+	remaining, strays := splitPositionals(remaining, 1)
 
 	if len(remaining) == 0 {
 		return fmt.Errorf("%w: task ID required", utils.ErrRequired)
@@ -138,6 +159,11 @@ func taskBlocking(args []string) error {
 
 	taskID, err := utils.ValidateIDString(strings.TrimSpace(remaining[0]), utils.FieldTaskID)
 	if err != nil {
+		return err
+	}
+
+	// See taskAddDep: a stray "-"-prefixed token is refused before the roadmap.
+	if err := rejectUnknownFlags(strays); err != nil {
 		return err
 	}
 

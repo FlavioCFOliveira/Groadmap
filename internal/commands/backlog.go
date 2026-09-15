@@ -50,6 +50,7 @@ Exit codes:
   0  Success
   2  Non-integer --limit (rejected by the flag parser as misuse)
   3  Missing -r
+  4  Roadmap not found
   6  Bad --type or --sort value, or out-of-range --limit
 
 Examples:
@@ -84,7 +85,9 @@ Output (stdout JSON):
 
 Exit codes:
   0  Success
+  2  An extra positional argument, or an unknown flag after [count]
   3  Missing -r
+  4  Roadmap not found
   6  Non-positive or non-numeric <count>
 
 Examples:
@@ -160,6 +163,7 @@ func backlogShowNext(args []string) error {
 	if err != nil {
 		return err
 	}
+	remaining, strays := splitPositionals(remaining, 1)
 
 	// Parse optional count argument (default: 5)
 	count := 5
@@ -175,6 +179,12 @@ func backlogShowNext(args []string) error {
 			n = models.MaxTaskLimit
 		}
 		count = n
+	}
+
+	// A "-"-prefixed token after count stands in no slot and is refused before
+	// the roadmap is opened (SPEC/COMMANDS.md § Positional Arguments).
+	if err := rejectUnknownFlags(strays); err != nil {
+		return err
 	}
 
 	backlogStatus := models.StatusBacklog

@@ -307,6 +307,15 @@ func isFlagLike(tok string) bool {
 	return false
 }
 
+// joinedQueryValue reports whether tok is the joined form of the query flag,
+// `--query=<cypher>` or `-q=<cypher>`, and returns the text after the first "=".
+func joinedQueryValue(tok string) (string, bool) {
+	if v, ok := strings.CutPrefix(tok, "--query="); ok {
+		return v, true
+	}
+	return strings.CutPrefix(tok, "-q=")
+}
+
 // readQuery extracts the Cypher query from args. It consumes --query / -q from
 // args and returns the trimmed query string, or reads the query from standard
 // input when the flag is absent. An empty or whitespace-only result is returned
@@ -322,6 +331,16 @@ func readQuery(args []string) (string, error) {
 	var queryFound bool
 
 	for i := 0; i < len(args); i++ {
+		// The joined form, `--query=<cypher>` or `-q=<cypher>`, carries its value
+		// in the same token: the text after the first "=", later "=" characters
+		// included, and no following token is read (SPEC/GRAPH.md § Cypher Input
+		// Source and Precedence, rule 4). An empty or whitespace-only value is the
+		// absent value, refused by the trim below.
+		if joined, ok := joinedQueryValue(args[i]); ok {
+			queryVal = joined
+			queryFound = true
+			continue
+		}
 		switch args[i] {
 		case "--query", "-q":
 			// SPEC/GRAPH.md precedence rule 4: when --query is present but its
@@ -350,8 +369,12 @@ func readQuery(args []string) (string, error) {
 			// unknown flag; a bare token such as "-1" is a stray positional, not
 			// a flag, so it is reported as an unexpected argument (finding #81).
 			// Both map to ErrInvalidInput (exit 2).
+			// A joined-form token is judged by its part before the first "=",
+			// and the line names the flag without the "=value" tail
+			// (SPEC/GRAPH.md § No Positional Query, rule 1).
 			if isFlagLike(args[i]) {
-				return "", fmt.Errorf("%w: unknown flag: %s", utils.ErrInvalidInput, args[i])
+				flagName, _, _ := strings.Cut(args[i], "=")
+				return "", errUnknownFlag(flagName)
 			}
 			return "", fmt.Errorf("%w: unexpected argument %q (graph queries use --query or stdin)", utils.ErrInvalidInput, args[i])
 		}

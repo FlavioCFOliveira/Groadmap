@@ -9,18 +9,95 @@ import (
 	"github.com/FlavioCFOliveira/Groadmap/internal/utils"
 )
 
-// hasHelpFlag reports whether args contains a help flag in any form
-// (-h, --help, help). Subcommand handlers call this before any other
-// parsing so that 'rmp <cmd> <sub> --help' shows the subcommand-level
-// help instead of forwarding --help to the underlying parser (which
-// would normally complain about missing -r or positional arguments).
-func hasHelpFlag(args []string) bool {
-	for _, a := range args {
-		if a == "-h" || a == "--help" || a == "help" {
+// hasHelpFlag reports whether args carries a help token in a token position
+// (SPEC/HELP.md § Help tokens). The dispatcher, the shared arity point and the
+// leaf handlers call it before any other check, so that
+// `rmp <cmd> <sub> --help` writes the help even when -r is missing.
+//
+// A help token is exactly one of `--help`, `-h` and `help`, compared as the
+// whole token: `--help=1` is not one. Every position is a token position except
+// the value of a flag that takes one, and whether a flag takes a value is read
+// from sub's registry declaration and from nothing else. A token is the value of
+// the flag written immediately before it when that flag is declared with a type
+// other than "boolean" and the token does not begin with "-": the word `help`
+// there is the flag's value, while `--help` and `-h` there still ask for help.
+// A flag the subcommand does not declare, a boolean flag, and a flag written in
+// the joined form `--flag=value` take no following token.
+//
+// sub may be nil, which declares no flag at all.
+func hasHelpFlag(sub *Subcommand, args []string) bool {
+	for i := 0; i < len(args); i++ {
+		tok := args[i]
+		if isHelpToken(tok) {
 			return true
+		}
+		if i+1 < len(args) && flagTakesValue(sub, tok) && !strings.HasPrefix(args[i+1], "-") {
+			i++ // args[i+1] is tok's value, which stands in no token position
 		}
 	}
 	return false
+}
+
+// flagTakesValue reports whether tok names a flag sub declares with a type
+// other than "boolean". The long and the short spelling of one declared flag are
+// the same flag; the roadmap selector is declared like any other flag on every
+// subcommand that takes it. A token carrying "=" names no declared spelling, so
+// it takes no following value.
+func flagTakesValue(sub *Subcommand, tok string) bool {
+	if sub == nil {
+		return false
+	}
+	for i := range sub.Flags {
+		f := &sub.Flags[i]
+		if tok == f.Long || (f.Short != "" && tok == f.Short) {
+			return f.Type != "boolean"
+		}
+	}
+	return false
+}
+
+// splitPositionals separates the tokens a command reads by position from the
+// "-"-prefixed tokens that stand in no positional slot
+// (SPEC/COMMANDS.md § Positional Arguments, the paragraphs on a token written
+// after and between the positional arguments). tokens are what is left once the
+// command's own flags and the roadmap selector have been consumed, in
+// command-line order; declared is the number of positional arguments the command
+// declares.
+//
+// A token that does not begin with "-" is a positional argument and fills the
+// next slot. A "-"-prefixed token is a stray, returned in strays in command-line
+// order, when every declared slot is already filled, or when it is written after
+// one positional argument and before another, in which case the positional
+// argument that follows it fills the next slot. Any other "-"-prefixed token —
+// written before the first positional argument, or with no positional argument
+// after it while a slot is still empty — stands in that slot and is returned
+// among the positionals, so the checks that slot's value faces refuse it.
+//
+// The caller refuses the strays with rejectUnknownFlags after its own checks on
+// the positionals and before anything that needs the roadmap.
+func splitPositionals(tokens []string, declared int) (positionals, strays []string) {
+	total := 0
+	for _, tok := range tokens {
+		if !strings.HasPrefix(tok, "-") {
+			total++
+		}
+	}
+
+	positionals = make([]string, 0, len(tokens))
+	seen := 0
+	for _, tok := range tokens {
+		if !strings.HasPrefix(tok, "-") {
+			positionals = append(positionals, tok)
+			seen++
+			continue
+		}
+		if len(positionals) >= declared || (seen > 0 && seen < total) {
+			strays = append(strays, tok)
+			continue
+		}
+		positionals = append(positionals, tok)
+	}
+	return positionals, strays
 }
 
 // errUnknownFlag words the CLI-wide refusal of a token that begins with "-"
@@ -41,11 +118,12 @@ func errUnknownFlag(flagName string) error {
 // rejectUnknownFlags refuses the first "-"-prefixed token in args, with the
 // line errUnknownFlag words and exit code 2.
 //
-// It is the refusal for a command that declares no flag of its own: every
+// It is the refusal for a command that does not build a FlagParser: every
 // token it can legitimately receive has already been consumed before this
 // runs — the help tokens by hasHelpFlag, the roadmap selector and its value
-// by requireRoadmap where the command takes one — so a "-"-prefixed token
-// that survives to here names nothing the command accepts.
+// by requireRoadmap where the command takes one, and the command's positional
+// arguments by splitPositionals where it reads them by position — so a
+// "-"-prefixed token that survives to here names nothing the command accepts.
 //
 // Who calls hasHelpFlag depends on the command's shape. For a family's
 // subcommand, such as `roadmap list`, Command.DispatchFamily calls it before

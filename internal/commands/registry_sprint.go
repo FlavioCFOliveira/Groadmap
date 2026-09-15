@@ -109,6 +109,7 @@ func buildSprintCommand() Command {
 				ExitCodes: []ExitCodeEntry{
 					ec(0, "The sprint object was written to stdout."),
 					ec(2,
+						condUnknownFlag,
 						condMalformedPositionalID,
 						condMissingPositional,
 						condExcessPositional,
@@ -144,6 +145,7 @@ func buildSprintCommand() Command {
 				ExitCodes: []ExitCodeEntry{
 					ec(0, "The stand-up summary of the sprint was written to stdout as a JSON object."),
 					ec(2,
+						condUnknownFlag,
 						condMalformedPositionalID,
 						condMissingPositional,
 						condExcessPositional,
@@ -230,6 +232,7 @@ func buildSprintCommand() Command {
 				ExitCodes: []ExitCodeEntry{
 					ec(0, "The sprint was deleted and every member task returned to BACKLOG; stdout is empty."),
 					ec(2,
+						condUnknownFlag,
 						condMalformedPositionalID,
 						condMissingPositional,
 						condExcessPositional,
@@ -267,6 +270,7 @@ func buildSprintCommand() Command {
 				ExitCodes: []ExitCodeEntry{
 					ec(0, "The sprint is now OPEN and its started_at is set; stdout is empty."),
 					ec(2,
+						condUnknownFlag,
 						condMalformedPositionalID,
 						condMissingPositional,
 						condExcessPositional,
@@ -312,6 +316,7 @@ func buildSprintCommand() Command {
 				ExitCodes: []ExitCodeEntry{
 					ec(0, "The sprint is now CLOSED and its closed_at is set; stdout is empty. With --force a warning naming the tasks left incomplete is written to stderr."),
 					ec(2,
+						condUnknownFlag,
 						condMalformedPositionalID,
 						condMissingPositional,
 						condExcessPositional,
@@ -354,6 +359,7 @@ func buildSprintCommand() Command {
 				ExitCodes: []ExitCodeEntry{
 					ec(0, "The sprint is OPEN again and its closed_at is cleared; started_at is preserved and stdout is empty."),
 					ec(2,
+						condUnknownFlag,
 						condMalformedPositionalID,
 						condMissingPositional,
 						condExcessPositional,
@@ -477,6 +483,7 @@ func buildSprintCommand() Command {
 				ExitCodes: []ExitCodeEntry{
 					ec(0, "The sprint's per-status counts, burndown, velocity and elapsed days were written to stdout as a JSON object."),
 					ec(2,
+						condUnknownFlag,
 						condMalformedPositionalID,
 						condMissingPositional,
 						condExcessPositional,
@@ -515,6 +522,7 @@ func buildSprintCommand() Command {
 				ExitCodes: []ExitCodeEntry{
 					ec(0, "Every named task is a member of the sprint and carries SPRINT status; stdout is empty."),
 					ec(2,
+						condUnknownFlag,
 						condMalformedPositionalID,
 						condMissingPositional,
 						condExcessPositional,
@@ -557,6 +565,7 @@ func buildSprintCommand() Command {
 				ExitCodes: []ExitCodeEntry{
 					ec(0, "Every named task left the sprint and returned to BACKLOG; stdout is empty."),
 					ec(2,
+						condUnknownFlag,
 						condMalformedPositionalID,
 						condMissingPositional,
 						condExcessPositional,
@@ -596,6 +605,7 @@ func buildSprintCommand() Command {
 				ExitCodes: []ExitCodeEntry{
 					ec(0, "Every named task now belongs to the destination sprint, appended after its current members, with its task status unchanged; stdout is empty."),
 					ec(2,
+						condUnknownFlag,
 						condMalformedPositionalID,
 						condMissingPositional,
 						condExcessPositional,
@@ -647,6 +657,7 @@ func buildSprintCommand() Command {
 				ExitCodes: []ExitCodeEntry{
 					ec(0, "The sprint's members hold the requested order, and the new order was written to stdout as a JSON object."),
 					ec(2,
+						condUnknownFlag,
 						condMalformedPositionalID,
 						condMissingPositional,
 						condExcessPositional,
@@ -699,6 +710,7 @@ func buildSprintCommand() Command {
 				ExitCodes: []ExitCodeEntry{
 					ec(0, "The task holds the requested position, the sprint's other members were renumbered around it, and the new placement was written to stdout as a JSON object."),
 					ec(2,
+						condUnknownFlag,
 						condMalformedPositionalID,
 						condMissingPositional,
 						condExcessPositional,
@@ -750,6 +762,7 @@ func buildSprintCommand() Command {
 				ExitCodes: []ExitCodeEntry{
 					ec(0, "The two tasks exchanged positions, and the exchange was written to stdout as a JSON object."),
 					ec(2,
+						condUnknownFlag,
 						condMalformedPositionalID,
 						condMissingPositional,
 						condExcessPositional,
@@ -800,6 +813,7 @@ func buildSprintCommand() Command {
 				ExitCodes: []ExitCodeEntry{
 					ec(0, "The task holds position 0, the sprint's other members were renumbered after it, and the new placement was written to stdout as a JSON object."),
 					ec(2,
+						condUnknownFlag,
 						condMalformedPositionalID,
 						condMissingPositional,
 						condExcessPositional,
@@ -847,6 +861,7 @@ func buildSprintCommand() Command {
 				ExitCodes: []ExitCodeEntry{
 					ec(0, "The task holds the last position of the sprint, the members it passed were renumbered before it, and the new placement was written to stdout as a JSON object."),
 					ec(2,
+						condUnknownFlag,
 						condMalformedPositionalID,
 						condMissingPositional,
 						condExcessPositional,

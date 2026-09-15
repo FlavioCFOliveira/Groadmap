@@ -10,6 +10,7 @@ package commands
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/FlavioCFOliveira/Groadmap/internal/graphserve"
 	"github.com/FlavioCFOliveira/Groadmap/internal/utils"
@@ -142,7 +143,10 @@ func readSocketFlag(args []string) (string, error) {
 	}
 	for _, token := range rest {
 		if isFlagLike(token) {
-			return "", fmt.Errorf("%w: unknown flag: %s", utils.ErrInvalidInput, token)
+			// Named without its "=value" tail, as every command names an
+			// unknown flag (SPEC/COMMANDS.md § Positional Arguments, rule 5).
+			flagName, _, _ := strings.Cut(token, "=")
+			return "", errUnknownFlag(flagName)
 		}
 		return "", fmt.Errorf("%w: unexpected argument %q", utils.ErrInvalidInput, token)
 	}

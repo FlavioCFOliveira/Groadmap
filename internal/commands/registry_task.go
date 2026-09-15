@@ -139,6 +139,7 @@ func buildTaskCommand() Command {
 				ExitCodes: []ExitCodeEntry{
 					ec(0, "One object per distinct id was written to stdout as a JSON array, in the order the ids were given."),
 					ec(2,
+						condUnknownFlag,
 						condMalformedPositionalID,
 						condMissingPositional,
 						condExcessPositional,
@@ -175,7 +176,7 @@ func buildTaskCommand() Command {
 				},
 				ExitCodes: []ExitCodeEntry{
 					ec(0, "The next incomplete tasks of the OPEN sprint were written to stdout as a JSON array, in sprint position order; an empty array when the sprint has no incomplete task left."),
-					ec(2, condExcessPositional),
+					ec(2, condUnknownFlag, condExcessPositional),
 					ec(3, condNoRoadmap),
 					ec(4,
 						condRoadmapNotFound,
@@ -255,6 +256,7 @@ func buildTaskCommand() Command {
 				ExitCodes: []ExitCodeEntry{
 					ec(0, "Every named task was deleted; stdout is empty."),
 					ec(2,
+						condUnknownFlag,
 						condMalformedPositionalID,
 						condMissingPositional,
 						condExcessPositional,
@@ -305,6 +307,7 @@ func buildTaskCommand() Command {
 				ExitCodes: []ExitCodeEntry{
 					ec(0, "Every named task now carries the target status and its lifecycle timestamps; stdout is empty."),
 					ec(2,
+						condUnknownFlag,
 						"--commit-open, --commit-close or --summary was written with no value after it.",
 						"An id in the list is not an integer.",
 					),
@@ -354,6 +357,7 @@ func buildTaskCommand() Command {
 				ExitCodes: []ExitCodeEntry{
 					ec(0, "Every named task not already in BACKLOG was returned to it and its lifecycle timestamps cleared; stdout is empty."),
 					ec(2,
+						condUnknownFlag,
 						condMalformedPositionalID,
 						condMissingPositional,
 						condExcessPositional,
@@ -392,6 +396,7 @@ func buildTaskCommand() Command {
 				ExitCodes: []ExitCodeEntry{
 					ec(0, "Every named task carries the new priority; stdout is empty."),
 					ec(2,
+						condUnknownFlag,
 						condMalformedPositionalID,
 						condMissingPositional,
 						condExcessPositional,
@@ -432,6 +437,7 @@ func buildTaskCommand() Command {
 				ExitCodes: []ExitCodeEntry{
 					ec(0, "Every named task carries the new severity; stdout is empty."),
 					ec(2,
+						condUnknownFlag,
 						condMalformedPositionalID,
 						condMissingPositional,
 						condExcessPositional,
@@ -471,6 +477,7 @@ func buildTaskCommand() Command {
 				ExitCodes: []ExitCodeEntry{
 					ec(0, "The direct subtasks of the named task were written to stdout as a JSON array; an empty array when it has none."),
 					ec(2,
+						condUnknownFlag,
 						condMalformedPositionalID,
 						condMissingPositional,
 						condExcessPositional,
@@ -508,6 +515,7 @@ func buildTaskCommand() Command {
 				ExitCodes: []ExitCodeEntry{
 					ec(0, "The dependency edge is recorded; stdout is empty. Recording an edge that already exists succeeds and changes nothing."),
 					ec(2,
+						condUnknownFlag,
 						condMalformedPositionalID,
 						condMissingPositional,
 						condExcessPositional,
@@ -548,6 +556,7 @@ func buildTaskCommand() Command {
 				ExitCodes: []ExitCodeEntry{
 					ec(0, "The dependency edge was removed; stdout is empty."),
 					ec(2,
+						condUnknownFlag,
 						condMalformedPositionalID,
 						condMissingPositional,
 						condExcessPositional,
@@ -583,6 +592,7 @@ func buildTaskCommand() Command {
 				ExitCodes: []ExitCodeEntry{
 					ec(0, "The not-yet-COMPLETED tasks the named task depends on were written to stdout as a JSON array; an empty array when nothing blocks it."),
 					ec(2,
+						condUnknownFlag,
 						condMalformedPositionalID,
 						condMissingPositional,
 						condExcessPositional,
@@ -618,6 +628,7 @@ func buildTaskCommand() Command {
 				ExitCodes: []ExitCodeEntry{
 					ec(0, "The tasks that declare a dependency on the named task were written to stdout as a JSON array; an empty array when none does."),
 					ec(2,
+						condUnknownFlag,
 						condMalformedPositionalID,
 						condMissingPositional,
 						condExcessPositional,

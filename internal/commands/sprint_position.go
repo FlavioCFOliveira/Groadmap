@@ -40,6 +40,7 @@ func sprintBottom(args []string) error {
 	if err != nil {
 		return err
 	}
+	remaining, strays := splitPositionals(remaining, 2)
 
 	if len(remaining) < 2 {
 		return fmt.Errorf("%w: sprint ID and task ID required", utils.ErrRequired)
@@ -52,6 +53,13 @@ func sprintBottom(args []string) error {
 
 	taskID, err := utils.ValidateIDString(remaining[1], utils.FieldTaskID)
 	if err != nil {
+		return err
+	}
+
+	// A "-"-prefixed token between or after the positional arguments stands in
+	// no slot and is refused before the roadmap is opened
+	// (SPEC/COMMANDS.md § Positional Arguments).
+	if err := rejectUnknownFlags(strays); err != nil {
 		return err
 	}
 
@@ -116,6 +124,7 @@ func sprintMoveToPosition(args []string, position int) error {
 	if err != nil {
 		return err
 	}
+	remaining, strays := splitPositionals(remaining, 2)
 
 	if len(remaining) < 2 {
 		return fmt.Errorf("%w: sprint ID and task ID required", utils.ErrRequired)
@@ -128,6 +137,11 @@ func sprintMoveToPosition(args []string, position int) error {
 
 	taskID, err := utils.ValidateIDString(remaining[1], utils.FieldTaskID)
 	if err != nil {
+		return err
+	}
+
+	// See sprintBottom: a stray "-"-prefixed token is refused before the roadmap.
+	if err := rejectUnknownFlags(strays); err != nil {
 		return err
 	}
 

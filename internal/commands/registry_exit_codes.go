@@ -68,12 +68,16 @@ const (
 // code entry, rule 2, exists to prevent.
 //
 // A subcommand carries only the ones it can actually produce, which is not
-// the same on all of them: `task get` cannot print the unknown-flag line
-// because a token beginning with "-" written in its id position is read as
-// the id, and `task next` can produce neither that line nor the malformed-id
-// one because its single positional is optional and non-numeric values reach
-// its own validation. Each assignment below was measured against the compiled
-// binary, one subcommand at a time.
+// the same on all of them: `task next` cannot print the malformed-id line
+// because its single positional is optional and non-numeric values reach its
+// own validation. The unknown-flag line, by contrast, is produced by every
+// subcommand that reads positional arguments, `task get` and `task next`
+// included: a token beginning with "-" written in a positional slot is read as
+// that slot's value and refused by that slot's check, but the same token
+// written between two positional arguments or after the last of them stands in
+// no slot and is refused as an unknown flag (SPEC/COMMANDS.md § Positional
+// Arguments; rmp tasks 465 and 484). Each assignment below was measured against
+// the compiled binary, one subcommand at a time.
 const (
 	// condUnknownFlag is one of exit code 2's conditions on every
 	// subcommand that refuses a token naming none of its own flags

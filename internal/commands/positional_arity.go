@@ -84,15 +84,16 @@ const (
 //
 // Two classes of invocation are passed through untouched:
 //
-//   - A help request. A help token anywhere in args means the reader asked
-//     for the help body, which every level already serves with exit 0; the
-//     arity rule governs work, not documentation.
+//   - A help request. A help token in a token position of args means the
+//     reader asked for the help body, which every level already serves with
+//     exit 0; the arity rule governs work, not documentation. A help token
+//     written as a flag's value asks for nothing (SPEC/HELP.md § Help tokens).
 //   - A subcommand that publishes its own refusal wording
 //     (Subcommand.PublishesOwnArityRefusal). Deferring keeps the lines
 //     SPEC/COMMANDS.md publishes for `graph`, `web`, and `ai-help` exactly
 //     as they are instead of overriding them from here.
 func checkPositionalArity(sub *Subcommand, args []string) error {
-	if sub == nil || sub.PublishesOwnArityRefusal || hasHelpFlag(args) {
+	if sub == nil || sub.PublishesOwnArityRefusal || hasHelpFlag(sub, args) {
 		return nil
 	}
 

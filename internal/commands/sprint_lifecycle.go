@@ -113,12 +113,18 @@ func sprintLifecycle(args []string, newStatus models.SprintStatus, op models.Aud
 	if err != nil {
 		return err
 	}
+	remaining, strays := splitPositionals(remaining, 1)
 	if len(remaining) == 0 {
 		return fmt.Errorf("%w: sprint ID required", utils.ErrRequired)
 	}
 
 	sprintID, err := utils.ValidateIDString(remaining[0], utils.FieldSprintID)
 	if err != nil {
+		return err
+	}
+	// A "-"-prefixed token after the id stands in no slot and is refused before
+	// the roadmap is opened (SPEC/COMMANDS.md § Positional Arguments).
+	if err := rejectUnknownFlags(strays); err != nil {
 		return err
 	}
 	database, err := db.OpenExisting(roadmapName)

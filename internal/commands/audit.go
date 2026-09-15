@@ -65,6 +65,7 @@ Exit codes:
   0  Success
   2  Non-integer --limit or --entity-id (rejected by the flag parser as misuse)
   3  Missing -r
+  4  Roadmap not found
   6  Invalid operation, entity-type, or date format, --limit out of 1-500,
      or --entity-id out of 1-2147483647
 
@@ -98,6 +99,7 @@ Exit codes:
   0  Success
   2  Non-integer <entity-id>
   3  Missing -r
+  4  Roadmap not found
   6  Bad entity-type value, or <entity-id> out of range (<1 or >2147483647)
 
 Examples:
@@ -135,7 +137,10 @@ Output (stdout JSON):
 
 Exit codes:
   0  Success
+  2  Unknown flag, --since/--until without its value, or a positional
+     argument (none accepted)
   3  Missing -r
+  4  Roadmap not found
   6  Invalid --since/--until date
 
 Examples:
@@ -251,6 +256,7 @@ func auditHistory(args []string) error {
 	if err != nil {
 		return err
 	}
+	remaining, strays := splitPositionals(remaining, 2)
 
 	if len(remaining) < 2 {
 		return fmt.Errorf("%w: entity type and ID required", utils.ErrRequired)
@@ -269,6 +275,13 @@ func auditHistory(args []string) error {
 	// out-of-range values are rejected with exit code 6.
 	entityID, err := utils.ValidateIDString(remaining[1], utils.FieldEntityID)
 	if err != nil {
+		return err
+	}
+
+	// A "-"-prefixed token between or after the two positional arguments stands
+	// in no slot and is refused before the roadmap is opened
+	// (SPEC/COMMANDS.md § Positional Arguments).
+	if err := rejectUnknownFlags(strays); err != nil {
 		return err
 	}
 

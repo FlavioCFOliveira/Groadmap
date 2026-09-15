@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"strings"
 
 	"github.com/FlavioCFOliveira/Groadmap/internal/db"
 	"github.com/FlavioCFOliveira/Groadmap/internal/models"
@@ -126,6 +125,7 @@ func sprintStats(args []string) error {
 		}
 		return err
 	}
+	remaining, strays := splitPositionals(remaining, 1)
 
 	if len(remaining) == 0 {
 		return fmt.Errorf("%w: sprint ID required", utils.ErrRequired)
@@ -133,6 +133,11 @@ func sprintStats(args []string) error {
 
 	sprintID, err := utils.ValidateIDString(remaining[0], utils.FieldSprintID)
 	if err != nil {
+		return err
+	}
+	// A "-"-prefixed token after the id stands in no slot and is refused before
+	// the roadmap is opened (SPEC/COMMANDS.md § Positional Arguments).
+	if err := rejectUnknownFlags(strays); err != nil {
 		return err
 	}
 	database, err := db.OpenExisting(roadmapName)
@@ -209,6 +214,7 @@ func sprintAddTasks(args []string) error {
 	if err != nil {
 		return err
 	}
+	remaining, strays := splitPositionals(remaining, 2)
 	if len(remaining) < 2 {
 		return fmt.Errorf("%w: sprint ID and task ID(s) required", utils.ErrRequired)
 	}
@@ -218,7 +224,11 @@ func sprintAddTasks(args []string) error {
 		return err
 	}
 
-	taskIDs, err := utils.ParseCommaSeparatedIDs(strings.Join(remaining[1:], ","), utils.FieldTaskID)
+	// The task-id list is the second positional argument and nothing more. It
+	// used to be every token after the sprint id joined with commas, so a
+	// "-"-prefixed token written after the list was read into it and refused as
+	// a malformed id instead of as the unknown flag it is (rmp task 465).
+	taskIDs, err := utils.ParseCommaSeparatedIDs(remaining[1], utils.FieldTaskID)
 	if err != nil {
 		return err
 	}
@@ -226,6 +236,13 @@ func sprintAddTasks(args []string) error {
 	// A repeated id names the same task each time; see the note in
 	// internal/commands/task_mutate.go and SPEC/COMMANDS.md § Task ID Lists.
 	taskIDs = utils.DistinctIDs(taskIDs)
+
+	// A "-"-prefixed token between or after the positional arguments stands in
+	// no slot and is refused before the roadmap is opened
+	// (SPEC/COMMANDS.md § Positional Arguments).
+	if err := rejectUnknownFlags(strays); err != nil {
+		return err
+	}
 
 	database, err := db.OpenExisting(roadmapName)
 	if err != nil {
@@ -286,6 +303,7 @@ func sprintRemoveTasks(args []string) error {
 	if err != nil {
 		return err
 	}
+	remaining, strays := splitPositionals(remaining, 2)
 
 	if len(remaining) < 2 {
 		return fmt.Errorf("%w: sprint ID and task ID(s) required", utils.ErrRequired)
@@ -304,6 +322,11 @@ func sprintRemoveTasks(args []string) error {
 	// A repeated id names the same task each time; see the note in
 	// internal/commands/task_mutate.go and SPEC/COMMANDS.md § Task ID Lists.
 	taskIDs = utils.DistinctIDs(taskIDs)
+
+	// See sprintAddTasks: a stray "-"-prefixed token is refused before the roadmap.
+	if err := rejectUnknownFlags(strays); err != nil {
+		return err
+	}
 
 	database, err := db.OpenExisting(roadmapName)
 	if err != nil {
@@ -465,6 +488,7 @@ func sprintMoveTasks(args []string) error {
 	if err != nil {
 		return err
 	}
+	remaining, strays := splitPositionals(remaining, 3)
 	if len(remaining) < 3 {
 		return fmt.Errorf("%w: from sprint ID, to sprint ID, and task ID(s) required", utils.ErrRequired)
 	}
@@ -486,6 +510,11 @@ func sprintMoveTasks(args []string) error {
 	// A repeated id names the same task each time; see the note in
 	// internal/commands/task_mutate.go and SPEC/COMMANDS.md § Task ID Lists.
 	taskIDs = utils.DistinctIDs(taskIDs)
+
+	// See sprintAddTasks: a stray "-"-prefixed token is refused before the roadmap.
+	if err := rejectUnknownFlags(strays); err != nil {
+		return err
+	}
 
 	database, err := db.OpenExisting(roadmapName)
 	if err != nil {

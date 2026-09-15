@@ -9,14 +9,16 @@ import (
 
 // HandleStats handles the stats command.
 func HandleStats(args []string) error {
-	// A help token anywhere in the argument list is served before any other
-	// parsing runs, so the help is reachable even when -r is missing
-	// (SPEC/HELP.md § Help levels). `stats` is a leaf command: DispatchFamily
-	// hands it the arguments untouched and never runs the hasHelpFlag
-	// short-circuit it runs for a family's subcommands, so this handler
-	// applies that same predicate to the same span itself. That is what makes
+	// A help token in a token position is served before any other check
+	// runs, so the help is reachable even when -r is missing
+	// (SPEC/HELP.md § Help levels, § Help tokens). `stats` is a leaf command:
+	// DispatchFamily hands it the arguments untouched and never runs the
+	// hasHelpFlag short-circuit it runs for a family's subcommands, so this
+	// handler applies that same predicate, over its own registry declaration,
+	// to the same span itself. That is what makes
 	// `rmp stats -r <name> --help` indistinguishable from
-	// `rmp task list -r <name> --help` (SPEC/COMMANDS.md § Roadmap Statistics).
+	// `rmp task list -r <name> --help` (SPEC/COMMANDS.md § Roadmap Statistics),
+	// and what reads `help` in `rmp stats -r help` as the selector's value.
 	//
 	// The check used to read args[0] alone. A help token written after the
 	// selector then survived requireRoadmap and reached rejectUnknownFlags
@@ -24,7 +26,7 @@ func HandleStats(args []string) error {
 	//
 	// Route through invokeHelpPrinter so the SPEC-mandated AI-agent banner
 	// (SPEC/HELP.md § AI agent banner) is prepended uniformly.
-	if hasHelpFlag(args) {
+	if hasHelpFlag(leafSubcommand("stats"), args) {
 		invokeHelpPrinter(printStatsHelp)
 		return nil
 	}

@@ -1310,12 +1310,17 @@ Precedence and rules:
    to type. The other two cases are decided as soon as the stream ends (see
    [Standard Input That Supplies No Query](#standard-input-that-supplies-no-query)).
 4. When `--query` is present, its value is the token that immediately follows it.
-   The command fails with `utils.ErrRequired` (exit code 2) whenever that value is
-   absent. The value is absent in either of these cases:
+   Written in the joined form, `--query=<cypher>` or `-q=<cypher>`, the flag carries
+   its value in the same token instead: the value is the text after the first `=`,
+   later `=` characters included, and no following token is read. The command
+   fails with `utils.ErrRequired` (exit code 2) whenever that value is absent. The
+   value is absent in either of these cases:
    - There is no following token, or the following token is empty or contains only
+     whitespace; in the joined form, the text after the `=` is empty or contains only
      whitespace.
-   - The following token is flag-like: it begins with `--` (a long flag), or with a
-     single `-` immediately followed by an ASCII letter (a short flag). A flag-like
+   - In the separate form, the following token is flag-like: it begins with `--` (a
+     long flag), or with a single `-` immediately followed by an ASCII letter (a
+     short flag). A flag-like
      token is the next flag the user supplied, not a query value, so it is never
      silently swallowed as the query.
 
@@ -1364,7 +1369,10 @@ The rules are:
    including a `-` followed by a digit or a decimal point (`-1`, `-0.5`) and a
    bare `-`. A flag-like token that `graph client` does not define is refused as
    an unknown flag, under the CLI-wide wording `COMMANDS.md § Positional Arguments`
-   rule 5 publishes; every other stray token is refused by rule 2 below. This is
+   rule 5 publishes. A token in the joined form is judged by its part before the
+   first `=`, so `--query=<cypher>`, `-q=<cypher>`, and `--socket=<path>` are flags
+   `graph client` defines, and `--zzz=1` is an unknown flag named `--zzz`. Every
+   other stray token is refused by rule 2 below. This is
    the one point on which `graph client` and the comment subcommands classify
    the same token differently, and each states its own rule: on a comment
    subcommand a stray `-1` is an unknown flag

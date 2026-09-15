@@ -44,7 +44,10 @@ Output (stdout JSON):
 
 Exit codes:
   0  Success
+  2  Unknown flag, a flag without its value, a non-integer
+     --priority/--severity/--limit, or a positional argument (none accepted)
   3  Missing -r
+  4  Roadmap not found
   6  Invalid filter value (bad enum or date format)
 
 Examples:
@@ -118,9 +121,11 @@ Output (stdout JSON):
 
 Exit codes:
   0  Success
-  2  Invalid id syntax (non-integer or non-positive id)
+  2  An id is not an integer, an argument is missing or extra, or an
+     unknown flag after the ids
   3  Missing -r
   4  At least one id does not exist
+  6  An id falls outside 1-2147483647
 
 Examples:
   rmp task get -r myproject 1
@@ -171,6 +176,7 @@ Output (stdout JSON):
 
 Exit codes:
   0  Success
+  2  An extra positional argument, or an unknown flag after [num]
   3  Missing -r
   4  No sprint is OPEN
   6  Invalid <num> (non-numeric or < 1)
@@ -206,6 +212,9 @@ Output: empty (exit 0 on success).
 
 Exit codes:
   0  Success
+  2  Unknown flag, a flag without its value, a non-integer --priority or
+     --severity, a missing or non-integer <task-id>, or an extra positional
+     argument
   3  Missing -r
   4  Task not found
   6  No fields supplied, empty value for required text field, oversize,
@@ -364,9 +373,11 @@ Output: empty (exit 0 on success).
 
 Exit codes:
   0  Success
-  2  Invalid id syntax (non-integer or non-positive id)
+  2  An id is not an integer, an argument is missing or extra, or an
+     unknown flag after the ids
   3  Missing -r
   4  At least one id does not exist
+  6  An id falls outside 1-2147483647
 
 Examples:
   rmp task reopen -r myproject 7

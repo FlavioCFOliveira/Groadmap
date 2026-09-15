@@ -56,6 +56,11 @@ const backstopLine = "7.5s"
 // statement out of what remains, so the socket flag has to be removed from the
 // arguments without an opinion about the rest.
 //
+// The flag is read in both forms (SPEC/COMMANDS.md § Serve Options, § Client
+// Options): `--socket <path>`, whose value is the following token, and
+// `--socket=<path>`, whose value is the text after the first "=" of the same
+// token, later "=" characters included. `--socket=` supplies the empty value.
+//
 // A flag supplied with an empty — or whitespace-only — value is a MISSING
 // parameter and not a validation failure: it names no socket at all, which is the
 // same condition as writing the flag with nothing after it. The value itself is
@@ -67,6 +72,11 @@ func extractSocketFlag(args []string) (string, []string, error) {
 	rest := make([]string, 0, len(args))
 
 	for i := 0; i < len(args); i++ {
+		if joined, ok := strings.CutPrefix(args[i], socketFlagLong+"="); ok {
+			value = joined
+			found = true
+			continue
+		}
 		if args[i] != socketFlagLong {
 			rest = append(rest, args[i])
 			continue

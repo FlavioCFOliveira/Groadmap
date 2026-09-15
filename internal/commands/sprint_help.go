@@ -35,7 +35,10 @@ Output (stdout JSON):
 
 Exit codes:
   0  Success
+  2  Unknown flag, --status without its value, or a positional argument
+     (none accepted)
   3  Missing -r
+  4  Roadmap not found
   6  Invalid --status value
 
 Examples:
@@ -89,6 +92,7 @@ Exit codes:
   0  Success
   2  Missing -t or -d
   3  Missing -r
+  4  Roadmap not found
   5  --order value already used by another sprint
   6  Title/description too long, --max-tasks outside 1-10000, or --order not a positive integer
 
@@ -117,6 +121,8 @@ Output (stdout JSON):
 
 Exit codes:
   0  Success
+  2  <sprint-id> missing or not an integer, an extra positional argument,
+     or an unknown flag after <sprint-id>
   3  Missing -r
   4  Sprint not found
 
@@ -159,6 +165,8 @@ Output (stdout JSON):
 
 Exit codes:
   0  Success
+  2  <sprint-id> missing or not an integer, an extra positional argument,
+     or an unknown flag after <sprint-id>
   3  Missing -r
   4  Sprint not found
 
@@ -250,6 +258,8 @@ Output: empty (exit 0 on success).
 
 Exit codes:
   0  Success
+  2  <sprint-id> missing or not an integer, an extra positional argument,
+     or an unknown flag after <sprint-id>
   3  Missing -r
   4  Sprint not found
 
@@ -278,6 +288,8 @@ Output: empty (exit 0 on success).
 
 Exit codes:
   0  Success
+  2  <sprint-id> missing or not an integer, an extra positional argument,
+     or an unknown flag after <sprint-id>
   3  Missing -r
   4  Sprint not found
   6  Current sprint state forbids starting (already OPEN, or another
@@ -311,6 +323,8 @@ Output: empty (exit 0 on success).
 
 Exit codes:
   0  Success
+  2  <sprint-id> missing or not an integer, an extra positional argument,
+     or an unknown flag after <sprint-id>
   3  Missing -r
   4  Sprint not found
   6  Sprint not OPEN, or active tasks remain and --force was not given
@@ -344,6 +358,8 @@ Output: empty (exit 0 on success).
 
 Exit codes:
   0  Success
+  2  <sprint-id> missing or not an integer, an extra positional argument,
+     or an unknown flag after <sprint-id>
   3  Missing -r
   4  Sprint not found
   6  Sprint not in CLOSED state, or another sprint is OPEN
@@ -378,6 +394,8 @@ Output (stdout JSON):
 
 Exit codes:
   0  Success
+  2  Unknown flag, --status without its value, <sprint-id> missing or not
+     an integer, or an extra positional argument
   3  Missing -r
   4  Sprint not found
   6  Invalid --status value
@@ -409,6 +427,8 @@ Output (stdout JSON):
 
 Exit codes:
   0  Success
+  2  Unknown flag, <sprint-id> missing or not an integer, or an extra
+     positional argument
   3  Missing -r
   4  Sprint not found
 
@@ -456,6 +476,8 @@ Notes for callers:
 
 Exit codes:
   0  Success
+  2  <sprint-id> missing or not an integer, an extra positional argument,
+     or an unknown flag after <sprint-id>
   3  Missing -r
   4  Sprint not found
 
@@ -483,6 +505,8 @@ Output: empty (exit 0). Audits SPRINT_ADD_TASK once per added task.
 
 Exit codes:
   0  Success
+  2  An id is not an integer, an argument is missing or extra, or an unknown
+     flag is written between or after the arguments
   3  Missing -r
   4  Sprint or any task id not found
   6  Sprint is CLOSED, or adding the tasks would exceed --max-tasks
@@ -511,8 +535,11 @@ Output: empty (exit 0). Audits SPRINT_REMOVE_TASK per removed task.
 
 Exit codes:
   0  Success
+  2  An id is not an integer, an argument is missing or extra, or an unknown
+     flag is written between or after the arguments
   3  Missing -r
-  4  Sprint not found, or some task ids are not currently in the sprint
+  4  Sprint not found
+  6  A named task is not a member of the sprint
 
 Examples:
   rmp sprint remove-tasks -r myproject 5 7
@@ -539,6 +566,8 @@ Output: empty (exit 0 on success).
 
 Exit codes:
   0  Success
+  2  An id is not an integer, an argument is missing or extra, or an unknown
+     flag is written between or after the arguments
   3  Missing -r
   4  Either sprint not found, or some task ids aren't in <from-id>
   6  Destination sprint is CLOSED or would exceed its --max-tasks
@@ -570,6 +599,8 @@ hold (exit 0). Audits SPRINT_REORDER_TASKS once.
 
 Exit codes:
   0  Success
+  2  An id is not an integer, an argument is missing or extra, or an unknown
+     flag is written between or after the arguments
   3  Missing -r
   4  Sprint not found, or unknown task id in list
   6  List does not match the current set of tasks in the sprint
@@ -601,6 +632,8 @@ now holds (exit 0). Audits SPRINT_TASK_MOVE_POSITION.
 
 Exit codes:
   0  Success
+  2  An id is not an integer, an argument is missing or extra, or an unknown
+     flag is written between or after the arguments
   3  Missing -r
   4  Task not in the sprint
   6  <position> is negative or non-numeric
@@ -628,6 +661,8 @@ exchanged positions (exit 0). Audits SPRINT_TASK_SWAP.
 
 Exit codes:
   0  Success
+  2  An id is not an integer, an argument is missing or extra, or an unknown
+     flag is written between or after the arguments
   3  Missing -r
   4  Either task not in the sprint
   6  Same id supplied twice
@@ -654,8 +689,11 @@ now holds (exit 0). Audits SPRINT_TASK_MOVE_POSITION.
 
 Exit codes:
   0  Success
+  2  An id is not an integer, an argument is missing or extra, or an unknown
+     flag is written between or after the arguments
   3  Missing -r
-  4  Task not in the sprint
+  4  Sprint not found
+  6  The task is not a member of the sprint
 
 Examples:
   rmp sprint top -r myproject 5 7
@@ -681,8 +719,11 @@ now holds (exit 0). Audits SPRINT_TASK_MOVE_POSITION.
 
 Exit codes:
   0  Success
+  2  An id is not an integer, an argument is missing or extra, or an unknown
+     flag is written between or after the arguments
   3  Missing -r
-  4  Task not in the sprint
+  4  Sprint not found
+  6  The task is not a member of the sprint
 
 Examples:
   rmp sprint bottom -r myproject 5 7
