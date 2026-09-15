@@ -1664,7 +1664,7 @@ other document**. Concretely:
 | `schema_version` | string | Semantic version of the contract schema itself. Bumped only when the structure of the contract changes. Independent of the binary version. A change that a consumer of the previous structure cannot read — a field that changes type, or one that stops being emitted — is a major bump; a field added beside the existing ones is a minor one. |
 | `tool.name` | string | Canonical binary name (`rmp`). |
 | `tool.display_name` | string | Human-readable product name (`Groadmap`). |
-| `tool.binary_version` | string | Bare semver string of the `rmp` binary that produced this contract (e.g. `"1.3.0"`). This is the value extracted from the application version constant, NOT the formatted output of `rmp --version` (which is plain text such as `Groadmap version 1.3.0`). The contract MUST strip the `Groadmap version ` prefix and emit only the semver. |
+| `tool.binary_version` | string | Bare semver string of the `rmp` binary that produced this contract (e.g. `"1.3.0"`). This is the value extracted from the application version constant, NOT the formatted output of `rmp --version` (which is plain text such as `Groadmap version 1.3.0 (commit 0a1b2c3)`; see `COMMANDS.md § Version`). The value carries neither the `Groadmap version ` prefix nor the build identification that follows the version on that line: the contract emits only the semver. |
 | `tool.description` | string | One-sentence summary of what the tool does. |
 | `conventions` | object | Cross-cutting invariants the agent must observe. See below. |
 | `exit_codes` | array of object | Catalogue of every exit code the binary can emit. |

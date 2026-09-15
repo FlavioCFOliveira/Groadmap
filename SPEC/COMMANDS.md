@@ -803,6 +803,24 @@ A third form is the bare word: `rmp version` writes the same single line to stdo
 
 All three forms accept no positional argument. An excess one is refused with the exit code and the error line `§ Positional Arguments` publishes.
 
+**Output (success):** exactly one line on stdout, ending in a newline, and exit code `0`. The three forms write the same line. It names the version and identifies the build, and which of its three shapes it takes depends on what the Go toolchain recorded about the source tree the binary was built from. The rule that decides it is `VERSION.md § Build Identification`.
+
+| Binary built | Line written |
+|--------------|--------------|
+| From a git working tree with no uncommitted change, as every released binary is | `Groadmap version <version> (commit <commit>)` |
+| From a git working tree with an uncommitted change | `Groadmap version <version> (commit <commit>, modified)` |
+| With no version-control data recorded, for example by `go run`, by `go install` of a published version, or from a copy of the source without its `.git` directory | `Groadmap version <version> (commit unknown)` |
+
+`<version>` is the application version constant, with no leading `v`. `<commit>` is exactly the first seven characters of the hash of the commit the binary was built from. At version `1.17.1`, the released binary writes the first line below, a binary built from the later commit `8647dae` with changes not yet committed writes the second, and `go run ./cmd/rmp --version` writes the third:
+
+```
+Groadmap version 1.17.1 (commit 994c1c7)
+Groadmap version 1.17.1 (commit 8647dae, modified)
+Groadmap version 1.17.1 (commit unknown)
+```
+
+**What a script may rely on.** The line always begins with the three words `Groadmap version <version>`, and the build identification always follows them after one space, as the last part of the line and inside one pair of parentheses. The version number is therefore always the third whitespace-separated word. What the parentheses hold is one of the three shapes above and nothing else. A script that compares the whole line with `Groadmap version <version>` matches no build.
+
 ### AI Help
 
 ```bash

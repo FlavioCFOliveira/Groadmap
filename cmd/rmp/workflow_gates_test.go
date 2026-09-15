@@ -98,12 +98,13 @@ func TestWorkflowsRunTheCompleteGateSet(t *testing.T) {
 }
 
 // TestWorkflowToolPinsMatchSpec proves the third rule of SPEC/BUILD.md §
-// Static Analysis: each tool's version appears in exactly three places — its
-// own section of the specification and the two workflows — and all three MUST
-// name the same version. The expected versions are read out of the
-// specification, so raising a pin there alone fails this test, which is the
-// point: a gate whose tool version differs between two pipelines is not the
-// same gate in both.
+// Static Analysis for the two workflows: each tool's version appears in exactly
+// four places — its own section of the specification, the two workflows, and
+// the Makefile — and all four MUST name the same version. This test holds the
+// workflows' copies; TestMakefileToolPinsMatchSpec holds the Makefile's. The
+// expected versions are read out of the specification, so raising a pin there
+// alone fails this test, which is the point: a gate whose tool version differs
+// between two pipelines is not the same gate in both.
 func TestWorkflowToolPinsMatchSpec(t *testing.T) {
 	facts := loadSpecGates(t)
 
@@ -131,8 +132,8 @@ func TestWorkflowToolPinsMatchSpec(t *testing.T) {
 			step := gate.job.steps[lintStep]
 			if got := step.with["version"]; got != facts.lintVersion {
 				t.Errorf("%s: step %q passes version %q to the golangci-lint action, but SPEC/BUILD.md "+
-					"§ Linter: golangci-lint pins the linter to %s. All three places that name this version "+
-					"— the specification and both workflows — MUST agree (§ Static Analysis, "+
+					"§ Linter: golangci-lint pins the linter to %s. All four places that name this version "+
+					"— the specification, both workflows and the Makefile — MUST agree (§ Static Analysis, "+
 					"\"Where the pins live, and how they change\").",
 					p.rel(), step.name, got, facts.lintVersion)
 			}
@@ -144,6 +145,68 @@ func TestWorkflowToolPinsMatchSpec(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestMakefileToolPinsMatchSpec holds the fourth place SPEC/BUILD.md § Static
+// Analysis names for each tool's pin: the Makefile's copy, which is the value
+// the local version check of § Local Tool Resolution compares a resolved binary
+// against. The specification requires the `test` gate to fail when that copy
+// differs from the pin in the tool's own section, as it fails for a workflow's
+// copy. Without this, `make lint` and `make security` would enforce whatever
+// version the Makefile happened to name, and a pin raised in the specification
+// and both workflows would leave every local gate checking against the old one.
+func TestMakefileToolPinsMatchSpec(t *testing.T) {
+	facts := loadSpecGates(t)
+
+	raw, err := os.ReadFile(filepath.Clean(makefilePath))
+	if err != nil {
+		t.Fatalf("reading the Makefile: %v", err)
+	}
+	makefile := string(raw)
+
+	cases := []struct {
+		tool     string
+		variable string
+		section  string
+		want     string
+	}{
+		{tool: "golangci-lint", variable: "GOLANGCI_LINT_VERSION", section: "§ Linter: golangci-lint", want: facts.lintVersion},
+		{tool: "gosec", variable: "GOSEC_VERSION", section: "§ Security Scan: gosec", want: facts.gosecVersion},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.tool, func(t *testing.T) {
+			pattern := makefilePinAssignment(tc.variable)
+			matches := pattern.FindAllStringSubmatch(makefile, -1)
+			if len(matches) != 1 {
+				t.Fatalf("the Makefile assigns %s %d times (pattern %s), but SPEC/BUILD.md § Static Analysis "+
+					"requires exactly one Makefile copy of the %s pin, the value § Local Tool Resolution's "+
+					"version check compares against. Write it once, as `override %s := %s`.",
+					tc.variable, len(matches), pattern, tc.tool, tc.variable, tc.want)
+			}
+			if got := matches[0][1]; got != tc.want {
+				t.Errorf("the Makefile pins %s to %q (%s), but SPEC/BUILD.md %s pins it to %s. All four places "+
+					"that name this version — the specification, both workflows and the Makefile — MUST agree "+
+					"(§ Static Analysis, \"Where the pins live, and how they change\"), and the test gate MUST "+
+					"fail when the Makefile's copy differs.",
+					tc.tool, got, tc.variable, tc.section, tc.want)
+			}
+			if reference := "$(" + tc.variable + ")"; !strings.Contains(makefile, reference) {
+				t.Errorf("the Makefile assigns %s but never reads it with %s, so no version check compares a "+
+					"binary against that pin. SPEC/BUILD.md § Local Tool Resolution makes the Makefile's copy "+
+					"the value the %s gate's version check compares against.",
+					tc.variable, reference, tc.tool)
+			}
+		})
+	}
+}
+
+// makefilePinAssignment matches a Makefile assignment of a tool pin, such as
+// `override GOSEC_VERSION := v2.28.0`, capturing the value. A conditional
+// assignment (`?=`) is deliberately not matched: the environment could then
+// replace the pin, and nothing may disable the version check.
+func makefilePinAssignment(variable string) *regexp.Regexp {
+	return regexp.MustCompile(`(?m)^(?:override[ \t]+)?` + regexp.QuoteMeta(variable) + `[ \t]*:?=[ \t]*(\S*)[ \t]*$`)
 }
 
 // TestWorkflowGateStepsCannotBeSkipped enforces SPEC/BUILD.md § A Missing Tool

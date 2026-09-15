@@ -35,6 +35,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"runtime/debug"
 	"strings"
 
 	"github.com/FlavioCFOliveira/Groadmap/internal/aihelp"
@@ -146,7 +147,10 @@ func main() {
 		if err := refuseGlobalPositional(os.Args[2:]); err != nil {
 			os.Exit(handleError(err))
 		}
-		fmt.Printf("%s version %s\n", appName, version)
+		// The line names the commit the binary was built from, read from the
+		// build information the Go toolchain embeds (SPEC/VERSION.md § Build
+		// Identification).
+		fmt.Println(versionLine(debug.ReadBuildInfo()))
 		os.Exit(ExitSuccess)
 	}
 

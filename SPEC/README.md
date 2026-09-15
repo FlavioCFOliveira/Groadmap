@@ -128,11 +128,14 @@ The SPEC is unversioned. Git is the source of truth for its evolution — recove
 | Query caching | `IMPLEMENTATION.md § Query Caching` |
 | Performance practices | `IMPLEMENTATION.md § Performance Considerations` |
 | Application version | `VERSION.md` |
+| Build identification (the commit and the `modified` marker the version line reports, its three shapes, and how a released binary carries its commit) | `VERSION.md § Build Identification`, `COMMANDS.md § Version`, and `DEPLOY.md § How a Released Binary Carries Its Commit` |
 | Schema migrations | `VERSION.md § Migrations` |
 | Build / CI / lint | `BUILD.md` |
 | Validation gates (the six gates, and their enforcement locally, in CI, and at release) | `BUILD.md § Validation Gates` |
 | Security scan (`gosec`, accepted findings, scope exclusion) | `BUILD.md § Security Scan: gosec` |
+| How `make lint` and `make security` find the pinned `golangci-lint` and `gosec`, the version check, and the lines a mismatch writes | `BUILD.md § Local Tool Resolution` |
 | Installation / release | `DEPLOY.md` |
+| How `install.sh` reads the installed version, compares it with the latest release, and the messages it writes when the two are equal or differ | `DEPLOY.md § Installed Version Detection` |
 
 ---
 
@@ -193,6 +196,9 @@ To prevent drift across SPEC files, the following topics have a single authorita
 | In-sprint position density, and the compaction every removal owes | `DATABASE.md § Position Density Within a Sprint` and `DATABASE.md § Compact Sprint Positions` |
 | Introducing a uniqueness constraint over rows that already exist | `DATABASE.md § Introducing a Uniqueness Constraint over Existing Rows` |
 | Schema migrations | `VERSION.md § Migrations` |
+| Build identification (which build settings the binary reads, the short commit, and the three displays of the version line) | `VERSION.md § Build Identification` |
+| The conditions under which a released binary carries its commit, and the stamp check that fails a workflow build job before it uploads an unstamped binary | `DEPLOY.md § How a Released Binary Carries Its Commit` |
+| Installed-version detection by `install.sh` (the reading rule, the comparison with the latest release, and the three outcomes with their messages) | `DEPLOY.md § Installed Version Detection` |
 | Concurrency model (WAL, pool, retry) | `IMPLEMENTATION.md § Concurrency Model` |
 | Caching strategies (query, connection) | `IMPLEMENTATION.md` |
 | Knowledge graph feature, persistence layout, multi-layer conventions | `GRAPH.md` |
@@ -213,6 +219,7 @@ To prevent drift across SPEC files, the following topics have a single authorita
 | Cypher engine constructor (`cypher.NewEngineWithStoreAndRecovery` on the one path, run only by `rmp graph serve`, carrying the recovered schema) | `GRAPH.md § Engine Constructor by Path` |
 | Minimum Go version and external dependencies | `BUILD.md § Go Toolchain` |
 | Validation gate set and where it is enforced (local, CI, release) | `BUILD.md § Validation Gates` |
+| Local resolution of the pinned lint and security tools, the version check, and its failure lines | `BUILD.md § Local Tool Resolution` |
 | Help text canonical | code in `internal/commands/*.go` (structure in `HELP.md`) |
 | AI agent contract JSON schema | `DATA_FORMATS.md § AI Agent Contract` |
 | AI agent contract generation rules | `ARCHITECTURE.md § AI Agent Contract Generation` |
