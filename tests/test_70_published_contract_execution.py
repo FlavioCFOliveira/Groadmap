@@ -1553,8 +1553,11 @@ VALID_POSITIONALS = {
 }
 
 # The flags a subcommand needs before its positional arguments are meaningful.
+# `task stat 1 COMPLETED` needs `--commit-close`: task 1 is in TESTING, and
+# COMPLETED is refused without the flag.
 EXTRA_FLAGS = {
     "task create": ["-t", "T", "-fr", "f", "-tr", "t", "-ac", "a"],
+    "task stat": ["--commit-close", CLOSE_HASH],
     "sprint create": ["-t", "T", "-d", "Deliver the fixture state."],
     "task comment-add": ["--type", "NOTE", "--body", "b"],
     "sprint comment-add": ["--type", "FINDING", "--body", "b"],
@@ -1570,6 +1573,47 @@ NO_ROADMAP = {"roadmap list", "roadmap create", "roadmap remove", "web", "ai-hel
 # Subcommands whose invocation blocks; the probe sweep leaves them to the
 # drivers, which start and stop them deliberately.
 BLOCKING_SUBCOMMANDS = {"graph serve", "web"}
+
+
+def base_invocation(label, argv):
+    """The invocation every probe of a subcommand departs from: the selector,
+    the valid positional arguments, then the flags the subcommand needs."""
+    selector = [] if label in NO_ROADMAP else ["-r", FIXTURE_ROADMAP]
+    return argv + selector + VALID_POSITIONALS[label] + EXTRA_FLAGS.get(label, [])
+
+
+# rmp task 485. A probe differs from its subcommand's base invocation by one
+# fault, so it reaches that fault's path only when the base invocation succeeds.
+# On these ten it did not. Five wrote their flags ahead of the positional
+# arguments, where the first flag stood in the first positional slot and every
+# probe was refused as a malformed id. Five failed on the fixture's state: no
+# sprint is OPEN for `task next`, `task stat 1 COMPLETED` lacked the
+# `--commit-close` EXTRA_FLAGS now gives it, task 4 has no dependency on task 5
+# for `task remove-dep`, and sprint 1 is PENDING for `sprint close` and `sprint
+# reopen`. Each maps to the preparation that puts a fixture copy in a state in
+# which its base invocation exits 0. The sweep asserts that it does before the
+# probes run, runs every probe of the subcommand from that same state, and
+# asserts that the unknown-flag probe is refused as the unknown flag it is.
+PROBE_STATES = {
+    "task comment-add": [],
+    "task comment-edit": [],
+    "sprint comment-add": [],
+    "sprint comment-edit": [],
+    "sprint update": [],
+    "task next": [["sprint", "start", "-r", FIXTURE_ROADMAP, "5"]],
+    "task stat": [],
+    "task remove-dep": [["task", "add-dep", "-r", FIXTURE_ROADMAP, "4", "5"]],
+    "sprint close": [["sprint", "start", "-r", FIXTURE_ROADMAP, "1"]],
+    "sprint reopen": [
+        ["sprint", "start", "-r", FIXTURE_ROADMAP, "1"],
+        ["sprint", "close", "-r", FIXTURE_ROADMAP, "1"],
+    ],
+}
+
+# The probe that writes an unrecognised flag after the base invocation, and the
+# line SPEC/COMMANDS.md § Positional Arguments, rule 5, publishes for it.
+UNKNOWN_FLAG_PROBE = "unknown flag after the arguments"
+UNKNOWN_FLAG_LINE = "Error: invalid input: unknown flag: --zzz-unknown"
 
 
 def subcommand_label(cmd_entry, sub):
@@ -1872,39 +1916,38 @@ class TestSubcommandExitCodesAreExhaustive:
         positionals = VALID_POSITIONALS[label]
         extra = EXTRA_FLAGS.get(label, [])
         selector = [] if label in NO_ROADMAP else ["-r", FIXTURE_ROADMAP]
+        # Every probe writes the positional arguments before the flags. A flag
+        # written ahead of the first positional argument stands in its slot and
+        # is refused as that id (SPEC/COMMANDS.md § Positional Arguments), so a
+        # probe that wrote the flags first was refused as a malformed id whatever
+        # fault it named (rmp task 485).
+        base = base_invocation(label, argv)
         probes = []
         if label not in NO_ROADMAP:
-            probes.append(("no roadmap selector", argv + extra + positionals))
+            probes.append(("no roadmap selector", argv + positionals + extra))
             probes.append(("roadmap absent",
-                           argv + ["-r", "nosuchroadmap"] + extra + positionals))
-        probes.append(("unknown flag after the arguments",
-                       argv + selector + extra + positionals + ["--zzz-unknown"]))
-        probes.append(("surplus positional argument",
-                       argv + selector + extra + positionals + ["surplus"]))
+                           argv + ["-r", "nosuchroadmap"] + positionals + extra))
+        probes.append((UNKNOWN_FLAG_PROBE, base + ["--zzz-unknown"]))
+        probes.append(("surplus positional argument", base + ["surplus"]))
         if sub.get("positional_arguments"):
             probes.append(("unknown flag in the first positional slot",
-                           argv + selector + extra + ["--zzz-unknown"]))
+                           argv + selector + ["--zzz-unknown"] + extra))
             probes.append(("malformed positional id",
-                           argv + selector + extra + ["notanumber"] + positionals[1:]))
+                           argv + selector + ["notanumber"] + positionals[1:] + extra))
             probes.append(("no positional argument at all", argv + selector + extra))
         for flag in sub["flags"]:
             long = flag["long"]
             if long in ("--help", "--roadmap"):
                 continue
             if flag["type"] != "boolean":
-                probes.append((f"{long} written with no value",
-                               argv + selector + extra + positionals + [long]))
+                probes.append((f"{long} written with no value", base + [long]))
             if flag["type"] == "enum":
-                probes.append((f"{long} outside its enum",
-                               argv + selector + extra + positionals + [long, "NOT_A_MEMBER"]))
+                probes.append((f"{long} outside its enum", base + [long, "NOT_A_MEMBER"]))
             if flag["type"] == "integer":
-                probes.append((f"{long} not an integer",
-                               argv + selector + extra + positionals + [long, "abc"]))
-                probes.append((f"{long} out of range",
-                               argv + selector + extra + positionals + [long, "999999"]))
+                probes.append((f"{long} not an integer", base + [long, "abc"]))
+                probes.append((f"{long} out of range", base + [long, "999999"]))
             if flag["type"] == "date":
-                probes.append((f"{long} not a date",
-                               argv + selector + extra + positionals + [long, "not-a-date"]))
+                probes.append((f"{long} not a date", base + [long, "not-a-date"]))
         return probes
 
     def test_no_subcommand_emits_a_code_it_does_not_declare(self):
@@ -1918,9 +1961,27 @@ class TestSubcommandExitCodesAreExhaustive:
                     # succeed would hang; they are driven, not swept.
                     continue
                 declared = {e["code"] for e in sub["exit_codes"]}
+                state = PROBE_STATES.get(label)
+                if state is not None:
+                    base = base_invocation(label, argv)
+                    home = Workspace.fresh()
+                    try:
+                        apply_preparation({"rmp": state}, home)
+                        code, _, err = Workspace._rmp(base, home, check=False)
+                    finally:
+                        shutil.rmtree(home, ignore_errors=True)
+                    if code != 0:
+                        problems.append(
+                            f"{label}: the base invocation `rmp {' '.join(base)}` exits "
+                            f"{code}, so no probe below departs from an invocation that "
+                            f"succeeds (rmp task 485); stderr: {first_line(err)!r}"
+                        )
+                        continue
                 for why, probe in self._probes(label, argv, sub):
                     home = Workspace.fresh()
                     try:
+                        if state:
+                            apply_preparation({"rmp": state}, home)
                         code, _, err = Workspace._rmp(probe, home, check=False)
                     finally:
                         shutil.rmtree(home, ignore_errors=True)
@@ -1931,6 +1992,14 @@ class TestSubcommandExitCodesAreExhaustive:
                             f"{code}, which its exit_codes array does not "
                             f"declare (declared: {sorted(declared)}); stderr: "
                             f"{first_line(err)!r}"
+                        )
+                    if (state is not None and why == UNKNOWN_FLAG_PROBE
+                            and (code != 2 or first_line(err) != UNKNOWN_FLAG_LINE)):
+                        problems.append(
+                            f"{label}: `rmp {' '.join(probe)}` ({why}) exits {code} "
+                            f"writing {first_line(err)!r}; an unrecognised flag is "
+                            f"refused as itself, with exit 2 and {UNKNOWN_FLAG_LINE!r} "
+                            f"(SPEC/COMMANDS.md § Positional Arguments, rule 5)"
                         )
         assert probes_run >= 350, (
             f"only {probes_run} probes ran; the sweep is broken and every "

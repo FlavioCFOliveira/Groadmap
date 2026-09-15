@@ -30,7 +30,7 @@ argument-level refusal.
   set of nodes in the store equals EXACTLY the set of writers that returned exit
   0, one node each. No acknowledged write is lost, no failed write leaves a
   phantom node, and no retry applies a committed write twice.
-  (SPEC/GRAPH.md section "Concurrency and Recovery"; Acceptance Criterion 16.)
+  (SPEC/GRAPH.md section "Concurrency and Recovery"; Acceptance Criterion 48.)
 
 - #26/#27 (#52): `--query` with no value, or whose value is the next flag, must
   fail with exit 2 (SPEC/GRAPH.md section "Cypher Input Source and Precedence",
@@ -57,13 +57,13 @@ argument-level refusal.
     subcommand reached 867 MB of resident memory and 15.9 s of wall time before
     anything rejected it. A query over 1 MiB is now refused with exit 6 after the
     read has consumed a bounded amount (SPEC/GRAPH.md sections "Maximum Query
-    Length" and "Bounded Standard-Input Read"; Acceptance Criterion 40).
+    Length" and "Bounded Standard-Input Read"; Acceptance Criterion 23).
   - a producer that writes nothing. With `--query` absent and a terminal on
     standard input, the command waited for a query nobody was going to type: one
     invocation hung for roughly forty minutes, printing nothing. Standard input
     that is empty, whitespace only, or a terminal is now refused with exit 2
     (SPEC/GRAPH.md section "Standard Input That Supplies No Query"; Acceptance
-    Criterion 41).
+    Criterion 24).
 
   Both refusals are made by `readQuery`, which runs before the roadmap's
   existence is checked and long before a socket is resolved, so they are asserted
@@ -372,7 +372,7 @@ class TestGraphConcurrencyInput:
 
     def test_oversized_stdin_query_is_refused_without_draining_the_writer(self):
         """A stream far larger than the maximum is refused, and the read that
-        refuses it is BOUNDED (SPEC/GRAPH.md Acceptance Criterion 40).
+        refuses it is BOUNDED (SPEC/GRAPH.md Acceptance Criterion 23).
 
         The bound is the security property. The unbounded read this replaces let
         whoever was writing decide how much this process buffered: 256 MiB
@@ -458,7 +458,7 @@ class TestGraphConcurrencyInput:
     def test_several_hundred_kilobyte_query_from_stdin_executes_normally(self):
         """The bound refuses only what the maximum forbids: a legitimate query of
         several hundred kilobytes, supplied the same way, still exits 0 and does
-        its work (SPEC/GRAPH.md Acceptance Criterion 40).
+        its work (SPEC/GRAPH.md Acceptance Criterion 23).
 
         This is the half that keeps the maximum honest. A cap tight enough to
         catch ordinary work would be widened later, and widening a published limit
@@ -557,7 +557,7 @@ class TestGraphConcurrencyInput:
     def test_stdin_at_end_of_stream_fails_exit_2_at_once(self):
         """Standard input already at end of stream -- here /dev/null, which the
         specification names -- supplies no query (SPEC/GRAPH.md Acceptance
-        Criterion 41).
+        Criterion 24).
         """
         elapsed = self._assert_no_query_refusal(
             subprocess.DEVNULL, "standard input at end of stream"
@@ -568,7 +568,7 @@ class TestGraphConcurrencyInput:
         """Standard input carrying only whitespace trims to nothing, so it
         supplies no query and is refused with the SAME exit code and message as an
         empty one -- exit 2, not the exit 6 an over-long query carries
-        (SPEC/GRAPH.md Acceptance Criterion 41).
+        (SPEC/GRAPH.md Acceptance Criterion 24).
         """
         read_fd, write_fd = os.pipe()
         os.write(write_fd, b"   \n\t\r\n  ")
@@ -584,7 +584,7 @@ class TestGraphConcurrencyInput:
 
     def test_terminal_stdin_fails_exit_2_without_waiting(self):
         """Standard input connected to a TERMINAL is refused WITHOUT BEING READ
-        (SPEC/GRAPH.md Acceptance Criterion 41).
+        (SPEC/GRAPH.md Acceptance Criterion 24).
 
         This is the case that regressed into a hang, and the only one whose proof
         has to be a clock. An invocation that omitted --query, with a terminal on

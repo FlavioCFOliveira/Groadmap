@@ -28,8 +28,9 @@
 // that ship, so a harness that measured a substitute would set them from a
 // substitute's behaviour. The server is assembled by [startRealServerAt], which
 // is the same bind and the same build the production startup sequence performs,
-// and the per-invocation baseline runs the same graphstore sequence
-// internal/commands.runGraphExecute runs, in the same order.
+// and the per-invocation baseline runs the graphstore sequence the withdrawn
+// `rmp graph execute` ran on every invocation, in the same order; no production
+// path runs that sequence any longer, so [directInvocation] carries it.
 //
 // # How to run them
 //
@@ -574,13 +575,13 @@ func seedDirect(tb testing.TB) string {
 	return graphDir
 }
 
-// directInvocation performs the WHOLE per-invocation sequence
-// internal/commands.runGraphExecute performs on its direct path, in the same
-// order: take the exclusive advisory hold, open the store through recovery, run
-// the statement under the statement budget, drain the result, commit by closing
-// it, checkpoint, and close the store — which releases the hold.
+// directInvocation performs the WHOLE per-invocation sequence the withdrawn
+// `rmp graph execute` performed on its direct path, in the same order: take the
+// exclusive advisory hold, open the store through recovery, run the statement
+// under the statement budget, drain the result, commit by closing it,
+// checkpoint, and close the store — which releases the hold.
 //
-// Every step is here because every step is on the real path. An implementation
+// Every step is here because every step was on that path. An implementation
 // that hoisted the open out of the loop would measure a server without a socket
 // rather than the per-invocation path, and the open is a large part of what that
 // path costs.

@@ -1,7 +1,7 @@
 package commands
 
 // Regression gate for rmp task #310, acceptance criterion 5, guarding
-// SPEC/GRAPH.md § Node Key Uniqueness and its acceptance criterion 61.
+// SPEC/GRAPH.md § Node Key Uniqueness and its acceptance criterion 31.
 //
 // THE DEFECT. knowledge-model.md stated flatly that every node's `key` is
 // "globally unique across the whole graph", in the register of a guarantee the
@@ -554,7 +554,7 @@ func TestKeyUniqueness_PublishedAuditQueryRunsAndReturnsEveryKeyedNode(t *testin
 }
 
 // TestKeyUniqueness_ByteWiseAuditIsBlindToTheNormalisationPair is the half of
-// acceptance criterion 61 that says WHY a second audit had to be published: the
+// acceptance criterion 31 that says WHY a second audit had to be published: the
 // duplicate audit the project already runs groups on the stored bytes, so the
 // two spellings appear as two groups of one and it reports nothing.
 //
@@ -585,7 +585,7 @@ func TestKeyUniqueness_ByteWiseAuditIsBlindToTheNormalisationPair(t *testing.T) 
 }
 
 // TestKeyUniqueness_EitherSpellingBindsExactlyOneNode is the rest of acceptance
-// criterion 61: the stored key is byte-for-byte what the caller supplied, and an
+// criterion 31: the stored key is byte-for-byte what the caller supplied, and an
 // unlabelled MATCH on either spelling binds that one node and never both.
 //
 // This is the product behaviour the convention is stated against. It is pinned
@@ -664,7 +664,7 @@ func TestKeyUniqueness_TheTwoStepAuditReportsTheViolationEndToEnd(t *testing.T) 
 	}
 
 	// The same audit reports nothing on a graph whose keys are all distinct under
-	// NFC, which acceptance criterion 61 requires and which is what stops the
+	// NFC, which acceptance criterion 31 requires and which is what stops the
 	// audit from being one that reports everything.
 	clean := make([]graphkeys.Row, 0, len(audited))
 	for _, r := range audited {

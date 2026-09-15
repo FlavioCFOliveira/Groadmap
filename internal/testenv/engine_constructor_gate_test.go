@@ -14,7 +14,7 @@ import (
 	"testing"
 )
 
-// This file is the regression gate that acceptance criterion 38 of
+// This file is the regression gate that acceptance criterion 29 of
 // SPEC/GRAPH.md requires (task #149).
 //
 // The defect it closes: SPEC/GRAPH.md § Engine Construction and Lifecycle used
@@ -310,7 +310,7 @@ func TestGraphEngineConstructorInventoryMatchesGoGraph(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// 2. The gate criterion 38 defines: every engine the implementation constructs
+// 2. The gate criterion 29 defines: every engine the implementation constructs
 //    is constructed through the constructor the table gives for its path.
 // ---------------------------------------------------------------------------
 

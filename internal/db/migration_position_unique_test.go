@@ -273,9 +273,9 @@ func indexesOverSprintPosition(t *testing.T, database *DB) map[string]bool {
 // assertDenseAndDistinct checks that every sprint's positions are a dense
 // 0..N-1 run, read row by row rather than in aggregate. That is the invariant
 // SPEC/DATABASE.md § Position Density Within a Sprint states, and it is what
-// acceptance criteria 2 and 3 of both SPEC/VERSION.md § Migration 1.12.0 →
-// 1.13.0 and § Migration 1.13.0 → 1.14.0 require of the databases those
-// migrations leave behind.
+// acceptance criteria 2 and 3 of SPEC/VERSION.md § Migration 1.12.0 → 1.13.0,
+// and acceptance criterion 2 of § Migration 1.13.0 → 1.14.0, require of the
+// databases those migrations leave behind.
 func assertDenseAndDistinct(t *testing.T, stored map[int]map[int]int) {
 	t.Helper()
 

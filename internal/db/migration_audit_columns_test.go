@@ -582,7 +582,7 @@ func TestMigrateV1_11_0_toV1_12_0_OnNextOpen(t *testing.T) {
 
 	// Neither the row count nor the id range moves: no DELETE, no id rewrite, no
 	// compaction (SPEC/VERSION.md § Migration 1.11.0 to 1.12.0, acceptance
-	// criteria 1 and 3).
+	// criterion 1).
 	assertRowCount(t, database, fx.rows, "every audit row survives the migration",
 		"SELECT COUNT(*) FROM audit")
 	var minID, maxID int

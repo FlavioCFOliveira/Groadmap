@@ -233,7 +233,7 @@ func TestSprintUpdate_ASuppliedEmptyValueIsRejectedNotReportedMissing(t *testing
 }
 
 // TestSprintUpdate_NoFlagAtAllStillReportsTheMissingParameter is acceptance
-// criterion 7: keying on presence must not lose the requirement itself. The
+// criterion 8: keying on presence must not lose the requirement itself. The
 // flagless invocation is the only one that reports a missing parameter, and it
 // still exits 2 with the documented message.
 func TestSprintUpdate_NoFlagAtAllStillReportsTheMissingParameter(t *testing.T) {
@@ -267,7 +267,7 @@ func TestSprintUpdate_NoFlagAtAllStillReportsTheMissingParameter(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 // TestSprintUpdate_AnEmptyValueBesideAValidOneMutatesNothing is the second
-// reported case of task #270 and acceptance criterion 6. It is the case the old
+// reported case of task #270 and acceptance criterion 7. It is the case the old
 // sentinel got worst: the empty title looked absent, the valid description kept
 // the update alive, so the command exited 0 having written one field and one
 // audit entry for an invocation that supplied two flags.
@@ -318,7 +318,7 @@ func TestSprintUpdate_AnEmptyValueBesideAValidOneMutatesNothing(t *testing.T) {
 }
 
 // TestSprintUpdate_AnEmptyValueIsRejectedBeforeTheDatabaseIsOpened separates the
-// two ways acceptance criterion 6 could be satisfied. A rejection that rolled
+// two ways acceptance criterion 7 could be satisfied. A rejection that rolled
 // the transaction back would first have had to resolve the sprint, so it would
 // report a missing sprint for an id that does not exist. Validating first
 // reports the empty value instead — which is what this asserts, and what makes

@@ -15,8 +15,9 @@ import (
 //
 // Nothing here maps to JSON. This file inverts the protocol encoding onto the
 // ENGINE's representation, and the single mapping in internal/graphjson then
-// publishes it — which is what makes `client` and `execute` byte-identical by
-// construction rather than by assertion (§ Graph Client Result).
+// publishes it — which is what makes the plan `rmp graph client` writes carry
+// exactly what the engine produced, by construction rather than by assertion
+// (§ Graph Client Result).
 const (
 	planKeyOperatorType = "operatorType"
 	planKeyArgs         = "args"

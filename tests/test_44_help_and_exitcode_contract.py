@@ -50,6 +50,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from tests.base_test import GroadmapTestBase
+from tests.test_73_help_exit_codes_contract import GateError, compare_codes, read_exit_codes
 
 BANNER_LINE = "AI agents: run `rmp --ai-help` for a machine-readable command contract."
 
@@ -706,7 +707,23 @@ class TestHelpContentBinary:
         print(f"✓ no hard TAB characters in any of the {len(ALL_COMMANDS) + sum(len(v) for v in subs_by_family.values())} help outputs checked")
 
     def test_every_help_output_contains_exit_codes_block(self):
-        """Every help output contains an exit-codes block mentioning code 0."""
+        """Every sampled subcommand help carries one `Exit codes:` block listing
+        exactly the codes its AI Agent Contract entry declares, code 0 among
+        them as an entry of the block.
+
+        SPEC/HELP.md § Exit codes requires the block, and § Agreement with the
+        contract fixes what it lists: every code of the entry's `exit_codes`
+        array, each once, and no code the array does not declare. The block is
+        read by the shape that section publishes, through test_73's reader, so a
+        `0` elsewhere in the help -- in an example, a range or a default -- is
+        never taken for the entry of code 0.
+        """
+        contract = json.loads(self._help(["--ai-help"]))
+        declared_by_subcommand = {
+            (command["name"], sub["name"]): [entry["code"] for entry in sub["exit_codes"]]
+            for command in contract["commands"]
+            for sub in command["subcommands"]
+        }
         subs_by_family = {
             "roadmap": ["list", "create", "remove"],
             "task": ["list", "create", "get", "next", "edit", "remove", "stat"],
@@ -716,25 +733,33 @@ class TestHelpContentBinary:
             "graph": GRAPH_SUBS,
         }
         failures = []
+        compared = 0
         for family, subs in subs_by_family.items():
             for sub in subs:
-                out = self._help([family, sub, "--help"])
-                lower = out.lower()
-                has_block = "exit code" in lower or "exit codes" in lower
-                if not has_block:
-                    failures.append(f"rmp {family} {sub} --help: missing exit-codes block")
+                label = f"rmp {family} {sub} --help"
+                declared = declared_by_subcommand.get((family, sub))
+                if declared is None:
+                    failures.append(f"{label}: the contract publishes no `{family} {sub}` subcommand")
                     continue
-                # Verify code 0 appears after the heading.
-                idx = lower.index("exit code")
-                tail = out[idx:]
-                if "0" not in tail:
-                    failures.append(f"rmp {family} {sub} --help: exit-codes block missing code 0")
+                try:
+                    listed = read_exit_codes(self._help([family, sub, "--help"]))
+                except GateError as exc:
+                    failures.append(f"{label}: {exc}")
+                    continue
+                compared += 1
+                failures += compare_codes(label, listed, declared)
+                if 0 not in listed:
+                    failures.append(f"{label}: the block carries no entry for code 0")
 
         assert not failures, (
-            "Help outputs missing exit-codes block or code 0:\n"
+            "Help outputs whose exit-codes block disagrees with the contract:\n"
             + "\n".join(f"  - {f}" for f in failures)
         )
-        print("✓ every sampled help output contains an exit-codes block with code 0")
+        sampled = sum(len(subs) for subs in subs_by_family.values())
+        assert compared == sampled, (
+            f"only {compared} of the {sampled} sampled helps were compared"
+        )
+        print(f"✓ all {compared} sampled help outputs list exactly their contract's exit codes, 0 included")
 
 
 class TestAuditHelpClassificationBinary:

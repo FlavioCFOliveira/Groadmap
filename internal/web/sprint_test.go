@@ -421,7 +421,7 @@ func TestClassifySprints_OrderingRules(t *testing.T) {
 // TestSprintPage_HappyPath drives handleSprint against a sprint of an existing
 // roadmap: 200 HTML showing all sprint fields and the sprint's member tasks, with
 // every task card clickable to a modal and no edit affordance (SPEC/WEB.md
-// § Roadmap Sprint Page; Acceptance Criterion 13).
+// § Roadmap Sprint Page; Acceptance Criterion 14).
 func TestSprintPage_HappyPath(t *testing.T) {
 	t.Setenv("HOME", shortHome(t))
 	f := seedSprintFixture(t, "web-sprint-page")
@@ -513,7 +513,7 @@ func TestSprintPage_TaskOrder(t *testing.T) {
 // TestSprintPage_NotFoundCases asserts the sprint route's 404 rules: a
 // non-integer id, and a syntactically valid but nonexistent id, both return
 // 404; and a non-read method returns 405 (SPEC/WEB.md § Routes and Pages,
-// path-parameter rule 3; Acceptance Criterion 13).
+// path-parameter rule 3; Acceptance Criteria 14 and 21).
 func TestSprintPage_NotFoundCases(t *testing.T) {
 	t.Setenv("HOME", shortHome(t))
 	f := seedSprintFixture(t, "web-sprint-404")

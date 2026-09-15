@@ -382,8 +382,8 @@ func TestGraphPositional_EveryStatementClassRefusesWithOneWording(t *testing.T) 
 	// the two families' relationship is held by
 	// positional_refusal_families_test.go, which this test shares the reader
 	// with (SPEC/COMMANDS.md § Positional Arguments, which is what that reader
-	// actually reads; this cited GRAPH.md acceptance criterion 60 until it was
-	// checked, and that criterion has never been about positional refusals).
+	// actually reads, and SPEC/GRAPH.md acceptance criterion 28, which makes the
+	// `graph client` line that line with this family's hint appended).
 	want := refusalLineWithToken(t, publishedGraphRefusalLine(t), stray)
 
 	// subcommand/statement class -> the line it produced, so a drifting member

@@ -1223,7 +1223,7 @@ func readTasks(ctx context.Context, src tasksSource, name string, controls board
 // attachSprints resolves the sprint of EVERY view in one grouped query over the
 // whole set of rendered task ids — never one per card and never one per board
 // column (SPEC/DATABASE.md § Resolve the Sprint of Many Tasks (Grouped);
-// Acceptance Criterion 92).
+// SPEC/WEB.md Acceptance Criterion 92).
 //
 // A page that renders no task issues no sprint query at all: the read is skipped
 // outright rather than called with an empty id set (which db.GetSprintsByTasks
@@ -1313,7 +1313,7 @@ func newTaskViews(tasks []models.Task) []taskView {
 // attachCommentCounts reads the comment COUNT of EVERY view in one grouped query
 // over the whole set of rendered task ids — never one per card, and never the
 // comment bodies (SPEC/DATABASE.md § Count Comments for Many Parents (Grouped);
-// Acceptance Criterion 70).
+// SPEC/WEB.md Acceptance Criterion 70).
 //
 // A page that renders no task issues no comment query at all: the read is skipped
 // outright rather than called with an empty id set (which
@@ -1862,7 +1862,7 @@ var planPrefixCheck = refusePlanPrefix
 // **Its cost is the parse's, paid before any server is resolved.** On the
 // development machine the default query parsed in 39 µs and 22 KB. The costliest
 // input found at the parser's own 1 MiB ceiling, a flat list of integers, parsed
-// in 2.5 s and allocated 1.46 GiB; the parser rejects anything longer in one
+// in 2.44 s to 2.72 s and allocated 1.46 GiB; the parser rejects anything longer in one
 // linear pass before it builds a tree, and ParseStatement takes no context, so
 // that time is spent whatever the client does meanwhile.
 func refusePlanPrefix(statement string) error {

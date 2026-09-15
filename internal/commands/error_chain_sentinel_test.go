@@ -189,7 +189,7 @@ func roadmapNameEntryPoints() []roadmapEntryPoint {
 }
 
 // TestGraphStoreRejectionCarriesRoadmapNameSentinel covers the site the sweep
-// for #290 found outside the enum table. openGraphStore validates the roadmap
+// for #290 found outside the enum table. resolveGraphDir validates the roadmap
 // name through utils.GetRoadmapDir, whose refusals carry a specific sentinel
 // (reserved name, leading hyphen, bad characters, too long) on top of
 // utils.ErrValidation. That site flattened the chain with %v, which discards the
@@ -227,7 +227,8 @@ func TestGraphStoreRejectionCarriesRoadmapNameSentinel(t *testing.T) {
 // TestRoadmapNameRefusalIsIdenticalAcrossFamilies is the regression test for
 // #325.
 //
-// The defect: openGraphStore restated utils.ErrValidation over an error
+// The defect: openGraphStore, the graph family's roadmap resolution before
+// resolveGraphDir replaced it, restated utils.ErrValidation over an error
 // utils.GetRoadmapDir had already classified, so `rmp graph execute -r CON` --
 // the statement subcommand since withdrawn -- read
 //

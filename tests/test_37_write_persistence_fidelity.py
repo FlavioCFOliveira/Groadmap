@@ -281,7 +281,7 @@ class TestWritePersistenceFidelity:
     # supplied empty. `-t ""` was read as "no title given" — reported as a
     # missing parameter when it was the only flag, and silently dropped when a
     # second, valid flag kept the update alive. Fixed in sprint_crud.go; the
-    # contract is SPEC/COMMANDS.md § Update Sprint, acceptance criteria 5-7.
+    # contract is SPEC/COMMANDS.md § Update Sprint, acceptance criteria 5, 7 and 8.
 
     def _sprint_audit(self, roadmap, sprint_id):
         """Audit entries for one sprint, newest first (server-side filter)."""

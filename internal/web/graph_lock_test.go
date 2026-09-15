@@ -147,7 +147,7 @@ func TestHandleGraphData_ConcurrentRequestsDoNotSerialise(t *testing.T) {
 	}
 }
 
-// TestHandleGraphData_CreatesNoLockFile is the inverted acceptance criterion 149.
+// TestHandleGraphData_CreatesNoLockFile is the lock-file half of acceptance criterion 163.
 //
 // The lock file used to be the ONE artefact a request that wrote nothing was
 // allowed to create. It is now one more thing this process does not create,

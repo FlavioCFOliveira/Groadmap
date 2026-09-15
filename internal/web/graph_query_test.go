@@ -412,15 +412,16 @@ func TestHandleGraphData_InvalidLimitRejected(t *testing.T) {
 	}
 }
 
-// TestHandleGraphData_ExecutionFailure asserts a query accepted as read-only but
-// invalid in the engine surfaces the distinct execution-failure classification,
-// not a read-only rejection (SPEC/WEB.md § Query-Bar Error Handling, rule 2;
-// Acceptance Criterion 50).
+// TestHandleGraphData_ExecutionFailure asserts a statement that fails in the
+// engine, here on invalid Cypher syntax, is answered with the execution-failure
+// kind, distinct from the endpoint's two refusals, invalid_limit and plan_prefix
+// (SPEC/WEB.md § Query-Bar Error Handling, rules 2 and 4; Acceptance Criterion
+// 50).
 func TestHandleGraphData_ExecutionFailure(t *testing.T) {
 	t.Setenv("HOME", shortHome(t))
 	name := servedRoadmap(t, "web-ui-rollout", graphSeedQueries()...)
 
-	// Read-only (no writing/DDL clause) but syntactically invalid Cypher.
+	// Syntactically invalid Cypher, which the engine refuses when it executes it.
 	rec := doGraphData(t, name, url.Values{"q": {`MATCH (n) RETURN`}})
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400; body=%q", rec.Code, rec.Body.String())

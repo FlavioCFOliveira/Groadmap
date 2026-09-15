@@ -2,7 +2,7 @@ package graphkeys
 
 // Tests for step 2 of the node-key uniqueness audit
 // (SPEC/GRAPH.md § Node Key Uniqueness, § Auditing the convention; acceptance
-// criterion 61), the regression guard for rmp task #310.
+// criterion 31), the regression guard for rmp task #310.
 //
 // WHAT THE DEFECT WAS. knowledge-model.md claimed every node's key was globally
 // unique and nothing in the product held that up. Two Unicode normalisations of
