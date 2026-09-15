@@ -74,6 +74,7 @@ directory instead of for the reason its example publishes.
 import json
 import os
 import re
+import select
 import shutil
 import signal
 import socket
@@ -583,32 +584,53 @@ def start_server(line, home, key, timeout=SERVER_START_TIMEOUT):
     {"socket": ...} for the graph server, {"url": ...} for the web server --
     which is what the subcommand's own stdout_on_success declares.
 
+    `timeout` bounds the WHOLE wait, a partial line included. Stdout is read
+    with select() and os.read() on the raw descriptor, never with a blocking
+    readline(): that waits for a newline a hung process may never write, which
+    stretched the timeout to the process's own lifetime (rmp task 482).
+    Complete lines are accumulated and parsed as they arrive; `buffered` also
+    carries the unterminated tail, so a failed start reports everything it read.
+
     A process that does not announce itself -- or that is still being read when
     an exception arrives -- is stopped here, before returning, so a caller's
     assertion on the startup line cannot leave it running.
     """
     env = _env_for(home)
     proc = _spawn(line, home, env, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    deadline = time.time() + timeout
-    buffered = ""
+    fd = proc.stdout.fileno()
+    deadline = time.monotonic() + timeout
+    complete = ""  # every newline-terminated line read so far, decoded
+    pending = b""  # the bytes read after the last newline
     started = None
     try:
-        while time.time() < deadline:
+        while started is None:
             if proc.poll() is not None:
                 break
-            line_read = proc.stdout.readline()
-            if not line_read:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            # A short slice, so an exit is noticed while nothing is written.
+            readable, _, _ = select.select([fd], [], [], min(remaining, 0.05))
+            if not readable:
+                continue
+            chunk = os.read(fd, 65536)
+            if not chunk:
+                # End of file with the process still alive: nothing more can
+                # arrive, and the deadline still bounds the wait for its exit.
                 time.sleep(0.02)
                 continue
-            buffered += line_read
-            try:
-                obj = json.loads(buffered)
-            except json.JSONDecodeError:
-                continue
-            if isinstance(obj, dict) and key in obj:
-                started = obj
-                break
+            pending += chunk
+            while started is None and b"\n" in pending:
+                raw, pending = pending.split(b"\n", 1)
+                complete += raw.decode("utf-8", errors="replace") + "\n"
+                try:
+                    obj = json.loads(complete)
+                except json.JSONDecodeError:
+                    continue
+                if isinstance(obj, dict) and key in obj:
+                    started = obj
     finally:
+        buffered = complete + pending.decode("utf-8", errors="replace")
         if started is None:
             stop_server(proc)
     return started, buffered, proc
@@ -1122,6 +1144,43 @@ class TestPublishedExamplesAreExecuted:
         )
 
     # -- the gate's own guarantees ----------------------------------------
+
+    def test_a_partial_startup_line_fails_the_start_within_its_timeout(self):
+        """rmp task 482: start_server's timeout bounds the whole wait.
+
+        The process writes a partial startup line -- `{`, no newline -- and
+        stays alive well past the timeout. A blocking readline() waits for the
+        newline and returns only when the process exits, `lifetime` seconds
+        later. The start must instead fail when the timeout elapses, report the
+        partial output it read, and leave nothing running.
+        """
+        timeout = 1.0
+        lifetime = 6
+        home = Workspace.fresh()
+        try:
+            began = time.monotonic()
+            started, buffered, proc = start_server(
+                f"printf '{{'; sleep {lifetime}", home, "socket", timeout=timeout)
+            elapsed = time.monotonic() - began
+            assert started is None, (
+                f"a process that wrote only a partial line was taken as started: "
+                f"{started!r}")
+            assert timeout <= elapsed < timeout + 2.0, (
+                f"start_server(timeout={timeout}) returned after {elapsed:.2f}s "
+                f"against a process that stays alive {lifetime}s; the timeout does "
+                f"not bound the wait when the startup line is partial "
+                f"(rmp task 482)")
+            assert buffered == "{", (
+                f"the failed start did not report what it read: the process "
+                f"wrote '{{' and buffered is {buffered!r}")
+            assert proc.returncode is not None, (
+                "the failed start returned without reaping the process it started")
+            leftover = surviving_groups({proc.pid})
+            assert not leftover and proc.pid not in _LIVE_GROUPS, (
+                f"the failed start left its process group running or registered: "
+                f"survivors={leftover!r}, registered={proc.pid in _LIVE_GROUPS}")
+        finally:
+            shutil.rmtree(home, ignore_errors=True)
 
     def test_a_backgrounded_server_is_seen_and_stopped(self):
         """rmp task 478: nothing the gate starts outlives the module, and the
