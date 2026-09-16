@@ -24,7 +24,7 @@ The SPEC is unversioned. Git is the source of truth for its evolution — recove
 | Web task detail modal (read-only task popup) | `WEB.md § Task Detail Modal` |
 | Web graph labels sidebar (node-label / edge-type inventory, counts, section totals, highlight, collapse/expand) | `WEB.md § Graph Labels Sidebar` |
 | Web graph query bar (editable Cypher query box, Search button, node-limit dropdown) | `WEB.md § Graph Query Bar` |
-| Web graph query-bar error handling (the two failure classes, the order they are decided in, and the boundary against the internal read error) | `WEB.md § Query-Bar Error Handling` |
+| Web graph query-bar error handling (the failure classes, the refusal of an `EXPLAIN` or `PROFILE` prefix among them, the order they are decided in, and the boundary against the internal read error) | `WEB.md § Query-Bar Error Handling` |
 | Web graph data endpoint `q` / `limit` parameters, limit injection, node/edge extraction | `WEB.md § Graph Data Endpoint` |
 | Web graph data endpoint executes writes over HTTP with no authentication (what a `GET` of it can change, and the only access control there is) | `WEB.md § Security and Constraints` |
 | Web startup schema migration (automatic, no-input, before serving) | `WEB.md § Startup Schema Migration` |
@@ -39,7 +39,7 @@ The SPEC is unversioned. Git is the source of truth for its evolution — recove
 | Vendored web assets / embedded Tabler framework and D3.js (with d3-sankey) | `BUILD.md § Vendored Web Assets` |
 | Free-text control-character constraint (CWE-150 / Trojan Source) | `MODELS.md § Task` (Free-Text Control-Character Constraint) |
 | Free-text UTF-8 encoding constraint (only valid UTF-8 is accepted and stored) | `MODELS.md § Task` (Free-Text UTF-8 Encoding Constraint) |
-| What Groadmap does not check about a Cypher statement (seven silent hazards, each reporting success, and the one direction the pinned engine is measured to get right) | `GRAPH.md § What Groadmap Does Not Check` |
+| What Groadmap does not check about a Cypher statement (eight silent hazards, each reporting success, and the one direction the pinned engine is measured to get right) | `GRAPH.md § What Groadmap Does Not Check` |
 | Published field name in a validation error message (one name per field, underscored; how it differs from the flag name) | `COMMANDS.md § Published Field Names in Validation Messages` |
 | Task commit-hash format (7-64 hexadecimal characters, lowercase on storage, no git invocation) | `MODELS.md § Task` (Commit Hash Constraint) |
 | Task commit-hash `CHECK` constraints and why `GLOB` is case-sensitive | `DATABASE.md § Commit Hash Format Constraint` |
@@ -49,7 +49,7 @@ The SPEC is unversioned. Git is the source of truth for its evolution — recove
 | Task comment / sprint comment models and field constraints | `MODELS.md § Task Comment` and `MODELS.md § Sprint Comment` |
 | Comment subcommand syntax / flags (`comment-add`, `comment-list`, `comment-edit`, `comment-remove`) | `COMMANDS.md § Task Comments` and `COMMANDS.md § Sprint Comments` |
 | Comment body input via flag or stdin | `COMMANDS.md § Comment Body Input Source and Precedence` |
-| Positional argument count of any command, and the refusal of an invocation that supplies more than the command declares | `COMMANDS.md § Positional Arguments` |
+| Positional argument count of any command, the refusal of an invocation that supplies more than the command declares, and the refusal of an unrecognised flag written between or after the positional arguments | `COMMANDS.md § Positional Arguments` |
 | Comment positional argument count, and what the one id identifies on each comment subcommand | `COMMANDS.md § Comment Positional Argument Contract` |
 | Comment JSON shape | `DATA_FORMATS.md § Task Comment` and `DATA_FORMATS.md § Sprint Comment` |
 | Comment tables, DDL, and cascade rules | `DATABASE.md § task_comments Table` and `DATABASE.md § sprint_comments Table` |
@@ -89,7 +89,7 @@ The SPEC is unversioned. Git is the source of truth for its evolution — recove
 | What one graph statement costs in resident memory, what that memory is made of, what happens when the cost cannot be served, and why no setting bounds it | `GRAPH.md § Peak Resident Memory` |
 | What a statement that writes nothing does and does not change on disk (the recovery repair performed on open) | `GRAPH.md § What a Statement That Writes Nothing Changes on Disk` |
 | Go toolchain / external dependencies | `BUILD.md § Go Toolchain` |
-| Dependency version pins (the four direct modules — GoGraph, `golang.org/x/sys`, `golang.org/x/text`, `modernc.org/sqlite` — and the exact `modernc.org/libc` / `modernc.org/memory` versions the driver requires) | `BUILD.md § External Dependencies` |
+| Dependency version pins (the four direct modules — GoGraph, `golang.org/x/sys`, `golang.org/x/text`, `modernc.org/sqlite` — and the exact `modernc.org/libc` / `modernc.org/memory` versions, which are not held to the versions the driver requires) | `BUILD.md § External Dependencies` |
 | AI agent contract (CLI surface) | `COMMANDS.md § AI Help` |
 | AI agent contract (JSON schema) | `DATA_FORMATS.md § AI Agent Contract` |
 | AI agent contract (generation) | `ARCHITECTURE.md § AI Agent Contract Generation` |
@@ -110,6 +110,8 @@ The SPEC is unversioned. Git is the source of truth for its evolution — recove
 | Dispatch failure (an unresolved command or subcommand name): exit code `127`, the help written after the error, the excluded `--ai-help` scope case | `HELP.md § Error message format` and `COMMANDS.md § Dispatch Failures (Unresolved Command or Subcommand Names)` |
 | Which error classes append help, and which do not | `HELP.md § Recovery help after a dispatch failure` |
 | Stdout silence on a failing invocation, and the help invocations that exit `0` | `HELP.md § Stdout silence on failure` and `COMMANDS.md § Failing Invocations Write Nothing to Stdout` |
+| Help tokens (`--help`, `-h`, `help`): the positions in which each asks for help, the flag values in which none does, and the refusal of `--help=<value>` | `HELP.md § Help tokens` |
+| Which exit codes a subcommand help lists (exactly those of its contract entry), and the end-to-end gate that compares the two | `HELP.md § Agreement with the contract` |
 | Database schema (DDL) | `DATABASE.md § DDL - Table Creation` |
 | SQL queries | `DATABASE.md § Main SQL Queries` |
 | Audit operations catalogue (the canonical list, including the LEGACY values) | `DATABASE.md § audit Table` |
@@ -128,11 +130,14 @@ The SPEC is unversioned. Git is the source of truth for its evolution — recove
 | Query caching | `IMPLEMENTATION.md § Query Caching` |
 | Performance practices | `IMPLEMENTATION.md § Performance Considerations` |
 | Application version | `VERSION.md` |
+| Build identification (the commit and the `modified` marker the version line reports, its three shapes, and how a released binary carries its commit) | `VERSION.md § Build Identification`, `COMMANDS.md § Version`, and `DEPLOY.md § How a Released Binary Carries Its Commit` |
 | Schema migrations | `VERSION.md § Migrations` |
 | Build / CI / lint | `BUILD.md` |
 | Validation gates (the six gates, and their enforcement locally, in CI, and at release) | `BUILD.md § Validation Gates` |
 | Security scan (`gosec`, accepted findings, scope exclusion) | `BUILD.md § Security Scan: gosec` |
+| How `make lint` and `make security` find the pinned `golangci-lint` and `gosec`, the version check, and the lines a mismatch writes | `BUILD.md § Local Tool Resolution` |
 | Installation / release | `DEPLOY.md` |
+| How `install.sh` reads the installed version, compares it with the latest release, and the messages it writes when the two are equal or differ | `DEPLOY.md § Installed Version Detection` |
 
 ---
 
@@ -166,6 +171,8 @@ To prevent drift across SPEC files, the following topics have a single authorita
 | Timestamp format, and the scope of the UTC rule (which output it binds, including a log record whose message came from a dependency, and the requirement that one realisation of the format serve every surface) | `DATA_FORMATS.md § Dates - ISO 8601 with UTC` |
 | Sentinel errors and wrapping rules | `ARCHITECTURE.md § Error Handling` |
 | Error output shape (stderr parts and their order, which error classes append help, stdout silence on failure) | `HELP.md § Error message format` |
+| Help tokens, token positions, and the flag values that never ask for help | `HELP.md § Help tokens` |
+| The exit codes a subcommand help lists, their agreement with the subcommand's contract entry, and the gate that holds it | `HELP.md § Agreement with the contract` |
 | Filesystem permission model (`0700` directories, `0600` database, when enforced, failure mode) | `ARCHITECTURE.md § Open-Time Permission Enforcement` |
 | Enums (`TaskType`, `TaskStatus`, `SprintStatus`, `CommentType`) | `MODELS.md § Enums` |
 | Comment type per-entity valid subsets (task: 7 values, sprint: 4 values) | `MODELS.md § Comment Type` |
@@ -176,7 +183,7 @@ To prevent drift across SPEC files, the following topics have a single authorita
 | What Groadmap does not check about a Cypher statement, the outcome of each unchecked hazard, and the relationship-read direction measured correct at the pinned engine | `GRAPH.md § What Groadmap Does Not Check` |
 | Knowledge-graph node `key` uniqueness (what the invariant is, which comparison decides that two keys are the same, that the product does not enforce it, and the audit that detects a violation) | `GRAPH.md § Node Key Uniqueness` |
 | Knowledge-graph schema management (the index and constraint statements the engine accepts, schema object naming, the non-atomic drop-then-create, and the schema failure classes) | `GRAPH.md § Schema Management` |
-| Declared positional arity per command, and the refusal of an excess positional argument (exit code 2, the published line, no side effect) | `COMMANDS.md § Positional Arguments` |
+| Declared positional arity per command, the refusal of an excess positional argument, and the refusal of an unrecognised flag written between or after the positional arguments (exit code 2, the published line, no side effect) | `COMMANDS.md § Positional Arguments` |
 | Comment positional arguments (exactly one id per subcommand, and what that id identifies) | `COMMANDS.md § Comment Positional Argument Contract` |
 | Memory layout / struct field ordering | `MODELS.md § Memory Layout Optimization` |
 | Task state transitions | `STATE_MACHINE.md § Task State Machine` |
@@ -193,6 +200,9 @@ To prevent drift across SPEC files, the following topics have a single authorita
 | In-sprint position density, and the compaction every removal owes | `DATABASE.md § Position Density Within a Sprint` and `DATABASE.md § Compact Sprint Positions` |
 | Introducing a uniqueness constraint over rows that already exist | `DATABASE.md § Introducing a Uniqueness Constraint over Existing Rows` |
 | Schema migrations | `VERSION.md § Migrations` |
+| Build identification (which build settings the binary reads, the short commit, and the three displays of the version line) | `VERSION.md § Build Identification` |
+| The conditions under which a released binary carries its commit, and the stamp check that fails a workflow build job before it uploads an unstamped binary | `DEPLOY.md § How a Released Binary Carries Its Commit` |
+| Installed-version detection by `install.sh` (the reading rule, the comparison with the latest release, and the three outcomes with their messages) | `DEPLOY.md § Installed Version Detection` |
 | Concurrency model (WAL, pool, retry) | `IMPLEMENTATION.md § Concurrency Model` |
 | Caching strategies (query, connection) | `IMPLEMENTATION.md` |
 | Knowledge graph feature, persistence layout, multi-layer conventions | `GRAPH.md` |
@@ -213,6 +223,7 @@ To prevent drift across SPEC files, the following topics have a single authorita
 | Cypher engine constructor (`cypher.NewEngineWithStoreAndRecovery` on the one path, run only by `rmp graph serve`, carrying the recovered schema) | `GRAPH.md § Engine Constructor by Path` |
 | Minimum Go version and external dependencies | `BUILD.md § Go Toolchain` |
 | Validation gate set and where it is enforced (local, CI, release) | `BUILD.md § Validation Gates` |
+| Local resolution of the pinned lint and security tools, the version check, and its failure lines | `BUILD.md § Local Tool Resolution` |
 | Help text canonical | code in `internal/commands/*.go` (structure in `HELP.md`) |
 | AI agent contract JSON schema | `DATA_FORMATS.md § AI Agent Contract` |
 | AI agent contract generation rules | `ARCHITECTURE.md § AI Agent Contract Generation` |

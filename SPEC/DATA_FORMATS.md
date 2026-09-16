@@ -527,7 +527,7 @@ GoGraph property values are typed. Each type maps to JSON as follows:
 
 | GoGraph value type | JSON representation | Notes |
 |--------------------|---------------------|-------|
-| `string` | JSON string | UTF-8, as-is. |
+| `string` | JSON string | UTF-8, as-is. A stored string holding bytes that are not valid UTF-8 is published with each such byte replaced by `U+FFFD`, which is what the JSON encoder every surface uses does to such a string. A statement's literals cannot carry one: Groadmap's surfaces send the engine statement text only, which the engine decodes to characters before running it (`GRAPH.md § What Groadmap Does Not Check`, item 2), and bind no parameter. The one route measured to store one is a parameter bound by a Bolt client other than `rmp`. |
 | `int64` | JSON number (integer) | Emitted without a decimal point. JSON numbers are IEEE-754 doubles in many consumers; values outside the safe integer range (beyond ±2^53) may lose precision on the consumer side. The CLI emits the exact integer; precision loss, if any, is the consumer's concern. |
 | `float64` | JSON number | Emitted in the standard Go float format. `NaN`, positive infinity, and negative infinity are not valid JSON numbers; when the engine produces any of them, they are emitted as JSON `null`. |
 | `bool` | JSON boolean | `true` / `false`. |
@@ -614,8 +614,17 @@ applies recursively to properties, list elements, and map values.
 
 Rules:
 
-1. `properties` is a JSON object whose values follow the scalar property-type
-   mapping above, applied recursively (a property may itself be a list or map).
+1. `properties` is a JSON object whose values follow
+   [Property-Type Mapping](#property-type-mapping). A stored property value is a
+   string, an integer, a float, a boolean, a temporal value, a byte array, or a
+   list of values of those kinds. A property value is never a map, a node, a
+   relationship, or a path, and a list never holds a list, a map, a node, a
+   relationship, or a path: the engine refuses to store any of them (see
+   [One Realisation of the Mapping](#one-realisation-of-the-mapping)). A stored
+   list never holds `null` either, although the engine does not refuse one: a
+   list written with a `null` element is not stored as written
+   (`GRAPH.md § What Groadmap Does Not Check`, item 9). A `properties` object
+   therefore holds only scalar renderings and JSON arrays of scalar renderings.
 2. A node's `labels` array preserves the order GoGraph reports and may be empty
    (`[]`) when the node carries no labels.
 3. Within a single result, a relationship's `startId` and `endId` reference the
@@ -693,18 +702,26 @@ only one of them. The storage boundary: the store's property representation has
 no encoding for a node, a relationship, a path, or a map, and the conversion back
 from it cannot construct one, so a property read back is never one of the four
 whatever a statement attempted to write. And measurement: a statement that
-assigns a node, a relationship, or a path to a property leaves that key absent
-from the entity when a later process reads it.
+assigns a node, a relationship, or a path to a property fails, and the key it
+named is absent from the entity when a later statement reads it.
 
-**Do not read that as a uniform refusal.** How the attempt is turned away depends
-on the form of the statement rather than on the value: on some write paths the
-engine raises `InvalidPropertyType`, and on others the statement is accepted,
-reports success, and stores nothing. Which paths do which is engine behaviour of
-the class `GRAPH.md § What Groadmap Does Not Check` exists to catalogue; this
-section neither settles it nor rests on it, because the conclusion above holds on
-every path either way. What this section settles is that conclusion alone: the
-element rows of the shared realisation are reached from a top-level result cell
-and from nowhere else.
+**The attempt is refused, and the refusal is a failure rather than a success.**
+The engine raises `InvalidPropertyType` for a node, a relationship, or a path —
+alone or inside a list — on every write form measured: `SET e.k = …`,
+`SET e = {…}`, `SET e += {…}`, `ON CREATE SET` and `ON MATCH SET`, and an inline
+property map in a `CREATE` or `MERGE` pattern, on a node and on a relationship
+alike. A map, and a list holding a list or a map, are refused in the same way.
+The key is never stored, and a replacing form leaves the properties the element
+already carried as they were. The caller reads the ordinary engine failure of
+`GRAPH.md § Error Handling and Exit Codes`, rule 2 — exit code 1 and nothing on
+stdout — but not the engine's diagnostic: the engine's server classifies this
+refusal as a fault of its own rather than of the caller, and replaces the message
+with generic text naming only the session, so the line does not say which value
+was refused. The engine's own diagnostic, which names the key, is written to the
+server's stderr as a record of the kind `GRAPH.md § Server Diagnostics on Stderr`,
+rule 1, describes. None of this is what the conclusion above rests on, and this
+section settles that conclusion alone: the element rows of the shared realisation
+are reached from a top-level result cell and from nowhere else.
 
 Giving a surface that only ever maps property bags a realisation which also
 carries those rows therefore widens neither what that surface can publish nor any
@@ -1198,14 +1215,17 @@ render and never in what the engine said.
 reach the error line.** What it fixes is the bytes a statement writes to stdout
 and the code it exits with; the plain-text diagnostic a *failing* statement
 writes to stderr is outside it, and is fixed per condition by the error tables of
-`COMMANDS.md` rather than here. One condition is worth naming, because the
-protocol degrades it rather than carrying it: a field the engine refuses as too
-long for its durable format arrives with the engine's diagnostic replaced, so the
-line the caller reads is the ordinary parse-or-execution line.
+`COMMANDS.md` rather than here. Three conditions are worth naming, because the
+protocol degrades them rather than carrying them. A field the engine refuses as
+too long for its durable format arrives with its diagnostic but without its
+class, so the line the caller reads is the ordinary parse-or-execution line;
 `GRAPH.md § Field Length Limits`, rule 13, is canonical for that, for the remedy
-that ends it, and for what holds meanwhile — the sentinel, the exit code, and the
-fact that nothing was written. No other condition degrades, and nothing above is
-weakened for a statement that succeeds.
+that ends it, and for what holds meanwhile — the sentinel and the exit code. A
+property value the engine cannot store, and a `PROFILE` of a statement that
+writes, arrive with the engine's diagnostic replaced by generic text naming only
+the session (see [One Realisation of the Mapping](#one-realisation-of-the-mapping)
+and `GRAPH.md § Query Plans: The EXPLAIN and PROFILE Prefixes`, rule 4). Nothing
+above is weakened for a statement that succeeds.
 
 5. **The requirement binds every value that is a property of the statement and
    the graph. It does not bind `timeNs`, and no implementation could make it.**
@@ -1367,9 +1387,11 @@ to run, URL-encoded) and `limit` (the node-limit value), that the graph page's
 query bar sends. When `q` is absent or empty, the endpoint runs the default query
 `MATCH (n) OPTIONAL MATCH (n)-[r]->(m) RETURN n, r, m`, which yields the same
 full-graph view a request with no parameters always produced (backward
-compatible). A user-supplied `q` is executed as written, and the resolved `limit`
-is applied as a `LIMIT` clause only when the statement both lacks a top-level
-`LIMIT` of its own and is a form that admits a `LIMIT` clause. The full parameter
+compatible). A user-supplied `q` is executed as written, unless the engine's parser
+reports an `EXPLAIN` or `PROFILE` prefix on it, in which case it is refused and not
+sent. The resolved `limit` is applied as a `LIMIT` clause only when the statement
+both lacks a top-level `LIMIT` of its own and is a form that admits a `LIMIT`
+clause. The full parameter
 contract, the limit-injection and suppression rules, and the failure modes are
 specified in `WEB.md § Graph Data Endpoint` and
 `WEB.md § Query-Bar Error Handling`; this section specifies the response shapes —
@@ -1449,14 +1471,14 @@ Rules:
 
 A request the graph data endpoint refuses, and a statement that fails, are
 answered with this object in place of the node-and-edge object above. The endpoint
-returns it for each of the two query-bar failures, always with HTTP
-`400 Bad Request`. The status, the failure classes, and the rule that selects
-between them are specified in `WEB.md § Query-Bar Error Handling`, which is
-canonical for them; this section is canonical for the shape.
+returns it for every query-bar failure, always with HTTP `400 Bad Request`. The
+status, the failure classes, and the rules that select between them are specified
+in `WEB.md § Query-Bar Error Handling`, which is canonical for them; this section
+is canonical for the shape.
 
 ```json
 {
-  "error": "invalid limit: 7",
+  "error": "invalid limit 7: must be one of 50, 100, 250, 500, 1000, 3000",
   "kind": "invalid_limit"
 }
 ```
@@ -1476,7 +1498,8 @@ Rules:
    `WEB.md § Query-Bar Error Handling`, rule 4, publishes; that rule is canonical
    for which values exist and how many, and this file deliberately does not carry
    a second copy of the list, so the two cannot disagree. What each value means is
-   fixed there too: an invalid `limit`, and a statement that failed once running. A
+   fixed there too: an invalid `limit`, a statement carrying an `EXPLAIN` or
+   `PROFILE` prefix, and a statement that failed once running. A
    statement cancelled for exhausting the endpoint's query time budget is an
    execution failure and carries the execution value; the budget adds no value of
    its own (see `WEB.md § Graph Query Time Budget`).
@@ -1484,17 +1507,22 @@ Rules:
    failure it carries the engine's own diagnostic text, so a given statement
    produces the same diagnostic here as it produces on the CLI (see
    `GRAPH.md § Error Handling and Exit Codes`, rule 2). For an invalid limit it
-   names the rejected value.
+   names the rejected value. For a statement refused for an `EXPLAIN` or `PROFILE`
+   prefix it is the one fixed line `WEB.md § Query-Bar Error Handling`, rule 12,
+   publishes, which names neither the prefix nor the statement.
 4. The object is serialized exactly as every other response of this endpoint is:
    HTML-safe, so `<`, `>`, and `&` are escaped (see `WEB.md § Graph Data Endpoint`),
    pretty-printed with two-space indentation, and terminated by a newline (see
    [Implementation Notes](#implementation-notes)).
-5. This is the endpoint's error contract for the two query-bar failures only. A
-   failure that never reached a statement does not carry this shape: no graph
-   server listening, or none reachable, is answered HTTP `503`, and a roadmap
-   whose derived socket path is over the platform's bound HTTP `500`. Neither
-   carries a `kind` (see `WEB.md § Query-Bar Error Handling`, rule 6, and
-   `WEB.md § Knowledge Graph from the GoGraph Store`, rule 1).
+5. This is the endpoint's error contract for the query-bar failures only. A
+   request the endpoint cannot serve for want of a reachable graph server does not
+   carry this shape: no graph server listening, or none reachable, is answered
+   HTTP `503`, and a roadmap whose derived socket path is over the platform's bound
+   HTTP `500`. Neither carries a `kind` (see
+   `WEB.md § Query-Bar Error Handling`, rule 6, and
+   `WEB.md § Knowledge Graph from the GoGraph Store`, rule 1). Whether a request
+   reached a statement does not decide the shape: an invalid `limit` and a
+   plan-prefix refusal both carry it, and neither sends a statement.
 
 ---
 
@@ -1664,7 +1692,7 @@ other document**. Concretely:
 | `schema_version` | string | Semantic version of the contract schema itself. Bumped only when the structure of the contract changes. Independent of the binary version. A change that a consumer of the previous structure cannot read — a field that changes type, or one that stops being emitted — is a major bump; a field added beside the existing ones is a minor one. |
 | `tool.name` | string | Canonical binary name (`rmp`). |
 | `tool.display_name` | string | Human-readable product name (`Groadmap`). |
-| `tool.binary_version` | string | Bare semver string of the `rmp` binary that produced this contract (e.g. `"1.3.0"`). This is the value extracted from the application version constant, NOT the formatted output of `rmp --version` (which is plain text such as `Groadmap version 1.3.0`). The contract MUST strip the `Groadmap version ` prefix and emit only the semver. |
+| `tool.binary_version` | string | Bare semver string of the `rmp` binary that produced this contract (e.g. `"1.3.0"`). This is the value extracted from the application version constant, NOT the formatted output of `rmp --version` (which is plain text such as `Groadmap version 1.3.0 (commit 0a1b2c3)`; see `COMMANDS.md § Version`). The value carries neither the `Groadmap version ` prefix nor the build identification that follows the version on that line: the contract emits only the semver. |
 | `tool.description` | string | One-sentence summary of what the tool does. |
 | `conventions` | object | Cross-cutting invariants the agent must observe. See below. |
 | `exit_codes` | array of object | Catalogue of every exit code the binary can emit. |

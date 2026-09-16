@@ -48,8 +48,12 @@ For nodes backed by a file (`CodeFile`, `Test`, `Spec`, `Doc`) the confirmed com
 LAST commit that touched the file, as reported by `git log -1 -- <path>` -- which is why
 backfilling a commit that was never recorded does not mean writing that commit onto every
 node it touched: where a later commit has since touched the same file, the later one is the
-answer, and writing the older one would move provenance backwards. For `Component` it is
-the last commit that touched the package directory. For `Requirement` it is the most recent
+answer, and writing the older one would move provenance backwards. For a `package`
+`Component` it is the last commit that touched the package directory. For an
+`external-dependency` `Component` it is the last commit that changed what is pinned: for a Go
+module, the last commit that changed that module's line in the first `require` block of
+`go.mod`, as reported by `git log -1 -G'<module path> v' -- go.mod`; for a vendored web asset,
+the last commit that touched its vendored files. For `Requirement` it is the most recent
 commit among the artefacts the requirement is linked to. For an edge it is the commit at
 which the relationship itself was last verified to hold.
 
@@ -92,11 +96,16 @@ depends on, or a third-party web asset vendored into the binary.
 | `path` | yes | Package path, module path, or the repository path of the vendored asset. |
 | `kind` | yes | `package` or `external-dependency`. |
 | `language` | yes | `Go` for Go packages and Go modules, `Python` for the `tests` harness package; for vendored web assets, the comma-separated languages they ship (`CSS,JavaScript`, `CSS,Webfont`, `JavaScript`). |
-| `version` | no | Pinned version. Omitted when upstream declares none, as the Inter webfont does; never inferred. |
+| `version` | no | Pinned version. Omitted when upstream declares none, as the Inter webfont does; never inferred. Required on a Go module, where it is the version string `go.mod` pins, leading `v` included (see Constraints, dependency fidelity). |
 | `licence` | no | Upstream licence of an `external-dependency`, as recorded in `internal/web/static/vendor/LICENSES.md`. |
 | `summary` | no | What the component is and what it owns. |
 | `release_commit`, `release_date` | no | Commit and date at which the pinned version was adopted. The dependency's own facts, not provenance. |
 | `gitCommit`, `gitDate` | yes | Provenance. |
+
+The Go modules modelled are the project's direct dependencies only: the modules the first
+`require` block of `go.mod` names. An indirect requirement has no `Component` node. Each
+direct module is linked by `DEPENDS_ON` from every package of this module whose production
+source imports one of its packages, on any supported platform.
 
 Third-party code is never a `CodeFile`. The files vendored under
 `internal/web/static/vendor/` (Tabler, Tabler Icons, Inter, D3, d3-sankey) are modelled as
@@ -356,54 +365,84 @@ comparison that decides sameness and publishes the two-step audit that does dete
 pair. The status the query last returned, and the decision recorded for each key it
 reported, are held in the same memory as the constraint state.
 
+### The rule the engine cannot hold: dependency fidelity
+
+Every module in the first `require` block of `go.mod` has exactly one `Component` node, whose
+`key` is the module path, whose `kind` is `external-dependency`, and whose `version` equals,
+string for string, the version that block pins. No `external-dependency` `Component` with
+`language` `Go` exists for a module outside that block. The rule compares the graph with a
+file, so no constraint can express it, and it is checked in two steps.
+
+Step 1 reads the block. `SPEC/BUILD.md` section External Dependencies requires the first
+`require` block to hold exactly the direct requirements, so the requirements
+`go mod edit -json` reports without `"Indirect": true` are that block.
+
+Step 2 reads the graph:
+
+```
+MATCH (c:Component {kind:'external-dependency', language:'Go'})
+RETURN c.key AS module, c.version AS version, count(*) AS nodes ORDER BY module
+```
+
+The rule holds when the two lists name the same modules, every row reports `nodes` 1, and
+every `version` equals the pinned one. Whether it holds today is not written here: running
+the two steps answers it.
+
 ## Indexes
 
 The engine's index is single-property, node-only and hash, and therefore equality-only: a
 range predicate (`>`, `<`) ignores it and falls back to a label scan. Composite indexes and
-relationship-property indexes are not supported. An index is consequently worth declaring
-exactly where a statement performs an equality lookup on one property, which is what every
-identity lookup against this graph is.
+relationship-property indexes are not supported. An index can consequently serve only a
+statement that performs an equality lookup on one property, which is what every identity
+lookup against this graph is.
 
-**Decision criterion.** Every label carries an enforced UNIQUE constraint on `key` (see
-Constraints), so `key` is distinct within every label by construction and selectivity decides
-nothing: label size decides. An index is declared on a label large enough that a scan would
-cost more than the index saves, and is not declared on a label small enough that its scan is
-already cheap.
+**What serves an identity lookup.** Every label carries a UNIQUE constraint on `key` (see
+Constraints), and the engine creates a hash index with each UNIQUE constraint to back it.
+`SHOW INDEXES` lists that backing index as `__uniq__<Label>.key`, with empty `labelsOrTypes`
+and `properties` -- a reporting quirk, not a stray index to drop. The planner uses it for the
+identity lookup `MATCH (n:<Label> {key:'...'})`, which plans as `NodeByIndexSeek`.
 
-| Label | Property | Index | Recommendation |
+**Why no separate key index is declared.** A `CREATE INDEX` on `key` would duplicate the
+backing index the label's UNIQUE constraint already provides, and would add nothing to the
+lookup the constraint's index already turns into a seek. No label therefore declares an index
+of its own on `key`. A separate index is warranted only for an equality lookup on a property
+that no UNIQUE constraint covers, and only once a plan has shown that the lookup would
+otherwise scan.
+
+| Label | Property | Serves the identity lookup | Declared index |
 |---|---|---|---|
-| `Test` | `key` | `test_key` | declared |
-| `Memory` | `key` | `memory_key` | declared |
-| `Requirement` | `key` | `requirement_key` | declared |
-| `CodeFile` | `key` | `codefile_key` | declared |
-| `Component` | `key` | none | not declared: label too small to pay |
-| `Doc` | `key` | none | not declared: label too small to pay |
-| `Spec` | `key` | none | not declared: label too small to pay |
-| `Release` | `key` | none | not declared: label too small to pay |
+| `Test` | `key` | `__uniq__Test.key`, backing `test_key_unique` | none |
+| `Memory` | `key` | `__uniq__Memory.key`, backing `memory_key_unique` | none |
+| `Requirement` | `key` | `__uniq__Requirement.key`, backing `requirement_key_unique` | none |
+| `CodeFile` | `key` | `__uniq__CodeFile.key`, backing `codefile_key_unique` | none |
+| `Component` | `key` | `__uniq__Component.key`, backing `component_key_unique` | none |
+| `Doc` | `key` | `__uniq__Doc.key`, backing `doc_key_unique` | none |
+| `Spec` | `key` | `__uniq__Spec.key`, backing `spec_key_unique` | none |
+| `Release` | `key` | `__uniq__Release.key`, backing `release_key_unique` | none |
 
-The DDL for a declared index is
-`CREATE INDEX <label lowercased>_key FOR (x:<Label>) ON (x.key)`, and `SHOW INDEXES` reads
-which indexes the engine holds.
+The DDL for a separate index, where one is warranted, is
+`CREATE INDEX <name> FOR (x:<Label>) ON (x.<property>)`, and `SHOW INDEXES` reads which
+indexes the engine holds.
 
-**Proof, not assertion.** A recommendation is measured, and the figures a measurement returns
-are graph content rather than part of this file. Two statements re-measure it:
+**Proof, not assertion.** What serves a lookup is measured, and the figures a measurement
+returns are graph content rather than part of this file. Two statements re-measure it:
 
 - label size and distinctness:
   `MATCH (n:<Label>) WHERE n.key IS NOT NULL RETURN count(n) AS tot, count(DISTINCT n.key) AS dv`;
 - the plan and its cost: `EXPLAIN` or `PROFILE` of `MATCH (n:<Label> {key:'<key>'}) RETURN n.key`.
 
 A lookup no index serves plans as `NodeByLabelScan` plus a filter; a lookup an index serves
-plans as `NodeByIndexSeek`, with no filter. The figures measured when the four indexes above
-were declared -- per-label node counts, and the dbHits and timings of the plans before and
-after -- are held in the graph:
+plans as `NodeByIndexSeek`, with no filter. The measurements behind this section -- per-label
+node counts, the indexes `SHOW INDEXES` listed, and the operators, dbHits and timings of the
+plans -- are held in the graph:
 `MATCH (m:Memory {key:'mem-kg-index-measurement'}) RETURN m.body`.
 
 **The lookup Conventions recommends cannot be indexed at all.** `MATCH (n {key:'...'})`
 without a label plans as `AllNodesScan` plus a filter, reading every node of the graph,
-because an index is declared on a label and a label-less pattern reaches none of them. The
-label-less form remains correct and remains the form that expresses the global-uniqueness
-convention, but a statement on a hot path should name the label it expects and pay the seek
-instead.
+because every index, a constraint's backing index included, belongs to one label and a
+label-less pattern reaches none of them. The label-less form remains correct and remains the
+form that expresses the global-uniqueness convention, but a statement on a hot path should
+name the label it expects and pay the seek instead.
 
 ## Maintenance
 

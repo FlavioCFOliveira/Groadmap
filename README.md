@@ -697,13 +697,17 @@ log's figure, and 1 GiB is the number to write under.**
 
 The two bounds fail differently, and that is the part worth knowing:
 
-- **Too long for the log** and the commit is refused. Nothing is written, the store stays
-  usable, and the invocation exits 1. A line of its own is specified for this class so
-  that "shorten a value" can be told from "correct your syntax", but at the pinned engine
-  it is not reachable: every statement crosses a server, and the engine's Bolt server
-  classifies this refusal as its own fault and replaces the message with generic
-  internal-error text naming only the session. The field and the figures reach that
-  server's stderr rather than the caller.
+- **Too long for the log** and the commit is refused. Nothing is written (with one
+  exception, a failed statement that had created a relationship between two nodes already
+  joined in that direction; see
+  [Known Limitations](DOCS/commands/graph.md#known-limitations)), the store stays usable,
+  and the invocation exits 1. A line of its own is specified for this class so that
+  "shorten a value" can be told from "correct your syntax", but at the pinned engine it is
+  not reachable: every statement crosses a server, and the engine's Bolt server forwards
+  this refusal under a code it also gives to every other argument error. What you read is
+  the general `graph query failed: ` line ending in the engine's own diagnostic, which
+  names the field kind and both figures; only that diagnostic's wording, which is not a
+  contract, tells this failure apart from any other.
 - **Short enough to commit and too long to fold** — a property value between 1 GiB and
   4 GiB — and the write succeeds and exits 0, and then **every checkpoint of that graph
   fails from that moment on**. Unlike every other checkpoint failure this one cannot

@@ -2,7 +2,7 @@
 // checkpoint, and for the schema a reader reports afterwards
 // (SPEC/GRAPH.md § Durability and Checkpointing in a Long-Lived Process;
 // § Engine Constructor by Path; § Recovered Schema on Every Surface; acceptance
-// criteria 63 and 64).
+// criteria 33 and 34).
 //
 // # The defect these tests close
 //
@@ -278,7 +278,7 @@ func TestCheckpointPreservesConstraintEnforcement(t *testing.T) {
 	if writeErr == nil {
 		t.Errorf("creating a second Spec with the key `user-authentication` succeeded (stdout %q) "+
 			"after a UNIQUE constraint over Spec.key survived a checkpoint. The constraint is listed "+
-			"but not applied, which is the silent integrity loss criterion 63 exists to catch",
+			"but not applied, which is the silent integrity loss criterion 33 exists to catch",
 			stdout)
 	}
 

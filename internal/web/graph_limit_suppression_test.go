@@ -465,11 +465,12 @@ func TestApplyGraphLimit_SuppressedFormsExecute(t *testing.T) {
 // collect, and the response shape is deliberately unchanged.
 //
 // The schema-introspection command is deliberately absent from this list. It
-// admits no LIMIT either, but this criterion does not reach it: the endpoint
-// refuses the class before the injection decision is taken, and Acceptance
-// Criterion 111 states that asserting HTTP 200 for it here would contradict
-// Acceptance Criterion 157. The sibling test below asserts that refusal, so the
-// form is covered rather than dropped.
+// admits no LIMIT either and is executed the same way, but its own tests drive it:
+// TestHandleGraphData_SchemaIntrospectionIsSuppressedAndExecuted below asserts
+// that the endpoint injects no LIMIT into it and answers it HTTP 200 with the
+// empty graph, and TestHandleGraphData_SchemaListingIsReadFromTheStoreNotTheEndpoint
+// asserts that empty answer together with the rows the same statement returns
+// from the store (SPEC/WEB.md Acceptance Criterion 157).
 func TestHandleGraphData_NonLimitableFormsRunThroughTheEndpoint(t *testing.T) {
 	t.Setenv("HOME", shortHome(t))
 	// The store is seeded first and served second: seedGraph opens the store

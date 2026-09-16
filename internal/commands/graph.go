@@ -307,6 +307,15 @@ func isFlagLike(tok string) bool {
 	return false
 }
 
+// joinedQueryValue reports whether tok is the joined form of the query flag,
+// `--query=<cypher>` or `-q=<cypher>`, and returns the text after the first "=".
+func joinedQueryValue(tok string) (string, bool) {
+	if v, ok := strings.CutPrefix(tok, "--query="); ok {
+		return v, true
+	}
+	return strings.CutPrefix(tok, "-q=")
+}
+
 // readQuery extracts the Cypher query from args. It consumes --query / -q from
 // args and returns the trimmed query string, or reads the query from standard
 // input when the flag is absent. An empty or whitespace-only result is returned
@@ -322,6 +331,16 @@ func readQuery(args []string) (string, error) {
 	var queryFound bool
 
 	for i := 0; i < len(args); i++ {
+		// The joined form, `--query=<cypher>` or `-q=<cypher>`, carries its value
+		// in the same token: the text after the first "=", later "=" characters
+		// included, and no following token is read (SPEC/GRAPH.md § Cypher Input
+		// Source and Precedence, rule 4). An empty or whitespace-only value is the
+		// absent value, refused by the trim below.
+		if joined, ok := joinedQueryValue(args[i]); ok {
+			queryVal = joined
+			queryFound = true
+			continue
+		}
 		switch args[i] {
 		case "--query", "-q":
 			// SPEC/GRAPH.md precedence rule 4: when --query is present but its
@@ -350,8 +369,12 @@ func readQuery(args []string) (string, error) {
 			// unknown flag; a bare token such as "-1" is a stray positional, not
 			// a flag, so it is reported as an unexpected argument (finding #81).
 			// Both map to ErrInvalidInput (exit 2).
+			// A joined-form token is judged by its part before the first "=",
+			// and the line names the flag without the "=value" tail
+			// (SPEC/GRAPH.md § No Positional Query, rule 1).
 			if isFlagLike(args[i]) {
-				return "", fmt.Errorf("%w: unknown flag: %s", utils.ErrInvalidInput, args[i])
+				flagName, _, _ := strings.Cut(args[i], "=")
+				return "", errUnknownFlag(flagName)
 			}
 			return "", fmt.Errorf("%w: unexpected argument %q (graph queries use --query or stdin)", utils.ErrInvalidInput, args[i])
 		}
@@ -593,15 +616,19 @@ func graphStatementError(budget time.Duration, stage string, err error) error {
 	}
 	// THIS BRANCH CANNOT FIRE AT THE PINNED ENGINE, AND IT IS KEPT DELIBERATELY.
 	// It is not dead code to tidy away. A statement now reaches a graph only
-	// through a server, and the server classifies this refusal as its own fault
-	// rather than the caller's and replaces the message, so the condition arrives
-	// at the caller through the ordinary parse/execution line below instead. The
-	// sentinel, the exit code and the fact that nothing is written are the same
-	// either way; only the message differs. SPEC/GRAPH.md § Field Length Limits,
-	// rule 13, is canonical for the limitation and for the engine-side change
-	// that ends it -- after which this branch produces the line again with no
-	// change here. Deleting it would leave SPEC/COMMANDS.md § Client Error Cases
-	// publishing a line that nothing in the product can produce.
+	// through a server, and the sentinel does not cross the connection: the
+	// server forwards the engine's diagnostic under a client-error code it also
+	// gives to every other argument the engine refuses, so nothing on this side
+	// can tell this refusal from the others without matching the engine's
+	// wording, which SPEC/GRAPH.md § Field Length Limits, rule 3, forbids. The
+	// condition therefore arrives through the ordinary parse/execution line
+	// below, ending in that diagnostic. The sentinel and the exit code are the
+	// same either way; only the message differs. Rule 13 of that section is
+	// canonical for the limitation and for the engine-side change that ends it —
+	// a failure the client can tell apart from every other argument error — after
+	// which this branch produces the line again with no change here. Deleting it
+	// would leave SPEC/COMMANDS.md § Client Error Cases publishing a line that
+	// nothing in the product can produce.
 	if graphstore.CommitRefusedFieldTooLong(err) {
 		return fmt.Errorf("%w: graph field too long; nothing was written. Shorten the field the "+
 			"engine names: %v", utils.ErrGraphEngine, err)

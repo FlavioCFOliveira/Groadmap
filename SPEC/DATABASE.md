@@ -2433,7 +2433,7 @@ ordinary migration path. The behaviour is:
 |----------|-------|
 | Exit code | `1` (`EXIT_FAILURE`; the migration error carries no sentinel and falls through to the general failure code, consistent with `utils.ErrDatabase`) |
 | stdout | Empty. A failing invocation writes nothing to stdout (`COMMANDS.md § Failing Invocations Write Nothing to Stdout`) |
-| stderr | `Error: running migrations: migration <version> failed: applying migration: <step>: <SQLite error>`, followed by a blank line and the standard AI-agent hint (`HELP.md § Error message format`) |
+| stderr | `Error: running migrations: migration <version> failed: applying migration: <step>: <detail>`, followed by a blank line and the standard AI-agent hint (`HELP.md § Error message format`). `<version>` is the migration's target schema version, `<step>` is the step that failed in the migration's own words, and `<detail>` is the SQLite driver's diagnostic; all three are declared in `COMMANDS.md § Published Error Strings Are Exact` |
 | Database | Unchanged. The transaction is rolled back, the repair is undone with it, and `_metadata.schema_version` keeps its previous value |
 
 **The command that triggered the migration does not run.** Migrations are applied

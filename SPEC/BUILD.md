@@ -101,21 +101,21 @@ this section, and so is a row naming a module that block does not require.
 
 | Module | Path | Version | Purpose |
 |--------|------|---------|---------|
-| GoGraph | `github.com/FlavioCFOliveira/GoGraph` | Exact tag **v0.14.1** | Labelled property graph, Cypher engine, and durable store backing the `graph` command. See `GRAPH.md`. |
-| System calls | `golang.org/x/sys` | Exact version **v0.47.0** | The operating-system calls the Go standard library does not publish. Groadmap imports the module at four sites, and each of the four compiles for one platform family only. `golang.org/x/sys/unix` is imported by `internal/terminal/terminal_unix.go`, for the `TIOCGWINSZ` ioctl that decides whether a stream is a terminal, and by `internal/testenv/pty_linux.go`, for the `/dev/ptmx` sequence that opens a pseudo-terminal pair. `golang.org/x/sys/windows` is imported by `internal/terminal/terminal_windows.go`, for the `GetConsoleMode` call that asks the console subsystem that same terminal question, and by `internal/graphlock/graphlock_windows.go`, for the `LockFileEx` and `UnlockFileEx` calls that are the graph store's mutual exclusion on that platform. See `GRAPH.md § Concurrency and Recovery` for the lock the last of those four implements. |
-| Unicode data | `golang.org/x/text` | Exact version **v0.41.0** | The Unicode character data the roadmap tasks board's search normalises a term and a task's searchable text by. `internal/unicodenorm` imports `golang.org/x/text/unicode/norm` — the Go project's own implementation of the normalisation forms UAX #15 defines — and no other package of the module. See `WEB.md § Roadmap Tasks Page` for the rule that normalisation serves and for the check that holds the client's copy of it equal to the server's. |
-| SQLite driver | `modernc.org/sqlite` | Exact version **v1.58.0** | Pure-Go SQLite driver backing every roadmap database (`~/.roadmaps/<name>/project.db`). It is the storage engine for all task, sprint, and audit data: `internal/db` registers it under the driver name `sqlite` and opens every database connection through it. Being pure Go, it needs no C toolchain and builds under `CGO_ENABLED=0`. See `DATABASE.md` for the schema it stores, `ARCHITECTURE.md § 3. internal/db/` for the layer that opens it, and `IMPLEMENTATION.md § Database Connections` for the entry point and DSN form that layer must use. |
+| GoGraph | `github.com/FlavioCFOliveira/GoGraph` | Exact tag **v0.14.2** | Labelled property graph, Cypher engine, and durable store backing the `graph` command. See `GRAPH.md`. |
+| System calls | `golang.org/x/sys` | Exact version **v0.48.0** | The operating-system calls the Go standard library does not publish. Groadmap imports the module at four sites, and each of the four compiles for one platform family only. `golang.org/x/sys/unix` is imported by `internal/terminal/terminal_unix.go`, for the `TIOCGWINSZ` ioctl that decides whether a stream is a terminal, and by `internal/testenv/pty_linux.go`, for the `/dev/ptmx` sequence that opens a pseudo-terminal pair. `golang.org/x/sys/windows` is imported by `internal/terminal/terminal_windows.go`, for the `GetConsoleMode` call that asks the console subsystem that same terminal question, and by `internal/graphlock/graphlock_windows.go`, for the `LockFileEx` and `UnlockFileEx` calls that are the graph store's mutual exclusion on that platform. See `GRAPH.md § Concurrency and Recovery` for the lock the last of those four implements. |
+| Unicode data | `golang.org/x/text` | Exact version **v0.42.0** | The Unicode character data the roadmap tasks board's search normalises a term and a task's searchable text by. `internal/unicodenorm` imports `golang.org/x/text/unicode/norm` — the Go project's own implementation of the normalisation forms UAX #15 defines — and no other package of the module. See `WEB.md § Roadmap Tasks Page` for the rule that normalisation serves and for the check that holds the client's copy of it equal to the server's. |
+| SQLite driver | `modernc.org/sqlite` | Exact version **v1.59.0** | Pure-Go SQLite driver backing every roadmap database (`~/.roadmaps/<name>/project.db`). It is the storage engine for all task, sprint, and audit data: `internal/db` registers it under the driver name `sqlite` and opens every database connection through it. Being pure Go, it needs no C toolchain and builds under `CGO_ENABLED=0`. See `DATABASE.md` for the schema it stores, `ARCHITECTURE.md § 3. internal/db/` for the layer that opens it, and `IMPLEMENTATION.md § Database Connections` for the entry point and DSN form that layer must use. |
 
 #### GoGraph Rules
 
 1. GoGraph MUST be pinned to an exact, immutable version in `go.mod`, not a
    floating reference (no branch or moving target), so that builds are
    reproducible and the on-disk graph format is stable.
-2. GoGraph is consumed at the exact tag **v0.14.1**. Because v0.14.1 is a v0 (pre-1.0)
+2. GoGraph is consumed at the exact tag **v0.14.2**. Because v0.14.2 is a v0 (pre-1.0)
    version, it is consumable directly at the bare module path
    `github.com/FlavioCFOliveira/GoGraph`, and `go.mod` pins the clean exact tag
-   `v0.14.1`. This exact-tag pin satisfies Rule 1.
-3. v0.14.1 is a `0.y.z` release, so GoGraph's public API is not yet stable and may
+   `v0.14.2`. This exact-tag pin satisfies Rule 1.
+3. v0.14.2 is a `0.y.z` release, so GoGraph's public API is not yet stable and may
    change while the module matures toward `1.0.0`. The residual risks (pre-1.0 API
    instability and on-disk format change across pre-1.0 releases) and their
    mitigations are in `GRAPH.md § Dependency Maturity Risk`. Upgrading GoGraph is a
@@ -129,7 +129,7 @@ this section, and so is a row naming a module that block does not require.
 1. `golang.org/x/sys` MUST be pinned to an exact, immutable version in `go.mod`,
    not a floating reference, so that every build of a given commit issues the same
    system calls with the same constants. The module is consumed at the exact
-   version **v0.47.0**. `go.sum` MUST record the checksum of that version, and the
+   version **v0.48.0**. `go.sum` MUST record the checksum of that version, and the
    build MUST fail if the checksum does not match.
 2. **GoGraph Rule 3 does NOT transfer to this module, and MUST NOT be copied to
    it.** That rule treats an upgrade as a re-validation event against a whole
@@ -169,7 +169,7 @@ this section, and so is a row naming a module that block does not require.
 
 1. `golang.org/x/text` MUST be pinned to an exact, immutable version in `go.mod`,
    not a floating reference. The module is consumed at the exact version
-   **v0.41.0**. `go.sum` MUST record the checksum of that version, and the build
+   **v0.42.0**. `go.sum` MUST record the checksum of that version, and the build
    MUST fail if the checksum does not match.
 
    The pin carries more weight here than for any other dependency, and for a
@@ -185,34 +185,40 @@ this section, and so is a row naming a module that block does not require.
    and `golang.org/x/text/unicode/norm` is the Go project's own implementation of
    it. Admitting a fourth direct dependency was accepted deliberately on that
    ground, and on no other.
-3. **Only this module's DECOMPOSITION is used. Its COMPOSITION is not, and MUST
-   NOT be.** Groadmap takes canonical decomposition and canonical ordering — that
-   is, NFD — from `golang.org/x/text/unicode/norm`, and performs the composition
-   step itself, from a table it generates and ships to the browser (see
-   `WEB.md § Roadmap Tasks Page`). **`norm.NFC.String`, `norm.NFC.Bytes`, and every
-   part of `norm.NFKC` MUST NOT be called anywhere in Groadmap's own code.** Those
-   are the entry points that compose, and composing through them is what this rule
-   forbids.
+3. **The server normalises with this module, and the browser's copy of the rule
+   is derived from the module's data and proven equal to it.** Groadmap's server
+   takes Normalization Form C from `golang.org/x/text/unicode/norm` — `norm.NFC` —
+   for the roadmap tasks board's search and for the key comparison of
+   `GRAPH.md § Node Key Uniqueness`. The browser cannot call the module, so the
+   binary ships it the rule as three tables Groadmap derives from the module's
+   character data — the full canonical decompositions, the canonical combining
+   classes, and the primary composites — together with a script that runs UAX
+   #15's algorithm over them. `WEB.md § Roadmap Tasks Page` is canonical for the
+   tables and for the checks that hold the shipped copy equal to `norm.NFC`; this
+   rule fixes where the tables' data comes from and what Groadmap keeps in order
+   to check them.
 
-   **The tests of `internal/unicodenorm` are the single exception, and only as a
-   measuring standard.** A test in that package MAY call `norm.NFC.String` as the
-   reference a result of Groadmap's own is compared against — never as a value any
-   caller receives, and in no other package and no non-test file. The exception is
-   required rather than tolerated: this rule asserts that Groadmap's composition
-   agrees with the module over every single code point and departs from it only
-   where the module is wrong, and an assertion no test is allowed to measure is one
-   no reader can falsify.
+   **Groadmap keeps a Go statement of the browser's algorithm, in
+   `internal/unicodenorm`, and the server does not normalise through it.** It
+   decomposes with the data the first table carries, orders by the classes the
+   second carries, and composes from the pairs the third carries, as the shipped
+   script does. Its only use is as the subject of the checks that hold the shipped
+   rule equal to the server's: those checks have to run the shipped rule somewhere,
+   and no Go test can run the script itself (see `WEB.md § Roadmap Tasks Page`).
+   Putting it on the server's search path would make the server answer with the
+   browser's copy, and leave `norm.NFC` answering nothing any check compares.
 
-   **Exactly one use of `norm.NFC` is admitted in the rule itself: the
-   Full_Composition_Exclusion lookup that derives the composition exclusions.**
-   `norm.NFC.IsNormalString` reports whether a string is already in Normalization
-   Form C. For a single code point carrying a canonical decomposition, that is
-   false exactly when Full_Composition_Exclusion is true of it, so the call is how
-   Groadmap reads which code points Unicode excludes from composition. It returns
-   a property of its argument and never a transformed string, so the composition
-   defect described below cannot reach a value any caller receives; and it runs in
-   the one-time derivation of the composition table — once per process on the
-   server, and once per run of the generator — never on a search.
+   **The primary composites are derived, and the derivation reads one character
+   property.** A primary composite is a code point whose canonical decomposition
+   is two characters, the first of them a starter, that Unicode does not exclude
+   from composition. The decompositions come from the module. The exclusion is
+   Unicode's Full_Composition_Exclusion property, and **exactly one query reads
+   it: `norm.NFC.IsNormalString` of the single code point.** For a code point
+   carrying a canonical decomposition, that query is false exactly when the
+   property is true. It returns a property of its argument rather than a
+   transformed string, and it runs in the one-time derivation of the tables —
+   once per process on the server, and once per run of the generator — never on a
+   search.
 
    **`norm.NFC.QuickSpanString` is NOT that lookup, and MUST NOT be used as one.**
    It reports a boundary up to which a string is *quick-checked* to be in
@@ -229,15 +235,15 @@ this section, and so is a row naming a module that block does not require.
    distinction was invisible for exactly that reason. Unicode 16.0.0 introduced
    twelve that do — `U+113C5`, `U+113C7` and `U+113C8`, `U+16121` through
    `U+16128`, and `U+16D68` — and the quick-check form reported all twelve as
-   excluded, dropping their composites from the table and leaving Groadmap's NFC
+   excluded, dropping their composites from the table and leaving the shipped rule
    returning the decomposition of a code point that composes, which is not
    Normalization Form C. The two forms disagree on **132** code points in all; the
    other 120 carry no canonical decomposition, and the derivation never asks the
    question of a code point that carries none, so those never reached the table.
    Twelve was the symptom; the predicate was the fault.
 
-   **The exclusions are not derivable from the decomposition data, which is what
-   the admission rests on.** A script exclusion such as `U+0958`, and a
+   **The exclusions are not derivable from the decomposition data, which is why
+   the derivation reads a property.** A script exclusion such as `U+0958`, and a
    post-composition-version exclusion such as `U+2ADC`, decompose exactly as an
    ordinary composite does, so no inspection of the decompositions can separate
    them; the exclusions have to be read from somewhere. Reading the property from
@@ -278,39 +284,6 @@ this section, and so is a row naming a module that block does not require.
    the same reason: a test that reached the network would fail offline, and would
    follow a property that had moved instead of reporting it.
 
-   Groadmap declines to cross that boundary even where crossing would pay, and
-   declining is what keeps the boundary meaningful rather than nominal. Gating the
-   server's own normalisation on a `norm.NFC` check, so that text already in
-   Normalization Form C skips the work, is a correct and tempting optimisation;
-   **it is declined**, because it would put a `norm.NFC` call on the search path
-   itself, where the next reader would find a precedent instead of a boundary.
-
-   The reason no composition at all is taken from the module is a defect in it at
-   the pinned version: it composes a supplementary starter as though the starter
-   were its **low 16 bits**. Three witness values, each of which the platform's own
-   normalisation and Groadmap's leave unchanged:
-
-   | Input | `norm.NFC` returns | Correct result | Why |
-   |-------|--------------------|----------------|-----|
-   | `U+1003C` `U+0338` | `U+226E` | unchanged | `U+1003C` masked to 16 bits is `U+003C` |
-   | `U+10041` `U+0301` | `U+00C1` | unchanged | `U+10041` masked to 16 bits is `U+0041` |
-   | `U+1042B` `U+0308` | `U+04F8` | unchanged | `U+1042B` masked to 16 bits is `U+042B` |
-
-   Measured over every supplementary starter against each of the 72 code points a
-   composition can consume, the defect spans **15,342** pairs over **6,232**
-   distinct leading code points. The decomposition Groadmap does use is unaffected
-   by it. Groadmap's own composition agrees with the module on all **1,112,064**
-   single code points, which is the claim the test the exception above admits
-   measures directly, and it still composes the 33 legitimate supplementary
-   composites: `U+11935` followed by `U+11930` gives `U+11938`. It is therefore
-   NFC where the module is right and NFC where the module is wrong, not a private
-   variant of it.
-
-   **A later simplification that replaces the composition step with a call to
-   `norm.NFC.String` would reintroduce the defect silently**, because the shipped
-   table and the server would then disagree and the guard test in Rule 6 would fail
-   with the client correct and the server wrong. This rule exists so that the reason
-   is found here rather than rediscovered.
 4. **The import adds exactly one module to the graph.**
    `golang.org/x/text/unicode/norm` imports the standard library and
    `golang.org/x/text/transform`, which is a package of the same module.
@@ -320,11 +293,11 @@ this section, and so is a row naming a module that block does not require.
    of `go.mod`.
 
    No third module's version is constrained by this one either: the coupling
-   `SQLite Driver Rules`, Rule 2 imposes on `modernc.org/libc` and
-   `modernc.org/memory` has **no analogue here**, and MUST NOT be invented for it.
+   between `modernc.org/sqlite` and `modernc.org/libc` that `SQLite Driver Rules`,
+   Rule 3 records has **no analogue here**, and MUST NOT be invented for it.
 5. **Neither this module's version nor the `go` directive fixes the Unicode
    version. The toolchain that runs the build does.** Inside `golang.org/x/text`
-   v0.41.0, `unicode/norm` selects its character data with a build constraint on
+   v0.42.0, `unicode/norm` selects its character data with a build constraint on
    the toolchain: `tables15.0.0.go` is compiled under `//go:build !go1.27` and
    `tables17.0.0.go` under `//go:build go1.27`. Built with the Go version that
    `Go Toolchain` requires, the server normalises against Unicode 17.0.0, with no
@@ -348,11 +321,11 @@ this section, and so is a row naming a module that block does not require.
    with a toolchain newer than that floor, which no pin can prevent and which
    Rule 6 is what catches.
 6. **Unlike the driver's coupling, a drift here IS caught, and by an ordinary
-   test.** `SQLite Driver Rules`, Rule 3 records that no gate can detect a
+   test.** `SQLite Driver Rules`, Rule 4 records that no gate detects a
    mismatched `modernc.org/libc`. The opposite holds for this module. The copy of
-   the rule the binary ships to the browser is generated from the server's own
-   normalisation, and a guard test compares the two over the whole of Unicode, so a
-   change of Unicode version — whether the module version or the toolchain that ran
+   the rule the binary ships to the browser is generated from the character data
+   the server's normalisation reads, and a guard test compares the two over the
+   whole of Unicode, so a change of Unicode version — whether the module version or the toolchain that ran
    produced it — fails the `test` gate until that shipped copy is regenerated from
    the new data. A server whose rule moved is **caught**, never silently followed.
    The check itself is specified in `WEB.md § Roadmap Tasks Page`.
@@ -362,67 +335,69 @@ this section, and so is a row naming a module that block does not require.
    change that caused it — a new module version, or a new toolchain — and never as
    a way of making a failing test pass.
 
-   A second test, in `internal/unicodenorm`, covers the other direction. It holds
-   the composition exclusions this package derives to a transcribed copy of
-   Full_Composition_Exclusion over the whole of Unicode, in both directions, and
-   holds this package's Normalization Form C equal to the module's over every
-   single code point. The first guard catches a client and a server that have
-   drifted apart; this one catches a server that has drifted away from Unicode
-   while the client faithfully follows it.
+   Further tests, in `internal/unicodenorm`, cover the other directions. One holds
+   the composition exclusions the package derives to a transcribed copy of
+   Full_Composition_Exclusion over the whole of Unicode, in both directions. The
+   others hold the Go statement of the browser's algorithm (Rule 3) equal to
+   `norm.NFC` over every single code point and over every two-code-point sequence
+   `WEB.md § Roadmap Tasks Page` enumerates, so a module upgrade that changes how
+   the server normalises, rather than which data it reads, fails the `test` gate
+   too. The first guard catches shipped data that has drifted away from the
+   server's; the exclusion test catches derived data that has drifted away from
+   Unicode while the client faithfully follows it; and the equality tests catch a
+   shipped algorithm that no longer answers as the server does.
 
 #### SQLite Driver Rules
 
 1. `modernc.org/sqlite` MUST be pinned to an exact, immutable version in `go.mod`,
    not a floating reference, so that builds are reproducible and every build of a
    given commit runs the same storage engine against the same on-disk database
-   format. The driver is consumed at the exact version **v1.58.0**. `go.sum` MUST
+   format. The driver is consumed at the exact version **v1.59.0**. `go.sum` MUST
    record the checksum of that version, and the build MUST fail if the checksum
    does not match.
-2. **`modernc.org/libc` and `modernc.org/memory` MUST be pinned to exactly the
-   versions that `modernc.org/sqlite`'s own `go.mod` requires, and never to a later
-   release.** For the pinned driver version, those versions are
-   `modernc.org/libc v1.75.6` and `modernc.org/memory v1.12.1`. Both modules are
-   indirect dependencies of Groadmap, but their versions are not free to float:
-   pinning them to the driver's own required versions is a standing instruction
-   from the driver's author, restated in its release notes and tracked upstream as
-   GitLab issue #177.
+2. **`modernc.org/libc` and `modernc.org/memory` MUST be pinned to exact,
+   immutable versions in `go.mod`, and they follow their own latest releases. They
+   are NOT held to the versions that `modernc.org/sqlite`'s own `go.mod`
+   requires.** Both modules are indirect dependencies of Groadmap, consumed at the
+   exact versions `modernc.org/libc` **v1.76.0** and `modernc.org/memory`
+   **v1.12.1**. The pinned driver's own `go.mod` requires
+   `modernc.org/libc v1.75.7` and `modernc.org/memory v1.12.1`: the
+   `modernc.org/libc` pin is therefore a later release than the driver requires,
+   and the two `modernc.org/memory` versions coincide.
 
-   The mechanism is that `modernc.org/sqlite` does not link the C SQLite library.
-   It ships the SQLite amalgamation transpiled into Go, and that transpiled code
-   executes inside `modernc.org/libc`, a Go implementation of the C runtime
-   (`modernc.org/memory` is the allocator that `modernc.org/libc` in turn
+   When a dependency refresh moves either module to a later release, that release
+   is kept; the pin is not reset to the version the driver's `go.mod` names. Go's
+   minimal version selection never selects a module version older than one that
+   another module in the build requires, so the driver's requirement remains a
+   floor that the build enforces by itself, and the only departure from it that
+   this rule admits is a later release.
+3. **A later `modernc.org/libc` or `modernc.org/memory` than the driver requires
+   is an accepted runtime risk.** `modernc.org/sqlite` does not link the C SQLite
+   library. It ships the SQLite amalgamation transpiled into Go, and that
+   transpiled code executes inside `modernc.org/libc`, a Go implementation of the
+   C runtime (`modernc.org/memory` is the allocator that `modernc.org/libc` in turn
    requires). The driver's transpiled sources are generated against one specific
-   `modernc.org/libc` version, and its release notes state that correct operation
-   requires that matching version. A newer `modernc.org/libc` is therefore not a
-   drop-in replacement: the mismatch is a runtime risk inside the storage engine —
-   the component that owns the project's durable data — and not a compilation
-   error. The coupling MUST be respected as stated rather than worked around:
-   upstream retracted its own release `modernc.org/sqlite v1.33.0`, which was an
-   attempt to resolve issue #177, because it broke client modules.
-3. **No validation gate can detect a violation of Rule 2.** A build carrying a
-   mismatched `modernc.org/libc` or `modernc.org/memory` version compiles cleanly,
-   passes `go vet`, passes the unit tests, passes `golangci-lint`, passes the
-   `gosec` security scan, and passes the full E2E suite. Every gate that
-   `make check` runs therefore reports success, because not one of them compares
-   the pinned versions against the driver's requirements. A green build is NOT
-   evidence that the pins are correct, and neither is a clean security scan.
-   Checking the two pins is a required manual step, and it MUST be performed
-   whenever a dependency version changes and before any release.
-4. **The pins MUST be re-derived after any `go get -u`.** A dependency refresh
-   such as `go get -u ./...` floats `modernc.org/libc` and `modernc.org/memory` to
-   their own latest releases and silently breaks Rule 2. After any such refresh,
-   the required versions MUST be re-read from the driver's own `go.mod` inside the
-   module cache — `$(go env GOMODCACHE)/modernc.org/sqlite@<version>/go.mod`, which
-   is the authoritative statement of what the consumed driver requires — and, if
-   the pins have drifted, reset to those exact versions with
-   `go get modernc.org/libc@<version> modernc.org/memory@<version>`.
-5. **The permanent "update available" report for these two modules is the expected
-   state.** Because `modernc.org/libc` and `modernc.org/memory` release more often
-   than the driver that pins them, `go list -m -u all` normally reports an
-   available update for both while Rule 2 is satisfied. That report MUST be left
-   alone: acting on it is exactly what breaks Rule 2. These two pins change only as
-   part of a `modernc.org/sqlite` upgrade, and they then change to whatever the new
-   driver version's `go.mod` requires — not to the newest available release.
+   `modernc.org/libc` version. Its author states, in the driver's package
+   documentation and release notes, that a downstream module must pin the same
+   `modernc.org/libc` version as the driver's own `go.mod`, and tracks that
+   coupling upstream as GitLab issue #177. Upstream also retracted its own release
+   `modernc.org/sqlite v1.33.0`, an attempt to resolve issue #177, because it broke
+   client modules.
+
+   A later `modernc.org/libc` is therefore not guaranteed to be a drop-in
+   replacement. A defect caused by the mismatch would be a runtime defect inside
+   the storage engine — the component that owns the project's durable data — and
+   not a compilation error. Rule 2 departs from the author's instruction
+   deliberately, and this risk is accepted with it.
+4. **No validation gate detects the mismatch.** No gate that `make check` runs —
+   format, vet, unit tests, host build, `golangci-lint`, and the `gosec` security
+   scan — and no test of the E2E suite compares the `modernc.org/libc` and
+   `modernc.org/memory` versions with the ones the driver requires. A build that
+   carries a later release therefore passes every gate unless the mismatch happens
+   to break a behaviour one of those tests exercises. A green build is NOT evidence
+   that the driver and `modernc.org/libc` operate correctly together, and neither
+   is a clean security scan: a defect the mismatch introduces would surface only
+   at runtime, inside the storage engine.
 
 ## Vendored Web Assets
 
@@ -589,6 +564,16 @@ it declares, and the order those jobs run in.
 Both workflows take the Go toolchain from `go.mod` (`go-version-file: go.mod`),
 so both track the version required by `Go Toolchain`.
 
+Both workflows build `rmp` with `-buildvcs=true`, and neither passes a `-X` linker
+flag. The flag makes a build that finds the repository but cannot record its
+version-control stamp fail, instead of producing a binary that reports
+`(commit unknown)`. The flag cannot catch a build that finds no repository at all, so
+each build job also runs a stamp check: before it uploads its artefact, it runs
+`go version -m` on the built binary and fails when the binary carries no
+`vcs.revision` build setting. The stamp, the flag, and the check are specified in
+`VERSION.md § Build Identification` and
+`DEPLOY.md § How a Released Binary Carries Its Commit`.
+
 ### Release Workflow
 
 **File:** `.github/workflows/release.yml`
@@ -607,6 +592,12 @@ so both track the version required by `Go Toolchain`.
 2. **build** — declares `needs: test`
    - The `build` gate: builds the binary for all nine Primary Platforms listed
      in `Supported Build Targets`, in the same order
+   - Builds with `-buildvcs=true` and passes no `-X` linker flag, so a build that
+     finds the repository but cannot stamp the binary with its commit fails (see
+     `DEPLOY.md § How a Released Binary Carries Its Commit`)
+   - Before uploading its artefact, runs `go version -m` on the built binary and
+     fails the job when the binary carries no `vcs.revision` build setting (see
+     `DEPLOY.md § How a Released Binary Carries Its Commit`)
    - Upload artifacts with naming: `release-{target}`
    - Archive naming: `rmp-{version}-{target}.tar.gz` (or `.zip` for Windows)
    - Generates a SHA256 checksum file for each archive
@@ -661,6 +652,9 @@ env:
 2. **build** — declares `needs: test`
    - The `build` gate: builds the four-target fast-feedback subset defined in
      `Validation Gates`, for the rolling `dev` pre-release
+   - Builds with `-buildvcs=true` and passes no `-X` linker flag, and runs the same
+     stamp check before uploading its artefact, as the release workflow's build job
+     does
 
 3. **dev-release** — declares `needs: build`
    - Publishes the rolling `dev` pre-release. It runs only for a push to `main`,
@@ -681,7 +675,8 @@ replaces the rolling `dev` release and its tag — raises its own permission to
 ## Static Analysis
 
 Two tools implement two of the validation gates: `golangci-lint` implements
-`lint`, and `gosec` implements `security`. Each has its own section below. The
+`lint`, and `gosec` implements `security`. Each has its own section below, and
+`Local Tool Resolution` specifies how the local gates find and check both. The
 three rules in this preamble govern both of them.
 
 **Both tools are pinned to an exact version.** The pinned versions are
@@ -702,21 +697,124 @@ rule:
    (GoGraph, the SQLite driver, and the two modules that driver requires) — and
    the workflows likewise pin every GitHub Action they use to an exact version.
 
-**The pins bind local installations too.** `make lint` and `make security` run
-whichever `golangci-lint` and `gosec` the shell finds on `PATH`; neither target
-installs or verifies a version. A developer whose `PATH` resolves either tool to
-a different version is therefore not running the gate this specification
-defines, and `make check` on that machine does not mean what a green pipeline
-means. Install the pinned version of both tools, and re-check after any change
-to `PATH` or to how either tool was installed.
+**The pins bind local installations too, and the local gates enforce them.** A
+machine can hold more than one copy of either tool, and the copy `PATH` finds
+first need not be the pinned one: a packaged linter that tracks the latest
+release, such as a snap in `/snap/bin`, can precede the directory `go install`
+writes to. `make lint` and `make security` therefore do not run whichever binary
+`PATH` resolves. Each runs the binary `Local Tool Resolution` names, and only
+after checking that binary's version against the pin, so a machine whose tools
+are not the pinned versions fails the gate instead of passing it on a different
+tool. Install the pinned version of both tools.
 
 **Where the pins live, and how they change.** Each tool's version appears in
-exactly three places: the tool's section below, `.github/workflows/ci.yml`, and
-`.github/workflows/release.yml`. All three MUST name the same version for a
-given tool. Raising either pin is a deliberate change, never an incidental one:
-it updates all three in the same commit, and the new version's findings MUST be
+exactly four places: the tool's section below, `.github/workflows/ci.yml`,
+`.github/workflows/release.yml`, and the `Makefile`, whose copy is the value the
+local version check compares against (see `Local Tool Resolution`). All four MUST
+name the same version for a given tool, and the `test` gate MUST fail when the
+`Makefile`'s copy differs from the specification, as it fails for a workflow's
+copy. Raising either pin is a deliberate change, never an incidental one: it
+updates all four in the same commit, and the new version's findings MUST be
 reviewed before the change lands, because a tool upgrade can fail its gate on
 source that no commit modified.
+
+### Local Tool Resolution
+
+The `lint` and `security` targets of the `Makefile` never run their tool by its
+bare name. Each resolves the tool to one binary through a make variable, reads
+that binary's version, and runs the tool only when the version matches the pin.
+One rule governs both tools:
+
+| Tool | Variable in the `Makefile` | How the gate reads the binary's version |
+|------|----------------------------|-----------------------------------------|
+| `golangci-lint` | `$(GOLANGCI_LINT)` | The linter's own report: `$(GOLANGCI_LINT) version --short` |
+| `gosec` | `$(GOSEC)` | The version field of the `mod` line that `go version -m $(GOSEC)` prints |
+
+The rule changes which binary a gate runs and nothing else. The command each gate
+executes and the scope it covers are the ones `Validation Gates` defines, and the
+version is the one `Static Analysis` pins. The rule is therefore not a difference
+between the three places that enforce the gates: it is what makes the local gate
+run the version the two workflows install on a fresh runner.
+
+**Resolution.** Each variable defaults to the tool's executable name inside the
+directory `go install` writes executables to, which is where the install command
+in the tool's own section puts the tool:
+
+1. the directory `go env GOBIN` reports, when that value is not empty;
+2. otherwise, the `bin` directory of the first entry of the list `go env GOPATH`
+   reports.
+
+Both values are read from `go env` rather than from the shell's environment,
+because `go env` also reports a setting written with `go env -w`. Only the first
+entry of `GOPATH` counts: `go install` writes to that entry's `bin` directory and
+to no other, so appending `/bin` to a `GOPATH` that lists several directories
+would name no directory at all. The resolved binary is run by that path, so
+`PATH` plays no part in which binary a gate runs.
+
+**Override.** A caller names a different binary by setting the variable, on the
+make command line or in the environment:
+
+```bash
+make lint GOLANGCI_LINT=/opt/golangci-lint/bin/golangci-lint
+GOSEC=/opt/gosec/bin/gosec make security
+```
+
+A command-line assignment takes precedence over the environment, and either takes
+precedence over the default. An override changes where the binary is found and
+nothing else: the version check applies to an overriding binary exactly as it
+applies to the default one, and nothing disables the check. A variable set to the
+empty string names no binary, and fails the check rather than falling back to the
+default.
+
+**Version check.** Before the tool runs, the gate reads the resolved binary's
+version as the table above gives, and compares it with the `Makefile`'s copy of
+the pin, which `Static Analysis` requires to equal the pin in the tool's own
+section. No single method reads both tools. `gosec --version` prints `dev` for a
+build made by `go install`, so the scanner's version comes from the Go build
+information the toolchain embedded, the reading `Security Scan: gosec` already
+prescribes. The linter's version comes from its own report, because
+`Linter: golangci-lint` admits an installation by a package manager, and a
+packaged build need not carry the linter's module version in its build
+information. A snap is the measured case: its command is a launcher, and
+`go version -m` on it reports the build information of the snap tool itself, not
+of the linter.
+
+A version is **readable** when, after one optional leading `v` is removed, it
+begins with a decimal digit. An empty report is not readable, and neither is
+`(devel)`, the value the toolchain records when it knows no module version. Two
+readable versions **match** when they are equal after one leading `v` is removed
+from each, so a report of `1.2.3` matches a pin of `v1.2.3`. Nothing looser
+matches: there is no prefix match, no range, and no rule that accepts a newer
+release.
+
+**Failure.** When the version is readable and does not match, the gate writes one
+line to standard error, according to the tool:
+
+```
+golangci-lint at {path} is version {found}, but SPEC/BUILD.md pins {pin}. Install golangci-lint {pin}, or name a binary of it with GOLANGCI_LINT=<path>.
+gosec at {path} is version {found}, but SPEC/BUILD.md pins {pin}. Install gosec {pin}, or name a binary of it with GOSEC=<path>.
+```
+
+When no readable version can be obtained — the path names no file, the file
+cannot be executed, `go version -m` finds no Go build information in it, or what
+the reading yields is not readable — the gate writes this line instead:
+
+```
+golangci-lint at {path} has no readable version, but SPEC/BUILD.md pins {pin}. Install golangci-lint {pin}, or name a binary of it with GOLANGCI_LINT=<path>.
+gosec at {path} has no readable version, but SPEC/BUILD.md pins {pin}. Install gosec {pin}, or name a binary of it with GOSEC=<path>.
+```
+
+| Placeholder | Value |
+|-------------|-------|
+| `{path}` | The resolved path, exactly as the variable holds it; empty when the variable is empty |
+| `{found}` | The version read from the binary, with a leading `v` added when it has none |
+| `{pin}` | The pin in the tool's own section, with its leading `v` |
+
+`<path>` is literal text, not a placeholder: it shows the reader the form of the
+override. The line is the whole of what the check writes. The gate then exits
+with a non-zero status without running the tool, and `make check` fails with it.
+What `make` itself prints about the failed target follows the line; that is
+`make`'s own text and is not specified here.
 
 ### Linter: golangci-lint
 
@@ -742,11 +840,12 @@ version the binary was built from, but it answers for whichever binary `PATH`
 resolves first, which is not necessarily the one `go install` wrote. A packaged
 linter earlier on `PATH` — a snap in `/snap/bin`, for example — shadows that
 one, and because such packages track the latest release, the shadow can report
-the pinned version itself. The check then passes while `make lint` runs a binary
-the pin never installed. Run `which -a golangci-lint` first: it lists every
-match in `PATH` order, so it reveals a shadow that `--version` alone cannot.
-Read the version of the entry it lists first, because that is the one the gate
-runs.
+the pinned version itself. The check then passes while a bare `golangci-lint`
+command runs a binary the pin never installed. Run `which -a golangci-lint` first:
+it lists every match in `PATH` order, so it reveals a shadow that `--version` alone
+cannot. Read the version of the entry it lists first, because that is the one a
+bare `golangci-lint` command runs. `make lint` does not depend on that order: it
+runs, and first checks, the binary `Local Tool Resolution` names.
 
 In the workflows, the pinned version is the `version` input passed to the
 `golangci-lint` GitHub Action: `version: v2.13.1`. This is separate from the pin
@@ -831,7 +930,9 @@ report a usable version when it is built by `go install`: `gosec --version`
 prints `dev`, because the release version is stamped by the project's own release
 build. It therefore cannot confirm the pin. Read the module version the binary
 was built from instead, with `go version -m "$(which gosec)"`, whose `mod` line
-names the version.
+names the version. `which` resolves through `PATH`, so that command reads the copy
+a bare `gosec` command runs; `make security` reads, and checks, the binary
+`Local Tool Resolution` names instead.
 
 **Run:**
 ```bash
@@ -961,6 +1062,11 @@ make check
 | `lint` | `golangci-lint run ./...` | Lint (see `Linter: golangci-lint`) |
 | `security` | `gosec -exclude-dir=.claude/worktrees ./...` | Security scan (see `Security Scan: gosec`) |
 
+The `lint` and `security` rows give the command each gate runs. The `Makefile` runs
+both commands through the binary `Local Tool Resolution` names, and only once that
+binary's version matches the pin; the command and its scope are the ones in the
+table.
+
 Each gate is also available on its own, for example `make lint` or
 `make security`. Running the gates individually is a convenience during
 development; it does not replace `make check` before a commit.
@@ -1006,7 +1112,9 @@ the following are forbidden:
 If a tool cannot be installed, the job fails. No project policy permits skipping
 a gate, and none may be invented: a host that lacks `gosec` is a host that fails
 the run, not a host that is exempt from the security gate. The same rule governs
-a local run — whoever lacks either tool has not run `make check`.
+a local run — whoever lacks either tool has not run `make check`. Locally the rule
+is enforced as well as stated: a missing tool, or a tool of another version, fails
+its gate with a line `Local Tool Resolution` publishes.
 
 **No release may report a gate as skipped.** Every gate MUST have run and passed
 in the release workflow before a release is published. Release notes, release
@@ -1056,6 +1164,11 @@ narrows it.
    gate compiles every Primary Platform wherever it runs, because the unit-test
    suite cross-compiles the whole target table (see `Supported Build Targets`).
    No supported target can therefore break unnoticed in any of the three places.
+   Both workflows also build with `-buildvcs=true`, where a local build keeps the
+   default `-buildvcs=auto`, and each workflow build job checks the binary's stamp
+   with `go version -m` before uploading it, which a local build does not. A
+   workflow therefore never publishes a binary that carries no commit (see
+   `GitHub Actions Workflow`).
 
 Nothing else may differ. In particular, `vet`, `lint`, and `security` run the
 same command over the same scope in all three places:
@@ -1129,8 +1242,15 @@ separate published asset, not a fourth entry inside the archive.
 - [ ] All matrix targets build successfully
 - [ ] Binaries are statically linked (`CGO_ENABLED=0`)
 - [ ] `make check` passes: format, vet, unit tests, host build, `golangci-lint`, and the `gosec` security scan all succeed. The security scan reports no unsuppressed finding (see Validation Gates and Security Scan: gosec)
+- [ ] `make check` exits 0 on a machine where both tools are installed at their pinned versions by the documented install commands, including a machine whose `PATH` holds a different version of either tool ahead of them (see Local Tool Resolution)
+- [ ] `make lint` runs the pinned linter even when another `golangci-lint` comes first on `PATH`: with the pinned version installed by the documented command, placing first on `PATH` a `golangci-lint` that fails whenever it is run leaves `make lint` passing. The same holds for `make security` with such a `gosec` first on `PATH`
+- [ ] Neither the `lint` target nor the `security` target of the `Makefile` runs its tool by its bare name. Each runs the binary its variable resolves to, and each variable defaults to the tool's name in the directory `go env GOBIN` reports, or, when that value is empty, in the `bin` directory of the first entry of `go env GOPATH`
+- [ ] A version mismatch fails the gate before the tool runs and names both versions: `make lint GOLANGCI_LINT=<path>`, with `<path>` a linter of another release, exits non-zero, writes to standard error the mismatch line Local Tool Resolution publishes, with that release as `{found}` and the pin as `{pin}`, and does not run the linter. `make security GOSEC=<path>` behaves the same way for a `gosec` of another release
+- [ ] A path that names no file, and a file from which no readable version can be obtained, each fail their gate with the no-readable-version line Local Tool Resolution publishes, for both tools
+- [ ] An override set in the environment is honoured and checked exactly as one set on the make command line, and a command-line assignment takes precedence over the environment
+- [ ] The `Makefile`'s copy of each tool's pin is the version the tool's own section names, and the `test` gate fails when the two differ, as it does for the two workflows (see Static Analysis)
 - [ ] `go.mod` pins **every** direct dependency the External Dependencies table names — `github.com/FlavioCFOliveira/GoGraph`, `golang.org/x/sys`, `golang.org/x/text`, and `modernc.org/sqlite` — to an exact version, and the first `require` block of `go.mod` requires those four modules and no others, so the table and the block still agree row for row (see External Dependencies)
-- [ ] The `modernc.org/libc` and `modernc.org/memory` versions match exactly the versions required by the pinned `modernc.org/sqlite`. This is verified by reading the driver's own `go.mod` in the module cache, because no gate detects a mismatch — neither any gate run by `make check` (format, vet, test, build, `golangci-lint`, `gosec`) nor the E2E suite (see External Dependencies, SQLite Driver Rules 2 and 3)
+- [ ] `go.mod` requires `modernc.org/libc` and `modernc.org/memory` at exactly the versions SQLite Driver Rules, Rule 2 names. Those versions are not checked against the ones the pinned `modernc.org/sqlite` requires: a later release is the risk Rule 3 accepts, and no gate compares them — neither any gate run by `make check` (format, vet, test, build, `golangci-lint`, `gosec`) nor the E2E suite (see External Dependencies, SQLite Driver Rules 2 to 4)
 - [ ] Any change to the pinned `golang.org/x/text` version, and any raise of the Go floor in Go Toolchain, has been treated as a change to the roadmap tasks board's search: the copy of the search rule the binary ships to the browser was regenerated from the new Unicode character data, and the guard test that holds it equal to the server's own rule passes (see External Dependencies, Unicode Data Rules 5 and 6, and `WEB.md § Roadmap Tasks Page`)
 - [ ] Archive naming follows convention: `rmp-{version}-{target}.{ext}`
 - [ ] Every published archive holds exactly the three entries Artifact Structure lists, and nothing else. Listing a `.tar.gz` (`tar -tzf`) shows `rmp`, `LICENSE`, and `README.md`; listing a Windows `.zip` (`unzip -l`) shows `rmp.exe`, `LICENSE`, and `README.md`. Every entry is at the archive root, with no leading directory component
@@ -1156,6 +1276,8 @@ separate published asset, not a fourth entry inside the archive.
 - [ ] Every gate fails its job when it fails: introducing one violation at a time — an unformatted file, a `go vet` finding, a failing test, a `golangci-lint` violation, and an unsuppressed `gosec` finding — fails the workflow run in each case, in both workflows
 - [ ] No artefact is built or published on a run whose gates did not pass: the build job declares `needs:` on the gate job, and the publishing job declares `needs:` on the build job
 - [ ] The release workflow builds all nine Primary Platforms, and the CI build job builds the four-target fast-feedback subset (see Validation Gates, Permitted Differences Between the Three Pipelines)
+- [ ] Both workflows build `rmp` with `-buildvcs=true` and pass no `-X` linker flag: reading the `go build` command of the build job in `.github/workflows/ci.yml` and in `.github/workflows/release.yml` shows the flag (see GitHub Actions Workflow)
+- [ ] Every build job of both workflows runs the stamp check before uploading its artefact: reading `.github/workflows/ci.yml` and `.github/workflows/release.yml` shows, in each build job, a step placed after the `go build` step and before the upload step that runs `go version -m` on the built binary and fails the job when its output carries no `vcs.revision` build setting (see GitHub Actions Workflow and `DEPLOY.md § How a Released Binary Carries Its Commit`)
 - [ ] Artifacts uploaded successfully
 - [ ] Permissions set to minimum required in BOTH workflows: each grants `contents: read` at workflow level, and exactly one job in each raises that to `contents: write` — `release` in the release workflow, `dev-release` in the CI workflow. No gate job and no build job holds write permission
 - [ ] No release reports any gate as skipped, waived, not installed, or not applicable

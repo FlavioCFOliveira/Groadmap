@@ -53,7 +53,7 @@ func TestEmbeddedStaticFS_OmitsRemovedAssets(t *testing.T) {
 // recursively embeds the vendored asset tree into the binary: every Tabler,
 // Tabler Icons, Inter, and D3 file the interface loads is present in the
 // embedded FS, so the deliverable is fully self-contained (SPEC/WEB.md
-// § Self-Contained Deliverable, Acceptance Criteria 18). This is the test the
+// § Self-Contained Deliverable, Acceptance Criterion 25). This is the test the
 // task brief requires to assert vendor/ embedding.
 func TestEmbeddedStaticFS_ContainsVendoredAssets(t *testing.T) {
 	for _, path := range vendoredAssets {
@@ -96,7 +96,7 @@ func servePage(t *testing.T, mux *http.ServeMux, path string) string {
 // TestPages_DarkThemeAttribute asserts every served page carries
 // data-bs-theme="dark" on the <html> element, so the interface renders in
 // Tabler's dark theme with no toggle (SPEC/WEB.md Functional Requirement 12,
-// Acceptance Criterion 23).
+// Acceptance Criterion 30).
 func TestPages_DarkThemeAttribute(t *testing.T) {
 	t.Setenv("HOME", shortHome(t))
 	name := seedRoadmap(t, "platform-core")
@@ -115,7 +115,7 @@ func TestPages_DarkThemeAttribute(t *testing.T) {
 // shell, a page header, and the top navbar. The off-canvas collapse
 // is driven by Tabler's JS via the navbar-toggler + collapse markup, so its
 // presence is the structural proof of the hamburger menu on small viewports
-// (SPEC/WEB.md Acceptance Criteria 23/24).
+// (SPEC/WEB.md Acceptance Criteria 30/31).
 //
 // What the top navbar CARRIES is roadmap-dependent — the selected roadmap's
 // name, and nothing at all on the roadmap index page — so it is asserted by
@@ -192,7 +192,7 @@ func TestPages_RoadmapSidebarLinks(t *testing.T) {
 // remoteOriginRe matches a stylesheet/script/font/image reference (href= or
 // src= or url(...)) to an absolute or protocol-relative remote origin in the
 // served HTML. The interface must reference ONLY same-origin /static/ assets;
-// any match is a CDN/remote-origin leak (SPEC/WEB.md Acceptance Criterion 16).
+// any match is a CDN/remote-origin leak (SPEC/WEB.md Acceptance Criterion 23).
 var remoteOriginRe = regexp.MustCompile(`(?i)(href|src)\s*=\s*["'](https?:)?//`)
 
 // TestPages_NoRemoteOrigin asserts every served page references no remote
@@ -277,7 +277,7 @@ func TestPages_AssetChainOrderAndLocality(t *testing.T) {
 // selector with the complete set of nine "Networks"-section D3 gallery layouts,
 // in order, with Force-directed preselected as the default (SPEC/WEB.md
 // § Roadmap Knowledge-Graph Page, Functional Requirement 7, Acceptance
-// Criterion 10).
+// Criterion 17).
 func TestGraphPage_LayoutDropdown(t *testing.T) {
 	t.Setenv("HOME", shortHome(t))
 	name := seedRoadmap(t, "platform-core")

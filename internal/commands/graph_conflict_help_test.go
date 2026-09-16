@@ -153,8 +153,10 @@ func TestGraphHelps_ExitCode1NamesTheExhaustedConflict(t *testing.T) {
 
 			// The parse is anchored, so a change to the block's layout that made
 			// exitCodeEntry swallow the whole help would fail here rather than
-			// turn the fragment assertions into a search of the entire text.
-			for _, foreign := range []string{"No roadmap selected", "Roadmap not found"} {
+			// turn the fragment assertions into a search of the entire text. The
+			// two fragments are the conditions of exit codes 3 and 4, which the
+			// block renders from the registry after the exit-1 entry.
+			for _, foreign := range []string{condNoRoadmap, condRoadmapNotFound} {
 				if strings.Contains(entry, foreign) {
 					t.Fatalf("%s: the parsed exit-1 entry reaches into another code's entry "+
 						"(it contains %q), so the assertions below are no longer scoped to "+
@@ -225,9 +227,12 @@ func TestGraphHelps_DoNotWriteTheRetryBudgetFigure(t *testing.T) {
 					"nothing", printer, file)
 			}
 
+			// The block itself is rendered from the registry, so the text this
+			// help writes into its own source is the remedies that follow the
+			// exit-1 entry's conditions; the anchor is the remedy item 10 fixes.
 			anchored := false
 			for _, lit := range literals {
-				if strings.Contains(lit, "Exit codes:") {
+				if strings.Contains(lit, "run the same statement again") {
 					anchored = true
 				}
 				if strings.Contains(lit, figure) {
@@ -241,7 +246,7 @@ func TestGraphHelps_DoNotWriteTheRetryBudgetFigure(t *testing.T) {
 				}
 			}
 			if !anchored {
-				t.Errorf("no literal of %s carries an 'Exit codes:' block, so this gate is not "+
+				t.Errorf("no literal of %s carries the exit-1 remedies, so this gate is not "+
 					"reading the help text it was written to read", printer)
 			}
 		})

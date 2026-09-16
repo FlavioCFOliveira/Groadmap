@@ -136,6 +136,7 @@ func taskNext(args []string) error {
 	if err != nil {
 		return err
 	}
+	remaining, strays := splitPositionals(remaining, 1)
 
 	// Parse optional num argument (default: 1). 'num' is a positive-integer
 	// domain value, so any invalid form — non-numeric or out of range — is a
@@ -150,6 +151,12 @@ func taskNext(args []string) error {
 			num = models.MaxTaskLimit
 		}
 		limit = num
+	}
+
+	// A "-"-prefixed token after num stands in no slot and is refused before the
+	// roadmap is opened (SPEC/COMMANDS.md § Positional Arguments).
+	if err := rejectUnknownFlags(strays); err != nil {
+		return err
 	}
 
 	database, err := db.OpenExisting(roadmapName)
@@ -175,6 +182,7 @@ func taskGet(args []string) error {
 	if err != nil {
 		return err
 	}
+	remaining, strays := splitPositionals(remaining, 1)
 
 	if len(remaining) == 0 {
 		return fmt.Errorf("%w: task ID(s) required", utils.ErrRequired)
@@ -193,6 +201,12 @@ func taskGet(args []string) error {
 	// ParseCommaSeparatedIDs is deliberate -- `sprint reorder` shares that parser
 	// and a repeat is a real error there, which silent deduplication would hide.
 	ids = utils.DistinctIDs(ids)
+
+	// A "-"-prefixed token after the ids stands in no slot and is refused before
+	// the roadmap is opened (SPEC/COMMANDS.md § Positional Arguments).
+	if err := rejectUnknownFlags(strays); err != nil {
+		return err
+	}
 
 	database, err := db.OpenExisting(roadmapName)
 	if err != nil {
@@ -226,6 +240,7 @@ func taskSubtasks(args []string) error {
 	if err != nil {
 		return err
 	}
+	remaining, strays := splitPositionals(remaining, 1)
 
 	if len(remaining) == 0 {
 		return fmt.Errorf("%w: task ID required", utils.ErrRequired)
@@ -233,6 +248,12 @@ func taskSubtasks(args []string) error {
 
 	id, err := utils.ValidateIDString(strings.TrimSpace(remaining[0]), utils.FieldTaskID)
 	if err != nil {
+		return err
+	}
+
+	// A "-"-prefixed token after the id stands in no slot and is refused before
+	// the roadmap is opened (SPEC/COMMANDS.md § Positional Arguments).
+	if err := rejectUnknownFlags(strays); err != nil {
 		return err
 	}
 

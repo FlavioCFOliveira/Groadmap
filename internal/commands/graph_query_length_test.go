@@ -1,7 +1,7 @@
 // Package commands — regression gates for the maximum Cypher query length and
 // the bounded standard-input read that enforces it (SPEC/GRAPH.md § Maximum
 // Query Length, § Bounded Standard-Input Read, § Standard Input That Supplies No
-// Query; acceptance criteria 40 and 41).
+// Query; acceptance criteria 23 and 24).
 //
 // The defect these close had two halves, and they are refused with DIFFERENT
 // exit codes on purpose:

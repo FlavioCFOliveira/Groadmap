@@ -3,14 +3,14 @@ module github.com/FlavioCFOliveira/Groadmap
 go 1.27.0
 
 require (
-	github.com/FlavioCFOliveira/GoGraph v0.14.1
-	golang.org/x/sys v0.47.0
-	golang.org/x/text v0.41.0
-	modernc.org/sqlite v1.58.0
+	github.com/FlavioCFOliveira/GoGraph v0.14.2
+	golang.org/x/sys v0.48.0
+	golang.org/x/text v0.42.0
+	modernc.org/sqlite v1.59.0
 )
 
 require (
-	github.com/RoaringBitmap/roaring/v2 v2.27.0 // indirect
+	github.com/RoaringBitmap/roaring/v2 v2.28.0 // indirect
 	github.com/antlr4-go/antlr/v4 v4.13.1 // indirect
 	github.com/bits-and-blooms/bitset v1.25.0 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
@@ -19,8 +19,8 @@ require (
 	github.com/mschoch/smat v0.2.0 // indirect
 	github.com/ncruces/go-strftime v1.0.0 // indirect
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
-	golang.org/x/exp v0.0.0-20260824195058-e88cd73687aa // indirect
-	modernc.org/libc v1.75.6 // indirect
+	golang.org/x/exp v0.0.0-20260908205506-85c1c2202aba // indirect
+	modernc.org/libc v1.76.0 // indirect
 	modernc.org/mathutil v1.7.1 // indirect
 	modernc.org/memory v1.12.1 // indirect
 )

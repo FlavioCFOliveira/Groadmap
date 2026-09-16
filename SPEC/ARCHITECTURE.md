@@ -165,11 +165,14 @@ operate on it rather than warning and continuing.
   Error: database error: cannot secure <path> to 0600: <detail>
   ```
 
-  `<path>` is the absolute path of the database file. `<detail>` is the
-  underlying failure, in one of two forms: the operating system's error text when
-  the mode change itself failed, or `expected 0600, got <mode>` when the mode
+  Both placeholders are declared in `COMMANDS.md § Published Error Strings Are
+  Exact`, whose table governs every file of this specification. In this line
+  `<path>` is the absolute path of the roadmap's database file, and `<detail>` is
+  the underlying failure, in one of two forms: the operating system's error text
+  when the mode change itself failed, or `expected 0600, got N` when the mode
   change reported success but the file is still not `0600`, which happens on a
-  filesystem that does not record POSIX permission bits. A complete example:
+  filesystem that does not record POSIX permission bits. `N` is the mode the file
+  still carries, in four octal digits, such as `0644`. A complete example:
 
   ```
   Error: database error: cannot secure /home/user/.roadmaps/project1/project.db to 0600: chmod /home/user/.roadmaps/project1/project.db: operation not permitted
@@ -407,9 +410,39 @@ Each package implements:
 ### 6. internal/commands/graph.go and the GoGraph dependency
 - Implements the `graph` command and its two subcommands, `serve` and `client`.
 - Integrates the external module `github.com/FlavioCFOliveira/GoGraph`, which
-  supplies the labelled property graph, the Cypher engine, and the durable
-  directory-based store. The integration boundary is contained in this one
-  package so that an upstream API change is absorbed in a single place.
+  supplies the labelled property graph, the Cypher engine, the durable
+  directory-based store, and the Bolt protocol. **The integration is not confined
+  to this package.** Six production packages import GoGraph, and each imports only
+  the GoGraph packages its own responsibility uses:
+  - `internal/commands` imports `cypher/expr`: the engine value a result row
+    carries, which it hands to `internal/graphjson`, and the Path rendering that
+    only the CLI publishes.
+  - `internal/graphstore` (module 8) imports `cypher`, `graph/csr`, `graph/lpg`,
+    `store/recovery`, `store/snapshot`, `store/txn` and `store/wal`: opening the
+    store through recovery, the write-ahead-log writer, the transactional store,
+    the Cypher engine built over it, the snapshot the synchronous checkpoint
+    writes, and the recognition of the engine's two field-length refusals.
+  - `internal/graphserve` (module 10) imports `bolt/server`, `store`,
+    `store/checkpoint` and `store/wal`: the engine's Bolt server, the store handle
+    and background checkpointer that server runs with, the watch over that
+    checkpointer's statistics, and the recognition of an already-closed
+    write-ahead-log writer at teardown.
+  - `internal/graphclient` (module 9) imports `bolt/proto`, `bolt/packstream`,
+    `cypher/exec` and `cypher/expr`: the handshake, the request messages and
+    their chunked framing, the PackStream codec, and the decoding of values,
+    counters and plans onto the engine's own types.
+  - `internal/graphjson` imports `cypher/expr` and `cypher/exec`: the one mapping
+    from an engine value, and from the engine's counters and plan nodes, to
+    published JSON.
+  - `internal/web` (module 7) imports `cypher/expr` and `cypher/parser`: walking
+    the returned values to collect the elements of the node-link document, and
+    the parser that reports whether a statement carries an `EXPLAIN` or `PROFILE`
+    prefix.
+
+  An upstream API change is therefore absorbed in whichever of these packages use
+  the API that changed. The list covers production source only: in
+  `internal/commands`, `internal/graphserve` and `internal/web`, test files import
+  further GoGraph packages that the production files of the same package do not.
 - Owns the `--query`/stdin input handling, the JSON serialisation of results,
   and the mapping of engine failures onto Groadmap's sentinel errors. It owns no
   validation of the statement's content beyond its length: the statement is
@@ -447,9 +480,9 @@ Each package implements:
   `DATA_FORMATS.md § Graph Query Result`.
 
 **External dependency note.** GoGraph requires Go 1.26 and is consumed at the exact
-tag **v0.14.1**. Because v0.14.1 is a v0 (pre-1.0) version,
+tag **v0.14.2**. Because v0.14.2 is a v0 (pre-1.0) version,
 it is consumable directly at the bare module path and `go.mod` pins the clean exact tag
-`v0.14.1`. GoGraph MUST be pinned to an exact version in `go.mod`. The risk analysis and
+`v0.14.2`. GoGraph MUST be pinned to an exact version in `go.mod`. The risk analysis and
 required mitigations are in `GRAPH.md § Dependency Maturity Risk`; the toolchain and
 pinning requirements are in `BUILD.md § Go Toolchain`.
 
@@ -474,12 +507,15 @@ pinning requirements are in `BUILD.md § Go Toolchain`.
   audit entry.
 - **It never opens a graph store, and it reaches a graph only through
   `internal/graphclient`.** The graph data endpoint sends the caller's Cypher,
-  unexamined, to the `rmp graph serve` process listening on the roadmap's socket,
-  and reads the answer back over the protocol. A request to that endpoint can
+  unexamined for what it does, to the `rmp graph serve` process listening on the
+  roadmap's socket, and reads the answer back over the protocol. The one statement
+  it does not send is one the engine's parser reports as carrying an `EXPLAIN` or
+  `PROFILE` prefix, which it refuses before resolving a server
+  (`WEB.md § Query-Bar Error Handling`, rule 12). A request to that endpoint can
   therefore create, change, and delete graph data, and can change the graph's
   schema, with no authentication — but the writing is the server's, and this
   process writes nothing to a graph directory at all. With no server listening the
-  request is answered HTTP `500` (see
+  request is answered HTTP `503` (see
   `WEB.md § Knowledge Graph from the GoGraph Store`). It MUST NOT run
   `rmp graph client` as a child process; the mechanism is shared as code, not as a
   command (see `GRAPH.md § The Bolt Client`).

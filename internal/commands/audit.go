@@ -61,14 +61,7 @@ Output (stdout JSON):
   TASK_STATUS_BACKLOG carries a sprint id from 'sprint remove-tasks' and null
   from 'task stat'. Neither key can be filtered on.
 
-Exit codes:
-  0  Success
-  2  Non-integer --limit or --entity-id (rejected by the flag parser as misuse)
-  3  Missing -r
-  6  Invalid operation, entity-type, or date format, --limit out of 1-500,
-     or --entity-id out of 1-2147483647
-
-Examples:
+`+exitCodesBlock("audit", "list")+`Examples:
   rmp audit list -r myproject
   rmp audit list -r myproject -o TASK_STATUS_DOING -e TASK
   rmp audit list -r myproject --entity-id 42 --since 2026-01-01
@@ -94,13 +87,7 @@ Required:
 Output (stdout JSON):
   Array of audit entries (same shape as 'audit list').
 
-Exit codes:
-  0  Success
-  2  Non-integer <entity-id>
-  3  Missing -r
-  6  Bad entity-type value, or <entity-id> out of range (<1 or >2147483647)
-
-Examples:
+`+exitCodesBlock("audit", "history")+`Examples:
   rmp audit history -r myproject TASK 1
   rmp audit history -r myproject SPRINT 3
   rmp audit hist -r myproject TASK 42
@@ -133,12 +120,7 @@ Output (stdout JSON):
     "by_entity_type": {"TASK": <int>, "SPRINT": <int>}
   }
 
-Exit codes:
-  0  Success
-  3  Missing -r
-  6  Invalid --since/--until date
-
-Examples:
+`+exitCodesBlock("audit", "stats")+`Examples:
   rmp audit stats -r myproject
   rmp audit stats -r myproject --since 2026-01-01T00:00:00.000Z
   rmp audit stats -r myproject --since 2026-01-01 --until 2026-01-31
@@ -251,6 +233,7 @@ func auditHistory(args []string) error {
 	if err != nil {
 		return err
 	}
+	remaining, strays := splitPositionals(remaining, 2)
 
 	if len(remaining) < 2 {
 		return fmt.Errorf("%w: entity type and ID required", utils.ErrRequired)
@@ -269,6 +252,13 @@ func auditHistory(args []string) error {
 	// out-of-range values are rejected with exit code 6.
 	entityID, err := utils.ValidateIDString(remaining[1], utils.FieldEntityID)
 	if err != nil {
+		return err
+	}
+
+	// A "-"-prefixed token between or after the two positional arguments stands
+	// in no slot and is refused before the roadmap is opened
+	// (SPEC/COMMANDS.md § Positional Arguments).
+	if err := rejectUnknownFlags(strays); err != nil {
 		return err
 	}
 

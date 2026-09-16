@@ -380,8 +380,17 @@ class TestEdgeCasesErrors:
         print("✓ Empty roadmap name rejected with exit 6 + descriptive message")
 
     def test_roadmap_name_with_special_chars(self):
-        """Test roadmap name with special characters."""
-        # These should be rejected or sanitized
+        """A roadmap name carrying a character outside the permitted set is refused.
+
+        SPEC/COMMANDS.md § Roadmap Name Validation: a name must match
+        `^[a-z0-9_-]+$`, and one that does not is refused with exit code 6 and
+        the line "Error: Roadmap name must only contain lowercase letters,
+        numbers, underscores, and hyphens". A refused invocation writes nothing
+        to stdout (§ Failing Invocations Write Nothing to Stdout), and no roadmap
+        of that name exists afterwards.
+        """
+        refusal = ("Error: Roadmap name must only contain lowercase letters, "
+                   "numbers, underscores, and hyphens")
         invalid_names = [
             "name/with/slashes",
             "name..with..dots",
@@ -390,14 +399,22 @@ class TestEdgeCasesErrors:
         ]
 
         for name in invalid_names:
-            exit_code, _, _ = self.test.run_cmd(
+            exit_code, stdout, stderr = self.test.run_cmd(
                 ["roadmap", "create", name],
                 check=False
             )
-            # Should either succeed with sanitization or fail gracefully
-            assert exit_code in [0, 2, 5, 6], f"Unexpected exit code {exit_code} for name: {name}"
+            assert exit_code == 6, (
+                f"roadmap create {name!r}: exit {exit_code}, want 6; stderr={stderr!r}")
+            first_line = stderr.strip().splitlines()[0] if stderr.strip() else ""
+            assert first_line == refusal, (
+                f"roadmap create {name!r}: stderr begins {first_line!r}, want {refusal!r}")
+            assert stdout == "", f"roadmap create {name!r}: wrote to stdout: {stdout!r}"
 
-        print("✓ Roadmap name with special chars test passed")
+        listed = {entry["name"] for entry in self.test.run_cmd_json(["roadmap", "list"])}
+        created = sorted(listed & set(invalid_names))
+        assert not created, f"a refused roadmap name exists afterwards: {created}"
+
+        print("✓ Roadmap names outside ^[a-z0-9_-]+$ refused with exit 6 and the published line")
 
     def test_no_roadmap_selected(self):
         """Test operations without selecting roadmap fail appropriately."""
@@ -450,23 +467,33 @@ class TestEdgeCasesErrors:
     def test_bulk_operations_with_mixed_valid_invalid_ids(self):
         """Bulk prio with a mixed valid/invalid batch must fail-fast (finding #45).
 
-        Per SPEC/COMMANDS.md § Change Priority, any unknown ID in the batch must
-        fail with exit 4 BEFORE any mutation: valid tasks must be left unchanged
-        and no phantom audit rows written. Previously the valid tasks were
-        silently mutated and the command exited 0.
+        SPEC/COMMANDS.md § Task ID Lists (Batch Commands), "Fail-fast": an
+        invocation that names an id which cannot be resolved performs nothing at
+        all -- no task is changed and no audit entry is written -- and, with
+        exactly one id missing, exits 4 with "Error: resource not found: task N
+        not found", the line § Change Priority publishes too. Previously the
+        valid tasks were silently mutated and the command exited 0.
         """
         roadmap = self.test.create_roadmap()
 
         task1 = self.test.create_task(roadmap, "Task 1", "Functional 1", "Technical 1", "Criteria 1")
         task2 = self.test.create_task(roadmap, "Task 2", "Functional 2", "Technical 2", "Criteria 2")
 
+        audit_before = self.test.run_cmd_json(["audit", "list", "-r", roadmap])
+        assert len(audit_before) >= 2, (
+            f"the two task creations must be in the audit log before the batch runs, or the "
+            f"comparison below compares nothing; got {audit_before!r}")
+
         # Set priority with one invalid ID - whole batch must fail-fast (exit 4).
-        exit_code, _, stderr = self.test.run_cmd(
+        exit_code, stdout, stderr = self.test.run_cmd(
             ["task", "prio", "-r", roadmap, f"{task1},99999,{task2}", "5"],
             check=False,
         )
         assert exit_code == 4, f"mixed batch must fail with exit 4, got {exit_code}"
-        assert "not found" in stderr.lower(), f"expected 'not found' message, got: {stderr}"
+        first_line = stderr.strip().splitlines()[0] if stderr.strip() else ""
+        assert first_line == "Error: resource not found: task 99999 not found", (
+            f"expected the published not-found line naming 99999, got: {stderr!r}")
+        assert stdout == "", f"a refused batch writes nothing to stdout, got: {stdout!r}"
 
         # Verify the valid tasks were NOT mutated (still default priority 0).
         result = self.test.run_cmd_json(["task", "get", "-r", roadmap, str(task1)])
@@ -474,7 +501,13 @@ class TestEdgeCasesErrors:
         result = self.test.run_cmd_json(["task", "get", "-r", roadmap, str(task2)])
         assert result[0]["priority"] == 0, "valid task must not be mutated on fail-fast"
 
-        print("✓ Bulk prio with mixed valid/invalid IDs fail-fasts (exit 4), no mutation")
+        # No phantom audit rows: the log reads back exactly as it did before.
+        audit_after = self.test.run_cmd_json(["audit", "list", "-r", roadmap])
+        assert audit_after == audit_before, (
+            f"the refused batch changed the audit log; a fail-fast refusal writes no audit "
+            f"entry.\n  before: {audit_before!r}\n  after:  {audit_after!r}")
+
+        print("✓ Bulk prio with mixed valid/invalid IDs fail-fasts (exit 4), no mutation, no audit entry")
 
     def test_remove_already_removed_task(self):
         """Test removing an already removed task fails."""
@@ -494,10 +527,11 @@ class TestEdgeCasesErrors:
         print("✓ Remove already removed task test passed")
 
     def test_edit_with_no_changes(self):
-        """Editing a task with no fields is a successful no-op (finding #48).
+        """Editing an existing task with no fields is a successful no-op (finding #48).
 
-        Per SPEC/COMMANDS.md § Edit Task, "If no fields are specified, command
-        succeeds with no changes (exit code 0)" and produces no output.
+        SPEC/COMMANDS.md § Edit Task, No-op: an edit that supplies no field
+        changes nothing and exits 0 when the task exists, and writes nothing to
+        stdout.
         """
         roadmap = self.test.create_roadmap()
         task_id = self.test.create_task(roadmap, "Task", "Functional", "Technical", "Criteria")

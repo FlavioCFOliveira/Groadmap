@@ -139,6 +139,7 @@ func buildTaskCommand() Command {
 				ExitCodes: []ExitCodeEntry{
 					ec(0, "One object per distinct id was written to stdout as a JSON array, in the order the ids were given."),
 					ec(2,
+						condUnknownFlag,
 						condMalformedPositionalID,
 						condMissingPositional,
 						condExcessPositional,
@@ -175,7 +176,7 @@ func buildTaskCommand() Command {
 				},
 				ExitCodes: []ExitCodeEntry{
 					ec(0, "The next incomplete tasks of the OPEN sprint were written to stdout as a JSON array, in sprint position order; an empty array when the sprint has no incomplete task left."),
-					ec(2, condExcessPositional),
+					ec(2, condUnknownFlag, condExcessPositional),
 					ec(3, condNoRoadmap),
 					ec(4,
 						condRoadmapNotFound,
@@ -192,7 +193,7 @@ func buildTaskCommand() Command {
 			{
 				Name:        "edit",
 				Summary:     "Edit fields of a task (status NOT editable here).",
-				Description: "Edits one or more fields on an existing task. At least one option must be provided.",
+				Description: "Edits the supplied fields of an existing task; every other field is left unchanged. Supplying no field at all changes nothing, and is accepted only when the named task exists.",
 				Usage:       "rmp task edit -r <roadmap> <task-id> [options]",
 				HelpPrinter: printTaskEditHelp,
 				Handler:     taskEdit,
@@ -207,7 +208,7 @@ func buildTaskCommand() Command {
 					"The task named on the command line exists.",
 				},
 				ExitCodes: []ExitCodeEntry{
-					ec(0, "Every supplied field was written to the task; stdout is empty. Supplying no field at all is accepted and changes nothing."),
+					ec(0, "Every supplied field was written to the task; stdout is empty. Supplying no field at all changes nothing, and is accepted only when the named task exists."),
 					ec(2,
 						condUnknownFlag,
 						condFlagWithoutValue,
@@ -222,6 +223,7 @@ func buildTaskCommand() Command {
 						"The named task does not exist.",
 					),
 					ec(6,
+						"The task id falls outside 1-2147483647.",
 						"A supplied free-text field is empty once trimmed, exceeds its cap, is not valid UTF-8, or carries a control character.",
 						"--priority or --severity carries a value outside 0-9.",
 						"--type carries a value that is not a member of TaskType.",
@@ -255,6 +257,7 @@ func buildTaskCommand() Command {
 				ExitCodes: []ExitCodeEntry{
 					ec(0, "Every named task was deleted; stdout is empty."),
 					ec(2,
+						condUnknownFlag,
 						condMalformedPositionalID,
 						condMissingPositional,
 						condExcessPositional,
@@ -305,8 +308,10 @@ func buildTaskCommand() Command {
 				ExitCodes: []ExitCodeEntry{
 					ec(0, "Every named task now carries the target status and its lifecycle timestamps; stdout is empty."),
 					ec(2,
+						condUnknownFlag,
 						"--commit-open, --commit-close or --summary was written with no value after it.",
 						"An id in the list is not an integer.",
+						condMissingPositional,
 					),
 					ec(3, condNoRoadmap),
 					ec(4,
@@ -354,6 +359,7 @@ func buildTaskCommand() Command {
 				ExitCodes: []ExitCodeEntry{
 					ec(0, "Every named task not already in BACKLOG was returned to it and its lifecycle timestamps cleared; stdout is empty."),
 					ec(2,
+						condUnknownFlag,
 						condMalformedPositionalID,
 						condMissingPositional,
 						condExcessPositional,
@@ -392,6 +398,7 @@ func buildTaskCommand() Command {
 				ExitCodes: []ExitCodeEntry{
 					ec(0, "Every named task carries the new priority; stdout is empty."),
 					ec(2,
+						condUnknownFlag,
 						condMalformedPositionalID,
 						condMissingPositional,
 						condExcessPositional,
@@ -432,6 +439,7 @@ func buildTaskCommand() Command {
 				ExitCodes: []ExitCodeEntry{
 					ec(0, "Every named task carries the new severity; stdout is empty."),
 					ec(2,
+						condUnknownFlag,
 						condMalformedPositionalID,
 						condMissingPositional,
 						condExcessPositional,
@@ -471,6 +479,7 @@ func buildTaskCommand() Command {
 				ExitCodes: []ExitCodeEntry{
 					ec(0, "The direct subtasks of the named task were written to stdout as a JSON array; an empty array when it has none."),
 					ec(2,
+						condUnknownFlag,
 						condMalformedPositionalID,
 						condMissingPositional,
 						condExcessPositional,
@@ -479,6 +488,9 @@ func buildTaskCommand() Command {
 					ec(4,
 						condRoadmapNotFound,
 						"The named parent task does not exist.",
+					),
+					ec(6,
+						"The task id falls outside 1-2147483647.",
 					),
 				},
 				Examples: []Example{
@@ -508,6 +520,7 @@ func buildTaskCommand() Command {
 				ExitCodes: []ExitCodeEntry{
 					ec(0, "The dependency edge is recorded; stdout is empty. Recording an edge that already exists succeeds and changes nothing."),
 					ec(2,
+						condUnknownFlag,
 						condMalformedPositionalID,
 						condMissingPositional,
 						condExcessPositional,
@@ -518,6 +531,7 @@ func buildTaskCommand() Command {
 						"The dependent task or the blocker task does not exist.",
 					),
 					ec(6,
+						"The task id or the blocker id falls outside 1-2147483647.",
 						"The two ids are the same; a task cannot depend on itself.",
 						"The edge would close a cycle in the existing dependency graph.",
 					),
@@ -548,6 +562,7 @@ func buildTaskCommand() Command {
 				ExitCodes: []ExitCodeEntry{
 					ec(0, "The dependency edge was removed; stdout is empty."),
 					ec(2,
+						condUnknownFlag,
 						condMalformedPositionalID,
 						condMissingPositional,
 						condExcessPositional,
@@ -556,6 +571,9 @@ func buildTaskCommand() Command {
 					ec(4,
 						condRoadmapNotFound,
 						"No dependency edge runs from the dependent task to the blocker task.",
+					),
+					ec(6,
+						"The task id or the blocker id falls outside 1-2147483647.",
 					),
 				},
 				Examples: []Example{
@@ -583,6 +601,7 @@ func buildTaskCommand() Command {
 				ExitCodes: []ExitCodeEntry{
 					ec(0, "The not-yet-COMPLETED tasks the named task depends on were written to stdout as a JSON array; an empty array when nothing blocks it."),
 					ec(2,
+						condUnknownFlag,
 						condMalformedPositionalID,
 						condMissingPositional,
 						condExcessPositional,
@@ -591,6 +610,9 @@ func buildTaskCommand() Command {
 					ec(4,
 						condRoadmapNotFound,
 						"The named task does not exist.",
+					),
+					ec(6,
+						"The task id falls outside 1-2147483647.",
 					),
 				},
 				Examples: []Example{
@@ -618,6 +640,7 @@ func buildTaskCommand() Command {
 				ExitCodes: []ExitCodeEntry{
 					ec(0, "The tasks that declare a dependency on the named task were written to stdout as a JSON array; an empty array when none does."),
 					ec(2,
+						condUnknownFlag,
 						condMalformedPositionalID,
 						condMissingPositional,
 						condExcessPositional,
@@ -626,6 +649,9 @@ func buildTaskCommand() Command {
 					ec(4,
 						condRoadmapNotFound,
 						"The named task does not exist.",
+					),
+					ec(6,
+						"The task id falls outside 1-2147483647.",
 					),
 				},
 				Examples: []Example{

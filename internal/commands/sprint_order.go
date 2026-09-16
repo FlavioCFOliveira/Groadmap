@@ -44,6 +44,7 @@ func sprintReorder(args []string) error {
 	if err != nil {
 		return err
 	}
+	remaining, strays := splitPositionals(remaining, 2)
 
 	if len(remaining) < 2 {
 		return fmt.Errorf("%w: sprint ID and ordered task ID(s) required", utils.ErrRequired)
@@ -64,6 +65,13 @@ func sprintReorder(args []string) error {
 			return fmt.Errorf("%w: duplicate task ID %d", utils.ErrValidation, id)
 		}
 		seen[id] = true
+	}
+
+	// A "-"-prefixed token between or after the positional arguments stands in
+	// no slot and is refused before the roadmap is opened
+	// (SPEC/COMMANDS.md § Positional Arguments).
+	if err := rejectUnknownFlags(strays); err != nil {
+		return err
 	}
 
 	database, err := db.OpenExisting(roadmapName)
@@ -145,6 +153,7 @@ func sprintMoveTo(args []string) error {
 	if err != nil {
 		return err
 	}
+	remaining, strays := splitPositionals(remaining, 3)
 
 	if len(remaining) < 3 {
 		return fmt.Errorf("%w: sprint ID, task ID, and position required", utils.ErrRequired)
@@ -167,6 +176,11 @@ func sprintMoveTo(args []string) error {
 		// value-validation failure (exit 6 / ErrValidation per
 		// SPEC/COMMANDS.md § Move Task to Position).
 		return fmt.Errorf("%w: position must be an integer between 0 and %d", utils.ErrValidation, utils.MaxInt32)
+	}
+
+	// See sprintReorder: a stray "-"-prefixed token is refused before the roadmap.
+	if err := rejectUnknownFlags(strays); err != nil {
+		return err
 	}
 
 	database, err := db.OpenExisting(roadmapName)
@@ -250,6 +264,7 @@ func sprintSwap(args []string) error {
 	if err != nil {
 		return err
 	}
+	remaining, strays := splitPositionals(remaining, 3)
 
 	if len(remaining) < 3 {
 		return fmt.Errorf("%w: sprint ID and two task IDs required", utils.ErrRequired)
@@ -272,6 +287,11 @@ func sprintSwap(args []string) error {
 
 	if taskID1 == taskID2 {
 		return fmt.Errorf("%w: cannot swap a task with itself", utils.ErrValidation)
+	}
+
+	// See sprintReorder: a stray "-"-prefixed token is refused before the roadmap.
+	if err := rejectUnknownFlags(strays); err != nil {
+		return err
 	}
 
 	database, err := db.OpenExisting(roadmapName)

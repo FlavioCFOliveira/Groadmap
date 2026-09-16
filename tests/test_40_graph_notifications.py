@@ -3,7 +3,7 @@
 Test 40: engine notifications as stderr diagnostics on the served graph path.
 
 End-to-end backstop for SPEC/GRAPH.md § Query Notifications as Diagnostics
-(functional requirement 10) and Acceptance Criteria 20, 21, 22.
+(functional requirement 10) and Acceptance Criteria 21 and 22.
 
 Contract under test:
 - The one subcommand that runs a statement -- `rmp graph client`, which sends it
@@ -21,7 +21,8 @@ The classic notification is the Cartesian-product warning the engine raises
 for a disconnected multi-pattern MATCH (two patterns sharing no variable):
 code "Neo.ClientNotification.Statement.CartesianProductWarning".
 
-Read path vs write path (AC 22): notifications are surfaced on both the read
+Read path vs write path (§ Query Notifications as Diagnostics, rules 1 and 4):
+notifications are surfaced on both the read
 path (a RETURN-bearing statement) and the write path (CREATE / SET / DELETE).
 There is ONE statement path now -- the client sends the text to the server and
 renders whatever comes back -- so whatever notifications the engine attaches are

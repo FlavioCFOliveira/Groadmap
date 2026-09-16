@@ -12,6 +12,7 @@ is modified.
 
 - [Audience and intent](#audience-and-intent)
 - [Help levels](#help-levels)
+  - [Help tokens](#help-tokens)
 - [AI agent banner](#ai-agent-banner)
 - [Help structure template](#help-structure-template)
 - [Family-help template](#family-help-template)
@@ -29,6 +30,7 @@ is modified.
   - [Stdout silence on failure](#stdout-silence-on-failure)
 - [AI_AGENT environment variable](#ai_agent-environment-variable)
 - [Exit codes](#exit-codes)
+  - [Agreement with the contract](#agreement-with-the-contract)
 
 ## Audience and intent
 
@@ -52,10 +54,13 @@ Three levels of help text exist, each at a different granularity:
 | Family | `rmp <family> --help` (and `rmp <family>` with no subcommand) | Enumerates the subcommands of a family, shared options, valid enum values, status workflow, output shapes, exit codes, families-wide examples. |
 | Subcommand | `rmp <family> <subcommand> --help` | Focused contract for a single subcommand: usage line, required vs optional, the JSON it returns, the exit codes it can emit, two or three worked examples. |
 
-Every family handler routes `--help` (and `-h` and the literal word
-`help`) anywhere in its argument list to the matching printer **before**
-any other parsing runs, so subcommand help is reachable even when the
-required `-r` flag is missing.
+Every family handler routes a help token — `--help`, `-h`, or the literal
+word `help` — written in a token position anywhere in its argument list to
+the matching printer **before** any other check runs, so subcommand help is
+reachable even when the required `-r` flag is missing. A help token written as
+the value of a flag is that flag's value and asks for no help, and a token
+such as `--help=1` is not a help token at all. `§ Help tokens` below defines
+both terms and is canonical for the rule.
 
 A separate machine-readable surface for the second audience exists in
 parallel to the plain-text help: the AI Agent Contract emitted by
@@ -64,6 +69,103 @@ parallel to the plain-text help: the AI Agent Contract emitted by
 `DATA_FORMATS.md § AI Agent Contract` (JSON shape). The plain-text help
 described in this document remains the primary surface for human
 operators.
+
+### Help tokens
+
+A **help token** is one of exactly three tokens: `--help`, `-h`, and `help`.
+The whole token is compared, byte for byte, and no other token is a help token:
+not another letter case, such as `--HELP`, and not a token that carries a value
+after an `=`, such as `--help=1`, `--help=`, or `-h=1`.
+
+A help token asks for help only where it stands in a **token position**. Every
+position after the command name is a token position except one: the position of
+a flag's value. A token written there is the value of that flag, like any other
+word written there, and asks for nothing. A help token in a token position is
+served before any other check runs, wherever it is written after the command
+name, before, between, or after the positional arguments and the flags: the
+invocation writes the help of its level (`§ Help levels`) to stdout, exits `0`,
+and does nothing else. Two invocations stand outside this paragraph, each under
+a rule of its own: `rmp help`, `rmp --help`, and `rmp -h` are the global help
+command, which refuses any token written after it
+(`COMMANDS.md § Positional Arguments`), and `rmp ai-help` followed by a help
+token writes the contract rather than a help (`COMMANDS.md § AI Help`).
+
+**A flag that takes a value** is a flag the subcommand declares with a type
+other than `boolean`. The declaration is the subcommand's entry in the command
+registry, which the AI Agent Contract publishes as that subcommand's `flags`
+array (`DATA_FORMATS.md § Field reference: flag entry`), and no other list
+decides the question. The long and the short spelling of a declared flag are
+the same flag, and the roadmap selector `-r` / `--roadmap` takes a value on every
+subcommand that declares it. Two consequences follow from the declaration being
+the source:
+
+- A flag declared `boolean` takes no value, so the token after it stands in a
+  token position: `rmp sprint tasks -r <name> 5 --order-by-priority help` writes
+  the help.
+- A flag the subcommand does not declare takes no value either, so the token
+  after it stands in a token position: `rmp task list -r <name> --foo help`
+  writes the help, and the unrecognised flag is not reported, because a help
+  token is served before any flag is refused.
+
+A flag's value is recognised in two forms, reading the command line from left to
+right:
+
+1. **The separate form, `--flag value` or `-f value`.** The token written
+   immediately after a flag that takes a value is that flag's value when it does
+   not begin with `-`, so the word `help` written there is the flag's value.
+   `--help` and `-h` written there are not values: a token that begins with `-`
+   is a flag in that position (`COMMANDS.md § Positional Arguments`, rule 5), so
+   each of them stands in a token position and asks for help.
+2. **The joined form, `--flag=value` or `-f=value`.** Where a command reads this
+   form, the value is the text after the first `=` of the same token. A token of
+   this form is never a help token, whatever that text is, on a command that does
+   not read the form as much as on one that does.
+
+The rule fixes, among others, these outcomes:
+
+- `rmp task create -r <name> -t help -fr <text> -tr <text> -ac <text>` creates a
+  task titled `help` and writes no help, and so does the same invocation with
+  `--title=help` in place of `-t help`.
+- `rmp sprint create -r <name> -t <title> -d help` creates a sprint whose
+  description is `help`.
+- `rmp task list -r help` reads `help` as the value of `-r`, and exits `6` with
+  `Error: validation error: "help": roadmap name is a reserved system name`: the
+  name is reserved, because no command could create or remove a roadmap of that
+  name (`COMMANDS.md § Roadmap Name Validation`).
+- `rmp task list -r <name> -s help` reads `help` as the value of `--status` and
+  refuses it as a status, with exit code `6`.
+- `rmp stats -r <name> help` and `rmp task list -r <name> --help` write the help
+  and exit `0`: `help` follows the value of the selector, not the selector, and
+  `--help` follows no flag that takes a value.
+- `rmp task create -r <name> -t --help` writes the help, because `--help` is not
+  a value in the separate form.
+- `rmp roadmap create help` and `rmp roadmap remove help` write the help of their
+  subcommand and create or remove nothing: a positional argument stands in a token
+  position, so the word `help` cannot be supplied as a roadmap name there. A
+  roadmap named `help` made outside the CLI is listed by `rmp roadmap list` and
+  reachable by no command, exactly as one named `con` is.
+
+**A token that carries a value after an `=` is refused, never served.**
+`--help=<value>` and `-h=<value>`, whatever the value and including the empty
+one, are unrecognised flags. Written among a command's arguments, either is
+refused under `COMMANDS.md § Positional Arguments`, rule 5, with exit code `2`:
+no help is written, nothing is written to stdout, and the command performs
+nothing. The line names the flag without the `=` and the text after it, as
+`COMMANDS.md § Positional Arguments`, rule 5, requires of every unrecognised
+flag on every command:
+
+| Token | Error line |
+|-------|-----------|
+| `--help=<value>` | `Error: invalid input: unknown flag: --help` |
+| `-h=<value>` | `Error: invalid input: unknown flag: -h` |
+
+`rmp web` follows the rule like every other command: `rmp web --help=1` exits
+`2` with the first line and writes no help. Two cases fall outside this
+paragraph, and neither writes help: `rmp ai-help` refuses every token other than
+a help token with the line `COMMANDS.md § AI Help` publishes, and a token written
+where a command or a subcommand name is expected, as in `rmp --help=1` or
+`rmp task --help=1`, names nothing and is a dispatch failure
+(`§ Recovery help after a dispatch failure`).
 
 ## AI agent banner
 
@@ -114,9 +216,20 @@ order:
 7. **Output (stdout JSON)** — one block per subcommand for family
    helps, one fenced block for subcommand helps. Mutating subcommands
    declare "empty (exit 0)" explicitly.
-8. **Exit codes** — every code the command can emit, each with a
-   one-line cause. Exit code 0 is included so the reader sees the
-   success case without inference.
+8. **Exit codes** — every code the command can emit, each with the
+   conditions that produce it. Exit code 0 is included so the reader
+   sees the success case without inference. In the help of a subcommand,
+   and in the help of a command that takes no subcommand, the block is
+   rendered from the registry's exit-code entries for that subcommand,
+   the entries its AI Agent Contract entry publishes as `exit_codes`,
+   and no part of it is written by hand. It lists every code that array
+   declares, each once, in the array's order, and no other code, and the
+   text of each entry is the contract's conditions for that code, word
+   for word and in the contract's order. Code 0 is rendered from its
+   conditions like every other code. The one entry that carries more is
+   the exit-code-1 entry of `graph client`: its conditions, followed by
+   its remedies. `§ Agreement with the contract` fixes the rendered shape
+   and the gate that holds every help to it.
 9. **Examples** — two to four worked examples that cover the common
    paths (filter, mutate, error-recovery).
 
@@ -186,8 +299,10 @@ Output (stdout JSON):
   <one-line or fenced JSON block describing the shape>
 
 Exit codes:
-  0   Success
-  <code>   <cause>
+  0     <condition of code 0, wrapped at 80 characters onto lines that
+        begin with eight spaces>
+  2     <first condition of code 2>
+        <second condition of code 2>
 
 Examples:
   rmp <family> <subcommand> -r <roadmap> ...
@@ -805,10 +920,15 @@ Output (stdout JSON):
   On startup: {"url": "http://127.0.0.1:8787"} (reflects the bound host/port)
 
 Exit codes:
-  0   Server started and was stopped by Ctrl+C / SIGINT / SIGTERM
-  1   Host/port could not be bound, or the data directory was unreadable
-  2   Unknown flag or unexpected argument
-  6   --port out of range 0-65535 or not an integer
+  0     The server bound its host and port, wrote the served URL to stdout, and
+        served read-only routes until SIGINT or SIGTERM.
+  1     The requested host and port could not be bound: an explicit --port is
+        already in use, or the host is not assignable.
+        The data directory ~/.roadmaps/ could not be read.
+        The listener stopped accepting connections after the server had started.
+  2     An unrecognised flag was supplied, or a positional argument was
+        supplied; this command accepts none.
+  6     --port falls outside 0-65535, or is not an integer.
 
 Examples:
   rmp web
@@ -828,8 +948,15 @@ nothing to stdout at all; see `Stdout silence on failure` below.
 Every failing invocation writes exactly one error line, in this shape:
 
 ```
-Error: <human-readable description of the problem>
+Error: <detail>
 ```
+
+`<detail>` is the placeholder `COMMANDS.md § Published Error Strings Are
+Exact` declares, and that section's table governs the placeholders of
+every file of this specification. Here it stands for the whole of the
+message after the prefix, sentinel included, which this shape does not
+fix: each command's error table in `COMMANDS.md` publishes its lines in
+full.
 
 The wording starts with `Error: ` (with the colon and the trailing
 space). For input-related errors (missing parameters, unknown flags,
@@ -901,12 +1028,17 @@ that publish their own wording for the refusal are specified in
 ### Error text of a dispatch failure
 
 The two classes use the same wording, differing only in the level they
-name:
+name. The name that could not be resolved follows the colon, echoed as
+the invocation gave it, and the subcommand line names the command that
+did resolve before the word `subcommand`. The lines below are those
+`rmp nadadisto` and `rmp task nadadisto` write, the invocations
+`COMMANDS.md § Dispatch Failures (Unresolved Command or Subcommand Names)`
+publishes them for:
 
 | Class | Error line |
 |-------|-----------|
-| Unresolved command | `Error: unknown command: <name>` |
-| Unresolved subcommand | `Error: unknown <command> subcommand: <name>` |
+| Unresolved command | `Error: unknown command: nadadisto` |
+| Unresolved subcommand | `Error: unknown task subcommand: nadadisto` |
 
 Neither line carries a sentinel prefix. In particular neither is
 prefixed with `invalid input: `, because a dispatch failure is not
@@ -1052,8 +1184,162 @@ a mode switch: no other behaviour changes when `AI_AGENT=1`.
 The canonical exit-code catalogue is defined in
 `ARCHITECTURE.md § Exit Codes`. Each family help (and each subcommand
 help) **must** include an `Exit codes:` block listing only the codes the
-command can actually emit, each with a one-line cause. The agreed
+command can actually emit, each with its cause: a one-line cause in a
+family help, and in the help of a subcommand the conditions its contract
+entry gives for that code, rendered from the registry
+(`§ Agreement with the contract`). The agreed
 philosophy is that the catalogue stays single-sourced in
 `ARCHITECTURE.md`, but every help replicates the relevant subset so the
 reader doesn't have to cross-reference for the failure cases that apply
 to the call they're about to make.
+
+### Agreement with the contract
+
+The AI Agent Contract publishes, for every subcommand, the exit codes that
+subcommand can emit and the conditions that produce each
+(`DATA_FORMATS.md § Field reference: per-subcommand exit code entry`). The
+plain-text help of the same subcommand lists exactly those codes: every code of
+the entry's `exit_codes` array appears in the help's `Exit codes:` block, each
+once, and the block lists no code the array does not declare. For each code, the
+conditions the help gives agree with the conditions the entry gives for the same
+code, as defined below. The block is not written by hand: it is rendered from the
+registry's exit-code entries, the entries the contract publishes, so the help and
+the contract draw every code and every condition from one source. This rule adds no exit code and no condition to any
+subcommand and removes none.
+
+The contract is the authority. Where the two disagree, the help is wrong and
+the correction is made to the help: which codes a subcommand emits, and under
+which conditions, is decided by its contract entry and by its command contract in
+`COMMANDS.md`, never by a help text. This is the non-duplication rule of
+`ARCHITECTURE.md § AI Agent Contract Generation`, which forbids a help printer to
+publish an exit code the registry does not declare, together with its converse:
+a help printer may not omit one the registry does declare.
+
+**What agreement of conditions means.** The conditions a help gives for a code
+agree with its contract entry when they are that entry's `conditions` for the
+code, in the contract's words and in the contract's order, and nothing else. The
+comparison is of text, and it is defined so that a gate decides it without
+judgement:
+
+1. The **text of a help entry** is the part of the entry's opening line that
+   follows the code and the spaces after it, followed by every continuation line
+   of the entry, joined with single spaces.
+2. The **text of a contract entry** is the elements of its `conditions` array, in
+   array order, joined with single spaces.
+3. Both texts are **normalised**: every run of whitespace becomes a single space,
+   and whitespace at either end is removed.
+4. A help entry **agrees** with the contract entry of the same code when the two
+   normalised texts are equal.
+
+Agreement is therefore exact, and code 0 is compared like every other code. A
+help that rewords a condition, omits one, adds one, orders them differently, or
+gives a condition under a code other than the one the contract gives it under,
+disagrees. Where the lines of an entry break has no bearing on agreement: the
+rendered shape below fixes where they break, and the gate checks that shape apart
+from agreement.
+
+**One entry states remedies after its conditions.** `§ Graph family help
+specifics`, items 4 and 10, require the exit-code-1 entry of the `graph client`
+help to state the remedy for two of its causes. The contract carries no remedy,
+so the remedies are the help's own text: the entry is rendered from the
+registry's conditions like every other entry, and the remedies follow its last
+condition in the rendered shape below. Its text is therefore its conditions, then
+one space, then the remedies, and it agrees when its normalised text begins
+with the normalised text of the contract entry followed by a space and at least
+one further character. It is the only entry after whose conditions anything may
+follow: any other entry that carries text after its conditions disagrees. The
+remedies are compared with nothing, because the contract carries no remedy to
+compare them with.
+
+The help of a subcommand is what `rmp <command> <subcommand> --help` writes. For
+`stats` and `web`, which take no subcommand, it is what `rmp <command> --help`
+writes. A family help has no contract entry of its own and is not bound by this
+subsection; the rule above governs it.
+
+**`ai-help` has no plain-text help to compare.** `rmp ai-help --help` writes the
+contract itself, byte for byte what `rmp --ai-help` writes, as
+`COMMANDS.md § AI Help` provides: `rmp ai-help` is equivalent to
+`rmp --ai-help`, and the contract takes precedence over every other argument.
+The exit codes of `ai-help` are therefore published once, by the entry the
+contract carries for it, and no second surface exists to disagree with them.
+
+**The gate.** An end-to-end module in `tests/` holds every plain-text subcommand
+help to this subsection. It reads both surfaces from the compiled binary, for the
+reason `DATA_FORMATS.md § Published Examples Are Executed` gives for its own
+gate: a help token can be served by a path other than the printer the registry
+names, as `rmp ai-help --help` is, so a gate that called the printers directly
+could compare a help that no invocation writes. The gate:
+
+1. obtains the contract by running `rmp --ai-help`, and takes from it the
+   subcommands it publishes and the `exit_codes` array of each;
+2. runs the help invocation of every one of those subcommands other than
+   `ai-help`, and reads the `Exit codes:` block from its stdout;
+3. compares the set of codes the block lists with the set of `code` values the
+   subcommand's `exit_codes` array carries, and fails, naming the subcommand and
+   the codes, on a code the help lists that the array does not declare, on a code
+   the array declares that the help does not list, and on a code the help lists
+   twice;
+4. fails on a help that carries no `Exit codes:` block, or more than one;
+5. asserts that `rmp ai-help --help` writes exactly what `rmp --ai-help` writes,
+   so the one subcommand it does not compare is excluded by a checked fact rather
+   than skipped;
+6. counts the subcommands it compared, and fails unless the count equals the
+   number of subcommands the contract publishes less one, for `ai-help`;
+7. proves it can fail: its comparator rejects a copy of a real `Exit codes:`
+   block with one entry removed, and a copy with one entry added, and accepts the
+   block unaltered;
+8. compares, for every code the block lists, the text of the help's entry with
+   the text of the contract's entry for the same code, as
+   `What agreement of conditions means` above defines both, and fails on an entry
+   that does not agree, naming the subcommand and the code and printing both
+   normalised texts; it compares the exit-code-1 entry of `graph client` as the
+   paragraph on remedies states, and no other entry that way;
+9. proves that comparison can fail: it rejects a copy of a real entry with one
+   condition removed, a copy with one word of a condition changed, a copy with a
+   condition of another code appended, and a copy of an entry other than the
+   `graph client` exit-code-1 entry with text appended after its conditions, and
+   it accepts the entry unaltered;
+10. renders, from each subcommand's contract entry, the block that
+    `How the block is rendered` below specifies, and fails unless the help's block
+    is that block line for line, naming the subcommand and printing the first line
+    that differs; for the exit-code-1 entry of `graph client` it compares the lines
+    up to the end of that entry's last condition, and requires every further line
+    of the entry to begin with eight spaces, to end in a character other than a
+    space, and to be at most 80 characters long; and
+11. proves that comparison can fail: it rejects a copy of a real block with two
+    lines of one condition joined into one, a copy with the second condition of a
+    code moved onto the line that ends the first, and a copy with a space appended
+    to one line, and it accepts the block unaltered.
+
+**How the block is rendered.** Every subcommand help's block has one shape, so
+that the help printer renders it from the registry and the gate reproduces it from
+the contract alone:
+
+1. The block is the line `Exit codes:`, then one entry for each element of the
+   subcommand's `exit_codes` array, in the array's order, then an empty line.
+2. An entry is its conditions, in the order of its `conditions` array, and each
+   condition begins on a line of its own. The entry's first line is two spaces,
+   the code in decimal, and as many further spaces as bring the line to eight
+   characters, followed by the start of the first condition; a code of up to
+   three digits therefore leaves at least three spaces before the text. Every
+   other line of the entry begins with eight spaces.
+3. A condition is laid out by words. Its text is split at each run of whitespace,
+   and its words are placed in order, separated by single spaces, each line taking
+   as many words as fit within 80 characters, counted as Unicode code points with
+   the eight-character prefix included. A word longer than the 72 characters that
+   follow the prefix is placed alone on its line, after the prefix, and is not
+   broken. No line ends in a space.
+4. The remedies of the `graph client` exit-code-1 entry, and no other text, follow
+   the last condition of that entry, each remedy beginning on a line of its own
+   and laid out as a condition is.
+
+The `rmp web` skeleton in `Web command help specifics` above is rendered this way.
+
+**How the block is read.** The block begins at the line `Exit codes:` and ends
+at the first empty line after it. A line of the block that is indented by
+exactly two spaces, and whose first field is a decimal number followed by at
+least two spaces, opens the entry for that code. Every other line of the block
+is indented by at least three spaces and continues the entry above it. A line in
+neither shape fails the gate rather than being skipped, because a block the gate
+cannot read is a block whose codes nobody has compared. Every plain-text
+subcommand help the CLI writes has this shape.

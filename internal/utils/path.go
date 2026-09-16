@@ -140,6 +140,14 @@ func VerifyPermissions(path string, expectedPerm os.FileMode) error {
 	return nil
 }
 
+// HelpRoadmapName is the roadmap name the CLI itself reserves. No command can
+// create or remove a roadmap of this name: the name is a positional argument
+// there, and in that position the word is a help token that writes the
+// subcommand's help (SPEC/COMMANDS.md § Roadmap Name Validation,
+// SPEC/HELP.md § Help tokens). It is therefore refused wherever a roadmap name
+// is validated, the -r/--roadmap selector included.
+const HelpRoadmapName = "help"
+
 // ValidateRoadmapName checks if a roadmap name is valid.
 // Names must:
 //   - Not be empty
@@ -147,6 +155,7 @@ func VerifyPermissions(path string, expectedPerm os.FileMode) error {
 //   - Not start with '-' (to prevent flag confusion)
 //   - Contain only lowercase letters, numbers, underscores, and hyphens
 //   - Not be a Windows reserved name (CON, PRN, AUX, NUL, COM1-9, LPT1-9)
+//   - Not be HelpRoadmapName, in that exact spelling
 func ValidateRoadmapName(name string) error {
 	if name == "" {
 		// SPEC/COMMANDS.md mandates this verbatim message (finding #60).
@@ -176,6 +185,12 @@ func ValidateRoadmapName(name string) error {
 	// Check for extension variants of reserved names (e.g., CON.txt)
 	baseName := strings.SplitN(upperName, ".", 2)[0]
 	if WindowsReservedNames[baseName] {
+		return fmt.Errorf("%w: %q: %w", ErrValidation, name, ErrRoadmapNameReserved)
+	}
+
+	// The CLI's own reserved name, in its exact spelling only: every other
+	// letter case is refused by the character rule below with that rule's line.
+	if name == HelpRoadmapName {
 		return fmt.Errorf("%w: %q: %w", ErrValidation, name, ErrRoadmapNameReserved)
 	}
 

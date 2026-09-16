@@ -46,13 +46,7 @@ Output (stdout JSON):
   Array of task objects; status is always BACKLOG. See 'rmp task --help'
   for the full task-object key list.
 
-Exit codes:
-  0  Success
-  2  Non-integer --limit (rejected by the flag parser as misuse)
-  3  Missing -r
-  6  Bad --type or --sort value, or out-of-range --limit
-
-Examples:
+`+exitCodesBlock("backlog", "list")+`Examples:
   rmp backlog list -r myproject
   rmp backlog list -r myproject --priority 7
   rmp backlog list -r myproject --type BUG --sort severity
@@ -82,12 +76,7 @@ Optional:
 Output (stdout JSON):
   Array of task objects (status BACKLOG, ordered by priority DESC).
 
-Exit codes:
-  0  Success
-  3  Missing -r
-  6  Non-positive or non-numeric <count>
-
-Examples:
+`+exitCodesBlock("backlog", "show-next")+`Examples:
   rmp backlog show-next -r myproject
   rmp backlog show-next -r myproject 10
 `)
@@ -160,6 +149,7 @@ func backlogShowNext(args []string) error {
 	if err != nil {
 		return err
 	}
+	remaining, strays := splitPositionals(remaining, 1)
 
 	// Parse optional count argument (default: 5)
 	count := 5
@@ -175,6 +165,12 @@ func backlogShowNext(args []string) error {
 			n = models.MaxTaskLimit
 		}
 		count = n
+	}
+
+	// A "-"-prefixed token after count stands in no slot and is refused before
+	// the roadmap is opened (SPEC/COMMANDS.md § Positional Arguments).
+	if err := rejectUnknownFlags(strays); err != nil {
+		return err
 	}
 
 	backlogStatus := models.StatusBacklog

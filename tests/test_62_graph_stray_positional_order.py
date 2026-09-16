@@ -4,7 +4,7 @@ Test 62: where the `graph` family's stray-positional refusal lands in the
 subcommand's order, measured against the compiled ./bin/rmp (rmp task #291).
 
 SPEC/GRAPH.md § No Positional Query: A Stray Token Is Refused is canonical, and
-acceptance criterion 59 requires the placement to be MEASURED rather than
+acceptance criterion 27 requires the placement to be MEASURED rather than
 reasoned about. `rmp graph execute` is withdrawn, so the subcommand that
 publishes this refusal is `rmp graph client`, and the order its published exit
 codes describe is:
@@ -66,7 +66,7 @@ What every case asserts, beyond the exit code:
     graph store, so without one the fingerprint would be an empty dict and every
     comparison of it vacuous.
 
-The module also carries the end-to-end half of acceptance criteria 57, 58 and
+The module also carries the end-to-end half of acceptance criteria 25, 26 and
 28. The lines every statement class produces are compared against each other and
 against the CANONICAL line plus this family's HINT; the comment subcommands'
 line is compared against that same canonical line without the hint; and so is
@@ -352,7 +352,7 @@ class GraphStrayBase:
 
 
 class TestGraphStrayRefusalOrder(GraphStrayBase):
-    """Acceptance criterion 59: the refusal precedes every other check the
+    """Acceptance criterion 27: the refusal precedes every other check the
     subcommand performs, and roadmap selection precedes the refusal."""
 
     def test_the_named_roadmap_not_existing_alone_exits_four(self):
@@ -634,7 +634,7 @@ class TestGraphStrayRefusalWording(GraphStrayBase):
         self.assert_store_untouched(before, "the six refusals")
 
     def test_hyphen_prefixed_tokens_are_classified_in_both_directions(self):
-        """Criterion 58. On this family a `-` followed by a digit or a decimal
+        """Criterion 26. On this family a `-` followed by a digit or a decimal
         point is a query value and not a flag, so a stray `-1` and a stray bare
         `-` are unexpected arguments, while a long flag the family does not
         define is an unknown flag.
@@ -670,7 +670,7 @@ class TestGraphStrayRefusalWording(GraphStrayBase):
                     f"argument; got {first!r}")
 
     def test_only_the_first_stray_token_is_named(self):
-        """Criterion 58's closing half. The tokens are examined left to right,
+        """Criterion 26's closing half. The tokens are examined left to right,
         the first positional argument ends the invocation, and the position of
         the stray on the command line does not change which one is named."""
         first, second = STRAY, "settlement-summary"
@@ -693,7 +693,7 @@ class TestGraphStrayRefusalWording(GraphStrayBase):
 
 
 class TestGraphStrayRefusalAcrossFamilies(GraphStrayBase):
-    """Acceptance criterion 60 at binary level: one rule, several subcommands.
+    """Acceptance criterion 28 at binary level: one rule, several subcommands.
 
     `graph client`'s line, `graph serve`'s line and the comment line are all
     derived from CANONICAL_REFUSAL in this module, so what is asserted below is

@@ -349,12 +349,14 @@ func TestGraphQueryBarFailureIsWarnLogged(t *testing.T) {
 	}
 }
 
-// TestGraphInvalidLimitIsWarnLogged asserts the same for the other kind the
-// endpoint publishes. Acceptance Criterion 142 binds EVERY query-bar failure
-// "whatever its kind", and the two are decided at different points in
-// loadGraphView — the limit before the socket is probed, the execution failure
-// once the statement is running in the server — so a rejection that returned an
-// unclassified error would answer 500 and log an ERROR.
+// TestGraphInvalidLimitIsWarnLogged asserts the same for the invalid-limit kind.
+// Acceptance Criterion 142 binds EVERY query-bar failure "whatever its kind", and
+// the kinds are decided at different points in loadGraphView — the limit before
+// the socket is probed, the execution failure once the statement is running in
+// the server — so a rejection that returned an unclassified error would answer
+// 500 and log an ERROR. The plan-prefix kind, decided between those two, is
+// recorded by TestHandleGraphData_APlanPrefixRefusalIsRecordedOnceAtWarn
+// (Acceptance Criterion 171).
 func TestGraphInvalidLimitIsWarnLogged(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)

@@ -169,6 +169,7 @@ func buildRoadmapCommand() Command {
 				ExitCodes: []ExitCodeEntry{
 					ec(0, "The roadmap home directory and its database were created, and the roadmap name was written to stdout."),
 					ec(2,
+						condUnknownFlag,
 						"The roadmap name was omitted.",
 						"A second positional argument was supplied; this subcommand takes exactly one.",
 					),
@@ -213,6 +214,7 @@ func buildRoadmapCommand() Command {
 				ExitCodes: []ExitCodeEntry{
 					ec(0, "The roadmap home directory was removed recursively; stdout is empty."),
 					ec(2,
+						condUnknownFlag,
 						"The roadmap name was omitted.",
 						"A second positional argument was supplied; this subcommand takes exactly one.",
 					),
@@ -356,7 +358,7 @@ func buildBacklogCommand() Command {
 				Idempotent:  true,
 				ExitCodes: []ExitCodeEntry{
 					ec(0, "The top-<count> BACKLOG tasks by priority were written to stdout as a JSON array; an empty array when the backlog is empty."),
-					ec(2, condExcessPositional),
+					ec(2, condUnknownFlag, condExcessPositional),
 					ec(3, condNoRoadmap),
 					ec(4, condRoadmapNotFound),
 					ec(6, "The count positional argument is not a positive integer."),
@@ -455,6 +457,7 @@ func buildAuditCommand() Command {
 				ExitCodes: []ExitCodeEntry{
 					ec(0, "Every audit entry recorded for the named entity was written to stdout as a JSON array, newest first; an empty array when the entity has no history, including when no such entity exists."),
 					ec(2,
+						condUnknownFlag,
 						condMissingPositional,
 						condExcessPositional,
 					),

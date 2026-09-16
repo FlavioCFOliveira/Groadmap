@@ -3,12 +3,12 @@
 Test 35: rmp web - read-only embedded web interface (SPEC/WEB.md).
 
 This suite drives the compiled binary's `rmp web` command end-to-end and
-exercises every acceptance criterion AC1-AC24 of SPEC/WEB.md against the
+exercises the acceptance criteria of SPEC/WEB.md against the
 running HTTP server:
 
 - Process/CLI contract: flag validation and exit codes (AC1-AC5), the
   machine-readable {"url": ...} startup object, and the graceful SIGINT/SIGTERM
-  shutdown of AC17 and acceptance criterion 24 — asserted as the OUTCOME the
+  shutdown of acceptance criterion 24 — asserted as the OUTCOME the
   criterion's adverb names and not merely as the exit code, since runServer
   returns nil on the signal path unconditionally. Each of step 7's four promises
   is driven or explicitly declined: the listener refusing new connections while
@@ -31,18 +31,18 @@ running HTTP server:
   and its JSON data endpoint, and the read-only proof that graph reads create
   no snapshot/ directory. Choosing a roadmap on the index lands the user on
   the sprints page with the current (OPEN) sprint selected by default.
-- Read-only enforcement: non-read HTTP methods answered 405 (AC14).
+- Read-only enforcement: non-read HTTP methods answered 405 (AC21).
 - Self-contained delivery: static assets served only from /static/, a
-  missing asset 404s (AC15), the vendored D3.js bundle and the d3-sankey
+  missing asset 404s (AC22), the vendored D3.js bundle and the d3-sankey
   plugin are served locally, no page references any remote origin
-  (AC16, AC18, AC19).
+  (AC23, AC25, AC26).
 - Mobile-first: every page carries the responsive viewport meta tag and
-  loads no remote CSS; the stylesheet uses min-width media queries (AC20-AC22).
+  loads no remote CSS; the stylesheet uses min-width media queries (AC27, AC29).
 - Tabler admin-shell: every page renders in the dark theme
   (data-bs-theme="dark"), with a vertical sidebar, page wrapper/header, a
   top navbar naming the selected roadmap (AC108), and the off-canvas
   hamburger markup; the vendored Tabler CSS/JS and the Inter / Tabler Icons
-  web fonts are served locally from /static/ (AC23/AC24, AC16/AC22).
+  web fonts are served locally from /static/ (AC30/AC31, AC23/AC29).
 
 The server is long-lived, so each scenario launches a fresh `rmp web`
 process on an ephemeral port (--port 0), parses the startup URL from
@@ -224,7 +224,7 @@ SERVICE_FAMILIES = (
 EXIT_SIGINT = 130
 
 class TestWebInterface:
-    """End-to-end coverage of `rmp web` (SPEC/WEB.md AC1-AC22)."""
+    """End-to-end coverage of `rmp web` (SPEC/WEB.md § Acceptance Criteria)."""
 
     def setup_method(self):
         self.test = GroadmapTestBase()
@@ -2803,11 +2803,11 @@ class TestWebInterface:
         )
 
     # ====================================================================
-    # AC10/AC11/AC12: sprint tabs, classification + ordering, sprint links
+    # AC11/AC12/AC13: sprint tabs, classification + ordering, sprint links
     # ====================================================================
 
     def test_detail_sprint_tabs_labels_and_default(self):
-        """AC10: three tabs labelled Próximos / Actual / Concluídos, left to
+        """AC11: three tabs labelled Próximos / Actual / Concluídos, left to
         right, with Actual active by default on load."""
         proc, port = self._start(["--port", "0"])
         _, _, body = self._req(port, f"/roadmaps/{ROADMAP}")
@@ -2863,7 +2863,7 @@ class TestWebInterface:
         return int(count.group(1))
 
     def test_detail_sprint_classification_and_links(self):
-        """AC11/AC12: sprints are classified by status into the right tab and
+        """AC12/AC13: sprints are classified by status into the right tab and
         each links to its own page."""
         proc, port = self._start(["--port", "0"])
         _, _, body = self._req(port, f"/roadmaps/{ROADMAP}")
@@ -3038,7 +3038,7 @@ class TestWebInterface:
             )
 
     # ====================================================================
-    # AC13: sprint page — all details, task order, 404/405 rules
+    # AC14/AC21: sprint page — all details, task order, 404/405 rules
     # ====================================================================
 
     def test_sprint_page_shows_all_details_and_task_order(self):
@@ -4370,7 +4370,7 @@ class TestWebInterface:
         )
 
     # ====================================================================
-    # AC14: read-only task detail modal — wiring, content, no edit control
+    # AC15: read-only task detail modal — wiring, content, no edit control
     # ====================================================================
 
     def test_task_modal_wiring_and_content(self):
@@ -4712,7 +4712,7 @@ class TestWebInterface:
         )
 
     # ====================================================================
-    # AC9: name validation / path-traversal guard
+    # AC10: name validation / path-traversal guard
     # ====================================================================
 
     def test_invalid_and_missing_names_return_404(self):
@@ -4730,7 +4730,7 @@ class TestWebInterface:
         assert self._req(port, "/roadmaps/no_such_roadmap/graph/data")[0] == 404
 
     # ====================================================================
-    # AC10/AC11/AC12: graph page, data endpoint, read-only proof
+    # AC17/AC18/AC19: graph page, data endpoint, read-only proof
     # ====================================================================
 
     def test_graph_page_loads_local_d3_and_layout_dropdown(self):
@@ -4756,7 +4756,7 @@ class TestWebInterface:
         assert "cdn" not in body.lower() and "unpkg" not in body.lower()
 
         # The layout dropdown offers the complete set of nine Networks-section
-        # layouts with Mobile patent suits preselected as the default (AC10).
+        # layouts with Mobile patent suits preselected as the default (AC17).
         assert 'id="layout-select"' in body, "graph page must provide the layout dropdown"
         layouts = (
             ("force", "Force-directed graph"),
@@ -5200,18 +5200,24 @@ class TestWebInterface:
         assert json.loads(body)["nodes"], (
             "the roadmap's own graph must survive the probe writes")
 
-    def test_query_bar_publishes_exactly_two_failure_kinds(self):
-        """AC123: the endpoint's `kind` takes exactly two values,
-        invalid_limit and execution, and the criterion requires the CLOSED set to
-        be asserted rather than only the two members -- "a third value is exactly
-        what an endpoint that started refusing statements again would publish".
+    def test_query_bar_publishes_exactly_three_failure_kinds(self):
+        """AC123: the endpoint's `kind` takes exactly three values,
+        invalid_limit, plan_prefix and execution, and the criterion requires the
+        CLOSED set to be asserted rather than only the three members -- "a
+        further value is exactly what an endpoint that started refusing
+        statements on the ground of what they do would publish".
 
         The corpus is made of the statements the withdrawn guard rail refused: a
         write, schema DDL, a schema-introspection command at both spacings, and
         an undirected relationship read. Each is either served or fails in the
-        engine; none of them may produce a kind of its own.
+        engine; none of them may produce a kind of its own. Beside them stand
+        the probes that produce each kind -- an invalid limit, an EXPLAIN and a
+        PROFILE prefix, and an unexecutable statement -- and every member of the
+        set must be observed, so what is asserted is the set the endpoint
+        produces and not merely a bound on it.
         """
         proc, port = self._start(["--port", "0"])
+        published = {"invalid_limit", "plan_prefix", "execution"}
         withdrawn = ("not_read_only", "schema_introspection",
                      "relationship_read_direction", "invalid_keyword_spacing")
 
@@ -5226,8 +5232,11 @@ class TestWebInterface:
             ("MATCH (a)<-[e]-(b) RETURN type(e)", None),
             ("MATCH (n) RETURN", None),
             ("SHOW DATABASES", None),
+            ("EXPLAIN MATCH (n) RETURN n", None),
+            ("PROFILE MATCH (n) RETURN n", None),
             (None, "7"),
         ]
+        observed = set()
         for query, limit in probes:
             status, _, body = self._req(
                 port, self._graph_data(port, q=query, limit=limit))
@@ -5237,14 +5246,191 @@ class TestWebInterface:
             if status == 200:
                 continue
             err = json.loads(body)
-            assert err.get("kind") in ("invalid_limit", "execution"), (
+            assert err.get("kind") in published, (
                 f"AC123: {query!r} limit={limit!r} carries kind "
                 f"{err.get('kind')!r}, outside the closed set "
-                f"{{invalid_limit, execution}}: {err!r}")
+                f"{sorted(published)}: {err!r}")
+            observed.add(err["kind"])
             for gone in withdrawn:
                 assert gone not in body, (
                     f"AC123: the body for {query!r} names the withdrawn kind "
                     f"{gone!r}: {body!r}")
+        assert observed == published, (
+            f"AC123: the probes must produce every member of the closed set "
+            f"{sorted(published)}; they produced {sorted(observed)}")
+
+    # ====================================================================
+    # AC166, AC167, AC170: the query bar refuses EXPLAIN and PROFILE
+    # ====================================================================
+
+    # The spellings AC166 names, each paired with the member `rmp graph client`
+    # publishes for its prefix: `plan` for EXPLAIN, `profile` for PROFILE. A
+    # PROFILE of a write is left out because the engine refuses it wherever it
+    # runs, so the client could not confirm its premise; its EXPLAIN executes
+    # nothing and can.
+    _PLAN_PREFIX_CASES = (
+        ("EXPLAIN MATCH (n) RETURN n", "plan"),
+        ("PROFILE MATCH (n) RETURN n", "profile"),
+        ("explain match (n) return n", "plan"),
+        ("profile match (n) return n", "profile"),
+        ("ExPlAiN MATCH (n) RETURN n", "plan"),
+        ("pRoFiLe MATCH (n) RETURN n", "profile"),
+        ("EXPLAIN\nMATCH (s:Spec)\nWHERE s.key = 'passwordless-auth'\nRETURN s", "plan"),
+        ("PROFILE\nMATCH (s:Spec)-[:IMPLEMENTED_BY]->(c:Code)\nRETURN s, c", "profile"),
+        (" \t\n\t EXPLAIN MATCH (n) RETURN n", "plan"),
+        ("\n  \t PROFILE MATCH (n) RETURN n", "profile"),
+        ("// plan the full read first\nEXPLAIN MATCH (n) RETURN n", "plan"),
+        ("// measure the full read\nPROFILE MATCH (n) RETURN n", "profile"),
+        ("/* plan the full read first */ EXPLAIN MATCH (n) RETURN n", "plan"),
+        ("/* measure the full read */\nPROFILE MATCH (n) RETURN n", "profile"),
+        ("EXPLAIN MATCH (n) RETURN n LIMIT 5", "plan"),
+        ("PROFILE MATCH (n) RETURN n LIMIT 5", "profile"),
+        ("EXPLAIN MATCH (n) DETACH DELETE n", "plan"),
+        ("EXPLAIN CALL db.labels() YIELD label RETURN label", "plan"),
+        ("PROFILE CALL db.labels() YIELD label RETURN label", "profile"),
+    )
+
+    # A second roadmap of the fixture's HOME that no graph server ever serves.
+    _UNSERVED_ROADMAP = "incident-response"
+
+    @staticmethod
+    def _published_plan_prefix_line():
+        """The refusal line SPEC/WEB.md section "Query-Bar Error Handling",
+        rule 12, publishes, read out of the specification itself so the
+        assertions cannot agree with a wrong copy of it. The specification
+        publishes it once, on a line of its own, as one code span."""
+        text = (REPO_ROOT / "SPEC" / "WEB.md").read_text(encoding="utf-8")
+        found = re.findall(r"(?m)^[ \t]*`(query not run: [^`]+)`[ \t]*$", text)
+        assert len(found) == 1, (
+            f"SPEC/WEB.md publishes {len(found)} plan-prefix refusal lines, want "
+            f"exactly one")
+        return found[0]
+
+    def _unserved_roadmap(self):
+        """Create the roadmap no graph server serves, and confirm nothing is
+        listening for it: no socket file exists at its derived path."""
+        self._run(["roadmap", "create", self._UNSERVED_ROADMAP])
+        socket_path = Path(self.test.default_socket_path(self._UNSERVED_ROADMAP))
+        assert not socket_path.exists(), (
+            f"the unserved roadmap has a socket at {socket_path}; the cases "
+            f"that need no graph server would not be about one")
+        return self._UNSERVED_ROADMAP
+
+    def test_query_bar_refuses_plan_prefixes(self):
+        """AC166: against a served roadmap, a statement carrying an EXPLAIN or
+        PROFILE prefix, in every spelling the engine's parser recognises, is
+        answered HTTP 400 with a body of exactly two fields -- kind plan_prefix
+        and the line rule 12 publishes -- with no limit and with an allowed one,
+        and the two answers are the same bytes.
+
+        The cases come from the engine's grammar, so the premise is confirmed
+        first, through the engine: `rmp graph client` sends each statement to
+        the same server and publishes the plan member its prefix selects. A
+        grammar change at a future pin then fails the premise instead of
+        silently changing what is asserted.
+        """
+        line = self._published_plan_prefix_line()
+        for query, member in self._PLAN_PREFIX_CASES:
+            result = self._graph(query)
+            assert member in result, (
+                f"AC166 premise: the pinned engine does not report {query!r} as "
+                f"carrying its prefix -- `rmp graph client` published "
+                f"{sorted(result)!r} and no {member!r} member")
+
+        proc, port = self._start(["--port", "0"])
+        for query, _member in self._PLAN_PREFIX_CASES:
+            answers = []
+            for limit in (None, "250"):
+                status, headers, body = self._req(
+                    port, self._graph_data(port, q=query, limit=limit))
+                assert status == 400, (
+                    f"AC166: {query!r} limit={limit!r} must be refused with 400; "
+                    f"got {status} {body!r}")
+                assert headers.get("content-type", "").startswith("application/json"), (
+                    f"AC166: the refusal must be JSON; got {headers!r}")
+                err = json.loads(body)
+                assert set(err) == {"error", "kind"}, (
+                    f"AC166: the body must carry exactly error and kind; got {err!r}")
+                assert err["kind"] == "plan_prefix", (
+                    f"AC166: {query!r} must carry kind plan_prefix; got {err!r}")
+                assert err["error"] == line, (
+                    f"AC166: the error must be exactly the published line "
+                    f"{line!r}; got {err['error']!r}")
+                answers.append(body)
+            assert answers[0] == answers[1], (
+                f"AC166: {query!r} must be refused identically with and without "
+                f"an allowed limit; got {answers!r}")
+
+    def test_query_bar_plan_prefix_is_refused_with_no_graph_server(self):
+        """AC167, the no-server half: with no `rmp graph serve` running for the
+        roadmap, EXPLAIN MATCH (n) RETURN n and PROFILE MATCH (n) RETURN n are
+        each answered 400 with kind plan_prefix, while MATCH (n) RETURN n is
+        answered 503.
+
+        The pair is the assertion. The 503 proves nothing is serving the
+        roadmap, so the 400 beside it can only come from a refusal decided
+        before any graph server is resolved.
+        """
+        line = self._published_plan_prefix_line()
+        roadmap = self._unserved_roadmap()
+        proc, port = self._start(["--port", "0"])
+
+        for query in ("EXPLAIN MATCH (n) RETURN n", "PROFILE MATCH (n) RETURN n"):
+            status, _, body = self._req(
+                port, self._graph_data(port, q=query, roadmap=roadmap))
+            assert status == 400, (
+                f"AC167: {query!r} against a roadmap no server serves must be "
+                f"refused with 400, not answered as an unavailable graph; got "
+                f"{status} {body!r}")
+            assert json.loads(body) == {"error": line, "kind": "plan_prefix"}, (
+                f"AC167: {query!r} must carry kind plan_prefix and the published "
+                f"line; got {body!r}")
+
+        status, _, body = self._req(
+            port, self._graph_data(port, q="MATCH (n) RETURN n", roadmap=roadmap))
+        assert status == 503, (
+            f"AC167: the unprefixed statement against the same roadmap must be "
+            f"answered 503, or the 400s above cannot show that the refusal "
+            f"precedes the server lookup; got {status} {body!r}")
+
+    def test_query_bar_invalid_limit_outranks_plan_prefix(self):
+        """AC170: a request carrying an invalid limit -- 7, or the non-numeric
+        all -- and a prefixed statement is answered 400 with kind invalid_limit
+        and an error naming the rejected value, never plan_prefix, for EXPLAIN
+        and PROFILE alike, both against a served roadmap and against one no
+        graph server serves.
+
+        The control is the same prefixed statement under an allowed limit,
+        answered plan_prefix: without it a limit that outranked the prefix could
+        not be told from a prefix that was never recognised.
+        """
+        line = self._published_plan_prefix_line()
+        unserved = self._unserved_roadmap()
+        proc, port = self._start(["--port", "0"])
+
+        for roadmap in (ROADMAP, unserved):
+            for query in ("EXPLAIN MATCH (n) RETURN n", "PROFILE MATCH (n) RETURN n"):
+                status, _, body = self._req(
+                    port, self._graph_data(port, q=query, limit="250", roadmap=roadmap))
+                assert status == 400 and json.loads(body) == {
+                        "error": line, "kind": "plan_prefix"}, (
+                    f"AC170 control: {query!r} under an allowed limit on {roadmap!r} "
+                    f"must be refused as plan_prefix; got {status} {body!r}")
+
+                for bad in ("7", "all"):
+                    status, _, body = self._req(
+                        port, self._graph_data(port, q=query, limit=bad, roadmap=roadmap))
+                    assert status == 400, (
+                        f"AC170: {query!r} limit={bad!r} on {roadmap!r} must be "
+                        f"answered 400; got {status} {body!r}")
+                    err = json.loads(body)
+                    assert err.get("kind") == "invalid_limit", (
+                        f"AC170: the limit is resolved before the prefix is "
+                        f"examined, so {query!r} limit={bad!r} on {roadmap!r} must "
+                        f"carry kind invalid_limit; got {err!r}")
+                    assert bad in err.get("error", ""), (
+                        f"AC170: the error must name the rejected limit {bad!r}; "
+                        f"got {err!r}")
 
     def test_schema_listing_is_read_from_the_cli_not_the_endpoint(self):
         """AC157 and AC156: a schema-introspection command is EXECUTED and
@@ -5312,6 +5498,10 @@ class TestWebInterface:
         The engine diagnostic is asserted and not only the status: a refusal
         decided before execution could not carry one, so it is what
         distinguishes "the engine rejected it" from "the endpoint rejected it".
+
+        Any kind but execution fails the criterion, a member of the closed set
+        included: none of these commands carries an EXPLAIN or PROFILE prefix,
+        so plan_prefix is as much a failure here as invalid_limit.
         """
         proc, port = self._start(["--port", "0"])
 
@@ -5673,13 +5863,16 @@ class TestWebInterface:
         )
 
     def test_query_bar_execution_failure_distinct_from_rejection(self):
-        """AC50: a read-only query that fails in the engine (invalid syntax)
-        surfaces kind=execution, distinct from a read-only rejection."""
+        """AC50: a statement that fails in the engine (invalid syntax) is
+        answered with kind=execution, distinct from the endpoint's two refusals,
+        invalid_limit and plan_prefix (SPEC/WEB.md § Query-Bar Error Handling,
+        rules 2 and 4)."""
         proc, port = self._start(["--port", "0"])
         status, _, body = self._req(port, self._graph_data(port, q="MATCH (n) RETURN"))
         assert status == 400
         assert json.loads(body).get("kind") == "execution", (
-            "an execution failure must be distinct from a read-only rejection"
+            "an execution failure must carry kind execution, distinct from the "
+            "endpoint's two refusals, invalid_limit and plan_prefix"
         )
 
     def test_graph_query_is_bounded_by_the_query_time_budget(self):
@@ -5930,7 +6123,7 @@ class TestWebInterface:
         assert status == 405, "the graph data endpoint must remain GET/HEAD only"
 
     # ====================================================================
-    # AC14: read-only - non-read methods rejected
+    # AC21: read-only - non-read methods rejected
     # ====================================================================
 
     def test_write_methods_return_405(self):
@@ -5950,7 +6143,7 @@ class TestWebInterface:
                 assert status == 405, f"{method} {path} must be 405, got {status}"
 
     # ====================================================================
-    # AC15/AC18/AC19: static assets, self-contained, missing -> 404
+    # AC22/AC25/AC26: static assets, self-contained, missing -> 404
     # ====================================================================
 
     def test_static_assets_served_locally(self):
@@ -5979,7 +6172,7 @@ class TestWebInterface:
         assert self._req(port, "/static/does-not-exist.js")[0] == 404
 
     # ====================================================================
-    # AC16/AC20/AC22: no remote origins, viewport meta, mobile-first CSS
+    # AC23/AC29/AC27: no remote origins, viewport meta, mobile-first CSS
     # ====================================================================
 
     def test_pages_reference_no_remote_origin(self):
@@ -6014,11 +6207,11 @@ class TestWebInterface:
         )
 
     # ====================================================================
-    # AC23/AC24: Tabler admin-shell layout in the dark theme
+    # AC30/AC31: Tabler admin-shell layout in the dark theme
     # ====================================================================
 
     def test_every_page_is_dark_theme(self):
-        """AC23: every page renders in Tabler's dark theme.
+        """AC30: every page renders in Tabler's dark theme.
 
         Tabler 1.x sets the colour mode with data-bs-theme="dark" on the
         <html> element (Bootstrap 5.3 colour mode). The interface must render
@@ -6033,13 +6226,13 @@ class TestWebInterface:
             ), f"page {path} is not in the dark theme (no data-bs-theme=\"dark\" on <html>)"
 
     def test_every_page_renders_admin_shell(self):
-        """AC23/AC24: every page renders the Tabler admin-shell.
+        """AC30/AC31: every page renders the Tabler admin-shell.
 
         The shell is a vertical navigation sidebar (listing Roadmaps and,
         within a roadmap, that roadmap's views), a page wrapper, a page
         header, and the top navbar. The navbar-toggler + collapse markup is
         what Tabler's JS turns into an off-canvas hamburger menu on small
-        viewports (AC24), so its presence is the structural proof of the
+        viewports (AC31), so its presence is the structural proof of the
         responsive sidebar.
 
         What the top navbar CARRIES is roadmap-dependent — the selected
@@ -6214,7 +6407,7 @@ class TestWebInterface:
             assert f"/roadmaps/{ROADMAP}#sprints" not in body, "stale #sprints anchor must be removed"
 
     def test_vendored_tabler_and_fonts_served_locally(self):
-        """AC16/AC22: the vendored Tabler framework and fonts are served from /static/.
+        """AC23/AC29: the vendored Tabler framework and fonts are served from /static/.
 
         The Tabler CSS framework is served with the correct text/css content
         type (so a nosniff client does not block it), the Tabler JS is served,
@@ -6241,7 +6434,7 @@ class TestWebInterface:
         )
 
     def test_pages_load_vendored_tabler_assets(self):
-        """AC16/AC22: every page loads the vendored Tabler CSS/JS from /static/."""
+        """AC23/AC29: every page loads the vendored Tabler CSS/JS from /static/."""
         proc, port = self._start(["--port", "0"])
         for path in ("/", f"/roadmaps/{ROADMAP}", f"/roadmaps/{ROADMAP}/tasks", f"/roadmaps/{ROADMAP}/audit", f"/roadmaps/{ROADMAP}/graph"):
             _, _, body = self._req(port, path)
@@ -6256,7 +6449,7 @@ class TestWebInterface:
             )
 
     def test_stylesheet_links_are_local(self):
-        """AC22: no page loads a CSS framework/reset from a remote origin.
+        """AC29: no page loads a CSS framework/reset from a remote origin.
 
         Every <link rel=stylesheet href> must be a same-origin /static/ URL.
         """
@@ -6339,7 +6532,7 @@ class TestWebInterface:
             )
 
     # ====================================================================
-    # AC17: graceful shutdown on SIGINT / SIGTERM
+    # AC24: graceful shutdown on SIGINT / SIGTERM
     # (SPEC/WEB.md section "Server Lifecycle", step 7; acceptance criterion 24)
     # ====================================================================
     #

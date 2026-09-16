@@ -240,6 +240,73 @@ Constructs the download URL for a specific version and architecture.
 
 **Returns:** GitHub release asset URL
 
+#### `get_current_version()`
+Reads the version of the `rmp` already installed, by the rule in Installed Version
+Detection.
+
+**Returns:**
+- The installed version, with no leading `v` (e.g., "1.17.1")
+- An empty string - No `rmp` on `PATH`, or no version could be read from it
+
+### Installed Version Detection
+
+Before it downloads anything, the script compares the version of the `rmp` already
+installed with the latest release, and it does not reinstall the release that is
+already installed.
+
+**Reading the installed version.** `get_current_version()` reads the `rmp` that
+`command -v rmp` finds on `PATH`:
+
+1. When `PATH` holds no `rmp`, there is no installed version.
+2. Otherwise the script runs `rmp --version`, keeps its standard output, and discards
+   its standard error. It splits the first line of that output on whitespace. The
+   installed version is the third word, provided the first two words are `Groadmap`
+   and `version` and the third consists of three runs of decimal digits separated by
+   dots, the `MAJOR.MINOR.PATCH` form that `VERSION.md § Semantic Versioning` defines.
+   Output of any other shape, and no output at all, yields no installed version.
+
+The rule reads no more of the line than `COMMANDS.md § Version` promises a script: the
+first three words are stable, and the version is the third. It therefore reads every
+shape that section publishes, whatever the build identification after the version
+says, and it reads the line a binary built before build identification writes, which
+ends after the version:
+
+| Line written by `rmp --version` | Installed version read |
+|---------------------------------|------------------------|
+| `Groadmap version 1.17.1` | `1.17.1` |
+| `Groadmap version 1.17.1 (commit 994c1c7)` | `1.17.1` |
+| `Groadmap version 1.17.1 (commit 8647dae, modified)` | `1.17.1` |
+| `Groadmap version 1.17.1 (commit unknown)` | `1.17.1` |
+
+Requiring the first two words keeps the output of an unrelated program named `rmp`
+from being read as a Groadmap version.
+
+**Comparing it with the latest release.** The latest release is the tag that
+`get_latest_version()` fetches, which carries a leading `v` (e.g., `v1.17.1`). The
+installed version is compared with that tag after one leading `v` is removed from the
+tag, so an installed `1.17.1` equals the latest release `v1.17.1`. The comparison is
+string equality and nothing else: the script does not order versions, so an installed
+version newer than the latest release differs from it exactly as an older one does.
+
+**What the script does.**
+
+| Installed version | Messages, in order | Outcome |
+|-------------------|--------------------|---------|
+| None could be read | `Latest version: {latest}` (`info`) | Continues to a fresh installation |
+| Equal to the latest release | `Current version: {current}` (`info`), then `Already up to date ({latest})` (`success`) | Exits 0, having downloaded and installed nothing |
+| Different from the latest release | `Current version: {current}` (`info`), then `Updating from {current} to {latest}` (`warn`) | Continues, and installs the latest release |
+
+`{current}` is the installed version as read, with no leading `v`, and `{latest}` is
+the tag as fetched, with its leading `v`. Each quoted message is the `{message}`
+argument of the helper named beside it (see Diagnostic Output), so with `1.17.1`
+installed and `v1.17.1` the latest release, standard error carries
+`INFO: Current version: 1.17.1` and then `SUCCESS: Already up to date (v1.17.1)`.
+
+Once an installation completes and `rmp` is on `PATH`, the script reads the version
+again by the same rule and reports it as `Installation complete! Version: {installed}`
+(`success`), where `{installed}` is the version read, and is empty when none could be
+read.
+
 ### Download URL Format
 
 ```
@@ -544,13 +611,94 @@ Releases are created automatically when a tag matching `v*` pattern is pushed:
      - `-s -w`: Strip debug info and DWARF tables
      - `-trimpath`: Remove build paths for reproducible builds
      - `-extldflags '-static'`: Static linking on Linux
-     - `-X main.version=${version}`: Embed version
+     - `-buildvcs=true`: Fail the build when it finds the repository but cannot
+       record the version-control stamp (see How a Released Binary Carries Its
+       Commit)
+   - No `-X` linker flag. The version is the constant in `cmd/rmp/main.go`, and
+     the commit is recorded by the Go toolchain itself; neither needs a flag (see
+     How a Released Binary Carries Its Commit)
 
 3. **Create GitHub Release**
    - Runs after all builds complete
    - Creates release using `gh release create`
    - Generates release notes automatically
    - Attaches all built binaries and checksums
+
+### How a Released Binary Carries Its Commit
+
+A released binary identifies the commit it was built from through the
+version-control stamp the Go toolchain records at build time, which
+`VERSION.md § Build Identification` specifies. No linker flag carries the commit or
+the version: the release workflow passes none for either, and this specification
+documents none.
+
+The stamp reaches the released binary because of how the build step runs, and each
+of these conditions MUST hold:
+
+1. **The build runs inside the checkout of the tagged commit.** The build job checks
+   the repository out at the pushed tag and runs `go build` in that checkout, so the
+   main package, its module, and the current directory are in one git repository,
+   which is the condition under which the toolchain stamps a binary.
+2. **The build passes `-buildvcs=true`.** This is the enforced guard. With the flag,
+   a build that finds the repository but cannot record its stamp fails instead of
+   producing an unstamped binary. Measured: with the `git` command absent from the
+   build host, a build with the flag exits non-zero, reports that it could not obtain
+   the version-control status, and writes no binary, where the same build without
+   the flag succeeds and writes an unstamped one.
+3. **Nothing modifies the working tree before the build.** No step that precedes
+   `go build` writes into the checkout, so git reports the tree unmodified and the
+   stamp records `vcs.modified=false`. The binary the build itself writes under
+   `dist/` does not affect the stamp of that same build.
+4. **The build job checks the stamp before the artefact leaves the job.** After the
+   step that runs `go build` and before the step that uploads the job's artefact, a
+   step runs `go version -m` on the binary the build wrote, and fails the job when
+   that binary carries no `vcs.revision` build setting. It requires the revision and
+   nothing else: it does not examine `vcs.modified`.
+
+**The stamp check.** The step decides on the output of `go version -m`, not on its
+exit status: the command exits 0 for a readable binary that carries no stamp
+(measured), so only the absence of the `build` line that names `vcs.revision`
+identifies one. When the revision is absent, the step writes this one line to
+standard error and exits with status 1:
+
+```
+{binary} carries no vcs.revision build setting, so it cannot name the commit it was built from; the job stops before the artefact is uploaded.
+```
+
+`{binary}` is the path the step passed to `go version -m`, such as `dist/rmp` or
+`dist/rmp.exe`. When `go version -m` cannot read the binary at all, it exits non-zero
+and the step fails with that command's own diagnostic, which is not specified here.
+
+**What the flag does not guard, and what does.** `-buildvcs=true` insists on a stamp
+only where the toolchain finds a repository. A build that finds none, such as one run
+in a checkout that has no `.git` directory, has no version-control information for
+the flag to insist on, and it succeeds unstamped with the flag present (measured).
+Condition 1 is therefore not enforced by the flag. The stamp check of condition 4
+closes that gap: whatever the reason a binary carries no revision, the job fails
+before the binary is uploaded, so neither workflow can publish a binary that carries
+no revision. Both guards are kept. The flag stops a build it can diagnose at the
+earliest point and names the cause; the check holds for every cause, a checkout
+without `.git` included.
+
+The production flags do not remove the stamp. `-trimpath` rewrites the file paths
+recorded in the binary, and `-s -w` omit the symbol table and the DWARF debugging
+information; the build information is neither. Measured on the published
+`rmp-v1.17.1-linux-amd64.tar.gz`, built with `-trimpath` and `-s -w`: `go version -m`
+on the extracted binary reports
+`vcs.revision=994c1c7d7d77656b8508d291879db89c971d3a42`, which is the commit the tag
+`v1.17.1` names, and `vcs.modified=false`. Adding `-buildvcs=true` to those flags
+changes nothing for a build that can be stamped: measured in a clone of depth 1,
+cross-compiled for `windows/amd64` with all of them, the binary carries
+`vcs.revision` and `vcs.modified=false`.
+
+The stamp check reads every binary the workflows build, on the Linux runner that
+built it. Measured on a `linux/amd64` host running the Go version
+`BUILD.md § Go Toolchain` requires: each of the nine Primary Platforms, cross-compiled
+with the release flags and `-buildvcs=true`, yields a binary whose `vcs.revision`
+`go version -m` reports, whatever the binary's format: ELF for Linux, FreeBSD, and
+OpenBSD, Mach-O for macOS, and PE for Windows. The same command on a binary built
+with `-buildvcs=false` exits 0 and prints no `vcs.revision` line, which is why the
+check reads the output rather than the exit status.
 
 ### Build Matrix
 
@@ -595,6 +743,7 @@ Each release includes:
 - [ ] Every validation gate ran and passed in the release workflow, and no gate is reported as skipped, waived, or not installed (see `BUILD.md § Validation Gates`)
 - [ ] All binaries built successfully
 - [ ] SHA256 checksums generated
+- [ ] The released binary names its commit: on a binary extracted from a published archive, `rmp --version` prints `(commit <commit>)` with the first seven characters of the commit the tag names, and no `modified` marker (see How a Released Binary Carries Its Commit)
 - [ ] Release notes prepared
 - [ ] Version updated in `cmd/rmp/main.go`
 - [ ] Documentation updated (`SPEC/VERSION.md`, `SPEC/README.md`)
@@ -621,6 +770,10 @@ Each release includes:
 - [ ] A host without `mktemp` is refused with exit 1 before any release asset is requested, and the message names the tool
 - [ ] No fixed staging path is written. Files already sitting at `/tmp/rmp` and `/tmp/rmp.exe` before the script runs are byte-identical after a successful installation
 - [ ] No exit path leaves the accepted staging directory behind: not a refusal, not a failed extraction, and not a signal. The `EXIT` trap removes it, and the `HUP`, `INT`, and `TERM` traps route a signal through that trap, exiting 129, 130, and 143
+- [ ] With `rmp` 1.17.1 on `PATH` and `v1.17.1` the latest release, the script writes `Current version: 1.17.1` and then `Already up to date (v1.17.1)`, exits 0, and requests no release asset (see Installed Version Detection)
+- [ ] With an older `rmp` on `PATH`, such as 1.16.0, and `v1.17.1` the latest release, the script writes `Current version: 1.16.0` and then `Updating from 1.16.0 to v1.17.1`, and installs the latest release
+- [ ] With no `rmp` on `PATH`, the script writes `Latest version: {latest}` and continues to a fresh installation
+- [ ] A test holds `get_current_version()` to its rule for the three line shapes `COMMANDS.md § Version` publishes and for the shape an older binary writes: `Groadmap version 1.17.1 (commit 994c1c7)`, `Groadmap version 1.17.1 (commit 8647dae, modified)`, `Groadmap version 1.17.1 (commit unknown)` and `Groadmap version 1.17.1` each yield `1.17.1`. No `rmp` on `PATH`, empty output, and a first line whose first two words are not `Groadmap version` each yield nothing
 
 ### Raspberry Pi Support
 - [ ] A Raspberry Pi running a 64-bit operating system installs through the `arm64` path: `uname -m` reports `aarch64`, `detect_arch()` returns `arm64`, and the script downloads `rmp-{version}-linux-arm64.tar.gz`
@@ -639,3 +792,7 @@ Each release includes:
 - [ ] The Go version in `go.mod` and the floor named in `BUILD.md § Go Toolchain` are the same version
 - [ ] Any vulnerability reported but not called is recorded in the release notes rather than silently dropped
 - [ ] `govulncheck` is run as a release step only. It is not added to `make check`, to `.github/workflows/ci.yml`, or to `.github/workflows/release.yml`, and the gate set stays at the six gates of `BUILD.md § Validation Gates`
+- [ ] This specification documents no linker flag that the release workflow does not pass, and the release workflow passes no `-X` linker flag
+- [ ] Both workflows build `rmp` with `-buildvcs=true`: reading `.github/workflows/release.yml` and `.github/workflows/ci.yml` shows the flag on the `go build` command of each build job (see How a Released Binary Carries Its Commit)
+- [ ] Every build job of `.github/workflows/release.yml` and `.github/workflows/ci.yml` runs the stamp check: reading each workflow shows a step that runs `go version -m` on the built binary and fails the job when its output carries no `vcs.revision` build setting, placed after the step that runs `go build` and before the step that uploads the artefact. The step decides on the command's output, not its exit status, and it examines no setting other than `vcs.revision` (see How a Released Binary Carries Its Commit)
+- [ ] A binary extracted from a published release archive prints `Groadmap version <version> (commit <commit>)`, where `<commit>` is the first seven characters of the commit the release tag names; `go version -m` on the same binary reports that commit as `vcs.revision` and reports `vcs.modified=false` (see How a Released Binary Carries Its Commit)

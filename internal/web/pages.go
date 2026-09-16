@@ -340,17 +340,20 @@ func handleGraphPage(w http.ResponseWriter, r *http.Request) {
 // sends: q (the Cypher statement to run; the default full-graph query when
 // absent) and limit (the node limit; default 100 when absent). It stays GET/HEAD
 // only; there is no POST and no request body (SPEC/WEB.md § Graph Data Endpoint;
-// § Graph Query Bar). The statement is not examined and may write, in the graph
-// server that runs it.
+// § Graph Query Bar). What the statement does is not examined, and it may write,
+// in the graph server that runs it. The one statement not sent is one the
+// engine's parser reports as carrying an EXPLAIN or PROFILE prefix, which is
+// refused before any graph server is resolved (SPEC/WEB.md § Query-Bar Error
+// Handling, rule 12).
 //
 // # Three answers to a failure, and the two 5xx are deliberately not one
 //
 //   - **A classified query-bar failure is HTTP 400 at WARN.** It is a
 //     client-visible, non-fatal condition returned as a structured JSON error so
-//     the page can show the distinct in-place message. It is the user's statement
+//     the page can show the distinct in-place message. It is the caller's request
 //     that failed and not this server, so the record carries the same kind the
 //     response body does. The failure classes are enumerated in one place only —
-//     SPEC/WEB.md § Query-Bar Error Handling, rule 5 — which this comment names
+//     SPEC/WEB.md § Query-Bar Error Handling, rule 4 — which this comment names
 //     rather than repeats.
 //   - **No graph server reachable is HTTP 503 at WARN.** The graph is a
 //     dependency the operator starts with `rmp graph serve`, and starting it

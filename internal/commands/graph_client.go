@@ -49,12 +49,17 @@ import (
 // thinking it has already discharged. The prose paragraph below states that a
 // serialisation conflict is retried rather than reported — true, and not the
 // obligation: the exit-codes block is where a caller goes to learn why a command
-// exited 1, so the exit-code-1 line itself names the exhausted conflict, states
-// that nothing was written, and gives the remedy in the published error line's
-// own terms. It is the one cause in that line whose remedy is to run the SAME
-// statement again rather than to rewrite it or correct it.
+// exited 1, so the exit-code-1 entry itself names the exhausted conflict. The
+// block is rendered from the registry (SPEC/HELP.md § Agreement with the
+// contract), so the entry's conditions are the contract's; the remedies below
+// are the help's own text, the one addition the SPEC admits after an entry's
+// conditions, and they state that nothing was written and give the remedy in
+// the published error line's own terms. The conflict is the one cause of exit 1
+// whose remedy is to run the SAME statement again rather than to rewrite it or
+// correct it, and the statement time budget (item 4) the one whose remedy is to
+// rewrite a working statement.
 //
-// The clause does NOT write the retry budget's figure. graphWriteConflict
+// The remedies do NOT write the retry budget's figure. graphWriteConflict
 // renders it from backoff.Total() so that one quantity keeps one expression, and
 // a figure spelled out here would be a second expression of it that disagreed
 // with the policy silently the moment the policy moved.
@@ -142,31 +147,16 @@ Output (stdout JSON):
   counter is left out, and a statement that changed nothing carries no counters
   key at all, so a MERGE that created is distinguishable from one that matched.
 
-Exit codes:
-  0   The statement was sent to a server, ran, and its result was written
-  1   No server is listening for the roadmap -- start one with rmp graph serve
-      -r <roadmap>; or a server could not be reached through the socket; or the
-      connection was lost, or went unanswered, after the statement was sent; or
-      the statement failed to parse or execute in the engine, including a schema
-      statement the engine refused: a duplicate create, a drop of an object that
-      does not exist, an unsupported definition, or a constraint the data does
-      not satisfy; or it exhausted the 5s statement time budget, where the
-      Cypher was valid and the store healthy: nothing was written, so the
-      remedy is to narrow the statement -- add a label, an indexed property
-      filter, or a LIMIT -- or split it into smaller statements; or every
-      attempt of the retry policy lost a serialisation conflict against the
-      server, the Cypher again valid and the store again healthy: nothing was
-      written, so the remedy is to run the same statement again -- it needs no
-      change -- and to spread concurrent writes across distinct nodes; or a
-      value the server returned could not be mapped onto the published result
-      shape
-  2   No query supplied, --socket given with an empty value, or a positional
-      argument was given
-  3   No roadmap selected
-  4   Roadmap not found
-  6   Query longer than the maximum length of 1048576 bytes
-
-Examples:
+`+exitCodesBlock("graph", "client", exitCodeRemedy{Code: 1, Remedies: []string{
+		"A statement cancelled for exhausting the 5-second statement time budget was " +
+			"valid Cypher against a healthy store and wrote nothing: narrow the " +
+			"statement -- add a label, an indexed property filter, or a LIMIT -- or " +
+			"split it into smaller statements.",
+		"A statement for which every attempt of the retry policy lost a serialisation " +
+			"conflict against the server was valid Cypher against a healthy store and " +
+			"wrote nothing: run the same statement again -- it needs no change -- and " +
+			"spread concurrent writes across distinct nodes.",
+	}})+`Examples:
   rmp graph client -r myproject --query "MATCH (n:Spec) RETURN n.key"
   rmp graph client -r myproject --query "CREATE (n:Spec {key:'auth'})"
   echo "MATCH (n) RETURN count(n)" | rmp graph client -r myproject

@@ -288,15 +288,36 @@ get_latest_version() {
     echo "$version"
 }
 
-# Get current installed version
+# Print the version of the rmp already on PATH, with no leading v, or nothing
+# when PATH holds no rmp or no version can be read from it.
+#
+# The first line of `rmp --version` is split on whitespace, and the installed
+# version is its third word, provided the first two words are `Groadmap` and
+# `version` and the third is MAJOR.MINOR.PATCH. That is all SPEC/COMMANDS.md
+# § Version promises a script, so whatever build identification follows the
+# version is ignored, and the older line that ends after the version is read
+# too. Requiring the first two words keeps an unrelated program named rmp from
+# being read as a Groadmap version. Per SPEC/DEPLOY.md § Installed Version
+# Detection.
 get_current_version() {
-    if command -v "$BINARY_NAME" >/dev/null 2>&1; then
-        local version
-        version=$($BINARY_NAME --version 2>/dev/null | grep -o 'v[0-9]\+\.[0-9]\+\.[0-9]\+' || echo "")
-        echo "$version"
-    else
-        echo ""
+    if ! command -v "$BINARY_NAME" >/dev/null 2>&1; then
+        return 0
     fi
+
+    local output first_line product keyword number rest
+    output=$("$BINARY_NAME" --version 2>/dev/null) || :
+    first_line="${output%%$'\n'*}"
+    read -r product keyword number rest <<< "$first_line" || :
+
+    if [ "$product" != "Groadmap" ] || [ "$keyword" != "version" ]; then
+        return 0
+    fi
+
+    local semver='^[[:digit:]]+\.[[:digit:]]+\.[[:digit:]]+$'
+    if [[ "$number" =~ $semver ]]; then
+        echo "$number"
+    fi
+    return 0
 }
 
 # Ask user for installation scope
@@ -746,7 +767,11 @@ main() {
 
     if [ -n "$current_version" ]; then
         info "Current version: ${current_version}"
-        if [ "$current_version" = "$latest_version" ]; then
+        # The tag carries a leading v and the installed version does not, so one
+        # leading v is removed from the tag, and the two are compared by string
+        # equality alone: versions are never ordered (SPEC/DEPLOY.md § Installed
+        # Version Detection).
+        if [ "$current_version" = "${latest_version#v}" ]; then
             success "Already up to date (${latest_version})"
             exit 0
         fi

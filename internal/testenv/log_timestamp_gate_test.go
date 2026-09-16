@@ -11,7 +11,8 @@ import (
 	"testing"
 )
 
-// This file is the structural regression gate for rmp task #386.
+// This file is the structural regression gate for rmp task #386, and for the
+// second shape of the same defect that rmp task #403 closes.
 //
 // The defect: `rmp graph serve` wrote its stderr diagnostics with timestamps in
 // the machine's LOCAL zone — `time=2026-09-03T11:51:05.221+01:00` — where
@@ -44,6 +45,18 @@ import (
 //   - It proves the hook is INSTALLED, not that the hook is right. What the hook
 //     does is internal/utils' own TestSlogTimestampUTC and the two measured
 //     tests beside the loggers, which check the instant as well as the shape.
+//   - It closes the second way a record escapes the hook (rmp task #403): a
+//     production call to one of log/slog's package-level output functions —
+//     Debug, Info, Warn and Error, their Context variants, Log and LogAttrs —
+//     written through whatever name the file imports log/slog under. Each writes
+//     through the process's DEFAULT logger, whose handler, unless
+//     slog.SetDefault has replaced it, hands the record to the standard log
+//     package; the record then reaches stderr under log's local-time prefix and
+//     never passes through a hook any handler of this module installs.
+//     TestNoProductionCodeLogsThroughTheDefaultLogger fails on every such call.
+//     It does not see the default logger reached any other way: a method called
+//     on slog.Default(), a function value such as `f := slog.Error`, a dot import
+//     of log/slog, or the standard log package itself.
 
 // slogHandlerConstructors are the standard-library handler constructors that
 // stamp a record's time. Both are listed so that rewriting a TextHandler as a
@@ -53,6 +66,22 @@ var slogHandlerConstructors = map[string]bool{
 	"NewJSONHandler": true,
 }
 
+// slogDefaultLoggerFuncs are the log/slog package-level functions that write a
+// record through the process's default logger rather than through a logger this
+// module built (rmp task #403).
+var slogDefaultLoggerFuncs = map[string]bool{
+	"Debug":        true,
+	"DebugContext": true,
+	"Info":         true,
+	"InfoContext":  true,
+	"Warn":         true,
+	"WarnContext":  true,
+	"Error":        true,
+	"ErrorContext": true,
+	"Log":          true,
+	"LogAttrs":     true,
+}
+
 // canonicalTimestampHook is the one hook every handler must install, written as
 // it appears at a call site: the selector on the local name of the internal/utils
 // import.
@@ -60,6 +89,10 @@ const canonicalTimestampHook = "SlogTimestampUTC"
 
 // utilsImportPath is the package that owns the timestamp format and the hook.
 const utilsImportPath = `"github.com/FlavioCFOliveira/Groadmap/internal/utils"`
+
+// slogImportPath is the import path of log/slog, written as an import spec
+// carries it.
+const slogImportPath = `"log/slog"`
 
 // TestEveryProductionLoggerStampsInCanonicalUTC asserts that every log/slog
 // handler built in production code installs the shared UTC timestamp hook.
@@ -101,7 +134,7 @@ func TestEveryProductionLoggerStampsInCanonicalUTC(t *testing.T) {
 			return nil
 		}
 
-		slogName, imported := importedAs(file, `"log/slog"`)
+		slogName, imported := importedAs(file, slogImportPath)
 		if !imported {
 			return nil
 		}
@@ -156,6 +189,67 @@ func TestEveryProductionLoggerStampsInCanonicalUTC(t *testing.T) {
 			"ISO 8601 with UTC requires of every Groadmap timestamp. Install "+
 			"`ReplaceAttr: utils.%s` — the one hook internal/web and internal/graphserve share — "+
 			"rather than writing a second expression of the same format (rmp task #386)",
+			offender, canonicalTimestampHook)
+	}
+}
+
+// TestNoProductionCodeLogsThroughTheDefaultLogger asserts that no production file
+// calls a log/slog package-level output function (rmp task #403).
+//
+// Such a call compiles, runs and writes a record, which is exactly why it needs a
+// gate rather than a review: the record goes through neither logger this module
+// builds, so neither measured timestamp test can see it, and the handler check
+// above cannot either, because no handler is constructed at the call site. The
+// shape it reintroduces is a diagnostic such as
+// `slog.Error("graph checkpoint failed", ...)` written in the machine's local
+// zone beside records that are stamped in canonical UTC.
+func TestNoProductionCodeLogsThroughTheDefaultLogger(t *testing.T) {
+	root := repoRoot(t)
+
+	var offenders []string
+	importers := 0
+
+	fset := token.NewFileSet()
+	walkProductionFiles(t, root, func(rel, _ string, file *ast.File) {
+		slogName, imported := importedAs(file, slogImportPath)
+		if !imported {
+			return
+		}
+		importers++
+
+		ast.Inspect(file, func(node ast.Node) bool {
+			call, ok := node.(*ast.CallExpr)
+			if !ok {
+				return true
+			}
+			selector, ok := call.Fun.(*ast.SelectorExpr)
+			if !ok || !slogDefaultLoggerFuncs[selector.Sel.Name] {
+				return true
+			}
+			qualifier, ok := selector.X.(*ast.Ident)
+			if !ok || qualifier.Name != slogName {
+				return true
+			}
+			offenders = append(offenders, rel+":"+itoa(fset.Position(call.Pos()).Line)+": "+
+				slogName+"."+selector.Sel.Name)
+			return true
+		})
+	}, fset)
+
+	// The gate must still have something to guard, for the reason the handler
+	// gate above gives: with no file importing log/slog it would pass vacuously.
+	if importers == 0 {
+		t.Errorf("no production file imports log/slog. If logging moved, move this gate with it; " +
+			"a gate with nothing to check is a gate that has stopped working")
+	}
+
+	sort.Strings(offenders)
+	for _, offender := range offenders {
+		t.Errorf("%s\nthis call writes through log/slog's DEFAULT logger, which hands the record to the "+
+			"standard log package: it is stamped in the machine's LOCAL zone and never passes through "+
+			"`ReplaceAttr: utils.%s`, so it is not in the format SPEC/DATA_FORMATS.md § Dates - ISO 8601 "+
+			"with UTC requires. Log through the logger of the surface that emits the record — the one "+
+			"internal/web or internal/graphserve builds with the shared hook (rmp tasks #386 and #403)",
 			offender, canonicalTimestampHook)
 	}
 }

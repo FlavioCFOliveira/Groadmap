@@ -14,8 +14,122 @@ const version = "X.Y.Z"
 
 This version is:
 - Compiled into the binary at build time
-- Displayed via `rmp version`, `rmp --version`, and `rmp -v`, which are three equivalent forms of the same request (`COMMANDS.md § Version`)
-- Used for release artefact naming (e.g., `rmp-v1.2.1-linux-amd64.tar.gz`)
+- Displayed via `rmp version`, `rmp --version`, and `rmp -v`, which are three equivalent forms of the same request (`COMMANDS.md § Version`), together with the commit the binary was built from (see Build Identification)
+
+The constant is the only source of the version number the binary reports. No linker
+flag sets it, and none can: the Go linker's `-X` flag assigns a package-level string
+variable, never a constant.
+
+The constant does not name release artefacts. A release archive such as
+`rmp-v1.2.1-linux-amd64.tar.gz` takes its version from the `v*` tag whose push
+triggered the release workflow, not from this constant (see
+`BUILD.md § Artifact Structure`). The Release Process below is what keeps the two
+equal: it bumps the constant (step 2) before it creates the tag (step 5).
+
+### Build Identification
+
+Two builds of one version are not necessarily the same program. The version constant
+changes only when a release bumps it, so a binary built from an unreleased commit, or
+from a working tree with uncommitted changes, carries the same version as the released
+binary. `rmp --version` therefore also reports the commit the binary was built from,
+and whether that working tree had uncommitted changes, so that such a binary can be
+told apart from the release.
+
+#### Mechanism
+
+The binary reads the build information that the Go toolchain embeds in the binaries
+it builds, through `runtime/debug.ReadBuildInfo`. When `go build` or `go install`
+compiles the main package inside a git working tree, with `-buildvcs` at its default
+value `auto` or at `true`, the toolchain records the state of that tree among the build
+settings. The two values differ only when the toolchain finds a repository but cannot
+record its stamp: `auto` then builds an unstamped binary, and `true`, which both
+workflows pass, fails the build instead.
+Nothing else carries it: no linker flag, no build tag, no generated source file, and
+no workflow step, and none may be added to carry the commit or to alter the recorded
+state.
+
+The binary reads exactly two build settings:
+
+| Build setting | What the toolchain records | What the binary does with it |
+|---------------|----------------------------|------------------------------|
+| `vcs.revision` | The full hash of the checked-out commit | Displays its first seven characters |
+| `vcs.modified` | `true` when git reports uncommitted changes in the working tree, otherwise `false` | Displays the `modified` marker when the value is exactly `true` |
+
+It reads no other setting. In particular it does not read `vcs.time`, and it does not
+read the main module's version, which the toolchain derives from the repository's tags:
+the version number comes from the constant alone, and a second source could disagree
+with it.
+
+**What counts as modified.** The toolchain takes `vcs.modified` from git's own status
+of the working tree at build time. A modified or staged tracked file sets it to `true`,
+and so does an untracked file that git does not ignore. A file git ignores, such as
+anything under `bin/`, does not. Measured on the Go version `BUILD.md § Go Toolchain`
+requires: a clean commit with one new untracked file builds with `vcs.modified=true`,
+and the same commit with one new ignored file builds with `vcs.modified=false`.
+
+#### Short commit
+
+The displayed commit is the first seven characters of `vcs.revision`, always exactly
+seven. It is a fixed-length prefix, not git's abbreviation: `git rev-parse --short`
+prints as many characters as the repository needs for a unique prefix, which can be
+more than seven, so a test that compares the displayed commit with git MUST compare it
+with the first seven characters of `git rev-parse HEAD`. Seven is also the length
+`BUILD.md § Artifact Structure` uses for the commit in the name of a dev pre-release
+archive.
+
+#### The three displays
+
+| Build information | Line on stdout |
+|-------------------|----------------|
+| `vcs.revision` is at least seven characters long, and `vcs.modified` is not `true` | `Groadmap version <version> (commit <commit>)` |
+| `vcs.revision` is at least seven characters long, and `vcs.modified` is exactly `true` | `Groadmap version <version> (commit <commit>, modified)` |
+| Anything else | `Groadmap version <version> (commit unknown)` |
+
+`<version>` is the application version constant, with no leading `v`, and `<commit>`
+is the short commit. "Anything else" is closed: it is a binary for which
+`runtime/debug.ReadBuildInfo` reports no build information, one whose build information
+carries no `vcs.revision`, and one whose `vcs.revision` is shorter than seven
+characters. The third display does not consult `vcs.modified`. The exact output of each
+form of the command, with examples, is in `COMMANDS.md § Version`.
+
+#### When there is no version-control data
+
+The toolchain omits every `vcs.*` setting, and the binary shows the third display, in
+each of the following cases. Each was measured on the Go version
+`BUILD.md § Go Toolchain` requires:
+
+- `go run ./cmd/rmp` does not stamp the binary it builds.
+- A test binary built by `go test` carries no `vcs.*` settings either, so a unit test
+  cannot observe the stamp of a real build through its own build information.
+- A build from a copy of the source without its `.git` directory, such as an extracted
+  source archive, carries none.
+- A build with `-buildvcs=false` carries none.
+- A build on a host where the `git` command cannot be run carries none under the
+  default `-buildvcs=auto`: the build succeeds and the binary is simply unstamped.
+  Under `-buildvcs=true`, which both workflows pass, the same build fails and writes
+  no binary. The flag does not change the copy-without-`.git` case above: that build
+  still succeeds unstamped with the flag present, and it is the workflows' stamp check
+  that stops such a binary before it is uploaded (see
+  `DEPLOY.md § How a Released Binary Carries Its Commit`).
+
+`go install github.com/FlavioCFOliveira/Groadmap/cmd/rmp@<version>` belongs to the
+same case, for the reason `go help build` gives under `-buildvcs`: the toolchain stamps
+a binary only when the main package, the main module containing it, and the current
+directory are all in the same repository, and a module built from the module cache is
+in none.
+
+The third display is therefore not a defect of the binary that shows it. It is a defect
+of a release: a released binary MUST show the first display, naming the commit its tag
+names (see `DEPLOY.md § How a Released Binary Carries Its Commit`).
+
+#### Acceptance criteria
+
+1. Two binaries of one version, built with `go build` from two different commits, each print a line naming the first seven characters of `git rev-parse HEAD` at the commit it was built from, so the two lines differ.
+2. A binary built with `go build` from a working tree holding an uncommitted change to a tracked file prints `, modified` after its commit; a binary built from the same commit with a clean working tree does not.
+3. `go run ./cmd/rmp --version` prints `Groadmap version <version> (commit unknown)`.
+4. The rule that turns build information into one of the three displays is verified by a test that supplies the build information itself — at least a clean revision, a modified revision, no build information, no `vcs.revision`, and a `vcs.revision` shorter than seven characters — rather than by the build information of the test binary, which carries none.
+5. No test compares a version line with a literal version number: a test that needs the number takes it from the application version constant.
+6. `cmd/rmp/main.go` declares `version` as a constant, and neither workflow passes a `-X` linker flag.
 
 ### Database Schema Version
 

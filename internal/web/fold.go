@@ -154,24 +154,36 @@ func foldSearchTerm(raw string) string {
 // second copy of NFC in one binary is what internal/graphlock and internal/backoff
 // were each extracted to prevent.
 //
-// WHAT REMAINS HERE ARE DELEGATIONS, AND THAT IS THE POINT. Each name below is
-// still the server's subject for the rule it names, so the guard that holds the
-// SHIPPED client tables equal to the server's rule
-// (TestTaskSearchScript_ShippedRuleIsTheServerRule) still compares the tables
-// against these functions, and still fails if the Unicode data underneath them
-// moves. What changed is where the body lives, not which function the board
-// search calls or which function the guard measures. Adding a rule of this
-// package's own here — rather than delegating — would put a second answer to one
-// question back into the binary.
+// WHAT REMAINS HERE ARE DELEGATIONS, AND THAT IS THE POINT. searchNFC is the
+// server's normalisation, and the board search calls nothing else for it. The
+// other names are the derivation of the data this package ships to the browser —
+// the decompositions, the combining classes and the primary composites, together
+// with the composition step read over them — and the guard that holds the SHIPPED
+// client tables equal to that data (TestTaskSearchScript_ShippedRuleIsTheServerRule)
+// compares the tables against these functions, and fails if the Unicode data
+// underneath them moves. What moved to internal/unicodenorm is the body, not
+// which function the board search calls or which function the guard measures.
+// Adding a rule of this package's own here — rather than delegating — would put a
+// second answer to one question back into the binary.
+//
+// The server's normalisation does not read the shipped data: it is
+// golang.org/x/text/unicode/norm's own. What holds the browser's copy of the rule
+// equal to it is the pair of checks in internal/unicodenorm, which run the Go
+// statement of the browser's algorithm over the same data this guard measures
+// (SPEC/WEB.md § Roadmap Tasks Page, What keeps the shipped rule equal to the
+// server's).
 
 // searchDecompose returns the FULL canonical decomposition of ONE code point,
-// canonically ordered: Normalization Form D of that code point.
+// canonically ordered: Normalization Form D of that code point, and the data the
+// shipped DECOMP_TABLE carries.
 func searchDecompose(r rune) []rune { return unicodenorm.Decompose(r) }
 
-// searchCombiningClass returns the canonical combining class of ONE code point.
+// searchCombiningClass returns the canonical combining class of ONE code point,
+// the data the shipped CCC_TABLE carries.
 func searchCombiningClass(r rune) uint8 { return unicodenorm.CombiningClass(r) }
 
-// searchCompositions is the primary-composite data, derived once per process.
+// searchCompositions is the primary-composite data, derived once per process: the
+// data the shipped COMPOSE_TABLE carries.
 func searchCompositions() *unicodenorm.Composition { return unicodenorm.Compositions() }
 
 // buildSearchComposition derives the primary composites from the Unicode
@@ -180,16 +192,17 @@ func searchCompositions() *unicodenorm.Composition { return unicodenorm.Composit
 func buildSearchComposition() *unicodenorm.Composition { return unicodenorm.BuildComposition() }
 
 // searchCompose returns the primary composite of two code points, if there is
-// one. It is Groadmap's own composition, deliberately not the module's; the
-// reason is in unicodenorm.Compose.
+// one, as the browser's copy of the rule composes them from the shipped data. The
+// server's normalisation does not call it; see unicodenorm.Compose.
 func searchCompose(lead, trail rune) (rune, bool) { return unicodenorm.Compose(lead, trail) }
 
-// searchNFC normalises text to Unicode's Normalization Form C.
+// searchNFC normalises text to Unicode's Normalization Form C, with
+// golang.org/x/text/unicode/norm.
 //
-// It is the server's subject for the normalisation rule: a task's searchable text
-// and a search term are both normalised through THIS function, so the corpus and
-// the term cannot drift apart (SPEC/WEB.md § Roadmap Tasks Page, One rule, and
-// only one implementation of it).
+// It is the server's normalisation: a task's searchable text and a search term
+// are both normalised through THIS function, so the corpus and the term cannot
+// drift apart (SPEC/WEB.md § Roadmap Tasks Page, One rule, and only one
+// implementation of it).
 func searchNFC(text string) string { return unicodenorm.NFC(text) }
 
 // isSurrogateRune reports whether r is one of the 2048 surrogate code points,

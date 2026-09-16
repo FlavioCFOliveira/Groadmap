@@ -250,9 +250,13 @@ func TestGraphRead_IncomingAndUndirectedResolveCorrectly(t *testing.T) {
 	})
 
 	t.Run("a SET deriving its value from type(e) persists the true type", func(t *testing.T) {
-		// The value is written to the NODE, deliberately: writing it to the
-		// relationship would run into the write-direction hazard of item 4 and
-		// could not measure the read.
+		// The value is written to the NODE, deliberately, so that what the
+		// assertion reads back depends on the read under test and on nothing
+		// else. An assignment to the relationship through this incoming pattern
+		// would persist as well — item 4 now reaches only a removal — but it
+		// would add a second relationship behaviour to the one this subtest
+		// measures, and TestGraphUpdate_RelationshipWriteDirection is where that
+		// one is asserted.
 		if err := runGraphClient([]string{"-r", roadmap, "--query",
 			"MATCH (s:Spec {key:'" + relReadSpecKey + "'})<-[e]-(x:Test) SET x.resolved_type = type(e)"}); err != nil {
 			t.Fatalf("the SET must execute: %v", err)

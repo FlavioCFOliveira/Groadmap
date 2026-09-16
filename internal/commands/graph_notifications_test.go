@@ -1,14 +1,14 @@
 // Behaviour tests for query notifications as stderr diagnostics
 // (SPEC/GRAPH.md § Query Notifications as Diagnostics; Acceptance Criteria
-// 20, 21, 22).
+// 21 and 22).
 //
 // These lock in three properties:
 //   - A disconnected multi-pattern MATCH surfaces the engine's
 //     Cartesian-product notification on stderr while leaving the stdout
-//     success JSON unchanged (AC 20).
+//     success JSON unchanged (AC 21).
 //   - A connected query that produces no notification writes nothing extra
-//     to stderr (AC 21).
-//   - Notifications are surfaced whether the statement reads or writes (AC 22).
+//     to stderr (AC 22).
+//   - Notifications are surfaced whether the statement reads or writes (rules 1 and 4 of that section).
 //
 // Every statement below crosses the protocol: `rmp graph client` is the only
 // subcommand that runs one, so what these tests assert is that a notification
@@ -26,7 +26,7 @@ import (
 )
 
 // cartesianCode is the stable machine-readable code GoGraph attaches to the
-// Cartesian-product advisory (SPEC/GRAPH.md AC 20). cartesianSeverity is the
+// Cartesian-product advisory (SPEC/GRAPH.md AC 21). cartesianSeverity is the
 // severity GoGraph reports for it.
 const (
 	cartesianCode     = "Neo.ClientNotification.Statement.CartesianProductWarning"
@@ -130,7 +130,7 @@ func assertColumnsRows(t *testing.T, raw string) {
 	}
 }
 
-// TestGraphNotifications_DisconnectedMatch covers AC 20: a disconnected
+// TestGraphNotifications_DisconnectedMatch covers AC 21: a disconnected
 // multi-pattern MATCH emits the Cartesian-product notice on stderr (severity,
 // code, description, one line) while stdout stays the normal columns/rows JSON.
 func TestGraphNotifications_DisconnectedMatch(t *testing.T) {
@@ -162,7 +162,7 @@ func TestGraphNotifications_DisconnectedMatch(t *testing.T) {
 	assertColumnsRows(t, stdout)
 }
 
-// TestGraphNotifications_ConnectedQueryQuiet covers AC 21: a connected,
+// TestGraphNotifications_ConnectedQueryQuiet covers AC 22: a connected,
 // notification-free query writes nothing extra to stderr while stdout carries
 // the normal result.
 func TestGraphNotifications_ConnectedQueryQuiet(t *testing.T) {
@@ -183,7 +183,7 @@ func TestGraphNotifications_ConnectedQueryQuiet(t *testing.T) {
 	assertColumnsRows(t, stdout)
 }
 
-// TestGraphNotifications_WritePathWired covers the write-path half of AC 22:
+// TestGraphNotifications_WritePathWired covers the write-path half of § Query Notifications as Diagnostics, rules 1 and 4:
 // a writing statement's result is carried back over the protocol with whatever
 // notifications the engine attached to it, and `rmp graph client` writes them
 // to stderr with the normal {"ok": true} success output unchanged.

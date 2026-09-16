@@ -15,7 +15,7 @@ import (
 const terminalRefusalBudget = time.Second
 
 // TestReadQueryStdinRefusesATerminalWithoutWaiting is the regression gate for
-// the half of SPEC/GRAPH.md acceptance criterion 41 that an exit code cannot
+// the half of SPEC/GRAPH.md acceptance criterion 24 that an exit code cannot
 // express (task #181).
 //
 // The defect: with --query absent and a terminal on standard input, the read

@@ -88,6 +88,10 @@ TEST_MODULES = [
     "test_68_graph_socket_path_length",
     "test_69_graph_field_length",
     "test_70_published_contract_execution",
+    "test_71_install_version_detection",
+    "test_72_unknown_flag_beside_positionals",
+    "test_73_help_exit_codes_contract",
+    "test_74_help_tokens_and_joined_flags",
 ]
 
 # Stress tests (run separately due to time/data volume)

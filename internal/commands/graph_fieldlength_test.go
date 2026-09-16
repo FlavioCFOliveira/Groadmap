@@ -279,33 +279,28 @@ func overLongLabelStatement(n int) string {
 //
 // # What the served path can and cannot report, MEASURED
 //
-// The engine's Bolt server does not carry this refusal's diagnostic across the
-// protocol. Measured against the pinned engine through a running server, a
-// 70000-byte label comes back as
-//
-//	graph engine error: graph query failed: An internal error occurred. See server logs for details (session: <id>).
-//
-// while an ordinary parse failure and an ordinary execution failure both cross
-// with their full text — `cypher: parse: parse error at 1:16, expected one of
-// {...}` and `exec: DropIndex "nope": index: no index by that name: "nope"`. The
-// server classifies this one as an internal error and replaces its message.
+// The engine's Bolt server carries this refusal's diagnostic across the protocol
+// and does not carry its class. Measured against the pinned engine through a
+// running server, a 70000-byte label comes back as the ordinary
+// parse-or-execution line, ending in the engine's own diagnostic — which names
+// the field kind and both figures — exactly as an ordinary parse failure and an
+// ordinary execution failure end in theirs. The server files the refusal under a
+// client-error code it also gives to every other argument the engine refuses, and
+// the sentinel stays on the server's side of the connection.
 //
 // Two things follow, and both are stated rather than worked around. The published
-// field-length line has NO PRODUCER on the served path: the sentinel does not
-// cross a protocol, and neither does the engine's diagnostic that names the field
-// and the two figures. And what a caller sees is the ordinary parse-or-execution
-// line, carrying nothing it can act on beyond "the statement failed". The
-// specification retains the line (SPEC/GRAPH.md § Field Length Limits, rules 2 to
-// 5); nothing produces it while the only route to a graph is a server that
-// replaces the message. This is recorded here, in
-// tests/test_55_error_string_parity.py's exemption for the same line, and nowhere
-// else — matching the engine's replacement text to recover the class is exactly
-// what rule 3 forbids.
+// field-length line has NO PRODUCER on the served path: nothing on this side can
+// tell the refusal from the other argument errors without matching the engine's
+// wording, which rule 3 forbids. And what a caller sees is the ordinary
+// parse-or-execution line, which says what is wrong and not which class of failure
+// it is. The specification retains the line (SPEC/GRAPH.md § Field Length Limits,
+// rules 2 to 5, and rule 13 for the limitation); nothing produces it while the
+// only route to a graph is a server that does not carry the class.
 //
 // # What is therefore asserted, and in which of the two places
 //
 // The bound is measured IN PROCESS, against a store this test opens itself, which
-// is the one place the sentinel and the diagnostic both survive. That half is not
+// is the one place the sentinel survives. That half is not
 // a convenience: it is the live check that the engine still wraps
 // store/txn.ErrFieldTooLong at all, which every fabricated case in this file
 // assumes and none can verify. A version bump that stopped wrapping it, or a layer
@@ -360,7 +355,9 @@ func TestGraphClient_FieldTooLongAgainstTheRealEngine(t *testing.T) {
 	}
 	// The line a caller actually gets. It is the ordinary parse-or-execution one,
 	// for the reason this test's documentation measures; asserting it is what
-	// makes the loss visible rather than merely absent.
+	// makes the missing class visible rather than merely absent. The engine's
+	// diagnostic that follows the prefix is not matched: its wording is the
+	// engine's (SPEC/GRAPH.md § Field Length Limits, rule 3).
 	if !strings.HasPrefix(refused.Error(), "graph engine error: graph query failed: ") {
 		t.Errorf("the refusal does not write the parse/execution line: %q", refused.Error())
 	}
@@ -406,10 +403,10 @@ func TestGraphClient_FieldTooLongAgainstTheRealEngine(t *testing.T) {
 	}
 
 	// Step 6: a genuine syntax error still writes the parse/execution line WITH
-	// the engine's own diagnostic. This is the non-vacuity control for the
-	// measurement above: it establishes that the protocol carries an engine
-	// diagnostic in general, so the field-length refusal's replacement message is
-	// a property of THAT class and not of every failure.
+	// the engine's own diagnostic, and not the field-length line. It is the
+	// direction an implementation that routed every engine failure to the
+	// field-length line would fail, and it establishes that the protocol carries
+	// an engine diagnostic for a failure of the ordinary class too.
 	_, _, syntaxErr := execute("CREATE (n:Broken")
 	if syntaxErr == nil {
 		t.Fatal("a malformed statement was accepted")
@@ -418,10 +415,9 @@ func TestGraphClient_FieldTooLongAgainstTheRealEngine(t *testing.T) {
 		t.Errorf("a syntax error no longer writes the parse/execution line: %q", syntaxErr.Error())
 	}
 	if !strings.Contains(syntaxErr.Error(), "parse") {
-		t.Errorf("the engine's own parse diagnostic no longer crosses the protocol: %q. If EVERY "+
-			"engine failure is now replaced by the server, the measurement this test's "+
-			"documentation records is stale and the field-length line's loss is no longer specific "+
-			"to that class", syntaxErr.Error())
+		t.Errorf("the engine's own parse diagnostic no longer crosses the protocol: %q. The "+
+			"measurement this test's documentation records — that the server forwards the "+
+			"engine's diagnostic for an ordinary failure — is stale", syntaxErr.Error())
 	}
 	if strings.Contains(syntaxErr.Error(), "graph field too long") {
 		t.Errorf("a syntax error was reported as a field-length refusal: %q", syntaxErr.Error())
@@ -433,8 +429,9 @@ func TestGraphClient_FieldTooLongAgainstTheRealEngine(t *testing.T) {
 //
 // It is the only place left where the whole of the condition is observable: the
 // engine wraps store/txn.ErrFieldTooLong around the refusal and formats the field
-// kind and both figures into its message, and neither the sentinel nor the message
-// survives the Bolt server (see the caller's documentation for the measurement).
+// kind and both figures into its message, and the sentinel does not survive the
+// Bolt server, which forwards the message without a class a caller may match (see
+// the caller's documentation for the measurement).
 // Opening the store directly is lawful here for one reason and only that reason:
 // no server is running yet — the caller starts one afterwards, over the store this
 // leaves behind.

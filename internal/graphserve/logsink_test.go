@@ -105,9 +105,12 @@ func (b *blockingWriter) records() [][]byte {
 // # Why the assertions are what they are
 //
 // "Every statement succeeded" would be WRONG and flaky: a serialisation conflict
-// that exhausts the retry ladder is a normal outcome under this exact load
-// (measured at 0.016%, so roughly one run in six would see one) and it is not
-// what this test is about. What the wedge produces is different in kind —
+// that exhausts the retry ladder is a normal outcome under this exact load —
+// rare per statement, yet common enough across runs that asserting its absence
+// would fail some of them — and it is not what this test is about.
+// SPEC/IMPLEMENTATION.md § Retry Logic is canonical for how often it happens,
+// and this comment does not restate that figure. What the wedge produces is
+// different in kind —
 // graphclient.FailureUnanswered, the caller's backstop firing on a server that is
 // alive and simply not answering — so that is the failure asserted against.
 //

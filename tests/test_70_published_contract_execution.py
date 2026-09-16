@@ -59,6 +59,12 @@ test, so an example beginning with the bare word `rmp` cannot silently reach an
 installed copy elsewhere on the machine -- which it did, and which made the
 first draft of this gate pass an example the binary under test refuses.
 
+Every command line runs in a process group of its own, which is killed and
+waited for when the line is done, and the module ends by asserting that no
+group it started still has a member. A line having exited does not mean that
+everything it started has: `rmp graph serve -r <name> & ...` leaves a server
+that belongs to no living shell.
+
 The temporary root is short so the graph socket path derived under it stays
 inside the platform's limit (SPEC/GRAPH.md § Socket Path Length); past that
 limit every graph invocation would be refused for the length of the gate's own
@@ -68,6 +74,7 @@ directory instead of for the reason its example publishes.
 import json
 import os
 import re
+import select
 import shutil
 import signal
 import socket
@@ -392,6 +399,32 @@ def _env_for(home):
     return env
 
 
+# Every command line the gate runs is started in a session of its own, and its
+# process group stays registered here until it is confirmed empty. The module
+# ends by asserting that no registered group still has a member (rmp task 478).
+
+_LIVE_GROUPS = {}
+
+GROUP_EXIT_TIMEOUT = 10.0
+
+
+def _spawn(line, home, env, stdout, stderr):
+    """Start one command line in a session of its own and register its group.
+
+    start_new_session=True makes the shell the leader of a new session and of
+    a new process group, so the group id is proc.pid by construction, and every
+    process the line starts is reachable through that group for as long as it
+    lives -- including after the shell itself has exited and been reaped.
+    """
+    proc = subprocess.Popen(
+        ["bash", "-c", line], stdout=stdout, stderr=stderr,
+        stdin=subprocess.DEVNULL, text=True, env=env, cwd=home,
+        start_new_session=True,
+    )
+    _LIVE_GROUPS[proc.pid] = (proc, line)
+    return proc
+
+
 def run_line(line, home, timeout=40.0):
     """Run one published invocation as a shell command line.
 
@@ -400,8 +433,9 @@ def run_line(line, home, timeout=40.0):
     semantics the SPEC asks of a published sequence: each element must exit 0
     for the next to run, and the line's own status is non-zero if any did not.
 
-    The process gets its own group, and the group is killed afterwards, so an
-    invocation that backgrounds a server leaves nothing running.
+    The process gets its own group, and the group is killed and waited for
+    afterwards, so an invocation that backgrounds a server leaves nothing
+    running.
     """
     env = _env_for(home)
     # The two streams go to FILES, not pipes. A published invocation may
@@ -414,11 +448,7 @@ def run_line(line, home, timeout=40.0):
     err_path = os.path.join(home, ".gate-stderr")
     with open(out_path, "w", encoding="utf-8") as out_fh, \
             open(err_path, "w", encoding="utf-8") as err_fh:
-        proc = subprocess.Popen(
-            ["bash", "-c", line], stdout=out_fh, stderr=err_fh,
-            stdin=subprocess.DEVNULL, text=True, env=env, cwd=home,
-            start_new_session=True,
-        )
+        proc = _spawn(line, home, env, stdout=out_fh, stderr=err_fh)
         try:
             code = proc.wait(timeout=timeout)
         except subprocess.TimeoutExpired:
@@ -432,11 +462,119 @@ def run_line(line, home, timeout=40.0):
     return code, out, err
 
 
-def _kill_group(proc):
+def _group_exists(pgid):
+    """Whether process group `pgid` still has a member, a zombie not yet reaped
+    included. Signal 0 performs the check without delivering anything."""
     try:
-        os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+        os.killpg(pgid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        # A member exists, and this user may not signal it.
+        return True
+    return True
+
+
+def _kill_group(proc, timeout=GROUP_EXIT_TIMEOUT):
+    """SIGKILL every process in the group `proc` leads, reap `proc`, wait --
+    bounded -- for the group to empty, and deregister it once it has.
+
+    The group id is proc.pid, never os.getpgid(proc.pid). The two are equal by
+    construction (see _spawn), and getpgid fails once the leader has been
+    reaped, which is exactly the state after a published line that backgrounds
+    a server has exited. Reading it there raised ProcessLookupError, the handler
+    swallowed it, and the backgrounded server outlived the gate, its fixture
+    directory and its binary (rmp task 478).
+
+    A group that does not empty within `timeout` stays registered, so the
+    module's closing check reports it rather than this helper hiding it.
+    """
+    deadline = time.monotonic() + timeout
+    try:
+        os.killpg(proc.pid, signal.SIGKILL)
     except (ProcessLookupError, PermissionError):
+        # Nothing left to signal, or nothing this user may signal: the wait
+        # below tells the two apart.
         pass
+    try:
+        proc.wait(timeout=max(0.0, deadline - time.monotonic()))
+    except subprocess.TimeoutExpired:
+        pass
+    while _group_exists(proc.pid):
+        if time.monotonic() >= deadline:
+            return
+        time.sleep(0.01)
+    if _LIVE_GROUPS.get(proc.pid, (None, None))[0] is proc:
+        del _LIVE_GROUPS[proc.pid]
+
+
+def _process_table():
+    """Every process on the machine as (pid, pgid, state, args), read from ps."""
+    listing = subprocess.run(
+        ["ps", "-A", "-o", "pid=,pgid=,stat=,args="],
+        capture_output=True, text=True, timeout=30,
+    )
+    assert listing.returncode == 0, (
+        f"the gate could not read the process table: exit={listing.returncode} "
+        f"stderr={listing.stderr.strip()!r}"
+    )
+    rows = []
+    for raw in listing.stdout.splitlines():
+        parts = raw.split(None, 3)
+        if len(parts) < 3 or not (parts[0].isdigit() and parts[1].isdigit()):
+            continue
+        rows.append((int(parts[0]), int(parts[1]), parts[2],
+                     parts[3] if len(parts) == 4 else ""))
+    return rows
+
+
+def surviving_groups(pgids=None):
+    """The registered groups -- or the given ones -- that still have a member,
+    each mapped to (the line that started it, the members ps lists for it)."""
+    candidates = list(_LIVE_GROUPS) if pgids is None else list(pgids)
+    alive = [pgid for pgid in candidates if _group_exists(pgid)]
+    if not alive:
+        return {}
+    members = {pgid: [] for pgid in alive}
+    for pid, pgid, state, args in _process_table():
+        if pgid in members:
+            members[pgid].append(f"pid {pid} [{state}] {args}")
+    return {
+        pgid: (_LIVE_GROUPS[pgid][1] if pgid in _LIVE_GROUPS else "(unregistered)",
+               members[pgid])
+        for pgid in alive
+    }
+
+
+def stop_every_started_group():
+    """Kill and reap every registered group not yet confirmed empty."""
+    for proc, _ in list(_LIVE_GROUPS.values()):
+        _kill_group(proc)
+
+
+def assert_no_started_process_outlives_the_module():
+    """No process the gate started is still running when the module ends.
+
+    The survivors are listed first, then stopped, then reported, so a failing
+    check still leaves nothing running behind it.
+    """
+    survivors = surviving_groups()
+    stop_every_started_group()
+    if not survivors:
+        return
+    unstopped = surviving_groups(survivors)
+    report = []
+    for pgid, (line, members) in sorted(survivors.items()):
+        report.append(f"  group {pgid}, started by `{line[:240]}`")
+        report.extend(f"    {member}"
+                      for member in (members or ["(exited while being listed)"]))
+    raise AssertionError(
+        f"{len(survivors)} process group(s) the gate started still had a member "
+        f"when the module ended; a test leaves no process it started running "
+        f"(rmp task 478). They were killed now"
+        + (f", and {len(unstopped)} did not exit" if unstopped else "")
+        + ":\n" + "\n".join(report)
+    )
 
 
 def start_server(line, home, key, timeout=SERVER_START_TIMEOUT):
@@ -445,31 +583,56 @@ def start_server(line, home, key, timeout=SERVER_START_TIMEOUT):
     The oracle is the JSON object the process writes to stdout at startup --
     {"socket": ...} for the graph server, {"url": ...} for the web server --
     which is what the subcommand's own stdout_on_success declares.
+
+    `timeout` bounds the WHOLE wait, a partial line included. Stdout is read
+    with select() and os.read() on the raw descriptor, never with a blocking
+    readline(): that waits for a newline a hung process may never write, which
+    stretched the timeout to the process's own lifetime (rmp task 482).
+    Complete lines are accumulated and parsed as they arrive; `buffered` also
+    carries the unterminated tail, so a failed start reports everything it read.
+
+    A process that does not announce itself -- or that is still being read when
+    an exception arrives -- is stopped here, before returning, so a caller's
+    assertion on the startup line cannot leave it running.
     """
     env = _env_for(home)
-    proc = subprocess.Popen(
-        ["bash", "-c", line], stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-        stdin=subprocess.DEVNULL, text=True, env=env, cwd=home,
-        start_new_session=True,
-    )
-    deadline = time.time() + timeout
-    buffered = ""
+    proc = _spawn(line, home, env, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    fd = proc.stdout.fileno()
+    deadline = time.monotonic() + timeout
+    complete = ""  # every newline-terminated line read so far, decoded
+    pending = b""  # the bytes read after the last newline
     started = None
-    while time.time() < deadline:
-        if proc.poll() is not None:
-            break
-        line_read = proc.stdout.readline()
-        if not line_read:
-            time.sleep(0.02)
-            continue
-        buffered += line_read
-        try:
-            obj = json.loads(buffered)
-        except json.JSONDecodeError:
-            continue
-        if isinstance(obj, dict) and key in obj:
-            started = obj
-            break
+    try:
+        while started is None:
+            if proc.poll() is not None:
+                break
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            # A short slice, so an exit is noticed while nothing is written.
+            readable, _, _ = select.select([fd], [], [], min(remaining, 0.05))
+            if not readable:
+                continue
+            chunk = os.read(fd, 65536)
+            if not chunk:
+                # End of file with the process still alive: nothing more can
+                # arrive, and the deadline still bounds the wait for its exit.
+                time.sleep(0.02)
+                continue
+            pending += chunk
+            while started is None and b"\n" in pending:
+                raw, pending = pending.split(b"\n", 1)
+                complete += raw.decode("utf-8", errors="replace") + "\n"
+                try:
+                    obj = json.loads(complete)
+                except json.JSONDecodeError:
+                    continue
+                if isinstance(obj, dict) and key in obj:
+                    started = obj
+    finally:
+        buffered = complete + pending.decode("utf-8", errors="replace")
+        if started is None:
+            stop_server(proc)
     return started, buffered, proc
 
 
@@ -857,7 +1020,7 @@ class TestPublishedExamplesAreExecuted:
         ran = 0
         for workflow in self.contract["common_workflows"]:
             home = Workspace.fresh()
-            server = None
+            servers = []
             try:
                 plan = WORKFLOW_PLANS.get(workflow["name"])
                 assert plan is not None, (
@@ -876,7 +1039,7 @@ class TestPublishedExamplesAreExecuted:
                             f"(`{line}`) starts a server that never announced "
                             f"itself; stdout was {buffered[:300]!r}"
                         )
-                        server = proc
+                        servers.append(proc)
                         # Started and asserted to have started, which is what
                         # this surface's oracle is; it counts as executed.
                         self.executed.append(step["command"])
@@ -892,7 +1055,7 @@ class TestPublishedExamplesAreExecuted:
                 self._assert_workflow_outcome(workflow["name"], plan, home)
                 ran += 1
             finally:
-                if server is not None:
+                for server in servers:
                     stop_server(server)
                 shutil.rmtree(home, ignore_errors=True)
         assert ran >= 8, f"only {ran} workflows ran; the traversal is broken"
@@ -981,6 +1144,107 @@ class TestPublishedExamplesAreExecuted:
         )
 
     # -- the gate's own guarantees ----------------------------------------
+
+    def test_a_partial_startup_line_fails_the_start_within_its_timeout(self):
+        """rmp task 482: start_server's timeout bounds the whole wait.
+
+        The process writes a partial startup line -- `{`, no newline -- and
+        stays alive well past the timeout. A blocking readline() waits for the
+        newline and returns only when the process exits, `lifetime` seconds
+        later. The start must instead fail when the timeout elapses, report the
+        partial output it read, and leave nothing running.
+        """
+        timeout = 1.0
+        lifetime = 6
+        home = Workspace.fresh()
+        try:
+            began = time.monotonic()
+            started, buffered, proc = start_server(
+                f"printf '{{'; sleep {lifetime}", home, "socket", timeout=timeout)
+            elapsed = time.monotonic() - began
+            assert started is None, (
+                f"a process that wrote only a partial line was taken as started: "
+                f"{started!r}")
+            assert timeout <= elapsed < timeout + 2.0, (
+                f"start_server(timeout={timeout}) returned after {elapsed:.2f}s "
+                f"against a process that stays alive {lifetime}s; the timeout does "
+                f"not bound the wait when the startup line is partial "
+                f"(rmp task 482)")
+            assert buffered == "{", (
+                f"the failed start did not report what it read: the process "
+                f"wrote '{{' and buffered is {buffered!r}")
+            assert proc.returncode is not None, (
+                "the failed start returned without reaping the process it started")
+            leftover = surviving_groups({proc.pid})
+            assert not leftover and proc.pid not in _LIVE_GROUPS, (
+                f"the failed start left its process group running or registered: "
+                f"survivors={leftover!r}, registered={proc.pid in _LIVE_GROUPS}")
+        finally:
+            shutil.rmtree(home, ignore_errors=True)
+
+    def test_a_backgrounded_server_is_seen_and_stopped(self):
+        """rmp task 478: nothing the gate starts outlives the module, and the
+        check that asserts it can fail.
+
+        A published line may background a server and exit, leaving the server
+        in no living shell. The same shape is run twice. Started with _spawn
+        and not stopped, its server must be seen by surviving_groups() -- the
+        module's closing check -- which proves that check is not vacuous. Run
+        through run_line, its server must be gone when run_line returns: that
+        is the defect this pins, where run_line read the group id from the
+        reaped shell, failed, and left the server running.
+
+        Each run names its own socket in the server's argv, so the server is
+        found in the process table without trusting the registry the closing
+        check reads.
+        """
+        def backgrounding_line(sock):
+            return (f"rmp graph serve -r {FIXTURE_ROADMAP} --socket {sock} & "
+                    f"until rmp graph client -r {FIXTURE_ROADMAP} --socket {sock} "
+                    f"--query 'RETURN 1' > /dev/null 2>&1; do sleep 0.2; done")
+
+        def servers_on(sock):
+            return [args for _, _, state, args in _process_table()
+                    if args.split()[:3] == ["rmp", "graph", "serve"]
+                    and sock in args.split() and not state.startswith("Z")]
+
+        left_home = Workspace.fresh()
+        left_sock = os.path.join(left_home, "left.sock")
+        try:
+            proc = _spawn(backgrounding_line(left_sock), left_home,
+                          _env_for(left_home), stdout=subprocess.DEVNULL,
+                          stderr=subprocess.DEVNULL)
+            try:
+                assert proc.wait(timeout=SERVER_START_TIMEOUT) == 0, (
+                    "the backgrounding line did not reach its server")
+                assert servers_on(left_sock), (
+                    "the line exited without leaving its server running, so "
+                    "nothing below is tested")
+                seen = surviving_groups({proc.pid})
+                assert proc.pid in seen and any(
+                    left_sock in member for member in seen[proc.pid][1]), (
+                    "the closing check did not see a server left running in a "
+                    "group the gate started; a check that cannot see a survivor "
+                    f"passes a gate that leaks. It saw {seen!r}")
+            finally:
+                _kill_group(proc)
+            assert not servers_on(left_sock), (
+                "_kill_group returned and the server the line left running is "
+                f"still running: {servers_on(left_sock)!r}")
+        finally:
+            shutil.rmtree(left_home, ignore_errors=True)
+
+        run_home = Workspace.fresh()
+        run_sock = os.path.join(run_home, "run.sock")
+        try:
+            code, _, err = run_line(backgrounding_line(run_sock), run_home)
+            assert code == 0, (
+                f"the backgrounding line exited {code}; stderr={err.strip()[:300]!r}")
+            assert not servers_on(run_sock), (
+                "run_line returned and the server its line backgrounded is still "
+                f"running (rmp task 478): {servers_on(run_sock)!r}")
+        finally:
+            shutil.rmtree(run_home, ignore_errors=True)
 
     def test_the_exemption_list_carries_no_stale_entry(self):
         published = set()
@@ -1289,8 +1553,11 @@ VALID_POSITIONALS = {
 }
 
 # The flags a subcommand needs before its positional arguments are meaningful.
+# `task stat 1 COMPLETED` needs `--commit-close`: task 1 is in TESTING, and
+# COMPLETED is refused without the flag.
 EXTRA_FLAGS = {
     "task create": ["-t", "T", "-fr", "f", "-tr", "t", "-ac", "a"],
+    "task stat": ["--commit-close", CLOSE_HASH],
     "sprint create": ["-t", "T", "-d", "Deliver the fixture state."],
     "task comment-add": ["--type", "NOTE", "--body", "b"],
     "sprint comment-add": ["--type", "FINDING", "--body", "b"],
@@ -1306,6 +1573,47 @@ NO_ROADMAP = {"roadmap list", "roadmap create", "roadmap remove", "web", "ai-hel
 # Subcommands whose invocation blocks; the probe sweep leaves them to the
 # drivers, which start and stop them deliberately.
 BLOCKING_SUBCOMMANDS = {"graph serve", "web"}
+
+
+def base_invocation(label, argv):
+    """The invocation every probe of a subcommand departs from: the selector,
+    the valid positional arguments, then the flags the subcommand needs."""
+    selector = [] if label in NO_ROADMAP else ["-r", FIXTURE_ROADMAP]
+    return argv + selector + VALID_POSITIONALS[label] + EXTRA_FLAGS.get(label, [])
+
+
+# rmp task 485. A probe differs from its subcommand's base invocation by one
+# fault, so it reaches that fault's path only when the base invocation succeeds.
+# On these ten it did not. Five wrote their flags ahead of the positional
+# arguments, where the first flag stood in the first positional slot and every
+# probe was refused as a malformed id. Five failed on the fixture's state: no
+# sprint is OPEN for `task next`, `task stat 1 COMPLETED` lacked the
+# `--commit-close` EXTRA_FLAGS now gives it, task 4 has no dependency on task 5
+# for `task remove-dep`, and sprint 1 is PENDING for `sprint close` and `sprint
+# reopen`. Each maps to the preparation that puts a fixture copy in a state in
+# which its base invocation exits 0. The sweep asserts that it does before the
+# probes run, runs every probe of the subcommand from that same state, and
+# asserts that the unknown-flag probe is refused as the unknown flag it is.
+PROBE_STATES = {
+    "task comment-add": [],
+    "task comment-edit": [],
+    "sprint comment-add": [],
+    "sprint comment-edit": [],
+    "sprint update": [],
+    "task next": [["sprint", "start", "-r", FIXTURE_ROADMAP, "5"]],
+    "task stat": [],
+    "task remove-dep": [["task", "add-dep", "-r", FIXTURE_ROADMAP, "4", "5"]],
+    "sprint close": [["sprint", "start", "-r", FIXTURE_ROADMAP, "1"]],
+    "sprint reopen": [
+        ["sprint", "start", "-r", FIXTURE_ROADMAP, "1"],
+        ["sprint", "close", "-r", FIXTURE_ROADMAP, "1"],
+    ],
+}
+
+# The probe that writes an unrecognised flag after the base invocation, and the
+# line SPEC/COMMANDS.md § Positional Arguments, rule 5, publishes for it.
+UNKNOWN_FLAG_PROBE = "unknown flag after the arguments"
+UNKNOWN_FLAG_LINE = "Error: invalid input: unknown flag: --zzz-unknown"
 
 
 def subcommand_label(cmd_entry, sub):
@@ -1503,6 +1811,77 @@ RESIDUE_DRIVERS = {
         ["sprint", "update", "-r", FIXTURE_ROADMAP, "2", "--max-tasks", "0"]),
     ("graph serve", 0): lambda home: _server_starts(home, "graph serve"),
     ("web", 0): lambda home: _server_starts(home, "web"),
+    # The code-6 entries rmp task #489 added where a subcommand had none: an id
+    # outside 1-2147483647, refused while the positional is parsed. No published
+    # example and no generic probe reaches them.
+    ("task subtasks", 6): _driver_plain(["task", "subtasks", "-r", FIXTURE_ROADMAP, "0"]),
+    ("task blockers", 6): _driver_plain(["task", "blockers", "-r", FIXTURE_ROADMAP, "0"]),
+    ("task blocking", 6): _driver_plain(["task", "blocking", "-r", FIXTURE_ROADMAP, "0"]),
+    ("task remove-dep", 6): _driver_plain(
+        ["task", "remove-dep", "-r", FIXTURE_ROADMAP, "4", "0"]),
+    ("sprint get", 6): _driver_plain(["sprint", "get", "-r", FIXTURE_ROADMAP, "0"]),
+    ("sprint show", 6): _driver_plain(["sprint", "show", "-r", FIXTURE_ROADMAP, "0"]),
+    ("sprint remove", 6): _driver_plain(["sprint", "remove", "-r", FIXTURE_ROADMAP, "0"]),
+    ("sprint open-tasks", 6): _driver_plain(
+        ["sprint", "open-tasks", "-r", FIXTURE_ROADMAP, "0"]),
+    ("sprint stats", 6): _driver_plain(["sprint", "stats", "-r", FIXTURE_ROADMAP, "0"]),
+}
+
+
+# ---------------------------------------------------------------------------
+# The conditions rmp tasks #488 and #489 added, each driven by name
+# ---------------------------------------------------------------------------
+#
+# The sweep above drives one invocation per declared CODE, which shows a code
+# can be produced but not that each of its conditions can: a code with a
+# condition nothing produces would still pass. The conditions those two tasks
+# added are therefore driven one by one, and each is recognised by the exact
+# line it writes rather than by its exit code alone.
+
+# A range condition names the positional arguments whose value it refuses. Each
+# named slot is driven with 0 and every other slot keeps its valid fixture value,
+# so the line must name the field that slot is validated as.
+RANGE_CONDITION_SLOTS = {
+    "The task id falls outside 1-2147483647.": ("task-id",),
+    "The task id or the blocker id falls outside 1-2147483647.": ("task-id", "blocker-id"),
+    "The sprint id falls outside 1-2147483647.": ("sprint-id",),
+    "An id in the task list falls outside 1-2147483647.": ("task-ids",),
+    "The source or destination sprint id falls outside 1-2147483647.": ("from-id", "to-id"),
+    "The sprint id or the task id falls outside 1-2147483647.": ("sprint-id", "task-id"),
+    "The sprint id, or either task id, falls outside 1-2147483647.": (
+        "sprint-id", "task-id-1", "task-id-2"),
+}
+
+# The field name each slot's range refusal carries (SPEC/COMMANDS.md § Entity
+# Identifier Range (All Positional Ids and --entity-id)).
+RANGE_SLOT_FIELD = {
+    "task-id": "task_id", "task-ids": "task_id", "task-id-1": "task_id",
+    "task-id-2": "task_id", "blocker-id": "dependency_task_id",
+    "sprint-id": "sprint_id", "from-id": "sprint_id", "to-id": "sprint_id",
+}
+
+# Every other added condition: (subcommand, code, condition) -> the invocations
+# that produce it, each as (the arguments after the selector, the stderr line).
+# Sprint 3 of the fixture is CLOSED, sprint 5 holds tasks 1, 2, 3 and 7, and
+# sprint 2 exists and is PENDING.
+ADDED_CONDITION_DRIVERS = {
+    ("sprint move-tasks", 6, "The source sprint is CLOSED, and a CLOSED sprint gives up no member."): [
+        (["3", "5", "1"], "Error: validation error: cannot move tasks from sprint #3: sprint is CLOSED"),
+    ],
+    ("sprint move-tasks", 6, "The destination sprint is CLOSED, and a CLOSED sprint takes no new member."): [
+        (["5", "3", "1"], "Error: validation error: cannot move tasks to sprint #3: sprint is CLOSED"),
+    ],
+    ("sprint update", 2, "None of --title, --description, --max-tasks or --order was supplied."): [
+        (["2"], "Error: required parameter missing: at least one of --title, --description, "
+                "--max-tasks or --order is required"),
+    ],
+    ("task stat", 2, "A required positional argument was omitted."): [
+        (["1"], "Error: required parameter missing: task ID(s) and status required"),
+    ],
+    ("sprint move-to", 6, "The position is not an integer, or falls outside 0-2147483647."): [
+        (["5", "3", "abc"], "Error: validation error: position must be an integer between 0 and 2147483647"),
+        (["5", "3", "2147483648"], "Error: validation error: position must be an integer between 0 and 2147483647"),
+    ],
 }
 
 
@@ -1537,39 +1916,38 @@ class TestSubcommandExitCodesAreExhaustive:
         positionals = VALID_POSITIONALS[label]
         extra = EXTRA_FLAGS.get(label, [])
         selector = [] if label in NO_ROADMAP else ["-r", FIXTURE_ROADMAP]
+        # Every probe writes the positional arguments before the flags. A flag
+        # written ahead of the first positional argument stands in its slot and
+        # is refused as that id (SPEC/COMMANDS.md § Positional Arguments), so a
+        # probe that wrote the flags first was refused as a malformed id whatever
+        # fault it named (rmp task 485).
+        base = base_invocation(label, argv)
         probes = []
         if label not in NO_ROADMAP:
-            probes.append(("no roadmap selector", argv + extra + positionals))
+            probes.append(("no roadmap selector", argv + positionals + extra))
             probes.append(("roadmap absent",
-                           argv + ["-r", "nosuchroadmap"] + extra + positionals))
-        probes.append(("unknown flag after the arguments",
-                       argv + selector + extra + positionals + ["--zzz-unknown"]))
-        probes.append(("surplus positional argument",
-                       argv + selector + extra + positionals + ["surplus"]))
+                           argv + ["-r", "nosuchroadmap"] + positionals + extra))
+        probes.append((UNKNOWN_FLAG_PROBE, base + ["--zzz-unknown"]))
+        probes.append(("surplus positional argument", base + ["surplus"]))
         if sub.get("positional_arguments"):
             probes.append(("unknown flag in the first positional slot",
-                           argv + selector + extra + ["--zzz-unknown"]))
+                           argv + selector + ["--zzz-unknown"] + extra))
             probes.append(("malformed positional id",
-                           argv + selector + extra + ["notanumber"] + positionals[1:]))
+                           argv + selector + ["notanumber"] + positionals[1:] + extra))
             probes.append(("no positional argument at all", argv + selector + extra))
         for flag in sub["flags"]:
             long = flag["long"]
             if long in ("--help", "--roadmap"):
                 continue
             if flag["type"] != "boolean":
-                probes.append((f"{long} written with no value",
-                               argv + selector + extra + positionals + [long]))
+                probes.append((f"{long} written with no value", base + [long]))
             if flag["type"] == "enum":
-                probes.append((f"{long} outside its enum",
-                               argv + selector + extra + positionals + [long, "NOT_A_MEMBER"]))
+                probes.append((f"{long} outside its enum", base + [long, "NOT_A_MEMBER"]))
             if flag["type"] == "integer":
-                probes.append((f"{long} not an integer",
-                               argv + selector + extra + positionals + [long, "abc"]))
-                probes.append((f"{long} out of range",
-                               argv + selector + extra + positionals + [long, "999999"]))
+                probes.append((f"{long} not an integer", base + [long, "abc"]))
+                probes.append((f"{long} out of range", base + [long, "999999"]))
             if flag["type"] == "date":
-                probes.append((f"{long} not a date",
-                               argv + selector + extra + positionals + [long, "not-a-date"]))
+                probes.append((f"{long} not a date", base + [long, "not-a-date"]))
         return probes
 
     def test_no_subcommand_emits_a_code_it_does_not_declare(self):
@@ -1583,9 +1961,27 @@ class TestSubcommandExitCodesAreExhaustive:
                     # succeed would hang; they are driven, not swept.
                     continue
                 declared = {e["code"] for e in sub["exit_codes"]}
+                state = PROBE_STATES.get(label)
+                if state is not None:
+                    base = base_invocation(label, argv)
+                    home = Workspace.fresh()
+                    try:
+                        apply_preparation({"rmp": state}, home)
+                        code, _, err = Workspace._rmp(base, home, check=False)
+                    finally:
+                        shutil.rmtree(home, ignore_errors=True)
+                    if code != 0:
+                        problems.append(
+                            f"{label}: the base invocation `rmp {' '.join(base)}` exits "
+                            f"{code}, so no probe below departs from an invocation that "
+                            f"succeeds (rmp task 485); stderr: {first_line(err)!r}"
+                        )
+                        continue
                 for why, probe in self._probes(label, argv, sub):
                     home = Workspace.fresh()
                     try:
+                        if state:
+                            apply_preparation({"rmp": state}, home)
                         code, _, err = Workspace._rmp(probe, home, check=False)
                     finally:
                         shutil.rmtree(home, ignore_errors=True)
@@ -1596,6 +1992,14 @@ class TestSubcommandExitCodesAreExhaustive:
                             f"{code}, which its exit_codes array does not "
                             f"declare (declared: {sorted(declared)}); stderr: "
                             f"{first_line(err)!r}"
+                        )
+                    if (state is not None and why == UNKNOWN_FLAG_PROBE
+                            and (code != 2 or first_line(err) != UNKNOWN_FLAG_LINE)):
+                        problems.append(
+                            f"{label}: `rmp {' '.join(probe)}` ({why}) exits {code} "
+                            f"writing {first_line(err)!r}; an unrecognised flag is "
+                            f"refused as itself, with exit 2 and {UNKNOWN_FLAG_LINE!r} "
+                            f"(SPEC/COMMANDS.md § Positional Arguments, rule 5)"
                         )
         assert probes_run >= 350, (
             f"only {probes_run} probes ran; the sweep is broken and every "
@@ -1641,6 +2045,72 @@ class TestSubcommandExitCodesAreExhaustive:
             f"{len(problems)} declared exit code(s) were not produced by the "
             f"invocation that is meant to produce them:\n  " + "\n  ".join(problems)
         )
+
+    def test_every_added_condition_is_driven(self):
+        """Each condition rmp tasks #488 and #489 added is produced by name.
+
+        Every range condition the contract publishes, on whichever subcommand,
+        is driven once per positional slot it names, and must write the range
+        refusal for that slot's field; every other added condition is driven by
+        ADDED_CONDITION_DRIVERS and must write its own line. Both tables are
+        held to the contract in both directions: a condition they name that the
+        contract no longer publishes fails, and so does a range condition whose
+        slot the subcommand does not declare.
+        """
+        problems = []
+        driven = 0
+        seen_range, seen_added = set(), set()
+        for cmd_entry in self.contract["commands"]:
+            for sub in cmd_entry["subcommands"]:
+                label, argv = subcommand_label(cmd_entry, sub)
+                selector = [] if label in NO_ROADMAP else ["-r", FIXTURE_ROADMAP]
+                names = [p["name"] for p in (sub.get("positional_arguments") or [])]
+                for entry in sub["exit_codes"]:
+                    for condition in entry["conditions"]:
+                        invocations = []
+                        if condition in RANGE_CONDITION_SLOTS:
+                            seen_range.add(condition)
+                            for slot in RANGE_CONDITION_SLOTS[condition]:
+                                if slot not in names:
+                                    problems.append(
+                                        f"{label}: {condition!r} names the {slot} slot, which is "
+                                        f"not one of its positional arguments {names}")
+                                    continue
+                                values = list(VALID_POSITIONALS[label])
+                                values[names.index(slot)] = "0"
+                                # The positionals come before the flags: a flag
+                                # written ahead of the first positional stands in
+                                # its slot and is refused as that id.
+                                invocations.append((
+                                    argv + selector + values + EXTRA_FLAGS.get(label, []),
+                                    f"Error: validation error: {RANGE_SLOT_FIELD[slot]} must be "
+                                    f"between 1 and 2147483647, got 0"))
+                        key = (label, entry["code"], condition)
+                        if key in ADDED_CONDITION_DRIVERS:
+                            seen_added.add(key)
+                            for tail, line in ADDED_CONDITION_DRIVERS[key]:
+                                invocations.append((argv + selector + tail, line))
+                        for probe, line in invocations:
+                            home = Workspace.fresh()
+                            try:
+                                code, out, err = Workspace._rmp(probe, home, check=False)
+                            finally:
+                                shutil.rmtree(home, ignore_errors=True)
+                            driven += 1
+                            if code != entry["code"] or first_line(err) != line or out != "":
+                                problems.append(
+                                    f"{label}: {condition!r} (exit {entry['code']}) was not produced "
+                                    f"by `rmp {' '.join(probe)}`: exit {code}, stderr "
+                                    f"{first_line(err)!r}, stdout {out[:80]!r}; want {line!r}")
+        for condition in sorted(set(RANGE_CONDITION_SLOTS) - seen_range):
+            problems.append(f"RANGE_CONDITION_SLOTS names {condition!r}, which no subcommand publishes")
+        for key in sorted(set(ADDED_CONDITION_DRIVERS) - seen_added):
+            problems.append(f"ADDED_CONDITION_DRIVERS names {key}, which the contract does not publish")
+        assert not problems, (
+            f"{len(problems)} added condition(s) are not produced as published:\n  "
+            + "\n  ".join(problems))
+        # 36 range slots across the 23 subcommands, and six other invocations.
+        assert driven >= 42, f"only {driven} added-condition invocations ran; the traversal is broken"
 
     def _driver_for(self, label, argv, sub, code):
         """A driver for one (subcommand, code) pair.
@@ -1757,6 +2227,16 @@ def _run_all():
                 print(f"✗ {cls.__name__}.{method} (error)")
             finally:
                 instance.teardown_method()
+    # The module's closing guarantee, checked once every test has run.
+    closing = "module: no process the gate started outlives it"
+    try:
+        assert_no_started_process_outlives_the_module()
+        passed += 1
+        print(f"✓ {closing}")
+    except AssertionError as exc:
+        failed += 1
+        failures.append((closing, exc))
+        print(f"✗ {closing}")
     print("\n" + "=" * 60)
     print(f"Published contract execution tests: {passed} passed, {failed} failed")
     print("=" * 60)
@@ -1769,5 +2249,8 @@ if __name__ == "__main__":
     try:
         ok = _run_all()
     finally:
+        # An interrupted run reaches here without the closing check; whatever
+        # it started is still stopped before the workspace is removed.
+        stop_every_started_group()
         Workspace.cleanup()
     sys.exit(0 if ok else 1)

@@ -197,15 +197,16 @@ func teardown(tb testing.TB, srv *server.Server, ln *serverListener, st *graphst
 // within the budget is a published outcome, with a line of its own in
 // SPEC/COMMANDS.md § Graph Management and a measured rate:
 // SPEC/IMPLEMENTATION.md § Retry Logic, canonical for the measurements of the
-// policy's shapes, records the full-jitter shape this client walks exhausted on
-// 0.07-0.22% of statements from sixty-four writers updating a single node.
+// policy's shapes, records how often the full-jitter shape this client walks is
+// exhausted by sixty-four writers updating a single node, and this comment does
+// not restate that figure.
 //
 // This test converges on one node the same way and does it with TWO, where the
-// rate is far lower — measured for #421, 820 runs of this test on CPUs saturated
-// by busy loops (GOMAXPROCS 1 and 2, -race, with and without -cover, one set of
-// runs with synchronous disk writes competing) exhausted the budget on none of
-// their 49,200 statements — but it is not zero, and the difference between
-// "rare" and "never" is the whole defect. Requiring all sixty statements to win
+// rate is far lower than the sixty-four-writer rate that section records (#421
+// measured it on CPUs saturated by busy loops; SPEC/IMPLEMENTATION.md § Retry
+// Logic is canonical for the policy's measured rates, and this comment does not
+// restate a figure) — but it is not zero, and the difference between "rare" and
+// "never" is the whole defect. Requiring all sixty statements to win
 // was requiring the engine to do better than it promises, and the CI runner that
 // failed this test refused writer alpha's round 7 as a conflict lost on every
 // attempt (rmp task #421).

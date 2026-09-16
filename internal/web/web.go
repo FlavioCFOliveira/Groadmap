@@ -37,18 +37,24 @@ type options struct {
 	noOpen bool
 }
 
-// Run is the registry handler for `rmp web`. It parses args, prints help
-// when requested, and otherwise starts the long-lived server. Run returns
-// nil after a graceful SIGINT/SIGTERM shutdown (exit 0) and a sentinel-
-// wrapped error on a startup failure, which cmd/rmp/main.go maps to the
-// matching exit code.
-func Run(args []string) error {
+// Run is the registry handler for `rmp web`. It parses args, calls printHelp
+// when they request help, and otherwise starts the long-lived server. Run
+// returns nil after a graceful SIGINT/SIGTERM shutdown (exit 0) and a
+// sentinel-wrapped error on a startup failure, which cmd/rmp/main.go maps to
+// the matching exit code.
+//
+// The help is supplied by the caller rather than printed from here because
+// its `Exit codes:` block is rendered from the command registry, which this
+// package cannot import (SPEC/HELP.md § Agreement with the contract).
+func Run(args []string, printHelp func()) error {
 	opts, showHelp, err := parseArgs(args)
 	if err != nil {
 		return err
 	}
 	if showHelp {
-		PrintHelp()
+		if printHelp != nil {
+			printHelp()
+		}
 		return nil
 	}
 	return serve(opts)
@@ -69,13 +75,18 @@ func parseArgs(args []string) (opts options, showHelp bool, err error) {
 	for i := 0; i < len(args); i++ {
 		arg := args[i]
 
+		// A help token is the whole token and nothing else: `--help=1` and
+		// `-h=` are unknown flags, never help (SPEC/HELP.md § Help tokens). The
+		// comparison therefore reads arg, before the split below removes an
+		// "=value" tail.
+		if arg == "-h" || arg == "--help" || arg == "help" {
+			return options{}, true, nil
+		}
+
 		// Split --flag=value once so both forms share one code path.
 		name, inlineVal, hasInline := splitFlag(arg)
 
 		switch name {
-		case "-h", "--help", "help":
-			return options{}, true, nil
-
 		case "--no-open":
 			if hasInline {
 				return options{}, false, fmt.Errorf("%w: --no-open does not take a value", utils.ErrInvalidInput)
@@ -108,7 +119,10 @@ func parseArgs(args []string) (opts options, showHelp bool, err error) {
 
 		default:
 			if strings.HasPrefix(arg, "-") {
-				return options{}, false, fmt.Errorf("%w: unknown flag: %s", utils.ErrInvalidInput, arg)
+				// The line names the flag without its "=value" tail, as every
+				// command's unknown-flag line does (SPEC/COMMANDS.md
+				// § Positional Arguments, rule 5): name is arg up to the first "=".
+				return options{}, false, fmt.Errorf("%w: unknown flag: %s", utils.ErrInvalidInput, name)
 			}
 			return options{}, false, fmt.Errorf("%w: unexpected argument: %s", utils.ErrInvalidInput, arg)
 		}
@@ -144,14 +158,18 @@ func flagValue(name, inlineVal string, hasInline bool, args []string, i int) (va
 	return args[i+1], i + 1, nil
 }
 
-// PrintHelp writes the `rmp web` help text to stdout. The text follows the
+// HelpText returns the `rmp web` help text, carrying exitCodes as its
+// `Exit codes:` block. The block is rendered by the caller from the command
+// registry, which this package cannot import, so that the help and the AI
+// Agent Contract draw every code and condition from one source
+// (SPEC/HELP.md § Agreement with the contract). The text follows the
 // skeleton in SPEC/HELP.md § Web command help specifics and makes explicit
 // the three behaviours an agent cannot infer from the generic template:
 // no -r/--roadmap flag, read-only and loopback-only by default (with
 // --host 0.0.0.0 as the explicit network-exposure opt-in), and the long-lived
 // process that runs until interrupted.
-func PrintHelp() {
-	fmt.Print(`Usage: rmp web [options]
+func HelpText(exitCodes string) string {
+	return `Usage: rmp web [options]
 
 Start a read-only web interface for the roadmaps under ~/.roadmaps/.
 The browser lists every roadmap and lets you view its tasks, sprints,
@@ -179,16 +197,10 @@ Options:
 Output (stdout JSON):
   On startup: {"url": "http://127.0.0.1:8787"} (reflects the bound host/port)
 
-Exit codes:
-  0   Server started and was stopped by Ctrl+C / SIGINT / SIGTERM
-  1   Host/port could not be bound, or the data directory was unreadable
-  2   Unknown flag or unexpected argument
-  6   --port out of range 0-65535 or not an integer
-
-Examples:
+` + exitCodes + `Examples:
   rmp web
   rmp web --port 9000
   rmp web --host 127.0.0.1 --port 9000
   rmp web --no-open
-`)
+`
 }

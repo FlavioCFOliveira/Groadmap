@@ -224,7 +224,7 @@ func TestHandleGraphData_ExpensiveQueryHitsTimeBudget(t *testing.T) {
 	}
 	t.Logf("expensive query over %d nodes returned in %v under a %v budget (unbounded cost: ~6s)", nodes, elapsed, budget)
 
-	// (ii) It is classified as a query execution failure — case 3 of
+	// (ii) It is classified as a query execution failure — case 2 of
 	// § Query-Bar Error Handling — with no new status and no new kind
 	// (SPEC/WEB.md § Graph Query Time Budget, rules 4 and 5).
 	if rec.Code != http.StatusBadRequest {

@@ -380,7 +380,7 @@ func (c *Command) DispatchFamily(args []string) error {
 	// `-h` anywhere among the remaining args). Banner is prepended via
 	// invokeHelpPrinter, keeping the SPEC banner rule applied at the
 	// single dispatch point rather than duplicated across 40+ printers.
-	if hasHelpFlag(args[1:]) {
+	if hasHelpFlag(sub, args[1:]) {
 		if sub.HelpPrinter != nil {
 			invokeHelpPrinter(sub.HelpPrinter)
 			return nil
@@ -403,9 +403,22 @@ func (c *Command) DispatchFamily(args []string) error {
 }
 
 // isHelpToken reports whether arg is one of the recognised help
-// tokens.
+// tokens. The whole token is compared, so `--help=1` is not one
+// (SPEC/HELP.md § Help tokens).
 func isHelpToken(arg string) bool {
 	return arg == "-h" || arg == "--help" || arg == "help"
+}
+
+// leafSubcommand returns the single registry entry of the leaf command named
+// name, or nil when no leaf command of that name is registered. A leaf handler
+// uses it to read its own flag declarations, which decide which of its tokens
+// are flag values rather than token positions (SPEC/HELP.md § Help tokens).
+func leafSubcommand(name string) *Subcommand {
+	cmd := AppRegistry().FindCommand(name)
+	if cmd == nil || cmd.HasSubcommand || len(cmd.Subcommands) != 1 {
+		return nil
+	}
+	return &cmd.Subcommands[0]
 }
 
 // dispatchFamily resolves a family by canonical name in the singleton

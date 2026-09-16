@@ -38,11 +38,7 @@ Output (stdout JSON):
     ]
   An empty array is returned when no roadmaps exist; exit is still 0.
 
-Exit codes:
-  0   Success
-  2   Unrecognised flag, or a positional argument (this command takes none)
-
-Examples:
+`+exitCodesBlock("roadmap", "list")+`Examples:
   rmp roadmap list
   rmp roadmap ls
 `)
@@ -67,13 +63,7 @@ Options: -h, --help
 Output (stdout JSON):
   {"name": "<name>"}
 
-Exit codes:
-  0   Success
-  2   Roadmap name argument missing
-  5   A roadmap with that name already exists
-  6   Invalid roadmap name (bad regex match, length, or reserved word)
-
-Examples:
+`+exitCodesBlock("roadmap", "create")+`Examples:
   rmp roadmap create mobile-app
   rmp roadmap new payment-api
 `)
@@ -97,13 +87,7 @@ Options: -h, --help
 
 Output: empty (exit 0 on success).
 
-Exit codes:
-  0   Success
-  2   Roadmap name argument missing
-  4   Roadmap not found
-  6   Invalid roadmap name
-
-Examples:
+`+exitCodesBlock("roadmap", "remove")+`Examples:
   rmp roadmap remove mobile-app
   rmp roadmap rm payment-api
   rmp roadmap delete legacy-project
@@ -168,6 +152,7 @@ func roadmapList(args []string) error {
 
 // roadmapCreate creates a new roadmap.
 func roadmapCreate(args []string) error {
+	args, strays := splitPositionals(args, 1)
 	if len(args) == 0 {
 		return fmt.Errorf("%w: roadmap name required", utils.ErrRequired)
 	}
@@ -176,6 +161,14 @@ func roadmapCreate(args []string) error {
 
 	// Validate name
 	if err := utils.ValidateRoadmapName(name); err != nil {
+		return err
+	}
+
+	// A "-"-prefixed token after <name> stands in no slot. It is refused after
+	// the name is validated and before the roadmap's existence is checked, the
+	// one check of this command that needs the roadmap
+	// (SPEC/COMMANDS.md § Positional Arguments).
+	if err := rejectUnknownFlags(strays); err != nil {
 		return err
 	}
 
@@ -201,6 +194,7 @@ func roadmapCreate(args []string) error {
 
 // roadmapRemove removes a roadmap.
 func roadmapRemove(args []string) error {
+	args, strays := splitPositionals(args, 1)
 	if len(args) == 0 {
 		return fmt.Errorf("%w: roadmap name required", utils.ErrRequired)
 	}
@@ -209,6 +203,12 @@ func roadmapRemove(args []string) error {
 
 	// Validate name
 	if err := utils.ValidateRoadmapName(name); err != nil {
+		return err
+	}
+
+	// See roadmapCreate: refused before the roadmap's existence is checked, so a
+	// refused invocation removes nothing.
+	if err := rejectUnknownFlags(strays); err != nil {
 		return err
 	}
 

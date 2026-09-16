@@ -10,6 +10,7 @@ package commands
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/FlavioCFOliveira/Groadmap/internal/graphserve"
 	"github.com/FlavioCFOliveira/Groadmap/internal/utils"
@@ -99,17 +100,7 @@ Output (stdout JSON):
   startup and are not failures: one for a server running without transport
   security, and one for a server running without authentication.
 
-Exit codes:
-  0   The server started, served, and was stopped by SIGINT or SIGTERM
-  1   The graph store could not be created, opened or recovered; or its lock
-      could not be taken within the bounded wait, which is what refuses a
-      second server against the same roadmap; or the socket could not be
-      bound; or a live server already answers on the resolved socket
-  2   Unknown flag, a positional argument, or --socket with an empty value
-  3   No roadmap selected
-  4   Roadmap not found
-
-Examples:
+`+exitCodesBlock("graph", "serve")+`Examples:
   rmp graph serve -r myproject
   rmp graph serve -r myproject --socket /run/user/1000/myproject-graph.sock
 `)
@@ -142,7 +133,10 @@ func readSocketFlag(args []string) (string, error) {
 	}
 	for _, token := range rest {
 		if isFlagLike(token) {
-			return "", fmt.Errorf("%w: unknown flag: %s", utils.ErrInvalidInput, token)
+			// Named without its "=value" tail, as every command names an
+			// unknown flag (SPEC/COMMANDS.md § Positional Arguments, rule 5).
+			flagName, _, _ := strings.Cut(token, "=")
+			return "", errUnknownFlag(flagName)
 		}
 		return "", fmt.Errorf("%w: unexpected argument %q", utils.ErrInvalidInput, token)
 	}

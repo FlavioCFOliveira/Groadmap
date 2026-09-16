@@ -49,7 +49,8 @@ Write — and interpret — language that is, at every moment:
 - **Concise** — so that few words describe what is intended.
 
 This applies to everything you write — to the user, to subagents, and in project
-artefacts — and to how you interpret everything you receive.
+artefacts — and to how you interpret everything you receive. Section 13 sets the
+language in which ALL documentation is written.
 
 ### Goal-Directed Action: No Volunteering
 
@@ -101,7 +102,7 @@ half-done or partially done.**
 
 - Every development cycle MUST be self-contained and produce a working result (a
   deliverable).
-- All code and development is **Full-fledged** by rule. NEVER create tests with
+- All code and development is **full-fledged** by rule. NEVER create tests with
   skip.
 - Everything the task's objectives, requirements, and acceptance criteria
   require is part of the task, and is done within the SAME cycle.
@@ -123,6 +124,28 @@ responsibilities pattern in order to maximize code reuse. Each unit owns a
 single, well-defined responsibility; cross-cutting concerns are factored out
 rather than duplicated.
 
+### Work Synergy
+
+Seeking synergies and optimising effort is a CONSTANT principle of every way of
+working in this project. Apply it to ALL work.
+
+- **Across tasks.** Whenever you identify tasks — in `rmp` or not — whose
+  functional or technical proximity is substantial, you MUST seek to combine them
+  into a single development effort. You MUST always seek to maximise the synergy
+  of one development effort for the benefit of several tasks. Section 4 (Group
+  tasks that are substantially close) defines how such a group is executed.
+- **Within a task.** By strategy and by default, identify the synergies inside
+  each piece of work:
+  - **Code and tests** — assess whether you can write ALL the code at once and
+    test it ALL at once, rather than writing small pieces and testing each one
+    in isolation (see Iterate: Analyse, Build in Bulk, Test What Changed).
+  - **Documentation** — handle ALL the documentation at once or, when the scope
+    is very large, identify blocks and handle each block at once, as a whole.
+  - **Any other work** — apply the same principle.
+
+Synergy decides only how the requested work is combined and carried out; it
+never licenses work that was not EXPLICITLY requested (see Goal-Directed Action).
+
 ### Workflow: Specify → Implement → Test → Document
 
 Work ALWAYS follows these phases, in order:
@@ -140,8 +163,9 @@ objectives are met:
 2. **Development of all the code, in bulk** — write it in one pass.
 3. **Testing of the changes made in step 2** — those changes, and not the project.
 
-**Build in bulk.** WHENEVER it is possible, write ALL the code of a task — or of
-several tasks together — in a single pass, rather than a little at a time.
+**Build in bulk.** This is Work Synergy (above) applied to implementation.
+WHENEVER it is possible, write ALL the code of a task — or of several tasks
+together — in a single pass, rather than a little at a time.
 Finishing the implementation in one pass avoids the cost of repeatedly reloading
 the same context, and it lets the testing step exercise finished behaviour rather
 than a half-built one. Within an iteration: do NOT write tests before the code, do
@@ -271,8 +295,8 @@ If a change to the SPEC needs a narrative beyond the diff, write it in the commi
 | Agent / Skill | Type | Responsibility | Key Rules |
 |---------------|------|----------------|-----------|
 | **specification-manager** | agent | SPEC/ creation and maintenance | MUST be first step. NEVER derives from code. Sole owner of `SPEC/`. |
-| **roadmap-manager** | skill | ALL coordination and maintenance of roadmap, sprints, and tasks via `rmp` CLI | Sole operator of `rmp`. Source of truth. NEVER implements code directly. |
-| **knowledge-authority** | skill | ALL knowledge of the project — structure, components, files — and the Knowledge Graph via `rmp graph` | Sole manager of the KG. Query it BEFORE reading files. Never guesses. |
+| **roadmap-manager** | skill | ALL coordination and management of the project's own roadmap (`groadmap`) — its tasks, sprints, and comments — via the `rmp` CLI | Sole operator of `rmp *` on `groadmap`, except `rmp graph *`; not the binary under development or test (see Mandatory Skills). Source of truth. NEVER implements code directly. |
+| **knowledge-authority** | skill | ALL knowledge of the project — structure, components, files — and the Knowledge Graph via `rmp graph *` | Exclusive manager of the KG. Query it BEFORE reading files. Never guesses. |
 | **go-developer** | agent | Go implementation, refactor, review, performance | ONLY after SPEC exists. Validates build/test/vet/fmt/lint. |
 | **exhaustive-qa-engineer** | agent | Testing, edge cases, security/robustness validation | Critical features, pre-release, schema changes. |
 | **release-manager** | agent | Release coordination, version bump, CHANGELOG | Triggered by release requests. Runs full validation gates. |
@@ -280,7 +304,25 @@ If a change to the SPEC needs a narrative beyond the diff, write it in the commi
 | **security-review** | skill | Security review of pending changes | Trigger before merging security-sensitive changes. |
 | **code-review** | skill | Pull request review | Code review on PRs. |
 | **simplify** | skill | Review changes for reuse/quality and fix issues | Post-implementation cleanup. |
-| **gitflow** | skill | Executes EVERY git write: commit, branch, merge, tag, push | Executor only. Rule 3 governs WHAT may be done. Reads stay direct. |
+| **gitflow** | skill | Executes EVERY git write: commit, branch, merge, tag, push | Executor only. Rule 3 governs WHAT may be done and prevails over gitflow practice. Reads stay direct. |
+
+### Mandatory Skills
+
+You MUST use these Claude Code skills for the following needs:
+
+- **`gitflow`** — EVERY git write command is executed through the `gitflow`
+  skill, following the good practices of that branch-management methodology for
+  this project's git repository. Those practices govern HOW a git write is
+  carried out; Section 6, Rule 3 governs WHAT may be done and PREVAILS over them.
+- **`roadmap-manager`** — operating the project's own roadmap (`groadmap`) goes
+  through the `roadmap-manager` skill: the coordination and management of its
+  tasks, sprints, and comments, and EVERY `rmp *` operation on it, with the
+  exception of the `rmp graph *` commands. The skill does NOT cover running the
+  binary as a subject of development or testing: E2E tests, development
+  subagents, and measurements MAY run `./bin/rmp` against throwaway roadmaps in
+  an isolated `HOME`.
+- **`knowledge-authority`** — the project's Knowledge Graph is managed
+  EXCLUSIVELY by the `knowledge-authority` skill (Section 5).
 
 ### Task/Sprint Creation Flow
 
@@ -308,9 +350,9 @@ the work it was given.
 **One subagent at a time.** Use ONLY ONE subagent running in parallel with the
 main Claude Code conversation. NEVER run more than one subagent at the same time.
 
-- Use as many subagents as the objective requires — in SERIES, never in
+- You MUST use every subagent the objective requires — in SERIES, never in
   parallel.
-- When the user authorises more than one subagent in parallel, that
+- WHENEVER the user authorises more than one subagent in parallel, that
   authorisation is an EXCEPTION: it applies only to the task it was given for,
   and it is ALWAYS revoked when that task ends.
 
@@ -322,8 +364,10 @@ Use the `rmp` CLI (the system's roadmap-management tool) to plan and coordinate
 execution. `rmp` is the **SINGLE SOURCE OF TRUTH** for planning and task
 execution in this project — no other mechanism may be used for this purpose.
 
-**EVERY operation that coordinates or maintains Tasks or Sprints MUST go through
-the `roadmap-manager` skill**, which is the interface to the `rmp` CLI.
+**EVERY operation that coordinates or manages the Tasks, Sprints, or comments of
+the `groadmap` roadmap MUST go through the `roadmap-manager` skill**, which is
+the interface to the `rmp` CLI for every command except `rmp graph *` (Section 3,
+Mandatory Skills).
 
 Use the **Knowledge Graph** (Section 5) to understand the project, its
 components, and how they relate, so you can identify the scope and impact of
@@ -379,12 +423,13 @@ use `rmp` to determine:
 Whenever possible, adapt the model and the model's effort level to the
 requirements of each task's individual operations.
 
-**Group tasks that are substantially close.** When evaluating the pending tasks,
-assess their TECHNICAL and FUNCTIONAL proximity. Where that proximity is
-SUBSTANTIAL, those similar tasks MUST be developed TOGETHER, in one pass, rather
-than one after another. This is the bulk rule of Section 0 applied across tasks:
-the group is ONE unit of work from beginning to end — analysed once, its code
-written in one pass, and the changes tested once, exactly as for a single task.
+**Group tasks that are substantially close.** This is the Work Synergy principle
+of Section 0 applied to the pending tasks. When evaluating them, assess their
+TECHNICAL and FUNCTIONAL proximity. Where that proximity is SUBSTANTIAL, combine
+those tasks into ONE development effort rather than developing them one after
+another. The group is ONE unit of work from beginning to end — analysed once, its
+code written in one pass, and the changes tested once, exactly as for a single
+task.
 
 **Delegate the group to exactly ONE subagent** — the one specialised in the
 objectives and requirements of those tasks. NEVER one subagent per task, and
@@ -392,9 +437,9 @@ NEVER the group divided among subagents by file or by area: dividing it defeats
 the reason for grouping, because each worker reloads the same context and none of
 them sees the whole change.
 
-Grouping decides only what is built in one pass — it never licenses work no
-task required, and every task in the group keeps its own acceptance criteria and
-its own closing summary.
+Grouping decides only what is built in one pass (see Section 0, Work Synergy),
+and every task in the group keeps its own acceptance criteria and its own
+closing summary.
 
 **Task and sprint execution is sequential.** Sprints MUST be executed
 sequentially, and so MUST the tasks inside them — a group of substantially close
@@ -410,9 +455,9 @@ task ends (see Section 3, Subagent Delegation).
 
 **EVERY task concerning knowledge of the project — its structure, components,
 files, and how they relate — goes through the `knowledge-authority` skill**,
-which is equally the sole manager of the Knowledge Graph itself: it drives
-`rmp`'s Graph (Groadmap) features to create, maintain (update), and query a
-knowledge graph of the project. This graph **MUST CONTAIN EVERYTHING**
+which is equally the exclusive manager of the Knowledge Graph itself (Section 3,
+Mandatory Skills): it drives `rmp`'s Graph (Groadmap) features to create,
+maintain (update), and query a knowledge graph of the project. This graph **MUST CONTAIN EVERYTHING**
 useful to know about the project. Examples:
 - What features exist; where each is specified; where each is implemented; which
   tests exist and what they test.
@@ -455,10 +500,10 @@ your ability to understand the project is preserved.
 | Task Type | Agent / Skill |
 |-----------|---------------|
 | New feature/changes | `specification-manager` FIRST |
-| ANY task/sprint coordination or maintenance | `roadmap-manager` |
-| ANY project knowledge (structure, components, files) or KG work | `knowledge-authority` |
+| ANY coordination or management of the `groadmap` roadmap (tasks, sprints, comments); ANY `rmp *` operation on it except `rmp graph *` | `roadmap-manager` — not `./bin/rmp` run for development or testing (Section 3, Mandatory Skills) |
+| ANY project knowledge (structure, components, files) or KG work (`rmp graph *`) | `knowledge-authority` (exclusive) |
 | Code implementation, refactor, performance | `go-developer` |
-| Git WRITES (commit, branch, merge, tag, push) | `gitflow` skill — see Rule 3 |
+| Git WRITES (commit, branch, merge, tag, push) | `gitflow` skill, following gitflow good practices; Rule 3 prevails — see Rule 3 |
 | Git reads (`status`, `log`, `diff`, `show`) | Bash (`git`) directly |
 | Releases / version bump | `release-manager` |
 | Testing | `exhaustive-qa-engineer` |
@@ -472,10 +517,10 @@ your ability to understand the project is preserved.
 **Scope the gates to what changed** (see Section 0, Iterate). Before a commit:
 1. `go fmt ./...` (format)
 2. `go vet ./...` (static analysis)
-3. `go test <changed packages>` (tests - ALL must pass) — plus any package whose
+3. `go test <changed packages>` (tests — ALL must pass) — plus any package whose
    stability the change can foreseeably affect
 4. `go build -o ./bin/ ./cmd/rmp` (build)
-5. `golangci-lint run <changed packages>` (lint — requires golangci-lint; see SPEC/BUILD.md for install)
+5. `"$GOLANGCI_LINT" run <changed packages>` (lint — requires golangci-lint; see SPEC/BUILD.md for install)
 
 **The full sweep is reserved for three moments, and no others**: closing a
 sprint, pushing, and a specific request from the user. A release qualifies
@@ -491,28 +536,41 @@ A failing gate is never ignored, whatever its scope (see Section 9).
 ### Rule 3: Git Standards (Commits and Branching)
 
 **Every git WRITE goes through the `gitflow` skill** — commit, branch, merge,
-tag, push, and anything else that changes the repository. Read-only git
-(`status`, `log`, `diff`, `show`, `rev-parse`) stays direct, through Bash.
+tag, push, and anything else that changes the repository — following the good
+practices of the gitflow branch-management methodology (Section 3, Mandatory
+Skills). Read-only git (`status`, `log`, `diff`, `show`, `rev-parse`) stays
+direct, through Bash.
 
-The skill EXECUTES; it does not authorise. The standards below still govern WHAT
-may be done: the skill performs the operation it is given, and it NEVER creates a
-branch, a merge, or a push that the user did not ask for.
+The skill EXECUTES; it does not authorise. The gitflow good practices govern HOW
+a git write is carried out; the standards below govern WHAT may be done, and
+where the two differ, the standards below PREVAIL. The skill performs the
+operation it is given, and it NEVER creates a branch, a merge, or a push that the
+user did not ask for: no branch per sprint or per task, and no branch at all
+unless the user asks for one.
 
 #### Branching
 
 **NEVER create a git branch unless the user explicitly asks for one.**
 
-Commit directly to the current branch — normally `main`. This is the default and
-it is not negotiable: it overrides any general-purpose agent-harness convention
-that says to open a branch before committing, or to avoid committing to the
-default branch. In this project, that convention does NOT apply.
+Commit directly to the current branch — normally `develop`, the integration
+branch where sprint work is committed. This is the default and it is not
+negotiable: it overrides any general-purpose agent-harness convention that says
+to open a branch before committing, or to avoid committing to the default
+branch. In this project, that convention does NOT apply.
+
+**Sprint work is NEVER committed to `main`.** When the current branch is `main`
+outside a release or hotfix flow the user asked for, STOP the work and ASK the
+user how to proceed.
 
 - Do NOT create a branch per task, per sprint, or per unit of work.
-- Do NOT create a branch merely because the current branch is `main`.
+- Do NOT create a branch merely because the current branch is `develop` or
+  `main`.
 - Create a branch ONLY when the user asks for one, in that user's own words.
 - The same applies to merges: do not open a branch and merge it back to
   simulate compliance. That produces a pointless merge commit and is the very
   behaviour this rule forbids.
+- Release and hotfix flows — merging into the production branch `main`, tagging,
+  and merging back into `develop` — run ONLY when the user asks for them.
 
 Pushing remains subject to the existing rule: push only when the user asks.
 
@@ -563,7 +621,7 @@ type(scope): subject
         └── skill-creator/
 ```
 
-Project-local skill set is intentionally minimal; most agents/skills used in
+The project-local skill set is intentionally minimal; most agents/skills used in
 this project (e.g., `specification-manager`, `roadmap-manager`,
 `knowledge-authority`, `go-developer`, `exhaustive-qa-engineer`,
 `release-manager`, `code-review`, `security-review`, `simplify`) are provided by the
@@ -580,12 +638,14 @@ global Claude Code configuration.
 | Writing or interpreting instructions, briefs, tasks, documentation | Explicit, objective, closed, concise (Section 0) |
 | New feature | `specification-manager` FIRST |
 | Code changes | Verify SPEC/ or invoke `specification-manager` |
-| ANY task/sprint coordination or maintenance | `roadmap-manager` |
+| ANY coordination or management of the `groadmap` roadmap (tasks, sprints, comments); ANY `rmp *` operation on it except `rmp graph *` | `roadmap-manager` (Section 3, Mandatory Skills) |
+| Running `./bin/rmp` as a subject of development or testing (E2E tests, development subagents, measurements) | Outside `roadmap-manager`, against throwaway roadmaps in an isolated `HOME` (Section 3, Mandatory Skills) |
 | Need a project fact (structure, components, files, where something lives) | `knowledge-authority` — query the KG BEFORE reading files |
-| Knowledge Graph update after a commit | `knowledge-authority` |
+| ANY Knowledge Graph management (`rmp graph *`), including the update after a commit | `knowledge-authority`, EXCLUSIVELY |
 | Git WRITES (commit, branch, merge, tag, push) | `gitflow` skill; Rule 3 still governs WHAT may be done — confirm destructive ops with the user |
 | Git reads (`status`, `log`, `diff`, `show`) | Bash (`git`) directly |
-| Committing work | `gitflow` skill, to the CURRENT branch. NEVER create a branch unless the user asked — see Rule 3 |
+| Committing work | `gitflow` skill, to the CURRENT branch — normally `develop`, NEVER `main` for sprint work. NEVER create a branch unless the user asked; release and hotfix flows ONLY on user request — see Rule 3 |
+| Current branch is `main`, outside a release or hotfix flow the user asked for | STOP and ASK the user how to proceed (Rule 3, Branching) |
 | Release / version bump | `release-manager` |
 | Tests needed | `exhaustive-qa-engineer` |
 | Security audit | `security-review` skill |
@@ -600,7 +660,8 @@ global Claude Code configuration.
 | Work not explicitly requested (speculation, tidying, unasked audit) | Do NOT start it — ask the user (Section 0, Goal-Directed Action) |
 | Task started | Execute it in full; NEVER leave it half-done (Section 0, Completeness) |
 | Operation that does not serve the task's success | Skip it: no re-running green checks, no re-reading what is already known |
-| Evaluating the pending tasks | Assess their technical and functional proximity; substantial proximity means they are developed together (Section 4) |
+| Evaluating tasks, in `rmp` or not | Assess their technical and functional proximity; where it is substantial, seek to combine them into ONE development effort (Section 0, Work Synergy; Section 4) |
+| Carrying out any piece of work (code and tests, documentation, anything else) | Seek its internal synergies: do it all at once or, when the scope is very large, in blocks each handled as a whole (Section 0, Work Synergy) |
 | Implementing a task | Iterate: analyse, write ALL the code in bulk, test ONLY those changes (Section 0, Iterate) |
 | Choosing the test scope | Judge the extent each change requires; full sweep ONLY on sprint close, push, or user request (Rule 2) |
 | Developing several tasks in one pass | ONE specialised subagent for the whole group; analyse, build, and test it as a single task (Section 4) |
@@ -609,7 +670,7 @@ global Claude Code configuration.
 | Assess performance / completeness / correctness | Gather evidence; decide empirically |
 | Trade-off between correctness, safety, and speed | Apply Correct → Safe → Fast; if they conflict, ASK the user |
 | Information insufficient | Consult Knowledge Graph first, then authoritative sources — never guess |
-| Code vs SPEC diverge | Follow SPEC, ask user |
+| Code vs SPEC diverge | Follow SPEC, ask the user |
 
 ---
 
@@ -618,7 +679,7 @@ global Claude Code configuration.
 ### Critical Violations
 - Implement without SPEC/
 - Derive SPEC from existing code
-- Make product decisions without user
+- Make product decisions without the user
 - Make decisions alone when instructions are unclear, ambiguous, or contradictory (always ASK)
 - Change scope, expected behavior, architecture, or requirements without asking the user first
 - Start any task that was not explicitly requested
@@ -641,6 +702,9 @@ global Claude Code configuration.
 - Partial (non-self-contained) deliverables or tests created with skip
 - Writing tests before an iteration's code is complete, or interleaving the two,
   or stopping mid-bulk to test a part of what is being built
+- Ignoring Work Synergy: developing substantially close tasks one after another,
+  or handling code, tests, or documentation in small isolated pieces, where one
+  combined effort was possible
 - Running the whole test suite where the change calls for a scoped one (the full
   sweep is for the three moments in Rule 2: sprint close, push, user request)
 - Doing more than was asked, or extending scope the user did not request
@@ -656,16 +720,21 @@ global Claude Code configuration.
   taking one subagent per task (the group goes to ONE specialist — Section 4)
 - Answering for the project's structure, components or files — or managing the
   Knowledge Graph — outside the `knowledge-authority` skill
-- Coordinating or maintaining tasks or sprints outside the `roadmap-manager`
-  skill
+- Operating the `groadmap` roadmap — coordinating or managing its tasks, sprints,
+  or comments, or running any `rmp *` operation on it other than `rmp graph *` —
+  outside the `roadmap-manager` skill
 - Committing without updating the Knowledge Graph
-- Creating a git branch that the user did not ask for (including a branch per
-  task or per sprint, or branching just because the current branch is `main`)
+- Creating a git branch, or running a release or hotfix flow, that the user did
+  not ask for (including a branch per task or per sprint, or branching just
+  because the current branch is `develop` or `main`)
+- Committing sprint work to `main`, or continuing work on `main` outside a
+  release or hotfix flow the user asked for (Rule 3, Branching)
 - Performing a git WRITE outside the `gitflow` skill (reads stay direct)
 - Destructive Git operations without confirmation
 - Security compromises (SQL injection, etc.)
 - Reference Claude/AI in commits
-- Documentation in Portuguese
+- Documentation — including code comments and docstrings — in any language other
+  than English, or with orthographic, grammatical, or syntactic errors
 - Emojis in technical documentation
 
 ---
@@ -705,10 +774,10 @@ go fmt ./...
 go vet ./...
 
 # Lint (requires golangci-lint at the pinned version; see SPEC/BUILD.md for install)
-golangci-lint run ./...
+make lint
 
 # Security scan (requires gosec at the pinned version; see SPEC/BUILD.md for install)
-gosec -exclude-dir=.claude/worktrees ./...
+make security
 
 # All validation gates in one command
 make check
@@ -719,7 +788,7 @@ make check
 ## 12. End-To-End (E2E) Testing
 
 ### Test Location
-- All E2E tests are stored in the `/tests` directory at repository root
+- All E2E tests are stored in the `/tests` directory at the repository root
 
 ### Test Execution
 - Tests must execute commands against the compiled binary at `/bin/rmp`
@@ -746,12 +815,14 @@ make check
 ## 13. Documentation Standards
 
 ### Language
-- **SPEC/, agent/skill definitions, CLAUDE.md:** English
+- **ALL documentation** — from the main README to the specification (`SPEC/`),
+  including code documentation (comments and docstrings), agent/skill
+  definitions, and CLAUDE.md — MUST be written in flawless English, in a
+  professional tone, with no orthographic, grammatical, or syntactic errors. It
+  MUST always seek to meet the four language requirements of Section 0
+  (explicit, objective, closed, concise).
 - **User interaction:** Portuguese (PT-pt)
 - **Technical terms:** May remain in English
-- All project documentation MUST be written in flawless English — no
-  orthographic, grammatical, or syntactic errors. Use clear, simple, and
-  unambiguous technical language aimed at human readers.
 
 ### Accuracy
 - Documentation MUST be accurate and faithful to the code. It is the final phase
@@ -766,4 +837,4 @@ make check
 
 ## Project Identity
 
-**Groadmap** is a CLI tool in Go for managing technical roadmaps, using SQLite as backend.
+**Groadmap** is a CLI tool in Go for managing technical roadmaps, using SQLite as its backend.

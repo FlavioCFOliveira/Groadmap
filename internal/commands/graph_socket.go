@@ -56,6 +56,11 @@ const backstopLine = "7.5s"
 // statement out of what remains, so the socket flag has to be removed from the
 // arguments without an opinion about the rest.
 //
+// The flag is read in both forms (SPEC/COMMANDS.md § Serve Options, § Client
+// Options): `--socket <path>`, whose value is the following token, and
+// `--socket=<path>`, whose value is the text after the first "=" of the same
+// token, later "=" characters included. `--socket=` supplies the empty value.
+//
 // A flag supplied with an empty — or whitespace-only — value is a MISSING
 // parameter and not a validation failure: it names no socket at all, which is the
 // same condition as writing the flag with nothing after it. The value itself is
@@ -67,6 +72,11 @@ func extractSocketFlag(args []string) (string, []string, error) {
 	rest := make([]string, 0, len(args))
 
 	for i := 0; i < len(args); i++ {
+		if joined, ok := strings.CutPrefix(args[i], socketFlagLong+"="); ok {
+			value = joined
+			found = true
+			continue
+		}
 		if args[i] != socketFlagLong {
 			rest = append(rest, args[i])
 			continue
@@ -250,9 +260,10 @@ func graphConnectionLost(socket string) error {
 //
 // The remedy it names is the measured one. Spreading writes across distinct
 // nodes REMOVES the failure rather than moving the threshold at which it starts:
-// holding sixteen writers and varying only the number of nodes they touch, the
-// policy was exhausted on 0.33% of statements against one node, 0.03% against
-// four, and none at all against eight or more (rule 8).
+// holding the writer count fixed and varying only the number of nodes the
+// writers touch, only writers that all shared one node exhausted the retry at
+// all (rule 8). SPEC/IMPLEMENTATION.md § Retry Logic is canonical for that
+// measurement and its figures, and this comment does not restate them.
 // The budget it names is read from the policy rather than written out. It
 // renders "2.5s", the figure SPEC/COMMANDS.md publishes, and it is a FIXED value
 // in the sense that section requires — nothing about an invocation can move it,

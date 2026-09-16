@@ -112,11 +112,14 @@ type Violation struct {
 // pins that, because a fold is exactly the kind of loosening this comparison could
 // drift into without anyone noticing.
 //
-// LIMIT, STATED RATHER THAN HIDDEN. A key holding bytes that are not valid UTF-8
-// is not a sequence of code points, and normalising it replaces each such byte
-// with U+FFFD. Two different malformed keys can therefore land in one group. That
-// is a false positive rather than a missed violation, and Spellings shows the
-// caller immediately that the stored bytes differ.
+// LIMIT, STATED RATHER THAN HIDDEN. Audit receives its keys from the published
+// result of the audit's first step, and a stored key holding bytes that are not
+// valid UTF-8 is published with each such byte already replaced by U+FFFD, so
+// NFC never sees an invalid byte. Two stored keys that differ only in their
+// invalid bytes therefore arrive here as one string: they land in one group, which
+// is reported as KindIdentical with a single spelling although the store holds
+// two (SPEC/GRAPH.md § Node Key Uniqueness, note 5; SPEC/DATA_FORMATS.md
+// § Property-Type Mapping).
 func Audit(rows []Row) []Violation {
 	groups := make(map[string][]Row, len(rows))
 	order := make([]string, 0, len(rows))

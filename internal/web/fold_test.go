@@ -87,13 +87,13 @@ const maxDecomposition = 4
 // keeps U+0085 and removes U+FEFF. It does not fold with the platform's case
 // conversion, which is Unicode's Default Case Conversion rather than the simple
 // mapping, differing on U+0130 and U+03A3. And it does not normalise with the
-// platform's String.prototype.normalize, which would have to agree with the
-// server about COMPOSITION — the one part of the server's Unicode module that is
-// wrong, and the reason the server composes from the very table it ships. All
-// three platform functions read tables of whatever Unicode version the browser
-// ships. The client uses the server's own whitespace set, the server's own
-// normalisation data and the server's own mapping instead, shipped to it as
-// SPACE_TABLE, DECOMP_TABLE, CCC_TABLE, COMPOSE_TABLE and FOLD_TABLE.
+// platform's String.prototype.normalize, which is an implementation no check in
+// the build can run, so nothing could hold it equal to the server's
+// normalisation. All three platform functions read tables of whatever Unicode
+// version the browser ships. The client uses the server's own whitespace set, the
+// character data the server's normalisation module reads, and the server's own
+// mapping instead, shipped to it as SPACE_TABLE, DECOMP_TABLE, CCC_TABLE,
+// COMPOSE_TABLE and FOLD_TABLE.
 //
 // Those five shipped tables are second carriers of the server's rule, and
 // carriers drift unless something compares them. This is that something, and it
@@ -105,12 +105,15 @@ const maxDecomposition = 4
 //
 //   - the SHIPPED tables, extracted from the script the binary actually serves,
 //     never copies of them kept in the test;
-//   - against the SERVER'S OWN foldSearch, isSearchSpace, searchDecompose,
-//     searchCombiningClass and composition data, never against strings.ToLower,
-//     unicode.IsSpace or norm directly and never against a stored table of
-//     expected results — a stored copy can be updated to match a rule that
-//     changed, and would then prove nothing, so a server that changes any part of
-//     the rule MUST fail here;
+//   - against the SERVER'S OWN foldSearch and isSearchSpace, and against the
+//     server's derivation of the normalisation data — searchDecompose,
+//     searchCombiningClass and the composition data — never against
+//     strings.ToLower, unicode.IsSpace or norm directly and never against a
+//     stored table of expected results — a stored copy can be updated to match a
+//     rule that changed, and would then prove nothing, so a server that changes
+//     any part of the rule MUST fail here. The server's normalisation itself is
+//     the module's, and internal/unicodenorm's tests hold the algorithm the script
+//     runs over this data equal to it;
 //   - over EVERY code point of Unicode, all unicodeScalarValues of them, applied
 //     through the same binary searches the script performs, so a table that is
 //     mis-ordered, overlapping, truncated or corrupt cannot pass — and the 11,172
@@ -463,27 +466,27 @@ func TestTaskSearchScript_ShippedRuleIsTheServerRule(t *testing.T) {
 		}
 	}
 
-	// THE COMPOSITION IS GROADMAP'S OWN, ON BOTH SIDES, AND THE WITNESSES SAY SO.
+	// SUPPLEMENTARY STARTERS COMPOSE CORRECTLY, ON BOTH SIDES.
 	//
-	// The sweep above compares the shipped tables with the server's DATA, which a
-	// server that went back to composing with golang.org/x/text would leave
-	// untouched — the table is derived from that module's DECOMPOSITION, which is
-	// right, and the defect is in its runtime composition, which builds its lookup
-	// key as uint32(uint16(a))<<16 + uint32(uint16(b)) and so composes a
-	// supplementary starter as though it were its low 16 bits. So the whole rule is
-	// exercised here as well, on the three witnesses of that defect and on a
-	// legitimate supplementary composite, on BOTH sides: a simplification that
-	// replaced the composition step with norm.NFC.String would leave the client
-	// right and the server wrong, and fails here rather than silently.
+	// The sweep above compares the shipped tables with the server's DATA, which
+	// says nothing about how the server's module composes at run time. Releases of
+	// golang.org/x/text before v0.42.0 composed a supplementary starter as though
+	// it were its low 16 bits, so U+1003C U+0338 became U+226E, U+10041 U+0301
+	// became U+00C1 and U+1042B U+0308 became U+04F8, where no primary composite
+	// has any of those pairs as its decomposition. The server now normalises with
+	// that module, so the whole rule is exercised here on those three witnesses
+	// and on a legitimate supplementary composite, on BOTH sides: a module that
+	// regressed would leave the client right and the server wrong, and fails here
+	// rather than silently.
 	for _, w := range []struct {
 		name          string
 		lead, trail   rune
 		composite     rune
 		shouldCompose bool
 	}{
-		{"the module masks U+1003C to U+003C and composes not-less-than", 0x1003C, 0x0338, 0x226E, false},
-		{"the module masks U+10041 to U+0041 and composes A-acute", 0x10041, 0x0301, 0x00C1, false},
-		{"the module masks U+1042B to U+042B and composes Cyrillic yeru", 0x1042B, 0x0308, 0x04F8, false},
+		{"U+1003C does not compose with U+0338 as U+003C would", 0x1003C, 0x0338, 0x226E, false},
+		{"U+10041 does not compose with U+0301 as U+0041 would", 0x10041, 0x0301, 0x00C1, false},
+		{"U+1042B does not compose with U+0308 as U+042B would", 0x1042B, 0x0308, 0x04F8, false},
 		{"and a legitimate supplementary composite still composes", 0x11935, 0x11930, 0x11938, true},
 	} {
 		sequence := string(w.lead) + string(w.trail)

@@ -106,6 +106,10 @@ jobs:
           # the flag was silently ignored -- the tag never reached the binary.
           # SPEC/VERSION.md makes that constant the single source of the
           # version, bumped as part of the release procedure.
+          # -buildvcs=true fails a build that finds the repository but cannot
+          # record its commit, instead of writing a binary that reports
+          # "(commit unknown)". See SPEC/DEPLOY.md § How a Released Binary
+          # Carries Its Commit.
           ldflags="-s -w"
           if [ "${{ matrix.goos }}" = "linux" ]; then
             ldflags="${ldflags} -extldflags '-static'"
@@ -116,11 +120,28 @@ jobs:
           if [ "${{ matrix.goos }}" = "windows" ]; then
             binary="rmp.exe"
           fi
-          go build -trimpath -ldflags="${ldflags}" -o "dist/${binary}" ./cmd/rmp
+          go build -trimpath -buildvcs=true -ldflags="${ldflags}" -o "dist/${binary}" ./cmd/rmp
           if [ -n "${{ matrix.goarm }}" ]; then
             echo "Built ${{ matrix.goos }}/${{ matrix.goarch }}v${{ matrix.goarm }}"
           else
             echo "Built ${{ matrix.goos }}/${{ matrix.goarch }}"
+          fi
+
+      - name: Check build stamp
+        run: |
+          # -buildvcs=true cannot stop a build that finds no repository at all,
+          # so the stamp is checked on the binary itself before it is packed and
+          # uploaded. `go version -m` exits 0 for an unstamped binary, so the
+          # step decides on its output. See SPEC/DEPLOY.md § How a Released
+          # Binary Carries Its Commit.
+          binary="dist/rmp"
+          if [ "${{ matrix.goos }}" = "windows" ]; then
+            binary="dist/rmp.exe"
+          fi
+          buildinfo=$(go version -m "${binary}")
+          if ! grep -Eq '^[[:space:]]+build[[:space:]]+vcs\.revision=' <<< "${buildinfo}"; then
+            echo "${binary} carries no vcs.revision build setting, so it cannot name the commit it was built from; the job stops before the artefact is uploaded." >&2
+            exit 1
           fi
 
       - name: Create archive

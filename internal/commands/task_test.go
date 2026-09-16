@@ -32,6 +32,31 @@ func setupTestTaskRoadmap(t *testing.T, name string) (*db.DB, func()) {
 	return database, cleanup
 }
 
+// wantNoRoadmapMsg is the refusal SPEC/COMMANDS.md § Roadmap Selection (Always
+// Required) publishes for every task subcommand invoked without -r, less the
+// "Error: " prefix cmd/rmp writes in front of every error.
+const wantNoRoadmapMsg = "no roadmap selected: use -r <name> or --roadmap <name>"
+
+// assertPublishedRefusal requires err to be the refusal SPEC/COMMANDS.md
+// publishes for the case: the sentinel that decides the exit code, the exit code
+// cmd/rmp derives from it, and the whole message after the "Error: " prefix.
+func assertPublishedRefusal(t *testing.T, label string, err, sentinel error, wantCode int, wantMsg string) {
+	t.Helper()
+
+	if err == nil {
+		t.Fatalf("%s: expected the published refusal %q, got nil", label, wantMsg)
+	}
+	if !errors.Is(err, sentinel) {
+		t.Errorf("%s: error %q does not chain %v", label, err, sentinel)
+	}
+	if got := exitCodeFor(err); got != wantCode {
+		t.Errorf("%s: exit code = %d, want %d; error %q", label, got, wantCode, err)
+	}
+	if err.Error() != wantMsg {
+		t.Errorf("%s:\n got: %q\nwant: %q", label, err.Error(), wantMsg)
+	}
+}
+
 // ==================== HandleTask Tests ====================
 
 func TestHandleTask_NoArgs(t *testing.T) {
@@ -74,9 +99,7 @@ func TestTaskList_NoRoadmap(t *testing.T) {
 	requireRoadmap([]string{"-r", "nonexistent"})
 
 	err := HandleTask([]string{"list"})
-	if err == nil {
-		t.Error("taskList with no roadmap expected error, got nil")
-	}
+	assertPublishedRefusal(t, "task list without -r", err, utils.ErrNoRoadmap, 3, wantNoRoadmapMsg)
 }
 
 func TestTaskList_WithRoadmap(t *testing.T) {
@@ -152,9 +175,7 @@ func TestTaskCreate_NoRoadmap(t *testing.T) {
 	utils.EnsureDataDir()
 
 	err := HandleTask([]string{"create", "-t", "test", "-fr", "functional", "-tr", "technical", "-ac", "criteria"})
-	if err == nil {
-		t.Error("taskCreate with no roadmap expected error, got nil")
-	}
+	assertPublishedRefusal(t, "task create without -r", err, utils.ErrNoRoadmap, 3, wantNoRoadmapMsg)
 }
 
 func TestTaskCreate_MissingTitle(t *testing.T) {
@@ -303,9 +324,7 @@ func TestTaskCreate_SpecialistsFlagRejected(t *testing.T) {
 
 func TestTaskGet_NoRoadmap(t *testing.T) {
 	err := HandleTask([]string{"get", "1"})
-	if err == nil {
-		t.Error("taskGet with no roadmap expected error, got nil")
-	}
+	assertPublishedRefusal(t, "task get without -r", err, utils.ErrNoRoadmap, 3, wantNoRoadmapMsg)
 }
 
 func TestTaskGet_NoID(t *testing.T) {
@@ -469,9 +488,7 @@ func TestTaskMutate_FailFastUnknownID(t *testing.T) {
 
 func TestTaskEdit_NoRoadmap(t *testing.T) {
 	err := HandleTask([]string{"edit", "1"})
-	if err == nil {
-		t.Error("taskEdit with no roadmap expected error, got nil")
-	}
+	assertPublishedRefusal(t, "task edit without -r", err, utils.ErrNoRoadmap, 3, wantNoRoadmapMsg)
 }
 
 func TestTaskEdit_NoID(t *testing.T) {
@@ -488,39 +505,63 @@ func TestTaskEdit_NoID(t *testing.T) {
 	}
 }
 
+// TestTaskEdit_InvalidID asserts the row of SPEC/COMMANDS.md § Edit Task for an
+// `<id>` that is not a positive integer.
 func TestTaskEdit_InvalidID(t *testing.T) {
 	testName := "testtaskeditinvalid"
 	_, cleanup := setupTestTaskRoadmap(t, testName)
 	defer cleanup()
 
 	err := HandleTask([]string{"edit", "-r", testName, "notanumber"})
-	if err == nil {
-		t.Error("taskEdit with invalid ID expected error, got nil")
-	}
+	assertPublishedRefusal(t, "task edit notanumber", err, utils.ErrInvalidInput, 2,
+		`invalid input: invalid task ID: "notanumber" (must be a positive integer)`)
 }
 
 // TestTaskEdit_NoFields is a regression gate for finding #48: per
-// SPEC/COMMANDS.md § Edit Task, an edit with no fields is a successful no-op
-// (exit 0, no output, no audit entry), NOT a validation error.
+// SPEC/COMMANDS.md § Edit Task, an edit with no fields of a task the roadmap
+// holds is a successful no-op (exit 0, no output, no audit entry), NOT a
+// validation error. The task is seeded first because a no-field edit of a task
+// the roadmap does not hold is refused with exit 4 (rmp task 492).
 func TestTaskEdit_NoFields(t *testing.T) {
 	testName := "testtaskeditnofields"
-	_, cleanup := setupTestTaskRoadmap(t, testName)
+	database, cleanup := setupTestTaskRoadmap(t, testName)
 	defer cleanup()
 
-	if err := HandleTask([]string{"edit", "-r", testName, "1"}); err != nil {
+	_ = captureStdout(t, func() {
+		if err := taskCreate([]string{
+			"-r", testName,
+			"-t", "Paginate the audit history endpoint",
+			"-fr", "The history endpoint returns at most 100 entries per page.",
+			"-tr", "Use keyset pagination on the audit id rather than OFFSET.",
+			"-ac", "A roadmap holding 250 entries is read in exactly three pages.",
+		}); err != nil {
+			t.Fatalf("seeding the task: %v", err)
+		}
+	})
+	tasks, err := database.ListTasks(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("reading the seeded task back: %v", err)
+	}
+	if len(tasks) != 1 {
+		t.Fatalf("seeded 1 task, found %d", len(tasks))
+	}
+
+	if err := HandleTask([]string{"edit", "-r", testName, itoa(tasks[0].ID)}); err != nil {
 		t.Errorf("taskEdit with no fields must be a no-op (exit 0), got error: %v", err)
 	}
 }
 
+// TestTaskEdit_InvalidPriority asserts the row of SPEC/COMMANDS.md § Edit Task
+// for a `priority` that is not an integer. The flag's value is refused while the
+// flags are parsed, before the task is looked up, so the roadmap holds no task.
 func TestTaskEdit_InvalidPriority(t *testing.T) {
 	testName := "testtaskeditprio"
 	_, cleanup := setupTestTaskRoadmap(t, testName)
 	defer cleanup()
 
 	err := HandleTask([]string{"edit", "-r", testName, "1", "-p", "invalid"})
-	if err == nil {
-		t.Error("taskEdit with invalid priority expected error, got nil")
-	}
+	assertPublishedRefusal(t, "task edit -p invalid", err, utils.ErrInvalidInput, 2,
+		`invalid input: invalid value for --priority: strconv.Atoi: parsing "invalid": invalid syntax`)
 }
 
 // TestTaskEdit_OutOfRangePriority is a regression gate for finding #46: an
@@ -641,9 +682,7 @@ func TestTaskEdit_SpecialistsFlagRejected(t *testing.T) {
 
 func TestTaskRemove_NoRoadmap(t *testing.T) {
 	err := HandleTask([]string{"remove", "1"})
-	if err == nil {
-		t.Error("taskRemove with no roadmap expected error, got nil")
-	}
+	assertPublishedRefusal(t, "task remove without -r", err, utils.ErrNoRoadmap, 3, wantNoRoadmapMsg)
 }
 
 func TestTaskRemove_NoID(t *testing.T) {
@@ -660,24 +699,23 @@ func TestTaskRemove_NoID(t *testing.T) {
 	}
 }
 
+// TestTaskRemove_InvalidID asserts the row of SPEC/COMMANDS.md § Remove Task for
+// an invalid ID format.
 func TestTaskRemove_InvalidID(t *testing.T) {
 	testName := "testtaskremoveinvalid"
 	_, cleanup := setupTestTaskRoadmap(t, testName)
 	defer cleanup()
 
 	err := HandleTask([]string{"remove", "-r", testName, "notanumber"})
-	if err == nil {
-		t.Error("taskRemove with invalid ID expected error, got nil")
-	}
+	assertPublishedRefusal(t, "task remove notanumber", err, utils.ErrInvalidInput, 2,
+		`invalid input: invalid task ID: "notanumber" (must be a positive integer)`)
 }
 
 // ==================== taskSetStatus Tests ====================
 
 func TestTaskSetStatus_NoRoadmap(t *testing.T) {
 	err := HandleTask([]string{"stat", "1", "DOING"})
-	if err == nil {
-		t.Error("taskSetStatus with no roadmap expected error, got nil")
-	}
+	assertPublishedRefusal(t, "task stat without -r", err, utils.ErrNoRoadmap, 3, wantNoRoadmapMsg)
 }
 
 func TestTaskSetStatus_NoArgs(t *testing.T) {
@@ -694,35 +732,36 @@ func TestTaskSetStatus_NoArgs(t *testing.T) {
 	}
 }
 
+// TestTaskSetStatus_InvalidStatus asserts the row of SPEC/COMMANDS.md § Change
+// Status (stat) for a target state that is not a recognised status. The status
+// is refused before any task is looked up, so the roadmap holds no task.
 func TestTaskSetStatus_InvalidStatus(t *testing.T) {
 	testName := "testtaskstatstatus"
 	_, cleanup := setupTestTaskRoadmap(t, testName)
 	defer cleanup()
 
 	err := HandleTask([]string{"stat", "-r", testName, "1", "INVALID"})
-	if err == nil {
-		t.Error("taskSetStatus with invalid status expected error, got nil")
-	}
+	assertPublishedRefusal(t, "task stat 1 INVALID", err, utils.ErrValidation, 6,
+		`validation error: invalid task status: "INVALID"`)
 }
 
+// TestTaskSetStatus_InvalidID asserts the row of SPEC/COMMANDS.md § Change Status
+// (stat) for an ID that is not an integer.
 func TestTaskSetStatus_InvalidID(t *testing.T) {
 	testName := "testtaskstatid"
 	_, cleanup := setupTestTaskRoadmap(t, testName)
 	defer cleanup()
 
 	err := HandleTask([]string{"stat", "-r", testName, "notanumber", "DOING"})
-	if err == nil {
-		t.Error("taskSetStatus with invalid ID expected error, got nil")
-	}
+	assertPublishedRefusal(t, "task stat notanumber DOING", err, utils.ErrInvalidInput, 2,
+		`invalid input: invalid task ID: "notanumber" (must be a positive integer)`)
 }
 
 // ==================== taskSetPriority Tests ====================
 
 func TestTaskSetPriority_NoRoadmap(t *testing.T) {
 	err := HandleTask([]string{"prio", "1", "5"})
-	if err == nil {
-		t.Error("taskSetPriority with no roadmap expected error, got nil")
-	}
+	assertPublishedRefusal(t, "task prio without -r", err, utils.ErrNoRoadmap, 3, wantNoRoadmapMsg)
 }
 
 func TestTaskSetPriority_NoArgs(t *testing.T) {
@@ -768,9 +807,7 @@ func TestTaskSetPriority_OutOfRange(t *testing.T) {
 
 func TestTaskSetSeverity_NoRoadmap(t *testing.T) {
 	err := HandleTask([]string{"sev", "1", "5"})
-	if err == nil {
-		t.Error("taskSetSeverity with no roadmap expected error, got nil")
-	}
+	assertPublishedRefusal(t, "task sev without -r", err, utils.ErrNoRoadmap, 3, wantNoRoadmapMsg)
 }
 
 func TestTaskSetSeverity_NoArgs(t *testing.T) {

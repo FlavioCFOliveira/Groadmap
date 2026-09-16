@@ -25,6 +25,7 @@ func taskRemove(args []string) error {
 	if err != nil {
 		return err
 	}
+	remaining, strays := splitPositionals(remaining, 1)
 
 	if len(remaining) == 0 {
 		return fmt.Errorf("%w: task ID(s) required", utils.ErrRequired)
@@ -43,6 +44,13 @@ func taskRemove(args []string) error {
 	// deliberate -- `sprint reorder` shares that parser and a repeat is a real
 	// error there, which silent deduplication would hide.
 	ids = utils.DistinctIDs(ids)
+
+	// A "-"-prefixed token after the ids stands in no slot and is refused here,
+	// after the checks on the ids and before the roadmap is opened
+	// (SPEC/COMMANDS.md § Positional Arguments).
+	if err := rejectUnknownFlags(strays); err != nil {
+		return err
+	}
 
 	database, err := db.OpenExisting(roadmapName)
 	if err != nil {
@@ -220,7 +228,7 @@ func taskSetStatus(args []string) error {
 			filtered = append(filtered, remaining[i])
 		}
 	}
-	remaining = filtered
+	remaining, strays := splitPositionals(filtered, 2)
 
 	if len(remaining) < 2 {
 		return fmt.Errorf("%w: task ID(s) and status required", utils.ErrRequired)
@@ -251,6 +259,14 @@ func taskSetStatus(args []string) error {
 	// Manual `task stat <ids> SPRINT` is rejected per SPEC/STATE_MACHINE.md.
 	if newStatus == models.StatusSprint {
 		return fmt.Errorf("%w: status SPRINT can only be set automatically via 'sprint add-tasks'", utils.ErrValidation)
+	}
+
+	// A "-"-prefixed token between or after the positional arguments stands in
+	// no slot. It is refused after steps 1 and 2 (ids, target state) and before
+	// step 3, so no flag value is validated once it has been refused
+	// (SPEC/COMMANDS.md § Change Status (stat), § Positional Arguments).
+	if err := rejectUnknownFlags(strays); err != nil {
+		return err
 	}
 
 	// Fail-fast validation for --summary (step 2: before ID/DB verification).
@@ -543,6 +559,7 @@ func taskReopen(args []string) error {
 	if err != nil {
 		return err
 	}
+	remaining, strays := splitPositionals(remaining, 1)
 
 	if len(remaining) == 0 {
 		return fmt.Errorf("%w: task ID(s) required", utils.ErrRequired)
@@ -561,6 +578,11 @@ func taskReopen(args []string) error {
 	// deliberate -- `sprint reorder` shares that parser and a repeat is a real
 	// error there, which silent deduplication would hide.
 	ids = utils.DistinctIDs(ids)
+
+	// See taskRemove: a stray "-"-prefixed token is refused before the roadmap.
+	if err := rejectUnknownFlags(strays); err != nil {
+		return err
+	}
 
 	database, err := db.OpenExisting(roadmapName)
 	if err != nil {
@@ -668,6 +690,7 @@ func taskSetPriority(args []string) error {
 	if err != nil {
 		return err
 	}
+	remaining, strays := splitPositionals(remaining, 2)
 
 	if len(remaining) < 2 {
 		return fmt.Errorf("%w: task ID(s) and priority required", utils.ErrRequired)
@@ -709,6 +732,13 @@ func taskSetPriority(args []string) error {
 	// and `task create` and `task edit` reach the same rule through it
 	// (rmp task 318).
 	if err := models.ValidatePriority(priority); err != nil {
+		return err
+	}
+
+	// A "-"-prefixed token between or after the positional arguments stands in
+	// no slot: refused after the checks on the ids and the priority, and before
+	// the roadmap is opened (SPEC/COMMANDS.md § Positional Arguments).
+	if err := rejectUnknownFlags(strays); err != nil {
 		return err
 	}
 
@@ -761,6 +791,7 @@ func taskSetSeverity(args []string) error {
 	if err != nil {
 		return err
 	}
+	remaining, strays := splitPositionals(remaining, 2)
 
 	if len(remaining) < 2 {
 		return fmt.Errorf("%w: task ID(s) and severity required", utils.ErrRequired)
@@ -799,6 +830,11 @@ func taskSetSeverity(args []string) error {
 	}
 	// One rule, one message: see the note in taskSetPriority above.
 	if err := models.ValidateSeverity(severity); err != nil {
+		return err
+	}
+
+	// See taskSetPriority: a stray "-"-prefixed token is refused before the roadmap.
+	if err := rejectUnknownFlags(strays); err != nil {
 		return err
 	}
 
