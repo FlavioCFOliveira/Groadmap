@@ -551,3 +551,73 @@ func TestSearchNormalisation_ChangesNothingElse(t *testing.T) {
 	t.Logf("%d of %d code points prepare differently under this rule than under the fold alone, "+
 		"%d of them ASCII", changed, swept, asciiChanged)
 }
+
+// ==================== A TERM THAT IS NOT VALID UTF-8 ====================
+
+// TestSearchTerm_EveryInvalidByteBecomesAReplacementCharacterFirst is the gate for
+// the invalid-byte clause of Acceptance Criterion 118: a term whose bytes are not
+// valid UTF-8 is prepared as though each invalid byte had been replaced by U+FFFD
+// before it was normalised and folded, and is then matched like any other term
+// (SPEC/WEB.md § Roadmap Tasks Page, The normalisation rule; The folding rule).
+//
+// The order is not the pipeline's own. searchNFC passes an invalid byte through
+// unchanged — golang.org/x/text/unicode/norm treats one as a boundary — and it is
+// the fold that replaces it, so the prepared term equals the one the criterion
+// describes only because an invalid byte and U+FFFD separate the code points
+// around them alike: neither composes with a neighbour, and no mark is reordered
+// across either. That is asserted here twice: on named terms, against the
+// expected text written out, and over every code point that can interact with a
+// code point before it, against the preparation of the same term with its invalid
+// bytes replaced first.
+func TestSearchTerm_EveryInvalidByteBecomesAReplacementCharacterFirst(t *testing.T) {
+	for _, c := range []struct{ name, raw, want string }{
+		{"an invalid byte between two letters", "a\xffb", "a�b"},
+		{"an invalid byte between a letter and the combining mark after it", "e\xff́",
+			"e�́"},
+		{"an invalid byte before a letter and its combining mark", "\xffÉ", "�é"},
+		{"an invalid byte after a letter and its combining mark", "É\xff", "é�"},
+		{"a truncated combining mark", "Caf\xcc", "caf�"},
+		{"an invalid byte inside an accented word", "Lisb\xc3oa", "lisb�oa"},
+		{"an invalid byte alone between trimmed whitespace", "  \xff　", "�"},
+		{"two invalid bytes, each replaced", "\xe0\x80", "��"},
+	} {
+		if got := foldSearchTerm(c.raw); got != c.want {
+			t.Errorf("%s: foldSearchTerm(%q) = %q (%U), want %q (%U)", c.name, c.raw, got,
+				[]rune(got), c.want, []rune(c.want))
+		}
+	}
+
+	seconds := searchCompositions().Seconds
+	swept, faults := 0, 0
+	for cp := rune(0); cp <= unicodeMaxCodePoint; cp++ {
+		if isSurrogateRune(cp) || (searchCombiningClass(cp) == 0 && !seconds[cp]) {
+			continue
+		}
+		mark := string(cp)
+		for _, raw := range []string{
+			"e\xff" + mark,
+			"\xff" + mark,
+			"E" + mark + "\xff",
+			"\xffE" + mark,
+		} {
+			swept++
+			got := foldSearchTerm(raw)
+			want := foldSearchTerm(string([]rune(raw))) // each invalid byte as U+FFFD, first
+			if got == want && utf8.ValidString(got) {
+				continue
+			}
+			faults++
+			if faults <= maxReportedMismatches {
+				t.Errorf("foldSearchTerm(%q) = %U; with its invalid bytes replaced first the "+
+					"term prepares to %U", raw, []rune(got), []rune(want))
+			}
+		}
+	}
+	if swept == 0 {
+		t.Fatal("the sweep found no code point that can interact with a code point before it")
+	}
+	if faults > maxReportedMismatches {
+		t.Errorf("%d of %d terms prepare differently from the same term with its invalid bytes "+
+			"replaced first; the first %d are above", faults, swept, maxReportedMismatches)
+	}
+}

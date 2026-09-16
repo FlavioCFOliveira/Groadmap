@@ -2,8 +2,9 @@
 """
 Test 64: schema management through `rmp graph serve` and `rmp graph client`.
 
-End-to-end backstop for SPEC/GRAPH.md "Schema Management" and Acceptance
-Criteria 32 to 38, driven against the compiled ./bin/rmp.
+End-to-end backstop for SPEC/GRAPH.md "Schema Management", Acceptance
+Criteria 32 to 38, and the schema half of Acceptance Criterion 62, driven against
+the compiled ./bin/rmp.
 
 A knowledge graph's schema -- its indexes and its constraints -- is managed by
 sending DDL to a running graph server. `rmp graph execute` is withdrawn: `rmp
@@ -77,6 +78,17 @@ EXIT_ENGINE = 1
 # exists to name what the engine's failures are NOT.
 EXIT_VALIDATION = 6
 
+# The fixed prefix of the parse-or-execution line (SPEC/GRAPH.md "Error Handling
+# and Exit Codes", rule 2), as the user reads it. What follows it is the engine's
+# own diagnostic, which this module does not match.
+PARSE_HEAD = "Error: graph engine error: graph query failed: "
+
+# The one fragment of the generic text the engine's Bolt server substitutes for a
+# failure it classifies as its own fault, which names nothing but a session. It is
+# used ONLY to assert that a schema failure does NOT arrive as that text
+# (Acceptance Criterion 37); nothing here recognises a failure by it.
+SESSION_ONLY_TEXT = "(session: "
+
 # The roadmap every case runs against: a realistic backend platform whose
 # specifications are the nodes the indexes and constraints below are declared
 # over.
@@ -126,6 +138,40 @@ class SchemaTestBase:
     def ok(self, query):
         """Run a statement that must succeed, and return its parsed stdout."""
         return self.test.graph_ok(self.roadmap, query=query)
+
+    def refused_with_diagnostic(self, query, *named):
+        """Run a schema statement the engine refuses, and require what
+        Acceptance Criterion 37 requires of the refusal: exit code 1, nothing on
+        stdout, and a first stderr line that is the parse-or-execution line
+        carrying, after its fixed prefix, the engine's own diagnostic -- not the
+        generic text that names only a session.
+
+        `named` are words the STATEMENT itself wrote -- the object's name, the
+        rule, the property -- which the engine's diagnostic for that refusal
+        repeats and the generic text cannot. They are asserted present so that a
+        diagnostic that is merely non-empty cannot pass; nothing of the engine's
+        own wording is matched. Returns the diagnostic.
+        """
+        code, stdout, stderr = self.run(query)
+        assert code == EXIT_ENGINE, (
+            f"AC37: {query!r} must fail in the engine with exit {EXIT_ENGINE}; "
+            f"exit={code} stderr={stderr!r}")
+        assert stdout.strip() == "", f"AC37: {query!r} wrote to stdout: {stdout!r}"
+        line = stderr.splitlines()[0] if stderr else ""
+        assert line.startswith(PARSE_HEAD), (
+            f"AC37: {query!r} must write the parse-or-execution line\n"
+            f"  expected prefix: {PARSE_HEAD!r}\n  captured: {line!r}")
+        diagnostic = line[len(PARSE_HEAD):]
+        assert diagnostic.strip(), (
+            f"AC37: {query!r} carries no diagnostic after the fixed prefix: {line!r}")
+        assert SESSION_ONLY_TEXT not in stderr, (
+            f"AC37: {query!r} arrived as the generic text naming only a session, not as "
+            f"the engine's diagnostic for the refusal: {stderr!r}")
+        for word in named:
+            assert word in diagnostic, (
+                f"AC37: the diagnostic for {query!r} does not name {word!r}, which the "
+                f"statement wrote: {diagnostic!r}")
+        return diagnostic
 
     def restart_server(self):
         """Stop the server and start a fresh one over the store it left.
@@ -639,87 +685,75 @@ class TestGraphSchemaFailureClasses(SchemaTestBase):
         assert code == EXIT_ENGINE, (
             f"AC37: DROP INDEX of an absent object exits {EXIT_ENGINE}, not "
             f"{EXIT_VALIDATION}; exit={code} stderr={stderr!r}")
-        # The shape only, deliberately, and NOT the counters. Measured against
-        # GoGraph v0.14.1, this statement removes nothing and still reports
-        # indexesRemoved 1, because the IF-EXISTS miss is absorbed INSIDE the
-        # operator -- DropIndexOp.Next returns the same silent success for a real
-        # drop and for a name that was never there -- while the counter is
-        # recorded above it, after the operator succeeds, by a caller that cannot
-        # tell the two apart. That contradicts SPEC/DATA_FORMATS.md § Graph Query
-        # Counters rule 7 -- every value is a count of an effect actually applied
-        # -- and the figure comes from the engine, so nothing in this repository
-        # can correct it. The sibling DROP CONSTRAINT ... IF EXISTS returns
-        # cleanly with no counter, because it tests IF EXISTS ABOVE the counted
-        # path and returns before reaching it, which is what makes it an engine
-        # asymmetry rather than a design.
-        # Asserting either number here would be wrong: {"indexesRemoved": 1}
-        # would enshrine the defect, and {} would fail on today's engine.
+        # An IF EXISTS miss is absorbed, and it changed nothing, so it carries no
+        # `counters` key at all (AC37, AC62).
         assert_graph_write_shape(
             self.ok("DROP INDEX no_such_index IF EXISTS"),
-            "AC37: DROP INDEX IF EXISTS over an absent object")
+            "AC37: DROP INDEX IF EXISTS over an absent object", {})
 
-        # The store is unchanged by the two failures and the two no-ops.
+        # AC62: the SAME statement, run twice. The first run removes an index
+        # that exists and says so; the second finds it absent, removes nothing
+        # and publishes no counters -- the difference a caller reads.
+        assert_graph_write_shape(
+            self.ok("CREATE INDEX spec_title FOR (n:Spec) ON (n.title)"),
+            "AC62: the index the two runs below drop", {"indexesAdded": 1})
+        drop_title = "DROP INDEX spec_title IF EXISTS"
+        assert_graph_write_shape(
+            self.ok(drop_title),
+            "AC62: the first run of DROP INDEX IF EXISTS, over an index that exists",
+            {"indexesRemoved": 1})
+        assert_graph_write_shape(
+            self.ok(drop_title),
+            "AC62: the second run of the SAME DROP INDEX IF EXISTS, the index now absent",
+            {})
+
+        # The store is unchanged by the two failures and the two no-ops, and the
+        # drops removed only the index created for them.
         assert self.schema_names() == ["spec_key"], (
             f"AC37: got {self.schema_names()!r}")
 
     def test_ac68_unsupported_definitions_are_engine_failures(self):
-        """Definitions the engine's DDL parser will not accept.
+        """Definitions the engine does not support: a composite index, an index
+        over a relationship property, a composite constraint, and a constraint of
+        a kind the engine does not implement (`IS KEY`).
 
-        The exit code and the empty stdout are what is asserted, and the message
-        deliberately is not. Measured against GoGraph v0.14.1 through the Bolt
-        server, these three fail with `cypher: DDL parse: ir: ...` diagnostics
-        that the server's own error sanitiser does not classify as a client
-        fault, so what reaches the caller is the generic "An internal error
-        occurred. See server logs for details (session: ...)" while the real
-        diagnostic goes to the server's log. That masking is an upstream
-        classification gap, not a fact this module should pin as correct; what
-        it may pin is the outcome the caller can act on, which is that the
-        statement failed in the engine and registered nothing.
+        Each fails in the engine with exit code 1, registers nothing, and carries
+        the engine's own diagnostic for the refusal rather than the generic text
+        naming only a session (AC37). The diagnostic is asserted to name the
+        object the statement named, and to be nothing more specific: its wording
+        is the engine's.
         """
-        for query in (
-            "CREATE INDEX spec_ck FOR (n:Spec) ON (n.key, n.title)",
-            "CREATE INDEX rel_since FOR ()-[e:DEPENDS_ON]-() ON (e.since)",
-            "CREATE CONSTRAINT spec_nk FOR (n:Spec) REQUIRE (n.key, n.title) IS UNIQUE",
+        for query, name in (
+            ("CREATE INDEX spec_ck FOR (n:Spec) ON (n.key, n.title)", "spec_ck"),
+            ("CREATE INDEX rel_since FOR ()-[e:DEPENDS_ON]-() ON (e.since)", "rel_since"),
+            ("CREATE CONSTRAINT spec_nk FOR (n:Spec) REQUIRE (n.key, n.title) IS UNIQUE", "spec_nk"),
+            ("CREATE CONSTRAINT spec_node_key FOR (n:Spec) REQUIRE n.key IS KEY", "spec_node_key"),
         ):
-            code, stdout, stderr = self.run(query)
-            assert code == EXIT_ENGINE, (
-                f"AC37: {query!r} is a definition the engine does not support and "
-                f"must exit {EXIT_ENGINE}; exit={code} stderr={stderr!r}")
-            assert stdout.strip() == "", f"AC37: got stdout {stdout!r}"
+            self.refused_with_diagnostic(query, name)
         assert self.schema_names() == [] and self.schema_names("SHOW CONSTRAINTS") == [], (
             "AC37: a refused definition registers nothing")
 
     def test_ac68_a_constraint_the_data_does_not_satisfy_registers_nothing(self):
         """The engine validates the graph's current data before registering a
         constraint. Groadmap's obligation is to surface that diagnostic intact,
-        so the caller learns WHICH rule failed and on WHICH property.
+        so the caller learns WHICH rule failed and on WHICH property -- for a
+        uniqueness rule and for a presence rule alike (SPEC/GRAPH.md "Schema
+        Failure Classes", rule 3; AC37).
         """
         self.ok("CREATE (:Spec {key:'user-authentication', ord:9})")
 
-        code, stdout, stderr = self.run("CREATE CONSTRAINT spec_key_uq FOR (n:Spec) REQUIRE n.key IS UNIQUE")
-        assert code == EXIT_ENGINE, (
-            f"AC37: a constraint the data does not satisfy exits {EXIT_ENGINE}; "
-            f"exit={code} stderr={stderr!r}")
-        assert stdout.strip() == "", f"AC37: got stdout {stdout!r}"
-        assert "UNIQUE" in stderr and "key" in stderr, (
-            f"AC37: the engine's diagnostic must reach the caller intact through the "
-            f"server, naming the rule and the property; got {stderr!r}")
+        self.refused_with_diagnostic(
+            "CREATE CONSTRAINT spec_key_uq FOR (n:Spec) REQUIRE n.key IS UNIQUE",
+            "UNIQUE", "key")
         assert self.schema_names("SHOW CONSTRAINTS") == [], (
-            "AC37: nothing is registered when the validation fails")
+            "AC37: nothing is registered when the uniqueness validation fails")
 
-        # Presence rules fail the same way, on a property some node lacks. The
-        # exit code and the empty registry are asserted and the message is not:
-        # measured against GoGraph v0.14.1, this one is the case whose
-        # diagnostic the Bolt server's sanitiser replaces with the generic
-        # internal-error text, unlike the UNIQUE rule above. See
-        # test_ac68_unsupported_definitions_are_engine_failures for the same
-        # gap.
-        code, _stdout, stderr = self.run("CREATE CONSTRAINT spec_status_nn FOR (n:Spec) REQUIRE n.status IS NOT NULL")
-        assert code == EXIT_ENGINE, (
-            f"AC37: a presence rule over a property some node lacks exits "
-            f"{EXIT_ENGINE}; exit={code} stderr={stderr!r}")
+        # Presence rules fail the same way, on a property some node lacks.
+        self.refused_with_diagnostic(
+            "CREATE CONSTRAINT spec_status_nn FOR (n:Spec) REQUIRE n.status IS NOT NULL",
+            "NOT NULL", "status")
         assert self.schema_names("SHOW CONSTRAINTS") == [], (
-            "AC37: nothing is registered when the validation fails")
+            "AC37: nothing is registered when the presence validation fails")
 
     def test_the_retired_subcommand_names_are_the_other_exit_code(self):
         """What used to distinguish the engine's 1 from a Groadmap refusal's 6.

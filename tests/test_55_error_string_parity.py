@@ -952,30 +952,31 @@ EXEMPT_KEYS = {
     "Error: graph engine error: graph field too long; nothing was written. Shorten the field the engine names: <engine diagnostic>": (
         "NOT REACHABLE AT THE PINNED ENGINE, and the specification says so in "
         "the scenario column of the row itself. Every statement now crosses a "
-        "graph server, and the engine's Bolt server classifies this refusal as "
-        "its own fault rather than the caller's: it replaces the diagnostic "
-        "with generic internal-error text, so no sentinel, no distinguishing "
-        "code and no field kind reaches this side. MEASURED through a running "
-        "server, a 70000-byte label comes back as \"Error: graph engine error: "
-        "graph query failed: An internal error occurred. See server logs for "
-        "details (session: <id>).\" -- the parse/execution row above, which is "
-        "the very outcome this line was published to end. An ordinary parse "
-        "failure and an ordinary execution failure both cross with their full "
-        "text, so the replacement is specific to this class. "
-        "Recovering the class by matching the engine's replacement text is "
-        "forbidden by GRAPH.md \"Field Length Limits\", rule 3: that text is "
-        "the engine's to reword and a match on it fails silently at the next "
-        "version bump. COMMANDS.md keeps the row rather than withdrawing it "
-        "because the class is real and the remedy is an engine-side change, and "
-        "it states in as many words that nothing in this repository can drive "
-        "the line. What IS still driven, in tests/test_69_graph_field_length.py: "
-        "that an over-long field of either kind is refused with exit code 1, "
-        "that a shorter one is accepted, that the refusal leaves nothing behind "
-        "and the store stays usable, and that a syntax error still writes the "
-        "parse/execution line WITH the engine's own diagnostic -- which is what "
-        "keeps this exemption's account of the loss honest rather than a "
-        "guess. internal/commands/graph_fieldlength_test.go measures the bound "
-        "in process, where the sentinel still survives."
+        "graph server, and the class of this refusal does not cross it: the "
+        "engine's Bolt server forwards the engine's diagnostic -- the field kind "
+        "and both figures -- under a client-error code it also gives to every "
+        "other argument the engine refuses, and the sentinel that selects this "
+        "line stays on the server's side. MEASURED through a running server, a "
+        "70000-byte label comes back on the parse/execution row above, ending in "
+        "the engine's own diagnostic: the caller learns what is wrong, and learns "
+        "it only from text COMMANDS.md does not specify -- the very outcome this "
+        "line was published to end. Recovering the class by matching that "
+        "diagnostic is forbidden by GRAPH.md \"Field Length Limits\", rule 3: "
+        "the text is the engine's to reword and a match on it fails silently at "
+        "the next version bump, and the shared code cannot select the line "
+        "either, because it would select it for refusals that are not an "
+        "over-long field (rule 13). COMMANDS.md keeps the row rather than "
+        "withdrawing it because the class is real and the remedy is an "
+        "engine-side change, and it states in as many words that nothing in this "
+        "repository can drive the line. What IS still driven, in "
+        "tests/test_69_graph_field_length.py: that an over-long field of either "
+        "kind is refused with exit code 1 and the parse/execution line followed "
+        "by the engine's diagnostic -- neither this line nor the generic text "
+        "naming only a session -- that a shorter one is accepted, that the "
+        "refusal leaves nothing behind and the store stays usable, and that a "
+        "syntax error still writes the parse/execution line WITH the engine's own "
+        "diagnostic. internal/commands/graph_fieldlength_test.go measures the "
+        "bound in process, where the sentinel still survives."
     ),
     "Error: graph store error: graph store unavailable: <detail>": (
         "internal/commands/graph_socket.go (graphServerFailure) and "
@@ -3270,9 +3271,10 @@ class TestErrorStringParity:
     #
     # The condition is real and the row is still published; what changed is that
     # nothing can produce the line. Every statement crosses a graph server, and
-    # the engine's Bolt server replaces this refusal's diagnostic with generic
-    # internal-error text, so the sentinel that selects the line never reaches
-    # this side and the condition arrives on the parse/execution row instead.
+    # the engine's Bolt server forwards this refusal's diagnostic under a code it
+    # shares with every other argument error, so the sentinel that selects the
+    # line never reaches this side and the condition arrives on the
+    # parse/execution row instead, ending in the engine's diagnostic.
     # SPEC/COMMANDS.md § Client Error Cases says so in the scenario column of the
     # row itself and states that nothing in this repository can drive it.
     #

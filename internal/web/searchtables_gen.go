@@ -15,10 +15,11 @@
 // carries the property, and removes U+FEFF, which does not; and its
 // String.prototype.normalize reads normalisation tables of its own. All three read
 // tables of whatever Unicode version the browser ships. Shipping the server's own
-// mapping, the server's own set and the server's own normalisation data removes
-// the platform and the browser's Unicode version from the answer on all three
-// counts (SPEC/WEB.md § Roadmap Tasks Page, One rule, and only one implementation
-// of it; The trim rule; The normalisation rule).
+// mapping, the server's own set, and the character data the server's
+// normalisation module reads removes the platform and the browser's Unicode
+// version from the answer on all three counts (SPEC/WEB.md § Roadmap Tasks Page,
+// One rule, and only one implementation of it; The trim rule; The normalisation
+// rule).
 //
 // Hangul is deliberately NOT tabulated: UAX #15 decomposes and composes the 11,172
 // Hangul syllables arithmetically, so both sides compute them and DECOMP_TABLE
@@ -27,12 +28,15 @@
 // Run it with `go generate ./internal/web/` and commit the result: the tables are
 // generated but COMMITTED artefacts, so `go build` stays a plain Go build with no
 // code-generation step. Regeneration is not what keeps the two sides equal —
-// TestTaskSearchScript_ShippedRuleIsTheServerRule is. That test compares BOTH
-// SHIPPED tables against the server's own foldSearch and isSearchSpace over every
-// code point of Unicode on every `go test ./...`, so a toolchain upgrade that
-// moves a mapping or changes which code points carry White_Space fails the build
-// gates and names what moved; re-running this generator is then the fix, not the
-// detection.
+// the tests are. TestTaskSearchScript_ShippedRuleIsTheServerRule compares EVERY
+// SHIPPED table, over every code point of Unicode on every `go test ./...`,
+// against the server's own foldSearch and isSearchSpace and against the
+// normalisation data internal/unicodenorm derives from the module; and the tests
+// of internal/unicodenorm hold the algorithm the script runs over that data equal
+// to the server's normalisation. So a toolchain or module upgrade that moves a
+// mapping, changes which code points carry White_Space, or moves the
+// normalisation data fails the build gates and names what moved; re-running this
+// generator is then the fix, not the detection.
 package main
 
 import (
@@ -367,8 +371,9 @@ type classSpan struct {
 //
 // The data is applied here exactly as internal/web/fold.go's searchDecompose
 // applies it — norm.NFD of the single code point — so the generator and the
-// server express one rule, and the guard test proves the two agree against
-// searchDecompose itself, over every code point, on every test run.
+// derivation the guard measures express one rule, and the guard test proves the
+// two agree against searchDecompose itself, over every code point, on every test
+// run.
 //
 // The 11,172 Hangul syllables are skipped: UAX #15 decomposes them
 // arithmetically, both sides compute them, and the guard sweeps them too — so an
@@ -425,13 +430,14 @@ func combiningClassSpans() []classSpan {
 // not exclude from composition.
 //
 // It re-expresses internal/web/fold.go's buildSearchComposition step for step,
-// down to reading the exclusion from the NFC_Quick_Check property — which is
-// DATA and not the composing transform — and to entering only COMPOSABLE code
-// points into the prefix lookup, so that U+01FA pairs with U+00C5 rather than
-// with the canonically equivalent but excluded U+212B. The reason the module's
-// own composition is not used at all is in that function's comment: at the pinned
-// version it composes a supplementary starter as though the starter were its low
-// 16 bits.
+// down to reading the exclusion from the Full_Composition_Exclusion property —
+// which is DATA and not the composing transform — and to entering only
+// COMPOSABLE code points into the prefix lookup, so that U+01FA pairs with U+00C5
+// rather than with the canonically equivalent but excluded U+212B. Like that
+// derivation, it never asks the module to compose: the table is a statement of
+// the pairs that is independent of the module's composition, and the tests of
+// internal/unicodenorm hold the browser's algorithm over it equal to that
+// composition (unicodenorm.BuildComposition says why the independence matters).
 //
 // Hangul is skipped here as it is in decompositionEntries, and for the same
 // reason.
@@ -486,8 +492,8 @@ func combiningClass(r rune) uint8 {
 //
 // It re-expresses internal/unicodenorm.IsCompositionExcluded, deliberately rather
 // than by importing it, for the same reason foldRuns re-expresses the fold: the
-// generator and the server are two expressions of one rule, and the guard test
-// proves they agree instead of assuming it. That function's comment says why the
+// generator and that derivation are two expressions of one rule, and the guard
+// test proves they agree instead of assuming it. That function's comment says why the
 // very similar QuickSpanString form is NOT this property, and which twelve code
 // points Unicode 16.0.0 introduced to prove it.
 func isCompositionExcluded(r rune) bool {

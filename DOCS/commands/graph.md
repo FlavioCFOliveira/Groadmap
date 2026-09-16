@@ -93,11 +93,11 @@ Every class of statement runs through this one subcommand:
 
 **It requires a server.** `client` resolves `~/.roadmaps/<name>/graph.sock`, or the `--socket` path when one is given, and with nothing listening there it fails with exit code `1` and writes nothing to stdout. It does **not** open the store, and no subcommand does. Start a server with `rmp graph serve -r <roadmap>` and leave it running — it is long-lived, so run it in the background or in another terminal, and wait for its `{"socket": ...}` line before sending a statement. A result from this command is therefore evidence that a server ran the statement, and a failure is evidence that none was reached; neither is a defect.
 
-**The statement runs under a 5-second time budget.** The server is the end that enforces it; the client keeps a later deadline of its own, 7.5 seconds, purely as a backstop against a server that answers nothing, so a statement that committed just before the budget expired is never reported as one that wrote nothing. A statement that exhausts the budget is cancelled, its transaction rolls back whole, nothing is written, and the command fails with exit code 1. The remedy is to narrow the statement — add a label, an indexed property filter, or a `LIMIT` — or to split it into smaller statements.
+**The statement runs under a 5-second time budget.** The server is the end that enforces it; the client keeps a later deadline of its own, 7.5 seconds, purely as a backstop against a server that answers nothing, so a statement that committed just before the budget expired is never reported as one that wrote nothing. A statement that exhausts the budget is cancelled, its transaction rolls back whole, nothing is written — with the one exception recorded under [Known Limitations](#known-limitations) — and the command fails with exit code 1. The remedy is to narrow the statement — add a label, an indexed property filter, or a `LIMIT` — or to split it into smaller statements.
 
 **A serialisation conflict is retried, not reported.** Two clients writing to the same nodes at the same time is an ordinary situation inside a server, and the store detects the collision rather than preventing it. The losing statement committed nothing, so the client re-sends it under the project's retry policy and reports a failure only when that policy or the statement time budget is exhausted. **An exhausted policy is reported as itself**, on a line of `rmp`'s own rather than the engine's: it names the contention, states that nothing was written, and asks for the same statement again, so a caller can tell "you hit contention, run it again" from "your statement is wrong" instead of guessing. Sustained contention on one node is the shape that produces it, and it is rare at this boundary: sixteen concurrent writers to a **single** node, driven through `rmp graph client`, exhausted the policy on **0 of 7,040** statements. That figure belongs to the delay shape the policy uses — a full-jitter draw rather than a fixed ladder — and it is what the shape was chosen for. Sixteen separate processes are the hard case: losing together, they walk a fixed ladder in lockstep, sleep the same interval and re-collide, which is why the same load under a fixed ladder exhausted on **2.81% to 3.44%** of invocations while the same contention measured inside one process exhausted on 0.18% to 0.43%. Spreading those writes across distinct nodes removes the failure rather than moving its threshold.
 
-**A field the statement writes may be too long for the store's durable formats.** The engine refuses such a commit, nothing is written and the invocation exits 1; a field short enough to commit and too long to fold into a snapshot commits and then refuses every checkpoint of that graph. See [How long a field may be](#how-long-a-field-may-be).
+**A field the statement writes may be too long for the store's durable formats.** The engine refuses such a commit, nothing is written (with the one exception recorded under [Known Limitations](#known-limitations)) and the invocation exits 1; a field short enough to commit and too long to fold into a snapshot commits and then refuses every checkpoint of that graph. See [How long a field may be](#how-long-a-field-may-be).
 
 **Usage:** `rmp graph client -r <roadmap> [--query <cypher>] [--socket <path>]`
 
@@ -237,14 +237,14 @@ An explicit `BEGIN` to `COMMIT` sequence has the same **5 seconds in total** tha
 
 **A server does not checkpoint per write.** A full snapshot after every write would make every write cost the whole live graph while its neighbours waited for the pause a capture takes. It checkpoints instead on an age-based cadence while it runs — a snapshot is owed once it is five minutes old, and the loop looks every 75 seconds — and again at shutdown, so the log the next open replays is short. The cadence is provisional, chosen by analogy and left where measurement found no reason to move it; it is not part of any published contract. There is no size trigger and no operation-count trigger, so a burst of writes inside one window grows the log without limit and the next open replays all of it.
 
-**The shutdown checkpoint is conditional, and the condition matters.** It runs when, and only when, the write-ahead log has grown since it was last folded; a shutdown that owes no fold writes nothing at all, and `snapshot/` and `wal` are left byte for byte as the server found them. The reason is not economy. A statement the time budget cut while it was writing is rolled back whole, and the rollback restores the *logical* graph but not the *physical* one: the engine keeps the interned key of every node the statement created, and a tombstone for each. A checkpoint taken afterwards serialises that residue to disk, where nothing removes it. Measured, one cut `MATCH (a),(b),(c) CREATE ()` over a store of 80 KB holding 600 nodes left the store at **134 MB** while the graph still held exactly its 600 nodes, and a later `MATCH (n) RETURN count(*)` over that store cost 1.48 s and 670 MB against 0.01 s and 21.6 MB on a clean one. A cut statement commits nothing, so it appends nothing to the log, so no fold is owed and the shutdown writes nothing — which is what keeps the residue off the disk. The in-flight cadence checkpoint carries no such condition and can still publish it.
+**The shutdown checkpoint is conditional, and the condition matters.** It runs when, and only when, the write-ahead log has grown since it was last folded; a shutdown that owes no fold writes nothing at all, and `snapshot/` and `wal` are left byte for byte as the server found them. The reason is not economy. A statement the time budget cut while it was writing is rolled back whole, and the rollback restores the *logical* graph — with the one exception recorded under [Known Limitations](#known-limitations) — but not the *physical* one: the engine keeps the interned key of every node the statement created, and a tombstone for each. A checkpoint taken afterwards serialises that residue to disk, where nothing removes it. Measured, one cut `MATCH (a),(b),(c) CREATE ()` over a store of 80 KB holding 600 nodes left the store at **134 MB** while the graph still held exactly its 600 nodes, and a later `MATCH (n) RETURN count(*)` over that store cost 1.48 s and 670 MB against 0.01 s and 21.6 MB on a clean one. A cut statement commits nothing, so it appends nothing to the log, so no fold is owed and the shutdown writes nothing — which is what keeps the residue off the disk. The in-flight cadence checkpoint carries no such condition and can still publish it.
 
 **Shutdown drains, and the drain is Groadmap's own** because the engine's shutdown cuts sessions rather than draining them. On `SIGINT` or `SIGTERM` the server stops accepting connections, waits under a bounded timeout (7.5 seconds) for the work in flight to reach a quiescent point, cuts what the drain could not finish, shuts the Bolt server down, checkpoints and truncates the log if a fold is owed, closes the store, releases the lock, removes the socket, and exits 0.
 
 What the drain guarantees, and what it does not:
 
 - **Every acknowledged commit is durable.** This is the commit protocol's doing rather than the drain's, and it holds against an unexpected kill too.
-- **A statement in flight is either completed and answered, or cut whole.** A cut statement's transaction rolls back entirely and leaves no partial write.
+- **A statement in flight is either completed and answered, or cut whole.** A cut statement's transaction rolls back entirely and leaves no partial write, with the one exception recorded under [Known Limitations](#known-limitations).
 - **It does not guarantee completion.** The bound is finite; past it the remaining sessions are cut, and a cut client sees a broken connection rather than a typed failure. The store is consistent either way.
 - **It does not tell a client whose connection was cut between the commit and its acknowledgement whether the statement committed.** Nothing closes that window.
 - **It does not bound the shutdown.** See [Known Limitations](#known-limitations).
@@ -287,6 +287,8 @@ Error: graph engine error: graph write conflict: another writer committed first 
 
 The first says to change the statement; the second says to run the same statement again. Everything else the engine refuses arrives on the general line, `Error: graph engine error: graph query failed: <engine diagnostic>`.
 
+Both lines say that nothing was written, which is what the engine's transaction guarantees, and they keep those words. One engine defect breaks the guarantee for a statement that had created a relationship between two nodes already joined in that direction; see [Known Limitations](#known-limitations).
+
 ## The Withdrawn Subcommand Names
 
 `execute`, `create`, `query`, `update`, `delete` and `search` were subcommands of `rmp graph`. They are not any more, and `serve` and `client` are the whole of the family. Each withdrawn name is an unresolved subcommand name and is answered as a dispatch failure: exit code `127`, the `graph` help on stderr, nothing on stdout, and the statement does not run. They are named here because an agent that has one of them in memory needs to be told that it will not resolve.
@@ -299,8 +301,10 @@ The hazards that follow are all silent and all report success. They are enumerat
 
 - A statement whose bytes are not valid UTF-8 executes, with every undecodable byte replaced by `U+FFFD`. A write stores a value that was never supplied; a match compares against a literal that was never supplied and reports success having found nothing.
 - A property value carrying a control character is stored. Cypher decodes `\b`, `\f` and `\uXXXX` inside a string literal, so a statement whose own text is pure ASCII can write a real `ESC` into the store.
-- A relationship property written through an incoming or undirected pattern is not reliably written, and the statement still reports success. Every relationship is writable through an outgoing pattern, which may be anchored on either endpoint: use `MATCH (s)-[e]->(v:Test {key:'…'}) SET e.last_commit = '…'` rather than the reverse spelling. See [Known Limitations](#known-limitations) for what an undirected pattern does to a `SET` that matched more than one relationship.
-- Reading is unaffected: a relationship read through an incoming or undirected pattern, fixed-length or variable-length, reports its identity, its type and its stored orientation correctly. The reach of the write hazard stops at writing.
+- A relationship property **removal** through an incoming or undirected pattern is not reliably applied, and the statement still reports success. Assignments are not affected: a `SET` reaches the relationship the pattern bound whichever way the pattern walked it. Remove through an outgoing pattern, which may be anchored on either endpoint — `MATCH (s)-[e]->(v:Test {key:'…'}) REMOVE e.last_commit` rather than the reverse spelling — or assign `null` instead. See [Known Limitations](#known-limitations) for what an undirected pattern does to a `REMOVE` that matched more than one relationship.
+- Reading is unaffected: a relationship read through an incoming or undirected pattern, fixed-length or variable-length, reports its identity, its type and its stored orientation correctly. The reach of the removal hazard stops at removing a property.
+- A relationship bound by a `MERGE` or a `CREATE` is not reliably the relationship that clause matched or created when more than one relationship joins the same two nodes in the pattern's direction: a write after a matching `MERGE`, or a `DELETE` of a relationship the statement created, can land on another relationship of the pair. Binding the relationship again with `MATCH` is sound. See [Known Limitations](#known-limitations).
+- A property value that is a list holding `null` is not stored as written. See [Known Limitations](#known-limitations).
 - A schema DDL statement carrying a further clause after it executes **in part**: the engine's schema parser stops when its grammar is satisfied and discards the rest without an error or a notification. Issue the two halves as two invocations.
 - A schema-introspection command written with anything but a single space between its two keywords fails as a syntax error whose message names `SHOW` rather than the spacing. `SHOW  INDEXES` fails; `SHOW INDEXES` succeeds. The same is true of the four DDL forms.
 
@@ -360,9 +364,7 @@ rmp graph client -r backend-platform --query "DROP CONSTRAINT spec_key_uq"
 rmp graph client -r backend-platform --query "DROP INDEX spec_key IF EXISTS"
 ```
 
-A drop that removed the object outputs `{"ok": true}` carrying `"indexesRemoved": 1` or `"constraintsRemoved": 1` under `counters`. A `DROP CONSTRAINT ... IF EXISTS` that found nothing to drop changes nothing and outputs `{"ok": true}` alone.
-
-**The figure a no-op `DROP INDEX ... IF EXISTS` reports is currently unreliable.** Over an index that does not exist, the engine reports `"indexesRemoved": 1` although nothing was removed. Only this one form is affected: a `DROP CONSTRAINT ... IF EXISTS` over an absent constraint reports no counter, and neither does a `CREATE INDEX ... IF NOT EXISTS` over an index already registered. The count comes from the engine, and the defect is tracked for repair; until it is fixed, read `indexesRemoved` after an `IF EXISTS` drop as saying that the drop ran, not as evidence that an index was there to remove. `SHOW INDEXES` remains the authoritative report of what is registered.
+A drop that removed the object outputs `{"ok": true}` carrying `"indexesRemoved": 1` or `"constraintsRemoved": 1` under `counters`. A `DROP INDEX ... IF EXISTS` or `DROP CONSTRAINT ... IF EXISTS` that found nothing to drop changes nothing and outputs `{"ok": true}` alone, so running the same `IF EXISTS` drop twice reports the removal the first time and no `counters` member the second.
 
 Because removal is by name only, a caller who did not declare a name must first learn the derived one from a listing. Declaring a name is the recommended practice and Groadmap does not enforce it: a named object is dropped by the name its author wrote, while an unnamed one is dropped by a name the engine chose, which changes if the index kind changes.
 
@@ -433,7 +435,7 @@ rmp graph client -r backend-platform --query "CREATE INDEX spec_key FOR (n:Spec)
 # Error: graph engine error: graph query failed: <engine diagnostic>
 ```
 
-**How much of the engine's diagnostic you actually read depends on how the engine classified the failure.** A duplicate create, a drop of an object that does not exist, a spacing failure, and a uniqueness rule the data does not satisfy all arrive with the engine's own text — the name it could not add, the name it could not find, the parse position, the duplicate value — because its Bolt server classifies them as the caller's fault and forwards the message. Two are classified as the server's own fault instead, and the session replaces the message with generic internal-error text naming only the session: a definition the engine does not support, and a **presence** rule (`IS NOT NULL`) the data does not satisfy. The split between the two constraint kinds is the engine's and is not a rule you can read off the statement. The refusal, the sentinel and the exit code are unchanged either way; only the diagnostic differs, and the full text is in the server's stderr. See [Through the server, some diagnostics are replaced](#through-the-server-some-diagnostics-are-replaced).
+**Every failure in the table arrives with the engine's own diagnostic**, because the engine's Bolt server classifies each as the caller's fault and forwards the message: a duplicate create names the object it could not add, a drop of an absent object names what it could not find, a spacing failure gives the parse position, a definition the engine does not support names the unsupported form, and a constraint the existing data does not satisfy — a uniqueness rule or a presence rule alike — names the rule and the property it failed on. Failures that the server does not forward are listed under [Through the server, some diagnostics are replaced](#through-the-server-some-diagnostics-are-replaced); no schema failure is among them.
 
 A failed schema statement leaves the schema as it was. No partial registration exists in any of these classes: the object is either registered or it is not.
 
@@ -563,11 +565,22 @@ rmp graph client -r backend-platform \
 ### A counter is not a promise that the write can be read back
 
 Each figure is incremented where the engine applied the change, which is not the same as
-saying the change is afterwards visible. The two relationship-write defects under
-[Known Limitations](#known-limitations) both report their counters as though the write
-had persisted: where their preconditions hold, `counters` is exactly as silent about the
-loss as `{"ok": true}` was. What the member adds is a signal where there was none; what
-it does not add is a guarantee that was never there.
+saying the change landed where the statement meant it to. The two relationship-write
+defects under [Known Limitations](#known-limitations) meet the counters differently:
+
+- **A dropped removal is not counted.** A statement whose only removal was dropped
+  publishes no `counters` member — which is also what a `REMOVE` of a property that was
+  genuinely absent publishes. The absence tells you something only if you already know
+  how many relationships carried the property.
+- **A misdirected binding is counted as if nothing were wrong.** A clause after a
+  `MERGE` that matched on a pair joined by several relationships runs once per row the
+  `MERGE` emitted, and every run is counted, so the figure overstates what the statement
+  did and says nothing about which relationship took the write. A `DELETE` that removed
+  a pre-existing relationship in place of the one the statement created reports one
+  relationship created and one deleted, exactly as the correct deletion would.
+
+What the member adds is a signal where there was none; what it does not add is a
+guarantee that was never there.
 
 `SPEC/DATA_FORMATS.md § Graph Query Counters` is canonical for the shape and the key
 set, and `SPEC/GRAPH.md § Write Counters: What a Statement Changed` for the behaviour.
@@ -690,11 +703,12 @@ they tell you.
   this refusal as its own fault and replaces the message with generic text naming only
   the session: `graph engine error: graph query failed: An internal error occurred. See
   server logs for details (session: <id>)`. The cause reaches the **server's** stderr
-  and not the caller. This is the same substitution the over-long-field refusal meets
-  (see [How Long a Field May Be](#how-long-a-field-may-be)), for the same reason, and it
-  is a property of the pinned engine rather than of Groadmap. So an unexplained internal
-  error from a `PROFILE` is worth reading as this refusal before it is read as a
-  defect.
+  and not the caller. This is the same substitution a property value the engine cannot
+  store meets (see
+  [Through the server, some diagnostics are replaced](#through-the-server-some-diagnostics-are-replaced)),
+  for the same reason, and it is a property of the pinned engine rather than of
+  Groadmap. So an unexplained internal error from a `PROFILE` is worth reading as this
+  refusal before it is read as a defect.
 
 `SPEC/DATA_FORMATS.md § Graph Plan Node` is canonical for the shape and for when each
 key is present; `SPEC/GRAPH.md § Query Plans: The EXPLAIN and PROFILE Prefixes` for the
@@ -743,8 +757,9 @@ The commit is refused, nothing is written, and the invocation exits `1`.
 **Nothing is written and the store stays usable.** The refused transaction consumes a
 sequence number and applies nothing, so the graph holds no part of the statement — not
 the elements it created before it reached the over-long field, and not the properties it
-set on them. An ordinary write submitted immediately afterwards succeeds, and a
-following `MATCH` counts it.
+set on them — with the one exception recorded under
+[Known Limitations](#known-limitations), which this refusal does not escape. An ordinary
+write submitted immediately afterwards succeeds, and a following `MATCH` counts it.
 
 **Two field kinds are reachable from a statement, and the others are not.** The
 65535-byte bound is what a node or edge **label** and a node or edge **property key**
@@ -767,13 +782,17 @@ Error: graph engine error: graph field too long; nothing was written. Shorten th
 so that a caller can tell "shorten one of your values" from "correct your syntax"
 without reading English — the same reason the statement budget and the exhausted retry
 each hold a line of their own. What a caller actually reads today is the general
-parse-or-execution line carrying generic internal-error text, because every statement
-crosses a server and the engine's Bolt server replaces the message of this class
-(see [Through the server, some diagnostics are replaced](#through-the-server-some-diagnostics-are-replaced)).
-The line stays published because the class is real and the remedy is known and small;
-it is published here as **not yet reachable** rather than left for a caller to wait for.
-Nothing about the failure itself changes: the sentinel is the same, the exit code is 1,
-nothing is written, and the store stays usable.
+parse-or-execution line, `Error: graph engine error: graph query failed: `, ending in the
+engine's own diagnostic, which names the field kind, the length the field occupies and
+the maximum in force. What does not cross the connection is the class: every statement
+crosses a server, and the engine's Bolt server forwards this refusal under a code it
+also gives to every other argument the engine refuses, so only the diagnostic's wording
+— which is the engine's to change and not a contract — tells this failure apart from
+any other. The line stays published because the class is real and the remedy is known
+and small; it is published here as **not yet reachable** rather than left for a caller
+to wait for. Nothing about the failure itself changes: the sentinel is the same, the
+exit code is 1, nothing is written (with the one exception recorded under
+[Known Limitations](#known-limitations)), and the store stays usable.
 
 Two neighbouring refusals are **not** this class. A node key longer than the
 log's 32-bit prefix is refused by the engine's node-key codec, and an assembled log
@@ -842,7 +861,10 @@ failure whether the caller reads its diagnostic or a replacement.
 **A failure the server classifies as the caller's own crosses intact.** A parse error
 arrives with its position and its expected tokens; a duplicate `CREATE INDEX` arrives
 naming the index; a `DROP INDEX` of an absent object arrives naming what it could not
-find. These are the common cases, and nothing is lost in them.
+find; every other schema failure arrives with the engine's own text (see
+[Managing the Schema](#managing-the-schema)); and the over-long field of the section
+above arrives naming the field kind and both figures, though without a class of its
+own. These are the common cases, and nothing in the diagnostic is lost in them.
 
 **A failure the server classifies as its own is replaced**, with generic text naming
 only the session:
@@ -851,28 +873,35 @@ only the session:
 Error: graph engine error: graph query failed: An internal error occurred. See server logs for details (session: <id>).
 ```
 
-The over-long field of the section above is one such case; so are a schema definition
-the engine does not support and a **presence** constraint (`REQUIRE ... IS NOT NULL`)
-the existing data does not satisfy. The neighbouring **uniqueness** constraint is not:
-a `REQUIRE ... IS UNIQUE` over duplicated data arrives with the engine's own text,
-naming the property and the repeated value. The two kinds are refused for the same
-reason and reported differently, which is the engine's classification and not something
-a caller can predict from the statement. The sanitised wording is the engine's at the
-pinned version and not a Groadmap contract; what is stable about it is that it names the
-session and nothing else.
+Two cases are replaced at the pinned engine:
+
+- **A property value the engine cannot store.** A node, a relationship or a path —
+  alone or inside a list — a map, and a list holding a list or a map are all refused, on
+  every write form: `SET e.k = …`, `SET e = {…}`, `SET e += {…}`, `ON CREATE SET`,
+  `ON MATCH SET`, and an inline property map in a `CREATE` or `MERGE` pattern, on a node
+  and on a relationship alike. The statement fails with exit code 1, the key is never
+  stored, and a replacing form leaves the properties the element already carried as
+  they were. The line does not say which value was refused; the server's stderr names
+  the key.
+- **A `PROFILE` of a statement that writes** (see
+  [Query Plans: `EXPLAIN` and `PROFILE`](#query-plans-explain-and-profile)).
+
+The sanitised wording is the engine's at the pinned version and not a Groadmap contract;
+what is stable about it is that it names the session and nothing else.
 
 **It is not a different failure, and the diagnostic is not destroyed.** The sentinel and
-the exit code are what they would otherwise be, nothing is written, and the store stays
+the exit code are what they would otherwise be, nothing is written (with the one
+exception recorded under [Known Limitations](#known-limitations)), and the store stays
 usable. The engine logs the full text under that same session on the server's own
-stderr, so a caller who meets one of these lines and needs to know which field, which
-definition or which constraint was at fault reads the stderr of the server that answered
-the statement — which is one reason to keep a server's output somewhere you can read it.
+stderr, so a caller who meets one of these lines and needs to know which value was
+refused, or why a `PROFILE` was, reads the stderr of the server that answered the
+statement — which is one reason to keep a server's output somewhere you can read it.
 
 Groadmap does not close this on its own side, and there is no interception point at
 which it could: the engine's server exposes no error-mapping option, and Groadmap runs
 no statement of its own between the caller and the server. The one remaining lever would
-be matching the replaced text, which names nothing worth matching. The remedy belongs in
-the engine.
+be matching the text the server sends, which is the engine's to reword and, where it has
+been replaced, names nothing worth matching. The remedy belongs in the engine.
 
 ## Query Input Source and Precedence
 
@@ -913,8 +942,14 @@ These are measured, currently unfixed, and reported here rather than left to be 
 
 - **A statement cancelled by the time budget can cost gigabytes of memory, and the server has no exit to return it at.** Every mutation a statement has applied is retained until the rollback finishes — across four accumulators, of which the undo log is only about a fifth — and the only ceiling on how many mutations a statement applies is the engine's own cap on the rows one statement may produce, which the 5-second budget is far too short to reach: given a budget long enough to reach it, the same statement costs roughly **20 GB**. Measured: `MATCH (a),(b),(c) CREATE ()` over a 600-node store of 80 KB drove the process running it to **3.3 GB** of resident memory at the 5-second budget. The figure tracks the budget rather than the size of the graph. That cost now lands on a long-lived process: measured against `rmp graph serve`, the peak was 3618-3734 MB and the server still held 1064 MB — 58 times its baseline — 130 seconds later. The connection ceiling bounds how many such statements may run at once but not what each of them costs, and when the cost cannot be served the operating system's out-of-memory killer ends the server with `SIGKILL`, which writes nothing to stdout and nothing to stderr. The store on disk is byte-identical afterwards, so this is an availability defect and not a durability one.
 - **A server's shutdown is not bounded, and two causes hold it open.** The first is an undo replay: a statement the budget cut while it was writing is inside a replay that takes no cancellation, and the store cannot close until that call returns. The longest such hold measured is **35.6 seconds** — the largest measured and not a maximum, since the same shape over the same store measured 34.5 seconds on an earlier run — and no ceiling has been established. The second is a client that has stopped reading its result. The drain closes the socket of a peer that was already parked in a write when the drain began, which was measured to take that shutdown from 60.0 seconds to 7.5; a peer that parks **after** that moment — one that stops reading during the drain, and one that trickles, reading just enough that each write completes and the next one parks — is not selected, and nothing else releases it, because Groadmap arms no deadline on a socket write. **The two are not unbounded in the same way.** An undo replay is finite work, so that shutdown does end on its own and what is missing is only a ceiling on how long it takes; a parked write is not, because the peer is under no obligation to read, so a signalled server in that state **may never exit at all** and `SIGKILL` is then the only remedy left. `SPEC/GRAPH.md § Server Shutdown and the Drain` is canonical for which sessions the drain reaches and for what bounds each. A supervisor that escalates `SIGTERM` to `SIGKILL` after a short grace period may therefore kill the server mid-replay; every acknowledged commit is still durable and the next open replays the log, but the shutdown checkpoint is lost.
-- **A `SET` on a relationship bound by a `MERGE` that matched an existing relationship is silently discarded when the ordered node pair already carries a parallel relationship.** The precondition is narrow and all three parts are required: the relationship variable must be bound by a `MERGE` clause in the same statement, that `MERGE` must have **matched** rather than created, and the same ordered pair `(source, target)` must already carry another relationship **in the same direction**. When all three hold, the statement exits 0, reports success, and writes nothing; a following read shows the previous value. Measured: with `(a)-[:OTHER]->(b)` present, `MERGE (a)-[e:T]->(b) SET e = {c:2}` over an existing `T` leaves `c` at `1` while still reporting `{"ok": true, "counters": {"propertiesWritten": 1}}` — the same output the statement produces when the write does persist, so the counters do not expose the loss either. Remove any one of the three and the write persists — an isolated pair works, a parallel edge in the **reverse** direction does not trigger it, and a plain `MATCH ... SET` writes correctly with the parallel edge present. Bind the relationship with `MATCH` rather than `MERGE` when you intend to update one that already exists, or set the properties in a second statement after a fresh `MATCH`. A `SET` on a relationship bound by `CREATE`, or by a `MERGE` that creates, is **not** affected and was repaired by the move to GoGraph v0.14.0.
-- **An undirected or incoming `SET` on a relationship does not write every relationship it matched, and how many it loses depends on the data.** A write persists only where the row's left-hand node is the relationship's stored source and its right-hand node the stored target, so the same statement may write everything it matched, some of it, or none of it. Re-measured for the 1.16.0 release on a single stored `(alice)-[:MENTORS]->(bob)`: the pattern anchored with `alice` on the left writes correctly, while the same pattern written with `bob` on the left writes nothing at all, exits 0, and leaves the property at its previous value. Measured on two relationships either side of one node, `MATCH (n)-[r:R]-(m {key:'b'}) RETURN count(r)` reports 2 while the same pattern with `SET r.stamp = 'x'` writes one of them and still reports success; with both relationships pointing away from the anchored node, none is written and the report is unchanged. Nothing in the output distinguishes a complete write from a partial one, and the counters do not either — that two-relationship statement reports `"propertiesWritten": 2` over a single persisted write, and the one anchored on the wrong endpoint reports `"propertiesWritten": 1` over none. **A selective statement is the hazardous one and an unanchored sweep is safe**, because each relationship is then emitted twice and one of the two rows is correctly oriented. Write through an outgoing pattern, which can be anchored on either endpoint. `DELETE` is unaffected and removes everything it matched.
+- **A relationship bound by a `MERGE` or a `CREATE` is not reliably the relationship that clause matched or created when more than one relationship joins the same two nodes in the pattern's direction, and the statement still reports success.** How the binding was made decides what goes wrong.
+  - **A `MERGE` that matched an existing relationship**, between two nodes the statement had already bound, on a pair that more than one relationship joins in the pattern's direction, emits more than one row for the one relationship it matched, and every row names one relationship of the pair — the same one whichever relationship matched — so the binding names the matched relationship only when that happens to be the one. A `SET`, an `ON MATCH SET` or a `REMOVE` after it acts on the relationship the binding names, once per row, and a replacing `SET e = {…}` clears that relationship's properties first. A `DELETE e` deletes more of the pair's relationships than the one matched — in every measurement, as many as the rows the clause emitted. An inline property map is compared against the relationship the binding names, so a `MERGE` whose map an existing relationship satisfies can create a second relationship beside it. Measured: with `(a)-[:OTHER {c:0}]->(b)` and `(a)-[:T {c:1}]->(b)` present, `MATCH (a:Spec {key:'a'}), (b:Test {key:'b'}) MERGE (a)-[e:T]->(b) SET e.c = 2` reports `{"ok": true, "counters": {"propertiesWritten": 2}}`, leaves `c` at `1` on `T`, and sets it to `2` on `OTHER`.
+  - **A `CREATE`, or a `MERGE` that created the relationship**, on a pair that a relationship already joined in that direction, applies every assignment and every removal to the created relationship, but `DELETE e` deletes one of the pair's pre-existing relationships and keeps the created one, also when `e` is projected across a `WITH` first. Measured: on the pair above, `MATCH (a:Spec {key:'a'}), (b:Test {key:'b'}) CREATE (a)-[e:NEW]->(b) DELETE e` reports one relationship created and one deleted — exactly what the correct deletion reports — and the pair afterwards holds `NEW` and `T`, with `OTHER` gone.
+
+  No error is raised and no notification is attached. **What is sound:** a relationship bound by `MATCH`, on any pair; the assignments and removals of a relationship the statement created, on any pair, and its deletion on a pair that no other relationship joins in that direction; and a matching `MERGE` where exactly one relationship joins the pair in that direction. A relationship in the **reverse** direction triggers neither case. The next entry's workarounds do not help here, because the binding names the wrong relationship before any of them runs. **Bind the relationship again with `MATCH`:** `MERGE (a)-[:VERIFIED_BY]->(b) WITH DISTINCT a, b MATCH (a)-[e:VERIFIED_BY]->(b) SET e.last_commit = '…'` ensures the relationship and writes the property once, to the relationship the `MATCH` binds; the `DISTINCT` collapses the extra rows before the `MATCH` runs. Write a `MERGE` meant to ensure a relationship without an inline property map, and set the properties after the `MATCH`. A statement that creates a relationship and deletes it again re-binds it the same way, by a type or a property that names it alone, before the `DELETE`.
+- **A relationship property removal through an incoming or undirected pattern does not reach every relationship it matched, and how many it misses depends on the data.** A `REMOVE e.k` takes effect only where the node bound on the pattern's left is the relationship's stored source and the node on its right is the stored target; every other matched relationship keeps the property, and the statement exits 0. An undirected pattern anchored on one node removes the property from every relationship that points away from the anchor and from none that points at it, and an incoming pattern removes nothing at all. Measured on a single stored `(s:Spec)-[:VERIFIED_BY]->(v:Test)` carrying `last_commit`: `MATCH (v:Test {key:'…'})<-[e]-(s) REMOVE e.last_commit` prints `{"ok": true}` and the property is still there, while `MATCH (s)-[e]->(v:Test {key:'…'}) REMOVE e.last_commit` removes it and reports `"propertiesWritten": 1`. A dropped removal is not counted, so a statement whose only removal was dropped publishes no `counters` member — which is also what a `REMOVE` of a property that was genuinely absent publishes. **A selective statement is the hazardous one and an unanchored sweep is safe**, because an undirected pattern with neither endpoint pinned emits each relationship twice and one of the two rows is correctly oriented. **Assignments are not affected:** `SET e.k = …`, `SET e.k = null`, `SET e = {…}` and `SET e += {…}` reach the relationship the pattern bound whichever way the pattern walked it, and `DELETE` removes every relationship it matched. Three forms remove a property whatever the stored direction: an outgoing pattern, which may be anchored on either endpoint; assigning `null` instead, as in `MATCH (v:Test {key:'…'})<-[e]-(s) SET e.last_commit = null`; and projecting the relationship before removing from it, either across a `WITH`, as in `MATCH (a {key:'…'})-[e]-(b {key:'…'}) WITH e REMOVE e.last_commit`, or inside a `FOREACH` over the collected relationships. None of the three helps with the previous entry.
+- **A property value that is a list holding `null` is not stored as written, and the statement reports success.** What happens depends on the form of the write, and no form stores the list as written. An assignment, `SET n.k = [1, null, 2]`, on a node or on a relationship, stores nothing, leaves the value the key already held in place, and is counted by no counter: measured over a node whose `k` was `'old'`, it printed `{"ok": true}` and `k` still read `'old'`. An entry of a replacing or merging map, `SET n = {k: [null, 1]}` or `SET n += {k: [1, null]}`, is not stored while the map's other entries are, and the replacing form still clears the properties the map does not name. An inline property map in a `CREATE` pattern stores the list with its `null` elements removed, so `CREATE (:Spec {key:'…', k: [null, 'x']})` reads back as `['x']`. No error is raised and no notification is attached. A list that holds no `null` is stored as written, and `null` assigned on its own removes the property. Nothing in the output reveals the difference, so read the property back after writing a list that may hold `null`.
+- **A statement that fails after creating a relationship between two nodes already joined in that direction can change the graph anyway, and its error line can say that nothing was written.** One of the pair's pre-existing relationships is replaced by the one the statement was creating: it now carries the new type and no properties, and the relationship it replaced is gone. The cause of the failure made no difference in any measurement — an evaluation error, a violated presence constraint, a property value the engine refuses, an over-long property key, and the statement time budget — and the budget and conflict lines keep saying that nothing was written, because the statement did not commit and the remedy each names still stands. Measured: over `(a:Spec)-[:OLD {p:1}]->(b:Test)`, `MATCH (a:Spec {key:'…'}), (b:Test {key:'…'}) CREATE (a)-[:NEW]->(b) WITH a RETURN 1/0` fails with exit code 1, and the pair then holds a single `NEW` relationship with no properties. A failed statement that creates no relationship, or creates one only between nodes not yet joined in that direction, leaves the graph as it found it. The write-ahead log is not affected, so the replacement lives in the server's memory, where every later statement reads it, until a checkpoint folds it into the snapshot and makes it permanent: a server killed with `SIGKILL` after such a failure recovered the original relationship on its next start, and a server stopped with `SIGINT`, whose shutdown checkpoint ran, did not. Wherever this page says that a failed or cut statement wrote nothing, rolled back whole, or left the graph as it found it, this entry is the exception. **After any failure of a statement that creates a relationship, read the node pair back** before relying on what it holds.
 
 ## Aliases
 

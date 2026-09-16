@@ -183,8 +183,8 @@ rule 3). Neither examines what a statement does.
     [Schema Management](#schema-management).
 12. A statement runs under a time budget, enforced by the server that executes it
     and carrying one value for every surface. A statement that exhausts it is
-    cancelled, its transaction rolls back whole, no checkpoint runs, and the
-    caller fails with `utils.ErrGraphEngine` (exit code 1); no new exit code is
+    cancelled, its transaction rolls back whole (with the one exception
+    [Error Handling and Exit Codes](#error-handling-and-exit-codes), rule 9, describes), no checkpoint runs, and the caller fails with `utils.ErrGraphEngine` (exit code 1); no new exit code is
     introduced. What the budget does to a statement is specified in
     [Statement Time Budget](#statement-time-budget), the bound the server applies
     in [Server Options](#server-options), and
@@ -252,15 +252,15 @@ Go version and of the build implications.
 
 ### Dependency Maturity Risk
 
-GoGraph is consumed at the exact tag **v0.14.1**. Because
-v0.14.1 is a v0 (pre-1.0) version, it is consumable directly at the bare module path
-`github.com/FlavioCFOliveira/GoGraph`, and `go.mod` pins the clean exact tag `v0.14.1`.
+GoGraph is consumed at the exact tag **v0.14.2**. Because
+v0.14.2 is a v0 (pre-1.0) version, it is consumable directly at the bare module path
+`github.com/FlavioCFOliveira/GoGraph`, and `go.mod` pins the clean exact tag `v0.14.2`.
 This exact-tag pin satisfies the pinning mitigation below directly. The pinned version
 is recorded in `BUILD.md § External Dependencies`, which is the table that carries it;
 `BUILD.md § Go Toolchain` records the Go minor-version floor GoGraph imposes, which is
 a different fact about the same dependency.
 
-As a `0.y.z` release, v0.14.1 signals under Semantic Versioning that GoGraph's public
+As a `0.y.z` release, v0.14.2 signals under Semantic Versioning that GoGraph's public
 API is not yet stable: it may change while the module matures toward `1.0.0`, and such
 changes can land without a major-version bump. The following residual risks remain:
 
@@ -334,12 +334,21 @@ Mitigations required by this specification:
    pinned engine rather than properties of Cypher, and items 4 and 8 each assert a
    boundary that an upstream fix moves: an assertion that only checks the losing
    side is satisfied by an engine in which the working side has regressed to match
-   it. For item 4: that a relationship property write through a pattern that walks
-   against the stored arrow is still dropped, **and** that a `DELETE` over the
-   same pattern still removes every relationship it matched. For item 8: that a
-   write over a relationship variable bound by a `CREATE` or `MERGE` clause is
-   still dropped, **and** that `ON CREATE SET` and `ON MATCH SET` still persist.
-   For item 5: the reads it names are still resolved correctly. Item 4's loss is
+   it. For item 4: that a relationship property removal through a pattern that
+   walks against the stored arrow is still dropped, **and** that an assignment
+   through the same pattern still persists and a `DELETE` over it still removes
+   every relationship it matched. For item 8: that a write through a relationship
+   bound by a `MERGE` that matched one of several relationships joining the same
+   two nodes in one direction still reaches another relationship, and that a
+   `DELETE` through a relationship bound by `CREATE`, or by a `MERGE` that created
+   it, on a pair a relationship already joined in that direction still deletes a
+   pre-existing relationship and keeps the created one; **and** that the sound
+   sides still hold — a write, a removal and a deletion through a relationship
+   bound by `MATCH`, an assignment and a removal through a relationship bound by
+   `CREATE` or by a `MERGE` that created it, and a deletion through such a binding
+   on a pair that no other relationship joins in that direction each still reach
+   their own relationship. For item 5: the reads it names are still resolved
+   correctly. Item 4's loss is
    decided by the data rather than by the statement, so its fixture MUST fix the
    stored orientation of every relationship it measures and read each one back;
    a statement's shape does not tell the assertion what to expect.
@@ -956,6 +965,17 @@ Notes:
 4. The audit reads; it changes no node and no key. Resolving a violation it reports
    is the caller's decision, because only the caller knows which of the two
    spellings the artefact is meant to carry.
+5. **Every key step 2 receives is valid UTF-8, even where the stored key is
+   not.** Step 1's result is published JSON, and a stored string holding bytes
+   that are not valid UTF-8 is published with each such byte replaced by `U+FFFD`
+   (see `DATA_FORMATS.md § Property-Type Mapping`). Step 2 therefore never
+   normalises an invalid byte. The cost falls on the rare key that holds one: two
+   keys that differ only in their invalid bytes arrive as one byte sequence, so
+   step 2 sees one spelling where the store holds two, and the byte-wise duplicate
+   audit returns them as two rows that print identically. A statement's literals
+   cannot carry such a key, and the one route measured to store one is a
+   parameter bound by a Bolt client other than `rmp` (see
+   `DATA_FORMATS.md § Property-Type Mapping`).
 
 ## What Groadmap Does Not Check
 
@@ -977,18 +997,20 @@ that a caller meets them in the specification rather than in the store.
 
 Item 5 is the exception and states the opposite of a hazard: a direction in which
 the engine is correct. It is here because it is the neighbour of item 4 and would
-otherwise be inferred from it — a reader told that a relationship property write
+otherwise be inferred from it — a reader told that a relationship property removal
 may be dropped when the pattern walks against the stored arrow has every reason
-to assume the read is unreliable in the same way, and that assumption is false.
-Item 5 is a measured property of the pinned engine, not a property of Cypher, so
-it is re-measured whenever the pin moves (see
+to assume that reading the relationship, or assigning one of its properties, is
+unreliable in the same way, and that assumption is false. Item 5 is a measured
+property of the pinned engine, not a property of Cypher, so it is re-measured
+whenever the pin moves (see
 [Dependency Maturity Risk](#dependency-maturity-risk), mitigation 3).
 
-Items 4 and 8 are two members of one family: a relationship property write
-dropped in silence, by two independent causes that share an outcome. They belong
-side by side and are numbered apart because these item numbers are cited from
-elsewhere in this specification and are not renumbered. Each of the two names the
-other, and neither one's workarounds are the other's.
+Items 4 and 8 are two members of one family: a relationship property write that
+does not reach the relationship the statement meant, by two independent causes.
+They belong side by side and are numbered apart because these item numbers are
+cited from elsewhere in this specification and are not renumbered, which is also
+why item 9 comes last. Each of the two names the other, and neither one's
+workarounds are the other's.
 
 1. **A statement runs whatever it says.** There is no subcommand whose contract is
    "this cannot delete". A statement that deletes reaches the engine the same way
@@ -1015,91 +1037,75 @@ other, and neither one's workarounds are the other's.
    governs task and sprint fields (`MODELS.md § Task`) does not reach
    knowledge-graph property values.
 
-4. **A relationship property write persists only where the pattern walked the
+4. **A relationship property removal persists only where the pattern walked the
    relationship the way storage holds it, and where it does not the statement
-   still reports success.** The engine writes a relationship property by its
-   endpoint pair, and it takes that pair from the columns the expansion emitted.
-   Those columns carry the relationship the way the **pattern** walked it, not the
-   way storage holds it. A `SET e.k = …`, a `SET e = {…}`, a `SET e += {…}` and a
-   `REMOVE e.k` therefore persist, for each relationship the statement matched,
-   only where the node bound at the pattern's **left** position is that
-   relationship's stored source and the node bound at its **right** position is
-   its stored target. Every other matched relationship is addressed as the
-   reversed pair and lost. No error is raised, no notification is attached, and
-   the transaction still commits.
+   still reports success.** A `REMOVE e.k` addresses the relationship by its
+   endpoint pair, and it takes that pair from the columns the expansion emitted,
+   which carry the relationship the way the **pattern** walked it rather than the
+   way storage holds it. The property is therefore removed only where the node
+   bound at the pattern's **left** position is the relationship's stored source
+   and the node bound at its **right** position is its stored target. Every other
+   matched relationship keeps the property. No error is raised, no notification is
+   attached, and the transaction still commits.
 
-   **The write is not refused; it is misfiled.** The engine holds relationship
-   properties in two stores, and the reversed pair defeats both — but only one of
-   them by declining to act. The per-pair store answers a write against a pair
-   that carries no relationship with a documented no-op. The by-handle store does
-   not test the pair at all: it records the property under the relationship's
-   correct handle in a bucket keyed by the reversed pair, and a read keys on the
-   pair the same way, so the value lands in a bucket no read consults. The write
-   happens and nothing can observe it.
+   **The assignment forms are not affected.** `SET e.k = …`, `SET e.k = null`,
+   `SET e = {…}` and `SET e += {…}` reach the relationship the pattern bound
+   whichever way the pattern walked it — through an incoming pattern, through an
+   undirected one, and on a node pair joined in both directions — and read back as
+   written. The engine turns the pair into the stored orientation before an
+   assignment and does not before a removal. That boundary is the part of this item
+   an engine upgrade is most likely to move (see
+   [Dependency Maturity Risk](#dependency-maturity-risk), mitigation 3).
 
-   **How much of a statement's write survives is decided by the data, not by the
-   statement.** The same statement over the same schema may write every
-   relationship it matched, some of them, or none, according to how those
-   relationships happen to be oriented in storage. An undirected pattern anchored
-   on one node writes both of two relationships that point at the anchor, writes
-   one of a pair with one pointing each way, and writes neither of two that point
-   away from the anchor — reporting `{"ok": true}` for a statement that changed
-   nothing. Moving the anchor to the pattern's other side writes the other
-   relationship instead. An **incoming** pattern is the extreme case of the rule
-   rather than a separate one: every relationship it binds is bound against its
-   stored arrow, so it loses the whole of its write, and
-   `MATCH (v:Test {key:'…'})<-[e]-(s) SET e.last_commit = '…'` writes nothing.
+   **How much of a removal survives is decided by the data, not by the
+   statement.** An undirected pattern anchored on one node removes the property
+   from every relationship that points away from the anchor and from none that
+   points at it. An **incoming** pattern is the extreme case of the rule rather
+   than a separate one: every relationship it binds is bound against its stored
+   arrow, so `MATCH (v:Test {key:'…'})<-[e]-(s) REMOVE e.last_commit` removes
+   nothing.
 
    **The selective statement is the hazardous one and the sweeping statement is
    safe**, which inverts the order a caller would triage in. An undirected pattern
-   with neither endpoint pinned writes **every** relationship it matches: with
-   nothing to prune the rows, the expansion emits each relationship twice, once
-   per direction, and one of the two rows is oriented the way storage holds it.
-   Any filter that narrows the match to one row per relationship — an inline key,
-   a `WHERE`, a bound second endpoint — can leave the reversed row as the
-   survivor.
+   with neither endpoint pinned removes the property from **every** relationship it
+   matches: with nothing to prune the rows, the expansion emits each relationship
+   twice, once per direction, and one of the two rows is oriented the way storage
+   holds it. Any filter that narrows the match to one row per relationship — an
+   inline key, a `WHERE`, a bound second endpoint — can leave the reversed row as
+   the survivor.
 
-   **The engine's own write-effect counters do not reveal it.** A `SET` that wrote
-   nothing still reports one property set per matched row, because the counter is
-   incremented above the layer that dropped the write, so its number is the same
-   number the statement reports when every write lands. The counter for removals
-   is the one that reports what landed rather than what was attempted, and it is
-   not a detector either: a `REMOVE` whose only write was dropped reports zero,
-   and so does a `REMOVE` of a property that was genuinely absent, so the number
-   means something only to a caller who already knows how many relationships
-   carried the property. Groadmap surfaces no counter on any path.
+   **The write counters report what landed, and that does not make them a
+   detector.** A removal is counted where it is applied, so a statement whose only
+   removal was dropped publishes no `counters` object at all — which is also what a
+   `REMOVE` of a property that was genuinely absent publishes. The absence means
+   something only to a caller who already knows how many relationships carried the
+   property (see
+   [Write Counters: What a Statement Changed](#write-counters-what-a-statement-changed)).
 
-   **`DELETE` is unaffected, and not by accident.** A `DELETE` over an incoming or
-   undirected pattern removes every relationship it matched — through an anchor,
-   over parallel relationships, on a node pair joined both ways, and under a
-   predicate over `startNode(e)`. The engine's delete operator detects the
-   reversed pair and retries against the stored orientation; the property-write
-   operators were never given that step. The divergence is confined to property
-   writes, and that boundary is the part of this item an engine upgrade is most
-   likely to move (see [Dependency Maturity Risk](#dependency-maturity-risk),
-   mitigation 3).
+   **`DELETE` is unaffected.** A `DELETE` over an incoming or undirected pattern
+   removes every relationship it matched.
 
-   **The reach is unaffected, and two forms write whatever they match.** Every
-   relationship is writable through an **outgoing** pattern, because an outgoing
-   pattern may be anchored on either endpoint, so
-   `MATCH (s)-[e]->(v:Test {key:'…'}) SET e.last_commit = '…'` writes what the
-   reverse form did not. A statement that must write without knowing the stored
-   direction may instead project the relationship before writing it — either
-   across a `WITH`,
-   `MATCH (a {key:'…'})-[e]-(b {key:'…'}) WITH e SET e.last_commit = '…'`, or
-   inside a `FOREACH` over the collected relationships. Both are measured to write
-   every relationship they match, whichever way the pattern walked it, because the
-   projected value carries storage's own endpoints. Neither workaround extends to
-   item 8, whose binding comes from a write clause rather than from a match.
+   **Every relationship's property can still be removed, and three forms remove it
+   whatever the stored direction.** An **outgoing** pattern may be anchored on
+   either endpoint, so `MATCH (s)-[e]->(v:Test {key:'…'}) REMOVE e.last_commit`
+   removes what the incoming form did not. A statement that must remove without
+   knowing the stored direction may instead assign `null`, which is an assignment
+   and removes the property through any pattern —
+   `MATCH (v:Test {key:'…'})<-[e]-(s) SET e.last_commit = null` — or project the
+   relationship before removing from it, either across a `WITH`,
+   `MATCH (a {key:'…'})-[e]-(b {key:'…'}) WITH e REMOVE e.last_commit`, or inside a
+   `FOREACH` over the collected relationships. Each is measured to remove the
+   property from every relationship it matches. None of them extends to item 8,
+   whose binding names the wrong relationship before any of them runs.
 
 5. **A relationship read through an incoming or undirected fixed-length pattern
    is reported correctly, and this is measured rather than assumed.** The reach of
-   item 4 stops at writing. Reading a bound relationship resolves its identity, its
-   type and its stored orientation whichever way the pattern walked it, including
-   on the shape that is hardest for an engine to get right: a node pair joined in
-   **both** directions, where an implementation that inferred the relationship from
-   the endpoint pair alone would find one in the emitted order and report the
-   forward leg twice. Measured at the pinned engine version, on such a pair, every
+   item 4 stops at removing a property. Reading a bound relationship resolves its
+   identity, its type and its stored orientation whichever way the pattern walked
+   it, including on the shape that is hardest for an engine to get right: a node
+   pair joined in **both** directions, where an implementation that inferred the
+   relationship from the endpoint pair alone would find one in the emitted order
+   and report the forward leg twice. Measured at the pinned engine version, on such a pair, every
    one of the following is correct — a projection over an undirected pattern
    reports each relationship once; `startNode(e)` and `endNode(e)` under an
    incoming pattern report what storage holds; a `WHERE` predicate over the
@@ -1111,14 +1117,15 @@ other, and neither one's workarounds are the other's.
    path** (`MATCH p=(a {key:'…'})-[e]-(b) RETURN p`), and for a bare `DELETE e`.
 
    The line between this item and item 4 is the line between **reading** a
-   relationship and **addressing** it. A right-hand side or a `WHERE` that reads a
-   bound relationship sees the orientation storage holds; a write whose target is
-   that same relationship is governed by item 4 regardless. A statement may
-   therefore select exactly the relationship its author meant and write nothing to
-   it: in
-   `MATCH (n)-[e]-(m {key:'b'}) WHERE startNode(e).key = 'b' SET e.stamp = 'x'`,
+   relationship, or assigning one of its properties, and **removing** one of its
+   properties. A right-hand side or a `WHERE` that reads a bound relationship sees
+   the orientation storage holds, and so does an assignment to it; a removal whose
+   target is that same relationship is governed by item 4 regardless. A statement
+   may therefore select exactly the relationship its author meant and remove
+   nothing from it: in
+   `MATCH (n)-[e]-(m {key:'b'}) WHERE startNode(e).key = 'b' REMOVE e.stamp`,
    the predicate is evaluated against the stored orientation and binds the one
-   relationship it names, correctly, and the `SET` behind it is dropped.
+   relationship it names, correctly, and the removal behind it is dropped.
 
    This is a statement about GoGraph at the pinned tag and about nothing else.
    Groadmap does not verify it per statement, cannot repair it if a later engine
@@ -1167,65 +1174,105 @@ other, and neither one's workarounds are the other's.
    general grammar rather than routed to the schema parser, and
    `CREATE INDEX ...` is not.
 
-8. **A relationship property write whose target was bound by a `CREATE` or a
-   `MERGE` clause in the same statement does not persist at all, and the statement
-   reports success.** This is the second member of item 4's family and an
-   independent defect with the same outcome: there the relationship is identified
-   correctly and its endpoint pair is reversed; here the endpoint pair is right
-   and the identity is not. A relationship variable bound by a write clause
-   carries an identifier synthesised from its two endpoints rather than the stable
-   handle that names the relationship, so a write addressed by that identifier
-   names no relationship at all. Nothing is written, no error is raised, no
-   notification is attached, and the transaction still commits.
+8. **A relationship bound by a `MERGE` or a `CREATE` is not reliably the
+   relationship that clause matched or created where more than one relationship
+   joins the same two nodes in the pattern's direction, and the statement still
+   reports success.** How the binding was made decides what goes wrong.
 
-   **It is the binding's origin that decides this, and nothing else.** Whether the
-   clause is `CREATE` or `MERGE` makes no difference; whether the relationship is
-   new or already existed makes no difference; and a relationship bound by a
-   `MATCH` still persists its write across an intervening `CREATE` or `MERGE`
-   clause, so a write clause standing between the binding and the `SET` is not
-   what does the damage.
-   `MATCH (a:Spec {key:'…'}), (b:Test {key:'…'}) CREATE (a)-[e:VERIFIED_BY]->(b) SET e.last_commit = '…'`
-   loses its write with no `MERGE` anywhere in it.
+   **A `MERGE` that matched an existing relationship.** The condition is a `MERGE`
+   whose relationship pattern joins two nodes the statement has already bound,
+   which matches an existing relationship rather than creating one, over a node
+   pair that more than one relationship joins in the direction the pattern names.
+   Measured on such a pair:
 
-   **Every property-write form over such a binding is lost**: `SET e.k = …`,
-   `SET e = {…}`, `SET e += {…}` and `REMOVE e.k`; each hop of a multi-hop `MERGE`
-   pattern; and the write however it is reached, whether directly, across a `WITH`
-   or inside a `FOREACH`. Item 4's two workarounds are precisely this item's
-   defect: projecting the relationship first does not rescue a binding whose
-   identity was wrong before the projection.
+   - the clause emits more than one row for the one relationship it matched, so
+     every clause after it runs more than once;
+   - every row binds the identifier of one relationship of the pair — the same one
+     whichever relationship matched — so the binding names the matched
+     relationship only when that happens to be the one;
+   - `SET e.k = …`, `SET e = {…}`, `ON MATCH SET` and `REMOVE e.k` act on the
+     relationship the binding names, the replacing form clearing that
+     relationship's properties first; a clause after the `MERGE` runs once per row,
+     and the write counters report every run, so the published number overstates
+     what the statement did as well as hiding where it landed;
+   - `DELETE e` deletes more relationships of the pair than the one matched — in
+     every measurement, as many as the rows the clause emitted — and reports each
+     deletion;
+   - a relationship pattern carrying an inline property map is compared against
+     the relationship the binding names rather than the ones the pair holds, so a
+     `MERGE` whose map an existing relationship satisfies can create a second
+     relationship beside it.
 
-   **`SET e = {…}` is the most deceptive of them**, because a `RETURN` in the same
-   statement echoes back the value the statement did not write, while a later
-   invocation reads the property absent. The scalar form reports the absence in
-   both places, so the shape that looks most confirmed is the one that persisted
-   least.
+   **A `CREATE`, or a `MERGE` that created the relationship.** The condition is a
+   node pair that a relationship already joins, before the statement runs, in the
+   direction the clause creates one. Measured on such a pair, the created
+   relationship takes every assignment and every removal on itself —
+   `SET e.k = …`, `SET e = {…}`, `SET e += {…}`, `ON CREATE SET` and
+   `REMOVE e.k` — but `DELETE e` does not reach it: the statement deletes one of
+   the pair's pre-existing relationships and keeps the one it created. The same
+   happens when the relationship is projected across a `WITH` before the
+   `DELETE`. The write counters report one relationship created and one deleted,
+   which is exactly what they report when the right one is deleted, so they do not
+   reveal the substitution.
 
-   **`DELETE e` is unaffected**: the identifier is good enough to destroy the
-   relationship and not good enough to write one of its properties. Nor is
-   anything about the binding wrong to read — `type(e)`, `startNode(e)` and
-   `endNode(e)` all report what storage holds — so nothing observable about it
-   warns the caller.
+   No error is raised, no notification is attached, and the transaction still
+   commits.
 
-   **The idiomatic forms are sound, and that is what makes this avoidable.**
-   `ON CREATE SET` and `ON MATCH SET` both persist — on a relationship the `MERGE`
-   created, on one it matched, and on every hop of a multi-hop pattern — as do
-   inline pattern properties, `MERGE (a)-[e:VERIFIED_BY {last_commit:'…'}]->(b)`,
-   and re-binding the relationship with a `MATCH` after the write clause. A
-   statement that stamps a property on a relationship it is creating should be
-   written in one of those forms rather than with a trailing bare `SET`.
+   **What is sound.** A relationship bound by `MATCH` takes every write, removal
+   and deletion on itself, on such a pair as on any other. A relationship bound by
+   `CREATE`, or by a `MERGE` that created it, takes every assignment and removal
+   on itself on any pair, and its deletion is sound on a pair that no other
+   relationship joins in the clause's direction, whatever joins the pair in the
+   other. A `MERGE` that matched is sound where exactly one relationship joins the
+   pair in the pattern's direction, whatever joins the pair in the other. This
+   item and item 4 are independent: here the identity is wrong
+   whichever way the pattern points, and item 4's workarounds — assigning `null`,
+   projecting across a `WITH`, iterating in a `FOREACH` — carry the wrong identity
+   with them.
 
-**The divergences in items 4 and 8 are upstream in GoGraph and cannot be
-corrected from this repository.** Both are measured properties of the engine at
-the pinned tag, as item 5 is. Groadmap holds no position from which to repair
-either: the write is dropped below the engine's own accounting, so what reaches
-Groadmap is a committed transaction reporting the property set, which is
-indistinguishable from the same statement having written. Detecting either would
-require reading the relationship back and comparing, which is the caller's
-statement to write and not Groadmap's to insert. Recognising the statement shapes
-instead is what the paragraph below rules out, and for item 4 it would be unsound
-as well as forbidden: how much of a write survives is decided by the data, so a
-rule that refused the shapes which can lose a write would refuse the many
-statements of that shape which write every relationship they match.
+   **Binding the relationship again with `MATCH` is sound, and it is how a
+   statement that must write or delete a relationship it ensured or created is
+   written.**
+   `MERGE (a)-[:VERIFIED_BY]->(b) WITH DISTINCT a, b MATCH (a)-[e:VERIFIED_BY]->(b) SET e.last_commit = '…'`
+   ensures the relationship and writes the property once, to the relationship the
+   `MATCH` binds, on a pair joined by several relationships; the `DISTINCT`
+   collapses the extra rows before the `MATCH` runs. For the reason the last
+   bullet above gives, a `MERGE` meant to ensure a relationship is written without
+   an inline property map, and the properties are set after the `MATCH`. A
+   statement that creates a relationship and deletes it again re-binds it the same
+   way, by a type or a property that names it alone, before the `DELETE`.
+
+9. **A property value that is a list holding `null` is not stored as written, and
+   the statement reports success.** What happens depends on the form of the
+   write, and no form stores the list the statement wrote:
+
+   - an assignment — `SET n.k = [1, null, 2]`, on a node or on a relationship —
+     stores nothing, leaves whatever value the key already held in place, and is
+     counted by no write counter;
+   - an entry of a replacing or merging map — `SET n = {k: [null, 1]}`,
+     `SET n += {k: [1, null]}` — is not stored, while the map's other entries are,
+     and the replacing form still clears the properties the map does not name;
+   - an inline property map in a `CREATE` pattern — `CREATE (:Spec {k: [null, 'x']})`,
+     on a node or on a relationship — stores the list with its `null` elements
+     removed, so the property reads back as `['x']`.
+
+   No error is raised and no notification is attached. A list that holds no `null`
+   is stored as written (see `DATA_FORMATS.md § Graph element mapping`, rule 1),
+   and `null` assigned on its own removes the property, as Cypher defines.
+
+**The divergences in items 4, 8 and 9 are upstream in GoGraph and cannot be
+corrected from this repository.** Each is a measured property of the engine at
+the pinned tag, as item 5 is. Groadmap holds no position from which to repair any
+of them: what reaches Groadmap is a committed transaction reporting success, and
+the write counters it carries, where it carries any, describe the engine's own
+accounting rather than which element changed or whether a value was stored as
+written. Detecting any of them would require reading the element back and
+comparing, which is the caller's statement to write and not Groadmap's to insert.
+Recognising the statement shapes instead is what the paragraph below rules out,
+and for item 4 it would be unsound as well as forbidden: how much of a removal
+survives is decided by the data, so a rule that refused the shapes which can lose
+one would refuse the many statements of that shape which remove from every
+relationship they match.
 
 **None of the items above is a reason for Groadmap to inspect a statement.** A
 check for any one of them would introduce the coupling this specification does not
@@ -1891,10 +1938,10 @@ is the whole reason both exist:
    therefore readable by whoever can read the server's stderr, and unreadable by
    the caller who ran the statement.
 
-   **This is the same substitution, for the same reason, that
-   [Field Length Limits](#field-length-limits), rule 13, records for an
-   over-long field, and it is above Groadmap's reach for the same reason.**
-   There is no interception point to close it at: the engine's server exposes no
+   **The substitution is above Groadmap's reach, as is the same substitution
+   applied to a property value the engine cannot store
+   (`DATA_FORMATS.md § One Realisation of the Mapping`).** There is no
+   interception point to close it at: the engine's server exposes no
    error-mapping option, and Groadmap runs no statement of its own between the
    caller and the server. The one remaining lever would be matching the
    substituted text, which names no statement, no prefix and no remedy, so it
@@ -1902,10 +1949,12 @@ is the whole reason both exist:
    next version bump. **The remedy belongs in the engine**: a case in its Bolt
    failure-code mapping that resolves this refusal to a client-error code, after
    which the engine's own message reaches the caller intact, exactly as a parse
-   diagnostic already does (rule 6). **What is unaffected**: the sentinel is
-   `utils.ErrGraphEngine` and the exit code is 1, the statement is still refused
-   and still writes nothing, and no condition moves between sentinels. Only the
-   message the caller reads is less informative than the refusal deserves.
+   diagnostic already does (rule 6) and as the diagnostic of an over-long field
+   now does ([Field Length Limits](#field-length-limits), rule 13). **What is
+   unaffected**: the sentinel is `utils.ErrGraphEngine` and the exit code is 1,
+   the statement is still refused and still writes nothing, and no condition moves
+   between sentinels. Only the message the caller reads is less informative than
+   the refusal deserves.
 5. **A writing statement's plan is a logical plan, and it is published as one.**
    A write's operators bind to an open transaction, so there is no physical
    operator tree to walk outside one, and opening one is precisely what `EXPLAIN`
@@ -2263,7 +2312,9 @@ Behaviour:
 5. **Nothing is written, the store stays usable, and the exit code is
    unchanged.** The refused transaction consumes a sequence number and applies
    nothing, so the graph holds no part of the statement — not the elements it
-   created before the over-long field, and not the properties it set on them.
+   created before the over-long field, and not the properties it set on them —
+   with the one exception [Error Handling and Exit Codes](#error-handling-and-exit-codes), rule 9,
+   describes, which this refusal does not escape.
    Measured, an ordinary write submitted immediately after such a refusal
    returned `{"ok": true}` and a following `MATCH` counted it. The refusal adds
    no exit code and moves no condition between sentinels
@@ -2380,22 +2431,21 @@ Behaviour:
     states that plainly rather than implying otherwise.** Every statement now runs
     inside `rmp graph serve` and every result crosses a Bolt connection, so there
     is no path on which a caller reads this refusal as itself. The engine's Bolt
-    server classifies the refusal as a **server** fault, because its failure-code
-    mapping carries no case for `store/txn.ErrFieldTooLong` and falls back to its
-    generic database-error code; the session then replaces the message of every
-    failure so classified with generic internal-error text naming only the
-    session. So neither the sentinel, nor a code that separates this condition
-    from any other, nor the field kind crosses the connection, and what a caller
-    reads is the ordinary parse-or-execution line of
-    [Error Handling and Exit Codes](#error-handling-and-exit-codes), rule 2,
-    carrying that generic text where the engine's diagnostic would be. That is
-    precisely the defect rule 2 of this section exists to remove, and the
-    withdrawal of the direct path has left it standing everywhere rather than on
-    one path of two. The diagnostic itself is not destroyed: the engine logs it in
-    full, under the same session, as a record of the kind
-    [Server Diagnostics on Stderr](#server-diagnostics-on-stderr), rule 1,
-    governs — so it is readable by whoever can read the server's stderr, and
-    unreadable by the caller who ran the statement.
+    server classifies the refusal as a **client** fault, under the code
+    `Neo.ClientError.Statement.ArgumentError`, and forwards the engine's
+    diagnostic unchanged, so the caller does read the field kind and both figures.
+    What does not cross is the class. The sentinel stays on the server's side of
+    the connection, and the code is the one the server also gives to every other
+    argument the engine refuses — a numeric argument out of range, for one — so
+    neither separates this condition from the others. What a caller reads is
+    therefore the ordinary parse-or-execution line of
+    [Error Handling and Exit Codes](#error-handling-and-exit-codes), rule 2, ending
+    in the engine's diagnostic. That is the defect rule 2 of this section exists to
+    remove, in its milder form: the line says what is wrong, and only its wording,
+    which a caller may not match, says which class of failure it is. The engine
+    also logs the diagnostic in full, under the same session, as a record of the
+    kind [Server Diagnostics on Stderr](#server-diagnostics-on-stderr), rule 1,
+    governs.
 
     **The line stays published, and it is published as not yet reachable.** It is
     specified in `COMMANDS.md § Client Error Cases`, and its scenario says that it
@@ -2403,28 +2453,29 @@ Behaviour:
     the line a caller reads today. Keeping it costs nothing and removing it would
     cost the contract: the class is real, the remedy is known and is small, and a
     line withdrawn now would have to be re-specified, re-agreed and re-tested the
-    moment the engine gains the case. What MUST NOT happen is a specification that
-    publishes the line without saying it is unreachable, because a caller told to
-    match it would wait for something that never arrives.
+    moment the engine gains the distinction. What MUST NOT happen is a
+    specification that publishes the line without saying it is unreachable,
+    because a caller told to match it would wait for something that never arrives.
 
     **What is unaffected.** The sentinel is `utils.ErrGraphEngine` and the exit
-    code is 1; nothing is written and the store stays usable (rule 5); no
-    condition moves between sentinels and no exit code is added. Only the message
-    the caller reads differs from the message this section specifies.
+    code is 1; nothing is written, with the one exception
+    [Error Handling and Exit Codes](#error-handling-and-exit-codes), rule 9,
+    describes, and the store stays usable (rule 5); no condition moves between
+    sentinels and no exit code is added. Only the message the caller reads differs
+    from the message this section specifies.
 
     **Groadmap MUST NOT close this on its own side.** There is no interception
     point to close it at: the engine's server exposes no error-mapping option, and
     Groadmap runs no statement of its own between the caller and the server. The
-    one remaining lever would be matching the sanitised text, which rule 3 forbids
-    and which would yield nothing worth publishing in any case — that text names
-    no field, no kind and no figure. **The remedy belongs in the engine**: a case
-    for `store/txn.ErrFieldTooLong` in its Bolt failure-code mapping, resolving to
-    a client-error code, exactly as the per-transaction operation cap is already
-    mapped there and its message reaches the client intact. Once a code
-    distinguishes the condition, the client reaches the published line through the
-    code-matching it already uses lawfully for the conflict and the budget
-    classes, this rule's exception ends, and the line becomes reachable at both
-    surfaces at once.
+    code the client receives cannot close it either, because publishing this line
+    for every argument error would publish it for refusals that are not an
+    over-long field. The one remaining lever would be matching the forwarded text,
+    which rule 3 forbids. **The remedy belongs in the engine**: a failure the
+    client can tell apart from every other argument error — a code of its own, or
+    a structured field that carries the class. Once one exists, the client reaches
+    the published line through the code-matching it already uses lawfully for the
+    conflict and the budget classes, this rule's exception ends, and the line
+    becomes reachable at both surfaces at once.
 
     **No identity is broken by this, which is the one thing the withdrawal
     improved here.** While two paths existed, one statement produced one of two
@@ -2435,8 +2486,8 @@ Behaviour:
     `DATA_FORMATS.md § Graph Client Result` fix. With one path there is one line,
     the same one for every caller of every surface, so the identity holds without
     qualification and the departure is retired. What remains is not an
-    inconsistency but a deficiency: the line every caller reads is less
-    informative than the line this section requires.
+    inconsistency but a deficiency: the line every caller reads names the fault
+    and not its class, where this section requires both.
 
 ## Error Handling and Exit Codes
 
@@ -2570,8 +2621,38 @@ Rules:
    including the second half of the condition that reaches the caller as a
    diagnostic on a successful invocation rather than as an error at all, and
    including the fact that at the pinned engine no caller reads this line: the
-   engine's Bolt server replaces its message, so the condition arrives through
-   rule 2's line instead ([Field Length Limits](#field-length-limits), rule 13).
+   engine's Bolt server forwards the diagnostic under a code it shares with other
+   argument errors, so the condition arrives through rule 2's line, ending in that
+   diagnostic ([Field Length Limits](#field-length-limits), rule 13).
+9. **A failed statement is not always without effect on the graph, and the lines
+   that say nothing was written can then be wrong.** A statement that creates a
+   relationship between two nodes already joined by a relationship in the same
+   direction, and then fails before it commits, leaves the served graph with one
+   of those pre-existing relationships replaced by the one it was creating: the
+   relationship now carries the new type and no properties, and the one it
+   replaced is gone. The cause of the failure made no difference in any
+   measurement — an evaluation error, a violated presence constraint, a property
+   value the engine refuses, an over-long property key, and the statement time
+   budget — and neither does the line the caller reads: the budget line of rule 6
+   says that nothing was written while the replacement is in place. A failed statement that
+   creates no relationship, or creates one only between nodes not yet joined in
+   that direction, is measured to leave the graph as it found it.
+
+   The write-ahead log is not affected, so the replacement lives in the server's
+   in-memory graph, and every statement the server runs from then on reads it,
+   until a checkpoint folds that graph into the snapshot and makes it permanent.
+   Measured: a server killed with `SIGKILL` after such a failure recovered the
+   original relationship on its next start, and a server stopped with `SIGINT`,
+   whose shutdown checkpoint ran, did not.
+
+   This is an engine defect, and Groadmap does not correct it: it holds no copy of
+   the graph to compare with, and runs no statement of its own between the caller
+   and the server. The published lines of rules 6, 7 and 8 are kept as they are,
+   because the statement did not commit and the remedy each names still stands.
+   Wherever this specification says that a failed or cut statement wrote nothing,
+   rolled back whole, or left the graph as it found it, the statement is subject
+   to this rule. A caller that needs certainty reads the node pair back after any
+   failure of a statement that creates a relationship.
 
 ## The Dedicated Graph Server
 
@@ -3052,7 +3133,8 @@ engine's own records of these same connections carry an empty one.
    answered, or is cut whole.** A cut statement's transaction is rolled back
    entirely: it leaves no partial write and no torn state on disk, exactly as a
    statement the time budget cuts does (see
-   [Statement Time Budget](#statement-time-budget)).
+   [Statement Time Budget](#statement-time-budget)), and it is subject to the same
+   exception, [Error Handling and Exit Codes](#error-handling-and-exit-codes), rule 9.
 3. **A statement that completes during the drain is answered before the server
    stops.** That is the whole of what the drain buys over the engine's own
    shutdown, and it is worth buying: without it a client that had just committed
@@ -3548,8 +3630,9 @@ something.
 8. **An unconditional checkpoint is not merely a wasted write; it publishes a
    permanent residue, and that is why rule 4's condition is a requirement rather
    than an optimisation.** A statement the deadline cuts while it is writing is
-   rolled back whole, and the rollback restores the **logical** graph but not the
-   **physical** one: the engine's key mapper keeps the interned key of every node
+   rolled back whole, and the rollback restores the **logical** graph — with the
+   one exception [Error Handling and Exit Codes](#error-handling-and-exit-codes), rule 9,
+   describes — but not the **physical** one: the engine's key mapper keeps the interned key of every node
    the statement created, and the tombstone set keeps a tombstone for each. A
    checkpoint taken afterwards serialises that residue to disk, where nothing
    removes it and where every later reader pays for it. Measured against a server,
@@ -3957,8 +4040,12 @@ limits that survive.
    [Server Resolution](#server-resolution), rule 7). The web graph data endpoint
    has a third, a request whose client disconnects, which a CLI invocation does
    not (see `WEB.md § Graph Query Time Budget`, rule 2).
-2. **A cut statement rolls back whole.** There is no partial write to reconcile
-   and no torn state on disk. Measured: a writing statement over a Cartesian
+2. **A cut statement rolls back whole, with one exception.** There is no partial
+   write to reconcile and no torn state on disk. The exception is
+   [Error Handling and Exit Codes](#error-handling-and-exit-codes), rule 9: a cut statement that had
+   created a relationship between two nodes already joined in that direction
+   leaves one of the pair's relationships replaced, and the budget line still says
+   that nothing was written. Measured: a writing statement over a Cartesian
    product, cut two seconds into a run that would otherwise have made 4.4 million
    writes, left **zero** of its nodes behind when the store was closed, reopened
    from disk, and the survivors counted.
@@ -4758,10 +4845,17 @@ what is compared is a store no process holds open.
     not 6; the same statement written `CREATE INDEX IF NOT EXISTS spec_key ...`
     exits 0 and prints `{"ok": true}`; `DROP INDEX no_such_index` fails with exit
     code **1** and not 6, while `DROP INDEX no_such_index IF EXISTS` exits 0; a
-    composite index and an index over a relationship property each fail with exit
-    code 1; `CREATE CONSTRAINT ... REQUIRE n.key IS UNIQUE` over a property that
-    already holds a repeated value fails with exit code 1, registers nothing, and
-    is absent from a subsequent `SHOW CONSTRAINTS`; and
+    composite index, an index over a relationship property, and a constraint of a
+    kind the engine does not implement (`REQUIRE n.key IS KEY`) each fail with
+    exit code 1; `CREATE CONSTRAINT ... REQUIRE n.key IS UNIQUE` over a property
+    that already holds a repeated value, and
+    `CREATE CONSTRAINT ... REQUIRE n.key IS NOT NULL` over a label one of whose
+    nodes lacks the property, each fail with exit code 1, register nothing, and
+    are absent from a subsequent `SHOW CONSTRAINTS`; each of those five failures
+    carries, after the fixed prefix of the parse-or-execution line, the engine's
+    own diagnostic for that refusal, and not the generic text naming only a
+    session that the engine's server substitutes for a failure it classifies as
+    its own (see [Schema Failure Classes](#schema-failure-classes), rule 3); and
     `CREATE   INDEX spec_key FOR (n:Spec) ON (n.key)`, whose keyword spacing the
     engine does not route to its schema parser, fails with exit code **1**
     carrying a parse diagnostic, creates no index, and leaves the graph's node and
@@ -4777,8 +4871,11 @@ what is compared is a store no process holds open.
       four-hex-digit Cypher escape for `U+001B` stores a value whose first code
       point after the literal's leading text is a real `U+001B`, read back through
       a subsequent statement;
-    - `MATCH (v:Test {key:'…'})<-[e]-(s) SET e.last_commit = 'x'` reports success
-      while a read-back through an outgoing pattern reports `last_commit` absent;
+    - `MATCH (v:Test {key:'…'})<-[e]-(s) SET e.last_commit = 'x'` reports success,
+      and a read-back through an outgoing pattern reports `last_commit` equal to
+      `'x'` on every relationship the incoming pattern bound; the same assignment
+      written `MATCH (v:Test {key:'…'})-[e]-(s) SET e.last_commit = 'y'` reaches
+      every relationship incident to `v`, whichever way each is stored;
     - against a node pair joined in both directions with a **different**
       relationship type each way — the fixture the criterion requires, because a
       pair whose two legs share a type cannot tell a correctly resolved read from
@@ -4794,13 +4891,18 @@ what is compared is a store no process holds open.
       bound; and a `DELETE` gated by such a predicate removes that relationship and
       leaves the other in place. The undirected and the incoming spelling are each
       asserted with the far endpoint bound by key and bound by label alone. This
-      bullet is the one whose subject is not a hazard (see item 5), and it is
-      asserted for the mirror-image reason: it is what fails if the engine stops
-      resolving these reads correctly, and equally what fails if a refusal of the
-      shape is reintroduced;
+      bullet and the third are the two whose subject is not a hazard (see items 4
+      and 5), and they are asserted for the mirror-image reason: each is what fails
+      if the engine stops resolving these shapes correctly, and equally what fails
+      if a refusal of the shape is reintroduced;
     - `CREATE INDEX spec_key FOR (n:Spec) ON (n.key) MATCH (m) SET m.reviewed = true`
-      creates the index, prints `{"ok": true}`, and leaves `m.reviewed` absent.
-    An implementation that refused any of the five fails this criterion. It is
+      creates the index, prints `{"ok": true}`, and leaves `m.reviewed` absent;
+    - `MATCH (v:Test {key:'…'})<-[e]-(s) REMOVE e.last_commit` reports success and
+      publishes no `counters` object, while a read-back through an outgoing pattern
+      still reports `last_commit` on every relationship the incoming pattern bound;
+      and the same removal written
+      `MATCH (s)-[e]->(v:Test {key:'…'}) REMOVE e.last_commit` removes it.
+    An implementation that refused any of the six fails this criterion. It is
     stated in this direction — asserting the outcome rather than the absence of a
     check — because an absence cannot be tested and an outcome can (see
     [What Groadmap Does Not Check](#what-groadmap-does-not-check)).
@@ -5057,9 +5159,13 @@ what is compared is a store no process holds open.
     something, and that is what the member is for.** Re-running a `MERGE` that
     matches the element it matched before returns `{"ok": true}` with no
     `counters` key, while its first run returned one; a `DELETE` whose pattern
-    matches no row does the same. The criterion MUST compare the two runs of the
-    **same statement** rather than two different statements, because it is the
-    difference between them that a caller reads, and MUST also assert that a
+    matches no row does the same; and `DROP INDEX <name> IF EXISTS` naming an
+    index that exists returns a `counters` object of exactly `indexesRemoved` 1,
+    while the same statement run again, with the index now absent, returns
+    `{"ok": true}` with no `counters` key. The criterion MUST compare the two
+    runs of the **same statement** rather than two different statements, because
+    it is the difference between them that a caller reads, and MUST also assert
+    that a
     `DETACH DELETE` of a connected node reports `nodesDeleted` and
     `relationshipsDeleted` and no property figure — a deletion counts no property
     removal.

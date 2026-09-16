@@ -3898,8 +3898,9 @@ of which reports success.
 **`client` runs what it is given, but not for as long as it takes.** The statement
 runs under a time budget of **5 seconds**, enforced by the server that executes it
 and carrying the same value for the web graph data endpoint. A statement that
-exhausts it is cancelled; its transaction rolls back whole, no snapshot is
-written, the write-ahead log is left as the statement found it, and the caller
+exhausts it is cancelled; its transaction rolls back whole (with the one engine
+defect `GRAPH.md § Error Handling and Exit Codes`, rule 9, describes), no snapshot
+is written, the write-ahead log is left as the statement found it, and the caller
 fails with exit code 1 and the budget line `§ Client Error Cases` publishes. This
 is a limit on what a caller may run, and it is published here for that reason: a
 statement whose work takes longer than five seconds fails, however valid its
@@ -4320,23 +4321,33 @@ repetition is not a defect to tidy away: trimming it would mean parsing it, and 
 match on the engine's wording fails silently at the next version bump.
 
 **What no caller can do today is read it.** Every statement crosses a server, and
-at the pinned engine the refusal does not survive the crossing: the server
-classifies it as its own fault rather than the caller's and replaces the message
-with generic internal-error text, so no sentinel, no distinguishing code and no
-field kind reaches this side. The condition arrives through the parse/execution
-row above instead — the very outcome this line was published to end. The rest
-still holds: the sentinel is `utils.ErrGraphEngine`, the exit code is 1, and
-nothing was written.
+at the pinned engine the refusal crosses without its class: the server forwards
+the engine's diagnostic — the field kind and both figures — under a code it also
+gives to every other argument the engine refuses, so no sentinel and no
+distinguishing code reaches this side. The condition therefore arrives through
+the parse/execution row above, ending in that diagnostic: the caller learns what
+is wrong, and learns it only from text this file does not specify — the outcome
+this line was published to end. The rest still holds: the sentinel is
+`utils.ErrGraphEngine`, the exit code is 1, and nothing was written, with the one
+exception described below.
 
 The row is kept rather than withdrawn because the class is real, the remedy is
 known and small, and a line withdrawn now would have to be re-specified,
 re-agreed and re-tested the moment the engine gains the case for it. What the
 scenario column must never do is imply the line is reachable, which is why it says
 it is not. `GRAPH.md § Field Length Limits`, rule 13, is canonical for the
-limitation, for why Groadmap MUST NOT close it by matching the replaced text, and
+limitation, for why Groadmap MUST NOT close it by matching the forwarded text, and
 for the engine-side change that ends it. **Nothing in this repository can drive
 this line**, so no test asserts it and none can; that is a property of the pinned
 engine and not of the specification.
+
+**"Nothing was written" has one exception, and the lines keep the words.** The
+budget line, the conflict line and the field-length line each say that nothing
+was written, which is what the engine's transaction guarantees. An engine defect
+breaks that guarantee for a statement that had created a relationship between two
+nodes already joined in the same direction: the failure leaves one of the pair's
+relationships replaced. `GRAPH.md § Error Handling and Exit Codes`, rule 9, is
+canonical for the defect and for why the lines are kept as published.
 
 ---
 

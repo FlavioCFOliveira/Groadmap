@@ -147,9 +147,9 @@ func TestAuditReportsOneKeySpelledTwoWays(t *testing.T) {
 			// decomposed, both spellings would still land together and the
 			// counts above would still pass. Requiring the shared form to be the
 			// precomposed spelling is what holds the composition half of NFC in
-			// place — remove the Hangul arithmetic from unicodenorm.Compose and
-			// the Hangul row fails here, where nothing else in this file would
-			// have noticed.
+			// place — an audit that grouped on a decomposed form, or on a
+			// normaliser that composed no Hangul syllable, fails the Hangul row
+			// here, where nothing else in this file would have noticed.
 			if v.NFC != c.composed {
 				t.Errorf("the group's NFC form is %q; NFC composes, so both spellings must reach %q",
 					v.NFC, c.composed)

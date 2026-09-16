@@ -1,7 +1,12 @@
 package unicodenorm_test
 
 import (
+	"bytes"
+	"runtime"
+	"sync"
+	"sync/atomic"
 	"testing"
+	"unicode/utf8"
 
 	"golang.org/x/text/unicode/norm"
 
@@ -40,7 +45,8 @@ const maxReportedCodePoints = 12
 // The alternative — asking the module — is what this test exists to check, so it
 // cannot be the reference: `!norm.NFC.IsNormalString(s)` is the implementation
 // under test, and `norm.NFC.QuickSpanString(s) != len(s)` is the defect it
-// replaced. A reference has to come from outside the thing measured.
+// replaced. A reference has to come from outside the thing measured
+// (SPEC/BUILD.md § External Dependencies, Unicode Data Rules 3).
 //
 // The list needs no network at test time and MUST NOT acquire one: a test that
 // fetched unicode.org would fail offline and would silently follow a property
@@ -90,12 +96,12 @@ func excludedCodePoints() map[rune]bool {
 // well have cancelled in a total. Each direction is therefore counted and named
 // separately:
 //
-//   - a FALSE POSITIVE drops a composite from the table, so NFC returns the
-//     decomposition of a code point that composes and Groadmap's NFC stops being
-//     NFC. That is what happened;
-//   - a FALSE NEGATIVE admits a composite Unicode excludes, so NFC composes text
-//     into a form no NFC string may contain — the mirror fault, and no less
-//     wrong.
+//   - a FALSE POSITIVE drops a composite from the table the browser is shipped,
+//     so the browser's copy of the rule returns the decomposition of a code point
+//     that composes and stops being NFC. That is what happened;
+//   - a FALSE NEGATIVE admits a composite Unicode excludes, so the browser's copy
+//     composes text into a form no NFC string may contain — the mirror fault,
+//     and no less wrong.
 //
 // The reference is transcribed UCD data, never the module: see
 // fullCompositionExclusion for why a derivation is not available here and why
@@ -133,7 +139,8 @@ func TestIsCompositionExcluded_IsFullCompositionExclusion(t *testing.T) {
 
 	for _, cp := range falsePositives {
 		t.Errorf("U+%04X: IsCompositionExcluded says EXCLUDED, Full_Composition_Exclusion says "+
-			"it is not; its composite is dropped from the table and NFC will leave it decomposed",
+			"it is not; its composite is dropped from the shipped table and the browser's copy of "+
+			"the rule will leave it decomposed",
 			cp)
 	}
 	if nFalsePositive > 0 {
@@ -142,7 +149,8 @@ func TestIsCompositionExcluded_IsFullCompositionExclusion(t *testing.T) {
 	}
 	for _, cp := range falseNegatives {
 		t.Errorf("U+%04X: IsCompositionExcluded says NOT excluded, Full_Composition_Exclusion says "+
-			"it is; NFC would compose text into a form no NFC string may contain", cp)
+			"it is; the browser's copy of the rule would compose text into a form no NFC string "+
+			"may contain", cp)
 	}
 	if nFalseNegative > 0 {
 		t.Errorf("%d code points are excluded by Unicode and not by this package (%d named above)",
@@ -158,27 +166,25 @@ func TestIsCompositionExcluded_IsFullCompositionExclusion(t *testing.T) {
 	}
 }
 
-// TestNFC_AgreesWithTheModuleOnEverySingleCodePoint asserts the claim the whole
-// of this package rests on, directly: NFC IS Normalization Form C.
+// TestClientNFC_AgreesWithTheModuleOnEverySingleCodePoint is the first of the
+// two checks that hold the browser's copy of the normalisation rule equal to the
+// server's: over every single code point of Unicode, the Go statement of the
+// algorithm task-search.js runs returns what golang.org/x/text/unicode/norm
+// returns (SPEC/WEB.md § Roadmap Tasks Page, What keeps the shipped rule equal to
+// the server's, check 1).
 //
 // It is a stronger statement than counting exclusions, because it measures the
 // OUTPUT of the rule rather than one input to it. A miscounted exclusion, a
-// missing prefix entry, a wrong combining class, a broken blocking test in
-// composeText — each of them changes a result here, and none of them need change
+// missing prefix entry, a wrong combining class, a broken blocking test in the
+// composition — each of them changes a result here, and none of them need change
 // the exclusion count.
 //
-// THE MODULE IS THE REFERENCE HERE, AND ONLY OVER SINGLE CODE POINTS. Compose
-// explains that golang.org/x/text/unicode/norm composes a supplementary starter
-// as though it were its low 16 bits, so over longer inputs the two forms differ
-// BY DESIGN and the module would be the wrong reference. Over a single code point
-// the defect cannot arise — the input carries no pair for it to key on — so the
-// two must agree on all 1,112,064 scalar values, and that is exactly the claim
-// SPEC/BUILD.md § External Dependencies, Unicode Data Rules 3 publishes.
-//
-// This is the one call to norm.NFC.String in Groadmap. Rule 3 forbids it in the
-// rule; here it is the yardstick the rule is held against, never a value any
-// caller receives, and the prohibition would be unmeasurable without it.
-func TestNFC_AgreesWithTheModuleOnEverySingleCodePoint(t *testing.T) {
+// THE SUBJECT IS THE BROWSER'S COPY, NOT NFC. NFC returns the module's own
+// answer, so comparing it with the module would compare the module with itself.
+// The client's algorithm runs over the data the three shipped tables carry, which
+// internal/web's guard test holds equal to the shipped tables, so this sweep and
+// that one together say that the script answers as the server does.
+func TestClientNFC_AgreesWithTheModuleOnEverySingleCodePoint(t *testing.T) {
 	swept, faults := 0, 0
 	named := make([]rune, 0, maxReportedCodePoints)
 
@@ -188,8 +194,8 @@ func TestNFC_AgreesWithTheModuleOnEverySingleCodePoint(t *testing.T) {
 		}
 		swept++
 		s := string(cp)
-		ours, reference := unicodenorm.NFC(s), norm.NFC.String(s)
-		if ours == reference {
+		client, reference := unicodenorm.ClientNFC(s), norm.NFC.String(s)
+		if client == reference {
 			continue
 		}
 		faults++
@@ -197,8 +203,8 @@ func TestNFC_AgreesWithTheModuleOnEverySingleCodePoint(t *testing.T) {
 			continue
 		}
 		named = append(named, cp)
-		t.Errorf("U+%04X: this package normalises to %X, Normalization Form C is %X",
-			cp, []rune(ours), []rune(reference))
+		t.Errorf("U+%04X: the browser's copy of the rule normalises to %X, the module to %X",
+			cp, []rune(client), []rune(reference))
 	}
 
 	if swept != 1112064 {
@@ -206,25 +212,255 @@ func TestNFC_AgreesWithTheModuleOnEverySingleCodePoint(t *testing.T) {
 			swept)
 	}
 	if faults > 0 {
-		t.Errorf("%d of the %d single code points are not returned in Normalization Form C "+
-			"(%d named above). This package's NFC is not NFC", faults, swept, len(named))
+		t.Errorf("%d of the %d single code points normalise differently in the browser's copy "+
+			"of the rule and in the server's (%d named above)", faults, swept, len(named))
 	}
 }
 
-// TestNFC_ComposesTheQuickCheckMaybeCodePoints is the named regression for the
-// defect that TestIsCompositionExcluded_IsFullCompositionExclusion generalises.
+// interactingSeconds returns, in ascending order, every code point that can
+// interact with a code point written before it: a code point whose full
+// canonical decomposition begins with a code point that carries a non-zero
+// canonical combining class, or with one that is the second element of a
+// canonical composition, the Hangul vowel and trailing-consonant jamo included.
+//
+// Every other code point begins with a starter that nothing composes with, so no
+// code point before it can change it or be changed by it, and under UAX #15 a
+// pair ending in one normalises to the concatenation of the two single code
+// points TestClientNFC_AgreesWithTheModuleOnEverySingleCodePoint covers
+// (SPEC/WEB.md § Roadmap Tasks Page, What keeps the shipped rule equal to the
+// server's, check 2).
+func interactingSeconds() []rune {
+	seconds := unicodenorm.Compositions().Seconds
+	interacting := make([]rune, 0, 1100)
+	for cp := rune(0); cp <= unicodenorm.MaxCodePoint; cp++ {
+		if unicodenorm.IsSurrogate(cp) {
+			continue
+		}
+		first := unicodenorm.Decompose(cp)[0]
+		if unicodenorm.CombiningClass(first) != 0 || seconds[first] {
+			interacting = append(interacting, cp)
+		}
+	}
+	return interacting
+}
+
+// pairFault is one two-code-point sequence the two expressions of the rule
+// normalise differently.
+type pairFault struct {
+	lead, trail       rune
+	client, reference []byte
+}
+
+// pairSweep is what one worker of the pair sweep observed.
+type pairSweep struct {
+	faults      []pairFault
+	firsts      int
+	pairs       int
+	faultsFound int
+}
+
+// pairSweepBlock is how many leading code points a worker claims at a time. It
+// is small enough that the processors share the dense and the sparse parts of
+// Unicode evenly, and large enough that claiming costs nothing measurable.
+const pairSweepBlock = 1 << 12
+
+// TestClientNFC_AgreesWithTheModuleOnEveryInteractingPair is the second of the
+// two checks: over every sequence of two code points whose first is any code
+// point of Unicode and whose second is one interactingSeconds returns, the Go
+// statement of the browser's algorithm returns what the module returns
+// (SPEC/WEB.md § Roadmap Tasks Page, What keeps the shipped rule equal to the
+// server's, check 2; Acceptance Criterion 155).
+//
+// THE SWEEP IS WHOLE ON EVERY RUN. The domain is the product of 1,112,064 leading
+// code points and about a thousand trailing ones — over a billion pairs — and
+// every one of them is normalised by both expressions and compared, under the
+// race detector as much as without it. Nothing is sampled and nothing is
+// skipped: a sample would leave the pairs it did not draw unproven, and the claim
+// is about all of them. The cost is paid by dividing the sweep across every
+// processor the run is given, which the specification requires, and by keeping
+// both expressions free of allocation inside the loop.
+//
+// Sequences of three or more code points are not enumerated. They are covered
+// because both expressions follow UAX #15's algorithm over data the checks hold
+// equal, which is the limit of the proof the specification states.
+func TestClientNFC_AgreesWithTheModuleOnEveryInteractingPair(t *testing.T) {
+	seconds := interactingSeconds()
+	requireInteractingSetShape(t, seconds)
+
+	encodedSeconds := make([][]byte, len(seconds))
+	for i, r := range seconds {
+		encodedSeconds[i] = utf8.AppendRune(nil, r)
+	}
+
+	// The client's tables are derived before the workers start, so the one-time
+	// derivation is not raced for by every worker at once.
+	_ = unicodenorm.ClientNFC("é") // derives the client's tables; the value is irrelevant
+
+	workers := runtime.GOMAXPROCS(0)
+	sweeps := make([]pairSweep, workers)
+	var claimed atomic.Int32
+	var wg sync.WaitGroup
+	for w := range workers {
+		wg.Add(1)
+		go func(sweep *pairSweep) {
+			defer wg.Done()
+			sweepPairs(&claimed, encodedSeconds, sweep)
+		}(&sweeps[w])
+	}
+	wg.Wait()
+
+	firsts, pairs, faults := 0, 0, 0
+	named := 0
+	for i := range sweeps {
+		firsts += sweeps[i].firsts
+		pairs += sweeps[i].pairs
+		faults += sweeps[i].faultsFound
+		for _, f := range sweeps[i].faults {
+			if named >= maxReportedCodePoints {
+				break
+			}
+			named++
+			t.Errorf("U+%04X U+%04X: the browser's copy of the rule normalises to %X, the module to %X",
+				f.lead, f.trail, []rune(string(f.client)), []rune(string(f.reference)))
+		}
+	}
+
+	if firsts != 1112064 {
+		t.Errorf("the sweep led with %d scalar values, want 1112064; it is not the whole of Unicode",
+			firsts)
+	}
+	if want := 1112064 * len(seconds); pairs != want {
+		t.Errorf("the sweep compared %d pairs, want %d (1112064 leading code points times %d "+
+			"trailing ones)", pairs, want, len(seconds))
+	}
+	if faults > 0 {
+		t.Errorf("%d of the %d pairs normalise differently in the browser's copy of the rule and "+
+			"in the server's (%d named above)", faults, pairs, named)
+	}
+	t.Logf("compared %d pairs (%d leading code points, %d trailing ones) across %d workers",
+		pairs, firsts, len(seconds), workers)
+}
+
+// sweepPairs claims blocks of leading code points until none is left, and
+// compares every pair each block leads. It is one worker, and it owns every
+// buffer it writes.
+func sweepPairs(claimed *atomic.Int32, encodedSeconds [][]byte, sweep *pairSweep) {
+	client := unicodenorm.NewClientNormaliser()
+	input := make([]byte, 0, 2*utf8.UTFMax)
+	var clientOut, referenceOut []byte
+	firsts, pairs := 0, 0
+	defer func() { sweep.firsts, sweep.pairs = firsts, pairs }()
+
+	for {
+		start := claimed.Add(pairSweepBlock) - pairSweepBlock
+		if start > unicodenorm.MaxCodePoint {
+			return
+		}
+		end := min(start+pairSweepBlock-1, unicodenorm.MaxCodePoint)
+		for lead := start; lead <= end; lead++ {
+			if unicodenorm.IsSurrogate(lead) {
+				continue
+			}
+			firsts++
+			input = utf8.AppendRune(input[:0], lead)
+			leadLen := len(input)
+			for _, trail := range encodedSeconds {
+				input = append(input[:leadLen], trail...)
+				referenceOut = norm.NFC.Append(referenceOut[:0], input...)
+				clientOut = client.AppendNFC(clientOut[:0], input)
+				pairs++
+				if bytes.Equal(clientOut, referenceOut) {
+					continue
+				}
+				sweep.faultsFound++
+				if len(sweep.faults) < maxReportedCodePoints {
+					r, _ := utf8.DecodeRune(trail)
+					sweep.faults = append(sweep.faults, pairFault{
+						lead:      lead,
+						trail:     r,
+						client:    bytes.Clone(clientOut),
+						reference: bytes.Clone(referenceOut),
+					})
+				}
+			}
+		}
+	}
+}
+
+// requireInteractingSetShape stops the pair sweep before it starts when the set
+// of trailing code points is not the set the specification describes, because a
+// sweep over the wrong set proves nothing about the pairs it left out.
+//
+// The members named are one of each kind the definition admits: a combining mark;
+// a code point with no class of its own whose decomposition begins with a mark;
+// a starter that is the second element of a composition, in the Basic
+// Multilingual Plane and beyond it; and a Hangul vowel and trailing jamo. The
+// non-members are a letter, a Hangul syllable and a leading jamo, each a starter
+// nothing composes with. The size is not pinned, because it moves with the
+// Unicode version, but it is held to the order of magnitude the specification
+// states.
+func requireInteractingSetShape(t *testing.T, seconds []rune) {
+	t.Helper()
+
+	in := make(map[rune]bool, len(seconds))
+	for _, r := range seconds {
+		in[r] = true
+	}
+	for _, member := range []struct {
+		r    rune
+		kind string
+	}{
+		{0x0301, "a combining mark"},
+		{0x0338, "a combining overlay"},
+		{0x0F73, "a code point of class 0 whose decomposition begins with a mark"},
+		{0x0CD5, "a starter that is the second element of a composition"},
+		{0x11930, "a supplementary starter that is the second element of a composition"},
+		{0x1161, "a Hangul vowel jamo"},
+		{0x11A8, "a Hangul trailing jamo"},
+	} {
+		if !in[member.r] {
+			t.Errorf("U+%04X, %s, is missing from the trailing code points", member.r, member.kind)
+		}
+	}
+	for _, outsider := range []struct {
+		r    rune
+		kind string
+	}{
+		{'a', "a letter"},
+		{0xAC00, "a Hangul syllable"},
+		{0x1100, "a Hangul leading jamo"},
+	} {
+		if in[outsider.r] {
+			t.Errorf("U+%04X, %s, is among the trailing code points; nothing before it can "+
+				"interact with it", outsider.r, outsider.kind)
+		}
+	}
+	if len(seconds) < 500 || len(seconds) > 5000 {
+		t.Errorf("the trailing set holds %d code points; the specification describes about a "+
+			"thousand", len(seconds))
+	}
+	if t.Failed() {
+		t.FailNow()
+	}
+}
+
+// TestClientNFC_ComposesTheQuickCheckMaybeCodePoints is the named regression for
+// the defect that TestIsCompositionExcluded_IsFullCompositionExclusion
+// generalises.
 //
 // These twelve carry BOTH a canonical decomposition and NFC_QC=Maybe, a
 // combination Unicode 15.0.0 had no instance of and Unicode 16.0.0 introduced.
 // Under `norm.NFC.QuickSpanString(s) != len(s)` every one of them was read as a
-// composition exclusion, its composite never entered the table, and NFC returned
-// its decomposition. Each MUST normalise to itself: it is a composite Unicode
-// composes, not one Unicode excludes.
+// composition exclusion, its composite never entered the composition table, and
+// the rule built on that table returned its decomposition. Each MUST normalise to
+// itself: it is a composite Unicode composes, not one Unicode excludes.
 //
-// It is deliberately stated as behaviour of NFC and not as a property lookup, so
-// that it keeps testing the thing that mattered — the text a search compares —
-// however the predicate underneath is next rewritten.
-func TestNFC_ComposesTheQuickCheckMaybeCodePoints(t *testing.T) {
+// The subject is the browser's copy of the rule, because the table is what the
+// defect damaged and the browser's copy is what reads it; NFC is asserted beside
+// it so that the twelve are held to one answer on both sides. It is stated as
+// behaviour rather than as a property lookup alone, so that it keeps testing the
+// text a search compares however the predicate underneath is next rewritten.
+func TestClientNFC_ComposesTheQuickCheckMaybeCodePoints(t *testing.T) {
 	for _, cp := range []rune{
 		0x113C5, 0x113C7, 0x113C8, // Tulu-Tigalari vowel signs AI, OO, AU
 		0x16121, 0x16122, 0x16123, 0x16124, // Gurung Khema vowel signs U, UU, E, EE
@@ -234,6 +470,10 @@ func TestNFC_ComposesTheQuickCheckMaybeCodePoints(t *testing.T) {
 		if unicodenorm.IsCompositionExcluded(cp) {
 			t.Errorf("U+%04X: reported as excluded from composition; it is NFC_QC=Maybe, which "+
 				"is not NFC_QC=No, and Full_Composition_Exclusion is false of it", cp)
+		}
+		if got := unicodenorm.ClientNFC(string(cp)); got != string(cp) {
+			t.Errorf("U+%04X: the browser's copy of the rule returns %X, want the code point "+
+				"itself; it is a composite Unicode composes", cp, []rune(got))
 		}
 		if got := unicodenorm.NFC(string(cp)); got != string(cp) {
 			t.Errorf("U+%04X: NFC returns %X, want the code point itself; it is a composite "+

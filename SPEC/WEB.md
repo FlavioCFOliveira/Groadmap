@@ -1422,29 +1422,20 @@ how the `rmp web` process itself terminates.
   first would give `U+0069` for one and `U+0069 U+0307` for the other, which are two
   different searchable texts for one title.
 
-  **The composition step is Groadmap's own; the decomposition step is not.** The
-  server obtains the canonical decomposition and the canonical ordering from
-  `golang.org/x/text/unicode/norm` (see `BUILD.md § External Dependencies`), and
-  performs the composition itself, from the same `COMPOSE_TABLE` it ships to the
-  browser (see **One rule, and only one implementation of it** below). That module's
-  own composition is **not** used, because it is wrong: at the pinned version it
-  composes a supplementary starter as though the starter were its low 16 bits, so
-  `U+1003C` followed by `U+0338` becomes `U+226E` (because `U+1003C` masked to 16
-  bits is `U+003C`), `U+10041` followed by `U+0301` becomes `U+00C1`, and `U+1042B`
-  followed by `U+0308` becomes `U+04F8`. The platform's own normalisation leaves all
-  three unchanged, and so does Groadmap's. The defect spans **15,342** pairs over
-  **6,232** distinct leading code points; the decomposition the server does use is
-  unaffected by it.
-
-  Composing from the table is not a private dialect of NFC. It is NFC where that
-  module is right and NFC where that module is wrong: the two agree on **all
-  1,112,064** single code points, and the table still composes the 33 legitimate
-  supplementary composites, `U+11935` followed by `U+11930` giving `U+11938` among
-  them. This is why the server takes the client's table rather than the client
-  taking the server's answer — the alternative would mean generating a table that
-  reproduced a truncation defect on purpose, and a client that was right while the
-  server was wrong would break **Server and client produce the same board** below,
-  which is the one property none of these rules may cost.
+  **The server's normalisation is the module's, and the client's is the same rule
+  over data the server ships.** The server normalises with
+  `golang.org/x/text/unicode/norm`, the Go project's own implementation of UAX #15
+  (see `BUILD.md § External Dependencies`), and takes both halves of the rule from
+  it: the decomposition and the canonical ordering as much as the composition. The
+  client cannot call that module, so it runs UAX #15's algorithm over three tables
+  generated from the module's character data (see **What keeps the shipped rule
+  equal to the server's** below). Two expressions of one rule therefore exist, and
+  what makes them one rule is a proof rather than a construction: the checks below
+  hold the client's expression equal to the server's on every single code point and
+  on every two-code-point sequence in which the second can interact with the first,
+  and both follow UAX #15's algorithm for every longer sequence. A client that
+  answered differently from the server would break **Server and client produce the
+  same board** below, which is the one property none of these rules may cost.
 
   A term whose bytes are not valid UTF-8 is normalised like any other term, after
   each invalid byte has been replaced by `U+FFFD` (see **The folding rule** below).
@@ -1541,23 +1532,22 @@ how the `rmp web` process itself terminates.
   platform's own normalisation — `String.prototype.normalize` — any more than it may
   call that platform's trimming or its case conversion. It normalises the term from
   the **tables the server ships to it**, so the normalised form of a term is the
-  server's answer on both paths by construction.
+  server's answer on both paths, which **What keeps the shipped rule equal to the
+  server's** below proves.
 
   Two reasons make that prohibition stricter here than for the other two steps, and
   the second is decisive. The first is the one already given for them: a browser's
   normalisation tables are of whatever Unicode version that browser ships, which
   Groadmap neither chooses nor can detect. The second is that the platform's
-  normalisation and the server's would have to agree on **composition**, and
-  composition is exactly where the server's own module is wrong (see **The
-  normalisation rule** above). The server composes from the shipped table
-  specifically so that both sides run one rule over **one set of data**, rather than
-  two expressions of one description that could agree with each other by
-  reproducing the same defect.
+  normalisation is an implementation no check in the build can run, so nothing
+  could hold it equal to the server's. The shipped tables are data a Go test reads,
+  and the algorithm the client runs over them has a Go statement a Go test runs
+  (`BUILD.md § External Dependencies`, Unicode Data Rules 3), so the client's
+  normalisation is one the build proves rather than one it trusts.
 
   On the server, the corpus and the term are likewise **one** rule at every step:
   the server normalises a task's searchable text and normalises a term through the
-  same function and the same tables, and folds both through the same folding
-  function, not through two implementations of one description, so the two cannot
+  same function, and folds both through the same folding function, not through two implementations of one description, so the two cannot
   drift apart on that side either.
 - **What keeps the shipped rule equal to the server's.** The binary ships the client
   the things a term's preparation is made of — the whitespace set, the case mapping,
@@ -1581,8 +1571,8 @@ how the `rmp web` process itself terminates.
 
   **That size is an order of magnitude and not a byte count, deliberately.** The
   three entry counts above are backed: the check described below reads the shipped
-  tables as numbers and requires the count, and every entry, to equal what the
-  server's own function derives, so an entry count stated here cannot drift from
+  tables as numbers and requires the count, and every entry, to equal what
+  Groadmap derives from the module's character data, so an entry count stated here cannot drift from
   the artefact without the `test` gate failing. A byte count has no such backing.
   It is a property of the generator's layout — the indentation, the line width,
   and the separator its emitter writes — and the check is blind to all three,
@@ -1592,15 +1582,18 @@ how the `rmp web` process itself terminates.
   this section states none: whoever needs the exact size measures the artefact,
   which is its only authority.
 
-  Each part is checked against the server's own function over **the whole of
-  Unicode**: every code point, not a sample, and against that function itself, never
-  against a stored copy of its expected results — such a copy can be updated to
-  match a changed fold, a changed whitespace set, or changed normalisation data, and
-  would then prove nothing. The check fails when a single code point folds
-  differently on the two sides; it fails the same way when a single code point is
-  whitespace to one side and not to the other; and it fails the same way when a
-  single code point decomposes, orders, or composes differently between the shipped
-  tables and the server. It fails the same way again when a toolchain upgrade or a
+  Each part is checked over **the whole of Unicode** — every code point, not a
+  sample — against the function that produces it on the server's side: the
+  server's own fold, the server's own whitespace set, and, for the three
+  normalisation tables, the derivation from the module's character data. It is
+  checked against that function itself, never against a stored copy of its
+  expected results — such a copy can be updated to match a changed fold, a changed
+  whitespace set, or changed normalisation data, and would then prove nothing. The
+  check fails when a single code point folds differently on the two sides; it
+  fails the same way when a single code point is whitespace to one side and not to
+  the other; and it fails the same way when a single code point decomposes,
+  orders, or composes differently between the shipped tables and the derived
+  data. It fails the same way again when a toolchain upgrade or a
   dependency upgrade changes any of them, so a change of Unicode version cannot move
   one side of the rule and leave the other behind unnoticed: a server whose rule
   moved is **caught**, never followed. The check also asserts, as an absence in the
@@ -1608,22 +1601,46 @@ how the `rmp web` process itself terminates.
   conversion of the platform, nor a trimming function of the platform, nor the
   platform's own normalisation.
 
-  **The table's composition is proven correct on every run.** The shipped
-  `COMPOSE_TABLE` is not merely equal to the server's data — it is equal to the
-  rule Unicode defines, which is what makes the server adopting it a correction
-  rather than a divergence. Three checks establish that, and each of them
-  re-establishes it whenever the `test` gate runs. Two live in
-  `internal/unicodenorm`. The first requires the server's Normalization Form C to
-  equal `golang.org/x/text/unicode/norm`'s over **all 1,112,064** single code
-  points, which is the one domain in which that module is a valid reference: the
-  truncation defect **The normalisation rule** describes needs a pair to arise, so
-  over longer inputs the two forms differ by design. The second requires the
-  composition exclusions the server derives to equal Full_Composition_Exclusion as
-  the Unicode Character Database publishes it, over the whole of Unicode and in
-  **both** directions — a false positive drops a composite Unicode composes, a
-  false negative admits one Unicode excludes, and a single total would let the two
-  cancel. The third is the check this section already describes: the shipped
-  tables against the server's own functions, every code point and not a sample.
+  **The shipped normalisation is proven equal to the server's on every run.** Equal
+  data is not yet an equal rule, because the server does not run the shipped
+  algorithm: it runs the module's own. Three further checks close that gap, and
+  each of them re-establishes it whenever the `test` gate runs. All three live in
+  `internal/unicodenorm`, beside the Go statement of the client's algorithm that
+  `BUILD.md § External Dependencies`, Unicode Data Rules 3, requires, and the
+  first two run that statement over the derived data, which the check above holds
+  equal to the shipped tables.
+
+  1. **Every single code point.** The client's algorithm equals the module's
+     Normalization Form C on **all 1,112,064** code points of Unicode.
+  2. **Every pair that can interact.** It equals the module's Normalization Form C
+     on every sequence of two code points whose first is any code point of Unicode
+     and whose second is one that can interact with a code point before it: a code
+     point whose full canonical decomposition begins with a code point that carries
+     a non-zero canonical combining class, or with one that is the second element
+     of a canonical composition, the Hangul vowel and trailing-consonant jamo
+     included. A code point outside that set begins with a starter that nothing
+     composes with, so no code point before it can change it or be changed by it,
+     and under UAX #15 a pair ending in one normalises to the concatenation of the
+     two single code points the first check covers. The set holds about a thousand
+     code points, so this check compares over a billion pairs, which takes minutes
+     rather than seconds under the race detector the workflows run; it MUST
+     therefore divide its sweep across the processors available rather than run it
+     on one.
+  3. **The exclusions.** The composition exclusions the derivation reads equal
+     Full_Composition_Exclusion as the Unicode Character Database publishes it,
+     over the whole of Unicode and in **both** directions — a false positive drops a
+     composite Unicode composes, a false negative admits one Unicode excludes, and a
+     single total would let the two cancel.
+
+  **Sequences of three or more code points are not enumerated, and this is the
+  limit of the proof, stated rather than covered over.** Their number grows without
+  bound, so no sweep reaches them. They are covered because the two
+  implementations follow one algorithm: UAX #15 defines Normalization Form C as
+  full canonical decomposition, then canonical ordering, then canonical
+  composition, each step a function of the input and of data the checks above hold
+  equal, and both the module and the client's algorithm implement those steps. A
+  difference that only a longer sequence could reveal would be a departure of one
+  of the two from UAX #15, not a difference in the data.
 
   **A count of inputs stood here, and it was withdrawn rather than updated.** It
   reported that a prototype driven by these tables had been checked against the
@@ -1637,14 +1654,14 @@ how the `rmp web` process itself terminates.
   byte count, deliberately**, above, applied to this paragraph: a figure a reviewer
   trusts and no gate checks is worse than no figure at all. What stands in its
   place is the stronger claim rather than the smaller one, because the count
-  recorded that the rule had been correct once and the three checks require it to
+  recorded that the rule had been correct once and the checks above require it to
   be correct now.
 
-  That third check is an ordinary Go test. It runs no JavaScript and requires no
-  JavaScript engine, no Node.js, no network access, and no module beyond the direct dependencies
-  `BUILD.md § External Dependencies` names, so it holds within the constraints
-  already fixed in that section and in `BUILD.md § Vendored Web Assets`,
-  rule 2. It is the discipline the badge
+  Every check this section describes is an ordinary Go test. None of them runs
+  JavaScript or requires a JavaScript engine, Node.js, network access, or a module
+  beyond the direct dependencies `BUILD.md § External Dependencies` names, so they
+  hold within the constraints already fixed in that section and in
+  `BUILD.md § Vendored Web Assets`, rule 2. It is the discipline the badge
   colour mapping already follows wherever a client script carries that mapping too
   (see
   [Status, Priority, and Severity Badge Colours](#status-priority-and-severity-badge-colours),
@@ -7257,26 +7274,26 @@ Rules:
     syllables appear in none of them, being decomposed and composed arithmetically
     per UAX #15 on both sides. All three are covered by the **same** check that
     Acceptance Criteria 119 and 122 fix and not by a further check beside it, with
-    the same three properties: each is compared against the server's own function
-    over the whole of Unicode — every code point, not a sample — and against that
-    function itself, never against a stored copy of its expected results; and the
-    comparison fails when a shipped table holds a different number of entries than
-    the server's data, and when a single code point decomposes, orders, or composes
-    differently on the two sides, including when a toolchain or dependency upgrade
-    changes the Unicode version, so a server whose rule moved is caught rather than
-    followed. The three counts above are the counts that comparison enforces. This
+    the same three properties: each is compared against the derivation from the
+    module's character data over the whole of Unicode — every code point, not a
+    sample — and against that derivation itself, never against a stored copy of its
+    expected results; and the comparison fails when a shipped table holds a
+    different number of entries than the derived data, and when a single code point
+    decomposes, orders, or composes differently on the two sides, including when a
+    toolchain or dependency upgrade changes the Unicode version, so a server whose
+    rule moved is caught rather than followed. The three counts above are the counts that comparison enforces. This
     criterion fixes no byte size for the tables, because no gate checks one and the
-    sizes move with the generator's layout alone. The server performs the composition step itself, from that same
-    `COMPOSE_TABLE`, and does **not** use the composition of
-    `golang.org/x/text/unicode/norm`: at the pinned version that module composes a
-    supplementary starter as though it were its low 16 bits, turning `U+1003C`
-    followed by `U+0338` into `U+226E`, `U+10041` followed by `U+0301` into `U+00C1`,
-    and `U+1042B` followed by `U+0308` into `U+04F8`, across 15,342 pairs over 6,232
-    leading code points, while the platform's normalisation and Groadmap's leave all
-    three unchanged. The table's composition agrees with that module on all 1,112,064
-    single code points and still composes the 33 supplementary composites, `U+11935`
-    followed by `U+11930` giving `U+11938` among them. The check remains an ordinary
-    Go test, on the terms Acceptance Criteria 119 and 122 already state (see
+    sizes move with the generator's layout alone. The server normalises with
+    `golang.org/x/text/unicode/norm` and not through the shipped tables, so equal
+    tables are not yet an equal rule, and the criterion also requires the three
+    checks of **What keeps the shipped rule equal to the server's**: the Go
+    statement of the client's algorithm equals the module's Normalization Form C
+    on all 1,112,064 single code points and on every two-code-point sequence whose
+    second code point can interact with the first, and the derived composition
+    exclusions equal Full_Composition_Exclusion in both directions. Sequences of
+    three or more code points are covered by both implementations following
+    UAX #15's algorithm, and not by enumeration. The checks remain ordinary
+    Go tests, on the terms Acceptance Criteria 119 and 122 already state (see
     [Roadmap Tasks Page](#roadmap-tasks-page), **One rule, and only one
     implementation of it**, and **What keeps the shipped rule equal to the
     server's**).

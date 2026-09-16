@@ -845,15 +845,16 @@ func TestTaskSearchScript_ImplementsTheSameMatchingRule(t *testing.T) {
 	// shipped FOLD_TABLE, and into Form C once more. Not one step is the
 	// platform's — its case conversion is Unicode's Default Case Conversion rather
 	// than the folding rule, its trimming removes a different set from the
-	// White_Space property, its own normalisation would have to agree about the
-	// composition its module gets wrong, and all three read tables of whatever
-	// Unicode version the browser ships (SPEC/WEB.md Acceptance Criteria 118, 119,
-	// 121, 122, 152 and 155; the tables themselves are checked against the
-	// server's foldSearch, isSearchSpace, searchDecompose, searchCombiningClass
-	// and composition data over the whole of Unicode by
-	// TestTaskSearchScript_ShippedRuleIsTheServerRule, which also asserts that
-	// neither a trimming function of the platform nor its own normalisation is
-	// named anywhere in the asset).
+	// White_Space property, its own normalisation is an implementation no check in
+	// the build can run, and all three read tables of whatever Unicode version the
+	// browser ships (SPEC/WEB.md Acceptance Criteria 118, 119, 121, 122, 152 and
+	// 155; the tables themselves are checked against the server's foldSearch,
+	// isSearchSpace, searchDecompose, searchCombiningClass and composition data
+	// over the whole of Unicode by TestTaskSearchScript_ShippedRuleIsTheServerRule,
+	// which also asserts that neither a trimming function of the platform nor its
+	// own normalisation is named anywhere in the asset, and the algorithm the
+	// script runs over them is held equal to the server's normalisation by the
+	// tests of internal/unicodenorm).
 	for _, fragment := range []string{
 		"var FOLD_TABLE = [",
 		"var SPACE_TABLE = [",
