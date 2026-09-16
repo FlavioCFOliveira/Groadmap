@@ -48,8 +48,12 @@ For nodes backed by a file (`CodeFile`, `Test`, `Spec`, `Doc`) the confirmed com
 LAST commit that touched the file, as reported by `git log -1 -- <path>` -- which is why
 backfilling a commit that was never recorded does not mean writing that commit onto every
 node it touched: where a later commit has since touched the same file, the later one is the
-answer, and writing the older one would move provenance backwards. For `Component` it is
-the last commit that touched the package directory. For `Requirement` it is the most recent
+answer, and writing the older one would move provenance backwards. For a `package`
+`Component` it is the last commit that touched the package directory. For an
+`external-dependency` `Component` it is the last commit that changed what is pinned: for a Go
+module, the last commit that changed that module's line in the first `require` block of
+`go.mod`, as reported by `git log -1 -G'<module path> v' -- go.mod`; for a vendored web asset,
+the last commit that touched its vendored files. For `Requirement` it is the most recent
 commit among the artefacts the requirement is linked to. For an edge it is the commit at
 which the relationship itself was last verified to hold.
 
@@ -92,11 +96,16 @@ depends on, or a third-party web asset vendored into the binary.
 | `path` | yes | Package path, module path, or the repository path of the vendored asset. |
 | `kind` | yes | `package` or `external-dependency`. |
 | `language` | yes | `Go` for Go packages and Go modules, `Python` for the `tests` harness package; for vendored web assets, the comma-separated languages they ship (`CSS,JavaScript`, `CSS,Webfont`, `JavaScript`). |
-| `version` | no | Pinned version. Omitted when upstream declares none, as the Inter webfont does; never inferred. |
+| `version` | no | Pinned version. Omitted when upstream declares none, as the Inter webfont does; never inferred. Required on a Go module, where it is the version string `go.mod` pins, leading `v` included (see Constraints, dependency fidelity). |
 | `licence` | no | Upstream licence of an `external-dependency`, as recorded in `internal/web/static/vendor/LICENSES.md`. |
 | `summary` | no | What the component is and what it owns. |
 | `release_commit`, `release_date` | no | Commit and date at which the pinned version was adopted. The dependency's own facts, not provenance. |
 | `gitCommit`, `gitDate` | yes | Provenance. |
+
+The Go modules modelled are the project's direct dependencies only: the modules the first
+`require` block of `go.mod` names. An indirect requirement has no `Component` node. Each
+direct module is linked by `DEPENDS_ON` from every package of this module whose production
+source imports one of its packages, on any supported platform.
 
 Third-party code is never a `CodeFile`. The files vendored under
 `internal/web/static/vendor/` (Tabler, Tabler Icons, Inter, D3, d3-sankey) are modelled as
@@ -355,6 +364,29 @@ Unicode normalisation form. `SPEC/GRAPH.md` section Node Key Uniqueness is canon
 comparison that decides sameness and publishes the two-step audit that does detect such a
 pair. The status the query last returned, and the decision recorded for each key it
 reported, are held in the same memory as the constraint state.
+
+### The rule the engine cannot hold: dependency fidelity
+
+Every module in the first `require` block of `go.mod` has exactly one `Component` node, whose
+`key` is the module path, whose `kind` is `external-dependency`, and whose `version` equals,
+string for string, the version that block pins. No `external-dependency` `Component` with
+`language` `Go` exists for a module outside that block. The rule compares the graph with a
+file, so no constraint can express it, and it is checked in two steps.
+
+Step 1 reads the block. `SPEC/BUILD.md` section External Dependencies requires the first
+`require` block to hold exactly the direct requirements, so the requirements
+`go mod edit -json` reports without `"Indirect": true` are that block.
+
+Step 2 reads the graph:
+
+```
+MATCH (c:Component {kind:'external-dependency', language:'Go'})
+RETURN c.key AS module, c.version AS version, count(*) AS nodes ORDER BY module
+```
+
+The rule holds when the two lists name the same modules, every row reports `nodes` 1, and
+every `version` equals the pinned one. Whether it holds today is not written here: running
+the two steps answers it.
 
 ## Indexes
 
