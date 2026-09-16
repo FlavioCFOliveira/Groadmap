@@ -102,7 +102,7 @@ half-done or partially done.**
 
 - Every development cycle MUST be self-contained and produce a working result (a
   deliverable).
-- All code and development is **Full-fledged** by rule. NEVER create tests with
+- All code and development is **full-fledged** by rule. NEVER create tests with
   skip.
 - Everything the task's objectives, requirements, and acceptance criteria
   require is part of the task, and is done within the SAME cycle.
@@ -517,7 +517,7 @@ your ability to understand the project is preserved.
 **Scope the gates to what changed** (see Section 0, Iterate). Before a commit:
 1. `go fmt ./...` (format)
 2. `go vet ./...` (static analysis)
-3. `go test <changed packages>` (tests - ALL must pass) — plus any package whose
+3. `go test <changed packages>` (tests — ALL must pass) — plus any package whose
    stability the change can foreseeably affect
 4. `go build -o ./bin/ ./cmd/rmp` (build)
 5. `"$GOLANGCI_LINT" run <changed packages>` (lint — requires golangci-lint; see SPEC/BUILD.md for install)
@@ -621,7 +621,7 @@ type(scope): subject
         └── skill-creator/
 ```
 
-Project-local skill set is intentionally minimal; most agents/skills used in
+The project-local skill set is intentionally minimal; most agents/skills used in
 this project (e.g., `specification-manager`, `roadmap-manager`,
 `knowledge-authority`, `go-developer`, `exhaustive-qa-engineer`,
 `release-manager`, `code-review`, `security-review`, `simplify`) are provided by the
@@ -670,7 +670,7 @@ global Claude Code configuration.
 | Assess performance / completeness / correctness | Gather evidence; decide empirically |
 | Trade-off between correctness, safety, and speed | Apply Correct → Safe → Fast; if they conflict, ASK the user |
 | Information insufficient | Consult Knowledge Graph first, then authoritative sources — never guess |
-| Code vs SPEC diverge | Follow SPEC, ask user |
+| Code vs SPEC diverge | Follow SPEC, ask the user |
 
 ---
 
@@ -679,7 +679,7 @@ global Claude Code configuration.
 ### Critical Violations
 - Implement without SPEC/
 - Derive SPEC from existing code
-- Make product decisions without user
+- Make product decisions without the user
 - Make decisions alone when instructions are unclear, ambiguous, or contradictory (always ASK)
 - Change scope, expected behavior, architecture, or requirements without asking the user first
 - Start any task that was not explicitly requested
@@ -788,7 +788,7 @@ make check
 ## 12. End-To-End (E2E) Testing
 
 ### Test Location
-- All E2E tests are stored in the `/tests` directory at repository root
+- All E2E tests are stored in the `/tests` directory at the repository root
 
 ### Test Execution
 - Tests must execute commands against the compiled binary at `/bin/rmp`
@@ -837,4 +837,4 @@ make check
 
 ## Project Identity
 
-**Groadmap** is a CLI tool in Go for managing technical roadmaps, using SQLite as backend.
+**Groadmap** is a CLI tool in Go for managing technical roadmaps, using SQLite as its backend.
