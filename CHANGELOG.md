@@ -5,6 +5,287 @@ All notable changes to **Groadmap** (`rmp`) are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.17.2] - 2026-09-16
+
+### Changed - BREAKING
+
+- **The version line names the build.** `rmp --version`, `rmp -v` and `rmp version`
+  now append the commit the binary was built from, in parentheses:
+  `Groadmap version 1.17.2 (commit <commit>)`, `(commit <commit>, modified)` for a
+  build from a tree with uncommitted changes, or `(commit unknown)` when the Go
+  toolchain recorded no version-control data. `<commit>` is exactly seven characters.
+  `1.17.1` printed `Groadmap version 1.17.1` and nothing after it.
+  - **Unchanged:** the line still begins `Groadmap version <version>`, so the version
+    is still the third whitespace-separated word, and the three forms still write
+    the same line.
+  - **The test to apply:** you are unaffected unless a program compares the whole
+    line with `Groadmap version <version>`, or reads anything after the version.
+    `SPEC/COMMANDS.md § Version` now publishes what a script may rely on.
+
+- **An unrecognised flag written after or between positional arguments is refused
+  with the unknown-flag line, before the roadmap is opened.** This applies to the 31
+  `task`, `sprint`, `roadmap`, `backlog` and `audit` subcommands that read their
+  positional arguments by position. Each such invocation now exits `2` with
+  `Error: invalid input: unknown flag: <flag>`, writes nothing to stdout and changes
+  nothing.
+  - **After the last positional argument**, the flag used to be discarded and the
+    command did its work. Invocations that succeeded on `1.17.1` now exit `2`, and
+    invocations naming a roadmap or an entity that does not exist exit `2` where they
+    exited `4`: `rmp sprint get -r <name> <missing-id> --foo` did so. See **Fixed**.
+  - **Between two positional arguments**, on the 14 subcommands that take two or
+    more, the flag used to be read as the next positional argument and refused by
+    that slot's own check. `1.17.1`'s `SPEC/COMMANDS.md` published that behaviour
+    for `task add-dep`, `task remove-dep` and the five sprint ordering commands.
+    `rmp task add-dep -r <name> 1 --foo 2` wrote
+    `Error: invalid input: invalid dependency task ID: "--foo" (must be a positive integer)`,
+    and `rmp task prio -r <name> 1 --foo 3` exited `6` with
+    `Error: validation error: invalid priority: must be 0-9`. Both now exit `2` with
+    the unknown-flag line.
+  - **Unchanged:** a `-`-prefixed token written before the first positional argument,
+    or with no positional argument after it, still stands in that slot and is refused
+    by the slot's own check.
+  - **The test to apply:** you are unaffected unless an invocation writes a flag the
+    subcommand does not declare after or between its positional arguments. Run it
+    once: an exit `2` naming an unknown flag names the token to remove.
+
+- **A help token asks for help only in a token position.** `1.17.1`'s
+  `SPEC/HELP.md` said that `--help`, `-h` and the word `help` asked for help anywhere
+  in the argument list, so the word written as a flag's value printed the help and
+  did nothing else. The word `help` written as the value of a flag the subcommand
+  declares with a value is now that flag's value.
+  `rmp task create -r <name> -t help -fr … -tr … -ac …` printed the help at exit `0`
+  and created nothing; it now creates a task titled `help`.
+  `rmp graph client -r <name> --query=help` sends the statement `help`.
+  `SPEC/HELP.md § Help tokens` defines the rule.
+  - **The test to apply:** you are unaffected unless an invocation passes the word
+    `help` as a flag's value and expects the help.
+
+- **`help` is a reserved roadmap name.** `rmp <command> -r help` printed the help at
+  exit `0`; it now exits `6` with
+  `Error: validation error: "help": roadmap name is a reserved system name`, the line
+  `con` and `nul` already produced. `rmp roadmap create help` still prints the help
+  and creates nothing, so no command can create such a roadmap. A directory named
+  `help` made outside the CLI is listed by `rmp roadmap list` and reachable by no
+  command.
+  - **The test to apply:** you are unaffected unless an invocation passes `-r help`
+    or `--roadmap help`.
+
+- **`rmp graph serve`, `rmp graph client` and `rmp web` name an unknown flag without
+  its `=value`.** `rmp graph serve -r <name> --zzz=1` wrote
+  `Error: invalid input: unknown flag: --zzz=1`, and now writes
+  `Error: invalid input: unknown flag: --zzz`, as the other commands already did. The
+  exit code stays `2`.
+  - **The test to apply:** you are unaffected unless a program matches that line
+    for one of these three commands, including the `=value`.
+
+- **`rmp task edit` with no field flags checks that the roadmap and the task exist.**
+  `1.17.1` published that such an invocation succeeds with exit `0`, and it did so
+  even for a task or a roadmap that does not exist. It now faces every check a
+  field-carrying edit faces, except the checks on field values. A missing task exits
+  `4` with `Error: resource not found: task N not found`, a missing roadmap exits `4`,
+  and an invalid roadmap name exits `6`.
+  - **Unchanged:** on an existing task it still exits `0`, changes nothing and writes
+    no audit entry.
+  - **The test to apply:** you are unaffected unless you run `rmp task edit` with no
+    field flags and rely on exit `0` when the task or the roadmap may not exist.
+
+- **The `rmp web` graph data endpoint refuses an `EXPLAIN` or `PROFILE` statement.**
+  `1.17.1`'s `SPEC/GRAPH.md` said a statement from the web query bar behaves exactly
+  as it does through `rmp graph client`.
+  `GET /roadmaps/{name}/graph/data?q=EXPLAIN …` answered HTTP `200` with an empty
+  graph that could not be told from a statement that matched nothing. A `PROFILE`
+  read answered `200` with its nodes. Both now answer HTTP `400`, without sending
+  the statement to the graph server, with
+  `{"error": "query not run: the query bar cannot show a query plan; remove the EXPLAIN or PROFILE prefix, or run the statement with rmp graph client", "kind": "plan_prefix"}`.
+  - **The error object's `kind` gains a third value**, `plan_prefix`, beside
+    `invalid_limit` and `execution`.
+  - **The prefix is examined after the `limit` and before the server is looked up.**
+    A prefixed statement is therefore refused with `400` even when no graph server
+    is running.
+  - **Unchanged:** a statement with neither prefix is answered byte for byte as
+    before, and `rmp graph client` still runs `EXPLAIN` and `PROFILE`.
+  - **The test to apply:** you are unaffected unless a client of the graph data
+    endpoint sends a prefixed statement, or handles `kind` as a closed set of two
+    values.
+
+### Added
+
+- **`rmp graph serve` and `rmp graph client` accept a flag's value in the joined
+  form.** `--socket=<path>`, `--query=<cypher>` and `-q=<cypher>` are read as
+  `--socket <path>`, `--query <cypher>` and `-q <cypher>` are, and the value is the
+  text after the first `=`. `1.17.1` refused each with exit `2`, and wrote
+  `Error: invalid input: unknown flag: --query=RETURN 1 AS one`. The roadmap
+  selector is still read in the separate form only, so `--roadmap=<name>` selects no
+  roadmap and exits `3`.
+
+### Fixed
+
+- **A misspelled flag after the positional arguments was discarded, and the command
+  ran.** `rmp roadmap remove <name> --foo` removed the roadmap at exit `0`, and
+  `rmp task remove -r <name> <id> --foo` removed the task.
+  `SPEC/COMMANDS.md § Positional Arguments`, rule 5, already required the refusal
+  that 31 subcommands now apply (see **Changed - BREAKING**).
+  `rmp sprint add-tasks` also read every token after the sprint id as part of its id
+  list, so such a flag was refused as a malformed task id. It now reads only its
+  second positional argument as the list.
+
+- **The graph engine's effect now equals the effect it reports.** GoGraph `v0.14.2`
+  fixes four defects that `rmp graph client` exposed. Each was driven against both
+  binaries:
+  - **A `SET` that assigned a node, a relationship or a path to a property reported
+    success and stored nothing (GoGraph #2816).** The replacing form was worse:
+    `SET a = {other: b}` exited `0` and left node `a` with no properties at all. Both
+    now exit `1` with the engine failure line, and the node keeps its properties.
+  - **An undirected `SET` over a pair of opposed relationships wrote one of them
+    (GoGraph #2817).** `MATCH (a)-[r:R]-(b) SET r.w = 1` over `a→b` and `b→a`
+    reported two property writes and left one relationship without the property. It
+    now writes both. `SPEC/GRAPH.md § What Groadmap Does Not Check`, item 4, is
+    narrowed to `REMOVE` accordingly.
+  - **`DROP INDEX <name> IF EXISTS` on a missing index reported
+    `"indexesRemoved": 1` (GoGraph #2818).** It now reports no counters.
+  - **Three client faults reached the caller as "An internal error occurred"
+    (GoGraph #2819).** An over-long field, an unsupported schema definition, and a
+    `NOT NULL` constraint that existing data violates now arrive after
+    `Error: graph engine error: graph query failed: ` with the engine's own
+    diagnostic. The exit code stays `1`. The first and the third were driven
+    against both binaries. The second is stated by the engine's changelog.
+
+- **The help's exit codes contradicted the AI Agent Contract.** Twenty-nine
+  subcommand helps omitted codes that their contract entry declared. The `Exit codes`
+  block of all 55 subcommand helps is now rendered from the command registry, so it
+  lists the codes of the contract entry in the same order, each with its conditions
+  word for word. The block's wording and layout change on every help.
+
+- **The AI Agent Contract omitted conditions the binary produces.** Nine subcommands
+  that refuse an id outside `1`-`2147483647` with exit `6` now declare that code, and
+  other subcommands gain the same condition beside their existing code `6`.
+  `sprint move-tasks` declares its refusals of a `CLOSED` source or destination
+  sprint. `sprint update` declares the code-`2` refusal of an invocation that
+  supplies no field. `task stat` declares its missing positional argument. The
+  contract gains 9 exit-code entries and 63 conditions (484 → 547) across 35
+  subcommands. `schema_version` stays `2.0.0`, and no key is added or removed.
+
+- **Two builds of different commits printed the same version line.** The line now
+  names the commit (see **Changed - BREAKING**). Both release workflows build with
+  `-buildvcs=true`, and each build job fails before upload when `go version -m` shows
+  no `vcs.revision` in the binary. No workflow passes `-X`, and `SPEC/DEPLOY.md` no
+  longer claims an `-X main.version` flag.
+
+- **`install.sh` never recognised an installed version, so it reinstalled every
+  time.** It searched the version line for a leading `v` that the line never
+  carried. It now reads the third word of the line, provided the first two are
+  `Groadmap version`. With the latest release already installed, it prints
+  `Already up to date` and exits `0` without downloading. It reads the lines of
+  `1.17.1` and `1.17.2` alike.
+
+- **`make lint` and `make security` ran whichever tool `PATH` found first.** They now
+  run the binary in `go env GOBIN`, or else in the `bin` directory of the first
+  `GOPATH` entry. Each fails, naming both versions, when that binary's version
+  differs from the pin in `SPEC/BUILD.md`.
+
+- **Published error strings disagreed with the binary.**
+  `SPEC/COMMANDS.md § Published Error Strings Are Exact` now governs every
+  specification file that publishes an error string. `sprint close` publishes its
+  active-task refusal and its `--force` warning. The `sprint show` not-found row
+  matches the binary. `task add-dep` and `task remove-dep` publish separate format
+  and range rows for each id. `SPEC/GRAPH.md` no longer describes a store fallback
+  that does not exist: a client with no server exits `1` with the no-server line.
+
+### Changed - dependencies
+
+- GoGraph `v0.14.1` → `v0.14.2`. It is a patch release with an unchanged exported API
+  and no store-format change: a store written by `1.17.1` opens unchanged.
+- `golang.org/x/text` `v0.41.0` → `v0.42.0`. The release fixes the composition defect
+  that `SPEC/BUILD.md § Unicode Data Rules`, rule 3, cited when it forbade
+  `norm.NFC`. The server's normalisation for the roadmap tasks board search and the
+  knowledge-graph key audit is now `norm.NFC` itself. Tests hold the browser's copy
+  of the rule equal to it over every code point and every interacting pair of code
+  points, and the tables shipped to the browser are byte-identical.
+- `golang.org/x/sys` `v0.47.0` → `v0.48.0`. The four bindings Groadmap uses are
+  unchanged.
+- `modernc.org/sqlite` `v1.58.0` → `v1.59.0`.
+- Indirect: `modernc.org/libc` `v1.75.6` → `v1.76.0`,
+  `github.com/RoaringBitmap/roaring/v2` `v2.27.0` → `v2.28.0`, and `golang.org/x/exp`
+  `v0.0.0-20260824195058-e88cd73687aa` → `v0.0.0-20260908205506-85c1c2202aba`.
+- The Go floor stays at `1.27.0`, and the tool pins stay at `golangci-lint v2.13.1`
+  and `gosec v2.28.0`.
+
+### Known Issues
+
+- **`modernc.org/libc` is a later release than `modernc.org/sqlite` requires**
+  (`v1.76.0` against `v1.75.7`). The driver's author requires the two to match, and
+  the mismatch is an accepted runtime risk in the storage engine that no validation
+  gate detects (`SPEC/BUILD.md § SQLite Driver Rules`, rules 2 to 4).
+- **A failed graph statement can replace an existing relationship.** A statement
+  that creates a relationship between two nodes already joined in the same
+  direction, and then fails, leaves one of the existing relationships replaced by
+  the new one, with the new type and no properties. It then exits `1` with a line
+  that says nothing was written. This is an engine defect, and `1.17.1` shows it
+  too (`SPEC/GRAPH.md § Error Handling and Exit Codes`, rule 9).
+- **Three engine hazards report success.**
+  - A relationship property `REMOVE` persists only where the pattern walked the
+    relationship in its stored direction.
+  - A relationship bound by `MERGE` or `CREATE` over a node pair that more than one
+    relationship joins is not reliably the one matched or created.
+  - A list holding `null` is not stored as written.
+
+  See `SPEC/GRAPH.md § What Groadmap Does Not Check`, items 4, 8 and 9.
+- **A property value the engine cannot store is refused with generic text.** The
+  caller reads `graph query failed: An internal error occurred. See server logs for
+  details (session: <id>).`, and the diagnostic that names the key goes only to the
+  server's stderr (`SPEC/DATA_FORMATS.md § One Realisation of the Mapping`).
+- **The published field-length line has no producer.** An over-long field arrives
+  through the parse/execution line with the engine's diagnostic
+  (`SPEC/COMMANDS.md § Client Error Cases`; `SPEC/GRAPH.md § Field Length Limits`,
+  rule 13).
+- **The web query bar's prefix check is outside the 5-second budget.** The parse
+  that detects `EXPLAIN` or `PROFILE` takes no context. At the parser's 1 MiB
+  ceiling, it measured 2.44 s to 2.72 s and 1.46 GiB for one request
+  (`internal/web/data.go`, `refusePlanPrefix`; rmp task #499).
+- **`SPEC/DEPLOY.md § Release Checklist` still lists "Documentation updated
+  (`SPEC/VERSION.md`, `SPEC/README.md`)".** The specification carries no version
+  state (`SPEC/VERSION.md`), and no release updates those files.
+
+### Notes
+
+- **Why this is `1.17.2`, and what the number does not tell you.** A strict reading
+  of Semantic Versioning 2.0.0 gives `MAJOR`. The first six items under **Changed -
+  BREAKING** change a result, a line or an exit code that `1.17.1` produced. Four of
+  them had been published by `1.17.1`'s own specification: the between-positionals
+  line, the help-token rule, the no-field edit and the web endpoint. None of these
+  is a backward-compatible bug fix, which is all a `PATCH` may contain.
+
+- **The number is the owner's decision, against the strict `2.0.0` reading.** The
+  project publishes `1.17.2` by the owner's explicit decision, taken on 2026-09-16
+  and recorded here. This is the seventh consecutive release published under a
+  smaller digit than the strict reading gives:
+  - `1.15.0`, `1.16.0` and `1.17.0` as a `MINOR`;
+  - `1.15.1`, `1.15.2` and `1.17.1` as a `PATCH`.
+
+  The `1.17.0` entry counts "three predecessors" and omits `1.15.1`. It is left as
+  published, and the omission is recorded here.
+
+  **So do not read the patch digit as a promise that nothing breaks.** The test to
+  apply is short: **upgrading is safe unless one of the following applies to you:**
+  - **a program of yours matches the whole `rmp --version` line;**
+  - **you write an undeclared flag after or between positional arguments, pass the
+    word `help` as a flag value, or pass `-r help`;**
+  - **you match an unknown-flag line of `graph serve`, `graph client` or `web`
+    including its `=value`;**
+  - **you rely on `rmp task edit` with no fields exiting `0` for a task or roadmap
+    that may not exist;**
+  - **a client of yours sends `EXPLAIN` or `PROFILE` to the web graph data
+    endpoint, or treats its error `kind` as a closed set.**
+
+- **What did NOT change.** No command, subcommand or flag was added or removed. The
+  top-level exit-code catalogue and the contract's `schema_version` are unchanged.
+  The graph server package, `internal/graphserve`, is unchanged apart from its tests.
+
+- **There is no database migration.** The SQLite schema version is unchanged at
+  `1.14.0`. GoGraph `v0.14.2` changes no store format, so a store written by
+  `1.17.1` opens unchanged. A downgrade to `1.17.1` brings back the four engine
+  defects under **Fixed**.
+
 ## [1.17.1] - 2026-09-14
 
 ### Changed - BREAKING
@@ -3472,6 +3753,7 @@ behaviour.
   AI-contract E2E suite (`tests/test_30_aihelp_contract.py`) to lock in the
   revised help text and contract invariants.
 
+[1.17.2]: https://github.com/FlavioCFOliveira/Groadmap/compare/v1.17.1...v1.17.2
 [1.17.1]: https://github.com/FlavioCFOliveira/Groadmap/compare/v1.17.0...v1.17.1
 [1.17.0]: https://github.com/FlavioCFOliveira/Groadmap/compare/v1.16.0...v1.17.0
 [1.16.0]: https://github.com/FlavioCFOliveira/Groadmap/compare/v1.15.2...v1.16.0
