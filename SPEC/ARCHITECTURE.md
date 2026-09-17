@@ -768,7 +768,7 @@ Error: resource not found: task 999 not found
 $ rmp task create -r project1
 Error: required parameter missing: --title
 
-AI agents: run `rmp --ai-help` for a machine-readable command contract.
+AI agents usage: run `rmp --ai-help` for a machine-readable command contract.
 ```
 
 **Example - Dispatch failure (family help follows the error, exit code 127):**
@@ -779,7 +779,7 @@ Error: unknown task subcommand: nadadisto
 Usage: rmp task <subcommand> [options]
 ...the remainder of the family help body...
 
-AI agents: run `rmp --ai-help` for a machine-readable command contract.
+AI agents usage: run `rmp --ai-help` for a machine-readable command contract.
 ```
 
 ### Error Reuse Policy (Mandatory)

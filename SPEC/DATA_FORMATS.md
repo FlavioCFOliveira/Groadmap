@@ -2078,7 +2078,7 @@ both serialize as `[]` when the command family or the workflow has no preconditi
       "title": "Missing required flag",
       "cmd": "rmp task create -r myproject",
       "stdout": "",
-      "stderr": "Error: required parameter missing: --title\n\nAI agents: run `rmp --ai-help` for a machine-readable command contract.",
+      "stderr": "Error: required parameter missing: --title\n\nAI agents usage: run `rmp --ai-help` for a machine-readable command contract.",
       "exit": 2
     }
   ]

@@ -9,18 +9,25 @@ the help/contract review (commits e901bbf, 8290fd0, 83ee2e6, 88136b6).
 Coverage
 --------
 A. Banner invariants (E2E binary-level, complementing the Go unit tests):
-   1.  Every family and a representative subcommand help starts with the SPEC
-       banner as the first line.
-   2.  Banner absent from rmp --ai-help, rmp --version.
+   1.  Every help -- the global help, every family help and every subcommand
+       help the contract publishes -- carries the SPEC banner on the line
+       immediately after its single Usage: line, followed by one blank line;
+       the banner is never the first line.
+   2.  The global help opens with `Groadmap v<version> - A CLI tool for
+       managing technical roadmaps`, <version> being the version `rmp
+       --version` prints and the contract publishes as tool.binary_version.
+   3.  The recovery help after a dispatch failure is the stdout help of the
+       same level with exactly the banner line removed.
+   4.  Banner absent from rmp --ai-help, rmp --version.
 
 B. Exit-code empirical verification (help says X → binary does X):
-   3.  task get -r R abc  (non-integer id syntax)  → exit 2
-   4.  sprint create with order collision           → exit 5
-   5.  task stat <id> INVALID_STATUS               → exit 6 (regression guard)
-   6.  task create --type INVALID_TYPE             → exit 6
-   7.  task next with no open sprint               → exit 4
-   8.  sprint tasks -s INVALID_STATUS              → exit 6
-   9.  task edit -r R <id> with no field           → exit 0, no output, nothing
+   5.  task get -r R abc  (non-integer id syntax)  → exit 2
+   6.  sprint create with order collision           → exit 5
+   7.  task stat <id> INVALID_STATUS               → exit 6 (regression guard)
+   8.  task create --type INVALID_TYPE             → exit 6
+   9.  task next with no open sprint               → exit 4
+   10. sprint tasks -s INVALID_STATUS              → exit 6
+   11. task edit -r R <id> with no field           → exit 0, no output, nothing
        changed, when the task exists; the help prose, the contract description
        and the contract's exit-0 condition all state that outcome, and none says
        "at least one". With no field, a task the roadmap does not hold and a
@@ -28,22 +35,23 @@ B. Exit-code empirical verification (help says X → binary does X):
        each with the line the same invocation prints when a field is supplied.
 
 C. Help content structural checks (binary-level):
-   10. rmp sprint create --help and rmp sprint update --help mention
+   12. rmp sprint create --help and rmp sprint update --help mention
        --title, --description, --order, "CLOSED", "immutable".
-   11. rmp sprint --help mentions exit code 5 (order collision).
-   12. rmp sprint tasks --help mentions -s / --status.
-   13. Every graph subcommand (serve, client) help contains
+   13. rmp sprint --help mentions exit code 5 (order collision).
+   14. rmp sprint tasks --help mentions -s / --status.
+   15. Every graph subcommand (serve, client) help contains
        "Output (stdout JSON):"; client, the only one that takes a statement,
        also publishes "-q" / "--query", and serve publishes neither.
-   14. No hard TAB character in any help output for any command.
-   15. rmp sprint --help, rmp sprint create --help and rmp sprint update --help
+   16. No hard TAB character in any help output for any command.
+   17. rmp sprint --help, rmp sprint create --help and rmp sprint update --help
        document the macro-goal semantics of the -d/--description flag.
-   16. The --ai-help JSON contract carries the same --description semantics for
+   18. The --ai-help JSON contract carries the same --description semantics for
        both sprint create and sprint update.
 """
 
 import json
 import os
+import re
 import subprocess
 import sys
 
@@ -52,7 +60,12 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from tests.base_test import GroadmapTestBase
 from tests.test_73_help_exit_codes_contract import GateError, compare_codes, read_exit_codes
 
-BANNER_LINE = "AI agents: run `rmp --ai-help` for a machine-readable command contract."
+BANNER_LINE = "AI agents usage: run `rmp --ai-help` for a machine-readable command contract."
+
+# The title that opens the global help, with its version slot
+# (SPEC/HELP.md section "Help structure template").
+GLOBAL_TITLE_TEMPLATE = "Groadmap v{version} - A CLI tool for managing technical roadmaps"
+GLOBAL_USAGE_LINE = "Usage: rmp [command] [subcommand] [arguments] [options]"
 
 ALL_COMMANDS = [
     "roadmap",
@@ -115,6 +128,45 @@ def _run(cli_path, args, env_overrides=None):
 # A. Banner invariants
 # ===========================================================================
 
+def _usage_indexes(lines):
+    """Zero-based indexes of the lines that begin with "Usage:"."""
+    return [i for i, line in enumerate(lines) if line.startswith("Usage:")]
+
+
+def _assert_banner_after_usage(label, out, want_usage_index):
+    """The placement rule of SPEC/HELP.md section "AI agent banner" on one help.
+
+    Exactly one Usage: line, at want_usage_index; the banner on the next line;
+    a blank line after the banner; the banner present once and never first.
+    """
+    lines = out.split("\n")
+    usage = _usage_indexes(lines)
+    assert len(usage) == 1, (
+        f"{label}: want exactly one line beginning with 'Usage:', got {usage}\n{out[:400]}"
+    )
+    u = usage[0]
+    assert u == want_usage_index, (
+        f"{label}: the Usage: line is line {u + 1}, want line {want_usage_index + 1}"
+    )
+    assert len(lines) > u + 2, f"{label}: help ends before the banner and its blank line"
+    assert lines[u + 1] == BANNER_LINE, (
+        f"{label}: the line after Usage: must be the SPEC banner; got {lines[u + 1]!r}"
+    )
+    assert lines[u + 2] == "", (
+        f"{label}: the line after the banner must be blank; got {lines[u + 2]!r}"
+    )
+    assert lines[0] != BANNER_LINE, f"{label}: the banner must not be the first line"
+    assert out.count(BANNER_LINE) == 1, (
+        f"{label}: the banner appears {out.count(BANNER_LINE)} times, want exactly 1"
+    )
+
+
+def _without_banner_line(help_text):
+    """The help with exactly its banner line (and that line's newline) removed."""
+    assert help_text.count(BANNER_LINE + "\n") == 1, "the help does not carry exactly one banner line"
+    return help_text.replace(BANNER_LINE + "\n", "", 1)
+
+
 class TestBannerInvariantsBinary:
     """Binary-level banner checks (complement Go unit tests in banner_test.go)."""
 
@@ -127,67 +179,159 @@ class TestBannerInvariantsBinary:
     def teardown_method(self):
         self.test.teardown()
 
-    def test_root_help_first_line_is_banner(self):
-        _, out, _ = _run(self.cli, ["--help"], {"HOME": self.home})
-        lines = out.splitlines()
-        assert lines and lines[0] == BANNER_LINE, (
-            f"rmp --help: first line must be SPEC banner; got {lines[0]!r}"
+    def _published_help_invocations(self):
+        """Every `--help` invocation the contract publishes, except ai-help.
+
+        Read from `rmp --ai-help` so the sweep cannot fall behind the CLI.
+        ai-help is left out because its help token is intercepted by the
+        contract emitter and prints JSON, not a plain-text help. Only the
+        `--help` forms are driven: a bare `rmp web` would start the server.
+        """
+        code, out, err = _run(self.cli, ["--ai-help"], {"HOME": self.home})
+        assert code == 0, f"rmp --ai-help exited {code}: {err}"
+        contract = json.loads(out)
+        invocations = []
+        for cmd in contract["commands"]:
+            if cmd["name"] == "ai-help":
+                continue
+            invocations.append([cmd["name"], "--help"])
+            for sub in cmd.get("subcommands") or []:
+                if sub.get("name"):
+                    invocations.append([cmd["name"], sub["name"], "--help"])
+        assert {inv[0] for inv in invocations} >= set(ALL_COMMANDS), (
+            f"the contract no longer publishes every family: {sorted({inv[0] for inv in invocations})}"
         )
-        print("✓ rmp --help: first line is SPEC banner")
+        assert len(invocations) >= 60, (
+            f"only {len(invocations)} help invocations were derived; the sweep proves nothing"
+        )
+        return invocations
 
-    def test_every_family_help_first_line_is_banner(self):
-        """All top-level command families (except ai-help) start with the banner."""
-        for cmd in ALL_COMMANDS:
-            _, out, _ = _run(self.cli, [cmd, "--help"], {"HOME": self.home})
-            lines = out.splitlines()
-            assert lines and lines[0] == BANNER_LINE, (
-                f"rmp {cmd} --help: first line must be SPEC banner; got {lines[0]!r}"
-            )
-        print(f"✓ all {len(ALL_COMMANDS)} family helps start with SPEC banner")
+    def test_root_help_banner_follows_usage(self):
+        """rmp --help, -h, help and bare rmp: banner is line 4, after Usage: on line 3."""
+        for args in (["--help"], ["-h"], ["help"], []):
+            code, out, err = _run(self.cli, args, {"HOME": self.home})
+            label = "rmp " + " ".join(args)
+            assert code == 0, f"{label}: exit {code}; stderr={err!r}"
+            assert err == "", f"{label}: wrote to stderr: {err!r}"
+            _assert_banner_after_usage(label, out, 2)
+        print("✓ global help (4 forms): banner on line 4, after the Usage: line")
 
-    def test_representative_subcommand_helps_first_line_is_banner(self):
-        """A representative sample of subcommand helps start with the banner."""
-        samples = [
-            ("task", "create"),
-            ("task", "list"),
-            ("sprint", "create"),
-            ("sprint", "tasks"),
-            ("roadmap", "create"),
-            ("backlog", "list"),
-            ("audit", "history"),
-            ("graph", "serve"),
-            ("graph", "client"),
+    def test_root_help_opens_with_versioned_title(self):
+        """The first five lines of the global help, exactly, with the real version."""
+        code, version_out, _ = _run(self.cli, ["--version"])
+        assert code == 0
+        m = re.fullmatch(r"Groadmap version (\S+) \(commit [^)]*\)\n", version_out)
+        assert m, f"unexpected --version output: {version_out!r}"
+        version = m.group(1)
+
+        code, contract_out, _ = _run(self.cli, ["--ai-help"])
+        assert code == 0
+        assert json.loads(contract_out)["tool"]["binary_version"] == version, (
+            "the contract's tool.binary_version disagrees with rmp --version"
+        )
+
+        _, out, _ = _run(self.cli, ["--help"], {"HOME": self.home})
+        want = [
+            GLOBAL_TITLE_TEMPLATE.format(version=version),
+            "",
+            GLOBAL_USAGE_LINE,
+            BANNER_LINE,
+            "",
+            "Commands:",
         ]
-        for family, sub in samples:
-            _, out, _ = _run(self.cli, [family, sub, "--help"], {"HOME": self.home})
-            lines = out.splitlines()
-            assert lines and lines[0] == BANNER_LINE, (
-                f"rmp {family} {sub} --help: first line must be SPEC banner; got {lines[0]!r}"
-            )
-        print(f"✓ all {len(samples)} sampled subcommand helps start with SPEC banner")
+        got = out.split("\n")[: len(want)]
+        assert got == want, f"rmp --help opening lines:\n got: {got!r}\nwant: {want!r}"
+        assert "commit" not in got[0], f"the title must carry the version alone: {got[0]!r}"
+        print(f"✓ rmp --help opens with {want[0]!r}")
 
-    def test_banner_second_line_is_blank(self):
-        """After the banner the second line must be blank (exactly one blank line)."""
-        for cmd in ["--help", "task --help", "sprint create --help"]:
-            args = cmd.split()
-            _, out, _ = _run(self.cli, args, {"HOME": self.home})
-            lines = out.splitlines()
-            assert len(lines) >= 2, f"rmp {cmd}: output has fewer than 2 lines"
-            assert lines[1] == "", (
-                f"rmp {cmd}: second line must be blank after banner; got {lines[1]!r}"
+    def test_every_help_banner_follows_usage(self):
+        """Every family and subcommand help: Usage: on line 1, banner on line 2."""
+        invocations = self._published_help_invocations()
+        for args in invocations:
+            code, out, err = _run(self.cli, args, {"HOME": self.home})
+            label = "rmp " + " ".join(args)
+            assert code == 0, f"{label}: exit {code}; stderr={err!r}"
+            assert out.startswith("Usage: rmp " + args[0]), (
+                f"{label}: a family or subcommand help opens with its Usage: line; got {out[:80]!r}"
             )
-        print("✓ banner is followed by exactly one blank line")
+            _assert_banner_after_usage(label, out, 0)
+        print(f"✓ all {len(invocations)} family and subcommand helps carry the banner on line 2")
+
+    def test_family_help_forms_agree(self):
+        """rmp <family>, -h and help print the same bytes as rmp <family> --help.
+
+        `web` and `stats` are leaf commands whose bare form is not a help
+        request (`rmp web` starts the server), so only the families that
+        dispatch subcommands are driven bare.
+        """
+        for family in ["roadmap", "task", "sprint", "backlog", "audit", "graph"]:
+            _, reference, _ = _run(self.cli, [family, "--help"], {"HOME": self.home})
+            for args in ([family], [family, "-h"], [family, "help"]):
+                code, out, _ = _run(self.cli, args, {"HOME": self.home})
+                assert code == 0 and out == reference, (
+                    f"rmp {' '.join(args)}: output differs from rmp {family} --help"
+                )
+        print("✓ bare, -h and help family forms print the --help bytes")
+
+    def test_recovery_help_is_stdout_help_minus_banner(self):
+        """A dispatch failure writes the same level's help minus the banner line.
+
+        The whole of stderr is asserted: error line, blank line, recovery help,
+        blank line, hint. For an unresolved command the recovery help opens with
+        the versioned title; at both levels the line after Usage: is blank.
+        """
+        cases = [(["reconciliacao-trimestral"], "Error: unknown command: reconciliacao-trimestral", ["--help"])]
+        for family in ["roadmap", "task", "sprint", "backlog", "audit", "graph"]:
+            cases.append((
+                [family, "arquivar-trimestre"],
+                f"Error: unknown {family} subcommand: arquivar-trimestre",
+                [family, "--help"],
+            ))
+        for args, error_line, help_args in cases:
+            label = "rmp " + " ".join(args)
+            _, help_out, _ = _run(self.cli, help_args, {"HOME": self.home})
+            recovery = _without_banner_line(help_out)
+            code, out, err = _run(self.cli, args, {"HOME": self.home})
+            assert code == 127, f"{label}: exit {code}, want 127"
+            assert out == "", f"{label}: wrote to stdout: {out[:120]!r}"
+            expected = error_line + "\n\n" + recovery + "\n" + BANNER_LINE + "\n\n"
+            assert err == expected, (
+                f"{label}: stderr is not error + blank + (help minus banner) + blank + hint\n"
+                f" got: {err[:400]!r}\nwant: {expected[:400]!r}"
+            )
+            lines = recovery.split("\n")
+            usage = _usage_indexes(lines)
+            assert len(usage) == 1 and lines[usage[0] + 1] == "", (
+                f"{label}: the line after Usage: in the recovery help must be blank"
+            )
+            if len(args) == 1:
+                assert lines[0].startswith("Groadmap v") and lines[0] == help_out.split("\n")[0], (
+                    f"{label}: the recovery help must open with the global title; got {lines[0]!r}"
+                )
+            else:
+                assert lines[0].startswith(f"Usage: rmp {args[0]} "), (
+                    f"{label}: the recovery help must open with the family Usage: line; got {lines[0]!r}"
+                )
+        print(f"✓ {len(cases)} dispatch failures: recovery help is the stdout help minus the banner line")
 
     def test_banner_absent_from_ai_help(self):
-        code, out, _ = _run(self.cli, ["--ai-help"])
-        assert code == 0
-        assert BANNER_LINE not in out, "SPEC banner must not appear inside --ai-help JSON"
-        print("✓ banner absent from --ai-help JSON output")
+        for args in (["--ai-help"], ["ai-help"], ["task", "--ai-help"], ["sprint", "close", "--ai-help"]):
+            code, out, err = _run(self.cli, args)
+            assert code == 0, f"rmp {' '.join(args)}: exit {code}"
+            assert BANNER_LINE not in out, f"rmp {' '.join(args)}: SPEC banner inside the JSON contract"
+            assert BANNER_LINE not in err, f"rmp {' '.join(args)}: SPEC banner on stderr"
+            json.loads(out)
+        print("✓ banner absent from all four --ai-help forms")
 
     def test_banner_absent_from_version(self):
-        _, out, _ = _run(self.cli, ["--version"])
-        assert BANNER_LINE not in out, "SPEC banner must not appear in --version output"
-        print("✓ banner absent from --version output")
+        for args in (["--version"], ["-v"], ["version"]):
+            code, out, err = _run(self.cli, args)
+            assert code == 0, f"rmp {args[0]}: exit {code}"
+            assert BANNER_LINE not in out and BANNER_LINE not in err, (
+                f"rmp {args[0]}: SPEC banner must not appear in version output"
+            )
+            assert len(out.splitlines()) == 1, f"rmp {args[0]}: version output is not one line: {out!r}"
+        print("✓ banner absent from all three version forms")
 
 
 # ===========================================================================

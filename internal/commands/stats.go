@@ -25,10 +25,10 @@ func HandleStats(args []string) error {
 	// below, which refused it as an unknown flag with exit 2 (rmp task 474).
 	//
 	// Route through invokeHelpPrinter so the SPEC-mandated AI-agent banner
-	// (SPEC/HELP.md § AI agent banner) is prepended uniformly.
+	// (SPEC/HELP.md § AI agent banner) is inserted uniformly after the help's
+	// `Usage:` line.
 	if hasHelpFlag(leafSubcommand("stats"), args) {
-		invokeHelpPrinter(printStatsHelp)
-		return nil
+		return invokeHelpPrinter(printStatsHelp)
 	}
 
 	roadmapName, remaining, err := requireRoadmap(args)

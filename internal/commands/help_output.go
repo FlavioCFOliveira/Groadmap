@@ -51,8 +51,10 @@ func helpDst() io.Writer {
 }
 
 // WriteHelpBodyTo runs printer with its output redirected to w, and
-// WITHOUT the AI-agent banner that invokeHelpPrinter prepends on the
-// stdout path.
+// WITHOUT the AI-agent banner that invokeHelpPrinter inserts after the
+// `Usage:` line on the stdout path. It is also the renderer that
+// invokeHelpPrinter itself uses: the stdout help is this body with the
+// banner inserted, so the two differ by exactly that one line.
 //
 // Omitting the banner is a requirement, not an optimisation. The banner
 // and the trailing AI-agent hint carry the same sentence, and every

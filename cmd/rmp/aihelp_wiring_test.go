@@ -24,6 +24,7 @@ import (
 	"testing"
 
 	"github.com/FlavioCFOliveira/Groadmap/internal/aihelp"
+	"github.com/FlavioCFOliveira/Groadmap/internal/commands"
 )
 
 // ------------------------------------------------------------------
@@ -465,7 +466,7 @@ func TestMaybeHandleAIHelp_ContractOutputHasNoBanner(t *testing.T) {
 		}
 		// Belt-and-braces: the SPEC banner literal must not appear
 		// anywhere in the contract output.
-		if bytes.Contains(stdout, []byte("AI agents: run `rmp --ai-help`")) {
+		if bytes.Contains(stdout, []byte(commands.AIBannerLine)) {
 			t.Errorf("%v: contract output contains the discovery banner string", args)
 		}
 	}

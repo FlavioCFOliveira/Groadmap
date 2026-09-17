@@ -1,8 +1,8 @@
 // Package aihelp — AI-agent discovery hint emitter (env-var + error path).
 //
 // This file implements the small, coordinated piece of plumbing that
-// emits the SPEC-mandated "AI agents: ..." hint line to stderr in two
-// situations:
+// emits the SPEC-mandated "AI agents usage: ..." hint line to stderr in
+// two situations:
 //
 //  1. AI_AGENT environment variable path (SPEC/HELP.md
 //     § AI_AGENT environment variable): when AI_AGENT is exactly the
@@ -52,11 +52,12 @@
 //
 //   - The hint text is intentionally NOT re-declared here. The single
 //     source of truth lives in internal/commands.AIBannerLine — see
-//     SPEC/HELP.md, which requires the env-var line, the error-path
-//     trailer, and the --help banner to be byte-identical. Re-typing
-//     the literal here would create three places to drift. Instead the
-//     caller passes the hint string in, and the wiring in cmd/rmp
-//     supplies commands.AIBannerLine.
+//     SPEC/HELP.md § AI agent banner and § Stderr part order, which
+//     require the env-var line, the error-path trailer, and the --help
+//     banner to carry the same sentence. Re-typing the literal here
+//     would create three places to drift. Instead the caller passes the
+//     hint string in, and the wiring in cmd/rmp supplies
+//     commands.AIBannerLine.
 //
 //     (We could also import internal/commands directly from this
 //     package, but that would invert the existing dependency arrow —
@@ -112,7 +113,7 @@ var hintOnce sync.Once
 // The output shape is exactly two lines (the hint line itself plus
 // the trailing blank line):
 //
-//	AI agents: run `rmp --ai-help` for a machine-readable command contract.
+//	AI agents usage: run `rmp --ai-help` for a machine-readable command contract.
 //	<blank line>
 //
 // The blank line is intentional: SPEC/HELP.md § AI_AGENT environment
@@ -143,7 +144,7 @@ func EmitHintOnce(w io.Writer, hintText string) {
 // The output shape is exactly three lines:
 //
 //	<blank line>
-//	AI agents: run `rmp --ai-help` for a machine-readable command contract.
+//	AI agents usage: run `rmp --ai-help` for a machine-readable command contract.
 //	<blank line>
 //
 // The trailing blank line matches the leading form's, so an agent

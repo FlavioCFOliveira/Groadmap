@@ -18,7 +18,7 @@ func printWebHelp() {
 // runWeb is the dispatch adapter for `rmp web`. web is a leaf command
 // (HasSubcommand: false), so DispatchFamily routes the raw args straight to
 // this handler and never runs the hasHelpFlag short-circuit it runs for a
-// family's subcommands, which is the path that prepends the SPEC AI-agent
+// family's subcommands, which is the path that inserts the SPEC AI-agent
 // banner. The handler therefore applies that same predicate to its whole
 // argument list itself, as HandleStats does, and routes printWebHelp through
 // invokeHelpPrinter so the banner is emitted uniformly, wherever the help
@@ -37,8 +37,7 @@ func printWebHelp() {
 // single-source commands-package concern; printWebHelp stays banner-free.
 func runWeb(args []string) error {
 	if hasHelpFlag(leafSubcommand("web"), args) {
-		invokeHelpPrinter(printWebHelp)
-		return nil
+		return invokeHelpPrinter(printWebHelp)
 	}
 	return web.Run(args, printWebHelp)
 }

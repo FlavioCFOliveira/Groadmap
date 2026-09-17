@@ -91,7 +91,9 @@ func main() {
 	installSignalHandler()
 
 	if len(os.Args) < 2 {
-		printHelp()
+		if err := printHelp(); err != nil {
+			os.Exit(handleError(err))
+		}
 		os.Exit(ExitSuccess)
 	}
 
@@ -141,7 +143,9 @@ func main() {
 		if err := refuseGlobalPositional(os.Args[2:]); err != nil {
 			os.Exit(handleError(err))
 		}
-		printHelp()
+		if err := printHelp(); err != nil {
+			os.Exit(handleError(err))
+		}
 		os.Exit(ExitSuccess)
 	case "-v", "--version", "version":
 		if err := refuseGlobalPositional(os.Args[2:]); err != nil {
@@ -302,33 +306,46 @@ func writeFailureReport(w io.Writer, err error) {
 	aihelp.EmitTrailingHintOnce(w, commands.AIBannerLine)
 }
 
-// printHelp prints the main help text.
+// printHelp prints the main help text to stdout.
 //
-// The SPEC-mandated AI-agent discovery banner is prepended first
-// (see SPEC/HELP.md § AI agent banner). The banner makes the
-// machine-readable contract emitted by `rmp --ai-help` discoverable
-// to LLM agents that first reach for the standard `--help` surface.
-// The single source of the banner string lives in
-// internal/commands.AIBannerLine, exposed via commands.WriteAIBanner
-// so this binary cannot drift from the SPEC text.
-func printHelp() {
-	commands.WriteAIBanner(os.Stdout)
-	writeGlobalHelpBody(os.Stdout)
+// The SPEC-mandated AI-agent discovery banner is inserted on the line
+// after the body's `Usage:` line (SPEC/HELP.md § AI agent banner). The
+// banner makes the machine-readable contract emitted by `rmp --ai-help`
+// discoverable to LLM agents that first reach for the standard `--help`
+// surface. Both the banner sentence and its placement live in
+// internal/commands (AIBannerLine and WriteHelpWithAIBanner), the same
+// code every family, subcommand and leaf help goes through, so this
+// binary cannot drift from the SPEC text or placement.
+//
+// The error is the one WriteHelpWithAIBanner reports for a body without
+// a `Usage:` line, in which case nothing has been written to stdout.
+func printHelp() error {
+	return commands.WriteHelpWithAIBanner(os.Stdout, writeGlobalHelpBody)
+}
+
+// globalHelpTitle returns the line that opens the global help:
+// `Groadmap v<version> - A CLI tool for managing technical roadmaps`,
+// where <version> is the application version constant, the value
+// `rmp --version` prints after "Groadmap version " and the AI Agent
+// Contract publishes as tool.binary_version (SPEC/HELP.md § Help
+// structure template). Only the global help carries a title.
+func globalHelpTitle() string {
+	return appName + " v" + version + " - A CLI tool for managing technical roadmaps"
 }
 
 // writeGlobalHelpBody writes the global help body WITHOUT the AI-agent
 // banner, to an arbitrary writer.
 //
 // Two callers need it on two different streams: printHelp writes it to
-// stdout under the banner for a help request the reader asked for, and
-// writeFailureReport writes it to stderr as the recovery help for an
-// unresolved command name. The recovery help must omit the banner:
-// the banner and the trailing hint carry the same sentence, and the
-// failing invocation already ends with the hint, so emitting both would
-// put that sentence on stderr twice (SPEC/HELP.md § Recovery help after
-// a dispatch failure).
+// stdout, with the banner inserted after its `Usage:` line, for a help
+// request the reader asked for, and writeFailureReport writes it to
+// stderr as the recovery help for an unresolved command name. The
+// recovery help must omit the banner: the banner and the trailing hint
+// carry the same sentence, and the failing invocation already ends with
+// the hint, so emitting both would put that sentence on stderr twice
+// (SPEC/HELP.md § Recovery help after a dispatch failure).
 func writeGlobalHelpBody(w io.Writer) {
-	fmt.Fprintf(w, `%s - A CLI tool for managing technical roadmaps
+	fmt.Fprintf(w, `%s
 
 Usage: rmp [command] [subcommand] [arguments] [options]
 
@@ -355,7 +372,7 @@ Global Options:
   --ai-help        Emit the AI Agent Contract (machine-readable JSON)
 
 Use "rmp [command] --help" for more information about a command.
-`, appName, commandSummaryLines())
+`, globalHelpTitle(), commandSummaryLines())
 }
 
 // commandSummaryLines renders the global-help command list directly from the

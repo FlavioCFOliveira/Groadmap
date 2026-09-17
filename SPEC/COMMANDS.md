@@ -819,6 +819,8 @@ rmp -h
 
 **Description:** Displays general help with available commands in **plain text**. This is also the default behavior when no command is provided.
 
+The global help opens with the title line `Groadmap v<version> - A CLI tool for managing technical roadmaps`, where `<version>` is the application version constant that `§ Version` names `<version>`, written immediately after a lower-case `v`. The title is followed by one blank line, the `Usage:` line, and the AI agent banner (`§ AI Help`, Discoverability requirements, rule 1). `HELP.md § Help structure template` is canonical for these opening lines.
+
 A third form is the bare word: `rmp help` writes the same help body to stdout and exits `0`, identically to the two flag forms. The word `help` is not an entry in the command registry; like the flag forms, it is resolved before any command lookup, so `rmp help <command>` does not reach that command's help. The form that reaches it is `rmp <command> --help` (`HELP.md § Help structure template`).
 
 All three forms accept no positional argument. `rmp help <command>` is therefore refused, with the exit code and the error line `§ Positional Arguments` publishes.
@@ -894,18 +896,18 @@ An unknown command or subcommand name preceding `--ai-help` exits `2`, not the `
 
 **Discoverability requirements:**
 
-1. The first line of the plain-text output of `rmp --help` and of every family-level and subcommand-level `--help` is the banner:
+1. The plain-text output of `rmp --help` and of every family-level and subcommand-level `--help` carries the banner on the line immediately after its `Usage:` line, with no blank line between the two:
 
    ```
-   AI agents: run `rmp --ai-help` for a machine-readable command contract.
+   AI agents usage: run `rmp --ai-help` for a machine-readable command contract.
    ```
 
-   The banner is followed by one blank line, then the existing help body. The banner is **not** printed by `rmp version` / `rmp --version` / `rmp -v` (version output is parsed by scripts; extra lines would break automations) and is **not** printed by the AI contract emitters (`rmp --ai-help`, `rmp ai-help`, `rmp <command> --ai-help`, `rmp <command> <subcommand> --ai-help`), which emit JSON only.
+   The blank line that follows the `Usage:` line follows the banner instead, and no other line of the help moves. A family-level or subcommand-level help opens with its `Usage:` line, so the banner is its second line; the global help opens with its title line and one blank line before its `Usage:` line, so the banner is its fourth line (`§ Help`). `HELP.md § AI agent banner` is canonical for the placement. The banner is **not** printed by `rmp version` / `rmp --version` / `rmp -v` (version output is parsed by scripts; extra lines would break automations) and is **not** printed by the AI contract emitters (`rmp --ai-help`, `rmp ai-help`, `rmp <command> --ai-help`, `rmp <command> <subcommand> --ai-help`), which emit JSON only.
 
-2. Every error message emitted to stderr by the CLI ends with one blank line followed by the hint:
+2. Every error message emitted to stderr by the CLI ends with one blank line followed by the hint, which is the banner's sentence (rule 1):
 
    ```
-   AI agents: run `rmp --ai-help` for a machine-readable command contract.
+   AI agents usage: run `rmp --ai-help` for a machine-readable command contract.
    ```
 
    This rule applies uniformly to input errors (missing flags, unresolved subcommands), validation errors, not-found errors, conflict errors, and database errors. On a dispatch failure the hint stays last, after the help written per `§ Dispatch Failures (Unresolved Command or Subcommand Names)`, so the hint remains the final line of stderr on every error path. The hint is one line, plain text, written to stderr, and does not change the exit code. The hint is not appended when the command itself is `rmp --ai-help`, `rmp ai-help`, `rmp <command> --ai-help`, or `rmp <command> <subcommand> --ai-help` (to avoid recursion in error paths of the contract emitter). The hint is also not appended when `AI_AGENT=1` is active for this invocation; in that case the env-var hint already occupies the top of stderr and the trailing hint is suppressed to avoid duplication (see rule 3 below).
@@ -913,7 +915,7 @@ An unknown command or subcommand name preceding `--ai-help` exits `2`, not the `
 3. When the environment variable `AI_AGENT` is set to the literal value `1`, every invocation of `rmp` writes the same hint line to stderr **before** any other output, regardless of whether the invocation succeeds or fails:
 
    ```
-   AI agents: run `rmp --ai-help` for a machine-readable command contract.
+   AI agents usage: run `rmp --ai-help` for a machine-readable command contract.
    ```
 
    The hint:

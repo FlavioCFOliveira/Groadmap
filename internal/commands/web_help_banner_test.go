@@ -37,16 +37,16 @@ func dispatchWebBounded(t *testing.T, args ...string) (string, error) {
 // untouched. runWeb served help, with the AI-agent banner, only when the help
 // token was the first argument. A help token written after another flag, as in
 // `rmp web --no-open --help`, fell through to web.Run, whose own parser prints
-// web.PrintHelp directly. The help arrived, the exit code was 0, and the first
-// line was `Usage: rmp web [options]` instead of the banner that
-// SPEC/HELP.md § AI agent banner requires on every plain-text help.
+// web.PrintHelp directly. The help arrived and the exit code was 0, but the
+// help carried none of the banner that SPEC/HELP.md § AI agent banner requires
+// on every plain-text help.
 //
 // Every row must produce exactly the bytes the banner-wrapped printer
 // produces. The rows with the token first pin the behaviour that was already
 // correct. Every row carries --no-open, so a regression that starts the server
 // cannot also open a browser.
 func TestWebHelp_BannerWhereverTheTokenIsWritten(t *testing.T) {
-	want := captureStdout(t, func() { invokeHelpPrinter(printWebHelp) })
+	want := mustInvokeHelpPrinter(t, printWebHelp)
 
 	cases := [][]string{
 		// The help token first: unchanged.

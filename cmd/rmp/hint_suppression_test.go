@@ -26,7 +26,7 @@ import (
 // AI_AGENT=1 therefore ended with a blank line that introduced
 // nothing:
 //
-//	AI agents: run `rmp --ai-help` for a machine-readable command contract.
+//	AI agents usage: run `rmp --ai-help` for a machine-readable command contract.
 //
 //	Error: resource not found: roadmap "mobile-checkout"
 //	                                                      <- orphan

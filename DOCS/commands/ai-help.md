@@ -92,7 +92,7 @@ When `--ai-help` is combined with any other action flag or positional argument, 
 
 Agents that did not start at the contract are reminded of its existence through three surfaces:
 
-- **`--help` banner**: every plain-text help output begins with the literal line `AI agents: run \`rmp --ai-help\` for a machine-readable command contract.` (followed by a blank line, then the existing help body).
+- **`--help` banner**: every plain-text help output carries the literal line `AI agents usage: run \`rmp --ai-help\` for a machine-readable command contract.` immediately after its `Usage:` line, with no blank line between the two; the blank line that follows `Usage:` follows the banner instead. The global help opens with the title `Groadmap v<version> - A CLI tool for managing technical roadmaps`, so its banner is the fourth line; in family and subcommand helps it is the second. The recovery help written to stderr after an unknown command or subcommand is the same help body without the banner line, because stderr already ends with the hint.
 - **Error path**: every `Error: ...` line written to stderr is followed by a blank line and the same hint.
 - **`AI_AGENT` environment variable**: setting `AI_AGENT=1` prepends the hint as the first line of stderr on every invocation. Only the literal string `1` enables this surface; other values (including `true`, `yes`, `0`, empty, `on`) leave the CLI silent. When `AI_AGENT=1` is active and an invocation fails, the hint is emitted exactly once at the top of stderr (the trailing error-path hint is suppressed to avoid duplication).
 

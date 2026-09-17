@@ -863,7 +863,7 @@ The contract is pretty-printed JSON on stdout (2-space indent, trailing newline,
 
 **Discoverability surfaces for agents that did not start at the contract:**
 
-- Every `--help` output is prepended with `AI agents: run \`rmp --ai-help\` for a machine-readable command contract.` as its first line.
+- Every `--help` output carries `AI agents usage: run \`rmp --ai-help\` for a machine-readable command contract.` on the line immediately after its `Usage:` line. The global help (`rmp --help`, `rmp -h`, `rmp help`, and bare `rmp`) opens with the title `Groadmap v<version> - A CLI tool for managing technical roadmaps`, where `<version>` is the version `rmp --version` reports.
 - Every `Error: ...` line on stderr is followed by the same hint after a blank line.
 - Setting `AI_AGENT=1` in the environment prepends the same hint as the first line of stderr on every invocation. Only the literal string `1` enables this; other values (including `true`, `yes`, `0`) are silent. When `AI_AGENT=1` is active and an error occurs, the hint is emitted exactly once at the top.
 
