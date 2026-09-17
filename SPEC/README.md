@@ -89,7 +89,7 @@ The SPEC is unversioned. Git is the source of truth for its evolution — recove
 | What one graph statement costs in resident memory, what that memory is made of, what happens when the cost cannot be served, and why no setting bounds it | `GRAPH.md § Peak Resident Memory` |
 | What a statement that writes nothing does and does not change on disk (the recovery repair performed on open) | `GRAPH.md § What a Statement That Writes Nothing Changes on Disk` |
 | Go toolchain / external dependencies | `BUILD.md § Go Toolchain` |
-| Dependency version pins (the four direct modules — GoGraph, `golang.org/x/sys`, `golang.org/x/text`, `modernc.org/sqlite` — and the exact `modernc.org/libc` / `modernc.org/memory` versions, which are not held to the versions the driver requires) | `BUILD.md § External Dependencies` |
+| Dependency pinning rules (the four direct modules — GoGraph, `golang.org/x/sys`, `golang.org/x/text`, `modernc.org/sqlite` — and the exact `modernc.org/libc` / `modernc.org/memory` pins, which are not held to the versions the driver requires); the versions themselves are written only in `go.mod` | `BUILD.md § External Dependencies` |
 | AI agent contract (CLI surface) | `COMMANDS.md § AI Help` |
 | AI agent contract (JSON schema) | `DATA_FORMATS.md § AI Agent Contract` |
 | AI agent contract (generation) | `ARCHITECTURE.md § AI Agent Contract Generation` |
@@ -221,7 +221,7 @@ To prevent drift across SPEC files, the following topics have a single authorita
 | Graph server socket (`graph.sock`), its mode, and what a leftover one means | `GRAPH.md § Socket Path and Permissions` (layout in `GRAPH.md § Persistence Layout`) |
 | Statement time budget (the single value the server enforces for every surface, and the evidence for it) | `WEB.md § Graph Query Time Budget` (its effect on a statement, and what a cut statement leaves behind, in `GRAPH.md § Statement Time Budget`) |
 | Cypher engine constructor (`cypher.NewEngineWithStoreAndRecovery` on the one path, run only by `rmp graph serve`, carrying the recovered schema) | `GRAPH.md § Engine Constructor by Path` |
-| Minimum Go version and external dependencies | `BUILD.md § Go Toolchain` |
+| Minimum Go version rules (the version itself is the `go` directive of `go.mod`) and external dependencies | `BUILD.md § Go Toolchain` |
 | Validation gate set and where it is enforced (local, CI, release) | `BUILD.md § Validation Gates` |
 | Local resolution of the pinned lint and security tools, the version check, and its failure lines | `BUILD.md § Local Tool Resolution` |
 | Help text canonical | code in `internal/commands/*.go` (structure in `HELP.md`) |

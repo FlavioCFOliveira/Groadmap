@@ -244,24 +244,25 @@ module path `github.com/FlavioCFOliveira/GoGraph`. GoGraph provides:
 - A durable, directory-based store combining a write-ahead log, atomic on-disk
   snapshots, and recovery on open (see [Concurrency and Recovery](#concurrency-and-recovery)).
 
-GoGraph requires Go 1.26: its `go.mod` declares `go 1.26`. Adopting the graph
-feature therefore sets Groadmap's minor-version floor at Go 1.26. Groadmap's own
-required Go version is higher than GoGraph's minimum and is set independently of
-GoGraph. `BUILD.md § Go Toolchain` is the authoritative statement of the required
-Go version and of the build implications.
+GoGraph declares, in the `go` directive of its own `go.mod`, the minimum Go
+version it requires. Adopting the graph feature therefore sets a floor under
+Groadmap's own required Go version, which cannot be older than GoGraph's minimum.
+Groadmap's required Go version is otherwise set independently of GoGraph.
+`BUILD.md § Go Toolchain` is the authoritative statement of the required Go version
+and of the build implications.
 
 ### Dependency Maturity Risk
 
-GoGraph is consumed at the exact tag **v0.14.2**. Because
-v0.14.2 is a v0 (pre-1.0) version, it is consumable directly at the bare module path
-`github.com/FlavioCFOliveira/GoGraph`, and `go.mod` pins the clean exact tag `v0.14.2`.
-This exact-tag pin satisfies the pinning mitigation below directly. The pinned version
-is recorded in `BUILD.md § External Dependencies`, which is the table that carries it;
-`BUILD.md § Go Toolchain` records the Go minor-version floor GoGraph imposes, which is
-a different fact about the same dependency.
+GoGraph is consumed at a pre-1.0 (`v0.y.z`) tag. Because that is a `v0` version, it
+is consumable directly at the bare module path `github.com/FlavioCFOliveira/GoGraph`,
+and `go.mod` pins a clean exact tag at that path. This exact-tag pin satisfies the
+pinning mitigation below directly. The pinned version is written in `go.mod` alone,
+and `BUILD.md § External Dependencies` governs it; `BUILD.md § Go Toolchain` records
+the Go version floor GoGraph imposes, which is a different fact about the same
+dependency.
 
-As a `0.y.z` release, v0.14.2 signals under Semantic Versioning that GoGraph's public
-API is not yet stable: it may change while the module matures toward `1.0.0`, and such
+As a `0.y.z` release, the pinned tag signals under Semantic Versioning that GoGraph's
+public API is not yet stable: it may change while the module matures toward `1.0.0`, and such
 changes can land without a major-version bump. The following residual risks remain:
 
 1. **Pre-1.0 API instability.** The engine constructors, result types, helper
@@ -318,7 +319,8 @@ Mitigations required by this specification:
 
 1. Groadmap MUST pin GoGraph to an exact version in `go.mod` (a specific immutable
    reference, not a floating or branch reference), so builds are reproducible. The
-   pinned exact tag is recorded in `BUILD.md § External Dependencies`.
+   pinned exact tag is written in `go.mod` alone, and
+   `BUILD.md § External Dependencies` governs it.
 2. The graph feature MUST be implemented behind Groadmap's own command and
    error-handling boundary (this specification). Behind that boundary GoGraph is
    not confined to one integration layer: it is imported by the production packages
@@ -5377,7 +5379,7 @@ what is compared is a store no process holds open.
 - Standard input as a Cypher source → `DATA_FORMATS.md § Input`
 - The sibling standard-input rule for the comment body, whose cap counts characters rather than bytes → `COMMANDS.md § Comment Body Input Source and Precedence`
 - GoGraph integration, directory layout, error handling → `ARCHITECTURE.md`
-- The required Go version, and the minor-version floor the GoGraph dependency contributes to it → `BUILD.md § Go Toolchain`
+- The required Go version, and the version floor the GoGraph dependency contributes to it → `BUILD.md § Go Toolchain`
 - Store serialisation, recovery, server-to-server lock contention, and the checkpoint trade-off → `IMPLEMENTATION.md § Graph Store Concurrency`
 - The value of the statement time budget, the evidence for it, and the web graph data endpoint's own handling of a statement it cuts → `WEB.md § Graph Query Time Budget`
 - Graph statements submitted through the web interface, the client it reaches them with, and what it answers when no server is running → `WEB.md § Knowledge Graph from the GoGraph Store`

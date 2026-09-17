@@ -1,6 +1,8 @@
 package main
 
 import (
+	"errors"
+	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -12,21 +14,29 @@ import (
 	"testing"
 )
 
-// The tests in this file pin the two GitHub Actions workflows to
-// SPEC/BUILD.md. They exist because the release workflow once ran only `fmt`,
-// `vet` and the tests: neither the linter nor the security scan ran anywhere in
-// the release pipeline, so a `v*` tag could publish binaries that no
+// The tests in this file pin the two GitHub Actions workflows, and the
+// Makefile's `check` target, to SPEC/BUILD.md and to the tool pins the Makefile
+// holds. They exist because the release workflow once ran only `fmt`, `vet` and
+// the tests: neither the linter nor the security scan ran anywhere in the
+// release pipeline, so a `v*` tag could publish binaries that no
 // `golangci-lint` and no `gosec` run had ever inspected. Nothing detected the
 // gap, and ten consecutive releases recorded the security gate as "skipped, per
 // project policy" — a policy SPEC/BUILD.md § A Missing Tool Is a Failure, Never
 // a Skip explicitly forbids and that never existed.
 //
 // The specified state has since been restored in both YAML files. These tests
-// are the gate that keeps it there: every assertion below reads its expected
-// value out of SPEC/BUILD.md rather than repeating it, so the specification
-// stays the single authority and a pin raised in the specification alone fails
-// the suite. This mirrors TestSupportedBuildTargetsMatchSpec in
-// build_targets_test.go, which pins the build matrix to the same document.
+// are the gate that keeps it there. Every expectation the specification states
+// is read out of SPEC/BUILD.md rather than repeated here: the gate set and its
+// commands, the order and no-skip rules, and the form of the command that
+// installs gosec. The tool versions are the exception, because the
+// specification does not state them. SPEC/BUILD.md § Static Analysis makes two
+// Makefile variables, GOLANGCI_LINT_VERSION and GOSEC_VERSION, the
+// authoritative pins and each workflow a holder of copies, so the pins are read
+// out of the Makefile: a pin raised in the Makefile alone, or in one workflow
+// alone, fails the suite. The pin on the golangci-lint action itself is written
+// only in the two workflows, so they are held to each other. This mirrors
+// TestSupportedBuildTargetsMatchSpec in build_targets_test.go, which pins the
+// build matrix to the same document.
 
 // ciWorkflowPath and releaseWorkflowPath locate the two workflow files from
 // this package's directory, which is where `go test` sets the working
@@ -97,116 +107,638 @@ func TestWorkflowsRunTheCompleteGateSet(t *testing.T) {
 	}
 }
 
-// TestWorkflowToolPinsMatchSpec proves the third rule of SPEC/BUILD.md §
-// Static Analysis for the two workflows: each tool's version appears in exactly
-// four places — its own section of the specification, the two workflows, and
-// the Makefile — and all four MUST name the same version. This test holds the
-// workflows' copies; TestMakefileToolPinsMatchSpec holds the Makefile's. The
-// expected versions are read out of the specification, so raising a pin there
-// alone fails this test, which is the point: a gate whose tool version differs
-// between two pipelines is not the same gate in both.
-func TestWorkflowToolPinsMatchSpec(t *testing.T) {
-	facts := loadSpecGates(t)
+// TestWorkflowToolPinsMatchMakefile proves the rule of SPEC/BUILD.md § Static
+// Analysis, "Where the pins live, and how they change", for the two workflows:
+// each holds a copy of both tool pins — the `version` input it passes to the
+// golangci-lint action, and the version in the command that installs gosec —
+// and each copy MUST equal the value the Makefile assigns to
+// GOLANGCI_LINT_VERSION or GOSEC_VERSION. The expected values are read out of
+// the Makefile, so raising a pin there alone fails this test, which is the
+// point: a gate whose tool version differs between two pipelines is not the
+// same gate in both. TestWorkflowPinCheckRejectsEveryDivergentCopy proves each
+// rejection this test relies on.
+func TestWorkflowToolPinsMatchMakefile(t *testing.T) {
+	spec := loadSpecGates(t)
+	pins := loadMakefilePins(t)
 
 	for _, p := range pipelines() {
 		t.Run(filepath.Base(p.path), func(t *testing.T) {
 			gate := loadGateJob(t, p)
-			sites := gate.resolveGates(t, facts)
-
-			// gosec: the workflow must install the pinned scanner with the
-			// exact command SPEC/BUILD.md § Security Scan: gosec documents.
-			if _, ok := sites[gateGosecInstall]; !ok {
-				t.Errorf("%s: job %q does not install gosec at the pinned version. "+
-					"SPEC/BUILD.md § Security Scan: gosec pins it to %s and documents the install command %q; "+
-					"§ A Missing Tool Is a Failure, Never a Skip requires each workflow to install the tool "+
-					"in the job that runs the gate.",
-					p.rel(), p.gateJob, facts.gosecVersion, facts.gosecInstall)
-			}
-
-			// golangci-lint: the pinned linter version is the `version` input
-			// passed to the action, a pin distinct from the action's own.
-			lintStep, ok := sites[gateLint]
-			if !ok {
-				return // resolveGates has already reported the missing lint gate.
-			}
-			step := gate.job.steps[lintStep]
-			if got := step.with["version"]; got != facts.lintVersion {
-				t.Errorf("%s: step %q passes version %q to the golangci-lint action, but SPEC/BUILD.md "+
-					"§ Linter: golangci-lint pins the linter to %s. All four places that name this version "+
-					"— the specification, both workflows and the Makefile — MUST agree (§ Static Analysis, "+
-					"\"Where the pins live, and how they change\").",
-					p.rel(), step.name, got, facts.lintVersion)
-			}
-			if want := "golangci/golangci-lint-action@" + facts.lintActionPin; step.uses != want {
-				t.Errorf("%s: step %q uses %q, but SPEC/BUILD.md § Linter: golangci-lint names the action pin %q. "+
-					"The action's version is a separate exact pin from the linter's, and neither substitutes "+
-					"for the other.",
-					p.rel(), step.name, step.uses, want)
+			for _, problem := range workflowPinProblems(p.rel(), &gate.job, pins, spec.gosecInstall) {
+				t.Error(problem)
 			}
 		})
 	}
 }
 
-// TestMakefileToolPinsMatchSpec holds the fourth place SPEC/BUILD.md § Static
-// Analysis names for each tool's pin: the Makefile's copy, which is the value
-// the local version check of § Local Tool Resolution compares a resolved binary
-// against. The specification requires the `test` gate to fail when that copy
-// differs from the pin in the tool's own section, as it fails for a workflow's
-// copy. Without this, `make lint` and `make security` would enforce whatever
-// version the Makefile happened to name, and a pin raised in the specification
-// and both workflows would leave every local gate checking against the old one.
-func TestMakefileToolPinsMatchSpec(t *testing.T) {
-	facts := loadSpecGates(t)
+// TestMakefileAssignsEachToolPinOnce holds the Makefile to what SPEC/BUILD.md §
+// Static Analysis requires of the place that holds the tool pins: each pin
+// variable is assigned exactly once, as `override <VAR> := <version>`, and that
+// value is the one the version check of § Local Tool Resolution compares a
+// resolved binary against. The specification requires the `test` gate to fail
+// when either variable is assigned any other number of times. Without this, a
+// second assignment could replace the pin the workflows are compared against,
+// and a `?=` could let the environment disable the version check.
+// TestMakefilePinReaderRejectsMalformedAssignments proves each rejection this
+// test relies on.
+func TestMakefileAssignsEachToolPinOnce(t *testing.T) {
+	makefile := readMakefile(t)
+
+	for _, variable := range []string{lintPinVariable, gosecPinVariable} {
+		t.Run(variable, func(t *testing.T) {
+			if _, err := makefilePin(makefile, variable); err != nil {
+				t.Error(err)
+			}
+		})
+	}
+}
+
+// TestWorkflowsNameTheSameLintActionPin holds the pin on the golangci-lint
+// action itself, which SPEC/BUILD.md § Static Analysis keeps apart from the
+// linter's: the Makefile does not hold it, it is written only in the two
+// workflows, and both MUST name the same one. The action is the code that
+// installs and runs the linter, so two different action pins would make the
+// lint gate differ between the pipelines even with the linter's own version
+// equal. TestLintActionPinCheckRejectsDivergentWorkflows proves each rejection
+// this test relies on.
+func TestWorkflowsNameTheSameLintActionPin(t *testing.T) {
+	sites := make([]actionPinSite, 0, 2)
+	for _, p := range pipelines() {
+		gate := loadGateJob(t, p)
+		sites = append(sites, actionPinSite{rel: p.rel(), pins: lintActionPins(&gate.job)})
+	}
+
+	for _, problem := range lintActionPinProblems(sites) {
+		t.Error(problem)
+	}
+}
+
+// TestMakefilePinReaderRejectsMalformedAssignments proves that makefilePin,
+// which TestMakefileAssignsEachToolPinOnce and every workflow pin comparison
+// rely on, accepts the one form SPEC/BUILD.md § Static Analysis requires and
+// rejects every other: no assignment, a second assignment in any form, the
+// wrong operator or modifiers, a value that is not an exact version, and a pin
+// no recipe reads.
+func TestMakefilePinReaderRejectsMalformedAssignments(t *testing.T) {
+	// reader is a rule whose recipe reads the pin, as the security gate does.
+	const reader = "\nsecurity:\n\t@check-version gosec $(GOSEC_VERSION)\n"
+
+	cases := []struct {
+		name     string
+		makefile string
+		value    string // the pin read, when the Makefile is accepted
+		reject   string // a fragment of the error, when it is rejected
+	}{
+		{
+			name:     "one override assignment is accepted",
+			makefile: "override GOSEC_VERSION := v2.21.4" + reader,
+			value:    "v2.21.4",
+		},
+		{
+			name:     "a pre-release version is accepted",
+			makefile: "override GOSEC_VERSION := v2.22.0-rc.1" + reader,
+			value:    "v2.22.0-rc.1",
+		},
+		{
+			name: "a recipe line setting a shell variable of the same name is not an assignment",
+			makefile: "override GOSEC_VERSION := v2.21.4\nscan:\n\tGOSEC_VERSION=v2.20.0 ./scripts/scan.sh\n" +
+				reader,
+			value: "v2.21.4",
+		},
+		{
+			name:     "no assignment",
+			makefile: "GOSEC ?= $(GOBIN)/gosec" + reader,
+			reject:   "assigns GOSEC_VERSION 0 times",
+		},
+		{
+			name:     "two override assignments",
+			makefile: "override GOSEC_VERSION := v2.21.4\noverride GOSEC_VERSION := v2.22.0" + reader,
+			reject:   "assigns GOSEC_VERSION 2 times",
+		},
+		{
+			name:     "a second, conditional assignment",
+			makefile: "override GOSEC_VERSION := v2.21.4\nGOSEC_VERSION ?= v2.22.0" + reader,
+			reject:   "assigns GOSEC_VERSION 2 times",
+		},
+		{
+			name:     "a second, appending assignment",
+			makefile: "override GOSEC_VERSION := v2.21.4\nGOSEC_VERSION += -rc.1" + reader,
+			reject:   "assigns GOSEC_VERSION 2 times",
+		},
+		{
+			name:     "a second, target-specific assignment",
+			makefile: "override GOSEC_VERSION := v2.21.4\nsecurity: GOSEC_VERSION := v2.22.0" + reader,
+			reject:   "assigns GOSEC_VERSION 2 times",
+		},
+		{
+			name:     "a second assignment by define",
+			makefile: "override GOSEC_VERSION := v2.21.4\ndefine GOSEC_VERSION\nv2.22.0\nendef" + reader,
+			reject:   "assigns GOSEC_VERSION 2 times",
+		},
+		{
+			name:     "the only assignment is a define",
+			makefile: "define GOSEC_VERSION\nv2.21.4\nendef" + reader,
+			reject:   "with `define`",
+		},
+		{
+			name:     "no override",
+			makefile: "GOSEC_VERSION := v2.21.4" + reader,
+			reject:   "requires the form `override GOSEC_VERSION := <version>`",
+		},
+		{
+			name:     "a conditional assignment",
+			makefile: "override GOSEC_VERSION ?= v2.21.4" + reader,
+			reject:   "requires the form `override GOSEC_VERSION := <version>`",
+		},
+		{
+			name:     "a recursive assignment",
+			makefile: "override GOSEC_VERSION = v2.21.4" + reader,
+			reject:   "requires the form `override GOSEC_VERSION := <version>`",
+		},
+		{
+			name:     "an exported assignment",
+			makefile: "export override GOSEC_VERSION := v2.21.4" + reader,
+			reject:   "requires the form `override GOSEC_VERSION := <version>`",
+		},
+		{
+			name:     "a trailing comment",
+			makefile: "override GOSEC_VERSION := v2.21.4 # the scanner pin" + reader,
+			reject:   "not an exact version",
+		},
+		{
+			name:     "a version prefix",
+			makefile: "override GOSEC_VERSION := v2" + reader,
+			reject:   "not an exact version",
+		},
+		{
+			name:     "no leading v",
+			makefile: "override GOSEC_VERSION := 2.21.4" + reader,
+			reject:   "not an exact version",
+		},
+		{
+			name:     "an empty value",
+			makefile: "override GOSEC_VERSION :=" + reader,
+			reject:   "not an exact version",
+		},
+		{
+			name:     "never read",
+			makefile: "override GOSEC_VERSION := v2.21.4\nsecurity:\n\tgosec ./...\n",
+			reject:   "never reads it",
+		},
+		{
+			name: "read only by a comment",
+			makefile: "# install: go install github.com/securego/gosec/v2/cmd/gosec@$(GOSEC_VERSION)\n" +
+				"override GOSEC_VERSION := v2.21.4\nsecurity:\n\tgosec ./...\n",
+			reject: "never reads it",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := makefilePin(tc.makefile, gosecPinVariable)
+			if tc.reject == "" {
+				if err != nil || got != tc.value {
+					t.Fatalf("makefilePin = %q, %v; want %q, nil\nMakefile:\n%s", got, err, tc.value, tc.makefile)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatalf("makefilePin accepted the Makefile and read %q; want an error containing %q\nMakefile:\n%s",
+					got, tc.reject, tc.makefile)
+			}
+			if !strings.Contains(err.Error(), tc.reject) {
+				t.Fatalf("makefilePin rejected the Makefile with %q; want an error containing %q", err, tc.reject)
+			}
+			if got != "" {
+				t.Fatalf("makefilePin returned the pin %q alongside its error; a rejected pin must not be used", got)
+			}
+		})
+	}
+}
+
+// TestWorkflowPinCheckRejectsEveryDivergentCopy proves that
+// workflowPinProblems, which TestWorkflowToolPinsMatchMakefile relies on,
+// passes a gate job whose copies equal the Makefile's pins and reports each way
+// a copy can diverge. The gosec install form is the one the specification
+// states, so the fixtures follow the specification rather than restating it.
+func TestWorkflowPinCheckRejectsEveryDivergentCopy(t *testing.T) {
+	form := loadSpecGates(t).gosecInstall
+	pins := toolPins{lint: "v2.4.0", gosec: "v2.21.4"}
+	install := form.with(pins.gosec)
+
+	cases := []struct {
+		name      string
+		actionPin string   // empty: the job has no golangci-lint action step
+		version   string   // the action's `version` input; empty: the input is absent
+		commands  []string // the job's other commands, one step each
+		problems  []string // a fragment of each problem expected, in order
+	}{
+		{
+			name:      "copies equal to the Makefile's pins",
+			actionPin: "v9.3.0",
+			version:   pins.lint,
+			commands:  []string{"go vet ./...", install, "gosec -exclude-dir=.claude/worktrees ./..."},
+		},
+		{
+			name:      "a linter version other than the Makefile's",
+			actionPin: "v9.3.0",
+			version:   "v2.3.0",
+			commands:  []string{install},
+			problems:  []string{`passes version "v2.3.0" to the golangci-lint action, but the Makefile pins golangci-lint to v2.4.0`},
+		},
+		{
+			name:      "no version input on the action",
+			actionPin: "v9.3.0",
+			commands:  []string{install},
+			problems:  []string{`passes version "" to the golangci-lint action`},
+		},
+		{
+			name:     "no golangci-lint action step",
+			commands: []string{"golangci-lint run ./...", install},
+			problems: []string{"has no step that uses the golangci-lint action"},
+		},
+		{
+			name:      "a gosec version other than the Makefile's",
+			actionPin: "v9.3.0",
+			version:   pins.lint,
+			commands:  []string{form.with("v2.20.0")},
+			problems:  []string{"@v2.20.0\", but SPEC/BUILD.md § Security Scan: gosec requires"},
+		},
+		{
+			name:      "a floating gosec version",
+			actionPin: "v9.3.0",
+			version:   pins.lint,
+			commands:  []string{form.with("latest")},
+			problems:  []string{"@latest\", but SPEC/BUILD.md § Security Scan: gosec requires"},
+		},
+		{
+			name:      "gosec installed a second time at another version",
+			actionPin: "v9.3.0",
+			version:   pins.lint,
+			commands:  []string{install, form.with("v2.22.0")},
+			problems:  []string{"@v2.22.0\", but SPEC/BUILD.md § Security Scan: gosec requires"},
+		},
+		{
+			name:      "gosec never installed",
+			actionPin: "v9.3.0",
+			version:   pins.lint,
+			commands:  []string{"gosec -exclude-dir=.claude/worktrees ./..."},
+			problems:  []string{"does not install gosec"},
+		},
+		{
+			name:     "both copies diverge at once",
+			commands: []string{"go install github.com/securego/gosec/v2/cmd/gosec@main"},
+			problems: []string{"has no step that uses the golangci-lint action", "@main\", but"},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			job := fixtureGateJob(t, tc.actionPin, tc.version, tc.commands...)
+			got := workflowPinProblems("fixture.yml", &job, pins, form)
+			assertProblems(t, got, tc.problems)
+		})
+	}
+}
+
+// TestLintActionPinCheckRejectsDivergentWorkflows proves that
+// lintActionPinProblems, which TestWorkflowsNameTheSameLintActionPin relies
+// on, passes two workflows that name the same exact action pin and reports
+// every other combination. The pins are read from parsed fixture jobs, so the
+// path from a step's `uses` value to the comparison is exercised too.
+func TestLintActionPinCheckRejectsDivergentWorkflows(t *testing.T) {
+	cases := []struct {
+		name     string
+		ci       []string // the action pin of each lint step in the CI fixture
+		release  []string // the same, in the release fixture
+		problems []string
+	}{
+		{
+			name:    "the same exact pin in both",
+			ci:      []string{"v9.3.0"},
+			release: []string{"v9.3.0"},
+		},
+		{
+			name:    "different pins",
+			ci:      []string{"v9.3.0"},
+			release: []string{"v9.2.0"},
+			problems: []string{"release.yml uses golangci/golangci-lint-action@v9.2.0, but ci.yml uses " +
+				"golangci/golangci-lint-action@v9.3.0"},
+		},
+		{
+			name:    "the same floating pin in both",
+			ci:      []string{"v9"},
+			release: []string{"v9"},
+			problems: []string{"ci.yml: uses golangci/golangci-lint-action@v9, which is not an exact version",
+				"release.yml: uses golangci/golangci-lint-action@v9, which is not an exact version"},
+		},
+		{
+			name:     "no action in one workflow",
+			ci:       []string{"v9.3.0"},
+			problems: []string{"release.yml: no step uses golangci/golangci-lint-action@<version>"},
+		},
+		{
+			name:    "two action steps with different pins in one workflow",
+			ci:      []string{"v9.3.0", "v9.2.0"},
+			release: []string{"v9.3.0"},
+			problems: []string{"ci.yml uses golangci/golangci-lint-action@v9.2.0, but ci.yml uses " +
+				"golangci/golangci-lint-action@v9.3.0"},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			sites := []actionPinSite{
+				{rel: "ci.yml", pins: fixtureActionPins(t, tc.ci)},
+				{rel: "release.yml", pins: fixtureActionPins(t, tc.release)},
+			}
+			assertProblems(t, lintActionPinProblems(sites), tc.problems)
+		})
+	}
+}
+
+// fixtureActionPins parses a gate job with one golangci-lint action step per
+// pin and returns the pins lintActionPins reads back from it.
+func fixtureActionPins(t *testing.T, pins []string) []string {
+	t.Helper()
+
+	var src strings.Builder
+	src.WriteString("jobs:\n  test:\n    runs-on: ubuntu-latest\n    steps:\n      - name: Run go vet\n        run: go vet ./...\n")
+	for i, pin := range pins {
+		fmt.Fprintf(&src, "      - name: Run golangci-lint %d\n        uses: %s%s\n        with:\n          version: v2.4.0\n",
+			i+1, lintActionPrefix, pin)
+	}
+	job := mustJob(t, parseWorkflowSource(src.String(), "fixture.yml"), "test")
+	return lintActionPins(&job)
+}
+
+// fixtureGateJob parses a gate job that runs the golangci-lint action at
+// actionPin, passing version as its `version` input, and then one step per
+// command. An empty actionPin leaves the action step out, and an empty version
+// leaves the input out.
+func fixtureGateJob(t *testing.T, actionPin, version string, commands ...string) wfJob {
+	t.Helper()
+
+	var src strings.Builder
+	src.WriteString("on: push\njobs:\n  test:\n    runs-on: ubuntu-latest\n    steps:\n")
+	if actionPin != "" {
+		fmt.Fprintf(&src, "      - name: Run golangci-lint\n        uses: %s%s\n        with:\n", lintActionPrefix, actionPin)
+		if version != "" {
+			fmt.Fprintf(&src, "          version: %s\n", version)
+		}
+		src.WriteString("          args: --timeout=5m\n")
+	}
+	for i, command := range commands {
+		fmt.Fprintf(&src, "      - name: Step %d\n        run: %s\n", i+1, command)
+	}
+	return mustJob(t, parseWorkflowSource(src.String(), "fixture.yml"), "test")
+}
+
+// assertProblems requires exactly one reported problem per expected fragment,
+// each containing its fragment, in order.
+func assertProblems(t *testing.T, got, want []string) {
+	t.Helper()
+
+	if len(got) != len(want) {
+		t.Fatalf("got %d problems, want %d.\ngot:  %q\nwant: %q", len(got), len(want), got, want)
+	}
+	for i := range want {
+		if !strings.Contains(got[i], want[i]) {
+			t.Errorf("problem %d is %q; want it to contain %q", i, got[i], want[i])
+		}
+	}
+}
+
+// Tool pin variables: the two Makefile variables SPEC/BUILD.md § Static
+// Analysis names as the authoritative pins. loadSpecGates requires the
+// specification to name exactly these, so a renamed variable fails the suite
+// until these tests are taught the new name.
+const (
+	lintPinVariable  = "GOLANGCI_LINT_VERSION"
+	gosecPinVariable = "GOSEC_VERSION"
+)
+
+// lintActionPrefix is how a workflow step names the golangci-lint action; the
+// rest of its `uses` value is the action pin.
+const lintActionPrefix = "golangci/golangci-lint-action@"
+
+// exactVersion matches an exact semantic version with its leading v, the only
+// form SPEC/BUILD.md admits for a pin ("Both tools are pinned to an exact
+// version"; "Both pins are exact"). A prefix such as `v2` is a moving target to
+// `go install` and to GitHub alike, so it is refused.
+var exactVersion = regexp.MustCompile(
+	`^v(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$`)
+
+// toolPins holds the value the Makefile assigns to each tool pin variable.
+type toolPins struct {
+	lint  string // GOLANGCI_LINT_VERSION
+	gosec string // GOSEC_VERSION
+}
+
+// readMakefile returns the repository's Makefile.
+func readMakefile(t *testing.T) string {
+	t.Helper()
 
 	raw, err := os.ReadFile(filepath.Clean(makefilePath))
 	if err != nil {
 		t.Fatalf("reading the Makefile: %v", err)
 	}
-	makefile := string(raw)
-
-	cases := []struct {
-		tool     string
-		variable string
-		section  string
-		want     string
-	}{
-		{tool: "golangci-lint", variable: "GOLANGCI_LINT_VERSION", section: "§ Linter: golangci-lint", want: facts.lintVersion},
-		{tool: "gosec", variable: "GOSEC_VERSION", section: "§ Security Scan: gosec", want: facts.gosecVersion},
-	}
-
-	for _, tc := range cases {
-		t.Run(tc.tool, func(t *testing.T) {
-			pattern := makefilePinAssignment(tc.variable)
-			matches := pattern.FindAllStringSubmatch(makefile, -1)
-			if len(matches) != 1 {
-				t.Fatalf("the Makefile assigns %s %d times (pattern %s), but SPEC/BUILD.md § Static Analysis "+
-					"requires exactly one Makefile copy of the %s pin, the value § Local Tool Resolution's "+
-					"version check compares against. Write it once, as `override %s := %s`.",
-					tc.variable, len(matches), pattern, tc.tool, tc.variable, tc.want)
-			}
-			if got := matches[0][1]; got != tc.want {
-				t.Errorf("the Makefile pins %s to %q (%s), but SPEC/BUILD.md %s pins it to %s. All four places "+
-					"that name this version — the specification, both workflows and the Makefile — MUST agree "+
-					"(§ Static Analysis, \"Where the pins live, and how they change\"), and the test gate MUST "+
-					"fail when the Makefile's copy differs.",
-					tc.tool, got, tc.variable, tc.section, tc.want)
-			}
-			if reference := "$(" + tc.variable + ")"; !strings.Contains(makefile, reference) {
-				t.Errorf("the Makefile assigns %s but never reads it with %s, so no version check compares a "+
-					"binary against that pin. SPEC/BUILD.md § Local Tool Resolution makes the Makefile's copy "+
-					"the value the %s gate's version check compares against.",
-					tc.variable, reference, tc.tool)
-			}
-		})
-	}
+	return string(raw)
 }
 
-// makefilePinAssignment matches a Makefile assignment of a tool pin, such as
-// `override GOSEC_VERSION := v2.28.0`, capturing the value. A conditional
-// assignment (`?=`) is deliberately not matched: the environment could then
-// replace the pin, and nothing may disable the version check.
-func makefilePinAssignment(variable string) *regexp.Regexp {
-	return regexp.MustCompile(`(?m)^(?:override[ \t]+)?` + regexp.QuoteMeta(variable) + `[ \t]*:?=[ \t]*(\S*)[ \t]*$`)
+// loadMakefilePins reads both tool pins out of the Makefile, failing the test
+// when either is not held the way SPEC/BUILD.md § Static Analysis requires.
+func loadMakefilePins(t *testing.T) toolPins {
+	t.Helper()
+
+	makefile := readMakefile(t)
+	lint, lintErr := makefilePin(makefile, lintPinVariable)
+	gosec, gosecErr := makefilePin(makefile, gosecPinVariable)
+	if err := errors.Join(lintErr, gosecErr); err != nil {
+		t.Fatalf("the Makefile does not hold the tool pins the workflows are compared against:\n%v", err)
+	}
+	return toolPins{lint: lint, gosec: gosec}
+}
+
+// makefilePin returns the value the Makefile assigns to a tool pin variable. It
+// fails unless the Makefile holds the pin as SPEC/BUILD.md § Static Analysis
+// requires: assigned exactly once, as `override <VAR> := <version>` with an
+// exact version and nothing after it, and read as $(<VAR>) on a line that is
+// not a comment.
+func makefilePin(makefile, variable string) (string, error) {
+	assignments := makefileAssignment(variable).FindAllStringSubmatch(makefile, -1)
+	defines := len(makefileDefine(variable).FindAllStringIndex(makefile, -1))
+	if count := len(assignments) + defines; count != 1 {
+		return "", fmt.Errorf("the Makefile assigns %s %d times, but SPEC/BUILD.md § Static Analysis requires "+
+			"exactly one assignment, `override %s := <version>`: the value the version check of § Local Tool "+
+			"Resolution compares against, and the value both workflows copy", variable, count, variable)
+	}
+	if defines == 1 {
+		return "", fmt.Errorf("the Makefile assigns %s with `define`, but SPEC/BUILD.md § Static Analysis "+
+			"requires the form `override %s := <version>`", variable, variable)
+	}
+
+	match := assignments[0]
+	target, modifiers, operator, value := match[1], strings.Fields(match[2]), match[3], match[4]
+	if target != "" || !slices.Equal(modifiers, []string{"override"}) || operator != ":=" {
+		return "", fmt.Errorf("the Makefile assigns %s as %q, but SPEC/BUILD.md § Static Analysis requires "+
+			"the form `override %s := <version>`: `override` keeps a value given on the make command line or "+
+			"in the environment from replacing the pin, and nothing may disable the version check",
+			variable, strings.TrimSpace(match[0]), variable)
+	}
+	if !exactVersion.MatchString(value) {
+		return "", fmt.Errorf("the Makefile assigns %s the value %q, which is not an exact version with its "+
+			"leading v (such as v1.2.3) and nothing after it. SPEC/BUILD.md § Static Analysis pins each tool to "+
+			"an exact version; a trailing comment is not allowed either, because make keeps the blanks before "+
+			"the `#` in the value", variable, value)
+	}
+	if !makefileReads(makefile, variable) {
+		return "", fmt.Errorf("the Makefile assigns %s but never reads it as $(%s) outside a comment, so no "+
+			"version check compares a binary against that pin. SPEC/BUILD.md § Local Tool Resolution makes the "+
+			"value of %s the one the gate's version check compares against", variable, variable, variable)
+	}
+	return value, nil
+}
+
+// makefileAssignment matches one assignment of a Makefile variable in any form
+// GNU make accepts at the start of a line: every assignment operator (`=`,
+// `:=`, `::=`, `:::=`, `?=`, `+=`, `!=`), the `override`, `export` and
+// `private` modifiers, and a target-specific prefix (`lint: VAR := ...`).
+// Counting every form is what makes "assigned exactly once" mean what it says,
+// because a second assignment of any kind can replace the pin or let the
+// environment replace it. A line that begins with a tab is a recipe line, where
+// the same text is a shell assignment, and is not matched. makefileDefine
+// covers the one remaining form, `define`.
+//
+// Groups: 1 the target prefix, 2 the modifiers, 3 the operator, 4 the value.
+func makefileAssignment(variable string) *regexp.Regexp {
+	return regexp.MustCompile(`(?m)^ *([^\s:#=][^:#=\n]*:[ \t]*)?((?:(?:override|export|private)[ \t]+)*)` +
+		regexp.QuoteMeta(variable) + `[ \t]*(:::=|::=|:=|\?=|\+=|!=|=)[ \t]*(.*?)[ \t]*$`)
+}
+
+// makefileDefine matches a multi-line `define` of a Makefile variable.
+func makefileDefine(variable string) *regexp.Regexp {
+	return regexp.MustCompile(`(?m)^ *(?:(?:override|export|private)[ \t]+)*define[ \t]+` +
+		regexp.QuoteMeta(variable) + `(?:[ \t]|$)`)
+}
+
+// makefileReads reports whether the Makefile reads a variable as $(VAR) on a
+// line that is not a comment. A comment that spells the reference — the install
+// hints above the pins do — proves nothing about what a gate compares against.
+func makefileReads(makefile, variable string) bool {
+	reference := "$(" + variable + ")"
+	for line := range strings.Lines(makefile) {
+		trimmed := strings.TrimSpace(line)
+		if !strings.HasPrefix(trimmed, "#") && strings.Contains(trimmed, reference) {
+			return true
+		}
+	}
+	return false
+}
+
+// workflowPinProblems returns every way one workflow's gate job departs from
+// the Makefile's tool pins, as SPEC/BUILD.md § Static Analysis requires the
+// workflows to copy them: each golangci-lint action step passes the Makefile's
+// GOLANGCI_LINT_VERSION as its `version` input, and each command that installs
+// gosec is the specification's install form with the Makefile's GOSEC_VERSION
+// in place of its placeholder. A job that holds no copy of a pin — no action
+// step, or no gosec install — is reported too.
+func workflowPinProblems(rel string, job *wfJob, pins toolPins, form installForm) []string {
+	problems := make([]string, 0, 2)
+
+	lintSteps := 0
+	for _, step := range job.steps {
+		if !strings.HasPrefix(step.uses, lintActionPrefix) {
+			continue
+		}
+		lintSteps++
+		if got := step.with["version"]; got != pins.lint {
+			problems = append(problems, fmt.Sprintf("%s: step %q passes version %q to the golangci-lint action, "+
+				"but the Makefile pins golangci-lint to %s (%s). SPEC/BUILD.md § Static Analysis requires each "+
+				"workflow's copy of the pin to equal the Makefile's value.",
+				rel, step.name, got, pins.lint, lintPinVariable))
+		}
+	}
+	if lintSteps == 0 {
+		problems = append(problems, fmt.Sprintf("%s: job %q has no step that uses the golangci-lint action, so "+
+			"it holds no copy of the linter pin. SPEC/BUILD.md § Static Analysis makes the action's `version` "+
+			"input that copy, equal to the Makefile's %s (%s).",
+			rel, job.id, lintPinVariable, pins.lint))
+	}
+
+	want := form.with(pins.gosec)
+	installs := 0
+	for _, cmd := range jobCommands(job) {
+		if !strings.HasPrefix(cmd.text, form.prefix()) {
+			continue
+		}
+		installs++
+		if cmd.text != want {
+			problems = append(problems, fmt.Sprintf("%s: step %q runs %q, but SPEC/BUILD.md § Security Scan: "+
+				"gosec requires each workflow to install gosec with exactly %q: its install command with the "+
+				"Makefile's %s (%s) in place of %s.",
+				rel, job.steps[cmd.step].name, cmd.text, want, gosecPinVariable, pins.gosec, form.placeholder))
+		}
+	}
+	if installs == 0 {
+		problems = append(problems, fmt.Sprintf("%s: job %q does not install gosec with %q. SPEC/BUILD.md "+
+			"§ Security Scan: gosec gives that command, with the Makefile's %s in place of %s, and § A Missing "+
+			"Tool Is a Failure, Never a Skip requires each workflow to install the tool in the job that runs "+
+			"the gate.", rel, job.id, want, gosecPinVariable, form.placeholder))
+	}
+	return problems
+}
+
+// actionPinSite is where one workflow names the golangci-lint action.
+type actionPinSite struct {
+	rel  string
+	pins []string // the pin of each step that uses the action, in step order
+}
+
+// lintActionPins returns the pin of every step of a job that uses the
+// golangci-lint action, in step order.
+func lintActionPins(job *wfJob) []string {
+	pins := make([]string, 0, 1)
+	for _, step := range job.steps {
+		if pin, ok := strings.CutPrefix(step.uses, lintActionPrefix); ok {
+			pins = append(pins, pin)
+		}
+	}
+	return pins
+}
+
+// lintActionPinProblems returns every way the workflows depart from SPEC/BUILD.md
+// on the pin of the golangci-lint action itself. That pin is written only in
+// the workflows, so each MUST name one, as an exact version (§ Linter:
+// golangci-lint), and all of them MUST be the same (§ Static Analysis).
+func lintActionPinProblems(sites []actionPinSite) []string {
+	problems := make([]string, 0, 2)
+
+	first, firstRel := "", ""
+	for _, site := range sites {
+		if len(site.pins) == 0 {
+			problems = append(problems, fmt.Sprintf("%s: no step uses %s<version>, so the workflow names no "+
+				"golangci-lint action pin. SPEC/BUILD.md § Static Analysis requires both workflows to name the "+
+				"same one.", site.rel, lintActionPrefix))
+		}
+		for _, pin := range site.pins {
+			if !exactVersion.MatchString(pin) {
+				problems = append(problems, fmt.Sprintf("%s: uses %s%s, which is not an exact version. "+
+					"SPEC/BUILD.md § Linter: golangci-lint requires the action's own pin to be exact, as the "+
+					"linter's is.", site.rel, lintActionPrefix, pin))
+			}
+			if firstRel == "" {
+				first, firstRel = pin, site.rel
+				continue
+			}
+			if pin != first {
+				problems = append(problems, fmt.Sprintf("%s uses %s%s, but %s uses %s%s. SPEC/BUILD.md "+
+					"§ Static Analysis writes the action pin only in the two workflows and requires both to name "+
+					"the same one.", site.rel, lintActionPrefix, pin, firstRel, lintActionPrefix, first))
+			}
+		}
+	}
+	return problems
 }
 
 // TestWorkflowGateStepsCannotBeSkipped enforces SPEC/BUILD.md § A Missing Tool
@@ -333,12 +865,7 @@ func TestWorkflowPermissionsAreLeastPrivilege(t *testing.T) {
 func TestMakefileCheckRunsTheSameGateSet(t *testing.T) {
 	facts := loadSpecGates(t)
 
-	raw, err := os.ReadFile(filepath.Clean(makefilePath))
-	if err != nil {
-		t.Fatalf("reading the Makefile: %v", err)
-	}
-
-	prerequisites := makefileCheckTarget(t, string(raw))
+	prerequisites := makefileCheckTarget(t, readMakefile(t))
 	for gate := range facts.commands {
 		if !slices.Contains(prerequisites, gate) {
 			t.Errorf("the Makefile's `check` target runs %v, which omits the %q gate. "+
@@ -1105,7 +1632,7 @@ func shellWords(command string) []string {
 // Gate identifiers used as keys in the map resolveGates returns. The first five
 // are the gate targets SPEC/BUILD.md § Validation Gates names; gateGosecInstall
 // is the install step § A Missing Tool Is a Failure, Never a Skip requires
-// alongside the security gate.
+// alongside the security gate, located whatever version it installs.
 const (
 	gateFmt          = "fmt"
 	gateVet          = "vet"
@@ -1115,34 +1642,53 @@ const (
 	gateGosecInstall = "gosec install"
 )
 
-// specGates is everything these tests read out of SPEC/BUILD.md. Nothing here
-// is duplicated in the test source: the specification is the only place any of
-// these values is written down.
+// specGates is everything these tests read out of SPEC/BUILD.md. The tool
+// versions are not part of it: the specification does not state them, and
+// loadMakefilePins reads them out of the Makefile, which the specification
+// names as their holder.
 type specGates struct {
-	commands      map[string]string // gate target -> command, from § Validation Gates
-	gosecInstall  string            // the install command § Security Scan: gosec documents
-	gosecVersion  string            // the gosec pin
-	lintVersion   string            // the golangci-lint pin
-	lintActionPin string            // the pin on the golangci-lint action itself
+	commands     map[string]string // gate target -> command, from § Validation Gates
+	gosecInstall installForm       // the install command § Security Scan: gosec documents
 }
 
-// versionPattern matches a pinned version as SPEC/BUILD.md writes one.
-const versionPattern = `v[0-9][0-9A-Za-z.+-]*`
+// installForm is a command the specification writes with a placeholder for a
+// Makefile pin, such as
+// `go install github.com/securego/gosec/v2/cmd/gosec@<GOSEC_VERSION>`.
+type installForm struct {
+	text        string // the command exactly as the specification writes it
+	placeholder string // the placeholder it carries, angle brackets included
+}
+
+// with returns the command with its placeholder replaced by a version.
+func (f installForm) with(version string) string {
+	return strings.Replace(f.text, f.placeholder, version, 1)
+}
+
+// prefix returns the part of the command before its placeholder, which every
+// installation of the tool shares whatever version it names.
+func (f installForm) prefix() string {
+	before, _, _ := strings.Cut(f.text, f.placeholder)
+	return before
+}
+
+// pinVariableName matches the name of a Makefile pin variable as SPEC/BUILD.md
+// writes one.
+const pinVariableName = `([A-Z][A-Z0-9_]*)`
 
 var (
-	specPinnedVersion = regexp.MustCompile(`The pinned version is \*\*(` + versionPattern + `)\*\*`)
-	specGosecInstall  = regexp.MustCompile(`(?m)^go install github\.com/securego/gosec/v2/cmd/gosec@(` + versionPattern + `)$`)
-	specLintInstall   = regexp.MustCompile(`(?m)^go install github\.com/golangci/golangci-lint/v2/cmd/golangci-lint@(` + versionPattern + `)$`)
-	specGosecPreamble = regexp.MustCompile("`gosec (" + versionPattern + ")`")
-	specLintPreamble  = regexp.MustCompile("`golangci-lint (" + versionPattern + ")`")
-	specLintInput     = regexp.MustCompile("`version: (" + versionPattern + ")`")
-	specLintAction    = regexp.MustCompile(`golangci/golangci-lint-action@(` + versionPattern + `)`)
+	specLintPreamble  = regexp.MustCompile("`" + pinVariableName + "`\\s+holds the\\s+`golangci-lint`\\s+pin")
+	specGosecPreamble = regexp.MustCompile("`" + pinVariableName + "`\\s+holds the\\s+`gosec`\\s+pin")
+	specPinVariable   = regexp.MustCompile("The pinned version is the value of\\s+`" + pinVariableName +
+		"`\\s+in the\\s+`Makefile`")
+	specInstallForm = regexp.MustCompile(`(?m)^go install [^\s@]+@<` + pinVariableName + `>$`)
+	specLintInput   = regexp.MustCompile("`version: <" + pinVariableName + ">`")
 )
 
-// loadSpecGates reads the gate set and both tool pins out of SPEC/BUILD.md. It
-// also checks the specification against itself: a version is named in several
-// places within the document, and every one of them must agree before the
-// workflows can be measured against it.
+// loadSpecGates reads the gate set and the gosec install form out of
+// SPEC/BUILD.md. It also checks that every statement of the specification that
+// names a tool pin variable names the one these tests read from the Makefile:
+// if the specification renames a variable, or names two different ones for the
+// same tool, there is no single pin to hold the workflows to.
 func loadSpecGates(t *testing.T) specGates {
 	t.Helper()
 
@@ -1156,45 +1702,34 @@ func loadSpecGates(t *testing.T) specGates {
 	gosecSection := specSection(t, spec, "### Security Scan: gosec")
 	lintSection := specSection(t, spec, "### Linter: golangci-lint")
 
-	install := specGosecInstall.FindStringSubmatch(gosecSection)
-	if install == nil {
-		t.Fatalf("SPEC/BUILD.md § Security Scan: gosec no longer documents a `go install ...@version` command; " +
-			"this test cannot check that the workflows install the pinned scanner")
-	}
-
-	facts := specGates{
-		commands:     parseValidationGates(t, spec),
-		gosecInstall: install[0],
-		gosecVersion: specVersion(t, gosecSection, "§ Security Scan: gosec", specPinnedVersion),
-		lintVersion:  specVersion(t, lintSection, "§ Linter: golangci-lint", specPinnedVersion),
-		lintActionPin: specVersion(t, lintSection, "§ Linter: golangci-lint (the action's own pin)",
-			specLintAction),
-	}
-
-	// The specification names each version more than once. If those statements
-	// ever disagree, there is no single expected value to hold the workflows
-	// to, and the specification must be repaired before this test can run.
-	agree := []struct {
+	names := []struct {
 		pattern *regexp.Regexp
 		section string
 		name    string
 		want    string
 	}{
-		{specGosecInstall, gosecSection, "§ Security Scan: gosec, install command", facts.gosecVersion},
-		{specGosecPreamble, preamble, "§ Static Analysis preamble (gosec)", facts.gosecVersion},
-		{specLintInstall, lintSection, "§ Linter: golangci-lint, install command", facts.lintVersion},
-		{specLintPreamble, preamble, "§ Static Analysis preamble (golangci-lint)", facts.lintVersion},
-		{specLintInput, lintSection, "§ Linter: golangci-lint, action input", facts.lintVersion},
+		{specLintPreamble, preamble, "§ Static Analysis (the golangci-lint pin variable)", lintPinVariable},
+		{specGosecPreamble, preamble, "§ Static Analysis (the gosec pin variable)", gosecPinVariable},
+		{specPinVariable, lintSection, "§ Linter: golangci-lint (the pinned version)", lintPinVariable},
+		{specInstallForm, lintSection, "§ Linter: golangci-lint (the install command)", lintPinVariable},
+		{specLintInput, lintSection, "§ Linter: golangci-lint (the action's version input)", lintPinVariable},
+		{specPinVariable, gosecSection, "§ Security Scan: gosec (the pinned version)", gosecPinVariable},
+		{specInstallForm, gosecSection, "§ Security Scan: gosec (the install command)", gosecPinVariable},
 	}
-	for _, check := range agree {
-		if got := specVersion(t, check.section, check.name, check.pattern); got != check.want {
-			t.Fatalf("SPEC/BUILD.md contradicts itself: %s names version %s, but the section's pinned version "+
-				"is %s. § Static Analysis requires one version per tool everywhere it appears.",
-				check.name, got, check.want)
+	for _, check := range names {
+		if got := specCapture(t, check.section, check.name, check.pattern); got != check.want {
+			t.Fatalf("SPEC/BUILD.md %s names the Makefile variable %s, but these tests read that pin from %s. "+
+				"§ Static Analysis makes one Makefile variable per tool the authoritative pin: if the variable "+
+				"was renamed, rename it in these tests too.", check.name, got, check.want)
 		}
 	}
 
-	return facts
+	// specCapture has already required exactly this form in the section.
+	install := specInstallForm.FindStringSubmatch(gosecSection)
+	return specGates{
+		commands:     parseValidationGates(t, spec),
+		gosecInstall: installForm{text: install[0], placeholder: "<" + install[1] + ">"},
+	}
 }
 
 // parseValidationGates reads the gate table of SPEC/BUILD.md § Validation
@@ -1259,26 +1794,26 @@ func specSection(t *testing.T, spec, heading string) string {
 	return body.String()
 }
 
-// specVersion extracts a version from a section of the specification and
-// requires every occurrence of the pattern in that section to name the same
-// one.
-func specVersion(t *testing.T, section, name string, pattern *regexp.Regexp) string {
+// specCapture extracts the value a pattern captures from a section of the
+// specification, and requires every occurrence of the pattern in that section
+// to capture the same one.
+func specCapture(t *testing.T, section, name string, pattern *regexp.Regexp) string {
 	t.Helper()
 
 	matches := pattern.FindAllStringSubmatch(section, -1)
 	if len(matches) == 0 {
-		t.Fatalf("SPEC/BUILD.md %s no longer names a version matching %s; "+
-			"this test cannot hold the workflows to a pin the specification does not state",
+		t.Fatalf("SPEC/BUILD.md %s no longer states anything matching %s; "+
+			"these tests cannot hold the workflows to a statement the specification does not make",
 			name, pattern)
 	}
-	version := matches[0][1]
+	value := matches[0][1]
 	for _, match := range matches[1:] {
-		if match[1] != version {
-			t.Fatalf("SPEC/BUILD.md %s names two different versions, %s and %s; "+
-				"§ Static Analysis requires one version per tool", name, version, match[1])
+		if match[1] != value {
+			t.Fatalf("SPEC/BUILD.md %s names two different values, %s and %s; "+
+				"§ Static Analysis requires one pin variable per tool", name, value, match[1])
 		}
 	}
-	return version
+	return value
 }
 
 // -----------------------------------------------------------------------------
@@ -1365,7 +1900,6 @@ func (g *gateJob) resolveGates(t *testing.T, facts specGates) map[string]int {
 		{gateFmt, facts.commands[gateFmt]},
 		{gateVet, facts.commands[gateVet]},
 		{gateSecurity, facts.commands[gateSecurity]},
-		{gateGosecInstall, facts.gosecInstall},
 	}
 	for _, want := range exact {
 		wanted := want.command
@@ -1373,14 +1907,20 @@ func (g *gateJob) resolveGates(t *testing.T, facts specGates) map[string]int {
 			found[want.gate] = g.commands[at].step
 			continue
 		}
-		if want.gate == gateGosecInstall {
-			continue // reported by the caller that cares about the pin
-		}
 		t.Errorf("%s: the %s gate is missing from job %q: no step runs %q. "+
 			"SPEC/BUILD.md § Validation Gates defines the six-gate set and § Where the Gate Set Is Enforced "+
 			"admits no per-pipeline exception — a `v*` tag must not publish a release unless every gate ran. "+
 			"Publishing a release with any gate absent is the defect this test exists to prevent.",
 			g.pipeline.rel(), want.gate, g.pipeline.gateJob, wanted)
+	}
+
+	// The gosec install step is located by the part of the specified command
+	// before its version placeholder, so it is found whatever version it names.
+	// TestWorkflowToolPinsMatchMakefile compares that version with the
+	// Makefile's pin, and reports a missing install.
+	installPrefix := facts.gosecInstall.prefix()
+	if at := g.find(func(cmd string) bool { return strings.HasPrefix(cmd, installPrefix) }); at >= 0 {
+		found[gateGosecInstall] = g.commands[at].step
 	}
 
 	// The test gate runs the local command widened with the race detector, and
@@ -1409,7 +1949,7 @@ func (g *gateJob) resolveGates(t *testing.T, facts specGates) map[string]int {
 	// pinned linter and runs `golangci-lint run ./...` itself (§ Permitted
 	// Differences Between the Three Pipelines).
 	for index, step := range g.job.steps {
-		if strings.HasPrefix(step.uses, "golangci/golangci-lint-action@") {
+		if strings.HasPrefix(step.uses, lintActionPrefix) {
 			found[gateLint] = index
 			break
 		}
@@ -1515,8 +2055,21 @@ func parseWorkflow(t *testing.T, path string) wfWorkflow {
 		t.Fatalf("reading the workflow %s: %v", strings.TrimPrefix(path, "../../"), err)
 	}
 
+	wf := parseWorkflowSource(string(raw), path)
+	if len(wf.jobs) == 0 {
+		t.Fatalf("%s: no jobs parsed. The workflow's layout changed in a way this reader does not "+
+			"understand, so it can no longer prove the gates run; fix the reader rather than the workflow",
+			strings.TrimPrefix(path, "../../"))
+	}
+	return wf
+}
+
+// parseWorkflowSource parses the text of a workflow; path names it in failure
+// messages. It is separate from parseWorkflow so that fixtures can be parsed by
+// the same reader as the real files.
+func parseWorkflowSource(src, path string) wfWorkflow {
 	wf := wfWorkflow{path: path, jobs: make(map[string]wfJob)}
-	for _, entry := range wfMapping(wfSplitLines(string(raw))) {
+	for _, entry := range wfMapping(wfSplitLines(src)) {
 		switch entry.key {
 		case "permissions":
 			wf.permissions = wfScalarMap(entry.body)
@@ -1540,12 +2093,6 @@ func parseWorkflow(t *testing.T, path string) wfWorkflow {
 				wf.jobOrder = append(wf.jobOrder, parsed.id)
 			}
 		}
-	}
-
-	if len(wf.jobs) == 0 {
-		t.Fatalf("%s: no jobs parsed. The workflow's layout changed in a way this reader does not "+
-			"understand, so it can no longer prove the gates run; fix the reader rather than the workflow",
-			strings.TrimPrefix(path, "../../"))
 	}
 	return wf
 }

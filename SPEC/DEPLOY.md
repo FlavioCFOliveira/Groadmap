@@ -788,8 +788,8 @@ Each release includes:
 
 ### Release Process
 - [ ] `govulncheck ./...` was run on the exact tree being released, and its output is available for the release record
-- [ ] No standard-library vulnerability reachable from Groadmap's own code is present at the released commit. Should one be found, the Go floor is raised to the release that fixes it, in both `go.mod` and `BUILD.md § Go Toolchain`, and `govulncheck ./...` re-run clean before the tag is created (see `VERSION.md § Pre-Release Vulnerability Check`)
-- [ ] The Go version in `go.mod` and the floor named in `BUILD.md § Go Toolchain` are the same version
+- [ ] No standard-library vulnerability reachable from Groadmap's own code is present at the released commit. Should one be found, the `go` directive of `go.mod` is raised to the release that fixes it, the advisory is recorded in `BUILD.md § Go Toolchain`, and `govulncheck ./...` re-run clean before the tag is created (see `VERSION.md § Pre-Release Vulnerability Check`)
+- [ ] The `go` directive of `go.mod` is not lower than any floor `BUILD.md § Go Toolchain` sets: the minimum Go version each required module declares, and the release that carries the fix for every reachable standard-library advisory
 - [ ] Any vulnerability reported but not called is recorded in the release notes rather than silently dropped
 - [ ] `govulncheck` is run as a release step only. It is not added to `make check`, to `.github/workflows/ci.yml`, or to `.github/workflows/release.yml`, and the gate set stays at the six gates of `BUILD.md § Validation Gates`
 - [ ] This specification documents no linker flag that the release workflow does not pass, and the release workflow passes no `-X` linker flag

@@ -965,7 +965,7 @@ differently:
 | What the report shows | What the release engineer does |
 |-----------------------|--------------------------------|
 | Nothing (`No vulnerabilities found`) | Continue to step 2 |
-| A standard-library vulnerability that **is called** | Stop. Raise the Go floor to the release that fixes it, as `BUILD.md § Go Toolchain` requires: set the `go` directive in `go.mod`, update `BUILD.md § Go Toolchain` to name the new floor and the advisories behind it, re-run `govulncheck ./...`, and continue only once it reports nothing. The release MUST NOT be published on the old floor |
+| A standard-library vulnerability that **is called** | Stop. Raise the Go floor to the release that fixes it, as `BUILD.md § Go Toolchain` requires: set the `go` directive in `go.mod` to that release, record the advisory behind it in `BUILD.md § Go Toolchain`, re-run `govulncheck ./...`, and continue only once it reports nothing. The release MUST NOT be published on the old floor |
 | A vulnerability outside the standard library that **is called** | Stop. Remediating it means changing a dependency, and the pins are governed by `BUILD.md § External Dependencies`, which forbids floating them casually. Refer the decision to the project owner, and do not publish the release while it is open |
 | A vulnerability that is reported but **not called** | Continue; it does not block the release. Record it in the release notes so the judgement is visible to whoever reads them |
 

@@ -35,7 +35,9 @@ jobs:
 
       # The linter binary is pinned, not just the action: an unpinned linter can
       # fail this job on a release nothing in the repository asked for. See
-      # SPEC/BUILD.md § Validation Gates.
+      # SPEC/BUILD.md § Validation Gates. The `version` input is a copy of the
+      # Makefile's GOLANGCI_LINT_VERSION, and the action pin is the same in both
+      # workflows (SPEC/BUILD.md § Static Analysis).
       - name: Run golangci-lint
         uses: golangci/golangci-lint-action@v9.3.0
         with:
@@ -52,11 +54,11 @@ jobs:
           files: ./coverage.out
           fail_ci_if_error: false
 
-      # gosec is pinned to the version SPEC/BUILD.md § Security Scan: gosec
-      # names, so the rule set, the scanned scope and the accepted #nosec
-      # suppressions are identical here, in the release workflow and in a local
-      # `make check`. A failure to install fails the job: the gate is never
-      # skipped.
+      # gosec is pinned to the Makefile's GOSEC_VERSION, of which this command
+      # holds a copy (SPEC/BUILD.md § Static Analysis), so the rule set, the
+      # scanned scope and the accepted #nosec suppressions are identical here,
+      # in the release workflow and in a local `make check`. A failure to
+      # install fails the job: the gate is never skipped.
       - name: Install gosec
         run: go install github.com/securego/gosec/v2/cmd/gosec@v2.28.0
 
