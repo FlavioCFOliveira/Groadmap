@@ -35,9 +35,9 @@ func TestHelpToken_ServedInEveryPosition(t *testing.T) {
 	f, cleanup := newArityFixture(t, "help-token-roadmap")
 	defer cleanup()
 
-	statsHelp := captureStdout(t, func() { invokeHelpPrinter(printStatsHelp) })
-	roadmapListHelp := captureStdout(t, func() { invokeHelpPrinter(printRoadmapListHelp) })
-	taskListHelp := captureStdout(t, func() { invokeHelpPrinter(printTaskListHelp) })
+	statsHelp := mustInvokeHelpPrinter(t, printStatsHelp)
+	roadmapListHelp := mustInvokeHelpPrinter(t, printRoadmapListHelp)
+	taskListHelp := mustInvokeHelpPrinter(t, printTaskListHelp)
 
 	cases := []struct {
 		label  string
@@ -128,7 +128,7 @@ func TestHelpToken_OnlyTheExactTokensAreHelp(t *testing.T) {
 	if err != nil {
 		t.Fatalf("stats -r <name> was refused: %v", err)
 	}
-	if strings.HasPrefix(stdout, "AI agents:") || !strings.Contains(stdout, `"average_velocity"`) {
+	if strings.Contains(stdout, AIBannerLine) || !strings.Contains(stdout, `"average_velocity"`) {
 		t.Errorf("stats -r <name> did not write the statistics report: %.160q", stdout)
 	}
 }

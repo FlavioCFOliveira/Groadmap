@@ -25,14 +25,20 @@ vet:
 # part. Each gate runs the binary its variable names, and only after checking
 # that binary's version against the pin below.
 #
-# The pins are the fourth copy SPEC/BUILD.md § Static Analysis names, beside the
-# tool's own section of that specification and the two workflows, and all four
-# MUST agree: TestMakefileToolPinsMatchSpec in cmd/rmp fails the test gate when
-# these differ from the specification. `override` keeps a command-line
-# assignment from replacing a pin, because nothing may disable the check.
+# These two variables are the authoritative tool pins SPEC/BUILD.md § Static
+# Analysis names; the specification does not restate their values. Each is
+# assigned exactly once, here. .github/workflows/ci.yml and
+# .github/workflows/release.yml hold copies -- the golangci-lint action's
+# `version` input and the version in the gosec install command -- and every copy
+# MUST equal the value below: TestWorkflowToolPinsMatchMakefile in cmd/rmp fails
+# the test gate when one differs, and TestMakefileAssignsEachToolPinOnce fails it
+# when a variable is not assigned exactly once. Raising a pin therefore updates
+# this file and both workflows in the same commit. `override` keeps a value given
+# on the make command line or in the environment from replacing a pin, because
+# nothing may disable the check.
 #
-# install: go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.13.1
-# install: go install github.com/securego/gosec/v2/cmd/gosec@v2.28.0
+# install: go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION)
+# install: go install github.com/securego/gosec/v2/cmd/gosec@$(GOSEC_VERSION)
 # The linter's module path needs the /v2 suffix -- a v1 binary cannot read
 # .golangci.yml (version: "2").
 override GOLANGCI_LINT_VERSION := v2.13.1
@@ -81,11 +87,11 @@ case "$${found#v}" in \
 	[[:digit:]]*) \
 		if [ "$${found#v}" != "$${pin#v}" ]; then \
 			case "$$found" in v*) ;; *) found="v$$found" ;; esac; \
-			printf '%s\n' "$(1) at $$path is version $$found, but SPEC/BUILD.md pins $$pin. Install $(1) $$pin, or name a binary of it with $(2)=<path>." >&2; \
+			printf '%s\n' "$(1) at $$path is version $$found, but the Makefile pins $$pin. Install $(1) $$pin, or name a binary of it with $(2)=<path>." >&2; \
 			exit 1; \
 		fi ;; \
 	*) \
-		printf '%s\n' "$(1) at $$path has no readable version, but SPEC/BUILD.md pins $$pin. Install $(1) $$pin, or name a binary of it with $(2)=<path>." >&2; \
+		printf '%s\n' "$(1) at $$path has no readable version, but the Makefile pins $$pin. Install $(1) $$pin, or name a binary of it with $(2)=<path>." >&2; \
 		exit 1 ;; \
 esac
 endef

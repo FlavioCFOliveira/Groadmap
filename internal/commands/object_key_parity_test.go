@@ -542,12 +542,12 @@ func TestPublishedKeyLists_CoverEveryHelpThatPublishesOne(t *testing.T) {
 	}
 }
 
-// helpBody strips the AI agent banner so that a help printed on its own and the
-// same help printed through the registry compare equal. The banner is prepended
-// by the dispatch path, not by the printers, so it is the one difference between
-// the two ways of obtaining the same page.
+// helpBody strips the AI agent banner line so that a help printed on its own and
+// the same help printed through the registry compare equal. The banner is
+// inserted by the dispatch path, not by the printers, so it is the one
+// difference between the two ways of obtaining the same page.
 func helpBody(help string) string {
-	return strings.TrimSpace(strings.ReplaceAll(help, AIBannerLine, ""))
+	return strings.TrimSpace(removeAIBannerLine(help))
 }
 
 // namedKeyList matches the phrases a help output uses to introduce a key set it

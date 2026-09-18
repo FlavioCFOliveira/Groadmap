@@ -5,6 +5,123 @@ All notable changes to **Groadmap** (`rmp`) are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.17.3] - 2026-09-18
+
+### Changed - BREAKING
+
+- **The plain-text help changes shape, and the AI-agent sentence changes both its
+  wording and its position.** The change reaches the global help, every family
+  help, every subcommand help, the leaf helps, and the hint written to stderr
+  after a failed invocation.
+  - **The sentence gains the word `usage`.** It now reads:
+
+    ```
+    AI agents usage: run `rmp --ai-help` for a machine-readable command contract.
+    ```
+
+    `1.17.2` opened it `AI agents:` where it now opens `AI agents usage:`. The
+    remainder of the sentence is unchanged.
+  - **It no longer opens the help.** It now sits on the line immediately after
+    each help's `Usage:` line. Under `1.17.2` it was the first line written, at
+    every level, followed by a blank line.
+  - **The global help opens with its versioned title:**
+    `Groadmap v1.17.3 - A CLI tool for managing technical roadmaps`. Under
+    `1.17.2` the first line was the AI-agent line, and the title two lines below
+    it read `Groadmap - A CLI tool for managing technical roadmaps`, carrying no
+    version. Only the global help carries a title; a family help and a
+    subcommand help still open with their `Usage:` line.
+  - **The stderr error hint carries the new sentence** in its unchanged position,
+    at the end of the failure report.
+  - **The recovery help written to stderr after a dispatch failure is the stdout
+    help minus that one line.** It omits the sentence because the failure report
+    already ends with the hint that carries it, and printing both would put the
+    same sentence on stderr twice.
+  - **Unchanged:** the output of `rmp --version`, `rmp -v`, `rmp version` and
+    `rmp --ai-help`, byte for byte. Every exit code. The wording of every other
+    help line. No command, subcommand or flag was added or removed.
+  - **The test to apply:** you are unaffected unless a program matches the first
+    line of a help, matches the old sentence, which opened `AI agents:`, or depends
+    on the line offset at which a help's content begins.
+
+### Changed - dependencies
+
+| Module | `1.17.2` | `1.17.3` | Note |
+|---|---|---|---|
+| `github.com/FlavioCFOliveira/GoGraph` | `v0.14.2` | `v0.15.0` | A pre-1.0 `MINOR` release. `go.sum` records the new checksums. No source change was required, and every gate and the full end-to-end suite pass at the new pin |
+
+  The Go floor stays at `1.27.0`, and the tool pins stay at
+  `golangci-lint v2.13.1` and `gosec v2.28.0`.
+
+### Internal
+
+These change no output of the binary.
+
+- **The specification no longer names a version of anything the build consumes.**
+  `SPEC/` used to carry the version of each Go module, of the Go toolchain, and of
+  `golangci-lint`, `gosec` and `golangci-lint-action`, so every upgrade had to
+  edit the specification in the same commit. The authorities are now single and
+  executable:
+  - `go.mod` is the single source of the module versions and of the toolchain
+    floor;
+  - the `Makefile` variables `GOLANGCI_LINT_VERSION` and `GOSEC_VERSION` are the
+    authoritative tool pins, with copies in `.github/workflows/ci.yml` and
+    `.github/workflows/release.yml` that the `test` gate holds equal to them.
+
+  Raising a tool pin therefore means editing the `Makefile` and both workflows in
+  one commit; the `test` gate fails when a copy is left behind. Raising a module
+  or the toolchain touches `go.mod` alone.
+- **The Local Tool Resolution failure lines name the Makefile.** Each now reads
+  `... but the Makefile pins {pin}` where it used to name the specification.
+- **The gate tests were renamed and widened.** `TestWorkflowToolPinsMatchMakefile`
+  and `TestMakefileAssignsEachToolPinOnce` replace the tests that compared the
+  pins with `SPEC/BUILD.md`, `TestWorkflowsNameTheSameLintActionPin` is new, and
+  three fixture tests were added.
+
+### Known Issues
+
+- **The CI workflow's `test` step on `main` times out at 30 minutes.** It did so
+  for release `1.17.2`, in
+  `TestClientNFC_AgreesWithTheModuleOnEveryInteractingPair` run under `-race
+  -coverprofile`, and the same is expected for this tag. The Release workflow —
+  the one that builds the binaries and publishes the release — runs the tests
+  without coverage and passes, so the published artefacts are unaffected. Work to
+  move that sweep and other heavy tests behind a `heavy` build tag is in progress
+  and is **not** part of this release.
+- **`modernc.org/libc` is a later release than `modernc.org/sqlite` requires**
+  (`v1.76.0` against the `v1.75.7` that `modernc.org/sqlite v1.59.0` declares).
+  The project accepts the risk deliberately (`SPEC/BUILD.md § SQLite Driver
+  Rules`). Unchanged from `1.17.2`.
+- **`SPEC/DEPLOY.md § Release Checklist` still lists "Documentation updated
+  (`SPEC/VERSION.md`, `SPEC/README.md`)".** The specification carries no version
+  state, and this release changes neither file. Unchanged from `1.17.2`.
+- The remaining engine and CLI items published under **Known Issues** in
+  `release-notes/v1.17.2-20260916.md` were not re-verified on this tree. Nothing
+  in this release touches the code behind them.
+
+### Notes
+
+- **Why this is `1.17.3`, and what the number does not tell you.** A strict
+  reading of Semantic Versioning 2.0.0 gives `MAJOR`. The item under **Changed -
+  BREAKING** changes lines that `1.17.2` produced on stdout and on stderr, and
+  that is not a backward-compatible bug fix, which is all a `PATCH` may contain.
+
+- **The number is the owner's decision, against the strict `2.0.0` reading.** The
+  project publishes `1.17.3` by the owner's explicit decision, taken on 2026-09-18
+  and recorded here. It follows the same decision taken for `1.17.2`, and is the
+  eighth consecutive release published under a smaller digit than the strict
+  reading gives.
+
+  **So do not read the patch digit as a promise that nothing breaks.** The test
+  to apply is short: **upgrading is safe unless a program of yours reads the
+  plain-text help or the stderr hint** — matching a help's first line, matching
+  the old `AI agents:` opening, or depending on where a help's content
+  starts. Everything a machine is meant to read — `rmp --ai-help`, the JSON on
+  stdout, the exit codes — is unchanged.
+
+- **There is no database migration.** The SQLite schema version is unchanged at
+  `1.14.0`. GoGraph `v0.15.0` required no source change, and a store written by
+  `1.17.2` opens unchanged.
+
 ## [1.17.2] - 2026-09-16
 
 ### Changed - BREAKING
@@ -3753,6 +3870,7 @@ behaviour.
   AI-contract E2E suite (`tests/test_30_aihelp_contract.py`) to lock in the
   revised help text and contract invariants.
 
+[1.17.3]: https://github.com/FlavioCFOliveira/Groadmap/compare/v1.17.2...v1.17.3
 [1.17.2]: https://github.com/FlavioCFOliveira/Groadmap/compare/v1.17.1...v1.17.2
 [1.17.1]: https://github.com/FlavioCFOliveira/Groadmap/compare/v1.17.0...v1.17.1
 [1.17.0]: https://github.com/FlavioCFOliveira/Groadmap/compare/v1.16.0...v1.17.0

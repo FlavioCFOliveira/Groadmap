@@ -106,7 +106,7 @@ GRAPH_CLIENT_HINT = " (graph queries use --query or stdin)"
 
 # The AI-agent hint that closes stderr on every failing invocation
 # (SPEC/HELP.md § Stderr part order, part 4).
-AI_HINT = "AI agents: run `rmp --ai-help` for a machine-readable command contract."
+AI_HINT = "AI agents usage: run `rmp --ai-help` for a machine-readable command contract."
 
 # The roadmap-selection refusal that PRECEDES the stray-token one
 # (SPEC/COMMANDS.md; the angle brackets are literal characters the binary

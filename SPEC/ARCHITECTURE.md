@@ -479,12 +479,13 @@ Each package implements:
   `COMMANDS.md § Graph Management`; the result JSON is in
   `DATA_FORMATS.md § Graph Query Result`.
 
-**External dependency note.** GoGraph requires Go 1.26 and is consumed at the exact
-tag **v0.14.2**. Because v0.14.2 is a v0 (pre-1.0) version,
-it is consumable directly at the bare module path and `go.mod` pins the clean exact tag
-`v0.14.2`. GoGraph MUST be pinned to an exact version in `go.mod`. The risk analysis and
-required mitigations are in `GRAPH.md § Dependency Maturity Risk`; the toolchain and
-pinning requirements are in `BUILD.md § Go Toolchain`.
+**External dependency note.** GoGraph declares a minimum Go version of its own and
+is consumed at a pre-1.0 (`v0.y.z`) tag. Because that is a `v0` version, it is
+consumable directly at the bare module path, and `go.mod` pins a clean exact tag.
+GoGraph MUST be pinned to an exact version in `go.mod`, which is the only place that
+version is written. The risk analysis and required mitigations are in
+`GRAPH.md § Dependency Maturity Risk`; the toolchain and pinning requirements are in
+`BUILD.md § Go Toolchain`.
 
 ### 7. internal/web/ and the embedded HTTP server
 
@@ -767,7 +768,7 @@ Error: resource not found: task 999 not found
 $ rmp task create -r project1
 Error: required parameter missing: --title
 
-AI agents: run `rmp --ai-help` for a machine-readable command contract.
+AI agents usage: run `rmp --ai-help` for a machine-readable command contract.
 ```
 
 **Example - Dispatch failure (family help follows the error, exit code 127):**
@@ -778,7 +779,7 @@ Error: unknown task subcommand: nadadisto
 Usage: rmp task <subcommand> [options]
 ...the remainder of the family help body...
 
-AI agents: run `rmp --ai-help` for a machine-readable command contract.
+AI agents usage: run `rmp --ai-help` for a machine-readable command contract.
 ```
 
 ### Error Reuse Policy (Mandatory)

@@ -3,7 +3,7 @@ module github.com/FlavioCFOliveira/Groadmap
 go 1.27.0
 
 require (
-	github.com/FlavioCFOliveira/GoGraph v0.14.2
+	github.com/FlavioCFOliveira/GoGraph v0.15.0
 	golang.org/x/sys v0.48.0
 	golang.org/x/text v0.42.0
 	modernc.org/sqlite v1.59.0

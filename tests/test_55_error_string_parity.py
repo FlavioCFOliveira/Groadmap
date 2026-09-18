@@ -37,7 +37,7 @@ Extraction recognises three loci a file uses to publish a string:
      double-quoted string (`` `"..."` ``) unwraps the outer literal quotes,
      because those quotes are the author's markup, not stderr's own.
   2. Fenced code blocks: a line containing "Error:". A line of a fenced JSON
-     document, such as `"stderr": "Error: ...\\n\\nAI agents: ..."`, publishes the
+     document, such as `"stderr": "Error: ...\\n\\nAI agents usage: ..."`, publishes the
      JSON string's decoded value up to its first newline, which is the line the
      user reads.
   3. Prose: every paragraph outside tables and fences, its line breaks joined,
@@ -4338,7 +4338,7 @@ class TestErrorStringParity:
         assert files_publishing_error_strings(texts) == {"PROSE.md", "TABLE.md"}
 
         # Fenced JSON publishes the decoded value up to its first newline.
-        fence = '```json\n  "stderr": "Error: required parameter missing: --title\\n\\nAI agents: run it",\n```\n'
+        fence = '```json\n  "stderr": "Error: required parameter missing: --title\\n\\nAI agents usage: run it",\n```\n'
         assert list(extract_fenced_corpus(fence)) == ["Error: required parameter missing: --title"]
 
     def test_published_stderr_rows_carry_the_error_prefix(self):

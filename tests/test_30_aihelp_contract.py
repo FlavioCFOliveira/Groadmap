@@ -18,8 +18,9 @@ Scenarios:
   UTF-8 encoding.
 - All 6 canonical workflows and all 12 canonical pitfalls present
   with required subfields.
-- --help banner: first line is the SPEC literal across root, family,
-  and subcommand help; banner NOT present in --ai-help JSON.
+- --help banner: the SPEC literal on the line after the Usage: line
+  across root, family, and subcommand help, never the first line;
+  banner NOT present in --ai-help JSON.
 - AI_AGENT env var: hint prepended on success; absent when unset;
   absent when value is anything other than the literal "1".
 - Error-path hint appended on every error; not appended on success;
@@ -46,7 +47,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from tests.base_test import GroadmapTestBase
 
 
-HINT_LINE = "AI agents: run `rmp --ai-help` for a machine-readable command contract."
+HINT_LINE = "AI agents usage: run `rmp --ai-help` for a machine-readable command contract."
 
 # Task-status words inside published prose, and the sentence boundary used to
 # read them. The semicolon matters: a clause joined that way carries its own
@@ -296,8 +297,22 @@ class TestAIHelpScopeFiltering:
         print("✓ schema_version identical across all scopes")
 
 
+def _line_after_usage(text):
+    """Return (index of the single Usage: line, the line after it).
+
+    Fails unless the help carries exactly one line beginning with "Usage:".
+    """
+    lines = text.split("\n")
+    usage = [i for i, line in enumerate(lines) if line.startswith("Usage:")]
+    assert len(usage) == 1, f"want exactly one Usage: line, got {usage}: {text[:300]!r}"
+    u = usage[0]
+    assert len(lines) > u + 2, f"help ends right after its Usage: line: {text[:300]!r}"
+    assert lines[u + 2] == "", f"the line after the banner must be blank; got {lines[u + 2]!r}"
+    return u, lines[u + 1]
+
+
 class TestAIHelpHelpBanner:
-    """The --help banner is a leading line on every help output."""
+    """The --help banner follows the Usage: line of every help output."""
 
     def setup_method(self):
         self.test = GroadmapTestBase()
@@ -307,23 +322,33 @@ class TestAIHelpHelpBanner:
     def teardown_method(self):
         self.test.teardown()
 
-    def test_root_help_first_line_is_banner(self):
+    def test_root_help_banner_is_fourth_line(self):
         _, out, _ = _run_raw(self.cli, ["--help"])
-        first = out.decode("utf-8").splitlines()[0]
-        assert first == HINT_LINE, f"root --help first line: {first!r}"
-        print("✓ rmp --help first line is SPEC banner")
+        text = out.decode("utf-8")
+        usage, after = _line_after_usage(text)
+        assert usage == 2, f"root --help: the Usage: line is line {usage + 1}, want line 3"
+        assert after == HINT_LINE, f"root --help line 4: {after!r}"
+        assert text.splitlines()[0] != HINT_LINE, "root --help must not open with the banner"
+        assert text.count(HINT_LINE) == 1, "root --help must carry the banner exactly once"
+        print("✓ rmp --help line 4 is the SPEC banner, after the Usage: line")
 
-    def test_family_help_first_line_is_banner(self):
+    def test_family_help_banner_is_second_line(self):
         _, out, _ = _run_raw(self.cli, ["task", "--help"])
-        first = out.decode("utf-8").splitlines()[0]
-        assert first == HINT_LINE, f"task --help first line: {first!r}"
-        print("✓ rmp task --help first line is SPEC banner")
+        text = out.decode("utf-8")
+        usage, after = _line_after_usage(text)
+        assert usage == 0, f"task --help: the Usage: line is line {usage + 1}, want line 1"
+        assert after == HINT_LINE, f"task --help line 2: {after!r}"
+        assert text.count(HINT_LINE) == 1, "task --help must carry the banner exactly once"
+        print("✓ rmp task --help line 2 is the SPEC banner, after the Usage: line")
 
-    def test_subcommand_help_first_line_is_banner(self):
+    def test_subcommand_help_banner_is_second_line(self):
         _, out, _ = _run_raw(self.cli, ["task", "create", "--help"])
-        first = out.decode("utf-8").splitlines()[0]
-        assert first == HINT_LINE, f"task create --help first line: {first!r}"
-        print("✓ rmp task create --help first line is SPEC banner")
+        text = out.decode("utf-8")
+        usage, after = _line_after_usage(text)
+        assert usage == 0, f"task create --help: the Usage: line is line {usage + 1}, want line 1"
+        assert after == HINT_LINE, f"task create --help line 2: {after!r}"
+        assert text.count(HINT_LINE) == 1, "task create --help must carry the banner exactly once"
+        print("✓ rmp task create --help line 2 is the SPEC banner, after the Usage: line")
 
     def test_banner_absent_from_ai_help_json(self):
         _, out, _ = _run_raw(self.cli, ["--ai-help"])

@@ -287,8 +287,8 @@ func TestDispatchFailure_RecoveryHelpIsTheInvokedLevelsHelp(t *testing.T) {
 
 // TestDispatchFailure_RecoveryHelpCarriesNoAIBanner is the guard on the
 // trap this change was most likely to fall into. Every --help body on
-// stdout opens with the AI-agent banner, and the banner sentence is
-// character-for-character the trailing hint. Reusing the stdout help
+// stdout carries the AI-agent banner after its Usage: line, and the
+// banner sentence is character-for-character the trailing hint. Reusing the stdout help
 // path for the recovery help would emit that sentence twice on stderr —
 // which is precisely the duplication the old `rmp nadadisto` produced
 // across its two streams (SPEC/HELP.md § Recovery help after a dispatch
@@ -523,11 +523,12 @@ func TestDispatchFailure_AIHelpScopeSelectorStaysExit2(t *testing.T) {
 // (SPEC/HELP.md § Stdout silence on failure).
 func TestDispatchFailure_HelpRequestsRemainOnStdout(t *testing.T) {
 	// `rmp` with no arguments, and `rmp --help`, both route to printHelp.
-	streams := captureStreams(t, printHelp)
-	if !strings.HasPrefix(streams.stdout, commands.AIBannerLine) {
-		t.Errorf("global help must still open with the AI-agent banner on stdout; got:\n%s",
-			truncate(streams.stdout))
+	var helpErr error
+	streams := captureStreams(t, func() { helpErr = printHelp() })
+	if helpErr != nil {
+		t.Errorf("global help returned %v, want nil", helpErr)
 	}
+	assertBannerFollowsUsage(t, "rmp --help", streams.stdout)
 	if !strings.Contains(streams.stdout, "Usage: rmp [command] [subcommand] [arguments] [options]") {
 		t.Errorf("global help lost its usage line; stdout:\n%s", truncate(streams.stdout))
 	}
@@ -547,10 +548,7 @@ func TestDispatchFailure_HelpRequestsRemainOnStdout(t *testing.T) {
 			if err != nil {
 				t.Errorf("%s: returned %v, want nil", label, err)
 			}
-			if !strings.HasPrefix(s.stdout, commands.AIBannerLine) {
-				t.Errorf("%s: family help must open with the AI-agent banner on stdout; got:\n%s",
-					label, truncate(s.stdout))
-			}
+			assertBannerFollowsUsage(t, label, s.stdout)
 			if s.stderr != "" {
 				t.Errorf("%s: wrote %d bytes to stderr, want zero: %q",
 					label, len(s.stderr), truncate(s.stderr))

@@ -171,16 +171,39 @@ where a command or a subcommand name is expected, as in `rmp --help=1` or
 
 To make the machine-readable contract discoverable to LLM agents that
 first reach for the plain-text help, every plain-text help printer
-emits the following banner as its **first line**, followed by exactly
-one blank line, followed by the existing help body:
+emits the following line, the **AI agent banner**:
 
 ```
-AI agents: run `rmp --ai-help` for a machine-readable command contract.
+AI agents usage: run `rmp --ai-help` for a machine-readable command contract.
 ```
 
 The banner is mandatory and identical across all three help levels
 (global, family, subcommand). It is the literal string above, with
-backticks, with no surrounding decoration.
+backticks, with no surrounding decoration. It is the same sentence as
+the AI-agent hint written to stderr (`§ Stderr part order`,
+`§ AI_AGENT environment variable`).
+
+**Placement.** At every help level, the banner is the line immediately
+after the help's `Usage:` line, with no blank line between the two. The
+blank line that follows the `Usage:` line follows the banner instead,
+and no other line of the help moves:
+
+- In a family help and in a subcommand help, which open with their
+  `Usage:` line, the banner is the second line.
+- In the global help, whose `Usage:` line follows the title and the
+  blank line after it, the banner is the fourth line
+  (`§ Help structure template`).
+
+The banner is never the first line of a help, and no blank line
+precedes it. The placement is defined at every level because every help
+carries exactly one `Usage:` line, written on one line. A family help:
+
+```
+Usage: rmp task [command] [arguments] [options]
+AI agents usage: run `rmp --ai-help` for a machine-readable command contract.
+
+Valid status values (for --status filter and 'stat' setter):
+```
 
 The banner is **not** printed when:
 
@@ -196,7 +219,9 @@ order:
 
 1. `Usage: rmp ...` — one line, with positional argument names spelled
    semantically (`<task-ids>`, `<sprint-id>`, `<new-status>`, not
-   `<id>`).
+   `<id>`), followed on the next line by the AI agent banner
+   (`§ AI agent banner`). The help opens with the `Usage:` line, and the
+   blank line that ends this block follows the banner.
 2. **Description / context** — one paragraph for family helps, one
    sentence for subcommands.
 3. **Valid values** *(when applicable)* — explicit enumeration of any
@@ -233,10 +258,35 @@ order:
 9. **Examples** — two to four worked examples that cover the common
    paths (filter, mutate, error-recovery).
 
+**Only the global help carries a title.** The global help, which
+`rmp --help`, `rmp -h`, `rmp help`, and `rmp` with no arguments write,
+opens with these four lines, followed by one blank line and the rest of
+its body:
+
+```
+Groadmap v<version> - A CLI tool for managing technical roadmaps
+
+Usage: rmp [command] [subcommand] [arguments] [options]
+AI agents usage: run `rmp --ai-help` for a machine-readable command contract.
+```
+
+`<version>` is the application version constant: the value
+`COMMANDS.md § Version` names `<version>` on the line `rmp --version`
+writes, and the value the AI Agent Contract publishes as
+`tool.binary_version` (`DATA_FORMATS.md § AI Agent Contract`). The title
+writes it immediately after a lower-case `v`, and carries the version
+alone, without the build identification that follows it on the
+`rmp --version` line. A binary whose version is `1.17.2` therefore opens
+its global help with
+`Groadmap v1.17.2 - A CLI tool for managing technical roadmaps`. A family
+help and a subcommand help carry no title: each opens with its `Usage:`
+line.
+
 ## Family-help template
 
 ```
 Usage: rmp <family> [command] [arguments] [options]
+AI agents usage: run `rmp --ai-help` for a machine-readable command contract.
 
 <one-paragraph description>
 
@@ -281,6 +331,7 @@ Examples:
 
 ```
 Usage: rmp <family> <subcommand> -r <roadmap> <positional-args> [options]
+AI agents usage: run `rmp --ai-help` for a machine-readable command contract.
 
 <one-sentence description, optionally a comparison paragraph for
 commands easily confused with siblings (e.g. task list vs sprint
@@ -900,6 +951,7 @@ The skeleton (illustrative; the canonical contract is
 
 ```
 Usage: rmp web [options]
+AI agents usage: run `rmp --ai-help` for a machine-readable command contract.
 
 Start a web interface for the roadmaps under ~/.roadmaps/. The browser
 lists every roadmap and lets you view its tasks, sprints, and knowledge
@@ -977,9 +1029,16 @@ order:
 | 3 | One blank line, then the recovery help | Only on a dispatch failure. See `Recovery help after a dispatch failure` below |
 | 4 | One blank line, then the AI-agent hint line | On every failing invocation, unless a suppression rule below applies |
 
-Parts 1 and 4 carry the same sentence, and they are never both present
-in the same invocation: the deduplication rule in
-`AI_AGENT environment variable` keeps the reader's count at exactly one.
+Parts 1 and 4 carry the same sentence, the sentence of the AI agent
+banner (`§ AI agent banner`):
+
+```
+AI agents usage: run `rmp --ai-help` for a machine-readable command contract.
+```
+
+The two parts are never both present in the same invocation: the
+deduplication rule in `AI_AGENT environment variable` keeps the reader's
+count at exactly one.
 
 ### Recovery help after a dispatch failure
 
@@ -1005,10 +1064,16 @@ so the reader is shown the list of names that would have worked:
 | Unresolved command | The global help body, that is, the body `rmp --help` prints |
 | Unresolved subcommand | The family help body of the command that did resolve, that is, the body `rmp <command> --help` prints |
 
-The recovery help omits the AI-agent banner that opens the same body on
-stdout (see `AI agent banner`), together with the blank line that
-follows the banner. The banner and the hint carry the same sentence, and
-the invocation already ends with the hint.
+The recovery help is that body with exactly one line removed: the AI
+agent banner, which follows the body's `Usage:` line on stdout
+(`§ AI agent banner`). No other line is removed and no line is added, so
+the blank line that follows the banner on stdout follows the `Usage:`
+line in the recovery help. The banner and the hint carry the same
+sentence, and the invocation already ends with the hint. The recovery
+help for an unresolved command therefore opens with the title line of
+the global help (`§ Help structure template`), and the recovery help for
+an unresolved subcommand opens with the `Usage:` line of the family
+help.
 
 No other error class appends help. A missing required parameter, an
 unknown flag, an invalid enum value, an out-of-range value, a rejected
@@ -1083,7 +1148,7 @@ A missing required parameter: error line and hint, no help, exit code 2.
 $ rmp task create -r myproject
 Error: required parameter missing: --title
 
-AI agents: run `rmp --ai-help` for a machine-readable command contract.
+AI agents usage: run `rmp --ai-help` for a machine-readable command contract.
 ```
 
 An unresolved subcommand: error line, family help, hint, exit code 127.
@@ -1099,7 +1164,7 @@ Subcommands:
   create, new      Create a task
   ...the remainder of the family help body...
 
-AI agents: run `rmp --ai-help` for a machine-readable command contract.
+AI agents usage: run `rmp --ai-help` for a machine-readable command contract.
 ```
 
 An unresolved command: error line, global help, hint, exit code 127.
@@ -1108,13 +1173,18 @@ An unresolved command: error line, global help, hint, exit code 127.
 $ rmp nadadisto
 Error: unknown command: nadadisto
 
-Groadmap - A CLI tool for managing technical roadmaps
+Groadmap v<version> - A CLI tool for managing technical roadmaps
 
 Usage: rmp [command] [subcommand] [arguments] [options]
+
   ...the remainder of the global help body...
 
-AI agents: run `rmp --ai-help` for a machine-readable command contract.
+AI agents usage: run `rmp --ai-help` for a machine-readable command contract.
 ```
+
+In both recovery helps above, the line after `Usage:` is blank: the AI
+agent banner that follows the `Usage:` line on stdout is the one line the
+recovery help removes (`§ Recovery help after a dispatch failure`).
 
 ## AI_AGENT environment variable
 
@@ -1123,7 +1193,7 @@ the CLI emits the AI-agent hint to stderr **before** any other output on
 every invocation:
 
 ```
-AI agents: run `rmp --ai-help` for a machine-readable command contract.
+AI agents usage: run `rmp --ai-help` for a machine-readable command contract.
 ```
 
 ### Ordering
@@ -1134,7 +1204,7 @@ line on failure paths, diagnostic output, etc.) is written after that
 blank line. The ordering is the same on success and on failure:
 
 ```
-AI agents: run `rmp --ai-help` for a machine-readable command contract.
+AI agents usage: run `rmp --ai-help` for a machine-readable command contract.
 <blank line>
 <remaining stderr, if any>
 ```
