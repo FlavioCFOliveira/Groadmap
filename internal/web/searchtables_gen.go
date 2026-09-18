@@ -429,8 +429,9 @@ func combiningClassSpans() []classSpan {
 // decomposition is two characters, the first of them a starter, that Unicode does
 // not exclude from composition.
 //
-// It re-expresses internal/web/fold.go's buildSearchComposition step for step,
-// down to reading the exclusion from the Full_Composition_Exclusion property —
+// It re-expresses unicodenorm.BuildComposition step for step — the derivation
+// internal/web/fold.go's searchCompositions memoises — down to reading the
+// exclusion from the Full_Composition_Exclusion property —
 // which is DATA and not the composing transform — and to entering only
 // COMPOSABLE code points into the prefix lookup, so that U+01FA pairs with U+00C5
 // rather than with the canonically equivalent but excluded U+212B. Like that

@@ -613,37 +613,38 @@ work with an explicit time budget.
    leaves on disk. Every surface reads one declaration, so the value cannot drift
    between them, and changing it here changes it for `rmp graph client` too.
 
-   **The value is justified against real graphs, because it has to carry the CLI
-   as well.** On a small store a three-way Cartesian product spent 1.32 seconds of
-   server time over 252 nodes to return a single aggregate row. That store is not
-   the scale at which the budget has to be generous, so the value is justified
-   against the largest real knowledge graph on the development machine as well,
-   44,906 nodes in 36 MB: the statement part of every realistic query and
-   every realistic write measured between **0 and 554 ms** there, and between
-   **6 and 870 ms** on a synthetic graph of 400,000 nodes in 122 MB. Five seconds
-   therefore clears the slowest realistic statement measured by roughly **5.7x**,
-   and graph growth puts the budget under no pressure — what growth does put under
-   pressure is the lock's fixed-part allowance, which
-   `GRAPH.md § Lock Contention` measures and bounds.
+   **The value is chosen to carry the CLI as well as this endpoint, and it is
+   stated as a decision rather than as a margin over a timing.** No figure is
+   published for what a statement costs: this project keeps no
+   performance-measurement tests, so nothing would re-derive such a figure and
+   nothing would catch it going stale
+   (`BUILD.md § No Benchmarks and No Performance-Measurement Tests`). What the
+   value rests on is the separation it produces, and that separation is a
+   classification of query **shapes** rather than a comparison of durations:
 
-   **What the budget cuts is measured too, and it is two query shapes.** On the
-   same 36 MB graph, whose store open alone costs 962 ms, an unbounded whole-graph
-   traversal (`MATCH (a)-[*1..3]->(b) RETURN count(*)`) costs **10.08 s** end to
-   end, and a Cartesian product over 325 million tuples costs **14.05 s**; a
-   three-way Cartesian product over 9.4 billion tuples had not finished after 300
-   seconds, and no finite budget admits it. Nothing else measured comes near five
-   seconds. A statement of either shape is narrowed rather than waited on: the
-   same traversal restricted to a label and a relationship type costs 1.52 s end
-   to end, a **554 ms** statement.
+   - **Inside the budget**: every realistic read and every realistic write against
+     a real knowledge graph, including the largest this product is used against.
+     Growth of the graph puts the budget under no pressure. What growth does put
+     under pressure is the lock's fixed-part allowance, which
+     `GRAPH.md § Lock Contention` is canonical for.
+   - **Cut by the budget**: the unbounded shapes, and there are two of them — a
+     whole-graph variable-length traversal (`MATCH (a)-[*1..3]->(b) RETURN count(*)`)
+     and a multi-way Cartesian product. The second admits no finite budget at all
+     on a graph of any size. Nothing between the two classes is close to the
+     boundary.
+   - **The remedy is narrowing, and it works**: the same traversal restricted to a
+     label and a relationship type completes and returns its row, where the
+     untargeted one is cut. That one succeeds and the other fails is the
+     observable, and it is what a check asserts here.
 
    The value sits well below the 30-second `WriteTimeout`, so a query the budget
    cuts while it is **reading** is cancelled, and its failure is rendered, while
    the response can still be written. A query the budget cuts while it is
    **writing** is not: the engine's rollback runs past the deadline by a factor
-   the statement itself sets, and the longest such run measured, 35.6 seconds,
-   exceeds the `WriteTimeout` on its own.
-   `GRAPH.md § Statement Time Budget` measures that overrun and is canonical for
-   it, and `GRAPH.md § Lock Contention` states what it costs the invariant below;
+   the statement itself sets, for which no ceiling is established, and it can
+   exceed the `WriteTimeout` on its own.
+   `GRAPH.md § Statement Time Budget` is canonical for that overrun, and
+   `GRAPH.md § Lock Contention` states what it costs the invariant below;
    neither is restated here. The budget is additionally the quantity the graph
    store lock's bounded wait is derived from, because a waiter has to know how
    long a hold may lawfully last and the hold spans the statement (see
@@ -705,9 +706,11 @@ work with an explicit time budget.
    Exhausting the budget never terminates the process: the server keeps serving.
 6. **Ordinary queries are unaffected.** A query that completes within the budget
    is served exactly as it was served before the budget existed: the same nodes
-   and edges, in the same response shape, with nothing truncated, no ordering
-   changed, and no latency added. The budget is observable only to a query that
-   would otherwise have run for longer than it.
+   and edges, in the same response shape, with nothing truncated and no ordering
+   changed. The requirement is on the **response**, which is compared, and not on
+   how long the request took, which is not
+   (`BUILD.md § No Benchmarks and No Performance-Measurement Tests`). The budget
+   is observable only to a query that would otherwise have run for longer than it.
 7. **Per request, and a cancelled statement commits nothing it had not already
    committed.** Each graph data request gets its own budget; requests do not share
    one, and one request's budget is unaffected by any other request in flight. A
@@ -735,19 +738,19 @@ work with an explicit time budget.
    is untouched either way (see
    `GRAPH.md § What a Statement That Writes Nothing Changes on Disk`).
 
-   **The measured figure is a baseline taken on this surface and not a cost it
-   bears now, and which it is has to be said rather than inferred.** One statement
-   the budget cut while it was writing reached **3088 MB** in `rmp web` against a
-   23 MB baseline, and all 3088 MB were still resident 130 seconds later, because
-   an otherwise idle process triggers no collection; that request received an empty
-   reply after 39.5 seconds, the `WriteTimeout` closing the connection while the
-   statement was still inside the engine call. Both observations were taken while
-   `rmp web` executed a statement in its own process, which it does not do: a
-   request today reaches neither state, because the endpoint's backstop fires at
-   7.5 seconds (`GRAPH.md § Server Resolution`, rule 7). The figure is stated here
-   because the property it measures has not changed and only the process it applies
-   to has — a long-lived process is left holding gigabytes that an otherwise idle
-   runtime does not collect, and that process is now the graph server.
+   **The property that matters is not this endpoint's any more, and saying so is
+   the point of this paragraph.** While `rmp web` executed statements in its own
+   process, one statement the budget cut while it was writing left that process
+   holding gigabytes it did not give back, because an otherwise idle runtime
+   triggers no collection, and the request itself received an empty reply when the
+   `WriteTimeout` closed the connection with the statement still inside the engine
+   call. A request today reaches neither state: this endpoint executes nothing, and
+   its backstop fires at 7.5 seconds (`GRAPH.md § Server Resolution`, rule 7). The
+   property is recorded here because it has not gone away — a **long-lived**
+   process is left holding that memory — and only the process it applies to has
+   changed, from this one to the graph server. No figure is published for it, here
+   or in `GRAPH.md § Peak Resident Memory`
+   (`BUILD.md § No Benchmarks and No Performance-Measurement Tests`).
 
 ## Security Headers
 
@@ -1599,16 +1602,27 @@ how the `rmp web` process itself terminates.
   moved is **caught**, never followed. The check also asserts, as an absence in the
   script the binary serves, that the narrowing script calls neither a case
   conversion of the platform, nor a trimming function of the platform, nor the
-  platform's own normalisation.
+  platform's own normalisation. **This check carries no build tag, so the `test`
+  gate compiles and runs it, and every run of that gate re-establishes it.**
 
-  **The shipped normalisation is proven equal to the server's on every run.** Equal
-  data is not yet an equal rule, because the server does not run the shipped
+  **The shipped normalisation is proven equal to the server's on demand, and not
+  by any gate.** Equal data is not yet an equal rule, because the server does not run the shipped
   algorithm: it runs the module's own. Three further checks close that gap, and
-  each of them re-establishes it whenever the `test` gate runs. All three live in
+  each of them re-establishes it whenever it runs. All three live in
   `internal/unicodenorm`, beside the Go statement of the client's algorithm that
   `BUILD.md § External Dependencies`, Unicode Data Rules 3, requires, and the
   first two run that statement over the derived data, which the check above holds
   equal to the shipped tables.
+
+  **Where these three run is not where the check above runs.** All four checks
+  `internal/unicodenorm` carries — these three and the regression that holds the
+  twelve code points of `BUILD.md § External Dependencies`, Unicode Data Rules 3,
+  to the composition Unicode gives them — carry the `heavy` build tag. No
+  validation gate and no workflow compiles them, and `make test-heavy` is the only
+  thing that runs them (see `BUILD.md § Validation Gates`). The equality of the
+  shipped data to the server's is therefore established at every run of the `test`
+  gate; the equality of the shipped algorithm to the server's is established when
+  `make test-heavy` is run, and at no other moment.
 
   1. **Every single code point.** The client's algorithm equals the module's
      Normalization Form C on **all 1,112,064** code points of Unicode.
@@ -1623,7 +1637,7 @@ how the `rmp web` process itself terminates.
      and under UAX #15 a pair ending in one normalises to the concatenation of the
      two single code points the first check covers. The set holds about a thousand
      code points, so this check compares over a billion pairs, which takes minutes
-     rather than seconds under the race detector the workflows run; it MUST
+     rather than seconds under the race detector `make test-heavy` runs; it MUST
      therefore divide its sweep across the processors available rather than run it
      on one.
   3. **The exclusions.** The composition exclusions the derivation reads equal
@@ -7176,10 +7190,13 @@ Rules:
     assert the absence rather than a success.** While a server is running for a
     roadmap, that server holds the store's exclusive advisory lock for its whole
     process lifetime. A `GET /roadmaps/{name}/graph/data` for that roadmap is
-    answered `200` throughout, and is answered without waiting: the criterion is
-    asserted on wall-clock time, because the failure it exists against is a request
-    that contends for the lock, spends a bounded wait and only then succeeds or
-    fails (see `GRAPH.md § Lock Contention`).
+    answered `200` throughout. **That `200` is the assertion, and it is
+    sufficient**: the lock is exclusive and is held for the whole life of the
+    server, so a request that contended for it would exhaust its bounded wait and
+    fail rather than succeed at all. The criterion MUST NOT add an assertion on
+    elapsed time, which would establish nothing the `200` has not already
+    established (see `GRAPH.md § Lock Contention` and
+    `BUILD.md § No Benchmarks and No Performance-Measurement Tests`).
 148. **Two graph data requests against one roadmap do not serialise against each
     other, and a `rmp graph client` invocation does not serialise against either.**
     A slow statement submitted through one request does not delay a second request
@@ -7346,15 +7363,18 @@ Rules:
     [Knowledge Graph from the GoGraph Store](#knowledge-graph-from-the-gograph-store),
     rule 1, and `GRAPH.md § Server Resolution`).
 159. **A socket file with nothing behind it is answered exactly as an absent
-    socket is, promptly, and is not removed.** With a socket file present at the
+    socket is, and is not removed.** With a socket file present at the
     roadmap's default socket path and no process listening on it, a `GET` of
-    `/roadmaps/<roadmap>/graph/data` is answered HTTP `503` with no `kind`, and it
-    is answered promptly: the criterion is asserted on wall-clock time, because a
-    refused connection must be recognised inside the probe rather than waited on.
-    The response MUST be compared against the response to the same request with no
-    socket file present at all and found equal, because the two are one condition
-    (see `GRAPH.md § Server Resolution`, rule 1). The leftover socket file is still
-    present afterwards, because no caller removes one.
+    `/roadmaps/<roadmap>/graph/data` is answered HTTP `503` with no `kind`. The
+    response MUST be compared against the response to the same request with no
+    socket file present at all and found **equal**, because the two are one
+    condition (see `GRAPH.md § Server Resolution`, rule 1). **That equality is
+    what establishes that the refused connection was recognised inside the probe
+    rather than waited on**, since a request that waited out the probe would be
+    answered as Unreachable and would not match. The criterion MUST NOT assert on
+    elapsed time (`BUILD.md § No Benchmarks and No Performance-Measurement
+    Tests`). The leftover socket file is still present afterwards, because no
+    caller removes one.
 160. **A derived socket path over the platform's bound refuses the request with
     `500`, and the criterion turns on three answers rather than two.** The
     criterion drives one request, `GET /roadmaps/<roadmap>/graph/data`, three

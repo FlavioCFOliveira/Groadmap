@@ -504,14 +504,15 @@ func (c boardControls) active() bool {
 // arithmetic rather than by a branch.
 //
 // The clauses are ordered cheapest first, which a conjunction of pure predicates
-// leaves free to choose: the two integer comparisons and the string equality cost
-// nothing, while the term clause folds the task's title (taskView.SearchText).
-// Rejecting a task on a threshold therefore skips that fold entirely. Measured
-// over 200 tasks with all four controls in force
-// (BenchmarkTaskMatches_OrdinalFirst vs BenchmarkTaskMatches_TermFirst):
-// 513 ns/op and 0 allocs against 20158 ns/op and 200 allocs — one allocation per
-// task saved per render (three runs, 20000 iterations each, all within 0.4%). Evaluation order cannot change the verdict, so the
-// property that server and client agree is untouched.
+// leaves free to choose: the two integer comparisons and the string equality are
+// comparisons of values already in hand, while the term clause folds the task's
+// title (taskView.SearchText) and that fold allocates. Rejecting a task on a
+// threshold therefore skips an allocation per task per render. No figure is
+// published for what the ordering saves: this project measures nothing
+// (SPEC/BUILD.md § No Benchmarks and No Performance-Measurement Tests), and what
+// justifies the order is the work the short circuit does not do, which is visible
+// in the code. Evaluation order cannot change the verdict, so the property that
+// server and client agree is untouched.
 func (v *taskView) matches(c boardControls) bool {
 	return v.Priority >= c.Priority &&
 		v.Severity >= c.Severity &&

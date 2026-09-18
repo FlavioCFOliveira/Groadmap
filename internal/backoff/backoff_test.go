@@ -20,6 +20,38 @@ var errRejected = errors.New("invalid input")
 // retryContended is the classifier the tests pair with errContended.
 func retryContended(err error) bool { return errors.Is(err, errContended) }
 
+// recordDelays substitutes a recorder for the package's delay source and returns
+// the slice the loop's waits are appended to. The previous source is restored
+// when the test ends.
+//
+// This is how every walk below is driven. SPEC/BUILD.md § No Benchmarks and No
+// Performance-Measurement Tests forbids asserting on elapsed time and names an
+// injected delay source as the observable that replaces it, and
+// SPEC/IMPLEMENTATION.md § Retry Logic says in as many words what such a test
+// asserts: the SEQUENCE of delays the policy asked for and the number of
+// attempts it made. Both are exact quantities, so nothing here needs slack, a
+// tolerance, or a second run on a loaded machine — and the walks cost no time at
+// all, because none of the waiting is spent.
+//
+// It is also strictly stronger than the clock ever was. A timed exhaustion could
+// only ever say that the total was about right; five flat 500 ms waits reach
+// 2500 ms too, and defect #294's four waits were caught by a tenth of a second
+// of margin. The recorded sequence separates every one of those.
+//
+// No test that calls it may call t.Parallel: the source is a package-level
+// variable, so two tests holding it at once would each record the other's waits.
+// None of the tests in this file is parallel, for that reason.
+func recordDelays(t *testing.T) *[]time.Duration {
+	t.Helper()
+
+	previous := sleep
+	t.Cleanup(func() { sleep = previous })
+
+	var requested []time.Duration
+	sleep = func(d time.Duration) { requested = append(requested, d) }
+	return &requested
+}
+
 // TestPolicyMatchesTheSpecification pins the ladder, the attempt count and the
 // worst-case wait to the figures SPEC/IMPLEMENTATION.md § Retry Logic states:
 // initial delay 100 ms, maximum delay 1000 ms, maximum retries 5, backoff
@@ -72,28 +104,29 @@ func TestPolicyMatchesTheSpecification(t *testing.T) {
 	}
 }
 
-// TestRetryExhaustsTheWholePolicy is the measurement the four call sites are
-// held to. It asserts both halves of the fix at once, because either on its own
-// is satisfied by a broken loop:
+// TestRetryExhaustsTheWholePolicy is the proof the four call sites are held to.
+// It asserts both halves of the fix at once, because either on its own is
+// satisfied by a broken loop:
 //
 //   - try must be called Attempts times — a loop that stops early attempts too
-//     few operations, whatever it slept;
-//   - the elapsed time must cover the whole ladder — a loop that makes six
-//     attempts but skips a sleep gives up sooner than the specification allows,
-//     which is exactly defect #294 (four waits, 1500 ms).
+//     few operations, whatever it waited for;
+//   - the waits it ASKED for must be the whole ladder, in order — a loop that
+//     makes six attempts but skips a wait gives up sooner than the specification
+//     allows, which is exactly defect #294 (four waits, 1500 ms).
 //
-// Elapsed time is measured rather than derived from the constants: reading the
-// constants back is what the drifted sites would still have passed.
+// The ladder is compared element for element against delays() rather than by its
+// sum, because a sum is satisfied by ladders that are not this one, and it is
+// read from the injected delay source rather than from the constants: reading
+// the constants back is what the drifted sites would still have passed, since
+// their constants were right all along and only their loop was wrong.
 func TestRetryExhaustsTheWholePolicy(t *testing.T) {
-	t.Parallel()
+	requested := recordDelays(t)
 
 	calls := 0
-	start := time.Now()
 	value, err := Retry(func() (int, error) {
 		calls++
 		return calls, errContended
 	}, retryContended)
-	elapsed := time.Since(start)
 
 	if calls != Attempts {
 		t.Errorf("try was called %d times, want %d (one initial attempt plus five retries)", calls, Attempts)
@@ -105,29 +138,27 @@ func TestRetryExhaustsTheWholePolicy(t *testing.T) {
 		t.Errorf("exhausted Retry returned value %d, want the last attempt's value %d", value, Attempts)
 	}
 
-	// A little slack below the nominal figure: time.Sleep guarantees a minimum,
-	// but the comparison is against a clock read taken around the whole loop and
-	// coarse timer resolution can shave a fraction off.
-	if floor := Total() - Total()/10; elapsed < floor {
-		t.Errorf("exhausted Retry took %v; it must sleep the whole ladder (about %v). "+
-			"A wait near %v means the loop skips the sleep before its last attempt (defect #294)",
-			elapsed, Total(), Total()-1000*time.Millisecond)
+	if want := slices.Collect(delays()); !slices.Equal(*requested, want) {
+		t.Errorf("exhausted Retry asked for the waits %v, want the whole ladder %v, in order. "+
+			"A shorter sequence means the loop skips the wait before its last attempt "+
+			"(defect #294: four waits where five were promised)", *requested, want)
 	}
 }
 
 // TestRetryReturnsSuccessWithoutSleeping pins the first of the three outcomes:
 // an operation that succeeds is not delayed at all. A policy that slept before
 // its first attempt would tax every uncontended call in the binary.
+//
+// "Not delayed at all" is asserted as the exact quantity it is: the loop asked
+// the delay source for nothing.
 func TestRetryReturnsSuccessWithoutSleeping(t *testing.T) {
-	t.Parallel()
+	requested := recordDelays(t)
 
 	calls := 0
-	start := time.Now()
 	value, err := Retry(func() (string, error) {
 		calls++
 		return "opened", nil
 	}, retryContended)
-	elapsed := time.Since(start)
 
 	if err != nil {
 		t.Errorf("Retry returned %v for an operation that succeeded", err)
@@ -138,8 +169,9 @@ func TestRetryReturnsSuccessWithoutSleeping(t *testing.T) {
 	if calls != 1 {
 		t.Errorf("try was called %d times for an immediate success, want 1", calls)
 	}
-	if elapsed >= FirstDelay {
-		t.Errorf("an immediate success took %v; Retry must not sleep before the first attempt", elapsed)
+	if len(*requested) != 0 {
+		t.Errorf("an immediate success asked for the waits %v; Retry must not wait before the "+
+			"first attempt", *requested)
 	}
 }
 
@@ -147,12 +179,11 @@ func TestRetryReturnsSuccessWithoutSleeping(t *testing.T) {
 // wins the resource on the third attempt waits the first two delays and no
 // more, and gets that attempt's value.
 func TestRetrySucceedsOnALaterAttempt(t *testing.T) {
-	t.Parallel()
+	requested := recordDelays(t)
 
 	const succeedOn = 3
 
 	calls := 0
-	start := time.Now()
 	value, err := Retry(func() (int, error) {
 		calls++
 		if calls < succeedOn {
@@ -160,7 +191,6 @@ func TestRetrySucceedsOnALaterAttempt(t *testing.T) {
 		}
 		return calls, nil
 	}, retryContended)
-	elapsed := time.Since(start)
 
 	if err != nil {
 		t.Errorf("Retry returned %v for an operation that succeeded on attempt %d", err, succeedOn)
@@ -172,14 +202,12 @@ func TestRetrySucceedsOnALaterAttempt(t *testing.T) {
 		t.Errorf("try was called %d times, want %d: Retry must stop at the first success", calls, succeedOn)
 	}
 
-	// Two sleeps precede the third attempt: 100 + 200 ms.
-	const wantSlept = 300 * time.Millisecond
-	if floor := wantSlept - wantSlept/10; elapsed < floor {
-		t.Errorf("success on attempt %d took %v, want at least about %v (100+200 ms)", succeedOn, elapsed, wantSlept)
-	}
-	if elapsed >= Total() {
-		t.Errorf("success on attempt %d took %v; Retry must stop sleeping once it succeeds, "+
-			"not run the ladder out (%v)", succeedOn, elapsed, Total())
+	// Two waits precede the third attempt, and they are the ladder's first two:
+	// the loop must stop asking for waits once it succeeds rather than run the
+	// ladder out.
+	if want := firstN(delays(), succeedOn-1); !slices.Equal(*requested, want) {
+		t.Errorf("success on attempt %d asked for the waits %v, want the ladder's first %d, %v",
+			succeedOn, *requested, succeedOn-1, want)
 	}
 }
 
@@ -189,15 +217,13 @@ func TestRetrySucceedsOnALaterAttempt(t *testing.T) {
 // constraint violation would be a regression no timing assertion elsewhere
 // would notice.
 func TestRetryDoesNotWaitOnARejectedError(t *testing.T) {
-	t.Parallel()
+	requested := recordDelays(t)
 
 	calls := 0
-	start := time.Now()
 	_, err := Retry(func() (int, error) {
 		calls++
 		return 0, errRejected
 	}, retryContended)
-	elapsed := time.Since(start)
 
 	if !errors.Is(err, errRejected) {
 		t.Errorf("Retry returned %v, want the rejected error unwrapped (%v)", err, errRejected)
@@ -205,8 +231,9 @@ func TestRetryDoesNotWaitOnARejectedError(t *testing.T) {
 	if calls != 1 {
 		t.Errorf("try was called %d times for a non-retryable failure, want 1", calls)
 	}
-	if elapsed >= FirstDelay {
-		t.Errorf("a non-retryable failure took %v; it must be returned without sleeping", elapsed)
+	if len(*requested) != 0 {
+		t.Errorf("a non-retryable failure asked for the waits %v; it must be returned without "+
+			"waiting at all", *requested)
 	}
 }
 
@@ -220,7 +247,7 @@ func TestRetryDoesNotWaitOnARejectedError(t *testing.T) {
 // recovers which happened. internal/db depends on exactly that to choose
 // between its "failed after N attempts" diagnostic and returning the error bare.
 func TestRetryRejectionEndsTheLoopMidLadder(t *testing.T) {
-	t.Parallel()
+	recordDelays(t)
 
 	const rejectOn = 3
 
@@ -355,30 +382,29 @@ func TestBudgetedLadderSpendsExactlyItsBudget(t *testing.T) {
 	}
 }
 
-// TestRetryWithinHonoursItsBudgetRatherThanTheRetryCount is the measured half:
-// the loop must climb delaysWithin(bound) and not the SQLite policy's five
+// TestRetryWithinHonoursItsBudgetRatherThanTheRetryCount is the behavioural
+// half: the loop must climb delaysWithin(bound) and not the SQLite policy's five
 // rungs.
 //
 // The budget chosen, 300 ms, is two whole rungs of the ladder and no more, so
-// the two possible loops are separated by an order of magnitude in both
-// observable quantities: honouring the budget makes 3 attempts in 300 ms, while
-// silently running the SQLite ladder would make Attempts (6) in 2500 ms. A
-// budget SMALLER than Total is used deliberately — it keeps the test cheap, and
-// it fails loudly against the implementation this entry point replaced, which
-// could only ever wait Total. That RetryWithin can also wait LONGER than Total
-// is fenced where it matters, against the wall clock, in internal/graphlock.
+// the two possible loops are separated in both observable quantities: honouring
+// the budget asks for 100 and 200 ms and makes 3 attempts, while silently
+// running the SQLite ladder would ask for the whole 2500 ms ladder and make
+// Attempts (6). A budget SMALLER than Total is used deliberately — it fails
+// loudly against the implementation this entry point replaced, which could only
+// ever wait Total. That RetryWithin also HONOURS a budget longer than Total is
+// the case TestBudgetedLadderSpendsExactlyItsBudget covers, over the same
+// sequence.
 func TestRetryWithinHonoursItsBudgetRatherThanTheRetryCount(t *testing.T) {
-	t.Parallel()
+	requested := recordDelays(t)
 
 	const budget = 300 * time.Millisecond
 
 	calls := 0
-	start := time.Now()
 	value, err := RetryWithin(budget, func() (int, error) {
 		calls++
 		return calls, errContended
 	}, retryContended)
-	elapsed := time.Since(start)
 
 	if want := 3; calls != want {
 		t.Errorf("try was called %d times under a %v budget, want %d (one initial attempt plus the "+
@@ -392,14 +418,19 @@ func TestRetryWithinHonoursItsBudgetRatherThanTheRetryCount(t *testing.T) {
 		t.Errorf("exhausted RetryWithin returned value %d, want the last attempt's value %d", value, calls)
 	}
 
-	if floor := budget - budget/10; elapsed < floor {
-		t.Errorf("exhausted RetryWithin took %v; it must sleep its whole %v budget", elapsed, budget)
+	if want := slices.Collect(delaysWithin(budget)); !slices.Equal(*requested, want) {
+		t.Errorf("exhausted RetryWithin asked for the waits %v, want the budgeted walk %v. The "+
+			"whole ladder %v would mean the budget was ignored and the SQLite retry count climbed "+
+			"instead", *requested, want, slices.Collect(delays()))
 	}
-	// The upper bound is what catches a loop that ignored the budget: half of
-	// Total sits far above the budget and far below the ladder's own 2500 ms.
-	if ceiling := Total() / 2; elapsed > ceiling {
-		t.Errorf("exhausted RetryWithin took %v under a %v budget; anything approaching %v means the "+
-			"budget was ignored and the SQLite ladder was climbed instead", elapsed, budget, Total())
+	var spent time.Duration
+	for _, delay := range *requested {
+		spent += delay
+	}
+	if spent != budget {
+		t.Errorf("exhausted RetryWithin asked for %v of waiting, want exactly its %v budget: not "+
+			"less, which gives up early, and not more, which spends time the caller did not grant",
+			spent, budget)
 	}
 }
 
@@ -408,11 +439,10 @@ func TestRetryWithinHonoursItsBudgetRatherThanTheRetryCount(t *testing.T) {
 // ladder, and Retry now routes through this function, so a regression in either
 // would reach every caller in the binary.
 func TestRetryWithinKeepsTheThreeOutcomes(t *testing.T) {
-	t.Parallel()
+	requested := recordDelays(t)
 
-	// Succeeds at once: no sleeping, one attempt.
+	// Succeeds at once: no waiting, one attempt.
 	calls := 0
-	start := time.Now()
 	value, err := RetryWithin(time.Hour, func() (int, error) {
 		calls++
 		return 7, nil
@@ -420,13 +450,13 @@ func TestRetryWithinKeepsTheThreeOutcomes(t *testing.T) {
 	if err != nil || value != 7 || calls != 1 {
 		t.Errorf("a successful operation returned (%d, %v) after %d attempts, want (7, nil) after 1", value, err, calls)
 	}
-	if elapsed := time.Since(start); elapsed >= FirstDelay {
-		t.Errorf("a successful operation took %v; it must not sleep at all", elapsed)
+	if len(*requested) != 0 {
+		t.Errorf("a successful operation asked for the waits %v; it must not wait at all", *requested)
 	}
 
-	// Fails with a rejected error: no sleeping, one attempt, error unwrapped.
+	// Fails with a rejected error: no waiting, one attempt, error unwrapped.
+	*requested = nil
 	calls = 0
-	start = time.Now()
 	_, err = RetryWithin(time.Hour, func() (int, error) {
 		calls++
 		return 0, errRejected
@@ -434,8 +464,9 @@ func TestRetryWithinKeepsTheThreeOutcomes(t *testing.T) {
 	if !errors.Is(err, errRejected) || calls != 1 {
 		t.Errorf("a rejected error returned %v after %d attempts, want %v after 1", err, calls, errRejected)
 	}
-	if elapsed := time.Since(start); elapsed >= FirstDelay {
-		t.Errorf("a rejected error took %v; a failure that cannot become a success must not be waited on", elapsed)
+	if len(*requested) != 0 {
+		t.Errorf("a rejected error asked for the waits %v; a failure that cannot become a success "+
+			"must not be waited on", *requested)
 	}
 
 	// Rejection mid-ladder ends the loop where it happens, budget or no budget.
@@ -685,11 +716,10 @@ func TestJitterWalkIsBoundedByTheATTEMPTCapAndByTheBUDGET(t *testing.T) {
 // the fixed ladder, made of the jittered entry point, so the two cannot come to
 // disagree about what a success, a rejection or a mid-walk rejection does.
 func TestRetryJitteredWithinKeepsTheThreeOutcomes(t *testing.T) {
-	t.Parallel()
+	requested := recordDelays(t)
 
-	// Succeeds at once: no sleeping, one attempt.
+	// Succeeds at once: no waiting, one attempt.
 	calls := 0
-	start := time.Now()
 	value, err := RetryJitteredWithin(Total(), func() (int, error) {
 		calls++
 		return 7, nil
@@ -698,13 +728,13 @@ func TestRetryJitteredWithinKeepsTheThreeOutcomes(t *testing.T) {
 		t.Errorf("a successful operation returned (%d, %v) after %d attempts, want (7, nil) after 1",
 			value, err, calls)
 	}
-	if elapsed := time.Since(start); elapsed >= jitterInitialCeiling {
-		t.Errorf("a successful operation took %v; it must not sleep at all", elapsed)
+	if len(*requested) != 0 {
+		t.Errorf("a successful operation asked for the waits %v; it must not wait at all", *requested)
 	}
 
-	// Fails with a rejected error: no sleeping, one attempt, error unwrapped.
+	// Fails with a rejected error: no waiting, one attempt, error unwrapped.
+	*requested = nil
 	calls = 0
-	start = time.Now()
 	_, err = RetryJitteredWithin(Total(), func() (int, error) {
 		calls++
 		return 0, errRejected
@@ -712,9 +742,9 @@ func TestRetryJitteredWithinKeepsTheThreeOutcomes(t *testing.T) {
 	if !errors.Is(err, errRejected) || calls != 1 {
 		t.Errorf("a rejected error returned %v after %d attempts, want %v after 1", err, calls, errRejected)
 	}
-	if elapsed := time.Since(start); elapsed >= jitterInitialCeiling {
-		t.Errorf("a rejected error took %v; a failure that cannot become a success must not be "+
-			"waited on", elapsed)
+	if len(*requested) != 0 {
+		t.Errorf("a rejected error asked for the waits %v; a failure that cannot become a success "+
+			"must not be waited on", *requested)
 	}
 
 	// Rejection mid-walk ends the loop where it happens.
@@ -732,36 +762,38 @@ func TestRetryJitteredWithinKeepsTheThreeOutcomes(t *testing.T) {
 	}
 }
 
-// TestRetryJitteredWithinExhaustsInsideBothBounds is the measured half, against
-// the wall clock, of the entry point production uses.
+// TestRetryJitteredWithinExhaustsInsideBothBounds is the behavioural half of the
+// entry point production uses, driven through the injected delay source with the
+// PRODUCTION draw in place — drawUpTo, and its real randomness.
 //
-// A randomised shape cannot be pinned to an exact attempt count or an exact
-// elapsed time — that is what randomising it means — so what is asserted is the
-// pair of bounds the specification does fix, plus the one thing that separates
-// this shape from the fixed ladder at the same budget:
+// A randomised shape has no exact delay sequence to compare against; that is what
+// randomising it means. What it does have, and what SPEC/IMPLEMENTATION.md
+// § Retry Logic fixes, is a bound on every individual draw and a bound on how
+// many there may be, and both are exact:
 //
-//   - never more than JitterAttempts attempts, and never more than the budget of
-//     sleeping;
+//   - each wait asked for lies in the CLOSED interval [0, ceiling] of its own
+//     position in jitterCeilings, except that the last may additionally be
+//     truncated by what is left of the budget;
+//   - the waits sum to no more than the budget, and there are never more than
+//     JitterAttempts-1 of them;
 //   - strictly MORE attempts than the fixed ladder makes in the same budget.
 //     Six attempts would mean the call site had been put back on RetryWithin,
-//     and this bound is what would catch that. It holds with no randomness
-//     needed: even if every draw came out at its ceiling, the first six sum to
-//     315 ms and the 2500 ms budget pays for nine more at the 250 ms cap.
+//     and this is what would catch that. It holds however the draws fall: even
+//     if every one came out at its ceiling, the first six sum to 315 ms and the
+//     budget pays for more.
 //
-// The budget is a small one so the test is cheap; the property under test is the
-// relationship between the bounds, which does not depend on its size.
+// None of it is a duration read from a clock, so none of it is affected by what
+// else the machine is doing.
 func TestRetryJitteredWithinExhaustsInsideBothBounds(t *testing.T) {
-	t.Parallel()
+	requested := recordDelays(t)
 
 	const budget = 400 * time.Millisecond
 
 	calls := 0
-	start := time.Now()
 	value, err := RetryJitteredWithin(budget, func() (int, error) {
 		calls++
 		return calls, errContended
 	}, retryContended)
-	elapsed := time.Since(start)
 
 	if !errors.Is(err, errContended) {
 		t.Errorf("exhausted RetryJitteredWithin returned %v, want the last error unwrapped (%v)",
@@ -775,15 +807,32 @@ func TestRetryJitteredWithinExhaustsInsideBothBounds(t *testing.T) {
 		t.Errorf("try was called %d times, want at most %d: the attempt cap is what bounds a walk "+
 			"whose draws may be near zero", calls, JitterAttempts)
 	}
-	if calls < 2 {
-		t.Errorf("try was called %d time(s); an exhausted walk must have retried at least once", calls)
+	if calls != len(*requested)+1 {
+		t.Errorf("try was called %d times after %d waits; the loop makes one initial attempt and "+
+			"one more after each wait, and never a wait after the final attempt",
+			calls, len(*requested))
 	}
-	// A slack of a tenth covers scheduler wake-up on a loaded machine; it is far
-	// below anything that would indicate the budget was ignored.
-	if ceiling := budget + budget/10; elapsed > ceiling {
-		t.Errorf("exhausted RetryJitteredWithin took %v under a %v budget: the shape changes how "+
-			"the waiting is distributed, never how long a caller can be made to wait",
-			elapsed, budget)
+	if calls <= Attempts {
+		t.Errorf("try was called %d times under a %v budget, want strictly more than the fixed "+
+			"ladder's %d: at the same budget the jittered shape draws shorter waits and therefore "+
+			"makes more attempts, and %d would mean the call site was put back on RetryWithin",
+			calls, budget, Attempts, Attempts)
+	}
+
+	// Every draw inside its own ceiling, and the whole walk inside the budget.
+	ceilings := firstN(jitterCeilings(), len(*requested))
+	var spent time.Duration
+	for i, delay := range *requested {
+		if delay < 0 || delay > ceilings[i] {
+			t.Errorf("wait %d = %v, outside the closed interval [0, %v] its position allows",
+				i, delay, ceilings[i])
+		}
+		spent += delay
+	}
+	if spent > budget {
+		t.Errorf("exhausted RetryJitteredWithin asked for %v of waiting under a %v budget: the "+
+			"shape changes how the waiting is distributed, never how long a caller can be made "+
+			"to wait", spent, budget)
 	}
 }
 

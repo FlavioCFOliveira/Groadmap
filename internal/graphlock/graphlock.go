@@ -158,6 +158,22 @@ var StatementBudget = DefaultStatementBudget
 // force.
 func WaitBudget() time.Duration { return StatementBudget + backoff.Total() }
 
+// lockNB is the non-blocking lock attempt AcquireExclusive retries, held in a
+// variable so that a test can COUNT the attempts one acquisition makes.
+//
+// The count is what tells this package's two candidate sizings apart. A wait
+// budget of the statement budget plus the backoff total climbs strictly more
+// rungs than the SQLite policy's own total does, so it makes strictly more
+// attempts, and SPEC/BUILD.md § No Benchmarks and No Performance-Measurement
+// Tests names a count of attempts as an admissible observable while forbidding
+// the elapsed-time comparison that used to establish the same thing. The
+// platform half stays in graphlock_unix.go and graphlock_windows.go; only the
+// indirection is here, so there is one seam rather than one per platform.
+//
+// Production never reassigns it, it is unexported, and AcquireExclusive behaves
+// exactly as it did when the call was written out.
+var lockNB = lockExclusiveNB
+
 // LockFileName is the basename of the advisory lock file inside a roadmap's
 // graph directory. GoGraph knows nothing about it: Groadmap creates and
 // maintains it, its contents are never read or written, and only the advisory
@@ -251,7 +267,7 @@ func AcquireExclusive(graphDir string) (func(), error) {
 	// long a holder of this lock may lawfully keep it. Every failure of
 	// lockExclusiveNB is contention, so every one is retried.
 	release, err := backoff.RetryWithin(WaitBudget(), func() (func(), error) {
-		if lockErr := lockExclusiveNB(f); lockErr != nil {
+		if lockErr := lockNB(f); lockErr != nil {
 			return nil, lockErr
 		}
 		return releaseFunc(f), nil

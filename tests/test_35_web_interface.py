@@ -5963,18 +5963,15 @@ class TestWebInterface:
                 timeout=30,
             )
         except (OSError, http.client.HTTPException) as exc:
-            waited = time.monotonic() - started
             raise AssertionError(
-                f"the endpoint never answered the expensive query: it was still "
-                f"running {waited:.2f}s in, and the connection failed with "
-                f"{type(exc).__name__}: {exc}. The query time budget did not cut "
-                "the query."
+                f"the endpoint never answered the expensive query, and the "
+                f"connection failed with {type(exc).__name__}: {exc}. The query "
+                "time budget did not cut the query."
             ) from exc
-        elapsed = time.monotonic() - started
 
         assert status == 400, (
             f"an exhausted budget is a query execution failure, answered 400; "
-            f"got {status} after {elapsed:.2f}s: {body!r}"
+            f"got {status}: {body!r}"
         )
         err = json.loads(body)
         assert err.get("kind") == "execution", (
@@ -5986,20 +5983,17 @@ class TestWebInterface:
             f"query was cancelled or that the Cypher was wrong: {err}"
         )
 
-        # The upper bound: the budget cut the work well before the server's
-        # 30s WriteTimeout, so the failure was actually written to this client.
-        assert elapsed < 15.0, (
-            f"the budget must cut the query long before the 30s WriteTimeout; "
-            f"the request took {elapsed:.2f}s"
-        )
-        # The lower bound, and the load-bearing half: the request really did run
-        # until the budget stopped it. Without this, a regression that removed
-        # the budget and failed the query instantly for any other reason would
-        # pass the check above.
-        assert elapsed > 3.0, (
-            f"the request returned after only {elapsed:.2f}s, far short of the "
-            "budget: the failure did not come from the budget expiring"
-        )
+        # WHICH failure was written is what establishes that the BUDGET cut the
+        # query, and it is stronger than any duration would be: the reason names
+        # the query time budget, and a request that failed for any other cause --
+        # a guard-rail rejection, an invalid limit, a cancelled client, a server
+        # that stopped -- carries a different kind or a different reason, both
+        # asserted above. That the answer reached this client at all is the other
+        # half: a query the budget had not cut would still have been running when
+        # the server's 30s WriteTimeout fired, and no 400 would have arrived.
+        # SPEC/WEB.md acceptance criterion 110 and SPEC/BUILD.md "No Benchmarks
+        # and No Performance-Measurement Tests" both forbid asserting the
+        # elapsed time here.
 
         # The budget is per request and nothing outlives it: the SAME server
         # process still serves, and serves the whole store.

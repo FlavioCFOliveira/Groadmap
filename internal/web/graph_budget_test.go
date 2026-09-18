@@ -190,11 +190,17 @@ func TestHandleGraphData_BudgetIsNotCallerControlled(t *testing.T) {
 // aggregate over a Cartesian product returns a single 33-byte row after scanning
 // the whole product, at a cost cubic in the size of the store.
 //
-// The test proves the three properties SPEC/WEB.md § Acceptance Criteria,
-// criterion 110 requires: the request comes back inside the budget instead of
-// running to completion, it is answered as a query EXECUTION failure (the same
-// classification an engine failure gets, not a new one), and the server keeps
-// serving afterwards.
+// The test proves the properties SPEC/WEB.md § Acceptance Criteria, criterion 110
+// requires: the request is answered as a query EXECUTION failure (the same
+// classification an engine failure gets, not a new one), the reason names the
+// budget in force, and the server keeps serving afterwards.
+//
+// **The reason line is what establishes that the BUDGET stopped the query.** A
+// query that failed for any other cause carries a different reason, so the line
+// already separates the budget from every other outcome; an assertion on how long
+// the request took would separate nothing and would make the test a measurement
+// of the machine (SPEC/BUILD.md § No Benchmarks and No Performance-Measurement
+// Tests).
 func TestHandleGraphData_ExpensiveQueryHitsTimeBudget(t *testing.T) {
 	t.Setenv("HOME", shortHome(t))
 	name := seedRoadmap(t, "web-ui-rollout")
@@ -211,20 +217,9 @@ func TestHandleGraphData_ExpensiveQueryHitsTimeBudget(t *testing.T) {
 	const budget = 150 * time.Millisecond
 	serveGraphAtBudget(t, name, budget)
 
-	started := time.Now()
 	rec := doGraphData(t, name, url.Values{"q": {expensiveGraphQuery}, "limit": {"3000"}})
-	elapsed := time.Since(started)
 
-	// (i) It returned within the budget rather than running to completion. The
-	// ceiling is generous (13x the budget) so a loaded or race-instrumented
-	// machine cannot flake it, and still an order of magnitude below the ~6s the
-	// unbounded query costs against this store.
-	if elapsed > 2*time.Second {
-		t.Errorf("request took %v with a %v budget over %d nodes: the query ran to completion; the budget did not bound the work", elapsed, budget, nodes)
-	}
-	t.Logf("expensive query over %d nodes returned in %v under a %v budget (unbounded cost: ~6s)", nodes, elapsed, budget)
-
-	// (ii) It is classified as a query execution failure — case 2 of
+	// (i) It is classified as a query execution failure — case 2 of
 	// § Query-Bar Error Handling — with no new status and no new kind
 	// (SPEC/WEB.md § Graph Query Time Budget, rules 4 and 5).
 	if rec.Code != http.StatusBadRequest {

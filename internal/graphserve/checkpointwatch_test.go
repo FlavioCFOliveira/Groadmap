@@ -777,3 +777,16 @@ func TestServedServer_FoldsTheWriteAheadLogWhileItServes(t *testing.T) {
 		time.Sleep(20 * time.Millisecond)
 	}
 }
+
+// walBytesAt reports the size of the write-ahead log under graphDir, or zero when
+// it cannot be stated.
+//
+// A missing log is zero and not a failure: the file is created on the first
+// append, so a store that has been read and never written has none.
+func walBytesAt(graphDir string) int64 {
+	info, err := os.Stat(filepath.Join(graphDir, "wal"))
+	if err != nil {
+		return 0
+	}
+	return info.Size()
+}

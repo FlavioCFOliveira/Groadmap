@@ -134,6 +134,7 @@ The SPEC is unversioned. Git is the source of truth for its evolution — recove
 | Schema migrations | `VERSION.md § Migrations` |
 | Build / CI / lint | `BUILD.md` |
 | Validation gates (the six gates, and their enforcement locally, in CI, and at release) | `BUILD.md § Validation Gates` |
+| The ban on benchmarks and performance-measurement tests, and the observables a specified time-bounded behaviour is proven by instead | `BUILD.md § No Benchmarks and No Performance-Measurement Tests` |
 | Security scan (`gosec`, accepted findings, scope exclusion) | `BUILD.md § Security Scan: gosec` |
 | How `make lint` and `make security` find the pinned `golangci-lint` and `gosec`, the version check, and the lines a mismatch writes | `BUILD.md § Local Tool Resolution` |
 | Installation / release | `DEPLOY.md` |
@@ -219,10 +220,11 @@ To prevent drift across SPEC files, the following topics have a single authorita
 | Graph store concurrency / store locking / recovery | `IMPLEMENTATION.md § Graph Store Concurrency` (contract in `GRAPH.md § Concurrency and Recovery`) |
 | Graph store lock file (`write.lock`) | `GRAPH.md § Concurrency and Recovery` (layout in `GRAPH.md § Persistence Layout`) |
 | Graph server socket (`graph.sock`), its mode, and what a leftover one means | `GRAPH.md § Socket Path and Permissions` (layout in `GRAPH.md § Persistence Layout`) |
-| Statement time budget (the single value the server enforces for every surface, and the evidence for it) | `WEB.md § Graph Query Time Budget` (its effect on a statement, and what a cut statement leaves behind, in `GRAPH.md § Statement Time Budget`) |
+| Statement time budget (the single value the server enforces for every surface, and the query shapes it separates) | `WEB.md § Graph Query Time Budget` (its effect on a statement, and what a cut statement leaves behind, in `GRAPH.md § Statement Time Budget`) |
 | Cypher engine constructor (`cypher.NewEngineWithStoreAndRecovery` on the one path, run only by `rmp graph serve`, carrying the recovered schema) | `GRAPH.md § Engine Constructor by Path` |
 | Minimum Go version rules (the version itself is the `go` directive of `go.mod`) and external dependencies | `BUILD.md § Go Toolchain` |
 | Validation gate set and where it is enforced (local, CI, release) | `BUILD.md § Validation Gates` |
+| No benchmarks and no performance-measurement tests, and how a specified time-bounded behaviour is proven without a clock | `BUILD.md § No Benchmarks and No Performance-Measurement Tests` |
 | Local resolution of the pinned lint and security tools, the version check, and its failure lines | `BUILD.md § Local Tool Resolution` |
 | Help text canonical | code in `internal/commands/*.go` (structure in `HELP.md`) |
 | AI agent contract JSON schema | `DATA_FORMATS.md § AI Agent Contract` |

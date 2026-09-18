@@ -57,7 +57,6 @@ import re
 import sqlite3
 import subprocess
 import sys
-import time
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -687,14 +686,20 @@ class TestTaskAndSprintComments:
         """A bad --type must not leave the command blocked on standard input.
 
         Both halves matter. Over a FIFO whose writer is alive and silent, a bad
-        --type must still return exit 6 promptly; the SAME FIFO with a good
-        --type must NOT return, which is what proves standard input was
-        genuinely blocking rather than simply at EOF
+        --type must still RETURN, with exit 6; the SAME FIFO with a good --type
+        must NOT return, which is what proves standard input was genuinely
+        blocking rather than simply at EOF
         (SPEC/COMMANDS.md § Comment Body ... Validation order).
+
+        The exit is the assertion and no duration is taken: a command that read
+        this standard input could not have reached an exit at all, so returning
+        is what separates the two (SPEC/BUILD.md "No Benchmarks and No
+        Performance-Measurement Tests"). The timeout below is the harness's
+        hang-breaker, which turns a regression into a reported failure instead
+        of a suite that never finishes.
         """
         fd = self.open_blocking_fifo()
 
-        started = time.monotonic()
         bad = self.popen_with_stdin(
             ["task", "comment-add", "-r", ROADMAP, str(self.task), "--type", "BOGUS"], fd
         )
@@ -705,12 +710,8 @@ class TestTaskAndSprintComments:
             raise AssertionError(
                 "a bad --type blocked on standard input instead of failing at once"
             )
-        elapsed = time.monotonic() - started
         assert bad.returncode == EXIT_VALIDATION, bad.returncode
         assert f'invalid comment type "BOGUS" for a task comment' in bad_err, bad_err
-        assert elapsed < 5.0, (
-            f"the type verdict took {elapsed:.2f}s; it must not wait on standard input"
-        )
 
         # The control: a GOOD type over the same still-open FIFO must block.
         good = self.popen_with_stdin(

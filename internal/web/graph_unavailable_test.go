@@ -39,6 +39,7 @@ import (
 	"go/token"
 	"io/fs"
 	"maps"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -130,6 +131,85 @@ func TestHandleGraphData_NoServerIsServiceUnavailable(t *testing.T) {
 		t.Errorf("the no-server failure does not carry utils.ErrGraphServer: %v. The CLI and this "+
 			"endpoint meet one condition through one client and MUST classify it identically",
 			unavailErr)
+	}
+}
+
+// TestHandleGraphData_ALeftoverSocketIsAnsweredExactlyAsAnAbsentOne is
+// SPEC/WEB.md acceptance criterion 159.
+//
+// A socket file a killed server left behind exists, is a socket, and has nothing
+// listening on it. For this endpoint that is ONE condition with "no socket at
+// all" — either way there is nothing to send the statement to — and the criterion
+// requires the two responses to be compared and found EQUAL.
+//
+// **That equality is the assertion, and it is what establishes that the refused
+// connection was recognised inside the probe rather than waited on.** A request
+// that waited the probe out would be answered as Unreachable, which is a
+// different answer, so it would not match. The criterion forbids asserting on
+// elapsed time (SPEC/BUILD.md § No Benchmarks and No Performance-Measurement
+// Tests), and the comparison is stronger than a clock in any case: it separates
+// the two by WHICH answer was written rather than by how long the machine took.
+//
+// The leftover file is still present afterwards, because no caller removes one
+// (SPEC/GRAPH.md § Server Resolution, rule 1).
+func TestHandleGraphData_ALeftoverSocketIsAnsweredExactlyAsAnAbsentOne(t *testing.T) {
+	t.Setenv("HOME", shortHome(t))
+	name := seedRoadmap(t, "backend-platform")
+
+	socket, err := graphclient.SocketPath(name)
+	if err != nil {
+		t.Fatalf("deriving the socket path: %v", err)
+	}
+
+	// The control: the same request with no socket file present at all.
+	if _, statErr := os.Lstat(socket); !os.IsNotExist(statErr) {
+		t.Fatalf("a socket already exists at %s (%v); the control below would not be the "+
+			"absent-socket case", socket, statErr)
+	}
+	absent := doGraphData(t, name, nil)
+
+	// A socket file a killed server left behind: bound, then closed WITHOUT
+	// unlinking.
+	ln, err := net.Listen("unix", socket)
+	if err != nil {
+		t.Fatalf("binding %s: %v", socket, err)
+	}
+	unix, ok := ln.(*net.UnixListener)
+	if !ok {
+		t.Fatalf("a unix listener is %T", ln)
+	}
+	unix.SetUnlinkOnClose(false)
+	if closeErr := ln.Close(); closeErr != nil {
+		t.Fatalf("closing the listener: %v", closeErr)
+	}
+	if _, statErr := os.Lstat(socket); statErr != nil {
+		t.Fatalf("the socket file was not left behind: %v", statErr)
+	}
+	leftover := doGraphData(t, name, nil)
+
+	if leftover.Code != http.StatusServiceUnavailable {
+		t.Errorf("status = %d over a leftover socket, want 503; body=%q",
+			leftover.Code, leftover.Body.String())
+	}
+	if strings.Contains(leftover.Body.String(), "kind") {
+		t.Errorf("the response names a kind: %q. A kind belongs to the 400s and names a fault in "+
+			"what the caller submitted; this request never reached a statement",
+			leftover.Body.String())
+	}
+	if leftover.Code != absent.Code || leftover.Body.String() != absent.Body.String() {
+		t.Errorf("a leftover socket is answered %d %q and an absent one %d %q. The two are ONE "+
+			"condition for this endpoint, and the equality is what establishes that the refused "+
+			"connection was recognised inside the probe rather than waited out — a request that "+
+			"waited would be answered as Unreachable and would not match "+
+			"(SPEC/WEB.md § Acceptance Criteria, criterion 159; SPEC/GRAPH.md § Server "+
+			"Resolution, rule 1)",
+			leftover.Code, leftover.Body.String(), absent.Code, absent.Body.String())
+	}
+
+	if _, statErr := os.Lstat(socket); statErr != nil {
+		t.Errorf("the leftover socket was removed by the request (%v). Removing one is the next "+
+			"server's business, and a caller that removed one would race a server that was "+
+			"binding it", statErr)
 	}
 }
 

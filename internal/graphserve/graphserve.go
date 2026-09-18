@@ -337,10 +337,9 @@ const maxOpenTxPerPrincipal = maxConnections
 // rather than what it bounds.
 //
 // A maxAge of zero DISABLES age-based triggering, which is the engine's
-// documented meaning for it and not a Groadmap convention. It is what the
-// benchmarks use to hold the write-ahead log still while they measure its growth
-// per write: a fold that truncated the log mid-measurement would destroy the
-// quantity being measured.
+// documented meaning for it and not a Groadmap convention. It is what a test of
+// the log itself uses to hold the write-ahead log still: a fold that truncated
+// the log mid-assertion would remove the very bytes the assertion is about.
 //
 // # The zero value disables MORE than the trigger, deliberately
 //
@@ -352,8 +351,9 @@ const maxOpenTxPerPrincipal = maxConnections
 // is therefore a loop with NO CLOCK at all, selecting on its stop and trigger
 // channels and nothing else, rather than a loop that ticks and declines to fire.
 //
-// That is the property a benchmark wants: no periodic wake-up landing inside a
-// timed region, not merely no fold. It is also why [build] starts no
+// That is the property a test of the fold's EFFECTS wants: no periodic wake-up
+// at all, not merely no fold, so nothing the server does on its own can change
+// the store under the assertion. It is also why [build] starts no
 // [checkpointWatch] under it — with no ticker there is no in-flight attempt to
 // observe, so a poller would sample a level nothing ever writes.
 type checkpointCadence struct {
@@ -363,60 +363,51 @@ type checkpointCadence struct {
 
 // productionCadence is the cadence a real `rmp graph serve` runs under.
 //
-// SPEC/GRAPH.md § Durability and Checkpointing in a Long-Lived Process requires
-// that a cadence EXIST and that it be bounded by something other than the
-// process's lifetime, and deliberately fixes no value: the cost of a checkpoint
-// is proportional to the live graph — 19.7 ms on a 1.3 MB store, 964 ms on a
-// 122 MB one — and its benefit is proportional to how fast the log is growing,
-// which is a property of the workload. Neither quantity is knowable from a
-// specification.
+// SPEC/GRAPH.md § Durability and Checkpointing in a Long-Lived Process, rule 6,
+// requires that a cadence EXIST and that it be bounded by something other than
+// the process's lifetime, and deliberately fixes no value: the cost of a
+// checkpoint is proportional to the live graph and its benefit is proportional to
+// how fast the log is growing, which is a property of the workload. Neither
+// quantity is knowable from a specification, and this project publishes no figure
+// for either (SPEC/BUILD.md § No Benchmarks and No Performance-Measurement
+// Tests).
 //
 // Five minutes was chosen provisionally, by analogy with the interval PostgreSQL
 // has defaulted its own checkpoint timeout to for two decades. rmp task #370
-// measured the two costs that analogy stands in for, and the measurement INVERTED
-// the expected profile: the cost everyone expects to bind is zero, and the cost
-// that actually decides the value is one the analogy never raises. The values
-// survive. The reason they survive has nothing to do with the analogy that chose
-// them, and the rest of this comment is that reason and not that analogy.
+// examined the two costs that analogy stands in for and INVERTED the expected
+// profile: the cost everyone expects to bind does not bind, and the cost that
+// actually decides the value is one the analogy never raises. The values survive.
+// The reason they survive has nothing to do with the analogy that chose them, and
+// the rest of this comment is that reason and not that analogy.
 //
-// # The writer cost, which everyone expects to be binding, is zero
+// # The writer cost, which everyone expects to be binding, is not
 //
-// BenchmarkServedWriteWithCheckpointing runs one write load twice at eight
-// concurrent writers, 20,000 writes per run, four interleaved repeats per arm:
-// once with no cadence at all, once folding every second. Folding every second
-// gives 2730 ops/s against the control arm's 2725 — 0.2% apart, against a 1.5%
-// spread WITHIN each arm — and p99 4.78 ms against 5.60 ms, which is inside the
-// control arm's own 4.12-5.74 ms spread. The difference is not merely small: it
-// is below the noise of the measurement that went looking for it.
+// The engine's three-phase design is why, and being structural it does not depend
+// on the hardware. Only phase 1a — quiesce, read the durable watermark, open the
+// MVCC read instant — and phase 3 — truncate the log prefix — hold the commit
+// lock, and both are O(1) in the graph. Phase 1b's O(V+E) serialisation and phase
+// 2's disk write, which the engine's own documentation calls potentially
+// multi-second, both run with the lock RELEASED, and writers commit throughout
+// them. A fold therefore does not stall a writer for the time it takes to write a
+// snapshot, whatever the cadence, and there is no latency argument against a
+// short one.
 //
-// The engine's three-phase design is why, and it is the reason the result
-// generalises past this hardware. Only phase 1a — quiesce, read the durable
-// watermark, open the MVCC read instant — and phase 3 — truncate the log prefix —
-// hold the commit lock, and both are O(1) in the graph. Phase 1b's O(V+E)
-// serialisation and phase 2's "potentially multi-second" disk write both run with
-// the lock RELEASED, and writers commit throughout them. There is therefore no
-// p99 argument against any cadence, however short.
+// # The benefit of a shorter cadence
 //
-// # The benefit of a shorter cadence, quantified
-//
-// The write-ahead log grows 83.97 bytes per single-property write, constant at
-// every concurrency measured. Recovery is linear in the log at 0.232 s per MB:
-// 0.47 MB in 0.144 s, 1.90 MB in 0.466 s, 4.79 MB in 1.128 s, 9.59 MB in 2.222 s.
-// At the maximum rate the server can be driven in process, 6729 writes/s, that is
-// 565 KB/s of log, so five minutes is a worst case of about 162 MB of log and
-// 38 s of recovery; at the 1265 writes/s concurrent `rmp graph client` processes
-// reach, one statement per process, it is 30 MB and 7.0 s. Those are the numbers
-// a shorter cadence buys down, and they are the whole of what it buys.
+// The write-ahead log grows by a roughly constant amount per write, and recovery
+// is linear in the log, so the log a kill leaves behind and the time to recover it
+// are both bounded by the cadence times the write rate. A shorter cadence buys
+// that bound down, and that is the whole of what it buys.
 //
 // # The cost of a shorter cadence, which is the one that decides it
 //
 // The engine's checkpointer has NO no-op gate. runNonBlocking captures and
 // writeAndTruncate writes unconditionally; nothing anywhere compares this fold's
 // watermark against the previous fold's, so a fold with nothing to fold still
-// serialises the whole graph and still rewrites the whole snapshot. Measured
-// directly rather than inferred: a server on a two-second cadence, with NO client
-// connected and not one statement sent, rewrote its 20.2 MB snapshot on every
-// tick, the manifest's mtime advancing every two to three seconds.
+// serialises the whole graph and still rewrites the whole snapshot. That is
+// observable without timing anything: a server on a short cadence, with NO client
+// connected and not one statement sent, rewrites its snapshot on every tick, and
+// the manifest's modification time advances with it.
 //
 // That is the opposite of the direct path, where graphstore.Store.Checkpoint
 // carries exactly that gate — it compares the writer's durable offset against the
@@ -424,23 +415,22 @@ type checkpointCadence struct {
 // so a statement that appended nothing leaves snapshot/ and wal untouched. The
 // gate exists in this project; it does not exist in the loop.
 //
-// Over ONE DAY of an idle server, on the real 1.4 MB knowledge graph: 403 MB
-// written at five minutes, 1.0 GB at two minutes, 2.0 GB at one minute. On a
-// 36 MB graph — the largest real KNOWLEDGE GRAPH this project has measured, as
-// distinct from the synthetic stores the checkpoint-cost figures above come
-// from — 10 GB, 26 GB and 52 GB respectively.
+// The consequence is that an IDLE server's disk traffic is the whole snapshot,
+// once per tick, for as long as it runs: it is inversely proportional to the
+// cadence and proportional to the size of the graph, and it is paid whether or not
+// anything was written.
 //
 // # The conclusion, stated as the inversion it is
 //
 // The two costs point in OPPOSITE directions, and the one expected to decide the
-// value decides nothing: the writer cost of folding is zero, so nothing argues for
-// a longer cadence from the writers' side, while the idle cost of folding is a
-// whole graph rewritten per tick, which argues for a longer one from the disk's.
-// This product's server is idle far more often than it is saturated — a knowledge
-// graph is queried in bursts and written at a commit — so the idle cost is the one
-// that is actually paid, and the longer cadence is the better one.
+// value decides nothing: folding does not stall writers, so nothing argues for a
+// longer cadence from the writers' side, while the idle cost of folding is a whole
+// graph rewritten per tick, which argues for a longer one from the disk's. This
+// product's server is idle far more often than it is saturated — a knowledge graph
+// is queried in bursts and written at a commit — so the idle cost is the one that
+// is actually paid, and the longer cadence is the better one.
 //
-// Five minutes therefore survives, on evidence that has nothing to do with the
+// Five minutes therefore survives, on a reason that has nothing to do with the
 // analogy that provisionally chose it. Seventy-five seconds is its quarter, which
 // is what the engine would have derived; it is stated rather than derived for the
 // reasons [checkpointCadence] gives.

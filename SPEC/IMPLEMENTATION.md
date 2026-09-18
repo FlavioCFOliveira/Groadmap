@@ -186,7 +186,7 @@ constants, is therefore what is shared.
 
 **What the policy does not have is a single delay shape.** It publishes two, and
 each caller selects one. The two conditions this project retries are not the same
-condition, and the delay that is right for one is measurably wrong for the other:
+condition, and the delay that is right for one is wrong for the other:
 
 | Shape | Delay before each retry | Retried under it |
 |-------|-------------------------|------------------|
@@ -264,83 +264,65 @@ graph client retries on the serialisation conflict alone
   loop stops as soon as that total is spent, so the shape changes how the waiting
   is distributed and never how long a caller can be made to wait.
 
-**Why a second shape exists, stated as the measurement that produced it rather
-than as a preference.** A first-updater-wins serialisation conflict invites the
-reading that no delay is needed at all — the winner has already committed, so the
-loser should succeed on its next attempt. Measured against a real server, that
-reading is not merely suboptimal, it is a congestion collapse: retrying
-immediately, six attempts, failed **79.9%** of statements where the fixed ladder,
-under the identical load in the same experiment, failed **0.15%**. A loser that
-waits removes itself from the contending set; a loser that retries at once keeps
-that set saturated. **The delay is load shedding, and the conflict rate is a
-function of the offered load the retries themselves create.**
+**Why a second shape exists, stated as the mechanism rather than as a
+preference.** A first-updater-wins serialisation conflict invites the reading
+that no delay is needed at all — the winner has already committed, so the loser
+should succeed on its next attempt. That reading is wrong, and it is wrong by a
+wide margin rather than by a little: a loser that retries at once stays in the
+contending set and keeps it saturated, so the conflict rate rises with the load
+the retries themselves offer, and retrying immediately collapses under
+contention where a delayed retry does not. A loser that waits removes itself from
+that set. **The delay is load shedding, and the conflict rate is a function of the
+offered load the retries themselves create.**
 
 Once the delay is understood as load shedding, the shape follows from what sheds
-load best inside a fixed budget. Measured head to head under identical load on
-one server, with sixteen and then sixty-four concurrent writers all updating a
-single node:
+load best inside a fixed budget. Full jitter is that shape. It spreads the
+contending set over the whole interval below the ceiling instead of releasing it
+in a cohort at each rung, so it clears a contended node under a load at which the
+fixed ladder does not, and it does so without a longer worst case: both shapes
+spend the same 2500ms total. What it costs is server work, in the form of more
+attempts per contended statement, and it costs nothing at all when there is no
+contention, because an uncontended statement never reaches a retry under either
+shape.
 
-| Shape, all inside 2500ms | Exhausted, 16 writers | Exhausted, 64 writers | Worst observed wait | Attempts per statement |
-|--------------------------|----------------------|-----------------------|---------------------|------------------------|
-| The fixed ladder | 0.08-0.30% | 0.86-1.46% | 2.5s | 1.07-1.33 |
-| Full jitter, ceiling 5 to 250ms | 0-0.017% | 0.07-0.22% | 1.6-2.5s | 2.19-3.48 |
-
-The sixteen-writer figure for full jitter spans two samples of the same load. The
-head-to-head experiment saw no exhaustion in 18,000 statements; the later
-measurement of the shape in force, below, saw 4 in 60,000, and never more than
-one in a run of 6,000. A run that sees none is therefore no evidence that none
-occur, and neither figure is a bound.
-
-Full jitter cuts the failure at sixteen writers from 0.08-0.30% of statements to
-0-0.017%, cuts it by between four and thirteen times at sixty-four, holds a worst
-case **shorter** than the fixed ladder's rather than longer, halves the 99th-percentile wait at sixty-four
-writers, and raises throughput by 15-45%. What it costs is server work: about
-2.6 times the attempts per statement under contention, and nothing at all when
-there is no contention, because an uncontended statement never reaches a retry
-under either shape.
-
-**What full jitter leaves is a property of one hot node.** Measured against a
-real server built from the production composition and running the production
-checkpoint cadence, under the shape in force, with sixteen concurrent writers
-sending 6,000 statements per run — one connection per statement, each setting a
-property on one node, the writers rotating over the nodes — and only the number
-of distinct nodes varied:
-
-| Distinct nodes written | Runs | Exhausted | Statements per second |
-|------------------------|------|-----------|-----------------------|
-| 1 | 10 | 4 in 60,000 (0-0.017% per run) | 616-631 |
-| 2 | 3 | 0 in 18,000 | 762-772 |
-| 4 | 3 | 0 in 18,000 | 1,346-1,369 |
-| 8 | 3 | 0 in 18,000 | 2,426-2,594 |
-| 16 | 3 | 0 in 18,000 | 3,465-4,324 |
-| 32 | 3 | 0 in 18,000 | 5,886-6,168 |
-| 64 | 3 | 0 in 18,000 | 6,065-6,101 |
-
-Only the writers that shared a single node exhausted the retry at all, and
-throughput rose almost tenfold as the same sixteen writers spread over thirty-two
-nodes. The figures are samples from one sixteen-core machine and not bounds.
-What they establish is the shape — the failure belongs to writers converging on
-one node, and spreading them removes it — which
+**What full jitter leaves is a property of one hot node.** Writers spread across
+distinct nodes barely collide; writers converging on one node collide steadily
+however few of them there are, and it is only writers that all share a single
+node that exhaust the retry at all. That is the shape of the residual failure —
+it belongs to convergence on one node, and spreading the writes removes it rather
+than moving the point at which it appears — and it is what
 `GRAPH.md § Concurrency Inside the Server`, rule 8, states for the caller. This
-section is canonical for these figures, and no other section restates them.
+section is canonical for the shape, and no other section restates it.
 
-**Two shapes that were measured and rejected, recorded so that they are not
-measured again.** Jitter with a ceiling that does not grow is adequate at sixteen
-writers (0.03-0.08%) and collapses at sixty-four (8.7-9.0%): a fixed cap of a few
-tens of milliseconds cannot shed enough load. A ceiling that grows but stops at
-100ms is **worse than the fixed ladder** at sixty-four writers (1.21-1.48%). The
-ceiling has to grow and it has to reach a few hundred milliseconds; the cap, and
-not the randomisation alone, is what sheds the load.
+**Two ceilings that were tried and rejected, recorded so that they are not tried
+again.** A jitter ceiling that does not grow is adequate against a light
+contending set and collapses against a heavy one: a fixed cap of a few tens of
+milliseconds cannot shed enough load. A ceiling that grows but stops at 100ms is
+worse than the fixed ladder under heavy contention. The ceiling has to grow and it
+has to reach a few hundred milliseconds; the cap, and not the randomisation alone,
+is what sheds the load. The published ceiling of 250ms is the decision those two
+rejections produced.
 
-**Lengthening the total instead of reshaping it was measured and is dominated.**
-Walking the fixed ladder for 6 seconds rather than 2500ms buys one decimal order
-of magnitude for five extra seconds of worst case, which is less than full jitter
-buys for none. It also collides with a published derivation: the graph store's
-wait budget is the statement budget plus this policy's total
-(`GRAPH.md § Lock Contention`), and a caller that waited 6 seconds on a conflict
-would sit within 1.5 seconds of the deadline at which its failure is reported as
-a server that did not answer and a statement whose outcome is unknown — which,
-for a conflict whose loser provably committed nothing, would be false.
+**Lengthening the total instead of reshaping it is rejected, and the reason is a
+published derivation rather than a preference.** Walking the fixed ladder for
+longer than 2500ms buys less than reshaping the delay buys, and it costs a longer
+worst case where reshaping costs none. It also collides with a derivation this
+project publishes: the graph store's wait budget is the statement budget plus this
+policy's total (`GRAPH.md § Lock Contention`), so lengthening the total lengthens
+that wait. A caller that waited 6 seconds on a conflict would sit within 1.5
+seconds of the deadline at which its failure is reported as a server that did not
+answer and a statement whose outcome is unknown — which, for a conflict whose
+loser provably committed nothing, would be false.
+
+**How the two shapes are proven.** Neither shape is established by timing a run.
+The ladder, the ceiling sequence, the attempt caps and the 2500ms total are
+proven against the delay source the policy is given: a test supplies that source,
+drives the loop to exhaustion, and asserts the **sequence of delays the policy
+asked for** and the number of attempts it made. A caller's selection of a shape is
+proven by which entry point it calls, and the derived figures — the wait budget of
+`GRAPH.md § Lock Contention`, the retry figure the conflict line renders — are
+proven by comparing declarations, never by observing a clock
+(`BUILD.md § No Benchmarks and No Performance-Measurement Tests`).
 
 ### Safe Concurrent Patterns
 
@@ -415,7 +397,10 @@ Multiple database functions build SQL queries using `fmt.Sprintf` with `strings.
 - `AddTasksToSprint` - IN clause for task IDs
 - `RemoveTasksFromSprint` - IN clause for task IDs
 
-**Current Overhead:** 20-30% on repeated batch operations.
+**The overhead is a recompilation on every execution**, because a query string
+that is unique to its call can match nothing SQLite has already compiled. No
+figure is published for what that costs: nothing in this project measures it, and
+a figure no check re-derives is one a reader would be entitled to trust.
 
 ### Cache Strategy
 
@@ -460,12 +445,29 @@ type BatchProcessor struct {
 func (bp *BatchProcessor) ProcessChunks(ids []int, fn func(chunk []int) error) error
 ```
 
-### Performance Requirements
+### Cache Requirements
 
-- 20-30% improvement in batch update operations
-- Query plan cache hit rate above 90% for repeated operations
-- Batch processing handles 1000+ IDs efficiently
-- Thread-safe implementation verified with concurrent access
+These are the requirements on the cache, and every one of them is settled by
+inspection rather than by measurement
+(`BUILD.md § No Benchmarks and No Performance-Measurement Tests`):
+
+- A batch operation of a cached size MUST take its query text from the cache
+  rather than build a new string, so that repeated operations of that size
+  present SQLite with a query it has already compiled. The requirement is on the
+  **identity** of the text: the same operation at the same size yields the same
+  string on every call.
+- The cached sizes MUST be exactly those listed above, and the template count
+  MUST be the 103 that set yields.
+- A list of any length MUST be processed correctly, including one above the
+  largest cached size and one above the SQLite variable limit, which
+  `BatchProcessor` chunks. Correctness here is the set of rows affected, and it
+  MUST NOT depend on how the list was chunked.
+- The implementation MUST be safe under concurrent access, proven by the race
+  detector over concurrent readers and writers of the cache.
+
+No throughput figure, cache-hit rate, or improvement percentage is required or
+published. The cache is justified by the recompilation it removes, and that
+removal is visible in the query text without timing anything.
 
 ## Graph Store Concurrency
 
@@ -490,7 +492,7 @@ under the loop of [Retry Logic](#retry-logic) like every other retry in this
 project, and under that policy's **full-jitter** delay shape rather than its fixed
 ladder, because a conflict is a contention failure whose rate is a function of the
 load the retries themselves offer; that section is canonical for both shapes and
-for the measurements that separate them.
+for the reasoning that separates them.
 
 Groadmap does not depend on the engine to serialise access to the store between
 processes. It serialises it itself, at the process level, on a lock file that
@@ -603,9 +605,9 @@ the boundary.
    statement budget plus the backoff total, so the loop keeps retrying until that
    budget is exhausted rather than stopping after the five retries the SQLite
    policy makes.
-   `GRAPH.md § Lock Contention` is canonical for that sizing rule, for the figure
-   it yields, and for the measurements behind it, and this rule does not restate
-   those either. The SQLite total is not reused because the two locks do not
+   `GRAPH.md § Lock Contention` is canonical for that sizing rule and for the
+   figure it yields, and this rule does not restate them. The SQLite total is not
+   reused because the two locks do not
    cover the same thing: no SQLite lock is held across a statement whose cost a
    caller chooses, since Groadmap issues every SQL statement itself, while the
    graph store lock is held across an outgoing server's whole drain and shutdown.
@@ -628,8 +630,7 @@ the boundary.
    behind.
 
    Three limits survive that, and none is fixed by bounding the statement.
-   `GRAPH.md § Lock Contention` states all three and is canonical for them, with
-   the measurements behind them:
+   `GRAPH.md § Lock Contention` states all three and is canonical for them:
 
    - The allowance rule 3's wait budget reserves for the **fixed** part of a hold
      is a constant, while the quantity it covers grows linearly with the store's
@@ -691,12 +692,13 @@ records the runtime implications.
    reconciles the snapshot. A failure before or during the commit is an ordinary
    write failure (`utils.ErrGraphEngine`, exit code 1 at the caller), not a fold
    failure, and no fold is attempted.
-5. **Performance trade-off.** A full snapshot makes each fold cost proportional to
+5. **Cost trade-off.** A full snapshot makes each fold cost proportional to
    the live graph size, because the snapshot rewrites the committed state. That
    cost is why a long-lived server folds on a cadence rather than after every
    committed write: doing the latter would make every write cost the whole live
    graph while its neighbours waited for the quiesce the capture takes. The
-   cadence's value is set on measurement and is not fixed in this specification
+   cadence's value is an operational choice and is not fixed in this
+   specification
    (`GRAPH.md § Durability and Checkpointing in a Long-Lived Process`, rule 6).
 
 ### Statements Against a Contended Store

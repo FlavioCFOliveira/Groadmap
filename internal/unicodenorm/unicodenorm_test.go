@@ -1,3 +1,11 @@
+//go:build heavy
+
+// The checks in this file hold the Go statement of the browser's normalisation
+// rule equal to the module's, and hold the composition exclusions equal to the
+// Unicode Character Database. They sweep the whole of Unicode and, in one case,
+// every interacting pair of code points, so they run ON DEMAND ONLY, through
+// `make test-heavy`, and are compiled by no validation gate and no workflow.
+
 package unicodenorm_test
 
 import (

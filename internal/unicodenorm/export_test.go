@@ -1,3 +1,5 @@
+//go:build heavy
+
 package unicodenorm
 
 // The Go statement of the browser's copy of the normalisation rule is

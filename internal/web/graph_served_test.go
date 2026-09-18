@@ -181,10 +181,17 @@ func scriptedGraphSession(conn net.Conn) {
 // this request waited the full wait budget and then failed; it must now answer
 // from the server without touching the lock at all.
 //
-// Two things are asserted and both are needed. The RESULT, because a 200 carrying
-// an empty graph would prove only that nothing failed; and the ELAPSED TIME,
-// because a request that somehow served itself from the store after waiting would
-// otherwise look identical from the outside.
+// **The success IS the proof that no lock was taken**, and acceptance criterion
+// 147 says so: the lock is exclusive and is held for the whole life of a server,
+// so a request that contended for it would exhaust its bounded wait and fail
+// rather than succeed at all. The criterion forbids adding an assertion on
+// elapsed time, which would establish nothing the success has not
+// (SPEC/BUILD.md § No Benchmarks and No Performance-Measurement Tests).
+//
+// What the success has to carry is the RESULT, because a 200 over an empty graph
+// would prove only that nothing failed. The node below came back through the
+// protocol, from the scripted server, with the server's own identifier and
+// property value, so it cannot have come from the store.
 func TestLoadGraphView_ServedRoadmapNeitherWaitsForTheLockNorTakesIt(t *testing.T) {
 	t.Setenv("HOME", shortHome(t))
 	name := seedRoadmap(t, "backend-platform")
@@ -208,16 +215,14 @@ func TestLoadGraphView_ServedRoadmapNeitherWaitsForTheLockNorTakesIt(t *testing.
 	}
 	scriptedGraphServer(t, socket)
 
-	started := time.Now()
 	view, err := loadGraphView(context.Background(), name, "", "")
-	elapsed := time.Since(started)
 
 	if err != nil {
-		t.Fatalf("a graph data request against a SERVED roadmap failed with %v after %v. Resolving "+
+		t.Fatalf("a graph data request against a SERVED roadmap failed with %v. Resolving "+
 			"the socket first is what stops a running server from disabling this endpoint: the "+
 			"server holds the store's exclusive lock for its process lifetime, and no finite wait "+
 			"can be sized against such a hold (SPEC/WEB.md § Knowledge Graph from the GoGraph "+
-			"Store, rule 1)", err, elapsed)
+			"Store, rule 1)", err)
 	}
 	if len(view.Nodes) != 1 {
 		t.Fatalf("the response carries %d node(s), want the one the server returned; a 200 with an "+
@@ -233,11 +238,6 @@ func TestLoadGraphView_ServedRoadmapNeitherWaitsForTheLockNorTakesIt(t *testing.
 	}
 	if got := view.Nodes[0]["id"]; got != uint64(140) {
 		t.Errorf("node id = %v, want the server's own 140", got)
-	}
-
-	if elapsed >= graphlock.WaitBudget() {
-		t.Errorf("the request took %v, which reached the lock's %v wait budget. A served request "+
-			"takes no lock and waits for none", elapsed, graphlock.WaitBudget())
 	}
 }
 

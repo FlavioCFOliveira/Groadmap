@@ -2058,22 +2058,29 @@ The following composite indexes are designed to optimize frequently executed que
 
 ### Index Design Rationale
 
+Each rationale below states the query pattern the index serves and the work it
+removes — a table scan, a sort step, a read of a table row. **No figure is
+published for what any index saves, and none may be.** This project measures
+nothing (`BUILD.md § No Benchmarks and No Performance-Measurement Tests`), so a
+percentage here would be a number no check re-derives and a reader would be
+entitled to trust. What is claimed instead is the **plan**: that the statement the
+application issues is served by the named index and needs no sort and no table
+read. That claim is exact, and `Verification` below states how it is settled, on
+the production statement rather than on a retyped one.
+
 **idx_tasks_status_priority:**
 - Query pattern: `WHERE status = ? ORDER BY priority DESC`
 - Without index: Full table scan + sort operation
 - With index: Index scan only, no sort needed
-- Expected improvement: 90% query time reduction for filtered listings
 
 **idx_tasks_priority_created:**
 - Query pattern: `WHERE priority >= ? ORDER BY created_at`
 - Supports priority-based filtering with chronological ordering
-- Expected improvement: 80% query time reduction for priority filters
 
 **idx_sprint_tasks_lookup:**
 - Query pattern: `WHERE sprint_id = ?` in sprint_tasks table
 - Optimizes GetSprintTasks and sprint membership checks
 - The same index serves the grouped `WHERE sprint_id IN (...) ORDER BY sprint_id ASC, task_id ASC` read that resolves the `tasks` and `task_count` of every sprint the sprint listing returns (see `Read the Membership of Many Sprints (Grouped)` above): the leading column serves the lookup and the pair serves the ordering, so that read needs no sort step and touches no table row
-- Expected improvement: 70% query time reduction for sprint operations
 
 **idx_sprint_tasks_order:**
 - Query pattern: `WHERE sprint_id = ? ORDER BY position ASC` in the `sprint_tasks` table
@@ -2084,7 +2091,6 @@ The following composite indexes are designed to optimize frequently executed que
 **idx_audit_date:**
 - Query pattern: `WHERE performed_at >= ? AND performed_at <= ?`
 - Essential for audit log pagination and date range filtering
-- Expected improvement: 85% query time reduction for date range queries
 
 **idx_task_comments_task_created and idx_sprint_comments_sprint_created:**
 - Query pattern: `WHERE task_id = ? ORDER BY created_at ASC` (and the `sprint_id` equivalent)

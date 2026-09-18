@@ -186,11 +186,6 @@ func searchCombiningClass(r rune) uint8 { return unicodenorm.CombiningClass(r) }
 // data the shipped COMPOSE_TABLE carries.
 func searchCompositions() *unicodenorm.Composition { return unicodenorm.Compositions() }
 
-// buildSearchComposition derives the primary composites from the Unicode
-// character data. It is the one-time work searchCompositions memoises, exposed
-// so the derivation can be benchmarked on its own.
-func buildSearchComposition() *unicodenorm.Composition { return unicodenorm.BuildComposition() }
-
 // searchCompose returns the primary composite of two code points, if there is
 // one, as the browser's copy of the rule composes them from the shipped data. The
 // server's normalisation does not call it; see unicodenorm.Compose.

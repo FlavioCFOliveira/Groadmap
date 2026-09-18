@@ -168,7 +168,7 @@ func TestQueryCacheGetTasksTemplateExecutesAgainstRealSchema(t *testing.T) {
 	db, cleanup := setupTestDB(t)
 	defer cleanup()
 
-	ids := createBenchmarkTasks(t, db, 4)
+	ids := seedTasks(t, db, 4)
 
 	// Execute the cached template directly (not via GetTasks) to isolate the
 	// template's correctness against the real schema.
@@ -209,9 +209,14 @@ func countINPlaceholders(t *testing.T, query string) int {
 	return strings.Count(rest[:end], "?")
 }
 
-// createBenchmarkTasks inserts n minimal valid tasks via the production
-// seeded insert path and returns their IDs. Shared by query-cache and batch tests.
-func createBenchmarkTasks(t *testing.T, db *DB, n int) []int {
+// seedTasks inserts n minimal valid tasks via the production seeded insert path
+// and returns their IDs. Shared by the query-cache and batch tests.
+//
+// It was named createBenchmarkTasks while this package had benchmarks. It never
+// served one after they went, and the project keeps none
+// (SPEC/BUILD.md § No Benchmarks and No Performance-Measurement Tests), so the
+// name said something about the helper that was no longer true.
+func seedTasks(t *testing.T, db *DB, n int) []int {
 	t.Helper()
 	ids := make([]int, 0, n)
 	for i := 0; i < n; i++ {

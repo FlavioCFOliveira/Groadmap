@@ -1,4 +1,11 @@
 version: "2"
+# The `heavy` build tag is analysed alongside the default build. The tests behind
+# it run on demand only (see the Makefile target `test-heavy`), and without this
+# the linter would both leave them unchecked and report the code they are the only
+# callers of as unused.
+run:
+  build-tags:
+    - heavy
 linters:
   default: none
   enable:

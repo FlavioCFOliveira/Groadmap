@@ -81,7 +81,6 @@ import inspect
 import os
 import subprocess
 import sys
-import time
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -124,11 +123,12 @@ EMPTY_SOCKET_LINE = "Error: required parameter missing: --socket"
 # specially.
 STRAY = "reconciliation-report"
 
-# How long the command may take to refuse a stray token while a producer is
-# still writing to standard input. The contract is that it does not read the
-# stream at all, so the honest budget is milliseconds; thirty seconds is chosen
-# only so a loaded machine cannot produce a false failure.
-NO_WAIT_BUDGET_SECONDS = 30.0
+# The bound on waiting for a command that is expected to refuse and exit. It is
+# the harness's hang-breaker and not an assertion: what proves the command did
+# not read standard input is the BYTE COUNT it absorbed, asserted against
+# UNREAD_PIPE_CEILING_BYTES below, and SPEC/BUILD.md "No Benchmarks and No
+# Performance-Measurement Tests" forbids asserting a duration in its place.
+HUNG_RUN_BOUND_SECONDS = 30.0
 
 # The most a NON-READING command can absorb: whatever the operating system's
 # pipe buffer holds before the writer blocks. A command that performed the
@@ -536,7 +536,6 @@ class TestGraphStrayRefusalOrder(GraphStrayBase):
         """
         before = self.graph_fingerprint()
 
-        started = time.time()
         proc = subprocess.Popen(
             [self.test.cli_path, "graph", "client", "-r", self.roadmap, STRAY],
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
@@ -568,8 +567,7 @@ class TestGraphStrayRefusalOrder(GraphStrayBase):
         # of stream cannot deadlock.
         stdout = proc.stdout.read().decode()
         stderr = proc.stderr.read().decode()
-        proc.wait(timeout=NO_WAIT_BUDGET_SECONDS)
-        elapsed = time.time() - started
+        proc.wait(timeout=HUNG_RUN_BOUND_SECONDS)
 
         self.assert_refused_cleanly(
             proc.returncode, stdout, stderr, EXIT_MISUSE, client_line(STRAY),
@@ -582,10 +580,8 @@ class TestGraphStrayRefusalOrder(GraphStrayBase):
             f"unread pipe can hold: the stray token was refused only AFTER standard input was "
             f"read, so a subcommand given no --query would block on, and consume, a stream a "
             f"producer is still writing to")
-        assert elapsed < NO_WAIT_BUDGET_SECONDS, (
-            f"the refusal took {elapsed:.3f}s; it must not wait on standard input at all")
         self.assert_store_untouched(before, "a stray token with a producer writing to standard input")
-        print(f"  the stray token was refused after {sent} bytes, in {elapsed:.3f}s")
+        print(f"  the stray token was refused after absorbing {sent} bytes")
 
 
 class TestGraphStrayRefusalWording(GraphStrayBase):

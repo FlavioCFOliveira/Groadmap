@@ -335,6 +335,29 @@ func (h *Hold) Open() (*Store, error) {
 	}, nil
 }
 
+// walRetryable is the classifier openWAL hands the retry policy, held in a
+// variable so that a test can COUNT the failed opens the policy classified.
+//
+// That count is the observable the regression fence for #294 turns on at this
+// call site, and it determines the attempt count exactly: the loop asks the
+// classifier once after every attempt that FAILED and never after one that
+// succeeded, so an exhausted open classifies once per attempt and an open that
+// succeeds classifies once per attempt before the last. The defect was a loop
+// that gave up an attempt early, and SPEC/BUILD.md § No Benchmarks and No
+// Performance-Measurement Tests names a count of attempts as an admissible proof
+// while forbidding the elapsed-time comparison that used to stand here.
+//
+// The seam is here rather than on wal.Open so that the call to wal.Open stays a
+// call to wal.Open: internal/testenv's TestGraphEngineConstructionsMatchSpec
+// reads this function's write-side shape from that call expression, and a seam
+// that hid it would make this constructor look like one that opens a
+// transactional store over no write-ahead log at all.
+//
+// Production never reassigns it, it is unexported, and openWAL behaves exactly as
+// it did when backoff.Always was passed literally: every failure is retryable
+// either way.
+var walRetryable = backoff.Always
+
 // openWAL opens the write-ahead-log writer at walPath under the project's single
 // bounded backoff policy (internal/backoff), which owns the attempt count and the
 // delay ladder. This sequence used to keep its own constants and its own loop,
@@ -344,7 +367,7 @@ func (h *Hold) Open() (*Store, error) {
 // — another process holding the WAL directory lock — and a WAL that cannot be
 // opened for any other reason is not distinguishable here anyway.
 func openWAL(walPath string) (*wal.Writer, error) {
-	w, err := backoff.Retry(func() (*wal.Writer, error) { return wal.Open(walPath) }, backoff.Always)
+	w, err := backoff.Retry(func() (*wal.Writer, error) { return wal.Open(walPath) }, walRetryable)
 	if err != nil {
 		return nil, fmt.Errorf("%w: graph store unavailable: %v", utils.ErrGraphStore, err)
 	}

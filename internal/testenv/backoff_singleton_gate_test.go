@@ -24,11 +24,12 @@ import (
 // ever compared by eye, and for as long as they were written apart they drifted.
 //
 // The fix moved the loop — not merely the constants — into internal/backoff, so
-// no other package decides how many times or how long to wait. The measured
-// tests beside each call site prove that each one currently waits the shared
-// 2.5 s; this gate proves something they cannot, because a test can only measure
-// the loops it knows about: that no FOURTH copy can appear anywhere in the
-// module without a test failing.
+// no other package decides how many times or how long to wait. The test beside
+// each call site proves that the site reaches the whole of the shared policy, by
+// counting the ATTEMPTS it makes; internal/backoff proves the delay ladder
+// itself, against an injected delay source. This gate proves something none of
+// them can, because a test can only exercise the loops it knows about: that no
+// FOURTH copy can appear anywhere in the module without a test failing.
 //
 // It works by the property that makes a backoff a backoff — it blocks for a
 // duration. A retry loop that does not sleep is not one, so a production file
@@ -52,9 +53,12 @@ import (
 //     coordinate goroutines that way — and holding them to this rule would say
 //     nothing about the binary's behaviour.
 //   - It proves that only one package waits, not that the call sites route
-//     through it. That is what the measured tests in internal/db,
-//     internal/commands, internal/graphlock and internal/web establish, each
-//     against backoff.Total() rather than against a figure of its own.
+//     through it. That is what the attempt-count tests in internal/db,
+//     internal/graphstore, internal/graphlock and internal/graphserve establish,
+//     each against backoff.Attempts or a walk derived from the shared policy
+//     rather than against a figure of its own
+//     (SPEC/BUILD.md § No Benchmarks and No Performance-Measurement Tests: a
+//     count of attempts, never elapsed time).
 
 // backoffPkgDir is the one package allowed to block on time in production code:
 // the home of the project's single retry policy.

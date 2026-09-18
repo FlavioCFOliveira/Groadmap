@@ -741,6 +741,7 @@ Each release includes:
 
 - [ ] `govulncheck ./...` was run on the tree being released and its result acted on: no standard-library vulnerability is reachable from Groadmap's own code, and any reported-but-not-called vulnerability is recorded in the release notes (see `VERSION.md § Pre-Release Vulnerability Check`)
 - [ ] Every validation gate ran and passed in the release workflow, and no gate is reported as skipped, waived, or not installed (see `BUILD.md § Validation Gates`)
+- [ ] `make test-heavy` was run on the tree being released and passed. No validation gate and no workflow compiles the checks behind the `heavy` build tag, so a green release run says nothing about them and the release is the moment they are established (see `BUILD.md § Validation Gates`)
 - [ ] All binaries built successfully
 - [ ] SHA256 checksums generated
 - [ ] The released binary names its commit: on a binary extracted from a published archive, `rmp --version` prints `(commit <commit>)` with the first seven characters of the commit the tag names, and no `modified` marker (see How a Released Binary Carries Its Commit)

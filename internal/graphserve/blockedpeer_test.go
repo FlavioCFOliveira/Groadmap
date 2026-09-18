@@ -393,12 +393,11 @@ func TestSignalledServer_StopsWhenAPeerHasStoppedReading(t *testing.T) {
 	})
 	wedged.sendWithoutReading(t, "PULL", &proto.Pull{N: -1, QID: -1})
 
-	// Give the server time to fill the send buffer and park. The measured figure
-	// is 22 ms; this is two orders of magnitude of headroom, and the byte floor
-	// below is what actually establishes that the condition was reached.
+	// Give the server room to fill the send buffer and park. The pause is
+	// generous rather than tuned, and it asserts nothing: the byte floor at the
+	// end of this test is what establishes that the condition was reached.
 	time.Sleep(2 * time.Second)
 
-	start := time.Now()
 	if err := child.Process.Signal(syscall.SIGTERM); err != nil {
 		t.Fatalf("signalling the server: %v", err)
 	}
@@ -419,8 +418,6 @@ func TestSignalledServer_StopsWhenAPeerHasStoppedReading(t *testing.T) {
 			"SIGKILL, %s (rmp tasks #396 and #455)",
 			blockedPeerShutdownBound(), sigkillSkips)
 	}
-	elapsed := time.Since(start)
-
 	if waitErr != nil {
 		t.Errorf("the server exited %v after SIGTERM, want a clean exit 0. It stopped, but not "+
 			"by draining, checkpointing and releasing its lock, which is what the 0 row of "+
@@ -459,9 +456,6 @@ func TestSignalledServer_StopsWhenAPeerHasStoppedReading(t *testing.T) {
 	// own write error, which reads as a network fault rather than as a choice the
 	// server made.
 	requireShutdownCutRecord(t, diagnostics, 1)
-
-	t.Logf("stopped %s after SIGTERM with one peer parked on %d unread bytes",
-		elapsed.Round(time.Millisecond), pending)
 }
 
 // cutRecordMessage is the substring that identifies the shutdown's own record.

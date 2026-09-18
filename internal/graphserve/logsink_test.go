@@ -594,11 +594,10 @@ func TestDropSink_FlushIsBoundedWhenTheDestinationNeverAccepts(t *testing.T) {
 		_, _ = fmt.Fprintf(sink, "record-%04d\n", i)
 	}
 
-	returned := make(chan time.Duration, 1)
+	returned := make(chan struct{})
 	go func() {
-		start := time.Now()
+		defer close(returned)
 		sink.Flush()
-		returned <- time.Since(start)
 	}()
 
 	select {
@@ -730,7 +729,6 @@ func TestDropSink_ASignalStillStopsAServerWhoseStderrIsNotRead(t *testing.T) {
 	wg.Wait()
 	cancel()
 
-	start := time.Now()
 	if err := child.Process.Signal(syscall.SIGTERM); err != nil {
 		t.Fatalf("signalling the child: %v", err)
 	}
@@ -756,8 +754,6 @@ func TestDropSink_ASignalStillStopsAServerWhoseStderrIsNotRead(t *testing.T) {
 		t.Errorf("the socket %s still exists after a graceful stop (lstat error: %v): the shutdown "+
 			"sequence did not reach its last step", socket, err)
 	}
-	t.Logf("stopped %s after SIGTERM with stderr unread", time.Since(start).Round(time.Millisecond))
-
 	// Non-vacuity: the child's pipe must actually have filled, or this run never
 	// reached the condition. Read it only now — the write end went with the
 	// child, so the copy ends at EOF.

@@ -678,11 +678,9 @@ class TestServeFlagsAndErrorCases(GraphServerTestBase):
         )
         incumbent = self.start_server(roadmap)
 
-        started = time.monotonic()
         rc, out, err = self.run_cli(
             ["graph", "serve", "-r", roadmap], timeout=WAIT_BUDGET_S + 10,
         )
-        elapsed = time.monotonic() - started
 
         assert rc == EXIT_DATABASE, f"got {rc}, stderr={err!r}"
         expected = (
@@ -692,11 +690,13 @@ class TestServeFlagsAndErrorCases(GraphServerTestBase):
         )
         assert err.splitlines()[0] == expected, f"got {err.splitlines()[0]!r}\nwant {expected!r}"
         assert out == ""
-        assert elapsed >= WAIT_BUDGET_S - 0.5, (
-            f"the refusal must come from the BOUNDED WAIT for the lock "
-            f"(SPEC/GRAPH.md \"Lock Contention\"), so it must not return "
-            f"appreciably before {WAIT_BUDGET_S}s; took {elapsed:.2f}s"
-        )
+        # WHICH line was written is what establishes that the refusal came from
+        # the bounded wait for the LOCK rather than from the "already serving"
+        # probe: the two conditions publish different lines
+        # (SPEC/COMMANDS.md "Graph Server Socket Error Lines"), and the line
+        # above is the store-lock one. No assertion on elapsed time is added,
+        # which would separate nothing the line has not separated already
+        # (SPEC/BUILD.md "No Benchmarks and No Performance-Measurement Tests").
 
         assert incumbent.is_alive(), "the incumbent server must survive the refused challenger"
         self.assert_is_socket(incumbent.socket)
@@ -935,21 +935,21 @@ class TestGraphClient(GraphServerTestBase):
             "nothing at the derived path"
         )
 
-        started = time.monotonic()
         rc, out, err = self.run_cli(
             ["graph", "client", "-r", roadmap, "--query", "MATCH (n) RETURN count(n)"],
             timeout=WAIT_BUDGET_S + 10,
         )
-        elapsed = time.monotonic() - started
 
         assert rc == EXIT_DATABASE, f"got {rc}, stderr={err!r}"
+        # The NO-SERVER line, and not the unreachable one: the client resolved
+        # the absent socket inside its probe rather than waiting the probe out,
+        # and the two outcomes carry different published lines
+        # (SPEC/GRAPH.md acceptance criterion 46). That is the whole of the
+        # proof, and no duration is asserted
+        # (SPEC/BUILD.md "No Benchmarks and No Performance-Measurement Tests").
         expected = f"Error: graph server error: no graph server is listening on {derived}"
         assert err.splitlines()[0] == expected, err
         assert out == ""
-        assert elapsed < 2.0, (
-            f"the client neither opens a store nor waits for a lock, so this "
-            f"refusal must be prompt; took {elapsed:.2f}s"
-        )
 
         # The control: the server WAS serving all along, and naming its socket
         # reaches it. Without this the case would also pass against a server
@@ -1288,7 +1288,6 @@ class TestServerConnectionFailureModes(GraphServerTestBase):
             server = self.start_server(roadmap)
             socket_path = server.socket
 
-            started = time.monotonic()
             client = self.run_cli_async(
                 ["graph", "client", "-r", roadmap, "--query",
                  "MATCH (a:MetricSample),(b:MetricSample),(c:MetricSample) CREATE ()"]
@@ -1317,8 +1316,6 @@ class TestServerConnectionFailureModes(GraphServerTestBase):
                     f"not answer. Its backstop is {WAIT_BUDGET_S}s and nothing "
                     f"else was ever going to end that wait"
                 )
-            elapsed = time.monotonic() - started
-
             assert client.returncode == EXIT_DATABASE, (
                 f"{label}: got {client.returncode}, stderr={err!r}"
             )
@@ -1332,10 +1329,11 @@ class TestServerConnectionFailureModes(GraphServerTestBase):
                 f"{label}: a statement that failed must write nothing to "
                 f"stdout; got {out!r}"
             )
-            assert elapsed >= WAIT_BUDGET_S - 0.5, (
-                f"{label}: the failure must come from the caller's OWN "
-                f"backstop, not an earlier one; took {elapsed:.2f}s"
-            )
+            # The line NAMES the backstop that fired, rendered from the same
+            # declaration the caller armed, so which deadline ended the wait is
+            # read off the message rather than off a clock
+            # (SPEC/BUILD.md "No Benchmarks and No Performance-Measurement
+            # Tests").
 
             still_frozen = server.state()
             assert still_frozen == "T", (
@@ -1413,10 +1411,8 @@ class TestShutdownDrainsAStatementInFlight(GraphServerTestBase):
             "not test the drain at all"
         )
 
-        signalled_at = time.monotonic()
         server.proc.send_signal(signal.SIGINT)
         server_rc = server.wait_for_exit(timeout=30.0)
-        shutdown_elapsed = time.monotonic() - signalled_at
 
         assert server_rc == EXIT_OK, (
             f"the server must still exit 0 once the in-flight write has "
@@ -1425,14 +1421,13 @@ class TestShutdownDrainsAStatementInFlight(GraphServerTestBase):
         )
         assert not os.path.exists(server.socket), "the socket must be removed on exit"
 
-        assert shutdown_elapsed >= 2.5, (
-            f"the drain must have waited for the write's own 5s budget to "
-            f"cut it (the signal arrived ~4s before that point) rather than "
-            f"cutting the connection immediately; shutdown took only "
-            f"{shutdown_elapsed:.2f}s, which is what a no-op drain looks "
-            f"like from outside"
-        )
-
+        # That the drain WAITED for the in-flight write, rather than cutting
+        # its connection at once, is read off the CLIENT's own outcome below:
+        # a write the server's 5s statement budget cut carries the budget line,
+        # while a connection the shutdown had cut would carry a lost-connection
+        # line instead. The two are different published lines, so the line is
+        # the discriminator and no duration is asserted
+        # (SPEC/BUILD.md "No Benchmarks and No Performance-Measurement Tests").
         out, err = client.communicate(timeout=15.0)
         assert client.returncode == EXIT_DATABASE, f"got {client.returncode}, stderr={err!r}"
         assert err.startswith(
@@ -1516,10 +1511,11 @@ class TestConcurrentClients(GraphServerTestBase):
     """SPEC/GRAPH.md "Concurrency Inside the Server": readers never block and
     writers do not exclude one another. A light end-to-end demonstration
     through the built binary -- concurrent `rmp graph client` PROCESSES, not
-    goroutines inside a test binary -- that every read and every write lands,
-    which is the property `internal/graphserve`'s own benchmarks establish in
-    depth (rmp task #370) and this module only has to confirm survives the
-    CLI.
+    goroutines inside a test binary -- that every read and every write lands.
+    The subject is CORRECTNESS under concurrency and never throughput: what is
+    asserted is that every invocation exits 0 and that every element it wrote
+    is in the graph afterwards, with no figure taken for how long any of it
+    took (SPEC/BUILD.md "No Benchmarks and No Performance-Measurement Tests").
     """
 
     def test_concurrent_reads_and_writes_all_land(self):
@@ -1617,7 +1613,6 @@ class TestHotNodeContention(GraphServerTestBase):
         def stamp(writer_index):
             for round_index in range(self.ROUNDS):
                 value = f"agent-{writer_index}-round-{round_index}"
-                started = time.monotonic()
                 rc, out, err = self.run_cli(
                     ["graph", "client", "-r", roadmap, "--query",
                      "MATCH (n:Component {key:'internal/backoff'}) "
@@ -1626,17 +1621,14 @@ class TestHotNodeContention(GraphServerTestBase):
                 )
                 outcomes[writer_index * self.ROUNDS + round_index] = (
                     value, rc, out.strip(), (err.splitlines()[0] if err else ""),
-                    time.monotonic() - started,
                 )
 
         threads = [threading.Thread(target=stamp, args=(w,))
                    for w in range(self.WRITERS)]
-        wall_start = time.monotonic()
         for t in threads:
             t.start()
         for t in threads:
             t.join(timeout=300.0)
-        elapsed = time.monotonic() - wall_start
 
         # Nothing is allowed to be missing. A writer thread that died or hung
         # would otherwise leave holes that the exit-code sweep below would
@@ -1653,15 +1645,14 @@ class TestHotNodeContention(GraphServerTestBase):
         failed = [o for o in outcomes if o[1] != EXIT_OK]
         assert not failed, (
             f"{len(failed)} of {total} invocations failed under "
-            f"{self.WRITERS} concurrent clients writing ONE node in "
-            f"{elapsed:.2f}s ({total / elapsed:.0f} invocations/s). Every one "
+            f"{self.WRITERS} concurrent clients writing ONE node. Every one "
             f"was a valid statement against a healthy store, so every one had "
             f"to succeed: a serialisation conflict is a normal outcome and is "
             f"retried, under the full-jitter shape of the project's single "
             f"retry policy (SPEC/IMPLEMENTATION.md 'Retry Logic'). Reverting "
             f"that shape to the fixed ladder is what this failure looks "
             f"like.\n  first failures: "
-            + "\n    ".join(f"{v}: exit={rc} {msg}" for v, rc, _out, msg, _t in failed[:5])
+            + "\n    ".join(f"{v}: exit={rc} {msg}" for v, rc, _out, msg in failed[:5])
         )
 
         # A write that reports success must have reported the write shape.

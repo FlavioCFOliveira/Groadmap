@@ -1153,28 +1153,35 @@ class TestPublishedExamplesAreExecuted:
         newline and returns only when the process exits, `lifetime` seconds
         later. The start must instead fail when the timeout elapses, report the
         partial output it read, and leave nothing running.
+
+        WHICH of the two happened is read off the process's EXIT STATUS, not off
+        a clock (SPEC/BUILD.md "No Benchmarks and No Performance-Measurement
+        Tests"). A start that gave up on its own timeout found the process still
+        running and had to KILL it, so the status is a signal; a start that
+        waited for the process's own exit found it already gone, and `sleep`
+        exits 0. The two are different values and nothing in between.
         """
         timeout = 1.0
         lifetime = 6
         home = Workspace.fresh()
         try:
-            began = time.monotonic()
             started, buffered, proc = start_server(
                 f"printf '{{'; sleep {lifetime}", home, "socket", timeout=timeout)
-            elapsed = time.monotonic() - began
             assert started is None, (
                 f"a process that wrote only a partial line was taken as started: "
                 f"{started!r}")
-            assert timeout <= elapsed < timeout + 2.0, (
-                f"start_server(timeout={timeout}) returned after {elapsed:.2f}s "
-                f"against a process that stays alive {lifetime}s; the timeout does "
-                f"not bound the wait when the startup line is partial "
-                f"(rmp task 482)")
+            assert proc.returncode is not None and proc.returncode < 0, (
+                f"start_server(timeout={timeout}) returned exit status "
+                f"{proc.returncode} against a process that stays alive "
+                f"{lifetime}s. A negative status is a signal, which means the "
+                f"process was still running when the start gave up and had to be "
+                f"killed -- the timeout bounding the wait. A status of 0 means "
+                f"the start waited for the process's own exit instead, which is "
+                f"the defect (rmp task 482)")
             assert buffered == "{", (
                 f"the failed start did not report what it read: the process "
                 f"wrote '{{' and buffered is {buffered!r}")
-            assert proc.returncode is not None, (
-                "the failed start returned without reaping the process it started")
+
             leftover = surviving_groups({proc.pid})
             assert not leftover and proc.pid not in _LIVE_GROUPS, (
                 f"the failed start left its process group running or registered: "

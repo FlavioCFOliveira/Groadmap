@@ -3376,7 +3376,6 @@ class TestErrorStringParity:
         expensive = "MATCH (a),(b),(c) RETURN count(*)"
         env = os.environ.copy()
         env["HOME"] = str(self.test.home_dir)
-        started = time.monotonic()
         try:
             proc = subprocess.run(
                 [self.test.cli_path, "graph", "client", "-r", r,
@@ -3394,20 +3393,14 @@ class TestErrorStringParity:
                 f"budget did not bound the work at all (SPEC/GRAPH.md "
                 f"§ Statement Time Budget)"
             )
-        elapsed = time.monotonic() - started
-
-        # (i) The deadline is what ended it: the invocation cannot have
-        # returned before its own budget elapsed.
-        assert elapsed >= 4.9, (
-            f"the invocation returned after {elapsed:.2f}s, before its 5s "
-            f"budget could elapse: whatever failed, it was not the budget"
-        )
-        # (ii) It was cut promptly rather than run to completion.
-        assert elapsed < 30, (
-            f"the invocation took {elapsed:.2f}s under a 5s budget: the "
-            f"deadline was not honoured promptly"
-        )
-        # (iii) Exit code 1, nothing on stdout, and the published line on
+        # (i) The PUBLISHED LINE is what establishes that the budget ended it,
+        # and SPEC/GRAPH.md acceptance criterion 39 says so in as many words:
+        # an invocation that failed for any other reason carries another line,
+        # so the line already separates the budget from every other cause,
+        # where a duration separates nothing and would make this a measurement
+        # of the machine. The criterion forbids adding one
+        # (SPEC/BUILD.md "No Benchmarks and No Performance-Measurement Tests").
+        # (ii) Exit code 1, nothing on stdout, and the published line on
         # stderr -- compared character for character, first line, exactly as
         # `check` compares every other string in this module.
         assert proc.returncode == 1, (

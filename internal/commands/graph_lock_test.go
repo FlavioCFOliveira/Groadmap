@@ -55,7 +55,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/FlavioCFOliveira/Groadmap/internal/graphlock"
 	"github.com/FlavioCFOliveira/Groadmap/internal/utils"
@@ -97,10 +96,15 @@ func fileSize(t *testing.T, path string) int64 {
 //     Without this the rest would pass against a server that had crashed;
 //   - the statement succeeds, and produces the value its own Cypher names, so a
 //     client that answered from nowhere would be caught;
-//   - it completes well inside the lock's wait budget, because an implementation
-//     that fell back to opening the store would spend that budget in full before
-//     failing, and the elapsed time is the only thing that separates the two from
-//     outside.
+//   - and that is the whole of it. The SUCCESS is the assertion: the lock is
+//     exclusive and is held for the entire life of the server, so an
+//     implementation that contended for it would exhaust its bounded wait and
+//     fail with a busy store rather than return a result at all. No assertion on
+//     elapsed time is added, because it would establish nothing the success has
+//     not already established (SPEC/GRAPH.md § Acceptance Criteria, criterion 20;
+//     SPEC/BUILD.md § No Benchmarks and No Performance-Measurement Tests). The
+//     same reasoning, on the same lock, is what SPEC/WEB.md criterion 147 states
+//     for the web surface.
 //
 // Both statement kinds are driven. A read and a write take the same route now —
 // the server does not examine the statement — and asserting only one would leave
@@ -147,23 +151,18 @@ func TestGraphClient_RunsAgainstAHeldLockWithoutWaitingForIt(t *testing.T) {
 					"Every assertion below would then be about an unheld lock", graphDir, roadmap)
 			}
 
-			start := time.Now()
 			stdout, _ := captureStdStreams(t, func() {
 				if runErr := runGraphClient([]string{"-r", roadmap, "--query", tc.query}); runErr != nil {
 					t.Errorf("a client statement must run in the server that holds the lock, not "+
 						"contend for it (SPEC/GRAPH.md § The Bolt Client): %v", runErr)
 				}
 			})
-			elapsed := time.Since(start)
 
 			if !strings.Contains(stdout, tc.want) {
-				t.Errorf("the invocation returned %q, want it to contain %q", stdout, tc.want)
-			}
-			if elapsed >= graphlock.WaitBudget() {
-				t.Errorf("the invocation took %v, reaching the lock's %v wait budget. A client "+
-					"takes no lock and waits for none; an invocation that spent the budget was "+
-					"contending for the store rather than speaking to the server",
-					elapsed, graphlock.WaitBudget())
+				t.Errorf("the invocation returned %q, want it to contain %q, produced by its own "+
+					"Cypher against a store whose exclusive lock was held throughout. An "+
+					"invocation that contended for that lock could only have failed",
+					stdout, tc.want)
 			}
 		})
 	}

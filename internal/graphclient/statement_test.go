@@ -561,9 +561,14 @@ func TestSend_ClassifiesAServerThatCannotBeReached(t *testing.T) {
 // bounds. The outcome is unknown for the same reason a lost connection's is, and
 // the caller does not fall back to the store.
 //
-// The budget is shortened through the same declaration production reads, so what
-// the test asserts is the relationship — the caller waits the WAIT budget — rather
-// than a figure of its own.
+// The budget is shortened through the same declaration production reads, so the
+// case is reached cheaply. WHICH deadline the caller arms is not asserted here
+// and is not asserted on a clock anywhere: it is a relationship between two
+// declared quantities, and TestSend_TheBackstopIsTheWaitBudgetAndNotTheStatementBudget
+// compares those declarations directly (SPEC/IMPLEMENTATION.md § Retry Logic;
+// SPEC/BUILD.md § No Benchmarks and No Performance-Measurement Tests). What this
+// test asserts is the CLASSIFICATION, which is the thing a silent server has to
+// be told apart by.
 func TestSend_ClassifiesAServerThatDoesNotAnswer(t *testing.T) {
 	previous := graphlock.StatementBudget
 	t.Cleanup(func() { graphlock.StatementBudget = previous })
@@ -578,9 +583,7 @@ func TestSend_ClassifiesAServerThatDoesNotAnswer(t *testing.T) {
 		}, runCount)
 	})
 
-	started := time.Now()
 	_, err := Send(context.Background(), server.socket, "MATCH (n) DETACH DELETE n")
-	elapsed := time.Since(started)
 
 	var sendErr *SendError
 	if !errors.As(err, &sendErr) {
@@ -589,11 +592,6 @@ func TestSend_ClassifiesAServerThatDoesNotAnswer(t *testing.T) {
 	if sendErr.Kind != FailureUnanswered {
 		t.Errorf("kind = %v, want FailureUnanswered: the connection is intact and the server is "+
 			"alive, so this is not a lost connection", sendErr.Kind)
-	}
-	if budget := graphlock.WaitBudget(); elapsed < budget {
-		t.Errorf("Send gave up after %v, before its %v backstop. The backstop is deliberately LATER "+
-			"than the server's statement budget so that a statement which committed just before the "+
-			"budget expired is never reported as one that wrote nothing", elapsed, budget)
 	}
 }
 

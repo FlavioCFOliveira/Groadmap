@@ -339,17 +339,25 @@ module is the one `go.mod` pins.
    change that caused it — a new module version, or a new toolchain — and never as
    a way of making a failing test pass.
 
-   Further tests, in `internal/unicodenorm`, cover the other directions. One holds
-   the composition exclusions the package derives to a transcribed copy of
-   Full_Composition_Exclusion over the whole of Unicode, in both directions. The
-   others hold the Go statement of the browser's algorithm (Rule 3) equal to
-   `norm.NFC` over every single code point and over every two-code-point sequence
-   `WEB.md § Roadmap Tasks Page` enumerates, so a module upgrade that changes how
-   the server normalises, rather than which data it reads, fails the `test` gate
-   too. The first guard catches shipped data that has drifted away from the
-   server's; the exclusion test catches derived data that has drifted away from
-   Unicode while the client faithfully follows it; and the equality tests catch a
-   shipped algorithm that no longer answers as the server does.
+   Further tests, in `internal/unicodenorm`, cover the other directions, and
+   **they are on demand rather than gated.** One holds the composition exclusions
+   the package derives to a transcribed copy of Full_Composition_Exclusion over
+   the whole of Unicode, in both directions. One is the named regression for the
+   quick-check defect above: the twelve code points it lists MUST normalise to
+   themselves. The others hold the Go statement of the browser's algorithm
+   (Rule 3) equal to `norm.NFC` over every single code point and over every
+   two-code-point sequence `WEB.md § Roadmap Tasks Page` enumerates. All four
+   carry the `heavy` build tag, so a module upgrade that changes how the server
+   normalises, rather than which data it reads, is caught by `make test-heavy`
+   and NOT by the `test` gate (see `Validation Gates`).
+
+   What the `test` gate still catches, at every run, is the guard test of this
+   rule: shipped data that has drifted away from the server's, which is the
+   drift a change of Unicode version produces. The exclusion test catches derived
+   data that has drifted away from Unicode while the client faithfully follows
+   it, and the equality tests catch a shipped algorithm that no longer answers as
+   the server does; both of those are established when `make test-heavy` is run,
+   and at no other moment.
 
 #### SQLite Driver Rules
 
@@ -1101,6 +1109,32 @@ Each gate is also available on its own, for example `make lint` or
 `make security`. Running the gates individually is a convenience during
 development; it does not replace `make check` before a commit.
 
+What the `test` gate may contain is bounded by
+`No Benchmarks and No Performance-Measurement Tests` below: the suite proves
+behaviour, and it measures nothing.
+
+**The `heavy` build tag marks tests no gate compiles.** A test file that declares
+`//go:build heavy` is compiled by nothing in the table above, and by neither
+workflow: the `test` gate does not build it, so it cannot fail, and a green gate
+run is no evidence about it. The tag is reserved for the exhaustive sweeps whose
+cost is minutes rather than seconds — the checks of `WEB.md § Roadmap Tasks Page`
+that hold the browser's copy of the normalisation rule equal to the server's.
+
+**`make test-heavy` is the only way those tests run, and it is not a gate.** The
+target runs `go test -tags heavy -race -timeout=60m ./...`: the whole module, the
+race detector on, and an explicit 60-minute timeout. It carries **no coverage
+profile**, because the sweeps take about an hour under `-race -coverprofile`
+against about a quarter of an hour under `-race` alone, and no gate reads a
+profile of them. `make check` does not run the target, no workflow runs it, and
+adding it to either would make it a seventh gate, which the set above forbids.
+Where it is required instead is `DEPLOY.md § Release Checklist`: a release records
+that it was run on the tree being released and that it passed.
+
+**The linter analyses the tag.** `.golangci.yml` sets `run.build-tags` to `heavy`,
+so the `lint` gate reads the tagged files and does not report the code whose only
+callers are in them as unused. The `lint` gate lints those files; it does not run
+them.
+
 ### Where the Gate Set Is Enforced
 
 The same six gates run in three places, and they mean the same thing in each:
@@ -1212,6 +1246,65 @@ same command over the same scope in all three places:
 - `security` runs `gosec -exclude-dir=.claude/worktrees ./...`, at the pinned
   scanner version, so the scanned scope, the accepted `#nosec` suppressions, and
   the rule set are identical everywhere.
+
+### No Benchmarks and No Performance-Measurement Tests
+
+**This project keeps no benchmarks and no performance-measurement tests, and no
+statement in this specification may require one.** The `test` gate runs the suite
+that proves behaviour. Nothing in that suite establishes how fast the product is,
+how much memory it uses, how many allocations it makes, or what throughput it
+sustains, and nothing anywhere in the repository does.
+
+The following are forbidden, in every package and every pipeline:
+
+1. A `Benchmark` function, whether or not any gate runs it. The gate set runs
+   `go test ./...`, which does not execute benchmarks, so an unrun benchmark
+   would be dead weight that no gate could ever defend.
+2. A test that asserts a duration, an allocation count, a resident-memory figure,
+   or a rate, or that compares two such quantities against each other.
+3. A requirement in this specification whose only stated proof is a benchmark or
+   a measurement of any of those quantities, and a performance target expressed
+   as a figure to reach.
+
+**Specified time-bounded behaviour is kept, and is proven without measuring.**
+Several behaviours this specification fixes are defined in terms of time: the
+graph statement budget (`GRAPH.md § Statement Time Budget`), the delay ladder and
+the jitter ceiling of the single retry policy (`IMPLEMENTATION.md § Retry Logic`),
+the graph store lock's bounded wait (`GRAPH.md § Lock Contention`), and the
+signal-ownership window of a long-lived server (`GRAPH.md § Server Startup`).
+Those requirements stand and the durations in them are contractual. What may not
+stand is a proof that reads the clock. A test establishes such a behaviour by an
+**observable other than elapsed time**, and the admissible observables are:
+
+- an injected clock or an injected delay source, which the test advances itself;
+- a count of attempts, of waits, or of steps taken;
+- a count of statements issued, which is how a claim about what a page or a
+  command costs the database is already settled (`WEB.md § Acceptance Criteria`,
+  criterion 92, and `DATABASE.md § Resolve the Sprint of Many Tasks (Grouped)`);
+- a state change that outlives the operation — a row, a file, a byte-for-byte
+  comparison of the graph store before and after;
+- the identity of the published error line, which distinguishes one failure
+  cause from another;
+- the exit code.
+
+A test MUST NOT sleep and then assert on what the clock says, MUST NOT assert
+that an operation finished within or after a given duration, and MUST NOT assert
+that one operation was quicker than another. Where a duration is itself the
+contract, the test asserts the **declared value** — that the constant the code
+reads is the one this specification fixes, and that it is read from one
+declaration rather than restated — and proves the behaviour around it by the
+observables above.
+
+**Requiring termination is not a timing assertion.** A test may require that an
+invocation exits rather than blocks; what it asserts is that the process ended,
+which is an outcome and not a duration. A run that hangs is ended by the `test`
+gate's own timeout (see `Permitted Differences Between the Three Pipelines`),
+which is the harness stopping a stuck run rather than a test measuring one.
+
+**This is not a gate.** It adds no target to the table above, changes no command
+any pipeline runs, and is enforced by review of what is written rather than by a
+check that runs. Adding a static check for it would be a change to the gate set
+and is not specified here.
 
 ## Artifact Structure
 

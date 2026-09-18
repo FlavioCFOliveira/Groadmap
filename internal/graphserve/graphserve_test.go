@@ -243,23 +243,23 @@ func TestQuiescent_IsTheConjunctionItClaimsToBe(t *testing.T) {
 
 // TestDrainUntil_ReturnsAtOnceWhenAlreadyQuiescent pins the ordinary case: a
 // server with nothing attached must not spend the drain's bound waiting for
-// nothing. The measured figure for it on a real server is 0.03 s.
+// nothing.
+//
+// One look is the whole of the proof, and it is an exact count rather than a
+// duration: the loop waits only BETWEEN looks, so a drain that asked its
+// condition once cannot have waited at all
+// (SPEC/BUILD.md § No Benchmarks and No Performance-Measurement Tests).
 func TestDrainUntil_ReturnsAtOnceWhenAlreadyQuiescent(t *testing.T) {
 	calls := 0
-	started := time.Now()
 	drainUntil(func() bool {
 		calls++
 		return true
 	})
-	elapsed := time.Since(started)
 
 	if calls != 1 {
 		t.Errorf("the condition was asked %d times, want exactly 1: a condition that already holds "+
-			"must not be re-checked after a delay", calls)
-	}
-	if elapsed >= backoff.FirstDelay {
-		t.Errorf("the drain took %v, which is at least the policy's first delay (%v); a server with "+
-			"nothing in flight must not wait at all", elapsed, backoff.FirstDelay)
+			"must not be re-checked after a delay, and one look is what proves nothing was waited "+
+			"for", calls)
 	}
 }
 
@@ -269,36 +269,35 @@ func TestDrainUntil_ReturnsAtOnceWhenAlreadyQuiescent(t *testing.T) {
 // into a hang.
 //
 // The budget is shortened for the test through the same declaration production
-// reads, so what is asserted is the relationship — the drain waits the wait
-// budget — rather than a figure written out here.
+// reads, and what is asserted is the number of LOOKS the drain takes, not how
+// long it took (SPEC/BUILD.md § No Benchmarks and No Performance-Measurement
+// Tests). The drain runs on backoff.RetryWithin over graphlock.WaitBudget, so it
+// looks once and then once more after each rung of the walk that budget pays
+// for. With the statement budget at zero the wait budget IS the SQLite total,
+// whose budgeted walk is the SQLite ladder element for element (internal/backoff's
+// TestBudgetedLadderMatchesTheRetryLadder), so the count is exactly
+// backoff.Attempts: fewer means the drain gave up inside its bound, and a drain
+// that never gave up would not return at all and would be stopped by the test
+// gate's own timeout.
 func TestDrainUntil_GivesUpAtTheWaitBudget(t *testing.T) {
 	previous := graphlock.StatementBudget
 	t.Cleanup(func() { graphlock.StatementBudget = previous })
 	graphlock.StatementBudget = 0
 
 	var calls atomic.Int64
-	started := time.Now()
 	drainUntil(func() bool {
 		calls.Add(1)
 		return false
 	})
-	elapsed := time.Since(started)
 
 	if calls.Load() < 2 {
 		t.Errorf("the condition was asked %d time(s); a drain that never sees its condition hold "+
 			"must retry rather than give up on the first look", calls.Load())
 	}
-	// The bound is the wait budget, which is now backoff.Total() alone. Allow the
-	// scheduler its slack on the upper side and assert the lower bound exactly:
-	// a drain that returned early would be the refuted formulation again.
-	budget := graphlock.WaitBudget()
-	if elapsed < budget {
-		t.Errorf("the drain gave up after %v, before its %v bound; it must wait the whole of it "+
-			"before the shutdown cuts what is left", elapsed, budget)
-	}
-	if elapsed > budget+2*time.Second {
-		t.Errorf("the drain took %v against a %v bound; it must be bounded, not merely eventual",
-			elapsed, budget)
+	if got, want := int(calls.Load()), backoff.Attempts; got != want {
+		t.Errorf("the condition was asked %d times against a %v bound, want %d: the drain must "+
+			"climb the whole of its bound before the shutdown cuts what is left",
+			got, graphlock.WaitBudget(), want)
 	}
 }
 

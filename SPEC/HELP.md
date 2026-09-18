@@ -910,7 +910,7 @@ introduces.
     closes is therefore a divergence between the contract and the published
     help rather than an unspecified behaviour. See
     `GRAPH.md § Concurrency Inside the Server`, canonical for the mechanism and
-    for the measured remedy, and `IMPLEMENTATION.md § Retry Logic`, canonical
+    for the remedy, and `IMPLEMENTATION.md § Retry Logic`, canonical
     for the policy whose exhaustion this reports.
 
 The `graph serve` and `graph client` helps carry an `Exit codes:` block like
