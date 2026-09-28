@@ -49,7 +49,7 @@ vet:
 # The linter's module path needs the /v2 suffix -- a v1 binary cannot read
 # .golangci.yml (version: "2").
 override GOLANGCI_LINT_VERSION := v2.13.1
-override GOSEC_VERSION := v2.28.0
+override GOSEC_VERSION := v2.29.0
 
 # The directory `go install` writes executables to: `go env GOBIN` when it is
 # not empty, otherwise the bin directory of the FIRST entry of `go env GOPATH`,

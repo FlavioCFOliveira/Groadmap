@@ -52,7 +52,7 @@ jobs:
       # in CI and in a local `make check`. A failure to install fails the job:
       # the gate is never skipped.
       - name: Install gosec
-        run: go install github.com/securego/gosec/v2/cmd/gosec@v2.28.0
+        run: go install github.com/securego/gosec/v2/cmd/gosec@v2.29.0
 
       - name: Run gosec
         run: gosec -exclude-dir=.claude/worktrees ./...
