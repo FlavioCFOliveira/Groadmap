@@ -13,7 +13,7 @@ import (
 // The guards in this file cover the per-column count badge of the two Kanban
 // boards: its COLOUR is the semantic colour of the status the column groups, while
 // its TEXT stays that column's task count (SPEC/WEB.md § Roadmap Tasks Page, Count
-// per column; § Sprint Detail Sub-Template, rule 4, Column header; § Status,
+// per column; § Sprint Detail Sub-Template, rule 3, Column header; § Status,
 // Priority, and Severity Badge Colours, rule 2; Acceptance Criterion 140).
 //
 // Two things make this rule hard to check one column at a time, and both are why
@@ -47,7 +47,7 @@ import (
 // inside a sprint is the exceptional case of a task returned to the backlog
 // without leaving the sprint — the column named DOING takes the colour of the
 // status named DOING, and CLOSED holds COMPLETED alone (SPEC/WEB.md § Sprint
-// Detail Sub-Template, rule 4, Column header).
+// Detail Sub-Template, rule 3, Column header).
 var wantSprintBoardCanonical = []struct {
 	heading   string
 	canonical models.TaskStatus
@@ -77,7 +77,7 @@ func TestSprintBoardColumns_NameTheCanonicalStatusOfTheirGroup(t *testing.T) {
 		if got.canonical != want.canonical {
 			t.Errorf("the %s column names %q as its canonical status, want %q; the count badge "+
 				"takes the colour of the status a task is normally in at that stage of the "+
-				"sprint (SPEC/WEB.md § Sprint Detail Sub-Template, rule 4, Column header)",
+				"sprint (SPEC/WEB.md § Sprint Detail Sub-Template, rule 3, Column header)",
 				got.heading, got.canonical, want.canonical)
 		}
 		// The canonical status must belong to the category the column holds, or the

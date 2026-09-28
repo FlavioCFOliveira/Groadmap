@@ -2,7 +2,7 @@ package web
 
 import (
 	"context"
-	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -14,9 +14,9 @@ import (
 
 // This file is the gate for the Roadmap Sprint Page's member-tasks board: the
 // three fixed columns, the placement and ordering of the cards inside them, the
-// identity between the column counts and the sprint status summary line, the
+// agreement between the column counts and the sprint's member tasks, the
 // card's content, the board's bounded height, and the page's comment read cost
-// (SPEC/WEB.md § Sprint Detail Sub-Template, rule 4; Acceptance Criteria 130 to
+// (SPEC/WEB.md § Sprint Detail Sub-Template, rule 3; Acceptance Criteria 130 to
 // 140). The COLOUR of each column's count badge is guarded separately, together
 // with the tasks board's, in board_column_badge_test.go.
 //
@@ -43,7 +43,7 @@ import (
 // The six member tasks populate all three columns, with two statuses in WAITING
 // and two in DOING, so a board that mapped one status per column — or that
 // grouped by a categorisation of its own — could not produce the counts the
-// summary line states.
+// member tasks' statuses call for.
 type sprintBoardFixture struct {
 	name     string
 	sprintID int
@@ -72,15 +72,15 @@ func (f *sprintBoardFixture) wantColumns() [][]int {
 	}
 }
 
-// wantSummaryLine is the sprint status summary line the fixture produces: three
-// WAITING, two DOING, one CLOSED, one of six completed (17%).
+// wantColumnCounts is what the fixture's member-task statuses call for: three
+// in BACKLOG or SPRINT, two in DOING or TESTING, one in COMPLETED.
 //
 // The three counts are pairwise distinct and none is zero, which is what makes
-// the identity assertion of Acceptance Criterion 131 discriminating: a board that
-// mapped the categories to the wrong columns would show three numbers that no
-// longer line up with P, A and C, where equal or zero counts would let a
-// mis-mapping pass unnoticed.
-const wantSummaryLine = "17% - P:3 A:2 C:1 - T:6"
+// the assertion of Acceptance Criterion 131 discriminating: a board that mapped
+// the categories to the wrong columns would show three numbers that no longer
+// line up with the statuses, where equal or zero counts would let a mis-mapping
+// pass unnoticed.
+var wantColumnCounts = [3]int{3, 2, 1}
 
 // The member-task titles, named so the fixture and the assertions agree on them
 // without repeating string literals.
@@ -180,7 +180,7 @@ func seedSprintBoardFixture(t *testing.T, name string) sprintBoardFixture {
 	// Membership forces every member to SPRINT, so the statuses that populate the
 	// other columns are set from there. runbook goes back to BACKLOG, which is
 	// the second status the WAITING column holds: SPEC/WEB.md assigns BACKLOG and
-	// SPRINT to that one column, and the sprint summary line counts both as
+	// SPRINT to that one column, and models.CalculateSprintShowResult counts both as
 	// pending, so a member in BACKLOG is a state the board must place, not a
 	// contrived one.
 	for status, ids := range map[models.TaskStatus][]int{
@@ -338,29 +338,6 @@ func memberCardIDs(t *testing.T, column string) []int {
 	return ids
 }
 
-// reSummaryLine captures the five values of the sprint status summary line.
-var reSummaryLine = regexp.MustCompile(
-	`data-role="sprint-summary">(\d+)% - P:(\d+) A:(\d+) C:(\d+) - T:(\d+)<`)
-
-// summaryLineCounts returns the P, A, C and T values of the summary line the page
-// rendered, read out of the served HTML rather than computed by the test.
-func summaryLineCounts(t *testing.T, body string) (pending, inProgress, completed, total int) {
-	t.Helper()
-
-	m := reSummaryLine.FindStringSubmatch(body)
-	if m == nil {
-		t.Fatalf("the sprint page renders no sprint status summary line in the documented format")
-	}
-	value := func(s string) int {
-		n, err := strconv.Atoi(s)
-		if err != nil {
-			t.Fatalf("the summary line carries the non-integer value %q: %v", s, err)
-		}
-		return n
-	}
-	return value(m[2]), value(m[3]), value(m[4]), value(m[5])
-}
-
 // ==================== THE THREE FIXED COLUMNS ====================
 
 // TestSprintBoard_RendersThreeFixedColumns is the gate for Acceptance Criterion
@@ -485,63 +462,81 @@ func TestSprintBoard_EmptySprintIsAnEmptyBoard(t *testing.T) {
 	}
 }
 
-// ==================== THE COUNTS ARE THE SUMMARY LINE'S OWN ====================
+// ==================== THE COUNTS ARE THE MEMBER TASKS' OWN ====================
 
-// TestSprintBoard_ColumnCountsAreTheSummaryLinesOwnNumbers is the gate for
-// Acceptance Criterion 131: each column's badge equals its counterpart in the
-// sprint status summary line rendered at the top of the same page — WAITING is P,
-// DOING is A, CLOSED is C — and the three sum to T.
+// TestSprintBoard_ColumnCountsMatchTheMemberTaskStatuses is the gate for
+// Acceptance Criterion 131: each column's badge is the number of the sprint's
+// member tasks in the statuses the column groups — WAITING counts BACKLOG and
+// SPRINT, DOING counts DOING and TESTING, CLOSED counts COMPLETED — which are the
+// Summary.Pending, Summary.InProgress, and Summary.Completed counters of
+// models.CalculateSprintShowResult for that sprint, and the three sum to
+// Summary.TotalTasks.
 //
-// Both sides are read out of ONE served page and compared against each other,
-// which is what the criterion asks for and is stronger than comparing each
-// against a number the test computes: the property under test is that the board
-// and the line group the sprint's tasks by the SAME categorisation, and a board
-// that grouped the statuses differently could still show three counts that each
-// looked plausible on its own.
-//
-// The fixture's three counts are pairwise distinct and none is zero, so a board
-// that mapped the categories to the wrong columns cannot satisfy the comparison by
-// coincidence.
-func TestSprintBoard_ColumnCountsAreTheSummaryLinesOwnNumbers(t *testing.T) {
+// The expected counts are derived from the sprint's member tasks as the database
+// holds them, read back independently of the page, and each badge is asserted
+// against its own expected count: a board that grouped the statuses differently
+// could still show three counts whose sum is right. The status groups are
+// written out here rather than taken from models.CategorizeTaskStatus, so the
+// check does not borrow the categorisation it is checking.
+func TestSprintBoard_ColumnCountsMatchTheMemberTaskStatuses(t *testing.T) {
 	t.Setenv("HOME", shortHome(t))
 	f := seedSprintBoardFixture(t, "settlement-platform")
 	mux := buildMux()
 
 	body := servePage(t, mux, f.path())
 
-	// The line is exactly the documented format, so the numbers below are read
-	// from the rendering the reader sees.
-	if !strings.Contains(body, wantSummaryLine) {
-		t.Fatalf("the sprint page's summary line is not %q", wantSummaryLine)
+	database, err := db.Open(f.name)
+	if err != nil {
+		t.Fatalf("opening the fixture roadmap: %v", err)
 	}
-	pending, inProgress, completed, total := summaryLineCounts(t, body)
+	defer database.Close() //nolint:errcheck // test cleanup
+	members, err := database.GetSprintTasksFull(context.Background(), f.sprintID, nil, false)
+	if err != nil {
+		t.Fatalf("reading the sprint's member tasks: %v", err)
+	}
+
+	groups := [3][]models.TaskStatus{
+		{models.StatusBacklog, models.StatusSprint},
+		{models.StatusDoing, models.StatusTesting},
+		{models.StatusCompleted},
+	}
+	var want [3]int
+	for _, task := range members {
+		for i, group := range groups {
+			if slices.Contains(group, task.Status) {
+				want[i]++
+			}
+		}
+	}
+
+	// The derivation agrees with the fixture's documented statuses and with the
+	// counters the SPEC names, so none of the three is a number of the test's own
+	// invention.
+	if want != wantColumnCounts {
+		t.Fatalf("the member tasks' statuses call for %v, want the fixture's %v", want, wantColumnCounts)
+	}
+	report := models.CalculateSprintShowResult(&models.Sprint{ID: f.sprintID, Status: models.SprintOpen}, members)
+	if got := [3]int{report.Summary.Pending, report.Summary.InProgress, report.Summary.Completed}; got != want {
+		t.Fatalf("CalculateSprintShowResult counts %v, the member tasks' statuses call for %v", got, want)
+	}
+	total := report.Summary.TotalTasks
+	if total != len(members) {
+		t.Fatalf("CalculateSprintShowResult counts %d tasks, the sprint has %d members", total, len(members))
+	}
 
 	// Falsifiability control: with equal or zero counts a mis-mapped board would
 	// satisfy the comparison below without grouping anything correctly.
-	if pending == inProgress || inProgress == completed || pending == completed {
-		t.Fatalf("the summary line reads P:%d A:%d C:%d; the three must differ for the "+
-			"comparison to discriminate", pending, inProgress, completed)
-	}
-	if pending == 0 || inProgress == 0 || completed == 0 {
-		t.Fatalf("the summary line reads P:%d A:%d C:%d; none may be zero for the comparison "+
-			"to discriminate", pending, inProgress, completed)
+	if want[0] == want[1] || want[1] == want[2] || want[0] == want[2] || slices.Contains(want[:], 0) {
+		t.Fatalf("the expected counts %v must be pairwise distinct and non-zero to discriminate", want)
 	}
 
 	columns := memberBoardColumns(t, body)
-	wantCounts := []struct {
-		label string
-		value int
-	}{
-		{"P", pending}, {"A", inProgress}, {"C", completed},
-	}
-
 	sum := 0
 	for i, column := range columns {
 		heading, count := columnHeader(t, column)
-		if count != wantCounts[i].value {
-			t.Errorf("the %s column's badge reads %d and the summary line's %s reads %d; the "+
-				"board and the line must group the sprint's tasks by the same categorisation",
-				heading, count, wantCounts[i].label, wantCounts[i].value)
+		if count != want[i] {
+			t.Errorf("the %s column's badge reads %d; the sprint has %d member tasks in %v",
+				heading, count, want[i], groups[i])
 		}
 		// The badge states what the column actually holds, not a number carried
 		// beside it: a count that disagreed with the cards would be false about
@@ -553,10 +548,10 @@ func TestSprintBoard_ColumnCountsAreTheSummaryLinesOwnNumbers(t *testing.T) {
 		sum += count
 	}
 	if sum != total {
-		t.Errorf("the three column badges sum to %d and the summary line's T reads %d", sum, total)
+		t.Errorf("the three column badges sum to %d and the sprint has %d member tasks", sum, total)
 	}
 	if cards := strings.Count(memberBoardRegion(t, body), cardOpen); cards != total {
-		t.Errorf("the board renders %d cards and the summary line's T reads %d", cards, total)
+		t.Errorf("the board renders %d cards and the sprint has %d member tasks", cards, total)
 	}
 }
 
@@ -570,7 +565,7 @@ func TestSprintBoard_ColumnCountsAreTheSummaryLinesOwnNumbers(t *testing.T) {
 // Four per column is the smallest set that can carry every case the ordering
 // rule states at once: two cards separated by their timestamp, two carrying the
 // SAME timestamp (the tie), and one carrying none at all (SPEC/WEB.md § Sprint
-// Detail Sub-Template, rule 4, The tiebreaker is the plan; Acceptance Criterion
+// Detail Sub-Template, rule 3, The tiebreaker is the plan; Acceptance Criterion
 // 132).
 //
 // The fields are grouped by column and declared in ID order within each group,
@@ -1112,7 +1107,7 @@ var sprintTieStartedAt = [...]string{
 // property the tiebreaker rests on: the sort that orders a column by its
 // timestamp is STABLE, so the cards the timestamp does not separate come out in
 // the sprint_tasks position order the read delivered them in (SPEC/WEB.md
-// § Sprint Detail Sub-Template, rule 4, The tiebreaker is the plan; Acceptance
+// § Sprint Detail Sub-Template, rule 3, The tiebreaker is the plan; Acceptance
 // Criterion 132).
 //
 // It exists because that property is INVISIBLE in a small column. Go's
@@ -1895,8 +1890,9 @@ func TestSprintBoard_CommentCountIsOneGroupedQueryWhateverN(t *testing.T) {
 // invented fourth one.
 //
 // This is the unit-level half of Acceptance Criterion 131. The page-level test
-// above compares two renderings of one sprint; this one states WHY they can never
-// disagree — there is one mapping from status to bucket, and the board reads it.
+// above checks the rendered counts against the member tasks' statuses; this one
+// states WHY the board can never disagree with models.CalculateSprintShowResult —
+// there is one mapping from status to bucket, and both read it.
 func TestGroupIntoSprintBoardColumns_ReusesTheSummaryCategorisation(t *testing.T) {
 	// Every status of the closed enum, and the column its category assigns it.
 	for _, status := range models.ValidTaskStatuses {

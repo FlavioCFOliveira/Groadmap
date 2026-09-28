@@ -335,7 +335,7 @@ func (v *taskView) SearchText() string {
 // It governs the TASKS board's card alone. The sprint page's member-tasks board
 // needs no such predicate: its card carries exactly two indicators, both of them
 // counts, and renders both on every card including when either is 0, so its footer
-// row is unconditional (SPEC/WEB.md § Sprint Detail Sub-Template, rule 4, Both
+// row is unconditional (SPEC/WEB.md § Sprint Detail Sub-Template, rule 3, Both
 // counters are always rendered; Acceptance Criterion 134).
 func (v *taskView) HasMeta() bool {
 	return v.Sprint != nil ||
@@ -691,48 +691,6 @@ type auditData struct {
 	HasNext    bool
 }
 
-// sprintCompletion is the precomputed per-sprint completion summary the shared
-// sprint presentation sub-template renders as its status summary line. It is
-// derived ONLY from the sprint's own loaded member tasks (no extra DB query),
-// using the shared models.CalculateSprintSummary categorisation so it never
-// diverges from models.CalculateSprintShowResult (SPEC/WEB.md § Shared Sprint
-// Presentation Sub-Template, sprint status summary line). Precomputing it keeps
-// the template declarative: the template reads fields instead of computing.
-type sprintCompletion struct {
-	Pending    int // P: tasks in BACKLOG or SPRINT.
-	InProgress int // A ("Abertas"): tasks in DOING or TESTING.
-	Completed  int // C: tasks in COMPLETED.
-	Total      int // T: total member tasks.
-	Pct        int // completion percentage, rounded to the nearest integer (0 when Total == 0).
-}
-
-// newSprintCompletion builds the completion summary for one sprint from its
-// loaded member tasks. It reuses models.CalculateSprintSummary (the same
-// categorisation models.CalculateSprintShowResult encodes) so the web summary
-// and the CLI sprint report agree exactly.
-func newSprintCompletion(tasks []models.Task) sprintCompletion {
-	summary := models.CalculateSprintSummary(tasks)
-	return sprintCompletion{
-		Pending:    summary.Pending,
-		InProgress: summary.InProgress,
-		Completed:  summary.Completed,
-		Total:      summary.TotalTasks,
-		Pct:        summary.CompletionPercentage(),
-	}
-}
-
-// Line renders the sprint status summary line in the exact documented format
-// `<pct>% - P:<p> A:<a> C:<c> - T:<t>` (for example `33% - P:8 A:29 C:18 - T:55`).
-// P, A and C always sum to T: the three categories partition the closed task
-// status enum, so no member task is counted twice and none is left out.
-// It is the single place the format string lives, so both call sites of the
-// shared sub-template produce a byte-identical line (SPEC/WEB.md § Shared Sprint
-// Presentation Sub-Template, sprint status summary line).
-func (c sprintCompletion) Line() string {
-	return fmt.Sprintf("%d%% - P:%d A:%d C:%d - T:%d",
-		c.Pct, c.Pending, c.InProgress, c.Completed, c.Total)
-}
-
 // sprintView is one sprint as the Roadmap Sprints Page presents it: the sprint
 // record and nothing else. The page renders every sprint as a card with no
 // member tasks on it, so it holds no member-task slice and no completion
@@ -799,7 +757,7 @@ type sprintCard struct {
 // model rather than in the template. The template hands it to taskStatusBadge, the
 // same helper every task status badge takes its colour from, so the board reads
 // the ONE semantic mapping instead of carrying colour literals that could drift
-// from it (SPEC/WEB.md § Sprint Detail Sub-Template, rule 4, Column header;
+// from it (SPEC/WEB.md § Sprint Detail Sub-Template, rule 3, Column header;
 // § Status, Priority, and Severity Badge Colours, rule 2; Acceptance Criterion
 // 140).
 //
@@ -808,7 +766,7 @@ type sprintCard struct {
 // static/sprint-board.js resolves to find the element it hides. It is taken from
 // the column table below rather than derived in the template, so the three ids
 // are fixed literals, unique within the page by construction (SPEC/WEB.md
-// § Sprint Detail Sub-Template, rule 4, Column collapse; Acceptance Criterion
+// § Sprint Detail Sub-Template, rule 3, Column collapse; Acceptance Criterion
 // 213).
 //
 // Field order puts the strings before the slice so the pointer-scan prefix stops
@@ -823,22 +781,23 @@ type sprintBoardColumn struct {
 
 // sprintBoardColumns is the board's three fixed columns, left to right, each
 // pairing the heading it shows with the sprint-summary category it holds
-// (SPEC/WEB.md § Sprint Detail Sub-Template, rule 4, Three fixed columns).
+// (SPEC/WEB.md § Sprint Detail Sub-Template, rule 3, Three fixed columns).
 //
-// The category is models.TaskStatusCategory — the SAME categorisation the sprint
-// status summary line is computed from (models.CalculateSprintSummary, which
-// counts through models.CategorizeTaskStatus). Naming the categories here rather
-// than the statuses is what makes each column's badge equal one of that line's own
-// numbers by construction instead of by coincidence: there is one mapping from
-// status to bucket in the project, and both presentations read it (Acceptance
-// Criterion 131).
+// The category is models.TaskStatusCategory — the SAME categorisation
+// models.CalculateSprintShowResult counts its Summary.Pending,
+// Summary.InProgress, and Summary.Completed through
+// (models.CategorizeTaskStatus). Naming the categories here rather than the
+// statuses is what makes each column's badge equal one of those counters by
+// construction instead of by coincidence: there is one mapping from status to
+// bucket in the project, and both the board and the CLI sprint report read it
+// (Acceptance Criterion 131).
 //
 // The headings are written exactly as the specification spells them, in upper
 // case, and are not translated.
 //
 // The third field is the CANONICAL status of the group — the status a task is
 // normally in at that stage of the sprint — and it is what the column's count
-// badge is coloured by (SPEC/WEB.md § Sprint Detail Sub-Template, rule 4, Column
+// badge is coloured by (SPEC/WEB.md § Sprint Detail Sub-Template, rule 3, Column
 // header; Acceptance Criterion 140). A task waiting in a sprint is normally a
 // SPRINT task: a BACKLOG task inside a sprint is the exceptional case, the case of
 // a task returned to the backlog without leaving the sprint, so SPRINT is the
@@ -854,7 +813,7 @@ type sprintBoardColumn struct {
 //
 // The fourth field is the column's own ORDERING KEY: the timestamp the column's
 // cards are ordered by, descending, read off the task the card presents
-// (SPEC/WEB.md § Sprint Detail Sub-Template, rule 4, Order within a column;
+// (SPEC/WEB.md § Sprint Detail Sub-Template, rule 3, Order within a column;
 // Acceptance Criteria 14 and 132). The three columns do not share one order, so
 // naming each column's key beside the column itself keeps the whole ordering rule
 // in one table instead of spread over a switch elsewhere.
@@ -875,7 +834,7 @@ type sprintBoardColumn struct {
 // The fifth field is the id of the column's body, the element the column's
 // collapse toggle controls. The specification fixes the three ids, so they are
 // written out here in full, beside the heading they belong to, rather than
-// assembled from it (SPEC/WEB.md § Sprint Detail Sub-Template, rule 4, Column
+// assembled from it (SPEC/WEB.md § Sprint Detail Sub-Template, rule 3, Column
 // collapse; Acceptance Criterion 213).
 var sprintBoardColumns = [...]struct {
 	orderingTimestamp func(*models.Task) *string
@@ -924,7 +883,6 @@ type sprintDetail struct {
 	Columns  []sprintBoardColumn
 	Comments []models.SprintComment
 	Sprint   models.Sprint
-	Summary  sprintCompletion
 }
 
 // sprintPageData is the view model handed to the roadmap sprint template. It
@@ -939,7 +897,6 @@ type sprintPageData struct {
 	Columns  []sprintBoardColumn
 	Comments []models.SprintComment
 	Sprint   models.Sprint
-	Summary  sprintCompletion
 }
 
 // Detail returns the context object the "sprintDetail" sub-template consumes
@@ -957,7 +914,6 @@ func (d sprintPageData) Detail() sprintDetail {
 		Sprint:   d.Sprint,
 		Columns:  d.Columns,
 		Comments: d.Comments,
-		Summary:  d.Summary,
 	}
 }
 
@@ -1664,30 +1620,30 @@ func readSprint(ctx context.Context, src sprintSource, name string, id int) (spr
 		Tasks:    views,
 		Columns:  groupIntoSprintBoardColumns(views),
 		Comments: comments,
-		Summary:  newSprintCompletion(orderedTasks),
 	}, nil
 }
 
 // groupIntoSprintBoardColumns groups a sprint's member-task views into the
 // member-tasks board's three fixed columns — WAITING, DOING, CLOSED — in that
-// order (SPEC/WEB.md § Sprint Detail Sub-Template, rule 4; Acceptance Criteria
+// order (SPEC/WEB.md § Sprint Detail Sub-Template, rule 3; Acceptance Criteria
 // 130 to 132).
 //
 // The bucket a task falls in comes from models.CategorizeTaskStatus, which is the
 // project's ONE mapping from a task status to a sprint-summary category and is
-// what models.CalculateSprintSummary counts the summary line's P, A and C through.
-// Reusing it, rather than writing a second status-to-column mapping here, is what
-// makes each column's badge equal its counterpart in the summary line by
-// construction: there is a single categorisation, so the board and the line cannot
-// come to disagree about which tasks are waiting, which are being worked on, and
-// which are done (Acceptance Criterion 131).
+// what models.CalculateSprintShowResult counts its Pending, InProgress, and
+// Completed counters through. Reusing it, rather than writing a second
+// status-to-column mapping here, is what makes each column's badge equal its
+// counterpart counter by construction: there is a single categorisation, so the
+// board and the CLI sprint report cannot come to disagree about which tasks are
+// waiting, which are being worked on, and which are done (Acceptance Criterion
+// 131).
 //
 // All three columns are built on every request, whatever the sprint holds, so an
 // empty column is a built column with no card and a sprint with no member task
 // renders an empty board rather than an absent one (Acceptance Criterion 130).
 //
 // EACH COLUMN THEN TAKES ITS OWN ORDER, because the three columns answer three
-// different questions (SPEC/WEB.md § Sprint Detail Sub-Template, rule 4, Order
+// different questions (SPEC/WEB.md § Sprint Detail Sub-Template, rule 3, Order
 // within a column; Acceptance Criteria 14 and 132):
 //
 //   - WAITING keeps the sprint_tasks position order, ascending — the plan, which
@@ -1759,7 +1715,7 @@ func groupIntoSprintBoardColumns(views []taskView) []sprintBoardColumn {
 
 // sortByTimestampDescending orders a board column's cards by the timestamp key
 // reads off each card's task: most recent first, and a card whose timestamp is
-// absent last (SPEC/WEB.md § Sprint Detail Sub-Template, rule 4, The tiebreaker is
+// absent last (SPEC/WEB.md § Sprint Detail Sub-Template, rule 3, The tiebreaker is
 // the plan; Acceptance Criterion 132).
 //
 // The sort is STABLE and the comparison reads the timestamp and nothing else, so
@@ -1781,7 +1737,7 @@ func sortByTimestampDescending(cards []*taskView, key func(*models.Task) *string
 	// length, so sorting an empty or single-card column costs an allocation and
 	// about 32ns to reach a conclusion that is free here. Both are ordinary
 	// columns — a sprint whose work has not started renders an empty DOING and an
-	// empty CLOSED (SPEC/WEB.md § Sprint Detail Sub-Template, rule 4, Every column
+	// empty CLOSED (SPEC/WEB.md § Sprint Detail Sub-Template, rule 3, Every column
 	// is always rendered).
 	if len(cards) < 2 {
 		return

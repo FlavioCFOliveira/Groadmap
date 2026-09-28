@@ -88,7 +88,8 @@ func TestTaskBoardColumn_CarriesTheSpecifiedFixedWidth(t *testing.T) {
 // it (SPEC/WEB.md § Roadmap Tasks Page, Column width and card density).
 func TestTaskCardBody_IsTighterThanTheVendoredSmallCard(t *testing.T) {
 	vendored := embeddedSheet(t, "static/vendor/tabler/tabler.min.css")
-	framework := cssUniformRemPadding(t, soleCSSRule(t, vendored, ".card-sm > .card-body"),
+	framework := cssUniformRemPadding(t,
+		resolveCSSVarPadding(t, vendored, soleCSSRule(t, vendored, ".card-sm > .card-body")),
 		".card-sm > .card-body")
 
 	project := soleCSSRule(t, projectStyleSheet(t), ".task-card > .card-body")
@@ -172,4 +173,40 @@ func cssUniformRemPadding(t *testing.T, block, selector string) float64 {
 			selector, fields[0], err)
 	}
 	return n
+}
+
+// resolveCSSVarPadding returns block with a padding written as one custom
+// property reference, `padding: var(--name)`, replaced by the value sheet gives
+// --name. The vendored distribution states the small card's body padding through
+// --tblr-card-body-padding-sm, so the comparison reads the length that property
+// carries. The property must have exactly one value across the whole sheet:
+// two values would leave the applied one to the cascade, which this helper
+// refuses to guess. A block whose padding is not a lone var() is returned as is.
+func resolveCSSVarPadding(t *testing.T, sheet, block string) string {
+	t.Helper()
+	values := cssDeclarations(block, "padding")
+	if len(values) != 1 {
+		return block
+	}
+	name, ok := strings.CutPrefix(values[0], "var(")
+	if !ok {
+		return block
+	}
+	name, ok = strings.CutSuffix(name, ")")
+	if !ok || !strings.HasPrefix(name, "--") || strings.ContainsAny(name, ", ") {
+		return block
+	}
+	distinct := map[string]bool{}
+	for _, rule := range parseCSSRules(sheet) {
+		for _, v := range cssDeclarations(rule.decls, name) {
+			distinct[v] = true
+		}
+	}
+	if len(distinct) != 1 {
+		t.Fatalf("the stylesheet gives %s %d distinct values, want exactly 1", name, len(distinct))
+	}
+	for v := range distinct {
+		return "padding:" + v
+	}
+	return block
 }

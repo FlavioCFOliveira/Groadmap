@@ -2,6 +2,7 @@ package web
 
 import (
 	"io/fs"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -163,12 +164,12 @@ func TestShell_CarriesNoFooterAnywhere(t *testing.T) {
 }
 
 // The tests below are the regression guards for the admin-shell fidelity rules
-// in SPEC/WEB.md § UI Framework. Each one was written against the Tabler v1.4.0
-// sources that match the vendored distribution — the version banner in
-// static/vendor/tabler/tabler.min.css and core/package.json on the Tabler
-// repository both read 1.4.0 — and each asserts both the shape Tabler uses and
-// the absence of the shape it replaced, so a divergence cannot come back
-// unnoticed.
+// in SPEC/WEB.md § UI Framework. Each one is checked against the Tabler sources
+// of the vendored release — the version banner in
+// static/vendor/tabler/tabler.min.css reads 1.6.0, and the sources cited are
+// those of the @tabler/core@1.6.0 tag of the Tabler repository — and each
+// asserts both the shape Tabler uses and the absence of the shape it replaced,
+// so a divergence cannot come back unnoticed.
 
 // allPagePaths is every route that renders the admin shell: the four of
 // pagePaths plus the sprint detail page and the audit log page. The shell rules
@@ -199,7 +200,7 @@ func allPagePaths(name string) []string {
 func topNavbarRegion(t *testing.T, path, body string) string {
 	t.Helper()
 
-	const open = `<header class="navbar navbar-expand-md d-print-none">`
+	const open = `<header class="navbar d-print-none">`
 	start := strings.Index(body, open)
 	if start < 0 {
 		t.Fatalf("page %s: no top navbar in the response, so any assertion on it would be vacuous", path)
@@ -349,8 +350,9 @@ func topNavbarDefinition(t *testing.T) string {
 // (docs/content/ui/layout/page-layouts.mdx) and its built shell
 // (shared/layouts/DefaultLayout.astro), and the vendored stylesheet is written
 // for it: `.navbar-expand-lg.navbar-vertical~.navbar` and the matching
-// `~.page-wrapper` rule give the header and the wrapper the same 15rem offset
-// through the sibling combinator, which never applies to a nested header.
+// `~.page-wrapper` rule give the header and the wrapper the same inline-start
+// offset, the sidebar's width (--tblr-sidebar-width, 16rem), through the sibling
+// combinator, which never applies to a nested header.
 func TestTablerFidelity_TopNavbarIsSiblingOfPageWrapper(t *testing.T) {
 	t.Setenv("HOME", shortHome(t))
 	name := seedRoadmap(t, "platform-core")
@@ -360,7 +362,7 @@ func TestTablerFidelity_TopNavbarIsSiblingOfPageWrapper(t *testing.T) {
 	for _, path := range allPagePaths(name) {
 		body := servePage(t, mux, path)
 
-		header := strings.Index(body, `<header class="navbar navbar-expand-md d-print-none">`)
+		header := strings.Index(body, `<header class="navbar d-print-none">`)
 		closing := strings.Index(body, "</header>")
 		wrapper := strings.Index(body, `<div class="page-wrapper">`)
 		if header < 0 || closing < 0 || wrapper < 0 {
@@ -415,7 +417,7 @@ func TestTablerFidelity_SingleTogglerAndSingleBrand(t *testing.T) {
 }
 
 // TestTablerFidelity_SidebarCollapseIsNavLandmark asserts the sidebar collapse
-// is the labelled <nav> element Tabler v1.4.0 renders
+// is the labelled <nav> element Tabler v1.6.0 renders
 // (shared/components/navbar/Sidebar.astro: `<nav class="collapse
 // navbar-collapse" id="sidebar-menu" aria-label="Sidebar">`), not a bare div.
 func TestTablerFidelity_SidebarCollapseIsNavLandmark(t *testing.T) {
@@ -548,8 +550,8 @@ func TestTablerFidelity_PageHeaderActionsAreHiddenInPrint(t *testing.T) {
 // TestTablerFidelity_FluidLayoutUsesContainerXl asserts the page containers use
 // Tabler's fluid idiom: `<body class="layout-fluid">` plus `container-xl`
 // containers. The vendored stylesheet carries `.layout-fluid .container,
-// .layout-fluid [class*=" container-"], .layout-fluid [class^=container-]
-// {max-width:100%}` for exactly that pairing; with `container-fluid` containers
+// .layout-fluid [class*=" container-"], .layout-fluid [class^=container-]`
+// selectors, which set max-width:100%, for exactly that pairing; with `container-fluid` containers
 // the body class does nothing at all.
 //
 // The single container-fluid Tabler itself uses — the one inside the vertical
@@ -635,9 +637,6 @@ var structuralHookClasses = map[string]string{
 	// item and content wrappers, only the title of which is styled.
 	"datagrid-item":    "Tabler DatagridItem structure",
 	"datagrid-content": "Tabler DatagridItem structure",
-	// shared/components/navbar/NavbarMenu.astro wraps every nav-link label in
-	// this span; the vertical navbar styles the link, not the span.
-	"nav-link-title": "Tabler NavbarMenu structure",
 	// Project BEM block and element names whose styled members are the
 	// children: static/style.css styles .graph-query-bar__row and
 	// .labels-sidebar__heading, and these two are their unstyled hooks.
@@ -746,7 +745,7 @@ func isClassNameByte(b byte) bool {
 }
 
 // TestTablerFidelity_PageBodyIsTheMainLandmark asserts the page body is the
-// <main class="page-body"> landmark Tabler v1.4.0's built shell renders
+// <main class="page-body"> landmark Tabler v1.6.0's built shell renders
 // (shared/layouts/DefaultLayout.astro: `<main id="content" class="page-body">`),
 // and that exactly one exists per page.
 //
@@ -975,4 +974,136 @@ func headerRegion(t *testing.T, path, body string) string {
 		t.Fatalf("page %s: no page body follows the page header", path)
 	}
 	return rest[:end]
+}
+
+// scrollbarOffsetDeclarations returns every declaration of sheet, conditional
+// or not, whose value derives a length from the viewport width minus the
+// document width — `calc(100vw - 100%)` in any spacing. That length is the width
+// of the vertical scrollbar when one is present and zero when none is, so any
+// rule that offsets the document or a shell region by it moves the content
+// between a page that scrolls and one that does not (SPEC/WEB.md § UI
+// Framework, rule 20).
+func scrollbarOffsetDeclarations(sheet string) []string {
+	var found []string
+	for _, rule := range parseCSSRules(sheet) {
+		for _, decl := range splitCSSDeclarations(rule.decls) {
+			if strings.Contains(stripSpace(decl), "100vw-100%") {
+				found = append(found, normaliseSelector(rule.prelude)+" { "+strings.TrimSpace(decl)+" }")
+			}
+		}
+	}
+	return found
+}
+
+// TestUIFramework_NoScrollbarDependentDocumentOffset is the regression guard for
+// SPEC/WEB.md § UI Framework, rule 20, and the stylesheet half of Acceptance
+// Criterion 219: no stylesheet served under /static/... offsets anything by the
+// viewport width minus the document width.
+//
+// Tabler v1.4.0 shipped `@media (min-width:992px){:host,:root{margin-left:
+// calc(100vw - 100%)}}`, which pushed the whole document right by the scrollbar
+// width on a page that scrolls vertically: the sidebar-to-content gap was 15px
+// wider on the sprint and audit pages than on the others, and it jumped when a
+// modal hid the scrollbar. The sweep walks the embedded filesystem, so a
+// stylesheet added later is covered without editing this test.
+func TestUIFramework_NoScrollbarDependentDocumentOffset(t *testing.T) {
+	// Falsifiability control: the detector must flag the exact v1.4.0 rule and
+	// a differently spaced form of it, or a clean sweep proves nothing.
+	for _, bad := range []string{
+		"@media (min-width:992px){:host,:root{margin-left:calc(100vw - 100%)}}",
+		"html { padding-inline-start: calc( 100vw-100% ); }",
+	} {
+		if len(scrollbarOffsetDeclarations(bad)) != 1 {
+			t.Fatalf("the detector does not flag %q", bad)
+		}
+	}
+
+	swept := map[string]bool{}
+	err := fs.WalkDir(staticFS, "static", func(path string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() || !strings.HasSuffix(path, ".css") {
+			return err
+		}
+		swept[path] = true
+		for _, decl := range scrollbarOffsetDeclarations(readEmbeddedAsset(t, path)) {
+			t.Errorf("%s carries a scrollbar-dependent offset: %s", path, decl)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("walking the embedded static filesystem: %v", err)
+	}
+	for _, want := range []string{"static/vendor/tabler/tabler.min.css", "static/style.css"} {
+		if !swept[want] {
+			t.Errorf("the sweep did not reach %s; the walk is broken", want)
+		}
+	}
+}
+
+// tablerBannerRe captures the release named in the licence banner at the head
+// of a vendored Tabler file. The CSS and the JavaScript write the banner's
+// comment lines with different leading spacing, so the pattern anchors on the
+// banner text alone.
+var tablerBannerRe = regexp.MustCompile(`^(?:@charset "UTF-8";)?\s*/\*!\s*\*?\s*Tabler v(\d+\.\d+\.\d+) \(https://tabler\.io\)`)
+
+// TestVendoredTabler_CSSAndJSFromTheSameRelease is the SPEC/BUILD.md checklist
+// criterion of § Vendored Web Assets, rule 3: the release named in the banner at
+// the head of the committed tabler.min.css equals the release named in the
+// banner at the head of the committed tabler.min.js.
+func TestVendoredTabler_CSSAndJSFromTheSameRelease(t *testing.T) {
+	versions := map[string]string{}
+	for _, path := range []string{"static/vendor/tabler/tabler.min.css", "static/vendor/tabler/tabler.min.js"} {
+		m := tablerBannerRe.FindStringSubmatch(readEmbeddedAsset(t, path))
+		if m == nil {
+			t.Fatalf("%s does not open with a Tabler licence banner naming its release", path)
+		}
+		versions[path] = m[1]
+	}
+	if css, js := versions["static/vendor/tabler/tabler.min.css"], versions["static/vendor/tabler/tabler.min.js"]; css != js {
+		t.Errorf("the vendored Tabler CSS is release %s and the JavaScript is release %s; "+
+			"both come from the same release and are upgraded together", css, js)
+	}
+}
+
+// headerOpenTagRe captures the class attribute of every <header> element's
+// opening tag.
+var headerOpenTagRe = regexp.MustCompile(`<header\b[^>]*\bclass="([^"]*)"`)
+
+// TestTablerFidelity_TopNavbarCarriesNoExpandClass is the regression guard for
+// SPEC/WEB.md § UI Framework, rule 12, and Acceptance Criterion 74: the top
+// <header> carries no class beginning with navbar-expand.
+//
+// Tabler v1.6.0 treats a horizontal navbar that expands at a breakpoint as the
+// page's primary navigation: while <html> carries no data-bs-navbar-position
+// attribute, its `.page:has(> [class*=navbar-expand]:not(.navbar-vertical))
+// >.navbar-vertical` rule hides the vertical sidebar and a companion rule sets
+// --tblr-sidebar-width to 0px on the header and the page wrapper. The shell's
+// former `navbar-expand-md` header therefore hid the sidebar on every page and
+// placed the content at the viewport's left edge after the upgrade.
+func TestTablerFidelity_TopNavbarCarriesNoExpandClass(t *testing.T) {
+	t.Setenv("HOME", shortHome(t))
+	name := seedRoadmap(t, "platform-core")
+	seedRoadmapWithAudit(t, name, 3)
+	mux := buildMux()
+
+	// Falsifiability control: the extraction must see the former header's class.
+	if m := headerOpenTagRe.FindStringSubmatch(`<header class="navbar navbar-expand-md d-print-none">`); m == nil ||
+		!strings.Contains(m[1], "navbar-expand-md") {
+		t.Fatal("the header extraction does not read the class attribute; the sweep below would be vacuous")
+	}
+
+	for _, path := range allPagePaths(name) {
+		headers := headerOpenTagRe.FindAllStringSubmatch(servePage(t, mux, path), -1)
+		if len(headers) == 0 {
+			t.Errorf("page %s renders no <header> with a class attribute; the top navbar is missing", path)
+			continue
+		}
+		for _, m := range headers {
+			for _, class := range strings.Fields(m[1]) {
+				if strings.HasPrefix(class, "navbar-expand") {
+					t.Errorf("page %s: the <header> carries %q, which makes Tabler hide the vertical "+
+						"sidebar and drop its offset", path, class)
+				}
+			}
+		}
+	}
 }

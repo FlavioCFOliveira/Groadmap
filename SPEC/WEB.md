@@ -239,8 +239,8 @@ task detail modal that displays all of the task's fields (see
    and `CLOSED` its `COMPLETED` tasks — whose cards are ordered by what each column
    is about, the `WAITING` column by the planned in-sprint execution order and the
    `DOING` and `CLOSED` columns by recency (`started_at` and `closed_at`
-   descending), and whose column counts are the `P`, `A`, and `C` values of the
-   sprint status summary line on the same page, and the sprint's own
+   descending), and whose three column counts sum to the sprint's total number of
+   member tasks, and the sprint's own
    comments in a Comments card, read from that roadmap's
    `project.db`. It is served at `/roadmaps/{name}/sprints/{id}`, is read-only, and
    returns HTTP `404 Not Found` when `{id}` is not a valid integer or is not a
@@ -351,8 +351,11 @@ task detail modal that displays all of the task's fields (see
     highlighting the active view), a top navbar naming the selected roadmap, page
     headers, and Tabler cards, tables, and badges. The interface is built on the vendored Tabler framework;
     on small viewports the navigation sidebar collapses to an off-canvas
-    (hamburger) menu (see [UI Framework](#ui-framework) and
-    [Responsive and Mobile-First Design](#responsive-and-mobile-first-design)).
+    (hamburger) menu. Wherever the sidebar is shown beside the content, the
+    horizontal gap between the sidebar and the top navbar, the page header, and the
+    page body is the same on every page, whether or not the page scrolls vertically
+    and whether or not a modal is open (see [UI Framework](#ui-framework), rule 20,
+    and [Responsive and Mobile-First Design](#responsive-and-mobile-first-design)).
 18. Startup failures (for example, the chosen port is already in use, the data
     directory is unreadable, or a flag value is invalid) are reported as plain
     text to stderr and map to the existing exit codes; no new exit code is
@@ -1053,8 +1056,8 @@ how the `rmp web` process itself terminates.
   boards whose card is the modal trigger; the two boards differ in what their
   columns stand for and in what their cards show below the title. This page has
   **five** columns, one per task status; the sprint page's board has **three**,
-  grouping the sprint's tasks the way the sprint status summary line groups them
-  (see [Sprint Detail Sub-Template](#sprint-detail-sub-template)). The cards of
+  grouping the sprint's tasks into waiting, in-progress, and completed work (see
+  [Sprint Detail Sub-Template](#sprint-detail-sub-template)). The cards of
   both boards open the same way: the task title leads the card, and one badge line
   below it carries the task's id, severity, priority, and type badges (see **Card
   content** below). The
@@ -1153,10 +1156,10 @@ how the `rmp web` process itself terminates.
        `id` written with its leading `#`. It carries the Tabler classes `bg-black`
        and `text-white` for every task: a black background (`#000000`) with white
        text (`#ffffff`), a contrast ratio of 21:1. Both classes are shipped by the
-       vendored `tabler.min.css`, which defines `bg-black` as the background colour
-       `rgb(var(--tblr-black-rgb))` and `text-white` as the text colour
-       `rgb(var(--tblr-white-rgb))`, with `--tblr-black-rgb` set to `0,0,0` and
-       `--tblr-white-rgb` set to `255,255,255`. The colour is fixed and
+       vendored `tabler.min.css`, which defines `bg-black` as a background colour
+       mixed from `var(--tblr-black)` and `text-white` as a text colour mixed from
+       `var(--tblr-white)`, each at full opacity, with `--tblr-black` set to `#000`
+       and `--tblr-white` set to `#fff`. The colour is fixed and
        value-independent: an id identifies a task and carries no meaning a colour
        could state, so no colour mapping governs this badge (see
        [Status, Priority, and Severity Badge Colours](#status-priority-and-severity-badge-colours),
@@ -2197,13 +2200,9 @@ how the `rmp web` process itself terminates.
   The actions column carries a link back to
   the roadmap's sprints page. The page does not redefine these fields;
   `MODELS.md` remains canonical.
-- **Sprint status summary line.** At the top of the sprint presentation the page
-  shows the sprint status summary line defined in
-  [Sprint Detail Sub-Template](#sprint-detail-sub-template).
 - **Sprint details.** The page shows the sprint's details, using the fields
   defined for the `Sprint` model in `MODELS.md § Sprint`: the page header presents
-  the sprint `id`, its `title`, and its status; the sprint status summary line
-  presents its total task count; and the Sprint details card presents its
+  the sprint `id`, its `title`, and its status, and the Sprint details card presents its
   description, `created_at`, `started_at`, and `closed_at` (see
   [Sprint Detail Sub-Template](#sprint-detail-sub-template)); the three timestamps,
   and the timestamps of the sprint's comments, are displayed as specified in
@@ -2220,9 +2219,10 @@ how the `rmp web` process itself terminates.
 - **Member-tasks board.** The page presents the sprint's tasks as a Kanban board
   of three fixed columns — `WAITING`, `DOING`, and `CLOSED` — holding one card per
   task, placed between the sprint details above it and the sprint's comments below
-  it. The columns group the tasks by the same
-  categorisation the sprint status summary line uses, so each column's count is one
-  of that line's own numbers, and each column orders its own cards: the `WAITING`
+  it. The columns group the tasks by one fixed categorisation of the task status —
+  `WAITING` holds `BACKLOG` and `SPRINT`, `DOING` holds `DOING` and `TESTING`, and
+  `CLOSED` holds `COMPLETED` — so the three column counts sum to the sprint's total
+  number of member tasks, and each column orders its own cards: the `WAITING`
   column keeps the planned in-sprint execution order, which is the `sprint_tasks`
   order (the ordered set of task IDs the `Sprint` model exposes as `tasks`; see
   `MODELS.md § Sprint` and `DATABASE.md § Relationships`), while the `DOING` and
@@ -2581,9 +2581,8 @@ shows sprints as compact cards through the shared sprint-card partial instead (s
 
 2. **What the sub-template renders.** For one sprint, the sub-template renders, in
    order:
-   - the **sprint status summary line** (defined below);
    - the **Sprint details card**, which carries the sprint's `description`
-     (rule 7) and the **sprint metadata datagrid**. The datagrid holds exactly
+     (rule 6) and the **sprint metadata datagrid**. The datagrid holds exactly
      three fields, in this order: `Created` (`created_at`), `Started`
      (`started_at`), and `Closed` (`closed_at`). A `started_at` or `closed_at`
      that is unset renders a neutral placeholder, an em dash, rather than an empty
@@ -2594,9 +2593,9 @@ shows sprints as compact cards through the shared sprint-card partial instead (s
      The datagrid carries no `ID`, `Title`, `Status`, `Order`, `Capacity`, or
      `Tasks` field. The page header already presents the sprint `title`,
      `Sprint #<ID>`, and the sprint's status badge (see
-     [Roadmap Sprint Page](#roadmap-sprint-page)), and the sprint status summary
-     line already presents the sprint's total task count as `T`, so a datagrid
-     field for any of them would repeat what the page shows above it. The
+     [Roadmap Sprint Page](#roadmap-sprint-page)), and the member-tasks board's
+     three column counts together give the sprint's total task count, so a
+     datagrid field for any of them would repeat what the page already shows. The
      sprint's execution `order` and its capacity (`max_tasks`) are not shown on
      the page. The datagrid is rendered only by this sub-template, and so only on
      the Roadmap Sprint Page;
@@ -2608,35 +2607,7 @@ shows sprints as compact cards through the shared sprint-card partial instead (s
    - the **Comments card**, a separate card placed after the member-tasks board and
      rendered last in the sub-template (defined below).
 
-3. **Sprint status summary line.** At the top of the sub-template the sub-template
-   renders one indicative, complementary line that summarises the sprint's task
-   completion. Its exact format is:
-
-   `<pct>% - P:<p> A:<a> C:<c> - T:<t>`
-
-   for example `33% - P:8 A:29 C:18 - T:55`. The components are:
-   - `<pct>` is the sprint **completion percentage**: the number of `COMPLETED`
-     tasks divided by the total number of tasks in the sprint, expressed as a
-     percentage and **rounded to the nearest integer percent**. When the sprint
-     has no tasks, the completion percentage is `0%`.
-   - `P` (`<p>`) is the **pending** count: the number of the sprint's tasks in the
-     `BACKLOG` or `SPRINT` status.
-   - `A` (`<a>`) is the **open/in-progress** count ("Abertas"): the number of the
-     sprint's tasks in the `DOING` or `TESTING` status.
-   - `C` (`<c>`) is the **completed** count: the number of the sprint's tasks in
-     the `COMPLETED` status.
-   - `T` (`<t>`) is the **total** number of tasks in the sprint.
-
-   All five values refer only to the sprint's own member tasks; no task outside
-   the sprint is counted. The status-to-category mapping (pending = `BACKLOG` +
-   `SPRINT`, open/in-progress = `DOING` + `TESTING`, completed = `COMPLETED`; the
-   task status enum is defined in `MODELS.md § Enums`) is exactly the
-   categorisation `models.CalculateSprintShowResult` already produces (its
-   `Summary.Pending`, `Summary.InProgress`, and `Summary.Completed` counters and
-   its `Summary.TotalTasks`); the summary line reuses that categorisation rather
-   than defining a new one.
-
-4. **Member-tasks board.** The sprint's member tasks are presented as a Kanban
+3. **Member-tasks board.** The sprint's member tasks are presented as a Kanban
    board of three fixed columns, one card per task. The **GitLab issue board** is
    the acknowledged model for this presentation: columns that stand for states of
    the work, cards that stand for work items, a count on each column header, and
@@ -2655,22 +2626,23 @@ shows sprints as compact cards through the shared sprint-card partial instead (s
      | `DOING` | `DOING` or `TESTING` |
      | `CLOSED` | `COMPLETED` |
 
-     The grouping is deliberately the **same categorisation the sprint status
-     summary line already uses** — pending = `BACKLOG` + `SPRINT`, open/in-progress
-     = `DOING` + `TESTING`, completed = `COMPLETED` — which is the categorisation
-     `models.CalculateSprintShowResult` produces in its `Summary.Pending`,
-     `Summary.InProgress`, and `Summary.Completed` counters (see rule 3 above). The
-     board defines no new categorisation; it reuses that one, so the two
-     presentations of one sprint cannot disagree about which tasks are waiting,
-     which are being worked on, and which are done.
+     The grouping is the categorisation `models.CalculateSprintShowResult` already
+     produces — pending = `BACKLOG` + `SPRINT` (its `Summary.Pending` counter),
+     in progress = `DOING` + `TESTING` (its `Summary.InProgress` counter), and
+     completed = `COMPLETED` (its `Summary.Completed` counter). The board defines no
+     new categorisation; it reuses that one, so every presentation of one sprint's
+     task progress agrees about which tasks are waiting, which are being worked on,
+     and which are done.
 
      Each column heading is written exactly as spelled above, in upper case, and is
      not translated.
-   - **The column counts are the summary line's own numbers.** Because the grouping
-     is that one, each column's count **equals** the corresponding value of the
-     summary line rendered at the top of the same page: the `WAITING` column's count
-     is `P`, the `DOING` column's count is `A`, the `CLOSED` column's count is `C`,
-     and the three counts sum to `T`. That identity is what makes a fourth or
+   - **The column counts partition the sprint.** Because the grouping is that one,
+     the `WAITING` column's count is the number of the sprint's member tasks in
+     `BACKLOG` or `SPRINT` (`Summary.Pending`), the `DOING` column's count is the
+     number in `DOING` or `TESTING` (`Summary.InProgress`), the `CLOSED` column's
+     count is the number in `COMPLETED` (`Summary.Completed`), and the three counts
+     sum to the sprint's total number of member tasks (`Summary.TotalTasks`). Only
+     the sprint's own member tasks are counted. That identity is what makes a fourth or
      "other" column unnecessary rather than merely unwanted: the task status enum is
      closed (`MODELS.md § Enums`) and `tasks.status` is restricted by a CHECK
      constraint to exactly its five values (`DATABASE.md § tasks Table`), so every
@@ -3042,9 +3014,10 @@ shows sprints as compact cards through the shared sprint-card partial instead (s
        own activation behaviour; it carries no `tabindex` and no `role`. It
        presents a touch-friendly hit target, and it shows a visible focus indicator
        whenever it receives keyboard focus (WCAG 2.2 Success Criterion 2.4.7, Focus
-       Visible). The vendored distribution's `btn-action` rule removes the focus
-       outline, so the project override stylesheet restores a visible indicator for
-       the toggle's `:focus-visible` state.
+       Visible). The vendored distribution's `btn-action` rules remove the focus
+       outline only while the focus does not match `:focus-visible`; the toggle's
+       `:focus-visible` state carries a visible indicator, set in the project
+       override stylesheet.
      - **Accessible state and name.** The toggle carries `aria-expanded="true"`
        while its column is expanded and `aria-expanded="false"` while it is
        collapsed, and an `aria-controls` attribute holding the `id` of its column's
@@ -3088,7 +3061,7 @@ shows sprints as compact cards through the shared sprint-card partial instead (s
        their left-to-right order in every combination.
      - **Presentation only.** Collapsing or expanding a column issues no request,
        reads nothing, and writes nothing. It changes no card, no count, no column
-       order, no card order, and not the sprint status summary line, and it neither
+       order, and no card order, and it neither
        opens nor closes the task detail modal. A card of a collapsed column cannot
        be reached while its column is collapsed, and is reachable again, unchanged,
        once the column is expanded.
@@ -3171,7 +3144,7 @@ shows sprints as compact cards through the shared sprint-card partial instead (s
      under the modifier class `task-board__column--collapsed` (see **Column
      collapse** above).
 
-5. **Comments card.** The last card of the sub-template presents the sprint's own
+4. **Comments card.** The last card of the sub-template presents the sprint's own
    comments — the sprint's progression log. The fields of a comment are defined for
    the `SprintComment` model in `MODELS.md § Sprint Comment`; the sub-template does
    not redefine them.
@@ -3216,13 +3189,13 @@ shows sprints as compact cards through the shared sprint-card partial instead (s
      Markdown task-list item, which can be neither checked nor unchecked (see
      [Markdown Rendering](#markdown-rendering), rule 3).
 
-6. **Read-only.** The sub-template renders data only. It contains no form, button,
+5. **Read-only.** The sub-template renders data only. It contains no form, button,
    or link that submits a change. Its interactions are two, and neither changes
    any data: opening the read-only task detail modal from a board card, and
    collapsing or expanding a board column with that column's toggle, which
    changes only the board's presentation.
 
-7. **Markdown fields.** Wherever the sub-template renders the sprint's
+6. **Markdown fields.** Wherever the sub-template renders the sprint's
    `description` or a sprint comment's `body`, it renders the HTML the Markdown
    renderer produces from it, as specified in
    [Markdown Rendering](#markdown-rendering).
@@ -5062,14 +5035,16 @@ the way out, on every request, and the CLI's output of these fields is unchanged
     that rendered Markdown reads as the interface's own body text: it imposes no
     line spacing of its own, and no vertical spacing of its own other than the
     `1rem` bottom margin of a table (see **Block spacing** below). Where the vendored `.markdown`
-    rules depart from the interface's base styles — `line-height: 2` on the
-    container, `margin-top: 2.5rem` on a top-level `h2` to `h6`, `font-size: 1rem`,
+    rules depart from the interface's base styles — `font-size:
+    var(--tblr-font-size-h3)` (`1rem`) and `line-height: var(--tblr-line-height-lg)`
+    (`1.7142857143`) on the container, `font-size: .8125em` on a `pre`,
+    `margin-top: 2.5rem` on a top-level `h2` to `h6`, `font-size: 1rem`,
     `margin: 1.5rem 0`, and `padding: .5rem 1.5rem` on a top-level `blockquote`,
     and `margin: 3em 0` on a top-level `hr` — the addition restores the base value
     stated below, and that is the value the element's computed style carries. The
     base values are those of the vendored Tabler stylesheet's own element rules
-    (its Bootstrap reboot and Tabler's element defaults), cited here as that
-    stylesheet states them. The vendored rules that remove the top margin of the
+    (its Bootstrap reboot and Tabler's element defaults), cited here as the values
+    those rules resolve to. The vendored rules that remove the top margin of the
     container's first child and the bottom margin of its last child stay in
     effect. In what follows, "body text" is the size of Tabler's
     `--tblr-body-font-size` (`0.875rem`), "the secondary colour" is
@@ -5082,13 +5057,20 @@ the way out, on every request, and the CLI's output of these fields is unchanged
       breaks rather than overflowing, and a table or a code block wider than its
       container scrolls horizontally inside its own box. Rendered Markdown
       therefore never makes the page, the modal, or a card scroll horizontally.
-    - **Line height.** The container's `line-height` is
+    - **Font size and line height.** The container's `font-size` is body text, in
+      place of the vendored `1rem`, and its `line-height` is
       `var(--tblr-body-line-height)` (`1.4285714286`), the line height of the
-      interface's body text, in place of the vendored `2`.
+      interface's body text, in place of the vendored `1.7142857143`. A `pre` has
+      the `font-size` `.85714285em` of the vendored Bootstrap reboot `pre` rule
+      (`pre{display:block;margin-top:0;margin-bottom:1rem;overflow:auto;font-size:.85714285em;...}`),
+      in place of the vendored `.markdown pre` `.8125em`. The vendored distribution
+      also carries a later Tabler `pre` rule that sets `.92857143em` and is the one
+      the cascade applies to a `pre` outside the container; the value restored
+      inside the container is the reboot rule's `.85714285em`, not that one.
     - **Block spacing.** Blocks keep the interface's base bottom margins, and the
       addition sets none of its own: a `p`, `ul`, `ol`, and `dl` has the `1rem`
       of the vendored `p` and `dl,ol,ul` rules, a `pre` the `1rem` of the vendored
-      `pre` rule, a `blockquote` the `0 0 1rem` of the vendored `blockquote` rule,
+      Bootstrap reboot `pre` rule (the later Tabler `pre` rule sets no margin), a `blockquote` the `0 0 1rem` of the vendored `blockquote` rule,
       and a `dd` the `.5rem` of the vendored `dd` rule. A `table` has a bottom
       margin of `1rem`, the same as the other blocks, in place of the `0` the
       vendored `.markdown>table` rules resolve to. A list item carries
@@ -5119,14 +5101,18 @@ the way out, on every request, and the CLI's output of these fields is unchanged
       own bottom margin, which is `1rem` for a paragraph, a list, a code block, a
       blockquote, and a table alike.
     - **Links.** An `<a>` inside the container has the colour
-      `rgb(106, 169, 227)` — the link colour of Tabler's own dark theme — and is
-      underlined, with a `text-underline-offset` of `.15em`. While the pointer
-      hovers it and while it has keyboard focus (`:hover` and `:focus-visible`), it
-      has the colour `rgb(135, 186, 233)` — the link hover colour of Tabler's own
-      dark theme — and no underline. Against the card background of the dark
-      theme, Tabler's `--tblr-bg-surface` (`#1f2937`), the two colours have
-      contrast ratios of 5.87:1 and 7.15:1, both above the 4.5:1 that WCAG 2.2
-      Success Criterion 1.4.3 (Contrast (Minimum)) requires. No link outside the
+      `rgb(121, 170, 231)` — the link colour of Tabler's own dark theme, whose
+      value the vendored distribution publishes as `--tblr-link-color-rgb`
+      (`121,170,231`) — and is underlined, with a `text-underline-offset` of
+      `.15em`. While the pointer hovers it and while it has keyboard focus
+      (`:hover` and `:focus-visible`), it has the colour `rgb(148, 187, 237)` —
+      the link hover colour of Tabler's own dark theme, published as
+      `--tblr-link-hover-color-rgb` (`148,187,237`) — and no underline. Against the
+      card background of the dark theme, Tabler's `--tblr-bg-surface`, which
+      resolves in the dark theme to `--tblr-gray-800`, `oklch(26.86% 0 0deg)`
+      (`#262626`), the two colours have contrast ratios of 6.28:1 and 7.63:1, both
+      above the 4.5:1 that WCAG 2.2 Success Criterion 1.4.3 (Contrast (Minimum))
+      requires. No link outside the
       container changes colour.
     - **Blockquotes, rules, and footnotes.** A `blockquote` has the `font-size`
       of body text, the margin `0 0 1rem` of the vendored `blockquote` rule, the
@@ -5273,7 +5259,7 @@ timestamp references this section and does not restate it.
    - on the [Roadmap Sprint Page](#roadmap-sprint-page), the `Created`, `Started`,
      and `Closed` fields of the sprint metadata datagrid, and the `created_at` and
      `updated_at` timestamps of each entry of the Comments card (see
-     [Sprint Detail Sub-Template](#sprint-detail-sub-template), rules 2 and 5);
+     [Sprint Detail Sub-Template](#sprint-detail-sub-template), rules 2 and 4);
    - on the [Roadmap Audit Log Page](#roadmap-audit-log-page), the `Performed At`
      column;
    - in the [Task Detail Modal](#task-detail-modal), the task's `created_at`,
@@ -5400,13 +5386,19 @@ timestamp references this section and does not restate it.
     Markdown (see [Markdown Rendering](#markdown-rendering), rule 7); no template
     uses those classes. In particular, the
     navigation sidebar's section label and the empty-state icon sizing carry no
-    inline `style`. The sidebar's per-roadmap section label is a Tabler
-    `subheader` — the small uppercase letter-spaced muted label the vendored
-    distribution defines — and the rule above it is a Tabler `dropdown-divider`.
-    The label is aligned with the sidebar links by a Tabler spacing utility
-    (`px-3`, the same 1rem horizontal padding Tabler gives a vertical-navbar
-    `nav-link` at the viewport widths where the sidebar is expanded), never by a
-    project stylesheet rule. Any presentational sizing, such as the empty-state
+    inline `style`. The sidebar's per-roadmap section label is Tabler's sidebar
+    section title: an `<li class="nav-section-title">` holding the roadmap name,
+    placed directly inside the sidebar's `<ul class="navbar-nav">` before the
+    roadmap's own links, which is how Tabler's own sidebar menu renders a section
+    label. No divider precedes it: Tabler's section title separates the section
+    by its own top margin, so the sidebar carries no `dropdown-divider` and no
+    other horizontal rule between the roadmap-index entry and the label. The vendored
+    distribution styles `.navbar-nav .nav-section-title` inside a vertical navbar
+    — small, uppercase, letter-spaced, and muted — and gives it the same
+    horizontal padding it gives the sidebar's `nav-link` elements, so the label
+    lines up with the links through the vendored rule alone. The label carries no
+    Tabler spacing utility and no `subheader` class, and no project stylesheet rule
+    positions it. Any presentational sizing, such as the empty-state
     icon's dimensions, lives in a Tabler utility class or in `static/style.css`.
 
     A template MUST use only class names the vendored Tabler distribution actually
@@ -5441,7 +5433,8 @@ timestamp references this section and does not restate it.
     descendant of it. The vendored stylesheet depends on that shape: its
     `.navbar-expand-lg.navbar-vertical~.navbar` and
     `.navbar-expand-lg.navbar-vertical~.page-wrapper` rules give the top navbar and
-    the page wrapper the 15rem offset that clears the vertical sidebar, and a
+    the page wrapper an inline-start margin equal to the sidebar's width
+    (`--tblr-sidebar-width`, `16rem`), the offset that clears the vertical sidebar, and a
     general sibling selector matches only elements that follow the `<aside>` at the
     same level. The templates MUST therefore place, inside `<div class="page">` and
     in this order: the sidebar `<aside>`, the top `<header>`, and then
@@ -5450,12 +5443,27 @@ timestamp references this section and does not restate it.
     `<div class="page-wrapper">`, and the top navbar carries `d-print-none` as the
     Tabler shell does.
 
+    The top `<header>` carries **no `navbar-expand-*` class**: its markup is
+    `<header class="navbar d-print-none">`. The vendored distribution treats a
+    horizontal navbar that expands at a breakpoint as the page's primary
+    navigation: while the `<html>` element carries no `data-bs-navbar-position`
+    attribute, its
+    `.page:has(> [class*=navbar-expand]:not(.navbar-vertical))>.navbar-vertical`
+    rule hides the vertical sidebar (`display: none`), and its companion rule sets
+    `--tblr-sidebar-width` to `0px` on the top navbar and the page wrapper, which
+    removes the offset described above. A `navbar-expand-*` class on the top
+    `<header>` therefore hides the sidebar at every viewport width and places the
+    content at the viewport's left edge. The top navbar holds no collapsible menu
+    (rule 13), so it has no use for an expand breakpoint.
+
     The shell carries **no footer**. No page renders a `<footer>` element, so the
     page body is the last region inside `<div class="page-wrapper">` on every page.
 13. **One sidebar collapse, one toggler, one brand.** Tabler's vertical navbar
     holds its collapsible menu region inside the sidebar `<aside>`, identified by
     `class="collapse navbar-collapse"` and `id="sidebar-menu"`, and gives that
-    region exactly one `navbar-toggler`, also inside the `<aside>`. Where Tabler's
+    region exactly one `navbar-toggler`, also inside the `<aside>`. The top navbar
+    of this interface carries no `navbar-expand-*` class (rule 12), so it has no
+    collapsible menu and no toggler of its own. Where Tabler's
     top navbar carries a toggler of its own, that toggler targets the top navbar's
     own `#navbar-menu` collapse, never the sidebar's; and in Tabler's own layout
     that combines a sidebar with a top navbar, the top navbar hides its brand, so
@@ -5503,8 +5511,8 @@ timestamp references this section and does not restate it.
 17. **The fluid layout idiom is `layout-fluid` plus `container-xl`.** Tabler's
     full-width layout pairs `class="layout-fluid"` on `<body>` with ordinary
     `container-xl` page containers. The vendored stylesheet's
-    `.layout-fluid .container,.layout-fluid [class*=" container-"],.layout-fluid [class^=container-]{max-width:100%}`
-    rule exists for exactly that pairing and is what releases those containers to
+    `.layout-fluid .container,.layout-fluid [class*=" container-"],.layout-fluid [class^=container-]`
+    selectors, which set `max-width: 100%`, exist for exactly that pairing and is what releases those containers to
     the full viewport width. A `container-fluid` page container is already full
     width on its own, which leaves the `layout-fluid` body class with nothing to act
     on and silently drops the idiom. The templates MUST therefore carry
@@ -5538,7 +5546,9 @@ timestamp references this section and does not restate it.
     The name is rendered prominently and with vendored Tabler classes only: the
     name alone, carrying Tabler's `h3` type utility, inside the
     `navbar-nav flex-row` / `nav-item` idiom Tabler uses for the top navbar's own
-    content. **No glyph precedes it.** An icon here would be the same on every
+    content. Because the top `<header>` carries no `navbar-expand-*` class (rule 12),
+    the vendored `.navbar-nav` rule lays the list out as a column, and the
+    `flex-row` utility is what keeps it a row. **No glyph precedes it.** An icon here would be the same on every
     page of every roadmap, so it would distinguish nothing, while the sidebar
     already gives each of the roadmap's views its own distinguishing glyph; a
     roadmap is identified by its name, which is what the URL, the sidebar label,
@@ -5565,6 +5575,22 @@ timestamp references this section and does not restate it.
     one shell region that can instead identify the page's subject spends that
     region on what the user cannot act on. This mirrors the removal of the
     read-only footer band, whose whole content was the same restatement (rule 12).
+20. **The sidebar-to-content gap is constant.** At every viewport width at which
+    the vertical sidebar is shown beside the content — Tabler's `lg` breakpoint,
+    `992px`, and wider — the horizontal distance from the right edge of the sidebar
+    `<aside>` to the left edge of the content of the top navbar, of the page
+    header, and of the page body is identical on every page. For each of those
+    three regions the distance does not depend on whether the page scrolls
+    vertically, and it does not change while a modal is open. No stylesheet rule,
+    vendored or in the project override stylesheet, may shift the document, the
+    page, the page wrapper, or any shell region horizontally by the width of the
+    vertical scrollbar, or by any other length that depends on whether a scrollbar
+    is present. The sidebar is fixed at the viewport's left edge and the top navbar
+    and the page wrapper are offset by the sidebar's width (rule 12), so the gap is
+    set by the shell alone; a gap that differs between pages, or between a page
+    that scrolls and one that does not, is a defect and never an accepted layout
+    variation. Below the `lg` breakpoint the sidebar collapses to the off-canvas
+    menu (rule 5) and this rule does not apply.
 
 ### Full-Height Page Regions
 
@@ -6710,26 +6736,18 @@ Rules:
     with the same card as the other sprints: it shows the header (`Sprint #<ID>`
     with a status badge), the sprint description, and the footer task count, and it
     is not expanded into an inline sprint metadata datagrid, member-tasks board, or
-    per-task modals on the sprints page. The full sprint detail block (sprint status
-    summary line, metadata datagrid, member-tasks board, and Comments card) is shown
+    per-task modals on the sprints page. The full sprint detail block (Sprint
+    details card with its metadata datagrid, member-tasks board, and Comments card) is shown
     only on the single Roadmap Sprint Page (see
     [Shared Sprint-Card Partial](#shared-sprint-card-partial) and
     [Sprint Detail Sub-Template](#sprint-detail-sub-template)).
-39. At the top of the full sprint presentation on the single Roadmap Sprint Page, a
-    sprint status summary line is shown in the
-    exact format `<pct>% - P:<p> A:<a> C:<c> - T:<t>` (for example
-    `33% - P:8 A:29 C:18 - T:55`), where `<pct>` is the completion percentage
-    (`COMPLETED` tasks divided by total tasks, rounded to the nearest integer
-    percent, and `0%` when the sprint has no tasks), `P` is the count of the
-    sprint's tasks in `BACKLOG` or `SPRINT`, `A` is the count in `DOING` or
-    `TESTING`, `C` is the count in `COMPLETED`, and `T` is the sprint's total task
-    count; every value counts only the sprint's own member tasks. `P`, `A`, and `C`
-    partition the sprint's tasks and therefore always sum to `T`: the three
-    categories cover all five values of the task status enum, and `tasks.status`
-    admits no sixth value (`MODELS.md § Enums` and `DATABASE.md § tasks Table`). For
-    a sprint with, for example, 55 member tasks of which 8 are pending, 29 are in
-    progress, and 18 are completed, the line reads
-    `33% - P:8 A:29 C:18 - T:55` (18 of 55 completed rounds to 33%).
+39. **The single sprint page renders no sprint status summary line.** The
+    served HTML of the Roadmap Sprint Page carries no element with
+    `data-role="sprint-summary"` and no text matching the pattern
+    `<pct>% - P:<p> A:<a> C:<c> - T:<t>` (for example `33% - P:8 A:29 C:18 - T:55`,
+    or any text of the form `<n>% - P:`). The sprint presentation opens with the
+    Sprint details card, directly below the page header (see
+    [Sprint Detail Sub-Template](#sprint-detail-sub-template), rule 2).
 40. Every sprint card under any tab of the roadmap sprints page — Próximos, Actual,
     and Concluídos — displays that sprint's total number of tasks in its footer.
 41. When `rmp web` starts against a roadmap whose on-disk `project.db` is at an
@@ -6982,10 +7000,14 @@ Rules:
 62. No template carries a presentational inline `style="..."` attribute: all styling
     is provided by vendored Tabler classes and utilities or by the project override
     stylesheet (`static/style.css`). In particular, the navigation sidebar's
-    per-roadmap section label is a Tabler `subheader` element preceded by a Tabler
-    `dropdown-divider` rule and aligned with the sidebar links by the `px-3` spacing
-    utility, rather than an inline-styled label, and the empty-state icon's sizing
-    lives in a Tabler utility class or in `static/style.css` rather than in an
+    per-roadmap section label is an `<li class="nav-section-title">` placed directly
+    inside the sidebar's `<ul class="navbar-nav">` and preceded by no divider (the
+    sidebar contains no `dropdown-divider` and no `<hr>`), carrying neither the
+    `subheader` class nor a Tabler spacing utility, rather than an inline-styled
+    label; in a browser at a viewport width of `992px` or wider, the left edge of
+    the label's text equals the left edge of the icons of the roadmap's sidebar
+    links (both are inset by the same vendored padding), and the empty-state icon's
+    sizing lives in a Tabler utility class or in `static/style.css` rather than in an
     inline `style` attribute. Every framework class name a template uses is present
     in the vendored `tabler.min.css`: a search of the templates for `navbar-heading`
     or for `navbar-divider` returns no match, and `static/style.css` carries no rule
@@ -7062,12 +7084,15 @@ Rules:
     [Markdown Rendering](#markdown-rendering), rules 10 and 11, and
     [Security and Constraints](#security-and-constraints), rule 7).
 74. Every page's admin shell places, inside `<div class="page">` and in this order,
-    the sidebar `<aside>`, the top `<header class="navbar ... d-print-none">`, and
+    the sidebar `<aside>`, the top `<header class="navbar d-print-none">`, and
     `<div class="page-wrapper">`, which holds the page header and the page body. The
     top `<header>` is a sibling of `<div class="page-wrapper">` and
     is never nested inside it, which is the shape the vendored stylesheet's
     `.navbar-vertical~.navbar` and `.navbar-vertical~.page-wrapper` offset rules
-    require. No page renders a `<footer>` element: the page body is the last region
+    require. The top `<header>` carries no class beginning with `navbar-expand`,
+    and in a browser at a viewport width of `992px` or wider the sidebar `<aside>`
+    is displayed (its computed `display` is not `none`) and the page wrapper's
+    left edge lies at the sidebar's right edge. No page renders a `<footer>` element: the page body is the last region
     inside `<div class="page-wrapper">` on every page, including the knowledge-graph
     page (see [UI Framework](#ui-framework), rule 12).
 75. The sidebar's collapsible region carries `class="collapse navbar-collapse"` and
@@ -7807,17 +7832,20 @@ Rules:
     state, rather than a page-level empty state or an absent board. The Sprint
     details card above the board and the Comments card below it keep their positions
     (see [Sprint Detail Sub-Template](#sprint-detail-sub-template)).
-131. Each column count equals its counterpart in the sprint status summary line
-    rendered at the top of the same page: the `WAITING` column's badge equals `P`,
-    the `DOING` column's badge equals `A`, the `CLOSED` column's badge equals `C`,
-    and the three sum to `T` (Acceptance Criterion 39 continues to hold). The check
-    compares the two renderings of one sprint against each other, rather than each
-    against a number the check computes on its own, because the property under test
-    is that the board and the summary line group the sprint's tasks by the **same**
-    categorisation: a board that grouped the statuses differently could still show
-    three counts that each looked plausible on its own. For the sprint whose summary
-    line reads `33% - P:8 A:29 C:18 - T:55`, the three column badges read `8`, `29`,
-    and `18`, and the board shows 55 cards in total.
+131. Each column count of the sprint's member-tasks board is the number of the
+    sprint's member tasks in the statuses the column groups: the `WAITING` column's
+    badge equals the number in `BACKLOG` or `SPRINT`, the `DOING` column's badge the
+    number in `DOING` or `TESTING`, and the `CLOSED` column's badge the number in
+    `COMPLETED` — the `Summary.Pending`, `Summary.InProgress`, and
+    `Summary.Completed` counters of `models.CalculateSprintShowResult` for that
+    sprint — and the three sum to the sprint's total number of member tasks
+    (`Summary.TotalTasks`). The check derives the expected counts from the sprint's
+    member tasks and their statuses, and asserts each badge against its own
+    expected count, because a board that grouped the statuses differently could
+    still show three counts whose sum is right. For a sprint of 55 member tasks of
+    which 8 are in `BACKLOG` or `SPRINT`, 29 in `DOING` or `TESTING`, and 18 in
+    `COMPLETED`, the three column badges read `8`, `29`, and `18`, and the board
+    shows 55 cards in total.
 132. Each column of the sprint's member-tasks board orders its cards by its own
     key. In the `WAITING` column the cards appear in the sprint's planned in-sprint
     execution order, which is the `sprint_tasks` position order the page reads
@@ -8711,7 +8739,7 @@ Rules:
     `margin-bottom`, or the top or bottom component of the `margin` shorthand —
     on `p`, `pre`, or `dd`. In a browser, at the default root font size, a
     `.markdown` container on each Markdown surface has a computed `line-height`
-    equal to 1.4285714286 times its font size, not the vendored `2`; a top-level
+    equal to 1.4285714286 times its font size, not the vendored 1.7142857143 times; a top-level
     `p` or `pre` that is not the container's last child has a computed
     `margin-bottom` of `16px`; a top-level `table` that is not the container's
     last child has a computed `margin-bottom` of `16px`, not the vendored `0`; an `li` that is not a task-list item has a computed `margin-top` and `margin-bottom` of `0`; and a
@@ -8746,12 +8774,12 @@ Rules:
     [Markdown Rendering](#markdown-rendering), rule 13).
 198. **Links in rendered Markdown are distinct and legible, and no other link
     changes.** `static/style.css` gives `.markdown a` the colour
-    `rgb(106, 169, 227)`, `text-decoration-line: underline`, and
+    `rgb(121, 170, 231)`, `text-decoration-line: underline`, and
     `text-underline-offset: .15em`, and gives `.markdown a:hover` and
-    `.markdown a:focus-visible` the colour `rgb(135, 186, 233)` and
+    `.markdown a:focus-visible` the colour `rgb(148, 187, 237)` and
     `text-decoration-line: none`. The contrast ratios of the two colours against
-    `#1f2937`, computed by the WCAG 2.2 relative-luminance formula, are each at
-    least 4.5:1 (5.87:1 and 7.15:1). No rule of `static/style.css` sets the colour
+    `#262626`, computed by the WCAG 2.2 relative-luminance formula, are each at
+    least 4.5:1 (6.28:1 and 7.63:1). No rule of `static/style.css` sets the colour
     of an `a` element, or changes a link-colour custom property, through a
     selector that is not scoped to `.markdown`, so the sidebar, navbar,
     page-header, and board links keep their computed colour (see
@@ -8936,8 +8964,8 @@ Rules:
     combination and at least one combination of collapsed and expanded columns.
 217. **Collapsing is presentation only, and the board stays read-only.**
     Collapsing or expanding a column of the sprint's member-tasks board issues no
-    network request, changes no card, no count badge, no column order, no card
-    order, and not the sprint status summary line, and neither opens nor closes the
+    network request, changes no card, no count badge, no column order, and no card
+    order, and neither opens nor closes the
     task detail modal. The behaviour is served as the embedded script
     `static/sprint-board.js`; the page carries no inline script and no inline
     event-handler attribute, no element of the board carries a `style` attribute
@@ -8955,6 +8983,28 @@ Rules:
     `task-board__column--collapsed`, the tasks page does not load
     `static/sprint-board.js`, and that board's columns, widths, and behaviour are
     unchanged (Acceptance Criteria 81 to 92 and 129 continue to hold).
+219. **The sidebar-to-content gap is the same on every page.** In a browser at the
+    viewport widths `992px` and `1440px`, on the roadmap index page, the roadmap
+    sprints page, the roadmap tasks page, the roadmap sprint page, the roadmap audit
+    log page, and the knowledge-graph page, the check measures, for each of the top
+    navbar, the page header, and the page body, the horizontal distance from the
+    right edge of the sidebar `<aside>` to the left edge of that region's content.
+    For each region the distance is identical on every page. The set of pages
+    measured MUST include at least one that scrolls vertically and at least one
+    that does not, because a scrollbar-dependent shift is visible only when the two
+    are compared. With the task detail modal open on the roadmap tasks page, the
+    three distances equal those measured with the modal closed. No stylesheet
+    served under `/static/...` carries a rule that offsets `:root`, `html`,
+    `body`, the page, or the page wrapper horizontally by a length derived from the
+    viewport width minus the document width, such as `calc(100vw - 100%)` (see
+    [UI Framework](#ui-framework), rule 20).
+220. **Rendered Markdown is set at body-text size.** `static/style.css` sets,
+    under `.markdown`, `font-size: var(--tblr-body-font-size)` on the container and
+    `font-size: .85714285em` on `pre`. In a browser, at the default root font size,
+    a `.markdown` container on each Markdown surface has a computed `font-size` of
+    `14px`, not the vendored `16px`, and a `pre` inside it has a computed
+    `font-size` of `12px`, not the vendored `11.375px` (see
+    [Markdown Rendering](#markdown-rendering), rule 13).
 
 ## See Also
 

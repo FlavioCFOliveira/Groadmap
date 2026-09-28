@@ -12,8 +12,9 @@
   Element order inside .page is the Tabler order: the sidebar <aside>, then the
   top <header>, then .page-wrapper — the header is a SIBLING of the wrapper, not
   a child of it. The vendored stylesheet offsets both with the same sibling rule
-  (.navbar-expand-lg.navbar-vertical~.navbar and ~.page-wrapper both get
-  margin-left:15rem), which only applies to that shape. The #sidebar-menu
+  (.navbar-expand-lg.navbar-vertical~.navbar and ~.page-wrapper both get an
+  inline-start margin of var(--tblr-sidebar-width), 16rem), which only applies to
+  that shape. The #sidebar-menu
   collapse has exactly one toggler, the one inside the <aside>; the top navbar
   carries no second toggler and no second brand.
 
@@ -58,20 +59,17 @@
           </li>
           {{with .Chrome.Roadmap}}
           {{/*
-            The per-roadmap section label. Tabler v1.4.0 ships no navbar-specific
-            heading or divider class, so the label is its own `subheader` (the
-            small uppercase letter-spaced muted label, core/scss/ui/_type.scss)
-            and the rule above it is Tabler's `dropdown-divider`. The px-3 gutter
-            is Tabler's own spacing utility and resolves to the exact inline
-            padding of a vertical-navbar nav-link (var(--tblr-page-padding) =
-            var(--tblr-spacer-3) = 1rem), so the label lines up with the links
-            without a single line of project CSS (SPEC/WEB.md § UI Framework,
-            rule 10).
+            The per-roadmap section label is Tabler's sidebar section title, the
+            `<li class="nav-section-title">` Tabler's own NavbarMenu renders
+            before a section's links. The vendored stylesheet styles it inside a
+            vertical navbar (small, uppercase, letter-spaced, muted), separates it
+            from the entries above with its own top margin, and pads it with
+            var(--tblr-sidebar-nav-padding-x), the padding it gives the sidebar's
+            nav-link elements, so the label lines up with the link icons with no
+            divider, no spacing utility, and no project CSS (SPEC/WEB.md § UI
+            Framework, rule 10).
           */}}
-          <li class="nav-item mt-3">
-            <hr class="dropdown-divider">
-            <h2 class="subheader px-3 mb-2">{{.}}</h2>
-          </li>
+          <li class="nav-section-title">{{.}}</li>
           <li class="nav-item{{if eq $.Chrome.Active "sprints"}} active{{end}}">
             <a class="nav-link" href="/roadmaps/{{.}}"{{if eq $.Chrome.Active "sprints"}} aria-current="page"{{end}}>
               <span class="nav-link-icon d-md-none d-lg-inline-block"><i class="ti ti-run"></i></span>
@@ -110,6 +108,15 @@
   targets its own #navbar-menu, which this interface does not have (SPEC/WEB.md
   § UI Framework, rules 13 and 19).
 
+  The header carries no navbar-expand-* class. Tabler 1.6.0 treats a horizontal
+  navbar that expands at a breakpoint as the page's primary navigation: its
+  .page:has(> [class*=navbar-expand]:not(.navbar-vertical))>.navbar-vertical rule
+  hides the sidebar, and a companion rule sets --tblr-sidebar-width to 0px on the
+  header and the page wrapper. This header holds no collapsible menu, so it has
+  no use for an expand breakpoint (SPEC/WEB.md § UI Framework, rule 12). Without
+  one the vendored .navbar-nav rule lays the list out as a column, and the
+  flex-row utility is what keeps it a row (rule 19).
+
   The name is what tells one roadmap's pages from another's at a glance, and the
   sidebar's own per-roadmap label collapses out of sight behind the off-canvas
   menu on a small viewport, so this is the one region that names the selected
@@ -133,7 +140,7 @@
   holds a single child (SPEC/WEB.md § UI Framework, rule 19; Acceptance
   Criterion 108).
 */}}
-{{define "topnavbar"}}  <header class="navbar navbar-expand-md d-print-none">
+{{define "topnavbar"}}  <header class="navbar d-print-none">
     <div class="container-xl">
       {{with .Chrome.Roadmap}}
       <div class="navbar-nav flex-row overflow-hidden">
@@ -222,32 +229,31 @@
 
   Dot is a web.sprintDetail: .Name (roadmap), .Sprint (models.Sprint), .Columns
   (the member tasks grouped into the member-tasks board's three fixed columns),
-  .Comments (the sprint's own comments, oldest first), and .Summary (the
-  precomputed completion summary). It renders, in order: the sprint status
-  summary line, the Sprint details card, the member-tasks board with each card
+  and .Comments (the sprint's own comments, oldest first). It renders, in
+  order: the Sprint details card, the member-tasks board with each card
   clickable to open the read-only task detail modal, and the sprint's Comments
-  card. The caller renders
+  card. It renders no sprint status summary line: the presentation opens with
+  the Sprint details card, directly below the page header (SPEC/WEB.md § Sprint
+  Detail Sub-Template, rule 2; Acceptance Criterion 39). The caller renders
   the single taskModalShell the page carries; a member task carries the NUMBER of
   its comments and never their text, because the modal a card opens is filled on
   demand from the task detail endpoint.
 
   The sprint description is the Markdown renderer's HTML, in the ordinary form,
   inside Tabler's markdown container (sprintDescriptionHTML; SPEC/WEB.md
-  § Sprint Detail Sub-Template, rule 7; § Markdown Rendering).
+  § Sprint Detail Sub-Template, rule 6; § Markdown Rendering).
 
   The Sprint details card carries the description and a metadata datagrid of
   exactly three fields, in this order: Created, Started, and Closed, with an em
   dash in place of an unset started_at or closed_at; each timestamp is displayed
   through the timestamp helper (SPEC/WEB.md § Date and Time Display). It carries no ID, Title,
   Status, Order, Capacity, or Tasks field: the page header already presents the
-  title, "Sprint #<ID>", and the status badge, the summary line above already
-  presents the total task count as T, and the page shows neither the execution
+  title, "Sprint #<ID>", and the status badge, the member-tasks board's three
+  column counts together give the total task count, and the page shows neither the execution
   order nor the capacity (SPEC/WEB.md § Sprint Detail Sub-Template, rule 2;
   Acceptance Criterion 14).
 */}}
-{{define "sprintDetail"}}          <div class="h3 mb-3" data-role="sprint-summary">{{.Summary.Line}}</div>
-
-          <div class="card mb-3">
+{{define "sprintDetail"}}          <div class="card mb-3">
             <div class="card-header">
               <h3 class="card-title">Sprint details</h3>
             </div>
@@ -274,7 +280,7 @@
             The member-tasks board: three FIXED columns — WAITING, DOING, CLOSED —
             holding one card per member task, placed between the Sprint details
             card above and the Comments card below (SPEC/WEB.md § Sprint Detail
-            Sub-Template, rule 4; Acceptance Criteria 130 to 139).
+            Sub-Template, rule 3; Acceptance Criteria 130 to 139).
 
             It replaces the six-column member-tasks table. The table could not
             hold the trigger contract whole: a <tr> is not an activatable element
@@ -285,9 +291,10 @@
 
             The columns come from the model (web.groupIntoSprintBoardColumns over
             models.CategorizeTaskStatus), never from a literal here, so the board
-            and the sprint status summary line above group the sprint's tasks by
-            ONE categorisation: each column's badge is that line's own P, A or C,
-            by construction rather than by coincidence. All three columns are
+            groups the sprint's tasks by the project's ONE status categorisation,
+            the one models.CalculateSprintShowResult counts its Pending,
+            InProgress and Completed through: each column's badge equals that
+            counter by construction rather than by coincidence. All three columns are
             rendered whatever the sprint holds, so a sprint with no member task is
             an empty board rather than an absent one, and the sub-template puts no
             page-level empty state in place of it.
@@ -355,7 +362,7 @@
                 script shows every column expanded and no toggle that would do
                 nothing when pressed. Being a real <button>, it is activated by a
                 click, a tap, Enter, and Space natively, so it carries no tabindex
-                and no role (SPEC/WEB.md § Sprint Detail Sub-Template, rule 4,
+                and no role (SPEC/WEB.md § Sprint Detail Sub-Template, rule 3,
                 Column collapse; Acceptance Criteria 212, 213, and 218).
               */}}
               <div class="card-header">

@@ -217,6 +217,16 @@ func contrastRatio(a, b float64) float64 {
 	return (math.Max(a, b) + 0.05) / (math.Min(a, b) + 0.05)
 }
 
+// TestMarkdownTypography_FontSize is the stylesheet half of Acceptance Criterion
+// 220: the container is set at body-text size, in place of the vendored 1rem,
+// and a code block at the .85714285em of the vendored pre rule, in place of the
+// vendored .markdown .8125em.
+func TestMarkdownTypography_FontSize(t *testing.T) {
+	sheet := servedProjectSheet(t)
+	assertDeclarations(t, sheet, []string{".markdown"}, map[string]string{"font-size": "var(--tblr-body-font-size)"})
+	assertDeclarations(t, sheet, []string{".markdown pre"}, map[string]string{"font-size": ".85714285em"})
+}
+
 // TestMarkdownTypography_Links is the stylesheet half of Acceptance Criterion
 // 198: the two link colours, the underline and its offset, the hover and
 // focus-visible state, the contrast of both colours against the dark card
@@ -224,20 +234,20 @@ func contrastRatio(a, b float64) float64 {
 func TestMarkdownTypography_Links(t *testing.T) {
 	sheet := servedProjectSheet(t)
 	assertDeclarations(t, sheet, []string{".markdown a"}, map[string]string{
-		"color": "rgb(106, 169, 227)", "text-decoration-line": "underline", "text-underline-offset": ".15em",
+		"color": "rgb(121, 170, 231)", "text-decoration-line": "underline", "text-underline-offset": ".15em",
 	})
 	assertDeclarations(t, sheet, []string{".markdown a:hover", ".markdown a:focus-visible"}, map[string]string{
-		"color": "rgb(135, 186, 233)", "text-decoration-line": "none",
+		"color": "rgb(148, 187, 237)", "text-decoration-line": "none",
 	})
 
-	surface := relativeLuminance(0x1f, 0x29, 0x37)
+	surface := relativeLuminance(0x26, 0x26, 0x26)
 	for _, tc := range []struct {
 		r, g, b float64
 		want    string
-	}{{106, 169, 227, "5.87"}, {135, 186, 233, "7.15"}} {
+	}{{121, 170, 231, "6.28"}, {148, 187, 237, "7.63"}} {
 		ratio := contrastRatio(relativeLuminance(tc.r, tc.g, tc.b), surface)
 		if ratio < 4.5 {
-			t.Errorf("rgb(%v, %v, %v) has a contrast of %.2f:1 against #1f2937, below 4.5:1", tc.r, tc.g, tc.b, ratio)
+			t.Errorf("rgb(%v, %v, %v) has a contrast of %.2f:1 against #262626, below 4.5:1", tc.r, tc.g, tc.b, ratio)
 		}
 		if got := strconv.FormatFloat(ratio, 'f', 2, 64); got != tc.want {
 			t.Errorf("rgb(%v, %v, %v) has a contrast of %s:1, the SPEC states %s:1", tc.r, tc.g, tc.b, got, tc.want)

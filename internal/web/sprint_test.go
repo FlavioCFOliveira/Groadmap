@@ -607,7 +607,7 @@ func TestTaskModal_WiringAndContent(t *testing.T) {
 		// carries exactly one input — its board's search box, which submits nothing
 		// and only changes which of the already-read tasks are shown; the sprint
 		// page's board carries none at all (SPEC/WEB.md § Roadmap Tasks Page,
-		// Read-only; § Sprint Detail Sub-Template, rule 4, Read-only).
+		// Read-only; § Sprint Detail Sub-Template, rule 3, Read-only).
 		low := strings.ToLower(body)
 		if strings.Contains(low, "<form") || strings.Contains(low, `type="submit"`) {
 			t.Errorf("page %s must be read-only: no form and no submit control", path)

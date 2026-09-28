@@ -1050,7 +1050,7 @@ class TestWebInterface:
     # in at that stage of the sprint: SPRINT for WAITING (a BACKLOG task inside a
     # sprint is the exceptional case), DOING for DOING, and COMPLETED for CLOSED,
     # which holds that status alone (SPEC/WEB.md § Sprint Detail Sub-Template,
-    # rule 4, Column header; Acceptance Criterion 140).
+    # rule 3, Column header; Acceptance Criterion 140).
     SPRINT_BOARD_CANONICAL = {
         "WAITING": "SPRINT",
         "DOING": "DOING",
@@ -1459,7 +1459,7 @@ class TestWebInterface:
         """The member-tasks board replaced the six-column member-task table: the
         card itself IS the modal trigger, a real `<button type="button">`, so a
         pointer click, a touch tap, Enter and Space all reach the SAME target
-        (SPEC/WEB.md § Sprint Detail Sub-Template, rule 4, The card is the
+        (SPEC/WEB.md § Sprint Detail Sub-Template, rule 3, The card is the
         trigger, and the trigger is a `<button>`; Acceptance Criterion 135).
 
         This replaces test_sprint_page_row_stays_clickable_by_pointer, whose
@@ -3190,34 +3190,52 @@ class TestWebInterface:
 
     # ====================================================================
     # Sprint page member-tasks board: the three-column Kanban board
-    # (SPEC/WEB.md § Sprint Detail Sub-Template, rule 4; Acceptance
+    # (SPEC/WEB.md § Sprint Detail Sub-Template, rule 3; Acceptance
     # Criteria 130 to 139)
     # ====================================================================
 
     # The three fixed board columns, left to right, exactly as
-    # SPEC/WEB.md § Sprint Detail Sub-Template, rule 4 spells them — the SAME
-    # categorisation the sprint status summary line groups its P/A/C by
-    # (Acceptance Criterion 130).
+    # SPEC/WEB.md § Sprint Detail Sub-Template, rule 3 spells them (Acceptance
+    # Criterion 130), and the task statuses each one groups (Acceptance
+    # Criterion 131).
     SPRINT_BOARD_COLUMNS = ("WAITING", "DOING", "CLOSED")
+    SPRINT_BOARD_STATUSES = (
+        ("BACKLOG", "SPRINT"),
+        ("DOING", "TESTING"),
+        ("COMPLETED",),
+    )
+
+    def _sprint_member_counts(self, roadmap, sprint_id):
+        """Count the sprint's member tasks per board column, from their statuses.
+
+        The member tasks are read with `rmp sprint tasks`, independently of the
+        web page, and each is counted under the column whose status group
+        (SPRINT_BOARD_STATUSES) holds its status. Returns (counts, total), where
+        counts lists the WAITING, DOING, and CLOSED expectations left to right
+        and total is the number of member tasks, so a caller asserts each
+        column's badge against its own expected count (Acceptance Criterion
+        131).
+        """
+        _, out, _ = self._run(["sprint", "tasks", "-r", roadmap, str(sprint_id)])
+        statuses = [task["status"] for task in json.loads(out)]
+        counts = [
+            sum(1 for status in statuses if status in group)
+            for group in self.SPRINT_BOARD_STATUSES
+        ]
+        assert sum(counts) == len(statuses), (
+            f"member task statuses {statuses} fall outside the board's status groups"
+        )
+        return counts, len(statuses)
 
     @staticmethod
-    def _sprint_summary(body):
-        """Parse the sprint status summary line into its five components.
-
-        Read from data-role="sprint-summary" in the format
-        `<pct>% - P:<p> A:<a> C:<c> - T:<t>` (SPEC/WEB.md § Sprint Detail
-        Sub-Template, rule 3). Returns a dict of ints so a caller can compare
-        the board's own column badges against these SAME numbers rather than
-        against a count it derives independently (Acceptance Criterion 131).
-        """
-        m = re.search(
-            r'<div class="h3 mb-3" data-role="sprint-summary">'
-            r'(\d+)% - P:(\d+) A:(\d+) C:(\d+) - T:(\d+)</div>',
-            body,
+    def _assert_no_sprint_summary_line(body):
+        """Acceptance Criterion 39: the sprint page carries no element with
+        data-role="sprint-summary" and no text of the form `<n>% - P:`."""
+        assert 'data-role="sprint-summary"' not in body, (
+            'the sprint page carries an element with data-role="sprint-summary"'
         )
-        assert m, "the sprint page carries no sprint status summary line"
-        pct, p, a, c, t = (int(x) for x in m.groups())
-        return {"pct": pct, "p": p, "a": a, "c": c, "t": t}
+        m = re.search(r"\d+% - P:", body)
+        assert m is None, f"the sprint page carries summary-line text {m.group(0)!r}"
 
     @staticmethod
     def _sprint_board_region(body):
@@ -3253,7 +3271,7 @@ class TestWebInterface:
         and toggled via a `hidden` attribute (because a client-side search can
         empty a column there), the sprint board carries no narrowing control of
         any kind: the element is rendered at all only when the column holds no
-        card (SPEC/WEB.md § Sprint Detail Sub-Template, rule 4, Every column is
+        card (SPEC/WEB.md § Sprint Detail Sub-Template, rule 3, Every column is
         always rendered).
         """
         return 'data-role="task-board-column-empty"' in column
@@ -3319,26 +3337,23 @@ class TestWebInterface:
         raise AssertionError(f'the element carrying data-role="{role}" is not closed')
 
     def test_sprint_board_groups_all_five_statuses_into_three_columns(self):
-        """AC130/AC131: the member-tasks board renders exactly three columns —
-        WAITING, DOING, CLOSED, left to right — each holding the sprint's own
-        tasks of the statuses assigned to it, and each column's badge equals
-        the summary line's own P/A/C.
+        """AC130/AC131/AC39: the member-tasks board renders exactly three
+        columns — WAITING, DOING, CLOSED, left to right — each holding the
+        sprint's own tasks of the statuses assigned to it, and each column's
+        badge equals the number of the sprint's member tasks in those statuses.
 
         The fixture seeds one member task per TaskStatus value (BACKLOG,
         SPRINT, DOING, TESTING, COMPLETED) so the two-statuses-per-column
         grouping is actually exercised rather than merely assumed: a board that
         miscategorised even one status would print a count that disagrees with
-        the summary line it is required to match.
+        the member tasks' own statuses.
 
-        AC131 is explicit that the check compares the two renderings of ONE
-        sprint against EACH OTHER, rather than each against a number this test
-        computes on its own: the property under test is that the board and the
-        summary line partition the sprint's tasks by the SAME categorisation,
-        and a board that grouped the statuses differently could still print
-        three counts that each looked plausible in isolation. So P/A/C/T are
-        read from the summary line here, and the column badges are compared
-        against THOSE values — never against a count this test derives
-        independently from the tasks it created.
+        AC131 derives the expected counts from the sprint's member tasks and
+        their statuses, read here with `rmp sprint tasks` rather than from the
+        page, and asserts each badge against its OWN expected count: a board
+        that grouped the statuses differently could still print three counts
+        whose sum is right. The page itself carries no sprint status summary
+        line (AC39).
         """
         roadmap = "webhook_delivery_demo"
         self._run(["roadmap", "create", roadmap])
@@ -3380,9 +3395,11 @@ class TestWebInterface:
         status, _, body = self._req(port, f"/roadmaps/{roadmap}/sprints/{sprint_id}")
         assert status == 200
 
-        summary = self._sprint_summary(body)
-        assert summary["t"] == 5, (
-            f"the sprint's own summary line must count all 5 member tasks, got {summary}"
+        self._assert_no_sprint_summary_line(body)
+        expected, total = self._sprint_member_counts(roadmap, sprint_id)
+        assert (expected, total) == ([2, 2, 1], 5), (
+            f"the fixture's member tasks call for WAITING/DOING/CLOSED {expected} "
+            f"of {total}, want [2, 2, 1] of 5"
         )
 
         region, columns = self._sprint_board_columns(body)
@@ -3397,19 +3414,17 @@ class TestWebInterface:
         doing_count = self._column_header(doing)[1]
         closed_count = self._column_header(closed)[1]
 
-        # AC131: the board's own badges against the summary line's own P/A/C —
-        # the two renderings of one sprint compared against each other.
-        assert waiting_count == summary["p"], (
-            f"WAITING badge {waiting_count} must equal the summary line's P {summary['p']}"
-        )
-        assert doing_count == summary["a"], (
-            f"DOING badge {doing_count} must equal the summary line's A {summary['a']}"
-        )
-        assert closed_count == summary["c"], (
-            f"CLOSED badge {closed_count} must equal the summary line's C {summary['c']}"
-        )
-        assert waiting_count + doing_count + closed_count == summary["t"], (
-            "the three column badges must sum to the summary line's T"
+        # AC131: each badge against its own count of the sprint's member tasks
+        # in the statuses the column groups.
+        for heading, got, want, group in zip(
+            self.SPRINT_BOARD_COLUMNS, (waiting_count, doing_count, closed_count),
+            expected, self.SPRINT_BOARD_STATUSES,
+        ):
+            assert got == want, (
+                f"{heading} badge {got} must equal the {want} member tasks in {group}"
+            )
+        assert waiting_count + doing_count + closed_count == total, (
+            "the three column badges must sum to the sprint's member-task count"
         )
 
         # Every member task appears on the board exactly once, in the column of
@@ -4415,9 +4430,10 @@ class TestWebInterface:
         status, _, body = self._req(port, f"/roadmaps/{roadmap}/sprints/{sprint_id}")
         assert status == 200
 
-        summary = self._sprint_summary(body)
-        assert summary == {"pct": 0, "p": 0, "a": 0, "c": 0, "t": 0}, (
-            f"an empty sprint's summary line must read all zeros, got {summary}"
+        self._assert_no_sprint_summary_line(body)
+        expected, total = self._sprint_member_counts(roadmap, sprint_id)
+        assert (expected, total) == ([0, 0, 0], 0), (
+            f"an empty sprint has no member task, got {expected} of {total}"
         )
 
         region, columns = self._sprint_board_columns(body)
@@ -4466,9 +4482,10 @@ class TestWebInterface:
 
         proc, port = self._start(["--port", "0"])
         _, _, body = self._req(port, f"/roadmaps/{roadmap}/sprints/{sprint_id}")
-        summary = self._sprint_summary(body)
-        assert (summary["p"], summary["a"], summary["c"], summary["t"]) == (0, 3, 0, 3), (
-            f"expected all 3 member tasks counted under A (DOING), got {summary}"
+        self._assert_no_sprint_summary_line(body)
+        expected, total = self._sprint_member_counts(roadmap, sprint_id)
+        assert (expected, total) == ([0, 3, 0], 3), (
+            f"expected all 3 member tasks in DOING, got {expected} of {total}"
         )
 
         region, columns = self._sprint_board_columns(body)
@@ -6621,7 +6638,7 @@ class TestWebInterface:
                 "page-header",       # per-page header
                 "navbar-toggler",    # hamburger / off-canvas toggle
                 "Roadmaps",          # always-present sidebar link
-                '<header class="navbar navbar-expand-md d-print-none">',  # top navbar
+                '<header class="navbar d-print-none">',  # top navbar
             ):
                 assert marker in body, f"page {path} missing admin-shell marker {marker!r}"
 
@@ -6635,7 +6652,7 @@ class TestWebInterface:
         name appears in the sidebar and the page header of every roadmap-scoped
         page, so a document-wide check would prove nothing either way.
         """
-        opening = '<header class="navbar navbar-expand-md d-print-none">'
+        opening = '<header class="navbar d-print-none">'
         start = body.find(opening)
         assert start >= 0, f"page {path} renders no top navbar, so any assertion on it would be vacuous"
         rest = body[start + len(opening):]

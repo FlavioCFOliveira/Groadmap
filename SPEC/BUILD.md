@@ -491,7 +491,10 @@ Rules:
    (`WEB.md § UI Framework`, rule 4). `internal/web/static/vendor/LICENSES.md`
    records, for every vendored web asset, its location, its upstream project, and
    its licence; the Inter entry names both faces under the SIL Open Font License
-   1.1. Upgrading or replacing any of these
+   1.1. The vendored Tabler CSS and the vendored Tabler JavaScript are always taken
+   from the same Tabler release, and they are upgraded together, in one change; the
+   Tabler Icons webfont and the Inter font are separate projects and are not bound
+   to that release. Upgrading or replacing any of these
    vendored Tabler assets — the framework CSS or JavaScript, the Inter font, or the
    Tabler Icons webfont — is a change to the committed asset and to this section,
    recorded in git.
@@ -1422,6 +1425,7 @@ separate published asset, not a fourth entry inside the archive.
 - [ ] The dev pre-release archive holds the same three entries as a release archive. This is checked on a published `dev` asset, not only on a release asset, because both workflows pack archives and only one of them builds release tags
 - [ ] The `.sha256` file for each archive is published as a separate asset and is not an entry inside the archive
 - [ ] Every web asset category (HTML templates, the stylesheet including the vendored Tabler CSS framework, all client JS including the vendored Tabler JavaScript and D3.js with the d3-sankey plugin and their dependencies, web fonts including the Inter font and the Tabler Icons webfont, icons and images, and the favicon) is embedded via `go:embed`; the build uses the Go toolchain only, with no Node.js or `node_modules` step (see Vendored Web Assets)
+- [ ] The vendored Tabler CSS and the vendored Tabler JavaScript come from the same Tabler release: the release named in the licence banner at the head of the committed CSS file equals the release named in the banner at the head of the committed JavaScript file (see Vendored Web Assets)
 - [ ] The web interface is fully self-contained: with networking disabled and with only the `rmp` binary present on disk (no sidecar files and no separate assets directory), `rmp web` serves the full UI — every page and the knowledge-graph visualisation render and function with no network egress (see Vendored Web Assets and `WEB.md § Self-Contained Deliverable`)
 
 ### Architecture Verification

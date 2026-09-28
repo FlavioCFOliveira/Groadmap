@@ -23,10 +23,10 @@
    leaving a `hidden` overlay painted on top of the rendered graph. */
 [hidden] { display: none !important; }
 
-/* The sidebar section label and its divider carry NO rule here: they are
-   Tabler's own `subheader` and `dropdown-divider` classes plus the `px-3`/`mb-2`
-   spacing utilities, all of which the vendored distribution already styles
-   (SPEC/WEB.md § UI Framework, rule 10). A class that needs a rule in this file
+/* The sidebar section label carries NO rule here: it is Tabler's own sidebar
+   section title, `<li class="nav-section-title">`, which the vendored
+   distribution styles and aligns with the sidebar links by itself (SPEC/WEB.md
+   § UI Framework, rule 10). A class that needs a rule in this file
    to look right is a class Tabler does not ship, which is a divergence from the
    framework rather than an override of it. */
 
@@ -232,7 +232,7 @@
 }
 
 /* ---- Kanban board (SPEC/WEB.md § Roadmap Tasks Page, layout and scrolling;
-   § Sprint Detail Sub-Template, rule 4; § Full-Height Page Regions;
+   § Sprint Detail Sub-Template, rule 3; § Full-Height Page Regions;
    § Responsive and Mobile-First Design, rules 9 and 10) ----
    The vendored Tabler distribution ships no board or Kanban component, so the
    column strip's own layout and scrolling rules live here; everything inside a
@@ -376,7 +376,7 @@
 }
 
 /* ---- Sprint board column collapse (SPEC/WEB.md § Sprint Detail Sub-Template,
-   rule 4, Column collapse; § Responsive and Mobile-First Design, rule 10;
+   rule 3, Column collapse; § Responsive and Mobile-First Design, rule 10;
    Acceptance Criteria 213 to 216) ----
    Each column header of the sprint page's board carries a toggle, Tabler's
    card-header action button (`btn-action` inside `card-actions`), which
@@ -403,12 +403,13 @@
   cursor: pointer;
 }
 
-/* The vendored `.btn-action:focus` rule removes the focus outline, which would
-   leave a keyboard user no sign of where focus is. The indicator is restored for
-   `:focus-visible` — keyboard focus, not a pointer press — with the same outline
-   the board's cards show (WCAG 2.2 Success Criterion 2.4.7, Focus Visible). The
-   selector is more specific than the vendored one, so source order is not what
-   decides it and no !important is needed. */
+/* The vendored `.btn-action:focus:not(:focus-visible)` rule removes the focus
+   outline only for a focus that is not `:focus-visible`, such as a pointer press.
+   The toggle's `:focus-visible` state — keyboard focus — carries the same outline
+   the board's cards show, set here so the indicator does not depend on the
+   vendored focus ring (WCAG 2.2 Success Criterion 2.4.7, Focus Visible). The
+   selector is more specific than the vendored `.btn-action:focus-visible`, so
+   source order is not what decides it and no !important is needed. */
 .task-board__column .btn-action:focus-visible {
   outline: 2px solid var(--tblr-primary, #4299e1);
   outline-offset: -2px;
@@ -594,10 +595,11 @@
    (white-space: pre) and scrolls instead of wrapping them.
 
    Typography. Rendered Markdown reads as the interface's own body text: where
-   the vendored .markdown rules depart from the base styles (line-height: 2 on
-   the container, margin-top: 2.5rem on a top-level h2 to h6, the top-level
-   blockquote's font size, margin, and padding, and the top-level hr's 3em
-   margin), the rules below restore the base value. They follow the vendored
+   the vendored .markdown rules depart from the base styles (font-size 1rem and
+   line-height 1.7142857143 on the container, font-size .8125em on a pre,
+   margin-top: 2.5rem on a top-level h2 to h6, the top-level blockquote's font
+   size, margin, and padding, and the top-level hr's 3em margin), the rules below
+   restore the base value. They follow the vendored
    stylesheet and match or exceed the specificity of the rules they override,
    so they win by specificity or by order. The vendored rules that remove the
    first child's top margin and the last child's bottom margin (.markdown >
@@ -607,6 +609,7 @@
   min-width: 0;
   overflow-wrap: anywhere;
   word-break: break-word;
+  font-size: var(--tblr-body-font-size);
   line-height: var(--tblr-body-line-height);
 }
 
@@ -625,6 +628,7 @@
   overflow-wrap: normal;
   word-break: normal;
   tab-size: 4;
+  font-size: .85714285em;
 }
 
 /* Lists. The markers and margins depend only on lists inside the container,
@@ -698,17 +702,18 @@
   margin-top: 0;
 }
 
-/* Links: the link and link-hover colours of Tabler's own dark theme, at
-   5.87:1 and 7.15:1 against the dark card surface #1f2937. */
+/* Links: the link and link-hover colours of Tabler's own dark theme (the
+   vendored --tblr-link-color-rgb and --tblr-link-hover-color-rgb), at 6.28:1 and
+   7.63:1 against the dark card surface #262626. */
 .markdown a {
-  color: rgb(106, 169, 227);
+  color: rgb(121, 170, 231);
   text-decoration-line: underline;
   text-underline-offset: .15em;
 }
 
 .markdown a:hover,
 .markdown a:focus-visible {
-  color: rgb(135, 186, 233);
+  color: rgb(148, 187, 237);
   text-decoration-line: none;
 }
 

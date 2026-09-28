@@ -70,44 +70,63 @@ func TestPages_EmptyStates_NoInlineStyleAttribute(t *testing.T) {
 	assertNoInlineStyle(t, "/roadmaps/"+name+"/graph (empty graph)", graphBody)
 }
 
-// TestSidebarSectionLabel_UsesTablerSubheaderIdiom proves the sidebar section
-// label uses Tabler's subheader + divider idiom instead of an inline-styled
-// label (SPEC/WEB.md § UI Framework rule 10, Acceptance Criterion 62), and that
-// the classes it uses are ones the vendored distribution actually ships.
+// TestSidebarSectionLabel_UsesTablerSectionTitle proves the sidebar section
+// label is Tabler's own sidebar section title rather than an inline-styled label
+// (SPEC/WEB.md § UI Framework rule 10, Acceptance Criterion 62): an
+// `<li class="nav-section-title">` holding the roadmap name, placed directly
+// inside the sidebar's `<ul class="navbar-nav">` before the roadmap's links, with
+// no divider or horizontal rule anywhere in the sidebar, and carrying neither the
+// `subheader` class nor a Tabler spacing utility.
 //
 // The first version of this rule reached for `navbar-heading` and
-// `navbar-divider`. Neither exists: the vendored tabler.min.css defines no rule
-// for either, and `navbar-heading` appears nowhere in the Tabler source at all,
-// so the sidebar only looked right because static/style.css propped both up with
-// project rules. That is a divergence from the framework dressed as an override.
-// The label is now Tabler's own `subheader` (core/scss/ui/_type.scss, the small
-// uppercase letter-spaced muted label) and the rule above it is Tabler's
-// `dropdown-divider`, with the alignment coming from the `px-3` spacing utility.
+// `navbar-divider`, which Tabler does not ship; the second used Tabler's
+// `subheader` with a `dropdown-divider` above it and a `px-3` gutter. Tabler's
+// own NavbarMenu renders a section label as `nav-section-title`, which the
+// vendored stylesheet aligns with the links through its own padding.
 // TestTablerFidelity_NoClassOutsideTheVendoredStylesheets is the general guard;
 // this test pins the specific markup.
-func TestSidebarSectionLabel_UsesTablerSubheaderIdiom(t *testing.T) {
+func TestSidebarSectionLabel_UsesTablerSectionTitle(t *testing.T) {
 	t.Setenv("HOME", shortHome(t))
 	name := seedRoadmap(t, "platform-core")
 	mux := buildMux()
 
 	body := servePage(t, mux, "/roadmaps/"+name)
-	for _, marker := range []string{
-		`<hr class="dropdown-divider">`,    // Tabler's divider, above the label
-		`<h2 class="subheader px-3 mb-2">`, // Tabler's subheader label
-	} {
-		if !strings.Contains(body, marker) {
-			t.Errorf("sidebar section label missing Tabler subheader marker %q", marker)
+	start := strings.Index(body, "<aside")
+	end := strings.Index(body, "</aside>")
+	if start < 0 || end < start {
+		t.Fatalf("the page carries no sidebar <aside>:\n%s", body)
+	}
+	sidebar := body[start:end]
+
+	label := `<li class="nav-section-title">` + name + `</li>`
+	if got := strings.Count(sidebar, label); got != 1 {
+		t.Fatalf("the sidebar carries %d copies of %q, want exactly 1:\n%s", got, label, sidebar)
+	}
+	// The label sits directly inside the sidebar's navbar-nav list: the element
+	// that precedes it closes the roadmap-index entry, and the element that
+	// follows it opens the first of the roadmap's own links.
+	list := strings.Index(sidebar, `<ul class="navbar-nav`)
+	at := strings.Index(sidebar, label)
+	if list < 0 || at < list || strings.Contains(sidebar[list:at], "</ul>") {
+		t.Errorf("the section label is not inside the sidebar's <ul class=\"navbar-nav\">:\n%s", sidebar)
+	}
+	if before := strings.TrimSpace(sidebar[:at]); !strings.HasSuffix(before, "</li>") {
+		t.Errorf("the section label is not preceded by the roadmap-index <li>; the markup before it ends %q",
+			before[max(0, len(before)-80):])
+	}
+	if after := strings.TrimSpace(sidebar[at+len(label):]); !strings.HasPrefix(after, `<li class="nav-item`) {
+		t.Errorf("the section label is not followed by the roadmap's first nav-item; the markup after it starts %q",
+			after[:min(80, len(after))])
+	}
+
+	for _, gone := range []string{"dropdown-divider", "<hr", "subheader", "navbar-heading", "navbar-divider"} {
+		if strings.Contains(sidebar, gone) {
+			t.Errorf("the sidebar carries %q; the section title needs no divider and no other label class", gone)
 		}
 	}
-	// The classes Tabler does not ship must not come back.
-	for _, gone := range []string{"navbar-heading", "navbar-divider"} {
-		if strings.Contains(body, gone) {
-			t.Errorf("sidebar section label regressed to %q, a class Tabler does not define", gone)
-		}
-	}
-	// The roadmap name is rendered as the subheader text.
-	if !strings.Contains(body, ">"+name+"</h2>") {
-		t.Errorf("sidebar subheader does not render the roadmap name %q as its text", name)
+	// No spacing utility on the label: the vendored rule alone aligns it.
+	if strings.Contains(sidebar, `class="nav-section-title `) {
+		t.Errorf("the section label carries a class beyond nav-section-title:\n%s", sidebar)
 	}
 }
 

@@ -13,7 +13,7 @@ import (
 // the server renders for the toggles and the column bodies, the script that
 // carries the behaviour and the page that loads it, and the stylesheet rules the
 // collapsed strip is declared by (SPEC/WEB.md § Sprint Detail Sub-Template, rule
-// 4, Column collapse; Acceptance Criteria 138 and 212 to 218).
+// 3, Column collapse; Acceptance Criteria 138 and 212 to 218).
 //
 // What a browser alone can observe — the measured widths before and after a
 // collapse, the computed writing mode, the focus staying on the toggle — is not
@@ -380,6 +380,6 @@ func TestSprintBoardCollapse_StylesheetDeclaresTheStrip(t *testing.T) {
 	outline := cssDeclarations(focus, "outline")
 	if len(outline) != 1 || outline[0] == "0" || strings.Contains(outline[0], "none") {
 		t.Errorf("the column toggle's :focus-visible declares outline: %v, want a visible outline "+
-			"restoring the one the vendored .btn-action:focus rule removes", outline)
+			"for the toggle's keyboard focus", outline)
 	}
 }

@@ -1,82 +1,81 @@
 package web
 
 import (
+	"regexp"
 	"strings"
 	"testing"
 
 	"github.com/FlavioCFOliveira/Groadmap/internal/models"
 )
 
-// taskWith builds a Task carrying only the fields the completion summary reads.
-// The title makes a rendered row identifiable; the status drives the bucket.
-func taskWith(status models.TaskStatus, title string) models.Task {
-	return models.Task{Status: status, Title: title}
-}
+// reSummaryLineText matches any text of the retired sprint status summary line's
+// form, `<n>% - P:` — the prefix Acceptance Criterion 39 names — however the
+// counts after it read.
+var reSummaryLineText = regexp.MustCompile(`\d+% - P:`)
 
-// TestNewSprintCompletion_CountsAndLine asserts the precomputed completion
-// summary derives the P/A/C/T counts and the rounded percentage straight from a
-// sprint's loaded member tasks, and that Line renders the exact documented
-// format `<pct>% - P:<p> A:<a> C:<c> - T:<t>` (SPEC/WEB.md § Shared Sprint
-// Presentation Sub-Template, sprint status summary line; Acceptance Criterion
-// 39).
-func TestNewSprintCompletion_CountsAndLine(t *testing.T) {
-	cases := []struct {
-		name     string
-		tasks    []models.Task
-		want     sprintCompletion
-		wantLine string
-	}{
-		{
-			name:     "no tasks is 0%",
-			tasks:    nil,
-			want:     sprintCompletion{Pending: 0, InProgress: 0, Completed: 0, Total: 0, Pct: 0},
-			wantLine: "0% - P:0 A:0 C:0 - T:0",
-		},
-		{
-			name: "two thirds completed rounds to 67%",
-			tasks: []models.Task{
-				taskWith(models.StatusCompleted, "Define the read-only data flow"),
-				taskWith(models.StatusCompleted, "Render the sprint detail sub-template"),
-				taskWith(models.StatusBacklog, "Document the completion summary line"),
-			},
-			want:     sprintCompletion{Pending: 1, InProgress: 0, Completed: 2, Total: 3, Pct: 67},
-			wantLine: "67% - P:1 A:0 C:2 - T:3",
-		},
-		{
-			name: "mixed statuses across all buckets",
-			tasks: []models.Task{
-				taskWith(models.StatusBacklog, "Backlog item"),
-				taskWith(models.StatusSprint, "Pulled into sprint"),
-				taskWith(models.StatusDoing, "In development"),
-				taskWith(models.StatusTesting, "Under test"),
-				taskWith(models.StatusCompleted, "Shipped"),
-			},
-			want:     sprintCompletion{Pending: 2, InProgress: 2, Completed: 1, Total: 5, Pct: 20},
-			wantLine: "20% - P:2 A:2 C:1 - T:5",
-		},
+// TestSprintPage_RendersNoStatusSummaryLine is the regression guard for
+// Acceptance Criterion 39: the served sprint page carries no element with
+// data-role="sprint-summary" and no text of the form `<pct>% - P:<p> A:<a>
+// C:<c> - T:<t>`, and the sprint presentation opens with the Sprint details
+// card, directly below the page header (SPEC/WEB.md § Sprint Detail
+// Sub-Template, rule 2).
+//
+// The fixture's sprint has member tasks in all three board columns, so a line
+// computed from them would carry non-zero counts and could not hide as an
+// all-zero string.
+func TestSprintPage_RendersNoStatusSummaryLine(t *testing.T) {
+	t.Setenv("HOME", shortHome(t))
+	f := seedSprintBoardFixture(t, "settlement-platform")
+	body := servePage(t, buildMux(), f.path())
+
+	// Falsifiability control: the pattern matches the line the page used to
+	// carry, so a clean sweep below means the line is absent.
+	if !reSummaryLineText.MatchString(`<div class="h3 mb-3" data-role="sprint-summary">17% - P:3 A:2 C:1 - T:6</div>`) {
+		t.Fatal("the summary-line pattern does not match the retired line; the sweep would be vacuous")
+	}
+	// And the page is the sprint page, with its board, not an error page.
+	if !strings.Contains(body, `data-role="task-board"`) {
+		t.Fatalf("the served page carries no member-tasks board:\n%s", body)
 	}
 
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			got := newSprintCompletion(c.tasks)
-			if got != c.want {
-				t.Errorf("newSprintCompletion = %+v, want %+v", got, c.want)
-			}
-			if line := got.Line(); line != c.wantLine {
-				t.Errorf("Line() = %q, want %q", line, c.wantLine)
-			}
-		})
+	if strings.Contains(body, `data-role="sprint-summary"`) {
+		t.Error(`the sprint page carries an element with data-role="sprint-summary"`)
+	}
+	if m := reSummaryLineText.FindString(body); m != "" {
+		t.Errorf("the sprint page carries summary-line text %q", m)
+	}
+
+	// The presentation opens with the Sprint details card: it is the first thing
+	// the page body's container holds.
+	const container = `<main class="page-body">`
+	start := strings.Index(body, container)
+	if start < 0 {
+		t.Fatalf("the sprint page carries no %s", container)
+	}
+	opening := `<div class="container-xl">`
+	rest := body[start+len(container):]
+	at := strings.Index(rest, opening)
+	if at < 0 {
+		t.Fatalf("the page body holds no %s", opening)
+	}
+	first := strings.TrimSpace(rest[at+len(opening):])
+	const detailsCard = `<div class="card mb-3">
+            <div class="card-header">
+              <h3 class="card-title">Sprint details</h3>`
+	if !strings.HasPrefix(first, detailsCard) {
+		t.Errorf("the sprint presentation does not open with the Sprint details card; it opens with %q",
+			first[:min(160, len(first))])
 	}
 }
 
 // TestSprintDetail_FullBlockOnlyOnSprintPage asserts that the full sprint detail
-// block — the exact summary line, the metadata datagrid (Created/Started/
-// Closed), and the member-tasks board with its three fixed columns — is rendered ONLY on the single Roadmap Sprint Page, and that the
+// block — the metadata datagrid (Created/Started/Closed) and the member-tasks
+// board with its three fixed columns — is rendered ONLY on the single Roadmap Sprint Page, and that the
 // Actual tab of the roadmap sprints page does NOT render it for the OPEN sprint:
 // there the OPEN sprint is shown through the shared sprint-card partial, with no
-// summary line, no datagrid, no member-tasks board, and no per-task modal
+// datagrid, no member-tasks board, and no per-task modal
 // (SPEC/WEB.md § Shared Sprint-Card Partial, § Sprint Detail Sub-Template;
-// Acceptance Criteria 8/12/38/39).
+// Acceptance Criteria 8/12/38).
 //
 // The board markers replaced the six <th> headers of the member-tasks table this
 // board supersedes. The test's subject is unchanged — where the full detail block
@@ -87,11 +86,6 @@ func TestSprintDetail_FullBlockOnlyOnSprintPage(t *testing.T) {
 	t.Setenv("HOME", shortHome(t))
 	f := seedSprintFixture(t, "web-shared-detail")
 	mux := buildMux()
-
-	// The OPEN sprint's two tasks are both in SPRINT status (added via
-	// AddTasksToSprint), so the completion summary is deterministic:
-	// P=2 (both SPRINT), A=0, C=0, T=2, Pct=0.
-	wantLine := "0% - P:2 A:0 C:0 - T:2"
 
 	sprintsPage := servePage(t, mux, "/roadmaps/"+f.name)
 	sprintPage := servePage(t, mux, "/roadmaps/"+f.name+"/sprints/"+itoa(f.openID))
@@ -115,12 +109,6 @@ func TestSprintDetail_FullBlockOnlyOnSprintPage(t *testing.T) {
 	}
 
 	// The single sprint page MUST carry the full detail block.
-	if !strings.Contains(sprintPage, wantLine) {
-		t.Errorf("single sprint page: missing exact summary line %q", wantLine)
-	}
-	if !strings.Contains(sprintPage, `data-role="sprint-summary"`) {
-		t.Errorf("single sprint page: missing the sprint summary line element")
-	}
 	for _, m := range datagridTitles {
 		if !strings.Contains(sprintPage, m) {
 			t.Errorf("single sprint page: detail block missing datagrid title %q", m)
@@ -146,9 +134,6 @@ func TestSprintDetail_FullBlockOnlyOnSprintPage(t *testing.T) {
 	}
 
 	// The Actual tab MUST NOT carry any part of the full detail block.
-	if strings.Contains(current, wantLine) || strings.Contains(current, `data-role="sprint-summary"`) {
-		t.Errorf("Actual tab must not render the sprint status summary line")
-	}
 	for _, m := range datagridTitles {
 		if strings.Contains(current, m) {
 			t.Errorf("Actual tab must not render the metadata datagrid title %q", m)

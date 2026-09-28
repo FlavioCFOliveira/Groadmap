@@ -1005,7 +1005,7 @@ func TestMarkdownStyles_NoForcedHorizontalScroll(t *testing.T) {
 		}
 	}
 	// The container class is Tabler's own.
-	if !strings.Contains(embeddedSheet(t, "static/vendor/tabler/tabler.min.css"), ".markdown{") {
+	if len(cssRuleBlocks(embeddedSheet(t, "static/vendor/tabler/tabler.min.css"), ".markdown")) == 0 {
 		t.Error("the vendored Tabler distribution does not define the markdown class")
 	}
 }

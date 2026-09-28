@@ -6,7 +6,7 @@
  * request is made, nothing is read or written anywhere — no URL parameter, no
  * cookie, no localStorage, sessionStorage, or IndexedDB — so every page load
  * presents all three columns expanded, whatever state the reader left them in
- * (SPEC/WEB.md § Sprint Detail Sub-Template, rule 4, Column collapse).
+ * (SPEC/WEB.md § Sprint Detail Sub-Template, rule 3, Column collapse).
  *
  * THE STATE LIVES IN THE MARKUP, AND IN FOUR PLACES ONLY. A column's state is
  * changed by setting or removing exactly these, and by nothing else:

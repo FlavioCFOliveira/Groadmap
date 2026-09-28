@@ -130,13 +130,13 @@ func TestPages_AdminShellMarkup(t *testing.T) {
 	for _, path := range pagePaths(name) {
 		body := servePage(t, mux, path)
 		for _, marker := range []string{
-			"navbar-vertical",   // Tabler vertical sidebar
-			"page-wrapper",      // admin-shell content wrapper
-			"page-header",       // per-page header
-			"navbar-toggler",    // hamburger control (off-canvas collapse on small viewports)
-			`id="sidebar-menu"`, // collapsible sidebar target the toggler controls
-			">Roadmaps<",        // the always-present Roadmaps sidebar link
-			`<header class="navbar navbar-expand-md d-print-none">`, // the top navbar
+			"navbar-vertical",                      // Tabler vertical sidebar
+			"page-wrapper",                         // admin-shell content wrapper
+			"page-header",                          // per-page header
+			"navbar-toggler",                       // hamburger control (off-canvas collapse on small viewports)
+			`id="sidebar-menu"`,                    // collapsible sidebar target the toggler controls
+			">Roadmaps<",                           // the always-present Roadmaps sidebar link
+			`<header class="navbar d-print-none">`, // the top navbar
 		} {
 			if !strings.Contains(body, marker) {
 				t.Errorf("page %s missing admin-shell marker %q", path, marker)

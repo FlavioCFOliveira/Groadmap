@@ -20,7 +20,7 @@ The SPEC is unversioned. Git is the source of truth for its evolution — recove
 | Web board search text rules (trim by White_Space, Unicode NFC normalisation, simple lowercase fold, and the three tables shipped to the browser) | `WEB.md § Roadmap Tasks Page` |
 | Web sprint page (`/roadmaps/{name}/sprints/{id}`) | `WEB.md § Roadmap Sprint Page` |
 | Web shared sprint-card partial (header, description, task-count footer; used by all three sprints-page tabs) | `WEB.md § Shared Sprint-Card Partial` |
-| Web sprint detail sub-template (status summary line, metadata datagrid, member-tasks board; single sprint page only) | `WEB.md § Sprint Detail Sub-Template` |
+| Web sprint detail sub-template (metadata datagrid, member-tasks board; single sprint page only) | `WEB.md § Sprint Detail Sub-Template` |
 | Web task detail modal (read-only task popup) | `WEB.md § Task Detail Modal` |
 | Web Markdown rendering of the long free-text fields (task requirements, acceptance criteria, completion summary, task and sprint comment bodies, sprint description): the one server-side goldmark renderer, extensions, line breaks, demoted headings, chroma highlighting and its dark stylesheet, link and image rules, raw-HTML omission, the sprint card's non-interactive form, the typography of rendered Markdown (body line height and base block spacing, list markers, heading scale, link colours, the real Inter italic face, the sprint page's 80-character line length) | `WEB.md § Markdown Rendering` |
 | Web date and time display (the `YYYY-MM-DD HH:mm:ss` form every page shows, in UTC as stored, truncated to the second; the one Go formatter and the modal script's formatter; the `<time datetime>` value; the surfaces it governs and the JSON it leaves in ISO 8601) | `WEB.md § Date and Time Display` |
@@ -34,7 +34,7 @@ The SPEC is unversioned. Git is the source of truth for its evolution — recove
 | Web graph data endpoint JSON shape | `DATA_FORMATS.md § Graph View Data` |
 | Self-contained web binary (offline, no CDN, embedded asset categories) | `WEB.md § Self-Contained Deliverable` |
 | Responsive / mobile-first web design | `WEB.md § Responsive and Mobile-First Design` |
-| Web UI framework (Tabler admin shell, dark theme, Tabler-fidelity rules, card tabs) | `WEB.md § UI Framework` |
+| Web UI framework (Tabler admin shell, dark theme, Tabler-fidelity rules, card tabs, constant sidebar-to-content gap) | `WEB.md § UI Framework` |
 | Web status / priority / severity / task type badge colours (semantic Tabler `bg-*-lt` mapping, including the type badge on both Kanban boards' cards and the count badges of the sprints-page tabs and of both Kanban boards' columns) | `WEB.md § Status, Priority, and Severity Badge Colours` |
 | Web HTTP security headers (CSP, X-Frame-Options, etc.) | `WEB.md § Security Headers` |
 | Web HTTP server timeouts (read-header, write, idle) and the graph data endpoint's query time budget | `WEB.md § HTTP Server Timeouts` |

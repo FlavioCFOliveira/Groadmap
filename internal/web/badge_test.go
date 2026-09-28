@@ -256,7 +256,7 @@ func TestTasksPage_RendersSemanticBadgeColours(t *testing.T) {
 // The member task's STATUS badge is asserted ABSENT, which is the half that moved
 // with the board: the card carries no status badge, because the column the card
 // sits in already states the status (SPEC/WEB.md § Sprint Detail Sub-Template,
-// rule 4, The card; Acceptance Criterion 133). The sprint's own status badge is
+// rule 3, The card; Acceptance Criterion 133). The sprint's own status badge is
 // unaffected and is still required above.
 func TestSprintPage_RendersSemanticStatusBadge(t *testing.T) {
 	t.Setenv("HOME", shortHome(t))
