@@ -127,24 +127,52 @@ rather than duplicated.
 ### Work Synergy
 
 Seeking synergies and optimising effort is a CONSTANT principle of every way of
-working in this project. Apply it to ALL work.
+working in this project. Apply it to ALL work. **The objectives MUST be reached
+with the fewest tasks and iterations possible.**
 
-- **Across tasks.** Whenever you identify tasks — in `rmp` or not — whose
-  functional or technical proximity is substantial, you MUST seek to combine them
-  into a single development effort. You MUST always seek to maximise the synergy
-  of one development effort for the benefit of several tasks. Section 4 (Group
-  tasks that are substantially close) defines how such a group is executed.
+- **Across tasks.** Whenever you identify tasks — in `rmp`, or requested ad hoc
+  by the user — whose functional or technical proximity is verifiable, you MUST
+  seek to combine them into a single, productive development effort. You MUST
+  always seek to maximise the synergy of one development effort for the benefit
+  of several tasks together. Such tasks are called **close tasks** in this
+  document; Section 4 (Group close tasks) defines how such a group is executed.
 - **Within a task.** By strategy and by default, identify the synergies inside
   each piece of work:
-  - **Code and tests** — assess whether you can write ALL the code at once and
-    test it ALL at once, rather than writing small pieces and testing each one
-    in isolation (see Iterate: Analyse, Build in Bulk, Test What Changed).
+  - **Code and tests** — assess whether you can write ALL the code at once (of
+    all the tasks) and test ALL the changes at once, rather than writing small
+    pieces and testing each one in isolation (see Iterate: Analyse, Build in
+    Bulk, Test What Changed).
   - **Documentation** — handle ALL the documentation at once or, when the scope
     is very large, identify blocks and handle each block at once, as a whole.
   - **Any other work** — apply the same principle.
 
 Synergy decides only how the requested work is combined and carried out; it
 never licenses work that was not EXPLICITLY requested (see Goal-Directed Action).
+
+### Work Convergence
+
+ALWAYS look for convergence between the individual objectives of the tasks, and
+turn that convergence into synergy. Tasks with complementary objectives, or with
+functional or technical proximity, are close tasks too: ALWAYS optimise the work
+effort so that their synergies are maximised.
+
+- Write ALL the code at once, write ALL the documentation at once, and run the
+  tests of ALL the changed code at once.
+- Synergy and convergence MUST only ever deliver BETTER work than task-by-task
+  development would. Aggregate tasks of the same kind where aggregation shortens
+  the delivery WITHOUT lowering its quality; where it would lower the quality, do
+  not aggregate.
+- MAXIMISE the resources available to you internally, so that deliveries are
+  faster and cost the user less — within the limits of Subagent Delegation
+  (Section 3: one subagent at a time, in series).
+- **Tasks stay separate.** Grouping never merges task records: each task keeps
+  its own identity, definition, acceptance criteria, and closing summary. Only
+  the work effort — development and testing — joins them.
+
+This is the DEFAULT way of working; the user MUST NOT need to ask for it. Its
+motto is **"Make the effort pay: deliver the most with the least work."** It is a
+working principle, NOT an `rmp` task: never record it, or its application, as a
+task.
 
 ### Workflow: Specify → Implement → Test → Document
 
@@ -407,8 +435,8 @@ Task execution is the natural continuation of planning (the next step). Always
 use `rmp` to determine:
 1. Whether there is an open, not-yet-completed task to continue.
 2. Which task is next, and whether other pending tasks MUST be taken with it —
-   assess that proximity EVERY time, before any work starts (see Group tasks
-   that are substantially close, below).
+   assess that proximity EVERY time, before any work starts (see Group close
+   tasks, below).
 3. The goal of the task being started, based on its description and its
    functional and technical requirements.
 4. Determine the most appropriate subagent for the task — or for the group of
@@ -423,11 +451,12 @@ use `rmp` to determine:
 Whenever possible, adapt the model and the model's effort level to the
 requirements of each task's individual operations.
 
-**Group tasks that are substantially close.** This is the Work Synergy principle
-of Section 0 applied to the pending tasks. When evaluating them, assess their
-TECHNICAL and FUNCTIONAL proximity. Where that proximity is SUBSTANTIAL, combine
-those tasks into ONE development effort rather than developing them one after
-another. The group is ONE unit of work from beginning to end — analysed once, its
+**Group close tasks.** This applies the Work Synergy and Work Convergence
+principles of Section 0 to the pending tasks. When evaluating them, assess their
+TECHNICAL and FUNCTIONAL proximity and whether their objectives are
+complementary. Where the proximity is VERIFIABLE or the objectives converge,
+combine those tasks into ONE development effort rather than developing them one
+after another. The group is ONE unit of work from beginning to end — analysed once, its
 code written in one pass, and the changes tested once, exactly as for a single
 task.
 
@@ -437,13 +466,12 @@ NEVER the group divided among subagents by file or by area: dividing it defeats
 the reason for grouping, because each worker reloads the same context and none of
 them sees the whole change.
 
-Grouping decides only what is built in one pass (see Section 0, Work Synergy),
-and every task in the group keeps its own acceptance criteria and its own
-closing summary.
+Grouping decides only what is built and tested in one pass (see Section 0, Work
+Synergy and Work Convergence). The tasks stay separate: every task in the group
+keeps its own record, acceptance criteria, and closing summary.
 
 **Task and sprint execution is sequential.** Sprints MUST be executed
-sequentially, and so MUST the tasks inside them — a group of substantially close
-tasks counts as one unit here, and the groups themselves are taken in order.
+sequentially, and so MUST the tasks inside them — a group of close tasks counts as one unit here, and the groups themselves are taken in order.
 
 Evaluations and audits MAY run in parallel ONLY when the user has explicitly
 authorised it beforehand. That authorisation is an exception, revoked when the
@@ -660,7 +688,7 @@ global Claude Code configuration.
 | Work not explicitly requested (speculation, tidying, unasked audit) | Do NOT start it — ask the user (Section 0, Goal-Directed Action) |
 | Task started | Execute it in full; NEVER leave it half-done (Section 0, Completeness) |
 | Operation that does not serve the task's success | Skip it: no re-running green checks, no re-reading what is already known |
-| Evaluating tasks, in `rmp` or not | Assess their technical and functional proximity; where it is substantial, seek to combine them into ONE development effort (Section 0, Work Synergy; Section 4) |
+| Evaluating tasks, in `rmp` or requested ad hoc | Assess their technical and functional proximity and the convergence of their objectives; where the proximity is verifiable or the objectives are complementary, combine them into ONE development effort, keeping the tasks separate (Section 0, Work Synergy and Work Convergence; Section 4) — by default, without being asked |
 | Carrying out any piece of work (code and tests, documentation, anything else) | Seek its internal synergies: do it all at once or, when the scope is very large, in blocks each handled as a whole (Section 0, Work Synergy) |
 | Implementing a task | Iterate: analyse, write ALL the code in bulk, test ONLY those changes (Section 0, Iterate) |
 | Choosing the test scope | Judge the extent each change requires; full sweep ONLY on sprint close, push, or user request (Rule 2) |
@@ -702,9 +730,11 @@ global Claude Code configuration.
 - Partial (non-self-contained) deliverables or tests created with skip
 - Writing tests before an iteration's code is complete, or interleaving the two,
   or stopping mid-bulk to test a part of what is being built
-- Ignoring Work Synergy: developing substantially close tasks one after another,
-  or handling code, tests, or documentation in small isolated pieces, where one
-  combined effort was possible
+- Ignoring Work Synergy or Work Convergence: developing close tasks one after
+  another, or handling code, tests, or documentation in small isolated pieces,
+  where one combined effort was possible
+- Aggregating tasks in a way that lowers the quality of the delivery, merging the
+  records of grouped tasks, or recording synergy or convergence as an `rmp` task
 - Running the whole test suite where the change calls for a scoped one (the full
   sweep is for the three moments in Rule 2: sprint close, push, user request)
 - Doing more than was asked, or extending scope the user did not request
@@ -715,8 +745,8 @@ global Claude Code configuration.
   without asking the user
 - Fixing a bug without adding the regression test(s) that prevent its recurrence
 - Executing tasks or sprints in parallel (execution is sequential; developing a
-  group of substantially close tasks in one pass is NOT parallel execution)
-- Splitting a group of substantially close tasks across several subagents, or
+  group of close tasks in one pass is NOT parallel execution)
+- Splitting a group of close tasks across several subagents, or
   taking one subagent per task (the group goes to ONE specialist — Section 4)
 - Answering for the project's structure, components or files — or managing the
   Knowledge Graph — outside the `knowledge-authority` skill
