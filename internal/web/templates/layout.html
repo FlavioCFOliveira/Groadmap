@@ -366,23 +366,25 @@
                   are unchanged, and w-100/p-0/text-start are the utilities that
                   keep a button looking like the card it is.
 
-                  This card differs from the tasks board's in exactly two places,
-                  both deliberate and both stated in the SPEC. First, the TITLE
-                  leads and the reference follows it as muted text on its own
-                  line, because the GitLab issue board card this board is modelled
-                  on leads with the title. Second, the badges and the counters
-                  share ONE line instead of the counters getting a footer row of
-                  their own, and on that line the comment count precedes the
-                  subtask count (SPEC/WEB.md § Sprint Detail Sub-Template, The
-                  card; Acceptance Criterion 133). The card carries no status
-                  badge — the column it sits in already states the status — and no
-                  type and no dependency counts: a card is read at a glance, and
-                  every field of the task is in the modal the card opens.
+                  The card OPENS exactly as the tasks board's card opens: the
+                  shared reference line (taskCardRef) carrying the id badge and
+                  the type badge, then the title on the next line (SPEC/WEB.md
+                  § Sprint Detail Sub-Template, The card opens the way the tasks
+                  board's card opens; Acceptance Criteria 133 and 179). Below the
+                  title the two cards differ in one deliberate, specified place:
+                  the badges and the counters share ONE line instead of the
+                  counters getting a footer row of their own, and on that line the
+                  comment count precedes the subtask count (SPEC/WEB.md § Sprint
+                  Detail Sub-Template, The card; Acceptance Criterion 133). The
+                  card carries no status badge — the column it sits in already
+                  states the status — and no dependency counts: a card is read at
+                  a glance, and every field of the task is in the modal the card
+                  opens.
                 */}}
                 <button type="button" class="card card-sm task-card w-100 p-0 text-start" data-bs-toggle="modal" data-bs-target="#task-modal" data-task-id="{{.ID}}" aria-label="Open details for task #{{.ID}}: {{.Title}}">
                   <span class="card-body d-block">
-                    <span class="d-block fw-bold text-break" data-role="task-card-title">{{.Title}}</span>
-                    <span class="d-block small text-secondary mb-1" data-role="task-card-ref">#{{.ID}}</span>
+                    {{template "taskCardRef" .}}
+                    <span class="d-block fw-bold text-break mb-1" data-role="task-card-title">{{.Title}}</span>
                     {{/*
                       The card's third and last line, carrying BOTH of its
                       remaining groups: the two badges at the leading edge and the
@@ -509,6 +511,35 @@
               {{end}}
             </div>
           </div>{{end}}
+
+{{/*
+  taskCardRef is the reference line that opens the card of BOTH Kanban boards —
+  the tasks page's board (tasks.html) and the sprint page's member-tasks board
+  (sprintDetail, above). It carries exactly two Tabler badges on one line, in this
+  order: the id badge, reading #<id> in the neutral bg-secondary-lt variant for
+  every task, and the type badge, reading the TaskType value exactly as the enum
+  spells it and coloured by taskTypeBadge (SPEC/WEB.md § Roadmap Tasks Page, Card
+  content, item 1; § Sprint Detail Sub-Template, The card; Acceptance Criteria
+  177 to 179).
+
+  The line is ONE partial rather than two copies because the SPEC states it once
+  for the card of both boards, so that the two cannot drift apart on it: a reader
+  moving between the boards finds a task's reference and its type in the same
+  place and in the same form on each.
+
+  The id badge's class is written out here, and not taken from a mapping: an id
+  identifies a task and is a value no colour table knows, so no mapping governs
+  it (SPEC/WEB.md § Status, Priority, and Severity Badge Colours, rule 2, The id
+  badge is outside the mapping). The type badge takes no prefix: its own text is
+  the type name, so it is never ambiguous. The elements are spans because a card
+  is a <button>, whose content model is phrasing content. The line is written
+  without whitespace between its elements: it is repeated once per card, the flex
+  gap alone spaces the two badges, and the tasks page's document is held to a
+  per-card byte budget (task_modal_test.go, Acceptance Criterion 96).
+
+  Dot is the card's taskView; only .ID and .Type are read.
+*/}}
+{{define "taskCardRef"}}<span class="d-flex flex-wrap gap-1 mb-1" data-role="task-card-ref"><span class="badge bg-secondary-lt">#{{.ID}}</span><span class="badge {{taskTypeBadge .Type}}">{{.Type}}</span></span>{{end}}
 
 {{/*
   taskModalShell is the ONE task detail modal a page renders. It is an empty

@@ -540,7 +540,7 @@ func TestTaskBoard_CardOrderIsPriorityThenCreatedAt(t *testing.T) {
 // ==================== CARD CONTENT ====================
 
 // TestTaskBoard_CardContent is the gate for Acceptance Criterion 85: the card
-// shows the reference line, the title, the priority and severity badges in the
+// shows the reference line (the id badge, then the type badge), the title, the priority and severity badges in the
 // SPEC's colour variants, and a metadata footer holding only the indicators the
 // task actually has — and it shows no status badge, because the column already
 // states the status.
@@ -552,18 +552,26 @@ func TestTaskBoard_CardContent(t *testing.T) {
 	columns := boardColumns(t, servePage(t, mux, "/roadmaps/"+f.name+"/tasks"))
 	card := cardSlice(t, columns[1], f.passkey) // the SPRINT column's single card
 
-	// 1. The reference line: #id and the task type, as muted text, with no colour
-	//    applied to the type (no badge, no bg-*-lt class on it).
-	ref := `<span class="d-block small text-secondary" data-role="task-card-ref">#` +
-		itoa(f.passkey) + ` &middot; ` + string(models.TypeUserStory) + `</span>`
-	if !strings.Contains(card, ref) {
+	// 1. The reference line opening the card: the id badge reading #id in the
+	//    neutral variant, then the type badge reading the TaskType value in the
+	//    variant the task type mapping assigns to USER_STORY (bg-green-lt).
+	ref := `<span class="d-flex flex-wrap gap-1 mb-1" data-role="task-card-ref">` +
+		`<span class="badge bg-secondary-lt">#` + itoa(f.passkey) + `</span>` +
+		`<span class="badge bg-green-lt">` + string(models.TypeUserStory) + `</span></span>`
+	refAt := strings.Index(card, ref)
+	if refAt < 0 {
 		t.Errorf("the card's reference line is not %q\ncard: %s", ref, card)
 	}
 
-	// 2. The title, as the card's prominent main content.
-	if !strings.Contains(card,
-		`data-role="task-card-title">Add WebAuthn passkey support to checkout</span>`) {
+	// 2. The title, on the line after the reference line, as the card's
+	//    prominent main content.
+	titleAt := strings.Index(card,
+		`data-role="task-card-title">Add WebAuthn passkey support to checkout</span>`)
+	if titleAt < 0 {
 		t.Errorf("the card does not show the task title as its main content\ncard: %s", card)
+	}
+	if refAt >= 0 && titleAt >= 0 && titleAt < refAt {
+		t.Errorf("the card shows the title before the reference line\ncard: %s", card)
 	}
 
 	// 3. The priority and severity badges. Each writes its value behind the

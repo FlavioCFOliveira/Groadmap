@@ -1266,10 +1266,11 @@ func reorderSprintTasks(t *testing.T, roadmap string, sprintID int, taskIDs []in
 
 // ==================== THE CARD ====================
 
-// TestSprintBoard_CardShowsSixDataPointsInOrder is the gate for Acceptance
-// Criterion 133: the card shows exactly six data points, on THREE lines, in this
-// order — the title leading the card, the reference `#<id>` on its own line as
-// secondary text, and one line carrying the priority badge and the severity badge
+// TestSprintBoard_CardShowsSevenDataPointsInOrder is the gate for Acceptance
+// Criterion 133: the card shows exactly seven data points, on THREE lines, in this
+// order — the reference line opening the card (the id badge reading `#<id>` in the
+// neutral variant, then the type badge in the variant the task type mapping
+// assigns), the title on the next line, and one line carrying the priority badge and the severity badge
 // at its leading edge and the number of comments followed by the number of
 // subtasks at its trailing edge, each counter as its icon followed by its number.
 //
@@ -1293,7 +1294,7 @@ func reorderSprintTasks(t *testing.T, roadmap string, sprintID int, taskIDs []in
 // Acceptance Criteria 85 and 133). The prefix is a label and not a value: the
 // class each badge carries is still the one the mapping assigns to the integer
 // alone, which is why the classes below are still read from the helpers.
-func TestSprintBoard_CardShowsSixDataPointsInOrder(t *testing.T) {
+func TestSprintBoard_CardShowsSevenDataPointsInOrder(t *testing.T) {
 	t.Setenv("HOME", shortHome(t))
 	f := seedSprintBoardFixture(t, "settlement-platform")
 	mux := buildMux()
@@ -1301,18 +1302,21 @@ func TestSprintBoard_CardShowsSixDataPointsInOrder(t *testing.T) {
 	columns := memberBoardColumns(t, servePage(t, mux, f.path()))
 	card := cardSlice(t, columns[0], f.reconcile) // the WAITING column's fullest card
 
-	// 1. The title, leading the card as its prominent main content.
-	title := `<span class="d-block fw-bold text-break" data-role="task-card-title">` +
+	// 1 and 2. The reference line opening the card: the id badge, neutral for
+	//          every task, then the type badge, whose class is taken from the
+	//          task type mapping (the reconciliation task is a USER_STORY).
+	idBadge := `<span class="d-flex flex-wrap gap-1 mb-1" data-role="task-card-ref">` +
+		`<span class="badge bg-secondary-lt">#` + itoa(f.reconcile) + `</span>`
+	typeBadge := `<span class="badge ` + taskTypeBadge(models.TypeUserStory) + `">` +
+		string(models.TypeUserStory) + `</span></span>`
+	// 3. The title, on the line after the reference line.
+	title := `<span class="d-block fw-bold text-break mb-1" data-role="task-card-title">` +
 		sprintTaskReconcile + `</span>`
-	// 2. The reference, on its own line as secondary muted text, carrying the id
-	//    and nothing else.
-	ref := `<span class="d-block small text-secondary mb-1" data-role="task-card-ref">#` +
-		itoa(f.reconcile) + `</span>`
-	// 3 and 4. The two badges, at the LEADING edge of the card's third line: the
+	// 4 and 5. The two badges, at the LEADING edge of the card's third line: the
 	//          prefixed value, in the variant the semantic mapping assigns to it.
 	priority := `<span class="badge ` + priorityBadge(9) + `">P9</span>`
 	severity := `<span class="badge ` + severityBadge(2) + `">S2</span>`
-	// 5 and 6. The counters, at the TRAILING edge of that same line, each an icon
+	// 6 and 7. The counters, at the TRAILING edge of that same line, each an icon
 	//          followed by its number, and the COMMENT count first.
 	comments := counterMarkup("task-card-comments", "ti ti-message", 3)
 	subtasks := counterMarkup("task-card-subtasks", "ti ti-subtask", 2)
@@ -1328,8 +1332,9 @@ func TestSprintBoard_CardShowsSixDataPointsInOrder(t *testing.T) {
 		what   string
 		markup string
 	}{
+		{"id badge", idBadge},
+		{"type badge", typeBadge},
 		{"title", title},
-		{"reference", ref},
 		{"priority badge", priority},
 		{"severity badge", severity},
 		{"comment counter", comments},
@@ -1384,7 +1389,6 @@ func TestSprintBoard_CardShowsSixDataPointsInOrder(t *testing.T) {
 	for what, absent := range map[string]string{
 		"a status badge":       taskStatusBadge(models.StatusSprint),
 		"the status value":     ">SPRINT<",
-		"the task type":        string(models.TypeUserStory),
 		"a specialists icon":   "ti ti-users",
 		"a depends-on count":   "Depends on:",
 		"a blocks count":       "Blocks:",
@@ -1413,7 +1417,7 @@ func TestSprintBoard_CardShowsSixDataPointsInOrder(t *testing.T) {
 			"omits the counts proves nothing")
 	}
 	if view.Task.Type != models.TypeUserStory {
-		t.Errorf("the reconciliation task's type is %q, not the distinctive value the absence "+
+		t.Errorf("the reconciliation task's type is %q, not the value the type badge "+
 			"assertion is written against", view.Task.Type)
 	}
 }
@@ -1535,7 +1539,7 @@ func TestSprintBoard_BothCountersAlwaysRender(t *testing.T) {
 // a narrow column, and the card renders no separate footer row for the counters.
 //
 // The contents and their order are asserted by
-// TestSprintBoard_CardShowsSixDataPointsInOrder; what is asserted here is that the
+// TestSprintBoard_CardShowsSevenDataPointsInOrder; what is asserted here is that the
 // four values are laid out as ONE line rather than two, which is the whole of the
 // change and is invisible to any check that only looks for the values.
 //

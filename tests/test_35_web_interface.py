@@ -3571,10 +3571,13 @@ class TestWebInterface:
                 f"{got_after[i]}, want {want_after[i]}"
             )
 
-    def test_sprint_board_card_shows_six_data_points_in_order(self):
-        """AC133: each card shows exactly six data points, on THREE lines, in
-        this order: the task title leading the card, the `#<id>` reference as
-        secondary text, and one line carrying the `P<n>` priority badge and the
+    def test_sprint_board_card_shows_seven_data_points_in_order(self):
+        """AC133/AC179: each card shows exactly seven data points, on THREE
+        lines, in this order: the reference line opening the card — the id
+        badge reading `#<id>` in the neutral `bg-secondary-lt` variant, then
+        the type badge reading the task's type in the variant the task type
+        mapping assigns (`TASK` -> `bg-blue-lt`) — the task title on the next
+        line, and one line carrying the `P<n>` priority badge and the
         `S<n>` severity badge at its leading edge and the comment count followed
         by the subtask count at its trailing edge, each counter as an icon
         followed by its number.
@@ -3634,9 +3637,14 @@ class TestWebInterface:
 
         title = self._rendered_task_title(body, parent)
         pattern = (
+            r'<span class="card-body d-block">\s*'
+            r'<span class="d-flex flex-wrap gap-1 mb-1" '
+            r'data-role="task-card-ref">'
+            rf'<span class="badge bg-secondary-lt">#{parent}</span>'
+            r'<span class="badge bg-blue-lt">TASK</span>'
+            r'</span>\s*'
+            r'<span class="d-block fw-bold text-break mb-1" '
             rf'data-role="task-card-title">{re.escape(title)}</span>\s*'
-            rf'<span class="d-block small text-secondary mb-1" '
-            rf'data-role="task-card-ref">#{parent}</span>\s*'
             r'<span class="d-flex flex-wrap align-items-center '
             r'justify-content-between gap-1" data-role="task-card-summary">\s*'
             r'<span class="d-flex flex-wrap gap-1" '
@@ -3654,7 +3662,7 @@ class TestWebInterface:
             r'</span>'
         )
         assert re.search(pattern, card, re.S), (
-            f"the card's six data points are missing or out of the required "
+            f"the card's seven data points are missing or out of the required "
             f"order: {card}"
         )
 
@@ -3669,11 +3677,11 @@ class TestWebInterface:
             f"roadmap tasks page's footer order: {card}"
         )
 
-        # Exactly six data points: no seventh. No status badge (the column
-        # already states it), no type, no specialists, no dependency counts,
-        # no sprint name.
-        assert card.count('class="badge') == 2, (
-            f"the card must carry exactly two badges (P and S); found "
+        # Exactly seven data points: no eighth. No status badge (the column
+        # already states it), no specialists, no dependency counts, no sprint
+        # name.
+        assert card.count('class="badge') == 4, (
+            f"the card must carry exactly four badges (id, type, P and S); found "
             f"{card.count('class=\"badge')} in {card}"
         )
         for absent in ("task-card-sprint", "task-card-specialists",
@@ -3689,7 +3697,7 @@ class TestWebInterface:
         renders no separate footer row for the counters.
 
         This is the card's SHAPE rather than its contents, which
-        test_sprint_board_card_shows_six_data_points_in_order asserts. The
+        test_sprint_board_card_shows_seven_data_points_in_order asserts. The
         layout is read from the utility classes the line carries, because those
         are what the browser resolves the behaviour from: justify-content-between
         puts the first flex item at the leading edge and the last at the

@@ -13,6 +13,11 @@ const (
 	badgeCyan      = "bg-cyan-lt"
 	badgeOrange    = "bg-orange-lt"
 	badgeRed       = "bg-red-lt"
+	badgeAzure     = "bg-azure-lt"
+	badgePurple    = "bg-purple-lt"
+	badgeIndigo    = "bg-indigo-lt"
+	badgeTeal      = "bg-teal-lt"
+	badgePink      = "bg-pink-lt"
 	badgeSecondary = "bg-secondary-lt"
 )
 
@@ -64,6 +69,56 @@ func sprintStatusBadge(s models.SprintStatus) string {
 	case models.SprintOpen:
 		return badgeBlue
 	case models.SprintPending:
+		return badgeSecondary
+	default:
+		return badgeSecondary
+	}
+}
+
+// taskTypeBadge returns the Tabler badge colour-variant class for a task type,
+// per the authoritative mapping in SPEC/WEB.md § Status, Priority, and Severity
+// Badge Colours (task type table):
+//
+//	BUG         -> bg-red-lt
+//	USER_STORY  -> bg-green-lt
+//	TASK        -> bg-blue-lt
+//	SUB_TASK    -> bg-azure-lt
+//	EPIC        -> bg-purple-lt
+//	REFACTOR    -> bg-indigo-lt
+//	IMPROVEMENT -> bg-teal-lt
+//	SPIKE       -> bg-yellow-lt
+//	DESIGN_UX   -> bg-pink-lt
+//	CHORE       -> bg-secondary-lt
+//
+// The type badge it colours is shown on the card of the two Kanban boards and
+// nowhere else: the task detail modal shows the type as plain text, and the type
+// filter offers the values as plain options.
+//
+// The function is total: every canonical TaskType is covered, and any value
+// outside the enum (which the data layer never produces, since models.Task
+// validates its type) falls back to the neutral bg-secondary-lt variant, like the
+// status helpers above, so the helper never returns an empty class.
+func taskTypeBadge(t models.TaskType) string {
+	switch t {
+	case models.TypeBug:
+		return badgeRed
+	case models.TypeUserStory:
+		return badgeGreen
+	case models.TypeTask:
+		return badgeBlue
+	case models.TypeSubTask:
+		return badgeAzure
+	case models.TypeEpic:
+		return badgePurple
+	case models.TypeRefactor:
+		return badgeIndigo
+	case models.TypeImprovement:
+		return badgeTeal
+	case models.TypeSpike:
+		return badgeYellow
+	case models.TypeDesignUX:
+		return badgePink
+	case models.TypeChore:
 		return badgeSecondary
 	default:
 		return badgeSecondary
@@ -125,14 +180,14 @@ func severityBadge(s int) string {
 // values, on a task comment and on a sprint comment alike (SPEC/WEB.md § Task
 // Detail Modal, type badge colour; Acceptance Criterion 66).
 //
-// The semantic colour mapping above covers task and sprint status, priority, and
-// severity only; it is deliberately NOT extended to comment types, and no
+// The semantic colour mapping above covers task and sprint status, task type,
+// priority, and severity only; it is deliberately NOT extended to comment types, and no
 // per-type colour is introduced. A comment type classifies an entry of a log; it
 // carries no urgency or progress meaning to colour-code, and colouring seven
 // values would compete visually with the status badges that do carry it.
 //
 // The helper exists rather than the class being written into the template so the
-// comment-type badge has one source, exactly like the four mappings above: the
+// comment-type badge has one source, exactly like the five mappings above: the
 // task detail modal and the sprint Comments card cannot drift apart, and the
 // neutral-for-every-value rule is verifiable in one place.
 func commentTypeBadge(models.CommentType) string {
@@ -141,8 +196,8 @@ func commentTypeBadge(models.CommentType) string {
 
 // badgeFuncMap is the html/template FuncMap that exposes the semantic badge
 // colour helpers to every page template. It is merged into the template set at
-// parse time (see embed.go) so the templates can render a status, priority,
-// severity, or comment-type badge with the deterministic Tabler colour variant
+// parse time (see embed.go) so the templates can render a status, task type,
+// priority, severity, or comment-type badge with the deterministic Tabler colour variant
 // the SPEC assigns to each value (SPEC/WEB.md § Status, Priority, and Severity
 // Badge Colours; § Task Detail Modal, type badge colour).
 //
@@ -161,6 +216,7 @@ func commentTypeBadge(models.CommentType) string {
 var badgeFuncMap = map[string]any{
 	"taskStatusBadge":   taskStatusBadge,
 	"sprintStatusBadge": sprintStatusBadge,
+	"taskTypeBadge":     taskTypeBadge,
 	"priorityBadge":     priorityBadge,
 	"severityBadge":     severityBadge,
 	"commentTypeBadge":  commentTypeBadge,

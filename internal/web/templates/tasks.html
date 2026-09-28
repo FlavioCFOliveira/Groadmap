@@ -167,7 +167,14 @@
                 */}}
                 <button type="button" class="card card-sm task-card w-100 p-0 text-start" data-bs-toggle="modal" data-bs-target="#task-modal" data-task-id="{{.ID}}" data-search="{{.SearchText}}" data-type="{{.Type}}" data-priority="{{.Priority}}" data-severity="{{.Severity}}" aria-label="Open details for task #{{.ID}}: {{.Title}}"{{if not .Match}} hidden{{end}}>
                   <span class="card-body d-block">
-                    <span class="d-block small text-secondary" data-role="task-card-ref">#{{.ID}} &middot; {{.Type}}</span>
+                    {{- /*
+                      The reference line — the id badge, then the type badge — is
+                      the shared taskCardRef partial (layout.html), because it
+                      opens the card of BOTH boards and is stated once for both
+                      (SPEC/WEB.md § Roadmap Tasks Page, Card content, item 1;
+                      Acceptance Criteria 85 and 177 to 179).
+                    */}}
+                    {{template "taskCardRef" .}}
                     <span class="d-block fw-bold text-break mb-1" data-role="task-card-title">{{.Title}}</span>
                     {{/*
                       Each badge names the value it carries with a one-letter

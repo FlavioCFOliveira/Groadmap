@@ -302,14 +302,16 @@ func TestBadgePrefix_TaskDetailModalRendersTheValuesBare(t *testing.T) {
 
 // TestBadgePrefix_NoOtherBadgeTakesAPrefix is the gate for the exclusive half of
 // the rule: a prefix earns its place only where no label names the value, which
-// is true of the board card's two badges and of no other badge in this interface
-// (SPEC/WEB.md § Roadmap Tasks Page, Card content, item 3, Only these two badges
-// take a prefix).
+// is true of the board card's priority and severity badges and of no other badge
+// in this interface (SPEC/WEB.md § Roadmap Tasks Page, Card content, item 3, Only
+// these two badges take a prefix).
 //
 // The check is TOTAL rather than sampled. Every page of the interface is served,
 // every badge it renders is read, and the badges are partitioned by whether they
-// sit inside a board card. Each card must carry exactly its two prefixed badges,
-// and no badge outside a card may carry a prefix — which covers the column count
+// sit inside a board card. Each card must carry exactly its four badges — the id
+// and type badges of its reference line, unprefixed, then its two prefixed badges
+// (Acceptance Criteria 85, 133 and 179) — and no badge outside a card may carry a
+// prefix — which covers the column count
 // badges, the sprint tab count badges, the sprint status badges of the shared
 // sprint card, the sprint page's header and datagrid, the comment type badges,
 // and the graph sidebar's totals in one statement, with no list of them to keep
@@ -353,22 +355,30 @@ func TestBadgePrefix_NoOtherBadgeTakesAPrefix(t *testing.T) {
 	for _, path := range paths {
 		cards, outside := splitBoardCards(t, servePage(t, mux, path))
 
-		// Inside a card: exactly the two prefixed badges, in that order, and no
-		// third badge — the card shows no status badge, because its column already
+		// Inside a card: the reference line's id and type badges, which take no
+		// prefix, then exactly the two prefixed badges, in that order, and no fifth
+		// badge — the card shows no status badge, because its column already
 		// states the status.
 		for _, card := range cards {
 			cardsSeen++
 			found := pageBadges(card)
-			if len(found) != 2 {
-				t.Errorf("%s: a board card carries %d badges, want exactly 2 — the priority and "+
-					"severity badges and no other\ncard: %s", path, len(found), card)
+			if len(found) != 4 {
+				t.Errorf("%s: a board card carries %d badges, want exactly 4 — the id and type "+
+					"badges, then the priority and severity badges, and no other\ncard: %s",
+					path, len(found), card)
 				continue
 			}
-			if !rePriorityBadgeText.MatchString(found[0].text) ||
-				!reSeverityBadgeText.MatchString(found[1].text) {
-				t.Errorf("%s: a board card's badges read %q and %q, want a priority badge reading "+
-					"P then its value and a severity badge reading S then its value, in that "+
-					"order\ncard: %s", path, found[0].text, found[1].text, card)
+			for _, unprefixed := range found[:2] {
+				if rePrefixedBadgeText.MatchString(unprefixed.text) {
+					t.Errorf("%s: a board card's reference-line badge reads %q; the id and type "+
+						"badges take no one-letter prefix\ncard: %s", path, unprefixed.text, card)
+				}
+			}
+			if !rePriorityBadgeText.MatchString(found[2].text) ||
+				!reSeverityBadgeText.MatchString(found[3].text) {
+				t.Errorf("%s: a board card's last two badges read %q and %q, want a priority badge "+
+					"reading P then its value and a severity badge reading S then its value, in "+
+					"that order\ncard: %s", path, found[2].text, found[3].text, card)
 			}
 		}
 
@@ -531,20 +541,22 @@ func cardMarkupOf(t *testing.T, region string, taskID int, where string) string 
 	return region[start : start+end+len(cardClose)]
 }
 
-// cardBadgePair returns a card's two badges, in the order the card renders them.
-// A card carrying any other number of badges is a failure in itself: the card
-// shows a priority badge and a severity badge and no status badge at all
-// (Acceptance Criteria 85 and 133).
+// cardBadgePair returns a card's priority and severity badges, in the order the
+// card renders them. A card carrying any number of badges other than four is a
+// failure in itself: the card shows the id and type badges of its reference line,
+// then a priority badge and a severity badge, and no status badge at all
+// (Acceptance Criteria 85, 133 and 179). The reference line's two badges are
+// asserted by the card tests that own them (card_reference_line_test.go).
 func cardBadgePair(t *testing.T, card string, taskID int, where string) badgePair {
 	t.Helper()
 
 	found := pageBadges(card)
-	if len(found) != 2 {
-		t.Fatalf("%s: the card of task #%d carries %d badges, want exactly 2 — its priority "+
-			"badge and its severity badge, and no status badge\ncard: %s",
+	if len(found) != 4 {
+		t.Fatalf("%s: the card of task #%d carries %d badges, want exactly 4 — its id and type "+
+			"badges, its priority badge and its severity badge, and no status badge\ncard: %s",
 			where, taskID, len(found), card)
 	}
-	return badgePair{priority: found[0].markup, severity: found[1].markup}
+	return badgePair{priority: found[2].markup, severity: found[3].markup}
 }
 
 // splitBoardCards partitions a served page into the markup of every board card,
