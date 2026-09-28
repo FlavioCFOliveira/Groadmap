@@ -548,11 +548,30 @@
   padding: 0.75rem;
 }
 
+/* Every card of a column starts at the column's own leading edge. The vendored
+   Tabler distribution carries `.card-link+.card-link { margin-inline-start:
+   var(--tblr-card-spacer-x) }`, Bootstrap's spacing between inline text links
+   placed side by side inside a card. A board card IS an element carrying the
+   card-link class, and a column's cards are adjacent siblings, so that rule
+   indents every card after the first by the card's horizontal spacer and the
+   first card reads wider than the ones below it. The classes stay — the
+   specification requires card and card-link, and making the card a link changes
+   the element, not the appearance (SPEC/WEB.md § Roadmap Tasks Page, Clickable
+   card; § Sprint Detail Sub-Template, The card is a link to the task page) — so
+   the inherited offset is neutralised here instead. The selector outranks the
+   vendored one (three classes against two) and this sheet is linked after it,
+   so no !important is needed. Both boards render their cards as direct children
+   of `.task-board__cards`, so the one rule covers both. */
+.task-board__cards > .task-card + .task-card {
+  margin-inline-start: 0;
+}
+
 /* An empty column of either board keeps its heading and its 0 count badge and
    shows Tabler's empty-state markup in place of the card list. Tabler sizes that
    panel for a full-width card; inside a board column it is tightened so the empty
    state stays unobtrusive. Together with the card-body padding above, these are
-   the only two presentation rules the boards add to a Tabler component. */
+   the only two presentation rules the boards add to a Tabler component; the
+   sibling-offset rule above adds nothing, it cancels a vendored margin. */
 .task-board__cards .empty {
   padding: 1rem 0.5rem;
 }
