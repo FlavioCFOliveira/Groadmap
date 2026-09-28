@@ -1,6 +1,6 @@
 module github.com/FlavioCFOliveira/Groadmap
 
-go 1.27.0
+go 1.27.1
 
 require (
 	github.com/FlavioCFOliveira/GoGraph v0.15.0
