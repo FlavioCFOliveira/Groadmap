@@ -355,7 +355,7 @@ You MUST use these Claude Code skills for the following needs:
 ### Task/Sprint Creation Flow
 
 **Step 1: `roadmap-manager`** collects ALL required fields and confirms with the user:
-- Tasks: title, type, priority, status, description, technical, criteria, complexity
+- Tasks: title, type, priority, status, description, technical, criteria
 - Sprints: name, goal, start, end, status
 
 **Step 2: User confirmation** → `roadmap-manager` executes `rmp` CLI commands:
