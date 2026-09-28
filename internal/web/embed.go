@@ -59,13 +59,14 @@ func init() {
 
 // templateFuncs is the complete FuncMap the page templates are parsed with: the
 // semantic badge colour helpers (see badge.go), the audit-cell helpers (see
-// audit.go), and the Markdown-field helpers (see markdown.go).
+// audit.go), the Markdown-field helpers (see markdown.go), and the timestamp
+// display helper (see timestamp.go).
 //
 // It is a function returning a fresh map rather than a package-level variable so
 // a test can take the real set, replace one entry with a probe, and re-parse the
 // templates against it without mutating the map the server uses.
 func templateFuncs() template.FuncMap {
-	funcs := make(template.FuncMap, len(badgeFuncMap)+len(auditFuncMap)+len(markdownFuncMap))
+	funcs := make(template.FuncMap, len(badgeFuncMap)+len(auditFuncMap)+len(markdownFuncMap)+len(timestampFuncMap))
 	for name, fn := range badgeFuncMap {
 		funcs[name] = fn
 	}
@@ -73,6 +74,9 @@ func templateFuncs() template.FuncMap {
 		funcs[name] = fn
 	}
 	for name, fn := range markdownFuncMap {
+		funcs[name] = fn
+	}
+	for name, fn := range timestampFuncMap {
 		funcs[name] = fn
 	}
 	return funcs

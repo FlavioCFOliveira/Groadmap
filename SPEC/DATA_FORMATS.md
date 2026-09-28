@@ -136,6 +136,13 @@ is rendered in the ISO 8601 form of its own type; see
 [Graph Query Result](#graph-query-result), **Temporal values**, which states that
 boundary in full.
 
+It does **not** govern how the web interface displays a stored timestamp to a
+reader. That display form (`WEB.md § Date and Time Display`) is a presentation of
+the stored value in a page's text, not a timestamp Groadmap generates: the stored
+value is unchanged by it, and every value Groadmap writes or emits in CLI output
+and in JSON — including every JSON the web interface serves — remains in the
+format above.
+
 **A record whose message came from a dependency is inside this rule rather than
 outside it.** The graph server's stderr carries records the graph engine
 produces, and it is tempting to read those as output the product merely relays

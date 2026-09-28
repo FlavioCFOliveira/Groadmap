@@ -68,7 +68,7 @@
                     <td>{{.EntityID}}</td>
                     <td{{with $related.Class}} class="{{.}}"{{end}}>{{$related.Text}}</td>
                     <td{{with $commit.Class}} class="{{.}}"{{end}}>{{$commit.Text}}</td>
-                    <td class="text-nowrap text-secondary">{{.PerformedAt}}</td>
+                    <td class="text-nowrap text-secondary">{{timestamp .PerformedAt}}</td>
                   </tr>
                   {{end}}
                 </tbody>

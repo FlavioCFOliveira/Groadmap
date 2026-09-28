@@ -38,6 +38,7 @@
   - [Embedded Asset Categories](#embedded-asset-categories)
   - [Frontend Rules](#frontend-rules)
   - [Markdown Rendering](#markdown-rendering)
+  - [Date and Time Display](#date-and-time-display)
   - [UI Framework](#ui-framework)
   - [Full-Height Page Regions](#full-height-page-regions)
   - [Status, Priority, and Severity Badge Colours](#status-priority-and-severity-badge-colours)
@@ -2204,7 +2205,9 @@ how the `rmp web` process itself terminates.
   the sprint `id`, its `title`, and its status; the sprint status summary line
   presents its total task count; and the Sprint details card presents its
   description, `created_at`, `started_at`, and `closed_at` (see
-  [Sprint Detail Sub-Template](#sprint-detail-sub-template)). The page does not
+  [Sprint Detail Sub-Template](#sprint-detail-sub-template)); the three timestamps,
+  and the timestamps of the sprint's comments, are displayed as specified in
+  [Date and Time Display](#date-and-time-display). The page does not
   show the sprint's execution `order` or its capacity (`max_tasks`).
   The page presents the sprint status clearly, through the status badge in the
   page header (the status enum and lifecycle are defined in `MODELS.md § Enums`
@@ -2261,8 +2264,10 @@ how the `rmp web` process itself terminates.
 - **Columns.** The table shows **every** `AuditEntry` field defined in
   `MODELS.md § Audit Entry` and `DATABASE.md § audit Table`, in this order: the entry
   `ID`, the `Operation`, the `Entity Type`, the `Entity ID`, the `Related Entity ID`,
-  the `Commit`, and the `Performed At` timestamp (the ISO 8601 UTC timestamp). The
-  page does not redefine these fields; `MODELS.md` and `DATABASE.md` remain
+  the `Commit`, and the `Performed At` timestamp. The `Performed At` column
+  displays the entry's `performed_at` in the display form `YYYY-MM-DD HH:mm:ss`,
+  in UTC as stored, specified in [Date and Time Display](#date-and-time-display).
+  The page does not redefine these fields; `MODELS.md` and `DATABASE.md` remain
   canonical.
 - **The two nullable columns are always rendered.** `Related Entity ID` and `Commit`
   are `null` on the operations that do not carry them, and the page renders a
@@ -2575,8 +2580,9 @@ shows sprints as compact cards through the shared sprint-card partial instead (s
      three fields, in this order: `Created` (`created_at`), `Started`
      (`started_at`), and `Closed` (`closed_at`). A `started_at` or `closed_at`
      that is unset renders a neutral placeholder, an em dash, rather than an empty
-     value. The fields are defined for the `Sprint` model in `MODELS.md § Sprint`
-     and are not redefined here.
+     value. A timestamp that is set is displayed in the display form of
+     [Date and Time Display](#date-and-time-display). The fields are defined for
+     the `Sprint` model in `MODELS.md § Sprint` and are not redefined here.
 
      The datagrid carries no `ID`, `Title`, `Status`, `Order`, `Capacity`, or
      `Tasks` field. The page header already presents the sprint `title`,
@@ -3063,7 +3069,8 @@ shows sprints as compact cards through the shared sprint-card partial instead (s
      rule 2, **The discriminating test**).
    - **What each entry shows.** For one comment, in order: its `type` as a badge,
      its `created_at` timestamp, its `updated_at` timestamp when that value is not
-     null (marking the entry as edited), and its `body`.
+     null (marking the entry as edited), and its `body`. Both timestamps are
+     displayed as specified in [Date and Time Display](#date-and-time-display).
    - **Markup.** The card body holds Tabler's Timeline component with the same
      structure the task detail modal uses: `<ul class="timeline">` with
      `<li class="timeline-event">` items, each an icon
@@ -4119,7 +4126,11 @@ tasks.
   `depends_on`, `blocks`, `created_at`, `started_at`, `tested_at`, `closed_at`,
   `commit_open`, and `commit_close`. The two commit hashes are short single-line
   values, and the modal presents each as plain text alongside the lifecycle
-  timestamps, under the same rules as every other short field it shows. The modal
+  timestamps, under the same rules as every other short field it shows. The four
+  lifecycle timestamps are displayed in the display form of
+  [Date and Time Display](#date-and-time-display), which the modal script produces
+  from the canonical values the endpoint delivers; an unset one shows the modal's
+  placeholder for an absent value, an em dash. The modal
   adds no link to any code-hosting service and no copy control for them: it is
   read-only and offline, and it holds no repository URL from which such a link
   could be built.
@@ -4163,7 +4174,8 @@ tasks.
     type filter and no count limit.
   - **What each entry shows.** For one comment, in order: its `type` as a badge,
     its `created_at` timestamp, its `updated_at` timestamp when that value is not
-    null (marking the entry as edited), and its `body`.
+    null (marking the entry as edited), and its `body`. Both timestamps are
+    displayed as specified in [Date and Time Display](#date-and-time-display).
   - **Markup.** The timeline uses Tabler's Timeline component, which the vendored
     `tabler.min.css` already provides (see
     [Embedded Asset Categories](#embedded-asset-categories)); the feature adds no
@@ -4753,6 +4765,11 @@ read from the host filesystem at runtime.
    [Shared Sprint-Card Partial](#shared-sprint-card-partial), and
    [Sprint Detail Sub-Template](#sprint-detail-sub-template) sections reference
    it.
+8. **Displayed timestamps take one display form.** Every date and time a page
+   displays reads `YYYY-MM-DD HH:mm:ss`, in UTC as stored, while every JSON the
+   interface serves keeps the canonical ISO 8601 format. The form, where it is
+   produced, the machine-readable value kept beside it, and the surfaces it
+   governs are specified in [Date and Time Display](#date-and-time-display).
 
 ### Markdown Rendering
 
@@ -5045,6 +5062,117 @@ the way out, on every request, and the CLI's output of these fields is unchanged
     which stays exactly the value in [Security Headers](#security-headers), and it
     adds no script: highlighting is performed on the server, so the page loads no
     highlighting script.
+
+### Date and Time Display
+
+Every date and time the web interface displays to a reader is shown in one
+display form. The rule is stated here once; each surface that displays a
+timestamp references this section and does not restate it.
+
+1. **The display form.** A displayed timestamp reads `YYYY-MM-DD HH:mm:ss`: the
+   four-digit year, the two-digit month, and the two-digit day joined by hyphens;
+   exactly one space (U+0020); then the two-digit hour on the 24-hour clock (`00`
+   to `23`), the two-digit minute, and the two-digit second joined by colons.
+   Every field is zero-padded to its width. The stored value
+   `2026-09-28T08:47:32.056Z` displays as `2026-09-28 08:47:32`, and the stored
+   value `2026-01-05T17:03:09.000Z` displays as `2026-01-05 17:03:09`.
+2. **Derived from the stored value, in UTC, with no conversion.** The source of
+   every displayed timestamp is the stored value, which is in the canonical format
+   of `DATA_FORMATS.md § Dates - ISO 8601 with UTC`. The display form carries
+   exactly the stored value's year, month, day, hour, minute, and second, in UTC as
+   stored. The interface converts no timestamp to the server's time zone, to the
+   browser's time zone, or to any other zone, and applies no locale.
+3. **Seconds are truncated, never rounded.** The fractional seconds are dropped,
+   not rounded: the stored value `2026-09-28T08:47:59.999Z` displays as
+   `2026-09-28 08:47:59`, never as `2026-09-28 08:48:00`. Truncation therefore
+   never changes the date, the hour, the minute, or the second the stored value
+   carries.
+4. **What the display form drops, and where.** The `T` separator, the decimal
+   point and the fractional seconds, and the `Z` suffix are absent from the
+   displayed text, and from nowhere else. The stored value, every JSON the
+   interface serves, and the machine-readable value of rule 6 keep the canonical
+   format unchanged.
+5. **Where the formatting happens.**
+   - **Server-rendered pages.** One Go formatting function produces the display
+     form, and every server-rendered surface that displays a timestamp formats it
+     through that function. No template and no handler composes the display form by
+     any other means.
+   - **The task detail modal.** The task detail endpoint delivers every timestamp in
+     the canonical format, unchanged by this rule (see
+     [Task Detail Endpoint](#task-detail-endpoint) and
+     `DATA_FORMATS.md § Task Detail Data`). The modal script, `static/task-modal.js`,
+     formats each timestamp it displays through one function of its own that
+     applies this same rule; no other path in the script formats a timestamp. The
+     function MUST NOT format through a browser facility that applies the browser's
+     time zone or locale, because rule 2 admits neither.
+   - **One result for one value.** The Go function and the modal script's function
+     produce the identical display form for the same stored value, so a timestamp
+     reads the same on the sprint page and in the modal.
+   - **The formatted value is text.** The modal writes the display form into the
+     DOM as text, under the text-only rule of
+     [Task Detail Modal](#task-detail-modal), **Client-side rendering is
+     text-only**; a server-rendered page emits it through `html/template`'s
+     contextual auto-escaping ([Frontend Rules](#frontend-rules), rule 1).
+6. **The stored value is kept in the markup as the machine-readable value.** Every
+   displayed timestamp is the text content of a `<time>` element whose `datetime`
+   attribute holds the stored value verbatim, in the canonical format: the stored
+   value `2026-09-28T08:47:32.056Z` is rendered as
+   `<time datetime="2026-09-28T08:47:32.056Z">2026-09-28 08:47:32</time>`. The
+   canonical format is a valid global date and time string in the sense the HTML
+   Living Standard defines for the `datetime` attribute of the `time` element, so
+   the attribute gives assistive technology and any other machine reader the exact
+   instant, including the milliseconds and the zone the display form omits. The
+   `<time>` element holds the display form and nothing else: a label or a marker
+   shown beside a timestamp — a datagrid field name, the edited marker of a
+   comment — stays outside it. A server-rendered page sets the attribute through
+   `html/template`; the modal script sets it through the DOM `setAttribute` method,
+   which interprets no markup, and never builds the element from a string.
+7. **An unset timestamp keeps its placeholder.** A nullable timestamp that is unset
+   — a task's `started_at`, `tested_at`, or `closed_at`, a sprint's `started_at` or
+   `closed_at` — displays the neutral placeholder the surface already uses for it,
+   an em dash, and no `<time>` element is rendered for it, because there is no
+   instant to state. A comment whose `updated_at` is null shows no edited marker,
+   exactly as before; this rule adds nothing in its place.
+   **A stored value not in the canonical format is displayed unchanged.** When a
+   stored timestamp is set but is not in the canonical format of
+   `DATA_FORMATS.md § Dates - ISO 8601 with UTC`, the interface displays the stored
+   text unchanged, as text — escaped by `html/template` on a server-rendered page
+   and written through `textContent` in the modal — and renders no `<time>`
+   element for it, because such a value is not a valid `datetime` attribute value.
+   The interface neither reformats, truncates, nor replaces it, and does not fail
+   the page or the modal because of it.
+8. **The surfaces this rule governs.** The rule governs every timestamp a page of
+   the interface displays. They are:
+   - on the [Roadmap Sprint Page](#roadmap-sprint-page), the `Created`, `Started`,
+     and `Closed` fields of the sprint metadata datagrid, and the `created_at` and
+     `updated_at` timestamps of each entry of the Comments card (see
+     [Sprint Detail Sub-Template](#sprint-detail-sub-template), rules 2 and 5);
+   - on the [Roadmap Audit Log Page](#roadmap-audit-log-page), the `Performed At`
+     column;
+   - in the [Task Detail Modal](#task-detail-modal), the task's `created_at`,
+     `started_at`, `tested_at`, and `closed_at`, and the `created_at` and
+     `updated_at` timestamps of each entry of the comments timeline.
+
+   The Roadmap Index Page, the sprint card of the Roadmap Sprints Page, and the
+   cards of both Kanban boards display no timestamp, and this rule adds none to
+   them. A surface that comes to display a timestamp is governed by this rule.
+9. **What this rule does not govern.**
+   - **CLI output and every JSON endpoint.** The CLI's output, the task detail
+     endpoint's response, and the graph data endpoint's response keep the canonical
+     format of `DATA_FORMATS.md § Dates - ISO 8601 with UTC`. The display form is a
+     presentation of a stored value in a page's text; it is not a timestamp
+     Groadmap generates, stores, or writes to any data surface.
+   - **Knowledge-graph property values.** A property value the graph detail panel
+     shows is data a caller stored in the knowledge graph, displayed as delivered
+     under [Frontend Rules](#frontend-rules), rule 6; a value that holds a date or a
+     time is not reformatted (see `DATA_FORMATS.md § Graph Query Result`).
+   - **Server log records.** The `time` attribute of a log record keeps the
+     canonical format ([Logger Configuration](#logger-configuration), rule 5).
+   - **Ordering.** Every ordering by a timestamp — the audit log's `performed_at`
+     descending, the board columns ordered by `started_at` and `closed_at`, the
+     comments' `created_at` ascending — compares the stored values, not the display
+     form. Two timestamps within the same second display identically and keep the
+     order their stored values give them.
 
 ### UI Framework
 
@@ -8546,6 +8674,66 @@ Rules:
     heading demotion, the Content-Security-Policy, and every safety property of
     rendered Markdown are unchanged (see
     [Markdown Rendering](#markdown-rendering), rule 13).
+204. **The sprint page displays its timestamps as `YYYY-MM-DD HH:mm:ss`.** For a
+    sprint whose stored `created_at` is `2026-09-28T08:47:32.056Z` and whose
+    `started_at` is `2026-09-29T17:03:09.000Z`, the sprint metadata datagrid shows
+    `Created` as `2026-09-28 08:47:32` and `Started` as `2026-09-29 17:03:09`. Each
+    entry of the Comments card shows its `created_at`, and its `updated_at` when
+    that value is not null, in the same form (see
+    [Date and Time Display](#date-and-time-display), rules 1 and 8).
+205. **The audit log page displays `Performed At` as `YYYY-MM-DD HH:mm:ss`.** An
+    audit entry whose stored `performed_at` is `2026-09-28T08:47:32.056Z` shows
+    `2026-09-28 08:47:32` in the `Performed At` column (see
+    [Date and Time Display](#date-and-time-display), rules 1 and 8).
+206. **The task detail modal displays its timestamps as `YYYY-MM-DD HH:mm:ss`.**
+    For a task whose stored `created_at`, `started_at`, `tested_at`, and
+    `closed_at` are all set, the modal shows each of the four in the display form,
+    and each entry of the comments timeline shows its `created_at`, and its
+    `updated_at` when that value is not null, in the same form. The form is
+    produced by the modal script from the canonical values the task detail
+    endpoint delivers, through one formatting function of the script, and for
+    every stored value it equals the form the server-rendered pages display for
+    the same value (see [Date and Time Display](#date-and-time-display), rule 5).
+207. **No displayed timestamp carries `T`, fractional seconds, or `Z`, and none is
+    rounded or converted.** On every surface of Acceptance Criteria 204 to 206, the
+    text of each displayed timestamp matches the regular expression
+    `^[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2}$` — one space between
+    the date and the time — and contains no `T`, no `.`, and no `Z`. A stored value of
+    `2026-09-28T08:47:59.999Z` displays as `2026-09-28 08:47:59`, not
+    `2026-09-28 08:48:00`, and a stored value of `2026-09-28T23:59:59.999Z`
+    displays as `2026-09-28 23:59:59`. The displayed digits are the stored UTC
+    digits whatever the time zone of the server process and of the browser (see
+    [Date and Time Display](#date-and-time-display), rules 2 to 4).
+208. **The JSON endpoints and the non-governed values keep their format.** The task
+    detail endpoint's response carries every task and comment timestamp in the
+    canonical format of `DATA_FORMATS.md § Dates - ISO 8601 with UTC`, byte for
+    byte as stored — for example `"created_at": "2026-09-28T08:47:32.056Z"` — and
+    the graph data endpoint's response is unchanged by the display rule. A
+    knowledge-graph property value holding a date or a time is shown in the graph
+    detail panel as delivered, not reformatted, and the CLI's output is unchanged
+    (see [Date and Time Display](#date-and-time-display), rule 9).
+209. **Each displayed timestamp carries the stored value in a `datetime`
+    attribute.** On every surface of Acceptance Criteria 204 to 206, each displayed
+    timestamp is the whole text content of a `<time>` element whose `datetime`
+    attribute equals the stored value verbatim: the stored value
+    `2026-09-28T08:47:32.056Z` is rendered as
+    `<time datetime="2026-09-28T08:47:32.056Z">2026-09-28 08:47:32</time>`. No
+    label and no edited marker is inside the element. In the modal the attribute is
+    set without a markup-parsing sink, so Acceptance Criterion 97 continues to hold
+    (see [Date and Time Display](#date-and-time-display), rule 6).
+210. **An unset timestamp keeps its em dash.** A sprint whose `started_at` or
+    `closed_at` is unset shows an em dash in that datagrid field, and a task whose
+    `started_at`, `tested_at`, or `closed_at` is unset shows an em dash for it in
+    the modal; no `<time>` element is rendered for an unset timestamp. A comment
+    whose `updated_at` is null shows no edited marker (see
+    [Date and Time Display](#date-and-time-display), rule 7).
+211. **A stored timestamp not in the canonical format is displayed unchanged.** On
+    every surface of Acceptance Criteria 204 to 206, a set timestamp whose stored
+    text is not in the canonical format — for example `2026-09-28 08:47` or
+    `<b>yesterday</b>` — is displayed as exactly that text, as visible characters
+    and never as markup, with no `<time>` element around it, and the page or the
+    modal renders the rest of its content normally (see
+    [Date and Time Display](#date-and-time-display), rule 7).
 
 ## See Also
 

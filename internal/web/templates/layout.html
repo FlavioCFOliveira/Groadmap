@@ -237,7 +237,8 @@
 
   The Sprint details card carries the description and a metadata datagrid of
   exactly three fields, in this order: Created, Started, and Closed, with an em
-  dash in place of an unset started_at or closed_at. It carries no ID, Title,
+  dash in place of an unset started_at or closed_at; each timestamp is displayed
+  through the timestamp helper (SPEC/WEB.md § Date and Time Display). It carries no ID, Title,
   Status, Order, Capacity, or Tasks field: the page header already presents the
   title, "Sprint #<ID>", and the status badge, the summary line above already
   presents the total task count as T, and the page shows neither the execution
@@ -255,15 +256,15 @@
               <div class="datagrid">
                 <div class="datagrid-item">
                   <div class="datagrid-title">Created</div>
-                  <div class="datagrid-content text-secondary">{{.Sprint.CreatedAt}}</div>
+                  <div class="datagrid-content text-secondary">{{timestamp .Sprint.CreatedAt}}</div>
                 </div>
                 <div class="datagrid-item">
                   <div class="datagrid-title">Started</div>
-                  <div class="datagrid-content text-secondary">{{with .Sprint.StartedAt}}{{.}}{{else}}&mdash;{{end}}</div>
+                  <div class="datagrid-content text-secondary">{{timestamp .Sprint.StartedAt}}</div>
                 </div>
                 <div class="datagrid-item">
                   <div class="datagrid-title">Closed</div>
-                  <div class="datagrid-content text-secondary">{{with .Sprint.ClosedAt}}{{.}}{{else}}&mdash;{{end}}</div>
+                  <div class="datagrid-content text-secondary">{{timestamp .Sprint.ClosedAt}}</div>
                 </div>
               </div>
             </div>
@@ -619,7 +620,9 @@
   every type value, via the commentTypeBadge helper — no per-type colour is
   introduced), its created_at timestamp, its updated_at timestamp ONLY when that
   value is not null (which marks the entry as edited: the stored text is no longer
-  the text originally written), and its body.
+  the text originally written), and its body. Both timestamps are displayed
+  through the timestamp helper, with the edited marker outside the <time> element
+  (SPEC/WEB.md § Date and Time Display).
 
   The four classes used — timeline, timeline-event, timeline-event-icon,
   timeline-event-card — are all provided by the vendored tabler.min.css, so the
@@ -640,8 +643,8 @@
                     <div class="card-body">
                       <div class="d-flex flex-wrap align-items-center gap-2 mb-2">
                         <span class="badge {{commentTypeBadge .Type}}">{{.Type}}</span>
-                        <span class="text-secondary">{{.CreatedAt}}</span>
-                        {{with .UpdatedAt}}<span class="text-secondary">edited {{.}}</span>{{end}}
+                        <span class="text-secondary">{{timestamp .CreatedAt}}</span>
+                        {{with .UpdatedAt}}<span class="text-secondary">edited {{timestamp .}}</span>{{end}}
                       </div>
                       <div class="markdown">{{sprintCommentBodyHTML .}}</div>
                     </div>

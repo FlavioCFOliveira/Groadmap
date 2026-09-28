@@ -130,12 +130,106 @@
     return item;
   }
 
-  /* timestampItem renders a lifecycle timestamp, muted, with the absent
-   * placeholder when the value is null. */
+  /* formatTimestamp is the ONE function of this script that formats a
+   * timestamp (SPEC/WEB.md § Date and Time Display, rule 5). Given a stored
+   * value in the canonical format YYYY-MM-DDTHH:mm:ss.sssZ it returns the display
+   * form YYYY-MM-DD HH:mm:ss: the stored UTC digits, the fractional seconds
+   * truncated and never rounded, with no zone conversion and no locale. For any
+   * other value it returns null, and the caller displays the value as stored.
+   *
+   * It is pure string parsing on purpose: a browser date facility would apply
+   * the browser's time zone or locale, which rule 2 admits neither of. The rule
+   * is the Go helper's canonicalTimestampDisplay (timestamp.go), check for check,
+   * so a value reads the same here as on the server-rendered pages: exact shape
+   * in ASCII digits, year 0001 or later, month 01-12, a day within the month's
+   * length in the proleptic Gregorian calendar, hour 00-23, minute and second
+   * 00-59. */
+  function formatTimestamp(value) {
+    if (typeof value !== "string" || value.length !== 24) {
+      return null;
+    }
+    for (var i = 0; i < 24; i++) {
+      var c = value.charCodeAt(i);
+      var ok;
+      if (i === 4 || i === 7) {
+        ok = c === 45; // "-"
+      } else if (i === 10) {
+        ok = c === 84; // "T"
+      } else if (i === 13 || i === 16) {
+        ok = c === 58; // ":"
+      } else if (i === 19) {
+        ok = c === 46; // "."
+      } else if (i === 23) {
+        ok = c === 90; // "Z"
+      } else {
+        ok = c >= 48 && c <= 57;
+      }
+      if (!ok) {
+        return null;
+      }
+    }
+    var year = digitsValue(value, 0, 4);
+    var month = digitsValue(value, 5, 7);
+    var day = digitsValue(value, 8, 10);
+    if (year < 1 || month < 1 || month > 12 || day < 1 || day > daysInMonth(year, month)) {
+      return null;
+    }
+    if (digitsValue(value, 11, 13) > 23 || digitsValue(value, 14, 16) > 59 || digitsValue(value, 17, 19) > 59) {
+      return null;
+    }
+    return value.substring(0, 10) + " " + value.substring(11, 19);
+  }
+
+  /* digitsValue returns the value of the ASCII digits value[start:end], which
+   * formatTimestamp has already validated. */
+  function digitsValue(value, start, end) {
+    var n = 0;
+    for (var i = start; i < end; i++) {
+      n = n * 10 + (value.charCodeAt(i) - 48);
+    }
+    return n;
+  }
+
+  /* daysInMonth returns the length of month (1-12) of year in the proleptic
+   * Gregorian calendar. */
+  function daysInMonth(year, month) {
+    if (month === 2) {
+      return year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0) ? 29 : 28;
+    }
+    if (month === 4 || month === 6 || month === 9 || month === 11) {
+      return 30;
+    }
+    return 31;
+  }
+
+  /* timestampNode returns the DOM node that displays one stored timestamp
+   * (SPEC/WEB.md § Date and Time Display, rules 6 and 7): a <time> element whose
+   * datetime attribute is the stored value verbatim and whose text is the display
+   * form; the absent placeholder when the value is unset; or, for a value not in
+   * the canonical format, the stored text unchanged with no <time> element. The
+   * attribute goes in through setAttribute and the text through textContent, so
+   * neither is interpreted as markup. */
+  function timestampNode(value) {
+    if (value === null || value === undefined || value === "") {
+      return document.createTextNode(ABSENT);
+    }
+    var display = formatTimestamp(value);
+    if (display === null) {
+      return document.createTextNode(String(value));
+    }
+    var node = document.createElement("time");
+    node.setAttribute("datetime", value);
+    node.textContent = display;
+    return node;
+  }
+
+  /* timestampItem renders a lifecycle timestamp, muted, through timestampNode. */
   function timestampItem(label, value) {
     var item = el("div", "datagrid-item");
     item.appendChild(el("div", "datagrid-title", label));
-    item.appendChild(el("div", "datagrid-content text-secondary", value ? value : ABSENT));
+    var content = el("div", "datagrid-content text-secondary");
+    content.appendChild(timestampNode(value));
+    item.appendChild(content);
     return item;
   }
 
@@ -213,9 +307,14 @@
 
       var meta = el("div", "d-flex flex-wrap align-items-center gap-2 mb-2");
       meta.appendChild(el("span", "badge " + COMMENT_TYPE_BADGE, comment.type));
-      meta.appendChild(el("span", "text-secondary", comment.created_at));
+      var created = el("span", "text-secondary");
+      created.appendChild(timestampNode(comment.created_at));
+      meta.appendChild(created);
       if (comment.updated_at) {
-        meta.appendChild(el("span", "text-secondary", "edited " + comment.updated_at));
+        // The edited marker is a label, so it stays outside the <time> element.
+        var edited = el("span", "text-secondary", "edited ");
+        edited.appendChild(timestampNode(comment.updated_at));
+        meta.appendChild(edited);
       }
       body.appendChild(meta);
       body.appendChild(markdownBlock(comment.body_html));

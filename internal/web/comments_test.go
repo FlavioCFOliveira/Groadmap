@@ -556,10 +556,14 @@ func TestSprintPage_CommentsCard(t *testing.T) {
 			t.Errorf("the Comments card is missing the neutral %s badge", commentType)
 		}
 	}
-	if !strings.Contains(card, `<span class="text-secondary">`+createdSprintProgress+`</span>`) {
+	// Both timestamps are displayed in the display form of SPEC/WEB.md § Date and
+	// Time Display, inside a <time> element; the edited marker stays outside it.
+	if !strings.Contains(card, `<span class="text-secondary"><time datetime="`+createdSprintProgress+
+		`">2026-08-13 17:00:00</time></span>`) {
 		t.Errorf("the Comments card does not show a comment's created_at timestamp")
 	}
-	if !strings.Contains(card, `<span class="text-secondary">edited `+updatedSprintDecision+`</span>`) {
+	if !strings.Contains(card, `<span class="text-secondary">edited <time datetime="`+updatedSprintDecision+
+		`">2026-08-16 10:00:00</time></span>`) {
 		t.Errorf("the Comments card does not mark the edited comment with its updated_at")
 	}
 	if got := strings.Count(card, "edited "); got != 1 {

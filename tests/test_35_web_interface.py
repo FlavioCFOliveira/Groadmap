@@ -2681,16 +2681,27 @@ class TestWebInterface:
             "audit page must list the recorded CLI operations"
         )
 
-        # Ordered performed_at DESC: every rendered timestamp is non-increasing.
-        # The Performed At cell carries a unique class; extract them in document
-        # order and assert monotonic non-increasing.
-        stamps = re.findall(
-            r'<td class="text-nowrap text-secondary">([^<]+)</td>', body
+        # Ordered performed_at DESC: every stored timestamp is non-increasing.
+        # The Performed At cell carries a unique class and holds a <time> element
+        # whose datetime attribute is the stored value and whose text is the
+        # display form YYYY-MM-DD HH:mm:ss (SPEC/WEB.md § Date and Time Display).
+        # The order is asserted on the stored values, as the page sorts by them.
+        cells = re.findall(
+            r'<td class="text-nowrap text-secondary">'
+            r'<time datetime="([^"]+)">([^<]+)</time></td>', body
         )
-        assert len(stamps) >= 2, "expected several audit rows in the populated roadmap"
+        assert len(cells) >= 2, "expected several audit rows in the populated roadmap"
+        stamps = [stored for stored, _ in cells]
         assert stamps == sorted(stamps, reverse=True), (
             f"audit rows must be ordered performed_at DESC; got {stamps}"
         )
+        for stored, shown in cells:
+            assert re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z", stored), (
+                f"the datetime attribute {stored!r} is not the stored ISO 8601 value"
+            )
+            assert shown == f"{stored[:10]} {stored[11:19]}", (
+                f"Performed At {stored!r} is displayed as {shown!r}"
+            )
 
         # Read-only: no form, no input, no write-method submission.
         low = body.lower()
@@ -3099,8 +3110,18 @@ class TestWebInterface:
                 "['Created', 'Started', 'Closed']"
             )
             cli = self.test.run_cmd_json(["sprint", "get", "-r", ROADMAP, str(sid)])
-            want = [cli["created_at"], cli.get("started_at") or "\u2014",
-                    cli.get("closed_at") or "\u2014"]
+
+            # A set timestamp is a <time> element carrying the CLI's stored value
+            # in its datetime attribute and the display form YYYY-MM-DD HH:mm:ss
+            # as its text; an unset one is the em dash (SPEC/WEB.md § Date and
+            # Time Display).
+            def shown(value):
+                if not value:
+                    return "\u2014"
+                return f'<time datetime="{value}">{value[:10]} {value[11:19]}</time>'
+
+            want = [shown(cli["created_at"]), shown(cli.get("started_at")),
+                    shown(cli.get("closed_at"))]
             got = [content for _, content in items]
             assert got == want, f"{label} sprint #{sid}: datagrid values {got}, want {want}"
             for gone in ("ID", "Title", "Status", "Order", "Capacity", "Tasks"):

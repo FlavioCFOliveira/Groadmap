@@ -23,6 +23,7 @@ The SPEC is unversioned. Git is the source of truth for its evolution — recove
 | Web sprint detail sub-template (status summary line, metadata datagrid, member-tasks board; single sprint page only) | `WEB.md § Sprint Detail Sub-Template` |
 | Web task detail modal (read-only task popup) | `WEB.md § Task Detail Modal` |
 | Web Markdown rendering of the long free-text fields (task requirements, acceptance criteria, completion summary, task and sprint comment bodies, sprint description): the one server-side goldmark renderer, extensions, line breaks, demoted headings, chroma highlighting and its dark stylesheet, link and image rules, raw-HTML omission, the sprint card's non-interactive form, the typography of rendered Markdown (body line height and base block spacing, list markers, heading scale, link colours, the real Inter italic face, the sprint page's 80-character line length) | `WEB.md § Markdown Rendering` |
+| Web date and time display (the `YYYY-MM-DD HH:mm:ss` form every page shows, in UTC as stored, truncated to the second; the one Go formatter and the modal script's formatter; the `<time datetime>` value; the surfaces it governs and the JSON it leaves in ISO 8601) | `WEB.md § Date and Time Display` |
 | Web graph labels sidebar (node-label / edge-type inventory, counts, section totals, highlight, collapse/expand) | `WEB.md § Graph Labels Sidebar` |
 | Web graph query bar (editable Cypher query box, Search button, node-limit dropdown) | `WEB.md § Graph Query Bar` |
 | Web graph query-bar error handling (the failure classes, the refusal of an `EXPLAIN` or `PROFILE` prefix among them, the order they are decided in, and the boundary against the internal read error) | `WEB.md § Query-Bar Error Handling` |
@@ -244,6 +245,7 @@ To prevent drift across SPEC files, the following topics have a single authorita
 - Format example: `2026-05-12T14:30:00.000Z` — three digits of milliseconds and an explicit `Z`.
 - This applies to: database columns, JSON output, audit log entries, version metadata, and the `time` attribute of every log record the two long-lived servers write to stderr.
 - Canonical source, including the boundary against knowledge-graph temporal values: `DATA_FORMATS.md § Dates - ISO 8601 with UTC`.
+- The web interface displays a stored timestamp to a reader as `YYYY-MM-DD HH:mm:ss`, in UTC as stored; that display form is presentation only, and every JSON the interface serves stays in the format above: `WEB.md § Date and Time Display`.
 
 ### Process Output
 
