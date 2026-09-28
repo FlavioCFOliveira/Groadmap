@@ -9,11 +9,12 @@ import (
 	"github.com/FlavioCFOliveira/Groadmap/internal/models"
 )
 
-// The guards in this file cover the reference line that opens the card of BOTH
-// Kanban boards: the id badge reading #<id> in the neutral bg-secondary-lt
-// variant, then the type badge reading the TaskType value in the variant the
-// task type table assigns to it, then the title on the next line (SPEC/WEB.md
-// § Roadmap Tasks Page, Card content, item 1; § Sprint Detail Sub-Template, The
+// The guards in this file cover the layout shared by the card of BOTH Kanban
+// boards: the title leads the card, and the badge line on the next line carries
+// the id badge reading #<id> with the fixed classes bg-black and text-white, the
+// severity badge, the priority badge, and the type badge reading the TaskType
+// value in the variant the task type table assigns to it (SPEC/WEB.md § Roadmap
+// Tasks Page, Card content, items 1 and 2; § Sprint Detail Sub-Template, The
 // card; § Status, Priority, and Severity Badge Colours, task type table;
 // Acceptance Criteria 177 to 179).
 
@@ -73,16 +74,23 @@ func TestTaskTypeBadge_CoversEveryEnumValue(t *testing.T) {
 	}
 }
 
-// typedTask is one task of the reference-line fixture: one per TaskType.
+// typedTask is one task of the card-layout fixture: one per TaskType, each with
+// its own priority and severity.
 type typedTask struct {
 	taskType models.TaskType
 	title    string
 	id       int
+	priority int
+	severity int
 }
 
 // referenceLineFixture is a roadmap holding one OPEN sprint whose ten member
 // tasks carry the ten task types, one each, so every type has a card on BOTH
-// boards.
+// boards. The ten tasks also carry ten different priorities and ten different
+// severities, running in opposite directions, so the badges whose colour must
+// NOT follow a value (the id badge) are asserted across every band of both
+// scales, and the severity and priority badges of one card never read the same
+// integer.
 type referenceLineFixture struct {
 	name     string
 	tasks    []typedTask
@@ -127,12 +135,14 @@ func seedReferenceLineFixture(t *testing.T, name string) referenceLineFixture {
 
 	ids := make([]int, 0, len(f.tasks))
 	for i := range f.tasks {
+		f.tasks[i].priority = i
+		f.tasks[i].severity = len(f.tasks) - 1 - i
 		id, cerr := seedTask(database, &models.Task{
 			Title:                  f.tasks[i].title,
 			Type:                   f.tasks[i].taskType,
 			Status:                 models.StatusBacklog,
-			Priority:               6,
-			Severity:               4,
+			Priority:               f.tasks[i].priority,
+			Severity:               f.tasks[i].severity,
 			FunctionalRequirements: "The settlement team must be able to track this work from the board.",
 			TechnicalRequirements:  "Implemented against the payments ledger service.",
 			AcceptanceCriteria:     "The change is live in staging and verified by the settlement team.",
@@ -168,10 +178,10 @@ func referenceLineBoards(t *testing.T, f *referenceLineFixture) map[string]strin
 // TestBoardCards_EveryTaskTypeRendersItsVariant is the gate for Acceptance
 // Criterion 177: a task of each of the ten types, on each of the two boards, and
 // all twenty type badges asserted — text exactly as the enum spells it, with no
-// prefix, and the variant the SPEC's table assigns — because a mapping that is
-// wrong for one type passes on every other.
+// badge label, and the variant the SPEC's table assigns — because a mapping that
+// is wrong for one type passes on every other.
 //
-// The badge is read from the card's reference line, and as the SECOND of its
+// The badge is read from the card's badge line, and as the FOURTH and last of its
 // badges, so a type badge rendered anywhere else on the card does not satisfy it.
 func TestBoardCards_EveryTaskTypeRendersItsVariant(t *testing.T) {
 	t.Setenv("HOME", shortHome(t))
@@ -181,13 +191,13 @@ func TestBoardCards_EveryTaskTypeRendersItsVariant(t *testing.T) {
 	for where, region := range referenceLineBoards(t, &f) {
 		for _, task := range f.tasks {
 			card := cardMarkupOf(t, region, task.id, where)
-			badges := pageBadges(spanWithRole(t, card, "task-card-ref"))
-			if len(badges) != 2 {
-				t.Errorf("%s: task #%d's reference line carries %d badges, want 2\ncard: %s",
+			badges := pageBadges(spanWithRole(t, card, "task-card-badges"))
+			if len(badges) != 4 {
+				t.Errorf("%s: task #%d's badge line carries %d badges, want 4\ncard: %s",
 					where, task.id, len(badges), card)
 				continue
 			}
-			typeBadge := badges[1]
+			typeBadge := badges[3]
 			if typeBadge.text != string(task.taskType) {
 				t.Errorf("%s: task #%d's type badge reads %q, want %q exactly as the enum spells it",
 					where, task.id, typeBadge.text, task.taskType)
@@ -235,26 +245,35 @@ func TestBoardCards_TypeMappingReachesNoOtherSurface(t *testing.T) {
 	}
 }
 
-// TestBoardCards_IDBadgeIsNeutral is the gate for Acceptance Criterion 178: on
-// both boards, the id badge reads #<id> and carries bg-secondary-lt whatever the
-// task's type. It is asserted on every NON-CHORE task — CHORE maps to the same
-// variant, so a card whose id badge took the type's colour would pass on it — and
-// the test fails if the fixture offers none.
-func TestBoardCards_IDBadgeIsNeutral(t *testing.T) {
+// TestBoardCards_IDBadgeIsBlackWithWhiteText is the gate for Acceptance
+// Criterion 178: on both boards, the id badge reads #<id> and carries exactly the
+// classes bg-black and text-white, whatever the task's type, severity, or
+// priority. The fixture spans all ten types, all ten severities, and all ten
+// priorities, and the test fails if it stops doing so, because an id badge whose
+// colour followed any one of those values would pass on a fixture that held it
+// constant.
+//
+// The fixed variant is also checked against every table of the badge colour
+// mapping: no status, type, priority, severity, or comment-type value may be
+// assigned bg-black, because the SPEC names bg-black as the mark of the id badge
+// and a value badge carrying it would be indistinguishable from it.
+func TestBoardCards_IDBadgeIsBlackWithWhiteText(t *testing.T) {
 	t.Setenv("HOME", shortHome(t))
 	f := seedReferenceLineFixture(t, "merchant-settlement")
 
-	discriminating := 0
+	const wantClasses = "badge bg-black text-white"
+
+	types, severities, priorities := map[models.TaskType]bool{}, map[int]bool{}, map[int]bool{}
 	for where, region := range referenceLineBoards(t, &f) {
 		for _, task := range f.tasks {
-			if task.taskType == models.TypeChore {
-				continue
-			}
-			discriminating++
+			types[task.taskType] = true
+			severities[task.severity] = true
+			priorities[task.priority] = true
+
 			card := cardMarkupOf(t, region, task.id, where)
-			badges := pageBadges(spanWithRole(t, card, "task-card-ref"))
+			badges := pageBadges(spanWithRole(t, card, "task-card-badges"))
 			if len(badges) == 0 {
-				t.Errorf("%s: task #%d's card has no reference-line badge\ncard: %s",
+				t.Errorf("%s: task #%d's card has no badge-line badge\ncard: %s",
 					where, task.id, card)
 				continue
 			}
@@ -262,32 +281,68 @@ func TestBoardCards_IDBadgeIsNeutral(t *testing.T) {
 			if want := "#" + itoa(task.id); idBadge.text != want {
 				t.Errorf("%s: task #%d's id badge reads %q, want %q", where, task.id, idBadge.text, want)
 			}
-			if want := "badge bg-secondary-lt"; idBadge.classes != want {
-				t.Errorf("%s: task #%d (%s) id badge carries the classes %q, want %q — the id "+
-					"badge takes no colour from any table", where, task.id, task.taskType,
-					idBadge.classes, want)
+			if idBadge.classes != wantClasses {
+				t.Errorf("%s: task #%d (%s, severity %d, priority %d) id badge carries the classes "+
+					"%q, want %q — the id badge takes no colour from any table",
+					where, task.id, task.taskType, task.severity, task.priority,
+					idBadge.classes, wantClasses)
 			}
 		}
 	}
-	if discriminating == 0 {
-		t.Fatalf("the fixture has no non-CHORE task, so the id badge assertion proves nothing")
+	if len(types) != len(models.ValidTaskTypes) || len(severities) != 10 || len(priorities) != 10 {
+		t.Fatalf("the fixture spans %d types, %d severities, and %d priorities, want %d, 10, "+
+			"and 10: an id badge whose colour followed a value held constant here would pass",
+			len(types), len(severities), len(priorities), len(models.ValidTaskTypes))
+	}
+
+	// No table of the mapping hands out the id badge's variant.
+	mapped := make([]string, 0, len(models.ValidTaskStatuses)+len(models.ValidSprintStatuses)+
+		len(models.ValidTaskTypes)+2*10+1)
+	for _, s := range models.ValidTaskStatuses {
+		mapped = append(mapped, taskStatusBadge(s))
+	}
+	for _, s := range models.ValidSprintStatuses {
+		mapped = append(mapped, sprintStatusBadge(s))
+	}
+	for _, tt := range models.ValidTaskTypes {
+		mapped = append(mapped, taskTypeBadge(tt))
+	}
+	for v := 0; v <= 9; v++ {
+		mapped = append(mapped, priorityBadge(v), severityBadge(v))
+	}
+	mapped = append(mapped, commentTypeBadge(""))
+	for _, variant := range mapped {
+		for _, token := range strings.Fields(variant) {
+			if token == "bg-black" || token == "text-white" {
+				t.Errorf("a table of the badge colour mapping assigns %q (from %q); bg-black and "+
+					"text-white are the id badge's alone", token, variant)
+			}
+		}
 	}
 }
 
-// TestBoardCards_OpenWithIDThenTypeThenTitle is the gate for Acceptance Criterion
-// 179: on both boards, the reference line is the FIRST line of the card body and
-// carries exactly two badges, id then type; the title follows it directly on the
-// next line; and the card's accessible name is unchanged.
+// TestBoardCards_LeadWithTitleThenBadgeLine is the gate for Acceptance Criterion
+// 179: on both boards, the title is the FIRST line of the card body, and the next
+// line opens with exactly four badges, in this order: the id badge, the severity
+// badge, the priority badge, and the type badge; and the card's accessible name is
+// unchanged.
 //
-// "First" and "directly" are asserted on the markup between the elements being
-// nothing but whitespace, so a card that put the badges after the title, or
-// anything between the reference line and the title, fails here even though it
-// would satisfy Acceptance Criteria 177 and 178.
-func TestBoardCards_OpenWithIDThenTypeThenTitle(t *testing.T) {
+// "First" and "next" are asserted on the markup between the elements being
+// nothing but whitespace — plus, on the sprint board, the opening tag of the line
+// that also carries the counters — so a card that put the badges before the
+// title, the priority before the severity, or the type before the id fails here
+// even though it would satisfy Acceptance Criteria 177 and 178.
+func TestBoardCards_LeadWithTitleThenBadgeLine(t *testing.T) {
 	t.Setenv("HOME", shortHome(t))
 	f := seedReferenceLineFixture(t, "merchant-settlement")
 
-	const bodyOpen = `<span class="card-body d-block">`
+	const (
+		bodyOpen = `<span class="card-body d-block">`
+		// The sprint board's second line holds the badge line at its leading edge
+		// and the counters at its trailing edge (Acceptance Criterion 133).
+		sprintLineOpen = `<span class="d-flex flex-wrap align-items-center ` +
+			`justify-content-between gap-1" data-role="task-card-summary">`
+	)
 
 	for where, region := range referenceLineBoards(t, &f) {
 		for _, task := range f.tasks {
@@ -305,28 +360,36 @@ func TestBoardCards_OpenWithIDThenTypeThenTitle(t *testing.T) {
 				t.Fatalf("%s: task #%d's card has no card body\ncard: %s", where, task.id, card)
 			}
 			afterBody := strings.TrimLeft(card[bodyAt+len(bodyOpen):], " \t\r\n")
-			ref := spanWithRole(t, card, "task-card-ref")
-			if ref == "" || !strings.HasPrefix(afterBody, ref) {
-				t.Errorf("%s: task #%d's card does not open with its reference line\ncard: %s",
-					where, task.id, card)
+			title := `<span class="d-block fw-bold text-break mb-1" data-role="task-card-title">` +
+				task.title + `</span>`
+			if !strings.HasPrefix(afterBody, title) {
+				t.Errorf("%s: task #%d's card does not open with its title; want %s first\ncard: %s",
+					where, task.id, title, card)
 				continue
 			}
 
-			wantRef := `<span class="d-flex flex-wrap gap-1 mb-1" data-role="task-card-ref">` +
-				`<span class="badge bg-secondary-lt">#` + itoa(task.id) + `</span>` +
-				`<span class="badge ` + wantTaskTypeVariant[task.taskType] + `">` +
-				string(task.taskType) + `</span></span>`
-			if ref != wantRef {
-				t.Errorf("%s: task #%d's reference line is\n  %s\nwant exactly the id badge then "+
-					"the type badge:\n  %s", where, task.id, ref, wantRef)
+			next := strings.TrimLeft(afterBody[len(title):], " \t\r\n")
+			if where == "the sprint board" {
+				if !strings.HasPrefix(next, sprintLineOpen) {
+					t.Errorf("%s: task #%d's title is not followed by the line carrying the badges "+
+						"and the counters\ncard: %s", where, task.id, card)
+					continue
+				}
+				next = strings.TrimLeft(next[len(sprintLineOpen):], " \t\r\n")
 			}
 
-			afterRef := strings.TrimLeft(afterBody[len(ref):], " \t\r\n")
-			title := `<span class="d-block fw-bold text-break mb-1" data-role="task-card-title">` +
-				task.title + `</span>`
-			if !strings.HasPrefix(afterRef, title) {
-				t.Errorf("%s: task #%d's title does not follow its reference line directly; "+
-					"want %s next\ncard: %s", where, task.id, title, card)
+			wantLine := `<span class="d-flex flex-wrap gap-1" data-role="task-card-badges">` +
+				`<span class="badge bg-black text-white">#` + itoa(task.id) + `</span>` +
+				`<span class="badge ` + severityBadge(task.severity) + `">Sev: ` +
+				itoa(task.severity) + `</span>` +
+				`<span class="badge ` + priorityBadge(task.priority) + `">Pri: ` +
+				itoa(task.priority) + `</span>` +
+				`<span class="badge ` + wantTaskTypeVariant[task.taskType] + `">` +
+				string(task.taskType) + `</span></span>`
+			if !strings.HasPrefix(next, wantLine) {
+				t.Errorf("%s: task #%d's title is not followed directly by the badge line\n  %s\n"+
+					"want exactly the id, severity, priority, and type badges:\n  %s",
+					where, task.id, spanWithRole(t, card, "task-card-badges"), wantLine)
 			}
 		}
 	}

@@ -540,10 +540,11 @@ func TestTaskBoard_CardOrderIsPriorityThenCreatedAt(t *testing.T) {
 // ==================== CARD CONTENT ====================
 
 // TestTaskBoard_CardContent is the gate for Acceptance Criterion 85: the card
-// shows the reference line (the id badge, then the type badge), the title, the priority and severity badges in the
-// SPEC's colour variants, and a metadata footer holding only the indicators the
-// task actually has — and it shows no status badge, because the column already
-// states the status.
+// shows the title first, then the badge line (the id badge, the severity badge,
+// the priority badge, then the type badge, the two value badges in the SPEC's
+// colour variants), then a metadata footer holding only the indicators the task
+// actually has — and it shows no status badge, because the column already states
+// the status.
 func TestTaskBoard_CardContent(t *testing.T) {
 	t.Setenv("HOME", shortHome(t))
 	f := seedBoardFixture(t, "payment-platform")
@@ -552,52 +553,46 @@ func TestTaskBoard_CardContent(t *testing.T) {
 	columns := boardColumns(t, servePage(t, mux, "/roadmaps/"+f.name+"/tasks"))
 	card := cardSlice(t, columns[1], f.passkey) // the SPRINT column's single card
 
-	// 1. The reference line opening the card: the id badge reading #id in the
-	//    neutral variant, then the type badge reading the TaskType value in the
-	//    variant the task type mapping assigns to USER_STORY (bg-green-lt).
-	ref := `<span class="d-flex flex-wrap gap-1 mb-1" data-role="task-card-ref">` +
-		`<span class="badge bg-secondary-lt">#` + itoa(f.passkey) + `</span>` +
-		`<span class="badge bg-green-lt">` + string(models.TypeUserStory) + `</span></span>`
-	refAt := strings.Index(card, ref)
-	if refAt < 0 {
-		t.Errorf("the card's reference line is not %q\ncard: %s", ref, card)
-	}
-
-	// 2. The title, on the line after the reference line, as the card's
-	//    prominent main content.
+	// 1. The title, leading the card as its prominent main content.
 	titleAt := strings.Index(card,
 		`data-role="task-card-title">Add WebAuthn passkey support to checkout</span>`)
 	if titleAt < 0 {
 		t.Errorf("the card does not show the task title as its main content\ncard: %s", card)
 	}
-	if refAt >= 0 && titleAt >= 0 && titleAt < refAt {
-		t.Errorf("the card shows the title before the reference line\ncard: %s", card)
-	}
 
-	// 3. The priority and severity badges. Each writes its value behind the
-	//    one-letter prefix that names it — P7 and S4 — with no space and no
-	//    separator, because the card carries no label that would say which of the
-	//    two numbers is which. The colour is still the colour of the VALUE:
-	//    priority 7 -> bg-red-lt (high band), severity 4 -> bg-yellow-lt (medium
-	//    band), and the two bands differ here, so a card that read one field for
-	//    both fails on the class as well as on the letter.
-	if !strings.Contains(card, `<span class="badge bg-red-lt">P7</span>`) {
-		t.Errorf("the card does not show priority 7 as a bg-red-lt badge reading P7\ncard: %s", card)
+	// 2. The badge line, after the title: the id badge reading #id in bg-black
+	//    with text-white; the severity and priority badges, each writing its
+	//    value behind its badge label and one space — Sev: 4 and Pri: 7 — in the
+	//    colour of the VALUE (severity 4 -> bg-yellow-lt, medium band; priority
+	//    7 -> bg-red-lt, high band; the two bands differ, so a card that read one
+	//    field for both fails on the class as well as on the label); then the type
+	//    badge reading the TaskType value in the variant the task type mapping
+	//    assigns to USER_STORY (bg-green-lt).
+	line := `<span class="d-flex flex-wrap gap-1" data-role="task-card-badges">` +
+		`<span class="badge bg-black text-white">#` + itoa(f.passkey) + `</span>` +
+		`<span class="badge bg-yellow-lt">Sev: 4</span>` +
+		`<span class="badge bg-red-lt">Pri: 7</span>` +
+		`<span class="badge bg-green-lt">` + string(models.TypeUserStory) + `</span></span>`
+	lineAt := strings.Index(card, line)
+	if lineAt < 0 {
+		t.Errorf("the card's badge line is not %q\ncard: %s", line, card)
 	}
-	if !strings.Contains(card, `<span class="badge bg-yellow-lt">S4</span>`) {
-		t.Errorf("the card does not show severity 4 as a bg-yellow-lt badge reading S4\ncard: %s", card)
+	if lineAt >= 0 && titleAt >= 0 && lineAt < titleAt {
+		t.Errorf("the card shows the badge line before the title\ncard: %s", card)
 	}
-	// A badge carrying the bare integer does not satisfy Acceptance Criterion 85,
-	// so the unprefixed form is asserted ABSENT and not merely left unasserted: a
-	// card rendering both forms would otherwise pass.
-	for _, unprefixed := range []string{
+	// A badge carrying the bare integer, or the retired one-letter prefix, or the
+	// label with no space, does not satisfy Acceptance Criterion 85, so each is
+	// asserted ABSENT and not merely left unasserted: a card rendering two forms
+	// would otherwise pass.
+	for _, wrong := range []string{
 		`<span class="badge bg-red-lt">7</span>`,
 		`<span class="badge bg-yellow-lt">4</span>`,
+		`>P7<`, `>S4<`, `>Pri:7<`, `>Sev:4<`,
 	} {
-		if strings.Contains(card, unprefixed) {
-			t.Errorf("the card renders %s; the priority and severity badges name the value they "+
-				"carry with a one-letter prefix (Acceptance Criterion 85)\ncard: %s",
-				unprefixed, card)
+		if strings.Contains(card, wrong) {
+			t.Errorf("the card renders %s; the severity and priority badges name the value they "+
+				"carry with the badge label and one space (Acceptance Criterion 85)\ncard: %s",
+				wrong, card)
 		}
 	}
 
@@ -735,8 +730,8 @@ func TestTaskBoard_AbsentMetadataRendersNothing(t *testing.T) {
 	if !strings.Contains(bare, "Audit the session-cookie flags") {
 		t.Errorf("the metadata-free card lost its title\ncard: %s", bare)
 	}
-	if !strings.Contains(bare, `<span class="badge bg-yellow-lt">P5</span>`) {
-		t.Errorf("the metadata-free card lost its priority badge, which reads P5 whatever the "+
+	if !strings.Contains(bare, `<span class="badge bg-yellow-lt">Pri: 5</span>`) {
+		t.Errorf("the metadata-free card lost its priority badge, which reads Pri: 5 whatever the "+
 			"card's metadata\ncard: %s", bare)
 	}
 

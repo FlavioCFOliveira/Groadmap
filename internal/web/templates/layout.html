@@ -380,12 +380,12 @@
                   are unchanged, and w-100/p-0/text-start are the utilities that
                   keep a button looking like the card it is.
 
-                  The card OPENS exactly as the tasks board's card opens: the
-                  shared reference line (taskCardRef) carrying the id badge and
-                  the type badge, then the title on the next line (SPEC/WEB.md
-                  § Sprint Detail Sub-Template, The card opens the way the tasks
-                  board's card opens; Acceptance Criteria 133 and 179). Below the
-                  title the two cards differ in one deliberate, specified place:
+                  The card is laid out exactly as the tasks board's card is: the
+                  title leads it, and the shared badge line (taskCardBadges)
+                  carrying the id, severity, priority, and type badges follows it
+                  (SPEC/WEB.md § Sprint Detail Sub-Template, The card is laid out
+                  the way the tasks board's card is; Acceptance Criteria 133 and
+                  179). The two cards differ in one deliberate, specified place:
                   the badges and the counters share ONE line instead of the
                   counters getting a footer row of their own, and on that line the
                   comment count precedes the subtask count (SPEC/WEB.md § Sprint
@@ -397,11 +397,10 @@
                 */}}
                 <button type="button" class="card card-sm task-card w-100 p-0 text-start" data-bs-toggle="modal" data-bs-target="#task-modal" data-task-id="{{.ID}}" aria-label="Open details for task #{{.ID}}: {{.Title}}">
                   <span class="card-body d-block">
-                    {{template "taskCardRef" .}}
                     <span class="d-block fw-bold text-break mb-1" data-role="task-card-title">{{.Title}}</span>
                     {{/*
-                      The card's third and last line, carrying BOTH of its
-                      remaining groups: the two badges at the leading edge and the
+                      The card's second and last line, carrying BOTH of its
+                      remaining groups: the four badges at the leading edge and the
                       two counters at the trailing edge. They share a line because
                       between them they answer one question — what this task IS,
                       and how much is ATTACHED to it — and because the column a
@@ -421,30 +420,23 @@
                       17rem minimum the counters drop directly BELOW the badges,
                       inside the same card, and neither the card, nor the column,
                       nor the page scrolls sideways. Both inner groups carry
-                      flex-wrap for the same reason, one level down. No inline
+                      flex-wrap for the same reason, one level down: a badge that
+                      does not fit moves below the badges before it, keeping their
+                      order (SPEC/WEB.md § Sprint Detail Sub-Template, The line
+                      wraps rather than overflowing). No inline
                       style, and every class here is Tabler's (Acceptance Criteria
                       27 and 62).
                     */}}
                     <span class="d-flex flex-wrap align-items-center justify-content-between gap-1" data-role="task-card-summary">
                       {{/*
-                        The pair is rendered exactly as the tasks board's card
-                        renders it: P then the priority, S then the severity, with
-                        no space and no separator, so a task of priority 5 and
-                        severity 3 reads P5 and S3. The rule is stated once for the
-                        card of BOTH boards, in SPEC/WEB.md § Roadmap Tasks Page,
-                        Card content, item 3 (Acceptance Criteria 85 and 133), and
-                        is not restated here: the two boards keep ONE form for this
-                        pair, and changing it on one card alone is the drift that
-                        statement exists to prevent.
-
-                        The prefix is a label, not a value. The colour helpers are
-                        handed .Priority and .Severity themselves, so the band is
-                        the band of the value and the prefix reaches no mapping.
+                        The badge line is the shared taskCardBadges partial,
+                        rendered exactly as the tasks board's card renders it: it
+                        is stated once for the card of BOTH boards (SPEC/WEB.md
+                        § Roadmap Tasks Page, Card content, item 2; Acceptance
+                        Criteria 85 and 133), and one partial is what keeps the two
+                        cards from drifting apart on it.
                       */}}
-                      <span class="d-flex flex-wrap gap-1" data-role="task-card-badges">
-                        <span class="badge {{priorityBadge .Priority}}">P{{.Priority}}</span>
-                        <span class="badge {{severityBadge .Severity}}">S{{.Severity}}</span>
-                      </span>
+                      {{template "taskCardBadges" .}}
                       {{/*
                         The counters, closing the line at its TRAILING edge, which
                         is where the GitLab card puts its own. The COMMENT count
@@ -527,33 +519,45 @@
           </div>{{end}}
 
 {{/*
-  taskCardRef is the reference line that opens the card of BOTH Kanban boards —
-  the tasks page's board (tasks.html) and the sprint page's member-tasks board
-  (sprintDetail, above). It carries exactly two Tabler badges on one line, in this
-  order: the id badge, reading #<id> in the neutral bg-secondary-lt variant for
-  every task, and the type badge, reading the TaskType value exactly as the enum
-  spells it and coloured by taskTypeBadge (SPEC/WEB.md § Roadmap Tasks Page, Card
-  content, item 1; § Sprint Detail Sub-Template, The card; Acceptance Criteria
-  177 to 179).
+  taskCardBadges is the badge line of the card of BOTH Kanban boards — the tasks
+  page's board (tasks.html) and the sprint page's member-tasks board
+  (sprintDetail, above) — on the line after the card's title. It carries exactly
+  four Tabler badges, in this order (SPEC/WEB.md § Roadmap Tasks Page, Card
+  content, item 2; § Sprint Detail Sub-Template, The card; Acceptance Criteria
+  85, 133, and 177 to 179):
+
+    1. the id badge, reading #<id> with the fixed classes bg-black and text-white
+       for every task;
+    2. the severity badge, reading "Sev: " then the task's severity;
+    3. the priority badge, reading "Pri: " then the task's priority;
+    4. the type badge, reading the TaskType value exactly as the enum spells it
+       and coloured by taskTypeBadge.
 
   The line is ONE partial rather than two copies because the SPEC states it once
   for the card of both boards, so that the two cannot drift apart on it: a reader
-  moving between the boards finds a task's reference and its type in the same
-  place and in the same form on each.
+  moving between the boards finds a task's reference, severity, priority, and
+  type in the same place and in the same form on each.
 
-  The id badge's class is written out here, and not taken from a mapping: an id
-  identifies a task and is a value no colour table knows, so no mapping governs
-  it (SPEC/WEB.md § Status, Priority, and Severity Badge Colours, rule 2, The id
-  badge is outside the mapping). The type badge takes no prefix: its own text is
-  the type name, so it is never ambiguous. The elements are spans because a card
-  is a <button>, whose content model is phrasing content. The line is written
-  without whitespace between its elements: it is repeated once per card, the flex
-  gap alone spaces the two badges, and the tasks page's document is held to a
-  per-card byte budget (task_modal_test.go, Acceptance Criterion 96).
+  The id badge's classes are written out here, and not taken from a mapping: an
+  id identifies a task and is a value no colour table knows, so no mapping
+  governs it, and no table assigns bg-black to any value (SPEC/WEB.md § Status,
+  Priority, and Severity Badge Colours, The id badge is outside the mapping).
+  "Sev: " and "Pri: " are badge labels, not values: the colour helpers are handed
+  .Severity and .Priority themselves, so each band is the band of the value and
+  the label reaches no mapping. The id and type badges take no badge label: the
+  id is written in its #<id> reference form, and the type's own text names it.
 
-  Dot is the card's taskView; only .ID and .Type are read.
+  The elements are spans because a card is a <button>, whose content model is
+  phrasing content. The line is a wrapping flex row, so a badge that does not fit
+  moves below the badges before it and keeps their order, and the card never
+  overflows. It is written without whitespace between its elements: it is
+  repeated once per card, the flex gap alone spaces the badges, and the tasks
+  page's document is held to a per-card byte budget (task_modal_test.go,
+  Acceptance Criterion 96).
+
+  Dot is the card's taskView; only .ID, .Severity, .Priority, and .Type are read.
 */}}
-{{define "taskCardRef"}}<span class="d-flex flex-wrap gap-1 mb-1" data-role="task-card-ref"><span class="badge bg-secondary-lt">#{{.ID}}</span><span class="badge {{taskTypeBadge .Type}}">{{.Type}}</span></span>{{end}}
+{{define "taskCardBadges"}}<span class="d-flex flex-wrap gap-1" data-role="task-card-badges"><span class="badge bg-black text-white">#{{.ID}}</span><span class="badge {{severityBadge .Severity}}">Sev: {{.Severity}}</span><span class="badge {{priorityBadge .Priority}}">Pri: {{.Priority}}</span><span class="badge {{taskTypeBadge .Type}}">{{.Type}}</span></span>{{end}}
 
 {{/*
   taskModalShell is the ONE task detail modal a page renders. It is an empty

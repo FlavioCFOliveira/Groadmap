@@ -225,18 +225,18 @@ func TestTasksPage_RendersSemanticBadgeColours(t *testing.T) {
 	}
 	body := rec.Body.String()
 
-	// Priority 8 -> bg-red-lt badge reading P8, on the board card. The prefix names
-	// the field the value belongs to and selects no colour: the variant is the one
-	// the mapping assigns to the integer 8 (SPEC/WEB.md § Status, Priority, and
-	// Severity Badge Colours, rule 2).
-	if !strings.Contains(body, `<span class="badge bg-red-lt">P8</span>`) {
-		t.Errorf("tasks page missing priority badge with bg-red-lt reading P8 for priority 8")
+	// Priority 8 -> bg-red-lt badge reading Pri: 8, on the board card. The badge
+	// label names the field the value belongs to and selects no colour: the
+	// variant is the one the mapping assigns to the integer 8 (SPEC/WEB.md
+	// § Status, Priority, and Severity Badge Colours, rule 2).
+	if !strings.Contains(body, `<span class="badge bg-red-lt">Pri: 8</span>`) {
+		t.Errorf("tasks page missing priority badge with bg-red-lt reading Pri: 8 for priority 8")
 	}
-	// Severity 9 -> bg-red-lt badge reading S9, on the board card. Priority and
-	// severity share the variant here, so the prefix is the only thing that tells
-	// the two badges apart — which is the reason the card carries one.
-	if !strings.Contains(body, `<span class="badge bg-red-lt">S9</span>`) {
-		t.Errorf("tasks page missing severity badge with bg-red-lt reading S9 for severity 9")
+	// Severity 9 -> bg-red-lt badge reading Sev: 9, on the board card. Priority and
+	// severity share the variant here, so the badge label is the only thing that
+	// tells the two badges apart — which is the reason the card carries one.
+	if !strings.Contains(body, `<span class="badge bg-red-lt">Sev: 9</span>`) {
+		t.Errorf("tasks page missing severity badge with bg-red-lt reading Sev: 9 for severity 9")
 	}
 	// No status badge is server-rendered on this page: not on the card, and not
 	// in the shell, which carries an empty badge element the script fills.
@@ -278,14 +278,14 @@ func TestSprintPage_RendersSemanticStatusBadge(t *testing.T) {
 	}
 	// Member task badges on the board card: priority 8 and severity 9 both fall in
 	// the high band, so both take bg-red-lt.
-	// Each badge writes its value behind the one-letter prefix that names it, the
-	// same form the tasks board's card renders (Acceptance Criteria 85 and 133);
-	// the prefix is a label and the variant is still the value's own.
-	if !strings.Contains(body, `<span class="badge bg-red-lt">P8</span>`) {
-		t.Errorf("the member-tasks board card is missing the priority badge with bg-red-lt reading P8 for priority 8")
+	// Each badge writes its value behind the badge label that names it, the same
+	// form the tasks board's card renders (Acceptance Criteria 85 and 133); the
+	// badge label is a label and the variant is still the value's own.
+	if !strings.Contains(body, `<span class="badge bg-red-lt">Pri: 8</span>`) {
+		t.Errorf("the member-tasks board card is missing the priority badge with bg-red-lt reading Pri: 8 for priority 8")
 	}
-	if !strings.Contains(body, `<span class="badge bg-red-lt">S9</span>`) {
-		t.Errorf("the member-tasks board card is missing the severity badge with bg-red-lt reading S9 for severity 9")
+	if !strings.Contains(body, `<span class="badge bg-red-lt">Sev: 9</span>`) {
+		t.Errorf("the member-tasks board card is missing the severity badge with bg-red-lt reading Sev: 9 for severity 9")
 	}
 	// And no status badge for the member task: the task is SPRINT after being
 	// added to the sprint, whose badge variant is bg-cyan-lt, and neither the

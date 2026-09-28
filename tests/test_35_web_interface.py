@@ -3591,15 +3591,14 @@ class TestWebInterface:
             )
 
     def test_sprint_board_card_shows_seven_data_points_in_order(self):
-        """AC133/AC179: each card shows exactly seven data points, on THREE
-        lines, in this order: the reference line opening the card — the id
-        badge reading `#<id>` in the neutral `bg-secondary-lt` variant, then
-        the type badge reading the task's type in the variant the task type
-        mapping assigns (`TASK` -> `bg-blue-lt`) — the task title on the next
-        line, and one line carrying the `P<n>` priority badge and the
-        `S<n>` severity badge at its leading edge and the comment count followed
-        by the subtask count at its trailing edge, each counter as an icon
-        followed by its number.
+        """AC133/AC179: each card shows exactly seven data points, on TWO
+        lines, in this order: the task title leading the card, then one line
+        carrying at its leading edge the badge line — the id badge reading
+        `#<id>` with `bg-black text-white`, the `Sev: <n>` severity badge, the
+        `Pri: <n>` priority badge, and the type badge reading the task's type in
+        the variant the task type mapping assigns (`TASK` -> `bg-blue-lt`) — and
+        at its trailing edge the comment count followed by the subtask count,
+        each counter as an icon followed by its number.
 
         The COUNTER ORDER is asserted rather than left implicit, because the
         criterion requires it: a card showing the subtask count before the
@@ -3610,10 +3609,9 @@ class TestWebInterface:
         have something to render, and priority 7 / severity 6 fall
         in different colour bands (red / orange per badge.go's
         priorityBadge/severityBadge), so the badges are shown to carry the
-        semantic mapping's own colours and not just the bare prefixed digits
-        (SPEC/WEB.md § Roadmap Tasks Page, Card content, item 3 — the
-        badge-prefix rule binds on both boards' cards; Acceptance Criterion
-        133).
+        semantic mapping's own colours and not just the labelled digits
+        (SPEC/WEB.md § Roadmap Tasks Page, Card content, item 2 — the badge
+        line binds on both boards' cards; Acceptance Criterion 133).
         """
         roadmap = "fraud_review_demo"
         self._run(["roadmap", "create", roadmap])
@@ -3657,19 +3655,16 @@ class TestWebInterface:
         title = self._rendered_task_title(body, parent)
         pattern = (
             r'<span class="card-body d-block">\s*'
-            r'<span class="d-flex flex-wrap gap-1 mb-1" '
-            r'data-role="task-card-ref">'
-            rf'<span class="badge bg-secondary-lt">#{parent}</span>'
-            r'<span class="badge bg-blue-lt">TASK</span>'
-            r'</span>\s*'
             r'<span class="d-block fw-bold text-break mb-1" '
             rf'data-role="task-card-title">{re.escape(title)}</span>\s*'
             r'<span class="d-flex flex-wrap align-items-center '
             r'justify-content-between gap-1" data-role="task-card-summary">\s*'
             r'<span class="d-flex flex-wrap gap-1" '
-            r'data-role="task-card-badges">\s*'
-            r'<span class="badge bg-red-lt">P7</span>\s*'
-            r'<span class="badge bg-orange-lt">S6</span>\s*'
+            r'data-role="task-card-badges">'
+            rf'<span class="badge bg-black text-white">#{parent}</span>'
+            r'<span class="badge bg-orange-lt">Sev: 6</span>'
+            r'<span class="badge bg-red-lt">Pri: 7</span>'
+            r'<span class="badge bg-blue-lt">TASK</span>'
             r'</span>\s*'
             r'<span class="d-flex flex-wrap gap-2 small text-secondary" '
             r'data-role="task-card-counters">\s*'
@@ -3700,13 +3695,110 @@ class TestWebInterface:
         # already states it), no specialists, no dependency counts, no sprint
         # name.
         assert card.count('class="badge') == 4, (
-            f"the card must carry exactly four badges (id, type, P and S); found "
+            f"the card must carry exactly four badges (id, Sev, Pri and type); found "
             f"{card.count('class=\"badge')} in {card}"
         )
         for absent in ("task-card-sprint", "task-card-specialists",
                        "task-card-depends-on", "task-card-blocks"):
             assert absent not in card, (
                 f"the sprint board's card must not render {absent!r}: {card}"
+            )
+
+    def test_board_cards_lead_with_title_then_one_badge_line(self):
+        """AC85/AC133/AC178/AC179: on the card of BOTH boards the task title is
+        the first line, and the next line opens with exactly four badges in
+        this order: the id badge `#<id>` with `bg-black text-white`, the
+        severity badge `Sev: <n>`, the priority badge `Pri: <n>`, and the type
+        badge in its type variant. The two boards render that line byte for
+        byte alike, the id badge keeps its fixed classes whatever the task's
+        values, and the retired forms (`S<n>`, `P<n>`, `Sev:<n>`, and the
+        separate reference line) are absent.
+
+        Two tasks of different types, severities, and priorities are asserted,
+        with each task's severity and priority different from each other, so a
+        card that swapped the two badges or coloured the id badge from a value
+        cannot pass on both.
+        """
+        roadmap = "chargeback_ops_demo"
+        self._run(["roadmap", "create", roadmap])
+        seeded = []
+        for title, task_type, priority, severity in (
+            ("Reject chargebacks filed after the network deadline", "BUG", 8, 3),
+            ("Summarise weekly dispute win rates for the risk team",
+             "IMPROVEMENT", 2, 6),
+        ):
+            _, out, _ = self._run([
+                "task", "create", "-r", roadmap, "-t", title, "-y", task_type,
+                "-p", str(priority), "--severity", str(severity),
+                "-fr", "Dispute operations must see this work on both boards",
+                "-tr", "Implemented in the dispute management service",
+                "-ac", "The dispute operations lead confirms the behaviour",
+            ])
+            seeded.append((json.loads(out)["id"], task_type, priority, severity))
+        sprint_id = self.test.create_sprint(roadmap, "Chargeback deadline sprint")
+        self._run(["sprint", "add-tasks", "-r", roadmap, str(sprint_id),
+                   ",".join(str(task_id) for task_id, _, _, _ in seeded)])
+        self._run(["sprint", "start", "-r", roadmap, str(sprint_id)])
+
+        # The SPEC's severity and priority bands (SPEC/WEB.md § Status,
+        # Priority, and Severity Badge Colours), for the four values used here.
+        severity_variant = {3: "bg-yellow-lt", 6: "bg-orange-lt"}
+        priority_variant = {8: "bg-red-lt", 2: "bg-secondary-lt"}
+        type_variant = {"BUG": "bg-red-lt", "IMPROVEMENT": "bg-teal-lt"}
+
+        proc, port = self._start(["--port", "0"])
+        _, _, tasks_body = self._req(port, f"/roadmaps/{roadmap}/tasks")
+        _, _, sprint_body = self._req(port, f"/roadmaps/{roadmap}/sprints/{sprint_id}")
+        tasks_region, _ = self._board_columns(tasks_body)
+        sprint_region, _ = self._sprint_board_columns(sprint_body)
+
+        for task_id, task_type, priority, severity in seeded:
+            title = self._rendered_task_title(tasks_body, task_id)
+            want_line = (
+                '<span class="d-flex flex-wrap gap-1" data-role="task-card-badges">'
+                f'<span class="badge bg-black text-white">#{task_id}</span>'
+                f'<span class="badge {severity_variant[severity]}">Sev: {severity}</span>'
+                f'<span class="badge {priority_variant[priority]}">Pri: {priority}</span>'
+                f'<span class="badge {type_variant[task_type]}">{task_type}</span>'
+                '</span>'
+            )
+            lines = {}
+            for where, region, between in (
+                ("the tasks board", tasks_region, r'\s*'),
+                ("the sprint board", sprint_region,
+                 r'\s*<span class="d-flex flex-wrap align-items-center '
+                 r'justify-content-between gap-1" data-role="task-card-summary">\s*'),
+            ):
+                card = self._sprint_board_card_html(region, task_id)
+                pattern = (
+                    r'<span class="card-body d-block">\s*'
+                    r'<span class="d-block fw-bold text-break mb-1" '
+                    rf'data-role="task-card-title">{re.escape(title)}</span>'
+                    + between + re.escape(want_line)
+                )
+                assert re.search(pattern, card, re.S), (
+                    f"AC179: on {where}, task #{task_id}'s card must open with its "
+                    f"title and then the badge line {want_line}: {card}"
+                )
+                assert 'data-role="task-card-ref"' not in card, (
+                    f"{where}: task #{task_id}'s card still renders the separate "
+                    f"reference line: {card}"
+                )
+                for retired in (f">S{severity}<", f">P{priority}<",
+                                f">Sev:{severity}<", f">Pri:{priority}<",
+                                f'bg-secondary-lt">#{task_id}<'):
+                    assert retired not in card, (
+                        f"AC85/AC178: {where} renders the retired form {retired!r} "
+                        f"on task #{task_id}'s card: {card}"
+                    )
+                assert (f'aria-label="Open details for task #{task_id}: {title}"'
+                        in card), (
+                    f"AC179: {where}: task #{task_id}'s accessible name changed: {card}"
+                )
+                lines[where] = self._span_with_role(card, "task-card-badges")
+            assert lines["the tasks board"] == lines["the sprint board"], (
+                f"task #{task_id}'s badge line differs between the two boards: "
+                f"{lines}"
             )
 
     def test_sprint_board_card_merges_badges_and_counters_onto_one_line(self):
@@ -3872,7 +3964,7 @@ class TestWebInterface:
     def test_sprint_board_card_always_renders_both_counters(self):
         """AC134: both counters are present on EVERY card of the member-tasks
         board, including when the number they carry is 0, so the trailing edge
-        of every card's third line carries both numbers and every card is the
+        of every card's second line carries both numbers and every card is the
         same shape.
 
         The subject is a task with neither a subtask nor a comment, because that
@@ -3935,7 +4027,7 @@ class TestWebInterface:
                     f'</i>{n}</span>')
 
         # The card with nothing to count still carries both counters, each
-        # showing 0, inside the counter group that closes its third line.
+        # showing 0, inside the counter group that closes its second line.
         card = self._sprint_board_card_html(columns[0], bare)
         assert 'data-role="task-card-counters"' in card, (
             f"a task with no subtasks and no comments must still render its "

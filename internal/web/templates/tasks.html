@@ -167,36 +167,17 @@
                 */}}
                 <button type="button" class="card card-sm task-card w-100 p-0 text-start" data-bs-toggle="modal" data-bs-target="#task-modal" data-task-id="{{.ID}}" data-search="{{.SearchText}}" data-type="{{.Type}}" data-priority="{{.Priority}}" data-severity="{{.Severity}}" aria-label="Open details for task #{{.ID}}: {{.Title}}"{{if not .Match}} hidden{{end}}>
                   <span class="card-body d-block">
-                    {{- /*
-                      The reference line — the id badge, then the type badge — is
-                      the shared taskCardRef partial (layout.html), because it
-                      opens the card of BOTH boards and is stated once for both
-                      (SPEC/WEB.md § Roadmap Tasks Page, Card content, item 1;
-                      Acceptance Criteria 85 and 177 to 179).
-                    */}}
-                    {{template "taskCardRef" .}}
                     <span class="d-block fw-bold text-break mb-1" data-role="task-card-title">{{.Title}}</span>
-                    {{/*
-                      Each badge names the value it carries with a one-letter
-                      prefix: P then the priority, S then the severity, with no
-                      space and no separator, so a task of priority 5 and
-                      severity 3 reads P5 and S3. Without it the card puts two
-                      bare integers side by side and states nowhere which one is
-                      which, and the reader would have to know the order by heart
-                      (SPEC/WEB.md § Roadmap Tasks Page, Card content, item 3;
-                      Acceptance Criterion 85). That section is the SINGLE
-                      statement of this rule, for the card of BOTH boards, so the
-                      sprint board's card in layout.html renders the pair exactly
-                      as this one does and the two cannot drift apart on it.
-
-                      The prefix is a label, not a value. The colour helpers are
-                      handed .Priority and .Severity themselves, so the band is
-                      the band of the value and the prefix reaches no mapping.
+                    {{- /*
+                      The title leads the card; the badge line follows it — the id,
+                      severity, priority, and type badges, in that order — as the
+                      shared taskCardBadges partial (layout.html), because it
+                      follows the title on the card of BOTH boards and is stated
+                      once for both (SPEC/WEB.md § Roadmap Tasks Page, Card
+                      content, items 1 and 2; Acceptance Criteria 85 and 177 to
+                      179).
                     */}}
-                    <span class="d-flex flex-wrap gap-1">
-                      <span class="badge {{priorityBadge .Priority}}">P{{.Priority}}</span>
-                      <span class="badge {{severityBadge .Severity}}">S{{.Severity}}</span>
-                    </span>
+                    {{template "taskCardBadges" .}}
                     {{/*
                       The metadata footer shows ONLY the indicators the task has:
                       an absent, empty, or zero value renders nothing at all — no

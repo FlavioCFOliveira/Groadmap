@@ -1054,8 +1054,9 @@ how the `rmp web` process itself terminates.
   **five** columns, one per task status; the sprint page's board has **three**,
   grouping the sprint's tasks the way the sprint status summary line groups them
   (see [Sprint Detail Sub-Template](#sprint-detail-sub-template)). The cards of
-  both boards open the same way: a reference line carrying the task's id badge and
-  its type badge, then the task title (see **Card content** below). The
+  both boards open the same way: the task title leads the card, and one badge line
+  below it carries the task's id, severity, priority, and type badges (see **Card
+  content** below). The
   five-column specification below governs this page alone.
 - **Structural inspiration only.** The board follows the structure of a GitLab
   issue board — columns that stand for states, cards that stand for work items,
@@ -1141,79 +1142,85 @@ how the `rmp web` process itself terminates.
   relative order in which the read returned them, so the board introduces no
   second sort and no ordering of its own.
 - **Card content.** Each card presents one task, in this order:
-  1. A **reference line** opening the card, carrying exactly two Tabler badges on
-     one line, in this order:
+  1. The task **`title`**, leading the card as its first line and presented as the
+     card's prominent main content. A card is read at a glance, and what the reader
+     reads first is the words that say what the task is. The GitLab issue card,
+     whose structure this board follows, leads with its title too.
+  2. The **badge line**, on the line after the title, carrying exactly four Tabler
+     badges on one line, in this order:
      - the **id badge**, whose text is the task reference `#<id>` — the task's
-       `id` written with its leading `#`. It carries the neutral `bg-secondary-lt`
-       variant for every task. An id identifies a task and carries no meaning a
-       colour could state, so no colour mapping governs this badge (see
+       `id` written with its leading `#`. It carries the Tabler classes `bg-black`
+       and `text-white` for every task: a black background (`#000000`) with white
+       text (`#ffffff`), a contrast ratio of 21:1. Both classes are shipped by the
+       vendored `tabler.min.css`, which defines `bg-black` as the background colour
+       `rgb(var(--tblr-black-rgb))` and `text-white` as the text colour
+       `rgb(var(--tblr-white-rgb))`, with `--tblr-black-rgb` set to `0,0,0` and
+       `--tblr-white-rgb` set to `255,255,255`. The colour is fixed and
+       value-independent: an id identifies a task and carries no meaning a colour
+       could state, so no colour mapping governs this badge (see
        [Status, Priority, and Severity Badge Colours](#status-priority-and-severity-badge-colours),
        rule 2);
-     - the **type badge**, immediately after the id badge, whose text is the
-       task's `type` exactly as the `TaskType` enum spells it (see
-       `MODELS.md § Enums`) — for example `IMPROVEMENT` — and whose colour is the
-       variant the task type table assigns to that value in
+     - the **`severity` badge**, whose text is the badge label `Sev:`, one space
+       (U+0020), and the task's integer `severity`;
+     - the **`priority` badge**, whose text is the badge label `Pri:`, one space
+       (U+0020), and the task's integer `priority`;
+     - the **type badge**, whose text is the task's `type` exactly as the
+       `TaskType` enum spells it (see `MODELS.md § Enums`) — for example
+       `IMPROVEMENT` — and whose colour is the variant the task type table assigns
+       to that value in
        [Status, Priority, and Severity Badge Colours](#status-priority-and-severity-badge-colours).
        The card introduces no colour of its own for the type.
 
-     **This line opens the card of both boards.** The card of the sprint page's
-     member-tasks board opens with the same reference line, carrying the same two
-     badges in the same order and in the same colours (see
-     [Sprint Detail Sub-Template](#sprint-detail-sub-template), **The card**). The
-     line is stated here once for both cards rather than twice, so that the two
-     cannot drift apart on it: a reader moving between the two boards finds a
-     task's reference and its type in the same place and in the same form on both.
-  2. The task **`title`**, on the line after the reference line, presented as the
-     card's prominent main content.
-  3. A **`priority` badge** and a **`severity` badge**, in that order, each
-     carrying that task's integer value and coloured by the band the value falls
-     in, using exactly the mapping in
+     A task of severity `3` and priority `5` therefore shows `Sev: 3` and `Pri: 5`,
+     the severity badge before the priority badge. The severity and priority badges
+     are each coloured by the band their value falls in, using exactly the mapping in
      [Status, Priority, and Severity Badge Colours](#status-priority-and-severity-badge-colours).
      No new badge colour and no new band is introduced here.
 
-     **Each badge names the value it carries with a one-letter prefix.** The
-     priority badge reads `P` immediately followed by the task's `priority`, and
-     the severity badge reads `S` immediately followed by the task's `severity`,
-     with no space and no separator between the letter and the digits: a task of
-     priority `5` and severity `3` shows `P5` and `S3`.
+     **This line follows the title on the card of both boards.** The card of the
+     sprint page's member-tasks board carries the same four badges, in the same
+     order, with the same texts and in the same colours, on the line after its
+     title (see [Sprint Detail Sub-Template](#sprint-detail-sub-template), **The
+     card**). The line is stated here once for both cards rather than twice, so
+     that the two cannot drift apart on it: a reader moving between the two boards
+     finds a task's title first and its reference, severity, priority, and type in
+     the same place and in the same form on both. The two boards differ in what
+     their columns stand for and in what else their cards show, and they keep
+     **one** form for this line.
 
-     The prefix is the label the card has no room to write out. Wherever else this
-     interface shows these two values, a word names each of them — the task detail
-     modal writes the field's name beside the value (see
-     [Task Detail Modal](#task-detail-modal)) — but a card is read at a glance, and
-     without the prefix it would put two bare integers side by side and state
-     nowhere which one is the priority and which one is the severity. A reader
-     would have to know the order by heart to tell `5` from `3`. The prefix states
-     that word in the one character the card can spare for it.
+     **The severity and priority badges each name the value they carry with a badge
+     label.** The label is the word the card has no room to write out in full.
+     Wherever else this interface shows these two values, the field's name stands
+     beside each of them — the task detail modal writes the field's name beside the
+     value (see [Task Detail Modal](#task-detail-modal)) — but without a label the
+     card would put two bare integers side by side and state nowhere which one is
+     the severity and which one is the priority. A reader would have to know the
+     order by heart to tell `3` from `5`. The label states the field in the fewest
+     characters that still read as its name.
 
-     **This rule governs the card of both boards.** The card of the sprint page's
-     member-tasks board renders the same pair in the same way (see
-     [Sprint Detail Sub-Template](#sprint-detail-sub-template)). The rule is stated
-     here once for both cards rather than twice, so that the two cannot drift apart
-     on it: the two boards differ in what their columns stand for and in what else
-     their cards show, and they keep **one** form for this pair.
-
-     **The prefix is a label, not a value.** It changes what the badge reads and
-     nothing else. The colour still follows the value alone, through exactly the
-     band mapping named above: `P5` takes the colour that mapping assigns to the
-     priority `5`, and the prefix selects no colour, introduces no band, and
-     changes no meaning. The card's accessible name is unaffected as well: it is
+     **The badge label is a label, not a value.** It changes what the badge reads
+     and nothing else. The colour still follows the value alone, through exactly the
+     band mapping named above: `Pri: 5` takes the colour that mapping assigns to the
+     priority `5`, and the label selects no colour, introduces no band, and changes
+     no meaning. The card's accessible name is unaffected as well: it is
      `Open details for task #<id>: <title>` (see **Clickable card** below), it
-     carries neither value, and so it carries no prefix.
+     carries neither value, and so it carries no badge label.
 
-     **Only these two badges take a prefix.** A prefix earns its place only where
-     no label names the value, which is true of the priority and severity badges on
-     a board card and of no other badge in this interface. A status badge is never
-     ambiguous, because its own text is the status name — it reads `COMPLETED`, not
-     a bare integer — so it takes no prefix wherever it is shown; this card shows no
-     status badge at all (see below). The type badge is unambiguous for the same
-     reason — it reads `IMPROVEMENT`, not a bare integer — and takes no prefix. The
-     leading `#` of the id badge is not a prefix in this sense: `#<id>` is the form
-     in which this interface writes a task reference everywhere, in the card's
-     accessible name and in the search's matching as much as here (see **Clickable
-     card** and **What the search matches** below). The priority and severity badges of the task
-     detail modal take no prefix either, for the reason stated there.
-  4. A **metadata footer** showing only the indicators the task actually has:
+     **Only these two badges take a badge label.** A badge label earns its place
+     only where no other text names the value, which is true of the severity and
+     priority badges on a board card and of no other badge in this interface. A
+     status badge is never ambiguous, because its own text is the status name — it
+     reads `COMPLETED`, not a bare integer — so it takes no badge label wherever it
+     is shown; this card shows no status badge at all (see below). The type badge
+     is unambiguous for the same reason — it reads `IMPROVEMENT`, not a bare
+     integer — and takes no badge label. The leading `#` of the id badge is not a
+     badge label in this sense: `#<id>` is the form in which this interface writes a
+     task reference everywhere, in the card's accessible name and in the search's
+     matching as much as here (see **Clickable card** and **What the search
+     matches** below). The priority and severity badges of the task detail modal
+     take no badge label either, for the reason stated there.
+  3. A **metadata footer**, below the badge line, showing only the indicators the
+     task actually has:
      the sprint the task belongs to, its number of subtasks (`subtask_count`), its
      number of `depends_on` entries, its number of `blocks` entries, and its number
      of comments. Each indicator is rendered with the icon or label that identifies
@@ -1312,7 +1319,7 @@ how the `rmp web` process itself terminates.
   2. the task reference `#<id>`, written with its leading `#`.
 
   Including the reference is deliberate: the card shows `#<id>` in the id badge of
-  its reference line, so a user reading a card can see it, and typing `42` to reach
+  its badge line, so a user reading a card can see it, and typing `42` to reach
   task 42 is the obvious gesture. Because the reference is matched as the literal string
   `#42`, both `42` and `#42` find it under the one substring rule below, with no
   special case for either form.
@@ -1742,9 +1749,8 @@ how the `rmp web` process itself terminates.
   — `-y, --type`, `-p, --priority`, and `--severity` (see
   `COMMANDS.md § List Tasks`) — so the page presents no less capability over the
   board than the command that lists the same data. Each dimension is also
-  visible on the card the filter acts on: the type badge of the card's reference
-  line shows the task's `type`, and the two badges show its `priority` and its `severity` (see **Card
-  content** above), so the user filters by values the board already displays, as the
+  visible on the card the filter acts on: the card's badge line shows the task's
+  `severity`, its `priority`, and its `type` (see **Card content** above), so the user filters by values the board already displays, as the
   search matches text the card already displays.
 
   Each dropdown offers, as its **first** option, a value meaning *no filter on this
@@ -2081,8 +2087,7 @@ how the `rmp web` process itself terminates.
   Inside a column, the card the user reads and activates carries **0.75rem** of
   padding on all four sides of its body, in place of the `1rem` the vendored Tabler
   distribution gives a small card's body. The card's body holds running text — the
-  reference line, the title, the priority and severity badges, and the metadata
-  footer — inside a
+  title, the badge line, and the metadata footer — inside a
   measure the column has already narrowed, so padding taken off the body is width
   returned to that text and height returned to the card. The hit target is
   unaffected, because what the user presses is the whole card and not the text
@@ -2104,8 +2109,8 @@ how the `rmp web` process itself terminates.
   distribution does not ship (see [UI Framework](#ui-framework), rules 8 and 10).
   Where Tabler provides the component that does the work, the board uses Tabler's
   markup: the cards are Tabler cards, the column headers use Tabler's card-header
-  idiom, the counts, the id and type badges, and the priority and severity badges
-  are Tabler badges, and
+  idiom, the counts and the four badges of the badge line are Tabler badges,
+  and
   the in-column empty state uses Tabler's empty-state markup. The vendored Tabler
   distribution ships no board or Kanban component, so the column strip's own
   layout and scrolling rules live in `static/style.css`, which is the specified
@@ -2731,34 +2736,24 @@ shows sprints as compact cards through the shared sprint-card partial instead (s
      needs no extra data either, because the position order is the order in which
      the rows arrived, so a stable sort by the column's timestamp leaves the cards
      that timestamp does not separate in exactly the order the tiebreaker calls for.
-   - **The card.** Each card presents one member task on three lines, in this
+   - **The card.** Each card presents one member task on two lines, in this
      order:
-     1. the **reference line**, opening the card: the task's **id badge**, reading
-        `#<id>` in the neutral `bg-secondary-lt` variant, followed immediately by
-        its **type badge**, reading the task's `type` exactly as the `TaskType`
-        enum spells it and coloured by the task type table of
-        [Status, Priority, and Severity Badge Colours](#status-priority-and-severity-badge-colours).
-        The line is the tasks board card's own opening line, and it is stated once,
-        for the card of both boards, in [Roadmap Tasks Page](#roadmap-tasks-page),
-        **Card content**, item 1; it is not restated here;
-     2. the task **`title`**, on the line after the reference line, as the card's
-        prominent main content;
-     3. **one line carrying both of the card's remaining groups**: the task's two
+     1. the task **`title`**, leading the card as its first line and presented as
+        the card's prominent main content;
+     2. **one line carrying both of the card's remaining groups**: the task's four
         badges at the **leading edge** of that line, and the task's two counters at
         its **trailing edge**.
 
-        The **`priority`** and **`severity`** lead the line, each as a Tabler badge
-        carrying that task's integer value behind the one-letter prefix that names
-        it — `P` for the priority and `S` for the severity, so a task of priority
-        `5` and severity `3` shows `P5` and `S3` — and coloured by the band the
-        value falls in, using exactly the mapping in
-        [Status, Priority, and Severity Badge Colours](#status-priority-and-severity-badge-colours).
-        They occupy the place the GitLab card gives its labels. No new badge colour
-        and no new band is introduced here. The prefix rule itself is stated once,
-        for the card of both boards, in [Roadmap Tasks Page](#roadmap-tasks-page),
-        **Card content**, item 3, and is not restated here: this card renders the
-        pair exactly as the tasks board's card does, and the two boards keep one
-        form for it.
+        The **badge line** leads: the task's **id badge**, **`severity` badge**,
+        **`priority` badge**, and **type badge**, in that order — a task 42 of
+        severity `3`, priority `5`, and type `IMPROVEMENT` shows `#42`, `Sev: 3`,
+        `Pri: 5`, and `IMPROVEMENT`. The line is the tasks board card's own badge
+        line, with the same four badges in the same order, with the same texts and
+        badge labels, and in the same colours, and it is stated once, for the card
+        of both boards, in [Roadmap Tasks Page](#roadmap-tasks-page), **Card
+        content**, item 2; it is not restated here. The badges occupy the place the
+        GitLab card gives its labels. No new badge colour and no new band is
+        introduced here.
 
         The **counters** close the same line at its trailing edge, which is where
         the GitLab card puts its counters. They are the task's number of comments
@@ -2770,15 +2765,15 @@ shows sprints as compact cards through the shared sprint-card partial instead (s
         always rendered, including when the number they carry is `0` (see **Both
         counters are always rendered** below).
 
-     **The card opens the way the tasks board's card opens.** This board follows
-     the GitLab issue board in its columns, its column counts, and the line of
-     badges and counters below the title; its card's opening line follows the
-     tasks board's card instead. The two boards differ in what their columns stand
-     for and in what their cards carry below the title, and they share everything
-     above it: the reference line with its id badge and its type badge, then the
-     title. A reader who meets the same task on both boards therefore finds its
-     reference and its type in the same place and in the same form on each, and
-     reads its title directly below them on each.
+     **The card is laid out the way the tasks board's card is.** This board follows
+     the GitLab issue board in its columns, its column counts, its card led by the
+     title, and the line of badges and counters below the title. The tasks board's
+     card has the same shape: the title first, then the badge line directly below
+     it. The two boards differ in what their columns stand for and in what their
+     cards carry beside and below the badge line, and they share the title and the
+     four badges. A reader who meets the same task on both boards therefore reads
+     its title first on each, and finds its reference, severity, priority, and type
+     directly below the title, in the same order and in the same form on each.
 
      **Why the badges and the counters share a line.** Between them the two groups
      answer one question about the task — what this task **is**, and how much is
@@ -2792,8 +2787,9 @@ shows sprints as compact cards through the shared sprint-card partial instead (s
      **The line wraps rather than overflowing.** The leading group and the trailing
      group sit on one line for as long as the card is wide enough to hold both. When
      it is not — a column held at its `17rem` minimum, or a reader whose text size
-     is large — the line **wraps**, placing the trailing group below the leading one
-     inside the same card. It never overflows the card's edge, and it never makes
+     is large — the line **wraps** inside the same card: the trailing group moves
+     below the leading one, and a badge of the leading group that does not fit moves
+     below the badges before it, keeping the order stated above. It never overflows the card's edge, and it never makes
      the card, the column, or the page scroll horizontally (see
      [Responsive and Mobile-First Design](#responsive-and-mobile-first-design),
      rules 2 and 10). The rule is stated as behaviour because that is what a reader
@@ -2804,16 +2800,17 @@ shows sprints as compact cards through the shared sprint-card partial instead (s
 
      **The two cards differ here, and the difference is deliberate.** The tasks
      board's card keeps its **separate metadata footer** and does not fold it into
-     the line carrying its priority and severity badges (see [Roadmap Tasks Page](#roadmap-tasks-page), **Card
-     content**, item 4). That footer lists five indicators of mixed kinds, one of
+     its badge line (see [Roadmap Tasks Page](#roadmap-tasks-page), **Card
+     content**, item 3). That footer lists five indicators of mixed kinds, one of
      which — the sprint the task belongs to — is text rather than a count and
      carries no bounded width, so the list cannot share a line with the badges: it
      would either push them off the line or wrap beneath them and
      spend the height the merge exists to save. This card carries exactly two
      indicators, both counts and both short, so it can. The two cards therefore
-     diverge in this one line and in nothing else: the reference line and its two
-     badges, the badge form and its prefixes, the two icons, the badge colours, the
-     absent status badge, and the card as the modal trigger all stay shared. This is a stated divergence, not drift.
+     diverge in this one line and in nothing else: the title leading the card, the
+     four badges of the badge line, their order, their texts and badge labels, the
+     two icons, the badge colours, the absent status badge, and the card as the
+     modal trigger all stay shared. This is a stated divergence, not drift.
 
      **The counter order differs from the tasks board's too.** On this card the
      comment count comes first and the subtask count second. The tasks board's
@@ -2829,8 +2826,8 @@ shows sprints as compact cards through the shared sprint-card partial instead (s
      states the task's status, which is the reason the tasks board's card omits one
      as well.
 
-     The card shows those seven data points — the id, the type, the title, the
-     priority, the severity, the comment count, and the subtask count — and no
+     The card shows those seven data points — the title, the id, the severity, the
+     priority, the type, the comment count, and the subtask count — and no
      others: no dependency counts. It presents a subset of the task's fields by design,
      because a card is read at a glance and a column of cards is
      read as a whole; every field of the `Task` model is shown in the task detail
@@ -2841,7 +2838,7 @@ shows sprints as compact cards through the shared sprint-card partial instead (s
      are present on every card of this board, including when either or both are `0`:
      a task with no comment shows the comment icon followed by `0`, a task with no
      subtask shows the subtask icon followed by `0`, and the trailing edge of the
-     third line therefore carries both numbers on every card the board renders.
+     second line therefore carries both numbers on every card the board renders.
 
      This is a deliberate departure from the tasks board's card, which renders an
      indicator only when it has something to count (see
@@ -3013,9 +3010,8 @@ shows sprints as compact cards through the shared sprint-card partial instead (s
      project override stylesheet `static/style.css` (see
      [UI Framework](#ui-framework), rules 8 and 10). Where Tabler provides the
      component, the board uses Tabler's markup — Tabler cards for the task cards,
-     the card-header idiom for the column headers, Tabler badges for the counts, for
-     the id and the type, and for the priority and severity values, and Tabler's
-     empty-state markup for an
+     the card-header idiom for the column headers, Tabler badges for the counts and
+     for the four badges of the badge line, and Tabler's empty-state markup for an
      empty column. The vendored Tabler distribution ships no board or Kanban
      component, so the column strip's own layout, height, and scrolling rules live
      in `static/style.css`, which is the specified home for project styling no
@@ -4085,7 +4081,7 @@ tasks.
   Where the trigger has a **visible text label**, the accessible name MUST contain
   that visible label text. This is the case on both boards, whose card carries the
   task title as its own visible text: on both boards the title is the card's
-  prominent main content, on the line after the card's reference line.
+  prominent main content, on the card's first line.
   Including the `title` in the name is what satisfies the rule on each of them. A
   name that omits the visible label breaks activation by speech
   input: a speech-input user says the words they can see, and a control whose
@@ -4119,17 +4115,18 @@ tasks.
   tasks page the modal is the sole place a task's full field set is shown, because
   the board card presents only the subset defined in
   [Roadmap Tasks Page](#roadmap-tasks-page).
-- **No prefix on the modal's priority and severity badges.** The one-letter prefix
-  the board card's `priority` and `severity` badges carry (see
-  [Roadmap Tasks Page](#roadmap-tasks-page), **Card content**, item 3) belongs to
-  the card and is not rendered here. That prefix exists because a card shows the two
-  values with no word naming either of them; the modal names every field it
-  displays, so the field's own name already stands beside each of these two values,
-  and a prefix would state the same thing twice. A prefix earns its place only where
-  no label names the value, which is true of the board card and of no other surface
-  in this interface. The badge colours are the same either way and stay those of
+- **No badge label on the modal's priority and severity badges.** The badge labels
+  `Pri: ` and `Sev: ` that the board card's `priority` and `severity` badges carry
+  (see [Roadmap Tasks Page](#roadmap-tasks-page), **Card content**, item 2) belong
+  to the card and are not rendered here. Those labels exist because a card shows the
+  two values with no field name beside either of them; the modal names every field
+  it displays, so the field's own name already stands beside each of these two
+  values, and a badge label would state the same thing twice. A badge label earns
+  its place only where no other text names the value, which is true of the board
+  card and of no other surface in this interface. The badge colours are the same
+  either way and stay those of
   [Status, Priority, and Severity Badge Colours](#status-priority-and-severity-badge-colours),
-  because the mapping keys on the value and never on the badge's prefix.
+  because the mapping keys on the value and never on the badge's label.
 - **Comments timeline.** Directly after the completion-summary block, and as the
   last block of the modal body, the modal renders the task's comments as a
   chronological timeline. The fields of a comment are defined for the
@@ -5508,14 +5505,15 @@ Rules:
      `COMPLETED`, `OPEN`, `IMPROVEMENT`, `7`, or `2`, and it takes the colour the
      relevant table assigns to the value it carries. The type badge on the card of
      either board writes the `TaskType` value exactly as the enum spells it, with no
-     prefix, and takes the variant the task type table assigns to it. On the card of
-     either board the priority and severity badges write that value behind a
-     one-letter prefix — `P7`, `S2` — which names the field the value belongs to,
-     because a card carries no label that would (see
-     [Roadmap Tasks Page](#roadmap-tasks-page), **Card content**, item 3). The prefix is a label and not a value: this mapping keys on
-     the value alone and never on the prefix, so `P7` takes the colour of the
-     priority `7`, and no band, no colour variant, and no enum value changes because
-     of it.
+     badge label, and takes the variant the task type table assigns to it. On the
+     card of either board the severity and priority badges write that value behind a
+     badge label — `Sev: 2`, `Pri: 7` — which names the field the value belongs to,
+     because a card carries no field name that would (see
+     [Roadmap Tasks Page](#roadmap-tasks-page), **Card content**, item 2). The badge
+     label is a label and not a value: this mapping keys on the value alone and never
+     on the label, so `Pri: 7` takes the colour of the priority `7`, `Sev: 2` takes
+     the colour of the severity `2`, and no band, no colour variant, and no enum
+     value changes because of it.
    - **The badge counts the members of a group with one status to key on.** Three
      sites are this case: the three sprint tabs on the Roadmap Sprints Page, the
      per-column count badge of the Roadmap Tasks Page's Kanban board, and the
@@ -5584,15 +5582,17 @@ Rules:
    every count badge the discriminating test leaves out is outside it as well and
    stays governed by the section that defines it.
 
-   **The id badge is outside the mapping.** The id badge that opens the card of
-   either board reads `#<id>` and carries the neutral `bg-secondary-lt` variant for
-   every task, whatever the task's type, status, priority, or severity. A task `id`
-   is an identifier and not a value any table above knows, so it selects no colour
-   (see [Roadmap Tasks Page](#roadmap-tasks-page), **Card content**, item 1).
-   `CHORE` also maps to `bg-secondary-lt`, so on a `CHORE` task the two badges of the
-   reference line share one variant; that is two rules agreeing, not the type
-   mapping reaching the id badge, and a card is judged by the type badge of a task
-   of any other type.
+   **The id badge is outside the mapping.** The id badge that leads the badge line
+   of either board's card reads `#<id>` and carries the fixed Tabler classes
+   `bg-black` and `text-white` — a black background with white text — for every
+   task, whatever the task's type, status, priority, or severity. A task `id` is an
+   identifier and not a value any table above knows, so it selects no colour, and no
+   table above assigns `bg-black` to any value (see
+   [Roadmap Tasks Page](#roadmap-tasks-page), **Card content**, item 2). The id
+   badge therefore never shares its colour with the type, severity, or priority
+   badge beside it, whatever their values: a badge of the line that carries
+   `bg-black` is the id badge, and a value badge that carried it would be outside
+   every table above.
 
    **The task type is coloured on the two board cards and nowhere else.** The task
    detail modal shows the task's `type` as plain text among its fields, not as a
@@ -6850,21 +6850,21 @@ Rules:
     preserves that relative order, so the cards of one column follow the same
     relative order the page's read returned, and the board applies no second sort of
     its own.
-85. Each card of the roadmap tasks page's Kanban board shows, in order: a reference
-    line opening the card and carrying two Tabler badges — an id badge reading
-    `#<id>` in the neutral `bg-secondary-lt` variant, followed immediately by a type
-    badge reading the task's `type` exactly as the `TaskType` enum spells it and
-    coloured by the task type mapping (Acceptance Criteria 177 to 179); the task
-    `title` on the next line as the card's prominent main content; a `priority` badge reading `P`
-    immediately followed by the task's priority and a `severity` badge reading `S`
-    immediately followed by the task's severity, with no space and no separator
-    between the letter and the digits — a task of priority `5` and severity `3`
-    shows `P5` and `S3`, and a badge carrying the bare integer does not satisfy this
-    criterion — each coloured by the mapping in
+85. Each card of the roadmap tasks page's Kanban board shows, in order: the task
+    `title` as the card's first line and prominent main content; on the next line,
+    the badge line, carrying exactly four Tabler badges in this order — an id badge
+    reading `#<id>` with the classes `bg-black` and `text-white`, a `severity` badge
+    reading `Sev:`, one space, and the task's severity, a `priority` badge reading
+    `Pri:`, one space, and the task's priority, and a type badge reading the task's
+    `type` exactly as the `TaskType` enum spells it and coloured by the task type
+    mapping (Acceptance Criteria 177 to 179) — so a task of severity `3` and priority
+    `5` shows `Sev: 3` and `Pri: 5`, and a badge reading `3`, `S3`, or `Sev:3` does
+    not satisfy this criterion; the severity and priority badges are each coloured
+    by the mapping in
     [Status, Priority, and Severity Badge Colours](#status-priority-and-severity-badge-colours)
-    applied to the value alone and not to the prefixed text, so the prefix changes no
-    badge colour (Acceptance Criterion 61 continues to hold); and a metadata footer
-    listing only
+    applied to the value alone and not to the labelled text, so the badge label
+    changes no badge colour (Acceptance Criterion 61 continues to hold); and, below
+    the badge line, a metadata footer listing only
     the indicators the task actually has, among the sprint the task belongs to, its
     `subtask_count`, its number of `depends_on` entries, its number of `blocks`
     entries, and its number of comments. The card shows **no status badge**, because
@@ -6873,12 +6873,12 @@ Rules:
     none of the five indicators renders no metadata footer. That absent-metadata rule
     is this board's own: the card of the sprint's member-tasks board is not governed
     by it and always renders both of its counters (Acceptance Criterion 134). The
-    prefix belongs to the board card and to nothing else: the same task's `priority`
-    and `severity` in the
+    badge label belongs to the board card and to nothing else: the same task's
+    `priority` and `severity` in the
     task detail modal render as the bare integer beside the field name that already
     names it (Acceptance Criterion 15 continues to hold), and the card's accessible
-    name carries neither value and therefore carries no prefix (Acceptance Criterion
-    86 continues to hold).
+    name carries neither value and therefore carries no badge label (Acceptance
+    Criterion 86 continues to hold).
 86. Selecting a board card opens the read-only task detail modal for that task,
     which displays that task's full field set as specified in Acceptance Criterion
     15. Opening the modal fetches that task's data from
@@ -7558,15 +7558,14 @@ Rules:
     pass on an order that merely coincides with the specified one. No ordering by
     priority, severity, title, or id is observable anywhere on the board.
 133. Each card of the sprint's member-tasks board shows exactly seven data points, on
-    three lines, in this order: the reference line opening the card, carrying an id
-    badge reading `#<id>` in the neutral `bg-secondary-lt` variant followed
-    immediately by a type badge reading the task's `type` and coloured by the task
-    type mapping, exactly as the tasks board's card opens (Acceptance Criteria 177
-    to 179); the task `title` on the next line as the card's prominent main content;
-    and one line carrying, at its leading
-    edge, a `priority` badge reading `P` immediately followed by the task's priority
-    and a `severity` badge reading `S` immediately followed by the task's severity,
-    and, at its trailing edge, the number of comments followed by the number of
+    two lines, in this order: the task `title` as the card's first line and
+    prominent main content; and one line carrying, at its leading edge, the badge
+    line exactly as the tasks board's card carries it — an id badge reading `#<id>`
+    with the classes `bg-black` and `text-white`, a `severity` badge reading `Sev:`,
+    one space, and the task's severity, a `priority` badge reading `Pri:`, one
+    space, and the task's priority, and a type badge reading the task's `type` and
+    coloured by the task type mapping, in that order (Acceptance Criteria 177 to
+    179) — and, at its trailing edge, the number of comments followed by the number of
     subtasks, each as an icon (`ti ti-message` and `ti ti-subtask` respectively)
     followed by its number. The badges and the counters share that one line, and the
     card renders no separate footer row for the counters. The check MUST assert the
@@ -7577,14 +7576,14 @@ Rules:
     overflow (Acceptance Criterion 27 continues to hold). The card carries no inline
     `style` attribute, and every class it emits is defined either in the vendored
     Tabler distribution or in `static/style.css` (Acceptance Criterion 62 continues
-    to hold). A task of priority `5` and severity `3` shows `P5` and `S3`; a badge
-    carrying the bare integer does not satisfy this criterion, and this card renders
-    the pair exactly as the tasks board's card does (Acceptance Criterion 85
-    continues to hold). The card of the roadmap tasks page's board is unchanged by
+    to hold). A task of severity `3` and priority `5` shows `Sev: 3` and `Pri: 5`; a
+    badge reading `3`, `S3`, or `Sev:3` does not satisfy this criterion, and this
+    card renders the four badges exactly as the tasks board's card does (Acceptance
+    Criterion 85 continues to hold). The card of the roadmap tasks page's board is unchanged by
     this criterion: it keeps its separate metadata footer and that footer's own
     indicator order. The priority and severity badges
-    take the colours the semantic mapping assigns to their values, which the prefix
-    does not affect (Acceptance Criterion 61
+    take the colours the semantic mapping assigns to their values, which the badge
+    label does not affect (Acceptance Criterion 61
     continues to hold). The card carries **no** status badge, because the column
     already states the status, and it shows no dependency counts.
     The task's full field set is reached through the task detail modal the card
@@ -7594,7 +7593,7 @@ Rules:
     comment count and the subtask count are present on every card, including when
     either or both are `0`, so a task with no comment and no subtask still shows the
     comment icon followed by `0` and the subtask icon followed by `0`, and both
-    numbers sit at the trailing edge of the card's third line, which every card of
+    numbers sit at the trailing edge of the card's second line, which every card of
     the board renders. The check asserts a card whose two
     counts are both zero, because a card that has something to count renders the same
     markup whether this criterion holds or not. The card of the roadmap tasks page's
@@ -8220,7 +8219,7 @@ Rules:
 177. **Every task type renders its own variant, on both boards.** On the card of the
     roadmap tasks page's Kanban board and on the card of the sprint's member-tasks
     board, the type badge's text is the task's `type` exactly as the `TaskType` enum
-    spells it, with no prefix, and its colour is the variant the task type table
+    spells it, with no badge label, and its colour is the variant the task type table
     assigns to that value: `BUG` renders `bg-red-lt`, `USER_STORY` renders
     `bg-green-lt`, `TASK` renders `bg-blue-lt`, `SUB_TASK` renders `bg-azure-lt`,
     `EPIC` renders `bg-purple-lt`, `REFACTOR` renders `bg-indigo-lt`, `IMPROVEMENT`
@@ -8233,28 +8232,31 @@ Rules:
     modal shows the `type` as plain text and not as a badge, the comment-type badges
     keep the neutral `bg-secondary-lt` variant (Acceptance Criterion 66 continues to
     hold), and the type filter of the roadmap tasks page is unchanged.
-178. **The id badge is neutral and reads `#<id>`.** On the card of both boards, the
-    id badge's text is the task's `id` written with its leading `#` — task 42 reads
-    `#42` — and the badge carries the `bg-secondary-lt` variant for every task,
-    whatever its type, status, priority, or severity. The check MUST assert the id
-    badge on a task whose type is not `CHORE`, because `CHORE` maps to the same
-    variant and a card whose id badge took the type's colour would pass on a
-    `CHORE` task. The id badge takes no colour from any table of the badge colour
-    mapping.
-179. **The card opens with the id badge, then the type badge, then the title, on
-    both boards.** On the card of both boards, the reference line is the first line
-    of the card and carries exactly two badges, the id badge first and the type
-    badge immediately after it; the task `title` follows on the next line; the lines
-    that follow it are those Acceptance Criterion 85 fixes for the tasks board's card
-    and Acceptance Criterion 133 fixes for the sprint board's card. The check MUST
-    assert this order on both boards, because a card that shows the right two
-    badges after the title, or the type badge before the id badge, satisfies
-    Acceptance Criteria 177 and 178 on their own. The card's accessible name is
-    unchanged and remains `Open details for task #<id>: <title>` on both boards
-    (Acceptance Criteria 86 and 135 continue to hold), and the search of the roadmap tasks
-    page still matches a task by its title and its `#<id>` reference and by nothing
-    else, so a term matching only a task's `type` matches no task (Acceptance
-    Criterion 101 continues to hold).
+178. **The id badge is black with white text and reads `#<id>`.** On the card of
+    both boards, the id badge's text is the task's `id` written with its leading
+    `#` — task 42 reads `#42` — and the badge carries the classes `bg-black` and
+    `text-white` for every task, whatever its type, status, priority, or severity.
+    Both classes are defined in the vendored `tabler.min.css`, and the badge renders
+    a `#000000` background with `#ffffff` text. The check MUST assert, on tasks of
+    different types, severities, and priorities, that the id badge carries
+    `bg-black` and `text-white` and no variant any table of the badge colour mapping
+    assigns, because the id badge's colour MUST NOT vary with any value of the task.
+    The id badge takes no colour from any table of the badge colour mapping.
+179. **The card leads with the title, then one badge line reading id, severity,
+    priority, type, on both boards.** On the card of both boards, the task `title`
+    is the first line of the card; the next line opens with exactly four badges, in
+    this order: the id badge, the severity badge, the priority badge, and the type
+    badge. The lines and groups that follow are those Acceptance Criterion 85 fixes
+    for the tasks board's card and Acceptance Criterion 133 fixes for the sprint
+    board's card. The check MUST assert this order on both boards, because a card
+    that shows the right four badges before the title, or the priority badge before
+    the severity badge, or the type badge before the id badge, satisfies Acceptance
+    Criteria 177 and 178 on their own. The card's accessible name is unchanged and
+    remains `Open details for task #<id>: <title>` on both boards (Acceptance
+    Criteria 86 and 135 continue to hold), and the search of the roadmap tasks page
+    still matches a task by its title and its `#<id>` reference and by nothing else,
+    so a term matching only a task's `type` matches no task (Acceptance Criterion 101
+    continues to hold).
 180. **Every Markdown field renders as Markdown, on every surface that shows it.**
     A field value holding a `**bold**` span, a bulleted list, and two lines
     separated by a single newline renders `<strong>`, `<ul>` with `<li>` items, and
