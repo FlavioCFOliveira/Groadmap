@@ -50,23 +50,23 @@
 #
 # TWO COUNTS, BOTH TRUE, MEASURING DIFFERENT THINGS.
 #
-#   57  RULES suppressed in the module, the number this register accounts for
+#   59  RULES suppressed in the module, the number this register accounts for
 #       and the number the gate sweeps. It counts rules, not directives: a
 #       directive naming two rules counts once under each, and the module has
 #       exactly one such directive — the `#nosec G302 G703` on
 #       internal/graphstore/graphstore.go's checkpoint chmod, which is both a
 #       directory-permission finding and a taint-analysis one. So the module
-#       carries 56 directives suppressing 57 rules. The gate reads comment
+#       carries 58 directives suppressing 59 rules. The gate reads comment
 #       groups the way gosec does, so the tag counts only where the scanner
 #       honours it.
-#   43  rules suppressed outside _test.go, across 42 directives. gosec does not
-#       scan _test.go files unless -tests is passed, and 14 of the 57 are in
-#       test files: 57 - 14 = 43. That the scanner does not read those 14 is an
+#   45  rules suppressed outside _test.go, across 44 directives. gosec does not
+#       scan _test.go files unless -tests is passed, and 14 of the 59 are in
+#       test files: 59 - 14 = 45. That the scanner does not read those 14 is an
 #       accepted gap, measured and reasoned in SPEC/BUILD.md § Security Scan;
 #       the register accounts for them anyway, so they stay reviewed even where
 #       the scanner is silent.
 #
-#       gosec's own summary prints `Nosec: 42`, and the difference is the
+#       gosec's own summary prints `Nosec: 44`, and the difference is the
 #       two-rule directive: gosec counts DIRECTIVES it honoured, this register
 #       counts RULES accepted. The two figures agreed while every directive
 #       named one rule, and the release notes quoted that agreement; they no
@@ -100,7 +100,7 @@
 # chmod, which is both a directory-permission finding and a taint-analysis one —
 # so the totals below are the number of directives plus one.
 #
-# totals: 57 suppressions, 43 outside _test.go
+# totals: 59 suppressions, 45 outside _test.go
 #
 # G104 Audit errors not checked (CWE-703)  [11]
 #   internal/db/connection.go                          6
@@ -166,8 +166,9 @@
 #     shapes when the guard is removed, and the column being looked for is bound.
 #     (d) A column name in one test helper, literal at both call sites.
 #
-# G203 Use of unescaped data in HTML templates (CWE-79)  [1]
+# G203 Use of unescaped data in HTML templates (CWE-79)  [3]
 #   internal/web/markdown.go                           1
+#   internal/web/timestamp.go                          2
 #   Reason: trustedMarkdown converts the output of the web interface's one
 #     Markdown renderer to template.HTML so a server-rendered page inserts it as
 #     markup, which SPEC/WEB.md § Markdown Rendering, rule 15 makes the single
@@ -183,6 +184,19 @@
 #     and data: links). It would stop being acceptable if raw HTML output
 #     (html.WithUnsafe) were ever enabled, or if any value other than
 #     renderMarkdown's output reached the conversion.
+#     The two in internal/web/timestamp.go are the timestamp display helper,
+#     timestampHTML, which returns template.HTML so a page inserts the <time>
+#     element it builds (SPEC/WEB.md § Date and Time Display). Neither converts
+#     an unescaped value. The first converts the output of executing timeElement,
+#     a package-level html/template parsed at init, which escapes the stored
+#     value contextually in the datetime attribute and in the text content alike.
+#     The second is the fallback taken only if that execution fails, and it
+#     converts template.HTMLEscapeString(stored), escaped on the same line. The
+#     escaping is pinned by TestTimestampHTML in internal/web/timestamp_test.go
+#     against markup and an attribute breakout ("><script>). It would stop being
+#     acceptable if timeElement were ever parsed with text/template, or if either
+#     return converted a value that had not passed through one of those two
+#     escapers.
 #
 # G204 Audit use of command execution (CWE-78)  [4]
 #   internal/testenv/graphserver/graphserver.go        1
@@ -288,8 +302,8 @@
 # TWO OBSERVATIONS THIS REGISTER MAKES DELIBERATELY, because a reviewer who
 # trusts the list should also know what the list does not mean.
 #
-# A suppression is not evidence that gosec had a finding. Of the 43 rules
-# suppressed outside test files, 28 suppress a reported finding and 15 currently
+# A suppression is not evidence that gosec had a finding. Of the 45 rules
+# suppressed outside test files, 30 suppress a reported finding and 15 currently
 # suppress nothing: gosec's G201 does not follow fmt.Sprintf through a query
 # issued on the embedded *sql.DB or through a function that only returns the
 # assembled string, G104 does not report an error discarded by an explicit
@@ -302,7 +316,7 @@
 #
 # The split is MEASURED rather than counted by hand, and it is reproducible:
 # `gosec -nosec=true -exclude-dir=.claude/worktrees ./...` disables suppression
-# handling and reports 28 issues where the ordinary run reports 0.
+# handling and reports 30 issues where the ordinary run reports 0.
 #
 # A #nosec is a permanent blindfold over one node. Every G201 line above means
 # that if the statement at that site is ever edited to interpolate a value
