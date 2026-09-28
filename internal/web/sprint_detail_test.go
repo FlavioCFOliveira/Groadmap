@@ -70,9 +70,8 @@ func TestNewSprintCompletion_CountsAndLine(t *testing.T) {
 }
 
 // TestSprintDetail_FullBlockOnlyOnSprintPage asserts that the full sprint detail
-// block — the exact summary line, the metadata datagrid (ID/Status/Capacity/
-// Tasks/Created/Started/Closed), and the member-tasks board with its three fixed
-// columns — is rendered ONLY on the single Roadmap Sprint Page, and that the
+// block — the exact summary line, the metadata datagrid (Created/Started/
+// Closed), and the member-tasks board with its three fixed columns — is rendered ONLY on the single Roadmap Sprint Page, and that the
 // Actual tab of the roadmap sprints page does NOT render it for the OPEN sprint:
 // there the OPEN sprint is shown through the shared sprint-card partial, with no
 // summary line, no datagrid, no member-tasks board, and no per-task modal
@@ -101,9 +100,7 @@ func TestSprintDetail_FullBlockOnlyOnSprintPage(t *testing.T) {
 	// target the OPEN sprint's card, not some other tab.
 	current := paneSlice(t, sprintsPage, `<div id="tab-current"`)
 
-	datagridTitles := []string{
-		">ID<", ">Status<", ">Capacity<", ">Tasks<", ">Created<", ">Started<", ">Closed<",
-	}
+	datagridTitles := []string{">Created<", ">Started<", ">Closed<"}
 	// The WAITING column's header carries the colour of the status that column
 	// groups — SPRINT's, the canonical status of the group — so the marker is
 	// built from the semantic helper rather than from a colour literal, and this

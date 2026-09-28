@@ -419,7 +419,7 @@ func TestClassifySprints_OrderingRules(t *testing.T) {
 }
 
 // TestSprintPage_HappyPath drives handleSprint against a sprint of an existing
-// roadmap: 200 HTML showing all sprint fields and the sprint's member tasks, with
+// roadmap: 200 HTML showing the sprint's details and its member tasks, with
 // every task card clickable to a modal and no edit affordance (SPEC/WEB.md
 // § Roadmap Sprint Page; Acceptance Criterion 14).
 func TestSprintPage_HappyPath(t *testing.T) {
@@ -429,8 +429,10 @@ func TestSprintPage_HappyPath(t *testing.T) {
 
 	body := servePage(t, mux, "/roadmaps/"+f.name+"/sprints/"+itoa(f.openID))
 
-	// All sprint detail fields are present.
-	for _, field := range []string{"Sprint #" + itoa(f.openID), "Status", "Capacity", "Tasks", "Created", "Started", "Closed"} {
+	// The sprint's details are present: the header identifier and the three
+	// datagrid fields (the datagrid's exact shape is pinned by
+	// TestSprintDetail_DatagridHoldsExactlyCreatedStartedClosed).
+	for _, field := range []string{"Sprint #" + itoa(f.openID), "Created", "Started", "Closed"} {
 		if !strings.Contains(body, field) {
 			t.Errorf("sprint page missing field %q", field)
 		}

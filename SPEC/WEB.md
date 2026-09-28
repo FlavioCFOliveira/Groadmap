@@ -130,7 +130,7 @@ The web interface exposes the following kinds of page for each roadmap:
    Kanban board of five fixed columns, one per task status, with each task shown as
    a card in the column of its status and each card clickable to open the read-only
    task detail modal. The page renders no task table.
-4. A roadmap sprint page that shows all details of a single sprint and the
+4. A roadmap sprint page that shows the details of a single sprint and the
    sprint's member tasks as a Kanban board of three fixed columns — `WAITING`,
    `DOING`, and `CLOSED` — whose cards follow the planned in-sprint execution
    order, read from that roadmap's `project.db`.
@@ -232,7 +232,7 @@ task detail modal that displays all of the task's fields (see
    current OPEN sprint or sprints — active by default (see
    [Roadmap Index Page](#roadmap-index-page) and
    [Roadmap Sprints Page](#roadmap-sprints-page)).
-9. The roadmap sprint page shows all details of a single sprint, the sprint's
+9. The roadmap sprint page shows the details of a single sprint, the sprint's
    member tasks as a Kanban board of three fixed columns — `WAITING` holding the
    sprint's `BACKLOG` and `SPRINT` tasks, `DOING` its `DOING` and `TESTING` tasks,
    and `CLOSED` its `COMPLETED` tasks — whose cards are ordered by what each column
@@ -871,7 +871,7 @@ produced from embedded `html/template` templates. Page routes return HTML
 | `/roadmaps/{name}` | GET, HEAD | Roadmap sprints page (landing; sprint tabs) | HTML |
 | `/roadmaps/{name}/tasks` | GET, HEAD | Roadmap tasks page (Kanban task board; optional `q` search parameter and optional `type`, `priority`, and `severity` filter parameters, see [Roadmap Tasks Page](#roadmap-tasks-page)) | HTML |
 | `/roadmaps/{name}/tasks/{id}/data` | GET, HEAD | One task's fields and comments, for the task detail modal (see [Task Detail Endpoint](#task-detail-endpoint)) | JSON |
-| `/roadmaps/{name}/sprints/{id}` | GET, HEAD | Roadmap sprint page (all sprint details and the sprint's member-tasks board) | HTML |
+| `/roadmaps/{name}/sprints/{id}` | GET, HEAD | Roadmap sprint page (the sprint's details and its member-tasks board) | HTML |
 | `/roadmaps/{name}/audit` | GET, HEAD | Roadmap audit log page (full audit log, paginated; optional `page` parameter; see [Roadmap Audit Log Page](#roadmap-audit-log-page)) | HTML |
 | `/roadmaps/{name}/graph` | GET, HEAD | Roadmap knowledge-graph page (interactive visualisation) | HTML |
 | `/roadmaps/{name}/graph/data` | GET, HEAD | Graph nodes and edges for the visualisation (optional `q` Cypher query and `limit` node-limit parameters; see [Graph Data Endpoint](#graph-data-endpoint)) | JSON |
@@ -2199,13 +2199,16 @@ how the `rmp web` process itself terminates.
 - **Sprint status summary line.** At the top of the sprint presentation the page
   shows the sprint status summary line defined in
   [Sprint Detail Sub-Template](#sprint-detail-sub-template).
-- **Sprint details.** The page shows all details of the sprint, using the fields
-  defined for the `Sprint` model in `MODELS.md § Sprint`: the sprint `id`, its
-  status, its `title`, its description, its execution `order` (a positive integer,
-  unique across the roadmap), its capacity (`max_tasks`, which may be unset meaning
-  unlimited capacity), `created_at`, `started_at`, `closed_at`, and `task_count`.
-  The page presents the sprint status clearly (the status enum and lifecycle are
-  defined in `MODELS.md § Enums` and `STATE_MACHINE.md § Sprint State Machine`).
+- **Sprint details.** The page shows the sprint's details, using the fields
+  defined for the `Sprint` model in `MODELS.md § Sprint`: the page header presents
+  the sprint `id`, its `title`, and its status; the sprint status summary line
+  presents its total task count; and the Sprint details card presents its
+  description, `created_at`, `started_at`, and `closed_at` (see
+  [Sprint Detail Sub-Template](#sprint-detail-sub-template)). The page does not
+  show the sprint's execution `order` or its capacity (`max_tasks`).
+  The page presents the sprint status clearly, through the status badge in the
+  page header (the status enum and lifecycle are defined in `MODELS.md § Enums`
+  and `STATE_MACHINE.md § Sprint State Machine`).
   The sprint `description` is authored as Markdown, and the page renders it as the
   HTML the Markdown renderer produces from it; the rendered content wraps within
   its card, so no forced horizontal scrolling of the page is introduced (see
@@ -2567,17 +2570,27 @@ shows sprints as compact cards through the shared sprint-card partial instead (s
 2. **What the sub-template renders.** For one sprint, the sub-template renders, in
    order:
    - the **sprint status summary line** (defined below);
-   - the **sprint metadata datagrid** with the sprint's `ID`, `Title` (the
-     sprint's required `title`), `Status`, `Order` (the sprint's execution
-     `order`, a positive integer unique across the roadmap), `Capacity` (the
-     `max_tasks` value, shown as "Unlimited" when unset), `Tasks` (the sprint's
-     `task_count`), `Created` (`created_at`), `Started` (`started_at`), and
-     `Closed` (`closed_at`); the fields are defined for the `Sprint` model in
-     `MODELS.md § Sprint` and are not redefined here;
+   - the **Sprint details card**, which carries the sprint's `description`
+     (rule 7) and the **sprint metadata datagrid**. The datagrid holds exactly
+     three fields, in this order: `Created` (`created_at`), `Started`
+     (`started_at`), and `Closed` (`closed_at`). A `started_at` or `closed_at`
+     that is unset renders a neutral placeholder, an em dash, rather than an empty
+     value. The fields are defined for the `Sprint` model in `MODELS.md § Sprint`
+     and are not redefined here.
+
+     The datagrid carries no `ID`, `Title`, `Status`, `Order`, `Capacity`, or
+     `Tasks` field. The page header already presents the sprint `title`,
+     `Sprint #<ID>`, and the sprint's status badge (see
+     [Roadmap Sprint Page](#roadmap-sprint-page)), and the sprint status summary
+     line already presents the sprint's total task count as `T`, so a datagrid
+     field for any of them would repeat what the page shows above it. The
+     sprint's execution `order` and its capacity (`max_tasks`) are not shown on
+     the page. The datagrid is rendered only by this sub-template, and so only on
+     the Roadmap Sprint Page;
    - the **member-tasks board**, a Kanban board of three fixed columns holding the
      sprint's tasks, one card per task (defined below). The board is the sprint's
      member-task presentation and sits between the two cards that surround it:
-     directly below the sprint metadata datagrid and directly above the Comments
+     directly below the Sprint details card and directly above the Comments
      card;
    - the **Comments card**, a separate card placed after the member-tasks board and
      rendered last in the sub-template (defined below).
@@ -5497,8 +5510,7 @@ Rules:
    [Sprint Detail Sub-Template](#sprint-detail-sub-template)), the task detail modal
    (see [Task Detail Modal](#task-detail-modal)), the sprint cards (see
    [Shared Sprint-Card Partial](#shared-sprint-card-partial)), the Roadmap Sprint
-   Page header and metadata datagrid (see [Roadmap Sprint Page](#roadmap-sprint-page)
-   and [Sprint Detail Sub-Template](#sprint-detail-sub-template)), the sprint
+   Page header (see [Roadmap Sprint Page](#roadmap-sprint-page)), the sprint
    tabs on the Roadmap Sprints Page (see [Roadmap Sprints Page](#roadmap-sprints-page)),
    and the per-column count badge of each of the two Kanban boards (see
    [Roadmap Tasks Page](#roadmap-tasks-page) and
@@ -6272,19 +6284,20 @@ Rules:
     is a clickable link to that sprint's page at
     `/roadmaps/{name}/sprints/{id}`.
 14. `GET /roadmaps/{name}/sprints/{id}` for a sprint of an existing roadmap returns
-    HTTP 200 and an HTML page showing all details of that sprint (id, status,
-    `title`, description, execution `order`, capacity `max_tasks`, `created_at`,
-    `started_at`, `closed_at`, and
-    `task_count`) and the sprint's member tasks as a three-column board whose
+    HTTP 200 and an HTML page showing the details of that sprint and the sprint's
+    member tasks as a three-column board whose
     `WAITING` column follows the `sprint_tasks` order (the planned
     in-sprint execution order) while its `DOING` and `CLOSED` columns lead with the
     most recently started and the most recently closed task respectively; the page
     header presents the sprint `title`
-    alongside `Sprint #<ID>`, and the sprint metadata datagrid shows the sprint
-    `Title` and the execution `Order` in addition to the ID, Status, Capacity,
-    Tasks, Created, Started, and Closed fields; the page contains no form, button,
-    or link that submits a change. A request whose `{id}` is not a valid integer, or is an
-    integer that is not a sprint of the named roadmap, returns HTTP 404, and a
+    alongside `Sprint #<ID>` and the sprint's status badge; the Sprint details card
+    shows the sprint description and a metadata datagrid of exactly three fields,
+    in the order `Created`, `Started`, and `Closed`, with an em dash in place of an
+    unset `started_at` or `closed_at`; the datagrid carries no `ID`, `Title`,
+    `Status`, `Order`, `Capacity`, or `Tasks` field, and the page shows neither the
+    sprint's execution `order` nor its capacity `max_tasks`; the page contains no
+    form, button, or link that submits a change. A request whose `{id}` is not a
+    valid integer, or is an integer that is not a sprint of the named roadmap, returns HTTP 404, and a
     request whose `{name}` is invalid or nonexistent returns HTTP 404.
 15. Clicking a task anywhere it is shown clickable — the board cards of the tasks
     page and the board cards of the sprint page — opens a modal
@@ -6700,8 +6713,8 @@ Rules:
     `bg-secondary-lt`. The same value maps to the same colour everywhere a badge for
     it is shown — the priority and severity badges on the tasks page's board cards
     and on the cards of the sprint detail member-tasks board, the task
-    detail modal, the sprint cards, the Roadmap Sprint Page header and metadata
-    datagrid, the sprints-page tabs, where the colour is the variant of the status
+    detail modal, the sprint cards, the Roadmap Sprint Page header, the sprints-page
+    tabs, where the colour is the variant of the status
     the tab groups while the badge text is that tab's sprint count (Acceptance
     Criterion 120), and the per-column count badge of each of the two Kanban boards,
     where the colour is the variant of the status the column groups while the badge

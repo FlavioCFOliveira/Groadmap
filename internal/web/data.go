@@ -890,13 +890,11 @@ func closedAt(t *models.Task) *string { return t.ClosedAt }
 // sub-template, so the full sprint detail block appears only there (SPEC/WEB.md
 // § Sprint Detail Sub-Template; Acceptance Criterion 38).
 //
-// Tasks is the sprint's member tasks in planned in-sprint execution order
-// (sprint_tasks position ascending), each carrying its own comment count; Columns
-// is that same list grouped into the member-tasks board's three fixed columns and
-// ordered per column — WAITING keeping the position order, DOING and CLOSED
-// reordered by started_at and closed_at descending — which is what the
-// sub-template renders. Both describe the same tasks: Columns points into Tasks,
-// and only the order in which it walks them differs.
+// Columns is the sprint's member tasks, each carrying its own comment count,
+// grouped into the member-tasks board's three fixed columns and ordered per
+// column — WAITING keeping the planned in-sprint execution order (sprint_tasks
+// position ascending), DOING and CLOSED reordered by started_at and closed_at
+// descending — which is what the sub-template renders.
 //
 // Comments is the sprint's OWN comment log — the sprint's progression account —
 // oldest first, rendered in the Comments card the sub-template places last. It
@@ -907,7 +905,6 @@ func closedAt(t *models.Task) *string { return t.ClosedAt }
 // is read only when a user opens that task's modal, one task at a time.
 type sprintDetail struct {
 	Name     string
-	Tasks    []taskView
 	Columns  []sprintBoardColumn
 	Comments []models.SprintComment
 	Sprint   models.Sprint
@@ -915,7 +912,7 @@ type sprintDetail struct {
 }
 
 // sprintPageData is the view model handed to the roadmap sprint template. It
-// presents a single sprint with all of its fields, its member tasks as a Kanban
+// presents a single sprint's details, its member tasks as a Kanban
 // board of three fixed columns each ordered by its own key — each card clickable
 // to open the read-only task detail modal — and the sprint's own comments
 // (SPEC/WEB.md § Roadmap Sprint Page). It is read-only.
@@ -942,7 +939,6 @@ func (d sprintPageData) Detail() sprintDetail {
 	return sprintDetail{
 		Name:     d.Name,
 		Sprint:   d.Sprint,
-		Tasks:    d.Tasks,
 		Columns:  d.Columns,
 		Comments: d.Comments,
 		Summary:  d.Summary,

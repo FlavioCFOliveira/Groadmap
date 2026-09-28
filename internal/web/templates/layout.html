@@ -220,13 +220,13 @@
   the single source of presentation shown only on the single Roadmap Sprint
   Page (SPEC/WEB.md § Sprint Detail Sub-Template; Acceptance Criteria 38/39).
 
-  Dot is a web.sprintDetail: .Name (roadmap), .Sprint (models.Sprint), .Tasks
-  (member tasks in planned in-sprint execution order), .Columns (those same tasks
-  grouped into the member-tasks board's three fixed columns), .Comments (the
-  sprint's own comments, oldest first), and .Summary (the precomputed completion
-  summary). It renders, in order: the sprint status summary line, the sprint
-  metadata datagrid, the member-tasks board with each card clickable to open the
-  read-only task detail modal, and the sprint's Comments card. The caller renders
+  Dot is a web.sprintDetail: .Name (roadmap), .Sprint (models.Sprint), .Columns
+  (the member tasks grouped into the member-tasks board's three fixed columns),
+  .Comments (the sprint's own comments, oldest first), and .Summary (the
+  precomputed completion summary). It renders, in order: the sprint status
+  summary line, the Sprint details card, the member-tasks board with each card
+  clickable to open the read-only task detail modal, and the sprint's Comments
+  card. The caller renders
   the single taskModalShell the page carries; a member task carries the NUMBER of
   its comments and never their text, because the modal a card opens is filled on
   demand from the task detail endpoint.
@@ -235,10 +235,14 @@
   inside Tabler's markdown container (sprintDescriptionHTML; SPEC/WEB.md
   § Sprint Detail Sub-Template, rule 7; § Markdown Rendering).
 
-  The "Tasks" datagrid value uses len .Tasks (the loaded member tasks) rather
-  than .Sprint.TaskCount: GetSprint populates TaskCount, but len .Tasks is the
-  authoritative count of the rows actually rendered here (SPEC/WEB.md § Sprint
-  Detail Sub-Template).
+  The Sprint details card carries the description and a metadata datagrid of
+  exactly three fields, in this order: Created, Started, and Closed, with an em
+  dash in place of an unset started_at or closed_at. It carries no ID, Title,
+  Status, Order, Capacity, or Tasks field: the page header already presents the
+  title, "Sprint #<ID>", and the status badge, the summary line above already
+  presents the total task count as T, and the page shows neither the execution
+  order nor the capacity (SPEC/WEB.md § Sprint Detail Sub-Template, rule 2;
+  Acceptance Criterion 14).
 */}}
 {{define "sprintDetail"}}          <div class="h3 mb-3" data-role="sprint-summary">{{.Summary.Line}}</div>
 
@@ -249,30 +253,6 @@
             <div class="card-body">
               <div class="markdown mb-3">{{sprintDescriptionHTML .Sprint}}</div>
               <div class="datagrid">
-                <div class="datagrid-item">
-                  <div class="datagrid-title">Title</div>
-                  <div class="datagrid-content">{{.Sprint.Title}}</div>
-                </div>
-                <div class="datagrid-item">
-                  <div class="datagrid-title">ID</div>
-                  <div class="datagrid-content">#{{.Sprint.ID}}</div>
-                </div>
-                <div class="datagrid-item">
-                  <div class="datagrid-title">Status</div>
-                  <div class="datagrid-content"><span class="badge {{sprintStatusBadge .Sprint.Status}}">{{.Sprint.Status}}</span></div>
-                </div>
-                <div class="datagrid-item">
-                  <div class="datagrid-title">Order</div>
-                  <div class="datagrid-content">{{.Sprint.Order}}</div>
-                </div>
-                <div class="datagrid-item">
-                  <div class="datagrid-title">Capacity</div>
-                  <div class="datagrid-content">{{with .Sprint.MaxTasks}}{{.}}{{else}}Unlimited{{end}}</div>
-                </div>
-                <div class="datagrid-item">
-                  <div class="datagrid-title">Tasks</div>
-                  <div class="datagrid-content">{{len .Tasks}}</div>
-                </div>
                 <div class="datagrid-item">
                   <div class="datagrid-title">Created</div>
                   <div class="datagrid-content text-secondary">{{.Sprint.CreatedAt}}</div>

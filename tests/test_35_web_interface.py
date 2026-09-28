@@ -3057,17 +3057,76 @@ class TestWebInterface:
             )
 
     # ====================================================================
-    # AC14/AC21: sprint page — all details, task order, 404/405 rules
+    # AC14/AC21: sprint page — details, task order, 404/405 rules
     # ====================================================================
 
-    def test_sprint_page_shows_all_details_and_task_order(self):
+    _DATAGRID_ITEM = re.compile(
+        r'<div class="datagrid-item">\s*<div class="datagrid-title">([^<]*)</div>'
+        r'\s*<div class="datagrid-content[^"]*">(.*?)</div>\s*</div>',
+        re.S,
+    )
+
+    def _sprint_datagrid_items(self, body):
+        """Return the (title, content) pairs of the sprint page's one metadata
+        datagrid, in document order, with the content HTML-unescaped."""
+        opener = '<div class="datagrid">'
+        assert body.count(opener) == 1, (
+            f"the sprint page carries {body.count(opener)} metadata datagrids, want exactly 1"
+        )
+        grid = body[body.index(opener):]
+        end = grid.find('data-role="task-board"')
+        if end != -1:
+            grid = grid[:end]
+        items = self._DATAGRID_ITEM.findall(grid)
+        assert len(items) == grid.count('<div class="datagrid-item">'), (
+            "a datagrid item escaped the item pattern, so the exact-shape check would miss it"
+        )
+        return [(title, html_lib.unescape(content)) for title, content in items]
+
+    def test_sprint_page_datagrid_holds_exactly_created_started_closed(self):
+        """AC14: the Sprint details datagrid holds exactly Created, Started and
+        Closed, in that order, each equal to the CLI's value or an em dash when
+        unset, and carries no ID, Title, Status, Order, Capacity or Tasks field."""
+        proc, port = self._start(["--port", "0"])
+        for label, sid in (("OPEN", self.open_sid), ("PENDING", self.pending_sid),
+                           ("CLOSED", self.closed_sid)):
+            status, _, body = self._req(port, f"/roadmaps/{ROADMAP}/sprints/{sid}")
+            assert status == 200, f"{label} sprint #{sid}: status {status}"
+            items = self._sprint_datagrid_items(body)
+            titles = [title for title, _ in items]
+            assert titles == ["Created", "Started", "Closed"], (
+                f"{label} sprint #{sid}: datagrid titles {titles}, want exactly "
+                "['Created', 'Started', 'Closed']"
+            )
+            cli = self.test.run_cmd_json(["sprint", "get", "-r", ROADMAP, str(sid)])
+            want = [cli["created_at"], cli.get("started_at") or "\u2014",
+                    cli.get("closed_at") or "\u2014"]
+            got = [content for _, content in items]
+            assert got == want, f"{label} sprint #{sid}: datagrid values {got}, want {want}"
+            for gone in ("ID", "Title", "Status", "Order", "Capacity", "Tasks"):
+                assert f'<div class="datagrid-title">{gone}</div>' not in body, (
+                    f"{label} sprint #{sid}: the page still carries the {gone!r} datagrid field"
+                )
+            assert "Unlimited" not in body, (
+                f"{label} sprint #{sid}: the page still shows the capacity placeholder"
+            )
+        # The fixture covers every placeholder combination the rule separates.
+        pending = self.test.run_cmd_json(["sprint", "get", "-r", ROADMAP, str(self.pending_sid)])
+        opened = self.test.run_cmd_json(["sprint", "get", "-r", ROADMAP, str(self.open_sid)])
+        closed = self.test.run_cmd_json(["sprint", "get", "-r", ROADMAP, str(self.closed_sid)])
+        assert not pending.get("started_at") and not pending.get("closed_at")
+        assert opened.get("started_at") and not opened.get("closed_at")
+        assert closed.get("started_at") and closed.get("closed_at")
+
+    def test_sprint_page_shows_details_and_task_order(self):
         proc, port = self._start(["--port", "0"])
         status, headers, body = self._req(port, f"/roadmaps/{ROADMAP}/sprints/{self.open_sid}")
         assert status == 200
         assert headers.get("content-type", "").startswith("text/html")
 
-        # All sprint detail fields are present.
-        for field in ("Status", "Capacity", "Created", "Started", "Closed", "Tasks"):
+        # The sprint's details are present (the datagrid's exact shape is pinned
+        # by test_sprint_page_datagrid_holds_exactly_created_started_closed).
+        for field in ("Created", "Started", "Closed"):
             assert field in body, f"sprint page missing field {field!r}"
         assert f"Sprint #{self.open_sid}" in body, "sprint page missing the sprint id"
         assert "authentication hardening sprint" in body.lower(), (
