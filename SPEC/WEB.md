@@ -37,6 +37,7 @@
   - [Self-Contained Deliverable](#self-contained-deliverable)
   - [Embedded Asset Categories](#embedded-asset-categories)
   - [Frontend Rules](#frontend-rules)
+  - [Markdown Rendering](#markdown-rendering)
   - [UI Framework](#ui-framework)
   - [Full-Height Page Regions](#full-height-page-regions)
   - [Status, Priority, and Severity Badge Colours](#status-priority-and-severity-badge-colours)
@@ -266,8 +267,11 @@ task detail modal that displays all of the task's fields (see
    task, and fills it on demand: opening a task fetches that task's fields and
    comments from the read-only endpoint `GET /roadmaps/{name}/tasks/{id}/data`.
    Every value that endpoint returns is written into the page as text and never as
-   markup (see [Task Detail Modal](#task-detail-modal) and
-   [Task Detail Endpoint](#task-detail-endpoint)).
+   markup, with one exception: the HTML the server's Markdown renderer produced for
+   each Markdown field, which the endpoint carries in its `_html` members and the
+   modal inserts as markup (see [Task Detail Modal](#task-detail-modal),
+   [Task Detail Endpoint](#task-detail-endpoint), and
+   [Markdown Rendering](#markdown-rendering)).
 12. The roadmap knowledge-graph page shows the selected roadmap's knowledge graph
    as an interactive node-link visualisation rendered with **D3.js**, read from
    that roadmap's graph through a running `rmp graph serve`, over the same client
@@ -363,6 +367,17 @@ task detail modal that displays all of the task's fields (see
     [Graph Query Time Budget](#graph-query-time-budget),
     [Graph Data Endpoint](#graph-data-endpoint), and
     [Query-Bar Error Handling](#query-bar-error-handling)).
+20. **Markdown fields render as HTML.** The long free-text fields a user authors
+    as Markdown — the task `functional_requirements`, `technical_requirements`,
+    `acceptance_criteria`, and `completion_summary`, the task comment `body`, the
+    sprint comment `body`, and the sprint `description` — are rendered, wherever
+    the interface shows them, as the HTML a single server-side Markdown renderer
+    produces from them, and not as escaped plain text. The renderer is
+    CommonMark-compliant, adds the GitHub Flavored Markdown extensions, footnotes,
+    definition lists, and syntax highlighting of fenced code blocks, and never
+    emits raw HTML from the source nor an active link to a dangerous URL. Task and
+    sprint titles, and the values of the knowledge-graph detail panel, stay plain
+    text (see [Markdown Rendering](#markdown-rendering)).
 
 ## Command Surface
 
@@ -774,7 +789,10 @@ Notes:
    asset model (see [Self-Contained Deliverable](#self-contained-deliverable)). It
    allows inline styles (`style-src 'self' 'unsafe-inline'`) and `data:` image
    sources (`img-src 'self' data:`) because the vendored Tabler framework and the
-   D3.js visualisation use them; it forbids inline and remote scripts
+   D3.js visualisation use them; the `data:` source is also what lets a Markdown
+   image whose source is a `data:` URL render as an image (see
+   [Markdown Rendering](#markdown-rendering), rule 9), and the Markdown feature
+   changes nothing in the policy. It forbids inline and remote scripts
    (`script-src 'self'`), forbids the page from being framed (`frame-ancestors
    'none'`), and restricts `<base>` to the same origin (`base-uri 'self'`).
 2. `X-Frame-Options: DENY` reinforces `frame-ancestors 'none'` for clients that do
@@ -1002,12 +1020,13 @@ how the `rmp web` process itself terminates.
   one tab. It changes no stored data and no other surface: the CLI listing order
   is unaffected, and a reader who wants the whole roadmap in a single planned
   sequence reads `rmp sprint list`.
-- **Sprint description line breaks.** Wherever a sprint's `description` text is
-  shown in a sprint card on this page — across all three tabs — the description
-  renders preserving the author's line breaks (newlines), because the description
-  is multi-line as authored through the CLI; the text still wraps, so no forced
-  horizontal scrolling is introduced (see [Frontend Rules](#frontend-rules),
-  rule 6).
+- **Sprint description rendered as Markdown.** Wherever a sprint's `description`
+  is shown in a sprint card on this page — across all three tabs — it renders as
+  the HTML the Markdown renderer produces from it, in the renderer's
+  non-interactive form, because the whole card is a single link (see
+  [Shared Sprint-Card Partial](#shared-sprint-card-partial), rule 5, and
+  [Markdown Rendering](#markdown-rendering)). The rendered content wraps within
+  the card, so no forced horizontal scrolling of the page is introduced.
 - **Relationships shown.** The page surfaces, in a read-only view, the
   relationships already modelled in the data: task-to-sprint membership (including
   task order within a sprint). The presentation MUST reflect the same
@@ -2176,10 +2195,10 @@ how the `rmp web` process itself terminates.
   unlimited capacity), `created_at`, `started_at`, `closed_at`, and `task_count`.
   The page presents the sprint status clearly (the status enum and lifecycle are
   defined in `MODELS.md § Enums` and `STATE_MACHINE.md § Sprint State Machine`).
-  The sprint `description` is multi-line as authored through the CLI, and the page
-  renders it preserving the author's line breaks (newlines); the text still wraps,
-  so no forced horizontal scrolling is introduced (see
-  [Frontend Rules](#frontend-rules), rule 6). The page does not redefine these
+  The sprint `description` is authored as Markdown, and the page renders it as the
+  HTML the Markdown renderer produces from it; the rendered content wraps within
+  its card, so no forced horizontal scrolling of the page is introduced (see
+  [Markdown Rendering](#markdown-rendering)). The page does not redefine these
   fields; `MODELS.md` and `DATABASE.md` remain canonical.
 - **Member-tasks board.** The page presents the sprint's tasks as a Kanban board
   of three fixed columns — `WAITING`, `DOING`, and `CLOSED` — holding one card per
@@ -2507,9 +2526,16 @@ other sprint and is not expanded inline.
    that submits a change; its only interaction is navigating to the sprint's own
    page.
 
-5. **Authored line breaks.** Where the card renders the sprint's `description`, it
-   preserves the author's line breaks as specified in
-   [Frontend Rules](#frontend-rules), rule 6.
+5. **Description rendered as Markdown, in the non-interactive form.** Where the
+   card renders the sprint's `description`, it renders the HTML the Markdown
+   renderer produces from it (see [Markdown Rendering](#markdown-rendering)), and
+   it uses the renderer's **non-interactive form**
+   ([Markdown Rendering](#markdown-rendering), rule 14). The whole card is one
+   link (rule 3), and HTML admits no interactive element — a link or a form
+   control — inside a link, so the card's rendered description carries none: a
+   Markdown link renders as its text, and a task-list item's checkbox renders as a
+   text marker. The card shows the whole rendered description; it neither clamps
+   nor truncates it, and the content wraps within the card.
 
 ### Sprint Detail Sub-Template
 
@@ -3026,23 +3052,27 @@ shows sprints as compact cards through the shared sprint-card partial instead (s
      `card timeline-event-card` holding the entry. The type badge uses the neutral
      `bg-secondary-lt` variant for every type value, exactly as in the modal, and
      introduces no per-type colour.
-   - **Authored line breaks.** A comment body is multi-line as authored through the
-     CLI, and the card renders it preserving the author's line breaks (see
-     [Frontend Rules](#frontend-rules), rule 6).
+   - **Body rendered as Markdown.** A comment body is authored as Markdown, and the
+     card renders it as the HTML the Markdown renderer produces from it; the
+     rendered content wraps within the card (see
+     [Markdown Rendering](#markdown-rendering)).
    - **Empty state.** When the sprint has no comments, the card shows a clear
      empty-state message in place of the timeline, in the same idiom a column of the
      member-tasks board uses when it holds no task. The card itself is always
      present.
-   - **Read-only.** The card renders data only: no form, no input, no edit control,
-     and no submit action.
+   - **Read-only.** The card renders data only: no form, no edit control, and no
+     submit action, and no input other than the disabled checkbox of a rendered
+     Markdown task-list item, which can be neither checked nor unchecked (see
+     [Markdown Rendering](#markdown-rendering), rule 3).
 
 6. **Read-only.** The sub-template renders data only. It contains no form, button,
    or link that submits a change; the only interaction is opening the read-only
    task detail modal from a board card.
 
-7. **Authored line breaks.** Wherever the sub-template renders the sprint's
-   `description`, it preserves the author's line breaks as specified in
-   [Frontend Rules](#frontend-rules), rule 6.
+7. **Markdown fields.** Wherever the sub-template renders the sprint's
+   `description` or a sprint comment's `body`, it renders the HTML the Markdown
+   renderer produces from it, as specified in
+   [Markdown Rendering](#markdown-rendering).
 
 ### Roadmap Knowledge-Graph Page
 
@@ -4076,11 +4106,15 @@ tasks.
   could be built.
   This includes the long free-text fields
   (`functional_requirements`, `technical_requirements`, `acceptance_criteria`, and
-  `completion_summary`), which the modal presents formatted for readable display.
-  These long free-text fields are multi-line as authored through the CLI, and the
-  modal renders them preserving the author's line breaks (newlines); the text
-  still wraps within the modal, so no forced horizontal scrolling is introduced
-  (see [Frontend Rules](#frontend-rules), rule 6). The page does not redefine
+  `completion_summary`). These long free-text fields are authored as Markdown, and
+  the modal presents each as the HTML the server's Markdown renderer produced from
+  it, which the task detail endpoint delivers in the field's `_html` member (see
+  [Task Detail Endpoint](#task-detail-endpoint) and
+  [Markdown Rendering](#markdown-rendering)); the modal never parses Markdown
+  itself. A field whose value is empty or null is presented as the modal presents
+  any other empty or null field. The rendered content wraps within the modal, and
+  a wide table or code block scrolls inside its own box, so no forced horizontal
+  scrolling of the modal is introduced. The page does not redefine
   these fields; `MODELS.md` and `DATABASE.md` remain canonical. On the roadmap
   tasks page the modal is the sole place a task's full field set is shown, because
   the board card presents only the subset defined in
@@ -4118,24 +4152,28 @@ tasks.
     `<div class="timeline-event-icon">` holding a Tabler icon
     (`<i class="ti ti-message"></i>`) and a
     `<div class="card timeline-event-card">` whose `card-body` carries the
-    timestamps, the type badge, and the body text.
+    timestamps, the type badge, and the rendered body in its Markdown container
+    (see [Markdown Rendering](#markdown-rendering), rule 13).
   - **Type badge colour.** The comment type renders as a neutral Tabler badge,
     `bg-secondary-lt`, for every one of the seven type values. The semantic colour
     mapping in
     [Status, Priority, and Severity Badge Colours](#status-priority-and-severity-badge-colours)
     covers task and sprint status, task type, priority, and severity only; it is not
     extended to comment types, and no per-type colour is introduced.
-  - **Authored line breaks.** A comment body is multi-line as authored through the
-    CLI. The timeline renders it preserving the author's line breaks, and the text
+  - **Body rendered as Markdown.** A comment body is authored as Markdown. The
+    timeline presents it as the HTML the server's Markdown renderer produced from
+    it, delivered in the comment's `body_html` member, and the rendered content
     wraps within the card, exactly as the long free-text fields above do (see
-    [Frontend Rules](#frontend-rules), rule 6).
+    [Markdown Rendering](#markdown-rendering)).
   - **Empty state.** When the task has no comments, the modal shows a clear
     empty-state message in place of the timeline rather than an empty list or an
     absent section.
-- **Read-only.** The modal only displays data. It contains no form, no input, no
-  edit control, and no submit action of any kind. This includes the comments
-  timeline: comments are displayed, never created, edited, or deleted from the
-  web interface.
+- **Read-only.** The modal only displays data. It contains no form, no edit
+  control, and no submit action of any kind, and no input other than the disabled
+  checkbox of a rendered Markdown task-list item, which can be neither checked nor
+  unchecked (see [Markdown Rendering](#markdown-rendering), rule 3). This
+  includes the comments timeline: comments are displayed, never created, edited,
+  or deleted from the web interface.
 - **One modal element, filled on demand.** A page that shows clickable tasks
   renders **one** modal element, not one per task. That element is an empty shell:
   it carries no task's data until a user opens a task. When the user opens one, the
@@ -4151,19 +4189,34 @@ tasks.
   stored value and the page structure: the responsibility moves to the script that
   fills the modal. Therefore **every** value the script writes into the DOM MUST be
   written through the DOM `textContent` property, or an equivalent that cannot
-  interpret markup. The script MUST NOT use `innerHTML`, MUST NOT use
-  `insertAdjacentHTML`, and MUST NOT build DOM by assigning a string that embeds a
-  value to any markup-parsing sink.
+  interpret markup, with the single exception stated below. The script MUST NOT
+  use `innerHTML`, MUST NOT use `insertAdjacentHTML`, and MUST NOT build DOM by
+  assigning a string that embeds a value to any markup-parsing sink.
 
   This governs every caller-authored value on this path, all of which are free text
-  a user wrote through the CLI: the task `title`, `functional_requirements`,
-  `technical_requirements`, `acceptance_criteria`, `completion_summary`, and every
-  comment `body`. A value containing HTML control characters MUST render as the
-  characters themselves and MUST NOT be able to
-  introduce an element, an attribute, or a script into the page. The
+  a user wrote through the CLI: the task `title`, the raw
+  `functional_requirements`, `technical_requirements`, `acceptance_criteria`, and
+  `completion_summary`, and every raw comment `body`. A value containing HTML
+  control characters MUST render as the characters themselves and MUST NOT be able
+  to introduce an element, an attribute, or a script into the page. The
   control-character constraint in `MODELS.md § Task` rejects terminal and
   bidirectional control characters at write time; it does not reject HTML markup,
   so it is not a substitute for this rule.
+
+  **The single exception: the renderer's HTML.** The five `_html` members the
+  task detail endpoint carries — `functional_requirements_html`,
+  `technical_requirements_html`, `acceptance_criteria_html`, and
+  `completion_summary_html` on the task, and `body_html` on each comment — are
+  HTML the server's Markdown renderer produced, and the script inserts each of
+  them as markup, whole, into that field's Markdown container (see
+  [Markdown Rendering](#markdown-rendering), rule 13). These five members are the
+  only values the script may pass to a markup-parsing sink, and it passes them
+  unmodified: it neither concatenates another value into them nor builds markup
+  around them from a string. Their safety is the renderer's: it emits no raw HTML
+  from the source and no active link to a dangerous URL (see
+  [Markdown Rendering](#markdown-rendering), rules 8 to 11), so a Markdown field
+  containing HTML markup can introduce no element, attribute, or script of the
+  author's into the page on this path either. The script never parses Markdown.
 - **Failure is visible in the modal.** The modal already depends on JavaScript,
   because the vendored framework is what opens it. When the fetch for a task's data
   fails — a network error, a non-200 response, or a body that does not parse — the
@@ -4211,6 +4264,24 @@ tasks.
   the `comments` array (oldest first, the order the modal's timeline presents) and
   the `[]`-not-`null` convention for a task with no comment; this file does not
   restate them.
+- **Rendered Markdown members.** Besides the raw fields, which the response
+  carries unchanged, the response carries the HTML the server's Markdown renderer
+  produces from each Markdown field, so the client never parses Markdown (see
+  [Markdown Rendering](#markdown-rendering)). The members are exactly five, and
+  each is named after its raw field with the suffix `_html`:
+  - on the `task` object, `functional_requirements_html`,
+    `technical_requirements_html`, and `acceptance_criteria_html`, each a string,
+    and `completion_summary_html`, a string, or `null` exactly when
+    `completion_summary` is `null`;
+  - on each element of the `comments` array, `body_html`, a string.
+
+  A member whose raw field is the empty string is the empty string. Each member is
+  the renderer's output for that field on this surface, byte for byte the HTML the
+  renderer returns for the same stored text, including the footnote identifier
+  prefix of [Markdown Rendering](#markdown-rendering), rule 12. The raw fields keep
+  their names, types, values, and null conventions, so a consumer that reads only
+  them is unaffected; the `_html` members exist in this response only and are never
+  part of the CLI's output.
 - **Path parameters.** `{name}` and `{id}` follow the discipline in
   [Routes and Pages](#routes-and-pages), rules 1, 2, and 4: `{name}` is validated
   against the roadmap-name rules before any filesystem path is built, and an
@@ -4243,7 +4314,9 @@ tasks.
   [Frontend Rules](#frontend-rules)).
 - **Output encoding.** The response body is JSON-encoded, never HTML. Task and
   comment text is carried as JSON string values and is never interpolated into
-  markup by the server. How the client renders those values is
+  markup by the server. The five `_html` members are JSON strings too; the HTML
+  they hold is the Markdown renderer's output and nothing else, and no other value
+  is interpolated into it. How the client renders those values is
   security-critical and is specified in [Task Detail Modal](#task-detail-modal),
   **Client-side rendering is text-only**.
 
@@ -4562,6 +4635,18 @@ not a convenience.
    reads an asset from the real filesystem, consistent with the path-traversal and
    no-arbitrary-file-serving constraint in
    [Security and Constraints](#security-and-constraints).
+6. **The Markdown renderer is compiled in.** The server-side Markdown renderer
+   (see [Markdown Rendering](#markdown-rendering)) is built from Go modules that
+   are compiled into the binary: `github.com/yuin/goldmark`,
+   `github.com/yuin/goldmark-highlighting/v2`, and
+   `github.com/alecthomas/chroma/v2`, together with the regular-expression module
+   chroma itself requires, `dlclark/regexp2`. None of them loads anything at
+   runtime: no
+   lexer, style, or other data file is read from the host filesystem or fetched
+   from a remote origin. The syntax-highlighting stylesheet is an embedded
+   static asset like every other stylesheet (see
+   [Embedded Asset Categories](#embedded-asset-categories)). The modules and the
+   rules that pin them are listed in `BUILD.md § External Dependencies`.
 
 ### Embedded Asset Categories
 
@@ -4572,8 +4657,10 @@ read from the host filesystem at runtime.
 
 1. **HTML templates** — the `html/template` set that renders every page.
 2. **Stylesheet** — all CSS, including the vendored Tabler CSS framework (the UI
-   framework, see [UI Framework](#ui-framework)) and any further vendored CSS the
-   interface uses (see
+   framework, see [UI Framework](#ui-framework)), the syntax-highlighting
+   stylesheet of rendered Markdown code blocks (see
+   [Markdown Rendering](#markdown-rendering), rule 7), and any further vendored CSS
+   the interface uses (see
    [Responsive and Mobile-First Design](#responsive-and-mobile-first-design)).
 3. **JavaScript** — all client scripts, including the Tabler JavaScript (the UI
    framework's scripts) and the D3.js knowledge-graph visualisation library (and
@@ -4592,9 +4679,11 @@ read from the host filesystem at runtime.
 1. **Server-rendered HTML.** Pages are rendered with Go's `html/template`. The
    template set is embedded into the binary at build time with `go:embed`.
    `html/template` performs contextual auto-escaping, which is the primary
-   defence against injecting roadmap-derived text (task titles, descriptions,
+   defence against injecting roadmap-derived text (task titles, sprint titles,
    graph property values) into the page (see
-   [Security and Constraints](#security-and-constraints)).
+   [Security and Constraints](#security-and-constraints)). The one value a
+   template inserts without escaping is the HTML of a Markdown field, and it comes
+   only from the Markdown renderer (see rule 7).
 2. **Embedded static assets.** Every asset category in
    [Embedded Asset Categories](#embedded-asset-categories) is embedded with
    `go:embed` and served from the `/static/...` route. There is no separate asset
@@ -4611,25 +4700,226 @@ read from the host filesystem at runtime.
    asset a page loads is served from `/static/...` on the same local server. The
    running server makes no outbound network request of its own (see
    [Self-Contained Deliverable](#self-contained-deliverable)).
-6. **Authored line breaks preserved in multi-line free-text.** Free-text that a
-   user authored through the CLI is multi-line: the user enters line breaks
-   (newlines) in it. Where the interface renders such authored free-text — the
-   task long free-text fields (`functional_requirements`,
-   `technical_requirements`, `acceptance_criteria`, and `completion_summary`) in
-   the task detail modal, a sprint's `description` wherever it is shown, and the
-   property values shown in the knowledge-graph detail panel when a node or edge
-   is selected — the interface preserves the author's line breaks rather than
-   collapsing them under HTML's default whitespace handling. The text still wraps
-   within its container, so preserving line breaks introduces no forced
-   horizontal scrolling, and the text is still emitted as the element's text
-   content (never as raw HTML): the server-rendered fields through
-   `html/template`'s contextual auto-escaping (rule 1), and the graph detail panel
-   values through the DOM `textContent` property. This rule is the general
-   statement of the behaviour; the [Task Detail Modal](#task-detail-modal),
+6. **Authored line breaks preserved in plain multi-line free-text.** Free-text
+   that the interface shows as plain text, and not as Markdown, may be multi-line:
+   its author entered line breaks (newlines) in it. Where the interface renders
+   such plain free-text — the property values shown in the knowledge-graph detail
+   panel when a node or edge is selected, and any other multi-line value that is
+   not one of the Markdown fields of rule 7 — the interface preserves the author's
+   line breaks rather than collapsing them under HTML's default whitespace
+   handling. The text still wraps within its container, so preserving line breaks
+   introduces no forced horizontal scrolling, and the text is still emitted as the
+   element's text content (never as raw HTML): a server-rendered value through
+   `html/template`'s contextual auto-escaping (rule 1), and a graph detail panel
+   value through the DOM `textContent` property. This rule does not govern the
+   Markdown fields; rule 7 does. The
+   [Roadmap Knowledge-Graph Page](#roadmap-knowledge-graph-page) section
+   references this rule.
+7. **Markdown fields render as the Markdown renderer's HTML.** The Markdown
+   fields — the task `functional_requirements`, `technical_requirements`,
+   `acceptance_criteria`, and `completion_summary`, the task comment `body`, the
+   sprint comment `body`, and the sprint `description` — are rendered wherever the
+   interface shows them as the HTML the single server-side Markdown renderer
+   produces from them, never as escaped plain text and never by a Markdown parser
+   in the browser. That HTML is the only markup the interface inserts without
+   escaping, on the server-rendered path and on the JSON path alike, and it comes
+   from that renderer alone. The renderer, the Markdown it accepts, the HTML it
+   emits, and the safety properties that HTML carries are specified in
+   [Markdown Rendering](#markdown-rendering); the
+   [Task Detail Modal](#task-detail-modal),
    [Roadmap Sprints Page](#roadmap-sprints-page),
-   [Roadmap Sprint Page](#roadmap-sprint-page), and
-   [Roadmap Knowledge-Graph Page](#roadmap-knowledge-graph-page) sections
-   reference it.
+   [Roadmap Sprint Page](#roadmap-sprint-page),
+   [Shared Sprint-Card Partial](#shared-sprint-card-partial), and
+   [Sprint Detail Sub-Template](#sprint-detail-sub-template) sections reference
+   it.
+
+### Markdown Rendering
+
+The Markdown fields of rule 7 of [Frontend Rules](#frontend-rules) are authored
+through the CLI as Markdown, and the web interface renders each of them as the
+richest HTML it can emit safely. This section is the canonical specification of
+that rendering: which fields it covers, the one renderer that performs it, the
+Markdown it accepts, the HTML it emits, and the properties that make that HTML
+safe to insert into a page. The stored text is never altered: rendering happens on
+the way out, on every request, and the CLI's output of these fields is unchanged.
+
+1. **The Markdown fields, and where each is rendered.** Exactly seven fields are
+   rendered as Markdown, on every surface that shows them:
+   - the task `functional_requirements`, `technical_requirements`,
+     `acceptance_criteria`, and `completion_summary`, in the task detail modal
+     (see [Task Detail Modal](#task-detail-modal));
+   - the task comment `body`, in the task detail modal's comments timeline;
+   - the sprint comment `body`, in the Comments card of the Roadmap Sprint Page
+     (see [Sprint Detail Sub-Template](#sprint-detail-sub-template));
+   - the sprint `description`, in the sprint card of every tab of the Roadmap
+     Sprints Page (see [Shared Sprint-Card Partial](#shared-sprint-card-partial))
+     and on the Roadmap Sprint Page (see
+     [Sprint Detail Sub-Template](#sprint-detail-sub-template)).
+
+   No other value is rendered as Markdown. The task `title` and the sprint `title`
+   stay plain text wherever they appear, and so does every other value the
+   interface shows. The property values of the knowledge-graph detail panel are
+   out of this section's scope and keep the plain-text rendering of
+   [Frontend Rules](#frontend-rules), rule 6.
+2. **One renderer, on the server.** Markdown is rendered on the server, in Go, by
+   one rendering unit whose single responsibility is to turn the stored text of
+   one Markdown field into an HTML fragment. The unit is built on
+   `github.com/yuin/goldmark`, a CommonMark-compliant parser and renderer. Every
+   surface obtains its HTML from this one unit: the server-rendered pages insert
+   its output into the page, and the task detail endpoint carries its output in
+   the `_html` members (see [Task Detail Endpoint](#task-detail-endpoint)). No
+   surface renders Markdown any other way, and the browser never parses Markdown.
+   The rendering is deterministic: the same stored text on the same surface
+   produces the same bytes. The unit holds no state between calls and keeps no
+   cache of rendered output (see
+   [Security and Constraints](#security-and-constraints), rule 12).
+3. **The Markdown accepted.** The renderer accepts CommonMark together with these
+   extensions, and no other:
+   - the GitHub Flavored Markdown extensions: tables, strikethrough, autolinks
+     (a bare `http://`, `https://`, or `www.` address becomes a link without angle
+     brackets), and task lists, whose checkboxes render as
+     `<input type="checkbox">` carrying the `disabled` attribute, and carrying
+     `checked` for a checked item, so they can be neither checked nor unchecked;
+   - footnotes;
+   - definition lists;
+   - syntax highlighting of fenced code blocks (rule 6).
+
+   The renderer does **not** enable raw HTML output, the attribute syntax that
+   lets an author attach an `id`, a `class`, or any other attribute to an element,
+   or automatic heading identifiers.
+4. **Plain text remains valid Markdown, and a single newline is a line break.**
+   Text written without any Markdown syntax renders as paragraphs: a blank line
+   separates two paragraphs. A single newline inside a paragraph renders as a line
+   break (`<br>`), not as the space CommonMark's soft line break would produce,
+   so every line break the author entered stays visible.
+5. **Headings are demoted.** A heading in a Markdown field never outranks the
+   structure of the page or modal it appears in. A level-1 heading (`#`, or a
+   Setext heading underlined with `=`) renders as `<h4>`, a level-2 heading (`##`,
+   or a Setext heading underlined with `-`) renders as `<h5>`, and a heading of
+   level 3 to 6 renders as `<h6>`. A rendered heading carries no `id` attribute.
+6. **Fenced code blocks are highlighted by their declared language only.** A
+   fenced code block whose info string begins with a language name that
+   `github.com/alecthomas/chroma/v2` recognises is highlighted by chroma, through
+   `github.com/yuin/goldmark-highlighting/v2`, and its tokens are marked with
+   chroma's CSS classes, never with a `style` attribute. A fenced code block with no info
+   string, or with a language name chroma does not recognise, and every indented
+   code block, renders unhighlighted: a monospaced preformatted block whose text
+   carries no token class. The renderer never guesses a block's language from its
+   content, so the same block renders the same way whatever it contains.
+7. **One syntax-highlighting stylesheet, dark.** The colours of highlighted
+   tokens come from one embedded stylesheet, served from `/static/highlight.css`.
+   It holds the CSS chroma produces, in class-based form, for its `github-dark`
+   style, and its rules are not scoped by any theme selector. The interface has a
+   single, fixed dark theme and offers no theme toggle (see
+   [UI Framework](#ui-framework), rule 2), so no light stylesheet exists; changing
+   the theme is a SPEC change to that rule and to this one. Every page that can
+   render a Markdown field — the Roadmap Sprints Page, the Roadmap Tasks Page, and
+   the Roadmap Sprint Page — links the stylesheet. Its content is the output of
+   the chroma version `go.mod` pins; a stylesheet that differs from what that
+   version produces for the `github-dark` style fails the test gate, so an upgrade
+   of chroma cannot leave the class names in the rendered HTML and the class names
+   in the stylesheet out of step.
+8. **Links.** A link's destination first passes goldmark's dangerous-URL filter,
+   which rejects a destination whose scheme is `javascript:`, `vbscript:`, or
+   `file:`, and a `data:` destination other than a `data:image/png`,
+   `data:image/gif`, `data:image/jpeg`, or `data:image/webp` URL, comparing the
+   scheme without regard to case. Then:
+   - a link whose destination the filter rejects renders as its link text alone,
+     with no `<a>` element, so it is never an active link;
+   - a link whose destination is absolute with the scheme `http` or `https`
+     (compared without regard to case), or a network-path reference beginning
+     with `//`, renders as `<a>` carrying `target="_blank"` and
+     `rel="noopener noreferrer"`, so it opens in a new tab and the opened page
+     receives neither a reference to this page nor the page's address;
+   - every other link — a relative reference, a fragment, or another scheme the
+     filter accepts, such as `mailto:` — renders as `<a>` with no `target` and no
+     `rel`, so it opens in the same tab.
+
+   These rules apply equally to an inline link, a reference link, an autolink, and
+   the link a remote image becomes (rule 9).
+9. **Images.** An image's source passes the same dangerous-URL filter. Then:
+   - an image whose source is a `data:` URL the filter accepts (one of the four
+     raster image types rule 8 names) renders as `<img>` with its alternative
+     text, which the Content-Security-Policy's `img-src 'self' data:` already
+     admits;
+   - an image whose source is any other URL the filter accepts — remote or
+     relative — renders **not** as an image but as a link to that URL, whose text
+     is the image's alternative text or, when the alternative text is empty, the
+     URL itself; the link follows rule 8 for its `target` and `rel`;
+   - an image whose source the filter rejects renders as its alternative text
+     alone, with no element.
+
+   A Markdown image therefore never causes the browser to make a request: the only
+   image the renderer emits is a `data:` image, which the browser decodes without
+   a request.
+10. **Raw HTML is never emitted.** Raw HTML in the source — a block of HTML or an
+    inline tag, such as `<script>`, `<iframe>`, or `<img onerror=...>` — is omitted
+    from the output; at most an HTML comment marking the omission takes its place.
+    Text that is not raw HTML, including a `<` or `&` inside a code span or code
+    block, is escaped. An author can therefore introduce no element and no
+    attribute of their own into the page through a Markdown field.
+11. **No author-controlled attributes and no inline styles.** The rendered HTML
+    carries no `style` attribute and no event-handler attribute, whatever the
+    source contains. A table column's alignment is expressed through the Tabler
+    text-alignment classes `text-start`, `text-center`, and `text-end` rather than
+    a `style` attribute. No attribute value in the output is taken from the
+    source, other than a link's destination and title and an image's alternative
+    text, each escaped for its attribute context and each subject to rules 8
+    and 9.
+12. **Footnote identifiers are unique within a page.** The footnotes of one
+    Markdown field render as a list at the end of that field's HTML, with a
+    reference link to each note and a back-link from each note, which are
+    same-page fragment links (rule 8). Several Markdown fields share one page — a
+    sprint page holds the description and every sprint comment, and the modal
+    holds four task fields and every task comment — so every `id` the renderer
+    emits, and every fragment that points at one, carries a prefix that
+    identifies its field and differs from the prefix of every other field on the
+    page: `task-<id>-<field>-` for a task field (for example
+    `task-42-acceptance_criteria-`), `task-comment-<id>-` for a task comment,
+    `sprint-<id>-description-` for a sprint description, and
+    `sprint-comment-<id>-` for a sprint comment. The prefix is built only from
+    the entity's integer `id` and the field's fixed name, never from text the
+    author wrote. Each footnote link therefore resolves within its own field, and
+    no two elements of a page share an `id`.
+13. **The Markdown container and its styling.** Each rendered fragment is placed
+    in a `<div>` carrying Tabler's `markdown` class, the class the vendored Tabler
+    distribution defines for rendered Markdown content, which styles its tables,
+    blockquotes, headings, lists, and code blocks consistently with the rest of the
+    interface. A `<div>` is used because a fragment contains block elements, which
+    a paragraph cannot hold. The project override stylesheet `static/style.css`
+    adds only what the vendored class does not provide (see
+    [UI Framework](#ui-framework), rule 10): the content wraps within its
+    container, a long word or URL breaks rather than overflowing, and a table or a
+    code block wider than its container scrolls horizontally inside its own box.
+    Rendered Markdown therefore never makes the page, the modal, or a card scroll
+    horizontally.
+14. **The non-interactive form, for content placed inside a link.** The sprint
+    card is a single link (see
+    [Shared Sprint-Card Partial](#shared-sprint-card-partial), rule 3), and HTML
+    admits no interactive element — a link or a form control — inside a link.
+    Where rendered Markdown is placed inside a link, the renderer is used in its
+    non-interactive form, which differs from the ordinary form in these respects
+    only:
+    - every element rule 8 would render as `<a>` — an inline, reference, or
+      autolink, a footnote reference or back-link, and the link a remote image
+      becomes under rule 9 — renders as its text alone, with no `<a>` element;
+    - a task-list item's checkbox renders as the text marker `[x]` for a checked
+      item or `[ ]` for an unchecked one, with no `<input>` element.
+
+    Everything else — the accepted Markdown, the line breaks, the demoted
+    headings, the highlighting, the filtering, the footnote identifier prefix, and
+    the container — is identical to the ordinary form. The sprint card is the only
+    surface that uses the non-interactive form.
+15. **The safety boundary.** The renderer's output is the only HTML the web
+    interface inserts into a page without escaping: a server-rendered page inserts
+    it through `html/template` as trusted HTML, and the modal script inserts the
+    `_html` members through a markup-parsing sink (see
+    [Task Detail Modal](#task-detail-modal), **Client-side rendering is
+    text-only**). Every other value stays escaped on the server and written as text
+    in the browser. The rendering changes nothing in the Content-Security-Policy,
+    which stays exactly the value in [Security Headers](#security-headers), and it
+    adds no script: highlighting is performed on the server, so the page loads no
+    highlighting script.
 
 ### UI Framework
 
@@ -4643,7 +4933,9 @@ read from the host filesystem at runtime.
    `/roadmaps/{name}/graph` — and the sidebar highlights whichever of these is the
    active view. Tabler also provides the tabs used for the sprint presentation on
    the roadmap sprints page and the modal used for the task detail popup.
-2. The interface uses Tabler's **dark theme**.
+2. The interface uses Tabler's **dark theme**. Every page declares it with
+   `data-bs-theme="dark"` on its `<html>` element, the attribute through which the
+   vendored framework selects its theme, and the interface offers no theme toggle.
 3. Tabler is **vendored**: its already-built distribution (the compiled Tabler
    CSS and JavaScript) is committed to the repository under the web asset set and
    embedded into the binary with `go:embed`. It is served locally from
@@ -4709,7 +5001,11 @@ read from the host filesystem at runtime.
     `style="..."` attributes. All styling lives in the vendored Tabler classes and
     utilities, or in the project override stylesheet (`static/style.css`), served
     from `/static/...` (see
-    [Embedded Asset Categories](#embedded-asset-categories)). In particular, the
+    [Embedded Asset Categories](#embedded-asset-categories)). The one further
+    source of styling is the syntax-highlighting stylesheet, which styles
+    only the token classes chroma emits inside a highlighted code block of rendered
+    Markdown (see [Markdown Rendering](#markdown-rendering), rule 7); no template
+    uses those classes. In particular, the
     navigation sidebar's section label and the empty-state icon sizing carry no
     inline `style`. The sidebar's per-roadmap section label is a Tabler
     `subheader` — the small uppercase letter-spaced muted label the vendored
@@ -5700,23 +5996,32 @@ Rules:
    fully offline, and the server makes no outbound network request (see
    [Self-Contained Deliverable](#self-contained-deliverable) and
    [Frontend and Embedded Assets](#frontend-and-embedded-assets)).
-7. **Output escaping.** Roadmap-derived text (task and sprint fields, task and
-   sprint comment bodies, and graph node and edge labels
-   and property values) that the server renders into a page is rendered through
-   `html/template`'s contextual
-   auto-escaping, so data that contains HTML control characters cannot alter page
-   structure. Data delivered as JSON instead — the task detail endpoint's task and
-   comment data, and the graph data delivered to the visualisation — is encoded as
-   JSON and never interpolated into HTML.
+7. **Output escaping, and the one renderer whose HTML is inserted.**
+   Roadmap-derived text (task and sprint fields, task and sprint comment bodies,
+   and graph node and edge labels and property values) that the server renders
+   into a page is rendered through `html/template`'s contextual auto-escaping, so
+   data that contains HTML control characters cannot alter page structure. The
+   single exception is a Markdown field — the task `functional_requirements`,
+   `technical_requirements`, `acceptance_criteria`, and `completion_summary`, the
+   task and sprint comment `body`, and the sprint `description` — which is
+   inserted as the HTML the Markdown renderer produces from it. That renderer is
+   the only source of HTML the interface inserts unescaped; it emits no raw HTML
+   from the source, no `style` or event-handler attribute, and no active link to a
+   dangerous URL, and it causes no image request (see
+   [Markdown Rendering](#markdown-rendering)). Data delivered as JSON instead —
+   the task detail endpoint's task and comment data, and the graph data delivered
+   to the visualisation — is encoded as JSON and never interpolated into HTML.
 
    Where a value reaches the browser as JSON, the server's auto-escaping no longer
    protects the page, so the client script MUST write every such value into the DOM
    through `textContent` or an equivalent that cannot interpret markup, and MUST
    NOT use `innerHTML` or `insertAdjacentHTML`. This applies to every value the
-   task detail modal renders and to every value the graph detail panel renders (see
-   [Task Detail Modal](#task-detail-modal), **Client-side rendering is text-only**,
-   and [Frontend Rules](#frontend-rules), rule 6). A stored value can therefore
-   alter neither page structure on the server-rendered path nor on the JSON path.
+   task detail modal renders, except the five `_html` members that carry the
+   Markdown renderer's output, and to every value the graph detail panel renders
+   (see [Task Detail Modal](#task-detail-modal), **Client-side rendering is
+   text-only**, and [Frontend Rules](#frontend-rules), rules 6 and 7). A stored
+   value can therefore alter page structure neither on the server-rendered path nor
+   on the JSON path, beyond the elements the Markdown renderer itself emits.
 8. **Security headers on every HTML response.** Every HTML response carries the
    Content-Security-Policy, X-Content-Type-Options (`nosniff`), X-Frame-Options
    (`DENY`), and Referrer-Policy (`same-origin`) headers specified in
@@ -5961,16 +6266,18 @@ Rules:
 31. On a small phone-sized viewport, the admin-shell navigation sidebar is not
     shown expanded inline; it collapses to an off-canvas (hamburger) menu that the
     user can open, so each page stays usable without horizontal overflow.
-32. Multi-line free-text authored through the CLI renders preserving its source
-    line breaks: the task detail modal's long free-text fields
-    (`functional_requirements`, `technical_requirements`, `acceptance_criteria`,
-    and `completion_summary`), every comment `body` shown in the modal's comments
-    timeline and in the sprint Comments card, and a sprint's `description` — shown
-    in the sprint cards on the roadmap sprints page (across all three tabs) and on
-    the roadmap sprint page — each display the author's
-    newlines rather than collapsing them, while the text still wraps without forced
-    horizontal scrolling and remains HTML-escaped through `html/template` (never
-    rendered as raw HTML).
+32. Multi-line free-text that the interface shows as plain text renders preserving
+    its source line breaks: a property value shown in the knowledge-graph detail
+    panel displays the author's newlines rather than collapsing them, while the text
+    still wraps without forced horizontal scrolling and is written as text, never as
+    markup (see [Frontend Rules](#frontend-rules), rule 6). The seven Markdown fields
+    — the task detail modal's long free-text fields (`functional_requirements`,
+    `technical_requirements`, `acceptance_criteria`, and `completion_summary`),
+    every comment `body` shown in the modal's comments timeline and in the sprint
+    Comments card, and a sprint's `description` on the roadmap sprints page (across
+    all three tabs) and on the roadmap sprint page — are not plain text: each renders
+    as Markdown, and its authored single newlines render as line breaks (Acceptance
+    Criterion 180).
 33. Every HTML response carries the security headers: `Content-Security-Policy`
     with the value `default-src 'self'; script-src 'self'; style-src 'self'
     'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self';
@@ -6299,9 +6606,9 @@ Rules:
     that task, and every comment of the task is present — no type filter and no count
     limit (see [Task Detail Modal](#task-detail-modal)).
 65. Each timeline entry shows the comment's type as a badge, its `created_at`
-    timestamp, its `body` with the author's line breaks preserved, and — only when
-    `updated_at` is not null — the `updated_at` timestamp marking the entry as
-    edited. A comment whose `updated_at` is null shows no edited marker.
+    timestamp, its `body` rendered as Markdown (Acceptance Criterion 180), and —
+    only when `updated_at` is not null — the `updated_at` timestamp marking the
+    entry as edited. A comment whose `updated_at` is null shows no edited marker.
 66. The comment type badge uses the neutral `bg-secondary-lt` variant for all seven
     type values, in both the task detail modal and the sprint Comments card. No
     per-type colour is introduced, and the semantic mapping in
@@ -6340,14 +6647,21 @@ Rules:
     `timeline-event-icon`, `timeline-event-card`). The feature adds no CSS file, no
     JavaScript file, and no vendored asset, and no template carries a presentational
     inline `style` attribute for it (Acceptance Criterion 62 continues to hold).
-72. Neither the modal timeline nor the sprint Comments card contains a form, an
-    input, a button, or a link that submits a change. There is no route, no
-    endpoint, and no client-side path through which the web interface can create,
-    edit, or delete a comment; the CLI remains the sole write path.
-73. Comment text is escaped exactly as every other roadmap-derived value: a comment
-    body containing HTML control characters is rendered as text and cannot alter the
-    page structure, in the modal and in the Comments card alike (see
-    [Security and Constraints](#security-and-constraints)).
+72. Neither the modal timeline nor the sprint Comments card contains a form, a
+    button, or a link that submits a change, and the only input either contains is
+    the disabled checkbox of a rendered Markdown task-list item, which can be
+    neither checked nor unchecked (see [Markdown Rendering](#markdown-rendering),
+    rule 3). There is no route, no endpoint, and no client-side path through which
+    the web interface can create, edit, or delete a comment; the CLI remains the
+    sole write path.
+73. A comment body is rendered through the Markdown renderer and no other way: a
+    comment body containing raw HTML — for example `<script>`, `<iframe>`, or
+    `<img onerror=...>` — introduces none of those elements and none of their
+    attributes into the page, and a `<` or `&` that is not raw HTML renders as the
+    character itself, in the modal and in the Comments card alike. The comment can
+    add to the page no element but those the renderer emits (see
+    [Markdown Rendering](#markdown-rendering), rules 10 and 11, and
+    [Security and Constraints](#security-and-constraints), rule 7).
 74. Every page's admin shell places, inside `<div class="page">` and in this order,
     the sidebar `<aside>`, the top `<header class="navbar ... d-print-none">`, and
     `<div class="page-wrapper">`, which holds the page header and the page body. The
@@ -6556,8 +6870,10 @@ Rules:
     order `rmp task comment-list` returns and the same order the modal's timeline
     shows — with every comment present, no type filter and no count limit, and `[]`
     for a task with no comment. The shape composes the `Task` and `Task Comment`
-    objects `DATA_FORMATS.md` already defines and introduces no new object shape
-    (see [Task Detail Endpoint](#task-detail-endpoint)).
+    objects `DATA_FORMATS.md` already defines, and adds to them only the five
+    `_html` members that carry the Markdown renderer's output (Acceptance
+    Criterion 188); every raw field keeps its name, type, value, and null
+    convention (see [Task Detail Endpoint](#task-detail-endpoint)).
 95. The task detail endpoint enforces the same path-parameter discipline as every
     other roadmap route: a request whose `{name}` violates the roadmap-name rules,
     or names a roadmap that does not exist, returns HTTP 404 without touching the
@@ -6578,15 +6894,20 @@ Rules:
     the specified order: nothing the modal displayed is lost (see
     [Task Detail Modal](#task-detail-modal)).
 97. Every value the modal script writes into the DOM is written as text, never as
-    markup: the script uses `textContent` or an equivalent that cannot interpret
-    markup, and uses neither `innerHTML` nor `insertAdjacentHTML`. A task whose
-    `title`, `completion_summary`, requirement free-text, or comment `body` contains
-    HTML markup renders that markup as visible characters and introduces no element,
-    no attribute, and no script into the page. This is proven by a test that fails if
-    the script writes such a value as markup, covering at least a hostile task title
-    and a hostile comment body (see [Task Detail Modal](#task-detail-modal),
-    **Client-side rendering is text-only**, and
-    [Security and Constraints](#security-and-constraints), rule 7).
+    markup, except the five `_html` members: the script uses `textContent` or an
+    equivalent that cannot interpret markup for every other value, and passes to
+    `innerHTML` or any other markup-parsing sink nothing but an `_html` member,
+    whole and unmodified, into that field's Markdown container; it never uses
+    `insertAdjacentHTML`. A task whose `title` contains HTML markup renders that
+    markup as visible characters. A task whose `completion_summary`, requirement
+    free-text, or comment `body` contains raw HTML renders through the Markdown
+    renderer's output, which carries none of that raw HTML, so no element, no
+    attribute, and no script of the author's reaches the page. This is proven by a
+    test that fails if the script writes any value other than an `_html` member as
+    markup, or if a hostile value reaches the page as markup, covering at least a
+    hostile task title, a hostile requirement field, and a hostile comment body (see
+    [Task Detail Modal](#task-detail-modal), **Client-side rendering is text-only**,
+    and [Security and Constraints](#security-and-constraints), rule 7).
 98. The Content-Security-Policy is unchanged by the task detail endpoint: it remains
     exactly the value fixed in Acceptance Criterion 33, whose `connect-src 'self'`
     and `script-src 'self'` already admit a same-origin fetch driven by a script
@@ -7816,6 +8137,154 @@ Rules:
     page still matches a task by its title and its `#<id>` reference and by nothing
     else, so a term matching only a task's `type` matches no task (Acceptance
     Criterion 101 continues to hold).
+180. **Every Markdown field renders as Markdown, on every surface that shows it.**
+    A field value holding a `**bold**` span, a bulleted list, and two lines
+    separated by a single newline renders `<strong>`, `<ul>` with `<li>` items, and
+    a `<br>` between the two lines, inside a `<div class="markdown">`, and the
+    literal asterisks are not displayed. The check MUST cover each of the seven
+    fields on each of its surfaces: the task `functional_requirements`,
+    `technical_requirements`, `acceptance_criteria`, and `completion_summary` in
+    the task detail modal; a task comment `body` in the modal's comments timeline;
+    a sprint comment `body` in the sprint Comments card; and a sprint `description`
+    in the sprint card under each of the three tabs Próximos, Actual, and
+    Concluídos, and on the roadmap sprint page. A surface that still shows escaped
+    text passes on every other surface, so no surface is left unchecked. A value
+    written with no Markdown syntax renders as paragraphs, a blank line separating
+    two of them and a single newline rendering as `<br>`. A task `title` and a
+    sprint `title` containing `**bold**` still display the asterisks as text (see
+    [Markdown Rendering](#markdown-rendering), rules 1 to 4).
+181. **The GitHub Flavored Markdown extensions, footnotes, and definition lists
+    render.** A Markdown field containing a pipe table with a header row, a
+    `~~struck~~` span, a bare `https://` address and a bare `www.` address, a task
+    list with one checked and one unchecked item, a footnote reference with its
+    definition, and a definition list renders a `<table>` with a `<thead>` and a
+    `<tbody>`, a `<del>` element, an `<a>` element for each of the two bare
+    addresses, two `<input type="checkbox">` elements that both carry `disabled`
+    and of which exactly the checked item's carries `checked`, a footnote reference
+    link and a footnotes list, and a `<dl>` holding `<dt>` and `<dd>` elements. A
+    table column aligned by `:---:` carries the class `text-center`, and no element
+    of the rendered HTML carries a `style` attribute (see
+    [Markdown Rendering](#markdown-rendering), rules 3 and 11).
+182. **Fenced code is highlighted by its declared language, and the dark
+    stylesheet exists.** A fenced code block declared as `go` renders with chroma's
+    token classes on its tokens and with no `style` attribute anywhere in the
+    block. A fenced block with no info string, and one declared with a language
+    name chroma does not recognise, render with no token class.
+    `GET /static/highlight.css` returns HTTP 200 with a CSS content type, and its
+    content equals the CSS the chroma version `go.mod` pins produces, in
+    class-based form, for the `github-dark` style, with no rule scoped by a theme
+    selector. No other syntax-highlighting stylesheet is embedded or served: no
+    light variant exists. The roadmap sprints page, the roadmap tasks page, and the
+    roadmap sprint page each link `/static/highlight.css` (see
+    [Markdown Rendering](#markdown-rendering), rules 6 and 7).
+183. **Raw HTML is never emitted.** A Markdown field containing
+    `<script>alert(1)</script>`, `<img src=x onerror=alert(1)>`, an `<iframe>`
+    block, and an inline `<b onclick=alert(1)>` tag renders HTML that contains no
+    `<script>`, `<img>`, `<iframe>`, or `<b>` element and no `onerror` or `onclick`
+    attribute, and a `<` inside a code span renders as `&lt;`. The check MUST cover
+    the server-rendered path, through a sprint `description` and a sprint comment
+    `body`, and the JSON path, through a task requirement field and a task comment
+    `body`, because the two paths insert the renderer's output by different
+    mechanisms (see [Markdown Rendering](#markdown-rendering), rule 10).
+184. **A dangerous link is never active.** A Markdown field containing
+    `[a](javascript:alert(1))`, `[b](JavaScript:alert(1))`, `[c](vbscript:msgbox)`,
+    `[d](file:///etc/passwd)`, and the autolink `<javascript:alert(1)>` renders the
+    text of each with no `<a>` element around it, and the rendered HTML contains no
+    `href` attribute at all for them; in particular no `href` is the empty string,
+    which a browser would resolve to the current page (see
+    [Markdown Rendering](#markdown-rendering), rule 8).
+185. **An absolute `http` or `https` link opens in a new tab; any other link does
+    not.** In a Markdown field, `[a](https://example.org/)`,
+    `[b](HTTP://example.org/)`, `[c](//example.org/)`, and the bare address
+    `https://example.org/` each render as `<a>` carrying `target="_blank"` and
+    `rel="noopener noreferrer"`, while `[d](/roadmaps/groadmap/tasks)`, a link
+    `[e]` whose destination is the fragment `#notes`, and
+    `[f](mailto:maintainer@example.org)` each render as `<a>` carrying neither
+    `target` nor `rel` (see
+    [Markdown Rendering](#markdown-rendering), rule 8).
+186. **A remote image becomes a link and causes no request.** In a Markdown field,
+    `![deployment diagram](https://example.org/diagram.png)` renders as an `<a>`
+    to that URL whose text is `deployment diagram` and which carries
+    `target="_blank"` and `rel="noopener noreferrer"`, with no `<img>` element;
+    `![](https://example.org/chart.png)` renders as a link whose text is the URL;
+    `![favicon](/static/favicon.svg)` renders as a link with no `target`; a
+    `![pixel](data:image/png;base64,...)` image renders as an `<img>` with that
+    source; and `![vector](data:image/svg+xml,...)` renders as its alternative text
+    alone. Opening, in a browser that records every request, a page and a modal
+    that show these fields records no request for any of the image URLs and no
+    request to any origin but the server's own (see
+    [Markdown Rendering](#markdown-rendering), rule 9).
+187. **Headings are demoted.** In a Markdown field, `#`, `##`, `###`, and `######`
+    headings render as `<h4>`, `<h5>`, `<h6>`, and `<h6>` respectively, and Setext
+    headings underlined with `=` and with `-` render as `<h4>` and `<h5>`. No
+    rendered Markdown contains an `<h1>`, `<h2>`, or `<h3>` element, and no
+    rendered heading carries an `id` attribute (see
+    [Markdown Rendering](#markdown-rendering), rule 5).
+188. **The task detail endpoint carries the rendered HTML beside the raw fields.**
+    For a task with a completion summary and two comments,
+    `GET /roadmaps/{name}/tasks/{id}/data` returns a `task` object carrying
+    `functional_requirements_html`, `technical_requirements_html`,
+    `acceptance_criteria_html`, and `completion_summary_html`, and each element of
+    `comments` carries `body_html`; each member equals the Markdown renderer's
+    output for its raw field. For a task whose `completion_summary` is `null`,
+    `completion_summary_html` is `null`, and a raw field that is the empty string
+    has an empty-string `_html` member. Every raw field is present and equal to the
+    value `rmp task get` and `rmp task comment-list` publish for the same task, the
+    object still has exactly the two top-level members `task` and `comments`, and
+    the CLI's own output carries no `_html` member. The modal inserts each `_html`
+    member into a `<div class="markdown">`, and no script the interface serves
+    contains a Markdown parser (see
+    [Task Detail Endpoint](#task-detail-endpoint) and
+    [Markdown Rendering](#markdown-rendering), rule 2).
+189. **The sprint card holds no interactive element.** A sprint whose `description`
+    contains an inline link, a bare `https://` address, a remote image, a task list
+    with one checked and one unchecked item, and a footnote renders, in its sprint
+    card under its tab, with no `<a>` element other than the card itself and no
+    `<input>` element: the link texts and the image's alternative text are
+    displayed as text, and the task-list items read `[x]` and `[ ]`. The same
+    `description` on the roadmap sprint page renders the links as `<a>` elements and
+    the task-list items with disabled checkboxes. The card shows the whole rendered
+    description, neither clamped nor truncated (see
+    [Shared Sprint-Card Partial](#shared-sprint-card-partial), rule 5, and
+    [Markdown Rendering](#markdown-rendering), rule 14).
+190. **Footnote identifiers are unique within a page.** A roadmap sprint page whose
+    sprint `description` and two sprint comments each define a footnote `[^1]`, and
+    a task detail modal whose four Markdown fields and two comments each define
+    one, each contain no two elements with the same `id`. Every footnote reference
+    and back-link points at an `id` inside the same field's rendered HTML, and every
+    `id` the renderer emits starts with that field's prefix:
+    `sprint-<id>-description-`, `sprint-comment-<id>-`, `task-<id>-<field>-`, or
+    `task-comment-<id>-` (see
+    [Markdown Rendering](#markdown-rendering), rule 12).
+191. **The knowledge-graph detail panel is unchanged.** Selecting a node whose
+    property value contains `**bold**`, a `# heading` line, and two lines separated
+    by a single newline shows that value in the graph detail panel as those literal
+    characters, with the author's line break preserved: the panel contains no
+    `<strong>` and no heading element for it and no `markdown` container, and the
+    value is written through `textContent` (see [Frontend Rules](#frontend-rules),
+    rule 6).
+192. **The Content-Security-Policy is unchanged by Markdown rendering.** A page
+    and a modal that show Markdown fields containing a highlighted code block, a
+    `data:` image, and links carry exactly the Content-Security-Policy value fixed
+    in Acceptance Criterion 33. The pages introduce no inline script and load no
+    highlighting or Markdown script, and every script they load still comes from
+    `/static/` (Acceptance Criteria 23 and 33 continue to hold; see
+    [Markdown Rendering](#markdown-rendering), rule 15).
+193. **Rendered Markdown never forces horizontal scrolling.** On a small phone-sized
+    viewport, a Markdown field containing a table of twelve columns and a code block
+    with a line of 300 characters, shown in the task detail modal, in a sprint card,
+    and on the roadmap sprint page, produces no horizontal overflow of `<body>`, of
+    the modal, or of the card: the table and the code block each scroll
+    horizontally inside their own box (Acceptance Criterion 27 continues to hold;
+    see [Markdown Rendering](#markdown-rendering), rule 13).
+194. **The renderer is compiled into the binary.** The first `require` block of
+    `go.mod` names `github.com/yuin/goldmark`,
+    `github.com/yuin/goldmark-highlighting/v2`, and
+    `github.com/alecthomas/chroma/v2`, and with networking disabled and only the
+    `rmp` binary present on disk, the pages and the modal render every Markdown
+    construct of Acceptance Criteria 180 to 187, highlighted code included, with no
+    file read from the host filesystem for the purpose (see
+    [Self-Contained Deliverable](#self-contained-deliverable), rule 6).
 
 ## See Also
 
@@ -7906,4 +8375,7 @@ Rules:
 - Embedded asset bundling, the vendored Tabler framework and D3.js (with
   d3-sankey) assets, and the self-contained-binary build verification →
   `BUILD.md § Vendored Web Assets`
+- The Go modules the Markdown renderer is built from, and the rules that pin
+  them → `BUILD.md § External Dependencies` and
+  `BUILD.md § Markdown Rendering Rules`
 - Help skeleton for `web` → `HELP.md`

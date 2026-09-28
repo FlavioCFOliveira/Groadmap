@@ -30,9 +30,10 @@ import (
 // what a browser receives.
 
 // Seeded comment bodies. They are declared as constants because most assertions
-// look for them verbatim in the rendered page, and because two of them carry
-// authored line breaks that must survive rendering: the newline is written as the
-// Go escape \n, never as a literal control character in the source.
+// look for them verbatim in the endpoint's raw fields or the rendered page, and
+// because three of them carry authored line breaks, which the Markdown renderer
+// turns into <br>: the newline is written as the Go escape \n, never as a literal
+// control character in the source.
 const (
 	// The three comments of the "logged" task, oldest first.
 	bodyFinding = "The settlement reconciliation drifts by one cent on windows " +
@@ -43,7 +44,7 @@ const (
 	bodyDecisionEdited   = "Round once, after the conversion, and keep the residual per window " +
 		"in the reconciliation report.\nThe per-window residual is what makes a drift traceable."
 
-	// The comment whose body carries markup: it must render as text.
+	// The comment whose body carries markup: its raw HTML never reaches a page.
 	bodyMarkup = "Regression input: <script>alert('drift')</script> and a <b>bold</b> label.\n" +
 		"Both must reach the page as text."
 
@@ -259,7 +260,7 @@ const (
 	timelineEvent = `<li class="timeline-event">`
 	timelineIcon  = `<div class="timeline-event-icon"><i class="ti ti-message"></i></div>`
 	timelineCard  = `<div class="card timeline-event-card">`
-	preWrapBlock  = `<div class="task-modal__text">`
+	markdownBlock = `<div class="markdown">`
 )
 
 // typeBadge renders the markup a comment type's badge must produce: the neutral
@@ -268,11 +269,22 @@ func typeBadge(commentType models.CommentType) string {
 	return `<span class="badge bg-secondary-lt">` + string(commentType) + `</span>`
 }
 
-// rendered returns a seeded body as the page carries it. Every roadmap-derived
-// value goes out through html/template's contextual auto-escaping, so an assertion
-// that looks for a body containing an apostrophe, an ampersand, or a tag must look
-// for the ESCAPED form — which is the point of Acceptance Criterion 73.
+// rendered returns a seeded value as html/template's contextual auto-escaping
+// writes it into a page, which is how every value but a Markdown field is
+// rendered: an assertion that looks for a value containing an apostrophe, an
+// ampersand, or a tag must look for the ESCAPED form.
 func rendered(text string) string { return html.EscapeString(text) }
+
+// renderedMarkdownText returns a seeded plain-text comment body as the page
+// carries it. A comment body is a Markdown field, and the Markdown renderer writes
+// the text of a paragraph with &, <, >, and " escaped and nothing else — an
+// apostrophe stays as it is (SPEC/WEB.md § Markdown Rendering, rule 10;
+// Acceptance Criterion 73).
+func renderedMarkdownText(text string) string { return markdownTextEscaper.Replace(text) }
+
+// markdownTextEscaper escapes text exactly as the Markdown renderer escapes the
+// text of a paragraph.
+var markdownTextEscaper = strings.NewReplacer("&", "&amp;", "<", "&lt;", ">", "&gt;", `"`, "&quot;")
 
 // fetchTaskDetail requests one task's detail endpoint and returns the status and
 // the raw body. It is the read the modal performs when a user opens a task.
@@ -371,7 +383,8 @@ func TestTaskDetail_CommentLog(t *testing.T) {
 	} {
 		page := servePage(t, mux, path)
 		for _, body := range wantBodies {
-			if strings.Contains(page, body) || strings.Contains(page, rendered(body)) {
+			if strings.Contains(page, body) || strings.Contains(page, rendered(body)) ||
+				strings.Contains(page, renderedMarkdownText(body)) {
 				t.Errorf("%s: a task comment body reached the served document: %q", path, body)
 			}
 		}
@@ -529,8 +542,8 @@ func TestSprintPage_CommentsCard(t *testing.T) {
 	}
 
 	// Oldest first, with the type badges, the timestamps, and the edited marker.
-	progressAt := strings.Index(card, rendered(bodySprintProgress))
-	decisionAt := strings.Index(card, rendered(bodySprintDecisionEdited))
+	progressAt := strings.Index(card, renderedMarkdownText(bodySprintProgress))
+	decisionAt := strings.Index(card, renderedMarkdownText(bodySprintDecisionEdited))
 	if progressAt < 0 || decisionAt < 0 {
 		t.Fatalf("the Comments card is missing a seeded sprint comment (progress=%d decision=%d)",
 			progressAt, decisionAt)
@@ -552,9 +565,10 @@ func TestSprintPage_CommentsCard(t *testing.T) {
 	if got := strings.Count(card, "edited "); got != 1 {
 		t.Errorf("the Comments card shows %d edited markers, want exactly 1", got)
 	}
-	// The line breaks of the sprint's own comments are preserved the same way.
-	if got := strings.Count(card, preWrapBlock); got != 2 {
-		t.Errorf("%d sprint comment bodies use the pre-wrap block, want 2", got)
+	// Each of the sprint's own comment bodies is rendered as Markdown, in the
+	// Tabler markdown container (Acceptance Criterion 180).
+	if got := strings.Count(card, markdownBlock); got != 2 {
+		t.Errorf("%d sprint comment bodies sit in the markdown container, want 2", got)
 	}
 	if !strings.Contains(card, "the next sprint: it needs the currency table refresh") {
 		t.Errorf("the Comments card does not show the stored (edited) body of the edited comment")
@@ -601,7 +615,11 @@ func TestSprintPage_CommentsCardHoldsOnlySprintOwnComments(t *testing.T) {
 	card := sprintCommentsCardSlice(t, body)
 
 	// No member task's comment leaks into the sprint's card.
-	for _, taskBody := range []string{rendered(bodyFinding), rendered(bodyHypothesis), rendered(bodyDecisionEdited), rendered(bodyMarkup)} {
+	for _, taskBody := range []string{
+		rendered(bodyFinding), rendered(bodyHypothesis), rendered(bodyDecisionEdited), rendered(bodyMarkup),
+		renderedMarkdownText(bodyFinding), renderedMarkdownText(bodyHypothesis),
+		renderedMarkdownText(bodyDecisionEdited), renderedMarkdownText(bodyMarkup),
+	} {
 		if strings.Contains(card, taskBody) {
 			t.Errorf("the sprint Comments card shows a member task's comment: %q", taskBody)
 		}
@@ -661,7 +679,7 @@ func TestTasksPage_CoversTasksOutsideAnySprint(t *testing.T) {
 	if strings.Contains(sprintBody, `data-task-id="`+itoa(f.looseTaskID)+`"`) {
 		t.Errorf("the sprint page offers a trigger for a task that is not a member of the sprint")
 	}
-	if strings.Contains(sprintBody, rendered(bodyLoose)) {
+	if strings.Contains(sprintBody, rendered(bodyLoose)) || strings.Contains(sprintBody, renderedMarkdownText(bodyLoose)) {
 		t.Errorf("the sprint page shows the comment of a task that is not a member of the sprint")
 	}
 }
@@ -688,6 +706,7 @@ func TestSprintsLandingPage_RendersNoCommentLog(t *testing.T) {
 	for _, commentBody := range []string{
 		rendered(bodyFinding), rendered(bodyHypothesis), rendered(bodyDecisionEdited), rendered(bodyMarkup),
 		rendered(bodySprintProgress), rendered(bodySprintDecisionEdited),
+		renderedMarkdownText(bodySprintProgress), renderedMarkdownText(bodySprintDecisionEdited),
 	} {
 		if strings.Contains(body, commentBody) {
 			t.Errorf("the sprints landing page shows a comment body: %q", commentBody)
@@ -1446,12 +1465,15 @@ func TestCommentPages_RenderOfflineWithoutInlineStyle(t *testing.T) {
 				t.Errorf("page %s references the banned remote origin %q", path, bad)
 			}
 		}
-		// The asset chain is exactly the embedded one: four stylesheets and one
-		// script, all from /static/. The comment log added none of them.
+		// The asset chain is exactly the embedded one: five stylesheets — the four
+		// of every page and the syntax-highlighting stylesheet every page that can
+		// render a Markdown field links — and one script, all from /static/. The
+		// comment log added none of them (SPEC/WEB.md § Markdown Rendering, rule 7).
 		for _, asset := range []string{
 			`<link rel="stylesheet" href="/static/vendor/inter/inter.css">`,
 			`<link rel="stylesheet" href="/static/vendor/tabler/tabler.min.css">`,
 			`<link rel="stylesheet" href="/static/vendor/tabler-icons/tabler-icons.min.css">`,
+			`<link rel="stylesheet" href="/static/highlight.css">`,
 			`<link rel="stylesheet" href="/static/style.css">`,
 			`<script src="/static/vendor/tabler/tabler.min.js"></script>`,
 		} {
@@ -1459,8 +1481,8 @@ func TestCommentPages_RenderOfflineWithoutInlineStyle(t *testing.T) {
 				t.Errorf("page %s is missing the embedded asset %s", path, asset)
 			}
 		}
-		if got := strings.Count(body, "<link rel=\"stylesheet\""); got != 4 {
-			t.Errorf("page %s loads %d stylesheets, want the 4 embedded ones", path, got)
+		if got := strings.Count(body, "<link rel=\"stylesheet\""); got != 5 {
+			t.Errorf("page %s loads %d stylesheets, want the 5 embedded ones", path, got)
 		}
 	}
 }

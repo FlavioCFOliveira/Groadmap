@@ -91,7 +91,7 @@ the `go` directive of `go.mod` names.
 
 ### External Dependencies
 
-Groadmap has exactly **four** direct module dependencies. Each one is listed
+Groadmap has exactly **seven** direct module dependencies. Each one is listed
 below, and each one is governed by its own set of rules.
 
 The table lists them in the order the first `require` block of `go.mod` lists
@@ -108,6 +108,9 @@ module is the one `go.mod` pins.
 | Module | Path | Purpose |
 |--------|------|---------|
 | GoGraph | `github.com/FlavioCFOliveira/GoGraph` | Labelled property graph, Cypher engine, and durable store backing the `graph` command. See `GRAPH.md`. |
+| Syntax highlighting | `github.com/alecthomas/chroma/v2` | The lexers and styles that highlight a fenced code block of a Markdown field in the web interface by its declared language, and the CSS of the syntax-highlighting stylesheet. See `WEB.md § Markdown Rendering` and Markdown Rendering Rules below. |
+| Markdown | `github.com/yuin/goldmark` | The CommonMark-compliant parser and renderer, with its GitHub Flavored Markdown, footnote, and definition-list extensions, that turns a Markdown field into the HTML the web interface shows. See `WEB.md § Markdown Rendering` and Markdown Rendering Rules below. |
+| Markdown highlighting bridge | `github.com/yuin/goldmark-highlighting/v2` | The goldmark extension that hands a fenced code block to chroma and emits chroma's class-based markup. See `WEB.md § Markdown Rendering` and Markdown Rendering Rules below. |
 | System calls | `golang.org/x/sys` | The operating-system calls the Go standard library does not publish. Groadmap imports the module at four sites, and each of the four compiles for one platform family only. `golang.org/x/sys/unix` is imported by `internal/terminal/terminal_unix.go`, for the `TIOCGWINSZ` ioctl that decides whether a stream is a terminal, and by `internal/testenv/pty_linux.go`, for the `/dev/ptmx` sequence that opens a pseudo-terminal pair. `golang.org/x/sys/windows` is imported by `internal/terminal/terminal_windows.go`, for the `GetConsoleMode` call that asks the console subsystem that same terminal question, and by `internal/graphlock/graphlock_windows.go`, for the `LockFileEx` and `UnlockFileEx` calls that are the graph store's mutual exclusion on that platform. See `GRAPH.md § Concurrency and Recovery` for the lock the last of those four implements. |
 | Unicode data | `golang.org/x/text` | The Unicode character data the roadmap tasks board's search normalises a term and a task's searchable text by. `internal/unicodenorm` imports `golang.org/x/text/unicode/norm` — the Go project's own implementation of the normalisation forms UAX #15 defines — and no other package of the module. See `WEB.md § Roadmap Tasks Page` for the rule that normalisation serves and for the check that holds the client's copy of it equal to the server's. |
 | SQLite driver | `modernc.org/sqlite` | Pure-Go SQLite driver backing every roadmap database (`~/.roadmaps/<name>/project.db`). It is the storage engine for all task, sprint, and audit data: `internal/db` registers it under the driver name `sqlite` and opens every database connection through it. Being pure Go, it needs no C toolchain and builds under `CGO_ENABLED=0`. See `DATABASE.md` for the schema it stores, `ARCHITECTURE.md § 3. internal/db/` for the layer that opens it, and `IMPLEMENTATION.md § Database Connections` for the entry point and DSN form that layer must use. |
@@ -187,7 +190,7 @@ module is the one `go.mod` pins.
    but it publishes no canonical decomposition data and no composition data. There
    is no way to normalise on the server without a module that carries that data,
    and `golang.org/x/text/unicode/norm` is the Go project's own implementation of
-   it. Admitting a fourth direct dependency was accepted deliberately on that
+   it. Admitting this direct dependency was accepted deliberately on that
    ground, and on no other.
 3. **The server normalises with this module, and the browser's copy of the rule
    is derived from the module's data and proven equal to it.** Groadmap's server
@@ -409,6 +412,32 @@ module is the one `go.mod` pins.
    is a clean security scan: a defect the mismatch introduces would surface only
    at runtime, inside the storage engine.
 
+#### Markdown Rendering Rules
+
+1. `github.com/yuin/goldmark`, `github.com/yuin/goldmark-highlighting/v2`, and
+   `github.com/alecthomas/chroma/v2` MUST each be pinned to an exact, immutable
+   version in `go.mod`, not a floating reference, so that every build of a given
+   commit renders the same stored Markdown into the same HTML. `go.sum` MUST record
+   the checksum of each pinned version, and the build MUST fail if a checksum does
+   not match.
+2. **chroma's regular-expression module is an indirect dependency, pinned like the
+   others.** chroma requires `dlclark/regexp2`, under the module path the pinned
+   chroma's own `go.mod` names. Groadmap does not import it, so it is not a row of
+   the table above; `go.mod` pins it to an exact version in its indirect `require`
+   block, and `go.sum` records its checksum.
+3. **All four modules are pure Go and compiled in.** None needs a C toolchain, so
+   the build stays under `CGO_ENABLED=0`, and none loads a lexer, a style, or any
+   other file at runtime or fetches anything from the network: the renderer is
+   part of the binary (see `WEB.md § Self-Contained Deliverable`).
+4. **An upgrade of any of the three direct modules changes rendered output, and is
+   re-validated as such.** The HTML these modules produce is what the web interface
+   inserts without escaping, so an upgrade MUST be re-validated against the
+   Markdown acceptance criteria of `WEB.md § Acceptance Criteria`, including those
+   that prove raw HTML is not emitted and dangerous links are not active. An
+   upgrade of chroma also changes the CSS of the syntax-highlighting
+   stylesheet, which the test gate holds equal to the pinned chroma's output (see
+   `WEB.md § Markdown Rendering`, rule 7).
+
 ## Vendored Web Assets
 
 The `rmp web` command serves a read-only web interface from assets embedded into
@@ -426,7 +455,8 @@ Rules:
    embedded asset categories is:
    - HTML templates;
    - the stylesheet (all CSS, including the vendored Tabler CSS framework — the UI
-     framework — and any further vendored CSS);
+     framework — the syntax-highlighting stylesheet of rendered Markdown, and
+     any further vendored CSS);
    - all client JavaScript, including the Tabler JavaScript and the D3.js
      knowledge-graph visualisation library (and the d3-sankey plugin) and any of
      their dependencies;

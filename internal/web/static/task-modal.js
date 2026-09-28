@@ -12,14 +12,25 @@
  * longer stands between a stored value and the page structure: this script is
  * what must not interpret them. EVERY value written into the DOM here goes in
  * through the textContent property, which cannot introduce an element, an
- * attribute, or a script. This file therefore contains no innerHTML, no
- * outerHTML, no insertAdjacentHTML, no document.write, and no eval: containers
- * are emptied with replaceChildren() and built with createElement. A task title,
- * the requirement free-text, a completion summary, and every comment body are all
- * text a user wrote through the CLI; the control-character constraint in
- * MODELS.md rejects terminal and bidirectional controls at write time and does
- * NOT reject HTML markup, so it is not a substitute for this rule (SPEC/WEB.md
- * § Task Detail Modal, Client-side rendering is text-only).
+ * attribute, or a script — with ONE exception, confined to markdownBlock below.
+ * A task title, the raw requirement free-text, a completion summary, and every
+ * comment body are all text a user wrote through the CLI; the control-character
+ * constraint in MODELS.md rejects terminal and bidirectional controls at write
+ * time and does NOT reject HTML markup, so it is not a substitute for this rule
+ * (SPEC/WEB.md § Task Detail Modal, Client-side rendering is text-only).
+ *
+ * The exception: the five _html members of the endpoint's response —
+ * functional_requirements_html, technical_requirements_html,
+ * acceptance_criteria_html, and completion_summary_html on the task, and
+ * body_html on each comment — are HTML the server's one Markdown renderer
+ * produced, which emits no raw HTML from the source, no author attribute, and no
+ * active link to a dangerous URL. markdownBlock inserts one of them, whole and
+ * unmodified, through innerHTML into a markdown container; it is the only
+ * markup-parsing sink in this file, and nothing but an _html member is ever
+ * passed to it. This script never parses Markdown itself (SPEC/WEB.md § Markdown
+ * Rendering, rules 2 and 15). The file contains no outerHTML, no
+ * insertAdjacentHTML, no document.write, and no eval: containers are emptied with
+ * replaceChildren() and built with createElement.
  *
  * No remote origin is contacted: the only fetch targets this same server, which
  * the Content-Security-Policy already admits through connect-src 'self'. The
@@ -159,13 +170,29 @@
     return wrap;
   }
 
-  /* textBlock renders one long free-text field. The task-modal__text class is
-   * what preserves the author's line breaks and wraps the text, exactly as the
-   * server-rendered modal did (SPEC/WEB.md § Frontend Rules, rule 6). */
-  function textBlock(label, value) {
+  /* markdownBlock places one _html member — the server's Markdown renderer's
+   * HTML for one field — into a Tabler markdown container, whole and unmodified.
+   * It is the ONE markup-parsing sink of this file, and its argument is only ever
+   * an _html member of the endpoint's response (see the SECURITY note above;
+   * SPEC/WEB.md § Markdown Rendering, rules 13 and 15). */
+  function markdownBlock(renderedHTML) {
+    var node = el("div", "markdown");
+    node.innerHTML = renderedHTML;
+    return node;
+  }
+
+  /* markdownField renders one of the task's Markdown fields under its label: the
+   * field's _html member in its markdown container, or the absent placeholder
+   * when the field is empty or null, as every other empty field is presented
+   * (SPEC/WEB.md § Task Detail Modal, Fields shown). */
+  function markdownField(label, renderedHTML) {
     var block = el("div", "mb-3");
     block.appendChild(el("div", "datagrid-title mb-1", label));
-    block.appendChild(el("div", "task-modal__text", value ? value : ABSENT));
+    if (renderedHTML) {
+      block.appendChild(markdownBlock(renderedHTML));
+    } else {
+      block.appendChild(el("div", "text-secondary", ABSENT));
+    }
     return block;
   }
 
@@ -191,7 +218,7 @@
         meta.appendChild(el("span", "text-secondary", "edited " + comment.updated_at));
       }
       body.appendChild(meta);
-      body.appendChild(el("div", "task-modal__text", comment.body));
+      body.appendChild(markdownBlock(comment.body_html));
 
       card.appendChild(body);
       item.appendChild(card);
@@ -265,10 +292,10 @@
 
     var fragment = document.createDocumentFragment();
     fragment.appendChild(grid);
-    fragment.appendChild(textBlock("Functional requirements", task.functional_requirements));
-    fragment.appendChild(textBlock("Technical requirements", task.technical_requirements));
-    fragment.appendChild(textBlock("Acceptance criteria", task.acceptance_criteria));
-    fragment.appendChild(textBlock("Completion summary", task.completion_summary));
+    fragment.appendChild(markdownField("Functional requirements", task.functional_requirements_html));
+    fragment.appendChild(markdownField("Technical requirements", task.technical_requirements_html));
+    fragment.appendChild(markdownField("Acceptance criteria", task.acceptance_criteria_html));
+    fragment.appendChild(markdownField("Completion summary", task.completion_summary_html));
 
     var log = el("div", null);
     log.appendChild(el("div", "datagrid-title mb-1", "Comments"));

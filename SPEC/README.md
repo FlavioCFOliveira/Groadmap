@@ -22,6 +22,7 @@ The SPEC is unversioned. Git is the source of truth for its evolution — recove
 | Web shared sprint-card partial (header, description, task-count footer; used by all three sprints-page tabs) | `WEB.md § Shared Sprint-Card Partial` |
 | Web sprint detail sub-template (status summary line, metadata datagrid, member-tasks board; single sprint page only) | `WEB.md § Sprint Detail Sub-Template` |
 | Web task detail modal (read-only task popup) | `WEB.md § Task Detail Modal` |
+| Web Markdown rendering of the long free-text fields (task requirements, acceptance criteria, completion summary, task and sprint comment bodies, sprint description): the one server-side goldmark renderer, extensions, line breaks, demoted headings, chroma highlighting and its dark stylesheet, link and image rules, raw-HTML omission, the sprint card's non-interactive form | `WEB.md § Markdown Rendering` |
 | Web graph labels sidebar (node-label / edge-type inventory, counts, section totals, highlight, collapse/expand) | `WEB.md § Graph Labels Sidebar` |
 | Web graph query bar (editable Cypher query box, Search button, node-limit dropdown) | `WEB.md § Graph Query Bar` |
 | Web graph query-bar error handling (the failure classes, the refusal of an `EXPLAIN` or `PROFILE` prefix among them, the order they are decided in, and the boundary against the internal read error) | `WEB.md § Query-Bar Error Handling` |
@@ -89,7 +90,7 @@ The SPEC is unversioned. Git is the source of truth for its evolution — recove
 | What one graph statement costs in resident memory, what that memory is made of, what happens when the cost cannot be served, and why no setting bounds it | `GRAPH.md § Peak Resident Memory` |
 | What a statement that writes nothing does and does not change on disk (the recovery repair performed on open) | `GRAPH.md § What a Statement That Writes Nothing Changes on Disk` |
 | Go toolchain / external dependencies | `BUILD.md § Go Toolchain` |
-| Dependency pinning rules (the four direct modules — GoGraph, `golang.org/x/sys`, `golang.org/x/text`, `modernc.org/sqlite` — and the exact `modernc.org/libc` / `modernc.org/memory` pins, which are not held to the versions the driver requires); the versions themselves are written only in `go.mod` | `BUILD.md § External Dependencies` |
+| Dependency pinning rules (the seven direct modules — GoGraph, `github.com/alecthomas/chroma/v2`, `github.com/yuin/goldmark`, `github.com/yuin/goldmark-highlighting/v2`, `golang.org/x/sys`, `golang.org/x/text`, `modernc.org/sqlite` — and the exact `modernc.org/libc` / `modernc.org/memory` pins, which are not held to the versions the driver requires); the versions themselves are written only in `go.mod` | `BUILD.md § External Dependencies` |
 | AI agent contract (CLI surface) | `COMMANDS.md § AI Help` |
 | AI agent contract (JSON schema) | `DATA_FORMATS.md § AI Agent Contract` |
 | AI agent contract (generation) | `ARCHITECTURE.md § AI Agent Contract Generation` |
@@ -150,7 +151,7 @@ The SPEC is unversioned. Git is the source of truth for its evolution — recove
 | `DATA_FORMATS.md` | JSON schemas, input/output formats |
 | `HELP.md` | CLI help skeleton and structure |
 | `GRAPH.md` | Knowledge graph feature: GoGraph integration, persistence, multi-layer conventions, and the dedicated graph server and its client, which are the only way a statement reaches a graph |
-| `WEB.md` | Web interface: `rmp web` server, server-rendered pages, interactive knowledge-graph visualisation, embedded assets |
+| `WEB.md` | Web interface: `rmp web` server, server-rendered pages, Markdown rendering of long free-text fields, interactive knowledge-graph visualisation, embedded assets |
 | `MODELS.md` | Structs, enums, memory layout |
 | `STATE_MACHINE.md` | Task and Sprint state transitions |
 | `ARCHITECTURE.md` | System design, modules, error handling, exit codes |
@@ -216,6 +217,7 @@ To prevent drift across SPEC files, the following topics have a single authorita
 | One realisation of the graph value mapping (which surfaces are bound, what each still owns, why the Path rendering is not shared, and what preserves the byte identity) | `DATA_FORMATS.md § One Realisation of the Mapping` |
 | Board search text preparation (the trim, normalisation, and folding rules; the single implementation of each; the tables shipped to the browser) | `WEB.md § Roadmap Tasks Page` |
 | Web UI framework (Tabler admin shell, dark theme) | `WEB.md § UI Framework` |
+| Markdown rendering of the web interface's long free-text fields (the one renderer, its safety boundary, the only HTML inserted unescaped) | `WEB.md § Markdown Rendering` |
 | Vendored web assets / embedded Tabler framework and D3.js (with d3-sankey) | `BUILD.md § Vendored Web Assets` |
 | Graph store concurrency / store locking / recovery | `IMPLEMENTATION.md § Graph Store Concurrency` (contract in `GRAPH.md § Concurrency and Recovery`) |
 | Graph store lock file (`write.lock`) | `GRAPH.md § Concurrency and Recovery` (layout in `GRAPH.md § Persistence Layout`) |

@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 
@@ -65,21 +66,23 @@ func TestTaskDetailEndpoint_ReturnsTheTaskAndItsComments(t *testing.T) {
 		}
 	}
 
-	// The task object is the DATA_FORMATS Task shape: the same field names the CLI
-	// emits, which is what "introduces no new object shape" means. The set is taken
-	// from the model's own JSON tags rather than restated here.
+	// The task object is the DATA_FORMATS Task shape — the same field names the
+	// CLI emits, taken from the model's own JSON tags rather than restated here —
+	// plus exactly the four task _html members and nothing else (SPEC/WEB.md
+	// Acceptance Criterion 94; SPEC/DATA_FORMATS.md § Task Detail Data, note 9).
 	var task map[string]any
 	if err := json.Unmarshal(envelope["task"], &task); err != nil {
 		t.Fatalf("decoding the task: %v", err)
 	}
-	for _, field := range taskJSONFields(t) {
+	wantFields := append(taskJSONFields(t), taskHTMLMembers...)
+	for _, field := range wantFields {
 		if _, ok := task[field]; !ok {
 			t.Errorf("the task object carries no %q field", field)
 		}
 	}
-	if len(task) != len(taskJSONFields(t)) {
-		t.Errorf("the task object carries %d fields, want the %d of the Task shape",
-			len(task), len(taskJSONFields(t)))
+	if len(task) != len(wantFields) {
+		t.Errorf("the task object carries %d fields, want the %d of the Task shape plus the %d _html members",
+			len(task), len(taskJSONFields(t)), len(taskHTMLMembers))
 	}
 
 	// Every field the modal displays is present and carries the stored value.
@@ -94,6 +97,15 @@ func TestTaskDetailEndpoint_ReturnsTheTaskAndItsComments(t *testing.T) {
 	if len(view.Comments) != 3 {
 		t.Errorf("the task detail carries %d comments, want its whole log of 3", len(view.Comments))
 	}
+}
+
+// taskHTMLMembers are the four members the task detail endpoint adds to the Task
+// shape, in the order SPEC/DATA_FORMATS.md § Task Detail Data, note 9 fixes.
+var taskHTMLMembers = []string{
+	"functional_requirements_html",
+	"technical_requirements_html",
+	"acceptance_criteria_html",
+	"completion_summary_html",
 }
 
 // taskJSONFields returns the JSON field names of the Task shape, read from the
@@ -314,11 +326,18 @@ func TestTasksPage_CarriesOneModalShellAndNoTaskDetail(t *testing.T) {
 // 97, the security property this change turns on: every value the script writes
 // into the DOM is written as text, never as markup.
 //
+// The single exception is the five _html members, the server's Markdown
+// renderer's HTML, which the script inserts whole into a markdown container
+// through ONE innerHTML assignment (SPEC/WEB.md § Task Detail Modal, Client-side
+// rendering is text-only; § Markdown Rendering, rule 15).
+//
 // With no browser in the test environment, the property is asserted at its
-// source — the script the binary serves — and it is asserted as an ABSENCE of
-// every markup-parsing sink plus the presence of the text-only ones. A script
-// that wrote a value as markup would have to use one of the forbidden sinks, so
-// this test fails the moment one appears.
+// source — the script the binary serves — as the ABSENCE of every other
+// markup-parsing sink, the presence of the text-only ones, and a closed account
+// of the one innerHTML assignment: it appears once, inside markdownBlock, and
+// every value that reaches markdownBlock is an _html member. A script that wrote
+// any other value as markup would have to break one of these, so this test fails
+// the moment it does.
 func TestTaskModalScript_WritesEveryValueAsText(t *testing.T) {
 	t.Setenv("HOME", shortHome(t))
 	// The scan runs on the CODE, with comments stripped: the file's own header
@@ -326,16 +345,19 @@ func TestTaskModalScript_WritesEveryValueAsText(t *testing.T) {
 	// read as using them.
 	script := stripJSComments(readEmbeddedAsset(t, "static/task-modal.js"))
 
-	// Every sink that parses markup, and every dynamic-code sink.
+	// Every other sink that parses markup, and every dynamic-code sink.
 	for _, sink := range []string{
-		"innerHTML", "outerHTML", "insertAdjacentHTML", "document.write",
+		"outerHTML", "insertAdjacentHTML", "document.write",
 		"eval(", "new Function", "srcdoc", "createContextualFragment",
-		"setHTMLUnsafe", "javascript:",
+		"setHTMLUnsafe", "javascript:", "DOMParser", ".html(",
 	} {
 		if strings.Contains(script, sink) {
 			t.Errorf("the modal script uses %q; every value it writes must go in as text", sink)
 		}
 	}
+
+	// The one innerHTML assignment, and what it may receive.
+	assertOnlyHTMLMembersReachInnerHTML(t, script)
 
 	// The text-only sink is used, and used for the caller-authored values: the
 	// helper that builds every element assigns through textContent.
@@ -356,6 +378,62 @@ func TestTaskModalScript_WritesEveryValueAsText(t *testing.T) {
 	for _, attr := range []string{`setAttribute("on`, `setAttribute("href`, `setAttribute("src`} {
 		if strings.Contains(script, attr) {
 			t.Errorf("the modal script sets %q from data; that is a markup sink in disguise", attr)
+		}
+	}
+}
+
+// assertOnlyHTMLMembersReachInnerHTML pins the single markup-parsing sink of the
+// modal script. innerHTML appears exactly once, as the body of markdownBlock,
+// assigned the function's own parameter; markdownBlock is called only with the
+// comment's body_html or from markdownField; and markdownField is called exactly
+// four times, once with each task _html member. Any other value reaching the sink
+// — a raw field, a concatenation, a string built around a member — fails here.
+func assertOnlyHTMLMembersReachInnerHTML(t *testing.T, script string) {
+	t.Helper()
+
+	if got := strings.Count(script, "innerHTML"); got != 1 {
+		t.Fatalf("the modal script uses innerHTML %d times, want exactly the 1 in markdownBlock", got)
+	}
+	blockRe := regexp.MustCompile(`function markdownBlock\(renderedHTML\) \{\s*var node = el\("div", "markdown"\);\s*node\.innerHTML = renderedHTML;\s*return node;\s*\}`)
+	if !blockRe.MatchString(script) {
+		t.Fatal("the one innerHTML assignment is not markdownBlock's assignment of its own " +
+			"parameter into a markdown container")
+	}
+
+	callRe := regexp.MustCompile(`markdownBlock\(([^)]*)\)`)
+	// The definition's own parameter list matches too, as "renderedHTML".
+	calls := callRe.FindAllStringSubmatch(script, -1)
+	blockArgs := make([]string, 0, len(calls))
+	for _, m := range calls {
+		blockArgs = append(blockArgs, m[1])
+	}
+	slices.Sort(blockArgs)
+	want := []string{"comment.body_html", "renderedHTML", "renderedHTML"}
+	if !slices.Equal(blockArgs, want) {
+		t.Errorf("markdownBlock receives %q, want the definition's parameter, markdownField's "+
+			"parameter, and comment.body_html only", blockArgs)
+	}
+
+	fieldRe := regexp.MustCompile(`markdownField\("[^"]*", ([^)]*)\)`)
+	fieldCalls := fieldRe.FindAllStringSubmatch(script, -1)
+	fieldArgs := make([]string, 0, len(fieldCalls))
+	for _, m := range fieldCalls {
+		fieldArgs = append(fieldArgs, m[1])
+	}
+	wantFields := make([]string, 0, len(taskHTMLMembers))
+	for _, member := range taskHTMLMembers {
+		wantFields = append(wantFields, "task."+member)
+	}
+	if !slices.Equal(fieldArgs, wantFields) {
+		t.Errorf("markdownField receives %q, want exactly %q", fieldArgs, wantFields)
+	}
+	if got := strings.Count(script, "renderedHTML ="); got != 0 {
+		t.Errorf("the modal script assigns to renderedHTML %d times; it must pass the member unmodified", got)
+	}
+	// The script never parses Markdown itself (Acceptance Criterion 188).
+	for _, parser := range []string{"marked", "markdownit", "markdown-it", "commonmark", "showdown", "micromark", "remark"} {
+		if strings.Contains(strings.ToLower(script), parser) {
+			t.Errorf("the modal script names the Markdown parser %q; it must never parse Markdown", parser)
 		}
 	}
 }
@@ -458,6 +536,27 @@ func TestTaskModal_HostileValuesNeverReachThePageAsMarkup(t *testing.T) {
 		}[label]
 		if got != want {
 			t.Errorf("the %s decoded to %q, want %q", label, got, want)
+		}
+	}
+
+	// The _html members are the Markdown renderer's output for the hostile
+	// fields, and that output carries none of their raw HTML: no element, no
+	// attribute, and no script of the author's reaches the modal through the one
+	// markup sink either (Acceptance Criteria 97 and 183, JSON path).
+	for label, got := range map[string]string{
+		"functional_requirements_html": view.Task.FunctionalRequirementsHTML,
+		"technical_requirements_html":  view.Task.TechnicalRequirementsHTML,
+		"acceptance_criteria_html":     view.Task.AcceptanceCriteriaHTML,
+		"completion_summary_html":      derefString(view.Task.CompletionSummaryHTML),
+		"body_html":                    view.Comments[0].BodyHTML,
+	} {
+		if got == "" {
+			t.Errorf("the %s member is empty for a non-empty field", label)
+		}
+		for _, bad := range []string{"<script", "<img", "<iframe", "<b>", "<div", "onerror", "javascript:"} {
+			if strings.Contains(got, bad) {
+				t.Errorf("the %s member carries the author's raw HTML %q: %q", label, bad, got)
+			}
 		}
 	}
 }

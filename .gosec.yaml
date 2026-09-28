@@ -100,7 +100,7 @@
 # chmod, which is both a directory-permission finding and a taint-analysis one —
 # so the totals below are the number of directives plus one.
 #
-# totals: 56 suppressions, 42 outside _test.go
+# totals: 57 suppressions, 43 outside _test.go
 #
 # G104 Audit errors not checked (CWE-703)  [11]
 #   internal/db/connection.go                          6
@@ -165,6 +165,24 @@
 #     TestColumnExistsRefusesUnsafeTableIdentifier, which fails on all four
 #     shapes when the guard is removed, and the column being looked for is bound.
 #     (d) A column name in one test helper, literal at both call sites.
+#
+# G203 Use of unescaped data in HTML templates (CWE-79)  [1]
+#   internal/web/markdown.go                           1
+#   Reason: trustedMarkdown converts the output of the web interface's one
+#     Markdown renderer to template.HTML so a server-rendered page inserts it as
+#     markup, which SPEC/WEB.md § Markdown Rendering, rule 15 makes the single
+#     value the interface inserts without escaping. The value is never author
+#     text: the renderer runs goldmark with raw HTML output disabled, so raw HTML
+#     in the source is omitted; it emits no attribute taken from the source other
+#     than a link destination and title and an image's alternative text, each
+#     escaped for its attribute context; it renders a destination goldmark's
+#     dangerous-URL filter rejects as text with no element, and emits no <img>
+#     other than a data: raster image. Every one of those properties is pinned by
+#     internal/web/markdown_test.go against hostile input (<script>, <img
+#     onerror>, <iframe>, inline event handlers, javascript:, vbscript:, file:
+#     and data: links). It would stop being acceptable if raw HTML output
+#     (html.WithUnsafe) were ever enabled, or if any value other than
+#     renderMarkdown's output reached the conversion.
 #
 # G204 Audit use of command execution (CWE-78)  [4]
 #   internal/testenv/graphserver/graphserver.go        1

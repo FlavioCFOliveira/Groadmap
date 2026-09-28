@@ -19,7 +19,11 @@
 
   Asset order in <head> is fixed: Inter font, Tabler core CSS, Tabler Icons
   CSS, then the reworked override stylesheet. All come from /static/...; no
-  remote origin, no CDN, no Google Fonts.
+  remote origin, no CDN, no Google Fonts. A page that can render a Markdown
+  field (.Chrome.Markdown: the sprints, tasks, and sprint pages) also links the
+  syntax-highlighting stylesheet, the CSS chroma produces for its github-dark
+  style, before the override stylesheet (SPEC/WEB.md § Markdown Rendering,
+  rule 7).
 */}}
 
 {{define "head"}}  <meta charset="utf-8">
@@ -29,7 +33,8 @@
   <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
   <link rel="stylesheet" href="/static/vendor/inter/inter.css">
   <link rel="stylesheet" href="/static/vendor/tabler/tabler.min.css">
-  <link rel="stylesheet" href="/static/vendor/tabler-icons/tabler-icons.min.css">
+  <link rel="stylesheet" href="/static/vendor/tabler-icons/tabler-icons.min.css">{{if .Chrome.Markdown}}
+  <link rel="stylesheet" href="/static/highlight.css">{{end}}
   <link rel="stylesheet" href="/static/style.css">{{end}}
 
 {{define "sidebar"}}  <aside class="navbar navbar-vertical navbar-expand-lg" data-bs-theme="dark">
@@ -182,10 +187,15 @@
   Dot is a web.sprintCard: .Name (roadmap), .Sprint (models.Sprint), and
   .TaskCount (the sprint's own total member-task count, which the sprint record
   carries; the page loads no member task). The card shows, in order:
-  a header ("Sprint #<ID>" with a status badge), the sprint description (authored
-  line breaks preserved via the .sprint-description CSS; SPEC/WEB.md § Frontend
-  Rules, rule 6, and Acceptance Criterion 32), and a footer task count. The whole
-  card is one link and opens no task detail modal.
+  a header ("Sprint #<ID>" with a status badge), the sprint description, and a
+  footer task count. The whole card is one link and opens no task detail modal.
+
+  The description is the Markdown renderer's HTML in its NON-INTERACTIVE form
+  (sprintCardDescriptionHTML): HTML admits no link and no form control inside a
+  link, so a Markdown link renders as its text and a task-list checkbox as [x] or
+  [ ]. It sits in Tabler's markdown container, whole — neither clamped nor
+  truncated — and wraps within the card (SPEC/WEB.md § Shared Sprint-Card
+  Partial, rule 5; § Markdown Rendering, rules 13 and 14).
 */}}
 {{define "sprintCard"}}                    <div class="col-12 col-lg-6">
                       <a href="/roadmaps/{{.Name}}/sprints/{{.Sprint.ID}}" class="card card-sm card-link text-reset">
@@ -197,7 +207,7 @@
                           <div class="card-actions"><span class="badge {{sprintStatusBadge .Sprint.Status}}">{{.Sprint.Status}}</span></div>
                         </div>
                         <div class="card-body">
-                          <p class="mb-1 sprint-description">{{.Sprint.Description}}</p>
+                          <div class="markdown mb-1">{{sprintCardDescriptionHTML .Sprint}}</div>
                           <span class="text-secondary">{{.TaskCount}} task(s)</span>
                         </div>
                       </a>
@@ -219,6 +229,10 @@
   its comments and never their text, because the modal a card opens is filled on
   demand from the task detail endpoint.
 
+  The sprint description is the Markdown renderer's HTML, in the ordinary form,
+  inside Tabler's markdown container (sprintDescriptionHTML; SPEC/WEB.md
+  § Sprint Detail Sub-Template, rule 7; § Markdown Rendering).
+
   The "Tasks" datagrid value uses len .Tasks (the loaded member tasks) rather
   than .Sprint.TaskCount: GetSprint populates TaskCount, but len .Tasks is the
   authoritative count of the rows actually rendered here (SPEC/WEB.md § Sprint
@@ -231,7 +245,7 @@
               <h3 class="card-title">Sprint details</h3>
             </div>
             <div class="card-body">
-              <p class="sprint-description">{{.Sprint.Description}}</p>
+              <div class="markdown mb-3">{{sprintDescriptionHTML .Sprint}}</div>
               <div class="datagrid">
                 <div class="datagrid-item">
                   <div class="datagrid-title">Title</div>
@@ -557,8 +571,10 @@
   data-task-id) and fills this shell. Every value it writes goes in as TEXT, never
   as markup: the server's html/template escaping no longer stands between a stored
   value and the page structure once the values travel as JSON, so the script is
-  what must not interpret them (SPEC/WEB.md § Task Detail Modal, Client-side
-  rendering is text-only).
+  what must not interpret them. The single exception is the five _html members,
+  the server's Markdown renderer's HTML, which the script inserts whole into a
+  markdown container (SPEC/WEB.md § Task Detail Modal, Client-side rendering is
+  text-only; § Markdown Rendering, rule 15).
 
   Dot is the page's own view model; only .Name is read.
 */}}
@@ -599,12 +615,11 @@
   (SPEC/WEB.md § Task Detail Modal, comments timeline, markup; § Sprint Detail
   Sub-Template, Comments card, markup).
 
-  Dot is the comment slice itself — []models.TaskComment or
-  []models.SprintComment. The two models carry identically named fields (Type,
-  CreatedAt, UpdatedAt, Body), so one partial renders both entities' logs without
-  a conversion step. The caller renders the empty state: it is reached when the
-  slice is empty, and its wording and idiom belong to the surface (a modal block
-  or a card body), not to the timeline.
+  Dot is the sprint's comment slice, []models.SprintComment: the task detail
+  modal's timeline is built by /static/task-modal.js from the task detail
+  endpoint with this same markup, so the sprint Comments card is the partial's
+  only caller. The caller renders the empty state: it is reached when the slice
+  is empty, and its wording and idiom belong to the surface, not to the timeline.
 
   Entries appear in the order the slice carries, which the loaders take straight
   from the comment reads: oldest first, created_at ascending with the comment id
@@ -620,13 +635,14 @@
 
   The four classes used — timeline, timeline-event, timeline-event-icon,
   timeline-event-card — are all provided by the vendored tabler.min.css, so the
-  log adds no CSS file, no JavaScript, and no vendored asset. The body sits in a
-  .task-modal__text block, the project's shared authored-free-text class, which
-  static/style.css renders with white-space: pre-wrap: the author's line breaks
-  survive and the text still wraps, so no inline style and no horizontal scrolling
-  is introduced (SPEC/WEB.md § Frontend Rules, rule 6; Acceptance Criteria 62/71).
+  log adds no CSS file, no JavaScript, and no vendored asset. The body is the
+  Markdown renderer's HTML, in the ordinary form (sprintCommentBodyHTML), inside
+  Tabler's markdown container, and wraps within the card (SPEC/WEB.md § Sprint
+  Detail Sub-Template, Comments card; § Markdown Rendering; Acceptance Criteria
+  62/71).
 
-  It is read-only: no form, no input, no button, and no link.
+  It is read-only: no form, no button, and no link that submits a change; the
+  only input is the disabled checkbox of a rendered task-list item.
 */}}
 {{define "commentTimeline"}}<ul class="timeline">
                 {{range .}}
@@ -639,7 +655,7 @@
                         <span class="text-secondary">{{.CreatedAt}}</span>
                         {{with .UpdatedAt}}<span class="text-secondary">edited {{.}}</span>{{end}}
                       </div>
-                      <div class="task-modal__text">{{.Body}}</div>
+                      <div class="markdown">{{sprintCommentBodyHTML .}}</div>
                     </div>
                   </div>
                 </li>

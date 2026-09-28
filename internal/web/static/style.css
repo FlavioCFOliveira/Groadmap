@@ -463,19 +463,51 @@
   min-width: 0;
 }
 
-/* Authored multi-line free-text wraps and preserves the source line breaks
+/* Plain multi-line free-text wraps and preserves the source line breaks
    without forcing horizontal scrolling, so it stays readable on small
-   viewports (SPEC/WEB.md § Frontend Rules, rule 6). This covers the task
-   detail modal's long free-text fields (functional/technical requirements,
-   acceptance criteria, completion summary), a sprint's description wherever it
-   is shown (the sprints page tabs and the sprint detail page), and the property
-   values rendered into the knowledge-graph detail panel. */
-.task-modal__text,
-.sprint-description,
+   viewports (SPEC/WEB.md § Frontend Rules, rule 6). The one such value the
+   interface shows is a property value rendered into the knowledge-graph detail
+   panel. The Markdown fields are not plain text and are not covered here: they
+   render as the Markdown renderer's HTML, styled by the rules below. */
 .detail-panel__value {
   white-space: pre-wrap;
   word-break: break-word;
   overflow-wrap: anywhere;
+}
+
+/* ---- Rendered Markdown (SPEC/WEB.md § Markdown Rendering, rule 13) ----
+   Every Markdown field is placed in a <div class="markdown">, the class the
+   vendored Tabler distribution defines for rendered Markdown content, which
+   styles its tables, blockquotes, headings, lists, and code blocks. These rules
+   add only what that class does not provide: the content wraps within its
+   container, a long word or URL breaks rather than overflowing, and a table or a
+   code block wider than its container scrolls horizontally inside its own box,
+   so rendered Markdown never makes the page, the modal, or a card scroll
+   sideways.
+
+   min-width: 0 lets the container shrink inside a flex item (the timeline card of
+   a comment), whose automatic minimum size would otherwise be its widest
+   content. A table is made a block so that it can carry its own horizontal
+   scroll; its rows and cells keep their table layout. A code block keeps its
+   authored lines (white-space: pre) and scrolls instead of wrapping them. */
+.markdown {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.markdown table {
+  display: block;
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+.markdown pre {
+  max-width: 100%;
+  overflow-x: auto;
+  white-space: pre;
+  overflow-wrap: normal;
+  word-break: normal;
 }
 
 /* ---- Knowledge-graph page (SPEC/WEB.md § Roadmap Knowledge-Graph Page, Graph

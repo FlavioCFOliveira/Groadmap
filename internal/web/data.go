@@ -1365,15 +1365,43 @@ type taskDetailSource interface {
 // taskDetailView is the JSON body of the task detail endpoint: exactly two
 // members, `task` and `comments` (SPEC/WEB.md § Task Detail Endpoint, Response).
 //
-// It introduces NO new object shape. Task and TaskComment are marshalled through
-// their own JSON tags, which are the shapes SPEC/DATA_FORMATS.md § Task and
-// § Task Comment already fix for CLI output, so a value carries the same field
-// names, types, and null conventions here as it does there.
+// It composes the Task and TaskComment shapes SPEC/DATA_FORMATS.md § Task and
+// § Task Comment already fix for CLI output: each is embedded, so its fields
+// marshal through their own JSON tags and carry the same names, types, and null
+// conventions here as there. The only members of its own are the five `_html`
+// members, which follow the raw fields (SPEC/DATA_FORMATS.md § Task Detail Data,
+// note 9).
 //
 // Comments is never nil: a task with no comment yields `[]`, not `null`.
+//
+//nolint:govet // fieldalignment: the field order is the response's member order, which predates the _html members
 type taskDetailView struct {
-	Comments []models.TaskComment `json:"comments"`
-	Task     models.Task          `json:"task"`
+	Comments []taskDetailComment `json:"comments"`
+	Task     taskDetailTask      `json:"task"`
+}
+
+// taskDetailTask is the endpoint's `task` object: the Task shape followed by the
+// HTML the Markdown renderer produces from each of the task's four Markdown
+// fields. CompletionSummaryHTML is null exactly when CompletionSummary is null.
+// These members exist in this response only; the CLI's Task never carries them.
+//
+//nolint:govet // fieldalignment: the embedded Task must lead, so its fields marshal before the _html members (note 9)
+type taskDetailTask struct {
+	models.Task
+	FunctionalRequirementsHTML string  `json:"functional_requirements_html"`
+	TechnicalRequirementsHTML  string  `json:"technical_requirements_html"`
+	AcceptanceCriteriaHTML     string  `json:"acceptance_criteria_html"`
+	CompletionSummaryHTML      *string `json:"completion_summary_html"`
+}
+
+// taskDetailComment is one element of the endpoint's `comments` array: the Task
+// Comment shape followed by the HTML the Markdown renderer produces from the
+// comment's body.
+//
+//nolint:govet // fieldalignment: the embedded TaskComment must lead, so body_html marshals after its fields (note 9)
+type taskDetailComment struct {
+	models.TaskComment
+	BodyHTML string `json:"body_html"`
 }
 
 // loadTaskDetail reads one task and its comments read-only for the task detail
@@ -1419,13 +1447,57 @@ func readTaskDetail(ctx context.Context, src taskDetailSource, id int) (taskDeta
 	if err != nil {
 		return taskDetailView{}, err
 	}
-	// A task with no comment must serialise as [], never null: the client walks
-	// the array unconditionally.
-	if comments == nil {
-		comments = []models.TaskComment{}
+
+	return newTaskDetailView(task, comments)
+}
+
+// newTaskDetailView builds the endpoint's response from the rows read: the raw
+// fields unchanged, and beside them the HTML the one Markdown renderer produces
+// from each Markdown field, in the ordinary form and with the footnote
+// identifier prefix of its field (SPEC/WEB.md § Task Detail Endpoint, Rendered
+// Markdown members; § Markdown Rendering, rule 12). The client inserts those
+// members as they are and never parses Markdown.
+//
+// A task with no comment serialises its comments as [], never null: the client
+// walks the array unconditionally.
+func newTaskDetailView(task *models.Task, comments []models.TaskComment) (taskDetailView, error) {
+	view := taskDetailView{
+		Task:     taskDetailTask{Task: *task},
+		Comments: make([]taskDetailComment, len(comments)),
 	}
 
-	return taskDetailView{Task: *task, Comments: comments}, nil
+	fields := [...]struct {
+		dst    *string
+		source string
+		name   string
+	}{
+		{&view.Task.FunctionalRequirementsHTML, task.FunctionalRequirements, "functional_requirements"},
+		{&view.Task.TechnicalRequirementsHTML, task.TechnicalRequirements, "technical_requirements"},
+		{&view.Task.AcceptanceCriteriaHTML, task.AcceptanceCriteria, "acceptance_criteria"},
+	}
+	for _, f := range fields {
+		out, err := renderMarkdown(f.source, taskFieldIDPrefix(task.ID, f.name), markdownInteractive)
+		if err != nil {
+			return taskDetailView{}, err
+		}
+		*f.dst = out
+	}
+	if task.CompletionSummary != nil {
+		out, err := renderMarkdown(*task.CompletionSummary, taskFieldIDPrefix(task.ID, "completion_summary"), markdownInteractive)
+		if err != nil {
+			return taskDetailView{}, err
+		}
+		view.Task.CompletionSummaryHTML = &out
+	}
+
+	for i := range comments {
+		out, err := renderMarkdown(comments[i].Body, taskCommentIDPrefix(comments[i].ID), markdownInteractive)
+		if err != nil {
+			return taskDetailView{}, err
+		}
+		view.Comments[i] = taskDetailComment{TaskComment: comments[i], BodyHTML: out}
+	}
+	return view, nil
 }
 
 // loadAudit reads one page of a roadmap's full audit log read-only for the

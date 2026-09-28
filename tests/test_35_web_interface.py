@@ -1419,10 +1419,29 @@ class TestWebInterface:
         code = re.sub(r"^\s*//.*$", "", code, flags=re.M)
 
         for sink in (
-            "innerHTML", "outerHTML", "insertAdjacentHTML", "document.write",
-            "eval(", "new Function", "createContextualFragment",
+            "outerHTML", "insertAdjacentHTML", "document.write",
+            "eval(", "new Function", "createContextualFragment", "DOMParser",
         ):
             assert sink not in code, f"the modal script uses the markup sink {sink!r}"
+        # The single exception is the server's Markdown renderer's HTML: the five
+        # _html members, inserted whole into a markdown container through ONE
+        # innerHTML assignment, and nothing else ever reaches it (SPEC/WEB.md
+        # § Task Detail Modal, Client-side rendering is text-only; Acceptance
+        # Criterion 97).
+        assert code.count("innerHTML") == 1, (
+            f"the modal script uses innerHTML {code.count('innerHTML')} times, want only "
+            "markdownBlock's insertion of an _html member"
+        )
+        assert "node.innerHTML = renderedHTML;" in code
+        block_args = sorted(re.findall(r"markdownBlock\(([^)]*)\)", code))
+        assert block_args == ["comment.body_html", "renderedHTML", "renderedHTML"], block_args
+        field_args = re.findall(r'markdownField\("[^"]*", ([^)]*)\)', code)
+        assert field_args == [
+            "task.functional_requirements_html",
+            "task.technical_requirements_html",
+            "task.acceptance_criteria_html",
+            "task.completion_summary_html",
+        ], field_args
         assert code.count("textContent") >= 10, (
             "the modal script must write its values through textContent"
         )
@@ -4291,67 +4310,241 @@ class TestWebInterface:
             "in that one status"
         )
 
-    def test_sprint_description_preserves_line_breaks(self):
-        """Authored multi-line sprint descriptions render preserving the line
-        breaks (SPEC/WEB.md § Frontend Rules rule 6, Acceptance Criterion 32):
-        the description <p> carries the sprint-description class, the served
-        HTML keeps the author's newlines verbatim, and the stylesheet applies
-        white-space: pre-wrap to that class (and to the task modal text)."""
-        desc = "First objective line.\nSecond objective line.\nThird objective line."
-        sid = self.test.create_sprint(ROADMAP, desc)
+    # ====================================================================
+    # Markdown fields (SPEC/WEB.md § Markdown Rendering; AC32, AC180-AC194)
+    # ====================================================================
+
+    MARKDOWN_DESCRIPTION = (
+        "Close the **settlement** window.\nKeep the ledger frozen.\n\n"
+        "- export the settlement day\n- compare the totals\n\n"
+        "See [the runbook](https://example.org/runbook), https://example.org/status and "
+        "![flow chart](https://example.org/flow.png).\n\n"
+        "- [x] freeze announced\n- [ ] residual published\n\n"
+        "The drift is one cent[^1].\n\n[^1]: Rounding happens twice.\n\n"
+        "# Runbook\n\n"
+        "```go\nfunc Residual() int { return 0 }\n```\n\n"
+        "The last line of the description."
+    )
+    HOSTILE_MARKDOWN = (
+        "Before <script>alert(1)</script> the table.\n\n"
+        "<img src=x onerror=alert(1)>\n\n"
+        "<iframe src=\"https://example.org/\"></iframe>\n\n"
+        "An inline <b onclick=alert(1)>bold</b> tag and the code `<script>`.\n\n"
+        "[alpha](javascript:alert(1)) [bravo](JavaScript:alert(1)) [charlie](vbscript:msgbox) "
+        "[delta](file:///etc/passwd) <javascript:alert(1)>"
+    )
+
+    @staticmethod
+    def _tags(fragment):
+        """Return (name, attributes) for every start tag in an HTML fragment."""
+        return [(m.group(1).lower(), m.group(2))
+                for m in re.finditer(r"<([a-zA-Z][a-zA-Z0-9]*)([^>]*)>", fragment)]
+
+    def _assert_no_raw_html(self, label, fragment):
+        """The Markdown renderer's output carries none of the author's raw HTML
+        and no active dangerous link (Acceptance Criteria 183 and 184)."""
+        for name, attrs in self._tags(fragment):
+            assert name not in ("script", "iframe", "img", "b", "object", "embed"), (
+                f"{label}: the author's raw element <{name}{attrs}> reached the page"
+            )
+            assert not re.search(r"\son[a-z]+\s*=", attrs, re.I), f"{label}: event handler in <{name}{attrs}>"
+            assert not re.search(r"\sstyle\s*=", attrs, re.I), f"{label}: style attribute in <{name}{attrs}>"
+        lowered = fragment.lower()
+        for bad in ('href="javascript:', 'href="vbscript:', 'href="file:', 'href=""'):
+            assert bad not in lowered, f"{label}: a dangerous link is active ({bad})"
+        assert "<code>&lt;script&gt;</code>" in fragment, f"{label}: a < in a code span is not escaped"
+
+    @staticmethod
+    def _sprint_card(body, roadmap, sprint_id):
+        """Return one sprint card of the sprints page, from its link start tag to
+        its end tag, and the id of the tab pane holding it."""
+        start = body.find(f'<a href="/roadmaps/{roadmap}/sprints/{sprint_id}" class="card')
+        assert start >= 0, f"no sprint card for sprint #{sprint_id}"
+        end = body.index("</a>", start) + len("</a>")
+        pane = re.findall(r'<div id="(tab-[a-z]+)"', body[:start])[-1]
+        return body[start:end], pane
+
+    def test_sprint_description_renders_as_markdown(self):
+        """A sprint's description renders as Markdown on every surface: in the
+        non-interactive form in its card under each of the three tabs, whole and
+        with the card as its only link, and in the ordinary form on the sprint
+        page; the sprint title stays plain text (Acceptance Criteria 32, 180,
+        187, and 189)."""
+        roadmap = "markdown_sprints"
+        self._run(["roadmap", "create", roadmap])
+        desc = self.MARKDOWN_DESCRIPTION
+        upcoming = self.test.create_sprint(roadmap, desc, title="Publish the **residual** report")
+        current = self.test.create_sprint(roadmap, desc, title="Reconcile the settlement windows")
+        closed = self.test.create_sprint(roadmap, desc, title="Retire the legacy importer")
+        self._run(["sprint", "start", "-r", roadmap, str(closed)])
+        self._run(["sprint", "close", "-r", roadmap, str(closed), "--force"])
+        self._run(["sprint", "start", "-r", roadmap, str(current)])
+
         proc, port = self._start(["--port", "0"])
-        # The sprint detail page always shows the full description.
-        _, _, body = self._req(port, f"/roadmaps/{ROADMAP}/sprints/{sid}")
-        assert "sprint-description" in body, (
-            "the sprint description must carry the line-break-preserving class"
-        )
-        # html/template passes newlines through unchanged; CSS pre-wrap renders
-        # them. The exact multi-line text must survive verbatim in the HTML.
-        assert desc in body, "sprint description must preserve the author's line breaks"
-        # The stylesheet preserves line breaks for the sprint description class.
+        _, _, body = self._req(port, f"/roadmaps/{roadmap}")
+        for sprint_id, want_pane in ((upcoming, "tab-upcoming"), (current, "tab-current"), (closed, "tab-closed")):
+            card, pane = self._sprint_card(body, roadmap, sprint_id)
+            assert pane == want_pane, f"sprint #{sprint_id} is under {pane}, want {want_pane}"
+            assert '<div class="markdown mb-1">' in card, f"sprint #{sprint_id}: no markdown container"
+            for want in ("<strong>settlement</strong>", "window.<br>", "<li>export the settlement day</li>",
+                         "the runbook, https://example.org/status and flow chart.",
+                         "<li>[x] freeze announced</li>", "<li>[ ] residual published</li>",
+                         "<h4>Runbook</h4>", '<pre class="chroma">',
+                         "The last line of the description."):
+                assert want in card, f"sprint #{sprint_id}: the card lacks {want!r}"
+            assert "**" not in card.split("card-title")[1].split("</h4>")[1], (
+                f"sprint #{sprint_id}: literal asterisks are displayed in the description"
+            )
+            assert len(re.findall(r"<a\s", card)) == 1, f"sprint #{sprint_id}: a link nested in the card"
+            assert "<input" not in card, f"sprint #{sprint_id}: a form control in the card"
+        assert "Publish the **residual** report</h4>" in body, "the sprint title is not plain text"
+
+        _, _, page = self._req(port, f"/roadmaps/{roadmap}/sprints/{current}")
+        assert '<div class="markdown mb-3">' in page
+        assert ('<a href="https://example.org/runbook" target="_blank" rel="noopener noreferrer">'
+                "the runbook</a>") in page
+        assert ('<a href="https://example.org/flow.png" target="_blank" rel="noopener noreferrer">'
+                "flow chart</a>") in page, "a remote image is not rendered as a link"
+        description = page.split('<div class="markdown mb-3">')[1].split('<div class="datagrid">')[0]
+        assert "<img" not in description
+        assert '<input checked="" disabled="" type="checkbox">' in page
+        assert '<input disabled="" type="checkbox">' in page
+        assert 'id="sprint-%d-description-fn:1"' % current in page, "the footnote id carries no field prefix"
+        for level in ("<h1", "<h2", "<h3"):
+            assert level not in description, f"an undemoted {level} heading"
+
         _, _, css = self._req(port, "/static/style.css")
-        assert ".sprint-description" in css, "stylesheet must target .sprint-description"
-        assert "white-space: pre-wrap" in css, (
-            "the stylesheet must preserve authored line breaks (white-space: pre-wrap)"
+        assert ".markdown table" in css and ".markdown pre" in css and "overflow-x: auto" in css, (
+            "a wide table or code block does not scroll inside its own box"
         )
+        assert ".sprint-description" not in css and ".task-modal__text" not in css
 
-    def test_task_modal_text_preserves_line_breaks(self):
-        """Authored multi-line task free-text renders preserving the line breaks
-        in the detail modal (SPEC/WEB.md § Frontend Rules rule 6): the long
-        fields sit in .task-modal__text, which the stylesheet renders with
-        white-space: pre-wrap, and the served HTML keeps the newlines."""
-        multiline_fr = "Step one of the rationale.\nStep two of the rationale."
-        self._run(["roadmap", "create", "linebreaks_demo"])
-        self.test.create_task(
-            "linebreaks_demo",
-            "Document the rollout rationale",
-            multiline_fr,            # functional requirements: multi-line
-            "how", "verify",
+    def test_task_modal_markdown_members(self):
+        """The task detail endpoint carries the renderer's HTML beside every raw
+        Markdown field, the modal inserts only those members, and the CLI never
+        emits them (Acceptance Criteria 180, 183, 188, and 190)."""
+        roadmap = "markdown_modal"
+        self._run(["roadmap", "create", roadmap])
+        functional = ("Operators must see the **residual**.\nPer settlement window[^1].\n\n- export\n- compare"
+                      "\n\n[^1]: One window per day.")
+        task_id = self.test.create_task(
+            roadmap, "Remove the **one-cent** drift", functional,
+            "Compare with `!time.Now().Before(exp)` first[^1].\n\n[^1]: The boundary second.\n\n"
+            + self.HOSTILE_MARKDOWN,
+            "Verified when:\n\n- [x] residual is 0.00\n- [ ] report published[^1]\n\n[^1]: Checked by the operator.",
         )
+        open_task = self.test.create_task(roadmap, "Publish the residual per window", "A", "B", "C")
+        sprint_id = self.test.move_task_to_sprint(roadmap, task_id)
+        self._run(["sprint", "start", "-r", roadmap, str(sprint_id)])
+        self._run(["task", "stat", "-r", roadmap, str(task_id), "DOING", "--commit-open", "391cff7"])
+        self._run(["task", "stat", "-r", roadmap, str(task_id), "TESTING"])
+        self._run(["task", "stat", "-r", roadmap, str(task_id), "COMPLETED", "--commit-close", "2578d18",
+                   "--summary", "Shipped; see [the runbook](https://example.org/runbook)[^1].\n\n[^1]: Behind a flag."])
+        for body in ("Found the **drift** in the importer[^1].\n\n[^1]: Rounding twice.",
+                     "Decided to round once[^1].\n\n[^1]: At export.\n\n" + self.HOSTILE_MARKDOWN):
+            self._run(["task", "comment-add", "-r", roadmap, str(task_id), "--type", "FINDING", "--body", body])
+
         proc, port = self._start(["--port", "0"])
-
-        # The value travels to the browser as JSON, with its newlines intact.
-        tasks = json.loads(self._run(["task", "list", "-r", "linebreaks_demo"])[1])
-        task_id = tasks[0]["id"]
-        _, detail = self._task_detail(port, "linebreaks_demo", task_id)
-        assert detail["task"]["functional_requirements"] == multiline_fr, (
-            "the endpoint must carry the author's line breaks unchanged"
+        status, detail = self._task_detail(port, roadmap, task_id)
+        assert status == 200
+        assert set(detail) == {"task", "comments"}
+        task = detail["task"]
+        cli_task = json.loads(self._run(["task", "get", "-r", roadmap, str(task_id)])[1])
+        cli_task = cli_task[0] if isinstance(cli_task, list) else cli_task
+        for key, value in cli_task.items():
+            assert task[key] == value, f"the raw field {key} differs from `rmp task get`"
+        assert not [k for k in cli_task if k.endswith("_html")], "the CLI's task carries an _html member"
+        cli_comments = json.loads(self._run(["task", "comment-list", "-r", roadmap, str(task_id)])[1])
+        assert not [k for c in cli_comments for k in c if k.endswith("_html")], (
+            "the CLI's comments carry an _html member"
         )
 
-        # The script writes it into a .task-modal__text block, which the
-        # stylesheet renders with white-space: pre-wrap, so the line breaks
-        # survive to the screen. The page itself carries no task text any more.
+        members = ["functional_requirements_html", "technical_requirements_html",
+                   "acceptance_criteria_html", "completion_summary_html"]
+        assert [k for k in task if k.endswith("_html")] == members, "the _html members are not in note 9's order"
+        assert "<strong>residual</strong>" in task["functional_requirements_html"]
+        assert "<br>" in task["functional_requirements_html"]
+        assert "<code>!time.Now().Before(exp)</code>" in task["technical_requirements_html"]
+        self._assert_no_raw_html("technical_requirements_html", task["technical_requirements_html"])
+        assert '<input checked="" disabled="" type="checkbox">' in task["acceptance_criteria_html"]
+        assert ('<a href="https://example.org/runbook" target="_blank" rel="noopener noreferrer">'
+                in task["completion_summary_html"])
+        assert detail["comments"][0]["body_html"].startswith("<p>Found the <strong>drift</strong>")
+        self._assert_no_raw_html("body_html", detail["comments"][1]["body_html"])
+
+        # Footnote identifiers of the six fragments the modal shows never collide.
+        ids = []
+        for fragment in [task[m] for m in members] + [c["body_html"] for c in detail["comments"]]:
+            ids += re.findall(r'\sid="([^"]*)"', fragment)
+            for target in re.findall(r'\shref="#([^"]*)"', fragment):
+                assert f' id="{target}"' in fragment, f"fragment #{target} does not resolve in its own field"
+        assert len(ids) == len(set(ids)) and len(ids) >= 12, ids
+        assert all(i.startswith(f"task-{task_id}-") or i.startswith("task-comment-") for i in ids), ids
+
+        _, other = self._task_detail(port, roadmap, open_task)
+        assert other["task"]["completion_summary"] is None
+        assert other["task"]["completion_summary_html"] is None
+
         _, _, script = self._req(port, "/static/task-modal.js")
-        assert '"task-modal__text"' in script, (
-            "the modal script must use the line-break-preserving class"
-        )
-        assert "textContent" in script, "the modal script must write values as text"
-        _, _, css = self._req(port, "/static/style.css")
-        assert ".task-modal__text" in css and "white-space: pre-wrap" in css
-        _, _, body = self._req(port, "/roadmaps/linebreaks_demo/tasks")
-        assert multiline_fr not in body, (
+        assert 'el("div", "markdown")' in script, "the modal does not use the markdown container"
+        _, _, tasks_page = self._req(port, f"/roadmaps/{roadmap}/tasks")
+        assert functional not in tasks_page and "<strong>residual</strong>" not in tasks_page, (
             "the task free-text must not travel in the page; the modal fetches it"
         )
+        assert "Remove the **one-cent** drift" in tasks_page, "the task title is not plain text"
+
+    def test_markdown_server_path_omits_raw_html_and_dangerous_links(self):
+        """On the server-rendered path, a sprint description and a sprint comment
+        carrying raw HTML and dangerous links reach the page through the Markdown
+        renderer only (Acceptance Criteria 73, 183, and 184)."""
+        roadmap = "markdown_hostile"
+        self._run(["roadmap", "create", roadmap])
+        sprint_id = self.test.create_sprint(roadmap, self.HOSTILE_MARKDOWN, title="Harden the importer")
+        self._run(["sprint", "comment-add", "-r", roadmap, str(sprint_id), "--type", "DECISION",
+                   "--body", self.HOSTILE_MARKDOWN])
+        proc, port = self._start(["--port", "0"])
+        _, _, page = self._req(port, f"/roadmaps/{roadmap}/sprints/{sprint_id}")
+        fragments = re.findall(r'<div class="markdown(?: mb-3)?">(.*?)</div>\n', page, re.S)
+        assert len(fragments) == 2, f"{len(fragments)} markdown containers, want the description and the comment"
+        for fragment in fragments:
+            self._assert_no_raw_html("sprint page", fragment)
+            assert "alpha bravo charlie delta javascript:alert(1)" in fragment
+        assert "<script>alert(1)" not in page and "<iframe" not in page
+        _, _, cards = self._req(port, f"/roadmaps/{roadmap}")
+        card, _ = self._sprint_card(cards, roadmap, sprint_id)
+        self._assert_no_raw_html("sprint card", card)
+
+    def test_highlight_stylesheet_served_and_linked(self):
+        """The one dark syntax-highlighting stylesheet is served and linked by the
+        three pages that can render a Markdown field, a fenced go block is
+        highlighted with its classes, and the Content-Security-Policy is unchanged
+        (Acceptance Criteria 182 and 192)."""
+        roadmap = "markdown_highlight"
+        self._run(["roadmap", "create", roadmap])
+        sprint_id = self.test.create_sprint(
+            roadmap,
+            "```go\nfunc Residual() int { return 0 }\n```\n\n```\nplain block\n```\n\n"
+            "![pixel](data:image/png;base64,iVBORw0KGgo=) [board](/roadmaps/%s/tasks)" % roadmap,
+            title="Highlight the runbook")
+        proc, port = self._start(["--port", "0"])
+        status, headers, css = self._req(port, "/static/highlight.css")
+        assert status == 200 and headers.get("content-type", "").startswith("text/css")
+        assert ".chroma" in css and "@media" not in css and "data-bs-theme" not in css
+        link = '<link rel="stylesheet" href="/static/highlight.css">'
+        for path in (f"/roadmaps/{roadmap}", f"/roadmaps/{roadmap}/tasks", f"/roadmaps/{roadmap}/sprints/{sprint_id}"):
+            _, page_headers, page = self._req(port, path)
+            assert page.count(link) == 1, f"{path} does not link the highlighting stylesheet once"
+            assert page_headers.get("content-security-policy") == (
+                "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; "
+                "img-src 'self' data:; font-src 'self'; connect-src 'self'; "
+                "frame-ancestors 'none'; base-uri 'self'"
+            ), f"{path}: the Content-Security-Policy changed"
+            for attrs in re.findall(r"<script([^>]*)>", page):
+                assert 'src="/static/' in attrs, f"{path}: an inline or remote script"
+        _, _, page = self._req(port, f"/roadmaps/{roadmap}/sprints/{sprint_id}")
+        assert '<pre class="chroma">' in page and '<span class="kd">func</span>' in page
+        assert "<pre><code>plain block\n</code></pre>" in page, "an undeclared block is not left unhighlighted"
+        assert '<img src="data:image/png;base64,iVBORw0KGgo=" alt="pixel">' in page
 
     def test_graph_detail_panel_preserves_line_breaks(self):
         """The knowledge-graph detail panel preserves authored line breaks in the

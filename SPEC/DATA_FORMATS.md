@@ -1537,11 +1537,13 @@ roadmap's `project.db` **read-only**: it writes nothing, alters no schema, and
 produces no audit entry.
 
 This is the canonical specification of the task detail response shape. It
-**composes** the two object shapes this file already defines and introduces no new
-field definitions of its own: the task object is the [Task](#task) shape and each
-comment is the [Task Comment](#task-comment) shape. A value therefore carries the
-same field name, the same type, and the same null convention here as it does in
-the corresponding CLI output.
+**composes** the two object shapes this file already defines: the task object is
+the [Task](#task) shape and each comment is the [Task Comment](#task-comment)
+shape. A value therefore carries the same field name, the same type, and the same
+null convention here as it does in the corresponding CLI output. The only field
+definitions of its own are the five `_html` members, which carry the HTML the web
+interface's Markdown renderer produces from the Markdown fields (see note 9 and
+`WEB.md § Markdown Rendering`).
 
 ### Shape
 
@@ -1567,7 +1569,11 @@ the corresponding CLI output.
     "severity": 0,
     "subtask_count": 0,
     "depends_on": [],
-    "blocks": []
+    "blocks": [],
+    "functional_requirements_html": "<p>Users must be able to authenticate securely</p>\n",
+    "technical_requirements_html": "<p>Create authentication module with JWT token support</p>\n",
+    "acceptance_criteria_html": "<p>Functional login with 24h valid tokens; proper error handling</p>\n",
+    "completion_summary_html": null
   },
   "comments": [
     {
@@ -1576,15 +1582,17 @@ the corresponding CLI output.
       "type": "FINDING",
       "body": "The JWT middleware rejects tokens whose exp claim is exactly the current second.",
       "created_at": "2026-03-12T11:15:00.000Z",
-      "updated_at": null
+      "updated_at": null,
+      "body_html": "<p>The JWT middleware rejects tokens whose exp claim is exactly the current second.</p>\n"
     },
     {
       "id": 13,
       "task_id": 42,
       "type": "DECISION",
-      "body": "Token expiry is compared with !time.Now().Before(exp), so the boundary second expires.",
+      "body": "Token expiry is compared with `!time.Now().Before(exp)`, so the boundary second expires.",
       "created_at": "2026-03-12T11:40:00.000Z",
-      "updated_at": "2026-03-12T14:05:00.000Z"
+      "updated_at": "2026-03-12T14:05:00.000Z",
+      "body_html": "<p>Token expiry is compared with <code>!time.Now().Before(exp)</code>, so the boundary second expires.</p>\n"
     }
   ]
 }
@@ -1595,13 +1603,14 @@ the corresponding CLI output.
 1. The object carries exactly two members, `task` and `comments`. No other
    top-level member is added.
 2. `task` is one [Task](#task) object, whose fields are defined for the `Task`
-   model in `MODELS.md § Task`. Every field the task detail modal displays is
-   present, including the long free-text fields (`functional_requirements`,
-   `technical_requirements`, `acceptance_criteria`, and `completion_summary`), the
-   lifecycle timestamps, and the two commit hashes (`commit_open` and
-   `commit_close`).
+   model in `MODELS.md § Task`, followed by the four task `_html` members of
+   note 9. Every field the task detail modal displays is present, including the
+   long free-text fields (`functional_requirements`, `technical_requirements`,
+   `acceptance_criteria`, and `completion_summary`), the lifecycle timestamps, and
+   the two commit hashes (`commit_open` and `commit_close`).
 3. `comments` is an array of [Task Comment](#task-comment) objects, whose fields
-   are defined for the `TaskComment` model in `MODELS.md § Task Comment`.
+   are defined for the `TaskComment` model in `MODELS.md § Task Comment`, each
+   followed by the `body_html` member of note 9.
 4. **Order.** The `comments` array is ordered **oldest first**: `created_at`
    ascending, with the comment `id` ascending as the tie-breaker. This is exactly
    the order `rmp task comment-list` returns for the same task (see
@@ -1616,8 +1625,25 @@ the corresponding CLI output.
 8. The response is JSON-encoded and is never interpolated into HTML by the server.
    Because these values reach the browser as data rather than as server-rendered
    markup, the client that renders them MUST write every value into the DOM as
-   text and never as markup; that requirement is specified in
-   `WEB.md § Task Detail Modal`.
+   text and never as markup, except the five `_html` members of note 9, which hold
+   server-produced HTML and which the client inserts as markup, whole and
+   unmodified; that requirement is specified in `WEB.md § Task Detail Modal`.
+9. **Rendered Markdown members.** Beside the raw fields, which keep their names,
+   types, values, and null conventions unchanged, the response carries exactly five
+   members holding the HTML the web interface's Markdown renderer produces from a
+   Markdown field (see `WEB.md § Markdown Rendering`). Each is named after its raw
+   field with the suffix `_html`:
+   - on `task`, after `blocks` and in this order: `functional_requirements_html`,
+     `technical_requirements_html`, and `acceptance_criteria_html`, each a string,
+     and `completion_summary_html`, a string, or `null` exactly when
+     `completion_summary` is `null`;
+   - on each comment, after `updated_at`: `body_html`, a string.
+
+   A member whose raw field is the empty string is the empty string. Each member is
+   the renderer's output for its raw field, byte for byte, including the footnote
+   identifier prefix of `WEB.md § Markdown Rendering`, rule 12. The `_html` members
+   exist in this response only: the [Task](#task) and
+   [Task Comment](#task-comment) objects the CLI publishes never carry them.
 
 ---
 

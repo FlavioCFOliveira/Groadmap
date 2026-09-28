@@ -27,11 +27,17 @@ const (
 // page header's title column.
 // It is embedded on every page view model under the field name Chrome, which
 // the layout.html partials reference (SPEC/WEB.md § UI Framework).
+//
+// Markdown is set on exactly the pages that can render a Markdown field — the
+// roadmap sprints page, the roadmap tasks page, and the roadmap sprint page — and
+// makes the head partial link the syntax-highlighting stylesheet
+// /static/highlight.css (SPEC/WEB.md § Markdown Rendering, rule 7).
 type chrome struct {
-	Title   string
-	Roadmap string
-	Active  string
-	Heading pageHeading
+	Title    string
+	Roadmap  string
+	Active   string
+	Heading  pageHeading
+	Markdown bool
 }
 
 // titleSeparator joins the segments of a page's document title: one space,
@@ -110,8 +116,8 @@ type indexView struct {
 // is the roadmap whose graph the page visualises; it is reused to build the
 // /static/-free, same-origin data-endpoint URL the client script fetches.
 type graphPageView struct {
-	Chrome chrome
 	Name   string
+	Chrome chrome
 }
 
 // handleIndex renders the roadmap index page: every roadmap discovered
@@ -162,10 +168,11 @@ func handleSprints(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	data.Chrome = chrome{
-		Title:   documentTitle(name, "Sprints", serverHostname),
-		Roadmap: name,
-		Active:  "sprints",
-		Heading: pageHeading{Title: "Sprints"},
+		Title:    documentTitle(name, "Sprints", serverHostname),
+		Roadmap:  name,
+		Active:   "sprints",
+		Heading:  pageHeading{Title: "Sprints"},
+		Markdown: true,
 	}
 	renderHTML(w, r, "sprints.html", data)
 }
@@ -202,10 +209,11 @@ func handleTasks(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	data.Chrome = chrome{
-		Title:   documentTitle(name, "Tasks", serverHostname),
-		Roadmap: name,
-		Active:  "tasks",
-		Heading: pageHeading{Title: "Tasks"},
+		Title:    documentTitle(name, "Tasks", serverHostname),
+		Roadmap:  name,
+		Active:   "tasks",
+		Heading:  pageHeading{Title: "Tasks"},
+		Markdown: true,
 	}
 	renderHTML(w, r, "tasks.html", data)
 }
@@ -350,6 +358,7 @@ func handleSprint(w http.ResponseWriter, r *http.Request) {
 			Badge:      string(data.Sprint.Status),
 			BadgeClass: sprintStatusBadge(data.Sprint.Status),
 		},
+		Markdown: true,
 	}
 	renderHTML(w, r, "sprint.html", data)
 }
