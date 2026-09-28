@@ -3594,8 +3594,8 @@ class TestWebInterface:
         """AC133/AC179: each card shows exactly seven data points, on TWO
         lines, in this order: the task title leading the card, then one line
         carrying at its leading edge the badge line — the id badge reading
-        `#<id>` with `bg-black text-white`, the `Sev: <n>` severity badge, the
-        `Pri: <n>` priority badge, and the type badge reading the task's type in
+        `#<id>` with `bg-black text-white`, the `S<n>` severity badge, the
+        `P<n>` priority badge, and the type badge reading the task's type in
         the variant the task type mapping assigns (`TASK` -> `bg-blue-lt`) — and
         at its trailing edge the comment count followed by the subtask count,
         each counter as an icon followed by its number.
@@ -3662,8 +3662,8 @@ class TestWebInterface:
             r'<span class="d-flex flex-wrap gap-1" '
             r'data-role="task-card-badges">'
             rf'<span class="badge bg-black text-white">#{parent}</span>'
-            r'<span class="badge bg-orange-lt">Sev: 6</span>'
-            r'<span class="badge bg-red-lt">Pri: 7</span>'
+            r'<span class="badge bg-orange-lt">S6</span>'
+            r'<span class="badge bg-red-lt">P7</span>'
             r'<span class="badge bg-blue-lt">TASK</span>'
             r'</span>\s*'
             r'<span class="d-flex flex-wrap gap-2 small text-secondary" '
@@ -3695,7 +3695,7 @@ class TestWebInterface:
         # already states it), no specialists, no dependency counts, no sprint
         # name.
         assert card.count('class="badge') == 4, (
-            f"the card must carry exactly four badges (id, Sev, Pri and type); found "
+            f"the card must carry exactly four badges (id, severity, priority and type); found "
             f"{card.count('class=\"badge')} in {card}"
         )
         for absent in ("task-card-sprint", "task-card-specialists",
@@ -3708,11 +3708,12 @@ class TestWebInterface:
         """AC85/AC133/AC178/AC179: on the card of BOTH boards the task title is
         the first line, and the next line opens with exactly four badges in
         this order: the id badge `#<id>` with `bg-black text-white`, the
-        severity badge `Sev: <n>`, the priority badge `Pri: <n>`, and the type
-        badge in its type variant. The two boards render that line byte for
-        byte alike, the id badge keeps its fixed classes whatever the task's
-        values, and the retired forms (`S<n>`, `P<n>`, `Sev:<n>`, and the
-        separate reference line) are absent.
+        severity badge `S<n>`, the priority badge `P<n>`, and the type badge in
+        its type variant. The two boards render that line byte for byte alike,
+        the id badge keeps its fixed classes whatever the task's values, and
+        the rejected forms (`S <n>`, `S:<n>`, `Sev:<n>`, `Sev: <n>`, their
+        priority counterparts, any `Sev:` or `Pri:` text, and the separate
+        reference line) are absent.
 
         Two tasks of different types, severities, and priorities are asserted,
         with each task's severity and priority different from each other, so a
@@ -3757,8 +3758,8 @@ class TestWebInterface:
             want_line = (
                 '<span class="d-flex flex-wrap gap-1" data-role="task-card-badges">'
                 f'<span class="badge bg-black text-white">#{task_id}</span>'
-                f'<span class="badge {severity_variant[severity]}">Sev: {severity}</span>'
-                f'<span class="badge {priority_variant[priority]}">Pri: {priority}</span>'
+                f'<span class="badge {severity_variant[severity]}">S{severity}</span>'
+                f'<span class="badge {priority_variant[priority]}">P{priority}</span>'
                 f'<span class="badge {type_variant[task_type]}">{task_type}</span>'
                 '</span>'
             )
@@ -3784,8 +3785,11 @@ class TestWebInterface:
                     f"{where}: task #{task_id}'s card still renders the separate "
                     f"reference line: {card}"
                 )
-                for retired in (f">S{severity}<", f">P{priority}<",
+                for retired in (f">S {severity}<", f">P {priority}<",
+                                f">S:{severity}<", f">P:{priority}<",
                                 f">Sev:{severity}<", f">Pri:{priority}<",
+                                f">Sev: {severity}<", f">Pri: {priority}<",
+                                "Sev:", "Pri:",
                                 f'bg-secondary-lt">#{task_id}<'):
                     assert retired not in card, (
                         f"AC85/AC178: {where} renders the retired form {retired!r} "

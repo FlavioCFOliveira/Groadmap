@@ -562,7 +562,7 @@ func TestTaskBoard_CardContent(t *testing.T) {
 
 	// 2. The badge line, after the title: the id badge reading #id in bg-black
 	//    with text-white; the severity and priority badges, each writing its
-	//    value behind its badge label and one space — Sev: 4 and Pri: 7 — in the
+	//    value immediately behind its one-letter badge label — S4 and P7 — in the
 	//    colour of the VALUE (severity 4 -> bg-yellow-lt, medium band; priority
 	//    7 -> bg-red-lt, high band; the two bands differ, so a card that read one
 	//    field for both fails on the class as well as on the label); then the type
@@ -570,8 +570,8 @@ func TestTaskBoard_CardContent(t *testing.T) {
 	//    assigns to USER_STORY (bg-green-lt).
 	line := `<span class="d-flex flex-wrap gap-1" data-role="task-card-badges">` +
 		`<span class="badge bg-black text-white">#` + itoa(f.passkey) + `</span>` +
-		`<span class="badge bg-yellow-lt">Sev: 4</span>` +
-		`<span class="badge bg-red-lt">Pri: 7</span>` +
+		`<span class="badge bg-yellow-lt">S4</span>` +
+		`<span class="badge bg-red-lt">P7</span>` +
 		`<span class="badge bg-green-lt">` + string(models.TypeUserStory) + `</span></span>`
 	lineAt := strings.Index(card, line)
 	if lineAt < 0 {
@@ -580,18 +580,21 @@ func TestTaskBoard_CardContent(t *testing.T) {
 	if lineAt >= 0 && titleAt >= 0 && lineAt < titleAt {
 		t.Errorf("the card shows the badge line before the title\ncard: %s", card)
 	}
-	// A badge carrying the bare integer, or the retired one-letter prefix, or the
-	// label with no space, does not satisfy Acceptance Criterion 85, so each is
+	// A badge carrying the bare integer, a separator between the letter and the
+	// digits, or the retired Sev:/Pri: label in either spacing, does not satisfy
+	// Acceptance Criterion 85, so each is
 	// asserted ABSENT and not merely left unasserted: a card rendering two forms
 	// would otherwise pass.
 	for _, wrong := range []string{
 		`<span class="badge bg-red-lt">7</span>`,
 		`<span class="badge bg-yellow-lt">4</span>`,
-		`>P7<`, `>S4<`, `>Pri:7<`, `>Sev:4<`,
+		`>P 7<`, `>S 4<`, `>P:7<`, `>S:4<`,
+		`>Pri:7<`, `>Sev:4<`, `>Pri: 7<`, `>Sev: 4<`, `Sev:`, `Pri:`,
 	} {
 		if strings.Contains(card, wrong) {
 			t.Errorf("the card renders %s; the severity and priority badges name the value they "+
-				"carry with the badge label and one space (Acceptance Criterion 85)\ncard: %s",
+				"carry with the one-letter badge label immediately followed by the value "+
+				"(Acceptance Criterion 85)\ncard: %s",
 				wrong, card)
 		}
 	}
@@ -730,8 +733,8 @@ func TestTaskBoard_AbsentMetadataRendersNothing(t *testing.T) {
 	if !strings.Contains(bare, "Audit the session-cookie flags") {
 		t.Errorf("the metadata-free card lost its title\ncard: %s", bare)
 	}
-	if !strings.Contains(bare, `<span class="badge bg-yellow-lt">Pri: 5</span>`) {
-		t.Errorf("the metadata-free card lost its priority badge, which reads Pri: 5 whatever the "+
+	if !strings.Contains(bare, `<span class="badge bg-yellow-lt">P5</span>`) {
+		t.Errorf("the metadata-free card lost its priority badge, which reads P5 whatever the "+
 			"card's metadata\ncard: %s", bare)
 	}
 

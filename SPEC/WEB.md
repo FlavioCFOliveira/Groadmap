@@ -1160,10 +1160,10 @@ how the `rmp web` process itself terminates.
        could state, so no colour mapping governs this badge (see
        [Status, Priority, and Severity Badge Colours](#status-priority-and-severity-badge-colours),
        rule 2);
-     - the **`severity` badge**, whose text is the badge label `Sev:`, one space
-       (U+0020), and the task's integer `severity`;
-     - the **`priority` badge**, whose text is the badge label `Pri:`, one space
-       (U+0020), and the task's integer `priority`;
+     - the **`severity` badge**, whose text is the badge label `S` immediately
+       followed by the task's integer `severity`;
+     - the **`priority` badge**, whose text is the badge label `P` immediately
+       followed by the task's integer `priority`;
      - the **type badge**, whose text is the task's `type` exactly as the
        `TaskType` enum spells it (see `MODELS.md § Enums`) — for example
        `IMPROVEMENT` — and whose colour is the variant the task type table assigns
@@ -1171,8 +1171,9 @@ how the `rmp web` process itself terminates.
        [Status, Priority, and Severity Badge Colours](#status-priority-and-severity-badge-colours).
        The card introduces no colour of its own for the type.
 
-     A task of severity `3` and priority `5` therefore shows `Sev: 3` and `Pri: 5`,
-     the severity badge before the priority badge. The severity and priority badges
+     The badge label is one letter, and no colon, no space, and no other separator
+     stands between it and the digits. A task of severity `3` and priority `5`
+     therefore shows `S3` and `P5`, the severity badge before the priority badge. The severity and priority badges
      are each coloured by the band their value falls in, using exactly the mapping in
      [Status, Priority, and Severity Badge Colours](#status-priority-and-severity-badge-colours).
      No new badge colour and no new band is introduced here.
@@ -1189,18 +1190,19 @@ how the `rmp web` process itself terminates.
      **one** form for this line.
 
      **The severity and priority badges each name the value they carry with a badge
-     label.** The label is the word the card has no room to write out in full.
-     Wherever else this interface shows these two values, the field's name stands
+     label.** The label stands for the word the card has no room to write out in
+     full. Wherever else this interface shows these two values, the field's name stands
      beside each of them — the task detail modal writes the field's name beside the
      value (see [Task Detail Modal](#task-detail-modal)) — but without a label the
      card would put two bare integers side by side and state nowhere which one is
      the severity and which one is the priority. A reader would have to know the
-     order by heart to tell `3` from `5`. The label states the field in the fewest
-     characters that still read as its name.
+     order by heart to tell `3` from `5`. The label is the initial letter of the
+     field's name — `S` for `severity`, `P` for `priority` — which is the fewest
+     characters that tell the two fields apart.
 
      **The badge label is a label, not a value.** It changes what the badge reads
      and nothing else. The colour still follows the value alone, through exactly the
-     band mapping named above: `Pri: 5` takes the colour that mapping assigns to the
+     band mapping named above: `P5` takes the colour that mapping assigns to the
      priority `5`, and the label selects no colour, introduces no band, and changes
      no meaning. The card's accessible name is unaffected as well: it is
      `Open details for task #<id>: <title>` (see **Clickable card** below), it
@@ -2746,8 +2748,8 @@ shows sprints as compact cards through the shared sprint-card partial instead (s
 
         The **badge line** leads: the task's **id badge**, **`severity` badge**,
         **`priority` badge**, and **type badge**, in that order — a task 42 of
-        severity `3`, priority `5`, and type `IMPROVEMENT` shows `#42`, `Sev: 3`,
-        `Pri: 5`, and `IMPROVEMENT`. The line is the tasks board card's own badge
+        severity `3`, priority `5`, and type `IMPROVEMENT` shows `#42`, `S3`, `P5`,
+        and `IMPROVEMENT`. The line is the tasks board card's own badge
         line, with the same four badges in the same order, with the same texts and
         badge labels, and in the same colours, and it is stated once, for the card
         of both boards, in [Roadmap Tasks Page](#roadmap-tasks-page), **Card
@@ -4116,7 +4118,7 @@ tasks.
   the board card presents only the subset defined in
   [Roadmap Tasks Page](#roadmap-tasks-page).
 - **No badge label on the modal's priority and severity badges.** The badge labels
-  `Pri: ` and `Sev: ` that the board card's `priority` and `severity` badges carry
+  `P` and `S` that the board card's `priority` and `severity` badges carry
   (see [Roadmap Tasks Page](#roadmap-tasks-page), **Card content**, item 2) belong
   to the card and are not rendered here. Those labels exist because a card shows the
   two values with no field name beside either of them; the modal names every field
@@ -5507,11 +5509,11 @@ Rules:
      either board writes the `TaskType` value exactly as the enum spells it, with no
      badge label, and takes the variant the task type table assigns to it. On the
      card of either board the severity and priority badges write that value behind a
-     badge label — `Sev: 2`, `Pri: 7` — which names the field the value belongs to,
+     one-letter badge label — `S2`, `P7` — which names the field the value belongs to,
      because a card carries no field name that would (see
      [Roadmap Tasks Page](#roadmap-tasks-page), **Card content**, item 2). The badge
      label is a label and not a value: this mapping keys on the value alone and never
-     on the label, so `Pri: 7` takes the colour of the priority `7`, `Sev: 2` takes
+     on the label, so `P7` takes the colour of the priority `7`, `S2` takes
      the colour of the severity `2`, and no band, no colour variant, and no enum
      value changes because of it.
    - **The badge counts the members of a group with one status to key on.** Three
@@ -6854,13 +6856,15 @@ Rules:
     `title` as the card's first line and prominent main content; on the next line,
     the badge line, carrying exactly four Tabler badges in this order — an id badge
     reading `#<id>` with the classes `bg-black` and `text-white`, a `severity` badge
-    reading `Sev:`, one space, and the task's severity, a `priority` badge reading
-    `Pri:`, one space, and the task's priority, and a type badge reading the task's
-    `type` exactly as the `TaskType` enum spells it and coloured by the task type
-    mapping (Acceptance Criteria 177 to 179) — so a task of severity `3` and priority
-    `5` shows `Sev: 3` and `Pri: 5`, and a badge reading `3`, `S3`, or `Sev:3` does
-    not satisfy this criterion; the severity and priority badges are each coloured
-    by the mapping in
+    reading `S` immediately followed by the task's severity, a `priority` badge
+    reading `P` immediately followed by the task's priority, with no colon, no space,
+    and no other separator between the letter and the digits, and a type badge
+    reading the task's `type` exactly as the `TaskType` enum spells it and coloured
+    by the task type mapping (Acceptance Criteria 177 to 179) — so a task of severity
+    `3` and priority `5` shows `S3` and `P5`, and a badge reading `3`, `S 3`,
+    `S:3`, `Sev:3`, or `Sev: 3` (or the corresponding `Pri:` form) does not satisfy
+    this criterion, and no `Sev:` or `Pri:` text appears on the card; the severity
+    and priority badges are each coloured by the mapping in
     [Status, Priority, and Severity Badge Colours](#status-priority-and-severity-badge-colours)
     applied to the value alone and not to the labelled text, so the badge label
     changes no badge colour (Acceptance Criterion 61 continues to hold); and, below
@@ -7561,9 +7565,10 @@ Rules:
     two lines, in this order: the task `title` as the card's first line and
     prominent main content; and one line carrying, at its leading edge, the badge
     line exactly as the tasks board's card carries it — an id badge reading `#<id>`
-    with the classes `bg-black` and `text-white`, a `severity` badge reading `Sev:`,
-    one space, and the task's severity, a `priority` badge reading `Pri:`, one
-    space, and the task's priority, and a type badge reading the task's `type` and
+    with the classes `bg-black` and `text-white`, a `severity` badge reading `S`
+    immediately followed by the task's severity, a `priority` badge reading `P`
+    immediately followed by the task's priority, with no colon, no space, and no
+    other separator between the letter and the digits, and a type badge reading the task's `type` and
     coloured by the task type mapping, in that order (Acceptance Criteria 177 to
     179) — and, at its trailing edge, the number of comments followed by the number of
     subtasks, each as an icon (`ti ti-message` and `ti ti-subtask` respectively)
@@ -7576,8 +7581,10 @@ Rules:
     overflow (Acceptance Criterion 27 continues to hold). The card carries no inline
     `style` attribute, and every class it emits is defined either in the vendored
     Tabler distribution or in `static/style.css` (Acceptance Criterion 62 continues
-    to hold). A task of severity `3` and priority `5` shows `Sev: 3` and `Pri: 5`; a
-    badge reading `3`, `S3`, or `Sev:3` does not satisfy this criterion, and this
+    to hold). A task of severity `3` and priority `5` shows `S3` and `P5`; a badge
+    reading `3`, `S 3`, `S:3`, `Sev:3`, or `Sev: 3` (or the corresponding `Pri:`
+    form) does not satisfy this criterion, no `Sev:` or `Pri:` text appears on the
+    card, and this
     card renders the four badges exactly as the tasks board's card does (Acceptance
     Criterion 85 continues to hold). The card of the roadmap tasks page's board is unchanged by
     this criterion: it keeps its separate metadata footer and that footer's own
@@ -8246,7 +8253,10 @@ Rules:
     priority, type, on both boards.** On the card of both boards, the task `title`
     is the first line of the card; the next line opens with exactly four badges, in
     this order: the id badge, the severity badge, the priority badge, and the type
-    badge. The lines and groups that follow are those Acceptance Criterion 85 fixes
+    badge. The severity badge reads `S<n>` and the priority badge reads `P<n>`, a
+    one-letter badge label immediately followed by the value, and neither reads a
+    `Sev:` or `Pri:` form (Acceptance Criteria 85 and 133). The lines and groups that
+    follow are those Acceptance Criterion 85 fixes
     for the tasks board's card and Acceptance Criterion 133 fixes for the sprint
     board's card. The check MUST assert this order on both boards, because a card
     that shows the right four badges before the title, or the priority badge before

@@ -10,9 +10,11 @@ import (
 )
 
 // The guards in this file cover ONE rule and its exclusions: on the card of
-// either board, the severity badge writes the badge label `Sev:`, one space, and
-// the task's severity, the priority badge writes `Pri:`, one space, and the
-// task's priority — severity first — and no other badge in this interface takes
+// either board, the severity badge writes the badge label `S` immediately
+// followed by the task's severity, the priority badge writes `P` immediately
+// followed by the task's priority — with no colon, space, or other separator
+// between the letter and the digits, severity first — and no other badge in
+// this interface takes
 // a badge label (SPEC/WEB.md § Roadmap Tasks Page, Card content, item 2;
 // Acceptance Criteria 85 and 133).
 //
@@ -41,7 +43,7 @@ import (
 //
 // The comparison is made between the two boards' rendered bytes, for the same
 // task, so a change applied to one card and not to the other fails here whatever
-// the change is — a dropped label, a missing space, a swapped order, a different
+// the change is — a dropped label, an added separator, a swapped order, a different
 // element. Both boards are then compared against the labelled form built from the
 // task's own severity and priority, so the two agreeing on the UNLABELLED form
 // cannot pass either.
@@ -79,14 +81,15 @@ func TestBadgePrefix_BothBoardsRenderOnePairForm(t *testing.T) {
 		// And that one form is the labelled one, built from the task's own values
 		// and the mapping's own variants rather than written out here.
 		want := badgePair{
-			severity: `<span class="badge ` + severityBadge(task.Severity) + `">Sev: ` +
+			severity: `<span class="badge ` + severityBadge(task.Severity) + `">S` +
 				itoa(task.Severity) + `</span>`,
-			priority: `<span class="badge ` + priorityBadge(task.Priority) + `">Pri: ` +
+			priority: `<span class="badge ` + priorityBadge(task.Priority) + `">P` +
 				itoa(task.Priority) + `</span>`,
 		}
 		if onTasks != want {
 			t.Errorf("task #%d (severity %d, priority %d) renders %s %s, want %s %s: each badge "+
-				"names the value it carries with its badge label, one space, then the value, "+
+				"names the value it carries with its one-letter badge label immediately followed "+
+				"by the value, "+
 				"severity first (Acceptance Criteria 85 and 133)",
 				id, task.Severity, task.Priority,
 				onTasks.severity, onTasks.priority, want.severity, want.priority)
@@ -122,7 +125,7 @@ func TestBadgePrefix_BothBoardsRenderOnePairForm(t *testing.T) {
 //
 //   - A task whose priority and severity fall in DIFFERENT bands must still get
 //     the two different band colours. This is the case a mapping keyed on the
-//     badge's text — "Pri: 9" and "Sev: 2" are two strings in no band at all —
+//     badge's text — "P9" and "S2" are two strings in no band at all —
 //     would fail, by falling back to one variant for both.
 //   - A task whose priority and severity fall in the SAME band is the case that
 //     shows why the badge label exists: the two badges are then identical but for
@@ -162,11 +165,11 @@ func TestBadgePrefix_ColourFollowsTheValueNotThePrefixedText(t *testing.T) {
 
 			// And the text is the value behind its badge label, so the badge whose
 			// colour was checked is the badge the reader is told the field of.
-			if got, want := pair.priorityText(), "Pri: "+itoa(task.Priority); got != want {
+			if got, want := pair.priorityText(), "P"+itoa(task.Priority); got != want {
 				t.Errorf("%s: task #%d's priority badge reads %q, want %q",
 					where, id, got, want)
 			}
-			if got, want := pair.severityText(), "Sev: "+itoa(task.Severity); got != want {
+			if got, want := pair.severityText(), "S"+itoa(task.Severity); got != want {
 				t.Errorf("%s: task #%d's severity badge reads %q, want %q",
 					where, id, got, want)
 			}
@@ -236,8 +239,8 @@ func TestBadgePrefix_TaskDetailModalRendersTheValuesBare(t *testing.T) {
 	mux := buildMux()
 
 	// The server half. The schema task carries the SPEC's own worked example,
-	// severity 3 and priority 5, whose card reads Sev: 3 and Pri: 5 — so if the
-	// values travelled labelled, this is where it would show.
+	// severity 3 and priority 5, whose card reads S3 and P5 — so if the values
+	// travelled labelled, this is where it would show.
 	status, body := fetchTaskDetail(t, mux, f.name, f.schema)
 	if status != http.StatusOK {
 		t.Fatalf("GET the detail of task #%d: status = %d, want 200; body=%q",
@@ -252,7 +255,9 @@ func TestBadgePrefix_TaskDetailModalRendersTheValuesBare(t *testing.T) {
 			"5 and 3, which the assertions below are written against",
 			f.schema, task.Priority, task.Severity)
 	}
-	for _, label := range []string{"Sev:", "Pri:"} {
+	// A labelled value would travel as a JSON string, so the labelled forms are
+	// looked for quoted; the retired long labels are looked for anywhere.
+	for _, label := range []string{`"S3"`, `"P5"`, "Sev:", "Pri:"} {
 		if strings.Contains(body, label) {
 			t.Errorf("the task detail endpoint carries %q; the badge label is the board card's "+
 				"and is applied where the card is rendered, never in the data\nbody: %s",
@@ -263,7 +268,7 @@ func TestBadgePrefix_TaskDetailModalRendersTheValuesBare(t *testing.T) {
 	// of that very task really does write the labelled strings.
 	card := cardMarkupOf(t, boardRegion(t, servePage(t, mux, "/roadmaps/"+f.name+"/tasks")),
 		f.schema, "the tasks board")
-	for _, labelled := range []string{">Sev: 3<", ">Pri: 5<"} {
+	for _, labelled := range []string{">S3<", ">P5<"} {
 		if !strings.Contains(card, labelled) {
 			t.Errorf("the card of task #%d does not render %s, so asserting the endpoint omits "+
 				"the labelled form proves nothing\ncard: %s", f.schema, labelled, card)
@@ -385,8 +390,8 @@ func TestBadgePrefix_NoOtherBadgeTakesAPrefix(t *testing.T) {
 			if !reSeverityBadgeText.MatchString(found[1].text) ||
 				!rePriorityBadgeText.MatchString(found[2].text) {
 				t.Errorf("%s: a board card's middle badges read %q and %q, want a severity badge "+
-					"reading \"Sev: \" then its value and a priority badge reading \"Pri: \" then "+
-					"its value, in that order\ncard: %s", path, found[1].text, found[2].text, card)
+					"reading \"S\" immediately followed by its value and a priority badge reading "+
+					"\"P\" immediately followed by its value, in that order\ncard: %s", path, found[1].text, found[2].text, card)
 			}
 		}
 
@@ -486,16 +491,17 @@ func badgeTextOf(markup string) string {
 var reLeafSpan = regexp.MustCompile(`<span\b([^>]*)>([^<]*)</span>`)
 
 // rePriorityBadgeText and reSeverityBadgeText recognise the labelled form: the
-// badge label, exactly one space (U+0020), and the value, an integer in 0-9
+// one-letter badge label immediately followed by the value, an integer in 0-9
 // (MODELS.md § Task), which is the form Acceptance Criteria 85 and 133 fix — so
-// `Sev:3`, `S3`, and a bare `3` do not match. reLabelledBadgeText recognises a
-// badge carrying either label, or the retired one-letter prefix, in ANY spacing,
-// which is what the exclusion checks must refuse wherever a label does not
-// belong. reIDBadgeText recognises the id badge's #<id> reference form.
+// `S 3`, `S:3`, `Sev:3`, `Sev: 3`, and a bare `3` do not match.
+// reLabelledBadgeText recognises a badge carrying either one-letter label, or
+// the retired `Sev:`/`Pri:` label, with ANY separator, which is what the
+// exclusion checks must refuse wherever a label does not belong. reIDBadgeText
+// recognises the id badge's #<id> reference form.
 var (
-	rePriorityBadgeText = regexp.MustCompile(`^Pri: [0-9]+$`)
-	reSeverityBadgeText = regexp.MustCompile(`^Sev: [0-9]+$`)
-	reLabelledBadgeText = regexp.MustCompile(`^(?:(?:Sev|Pri):\s*[0-9]+|[PS][0-9]+)$`)
+	rePriorityBadgeText = regexp.MustCompile(`^P[0-9]+$`)
+	reSeverityBadgeText = regexp.MustCompile(`^S[0-9]+$`)
+	reLabelledBadgeText = regexp.MustCompile(`^(?:Sev|Pri|S|P)\s*:?\s*[0-9]+$`)
 	reIDBadgeText       = regexp.MustCompile(`^#[0-9]+$`)
 )
 

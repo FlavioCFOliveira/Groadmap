@@ -528,8 +528,10 @@
 
     1. the id badge, reading #<id> with the fixed classes bg-black and text-white
        for every task;
-    2. the severity badge, reading "Sev: " then the task's severity;
-    3. the priority badge, reading "Pri: " then the task's priority;
+    2. the severity badge, reading the badge label S immediately followed by
+       the task's severity (S3), with no colon, space, or other separator;
+    3. the priority badge, reading the badge label P immediately followed by
+       the task's priority (P5), with no colon, space, or other separator;
     4. the type badge, reading the TaskType value exactly as the enum spells it
        and coloured by taskTypeBadge.
 
@@ -542,7 +544,7 @@
   id identifies a task and is a value no colour table knows, so no mapping
   governs it, and no table assigns bg-black to any value (SPEC/WEB.md § Status,
   Priority, and Severity Badge Colours, The id badge is outside the mapping).
-  "Sev: " and "Pri: " are badge labels, not values: the colour helpers are handed
+  "S" and "P" are badge labels, not values: the colour helpers are handed
   .Severity and .Priority themselves, so each band is the band of the value and
   the label reaches no mapping. The id and type badges take no badge label: the
   id is written in its #<id> reference form, and the type's own text names it.
@@ -557,7 +559,7 @@
 
   Dot is the card's taskView; only .ID, .Severity, .Priority, and .Type are read.
 */}}
-{{define "taskCardBadges"}}<span class="d-flex flex-wrap gap-1" data-role="task-card-badges"><span class="badge bg-black text-white">#{{.ID}}</span><span class="badge {{severityBadge .Severity}}">Sev: {{.Severity}}</span><span class="badge {{priorityBadge .Priority}}">Pri: {{.Priority}}</span><span class="badge {{taskTypeBadge .Type}}">{{.Type}}</span></span>{{end}}
+{{define "taskCardBadges"}}<span class="d-flex flex-wrap gap-1" data-role="task-card-badges"><span class="badge bg-black text-white">#{{.ID}}</span><span class="badge {{severityBadge .Severity}}">S{{.Severity}}</span><span class="badge {{priorityBadge .Priority}}">P{{.Priority}}</span><span class="badge {{taskTypeBadge .Type}}">{{.Type}}</span></span>{{end}}
 
 {{/*
   taskModalShell is the ONE task detail modal a page renders. It is an empty

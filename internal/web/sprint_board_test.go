@@ -1288,8 +1288,8 @@ func reorderSprintTasks(t *testing.T, roadmap string, sprintID int, taskIDs []in
 // bands, so the two badges carry different classes and a card that read one field
 // for both, or swapped them, fails here.
 //
-// Each value badge writes its value behind the badge label that names it —
-// Sev: 2 and Pri: 9 — exactly as the tasks board's card does, because the rule is
+// Each value badge writes its value immediately behind the one-letter badge label
+// that names it — S2 and P9 — exactly as the tasks board's card does, because the rule is
 // stated once for the card of both boards (SPEC/WEB.md § Roadmap Tasks Page, Card
 // content, item 2; Acceptance Criteria 85 and 133). The badge label is a label and
 // not a value: the class each badge carries is still the one the mapping assigns
@@ -1313,8 +1313,8 @@ func TestSprintBoard_CardShowsSevenDataPointsInOrder(t *testing.T) {
 	//         from the task type mapping (the reconciliation task is a USER_STORY).
 	idBadge := `<span class="d-flex flex-wrap gap-1" data-role="task-card-badges">` +
 		`<span class="badge bg-black text-white">#` + itoa(f.reconcile) + `</span>`
-	severity := `<span class="badge ` + severityBadge(2) + `">Sev: 2</span>`
-	priority := `<span class="badge ` + priorityBadge(9) + `">Pri: 9</span>`
+	severity := `<span class="badge ` + severityBadge(2) + `">S2</span>`
+	priority := `<span class="badge ` + priorityBadge(9) + `">P9</span>`
 	typeBadge := `<span class="badge ` + taskTypeBadge(models.TypeUserStory) + `">` +
 		string(models.TypeUserStory) + `</span></span>`
 	// 6 and 7. The counters, at the TRAILING edge of that same line, each an icon
@@ -1354,18 +1354,21 @@ func TestSprintBoard_CardShowsSevenDataPointsInOrder(t *testing.T) {
 		previous = at
 	}
 
-	// A badge carrying the bare integer, the retired one-letter prefix, or the
-	// label with no space does not satisfy Acceptance Criterion 133, so each is
+	// A badge carrying the bare integer, a separator between the letter and the
+	// digits, or the retired Sev:/Pri: label in either spacing does not satisfy
+	// Acceptance Criterion 133, so each is
 	// asserted ABSENT rather than left unasserted: a card rendering two forms would
 	// otherwise pass the presence checks above.
 	for _, wrong := range []string{
 		`<span class="badge ` + priorityBadge(9) + `">9</span>`,
 		`<span class="badge ` + severityBadge(2) + `">2</span>`,
-		`>P9<`, `>S2<`, `>Pri:9<`, `>Sev:2<`,
+		`>P 9<`, `>S 2<`, `>P:9<`, `>S:2<`,
+		`>Pri:9<`, `>Sev:2<`, `>Pri: 9<`, `>Sev: 2<`, `Sev:`, `Pri:`,
 	} {
 		if strings.Contains(card, wrong) {
 			t.Errorf("the card renders %s; the severity and priority badges name the value they "+
-				"carry with the badge label and one space, exactly as the tasks board's card "+
+				"carry with the one-letter badge label immediately followed by the value, "+
+				"exactly as the tasks board's card "+
 				"does (Acceptance Criteria 85 and 133)\ncard: %s", wrong, card)
 		}
 	}
@@ -1480,8 +1483,8 @@ func TestSprintBoard_BothCountersAlwaysRender(t *testing.T) {
 	if !strings.Contains(bare, sprintTaskRunbook) {
 		t.Errorf("the counter-free card lost its title\ncard: %s", bare)
 	}
-	if !strings.Contains(bare, `<span class="badge `+priorityBadge(8)+`">Pri: 8</span>`) {
-		t.Errorf("the counter-free card lost its priority badge, which reads Pri: 8 whatever the "+
+	if !strings.Contains(bare, `<span class="badge `+priorityBadge(8)+`">P8</span>`) {
+		t.Errorf("the counter-free card lost its priority badge, which reads P8 whatever the "+
 			"card's counters\ncard: %s", bare)
 	}
 

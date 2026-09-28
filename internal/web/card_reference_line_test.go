@@ -380,9 +380,9 @@ func TestBoardCards_LeadWithTitleThenBadgeLine(t *testing.T) {
 
 			wantLine := `<span class="d-flex flex-wrap gap-1" data-role="task-card-badges">` +
 				`<span class="badge bg-black text-white">#` + itoa(task.id) + `</span>` +
-				`<span class="badge ` + severityBadge(task.severity) + `">Sev: ` +
+				`<span class="badge ` + severityBadge(task.severity) + `">S` +
 				itoa(task.severity) + `</span>` +
-				`<span class="badge ` + priorityBadge(task.priority) + `">Pri: ` +
+				`<span class="badge ` + priorityBadge(task.priority) + `">P` +
 				itoa(task.priority) + `</span>` +
 				`<span class="badge ` + wantTaskTypeVariant[task.taskType] + `">` +
 				string(task.taskType) + `</span></span>`
