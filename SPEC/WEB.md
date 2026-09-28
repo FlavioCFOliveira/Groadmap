@@ -2187,9 +2187,13 @@ how the `rmp web` process itself terminates.
   title defined for the `Sprint` model in `MODELS.md § Sprint`) alongside the text
   `Sprint #<ID>` (the sprint's `id`), so the sprint is identifiable by both its
   title and its id. It is rendered by the shared partial, which places
-  `Sprint #<ID>` in the pretitle and the `title` with its status badge in the
+  `Sprint #<ID>` followed by the sprint's status badge in the pretitle, so the
+  pretitle reads `Sprint #<ID>` and then the badge, and the `title` alone in the
   title (see [Shared Page-Header Partial](#shared-page-header-partial)); the
-  roadmap name is not repeated there. The actions column carries a link back to
+  roadmap name is not repeated there. The badge takes its colour from the sprint
+  status mapping in
+  [Status, Priority, and Severity Badge Colours](#status-priority-and-severity-badge-colours).
+  The actions column carries a link back to
   the roadmap's sprints page. The page does not redefine these fields;
   `MODELS.md` remains canonical.
 - **Sprint status summary line.** At the top of the sprint presentation the page
@@ -2433,8 +2437,9 @@ which this section leaves unchanged.
 Every page's header title column is rendered by **one** partial, so the six pages
 cannot drift into six conventions for saying the same kind of thing. The partial
 renders the `<div class="col">` of the Tabler page-header row: an optional
-pretitle, the title, an optional status badge inside the title, and an optional
-lead line. A page MUST NOT hand-write a `page-pretitle` or a `page-title` element.
+pretitle, an optional status badge inside the pretitle, placed after the pretitle
+text, the title, and an optional lead line. A page MUST NOT hand-write a
+`page-pretitle` or a `page-title` element.
 The document `<title>` is a separate element, specified in
 [Document Title](#document-title).
 
@@ -2452,15 +2457,18 @@ The document `<title>` is a separate element, specified in
    | Roadmap Tasks | — | `Tasks` |
    | Roadmap Audit Log | — | `Audit` |
    | Roadmap Knowledge-Graph | — | `Knowledge graph` |
-   | Roadmap Sprint | `Sprint #<ID>` | the sprint's `title`, with its status badge |
+   | Roadmap Sprint | `Sprint #<ID>`, followed by the sprint's status badge | the sprint's `title` |
 
 2. **The sprint page is the one hierarchical header.** It is the only page that
    presents an individual record rather than a view of the roadmap, so it alone
    carries a pretitle, and that pretitle is `Sprint #<ID>` — the roadmap name is
-   not repeated in it. The sprint's `title` stays the header title and keeps the
-   status badge specified in
-   [Roadmap Sprint Page](#roadmap-sprint-page), so the sprint remains identifiable
-   by both its title and its id.
+   not repeated in it. The sprint's status badge specified in
+   [Roadmap Sprint Page](#roadmap-sprint-page) sits inside the pretitle,
+   immediately after the text `Sprint #<ID>` and separated from it by white
+   space, so the pretitle reads `Sprint #<ID>` followed by the badge. The sprint's `title`
+   stays the header title and holds the `title` alone, with no badge. The sprint
+   therefore remains identifiable by both its title and its id. No other page's
+   header carries a badge.
 
 3. **The lead line belongs to the roadmap index alone.** The index page's title is
    followed by a lead line naming the directory the roadmaps are discovered under.
@@ -7144,10 +7152,11 @@ Rules:
 109. Every page's header title column is rendered by the shared page-header
     partial: no page hand-writes a `page-pretitle` or a `page-title` element, and
     the titles read exactly `Roadmaps`, `Sprints`, `Tasks`, `Audit`,
-    `Knowledge graph`, and — on a sprint's own page — that sprint's `title` with
-    its status badge, under the pretitle `Sprint #<ID>`. No header title contains the
-    roadmap name, which the shell already states in the sidebar and in the top
-    navbar. Each page's actions column carries only what
+    `Knowledge graph`, and — on a sprint's own page — that sprint's `title` alone,
+    under the pretitle `Sprint #<ID>` followed by the sprint's status badge; the
+    sprint page's title contains no badge, and no other page's header carries one.
+    No header title contains the roadmap name, which the shell already states in
+    the sidebar and in the top navbar. Each page's actions column carries only what
     [Shared Page-Header Partial](#shared-page-header-partial) fixes: the tasks
     page's search input and its three filter dropdowns, the knowledge-graph page's
     layout dropdown, and the sprint page's link back to the roadmap's sprints page.

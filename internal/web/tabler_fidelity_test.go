@@ -817,20 +817,41 @@ func TestPageHeader_SharedPartialAndActions(t *testing.T) {
 		}
 	}
 
-	// The sprint page: pretitle Sprint #<id>, title the sprint's own title with
-	// its status badge, and no roadmap name in either.
-	sprintBody := servePage(t, mux, "/roadmaps/"+name+"/sprints/1")
-	if !strings.Contains(sprintBody, `<div class="page-pretitle">Sprint #1</div>`) {
-		t.Errorf("sprint page: pretitle is not the sprint id alone")
+	// The sprint page: pretitle Sprint #<id> followed, after one space, by the
+	// sprint's status badge (PENDING -> bg-secondary-lt, the sprint status
+	// mapping); the title is the sprint's own title alone; no roadmap name in
+	// either.
+	sprintPath := "/roadmaps/" + name + "/sprints/1"
+	sprintBody := servePage(t, mux, sprintPath)
+	sprintColumn := titleColumn(t, sprintPath, sprintBody)
+	const wantPretitle = `<div class="page-pretitle">Sprint #1 <span class="badge bg-secondary-lt">PENDING</span></div>`
+	if !strings.Contains(sprintColumn, wantPretitle) {
+		t.Errorf("sprint page: pretitle is not Sprint #1 followed by the status badge; column=%q", sprintColumn)
 	}
-	// seedRoadmap's sprint 1, verbatim: the title column shows the sprint's own
-	// title, not a composed one, and carries the status badge.
+	// seedRoadmap's sprint 1, verbatim: the title is the sprint's own title,
+	// not a composed one, and carries no badge.
 	const seededSprintTitle = "Ship the read-only web UI for roadmap inspection"
-	wantTitle := `<h2 class="page-title">` + seededSprintTitle +
-		`<span class="badge bg-secondary-lt ms-2">PENDING</span></h2>`
-	if !strings.Contains(sprintBody, wantTitle) {
-		t.Errorf("sprint page: header title is not the sprint's title with its status badge; header=%q",
-			headerRegion(t, "/roadmaps/"+name+"/sprints/1", sprintBody))
+	wantTitle := `<h2 class="page-title">` + seededSprintTitle + `</h2>`
+	if !strings.Contains(sprintColumn, wantTitle) {
+		t.Errorf("sprint page: header title is not the sprint's title alone; column=%q", sprintColumn)
+	}
+	h2Start := strings.Index(sprintColumn, `<h2 class="page-title">`)
+	if h2Start < 0 {
+		t.Fatalf("sprint page: no page-title in the title column; column=%q", sprintColumn)
+	}
+	if h2 := sprintColumn[h2Start:]; strings.Contains(h2[:strings.Index(h2, "</h2>")+len("</h2>")], "badge") {
+		t.Errorf("sprint page: the page-title carries a badge; it belongs in the pretitle; column=%q", sprintColumn)
+	}
+
+	// No other page's header title column carries a badge: the sprint's status
+	// badge is the only one, and it lives in the sprint page's pretitle.
+	for _, path := range allPagePaths(name) {
+		if path == sprintPath {
+			continue
+		}
+		if column := titleColumn(t, path, servePage(t, mux, path)); strings.Contains(column, "badge") {
+			t.Errorf("page %s: the header's title column carries a badge; only the sprint page's pretitle does; column=%q", path, column)
+		}
 	}
 
 	// The roadmap name belongs to the shell, not to any page title. The check is

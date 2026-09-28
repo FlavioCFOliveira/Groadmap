@@ -91,9 +91,11 @@ func documentTitle(roadmap, area, hostname string) string {
 // statement in the page title would say the same thing again while leaving the
 // view unnamed. Pretitle is set only by the sprint page, the one page that
 // presents an individual record rather than a view of the roadmap; Badge is
-// that sprint's status, and BadgeClass the colour variant the badge mapping
-// gives it. Lead and LeadCode are the roadmap index's lead line, whose trailing
-// path renders inside a <code> element; every other page leaves them empty.
+// that sprint's status, rendered inside the pretitle right after its text and
+// never in the title, and BadgeClass the colour variant the badge mapping gives
+// it. A Badge without a Pretitle is not rendered. Lead and LeadCode are the
+// roadmap index's lead line, whose trailing path renders inside a <code>
+// element; every other page leaves them empty.
 //
 // Every field is rendered as text through html/template.
 type pageHeading struct {
@@ -346,8 +348,9 @@ func handleSprint(w http.ResponseWriter, r *http.Request) {
 
 	// The one hierarchical page header: it presents an individual record, not a
 	// view of the roadmap, so it alone carries a pretitle, and that pretitle is
-	// the sprint's id — the roadmap name is not repeated there, the shell states
-	// it twice already (SPEC/WEB.md § Shared Page-Header Partial, rule 2).
+	// the sprint's id followed by the sprint's status badge; the title is the
+	// sprint's title alone. The roadmap name is not repeated there, the shell
+	// states it twice already (SPEC/WEB.md § Shared Page-Header Partial, rule 2).
 	data.Chrome = chrome{
 		Title:   documentTitle(name, "Sprint #"+strconv.Itoa(id), serverHostname),
 		Roadmap: name,

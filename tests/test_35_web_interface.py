@@ -6606,6 +6606,37 @@ class TestWebInterface:
                 f"page {path}: the header names the roadmap, which the sidebar and the "
                 f"top navbar already state; header={header!r}"
             )
+            # The title column (everything before any actions column) carries
+            # no badge: the sprint's status badge is the only header badge,
+            # and it lives in the sprint page's pretitle.
+            title_column = header.split('<div class="col-auto', 1)[0]
+            assert "badge" not in title_column, (
+                f"page {path}: the header's title column carries a badge; "
+                f"only the sprint page's pretitle does; column={title_column!r}"
+            )
+
+        # The sprint page: the pretitle reads Sprint #<id> and then, after one
+        # space, the sprint's status badge (OPEN -> bg-blue-lt, the sprint
+        # status mapping); the page-title holds the sprint's title alone.
+        sprint_path = f"/roadmaps/{ROADMAP}/sprints/{self.open_sid}"
+        _, _, sprint_body = self._req(port, sprint_path)
+        sprint_header = self._page_header(sprint_path, sprint_body)
+        want_pretitle = (
+            f'<div class="page-pretitle">Sprint #{self.open_sid} '
+            '<span class="badge bg-blue-lt">OPEN</span></div>'
+        )
+        assert want_pretitle in sprint_header, (
+            f"sprint page: pretitle is not Sprint #{self.open_sid} followed by its "
+            f"status badge; header={sprint_header!r}"
+        )
+        assert '<h2 class="page-title">Authentication hardening sprint</h2>' in sprint_header, (
+            f"sprint page: page-title is not the sprint's title alone; header={sprint_header!r}"
+        )
+        h2 = sprint_header[sprint_header.index('<h2 class="page-title">'):]
+        h2 = h2[: h2.index("</h2>")]
+        assert "badge" not in h2, (
+            f"sprint page: the page-title carries a badge; it belongs in the pretitle; h2={h2!r}"
+        )
 
         # No header offers a second route to the knowledge graph, and the
         # retired "Tasks & sprints" label is gone from the graph page too.

@@ -159,18 +159,20 @@
 
   Three fields are optional and belong to one page each. Pretitle is the sprint
   page's, the only page presenting an individual record rather than a view, where
-  it carries Sprint #<id> and the title becomes the sprint's own title plus its
-  status Badge. Lead and LeadCode are the roadmap index's lead line, whose
-  trailing path renders inside <code>. $ is the pageHeading itself, which the
-  {{with}} blocks shadow.
+  it carries Sprint #<id> followed, after one space, by the sprint's status
+  Badge; the title is the sprint's own title alone, with no badge. The Badge is
+  rendered only inside the pretitle, so a page without a pretitle carries none.
+  Lead and LeadCode are the roadmap index's lead line, whose trailing path
+  renders inside <code>. $ is the pageHeading itself, which the {{with}} blocks
+  shadow.
 
   The actions column is NOT here: a search input, a <select> and a link are
   genuinely different markup, and folding them in would force this partial to
   know every page that uses it (SPEC/WEB.md § Shared Page-Header Partial, rule 4).
 */}}
 {{define "pageTitle"}}            <div class="col">
-              {{with .Pretitle}}<div class="page-pretitle">{{.}}</div>{{end}}
-              <h2 class="page-title">{{.Title}}{{with .Badge}}<span class="badge {{$.BadgeClass}} ms-2">{{.}}</span>{{end}}</h2>
+              {{with .Pretitle}}<div class="page-pretitle">{{.}}{{with $.Badge}} <span class="badge {{$.BadgeClass}}">{{.}}</span>{{end}}</div>{{end}}
+              <h2 class="page-title">{{.Title}}</h2>
               {{with .Lead}}<div class="text-secondary mt-1">{{.}}{{with $.LeadCode}} <code>{{.}}</code>{{end}}</div>{{end}}
             </div>{{end}}
 
