@@ -2252,8 +2252,10 @@ how the `rmp web` process itself terminates.
   alike (see [Roadmap Task Page](#roadmap-task-page)). Each column header
   carries, at its trailing
   edge, a chevron toggle that collapses the column to a narrow strip and expands
-  it again; the toggle changes only how the board is presented, and every page
-  load renders all three columns expanded (see
+  it again; the toggle changes only how the board is presented. Each page load
+  starts every column that holds no task collapsed and every column that holds a
+  task expanded, except that a sprint with no member task starts with all three
+  columns expanded (see
   [Sprint Detail Sub-Template](#sprint-detail-sub-template), **Column collapse**).
   The board carries no control that moves a task between columns (see
   [Sprint Detail Sub-Template](#sprint-detail-sub-template)).
@@ -2991,17 +2993,21 @@ shows sprints as compact cards through the shared sprint-card partial instead (s
      one column, and no task of the sprint can fall outside the board.
    - **Every column is always rendered.** All three columns are present, in that
      order, whatever the sprint holds; the page never drops or hides a column, and
-     neither the set of columns nor their order depends on the data. A column the
-     reader collapses stays on the board, in its place, with its heading and its
-     count badge visible; only its cards, or its empty state, are hidden (see
-     **Column collapse** below). A column
-     holding no task renders the in-column empty state in the idiom the tasks board
-     already uses — a clear, unobtrusive empty state inside the column, below the
-     column header, in place of the card list, with the column, its heading, and its
-     `0` count badge still visible (see
-     [Roadmap Tasks Page](#roadmap-tasks-page), **Empty states**). A sprint with no
-     member task is therefore shown as an empty board rather than as an absent one,
-     and the sub-template puts no page-level empty state in place of the board.
+     neither the set of columns nor their order depends on the data. A collapsed
+     column — whether the page started it collapsed or the reader collapsed it —
+     stays on the board, in its place, with its heading and its count badge
+     visible; only its cards, or its empty state, are hidden (see
+     **Column collapse** below). In the served HTML, a column holding no task
+     renders the in-column empty state in the idiom the tasks board already uses —
+     a clear, unobtrusive empty state inside the column, below the column header, in
+     place of the card list, with the column, its heading, and its `0` count badge
+     still visible (see [Roadmap Tasks Page](#roadmap-tasks-page), **Empty
+     states**). Once the page's scripts have initialised, such a column starts
+     collapsed when another column of the sprint holds a task, and its empty state
+     is displayed when the reader expands it (see **Column collapse** below). A
+     sprint with no member task is therefore shown as an empty board, with all three
+     columns expanded and all three empty states displayed, rather than as an absent
+     one, and the sub-template puts no page-level empty state in place of the board.
    - **Column header.** Each column header shows the column heading together with a
      Tabler badge carrying that column's task count, exactly as the tasks board's
      column header does (see [Roadmap Tasks Page](#roadmap-tasks-page), **Count per
@@ -3288,8 +3294,11 @@ shows sprints as compact cards through the shared sprint-card partial instead (s
      applies to the **expanded** columns. A collapsed column is a strip of fixed
      width and takes no share, and the columns that remain expanded divide the
      width it frees equally among themselves on the same terms (see **Column
-     collapse** below). Every page load renders all three columns expanded, so the
-     board a page load presents divides its width among all three.
+     collapse** below). The served HTML renders all three columns expanded; once
+     the page's scripts have initialised, the board divides its width among the
+     columns that start expanded — the columns that hold a task, or all three when
+     the sprint holds no member task — and each column that starts collapsed is a
+     strip.
 
      An expanded column is never narrower than **17rem**, the width at which its
      cards stay legible. When the expanded columns at that minimum, plus any
@@ -3334,14 +3343,36 @@ shows sprints as compact cards through the shared sprint-card partial instead (s
      task page a card links to is usable at the same viewport (see
      [Roadmap Task Page](#roadmap-task-page)).
    - **Column collapse.** Each of the three columns can be collapsed by the
-     reader and expanded again. The control is presentation only: it changes how
-     the board is shown and nothing the board shows.
-     - **Default state, not persisted.** Every page load renders all three columns
-       expanded. The collapsed or expanded state is held by the page alone: it is
-       carried in no URL parameter, no cookie, and no browser storage
-       (`localStorage`, `sessionStorage`, or IndexedDB), so reloading the page, or
-       navigating to it again, presents all three columns expanded whatever state
-       the reader left them in.
+     reader and expanded again, and the page chooses each column's initial state
+     from the tasks the column holds. The control is presentation only: it changes
+     how the board is shown and nothing the board shows.
+     - **Initial state.** Once the page's scripts have initialised, each column
+       starts in the state this rule assigns:
+       - when the sprint's board holds at least one member task, in any column,
+         each column holding no task starts **collapsed** and each column holding
+         one or more tasks starts **expanded**;
+       - when the sprint holds no member task, so that every column is empty, all
+         three columns start **expanded**.
+
+       A column that starts collapsed is in exactly the state that activating its
+       toggle produces (see **Collapsing** below). An empty column is started
+       collapsed because it has nothing to show beside columns that do, while a
+       board that is empty everywhere keeps its three empty states in view, so that
+       it reads as an empty sprint rather than as three bare strips.
+     - **Task count on the column.** The column element — the card carrying
+       `data-role="task-board-column"` — carries the attribute
+       `data-task-count="<N>"`, where `<N>` is the number of the sprint's member
+       tasks in that column, written in ASCII decimal digits with no sign and no
+       leading zero other than the single digit `0`. It is the same number as the
+       text of the column's count badge (see **Column header** above), so the three
+       values sum to the sprint's total number of member tasks. The attribute is
+       the only input the initial state is derived from.
+     - **Not persisted.** The collapsed or expanded state is held by the page
+       alone: it is carried in no URL parameter, no cookie, and no browser storage
+       (`localStorage`, `sessionStorage`, or IndexedDB). Each page load derives the
+       initial state again from the tasks alone, so reloading the page, or
+       navigating to it again, presents the state the rule above assigns whatever
+       state the reader left the columns in.
      - **The toggle.** Each column header carries exactly one toggle, at its
        trailing (right-hand) edge, inside Tabler's card-header actions container,
        `<div class="card-actions">`. The toggle is a
@@ -3391,12 +3422,14 @@ shows sprints as compact cards through the shared sprint-card partial instead (s
        column loses `task-board__column--collapsed`, the heading and its badge read
        horizontally again, the column takes its share of the board's width again
        (see **Height and scrolling** above), its cards, or its empty state, are shown
-       again unchanged and in the order the page rendered them, and the toggle
+       unchanged and in the order the page rendered them, and the toggle
        returns to `aria-expanded="true"`, the name `Collapse <HEADING> column`, and
        the icon `ti ti-chevron-left`. Keyboard focus stays on the toggle through
-       both transitions.
+       both transitions. A column that started collapsed expands in exactly this
+       way, and then shows its empty state.
      - **Independence.** Each toggle acts on its own column alone, and the three
-       columns collapse and expand independently. Every combination is allowed,
+       columns collapse and expand independently, whatever state each started in.
+       Every combination is allowed,
        including all three collapsed, in which case the board shows three strips,
        keeps its height, and leaves the rest of its width empty. The columns keep
        their left-to-right order in every combination.
@@ -3418,17 +3451,35 @@ shows sprints as compact cards through the shared sprint-card partial instead (s
        and no inline style property. The strip's width, its layout, and the rotated
        heading are declared in the project override stylesheet `static/style.css`
        under the modifier class (see [UI Framework](#ui-framework), rules 8 and 10).
+     - **Initialisation.** When the script initialises, it performs these steps in
+       this order:
+       1. it removes the `hidden` attribute from every toggle (see **Without
+          JavaScript** below);
+       2. it reads each column element's `data-task-count`. A value that is not a
+          string of one or more ASCII decimal digits cannot be read as a
+          non-negative integer, and its column is left expanded;
+       3. when the sum of the values read in step 2 is greater than `0`, it puts
+          each column whose value reads as `0` into the collapsed state, through
+          the same state change that activating that column's toggle performs
+          (see **Collapsing** above); when that sum is `0`, it changes no column,
+          so all three stay expanded.
+
+       Initialisation issues no request, reads nothing but the served markup, and
+       moves no keyboard focus.
      - **Without JavaScript.** The served HTML renders every column expanded and
        every toggle in its expanded state — `aria-expanded="true"`, the
        `aria-controls` reference, the name `Collapse <HEADING> column`, and the icon
        `ti ti-chevron-left` — and it renders each toggle with the `hidden`
-       attribute, which the script removes from every toggle when it initialises. A
-       browser that runs no script therefore shows the board with all three columns
-       expanded and every card visible, and shows no toggle that would do nothing
-       when activated.
+       attribute, which the script removes from every toggle when it initialises.
+       The served state is the same for every sprint, whatever its tasks; only the
+       script applies the initial state. A browser that runs no script therefore
+       shows the board with all three columns expanded and every card and every
+       empty state visible, and shows no toggle that would do nothing when
+       activated.
      - **This board only.** The collapse toggle belongs to this board. The roadmap
-       tasks page's five-column board carries no collapse toggle, and none of the
-       rules above applies to it; the tasks page does not load
+       tasks page's five-column board carries no collapse toggle and no
+       `data-task-count` attribute, and none of the rules above applies to it; the
+       tasks page does not load
        `static/sprint-board.js` (see [Roadmap Tasks Page](#roadmap-tasks-page)).
    - **Read cost: one grouped comment count, and nothing per card.** The card shows
      a comment count, so the page reads one. That count is read with **one grouped
@@ -8091,7 +8142,9 @@ Rules:
     classes, carries no inline `style` attribute, and Acceptance Criteria 27, 130,
     and 136
     continue to hold. The criterion is asserted with all three columns expanded,
-    which is the state every page load renders; with one or more columns collapsed,
+    which is the state a page load presents for a sprint with no member task or
+    with at least one member task in every column (Acceptance Criterion 212); with
+    one or more columns collapsed,
     the expanded columns divide the width the collapsed strips leave, on the same
     terms (Acceptance Criterion 214) (see
     [Sprint Detail Sub-Template](#sprint-detail-sub-template), **Height and
@@ -8993,18 +9046,38 @@ Rules:
     and never as markup, with no `<time>` element around it, and the page renders
     the rest of its content normally (see
     [Date and Time Display](#date-and-time-display), rule 7).
-212. **Every sprint page load renders all three board columns expanded.** For a
-    sprint of an existing roadmap, the served HTML of
+212. **Each sprint page load starts its board columns in the state their tasks
+    assign.** For a sprint of an existing roadmap, the served HTML of
     `GET /roadmaps/{name}/sprints/{id}` renders the `WAITING`, `DOING`, and
-    `CLOSED` columns of the member-tasks board expanded: no column element carries
-    the class `task-board__column--collapsed`, no column body carries the `hidden`
-    attribute, and once the page's scripts have run every card and every in-column
-    empty state is displayed. The state is not persisted: the response sets no
-    cookie for it, the route reads no query parameter for it, and the page's
-    scripts read and write no `localStorage`, `sessionStorage`, or IndexedDB, so a
-    page reloaded after a column was collapsed renders all three columns expanded
-    again (see [Sprint Detail Sub-Template](#sprint-detail-sub-template), **Column
-    collapse**).
+    `CLOSED` columns of the member-tasks board expanded whatever the sprint holds:
+    no column element carries the class `task-board__column--collapsed`, and no
+    column body carries the `hidden` attribute. Each column element carries
+    `data-task-count` equal to the text of its own count badge, and the three
+    values sum to the sprint's total number of member tasks. Once the page's
+    scripts have initialised:
+    - for a sprint with at least one member task and at least one empty column —
+      for example tasks in `WAITING` and `CLOSED` and none in `DOING` — each column
+      whose `data-task-count` is `0` is collapsed, carrying exactly the state
+      Acceptance Criterion 214 states for a collapse (body `hidden`, the class
+      `task-board__column--collapsed`, a `3rem` strip, `aria-expanded="false"`,
+      the `aria-label` `Expand <HEADING> column`, and the icon
+      `ti ti-chevron-right`), and each column holding one or more tasks is
+      expanded, with every one of its cards displayed and its toggle carrying
+      `aria-expanded="true"`, the `aria-label` `Collapse <HEADING> column`, and the
+      icon `ti ti-chevron-left`;
+    - for a sprint with no member task, all three columns are expanded, each
+      displays its in-column empty state, and each toggle carries
+      `aria-expanded="true"`.
+
+    Initialisation moves no keyboard focus and issues no network request. The
+    check asserts both cases above, because a script that collapsed every empty
+    column, or none, would pass either case alone. The state is not persisted: the
+    response sets no cookie for it, the route reads no query parameter for it, and
+    the page's scripts read and write no `localStorage`, `sessionStorage`, or
+    IndexedDB, so a page reloaded after the reader expanded a column that started
+    collapsed, or collapsed one that started expanded, presents again the state
+    its tasks assign (see [Sprint Detail Sub-Template](#sprint-detail-sub-template),
+    **Column collapse**).
 213. **Each column header carries one accessible chevron toggle.** In the served
     HTML, each of the three column headers of the sprint's member-tasks board
     carries exactly one `<button type="button" class="btn-action">` carrying
@@ -9040,12 +9113,14 @@ Rules:
     attribute from the column's body and the class `task-board__column--collapsed`
     from the column element, shows the heading and its badge horizontally again,
     returns the column to an equal share of the board's width, and shows the same
-    cards, or the same empty state, in the same order as before the collapse. The
-    toggle returns to `aria-expanded="true"`, the `aria-label`
+    cards, or the same empty state, in the same order as before the collapse; a
+    column that started collapsed because it holds no task shows its in-column
+    empty state. The toggle returns to `aria-expanded="true"`, the `aria-label`
     `Collapse <HEADING> column`, and the icon `ti ti-chevron-left`, and keeps
-    keyboard focus. After a collapse and an expand, the column's markup and its
-    measured width equal those the page presented once its scripts had
-    initialised.
+    keyboard focus. After a collapse and an expand of a column that started
+    expanded, or an expand and a collapse of a column that started collapsed, the
+    column's markup and its measured width equal those the page presented once its
+    scripts had initialised.
 216. **The columns toggle independently.** Activating the toggle of one column of
     the sprint's member-tasks board changes that column alone: the other two keep
     their state, their attributes, and their cards. Every combination of collapsed

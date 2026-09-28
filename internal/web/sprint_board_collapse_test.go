@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -52,19 +53,23 @@ func servedToggle(heading, bodyID string) string {
 // and naming the id of its OWN column's body — an id that occurs exactly once in
 // the page.
 //
-// It is run over two sprints: one whose three columns all hold cards, and one
-// whose DOING and CLOSED columns are empty, so the toggle and its body are pinned
-// around an empty state as well as around a card list.
+// It is run over three sprints: one whose three columns all hold cards, one
+// whose DOING and CLOSED columns are empty, and one with no member task at all,
+// so the toggle and its body are pinned around an empty state as well as around
+// a card list, and the served toggle is shown to be the same whatever the sprint
+// holds.
 func TestSprintBoardCollapse_EachHeaderCarriesOneServedToggle(t *testing.T) {
 	t.Setenv("HOME", shortHome(t))
 	mux := buildMux()
 
 	full := seedSprintBoardFixture(t, "settlement-platform")
 	sparseID := seedSprintWithMembers(t, "settlement-window", 2)
+	emptyID := seedSprintWithMembers(t, "chargeback-intake", 0)
 
 	for _, path := range []string{
 		full.path(),
 		"/roadmaps/settlement-window/sprints/" + itoa(sparseID),
+		"/roadmaps/chargeback-intake/sprints/" + itoa(emptyID),
 	} {
 		page := servePage(t, mux, path)
 		columns := memberBoardColumns(t, page)
@@ -123,13 +128,19 @@ var reColumnToggle = regexp.MustCompile(`<button[^>]*data-role="task-board-colum
 // reTabindexOrRole matches a tabindex or a role attribute of an opening tag.
 var reTabindexOrRole = regexp.MustCompile(`\s(?:tabindex|role)\s*=`)
 
-// TestSprintBoardCollapse_EveryPageLoadIsExpandedAndNothingIsPersisted is the
+// reServedColumn matches the opening tag of a column element exactly as the
+// server renders it on the sprint board: the expanded column, carrying no
+// modifier, and its task count (Acceptance Criterion 212).
+var reServedColumn = regexp.MustCompile(`<div class="card task-board__column" data-role="task-board-column" data-task-count="\d+">`)
+
+// TestSprintBoardCollapse_ServedMarkupIsExpandedAndNothingIsPersisted is the
 // gate for the server-rendered half of Acceptance Criterion 212: the served board
-// renders all three columns expanded — no column carries the collapsed modifier
-// and no body carries the hidden attribute — the response sets no cookie, and the
-// route reads no query parameter for the state, so a request carrying one
-// renders the same board as a request carrying none.
-func TestSprintBoardCollapse_EveryPageLoadIsExpandedAndNothingIsPersisted(t *testing.T) {
+// renders all three columns expanded whatever the sprint holds — no column
+// carries the collapsed modifier and no body carries the hidden attribute, even
+// around an empty column, which the script alone collapses — the response sets no
+// cookie, and the route reads no query parameter for the state, so a request
+// carrying one renders the same board as a request carrying none.
+func TestSprintBoardCollapse_ServedMarkupIsExpandedAndNothingIsPersisted(t *testing.T) {
 	t.Setenv("HOME", shortHome(t))
 	f := seedSprintBoardFixture(t, "settlement-platform")
 	srv := handler()
@@ -144,25 +155,40 @@ func TestSprintBoardCollapse_EveryPageLoadIsExpandedAndNothingIsPersisted(t *tes
 		return rec
 	}
 
+	// The served state is the same for every sprint: the full fixture, a sprint
+	// whose DOING and CLOSED columns are empty, and a sprint with no member task.
+	// The two with empty columns are the ones a server applying the initial state
+	// itself would render collapsed.
+	sparseID := seedSprintWithMembers(t, "settlement-window", 2)
+	emptyID := seedSprintWithMembers(t, "chargeback-intake", 0)
+	for _, path := range []string{
+		"/roadmaps/settlement-window/sprints/" + itoa(sparseID),
+		"/roadmaps/chargeback-intake/sprints/" + itoa(emptyID),
+		f.path(),
+	} {
+		served := serve(path).Body.String()
+		board := memberBoardRegion(t, served)
+		if strings.Contains(served, "task-board__column--collapsed") {
+			t.Errorf("%s: the served page carries the collapsed modifier; the served HTML renders "+
+				"all three columns expanded whatever the sprint holds", path)
+		}
+		if got := len(reServedColumn.FindAllString(board, -1)); got != 3 {
+			t.Errorf("%s: the board carries %d column elements served as %s, want all 3",
+				path, got, reServedColumn)
+		}
+		for _, want := range sprintBoardToggleColumns {
+			open := `<div class="card-body task-board__cards" id="` + want.bodyID + `">`
+			if !strings.Contains(board, open) {
+				t.Errorf("%s: the %s column's body is not served as %s; a body served with the "+
+					"hidden attribute, or with any other attribute, is not the expanded state",
+					path, want.heading, open)
+			}
+		}
+	}
+
 	rec := serve(f.path())
 	page := rec.Body.String()
 	region := memberBoardRegion(t, page)
-
-	if strings.Contains(page, "task-board__column--collapsed") {
-		t.Errorf("the served page carries the collapsed modifier; every page load renders all " +
-			"three columns expanded")
-	}
-	const expandedColumn = `<div class="card task-board__column" data-role="task-board-column">`
-	if got := strings.Count(region, expandedColumn); got != 3 {
-		t.Errorf("the board carries %d column elements served as %s, want all 3", got, expandedColumn)
-	}
-	for _, want := range sprintBoardToggleColumns {
-		open := `<div class="card-body task-board__cards" id="` + want.bodyID + `">`
-		if !strings.Contains(region, open) {
-			t.Errorf("the %s column's body is not served as %s; a body served with the hidden "+
-				"attribute, or with any other attribute, is not the expanded state", want.heading, open)
-		}
-	}
 	// Falsifiability control: the board renders its cards, so "no body is hidden"
 	// is asserted over a board with content in every column.
 	if got := strings.Count(region, cardOpen); got != 6 {
@@ -241,6 +267,7 @@ func TestSprintBoardCollapse_ScriptIsServedAndLoadedBySprintPageAlone(t *testing
 		body := get(path).Body.String()
 		for _, forbidden := range []string{
 			"sprint-board.js", `data-role="task-board-column-toggle"`, "task-board__column--collapsed",
+			"data-task-count",
 		} {
 			if strings.Contains(body, forbidden) {
 				t.Errorf("%s carries %q; the column collapse belongs to the sprint page's board alone",
@@ -316,6 +343,137 @@ func TestSprintBoardCollapse_ScriptChangesOnlyTheSpecifiedState(t *testing.T) {
 	if regexp.MustCompile(`\.className\s*=|\.setAttribute\(\s*"class"`).MatchString(script) {
 		t.Errorf("static/sprint-board.js replaces a whole class list; it adds and removes the " +
 			"one modifier and the one chevron class, and leaves every other class alone")
+	}
+}
+
+// reColumnTaskCount captures, from one column's markup as memberBoardColumns
+// returns it (the text after the column's data-role hook), the column's
+// data-task-count and the text of its count badge.
+var reColumnTaskCount = regexp.MustCompile(`^ data-task-count="([^"]*)">\s*` +
+	`(?:\{\{[^}]*\}\}\s*)?<div class="card-header">\s*<h3 class="card-title">[A-Z]+ ` +
+	`<span class="badge [^"]+">(\d+)</span></h3>`)
+
+// TestSprintBoardCollapse_EachColumnCarriesItsTaskCount is the gate for the
+// markup half of the initial state (Acceptance Criterion 212; SPEC/WEB.md
+// § Sprint Detail Sub-Template, rule 3, Column collapse, Task count on the
+// column): each column element of the sprint board carries data-task-count, in
+// ASCII decimal digits with no leading zero, equal to the text of its own count
+// badge, and the three values sum to the sprint's number of member tasks. It is
+// run over a sprint with every column populated, one with two empty columns, and
+// one with no member task, because the zero is the value the script keys on.
+// The tasks page's five-column board carries no data-task-count; that half is
+// asserted by TestSprintBoardCollapse_ScriptIsServedAndLoadedBySprintPageAlone.
+func TestSprintBoardCollapse_EachColumnCarriesItsTaskCount(t *testing.T) {
+	t.Setenv("HOME", shortHome(t))
+	mux := buildMux()
+
+	full := seedSprintBoardFixture(t, "settlement-platform")
+	sparseID := seedSprintWithMembers(t, "settlement-window", 2)
+	emptyID := seedSprintWithMembers(t, "chargeback-intake", 0)
+
+	for _, tc := range []struct {
+		path string
+		want []string
+	}{
+		{full.path(), []string{"3", "2", "1"}},
+		{"/roadmaps/settlement-window/sprints/" + itoa(sparseID), []string{"2", "0", "0"}},
+		{"/roadmaps/chargeback-intake/sprints/" + itoa(emptyID), []string{"0", "0", "0"}},
+	} {
+		columns := memberBoardColumns(t, servePage(t, mux, tc.path))
+		total, wantTotal := 0, 0
+		for i, column := range columns {
+			heading := sprintBoardToggleColumns[i].heading
+			m := reColumnTaskCount.FindStringSubmatch(column)
+			if m == nil {
+				t.Errorf("%s: the %s column does not open with data-task-count followed by its "+
+					"header and count badge:\n%.400s", tc.path, heading, column)
+				continue
+			}
+			count, badge := m[1], m[2]
+			if !regexp.MustCompile(`^(?:0|[1-9][0-9]*)$`).MatchString(count) {
+				t.Errorf("%s: the %s column's data-task-count is %q, want ASCII decimal digits "+
+					"with no sign and no leading zero", tc.path, heading, count)
+			}
+			if count != badge {
+				t.Errorf("%s: the %s column's data-task-count is %q and its badge reads %q; "+
+					"the two are the same number", tc.path, heading, count, badge)
+			}
+			if count != tc.want[i] {
+				t.Errorf("%s: the %s column's data-task-count is %q, want %q",
+					tc.path, heading, count, tc.want[i])
+			}
+			n, _ := strconv.Atoi(count) // validated above; a failure reads as 0 and fails the sum
+			total += n
+			w, _ := strconv.Atoi(tc.want[i]) // a literal of this table
+			wantTotal += w
+		}
+		if total != wantTotal {
+			t.Errorf("%s: the columns' data-task-count values sum to %d, want the sprint's %d "+
+				"member tasks", tc.path, total, wantTotal)
+		}
+		if got := strings.Count(memberBoardRegion(t, servePage(t, mux, tc.path)), "data-task-count="); got != 3 {
+			t.Errorf("%s: the board carries data-task-count %d times, want once per column", tc.path, got)
+		}
+	}
+}
+
+// TestSprintBoardCollapse_ScriptAppliesTheInitialStateFromTheCounts is the gate
+// for the script half of the initial state (Acceptance Criterion 212; SPEC/WEB.md
+// § Sprint Detail Sub-Template, rule 3, Column collapse, Initialisation), read at
+// the script's source: the script un-hides the toggles, THEN reads each column's
+// data-task-count through a pattern that admits ASCII decimal digits alone, THEN
+// — only when the counts sum above zero — collapses each column whose count is 0
+// through the one state change the click handler also uses. That the change is
+// shared, not duplicated, is what makes a column that starts collapsed be in
+// exactly the state a click produces. Initialisation moves no focus.
+func TestSprintBoardCollapse_ScriptAppliesTheInitialStateFromTheCounts(t *testing.T) {
+	script := stripJSComments(readEmbeddedAsset(t, "static/sprint-board.js"))
+
+	// The steps, in the specified order.
+	steps := []string{
+		`bind(toggles[i])`,
+		`getAttribute("data-task-count")`,
+		`if (total > 0) {`,
+		`counts[e] === 0`,
+		`setCollapsed(empty, true);`,
+	}
+	at := -1
+	for _, step := range steps {
+		i := strings.Index(script, step)
+		if i < 0 {
+			t.Errorf("static/sprint-board.js does not contain %s", step)
+			continue
+		}
+		if i < at {
+			t.Errorf("static/sprint-board.js performs %s out of the specified order", step)
+		}
+		at = i
+	}
+
+	// A count is read only when it is one or more ASCII decimal digits; anything
+	// else leaves its column expanded.
+	if !strings.Contains(script, `var COUNT = /^[0-9]+$/;`) || !strings.Contains(script, `COUNT.test(value)`) {
+		t.Errorf("static/sprint-board.js does not read data-task-count through the ASCII-digit " +
+			"pattern /^[0-9]+$/")
+	}
+
+	// One state change, shared by the click handler and the initial state: the
+	// column's state is written in exactly one place.
+	if !strings.Contains(script, `setCollapsed(bound, toggle.getAttribute("aria-expanded") === "true");`) {
+		t.Errorf("static/sprint-board.js's click handler does not go through setCollapsed")
+	}
+	for _, write := range []string{`body.hidden =`, `classList.toggle(COLLAPSED`, `"aria-expanded", collapse`} {
+		if got := strings.Count(script, write); got != 1 {
+			t.Errorf("static/sprint-board.js writes %q %d times, want exactly once: the click "+
+				"handler and the initial state share one state change", write, got)
+		}
+	}
+
+	// Initialisation moves no keyboard focus.
+	for _, banned := range []string{".focus(", ".blur(", "autofocus"} {
+		if strings.Contains(script, banned) {
+			t.Errorf("static/sprint-board.js uses %q; initialisation moves no keyboard focus", banned)
+		}
 	}
 }
 

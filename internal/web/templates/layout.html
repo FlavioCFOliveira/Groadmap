@@ -331,7 +331,7 @@
           */}}
           <div class="task-board task-board--bounded mb-3" data-role="task-board">
             {{range .Columns}}
-            <div class="card task-board__column" data-role="task-board-column">
+            <div class="card task-board__column" data-role="task-board-column" data-task-count="{{len .Tasks}}">
               {{/*
                 The column header: the heading, and a hybrid badge whose TEXT is
                 the number of member tasks in the column and whose COLOUR is the
@@ -359,7 +359,12 @@
                 The toggle is served in its EXPANDED state and with the hidden
                 attribute, which the script alone removes: a browser that runs no
                 script shows every column expanded and no toggle that would do
-                nothing when pressed. Being a real <button>, it is activated by a
+                nothing when pressed. The served state is the same for every
+                sprint; the script alone applies the initial state, from the
+                column's data-task-count, the number of member tasks it holds and
+                the same number as its count badge: when the board holds a task,
+                each column whose count is 0 starts collapsed, and when the sprint
+                holds none, all three stay expanded. Being a real <button>, it is activated by a
                 click, a tap, Enter, and Space natively, so it carries no tabindex
                 and no role (SPEC/WEB.md § Sprint Detail Sub-Template, rule 3,
                 Column collapse; Acceptance Criteria 212, 213, and 218).

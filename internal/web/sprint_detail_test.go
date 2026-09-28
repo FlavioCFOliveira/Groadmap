@@ -103,7 +103,7 @@ func TestSprintDetail_FullBlockOnlyOnSprintPage(t *testing.T) {
 	// (Acceptance Criterion 140).
 	boardMarkers := []string{
 		`class="task-board task-board--bounded mb-3" data-role="task-board"`,
-		`<div class="card task-board__column" data-role="task-board-column">`,
+		`<div class="card task-board__column" data-role="task-board-column" data-task-count="2">`,
 		`<h3 class="card-title">WAITING <span class="badge ` +
 			taskStatusBadge(models.StatusSprint) + ` ms-2">2</span></h3>`,
 	}
