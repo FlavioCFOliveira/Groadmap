@@ -2233,8 +2233,12 @@ how the `rmp web` process itself terminates.
   column**). Each card is clickable: selecting a card opens
   the read-only task detail modal for that task. The card **is** the element that
   opens the modal and it is a `<button>`, so the modal opens from the pointer, from
-  touch, and from the keyboard alike. The board carries no control that moves a
-  task between columns (see
+  touch, and from the keyboard alike. Each column header carries, at its trailing
+  edge, a chevron toggle that collapses the column to a narrow strip and expands
+  it again; the toggle changes only how the board is presented, and every page
+  load renders all three columns expanded (see
+  [Sprint Detail Sub-Template](#sprint-detail-sub-template), **Column collapse**).
+  The board carries no control that moves a task between columns (see
   [Sprint Detail Sub-Template](#sprint-detail-sub-template) and
   [Task Detail Modal](#task-detail-modal)).
 - **Sprint comments.** After the member-tasks board, the page shows the sprint's
@@ -2251,7 +2255,10 @@ how the `rmp web` process itself terminates.
   sprint belonging to the named roadmap, returns HTTP `404 Not Found` (see the
   HTTP status mapping in [Routes and Pages](#routes-and-pages)).
 - **Read-only.** The page renders data only. It contains no form, button, or
-  link that submits a change; there is no edit affordance of any kind.
+  link that submits a change; there is no edit affordance of any kind. The
+  buttons the board carries — the task cards, which open the read-only task
+  detail modal, and the column collapse toggles, which change only the board's
+  presentation — submit nothing and change no data.
 
 ### Roadmap Audit Log Page
 
@@ -2634,7 +2641,9 @@ shows sprints as compact cards through the shared sprint-card partial instead (s
    the acknowledged model for this presentation: columns that stand for states of
    the work, cards that stand for work items, a count on each column header, and
    counters at the trailing edge of a card. As on the tasks page, the model is
-   structural and never interactive (see **Read-only** below).
+   structural and never acts on the data: the board's one control beyond the
+   card, the column collapse toggle, changes only how the board is presented
+   (see **Column collapse** and **Read-only** below).
 
    - **Three fixed columns, in this order.** From left to right the columns are
      `WAITING`, `DOING`, and `CLOSED`, and each holds the sprint's tasks in the
@@ -2668,8 +2677,11 @@ shows sprints as compact cards through the shared sprint-card partial instead (s
      member task carries one of those five, each of the five is claimed by exactly
      one column, and no task of the sprint can fall outside the board.
    - **Every column is always rendered.** All three columns are present, in that
-     order, whatever the sprint holds; a column is never dropped or hidden, and
-     neither the set of columns nor their order depends on the data. A column
+     order, whatever the sprint holds; the page never drops or hides a column, and
+     neither the set of columns nor their order depends on the data. A column the
+     reader collapses stays on the board, in its place, with its heading and its
+     count badge visible; only its cards, or its empty state, are hidden (see
+     **Column collapse** below). A column
      holding no task renders the in-column empty state in the idiom the tasks board
      already uses — a clear, unobtrusive empty state inside the column, below the
      column header, in place of the card list, with the column, its heading, and its
@@ -2684,7 +2696,9 @@ shows sprints as compact cards through the shared sprint-card partial instead (s
      of member tasks in the column, and its **colour** is the semantic colour of the
      status the column groups, taken from the task status table (see
      [Status, Priority, and Severity Badge Colours](#status-priority-and-severity-badge-colours),
-     rule 2). No new colour and no new band is introduced here.
+     rule 2). No new colour and no new band is introduced here. At the header's
+     trailing edge, after the heading and its badge, sits the column's collapse
+     toggle (see **Column collapse** below).
 
      A column of this board groups a **set** of statuses rather than a single one:
      `WAITING` groups `BACKLOG` and `SPRINT`, `DOING` groups `DOING` and `TESTING`,
@@ -2957,11 +2971,17 @@ shows sprints as compact cards through the shared sprint-card partial instead (s
      taken out, so the columns grow into whatever the viewport gives them instead of
      leaving the space beside them empty. A column stands for a state and not for a
      volume of work, so the three widths stay equal whatever number of tasks each
-     column holds: the width follows the viewport, never the data.
+     column holds: the width follows the viewport, never the data. This division
+     applies to the **expanded** columns. A collapsed column is a strip of fixed
+     width and takes no share, and the columns that remain expanded divide the
+     width it frees equally among themselves on the same terms (see **Column
+     collapse** below). Every page load renders all three columns expanded, so the
+     board a page load presents divides its width among all three.
 
-     A column is never narrower than **17rem**, the width at which its cards stay
-     legible. When three columns at that minimum, plus the gaps between them, do not
-     fit the viewport, the columns keep the minimum and the column strip scrolls
+     An expanded column is never narrower than **17rem**, the width at which its
+     cards stay legible. When the expanded columns at that minimum, plus any
+     collapsed strip and the gaps between the columns, do not fit the viewport, the
+     expanded columns keep the minimum and the column strip scrolls
      horizontally inside its own container exactly as it does when the board is
      wider than the viewport for any other reason, while `<body>` still produces no
      horizontal overflow (see **Height and scrolling** above and
@@ -2995,10 +3015,108 @@ shows sprints as compact cards through the shared sprint-card partial instead (s
      card scale with the reader's own text size.
 
      On a narrow viewport the board stays usable on the tasks board's terms: each
-     column keeps the minimum width above, at which its cards remain legible, the
-     horizontal strip scroll is reachable by a touch gesture, the cards present
-     touch-friendly hit targets, and the task detail modal a card opens stays usable
-     at the same viewport (see [Task Detail Modal](#task-detail-modal)).
+     expanded column keeps the minimum width above, at which its cards remain
+     legible, the horizontal strip scroll is reachable by a touch gesture, the cards
+     and the column collapse toggles present touch-friendly hit targets, and the
+     task detail modal a card opens stays usable at the same viewport (see
+     [Task Detail Modal](#task-detail-modal)).
+   - **Column collapse.** Each of the three columns can be collapsed by the
+     reader and expanded again. The control is presentation only: it changes how
+     the board is shown and nothing the board shows.
+     - **Default state, not persisted.** Every page load renders all three columns
+       expanded. The collapsed or expanded state is held by the page alone: it is
+       carried in no URL parameter, no cookie, and no browser storage
+       (`localStorage`, `sessionStorage`, or IndexedDB), so reloading the page, or
+       navigating to it again, presents all three columns expanded whatever state
+       the reader left them in.
+     - **The toggle.** Each column header carries exactly one toggle, at its
+       trailing (right-hand) edge, inside Tabler's card-header actions container,
+       `<div class="card-actions">`. The toggle is a
+       `<button type="button" class="btn-action">`, Tabler's card-header action
+       button, carrying `data-role="task-board-column-toggle"` and holding one
+       Tabler chevron icon: `<i class="ti ti-chevron-left" aria-hidden="true"></i>`
+       while its column is expanded and `<i class="ti ti-chevron-right"
+       aria-hidden="true"></i>` while it is collapsed, so the chevron points a
+       different way in each state. Being a `<button>`, the toggle is activated by
+       a pointer click, a touch tap, Enter, and Space alike, through the browser's
+       own activation behaviour; it carries no `tabindex` and no `role`. It
+       presents a touch-friendly hit target, and it shows a visible focus indicator
+       whenever it receives keyboard focus (WCAG 2.2 Success Criterion 2.4.7, Focus
+       Visible). The vendored distribution's `btn-action` rule removes the focus
+       outline, so the project override stylesheet restores a visible indicator for
+       the toggle's `:focus-visible` state.
+     - **Accessible state and name.** The toggle carries `aria-expanded="true"`
+       while its column is expanded and `aria-expanded="false"` while it is
+       collapsed, and an `aria-controls` attribute holding the `id` of its column's
+       body — the element that holds the column's cards or its empty state. The
+       three bodies carry the ids `sprint-board-column-waiting`,
+       `sprint-board-column-doing`, and `sprint-board-column-closed`, which are
+       unique within the page. The toggle's accessible name is carried by
+       `aria-label` and names the action the toggle will perform and the column it
+       acts on: `Collapse <HEADING> column` while the column is expanded and
+       `Expand <HEADING> column` while it is collapsed, where `<HEADING>` is the
+       column heading exactly as written above — for example
+       `Collapse WAITING column` and `Expand WAITING column`. The chevron icon is
+       decorative and is hidden from assistive technology.
+     - **Collapsing.** Activating the toggle of an expanded column collapses it:
+       - the column body carries the `hidden` attribute, so the column's cards, or
+         its empty state, are neither displayed nor exposed to assistive
+         technology;
+       - the column element — the card carrying `data-role="task-board-column"` —
+         carries the modifier class `task-board__column--collapsed`;
+       - the column shrinks to a vertical strip **3rem** wide that keeps the board's
+         height. The strip is the column's own Tabler card with its header, and it
+         shows the toggle at its top, followed by the column heading and its count badge rotated 90
+         degrees clockwise, so that they read from top to bottom (the vertical
+         writing mode `vertical-rl`). The count badge keeps its text and its colour,
+         so a collapsed column still states how many tasks it holds;
+       - the toggle's `aria-expanded` becomes `false`, its `aria-label` becomes
+         `Expand <HEADING> column`, and its icon becomes `ti ti-chevron-right`.
+     - **Expanding.** Activating the toggle of a collapsed column restores the
+       column to its expanded form: the body loses the `hidden` attribute, the
+       column loses `task-board__column--collapsed`, the heading and its badge read
+       horizontally again, the column takes its share of the board's width again
+       (see **Height and scrolling** above), its cards, or its empty state, are shown
+       again unchanged and in the order the page rendered them, and the toggle
+       returns to `aria-expanded="true"`, the name `Collapse <HEADING> column`, and
+       the icon `ti ti-chevron-left`. Keyboard focus stays on the toggle through
+       both transitions.
+     - **Independence.** Each toggle acts on its own column alone, and the three
+       columns collapse and expand independently. Every combination is allowed,
+       including all three collapsed, in which case the board shows three strips,
+       keeps its height, and leaves the rest of its width empty. The columns keep
+       their left-to-right order in every combination.
+     - **Presentation only.** Collapsing or expanding a column issues no request,
+       reads nothing, and writes nothing. It changes no card, no count, no column
+       order, no card order, and not the sprint status summary line, and it neither
+       opens nor closes the task detail modal. A card of a collapsed column cannot
+       be reached while its column is collapsed, and is reachable again, unchanged,
+       once the column is expanded.
+     - **The script.** The behaviour is carried by one embedded client script,
+       `static/sprint-board.js`, which the sprint page loads from `/static/` like
+       every other client script (see
+       [Embedded Asset Categories](#embedded-asset-categories) and
+       [Frontend Rules](#frontend-rules), rules 2 and 5). No inline script and no
+       inline event-handler attribute is introduced, and the
+       Content-Security-Policy in [Security Headers](#security-headers) is
+       unchanged. The script changes a column's state only by setting or removing
+       the body's `hidden` attribute, the column's modifier class, and the toggle's
+       `aria-expanded`, `aria-label`, and icon class; it writes no `style` attribute
+       and no inline style property. The strip's width, its layout, and the rotated
+       heading are declared in the project override stylesheet `static/style.css`
+       under the modifier class (see [UI Framework](#ui-framework), rules 8 and 10).
+     - **Without JavaScript.** The served HTML renders every column expanded and
+       every toggle in its expanded state — `aria-expanded="true"`, the
+       `aria-controls` reference, the name `Collapse <HEADING> column`, and the icon
+       `ti ti-chevron-left` — and it renders each toggle with the `hidden`
+       attribute, which the script removes from every toggle when it initialises. A
+       browser that runs no script therefore shows the board with all three columns
+       expanded and every card visible, and shows no toggle that would do nothing
+       when activated.
+     - **This board only.** The collapse toggle belongs to this board. The roadmap
+       tasks page's five-column board carries no collapse toggle, and none of the
+       rules above applies to it; the tasks page does not load
+       `static/sprint-board.js` (see [Roadmap Tasks Page](#roadmap-tasks-page)).
    - **Read cost: one grouped comment count, and nothing per card.** The card shows
      a comment count, so the page reads one. That count is read with **one grouped
      query** over the whole set of rendered member-task ids (see
@@ -3027,12 +3145,15 @@ shows sprints as compact cards through the shared sprint-card partial instead (s
      card.
    - **Read-only.** The board offers **no drag-and-drop** and no control of any
      other kind that moves a task between columns, reorders cards, changes a task's
-     status, or creates or edits anything. It contains no form and no write path;
-     its only interaction is opening the read-only task detail modal. This is the
-     same deliberate divergence from the GitLab issue board the tasks page states:
-     the inspiration is structural — columns per state, cards, per-column counts —
-     and never interactive, and the `rmp` CLI remains the sole write path for every
-     task (see [Security and Constraints](#security-and-constraints)).
+     status, or creates or edits anything. It contains no form and no write path.
+     It carries two kinds of button, and neither submits anything or changes any
+     data: the card, which opens the read-only task detail modal, and the column
+     collapse toggle, which changes only the board's presentation (see **Column
+     collapse** above). This is the same deliberate divergence from the GitLab
+     issue board the tasks page states: the inspiration is structural — columns
+     per state, cards, per-column counts — and never acts on the data, and the
+     `rmp` CLI remains the sole write path for every task (see
+     [Security and Constraints](#security-and-constraints)).
    - **Markup.** The board introduces no exception to the markup rules already in
      force: no template carries an inline `style` attribute, and every class the
      board emits is defined either in the vendored Tabler distribution or in the
@@ -3044,7 +3165,11 @@ shows sprints as compact cards through the shared sprint-card partial instead (s
      empty column. The vendored Tabler distribution ships no board or Kanban
      component, so the column strip's own layout, height, and scrolling rules live
      in `static/style.css`, which is the specified home for project styling no
-     Tabler class covers.
+     Tabler class covers. The column collapse toggle uses Tabler's card-header
+     actions idiom (`card-actions` holding a `btn-action` button) and a Tabler
+     Icons chevron, and the collapsed strip's rules live in `static/style.css`
+     under the modifier class `task-board__column--collapsed` (see **Column
+     collapse** above).
 
 5. **Comments card.** The last card of the sub-template presents the sprint's own
    comments — the sprint's progression log. The fields of a comment are defined for
@@ -3092,8 +3217,10 @@ shows sprints as compact cards through the shared sprint-card partial instead (s
      [Markdown Rendering](#markdown-rendering), rule 3).
 
 6. **Read-only.** The sub-template renders data only. It contains no form, button,
-   or link that submits a change; the only interaction is opening the read-only
-   task detail modal from a board card.
+   or link that submits a change. Its interactions are two, and neither changes
+   any data: opening the read-only task detail modal from a board card, and
+   collapsing or expanding a board column with that column's toggle, which
+   changes only the board's presentation.
 
 7. **Markdown fields.** Wherever the sub-template renders the sprint's
    `description` or a sprint comment's `body`, it renders the HTML the Markdown
@@ -5916,18 +6043,21 @@ experience is the baseline that larger viewports enhance.
    leaves, because the sprint page places the Sprint details card above the board
    and the Comments card below it (see
    [Full-Height Page Regions](#full-height-page-regions)). On narrow viewports the
-   board MUST remain usable on the same terms as the tasks page's board: each column
-   keeps a minimum width at which its cards stay legible, the horizontal strip
-   scroll is reachable by a touch gesture, and the cards and their badges present
-   touch-friendly hit targets that open the read-only task detail modal (see
-   [Task Detail Modal](#task-detail-modal)). The board's height is `60vh` with a
-   floor read from the `--full-height-region-floor` custom property. Its three
-   columns divide the board's width equally and grow with the viewport, never
-   falling below the tasks board's own `17rem` minimum and separated by that board's
-   `0.75rem` gap, so every length is viewport-relative or in `rem` and scales with
-   the screen and with the reader's own text size rather than fixing the layout to
-   one device (see [Sprint Detail Sub-Template](#sprint-detail-sub-template),
-   **Height and scrolling**).
+   board MUST remain usable on the same terms as the tasks page's board: each
+   expanded column keeps a minimum width at which its cards stay legible, the
+   horizontal strip scroll is reachable by a touch gesture, and the cards and their
+   badges present touch-friendly hit targets that open the read-only task detail
+   modal (see [Task Detail Modal](#task-detail-modal)). Each column's collapse
+   toggle likewise presents a touch-friendly hit target, and a collapsed column is a
+   `3rem` strip (see [Sprint Detail Sub-Template](#sprint-detail-sub-template),
+   **Column collapse**). The board's height is `60vh` with a floor read from the
+   `--full-height-region-floor` custom property. Its expanded columns divide the
+   board's width equally and grow with the viewport, never falling below the tasks
+   board's own `17rem` minimum and separated by that board's `0.75rem` gap, so every
+   length is viewport-relative or in `rem` and scales with the screen and with the
+   reader's own text size rather than fixing the layout to one device (see
+   [Sprint Detail Sub-Template](#sprint-detail-sub-template), **Height and
+   scrolling**).
 
 ## Server Logging
 
@@ -7765,10 +7895,10 @@ Rules:
     card's visible label; a name carrying the `id` alone does not satisfy this
     criterion. Opening a card fetches that task's data from
     `GET /roadmaps/{name}/tasks/{id}/data` and fills the page's single modal shell,
-    of which the page renders one and not one per task. The page loads no script
-    beyond those it already loads from `/static/`, and the Content-Security-Policy of
-    Acceptance Criterion 33 is unchanged (Acceptance Criteria 93 and 97 to 99
-    continue to hold).
+    of which the page renders one and not one per task. Opening the modal adds no
+    script: every script the page loads is served from `/static/`, none is inline,
+    and the Content-Security-Policy of Acceptance Criterion 33 is unchanged
+    (Acceptance Criteria 93 and 97 to 99 continue to hold).
 136. The sprint's member-tasks board is height-limited and scrolls per column: each
     column scrolls vertically and independently when its cards exceed the board's
     height. That height is **`60vh`** in the project override stylesheet, floored at
@@ -7785,8 +7915,8 @@ Rules:
     card further down the page. When the three columns do not fit the viewport, the
     column strip scrolls horizontally inside its own container while `<body>`
     produces no horizontal overflow (Acceptance Criterion 27 continues to hold), and
-    on a narrow viewport each column keeps a minimum width at which its cards stay
-    legible, with touch-friendly hit targets on the cards (see
+    on a narrow viewport each expanded column keeps a minimum width at which its
+    cards stay legible, with touch-friendly hit targets on the cards (see
     [Sprint Detail Sub-Template](#sprint-detail-sub-template), **Height and
     scrolling**, and
     [Responsive and Mobile-First Design](#responsive-and-mobile-first-design),
@@ -7806,9 +7936,14 @@ Rules:
     control of any other kind that moves a task between columns, reorders cards,
     changes a task's status, or creates or edits a task, a column, or a comment. The
     served HTML contains no form, no input, and no control in the board that submits
-    a change: the only button in the board is the card itself, and activating it
-    opens the read-only modal. There is no route and no client-side path through
-    which the board can write; the `rmp` CLI remains the sole write path.
+    a change. The board's buttons are of exactly two kinds, and every `<button>` in
+    the board is one of them: the card, whose activation opens the read-only modal,
+    and the column collapse toggle carrying
+    `data-role="task-board-column-toggle"`, one per column header, whose activation
+    changes only the board's presentation (Acceptance Criteria 212 to 218). Neither
+    kind submits anything or changes any data. There is no route and no client-side
+    path through which the board can write; the `rmp` CLI remains the sole write
+    path.
 139. The three columns of the sprint's member-tasks board divide the width of the
     board equally: all three carry the same width whatever number of tasks each
     holds, and that width grows with the viewport, so widening the viewport widens
@@ -7836,7 +7971,10 @@ Rules:
     This is a stylesheet change only: the board emits the same markup and the same
     classes, carries no inline `style` attribute, and Acceptance Criteria 27, 130,
     and 136
-    continue to hold (see
+    continue to hold. The criterion is asserted with all three columns expanded,
+    which is the state every page load renders; with one or more columns collapsed,
+    the expanded columns divide the width the collapsed strips leave, on the same
+    terms (Acceptance Criterion 214) (see
     [Sprint Detail Sub-Template](#sprint-detail-sub-template), **Height and
     scrolling**).
 140. Each per-column count badge of the two Kanban boards carries the semantic colour
@@ -8734,6 +8872,89 @@ Rules:
     and never as markup, with no `<time>` element around it, and the page or the
     modal renders the rest of its content normally (see
     [Date and Time Display](#date-and-time-display), rule 7).
+212. **Every sprint page load renders all three board columns expanded.** For a
+    sprint of an existing roadmap, the served HTML of
+    `GET /roadmaps/{name}/sprints/{id}` renders the `WAITING`, `DOING`, and
+    `CLOSED` columns of the member-tasks board expanded: no column element carries
+    the class `task-board__column--collapsed`, no column body carries the `hidden`
+    attribute, and once the page's scripts have run every card and every in-column
+    empty state is displayed. The state is not persisted: the response sets no
+    cookie for it, the route reads no query parameter for it, and the page's
+    scripts read and write no `localStorage`, `sessionStorage`, or IndexedDB, so a
+    page reloaded after a column was collapsed renders all three columns expanded
+    again (see [Sprint Detail Sub-Template](#sprint-detail-sub-template), **Column
+    collapse**).
+213. **Each column header carries one accessible chevron toggle.** In the served
+    HTML, each of the three column headers of the sprint's member-tasks board
+    carries exactly one `<button type="button" class="btn-action">` carrying
+    `data-role="task-board-column-toggle"`, placed inside a
+    `<div class="card-actions">` after the column heading and its count badge, and
+    carrying no `tabindex` and no `role`. Each toggle carries
+    `aria-expanded="true"`; `aria-controls` equal to the `id` of its own column's
+    body — `sprint-board-column-waiting`, `sprint-board-column-doing`, and
+    `sprint-board-column-closed` respectively, each of which occurs exactly once in
+    the page; `aria-label` `Collapse WAITING column`, `Collapse DOING column`, or
+    `Collapse CLOSED column` respectively; and exactly one icon,
+    `<i class="ti ti-chevron-left" aria-hidden="true"></i>`. Once the page's
+    scripts have run, the toggle is visible and is activated by a pointer click, a
+    touch tap, Enter, and Space; it shows a visible focus indicator when it
+    receives keyboard focus, and it presents a touch-friendly hit target.
+214. **Activating a toggle collapses its column.** Activating the toggle of an
+    expanded column of the sprint's member-tasks board sets the `hidden` attribute
+    on that column's body, so none of its cards and not its empty state is
+    displayed or exposed to assistive technology; adds the class
+    `task-board__column--collapsed` to the column element; shrinks the column to a
+    strip `3rem` wide that keeps the board's height; shows the column heading and
+    its count badge rotated 90 degrees clockwise and reading from top to bottom
+    (computed `writing-mode` `vertical-rl`), with the badge's text and colour
+    unchanged; and sets the toggle's `aria-expanded` to `false`, its `aria-label`
+    to `Expand <HEADING> column`, and its icon to `ti ti-chevron-right`. The toggle
+    stays visible and operable at the top of the strip and keeps keyboard focus.
+    The columns that remain expanded divide the width the strip frees equally, each
+    never narrower than `17rem`. The check measures the column widths before and
+    after the collapse, because a collapse that hid the cards but kept the column's
+    width would pass a check of the attributes alone.
+215. **Activating the toggle again restores the column.** Activating the toggle of
+    a collapsed column of the sprint's member-tasks board removes the `hidden`
+    attribute from the column's body and the class `task-board__column--collapsed`
+    from the column element, shows the heading and its badge horizontally again,
+    returns the column to an equal share of the board's width, and shows the same
+    cards, or the same empty state, in the same order as before the collapse. The
+    toggle returns to `aria-expanded="true"`, the `aria-label`
+    `Collapse <HEADING> column`, and the icon `ti ti-chevron-left`, and keeps
+    keyboard focus. After a collapse and an expand, the column's markup and its
+    measured width equal those the page presented once its scripts had
+    initialised.
+216. **The columns toggle independently.** Activating the toggle of one column of
+    the sprint's member-tasks board changes that column alone: the other two keep
+    their state, their attributes, and their cards. Every combination of collapsed
+    and expanded columns is reachable, including all three collapsed, in which the
+    board shows three `3rem` strips in the order `WAITING`, `DOING`, `CLOSED`,
+    keeps its height, and each strip's toggle still expands its own column; in
+    every combination `<body>` produces no horizontal overflow (Acceptance
+    Criterion 27 continues to hold). The check asserts the all-collapsed
+    combination and at least one combination of collapsed and expanded columns.
+217. **Collapsing is presentation only, and the board stays read-only.**
+    Collapsing or expanding a column of the sprint's member-tasks board issues no
+    network request, changes no card, no count badge, no column order, no card
+    order, and not the sprint status summary line, and neither opens nor closes the
+    task detail modal. The behaviour is served as the embedded script
+    `static/sprint-board.js`; the page carries no inline script and no inline
+    event-handler attribute, no element of the board carries a `style` attribute
+    before or after any toggle is activated, and the Content-Security-Policy of
+    Acceptance Criterion 33 is unchanged. Acceptance Criteria 135 and 138 continue
+    to hold (see [Sprint Detail Sub-Template](#sprint-detail-sub-template),
+    **Column collapse** and **Read-only**).
+218. **Without JavaScript the board is expanded and usable, and the tasks board is
+    unaffected.** With scripting disabled, the sprint page shows all three columns
+    of its member-tasks board expanded, with every card and every empty state
+    visible, and shows no collapse toggle, because each toggle is served with the
+    `hidden` attribute and only `static/sprint-board.js` removes it. The roadmap
+    tasks page's five-column board carries no element with
+    `data-role="task-board-column-toggle"` and no element with the class
+    `task-board__column--collapsed`, the tasks page does not load
+    `static/sprint-board.js`, and that board's columns, widths, and behaviour are
+    unchanged (Acceptance Criteria 81 to 92 and 129 continue to hold).
 
 ## See Also
 

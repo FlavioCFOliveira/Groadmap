@@ -298,14 +298,18 @@ func TestModalTriggers_AddNoScriptAndKeepTheContentSecurityPolicy(t *testing.T) 
 		// The scripts a page that shows clickable tasks loads: the vendored
 		// framework that opens the modal, the project script that fills it from the
 		// task detail endpoint, and — on the tasks page — the one that narrows the
-		// board. All are served from /static/, which is what the policy admits;
-		// none is inline, which the policy forbids outright.
+		// board, or — on the sprint page — the one that collapses the board's
+		// columns. Neither of the last two takes part in opening the modal. All are
+		// served from /static/, which is what the policy admits; none is inline,
+		// which the policy forbids outright (Acceptance Criteria 135 and 217).
 		wantScripts := map[string]bool{
 			"/static/vendor/tabler/tabler.min.js": true,
 			"/static/task-modal.js":               true,
 		}
 		if strings.HasSuffix(path, "/tasks") {
 			wantScripts["/static/task-search.js"] = true
+		} else {
+			wantScripts["/static/sprint-board.js"] = true
 		}
 		if len(scripts) != len(wantScripts) {
 			t.Errorf("%s: the page loads %d scripts, want %d", path, len(scripts), len(wantScripts))

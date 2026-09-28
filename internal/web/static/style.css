@@ -375,6 +375,107 @@
   width: auto;
 }
 
+/* ---- Sprint board column collapse (SPEC/WEB.md § Sprint Detail Sub-Template,
+   rule 4, Column collapse; § Responsive and Mobile-First Design, rule 10;
+   Acceptance Criteria 213 to 216) ----
+   Each column header of the sprint page's board carries a toggle, Tabler's
+   card-header action button (`btn-action` inside `card-actions`), which
+   static/sprint-board.js turns into a collapse control. The script changes a
+   column's state only through markup — the body's `hidden` attribute and the
+   `task-board__column--collapsed` modifier on the column — and every length and
+   layout rule of the collapsed strip is declared here, under that modifier.
+
+   The toggle. The vendored `btn-action` rule is written for an anchor: it sets a
+   colour and a transparent background but no size and no border, so on a
+   <button> it would keep the browser's own border and padding and present a hit
+   target no larger than its glyph. It is given a square, touch-friendly target
+   here — the 2.25rem the graph page's sidebar toggle and entries present — and
+   no border. Tabler's `card-actions` negative margins keep the header's height
+   unchanged by a target taller than the heading. */
+.task-board__column .btn-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 2.25rem;
+  min-height: 2.25rem;
+  padding: 0;
+  border: 0;
+  cursor: pointer;
+}
+
+/* The vendored `.btn-action:focus` rule removes the focus outline, which would
+   leave a keyboard user no sign of where focus is. The indicator is restored for
+   `:focus-visible` — keyboard focus, not a pointer press — with the same outline
+   the board's cards show (WCAG 2.2 Success Criterion 2.4.7, Focus Visible). The
+   selector is more specific than the vendored one, so source order is not what
+   decides it and no !important is needed. */
+.task-board__column .btn-action:focus-visible {
+  outline: 2px solid var(--tblr-primary, #4299e1);
+  outline-offset: -2px;
+}
+
+/* A collapsed column is a strip of fixed width, 3rem, that takes no share of the
+   board's width: `flex: 0 0 3rem` neither grows nor shrinks, and the 17rem floor
+   of an expanded column is lifted, because that floor is the width at which a
+   card stays legible and a collapsed column shows no card. The columns that stay
+   expanded keep `flex: 1 1 0` and divide the width the strip frees among
+   themselves, each still at least 17rem. The strip keeps the board's height, as
+   every column does: the board stretches its columns and nothing here overrides
+   that.
+
+   The selector carries the `--bounded` board modifier because the collapse
+   belongs to the sprint page's board alone, and it matches the specificity of
+   that board's own column rule above, which it follows, so source order settles
+   the cascade. */
+.task-board--bounded > .task-board__column--collapsed {
+  flex: 0 0 3rem;
+  width: 3rem;
+  min-width: 3rem;
+}
+
+/* The strip's header stacks its content from the top: the toggle first, then the
+   heading and its count badge. The toggle comes after the heading in the markup,
+   where it sits at the trailing edge of an expanded header, so `order` moves it
+   to the top of the strip without a second copy of the control. The Tabler
+   header padding is sized for a full-width card and would leave a 3rem strip no
+   room for the toggle, so it is reduced to a vertical padding alone. */
+.task-board__column--collapsed > .card-header {
+  flex-direction: column;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.375rem 0;
+}
+
+.task-board__column--collapsed .card-actions {
+  order: -1;
+  margin: 0;
+  padding: 0;
+}
+
+/* The heading and its count badge, rotated 90 degrees clockwise so that they
+   read from top to bottom: the vertical writing mode `vertical-rl`. The badge is
+   inside the heading, so it turns with it and keeps its text and its colour; the
+   strip therefore still states how many tasks the column holds. `nowrap` keeps
+   the heading and its badge on one vertical line.
+
+   The heading is laid out as a flex line along that vertical axis, so the gap
+   between the heading and its badge runs top to bottom and both are centred
+   across the strip. The badge's `ms-2` utility is a PHYSICAL left margin, which
+   in the vertical writing mode lies across the strip rather than along the line;
+   the equal right margin below balances it, so the badge is centred under the
+   heading instead of being pushed to one side, without overriding the utility. */
+.task-board__column--collapsed .card-title {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  writing-mode: vertical-rl;
+  white-space: nowrap;
+}
+
+.task-board__column--collapsed .card-title > .badge {
+  margin-right: 0.5rem;
+}
+
 /* The card list of one column scrolls VERTICALLY and independently of the other
    columns when it exceeds the available height. min-height: 0 is what lets a
    flex item shrink below its content height and therefore scroll at all. */

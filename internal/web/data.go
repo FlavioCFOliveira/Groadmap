@@ -803,11 +803,20 @@ type sprintCard struct {
 // § Status, Priority, and Severity Badge Colours, rule 2; Acceptance Criterion
 // 140).
 //
-// Field order puts the two strings before the slice so the pointer-scan prefix
-// stops at the slice header rather than spanning the whole struct (govet
+// BodyID is the id of the column's body — the element holding its cards or its
+// empty state — which the column's collapse toggle names in aria-controls and
+// static/sprint-board.js resolves to find the element it hides. It is taken from
+// the column table below rather than derived in the template, so the three ids
+// are fixed literals, unique within the page by construction (SPEC/WEB.md
+// § Sprint Detail Sub-Template, rule 4, Column collapse; Acceptance Criterion
+// 213).
+//
+// Field order puts the strings before the slice so the pointer-scan prefix stops
+// at the slice header rather than spanning the whole struct (govet
 // fieldalignment).
 type sprintBoardColumn struct {
 	Heading         string
+	BodyID          string
 	CanonicalStatus models.TaskStatus
 	Tasks           []*taskView
 }
@@ -862,15 +871,22 @@ type sprintBoardColumn struct {
 // into DOING for both, so a TESTING card takes its place from when its task
 // entered DOING and never from when it entered TESTING (SPEC/STATE_MACHINE.md
 // § Date Tracking Fields).
+//
+// The fifth field is the id of the column's body, the element the column's
+// collapse toggle controls. The specification fixes the three ids, so they are
+// written out here in full, beside the heading they belong to, rather than
+// assembled from it (SPEC/WEB.md § Sprint Detail Sub-Template, rule 4, Column
+// collapse; Acceptance Criterion 213).
 var sprintBoardColumns = [...]struct {
 	orderingTimestamp func(*models.Task) *string
 	heading           string
+	bodyID            string
 	canonical         models.TaskStatus
 	category          models.TaskStatusCategory
 }{
-	{nil, "WAITING", models.StatusSprint, models.CategoryPending},
-	{startedAt, "DOING", models.StatusDoing, models.CategoryInProgress},
-	{closedAt, "CLOSED", models.StatusCompleted, models.CategoryCompleted},
+	{nil, "WAITING", "sprint-board-column-waiting", models.StatusSprint, models.CategoryPending},
+	{startedAt, "DOING", "sprint-board-column-doing", models.StatusDoing, models.CategoryInProgress},
+	{closedAt, "CLOSED", "sprint-board-column-closed", models.StatusCompleted, models.CategoryCompleted},
 }
 
 // startedAt and closedAt are the two ordering keys sprintBoardColumns names. Each
@@ -1719,6 +1735,7 @@ func groupIntoSprintBoardColumns(views []taskView) []sprintBoardColumn {
 	for i := range sprintBoardColumns {
 		columns[i] = sprintBoardColumn{
 			Heading:         sprintBoardColumns[i].heading,
+			BodyID:          sprintBoardColumns[i].bodyID,
 			CanonicalStatus: sprintBoardColumns[i].canonical,
 		}
 	}

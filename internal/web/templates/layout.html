@@ -317,9 +317,11 @@
             here.
 
             READ-ONLY: no drag-and-drop, no control that moves a task between
-            columns, reorders cards, or edits anything. The only button in the
-            board is the card itself, and it opens the read-only detail modal
-            (Acceptance Criterion 138).
+            columns, reorders cards, or edits anything. The board carries buttons
+            of exactly two kinds, and neither submits anything or changes any
+            data: the card, which opens the read-only detail modal, and the column
+            collapse toggle in each column header, which changes only how the
+            board is presented (Acceptance Criteria 138 and 212 to 218).
           */}}
           <div class="task-board task-board--bounded mb-3" data-role="task-board">
             {{range .Columns}}
@@ -340,11 +342,29 @@
                 rather than about its markup (SPEC/WEB.md § Sprint Detail
                 Sub-Template, Column header; § Status, Priority, and Severity Badge
                 Colours, rule 2; Acceptance Criteria 61 and 140).
+
+                At the header's trailing edge, in Tabler's card-header actions
+                container, sits the column's collapse toggle. It changes only how
+                the board is presented: static/sprint-board.js hides the column
+                body it names in aria-controls, marks the column with
+                task-board__column--collapsed, and flips aria-expanded, the
+                aria-label, and the chevron; static/style.css turns a marked column
+                into a 3rem strip with its heading and badge set vertically.
+                The toggle is served in its EXPANDED state and with the hidden
+                attribute, which the script alone removes: a browser that runs no
+                script shows every column expanded and no toggle that would do
+                nothing when pressed. Being a real <button>, it is activated by a
+                click, a tap, Enter, and Space natively, so it carries no tabindex
+                and no role (SPEC/WEB.md § Sprint Detail Sub-Template, rule 4,
+                Column collapse; Acceptance Criteria 212, 213, and 218).
               */}}
               <div class="card-header">
                 <h3 class="card-title">{{.Heading}} <span class="badge {{taskStatusBadge .CanonicalStatus}} ms-2">{{len .Tasks}}</span></h3>
+                <div class="card-actions">
+                  <button type="button" class="btn-action" data-role="task-board-column-toggle" aria-expanded="true" aria-controls="{{.BodyID}}" aria-label="Collapse {{.Heading}} column" hidden><i class="ti ti-chevron-left" aria-hidden="true"></i></button>
+                </div>
               </div>
-              <div class="card-body task-board__cards">
+              <div class="card-body task-board__cards" id="{{.BodyID}}">
                 {{range .Tasks}}
                 {{/*
                   The card IS the modal trigger, and it is a real <button>: the

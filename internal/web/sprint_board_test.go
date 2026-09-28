@@ -1703,8 +1703,9 @@ func counterMarkup(role, icon string, n int) string {
 // TestSprintBoard_IsReadOnly is the gate for Acceptance Criterion 138: the board
 // offers no drag-and-drop and no control of any other kind that moves a task
 // between columns, reorders cards, changes a task's status, or creates or edits
-// anything. The only button in the board is the card itself, and activating it
-// opens the read-only modal.
+// anything. The board's buttons are of exactly two kinds: the card, whose
+// activation opens the read-only modal, and the column collapse toggle, one per
+// column header, whose activation changes only the board's presentation.
 //
 // The assertion is made on the board REGION rather than on the page, because the
 // page legitimately carries controls that submit nothing — the page header's
@@ -1731,19 +1732,31 @@ func TestSprintBoard_IsReadOnly(t *testing.T) {
 		}
 	}
 
-	// The only buttons in the board are the cards, and every one of them is a
-	// modal trigger. A count of zero would make this vacuous, so it is checked.
+	// The board's buttons are the six cards and the three column toggles, and
+	// nothing else. Every card is a modal trigger and no toggle is: a toggle that
+	// opened the modal, or a third kind of button, would change the count of one
+	// kind without the other. A count of zero would make this vacuous, so the
+	// totals are checked exactly.
 	buttons := strings.Count(region, "<button")
-	if buttons != 6 {
-		t.Errorf("the board carries %d buttons, want the 6 cards of its member tasks", buttons)
+	if buttons != 9 {
+		t.Errorf("the board carries %d buttons, want the 6 cards of its member tasks and the 3 "+
+			"column toggles", buttons)
 	}
-	if got := strings.Count(region, cardOpen); got != buttons {
-		t.Errorf("the board carries %d buttons of which %d are cards; every button in the board "+
-			"must be a card", buttons, got)
+	cards := strings.Count(region, cardOpen)
+	if cards != 6 {
+		t.Errorf("the board carries %d cards, want the 6 of its member tasks", cards)
 	}
-	if got := strings.Count(region, `data-bs-toggle="modal"`); got != buttons {
-		t.Errorf("the board carries %d buttons and %d modal triggers; the only thing a card does "+
-			"is open the read-only modal", buttons, got)
+	toggles := strings.Count(region, columnToggleOpen)
+	if toggles != 3 {
+		t.Errorf("the board carries %d column toggles, want one per column header", toggles)
+	}
+	if cards+toggles != buttons {
+		t.Errorf("the board carries %d buttons of which %d are cards and %d column toggles; every "+
+			"button in the board must be one of the two", buttons, cards, toggles)
+	}
+	if got := strings.Count(region, `data-bs-toggle="modal"`); got != cards {
+		t.Errorf("the board carries %d cards and %d modal triggers; the only thing a card does "+
+			"is open the read-only modal, and a column toggle opens nothing", cards, got)
 	}
 }
 
