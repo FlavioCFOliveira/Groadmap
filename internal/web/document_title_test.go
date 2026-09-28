@@ -17,11 +17,15 @@ import (
 // This file gates the document title every HTML page carries (SPEC/WEB.md
 // § Document Title; Acceptance Criteria 173-176).
 
-// titleFixtureRoadmap and titleFixtureSprint are the roadmap and sprint the
-// acceptance criteria name: a roadmap called payments holding sprint 7.
+// titleFixtureRoadmap, titleFixtureSprint, and titleFixtureTask are the roadmap,
+// sprint, and task the acceptance criteria name: a roadmap called payments
+// holding sprint 7 and task 42.
 const (
 	titleFixtureRoadmap = "payments"
 	titleFixtureSprint  = 7
+	titleFixtureTask    = 42
+	// titleFixtureTaskTitle is the title criterion 173 gives task 42.
+	titleFixtureTaskTitle = "Rotate the signing keys"
 )
 
 // titleElement captures the text of every <title> element on a page. The
@@ -33,8 +37,8 @@ var titleElement = regexp.MustCompile(`<title>(.*?)</title>`)
 // count as a second brand.
 var navbarBrandClass = regexp.MustCompile(`class="(?:[^"]*\s)?navbar-brand(?:\s[^"]*)?"`)
 
-// seedTitleFixture creates the payments roadmap with sprints 1 through 7, so
-// sprint 7 exists and its page renders. Every sprint goes through seedSprint,
+// seedTitleFixture creates the payments roadmap with sprints 1 through 7 and
+// tasks 1 through 42, so sprint 7 and task 42 exist and their pages render. Every sprint goes through seedSprint,
 // the statement `sprint create` runs.
 func seedTitleFixture(t *testing.T) {
 	t.Helper()
@@ -57,6 +61,19 @@ func seedTitleFixture(t *testing.T) {
 		}
 		if id != i {
 			t.Fatalf("sprint id = %d, want %d", id, i)
+		}
+	}
+	for i := 1; i <= titleFixtureTask; i++ {
+		title := fmt.Sprintf("Reconcile card settlement batch %d", i)
+		if i == titleFixtureTask {
+			title = titleFixtureTaskTitle
+		}
+		id, err := seedTask(database, seededTask(now, title))
+		if err != nil {
+			t.Fatalf("creating task %d: %v", i, err)
+		}
+		if id != i {
+			t.Fatalf("task id = %d, want %d", id, i)
 		}
 	}
 }
@@ -98,7 +115,7 @@ type titleCase struct {
 	want string
 }
 
-// titleCases returns the six pages of criterion 173 with their expected titles
+// titleCases returns the seven pages of criterion 173 with their expected titles
 // for hostname; an empty hostname yields the titles of criterion 176.
 func titleCases(hostname string) []titleCase {
 	suffix := ""
@@ -114,6 +131,7 @@ func titleCases(hostname string) []titleCase {
 		{base + "/audit", rdm + "Audit" + suffix},
 		{base + "/graph", rdm + "Knowledge graph" + suffix},
 		{fmt.Sprintf("%s/sprints/%d", base, titleFixtureSprint), fmt.Sprintf("%sSprint #%d%s", rdm, titleFixtureSprint, suffix)},
+		{fmt.Sprintf("%s/tasks/%d", base, titleFixtureTask), fmt.Sprintf("#%d %s - %s%s", titleFixtureTask, titleFixtureTaskTitle, titleFixtureRoadmap, suffix)},
 	}
 }
 
@@ -238,4 +256,68 @@ func TestReadHostname(t *testing.T) {
 			t.Errorf("%s: readHostname = %q, want %q", tc.name, got, tc.want)
 		}
 	}
+}
+
+// TestDocumentTitle_TaskPageLeadsWithTheTask is the gate for Document Title rule
+// 7 (Acceptance Criterion 173): the task page's document title is `#<id>`, one
+// space, the task's title as stored and whole, then the roadmap and the hostname.
+// A title holding a tab, a line feed, or a carriage return is written as stored —
+// the browser collapses that whitespace, the server does not — a title holding
+// the separator is written as stored, a long title is not truncated, and markup
+// in a title is escaped. The sprint page keeps its own form.
+func TestDocumentTitle_TaskPageLeadsWithTheTask(t *testing.T) {
+	t.Setenv("HOME", shortHome(t))
+	seedTitleFixture(t)
+	setServerHostname(t, "ROG")
+
+	database, err := db.Open(titleFixtureRoadmap)
+	if err != nil {
+		t.Fatalf("opening roadmap: %v", err)
+	}
+	long := strings.Repeat("Reconcile the chargeback ledger ", 7)[:200]
+	for id, title := range map[int]string{
+		1: "Saved card\ttokenisation\nfor the\rcheckout",
+		2: "Settle - then reconcile",
+		3: long,
+		4: `Reject <b>"bold"</b> & O'Brien`,
+	} {
+		if _, err := database.Exec(`UPDATE tasks SET title = ? WHERE id = ?`, title, id); err != nil {
+			t.Fatalf("retitling task %d: %v", id, err)
+		}
+	}
+	_ = database.Close() // test cleanup; a close error on a fixture handle is not under test
+
+	h := handler()
+	for id, want := range map[int]string{
+		1: "#1 Saved card\ttokenisation\nfor the\rcheckout - payments - ROG",
+		2: "#2 Settle - then reconcile - payments - ROG",
+		3: "#3 " + long + " - payments - ROG",
+		4: "#4 Reject &lt;b&gt;&#34;bold&#34;&lt;/b&gt; &amp; O&#39;Brien - payments - ROG",
+	} {
+		got, _ := pageTitleExact(t, h, fmt.Sprintf("/roadmaps/payments/tasks/%d", id))
+		if got != want {
+			t.Errorf("task %d: <title> = %q, want %q", id, got, want)
+		}
+	}
+	if got, _ := pageTitleExact(t, h, "/roadmaps/payments/sprints/7"); got != "payments - Sprint #7 - ROG" {
+		t.Errorf("the sprint page's <title> = %q, want its own form", got)
+	}
+}
+
+// pageTitleExact returns the raw text of a page's single <title> element,
+// including any line break it holds, which the one-line pattern of pageTitle
+// would not cross.
+func pageTitleExact(t *testing.T, h http.Handler, path string) (string, string) {
+	t.Helper()
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET %s: status = %d, want 200", path, rec.Code)
+	}
+	body := rec.Body.String()
+	m := regexp.MustCompile(`(?s)<title>(.*?)</title>`).FindAllStringSubmatch(body, -1)
+	if len(m) != 1 {
+		t.Fatalf("GET %s: %d <title> elements, want 1", path, len(m))
+	}
+	return m[0][1], body
 }

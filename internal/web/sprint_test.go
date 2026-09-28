@@ -4,7 +4,6 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
-	"regexp"
 	"strconv"
 	"strings"
 	"testing"
@@ -15,8 +14,8 @@ import (
 )
 
 // seededTask builds a valid task with the long free-text fields populated, so
-// the task detail modal has functional/technical/acceptance text to render. The
-// title is unique per id so an assertion can target one task's modal.
+// the task page has functional/technical/acceptance text to render. The title is
+// unique per id so an assertion can target one task's card or page.
 func seededTask(now, title string) *models.Task {
 	return &models.Task{
 		Priority:               4,
@@ -332,8 +331,8 @@ func TestSprints_SprintClassificationAndLinks(t *testing.T) {
 
 	// OPEN -> Actual, rendered through the SAME shared sprint-card partial as the
 	// other tabs: the card links to the sprint page and shows the description and
-	// the task count, but it does NOT expand into an inline member-tasks table or
-	// per-task modals (SPEC/WEB.md § Shared Sprint-Card Partial; Acceptance
+	// the task count, but it does NOT expand into an inline member-tasks table and
+	// links to no task page (SPEC/WEB.md § Shared Sprint-Card Partial; Acceptance
 	// Criteria 8/12/38).
 	if !strings.Contains(current, "/sprints/"+itoa(f.openID)) {
 		t.Errorf("OPEN sprint #%d not under the Actual tab", f.openID)
@@ -344,13 +343,13 @@ func TestSprints_SprintClassificationAndLinks(t *testing.T) {
 	if !strings.Contains(current, "2 task(s)") {
 		t.Errorf("Actual tab card does not show the OPEN sprint's task count")
 	}
-	// The OPEN sprint must NOT be expanded: no member-task title and no per-task
-	// modal trigger on the sprints landing page.
+	// The OPEN sprint must NOT be expanded: no member-task title and no link to a
+	// task page on the sprints landing page.
 	if strings.Contains(current, "Build the read-only sprint page route and template") {
 		t.Errorf("Actual tab must not show the OPEN sprint's member task title (no inline table)")
 	}
-	if strings.Contains(current, `data-bs-target="#task-modal-`) {
-		t.Errorf("Actual tab must not render a per-task modal trigger")
+	if strings.Contains(current, "/tasks/") {
+		t.Errorf("Actual tab must not link to a task page")
 	}
 
 	// CLOSED -> Concluídos, ordered by descending Order: closedHigher (Order 40)
@@ -420,7 +419,7 @@ func TestClassifySprints_OrderingRules(t *testing.T) {
 
 // TestSprintPage_HappyPath drives handleSprint against a sprint of an existing
 // roadmap: 200 HTML showing the sprint's details and its member tasks, with
-// every task card clickable to a modal and no edit affordance (SPEC/WEB.md
+// every task card a link to its task page and no edit affordance (SPEC/WEB.md
 // § Roadmap Sprint Page; Acceptance Criterion 14).
 func TestSprintPage_HappyPath(t *testing.T) {
 	t.Setenv("HOME", shortHome(t))
@@ -440,12 +439,12 @@ func TestSprintPage_HappyPath(t *testing.T) {
 	if !strings.Contains(body, "Deliver the sprint detail page and task modal") {
 		t.Errorf("sprint page missing the sprint description")
 	}
-	// Member tasks presented, each card clickable to a modal.
+	// Member tasks presented, each card a link to its task page.
 	if !strings.Contains(body, "Build the read-only sprint page route and template") {
 		t.Errorf("sprint page does not present its member task")
 	}
-	if !strings.Contains(body, `data-task-id="`+itoa(f.openTaskID)+`"`) {
-		t.Errorf("sprint page task card is not wired to the task detail modal")
+	if !strings.Contains(body, `href="/roadmaps/`+f.name+`/tasks/`+itoa(f.openTaskID)+`"`) {
+		t.Errorf("sprint page task card does not link to the task page")
 	}
 	// Read-only: no form, no submit, no edit control.
 	low := strings.ToLower(body)
@@ -548,58 +547,36 @@ func TestSprintPage_NotFoundCases(t *testing.T) {
 	}
 }
 
-// TestTaskModal_WiringAndContent asserts the read-only task detail modal
-// mechanism on every page that shows clickable tasks: the tasks page and the
-// sprint page. Each page carries ONE modal shell, each clickable task is wired to
-// it by data-bs-toggle="modal" plus the task id the script fetches, and the
-// endpoint that fills the shell returns the long free-text fields the modal
-// presents. The sprints landing page is deliberately excluded: it renders every
-// sprint as a compact card and opens no task detail modal (SPEC/WEB.md § Task
-// Detail Modal, § Task Detail Endpoint, § Shared Sprint-Card Partial; Acceptance
-// Criteria 8/15/38/96).
-var rePerTaskModal = regexp.MustCompile(`id="task-modal-\d+"`)
-
-func TestTaskModal_WiringAndContent(t *testing.T) {
+// TestTaskCards_LinkToTheTaskPageAndThePagesStayReadOnly asserts, on every page
+// that shows a task card — the tasks page and the sprint page — that the card of
+// a task links to that task's own page, that no task's long fields travel in the
+// board page, and that the pages are read-only; then that the task page the card
+// links to carries the long free-text fields, rendered on the server. The sprints
+// landing page is deliberately excluded: it renders every sprint as a compact
+// card and links to no task page (SPEC/WEB.md § Roadmap Task Page, § Shared
+// Sprint-Card Partial; Acceptance Criteria 8/15/38/86/135).
+func TestTaskCards_LinkToTheTaskPageAndThePagesStayReadOnly(t *testing.T) {
 	t.Setenv("HOME", shortHome(t))
-	f := seedSprintFixture(t, "web-task-modal")
+	f := seedSprintFixture(t, "web-task-page")
 	mux := buildMux()
 
+	href := `href="/roadmaps/` + f.name + `/tasks/` + itoa(f.openTaskID) + `"`
 	for _, path := range []string{
 		"/roadmaps/" + f.name + "/tasks",                     // tasks page (the board)
 		"/roadmaps/" + f.name + "/sprints/" + itoa(f.openID), // sprint page
 	} {
 		body := servePage(t, mux, path)
 
-		// A clickable control is wired to the modal via Bootstrap data attributes,
-		// and carries the id of the task the script fetches.
-		if !strings.Contains(body, `data-bs-toggle="modal"`) {
-			t.Errorf("page %s has no modal-toggling control", path)
-		}
-		if !strings.Contains(body, `data-bs-target="#task-modal"`) {
-			t.Errorf("page %s has no trigger pointing at the modal shell", path)
-		}
-		if !strings.Contains(body, `data-task-id="`+itoa(f.openTaskID)+`"`) {
-			t.Errorf("page %s missing the trigger for task #%d", path, f.openTaskID)
-		}
-
-		// Exactly ONE modal element, and it is the empty shell: no task's data
-		// travels in the document.
-		if got := strings.Count(body, `id="task-modal"`); got != 1 {
-			t.Errorf("page %s carries %d modal shells, want exactly 1", path, got)
-		}
-		// A per-task modal carried a numeric id; the shell's own elements are named
-		// (task-modal-title, task-modal-ref, ...), so the digits are what
-		// distinguish the two.
-		if rePerTaskModal.MatchString(body) {
-			t.Errorf("page %s still renders a per-task modal", path)
+		if !strings.Contains(body, href) {
+			t.Errorf("page %s carries no card linking to task #%d", path, f.openTaskID)
 		}
 		for _, absent := range []string{
+			`data-bs-toggle="modal"`, `id="task-modal`,
 			"Functional requirements", "Technical requirements", "Acceptance criteria",
 			"Operators can inspect a sprint and its task list from the browser",
 		} {
 			if strings.Contains(body, absent) {
-				t.Errorf("page %s carries the modal content %q; it must be fetched on demand",
-					path, absent)
+				t.Errorf("page %s carries %q; a task's fields are shown on its own page", path, absent)
 			}
 		}
 
@@ -621,25 +598,29 @@ func TestTaskModal_WiringAndContent(t *testing.T) {
 		}
 	}
 
-	// What the shell is filled with: the endpoint returns every field the modal
-	// presents, for the same task the triggers point at.
-	view := decodeTaskDetail(t, mux, f.name, f.openTaskID)
-	if view.Task.ID != f.openTaskID {
-		t.Fatalf("the endpoint returned task #%d, want #%d", view.Task.ID, f.openTaskID)
+	// The page the card links to carries every long field, server-rendered, and is
+	// read-only too.
+	page := servePage(t, mux, "/roadmaps/"+f.name+"/tasks/"+itoa(f.openTaskID))
+	mainAt := strings.Index(page, `<main class="page-body">`)
+	if mainAt < 0 {
+		t.Fatal("the task page has no page body")
 	}
-	for label, value := range map[string]string{
-		"functional requirements": view.Task.FunctionalRequirements,
-		"technical requirements":  view.Task.TechnicalRequirements,
-		"acceptance criteria":     view.Task.AcceptanceCriteria,
-		"title":                   view.Task.Title,
-		"created_at":              view.Task.CreatedAt,
+	main := page[mainAt:]
+	for _, want := range []string{
+		"Functional requirements", "Technical requirements", "Acceptance criteria", "Completion summary",
+		"Operators can inspect a sprint and its task list from the browser",
+		"Render the sprint page server-side from project.db, read-only",
+		"The sprint page lists every member task in execution order",
 	} {
-		if value == "" {
-			t.Errorf("the task detail carries no %s", label)
+		if !strings.Contains(page, want) {
+			t.Errorf("the task page does not carry %q", want)
 		}
 	}
-	if view.Task.FunctionalRequirements != "Operators can inspect a sprint and its task list from the browser" {
-		t.Errorf("the task detail's functional requirements = %q", view.Task.FunctionalRequirements)
+	low := strings.ToLower(main)
+	for _, bad := range []string{"<form", `type="submit"`, "<button", "<textarea", "<select", "<input"} {
+		if strings.Contains(low, bad) {
+			t.Errorf("the task page must be read-only but contains %q", bad)
+		}
 	}
 }
 

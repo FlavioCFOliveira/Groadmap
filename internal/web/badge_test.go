@@ -206,11 +206,9 @@ func seedBadgeRoadmap(t *testing.T, name string) (roadmap string, sprintID int) 
 // (SPEC/WEB.md § Status, Priority, and Severity Badge Colours, rule 2).
 //
 // The STATUS badge is deliberately not asserted here. The card shows none — the
-// column it sits in already states the status — and the modal that does show one
-// is now filled by /static/task-modal.js from the task detail endpoint, so no
-// status badge is server-rendered on this page at all. The script's own mapping
-// is pinned against these same Go helpers, value by value, in
-// TestTaskModalScript_BadgeMappingMatchesTheServerHelpers.
+// column it sits in already states the status — and the page that does show one
+// is the task's own page, whose header badge is gated in task_page_test.go, so no
+// status badge is rendered on this page at all.
 func TestTasksPage_RendersSemanticBadgeColours(t *testing.T) {
 	t.Setenv("HOME", shortHome(t))
 	name, _ := seedBadgeRoadmap(t, "badge-colours")
@@ -238,11 +236,11 @@ func TestTasksPage_RendersSemanticBadgeColours(t *testing.T) {
 	if !strings.Contains(body, `<span class="badge bg-red-lt">S9</span>`) {
 		t.Errorf("tasks page missing severity badge with bg-red-lt reading S9 for severity 9")
 	}
-	// No status badge is server-rendered on this page: not on the card, and not
-	// in the shell, which carries an empty badge element the script fills.
+	// No status badge is rendered on this page: the column states the status and
+	// the task's own page shows it.
 	if strings.Contains(body, `>SPRINT</span>`) {
-		t.Errorf("tasks page renders a status badge; the column states the status and the modal " +
-			"is filled by the script")
+		t.Errorf("tasks page renders a status badge; the column states the status and the task " +
+			"page shows it")
 	}
 }
 
@@ -296,7 +294,7 @@ func TestSprintPage_RendersSemanticStatusBadge(t *testing.T) {
 	}
 	if strings.Contains(body, ">SPRINT<") {
 		t.Errorf("the sprint page renders the member task's status value; the board states it " +
-			"by the column and the modal is filled by the script")
+			"by the column and the task page shows it")
 	}
 }
 

@@ -9,9 +9,8 @@ import (
 // display form (SPEC/WEB.md § Date and Time Display). Every server-rendered
 // surface that displays a timestamp formats it through timestampHTML, the one
 // helper registered in the template FuncMap; no template and no handler composes
-// the display form by any other means. The modal script, static/task-modal.js,
-// carries the one client-side counterpart, formatTimestamp, which applies the
-// same rule and is compared against canonicalTimestampDisplay value by value.
+// the display form by any other means, and no script formats a timestamp: every
+// surface the rule governs is rendered on the server.
 
 // canonicalTimestampLen is the length of a stored timestamp in the canonical
 // format of SPEC/DATA_FORMATS.md § Dates - ISO 8601 with UTC:
@@ -48,8 +47,9 @@ type timeElementData struct {
 // length in the proleptic Gregorian calendar, an hour above 23, a minute or a
 // second above 59). Such a value is not a valid global date and time string for
 // the datetime attribute of the HTML time element, so it is displayed as stored
-// (rule 7). The check is spelled out rather than delegated to time.Parse so the
-// modal script's formatTimestamp can apply the identical rule byte for byte.
+// (rule 7). The check is spelled out rather than delegated to time.Parse, so the
+// accepted shape is exactly the canonical one and nothing a parser would also
+// tolerate.
 func canonicalTimestampDisplay(stored string) (string, bool) {
 	if len(stored) != canonicalTimestampLen {
 		return "", false

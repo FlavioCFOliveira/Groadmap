@@ -2,6 +2,7 @@ package web
 
 import (
 	"context"
+	"regexp"
 	"slices"
 	"sort"
 	"strconv"
@@ -286,8 +287,8 @@ func seedSprintWithMembers(t *testing.T, name string, n int) int {
 //
 // Bounding it before the Comments card is what makes every "the board shows X"
 // and "the board shows no X" assertion falsifiable: the sprint page renders three
-// cards outside the board — the Sprint details card above it, the Comments card
-// below it, and the single modal shell after the page wrapper — and a page-wide
+// cards outside the board — the Sprint details card above it and the Comments card
+// below it — and a page-wide
 // check would answer for their content as readily as for the board's.
 //
 // The container's marker is `data-role="task-board">`, with the closing angle
@@ -321,12 +322,16 @@ func memberBoardColumns(t *testing.T, body string) []string {
 	return parts[1:]
 }
 
+// reMemberCardID captures the task id of a card from the href of its link to the
+// task's own page.
+var reMemberCardID = regexp.MustCompile(`class="card card-sm card-link text-reset task-card" href="/roadmaps/[^/"]+/tasks/(\d+)"`)
+
 // memberCardIDs returns the task ids of a column's cards, in document order,
 // which is the order the reader sees them in.
 func memberCardIDs(t *testing.T, column string) []int {
 	t.Helper()
 
-	matches := reModalTarget.FindAllStringSubmatch(column, -1)
+	matches := reMemberCardID.FindAllStringSubmatch(column, -1)
 	ids := make([]int, 0, len(matches))
 	for _, m := range matches {
 		id, err := strconv.Atoi(m[1])
@@ -1386,7 +1391,7 @@ func TestSprintBoard_CardShowsSevenDataPointsInOrder(t *testing.T) {
 
 	// And nothing else. Each of these is a value the task HAS — so the assertion
 	// is about the card omitting it, not about the roadmap lacking it — and each
-	// is reached through the task detail modal the card opens.
+	// is shown on the task page the card links to.
 	for what, absent := range map[string]string{
 		"a status badge":       taskStatusBadge(models.StatusSprint),
 		"the status value":     ">SPRINT<",
@@ -1398,8 +1403,8 @@ func TestSprintBoard_CardShowsSevenDataPointsInOrder(t *testing.T) {
 		"a sprint indicator":   "ti ti-flag",
 	} {
 		if strings.Contains(card, absent) {
-			t.Errorf("the card shows %s (%q); the column states the status and the modal the "+
-				"card opens carries every field\ncard: %s", what, absent, card)
+			t.Errorf("the card shows %s (%q); the column states the status and the task page "+
+				"the card links to carries every field\ncard: %s", what, absent, card)
 		}
 	}
 
@@ -1412,14 +1417,14 @@ func TestSprintBoard_CardShowsSevenDataPointsInOrder(t *testing.T) {
 	// what would betray a surviving indicator, and it is asserted absent from the
 	// TASKS board too, where a value could once have reached a card
 	// (TestTaskBoard_CardShowsEveryPart, TestTaskBoard_AbsentMetadataRendersNothing).
-	view := decodeTaskDetail(t, mux, f.name, f.reconcile)
-	if len(view.Task.Blocks) == 0 && len(view.Task.DependsOn) == 0 {
+	stored := storedTask(t, f.name, f.reconcile)
+	if len(stored.Blocks) == 0 && len(stored.DependsOn) == 0 {
 		t.Errorf("the reconciliation task has no dependency edge at all, so asserting the card " +
 			"omits the counts proves nothing")
 	}
-	if view.Task.Type != models.TypeUserStory {
+	if stored.Type != models.TypeUserStory {
 		t.Errorf("the reconciliation task's type is %q, not the value the type badge "+
-			"assertion is written against", view.Task.Type)
+			"assertion is written against", stored.Type)
 	}
 }
 
@@ -1698,15 +1703,14 @@ func counterMarkup(role, icon string, n int) string {
 // TestSprintBoard_IsReadOnly is the gate for Acceptance Criterion 138: the board
 // offers no drag-and-drop and no control of any other kind that moves a task
 // between columns, reorders cards, changes a task's status, or creates or edits
-// anything. The board's buttons are of exactly two kinds: the card, whose
-// activation opens the read-only modal, and the column collapse toggle, one per
-// column header, whose activation changes only the board's presentation.
+// anything. Every card is a link to a read-only task page, and every button of
+// the board is a column collapse toggle, one per column header, whose activation
+// changes only the board's presentation.
 //
 // The assertion is made on the board REGION rather than on the page, because the
 // page legitimately carries controls that submit nothing — the page header's
-// "Back to sprints" link, the modal's Close button, the sidebar links — and a
-// page-wide check would either fail on those or have to be weakened until it
-// proved nothing.
+// "Back to sprints" link, the sidebar links — and a page-wide check would either
+// fail on those or have to be weakened until it proved nothing.
 func TestSprintBoard_IsReadOnly(t *testing.T) {
 	t.Setenv("HOME", shortHome(t))
 	f := seedSprintBoardFixture(t, "settlement-platform")
@@ -1718,40 +1722,33 @@ func TestSprintBoard_IsReadOnly(t *testing.T) {
 	// Anything that could carry a change to the server, plus the attributes that
 	// would make an element do so or make a card draggable.
 	for _, bad := range []string{
-		"<form", "<input", "<textarea", "<select", "<a ", "href=", "action=", "formaction=",
+		"<form", "<input", "<textarea", "<select", "action=", "formaction=",
 		"method=", "onclick=", "onsubmit=", "ondrop=", "ondragstart=", "draggable=",
-		"contenteditable", "sortable",
+		"contenteditable", "sortable", "data-bs-toggle",
 	} {
 		if strings.Contains(low, bad) {
 			t.Errorf("the member-tasks board must be read-only but contains %q", bad)
 		}
 	}
 
-	// The board's buttons are the six cards and the three column toggles, and
-	// nothing else. Every card is a modal trigger and no toggle is: a toggle that
-	// opened the modal, or a third kind of button, would change the count of one
-	// kind without the other. A count of zero would make this vacuous, so the
-	// totals are checked exactly.
-	buttons := strings.Count(region, "<button")
-	if buttons != 9 {
-		t.Errorf("the board carries %d buttons, want the 6 cards of its member tasks and the 3 "+
-			"column toggles", buttons)
-	}
+	// The board's links are the six cards and nothing else, each a link to a task
+	// page; its buttons are the three column toggles and nothing else. A count of
+	// zero would make this vacuous, so the totals are checked exactly.
 	cards := strings.Count(region, cardOpen)
 	if cards != 6 {
 		t.Errorf("the board carries %d cards, want the 6 of its member tasks", cards)
 	}
+	if links := strings.Count(region, "<a "); links != cards {
+		t.Errorf("the board carries %d links, want only its %d cards", links, cards)
+	}
+	if hrefs := strings.Count(region, `href="/roadmaps/`+f.name+`/tasks/`); hrefs != cards {
+		t.Errorf("the board carries %d task-page hrefs for %d cards", hrefs, cards)
+	}
+	buttons := strings.Count(region, "<button")
 	toggles := strings.Count(region, columnToggleOpen)
-	if toggles != 3 {
-		t.Errorf("the board carries %d column toggles, want one per column header", toggles)
-	}
-	if cards+toggles != buttons {
-		t.Errorf("the board carries %d buttons of which %d are cards and %d column toggles; every "+
-			"button in the board must be one of the two", buttons, cards, toggles)
-	}
-	if got := strings.Count(region, `data-bs-toggle="modal"`); got != cards {
-		t.Errorf("the board carries %d cards and %d modal triggers; the only thing a card does "+
-			"is open the read-only modal, and a column toggle opens nothing", cards, got)
+	if toggles != 3 || buttons != toggles {
+		t.Errorf("the board carries %d buttons of which %d are column toggles, want exactly the 3 "+
+			"toggles", buttons, toggles)
 	}
 }
 

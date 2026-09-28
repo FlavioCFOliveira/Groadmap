@@ -106,8 +106,8 @@ func TestHandleSprints_HappyPath(t *testing.T) {
 }
 
 // TestHandleTasks_HappyPath drives handleTasks end-to-end against a populated
-// roadmap: it must render 200 HTML showing the full task table with the seeded
-// task title and a task detail modal for that task. This covers loadTasks'
+// roadmap: it must render 200 HTML showing the task board with the seeded task
+// title and a card linking to that task's own page. This covers loadTasks'
 // read path (the full, unfiltered task list) and renderHTML's success branch
 // (SPEC/WEB.md § Roadmap Tasks Page; Tasks and Sprints from SQLite).
 func TestHandleTasks_HappyPath(t *testing.T) {
@@ -138,9 +138,9 @@ func TestHandleTasks_HappyPath(t *testing.T) {
 	if contains(body, "<th>Type</th>") {
 		t.Errorf("tasks page renders a task table; the board replaced it")
 	}
-	// A task detail modal is rendered for the seeded task.
-	if !contains(body, "task-modal-") {
-		t.Errorf("tasks page missing a task detail modal")
+	// The seeded task's card links to the task's own page.
+	if !contains(body, `href="/roadmaps/`+name+`/tasks/1"`) {
+		t.Errorf("tasks page missing the card link to the seeded task's page")
 	}
 }
 

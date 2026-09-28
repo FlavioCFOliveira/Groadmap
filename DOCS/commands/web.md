@@ -92,12 +92,12 @@ All routes serve `GET` and `HEAD` only. Any other HTTP method on any route retur
 |-------|---------|----------|
 | `/` | Roadmap index: every roadmap under `~/.roadmaps/`, with links to each roadmap's sprints landing page and graph page (empty-state message when none) | HTML |
 | `/roadmaps/{name}` | Roadmap sprints page and landing page: that roadmap's sprints in three tabs (Próximos / Actual / Concluídos, Actual default), each tab carrying a count badge in the colour of the sprint status it groups; every sprint rendered through the same sprint card and linking to its own page. Selecting a roadmap on the index lands here | HTML |
-| `/roadmaps/{name}/tasks` | Roadmap tasks board: every task of that roadmap, of any status, laid out as a Kanban board of five fixed status columns with a count badge on each; narrowed by the header search and the three header filters through the `q`, `type`, `priority` and `severity` query parameters; clicking a card opens a read-only modal with all task fields and that task's comments timeline. See [The Tasks Board](#the-tasks-board) | HTML |
-| `/roadmaps/{name}/sprints/{id}` | Dedicated sprint page: all sprint details, the sprint's member tasks as a three-column board in planned execution order, and the sprint's own Comments card; each task card opens the task detail modal. See [The Sprint Board](#the-sprint-board) | HTML |
+| `/roadmaps/{name}/tasks` | Roadmap tasks board: every task of that roadmap, of any status, laid out as a Kanban board of five fixed status columns with a count badge on each; narrowed by the header search and the three header filters through the `q`, `type`, `priority` and `severity` query parameters; each card links to that task's own page. See [The Tasks Board](#the-tasks-board) | HTML |
+| `/roadmaps/{name}/sprints/{id}` | Dedicated sprint page: all sprint details, the sprint's member tasks as a three-column board in planned execution order, and the sprint's own Comments card; each task card links to that task's own page. See [The Sprint Board](#the-sprint-board) | HTML |
+| `/roadmaps/{name}/tasks/{id}` | Dedicated task page: every field of the task, a small context of the sprint it belongs to, its four Markdown text fields, and its Comments card. A task id that is not an integer or names no task in that roadmap returns HTTP `404`. No path exists below it, so `/roadmaps/{name}/tasks/{id}/data` also returns `404`. See [The Task Page](#the-task-page) | HTML |
 | `/roadmaps/{name}/audit` | Roadmap audit log page: that roadmap's full audit log, showing every field of an audit entry (columns ID, Operation, Entity Type, Entity ID, Related Entity ID, Commit, Performed At, in that order; the two nullable columns are always present and render an em dash where the entry carries no value), ordered by Performed At descending (most recent first), paginated at 100 entries per page via the `page` query parameter (1-based, default 1; out-of-range or non-numeric values are clamped to the nearest valid page) with Previous/Next controls and a "Page X of Y" indicator | HTML |
 | `/roadmaps/{name}/graph` | Interactive knowledge-graph visualisation (D3.js; selectable Networks-section layouts via a dropdown, default Mobile patent suits; pan/zoom, touch, tap-to-inspect), driven by the editable Cypher query bar above the graph card. See [The Knowledge-Graph Query Bar and Data Endpoint](#the-knowledge-graph-query-bar-and-data-endpoint) | HTML |
 | `/roadmaps/{name}/graph/data` | The graph's nodes and edges for the visualisation, produced by sending the Cypher statement in the `q` parameter (the full-graph default query when absent) to the roadmap's running graph server, under the 5-second statement time budget that server enforces. The statement is executed as written and may write. An invalid limit or a failed statement answers HTTP `400` with an `error`/`kind` JSON body; a roadmap no server is serving is answered HTTP `503`; a roadmap whose derived socket path is longer than the platform allows is answered HTTP `500` before anything is probed | JSON |
-| `/roadmaps/{name}/tasks/{id}/data` | One task's full record for the read-only task detail modal: a JSON object with a `task` member carrying every field of the `Task` model and a `comments` member carrying that task's comments oldest first. It is fetched when a card is opened, which is why neither the tasks board nor the sprint page pays for it on its own read. A task id that names no task in that roadmap returns HTTP `404` | JSON |
 | `/static/...` | Embedded static assets (CSS, JS, vendored Tabler framework and D3.js + d3-sankey, fonts) | static file |
 
 `{name}` is validated against the roadmap-name rules (regex `^[a-z0-9_-]+$`, max 50 characters) before it is used to build any filesystem path; a name that fails validation, or a roadmap that does not exist, returns HTTP `404`. A request for a `/static/...` asset that is not embedded returns HTTP `404`. These HTTP statuses are distinct from the process exit codes below.
@@ -141,7 +141,7 @@ Each card presents one task, in this order:
 
 An indicator whose value is absent, empty or zero is not rendered at all: no dash, no placeholder, no empty slot. A task with none of the five shows no metadata footer. The card shows **no status badge**, because the column it sits in already states the task's status.
 
-The whole card is a `<button>`: a pointer click, a touch tap, and the keyboard (Enter and Space) all open the read-only task detail modal for that task, which carries every field of the `Task` model and that task's comments timeline. The modal's data is fetched when the user opens the task, so it adds no query to the page's own read.
+The whole card is a link to that task's page, `/roadmaps/{name}/tasks/{id}` (see [The Task Page](#the-task-page)): a pointer click, a touch tap, and the Enter key open it, and the browser's own open-in-new-tab gestures work. The card adds no query to the board's own read.
 
 ### Header controls
 
@@ -246,9 +246,9 @@ Each card presents one member task on three lines:
 
 The badges and the counters share a line because they hold one kind of information — what the task is, and how much is attached to it — and because height is the scarce dimension in a column that is bounded and scrolls. Where the card is too narrow to hold both groups, the line wraps inside the card rather than overflowing it, so the card, its column and the page never scroll horizontally.
 
-Both counters are always rendered, including when either or both are `0`, so a zero is a statement rather than a silence. This is where the sprint card departs from the tasks board card, which renders only the indicators a task has and keeps them in a footer of their own: the sprint card carries exactly two counters and can put them on the badge line, while the tasks board card carries five indicators of mixed kinds, one of them text with no zero to show, which cannot share that line. The counter order differs for the same reason — comments before subtasks here, subtasks before comments in the tasks board's footer. The card shows no status badge, because the column it sits in already states the status, and it shows no type and no dependency counts: those are in the task detail modal the card opens.
+Both counters are always rendered, including when either or both are `0`, so a zero is a statement rather than a silence. This is where the sprint card departs from the tasks board card, which renders only the indicators a task has and keeps them in a footer of their own: the sprint card carries exactly two counters and can put them on the badge line, while the tasks board card carries five indicators of mixed kinds, one of them text with no zero to show, which cannot share that line. The counter order differs for the same reason — comments before subtasks here, subtasks before comments in the tasks board's footer. The card shows no status badge, because the column it sits in already states the status, and it shows no type and no dependency counts: those are on the task page the card links to.
 
-The whole card is a `<button>`, so a pointer click, a touch tap, and the keyboard (Enter and Space) all open that task's read-only detail modal.
+The whole card is a link to that task's page, so a pointer click, a touch tap, and the Enter key open it (see [The Task Page](#the-task-page)).
 
 ### Layout and read cost
 
@@ -257,6 +257,20 @@ The board takes a bounded height of `60vh`, never falling below the floor the in
 The three columns divide the width of the board equally and grow with the viewport, down to a floor of `17rem` below which the strip scrolls horizontally. This is where the two boards part: the tasks board's five columns keep a fixed `19rem`, because five columns divided across a viewport would each be narrow enough to hurt the card's measure, and that board is a view of a whole roadmap whose column count the status enum fixes. The minimum column width, the gap between columns and the card's body padding stay shared by both boards.
 
 The page performs two comment reads whatever the number of member tasks: the sprint's own comment log, which the Comments card renders in full, and one grouped query for the comment count of every rendered card. Neither grows with the number of member tasks, and the board issues no query per column and none per card. The subtask counter costs no read of its own, because the sprint's member-task read already carries it.
+
+## The Task Page
+
+`/roadmaps/{name}/tasks/{id}` shows one task on its own read-only page. It is the page every card of the tasks board and of the sprint board links to.
+
+- **Header.** The pretitle carries `Task #<id>` and the task's status badge; the task `title` is the page title. A `Back to tasks` action returns to the roadmap's tasks board. On viewports narrower than 576px the action sits on its own row below the title. The sidebar highlights the Tasks view.
+- **Browser tab title.** `#<id> <title> - <roadmap> - <hostname>`, so several open task pages can be told apart.
+- **Sprint context.** A small card names the sprint the task belongs to, `Sprint #<id>` and its title, as a link to the sprint page, with the sprint's status badge, the task's place in the sprint's planned execution order (`Position n of m`), and the sprint's progress (`c of m tasks completed`, with a progress bar). A task in no sprint shows `In the backlog: this task belongs to no sprint.` instead.
+- **Details.** Every remaining field of the task, Severity before Priority. The parent, depends-on and blocks references are links to those tasks' pages. Commit hashes are shown in full and wrap rather than being cut off.
+- **Text fields.** The four Markdown fields (functional requirements, technical requirements, acceptance criteria, completion summary) each in its own card, rendered as rich text across the full width of the card.
+- **Comments.** The task's Comments card, oldest first (see [Comment Surfaces](#comment-surfaces)).
+- **Layout.** On wide viewports the sprint context and details sit in a narrow side column to the right of the text and comments; on narrow viewports the page is one stacked column and the details list uses two columns. The page never scrolls horizontally.
+
+A task id that is not an integer, or that names no task in that roadmap, returns HTTP `404`.
 
 ## The Knowledge-Graph Query Bar and Data Endpoint
 
@@ -344,9 +358,9 @@ In every case the message is shown in place on the page, the page does not crash
 
 Comments recorded through `rmp task comment-add` and `rmp sprint comment-add` are surfaced on two read-only places in the interface. Both only display data: neither creates, edits, nor deletes a comment, and the CLI remains the sole write path.
 
-### Task comments: the detail modal timeline
+### Task comments: the task page's Comments card
 
-Anywhere a task is clickable — the cards of the roadmap tasks board and the sprint page's task list — the read-only task detail modal renders that task's comments as a chronological timeline, placed after the task's fields and last in the modal body.
+The task page (`/roadmaps/{name}/tasks/{id}`) shows the task's comments as a chronological timeline in a Comments card, rendered last on the page. Its header carries the title `Comments`, a badge with the number of comments, and the text `Oldest first`.
 
 - **Order and completeness.** Oldest first, exactly the order `rmp task comment-list` returns (`created_at` ascending, comment `id` ascending as the tie-breaker). Every comment of the task is rendered: no type filter and no count limit.
 - **What each entry shows.** The comment's `type` as a badge, its `created_at` timestamp, an edited marker carrying the `updated_at` timestamp when that value is not null, and the `body`.
@@ -358,9 +372,9 @@ Anywhere a task is clickable — the cards of the roadmap tasks board and the sp
 
 The dedicated sprint page (`/roadmaps/{name}/sprints/{id}`) shows the sprint's own comments in a Comments card, placed after the member-tasks board and rendered last on the page.
 
-- **Scope.** The card shows the comments of the sprint itself. It does not show, aggregate, or merge in the comments of the sprint's member tasks; those are reachable through each task's own detail modal.
+- **Scope.** The card shows the comments of the sprint itself. It does not show, aggregate, or merge in the comments of the sprint's member tasks; those are on each task's own page.
 - **Order and completeness.** Oldest first, exactly the order `rmp sprint comment-list` returns. Every comment of the sprint is rendered: no type filter and no count limit.
-- **Card header.** The card title `Comments` with a badge showing the number of comments.
+- **Card header.** The card title `Comments` with a badge showing the number of comments, and the text `Oldest first`.
 - **What each entry shows.** The same four elements as the task timeline: the `type` badge, `created_at`, the edited marker when `updated_at` is not null, and the `body`. The badge is neutral for every one of the four sprint comment types.
 - **Empty state.** A sprint with no comments shows an empty-state message in place of the timeline. The card itself is always present.
 

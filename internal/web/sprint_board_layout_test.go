@@ -431,7 +431,7 @@ func TestBoards_ShareTheMinimumGapAndCardPadding(t *testing.T) {
 		marker string
 	}{
 		{"column", `data-role="task-board-column"`},
-		{"card", `data-task-id="`},
+		{"card", `class="card card-sm card-link text-reset task-card"`},
 	} {
 		onSprint := elementClassTokens(t, sprintPage, part.marker, "the sprint page's board")
 		onTasks := elementClassTokens(t, tasksPage, part.marker, "the tasks page's board")

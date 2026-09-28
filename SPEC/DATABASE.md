@@ -1551,7 +1551,7 @@ ORDER BY st.task_id ASC;
 
 **Index.** The query needs no new index. `WHERE st.task_id IN (...)` is served by `idx_sprint_tasks_task_id`, the single-column index the `sprint_tasks` DDL already declares on `task_id`, and by the implicit unique index SQLite creates for that column's `UNIQUE` constraint. The join resolves `sprints` by its primary key. See Performance Optimization below.
 
-**Use case:** the read-only web interface renders the roadmap's tasks as a Kanban board and shows on each card the sprint that task belongs to, so it MUST resolve the sprint of every rendered task with this single grouped query rather than one query per task or one query per board column (see `WEB.md § Roadmap Tasks Page`).
+**Use case:** the read-only web interface renders the roadmap's tasks as a Kanban board and shows on each card the sprint that task belongs to, so it MUST resolve the sprint of every rendered task with this single grouped query rather than one query per task or one query per board column (see `WEB.md § Roadmap Tasks Page`). The roadmap task page resolves the sprint of its one task through the same statement, over a set holding that one id (see `WEB.md § Roadmap Task Page`).
 
 ### Audit Queries
 
@@ -1826,7 +1826,7 @@ ORDER BY task_id ASC;
 
 **Index.** Served by `idx_task_comments_task_created`, whose leading column is `task_id`; the aggregate needs no further index and reads no `body` value. See Performance Optimization below.
 
-**Use case:** the two boards of the read-only web interface — the roadmap tasks page's Kanban task board and the sprint page's member-tasks board (see `WEB.md § Roadmap Tasks Page` and `WEB.md § Sprint Detail Sub-Template`) — each show a comment count on a card but no comment text, because the card's modal loads a task's comments on demand from its own endpoint (see `WEB.md § Task Detail Endpoint`). Neither board therefore ever reads a comment body in order to display a number, and no read anywhere loads the comment text of several tasks at once: a task's comments are read one task at a time, through the single-parent listing above.
+**Use case:** the two boards of the read-only web interface — the roadmap tasks page's Kanban task board and the sprint page's member-tasks board (see `WEB.md § Roadmap Tasks Page` and `WEB.md § Sprint Detail Sub-Template`) — each show a comment count on a card but no comment text, because a task's comments are shown on that task's own page, which the card links to (see `WEB.md § Roadmap Task Page`). Neither board therefore ever reads a comment body in order to display a number, and no read anywhere loads the comment text of several tasks at once: a task's comments are read one task at a time, through the single-parent listing above.
 
 This statement has no `sprint_comments` form: the Roadmap Sprint Page presents one sprint's comment log in full through the single-parent listing, and no surface counts the comments of several sprints at once.
 

@@ -85,11 +85,10 @@
             and every column is rendered even when it holds no task.
 
             The board is READ-ONLY: it has no drag-and-drop and no control that
-            moves a task between columns or edits anything. Selecting a card opens
-            that task's read-only detail modal, which is rendered once per task at
-            the end of this page from data already delivered to it — no new route,
-            no new endpoint, no further query (SPEC/WEB.md § Roadmap Tasks Page;
-            Acceptance Criteria 81 to 92).
+            moves a task between columns or edits anything. Each card is a link to
+            that task's own read-only page; following it is an ordinary navigation
+            that adds no query to this page's read (SPEC/WEB.md § Roadmap Tasks
+            Page; Acceptance Criteria 81 to 93).
 
             Tabler ships no board component, so only the column strip's layout and
             scrolling live in static/style.css (.task-board*); everything inside a
@@ -140,17 +139,15 @@
               <div class="card-body task-board__cards">
                 {{range .Tasks}}
                 {{/*
-                  The card IS the modal trigger, and it is a real <button>: the
-                  vendored Bootstrap binds the modal data-api on click only, and
-                  per the HTML activation behaviour only a button, an anchor with
-                  href, or a form control turns Enter and Space into a click. A
-                  div carrying role="button" and tabindex="0" takes focus and
-                  announces itself as a button while being impossible to press,
-                  so the element itself carries the affordance instead. role and
-                  tabindex are therefore absent: a button has both natively. The
-                  accessible name names the task and carries its title, the same
-                  form the sprint page's row trigger uses (SPEC/WEB.md § Roadmap
-                  Tasks Page, clickable card).
+                  The card IS the link to the task's own page: one <a> carrying
+                  Tabler's card and card-link classes and an href, the idiom the
+                  sprint card of the sprints page uses. A link with an href is
+                  natively focusable and activatable, so a click, a tap, and Enter
+                  follow it with no script, and a middle click or the context menu
+                  opens the task page in a new tab. role and tabindex are therefore
+                  absent. The accessible name names the task and carries its title,
+                  the same form the sprint page's card uses (SPEC/WEB.md § Roadmap
+                  Tasks Page, Clickable card; Acceptance Criteria 86 and 93).
 
                   The card carries the three dimensions the header filters act on
                   — its type, its priority and its severity — in the server's own
@@ -160,12 +157,12 @@
                   which is what keeps the two verdicts identical (SPEC/WEB.md
                   § Roadmap Tasks Page, Server and client produce the same board).
 
-                  The button's content is phrasing content — spans, not divs —
-                  because that is a button's content model; the Tabler card
-                  classes are unchanged, and w-100/p-0/text-start are the
-                  utilities that keep a button looking like the card it is.
+                  The card holds no nested link — a link admits no interactive
+                  descendant — so the sprint indicator below stays plain text.
+                  data-task-id carries the id the narrowing script rebuilds the
+                  card's #<id> reference from.
                 */}}
-                <button type="button" class="card card-sm task-card w-100 p-0 text-start" data-bs-toggle="modal" data-bs-target="#task-modal" data-task-id="{{.ID}}" data-search="{{.SearchText}}" data-type="{{.Type}}" data-priority="{{.Priority}}" data-severity="{{.Severity}}" aria-label="Open details for task #{{.ID}}: {{.Title}}"{{if not .Match}} hidden{{end}}>
+                <a class="card card-sm card-link text-reset task-card" href="/roadmaps/{{$.Name}}/tasks/{{.ID}}" data-task-id="{{.ID}}" data-search="{{.SearchText}}" data-type="{{.Type}}" data-priority="{{.Priority}}" data-severity="{{.Severity}}" aria-label="Open details for task #{{.ID}}: {{.Title}}"{{if not .Match}} hidden{{end}}>
                   <span class="card-body d-block">
                     <span class="d-block fw-bold text-break mb-1" data-role="task-card-title">{{.Title}}</span>
                     {{- /*
@@ -196,7 +193,7 @@
                     </span>
                     {{end}}
                   </span>
-                </button>
+                </a>
                 {{end}}
                 {{/*
                   The column's own empty state. It is rendered whether or not the
@@ -220,16 +217,7 @@
     </div>
   </div>
 
-  {{/*
-    ONE read-only task detail modal for the whole page: an empty shell filled on
-    demand from the task detail endpoint when the user opens a task, so the
-    document carries no task's modal content at all (SPEC/WEB.md § Task Detail
-    Modal, One modal element, filled on demand).
-  */}}
-{{template "taskModalShell" .}}
-
   <script src="/static/vendor/tabler/tabler.min.js"></script>
-  <script src="/static/task-modal.js"></script>
   <script src="/static/task-search.js"></script>
 </body>
 </html>{{end}}

@@ -5,6 +5,8 @@ package web
 import (
 	"bufio"
 	"bytes"
+	"errors"
+	"fmt"
 	"html/template"
 	"strconv"
 
@@ -546,6 +548,7 @@ var markdownFuncMap = map[string]any{
 	"sprintDescriptionHTML":     sprintDescriptionHTML,
 	"sprintCardDescriptionHTML": sprintCardDescriptionHTML,
 	"sprintCommentBodyHTML":     sprintCommentBodyHTML,
+	"commentBodyHTML":           commentBodyHTML,
 }
 
 // sprintDescriptionHTML renders a sprint's description on the roadmap sprint
@@ -571,6 +574,35 @@ func sprintCardDescriptionHTML(s models.Sprint) (template.HTML, error) {
 //nolint:gocritic // html/template passes the comment by value
 func sprintCommentBodyHTML(c models.SprintComment) (template.HTML, error) {
 	return trustedMarkdown(c.Body, sprintCommentIDPrefix(c.ID), markdownInteractive)
+}
+
+// taskCommentBodyHTML renders a task comment's body in the Comments card of the
+// Roadmap Task Page, in the ordinary form.
+//
+//nolint:gocritic // html/template passes the comment by value
+func taskCommentBodyHTML(c models.TaskComment) (template.HTML, error) {
+	return trustedMarkdown(c.Body, taskCommentIDPrefix(c.ID), markdownInteractive)
+}
+
+// errUnsupportedComment reports a value handed to commentBodyHTML that is neither
+// kind of comment, which only a template wiring error produces.
+var errUnsupportedComment = errors.New("commentBodyHTML: unsupported comment value")
+
+// commentBodyHTML renders the body of either kind of comment for the one shared
+// comment timeline partial, which the sprint page and the task page both invoke:
+// a sprint comment through sprintCommentBodyHTML and a task comment through
+// taskCommentBodyHTML, each with its own footnote identifier prefix (SPEC/WEB.md
+// § Markdown Rendering, rule 12). Any other value is a template wiring error and
+// fails the render rather than showing a body it cannot identify.
+func commentBodyHTML(comment any) (template.HTML, error) {
+	switch c := comment.(type) {
+	case models.SprintComment:
+		return sprintCommentBodyHTML(c)
+	case models.TaskComment:
+		return taskCommentBodyHTML(c)
+	default:
+		return "", fmt.Errorf("%w: %T", errUnsupportedComment, comment)
+	}
 }
 
 // trustedMarkdown marks the renderer's output as trusted HTML. This conversion

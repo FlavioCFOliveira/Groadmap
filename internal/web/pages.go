@@ -29,9 +29,10 @@ const (
 // the layout.html partials reference (SPEC/WEB.md § UI Framework).
 //
 // Markdown is set on exactly the pages that can render a Markdown field — the
-// roadmap sprints page, the roadmap tasks page, and the roadmap sprint page — and
+// roadmap sprints page, the roadmap sprint page, and the roadmap task page — and
 // makes the head partial link the syntax-highlighting stylesheet
-// /static/highlight.css (SPEC/WEB.md § Markdown Rendering, rule 7).
+// /static/highlight.css; the roadmap tasks page renders none and does not link it
+// (SPEC/WEB.md § Markdown Rendering, rule 7; Acceptance Criterion 182).
 type chrome struct {
 	Title    string
 	Roadmap  string
@@ -82,6 +83,16 @@ func documentTitle(roadmap, area, hostname string) string {
 	return title
 }
 
+// taskDocumentTitle builds the task page's <title>: the task segment first — the
+// reference #<id>, one space, and the task's title as stored and whole — then the
+// roadmap and the hostname, as on every other page. The title is neither
+// truncated nor normalised: a browser collapses the whitespace of a document
+// title itself, and a title that contains the separator is written as stored
+// (SPEC/WEB.md § Document Title, rule 7). It is rendered as escaped text.
+func taskDocumentTitle(id int, title, roadmap, hostname string) string {
+	return documentTitle("", "#"+strconv.Itoa(id)+" "+title+titleSeparator+roadmap, hostname)
+}
+
 // pageHeading is the content of the page header's title column, rendered by
 // the single shared pageTitle partial so the pages cannot drift into one
 // convention each (SPEC/WEB.md § Shared Page-Header Partial).
@@ -89,11 +100,11 @@ func documentTitle(roadmap, area, hostname string) string {
 // Title names the VIEW, never the roadmap: the shell already states the
 // roadmap in the sidebar's section label and in the top navbar, so a third
 // statement in the page title would say the same thing again while leaving the
-// view unnamed. Pretitle is set only by the sprint page, the one page that
-// presents an individual record rather than a view of the roadmap; Badge is
-// that sprint's status, rendered inside the pretitle right after its text and
-// never in the title, and BadgeClass the colour variant the badge mapping gives
-// it. A Badge without a Pretitle is not rendered. Lead and LeadCode are the
+// view unnamed. Pretitle is set only by the sprint page and the task page, the
+// two pages that present an individual record rather than a view of the
+// roadmap; Badge is that record's status, rendered inside the pretitle right
+// after its text and never in the title, and BadgeClass the colour variant the
+// badge mapping gives it. A Badge without a Pretitle is not rendered. Lead and LeadCode are the
 // roadmap index's lead line, whose trailing path renders inside a <code>
 // element; every other page leaves them empty.
 //
@@ -180,9 +191,8 @@ func handleSprints(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleTasks renders a roadmap's tasks page: every task, any status, as a
-// Kanban board of five fixed columns — one per task status — with each card
-// clickable to open the read-only task detail modal (SPEC/WEB.md § Roadmap Tasks
-// Page). The page renders no task table; the board is its only task presentation.
+// Kanban board of five fixed columns — one per task status — with each card a
+// link to that task's own page (SPEC/WEB.md § Roadmap Tasks Page). The page renders no task table; the board is its only task presentation.
 // An optional q parameter narrows the board to the tasks whose title or #id
 // reference contains it, and the optional type, priority and severity parameters
 // narrow it by what a task is; the same values set on the header controls narrow
@@ -211,30 +221,29 @@ func handleTasks(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	data.Chrome = chrome{
-		Title:    documentTitle(name, "Tasks", serverHostname),
-		Roadmap:  name,
-		Active:   "tasks",
-		Heading:  pageHeading{Title: "Tasks"},
-		Markdown: true,
+		Title:   documentTitle(name, "Tasks", serverHostname),
+		Roadmap: name,
+		Active:  "tasks",
+		Heading: pageHeading{Title: "Tasks"},
 	}
 	renderHTML(w, r, "tasks.html", data)
 }
 
-// handleTaskData serves one task's detail as JSON: the task's full field set and
-// its comments, which the page's script fetches when the user opens that task's
-// modal (SPEC/WEB.md § Task Detail Endpoint). The page itself carries one empty
-// modal shell and no task data, so this endpoint is what a modal is filled from.
+// handleTask renders the Roadmap Task Page: every field of one task, the task's
+// comments, and the context of the sprint it belongs to, all rendered on the
+// server (SPEC/WEB.md § Roadmap Task Page).
 //
 // The {name} is validated and confirmed to exist before any data read
 // (resolveRoadmap), and {id} is parsed before any read: an invalid or unknown
 // name, a non-integer id, and an id that is not a task of THIS roadmap all yield
 // 404 — the last one because the read is scoped to this roadmap's own database,
 // so another roadmap's task is not reachable here. Any other read failure yields
-// 500.
+// 500 and is logged once, at ERROR (SPEC/WEB.md § What Is Logged).
 //
 // The response is data-derived, so the security-header middleware already gives
-// it Cache-Control: no-store; nothing is set here (SPEC/WEB.md § Cache Policy).
-func handleTaskData(w http.ResponseWriter, r *http.Request) {
+// it, its 404 included, Cache-Control: no-store; nothing is set here
+// (SPEC/WEB.md § Cache Policy).
+func handleTask(w http.ResponseWriter, r *http.Request) {
 	name, ok := resolveRoadmap(w, r)
 	if !ok {
 		return
@@ -248,19 +257,36 @@ func handleTaskData(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	data, err := loadTaskDetail(r.Context(), name, id)
+	data, err := loadTask(r.Context(), name, id)
 	if err != nil {
 		if errors.Is(err, utils.ErrNotFound) {
 			http.NotFound(w, r)
 			return
 		}
-		logServerError(r, "task detail load failed", err,
+		logServerError(r, "task page load failed", err,
 			slog.String("roadmap", name), slog.Int("task", id))
 		http.Error(w, "internal server error", http.StatusInternalServerError)
 		return
 	}
 
-	renderJSON(w, r, data)
+	// The second hierarchical page header: the page presents an individual
+	// record, so its pretitle is the task's id followed by the task's status
+	// badge, and its title is the task's title alone. The page belongs to the
+	// roadmap's Tasks view, so the sidebar highlights Tasks (SPEC/WEB.md § Shared
+	// Page-Header Partial, rule 2; § Roadmap Task Page, Active view).
+	data.Chrome = chrome{
+		Title:   taskDocumentTitle(id, data.Task.Title, name, serverHostname),
+		Roadmap: name,
+		Active:  "tasks",
+		Heading: pageHeading{
+			Pretitle:   "Task #" + strconv.Itoa(id),
+			Title:      data.Task.Title,
+			Badge:      string(data.Task.Status),
+			BadgeClass: taskStatusBadge(data.Task.Status),
+		},
+		Markdown: true,
+	}
+	renderHTML(w, r, "task.html", data)
 }
 
 // handleAudit renders a roadmap's audit log page: one page of the full audit

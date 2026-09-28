@@ -13,7 +13,7 @@ import (
 
 // This file is the gate for the roadmap tasks page's Kanban board: the five
 // fixed columns, the placement and ordering of the cards inside them, the card's
-// content, the modal a card opens, the empty states, and the page's read cost
+// content, the task page a card links to, the empty states, and the page's read cost
 // (SPEC/WEB.md § Roadmap Tasks Page; Acceptance Criteria 81 to 92).
 //
 // It replaces the assertions that pinned the fifteen-column task table the board
@@ -212,9 +212,8 @@ func newSprint(t *testing.T, database *db.DB, title, description string) int {
 // ==================== MARKUP HELPERS ====================
 
 // boardRegion returns the page's <main> element, which holds the board and
-// nothing else. The task detail modals are rendered AFTER it, outside the page
-// wrapper, so slicing here keeps a modal's copy of a task's title from being
-// mistaken for a card.
+// nothing else, so slicing here keeps the page header and the scripts after it out
+// of every assertion about the cards.
 func boardRegion(t *testing.T, body string) string {
 	t.Helper()
 
@@ -278,15 +277,12 @@ func columnBadge(t *testing.T, column string) (heading, variant string, count in
 	return m[1], m[2], n
 }
 
-// cardMarker is the attribute that identifies the card of one task: the task id
-// the trigger carries, which the modal script fetches that task's data with. It
-// appears once per card and nowhere else in the board region.
-//
-// The board no longer points each card at a modal of its own — the page holds one
-// shell — so the target attribute is the same on every card and identifies
-// nothing; the task id is what does.
+// cardMarker identifies the card of one task: the tail of the href the card links
+// to, /tasks/<id> and its closing quote. It appears once per card and nowhere else
+// in either board's region, on both boards, and the closing quote keeps the id of
+// one task from matching the prefix of another's.
 func cardMarker(taskID int) string {
-	return `data-task-id="` + itoa(taskID) + `"`
+	return `/tasks/` + itoa(taskID) + `"`
 }
 
 // shownEmptyState reports whether a column is SHOWING its in-column empty state.
@@ -309,10 +305,10 @@ func shownEmptyState(column string) bool {
 }
 
 // cardOpen is the opening markup of a board card, used both to count cards and to
-// find a card's boundaries. The card is a real <button>: only a natively
-// activatable element turns Enter and Space into the click the modal data-api
-// listens for (see keyboard_activation_test.go).
-const cardOpen = `<button type="button" class="card card-sm task-card`
+// find a card's boundaries. On both boards the card is a link to the task's own
+// page, carrying Tabler's card and card-link classes (see
+// task_card_link_test.go).
+const cardOpen = `<a class="card card-sm card-link text-reset task-card"`
 
 // cardSlice returns the markup of one task's card within a column.
 func cardSlice(t *testing.T, column string, taskID int) string {
@@ -781,9 +777,10 @@ func TestTaskBoard_SprintIndicator(t *testing.T) {
 		if !strings.Contains(card, c.wantSprint) {
 			t.Errorf("task #%d's card does not name %q\ncard: %s", c.taskID, c.wantSprint, card)
 		}
-		// Plain text, not a link: the whole card is the single activation target.
-		if strings.Contains(card, "<a ") || strings.Contains(card, "href=") {
-			t.Errorf("task #%d's card carries a link; the sprint indicator is plain text\ncard: %s",
+		// Plain text, not a link: the whole card is the single link, so the card
+		// holds exactly one <a> and one href — its own.
+		if strings.Count(card, "<a ") != 1 || strings.Count(card, "href=") != 1 {
+			t.Errorf("task #%d's card carries a nested link; the sprint indicator is plain text\ncard: %s",
 				c.taskID, card)
 		}
 	}
@@ -804,13 +801,14 @@ func TestTaskBoard_SprintIndicator(t *testing.T) {
 	}
 }
 
-// ==================== THE MODAL, AND READ-ONLY ====================
+// ==================== THE CARD IS A LINK, AND READ-ONLY ====================
 
-// TestTaskBoard_CardOpensTheReadOnlyModal is the gate for Acceptance Criteria 86
-// and 87: selecting a card opens that task's read-only detail modal, the card
-// carries the same keyboard and ARIA treatment as the sprint page's clickable
-// task rows, and the board itself offers no control that changes anything.
-func TestTaskBoard_CardOpensTheReadOnlyModal(t *testing.T) {
+// TestTaskBoard_CardIsALinkToTheTaskPage is the gate for Acceptance Criteria 86
+// and 87: each card is one <a> carrying Tabler's card and card-link classes and
+// the href of its own task's page, named `Open details for task #<id>: <title>`,
+// with no tabindex, no role, and no nested link; following it serves that task's
+// page; and the board itself offers no control that changes anything.
+func TestTaskBoard_CardIsALinkToTheTaskPage(t *testing.T) {
 	t.Setenv("HOME", shortHome(t))
 	f := seedBoardFixture(t, "payment-platform")
 	mux := buildMux()
@@ -819,68 +817,60 @@ func TestTaskBoard_CardOpensTheReadOnlyModal(t *testing.T) {
 	region := boardRegion(t, body)
 	columns := boardColumns(t, body)
 
+	cards := 0
 	for status, ids := range f.tasksByStatus() {
 		for _, id := range ids {
+			cards++
 			column := columns[statusIndex(t, status)]
 			card := cardSlice(t, column, id)
+			openTag := card[:strings.Index(card, ">")+1]
 
-			// The card is the modal's trigger, and it is a real button, so the
-			// keyboard activates it — the treatment the sprint page's task rows
-			// now carry too (keyboard_activation_test.go gates that across both
-			// surfaces).
 			for _, attr := range []string{
-				`<button type="button"`,
-				`data-bs-toggle="modal"`,
-				`data-bs-target="#task-modal"`,
-				`data-task-id="` + itoa(id) + `"`,
-				// The accessible name names the task AND carries its title, the
-				// same form the sprint page's trigger uses; the expectation is
-				// composed from the roadmap's own stored title, escaped as
-				// html/template escapes it (keyboard_activation_test.go).
+				`<a class="card card-sm card-link text-reset task-card"`,
+				`href="/roadmaps/` + f.name + `/tasks/` + itoa(id) + `"`,
+				// The accessible name names the task AND carries its title, composed
+				// from the roadmap's own stored title, escaped as html/template
+				// escapes it.
 				wantAccessibleName(itoa(id), renderedTitleOf(t, f.name, id)),
 			} {
-				if !strings.Contains(card, attr) {
-					t.Errorf("task #%d's card is missing %s\ncard: %s", id, attr, card)
+				if !strings.Contains(openTag, attr) {
+					t.Errorf("task #%d's card is missing %s\ncard: %s", id, attr, openTag)
 				}
 			}
-			// role and tabindex are redundant on a button and must not come back:
-			// they are what made the old div look activatable without being so.
-			for _, redundant := range []string{`role="button"`, `tabindex="0"`} {
-				if strings.Contains(card, redundant) {
-					t.Errorf("task #%d's card carries %s, which a <button> has natively\ncard: %s",
-						id, redundant, card)
+			// role and tabindex are redundant on a link and must not come back.
+			for _, redundant := range []string{"role=", "tabindex="} {
+				if strings.Contains(openTag, redundant) {
+					t.Errorf("task #%d's card carries %s, which a link with an href does not need\ncard: %s",
+						id, redundant, openTag)
 				}
+			}
+			// No nested link: the card holds exactly one <a>, itself.
+			if got := strings.Count(card, "<a "); got != 1 {
+				t.Errorf("task #%d's card holds %d links, want exactly 1 (the card itself)\ncard: %s", id, got, card)
 			}
 
-			// The card points at the ONE modal shell the page carries: the page
-			// renders no modal per task, and the shell is filled on demand from the
-			// task detail endpoint when the card is opened (Acceptance Criterion 96;
-			// task_modal_test.go pins the shell and the fetch).
-			if got := strings.Count(body, `id="task-modal-`+itoa(id)+`"`); got != 0 {
-				t.Errorf("task #%d has %d detail modals of its own, want 0: the page carries one "+
-					"shell for every task", id, got)
+			// Following the card serves that task's own page.
+			page := servePage(t, mux, "/roadmaps/"+f.name+"/tasks/"+itoa(id))
+			if !strings.Contains(page, `<div class="page-pretitle">Task #`+itoa(id)+` `) {
+				t.Errorf("following task #%d's card does not serve that task's page", id)
 			}
 		}
 	}
 
-	// The board region is read-only: no form, no input, no link, and no
-	// write-method submission anywhere in it. (The modals live outside this region
-	// and carry only Bootstrap's own dismiss control.)
+	// The board region is read-only: no form, no input, no link other than the
+	// cards, and no write-method submission anywhere in it.
 	lower := strings.ToLower(region)
-	for _, forbidden := range []string{"<form", "<input", "<select", "<textarea", "<a ",
-		`method="post"`, "draggable=", "ondrag"} {
+	for _, forbidden := range []string{"<form", "<input", "<select", "<textarea", "<button",
+		`method="post"`, "draggable=", "ondrag", "data-bs-toggle"} {
 		if strings.Contains(lower, forbidden) {
 			t.Errorf("the board is read-only but contains %q", forbidden)
 		}
 	}
-	// The only buttons on the board are the cards themselves: every one is a
-	// type="button" modal trigger, so none can submit anything. type="button" is
-	// also what keeps a button inert outside a form.
-	buttons := strings.Count(region, "<button")
-	triggers := strings.Count(region, `<button type="button" class="card card-sm task-card`)
-	if buttons != triggers {
-		t.Errorf("the board renders %d buttons but only %d are card modal triggers; "+
-			"the board carries no other control", buttons, triggers)
+	if got := strings.Count(region, "<a "); got != cards {
+		t.Errorf("the board renders %d links but %d cards; the cards are its only links", got, cards)
+	}
+	if got := strings.Count(region, cardOpen); got != cards {
+		t.Errorf("the board renders %d card links, want one per task (%d)", got, cards)
 	}
 	if strings.Contains(lower, `type="submit"`) {
 		t.Errorf("the board carries a submit control")
@@ -1075,7 +1065,7 @@ func TestTasksPage_IssuesThreeReadsAndNoneMore(t *testing.T) {
 	}
 	if src.perTaskComments != 0 {
 		t.Errorf("the board issued %d comment-listing queries, want 0: a card shows a count and "+
-			"the modal's text comes from the task detail endpoint", src.perTaskComments)
+			"a task's comment text is read only by the task's own page", src.perTaskComments)
 	}
 	if src.boundedTaskList != 0 {
 		t.Errorf("the board issued %d bounded task-list queries, want 0: it reads every task",

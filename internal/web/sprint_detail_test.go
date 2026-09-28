@@ -73,7 +73,7 @@ func TestSprintPage_RendersNoStatusSummaryLine(t *testing.T) {
 // board with its three fixed columns — is rendered ONLY on the single Roadmap Sprint Page, and that the
 // Actual tab of the roadmap sprints page does NOT render it for the OPEN sprint:
 // there the OPEN sprint is shown through the shared sprint-card partial, with no
-// datagrid, no member-tasks board, and no per-task modal
+// datagrid, no member-tasks board, and no link to a task page
 // (SPEC/WEB.md § Shared Sprint-Card Partial, § Sprint Detail Sub-Template;
 // Acceptance Criteria 8/12/38).
 //
@@ -129,8 +129,8 @@ func TestSprintDetail_FullBlockOnlyOnSprintPage(t *testing.T) {
 	if !strings.Contains(sprintPage, "Build the read-only sprint page route and template") {
 		t.Errorf("single sprint page: detail block missing the OPEN sprint's member task")
 	}
-	if !strings.Contains(sprintPage, `data-task-id="`+itoa(f.openTaskID)+`"`) {
-		t.Errorf("single sprint page: member task card not wired to the task detail modal")
+	if !strings.Contains(sprintPage, `href="/roadmaps/`+f.name+`/tasks/`+itoa(f.openTaskID)+`"`) {
+		t.Errorf("single sprint page: member task card does not link to the task page")
 	}
 
 	// The Actual tab MUST NOT carry any part of the full detail block.
@@ -144,8 +144,8 @@ func TestSprintDetail_FullBlockOnlyOnSprintPage(t *testing.T) {
 			t.Errorf("Actual tab must not render the member-tasks board markup %q", m)
 		}
 	}
-	if strings.Contains(current, `data-bs-target="#task-modal-`) {
-		t.Errorf("Actual tab must not render a per-task modal trigger")
+	if strings.Contains(current, "/tasks/") {
+		t.Errorf("Actual tab must not link to a task page")
 	}
 	// The OPEN sprint IS present on the Actual tab, as a card linking to its page.
 	if !strings.Contains(current, "/sprints/"+itoa(f.openID)) {

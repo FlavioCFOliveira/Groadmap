@@ -10,10 +10,9 @@ import (
 	"github.com/FlavioCFOliveira/Groadmap/internal/models"
 )
 
-// timestampDisplayCase is one row of the display-form table. The same rows drive
-// the Go helper here and are the reference the modal script's formatTimestamp is
-// measured against (SPEC/WEB.md § Date and Time Display, rule 5; Acceptance
-// Criterion 206), so a row is added here, never to one side only.
+// timestampDisplayCase is one row of the display-form table. The rows drive the
+// one Go helper every server-rendered surface formats a timestamp through
+// (SPEC/WEB.md § Date and Time Display, rule 5; Acceptance Criterion 206).
 type timestampDisplayCase struct {
 	name    string
 	stored  string
@@ -361,10 +360,14 @@ func TestAuditPage_PerformedAtDisplay(t *testing.T) {
 	}
 }
 
-// TestTaskDetailEndpoint_TimestampsStayCanonical is the gate for Acceptance
-// Criterion 208: the task detail endpoint carries every task and comment
-// timestamp byte for byte as stored, untouched by the display form.
-func TestTaskDetailEndpoint_TimestampsStayCanonical(t *testing.T) {
+// TestTaskPage_TimestampsUseTheDisplayFormOnTheServer is the gate for Acceptance
+// Criteria 206, 207, and 209 on the task page: the Details card shows the four
+// lifecycle timestamps, and each Comments card entry its created_at and its
+// updated_at, in the display form produced on the server by the one Go helper,
+// each inside a <time> element whose datetime attribute carries the stored value
+// byte for byte; and the stored values themselves are untouched (Acceptance
+// Criterion 208 — the CLI half is gated end to end in tests/).
+func TestTaskPage_TimestampsUseTheDisplayFormOnTheServer(t *testing.T) {
 	t.Setenv("HOME", shortHome(t))
 	const name = "settlement-json"
 	database, err := db.Open(name)
@@ -389,98 +392,55 @@ func TestTaskDetailEndpoint_TimestampsStayCanonical(t *testing.T) {
 	editTaskCommentBody(t, database, commentID, "The residual is zero on every window of the quarter.",
 		"2026-09-28T10:15:30.500Z")
 
-	status, body := fetchTaskDetail(t, buildMux(), name, taskID)
-	if status != 200 {
-		t.Fatalf("GET the task detail: status = %d; body=%q", status, body)
-	}
-	for _, member := range []string{
-		`"created_at": "2026-09-28T08:47:32.056Z"`,
-		`"started_at": "2026-09-28T09:00:00.000Z"`,
-		`"tested_at": "2026-09-28T23:59:59.999Z"`,
-		`"closed_at": "2026-09-29T00:00:00.001Z"`,
-		`"created_at": "2026-09-28T08:47:59.999Z"`,
-		`"updated_at": "2026-09-28T10:15:30.500Z"`,
+	body := servePage(t, buildMux(), "/roadmaps/"+name+"/tasks/"+itoa(taskID))
+	details := detailsCardSlice(t, body)
+	for label, stored := range map[string]string{
+		"Created": "2026-09-28T08:47:32.056Z",
+		"Started": "2026-09-28T09:00:00.000Z",
+		"Tested":  "2026-09-28T23:59:59.999Z",
+		"Closed":  "2026-09-29T00:00:00.001Z",
 	} {
-		if !strings.Contains(body, member) {
-			t.Errorf("the endpoint's JSON does not carry %s byte for byte", member)
+		display, _ := canonicalTimestampDisplay(stored)
+		want := `<div class="datagrid-content text-secondary">` + string(timestampHTML(stored)) + `</div>`
+		if got := datagridContent(t, details, label); got != want {
+			t.Errorf("%s = %s, want %s", label, got, want)
+		}
+		if !strings.Contains(want, `<time datetime="`+stored+`">`+display+`</time>`) {
+			t.Errorf("%s: the helper does not produce the time element for %s", label, stored)
 		}
 	}
-	if strings.Contains(body, "<time") || regexp.MustCompile(`\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}`).MatchString(body) {
-		t.Error("the endpoint's JSON carries the display form or its markup")
+	card := taskCommentsCardSlice(t, body)
+	for _, want := range []string{
+		`<span class="text-secondary"><time datetime="2026-09-28T08:47:59.999Z">2026-09-28 08:47:59</time></span>`,
+		`<span class="text-secondary">edited <time datetime="2026-09-28T10:15:30.500Z">2026-09-28 10:15:30</time></span>`,
+	} {
+		if !strings.Contains(card, want) {
+			t.Errorf("the Comments card does not show %s", want)
+		}
+	}
+	// Every <time> of the page is well formed and displays the display form of its
+	// own stored value, which carries no T, no fraction, and no Z (Acceptance
+	// Criterion 207): six timestamps in all.
+	if found := assertTimeElements(t, regionBetween(t, body, `<main class="page-body">`, "</main>")); len(found) != 6 {
+		t.Errorf("the task page carries %d <time> elements, want 6", len(found))
+	}
+
+	stored := storedTask(t, name, taskID)
+	if stored.CreatedAt != "2026-09-28T08:47:32.056Z" || derefString(stored.ClosedAt) != "2026-09-29T00:00:00.001Z" {
+		t.Errorf("the stored timestamps changed: created %q closed %q", stored.CreatedAt, derefString(stored.ClosedAt))
 	}
 }
 
-// TestTaskModalScript_TimestampFormatter pins the modal half of rules 5 and 6
-// (Acceptance Criteria 206, 207, and 209) on the script the binary serves: one
-// formatting function, built by string parsing alone, through which every
-// timestamp the modal displays passes, and a <time> element built through the
-// DOM rather than from markup.
-//
-// That formatTimestamp returns the Go helper's display form for every row of
-// timestampDisplayCases is measured in a browser, not here: the test environment
-// runs no JavaScript. This test pins the structure that measurement relies on.
-func TestTaskModalScript_TimestampFormatter(t *testing.T) {
-	t.Setenv("HOME", shortHome(t))
-	script := stripJSComments(readEmbeddedAsset(t, "static/task-modal.js"))
-
-	if got := strings.Count(script, "function formatTimestamp("); got != 1 {
-		t.Fatalf("the modal script defines formatTimestamp %d times, want 1", got)
-	}
-	// Called once, by timestampNode, the one builder of a displayed timestamp.
-	if got := strings.Count(script, "formatTimestamp("); got != 2 {
-		t.Errorf("formatTimestamp is referenced %d times, want its definition and one call", got)
-	}
-	if !regexp.MustCompile(`function timestampNode\(value\) \{[^}]*\}\s*var display = formatTimestamp\(value\);`).
-		MatchString(script) {
-		t.Error("timestampNode does not format through formatTimestamp")
-	}
-
-	// No browser date facility: each applies the browser's zone or locale, or
-	// parses by rules other than the canonical format's (rule 2).
-	for _, facility := range []string{
-		"Date", "Intl", "toLocale", "toISOString", "toUTCString", "getTimezoneOffset",
-		"toJSON", "localeCompare", "RegExp",
-	} {
-		if regexp.MustCompile(`\b` + facility).MatchString(script) {
-			t.Errorf("the modal script uses %s; the timestamp is formatted by string parsing alone", facility)
-		}
-	}
-
-	// The <time> element is built through the DOM: the attribute through
-	// setAttribute, the display form through textContent (rule 6).
-	for _, fragment := range []string{
-		`document.createElement("time")`,
-		`node.setAttribute("datetime", value);`,
-		`node.textContent = display;`,
-		`return document.createTextNode(ABSENT);`,
-		`return document.createTextNode(String(value));`,
-	} {
-		if !strings.Contains(script, fragment) {
-			t.Errorf("timestampNode is missing %q", fragment)
-		}
-	}
-
-	// Every timestamp the modal displays reaches the DOM through timestampNode or
-	// timestampItem, never as a raw el(...) text argument.
-	for _, use := range []string{
-		`timestampItem("Created", task.created_at)`,
-		`timestampItem("Started", task.started_at)`,
-		`timestampItem("Tested", task.tested_at)`,
-		`timestampItem("Closed", task.closed_at)`,
-		`created.appendChild(timestampNode(comment.created_at));`,
-		`edited.appendChild(timestampNode(comment.updated_at));`,
-		`var edited = el("span", "text-secondary", "edited ");`,
-		`content.appendChild(timestampNode(value));`,
-	} {
-		if !strings.Contains(script, use) {
-			t.Errorf("the modal script does not display a timestamp through %q", use)
-		}
-	}
-	for _, field := range []string{"created_at", "started_at", "tested_at", "closed_at", "updated_at"} {
-		want := map[string]int{"created_at": 2, "started_at": 1, "tested_at": 1, "closed_at": 1, "updated_at": 2}[field]
-		if got := strings.Count(script, "."+field); got != want {
-			t.Errorf("the modal script reads .%s %d times, want %d (every read accounted for above)",
-				field, got, want)
+// TestTimestamps_NoScriptFormatsATimestamp pins the other half of Date and Time
+// Display, rule 5: every surface the rule governs is rendered on the server, so
+// no script the interface serves formats a timestamp or builds a <time> element.
+func TestTimestamps_NoScriptFormatsATimestamp(t *testing.T) {
+	for _, path := range []string{"static/task-search.js", "static/sprint-board.js", "static/graph.js"} {
+		script := stripJSComments(readEmbeddedAsset(t, path))
+		for _, bad := range []string{"formatTimestamp", `createElement("time")`, `setAttribute("datetime"`} {
+			if strings.Contains(script, bad) {
+				t.Errorf("%s carries %q; no script formats a timestamp", path, bad)
+			}
 		}
 	}
 }

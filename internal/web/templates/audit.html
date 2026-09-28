@@ -20,7 +20,7 @@
 
           {{/*
             Read-only audit log: one fixed-size page of audit entries ordered by
-            performed_at DESC (most recent first). No clickable row, no modal, no
+            performed_at DESC (most recent first). No clickable row and no
             edit affordance (SPEC/WEB.md § Roadmap Audit Log Page). The card's
             own footer holds plain GET pagination links that change only the page
             query parameter; there is no form and no write path.
@@ -51,7 +51,7 @@
                     audit.go rather than by an {{if}} written here, so the rule
                     that decides "value or placeholder" — and the presentation
                     each of the two answers takes — has one source, shared with
-                    the task detail modal's own commit hashes.
+                    the task page's own commit hashes.
 
                     The Commit cell shows the stored hash verbatim: the page does
                     not abbreviate it, does not expand it, and links it to no

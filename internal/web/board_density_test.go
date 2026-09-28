@@ -123,7 +123,7 @@ func TestTaskCardBody_IsTighterThanTheVendoredSmallCard(t *testing.T) {
 // This is the link between the stylesheet and the markup, and it is the half a
 // stylesheet-only assertion cannot make: `.task-card > .card-body` is a CHILD
 // combinator, so wrapping the card's body in one more element — or moving the
-// `card-body` class onto the button itself — leaves the rule matching nothing
+// `card-body` class onto the card link itself — leaves the rule matching nothing
 // while every assertion above still passes and the card silently returns to
 // Tabler's 1rem.
 func TestTaskCard_BodyIsADirectChildOfTheCard(t *testing.T) {
@@ -136,8 +136,8 @@ func TestTaskCard_BodyIsADirectChildOfTheCard(t *testing.T) {
 		t.Fatal("the card body has no ancestor at all in the served page")
 	}
 	parent := chain[len(chain)-1]
-	if !strings.HasPrefix(parent, "button.") || !strings.Contains(parent, ".task-card") {
-		t.Errorf("the card body's parent element is %q; it must be the .task-card button "+
+	if !strings.HasPrefix(parent, "a.") || !strings.Contains(parent, ".task-card") {
+		t.Errorf("the card body's parent element is %q; it must be the .task-card link "+
 			"itself, because `.task-card > .card-body` is a child combinator and selects "+
 			"nothing once anything sits between them", parent)
 	}

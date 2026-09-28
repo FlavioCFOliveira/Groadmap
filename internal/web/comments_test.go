@@ -3,7 +3,6 @@ package web
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -21,16 +20,16 @@ import (
 	"github.com/FlavioCFOliveira/Groadmap/internal/models"
 )
 
-// The comment log on the read-only web interface (SPEC/WEB.md § Task Detail
-// Modal, comments timeline; § Sprint Detail Sub-Template, Comments card;
-// Acceptance Criteria 64-73).
+// The comment log on the read-only web interface (SPEC/WEB.md § Roadmap Task
+// Page, Comments card; § Sprint Detail Sub-Template, Comments card; Acceptance
+// Criteria 64-73).
 //
 // Every assertion here is made against markup rendered from a real on-disk
 // SQLite roadmap seeded through the production write API, so what is measured is
 // what a browser receives.
 
 // Seeded comment bodies. They are declared as constants because most assertions
-// look for them verbatim in the endpoint's raw fields or the rendered page, and
+// look for them verbatim in the rendered pages, and
 // because three of them carry authored line breaks, which the Markdown renderer
 // turns into <br>: the newline is written as the Go escape \n, never as a literal
 // control character in the source.
@@ -231,14 +230,10 @@ func editSprintCommentBody(t *testing.T, database *db.DB, id int, body, updatedA
 	}
 }
 
-// modalOpenTag is the opening tag every task detail modal starts with.
-const modalOpenTag = `<div class="modal modal-blur fade"`
-
 // sprintCommentsCardSlice returns the sprint page's Comments card: from its card
-// header to the first task detail modal, which the page renders after the whole
-// sprint detail block. It is the region Acceptance Criteria 68, 69 and 72 speak
-// about, and bounding it before the modals is what makes "the card shows only the
-// sprint's own comments" a falsifiable assertion.
+// header to the end of the page body, which the card closes as the last card of
+// the sprint detail sub-template. It is the region Acceptance Criteria 68, 69 and
+// 72 speak about.
 func sprintCommentsCardSlice(t *testing.T, body string) string {
 	t.Helper()
 
@@ -247,7 +242,25 @@ func sprintCommentsCardSlice(t *testing.T, body string) string {
 		t.Fatalf("the sprint page renders no Comments card")
 	}
 	rest := body[start:]
-	if end := strings.Index(rest, modalOpenTag); end >= 0 {
+	if end := strings.Index(rest, "</main>"); end >= 0 {
+		return rest[:end]
+	}
+	return rest
+}
+
+// taskCommentsCardSlice returns the task page's Comments card: from its opening
+// element to the end of the page body. The card is the last card of the main
+// column, and the main column is the last column of the page's row, so nothing
+// else of the page lies inside the region.
+func taskCommentsCardSlice(t *testing.T, body string) string {
+	t.Helper()
+
+	start := strings.Index(body, `data-role="task-comments-card"`)
+	if start < 0 {
+		t.Fatalf("the task page renders no Comments card")
+	}
+	rest := body[start:]
+	if end := strings.Index(rest, "</main>"); end >= 0 {
 		return rest[:end]
 	}
 	return rest
@@ -286,200 +299,155 @@ func renderedMarkdownText(text string) string { return markdownTextEscaper.Repla
 // text of a paragraph.
 var markdownTextEscaper = strings.NewReplacer("&", "&amp;", "<", "&lt;", ">", "&gt;", `"`, "&quot;")
 
-// fetchTaskDetail requests one task's detail endpoint and returns the status and
-// the raw body. It is the read the modal performs when a user opens a task.
-func fetchTaskDetail(t *testing.T, mux *http.ServeMux, roadmap string, taskID int) (int, string) {
-	t.Helper()
-
-	req := httptest.NewRequest(http.MethodGet, "/roadmaps/"+roadmap+"/tasks/"+itoa(taskID)+"/data", nil)
-	rec := httptest.NewRecorder()
-	mux.ServeHTTP(rec, req)
-	return rec.Code, rec.Body.String()
-}
-
-// decodeTaskDetail requests a task's detail endpoint and decodes the 200 body.
-func decodeTaskDetail(t *testing.T, mux *http.ServeMux, roadmap string, taskID int) taskDetailView {
-	t.Helper()
-
-	status, body := fetchTaskDetail(t, mux, roadmap, taskID)
-	if status != http.StatusOK {
-		t.Fatalf("GET the detail of task #%d: status = %d, want 200; body=%q", taskID, status, body)
-	}
-	var view taskDetailView
-	if err := json.Unmarshal([]byte(body), &view); err != nil {
-		t.Fatalf("decoding the detail of task #%d: %v; body=%q", taskID, err, body)
-	}
-	return view
-}
-
-// TestTaskDetail_CommentLog is the gate for Acceptance Criteria 64, 65 and 94 on
-// the task surface: the detail a modal is filled from carries the task's comments
-// oldest first, every one of them, each with its type, its created_at, its
-// updated_at when it has one, and its body.
-//
-// The comments no longer travel inside the served page: the page carries one empty
-// modal shell, and this endpoint is what a modal is filled from, so this is where
-// the log's order and completeness are now measured. That the script renders them
-// as a Tabler timeline, as text, is pinned in task_modal_test.go.
-func TestTaskDetail_CommentLog(t *testing.T) {
+// TestTaskPage_CommentLog is the gate for Acceptance Criteria 64 and 65 on the task
+// surface: the task page renders the task's comments as a timeline in its Comments
+// card, placed after the Completion summary card and last in the main column,
+// oldest first, every one of them, each with its type badge, its created_at, its
+// updated_at when it has one, and its body; the card header carries the count.
+func TestTaskPage_CommentLog(t *testing.T) {
 	t.Setenv("HOME", shortHome(t))
 	f := seedCommentFixture(t, "settlement-reconciliation")
 	mux := buildMux()
 
-	view := decodeTaskDetail(t, mux, f.name, f.loggedTaskID)
+	body := servePage(t, mux, "/roadmaps/"+f.name+"/tasks/"+itoa(f.loggedTaskID))
 
-	if view.Task.ID != f.loggedTaskID {
-		t.Errorf("the endpoint returned task #%d, want #%d", view.Task.ID, f.loggedTaskID)
+	// Placement: after the Completion summary card, and the last card of the main
+	// column, which is the last column of the row.
+	summaryAt := strings.Index(body, `<h3 class="card-title">Completion summary</h3>`)
+	commentsAt := strings.Index(body, `data-role="task-comments-card"`)
+	if summaryAt < 0 || commentsAt < 0 || commentsAt < summaryAt {
+		t.Fatalf("the Comments card does not follow the Completion summary card (summary=%d comments=%d)",
+			summaryAt, commentsAt)
 	}
-	if len(view.Comments) != 3 {
-		t.Fatalf("the logged task carries %d comments, want its whole log of 3", len(view.Comments))
+	card := taskCommentsCardSlice(t, body)
+	if strings.Contains(card, `<div class="card mb-3"`) || strings.Contains(card, `data-role="task-field-card"`) {
+		t.Errorf("a card follows the Comments card in the main column")
 	}
 
-	// Oldest first, exactly the order `rmp task comment-list` returns and the order
-	// the timeline presents.
-	wantTypes := []models.CommentType{
-		models.CommentFinding, models.CommentHypothesis, models.CommentDecision,
+	if !strings.Contains(card, `<h3 class="card-title">Comments <span class="badge bg-secondary-lt ms-2">3</span></h3>`) {
+		t.Errorf("the Comments card header does not carry the comment-count badge for 3 comments")
 	}
-	wantBodies := []string{bodyFinding, bodyHypothesis, bodyDecisionEdited}
-	for i := range wantTypes {
-		if view.Comments[i].Type != wantTypes[i] {
-			t.Errorf("comment %d is a %s, want %s", i, view.Comments[i].Type, wantTypes[i])
-		}
-		if view.Comments[i].Body != wantBodies[i] {
-			t.Errorf("comment %d body = %q, want %q", i, view.Comments[i].Body, wantBodies[i])
-		}
-		if view.Comments[i].CreatedAt == "" {
-			t.Errorf("comment %d carries no created_at", i)
-		}
+	if !strings.Contains(card, timelineList) {
+		t.Fatalf("the Comments card renders no %s", timelineList)
 	}
-	for i := 1; i < len(view.Comments); i++ {
-		if view.Comments[i-1].CreatedAt > view.Comments[i].CreatedAt {
-			t.Errorf("the log is not oldest first: %q precedes %q",
-				view.Comments[i-1].CreatedAt, view.Comments[i].CreatedAt)
+	for _, part := range []string{timelineEvent, timelineIcon, timelineCard, markdownBlock} {
+		if got := strings.Count(card, part); got != 3 {
+			t.Errorf("the Comments card carries %d of %q, want 3 (one per comment)", got, part)
 		}
 	}
 
-	// Exactly one entry was edited, and only that one carries updated_at: an edit
-	// is the only thing that writes that column.
-	edited := 0
-	for i := range view.Comments {
-		if view.Comments[i].UpdatedAt != nil {
-			edited++
-			if view.Comments[i].Type != models.CommentDecision {
-				t.Errorf("the %s entry carries updated_at; only the edited DECISION does",
-					view.Comments[i].Type)
-			}
+	// Oldest first, exactly the order `rmp task comment-list` returns.
+	wantTypes := []models.CommentType{models.CommentFinding, models.CommentHypothesis, models.CommentDecision}
+	wantBodies := []string{bodyFinding, "Converting first and rounding once at the end should remove the drift.",
+		"Round once, after the conversion, and keep the residual per window"}
+	last := -1
+	for i := range wantBodies {
+		at := strings.Index(card, renderedMarkdownText(wantBodies[i]))
+		if at < 0 {
+			t.Fatalf("the Comments card does not show comment %d: %q", i, wantBodies[i])
+		}
+		if at < last {
+			t.Errorf("the Comments card is not oldest first: comment %d precedes comment %d", i, i-1)
+		}
+		last = at
+		if !strings.Contains(card, typeBadge(wantTypes[i])) {
+			t.Errorf("the Comments card is missing the neutral %s badge", wantTypes[i])
 		}
 	}
-	if edited != 1 {
-		t.Errorf("%d entries carry updated_at, want exactly the 1 that was edited", edited)
+
+	// The timestamps, in the display form, with the edited marker outside <time>.
+	for _, want := range []string{
+		`<span class="text-secondary"><time datetime="` + createdFinding + `">2026-08-14 09:12:00</time></span>`,
+		`<span class="text-secondary"><time datetime="` + createdDecision + `">2026-08-15 08:05:00</time></span>`,
+		`<span class="text-secondary">edited <time datetime="` + updatedDecision + `">2026-08-16 07:30:00</time></span>`,
+	} {
+		if !strings.Contains(card, want) {
+			t.Errorf("the Comments card does not show %s", want)
+		}
+	}
+	if got := strings.Count(card, "edited "); got != 1 {
+		t.Errorf("the Comments card shows %d edited markers, want exactly 1", got)
+	}
+	// The authored line break of the hypothesis survives as a <br>.
+	if !strings.Contains(card, "should remove the drift.<br>") {
+		t.Errorf("the hypothesis body lost its authored line break")
 	}
 
-	// The page itself carries none of this: no comment body reaches the served
-	// document, on either surface that shows a clickable task.
+	// The boards carry none of this: no comment body reaches either board page.
 	for _, path := range []string{
 		"/roadmaps/" + f.name + "/tasks",
 		"/roadmaps/" + f.name + "/sprints/" + itoa(f.sprintID),
 	} {
 		page := servePage(t, mux, path)
-		for _, body := range wantBodies {
-			if strings.Contains(page, body) || strings.Contains(page, rendered(body)) ||
-				strings.Contains(page, renderedMarkdownText(body)) {
-				t.Errorf("%s: a task comment body reached the served document: %q", path, body)
+		for _, raw := range []string{bodyFinding, bodyDecisionEdited} {
+			if strings.Contains(page, raw) || strings.Contains(page, rendered(raw)) ||
+				strings.Contains(page, renderedMarkdownText(raw)) {
+				t.Errorf("%s: a task comment body reached a board page: %q", path, raw)
 			}
 		}
 	}
 }
 
-// TestTaskDetail_CommentEmptyState is the gate for Acceptance Criterion 67 at the
-// data layer: a task with no comment yields an EMPTY ARRAY, never null, so the
-// script walks it unconditionally and renders its empty-state message.
-func TestTaskDetail_CommentEmptyState(t *testing.T) {
+// TestTaskPage_CommentEmptyState is the gate for Acceptance Criterion 67: the page
+// of a task with no comments renders its Comments card with a clear empty-state
+// message in place of the timeline — not an empty list, and not a missing card.
+func TestTaskPage_CommentEmptyState(t *testing.T) {
 	t.Setenv("HOME", shortHome(t))
 	f := seedCommentFixture(t, "settlement-reconciliation")
 	mux := buildMux()
 
-	status, body := fetchTaskDetail(t, mux, f.name, f.quietTaskID)
-	if status != http.StatusOK {
-		t.Fatalf("status = %d, want 200", status)
-	}
-	if !strings.Contains(body, `"comments": []`) {
-		t.Errorf("a task with no comment must serialise comments as [], never null; body=%q", body)
-	}
+	body := servePage(t, mux, "/roadmaps/"+f.name+"/tasks/"+itoa(f.quietTaskID))
+	card := taskCommentsCardSlice(t, body)
 
-	var view taskDetailView
-	if err := json.Unmarshal([]byte(body), &view); err != nil {
-		t.Fatalf("decoding: %v", err)
+	if !strings.Contains(card, `<h3 class="card-title">Comments <span class="badge bg-secondary-lt ms-2">0</span></h3>`) {
+		t.Errorf("a task with no comments does not render the Comments card with a zero count badge")
 	}
-	if view.Comments == nil {
-		t.Error("the decoded comments are nil; the endpoint must send an empty array")
+	if strings.Contains(card, timelineList) || strings.Contains(card, timelineEvent) {
+		t.Errorf("a task with no comments renders a timeline instead of an empty state")
 	}
-	if len(view.Comments) != 0 {
-		t.Errorf("the quiet task carries %d comments, want 0", len(view.Comments))
-	}
-
-	// The message the script shows in place of the timeline lives in the script,
-	// where the empty state is now rendered.
-	script := readEmbeddedAsset(t, "static/task-modal.js")
-	if !strings.Contains(script, "No comments have been recorded on this task yet.") {
-		t.Error("the modal script carries no comment empty-state message")
+	for _, marker := range []string{
+		`<p class="empty-title">No comments</p>`,
+		"Nothing has been recorded on this task yet.",
+	} {
+		if !strings.Contains(card, marker) {
+			t.Errorf("the Comments card of a task with no comments is missing %q", marker)
+		}
 	}
 }
 
-// TestTaskDetail_CommentBodyTravelsAsAJSONString is the gate for Acceptance
-// Criterion 73 under the new data path: a comment body is free text a user wrote,
-// so a body containing markup must travel as a JSON string VALUE and must not
-// reach the page as markup.
-//
-// Two properties, measured where each now lives: the served page carries no
-// comment body at all, and the endpoint carries it as a string whose markup
-// characters are JSON-escaped by the encoder. How the client writes it into the
-// DOM — as text, never as markup — is pinned in task_modal_test.go.
-func TestTaskDetail_CommentBodyTravelsAsAJSONString(t *testing.T) {
+// TestTaskPage_CommentBodyMarkupNeverReachesThePage is the gate for Acceptance
+// Criterion 73 on the task page: a comment body carrying raw HTML renders through
+// the Markdown renderer, which emits none of that raw HTML, so no element and no
+// script of the author's reaches the page, and a < that is not raw HTML renders
+// as the character itself.
+func TestTaskPage_CommentBodyMarkupNeverReachesThePage(t *testing.T) {
 	t.Setenv("HOME", shortHome(t))
 	f := seedCommentFixture(t, "settlement-reconciliation")
 	mux := buildMux()
 
-	page := servePage(t, mux, "/roadmaps/"+f.name+"/tasks")
-	for _, raw := range []string{"<script>alert(", "<b>bold</b>", bodyMarkup} {
+	page := servePage(t, mux, "/roadmaps/"+f.name+"/tasks/"+itoa(f.markupTaskID))
+	card := taskCommentsCardSlice(t, page)
+	for _, raw := range []string{"<script>alert(", "<b>bold</b>", "</script> and"} {
 		if strings.Contains(page, raw) {
 			t.Errorf("a comment body reached the page as markup: found %q", raw)
 		}
 	}
-	if strings.Contains(page, rendered(bodyMarkup)) {
-		t.Errorf("a comment body reached the page at all; the modal is filled from the endpoint")
+	if !strings.Contains(card, "Both must reach the page as text.") {
+		t.Errorf("the markup comment's text is missing from the Comments card")
 	}
-	// The page's script elements are the three it loads, opened and closed once
-	// each. A body that became markup would raise either count.
-	if got := strings.Count(page, "<script"); got != 3 {
-		t.Errorf("page has %d <script elements, want exactly 3 (the vendored bundle, the "+
-			"modal script and the board's search script)", got)
+	// The page's script elements are exactly the one it loads, the vendored
+	// framework. A body that became markup would raise either count.
+	if got := strings.Count(page, "<script"); got != 1 {
+		t.Errorf("page has %d <script elements, want exactly 1 (the vendored bundle)", got)
 	}
-	if got := strings.Count(page, "</script>"); got != 3 {
-		t.Errorf("page has %d </script> closers, want exactly 3", got)
-	}
-
-	// The endpoint carries the body as a JSON string. Go's encoder escapes the
-	// HTML-significant characters, so the markup cannot terminate a script element
-	// even if the payload were ever embedded in one.
-	status, body := fetchTaskDetail(t, mux, f.name, f.markupTaskID)
-	if status != http.StatusOK {
-		t.Fatalf("status = %d, want 200", status)
-	}
-	if strings.Contains(body, "<script>") || strings.Contains(body, "</script>") {
-		t.Errorf("the endpoint emitted an unescaped script tag in its JSON body: %q", body)
-	}
-	if !strings.Contains(body, `\u003c`) {
-		t.Errorf("the endpoint did not JSON-escape the markup characters of the comment body: %q", body)
+	if got := strings.Count(page, "</script>"); got != 1 {
+		t.Errorf("page has %d </script> closers, want exactly 1", got)
 	}
 
-	// And the value round-trips: the client receives exactly what the user wrote.
-	view := decodeTaskDetail(t, mux, f.name, f.markupTaskID)
-	if len(view.Comments) != 1 {
-		t.Fatalf("the markup task carries %d comments, want 1", len(view.Comments))
-	}
-	if view.Comments[0].Body != bodyMarkup {
-		t.Errorf("the comment body decoded to %q, want %q", view.Comments[0].Body, bodyMarkup)
+	// The boards never carry a comment body at all.
+	tasksPage := servePage(t, mux, "/roadmaps/"+f.name+"/tasks")
+	if strings.Contains(tasksPage, "Both must reach the page as text.") {
+		t.Errorf("a comment body reached the tasks page")
 	}
 }
 
@@ -498,8 +466,7 @@ func TestSprintPage_CommentsCard(t *testing.T) {
 
 	body := servePage(t, mux, "/roadmaps/"+f.name+"/sprints/"+itoa(f.sprintID))
 
-	// Placement: after the member-tasks board, and last (only the task modal shell,
-	// which is not part of the sub-template, follows it). The anchor is the LAST
+	// Placement: after the member-tasks board, and last. The anchor is the LAST
 	// column of the board rather than the board's opening tag, so a Comments card
 	// rendered between two columns would fail this assertion too.
 	boardAt := strings.Index(body, `data-role="task-board"`)
@@ -527,7 +494,7 @@ func TestSprintPage_CommentsCard(t *testing.T) {
 
 	card := sprintCommentsCardSlice(t, body)
 
-	// The same timeline structure the modal uses, one event per comment.
+	// The same timeline structure the task page uses, one event per comment.
 	if !strings.Contains(card, timelineList) {
 		t.Errorf("the Comments card renders no %s", timelineList)
 	}
@@ -608,7 +575,7 @@ func TestSprintPage_CommentsCardEmptyState(t *testing.T) {
 
 // TestSprintPage_CommentsCardHoldsOnlySprintOwnComments is the gate for Acceptance
 // Criterion 69: the card shows the comments of the sprint ITSELF. A comment written
-// against a member task appears in that task's detail modal and nowhere in the card,
+// against a member task appears on that task's own page and nowhere in the card,
 // and no aggregate of task comments is presented at sprint level.
 func TestSprintPage_CommentsCardHoldsOnlySprintOwnComments(t *testing.T) {
 	t.Setenv("HOME", shortHome(t))
@@ -633,25 +600,24 @@ func TestSprintPage_CommentsCardHoldsOnlySprintOwnComments(t *testing.T) {
 		t.Errorf("the sprint Comments card holds %d entries, want exactly the sprint's own 2", got)
 	}
 
-	// The member task's log is reachable, but from that task's own endpoint — the
-	// modal is filled on demand — and it is the task's log, not the sprint's.
-	view := decodeTaskDetail(t, mux, f.name, f.loggedTaskID)
-	if len(view.Comments) != 3 || view.Comments[0].Body != bodyFinding {
-		t.Errorf("the member task's own log is not served by its detail endpoint: %+v", view.Comments)
+	// The member task's log is on that task's own page, and it is the task's log,
+	// not the sprint's.
+	taskCard := taskCommentsCardSlice(t, servePage(t, mux, "/roadmaps/"+f.name+"/tasks/"+itoa(f.loggedTaskID)))
+	if got := strings.Count(taskCard, timelineEvent); got != 3 ||
+		!strings.Contains(taskCard, renderedMarkdownText(bodyFinding)) {
+		t.Errorf("the member task's own log is not on its page (%d entries)", got)
 	}
 	for _, sprintBody := range []string{bodySprintProgress, bodySprintDecisionEdited} {
-		for i := range view.Comments {
-			if view.Comments[i].Body == sprintBody {
-				t.Errorf("a sprint comment leaked into a task's detail: %q", sprintBody)
-			}
+		if strings.Contains(taskCard, renderedMarkdownText(sprintBody)) {
+			t.Errorf("a sprint comment leaked into a task's page: %q", sprintBody)
 		}
 	}
 }
 
 // TestTasksPage_CoversTasksOutsideAnySprint pins that the board's grouped count
 // read covers EVERY task the page renders, not just those in a sprint: a task
-// that belongs to no sprint shows its comment count on its card and serves its
-// log from its own endpoint, and is absent from the sprint page altogether.
+// that belongs to no sprint shows its comment count on its card and shows its log
+// on its own page, and is absent from the sprint page altogether.
 func TestTasksPage_CoversTasksOutsideAnySprint(t *testing.T) {
 	t.Setenv("HOME", shortHome(t))
 	f := seedCommentFixture(t, "settlement-reconciliation")
@@ -665,23 +631,23 @@ func TestTasksPage_CoversTasksOutsideAnySprint(t *testing.T) {
 		t.Errorf("the card of the task in no sprint does not show its comment count\ncard: %s", card)
 	}
 
-	// And its log is served by its own detail endpoint.
-	view := decodeTaskDetail(t, mux, f.name, f.looseTaskID)
-	if len(view.Comments) != 1 {
-		t.Fatalf("the detail of the task in no sprint carries %d comments, want 1", len(view.Comments))
+	// And its log is on its own page.
+	loose := taskCommentsCardSlice(t, servePage(t, mux, "/roadmaps/"+f.name+"/tasks/"+itoa(f.looseTaskID)))
+	if got := strings.Count(loose, timelineEvent); got != 1 {
+		t.Fatalf("the page of the task in no sprint carries %d comments, want 1", got)
 	}
-	if view.Comments[0].Body != bodyLoose {
-		t.Errorf("the detail of the task in no sprint shows %q, want %q", view.Comments[0].Body, bodyLoose)
+	if !strings.Contains(loose, renderedMarkdownText(bodyLoose)) {
+		t.Errorf("the page of the task in no sprint does not show %q", bodyLoose)
 	}
-	if view.Comments[0].Type != models.CommentNote {
-		t.Errorf("the comment type is %s, want NOTE", view.Comments[0].Type)
+	if !strings.Contains(loose, typeBadge(models.CommentNote)) {
+		t.Errorf("the comment type badge is not NOTE")
 	}
 
-	// The sprint page renders only its member tasks, so that task has no trigger
+	// The sprint page renders only its member tasks, so that task has no card
 	// there and its comment is nowhere on it.
 	sprintBody := servePage(t, mux, "/roadmaps/"+f.name+"/sprints/"+itoa(f.sprintID))
-	if strings.Contains(sprintBody, `data-task-id="`+itoa(f.looseTaskID)+`"`) {
-		t.Errorf("the sprint page offers a trigger for a task that is not a member of the sprint")
+	if strings.Contains(sprintBody, cardMarker(f.looseTaskID)) {
+		t.Errorf("the sprint page offers a card for a task that is not a member of the sprint")
 	}
 	if strings.Contains(sprintBody, rendered(bodyLoose)) || strings.Contains(sprintBody, renderedMarkdownText(bodyLoose)) {
 		t.Errorf("the sprint page shows the comment of a task that is not a member of the sprint")
@@ -689,8 +655,8 @@ func TestTasksPage_CoversTasksOutsideAnySprint(t *testing.T) {
 }
 
 // TestSprintsLandingPage_RendersNoCommentLog pins that the sprints landing page is
-// unchanged by this feature: it renders every sprint as a compact card, opens no
-// task detail modal, and therefore shows no comment log of any kind — neither the
+// unchanged by this feature: it renders every sprint as a compact card, links to
+// no task page, and therefore shows no comment log of any kind — neither the
 // sprint's own nor a member task's (SPEC/WEB.md § Shared Sprint-Card Partial).
 func TestSprintsLandingPage_RendersNoCommentLog(t *testing.T) {
 	t.Setenv("HOME", shortHome(t))
@@ -701,7 +667,7 @@ func TestSprintsLandingPage_RendersNoCommentLog(t *testing.T) {
 
 	for _, marker := range []string{
 		timelineList, timelineEvent, timelineIcon,
-		`<h3 class="card-title">Comments`, `id="task-modal-`,
+		`<h3 class="card-title">Comments`, `data-role="task-comments-card"`,
 	} {
 		if strings.Contains(body, marker) {
 			t.Errorf("the sprints landing page must not render %q", marker)
@@ -918,8 +884,8 @@ func seedTasksWithComments(t *testing.T, name string, n int) []int {
 // The board shows a number on each card. Reading the text of every comment of
 // every task in order to display a number is work the page throws away, so the
 // grouped LISTING must not be issued here at all; a task's comment text is read
-// only when a user opens that task's modal, by the task detail endpoint
-// (SPEC/DATABASE.md § Count Comments for Many Parents (Grouped)).
+// only by that task's own page (SPEC/DATABASE.md § Count Comments for Many
+// Parents (Grouped)).
 func TestTasksPage_OneGroupedCommentCountQueryIndependentOfTaskCount(t *testing.T) {
 	t.Setenv("HOME", shortHome(t))
 
@@ -1018,8 +984,8 @@ func TestTasksPage_OneGroupedCommentCountQueryIndependentOfTaskCount(t *testing.
 // each board card its comment number.
 //
 // The page reads no comment BODY for a task it renders: a card shows a number, and
-// the text of a member task's comments is fetched only when a user opens that
-// task's modal, one task at a time, by the task detail endpoint. That is what the
+// the text of a member task's comments is read only by that task's own page, one
+// task at a time. That is what the
 // zero on the per-task listing states (SPEC/WEB.md § Tasks and Sprints from SQLite;
 // § Sprint Detail Sub-Template, Read cost; Acceptance Criterion 137).
 func TestSprintPage_CommentQueryCount(t *testing.T) {
@@ -1055,7 +1021,7 @@ func TestSprintPage_CommentQueryCount(t *testing.T) {
 	}
 	if src.perTaskComments != 0 {
 		t.Errorf("the sprint page issued %d per-task comment queries, want 0: a card shows a "+
-			"count and a member task's comment TEXT is read only through its own modal",
+			"count and a member task's comment TEXT is read only by its own page",
 			src.perTaskComments)
 	}
 	if src.sprintComments != 1 {
@@ -1097,23 +1063,18 @@ func TestSprintPage_CommentQueryCount(t *testing.T) {
 // ==================== READ-ONLY: NO ROUTE, NO ENDPOINT, NO WRITE PATH ====================
 
 // TestCommentSurface_HasNoWriteAffordance is the gate for Acceptance Criterion 72
-// on the markup: the sprint Comments card contains no form, no input, no button
-// and no link — nothing through which a comment could be created, edited or
-// deleted from the browser — and the script that fills the task modal builds no
-// such control either.
+// on the markup: neither the sprint Comments card nor the task page's Comments
+// card contains a form, an input, a button, or a link — nothing through which a
+// comment could be created, edited or deleted from the browser.
 //
-// The card is asserted as a region rather than the whole page, because the page
-// legitimately carries controls that submit nothing (the modal's Close button, the
-// sidebar links): a page-wide assertion would either fail on those or have to be
-// weakened until it proved nothing. The task modal's own timeline is no longer
-// server-rendered, so its read-only property is asserted on the script that builds
-// it.
+// Each card is asserted as a region rather than the whole page, because a page
+// legitimately carries links that submit nothing (the sidebar, the back link): a
+// page-wide assertion would either fail on those or have to be weakened until it
+// proved nothing.
 func TestCommentSurface_HasNoWriteAffordance(t *testing.T) {
 	t.Setenv("HOME", shortHome(t))
 	f := seedCommentFixture(t, "settlement-reconciliation")
 	mux := buildMux()
-
-	sprintBody := servePage(t, mux, "/roadmaps/"+f.name+"/sprints/"+itoa(f.sprintID))
 
 	// Anything that could carry a change to the server, plus the attributes that
 	// would make an element do so.
@@ -1122,23 +1083,21 @@ func TestCommentSurface_HasNoWriteAffordance(t *testing.T) {
 		"href=", "action=", "formaction=", "method=", "onclick=", "onsubmit=",
 		"data-bs-toggle=", "contenteditable",
 	}
-	card := strings.ToLower(sprintCommentsCardSlice(t, sprintBody))
-	for _, bad := range forbidden {
-		if strings.Contains(card, bad) {
-			t.Errorf("the sprint Comments card must be read-only but contains %q", bad)
-		}
+	regions := map[string]string{
+		"the sprint Comments card": sprintCommentsCardSlice(t,
+			servePage(t, mux, "/roadmaps/"+f.name+"/sprints/"+itoa(f.sprintID))),
+		"the task page's Comments card": taskCommentsCardSlice(t,
+			servePage(t, mux, "/roadmaps/"+f.name+"/tasks/"+itoa(f.loggedTaskID))),
 	}
-
-	// The modal script creates only presentational elements, and reaches the
-	// server only through a read: no form, no control, and no non-GET request.
-	script := readEmbeddedAsset(t, "static/task-modal.js")
-	for _, bad := range []string{
-		`createElement("form")`, `createElement("input")`, `createElement("button")`,
-		`createElement("a")`, `createElement("textarea")`, `createElement("select")`,
-		"method:", "POST", "PUT", "PATCH", "DELETE", "FormData", "XMLHttpRequest",
-	} {
-		if strings.Contains(script, bad) {
-			t.Errorf("the modal script must be read-only but contains %q", bad)
+	for label, region := range regions {
+		lower := strings.ToLower(region)
+		if !strings.Contains(lower, "timeline-event") {
+			t.Fatalf("%s holds no timeline; the region is wrong", label)
+		}
+		for _, bad := range forbidden {
+			if strings.Contains(lower, bad) {
+				t.Errorf("%s must be read-only but contains %q", label, bad)
+			}
 		}
 	}
 }
@@ -1146,8 +1105,9 @@ func TestCommentSurface_HasNoWriteAffordance(t *testing.T) {
 // wantRoutePatterns is the complete, pinned set of patterns the read-only mux
 // registers. Every roadmap page is registered for GET and for HEAD only; the bare
 // "/" is the catch-all that answers 404 for an unknown read and 405 for any other
-// method. The comment log added none of them: it is rendered into pages that already
-// existed (Acceptance Criterion 72).
+// method. No route below /roadmaps/{name}/tasks/{id} exists: the interface serves
+// no JSON for a task (SPEC/WEB.md § Routes and Pages, rule 5; Acceptance
+// Criteria 72 and 96).
 var wantRoutePatterns = []string{
 	"/",
 	"GET /roadmaps/{name}",
@@ -1156,7 +1116,7 @@ var wantRoutePatterns = []string{
 	"GET /roadmaps/{name}/graph/data",
 	"GET /roadmaps/{name}/sprints/{id}",
 	"GET /roadmaps/{name}/tasks",
-	"GET /roadmaps/{name}/tasks/{id}/data",
+	"GET /roadmaps/{name}/tasks/{id}",
 	"GET /static/",
 	"GET /{$}",
 	"HEAD /roadmaps/{name}",
@@ -1165,7 +1125,7 @@ var wantRoutePatterns = []string{
 	"HEAD /roadmaps/{name}/graph/data",
 	"HEAD /roadmaps/{name}/sprints/{id}",
 	"HEAD /roadmaps/{name}/tasks",
-	"HEAD /roadmaps/{name}/tasks/{id}/data",
+	"HEAD /roadmaps/{name}/tasks/{id}",
 	"HEAD /static/",
 	"HEAD /{$}",
 }
@@ -1254,6 +1214,7 @@ func TestCommentPages_AnswerReadMethodsOnly(t *testing.T) {
 		"/roadmaps/" + f.name,
 		"/roadmaps/" + f.name + "/tasks",
 		"/roadmaps/" + f.name + "/sprints/" + itoa(f.sprintID),
+		"/roadmaps/" + f.name + "/tasks/" + itoa(f.loggedTaskID),
 	}
 	for _, path := range paths {
 		for _, method := range []string{http.MethodGet, http.MethodHead} {
@@ -1356,54 +1317,14 @@ func TestCommentTimeline_ClassesComeFromVendoredCSS(t *testing.T) {
 		}
 	}
 
-	// The task modal's timeline is built by the script, so its classes never appear
-	// in served markup and the fidelity guard cannot see them. They are scanned at
-	// their source instead: every class name the script assigns must resolve to a
-	// rule in the same embedded stylesheets (SPEC/WEB.md § UI Framework, rule 10).
-	for _, class := range scriptClassTokens(t, readEmbeddedAsset(t, "static/task-modal.js")) {
-		// The same documented structural hooks the markup guard allows: Tabler
-		// component skeletons that carry no rule of their own
-		// (tabler_fidelity_test.go, structuralHookClasses).
-		if _, hook := structuralHookClasses[class]; hook {
-			continue
-		}
+	// The task page's Comments card is the same partial, server-rendered too.
+	taskBody := servePage(t, mux, "/roadmaps/"+f.name+"/tasks/"+itoa(f.loggedTaskID))
+	for _, class := range classTokens(taskCommentsCardSlice(t, taskBody)) {
 		if !strings.Contains(styles, "."+class) {
-			t.Errorf("the modal script builds an element with the class %q, which no embedded "+
-				"stylesheet defines and which is not a recorded structural hook", class)
+			t.Errorf("the task page's Comments card uses the class %q, which no embedded stylesheet "+
+				"defines; the feature must add no CSS", class)
 		}
 	}
-}
-
-// reScriptClass captures the class names the modal script assigns: the second
-// argument of its el(tag, className, text) helper, and any className assignment.
-var reScriptClass = regexp.MustCompile(`(?:el\("[a-z]+", "([^"]*)"|className = "([^"]*)")`)
-
-// scriptClassTokens returns every class name the script assigns to an element.
-// The concatenated forms (a base class plus a badge variable) are split on the
-// quote boundary by the pattern itself, so only literal class names are returned.
-func scriptClassTokens(t *testing.T, script string) []string {
-	t.Helper()
-
-	seen := map[string]bool{}
-	tokens := make([]string, 0, 16)
-	for _, m := range reScriptClass.FindAllStringSubmatch(script, -1) {
-		for _, group := range m[1:] {
-			for _, class := range strings.Fields(group) {
-				if class == "" || seen[class] {
-					continue
-				}
-				seen[class] = true
-				tokens = append(tokens, class)
-			}
-		}
-	}
-	// Falsifiability control: a pattern that matched nothing would make the
-	// assertion above vacuous. The script builds well over a dozen elements.
-	if len(tokens) < 10 {
-		t.Fatalf("extracted only %d class tokens from the modal script; the extraction is broken",
-			len(tokens))
-	}
-	return tokens
 }
 
 // classAttrRe captures the value of every class attribute in a markup region.
@@ -1454,6 +1375,8 @@ func TestCommentPages_RenderOfflineWithoutInlineStyle(t *testing.T) {
 		"/roadmaps/" + f.name + "/tasks",
 		"/roadmaps/" + f.name + "/sprints/" + itoa(f.sprintID),      // comments present
 		"/roadmaps/" + f.name + "/sprints/" + itoa(f.quietSprintID), // empty state
+		"/roadmaps/" + f.name + "/tasks/" + itoa(f.loggedTaskID),    // task log
+		"/roadmaps/" + f.name + "/tasks/" + itoa(f.quietTaskID),     // task empty state
 	}
 	for _, path := range paths {
 		body := servePage(t, mux, path)
@@ -1469,24 +1392,32 @@ func TestCommentPages_RenderOfflineWithoutInlineStyle(t *testing.T) {
 				t.Errorf("page %s references the banned remote origin %q", path, bad)
 			}
 		}
-		// The asset chain is exactly the embedded one: five stylesheets — the four
-		// of every page and the syntax-highlighting stylesheet every page that can
-		// render a Markdown field links — and one script, all from /static/. The
-		// comment log added none of them (SPEC/WEB.md § Markdown Rendering, rule 7).
-		for _, asset := range []string{
+		// The asset chain is exactly the embedded one: the four stylesheets of
+		// every page, plus the syntax-highlighting stylesheet on every page that
+		// can render a Markdown field — not the tasks page, which renders none —
+		// and the vendored script, all from /static/. The comment log added none
+		// of them (SPEC/WEB.md § Markdown Rendering, rule 7).
+		assets := []string{
 			`<link rel="stylesheet" href="/static/vendor/inter/inter.css">`,
 			`<link rel="stylesheet" href="/static/vendor/tabler/tabler.min.css">`,
 			`<link rel="stylesheet" href="/static/vendor/tabler-icons/tabler-icons.min.css">`,
-			`<link rel="stylesheet" href="/static/highlight.css">`,
 			`<link rel="stylesheet" href="/static/style.css">`,
 			`<script src="/static/vendor/tabler/tabler.min.js"></script>`,
-		} {
+		}
+		wantSheets := 4
+		if !strings.HasSuffix(path, "/tasks") {
+			assets = append(assets, `<link rel="stylesheet" href="/static/highlight.css">`)
+			wantSheets = 5
+		} else if strings.Contains(body, "/static/highlight.css") {
+			t.Errorf("page %s links highlight.css, but it renders no Markdown field", path)
+		}
+		for _, asset := range assets {
 			if !strings.Contains(body, asset) {
 				t.Errorf("page %s is missing the embedded asset %s", path, asset)
 			}
 		}
-		if got := strings.Count(body, "<link rel=\"stylesheet\""); got != 5 {
-			t.Errorf("page %s loads %d stylesheets, want the 5 embedded ones", path, got)
+		if got := strings.Count(body, "<link rel=\"stylesheet\""); got != wantSheets {
+			t.Errorf("page %s loads %d stylesheets, want the %d embedded ones", path, got, wantSheets)
 		}
 	}
 }
@@ -1511,7 +1442,7 @@ func TestCommentPages_RenderOnAMigratedLegacyRoadmap(t *testing.T) {
 	mux := buildMux()
 
 	// The stale fixture seeds one sprint (id 1) and no task, so the sprint page
-	// exercises the Comments card's empty state and the tasks page renders no modal.
+	// exercises the Comments card's empty state and the tasks page renders no card.
 	sprintBody := servePage(t, mux, "/roadmaps/"+roadmapName+"/sprints/1")
 	if !strings.Contains(sprintBody,
 		`<h3 class="card-title">Comments <span class="badge bg-secondary-lt ms-2">0</span></h3>`) {

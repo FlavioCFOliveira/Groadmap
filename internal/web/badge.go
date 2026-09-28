@@ -91,7 +91,7 @@ func sprintStatusBadge(s models.SprintStatus) string {
 //	CHORE       -> bg-secondary-lt
 //
 // The type badge it colours is shown on the card of the two Kanban boards and
-// nowhere else: the task detail modal shows the type as plain text, and the type
+// nowhere else: the task page shows the type as plain text, and the type
 // filter offers the values as plain options.
 //
 // The function is total: every canonical TaskType is covered, and any value
@@ -188,7 +188,7 @@ func severityBadge(s int) string {
 //
 // The helper exists rather than the class being written into the template so the
 // comment-type badge has one source, exactly like the five mappings above: the
-// task detail modal and the sprint Comments card cannot drift apart, and the
+// Comments cards of the task page and the sprint page cannot drift apart, and the
 // neutral-for-every-value rule is verifiable in one place.
 func commentTypeBadge(models.CommentType) string {
 	return badgeSecondary
@@ -199,7 +199,7 @@ func commentTypeBadge(models.CommentType) string {
 // parse time (see embed.go) so the templates can render a status, task type,
 // priority, severity, or comment-type badge with the deterministic Tabler colour variant
 // the SPEC assigns to each value (SPEC/WEB.md § Status, Priority, and Severity
-// Badge Colours; § Task Detail Modal, type badge colour).
+// Badge Colours; § Roadmap Task Page, Comments card).
 //
 // sprintStatus is the odd one out and colours nothing: it is the canonical enum
 // parser from models, exposed so a template can NAME a sprint status the colour

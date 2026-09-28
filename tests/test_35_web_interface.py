@@ -1009,9 +1009,8 @@ class TestWebInterface:
     def _board_columns(body):
         """Return the markup of each board column, in the order rendered.
 
-        The board lives inside <main class="page-body">; the task detail modals
-        are rendered after it, outside the page wrapper, so slicing main keeps a
-        modal's copy of a task's title from being mistaken for a card.
+        The board lives inside <main class="page-body">, so slicing main keeps
+        the page header and the scripts after it out of every card assertion.
         """
         main = re.search(r'<main class="page-body">(.*?)</main>', body, re.S)
         assert main, 'the tasks page has no <main class="page-body"> region'
@@ -1083,7 +1082,7 @@ class TestWebInterface:
 
     def test_tasks_page_renders_the_kanban_board_read_only(self):
         """The tasks page renders every task of the roadmap as a Kanban board of
-        five fixed columns, each card opening the read-only task detail modal.
+        five fixed columns, each card a link to that task's own page.
 
         It renders no task table, no sprint tabs, and no control that writes
         (SPEC/WEB.md § Roadmap Tasks Page, Acceptance Criteria 81 to 92)."""
@@ -1129,12 +1128,14 @@ class TestWebInterface:
         ):
             assert title in low, f"tasks page must show task {title!r} on the board"
 
-        # A card opens the read-only modal of its own task.
+        # A card is a link to its own task's page, and the page carries no modal.
         t1 = self.open_task_ids[0]
-        assert f'data-task-id="{t1}"' in region, "board card missing the modal trigger"
-        assert body.count('id="task-modal"') == 1, "the page must carry exactly one modal shell"
-        assert '<button type="button" class="card card-sm task-card' in region, (
-            "a board card must be a real button, so the keyboard can activate it"
+        assert (f'<a class="card card-sm card-link text-reset task-card" '
+                f'href="/roadmaps/{ROADMAP}/tasks/{t1}"') in region, (
+            "a board card must be a link to its task's page"
+        )
+        assert "task-modal" not in body and 'data-bs-toggle="modal"' not in body, (
+            "the tasks page must carry no task modal"
         )
 
         # The card of a task in a sprint names that sprint, by title and id.
@@ -1261,43 +1262,40 @@ class TestWebInterface:
                 f"{'an' if empty else 'no'} empty state"
             )
 
-    # Elements the HTML activation behaviour lets the keyboard press: only these
-    # turn Enter or Space into the click Bootstrap's modal data-api listens for.
-    NATIVELY_ACTIVATABLE = ("button", "a", "input")
+    @staticmethod
+    def _go_escaped(text):
+        """Return text as Go's html/template escapes it in element text: the
+        ampersand, the angle brackets, and both quote characters, the quotes as
+        numeric references."""
+        return (text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+                .replace('"', "&#34;").replace("'", "&#39;"))
 
-    def _task_detail(self, port, roadmap, task_id):
-        """Return (status, parsed-JSON) of one task's detail endpoint.
+    @staticmethod
+    def _markdown_text(text):
+        """Return plain text as the Markdown renderer writes it in a paragraph:
+        the ampersand, the angle brackets, and the double quote escaped, and
+        nothing else."""
+        return (text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+                .replace('"', "&quot;"))
 
-        This is the read the modal performs when the user opens a task: the page
-        carries one empty shell and the script fills it from here (SPEC/WEB.md
-        § Task Detail Endpoint).
-        """
-        status, _, body = self._req(port, f"/roadmaps/{roadmap}/tasks/{task_id}/data")
-        if status != 200:
-            return status, None
-        return status, json.loads(body)
+    def _task_page(self, port, roadmap, task_id):
+        """Return (status, body) of one task's own page, GET
+        /roadmaps/{name}/tasks/{id} (SPEC/WEB.md § Roadmap Task Page)."""
+        status, _, body = self._req(port, f"/roadmaps/{roadmap}/tasks/{task_id}")
+        return status, body
 
     @staticmethod
     def _rendered_task_title(body, task_id):
-        """Return a task's title exactly as the page rendered it.
-
-        Read from the task's own modal heading, so an expected accessible name is
-        composed from the page's own value rather than from a literal repeated in
-        the test: Go's html/template escapes element text and attribute values
-        with the same replacement table, which
-        test_task_title_is_escaped_in_markup_and_in_the_accessible_name pins.
+        """Return a task's title exactly as a board page rendered it: the visible
+        label of the task's card, read from the card link that carries the task's
+        href followed by its accessible name. Reading the visible label rather
+        than the aria-label is what keeps an assertion about the accessible name
+        non-circular.
         """
-        # The trigger of that task — the board card or the sprint row's title
-        # button, both of which carry the task id followed by the accessible name
-        # — and then its VISIBLE label. Reading the visible label rather than the
-        # aria-label is what keeps an assertion about the accessible name
-        # non-circular.
-        # Attributes may sit between the task id and the accessible name (the board
-        # card also carries its search corpus), so the pattern spans them.
         m = re.search(
-            rf'data-task-id="{task_id}"[^>]*aria-label="[^"]*">(.*?)</button>', body, re.S
+            rf'href="/roadmaps/[^"/]+/tasks/{task_id}"[^>]*aria-label="[^"]*">(.*?)</a>', body, re.S
         )
-        assert m, f"task #{task_id} has no trigger to read its title from"
+        assert m, f"task #{task_id} has no card to read its title from"
         inner = re.search(r'data-role="task-card-title">(.*?)</span>', m.group(1), re.S)
         return inner.group(1) if inner else m.group(1)
 
@@ -1306,17 +1304,14 @@ class TestWebInterface:
         """Yield (tag, attributes) for every opening tag in a document."""
         return re.findall(r"<([a-zA-Z][a-zA-Z0-9]*)\b([^>]*)>", body)
 
-    def test_every_task_has_a_keyboard_activatable_modal_trigger(self):
-        """On both surfaces that show a clickable task, each task can be opened by
-        a natively activatable control, and nothing that cannot be activated
-        pretends to be one.
-
-        The vendored Bootstrap binds the modal data-api on click alone
-        (tabler.min.js: ge.on(document, On, '[data-bs-toggle="modal"]', ...) with
-        On = 'click...'), so a div or tr carrying role="button" and tabindex="0"
-        took focus, announced a button, and could never be pressed. The fix is
-        markup, not script (SPEC/WEB.md § Roadmap Tasks Page, clickable card;
-        § Sprint Detail Sub-Template)."""
+    def test_every_task_card_is_a_link_to_its_task_page(self):
+        """On both boards every task card is ONE <a> carrying Tabler's card and
+        card-link classes and the href of its own task's page, named
+        `Open details for task #<id>: <title>`, with no tabindex and no role, and
+        nothing that cannot be activated pretends to be a control. Following the
+        href serves that task's page. No script was added for it (SPEC/WEB.md
+        § Roadmap Tasks Page, Clickable card; § Sprint Detail Sub-Template, The
+        card is a link to the task page; Acceptance Criteria 86, 93, and 135)."""
         proc, port = self._start(["--port", "0"])
 
         for path in (
@@ -1324,198 +1319,108 @@ class TestWebInterface:
             f"/roadmaps/{ROADMAP}/sprints/{self.open_sid}",
         ):
             _, _, body = self._req(port, path)
-            tags = self._opening_tags(body)
+            main = re.search(r'<main class="page-body">(.*?)</main>', body, re.S).group(1)
+            tags = self._opening_tags(main)
             assert tags, f"{path}: no markup parsed; the extraction is broken"
 
-            # Each task the page can open has at least one activatable trigger,
-            # whose accessible name identifies the task.
-            activatable_by_task = {}
-            for tag, attrs in tags:
-                if 'data-bs-toggle="modal"' not in attrs:
-                    continue
-                target = re.search(r'data-task-id="(\d+)"', attrs)
-                if not target:
-                    continue
-                task_id = target.group(1)
-                activatable_by_task.setdefault(task_id, False)
-                if tag.lower() not in self.NATIVELY_ACTIVATABLE:
-                    continue
-                if tag.lower() == "button":
-                    assert 'type="button"' in attrs, (
-                        f"{path}: a modal trigger button carries no type=\"button\": {attrs}"
-                    )
-                # The accessible name names the task AND carries its title: a
-                # control whose accessible name omits its visible label fails
-                # WCAG 2.5.3 (Label in Name), and on the sprint page the visible
-                # label of the trigger IS the title. The expectation is composed
-                # from the page's own rendering of that title, so it stays exact
-                # for a title carrying characters the template escapes.
+            cards = [(tag, attrs) for tag, attrs in tags
+                     if re.search(r'class="[^"]*\btask-card\b[^"]*"', attrs)]
+            assert cards, f"{path}: no task card found"
+            for tag, attrs in cards:
+                assert tag.lower() == "a", f"{path}: a task card is a <{tag}>: {attrs}"
+                m = re.match(
+                    rf' class="card card-sm card-link text-reset task-card" href="/roadmaps/{ROADMAP}/tasks/(\d+)"',
+                    attrs,
+                )
+                assert m, f"{path}: a card does not carry the card link classes and its task href: {attrs}"
+                task_id = m.group(1)
                 title = self._rendered_task_title(body, task_id)
                 want = f'aria-label="Open details for task #{task_id}: {title}"'
-                assert want in attrs, (
-                    f"{path}: the trigger of task #{task_id} does not carry {want}: {attrs}"
-                )
-                activatable_by_task[task_id] = True
-
-            assert activatable_by_task, f"{path}: no task modal trigger found"
-            for task_id, activatable in activatable_by_task.items():
-                assert activatable, (
-                    f"{path}: task #{task_id} can be opened by pointer only — no trigger of it "
-                    f"is a button, an anchor with href, or a form control, so Enter and Space "
-                    f"do nothing"
+                assert want in attrs, f"{path}: task #{task_id}'s card lacks {want}: {attrs}"
+                for prop in ("tabindex=", "role=", "data-bs-toggle"):
+                    assert prop not in attrs, f"{path}: task #{task_id}'s card carries {prop}: {attrs}"
+                status, page = self._task_page(port, ROADMAP, task_id)
+                assert status == 200 and f'<div class="page-pretitle">Task #{task_id} ' in page, (
+                    f"{path}: following task #{task_id}'s card does not serve its page"
                 )
 
-            # And no element fakes a button it cannot be.
+            # No nested link inside a card, and nothing fakes a control.
+            for chunk in main.split('<a class="card card-sm card-link text-reset task-card"')[1:]:
+                assert "<a " not in chunk[:chunk.find("</a>")], f"{path}: a card holds a nested link"
             for tag, attrs in tags:
-                if 'role="button"' in attrs and 'tabindex="0"' in attrs:
-                    assert tag.lower() in self.NATIVELY_ACTIVATABLE, (
-                        f"{path}: a <{tag}> carries role=\"button\" with tabindex=\"0\"; it takes "
-                        f"focus and announces a button that cannot be pressed: {attrs}"
-                    )
-                if 'data-bs-toggle="modal"' in attrs:
-                    for prop in ('role="button"', 'tabindex="0"'):
-                        assert prop not in attrs, (
-                            f"{path}: a modal trigger carries {prop}; a real button has it "
-                            f"natively and anything else that needs it cannot be activated: {attrs}"
-                        )
+                assert 'role="button"' not in attrs and "tabindex=" not in attrs, (
+                    f"{path}: a <{tag}> carries a role or a tabindex: {attrs}"
+                )
+            assert "<tr" not in main, f"{path}: a table row remains"
 
-            # The fix added no script: the page still loads the one vendored
-            # bundle, and the policy still forbids inline script.
+            # No script was added: the vendored bundle plus the page's own board
+            # script, all from /static/, under the unchanged policy.
             scripts = re.findall(r"<script\b([^>]*)>", body)
             srcs = {re.search(r'src="([^"]*)"', s).group(1) for s in scripts}
-            want_srcs = {
-                "/static/vendor/tabler/tabler.min.js",
-                "/static/task-modal.js",
-            }
-            if path.endswith("/tasks"):
-                want_srcs.add("/static/task-search.js")
-            assert len(scripts) == len(want_srcs), (
-                f"{path}: loads {len(scripts)} scripts, want {len(want_srcs)}"
+            want_srcs = {"/static/vendor/tabler/tabler.min.js"}
+            want_srcs.add("/static/task-search.js" if path.endswith("/tasks") else "/static/sprint-board.js")
+            assert srcs == want_srcs and len(scripts) == len(want_srcs), (
+                f"{path}: unexpected scripts {srcs!r}"
             )
-            assert srcs == want_srcs, f"{path}: unexpected scripts {srcs!r}"
             _, headers, _ = self._req(port, path)
             assert "script-src 'self'" in headers.get("content-security-policy", ""), (
                 f"{path}: the Content-Security-Policy no longer restricts script to 'self'"
             )
 
-    def test_task_modal_script_writes_values_as_text_only(self):
-        """The script the binary serves writes every value as text.
-
-        Moving the modal's values from html/template to JSON moved the escaping
-        responsibility to the client, so this is the property that replaces the
-        server's auto-escaping on that path: no markup-parsing sink appears in the
-        script the browser actually receives (SPEC/WEB.md § Task Detail Modal,
-        Client-side rendering is text-only; Acceptance Criterion 97)."""
+    def test_task_modal_script_and_task_json_are_gone(self):
+        """The interface has no task modal, no task detail script, and no task
+        JSON: neither board page carries a modal element or a modal toggle, the
+        modal script is not served, and every path below a task page answers 404
+        with no JSON body (SPEC/WEB.md § Routes and Pages, rule 5; Acceptance
+        Criterion 96)."""
         proc, port = self._start(["--port", "0"])
-        status, headers, script = self._req(port, "/static/task-modal.js")
-        assert status == 200, f"the modal script is not served: {status}"
-        assert headers.get("content-type", "").startswith("text/javascript") or (
-            "javascript" in headers.get("content-type", "")
-        ), headers.get("content-type")
+        for path in (f"/roadmaps/{ROADMAP}/tasks", f"/roadmaps/{ROADMAP}/sprints/{self.open_sid}"):
+            _, _, body = self._req(port, path)
+            assert not re.search(r'class="(?:[^"]* )?modal(?: [^"]*)?"', body), f"{path}: a modal element"
+            assert 'data-bs-toggle="modal"' not in body and "task-modal" not in body, f"{path}: modal wiring"
 
-        # Comments are stripped first: the file's header names the sinks it must
-        # never use, and naming them in prose is not using them.
-        code = re.sub(r"/\*.*?\*/", "", script, flags=re.S)
-        code = re.sub(r"^\s*//.*$", "", code, flags=re.M)
+        status, _, _ = self._req(port, "/static/task-modal.js")
+        assert status == 404, f"the modal script is still served: {status}"
+        t1 = self.open_task_ids[0]
+        for suffix in ("/data", "/comments", "/data/extra"):
+            status, headers, body = self._req(port, f"/roadmaps/{ROADMAP}/tasks/{t1}{suffix}")
+            assert status == 404, f"GET .../tasks/{t1}{suffix}: status {status}, want 404"
+            assert "json" not in headers.get("content-type", ""), headers.get("content-type")
+            assert not body.lstrip().startswith("{"), f"GET .../tasks/{t1}{suffix} returned JSON: {body!r}"
 
-        for sink in (
-            "outerHTML", "insertAdjacentHTML", "document.write",
-            "eval(", "new Function", "createContextualFragment", "DOMParser",
-        ):
-            assert sink not in code, f"the modal script uses the markup sink {sink!r}"
-        # The single exception is the server's Markdown renderer's HTML: the five
-        # _html members, inserted whole into a markdown container through ONE
-        # innerHTML assignment, and nothing else ever reaches it (SPEC/WEB.md
-        # § Task Detail Modal, Client-side rendering is text-only; Acceptance
-        # Criterion 97).
-        assert code.count("innerHTML") == 1, (
-            f"the modal script uses innerHTML {code.count('innerHTML')} times, want only "
-            "markdownBlock's insertion of an _html member"
-        )
-        assert "node.innerHTML = renderedHTML;" in code
-        block_args = sorted(re.findall(r"markdownBlock\(([^)]*)\)", code))
-        assert block_args == ["comment.body_html", "renderedHTML", "renderedHTML"], block_args
-        field_args = re.findall(r'markdownField\("[^"]*", ([^)]*)\)', code)
-        assert field_args == [
-            "task.functional_requirements_html",
-            "task.technical_requirements_html",
-            "task.acceptance_criteria_html",
-            "task.completion_summary_html",
-        ], field_args
-        assert code.count("textContent") >= 10, (
-            "the modal script must write its values through textContent"
-        )
-        assert "replaceChildren(" in code, (
-            "the modal script must clear containers structurally, not by assigning markup"
-        )
-
-        # And the policy that makes "no inline script" enforceable is unchanged.
-        _, page_headers, _ = self._req(port, f"/roadmaps/{ROADMAP}/tasks")
-        csp = page_headers.get("content-security-policy", "")
-        assert "script-src 'self'" in csp, csp
-        assert "connect-src 'self'" in csp, csp
-
-    def test_sprint_board_card_is_the_single_pointer_and_keyboard_trigger(self):
-        """The member-tasks board replaced the six-column member-task table: the
-        card itself IS the modal trigger, a real `<button type="button">`, so a
-        pointer click, a touch tap, Enter and Space all reach the SAME target
-        (SPEC/WEB.md § Sprint Detail Sub-Template, rule 3, The card is the
-        trigger, and the trigger is a `<button>`; Acceptance Criterion 135).
-
-        This replaces test_sprint_page_row_stays_clickable_by_pointer, whose
-        markup — a clickable `<tr class="task-row">` plus a separate
-        `task-row__trigger` `<button>` nested in one of its cells — no longer
-        exists by design (the table became a board). What that test actually
-        verified survives here: a member task is reachable by pointer AND by
-        keyboard, and both still open that same task's modal. The property is
-        now witnessed through ONE element instead of two, which is exactly what
-        `data-task-id` appearing exactly ONCE per card proves: the old split
-        trigger carried the id twice — once on the row, once on the button
-        nested inside it — so "exactly once" is the signature that the
-        two-target arrangement is gone, not merely that a card renders at all.
-        """
+    def test_sprint_board_card_is_the_single_pointer_and_keyboard_target(self):
+        """On the sprint page's member-tasks board the card itself IS the link to
+        the task's page — one `<a>` carrying the card and card-link classes — so a
+        pointer click, a touch tap, and Enter all reach the SAME target, and the
+        task's href appears exactly once on the page (SPEC/WEB.md § Sprint Detail
+        Sub-Template, The card is a link to the task page; Acceptance Criterion
+        135)."""
         proc, port = self._start(["--port", "0"])
         _, _, body = self._req(port, f"/roadmaps/{ROADMAP}/sprints/{self.open_sid}")
 
         t1 = self.open_task_ids[0]
-        marker = f'data-task-id="{t1}"'
+        href = f'href="/roadmaps/{ROADMAP}/tasks/{t1}"'
         title = self._rendered_task_title(body, t1)
 
         want = (
-            f'<button type="button" class="card card-sm task-card w-100 p-0 text-start" '
-            f'data-bs-toggle="modal" data-bs-target="#task-modal" {marker} '
+            f'<a class="card card-sm card-link text-reset task-card" {href} '
             f'aria-label="Open details for task #{t1}: {title}">'
         )
         assert want in body, (
-            f"the member task's card must itself be the trigger; opening tag "
+            f"the member task's card must itself be the link; opening tag "
             f"{want!r} not found in the served sprint page"
         )
 
         card = self._sprint_board_card_html(self._sprint_board_region(body), t1)
-        assert "tabindex" not in card, (
-            "a <button> is natively focusable; tabindex on the card would be "
-            "redundant and is exactly what the SPEC forbids on it"
-        )
-        assert 'role="button"' not in card, (
-            'the card already IS a button; role="button" on it would announce '
-            "nothing new and is the pattern this rule forbids on a real button"
-        )
+        assert "tabindex" not in card, "a link is natively focusable; tabindex on the card is redundant"
+        assert not re.search(r"\srole=", card), "a link announces itself; a role on the card is redundant"
 
-        # Exactly one target for this task: the old row+nested-button split
-        # trigger carried data-task-id TWICE for one task (row and button); a
-        # single <button> card carries it once.
-        assert body.count(marker) == 1, (
-            f"task #{t1}'s id appears {body.count(marker)} times on the sprint "
-            f"page, want exactly 1 — more than one means more than one element "
-            f"is wired as that task's modal trigger"
+        # Exactly one target for this task.
+        assert body.count(href) == 1, (
+            f"task #{t1}'s href appears {body.count(href)} times on the sprint page, want exactly 1"
         )
-
-        # No <tr> is a modal trigger on this page, and no row-based markup of
-        # any kind remains.
         assert "<table" not in body, "the sprint page must render no member-tasks table"
-        assert "task-row" not in body, (
-            "no row-based trigger markup (task-row / task-row__trigger) may remain"
-        )
+        assert "task-row" not in body, "no row-based markup may remain"
 
     # ====================================================================
     # Header search: narrowing the board, the URL, and the two paths agreeing
@@ -1527,7 +1432,7 @@ class TestWebInterface:
         """Return every card of a board region as (id, corpus, shown)."""
         cards = []
         for tag in re.findall(
-            r'<button type="button" class="card card-sm task-card[^>]*>', region
+            r'<a class="card card-sm card-link text-reset task-card"[^>]*>', region
         ):
             task_id = re.search(r'data-task-id="(\d+)"', tag)
             corpus = re.search(r'data-search="([^"]*)"', tag)
@@ -1692,10 +1597,10 @@ class TestWebInterface:
 
         assert hostile not in body, "the raw term reached the page"
         assert "<script>alert(1)</script>" not in body, "the term became a script element"
-        assert body.count("<script") == 3, (
-            f"the page has {body.count('<script')} script elements, want 3"
+        assert body.count("<script") == 2, (
+            f"the page has {body.count('<script')} script elements, want 2"
         )
-        assert body.count("</script>") == 3
+        assert body.count("</script>") == 2
 
         # The input echoes it as an attribute value that decodes back exactly.
         m = re.search(r'<input[^>]*data-role="task-search"[^>]*>', body)
@@ -1779,7 +1684,6 @@ class TestWebInterface:
                 for s in re.findall(r"<script\b([^>]*)>", page)}
         assert srcs == {
             "/static/vendor/tabler/tabler.min.js",
-            "/static/task-modal.js",
             "/static/task-search.js",
         }, srcs
 
@@ -2165,7 +2069,7 @@ class TestWebInterface:
         """Return {id: (type, priority, severity)} for every card in a region."""
         dimensions = {}
         for tag in re.findall(
-            r'<button type="button" class="card card-sm task-card[^>]*>', region
+            r'<a class="card card-sm card-link text-reset task-card"[^>]*>', region
         ):
             task_id = re.search(r'data-task-id="(\d+)"', tag)
             task_type = re.search(r'data-type="([^"]*)"', tag)
@@ -2407,7 +2311,7 @@ class TestWebInterface:
         corpus the server wrote into the card."""
         titles = {}
         for tag in re.findall(
-            r'<button type="button" class="card card-sm task-card[^>]*>', region
+            r'<a class="card card-sm card-link text-reset task-card"[^>]*>', region
         ):
             task_id = int(re.search(r'data-task-id="(\d+)"', tag).group(1))
             titles[task_id] = html_lib.unescape(
@@ -2578,7 +2482,6 @@ class TestWebInterface:
                 for s in re.findall(r"<script\b([^>]*)>", page)}
         assert srcs == {
             "/static/vendor/tabler/tabler.min.js",
-            "/static/task-modal.js",
             "/static/task-search.js",
         }, srcs
         assert "style=" not in page, "the filters introduced an inline style attribute"
@@ -2598,8 +2501,8 @@ class TestWebInterface:
         assert status == 200, f"a hostile filter value answered {status}, want 200"
         assert hostile not in body, "a raw filter value reached the page"
         assert "alert(1)" not in body, "a filter value became script content"
-        assert body.count("<script") == 3, (
-            f"the page has {body.count('<script')} script elements, want 3"
+        assert body.count("<script") == 2, (
+            f"the page has {body.count('<script')} script elements, want 2"
         )
         for control_id, _ in self.FILTER_CONTROL_IDS:
             assert self._selected(self._read_select(body, control_id), control_id) == "", (
@@ -3279,27 +3182,27 @@ class TestWebInterface:
     @staticmethod
     def _sprint_board_card_ids(column):
         """Return the task ids of a sprint-board column's cards, in card
-        (= document) order."""
+        (= document) order, read from each card's link to its task page."""
         return [
             int(m) for m in re.findall(
-                r'<button type="button" class="card card-sm task-card[^>]*'
-                r'data-task-id="(\d+)"',
+                r'<a class="card card-sm card-link text-reset task-card" '
+                r'href="/roadmaps/[^"/]+/tasks/(\d+)"',
                 column,
             )
         ]
 
     @staticmethod
     def _sprint_board_card_html(region, task_id):
-        """Return one board card's full markup, from its opening <button> to its
-        closing </button>.
+        """Return one board card's full markup, from its opening <a> to its
+        closing </a>.
 
         Both Kanban boards emit the same card element, so this reads a card of
         either: the sprint's member-tasks board, and the roadmap tasks page's
         board when one is needed as a control.
         """
         m = re.search(
-            rf'<button type="button" class="card card-sm task-card[^>]*'
-            rf'data-task-id="{task_id}"[^>]*>.*?</button>',
+            rf'<a class="card card-sm card-link text-reset task-card" '
+            rf'href="/roadmaps/[^"/]+/tasks/{task_id}"[^>]*>.*?</a>',
             region, re.S,
         )
         assert m, f"no board card found for task #{task_id}"
@@ -3310,8 +3213,7 @@ class TestWebInterface:
         """Return the whole <span> carrying data-role="<role>", children
         included, or None when the markup holds none.
 
-        A card's parts are all <span> elements — a button's content model is
-        phrasing content — and they NEST, so the slice is taken by balancing the
+        A card's parts are all <span> elements, and they NEST, so the slice is taken by balancing the
         tags. Matching the first `</span>` instead would cut a group after its
         first child and make every "the group holds X" assertion pass or fail by
         accident.
@@ -3435,7 +3337,7 @@ class TestWebInterface:
             t_completed: closed,
         }
         for task_id, column in placement.items():
-            marker = f'data-task-id="{task_id}"'
+            marker = f'/tasks/{task_id}"'
             assert region.count(marker) == 1, (
                 f"task #{task_id} appears {region.count(marker)} times on the "
                 f"board, want exactly 1"
@@ -4160,7 +4062,7 @@ class TestWebInterface:
 
         # Every card of the board carries the pair, which is the property the
         # criterion is written for and which no single card can establish.
-        cards = region.count('<button type="button" class="card card-sm task-card')
+        cards = region.count('<a class="card card-sm card-link text-reset task-card"')
         assert cards == 2, f"the board renders {cards} cards, want the 2 seeded"
         for role in ("task-card-counters", "task-card-comments", "task-card-subtasks"):
             assert region.count(f'data-role="{role}"') == cards, (
@@ -4611,13 +4513,26 @@ class TestWebInterface:
         assert ".markdown table" in css and ".markdown pre" in css and "overflow-x: auto" in css, (
             "a wide table or code block does not scroll inside its own box"
         )
-        assert ".sprint-description" not in css and ".task-modal__text" not in css
+        assert ".sprint-description" not in css and ".task-modal__text" not in css and ".modal " not in css
 
-    def test_task_modal_markdown_members(self):
-        """The task detail endpoint carries the renderer's HTML beside every raw
-        Markdown field, the modal inserts only those members, and the CLI never
-        emits them (Acceptance Criteria 180, 183, 188, and 190)."""
-        roadmap = "markdown_modal"
+    @staticmethod
+    def _task_page_card(page, title):
+        """Return one card of a task page, from its card title to the next card
+        title (the Comments card closes the page body's main column)."""
+        start = page.find(f'<h3 class="card-title">{title}')
+        assert start >= 0, f"the task page has no card titled {title!r}"
+        nxt = page.find('<h3 class="card-title">', start + 1)
+        end = page.find("</main>", start) if nxt < 0 else nxt
+        return page[start:end]
+
+    def test_task_page_markdown_fields(self):
+        """The task page carries, inside a markdown container, the renderer's HTML
+        for each of the four Markdown fields and each comment body; a null
+        completion summary shows the em dash and no container; the six fragments
+        share no id; the CLI's output carries no _html member and keeps every
+        timestamp in the canonical format (Acceptance Criteria 180, 183, 188, 190,
+        and 208)."""
+        roadmap = "markdown_task_page"
         self._run(["roadmap", "create", roadmap])
         functional = ("Operators must see the **residual**.\nPer settlement window[^1].\n\n- export\n- compare"
                       "\n\n[^1]: One window per day.")
@@ -4627,7 +4542,8 @@ class TestWebInterface:
             + self.HOSTILE_MARKDOWN,
             "Verified when:\n\n- [x] residual is 0.00\n- [ ] report published[^1]\n\n[^1]: Checked by the operator.",
         )
-        open_task = self.test.create_task(roadmap, "Publish the residual per window", "A", "B", "C")
+        open_task = self.test.create_task(roadmap, "Publish the residual per window",
+                                          "Show the residual", "Read it from the ledger", "It is shown")
         sprint_id = self.test.move_task_to_sprint(roadmap, task_id)
         self._run(["sprint", "start", "-r", roadmap, str(sprint_id)])
         self._run(["task", "stat", "-r", roadmap, str(task_id), "DOING", "--commit-open", "391cff7"])
@@ -4639,53 +4555,65 @@ class TestWebInterface:
             self._run(["task", "comment-add", "-r", roadmap, str(task_id), "--type", "FINDING", "--body", body])
 
         proc, port = self._start(["--port", "0"])
-        status, detail = self._task_detail(port, roadmap, task_id)
+        status, page = self._task_page(port, roadmap, task_id)
         assert status == 200
-        assert set(detail) == {"task", "comments"}
-        task = detail["task"]
+
+        functional_card = self._task_page_card(page, "Functional requirements")
+        technical_card = self._task_page_card(page, "Technical requirements")
+        criteria_card = self._task_page_card(page, "Acceptance criteria")
+        summary_card = self._task_page_card(page, "Completion summary")
+        comments_card = self._task_page_card(page, "Comments")
+        for label, card in (("functional", functional_card), ("technical", technical_card),
+                            ("criteria", criteria_card), ("summary", summary_card)):
+            assert card.count('<div class="markdown">') == 1, f"the {label} card has no single markdown container"
+        assert "<strong>residual</strong>" in functional_card and "<br>" in functional_card
+        assert "<code>!time.Now().Before(exp)</code>" in technical_card
+        self._assert_no_raw_html("technical requirements", technical_card)
+        assert '<input checked="" disabled="" type="checkbox">' in criteria_card
+        assert ('<a href="https://example.org/runbook" target="_blank" rel="noopener noreferrer">'
+                in summary_card)
+        assert comments_card.count('<div class="markdown">') == 2
+        assert "<p>Found the <strong>drift</strong>" in comments_card
+        self._assert_no_raw_html("comment body", comments_card)
+        assert "**" not in functional_card, "literal asterisks are displayed"
+
+        # Footnote identifiers of the six fragments never collide on the page.
+        fn_ids = [i for i in re.findall(r'\sid="([^"]*)"', page) if "fn" in i]
+        assert len(fn_ids) == len(set(fn_ids)) and len(fn_ids) >= 12, fn_ids
+        assert all(i.startswith(f"task-{task_id}-") or i.startswith("task-comment-") for i in fn_ids), fn_ids
+        all_ids = re.findall(r'\sid="([^"]*)"', page)
+        assert len(all_ids) == len(set(all_ids)), "two elements of the task page share an id"
+        for target in re.findall(r'\shref="#([^"]*)"', page):
+            assert f' id="{target}"' in page, f"fragment #{target} does not resolve on the page"
+
+        # A null completion summary keeps its card, with the em dash alone.
+        _, other = self._task_page(port, roadmap, open_task)
+        other_summary = self._task_page_card(other, "Completion summary")
+        assert 'class="markdown"' not in other_summary and "\u2014" in other_summary, other_summary
+
+        # The CLI is unchanged: no _html member, and canonical timestamps
+        # (Acceptance Criterion 208).
         cli_task = json.loads(self._run(["task", "get", "-r", roadmap, str(task_id)])[1])
         cli_task = cli_task[0] if isinstance(cli_task, list) else cli_task
-        for key, value in cli_task.items():
-            assert task[key] == value, f"the raw field {key} differs from `rmp task get`"
         assert not [k for k in cli_task if k.endswith("_html")], "the CLI's task carries an _html member"
         cli_comments = json.loads(self._run(["task", "comment-list", "-r", roadmap, str(task_id)])[1])
         assert not [k for c in cli_comments for k in c if k.endswith("_html")], (
             "the CLI's comments carry an _html member"
         )
+        canonical = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$")
+        for field in ("created_at", "started_at", "tested_at", "closed_at"):
+            value = cli_task[field]
+            assert canonical.match(value), f"`rmp task get` publishes {field}={value!r}, not the canonical format"
+            display = value[:10] + " " + value[11:19]
+            assert f'<time datetime="{value}">{display}</time>' in page, (
+                f"the task page does not display {field} as {display} with the stored value in datetime"
+            )
 
-        members = ["functional_requirements_html", "technical_requirements_html",
-                   "acceptance_criteria_html", "completion_summary_html"]
-        assert [k for k in task if k.endswith("_html")] == members, "the _html members are not in note 9's order"
-        assert "<strong>residual</strong>" in task["functional_requirements_html"]
-        assert "<br>" in task["functional_requirements_html"]
-        assert "<code>!time.Now().Before(exp)</code>" in task["technical_requirements_html"]
-        self._assert_no_raw_html("technical_requirements_html", task["technical_requirements_html"])
-        assert '<input checked="" disabled="" type="checkbox">' in task["acceptance_criteria_html"]
-        assert ('<a href="https://example.org/runbook" target="_blank" rel="noopener noreferrer">'
-                in task["completion_summary_html"])
-        assert detail["comments"][0]["body_html"].startswith("<p>Found the <strong>drift</strong>")
-        self._assert_no_raw_html("body_html", detail["comments"][1]["body_html"])
-
-        # Footnote identifiers of the six fragments the modal shows never collide.
-        ids = []
-        for fragment in [task[m] for m in members] + [c["body_html"] for c in detail["comments"]]:
-            ids += re.findall(r'\sid="([^"]*)"', fragment)
-            for target in re.findall(r'\shref="#([^"]*)"', fragment):
-                assert f' id="{target}"' in fragment, f"fragment #{target} does not resolve in its own field"
-        assert len(ids) == len(set(ids)) and len(ids) >= 12, ids
-        assert all(i.startswith(f"task-{task_id}-") or i.startswith("task-comment-") for i in ids), ids
-
-        _, other = self._task_detail(port, roadmap, open_task)
-        assert other["task"]["completion_summary"] is None
-        assert other["task"]["completion_summary_html"] is None
-
-        _, _, script = self._req(port, "/static/task-modal.js")
-        assert 'el("div", "markdown")' in script, "the modal does not use the markdown container"
+        # The board pages carry none of the free text, and the title stays text.
         _, _, tasks_page = self._req(port, f"/roadmaps/{roadmap}/tasks")
-        assert functional not in tasks_page and "<strong>residual</strong>" not in tasks_page, (
-            "the task free-text must not travel in the page; the modal fetches it"
-        )
+        assert "<strong>residual</strong>" not in tasks_page, "the task free-text reached the board page"
         assert "Remove the **one-cent** drift" in tasks_page, "the task title is not plain text"
+        assert '<h2 class="page-title">Remove the **one-cent** drift</h2>' in page
 
     def test_markdown_server_path_omits_raw_html_and_dangerous_links(self):
         """On the server-rendered path, a sprint description and a sprint comment
@@ -4720,12 +4648,22 @@ class TestWebInterface:
             "```go\nfunc Residual() int { return 0 }\n```\n\n```\nplain block\n```\n\n"
             "![pixel](data:image/png;base64,iVBORw0KGgo=) [board](/roadmaps/%s/tasks)" % roadmap,
             title="Highlight the runbook")
+        hl_task = self.test.create_task(
+            roadmap, "Highlight the settlement runbook",
+            "```go\nfunc Residual() int { return 0 }\n```", "Read the residual from the ledger",
+            "The residual renders highlighted",
+        )
         proc, port = self._start(["--port", "0"])
         status, headers, css = self._req(port, "/static/highlight.css")
         assert status == 200 and headers.get("content-type", "").startswith("text/css")
         assert ".chroma" in css and "@media" not in css and "data-bs-theme" not in css
         link = '<link rel="stylesheet" href="/static/highlight.css">'
-        for path in (f"/roadmaps/{roadmap}", f"/roadmaps/{roadmap}/tasks", f"/roadmaps/{roadmap}/sprints/{sprint_id}"):
+        # The tasks page renders no Markdown field and does not link the
+        # stylesheet (Acceptance Criterion 182).
+        _, _, board_page = self._req(port, f"/roadmaps/{roadmap}/tasks")
+        assert "/static/highlight.css" not in board_page, "the tasks page links highlight.css"
+        for path in (f"/roadmaps/{roadmap}", f"/roadmaps/{roadmap}/sprints/{sprint_id}",
+                     f"/roadmaps/{roadmap}/tasks/{hl_task}"):
             _, page_headers, page = self._req(port, path)
             assert page.count(link) == 1, f"{path} does not link the highlighting stylesheet once"
             assert page_headers.get("content-security-policy") == (
@@ -4739,6 +4677,10 @@ class TestWebInterface:
         assert '<pre class="chroma">' in page and '<span class="kd">func</span>' in page
         assert "<pre><code>plain block\n</code></pre>" in page, "an undeclared block is not left unhighlighted"
         assert '<img src="data:image/png;base64,iVBORw0KGgo=" alt="pixel">' in page
+        _, _, task_page = self._req(port, f"/roadmaps/{roadmap}/tasks/{hl_task}")
+        assert '<pre class="chroma">' in task_page and '<span class="kd">func</span>' in task_page, (
+            "the task page does not highlight a fenced code block"
+        )
 
     def test_graph_detail_panel_preserves_line_breaks(self):
         """The knowledge-graph detail panel preserves authored line breaks in the
@@ -4765,77 +4707,245 @@ class TestWebInterface:
         )
 
     # ====================================================================
-    # AC15: read-only task detail modal — wiring, content, no edit control
+    # AC15, AC94 to AC99, AC221 to AC226: the roadmap task page
     # ====================================================================
 
-    def test_task_modal_wiring_and_content(self):
+    def test_task_page_wiring_and_content(self):
+        """Following a card on either board navigates to the task's own page,
+        which carries every field of the task in the HTML the server sends and
+        contains no form, no edit control, and no submit (Acceptance Criteria 15
+        and 94). The board pages carry none of a task's long text."""
         proc, port = self._start(["--port", "0"])
         t1 = self.open_task_ids[0]
-        # Both pages that show clickable tasks carry ONE modal shell and wire every
-        # trigger to it by task id; the content comes from the task detail
-        # endpoint when the user opens a task. The sprints landing page renders
-        # compact sprint cards only and opens no task detail modal (SPEC/WEB.md
-        # § Task Detail Modal, § Task Detail Endpoint; Acceptance Criteria
-        # 8/15/38/96).
+        href = f'href="/roadmaps/{ROADMAP}/tasks/{t1}"'
         for path in (
             f"/roadmaps/{ROADMAP}/tasks",
             f"/roadmaps/{ROADMAP}/sprints/{self.open_sid}",
         ):
             _, _, body = self._req(port, path)
-            assert 'data-bs-toggle="modal"' in body, f"{path}: no modal-toggling control"
-            assert 'data-bs-target="#task-modal"' in body, (
-                f"{path}: no trigger pointing at the modal shell"
-            )
-            assert f'data-task-id="{t1}"' in body, f"{path}: missing the trigger for task #{t1}"
-
-            # Exactly one modal element, and no per-task modal.
-            assert body.count('id="task-modal"') == 1, (
-                f"{path}: carries {body.count('id=\"task-modal\"')} modal shells, want 1"
-            )
-            assert not re.search(r'id="task-modal-\d+"', body), (
-                f"{path}: still renders a per-task modal"
-            )
-            # No task's modal content travels in the document.
-            for absent in (
-                "Functional requirements",
-                "Technical requirements",
-                "Acceptance criteria",
-                "end users must authenticate without a stored password",
-            ):
-                assert absent.lower() not in body.lower(), (
-                    f"{path}: carries the modal content {absent!r}; it must be fetched on demand"
-                )
-            # Read-only: no form and no submit. The tasks page carries exactly one
-            # input, the header search box; the sprint page carries none.
+            assert href in body, f"{path}: no card links to task #{t1}'s page"
+            for absent in ("Functional requirements", "Technical requirements", "Acceptance criteria",
+                           "end users must authenticate without a stored password"):
+                assert absent.lower() not in body.lower(), f"{path}: carries the task text {absent!r}"
             low = body.lower()
-            assert "<form" not in low, f"{path}: modal page must contain no form"
-            assert 'type="submit"' not in low, f"{path}: modal page must contain no submit"
+            assert "<form" not in low and 'type="submit"' not in low, f"{path}: a form or a submit"
             want_inputs = 1 if path.endswith("/tasks") else 0
             assert low.count("<input") == want_inputs, (
                 f"{path}: carries {low.count('<input')} inputs, want {want_inputs}"
             )
 
-        # And the shell is filled from the endpoint, which carries every field the
-        # modal presents.
-        status, detail = self._task_detail(port, ROADMAP, t1)
-        assert status == 200, f"the task detail endpoint answered {status}"
-        for field in (
-            "id", "title", "status", "type", "priority", "severity",
-            "functional_requirements", "technical_requirements", "acceptance_criteria",
-            "completion_summary", "parent_task_id", "subtask_count",
-            "depends_on", "blocks", "created_at", "started_at", "tested_at", "closed_at",
-        ):
-            assert field in detail["task"], f"the task detail carries no {field!r}"
-        # The specialists field was removed from the task entity (rmp task
-        # #246); the web task-detail endpoint must not carry it either.
-        assert "specialists" not in detail["task"], detail["task"]
-        assert "end users must authenticate without a stored password" in (
-            detail["task"]["functional_requirements"].lower()
+        status, headers, page = self._req(port, f"/roadmaps/{ROADMAP}/tasks/{t1}")
+        assert status == 200 and headers.get("content-type", "").startswith("text/html")
+        cli = json.loads(self._run(["task", "get", "-r", ROADMAP, str(t1)])[1])
+        cli = cli[0] if isinstance(cli, list) else cli
+        assert f'<div class="page-pretitle">Task #{t1} <span class="badge ' in page
+        assert f">{cli['status']}</span></div>" in page, "the header does not state the task's status"
+        assert f'<h2 class="page-title">{self._go_escaped(cli["title"])}</h2>' in page
+        for label in ("Type", "Severity", "Priority", "Parent task", "Subtasks", "Depends on", "Blocks",
+                      "Created", "Started", "Tested", "Closed", "Commit open", "Commit close"):
+            assert f'<div class="datagrid-title">{label}</div>' in page, f"the Details card lacks {label}"
+        for title in ("Functional requirements", "Technical requirements", "Acceptance criteria",
+                      "Completion summary", "Comments"):
+            assert f'<h3 class="card-title">{title}' in page, f"the task page lacks the {title} card"
+        assert f'<div class="datagrid-content">{cli["type"]}</div>' in page
+        assert f'<time datetime="{cli["created_at"]}">' in page
+        assert "end users must authenticate without a stored password" in page.lower()
+        assert "specialists" not in page.lower(), "the removed specialists field reached the task page"
+        main = page[page.index('<main class="page-body">'):page.index("</main>")].lower()
+        for bad in ("<form", 'type="submit"', "<button", "<textarea", "<select", "<input"):
+            assert bad not in main, f"the task page is read-only but carries {bad!r}"
+        # The page loads no script of its own (Acceptance Criterion 98).
+        scripts = re.findall(r"<script\b([^>]*)>", page)
+        assert scripts == [' src="/static/vendor/tabler/tabler.min.js"'], scripts
+        assert not re.search(r"\son[a-z]+=", page, re.I), "the task page carries an inline event handler"
+
+        # HEAD answers 200 with the GET's headers and no body.
+        head_status, head_headers, head_body = self._req(port, f"/roadmaps/{ROADMAP}/tasks/{t1}", method="HEAD")
+        assert head_status == 200 and head_body == "", (head_status, head_body[:80])
+        for h in ("content-type", "cache-control", "content-security-policy"):
+            assert head_headers.get(h) == headers.get(h), f"HEAD {h} differs from the GET"
+
+    def test_task_page_header_sprint_card_and_details(self):
+        """The task page header, its way back, its Sprint card, and its Details
+        card, for a task in a sprint, a task in no sprint, and after
+        `rmp sprint add-tasks` (Acceptance Criteria 221 to 224)."""
+        roadmap = "payments"
+        self._run(["roadmap", "create", roadmap])
+        mk = lambda title, fr="Card payments settle in the reconciliation window", \
+            tr="Read the ledger through the settlement API", ac="The residual is zero": \
+            self.test.create_task(roadmap, title, fr, tr, ac)
+        parent = mk("Harden the payment gateway key management")
+        dep_a = mk("Inventory the signing keys in use")
+        dep_b = mk("Publish the key rotation runbook")
+        key = json.loads(self._run([
+            "task", "create", "-r", roadmap, "-t", "Rotate the signing keys",
+            "-fr", "Rotate the **signing keys** every 90 days", "-tr", "Use the kms rotation API",
+            "-ac", "Verified when:\n\n- [x] new key active", "-p", "7", "--severity", "2", "--parent", str(parent),
+        ])[1])["id"]
+        blocked = mk("Revoke the retired signing keys")
+        loose = mk("Document the refund reversal flow")
+        members = [mk(f"Reconcile settlement batch {i}") for i in range(1, 9)]
+        self._run(["task", "add-dep", "-r", roadmap, str(key), str(dep_a)])
+        self._run(["task", "add-dep", "-r", roadmap, str(key), str(dep_b)])
+        self._run(["task", "add-dep", "-r", roadmap, str(blocked), str(key)])
+        sprint = self.test.create_sprint(roadmap, "Harden the payment platform before the audit",
+                                         title="Payments hardening")
+        order = members[:2] + [key] + members[2:]
+        self._run(["sprint", "add-tasks", "-r", roadmap, str(sprint), ",".join(map(str, order))])
+        self._run(["sprint", "start", "-r", roadmap, str(sprint)])
+        for done in members[:4]:
+            self._run(["task", "stat", "-r", roadmap, str(done), "DOING", "--commit-open", "24262f0"])
+            self._run(["task", "stat", "-r", roadmap, str(done), "TESTING"])
+            self._run(["task", "stat", "-r", roadmap, str(done), "COMPLETED", "--commit-close", "2578d18",
+                       "--summary", "Settled."])
+        self._run(["task", "stat", "-r", roadmap, str(key), "DOING", "--commit-open", "5f93b51"])
+
+        proc, port = self._start(["--port", "0"])
+        status, page = self._task_page(port, roadmap, key)
+        assert status == 200
+
+        # AC221: the header, the active view, and the way back.
+        assert (f'<div class="page-pretitle">Task #{key} <span class="badge bg-blue-lt">DOING</span></div>'
+                in page), "the pretitle is not Task #<id> followed by the DOING badge"
+        assert '<h2 class="page-title">Rotate the signing keys</h2>' in page
+        assert (f'<a class="nav-link" href="/roadmaps/{roadmap}/tasks" aria-current="page">' in page
+                and page.count('aria-current="page"') == 1), "the sidebar's Tasks entry is not the active one"
+        header = page[page.index('<div class="page-header d-print-none">'):page.index('<main class="page-body">')]
+        actions = header[header.index('<div class="col-12 col-sm-auto ms-auto d-print-none">'):]
+        assert actions.count("<a ") == 1 and f'href="/roadmaps/{roadmap}/tasks">' in actions, actions
+        assert "Back to tasks</a>" in actions
+        assert "/sprints/" not in header and "/graph" not in header and "?" not in header
+
+        # AC222: the Sprint card of a task in a sprint.
+        card = self._task_page_card(page, "Sprint</h3>")
+        for want in (f'href="/roadmaps/{roadmap}/sprints/{sprint}"', f">Sprint #{sprint} Payments hardening</a>",
+                     '<span class="badge bg-blue-lt">OPEN</span>', ">Position 3 of 9</div>",
+                     ">4 of 9 tasks completed</div>",
+                     '<progress class="progress progress-sm" value="4" max="9" aria-label="Sprint progress"></progress>'):
+            assert want in card, f"the Sprint card lacks {want!r}: {card}"
+        assert "style=" not in card
+        _, first = self._task_page(port, roadmap, order[0])
+        assert ">Position 1 of 9</div>" in first
+        _, last = self._task_page(port, roadmap, order[-1])
+        assert ">Position 9 of 9</div>" in last
+
+        # AC224: the Details card.
+        details = page[page.index('data-role="task-details-card"'):page.index('<div class="col-12 col-lg-8">')]
+        assert '<div class="datagrid-content">TASK</div>' in details
+        assert re.search(r'<div class="datagrid-title">Priority</div>\s*<div class="datagrid-content">'
+                         r'<span class="badge bg-[a-z]+-lt">7</span></div>', details)
+        assert re.search(r'<div class="datagrid-title">Severity</div>\s*<div class="datagrid-content">'
+                         r'<span class="badge bg-[a-z]+-lt">2</span></div>', details)
+        assert f'<a href="/roadmaps/{roadmap}/tasks/{parent}">#{parent}</a>' in details
+        assert (f'<a href="/roadmaps/{roadmap}/tasks/{dep_a}">#{dep_a}</a>'
+                f'<a href="/roadmaps/{roadmap}/tasks/{dep_b}">#{dep_b}</a>') in details
+        assert f'<a href="/roadmaps/{roadmap}/tasks/{blocked}">#{blocked}</a>' in details
+        assert '<div class="datagrid-content font-monospace text-break">5f93b51</div>' in details
+        assert "text-truncate" not in details, "a Details value is truncated"
+        # Severity precedes Priority (Acceptance Criterion 224).
+        labels = re.findall(r'<div class="datagrid-title">([^<]+)</div>', details)
+        assert labels == ["Type", "Severity", "Priority", "Parent task", "Subtasks", "Depends on", "Blocks",
+                          "Created", "Started", "Tested", "Closed", "Commit open", "Commit close"], labels
+        assert '<div class="datagrid task-details-grid">' in details
+
+        # AC173: the document title leads with the task.
+        title = re.search(r"<title>(.*?)</title>", page).group(1)
+        assert re.fullmatch(rf"#{key} Rotate the signing keys - {roadmap}( - .+)?", title), title
+
+        # AC230: the sprint page's actions column wraps like the task page's.
+        _, _, sprint_page = self._req(port, f"/roadmaps/{roadmap}/sprints/{sprint}")
+        assert '<div class="col-12 col-sm-auto ms-auto d-print-none">' in sprint_page
+        _, _, board = self._req(port, f"/roadmaps/{roadmap}/tasks")
+        assert '<div class="col-auto ms-auto d-print-none">' in board
+
+        # AC231: both Comments cards state their order, with or without comments.
+        for record in (page, sprint_page):
+            header_ = record[record.index('<h3 class="card-title">Comments'):]
+            header_ = header_[:header_.index('<div class="card-body">')]
+            assert header_.count('<div class="card-actions text-secondary">Oldest first</div>') == 1, header_
+        assert ">P7<" not in details and ">S2<" not in details
+        for ref in re.findall(r'<a href="(/roadmaps/[^"]+)">#\d+</a>', details):
+            assert self._req(port, ref)[0] == 200, f"the reference {ref} does not serve a task page"
+
+        # AC223: a task in no sprint, then moved into one.
+        _, loose_page = self._task_page(port, roadmap, loose)
+        loose_card = self._task_page_card(loose_page, "Sprint</h3>")
+        assert "In the backlog: this task belongs to no sprint." in loose_card
+        for gone in ("<a ", "badge", "Position", "<progress"):
+            assert gone not in loose_card, f"the backlog Sprint card carries {gone!r}"
+        self._run(["sprint", "add-tasks", "-r", roadmap, str(sprint), str(loose)])
+        _, moved = self._task_page(port, roadmap, loose)
+        moved_card = self._task_page_card(moved, "Sprint</h3>")
+        assert ">Position 10 of 10</div>" in moved_card and ">4 of 10 tasks completed</div>" in moved_card
+
+        # AC225: the layout, in the served markup.
+        body = moved[moved.index('<main class="page-body">'):]
+        order_marks = ['<div class="col-12 col-lg-4 order-lg-last">', 'data-role="task-sprint-card"',
+                       'data-role="task-details-card"', '<div class="col-12 col-lg-8">',
+                       ">Functional requirements</h3>", ">Technical requirements</h3>",
+                       ">Acceptance criteria</h3>", ">Completion summary</h3>", 'data-role="task-comments-card"']
+        positions = [body.index(m) for m in order_marks]
+        assert positions == sorted(positions), "the task page's cards are out of order"
+
+        # AC226: serving the task pages wrote no audit entry.
+        before = json.loads(self._run(["audit", "list", "-r", roadmap, "-l", "500"])[1])
+        for task_id in (key, loose, parent):
+            self._task_page(port, roadmap, task_id)
+        after = json.loads(self._run(["audit", "list", "-r", roadmap, "-l", "500"])[1])
+        assert len(after) == len(before), "serving the task pages wrote an audit entry"
+
+    def test_task_page_path_discipline_and_escaping(self):
+        """404 for an invalid or unknown roadmap, a non-integer id, and a task of
+        another roadmap; 405 for any non-read method; no-store on every response,
+        the 404 included; a hostile title renders as visible characters in the
+        header and the document title (Acceptance Criteria 95 and 97)."""
+        self._run(["roadmap", "create", "endpoint_other"])
+        other_task = self.test.create_task(
+            "endpoint_other", "Rotate the acquirer API credentials",
+            "Credentials must rotate quarterly", "Rotate through the secret manager",
+            "The old credential stops authenticating",
         )
+        hostile = 'Reject "quoted" <b>bold</b> & O\'Brien'
+        hostile_id = self.test.create_task(
+            ROADMAP, hostile, "Block <script>alert('fr')</script> inputs", "<img src=x onerror=alert(1)>",
+            "The page shows the text",
+        )
+        proc, port = self._start(["--port", "0"])
+        t1 = self.open_task_ids[0]
+        ok, headers, _ = self._req(port, f"/roadmaps/{ROADMAP}/tasks/{t1}")
+        assert ok == 200 and headers.get("cache-control") == "no-store"
+
+        for path in (
+            "/roadmaps/INVALID/tasks/1",
+            "/roadmaps/..%2fetc/tasks/1",
+            "/roadmaps/no_such_roadmap/tasks/1",
+            f"/roadmaps/{ROADMAP}/tasks/not-a-number",
+            f"/roadmaps/{ROADMAP}/tasks/999999",
+            f"/roadmaps/{ROADMAP}/tasks/{other_task}"
+            if other_task not in self.open_task_ids and other_task != hostile_id else
+            f"/roadmaps/{ROADMAP}/tasks/999998",
+            f"/roadmaps/{ROADMAP}/tasks/{t1}/data",
+        ):
+            status, h, _ = self._req(port, path)
+            assert status == 404, f"GET {path} answered {status}, want 404"
+            assert h.get("cache-control") == "no-store", f"GET {path}: {h.get('cache-control')}"
+        for method in ("POST", "PUT", "PATCH", "DELETE"):
+            status, _, _ = self._req(port, f"/roadmaps/{ROADMAP}/tasks/{t1}", method=method)
+            assert status == 405, f"{method} answered {status}, want 405"
+
+        _, page = self._task_page(port, ROADMAP, hostile_id)
+        escaped = self._go_escaped(hostile)
+        assert f'<h2 class="page-title">{escaped}</h2>' in page, "the hostile title is not escaped in the header"
+        title = re.search(r"<title>(.*?)</title>", page).group(1)
+        assert "<b>" not in title and title.startswith(f"#{hostile_id} {escaped} - {ROADMAP}"), title
+        main = page[page.index('<main class="page-body">'):page.index("</main>")]
+        for raw in ("<b>bold</b>", "<script", "<img", "onerror"):
+            assert raw not in main, f"{raw!r} reached the task page as markup"
+        assert page.count("<script") == 1
 
     # ====================================================================
-    # Comment log: the task detail modal timeline and the sprint Comments card
-    # (SPEC/WEB.md § Task Detail Modal, comments timeline; § Sprint Detail
+    # Comment log: the task page's Comments card and the sprint Comments card
+    # (SPEC/WEB.md § Roadmap Task Page, Comments card; § Sprint Detail
     # Sub-Template, Comments card)
     # ====================================================================
 
@@ -4845,8 +4955,8 @@ class TestWebInterface:
         The bodies belong to this module's authentication domain, so the
         rendered page reads like the project it models. One task comment is
         edited, which is what makes the "edited" stamp reachable; the second
-        member task is deliberately left without comments so the modal empty
-        state is reachable on the same page.
+        member task is deliberately left without comments so the task page's
+        empty state is reachable.
         """
         t1, t2 = self.open_task_ids
         bodies = {
@@ -4893,12 +5003,7 @@ class TestWebInterface:
 
     @staticmethod
     def _slice_sprint_comments_card(html):
-        """Return the sprint's own Comments card, up to the end of its timeline.
-
-        The card precedes the page's task modals, so bounding it on its own
-        first </ul> keeps a member task's comment log out of the slice — which
-        is what lets the card be tested for the sprint's comments alone.
-        """
+        """Return the sprint's own Comments card, up to the end of its timeline."""
         start = html.find('<h3 class="card-title">Comments')
         assert start != -1, "the sprint page carries no Comments card"
         end = html.find("</ul>", start)
@@ -4914,107 +5019,56 @@ class TestWebInterface:
     def _timeline_types(timeline):
         return re.findall(r'<span class="badge bg-secondary-lt">(\w+)</span>', timeline)
 
-    def test_task_detail_endpoint_serves_the_comment_log(self):
-        """The log the modal shows travels through the task detail endpoint, in
-        the order the CLI reports and complete (SPEC/WEB.md § Task Detail
-        Endpoint; Acceptance Criterion 94)."""
+    def test_task_page_serves_the_comment_log(self):
+        """The task page's Comments card shows the task's log, last in the main
+        column after the Completion summary card, complete and in the order the
+        CLI reports, with its count in the header badge and the edited entry
+        marked (Acceptance Criteria 64 and 65)."""
         self._seed_comments()
         proc, port = self._start(["--port", "0"])
 
-        status, detail = self._task_detail(port, ROADMAP, self.commented_task)
-        assert status == 200, f"the task detail endpoint answered {status}"
-        assert set(detail) == {"task", "comments"}, f"unexpected members {set(detail)!r}"
-        assert detail["task"]["id"] == self.commented_task
-
-        # Complete, and in the order `rmp task comment-list` returns.
-        cli_log = json.loads(
-            self._run(["task", "comment-list", "-r", ROADMAP,
-                       str(self.commented_task)])[1]
-        )
-        assert [c["type"] for c in detail["comments"]] == [c["type"] for c in cli_log]
-        assert [c["body"] for c in detail["comments"]] == [c["body"] for c in cli_log]
-        created = [c["created_at"] for c in detail["comments"]]
-        assert created == sorted(created), f"the log is not oldest first: {created}"
-
-        # Exactly one entry was edited, and only that one carries updated_at.
-        edited = [c for c in detail["comments"] if c.get("updated_at")]
-        assert len(edited) == 1, f"{len(edited)} entries carry updated_at, want 1"
-
-        # The page carries none of it: the modal is filled on demand.
-        _, _, body = self._req(port, f"/roadmaps/{ROADMAP}/tasks")
-        for comment in detail["comments"]:
-            assert comment["body"] not in body, (
-                "a comment body reached the served page; the modal is filled from the endpoint"
-            )
-        assert '<ul class="timeline">' not in body, (
-            "the tasks page renders no timeline: the modal builds it from the endpoint"
-        )
-
-    def test_task_detail_endpoint_without_comments_returns_an_empty_array(self):
-        """A task with no comment yields [], never null, so the script renders
-        its empty-state message (Acceptance Criterion 94)."""
-        self._seed_comments()
-        proc, port = self._start(["--port", "0"])
-
-        status, detail = self._task_detail(port, ROADMAP, self.uncommented_task)
+        status, page = self._task_page(port, ROADMAP, self.commented_task)
         assert status == 200
-        assert detail["comments"] == [], f"want an empty array, got {detail['comments']!r}"
+        assert page.index(">Completion summary</h3>") < page.index('data-role="task-comments-card"')
+        card = page[page.index('data-role="task-comments-card"'):page.index("</main>")]
+        assert '<h3 class="card-title">Comments <span class="badge bg-secondary-lt ms-2">3</span></h3>' in card
 
-        # The message itself lives in the script, which renders the empty state.
-        _, _, script = self._req(port, "/static/task-modal.js")
-        assert "No comments have been recorded on this task yet." in script
-
-        # The commented task, on the same server, does carry its log: the empty
-        # array above is a fact about that task, not about the endpoint.
-        _, populated = self._task_detail(port, ROADMAP, self.commented_task)
-        assert len(populated["comments"]) == 3
-
-    def test_task_detail_endpoint_rejects_unknown_names_ids_and_methods(self):
-        """The endpoint enforces the roadmap-route discipline: 404 for an invalid
-        or unknown roadmap, a non-integer id and a task of another roadmap; 405
-        for any non-read method; and no-store on its response (Acceptance
-        Criterion 95)."""
-        self._seed_comments()
-        self._run(["roadmap", "create", "endpoint_other"])
-        other_task = self.test.create_task(
-            "endpoint_other",
-            "Rotate the acquirer API credentials",
-            "Credentials must rotate quarterly",
-            "Rotate through the secret manager",
-            "The old credential stops authenticating",
+        cli_log = json.loads(
+            self._run(["task", "comment-list", "-r", ROADMAP, str(self.commented_task)])[1]
         )
+        assert self._timeline_types(self._timeline(card)) == [c["type"] for c in cli_log]
+        positions = [card.find(self._markdown_text(c["body"])[:40]) for c in cli_log]
+        assert all(p >= 0 for p in positions) and positions == sorted(positions), (
+            f"the log is not complete and oldest first: {positions}"
+        )
+        assert card.count(">edited <time datetime=") == 1, "exactly one entry must carry the edited stamp"
+        for c in cli_log:
+            assert f'<time datetime="{c["created_at"]}">' in card, "a comment's created_at is missing"
+
+        # The board pages carry none of it.
+        _, _, board = self._req(port, f"/roadmaps/{ROADMAP}/tasks")
+        for c in cli_log:
+            assert self._markdown_text(c["body"])[:40] not in board, "a comment body reached the board"
+        assert '<ul class="timeline">' not in board, "the tasks page renders no timeline"
+
+    def test_task_page_without_comments_shows_the_empty_state(self):
+        """The page of a task with no comments keeps its Comments card, with a
+        zero badge and a clear empty-state message in place of the timeline
+        (Acceptance Criterion 67)."""
+        self._seed_comments()
         proc, port = self._start(["--port", "0"])
 
-        ok, headers, _ = self._req(port, f"/roadmaps/{ROADMAP}/tasks/{self.commented_task}/data")
-        assert ok == 200
-        assert headers.get("cache-control") == "no-store", headers.get("cache-control")
-
-        for path in (
-            "/roadmaps/INVALID/tasks/1/data",
-            "/roadmaps/..%2fetc/tasks/1/data",
-            "/roadmaps/no_such_roadmap/tasks/1/data",
-            f"/roadmaps/{ROADMAP}/tasks/not-a-number/data",
-            f"/roadmaps/{ROADMAP}/tasks/999999/data",
-            # A task of ANOTHER roadmap is not reachable through this one.
-            f"/roadmaps/{ROADMAP}/tasks/{other_task}/data"
-            if other_task not in self.open_task_ids else
-            f"/roadmaps/{ROADMAP}/tasks/999998/data",
-            # The bare page path is not a route.
-            f"/roadmaps/{ROADMAP}/tasks/{self.commented_task}",
-        ):
-            status, _, _ = self._req(port, path)
-            assert status == 404, f"GET {path} answered {status}, want 404"
-
-        path = f"/roadmaps/{ROADMAP}/tasks/{self.commented_task}/data"
-        for method in ("POST", "PUT", "PATCH", "DELETE"):
-            status, _, _ = self._req(port, path, method=method)
-            assert status == 405, f"{method} {path} answered {status}, want 405"
+        status, page = self._task_page(port, ROADMAP, self.uncommented_task)
+        assert status == 200
+        card = page[page.index('data-role="task-comments-card"'):page.index("</main>")]
+        assert '<span class="badge bg-secondary-lt ms-2">0</span>' in card
+        assert "Nothing has been recorded on this task yet." in card
+        assert '<ul class="timeline">' not in card
 
     def test_sprint_page_comments_card_shows_only_the_sprints_own_comments(self):
         """The Comments card is the SPRINT's log, counted in its own badge.
 
-        A member task's comments appear on the same page, inside that task's
-        modal, so the card is sliced out and checked on its own.
+        A member task's comments appear on that task's own page, never here.
         """
         self._seed_comments()
         proc, port = self._start(["--port", "0"])
@@ -5040,14 +5094,11 @@ class TestWebInterface:
                 "a member task's comment leaked into the sprint's Comments card"
             )
 
-        # The member task's own log is still reachable — from its own detail
-        # endpoint, which is where the modal now gets it — and it is the task's
-        # log, not the sprint's.
-        _, detail = self._task_detail(port, ROADMAP, self.commented_task)
-        assert self.comment_bodies["FINDING"] in [c["body"] for c in detail["comments"]]
-        assert self.sprint_comment_body not in [c["body"] for c in detail["comments"]], (
-            "a sprint comment leaked into a task's detail"
-        )
+        # The member task's own log is on its own page, and it is the task's log,
+        # not the sprint's.
+        _, task_page = self._task_page(port, ROADMAP, self.commented_task)
+        assert self._markdown_text(self.comment_bodies["FINDING"])[:50] in task_page
+        assert self.sprint_comment_body[:50] not in task_page, "a sprint comment leaked into a task's page"
 
     def test_sprint_page_comments_card_empty_state(self):
         """A sprint with no comments shows the Tabler empty panel and a zero badge."""
@@ -5079,7 +5130,7 @@ class TestWebInterface:
         assert '<ul class="timeline">' not in body
         assert '<li class="timeline-event">' not in body
         assert '<h3 class="card-title">Comments' not in body
-        assert "No comments have been recorded on this task yet." not in body
+        assert "Nothing has been recorded on this task yet." not in body
         for task_body in self.comment_bodies.values():
             assert task_body[:50] not in body
         assert self.sprint_comment_body[:50] not in body
@@ -6754,10 +6805,20 @@ class TestWebInterface:
         _, _, graph_body = self._req(port, f"/roadmaps/{ROADMAP}/graph")
         assert 'id="layout-select"' in self._page_header(f"/roadmaps/{ROADMAP}/graph", graph_body)
 
+        # The two record pages' actions column is full width below sm, so it
+        # wraps below a long title; the other pages keep col-auto (Acceptance
+        # Criteria 78 and 230).
+        for path in (f"/roadmaps/{ROADMAP}/sprints/{self.open_sid}", f"/roadmaps/{ROADMAP}/tasks/{self.open_task_ids[0]}"):
+            _, _, body = self._req(port, path)
+            assert '<div class="col-12 col-sm-auto ms-auto d-print-none">' in self._page_header(path, body), path
+        for path in (f"/roadmaps/{ROADMAP}/tasks", f"/roadmaps/{ROADMAP}/graph"):
+            _, _, body = self._req(port, path)
+            assert '<div class="col-auto ms-auto d-print-none">' in self._page_header(path, body), path
+
         for path in ("/", f"/roadmaps/{ROADMAP}", f"/roadmaps/{ROADMAP}/audit"):
             _, _, body = self._req(port, path)
             header = self._page_header(path, body)
-            assert "col-auto ms-auto" not in header, (
+            assert "ms-auto" not in header, (
                 f"page {path}: header carries an actions column; it should have none; header={header!r}"
             )
 
@@ -6945,11 +7006,19 @@ class TestWebInterface:
                     f"{path}: the accessible name decodes to {html_lib.unescape(label)!r}"
                 )
 
-            # And the markup kept its shape: the page carries exactly one modal
-            # shell, not fragments produced by a broken attribute.
-            assert body.count('id="task-modal"') == 1, (
+            # And the markup kept its shape: the task's card link is one element
+            # carrying its href once, not fragments produced by a broken attribute.
+            assert body.count(f'href="/roadmaps/escaping_demo/tasks/{task_id}"') == 1, (
                 f"{path}: the hostile title broke the markup"
             )
+
+        # The task's own page shows the title as visible characters too, in the
+        # header and in the document title (Acceptance Criterion 97).
+        _, _, page = self._req(port, f"/roadmaps/escaping_demo/tasks/{task_id}")
+        assert hostile not in page and "<b>bold</b>" not in page, "the task page renders the title as markup"
+        assert f'<h2 class="page-title">{self._go_escaped(hostile)}</h2>' in page, (
+            "the task page header does not show the escaped title"
+        )
 
     # ====================================================================
     # AC24: graceful shutdown on SIGINT / SIGTERM
@@ -7725,7 +7794,8 @@ class TestWebInterface:
             ("GET", "/favicon.ico", 404),
             ("GET", "/no/such/page", 404),
             ("GET", f"/roadmaps/{ROADMAP}/sprints/999999", 404),
-            ("GET", f"/roadmaps/{ROADMAP}/tasks/999999/data", 404),
+            ("GET", f"/roadmaps/{ROADMAP}/tasks/999999", 404),
+            ("GET", f"/roadmaps/{ROADMAP}/tasks/1/data", 404),
             ("POST", f"/roadmaps/{ROADMAP}", 405),
             ("DELETE", "/", 405),
         ]

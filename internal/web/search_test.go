@@ -122,7 +122,7 @@ func (c clientControls) active() bool {
 }
 
 var (
-	reSearchCardTag   = regexp.MustCompile(`<button type="button" class="card card-sm task-card[^>]*>`)
+	reSearchCardTag   = regexp.MustCompile(`<a class="card card-sm card-link text-reset task-card"[^>]*>`)
 	reSearchCardID    = regexp.MustCompile(`data-task-id="(\d+)"`)
 	reSearchCorpus    = regexp.MustCompile(`data-search="([^"]*)"`)
 	reSearchCardType  = regexp.MustCompile(`data-type="([^"]*)"`)
@@ -461,15 +461,15 @@ func TestTaskSearch_NarrowsTheBoardAndItsCounts(t *testing.T) {
 	// The control that keeps the absence above from being vacuous: the term really
 	// is in the seeded functional_requirements, and really is in no title. Without
 	// it, a term the fixture never wrote anywhere would pass the same assertion.
-	detail := decodeTaskDetail(t, mux, f.name, f.passkey)
-	if !strings.Contains(detail.Task.FunctionalRequirements, requirementsOnlyTerm) {
+	detail := storedTask(t, f.name, f.passkey)
+	if !strings.Contains(detail.FunctionalRequirements, requirementsOnlyTerm) {
 		t.Fatalf("the seeded functional_requirements %q does not contain %q, so asserting the "+
 			"search ignores the field proves nothing",
-			detail.Task.FunctionalRequirements, requirementsOnlyTerm)
+			detail.FunctionalRequirements, requirementsOnlyTerm)
 	}
-	if strings.Contains(strings.ToLower(detail.Task.Title), strings.ToLower(requirementsOnlyTerm)) {
+	if strings.Contains(strings.ToLower(detail.Title), strings.ToLower(requirementsOnlyTerm)) {
 		t.Fatalf("the seeded title %q contains %q, so the term is not exclusive to "+
-			"functional_requirements", detail.Task.Title, requirementsOnlyTerm)
+			"functional_requirements", detail.Title, requirementsOnlyTerm)
 	}
 }
 
@@ -786,13 +786,14 @@ func TestTaskSearch_TermIsEscapedWhereverItIsEchoed(t *testing.T) {
 			t.Errorf("the raw term reached the page: found %q", raw)
 		}
 	}
-	// The page's script elements are exactly the three it loads: a term that
-	// became markup would raise either count.
-	if got := strings.Count(body, "<script"); got != 3 {
-		t.Errorf("the page has %d <script elements, want 3", got)
+	// The page's script elements are exactly the two it loads — the vendored
+	// framework and the narrowing script: a term that became markup would raise
+	// either count.
+	if got := strings.Count(body, "<script"); got != 2 {
+		t.Errorf("the page has %d <script elements, want 2", got)
 	}
-	if got := strings.Count(body, "</script>"); got != 3 {
-		t.Errorf("the page has %d </script> closers, want 3", got)
+	if got := strings.Count(body, "</script>"); got != 2 {
+		t.Errorf("the page has %d </script> closers, want 2", got)
 	}
 
 	// The input echoes the term as an attribute VALUE that decodes back to exactly
@@ -987,8 +988,8 @@ func TestTaskSearch_AddsNoInlineScriptAndKeepsThePolicy(t *testing.T) {
 
 	body := rec.Body.String()
 	scripts := regexp.MustCompile(`<script\b([^>]*)>`).FindAllStringSubmatch(body, -1)
-	if len(scripts) != 3 {
-		t.Errorf("the page loads %d scripts, want 3", len(scripts))
+	if len(scripts) != 2 {
+		t.Errorf("the page loads %d scripts, want 2", len(scripts))
 	}
 	found := false
 	for _, script := range scripts {

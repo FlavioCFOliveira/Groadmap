@@ -498,8 +498,8 @@ version is written. The risk analysis and required mitigations are in
   description — through one server-side Markdown renderer built on the compiled-in
   goldmark and chroma modules (see `BUILD.md § Markdown Rendering Rules`). That
   renderer's output is the only HTML the package inserts into a page without
-  escaping, on the server-rendered pages and through the task detail endpoint's
-  `_html` members alike (see `WEB.md § Markdown Rendering`).
+  escaping, and only the server-rendered pages insert it (see
+  `WEB.md § Markdown Rendering`).
 - Serves server-rendered HTML produced from `html/template`, presented in the
   vendored Tabler admin-shell layout (dark theme), plus the vendored Tabler CSS
   and JavaScript framework, the Inter font and the Tabler Icons webfont, client

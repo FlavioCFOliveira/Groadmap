@@ -216,8 +216,7 @@ func TestBoardCards_EveryTaskTypeRendersItsVariant(t *testing.T) {
 
 // TestBoardCards_TypeMappingReachesNoOtherSurface is the exclusion clause of
 // Acceptance Criterion 177: outside the board cards, no badge on either page reads
-// a task type, so the type filter's options and the modal shell carry no type
-// badge, and the type filter still offers the ten values as plain options.
+// a task type, so the type filter's options carry no type badge, and the type filter still offers the ten values as plain options.
 func TestBoardCards_TypeMappingReachesNoOtherSurface(t *testing.T) {
 	t.Setenv("HOME", shortHome(t))
 	f := seedReferenceLineFixture(t, "merchant-settlement")

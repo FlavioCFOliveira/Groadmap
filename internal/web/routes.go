@@ -52,7 +52,7 @@ func (f noDirFS) Open(name string) (fs.File, error) {
 // assets under /static/... are excluded and remain cacheable (SPEC/WEB.md
 // § Cache Policy). Setting it here — the outermost layer that runs on every
 // response, including the fallback handler's data-state-dependent 404/405/500 —
-// covers all dynamic pages, the JSON data endpoint, and those error responses
+// covers all dynamic pages, the graph data endpoint, and those error responses
 // in one place. It is deliberately NOT duplicated in renderHTML/renderJSON, so
 // the no-store guarantee has exactly one source of truth and cannot diverge.
 func securityHeaders(next http.Handler) http.Handler {
@@ -113,16 +113,15 @@ func buildMux() *http.ServeMux {
 	mux.HandleFunc("GET /roadmaps/{name}/tasks", handleTasks)
 	mux.HandleFunc("HEAD /roadmaps/{name}/tasks", handleTasks)
 
-	// Task detail endpoint: the JSON one task's detail modal is filled from,
-	// fetched when the user opens that task. The /data suffix is what marks a
-	// path as a JSON payload rather than an HTML page, exactly as the graph's
-	// own data endpoint does, which keeps the bare {collection}/{id} shape
-	// reserved for the HTML-page idiom /roadmaps/{name}/sprints/{id} uses:
-	// /roadmaps/{name}/tasks/{id} is deliberately NOT a route and falls through
-	// to the 404 handler. {id} is parsed and validated inside the handler
-	// (SPEC/WEB.md § Task Detail Endpoint).
-	mux.HandleFunc("GET /roadmaps/{name}/tasks/{id}/data", handleTaskData)
-	mux.HandleFunc("HEAD /roadmaps/{name}/tasks/{id}/data", handleTaskData)
+	// Roadmap task page: one task's fields, its comments, and its sprint context,
+	// rendered on the server. {id} is parsed and validated inside the handler; a
+	// non-integer id, or an id that is not a task of the roadmap, is a 404. No
+	// route lies below this path: /roadmaps/{name}/tasks/{id}/data and every
+	// other longer path match no pattern and fall through to the 404 handler
+	// (SPEC/WEB.md § Roadmap Task Page; § Routes and Pages, path-parameter rules
+	// 4 and 5).
+	mux.HandleFunc("GET /roadmaps/{name}/tasks/{id}", handleTask)
+	mux.HandleFunc("HEAD /roadmaps/{name}/tasks/{id}", handleTask)
 
 	// Roadmap audit log page: the full audit log, paginated. A distinct, more
 	// specific pattern than /roadmaps/{name}; Go 1.22+ ServeMux routes the

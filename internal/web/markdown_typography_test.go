@@ -480,12 +480,13 @@ func TestMarkdownTypography_EmphasisAndInterItalic(t *testing.T) {
 // TestMarkdownTypography_SprintPageLineLength is Acceptance Criterion 202
 // outside the browser: exactly one rule sets max-width: 80ch, and the markup its
 // selector relies on holds — the sprint description and comment bodies sit in
-// the page body, a sprint card's container sits in a .card-link, and the task
-// detail modal, whose containers carry .markdown only once filled, is a .modal
-// outside the page body.
+// the page body and outside any .card-link and any .task-page, a sprint card's
+// container sits in a .card-link, and every container of the task page — the
+// four Markdown fields and every comment body — sits in the .task-page row, so
+// none carries the limit and each spans its card's body.
 func TestMarkdownTypography_SprintPageLineLength(t *testing.T) {
 	sheet := servedProjectSheet(t)
-	const selector = ".page-body .markdown:not(.card-link .markdown):not(.modal .markdown)"
+	const selector = ".page-body .markdown:not(.card-link .markdown):not(.task-page .markdown)"
 	if got := cssRulesDeclaring(sheet, "max-width"); !containsAll(got, selector) {
 		t.Fatalf("no rule %q sets a max-width; rules: %q", selector, got)
 	}
@@ -506,11 +507,16 @@ func TestMarkdownTypography_SprintPageLineLength(t *testing.T) {
 		strings.Count(sprint, `<div class="markdown`) != want {
 		t.Errorf("%d Markdown containers in the sprint page body, want the description and %d comments, all of them there", got, len(f.sprintCommentIDs))
 	}
-	if strings.Contains(inside, "card-link") || strings.Contains(inside, `class="modal`) {
-		t.Error("the sprint page body holds a card link or the modal, which the selector excludes")
+	// The sprint page's board cards are card links, but hold no Markdown container:
+	// every container of the page is outside a card link and outside a task-page
+	// row, so the selector matches each of them.
+	for _, card := range strings.Split(inside, cardOpen)[1:] {
+		if end := strings.Index(card, "</a>"); end >= 0 && strings.Contains(card[:end], "markdown") {
+			t.Error("a board card of the sprint page holds a Markdown container")
+		}
 	}
-	if !strings.Contains(sprint[closing:], `<div class="modal modal-blur fade" id="task-modal"`) {
-		t.Error("the task detail modal is not a .modal outside the sprint page body")
+	if strings.Contains(inside, "task-page") {
+		t.Error("the sprint page body holds a task-page row, which the selector excludes")
 	}
 
 	sprints := servePage(t, mux, "/roadmaps/"+f.name)
@@ -522,8 +528,20 @@ func TestMarkdownTypography_SprintPageLineLength(t *testing.T) {
 	if total := strings.Count(sprints, `<div class="markdown`); total == 0 || total != inCards {
 		t.Errorf("%d Markdown containers on the sprints page, %d of them in a .card-link", total, inCards)
 	}
-	if !strings.Contains(readEmbeddedAsset(t, "static/task-modal.js"), `el("div", "markdown")`) {
-		t.Error("the modal no longer builds its Markdown containers inside the modal")
+
+	// The task page: every Markdown container sits inside the one task-page row of
+	// the page body, directly in its card's body, with nothing between them that
+	// could narrow it.
+	task := servePage(t, mux, "/roadmaps/"+f.name+"/tasks/"+itoa(f.taskID))
+	row := task[strings.Index(task, `<div class="row row-cards task-page">`):strings.Index(task, "</main>")]
+	if got, want := strings.Count(row, `<div class="markdown">`), 4+len(f.taskCommentIDs); got != want ||
+		strings.Count(task, `<div class="markdown`) != want {
+		t.Errorf("%d Markdown containers in the task page's task-page row, want the 4 fields and %d comments, all of them there",
+			got, len(f.taskCommentIDs))
+	}
+	fieldBodies := regexp.MustCompile(`<div class="card-body">\s*<div class="markdown">`).FindAllString(row, -1)
+	if len(fieldBodies) != 4 {
+		t.Errorf("%d field containers sit directly in their card's body, want 4", len(fieldBodies))
 	}
 }
 

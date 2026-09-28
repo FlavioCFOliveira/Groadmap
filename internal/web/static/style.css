@@ -39,27 +39,71 @@
   font-size: 2.5rem;
 }
 
-/* ---- The card that opens the read-only task detail modal ----
+/* ---- The board card: a link to the task's own page ----
    Both boards render it — the roadmap tasks page's Kanban board and the sprint
-   page's member-tasks board — and on both the card IS the trigger and is a real
-   <button>. Tabler/Bootstrap own the modal; this only signals the element is
-   interactive (SPEC/WEB.md § Task Detail Modal, § Responsive and Mobile-First
-   Design).
+   page's member-tasks board — and on both the card IS the link, an <a> carrying
+   Tabler's card and card-link classes (SPEC/WEB.md § Roadmap Tasks Page, Clickable
+   card; § Sprint Detail Sub-Template, The card is a link to the task page).
 
-   `cursor` is inherited, but a browser user-agent stylesheet may set its own
-   cursor on a button, so the card names it here rather than relying on
-   inheritance.
-
-   The rules for `.task-row` and `.task-row__trigger` were removed with the
-   sprint page's member-tasks table: a <tr> is not activatable and could hold no
-   control wrapping the whole row, so that presentation needed two targets for one
-   task — the row for the pointer and a button in one cell for the keyboard. The
-   card needs one, and it is the card. */
-.task-card { cursor: pointer; }
-
-/* The keyboard-focus affordance, on the element that actually takes focus and can
-   be activated: the card button itself. */
+   The keyboard-focus affordance, on the element that takes focus: the card link
+   itself. The vendored card-link gives a focused card no indicator of its own, so
+   this rule sets one on the card's :focus-visible state (WCAG 2.2 Success
+   Criterion 2.4.7, Focus Visible; Acceptance Criterion 93). */
 .task-card:focus-visible { outline: 2px solid var(--tblr-primary, #4299e1); outline-offset: -2px; }
+
+/* ---- Keyboard focus on the header back links and the sidebar links
+   (SPEC/WEB.md § UI Framework, rule 21) ----
+   The vendored focus ring of a button and of a nav-link is a translucent
+   primary outline, which on the dark theme does not reach the 3:1 contrast WCAG
+   2.2 Success Criterion 1.4.11 asks of a state indicator. These rules replace it,
+   on the :focus-visible state only, with a solid 2px light-grey outline, which
+   stands at well over 3:1 against the dark page, sidebar, and
+   button backgrounds. A pointer focus does not match :focus-visible and shows
+   none. The colour is one fixed light grey, #dce1e7: the interface has the dark
+   theme only (UI Framework, rule 2), so no light-theme variant is needed.
+   The selectors outrank the vendored `.btn:focus-visible` and
+   `.nav-link:focus-visible`, so no !important is needed. */
+.page-header a.btn:focus-visible,
+.navbar-vertical .nav-link:focus-visible {
+  outline: 2px solid #dce1e7;
+  outline-offset: 2px;
+}
+
+/* The vendored `.btn:focus-visible` also paints a focused button in its hover
+   colours, a light fill against which no single outline colour reaches 3:1 while
+   also reaching 3:1 against the dark page around it. A keyboard-focused back
+   link therefore keeps its resting colours, and the outline alone marks the
+   focus; hovering still shows the hover colours. The rule points the three
+   hover custom properties the vendored focus rule reads at the resting ones,
+   rather than declaring a colour on the link itself. */
+.page-header a.btn:focus-visible {
+  --tblr-btn-hover-color: var(--tblr-btn-color);
+  --tblr-btn-hover-bg: var(--tblr-btn-bg);
+  --tblr-btn-hover-border-color: var(--tblr-btn-border-color);
+}
+
+/* ---- The task page's Details datagrid (SPEC/WEB.md § Roadmap Task Page,
+   Details card) ----
+   The vendored datagrid fits as many 15rem columns as the width admits, which
+   makes the grid wider than the col-lg-4 side column between 992px and about
+   1055px and scrolls the page sideways. The card fixes its own count instead:
+   two equal columns while the page is one stacked column, below lg, and one
+   column in the side column from lg up. minmax(0, 1fr) and min-width: 0 let a
+   column shrink below its content, so a commit hash wraps (text-break) rather
+   than widening it. */
+.task-details-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.task-details-grid > .datagrid-item {
+  min-width: 0;
+}
+
+@media (min-width: 992px) {
+  .task-details-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
 
 /* ---- The floor every bounded region reads (SPEC/WEB.md § Full-Height Page
    Regions, rule 5; § Sprint Detail Sub-Template, Height and scrolling) ----
@@ -587,7 +631,7 @@
    Overflow. The content wraps within its container, a long word or URL breaks
    rather than overflowing, and a table or a code block wider than its
    container scrolls horizontally inside its own box, so rendered Markdown
-   never makes the page, the modal, or a card scroll sideways. min-width: 0 lets
+   never makes the page or a card scroll sideways. min-width: 0 lets
    the container shrink inside a flex item (the timeline card of a comment),
    whose automatic minimum size would otherwise be its widest content. A table
    is made a block so that it can carry its own horizontal scroll; its rows and
@@ -633,7 +677,7 @@
 
 /* Lists. The markers and margins depend only on lists inside the container,
    never on an enclosing element: a comment body sits inside the
-   <ul class="timeline"> of the modal and of the sprint page, where the
+   <ul class="timeline"> of the task page and of the sprint page, where the
    reboot's nested-list rules and the user agent's nested-list markers would
    otherwise treat its top-level list as a nested one. */
 .markdown ul {
@@ -745,8 +789,10 @@
 /* Line length: on the roadmap sprint page, the sprint description and every
    sprint comment body hold at most about 80 characters a line. The selector
    matches the .markdown containers in the page body, and excludes the sprint
-   card (a .card-link) of the sprints page and the task detail modal. */
-.page-body .markdown:not(.card-link .markdown):not(.modal .markdown) {
+   card (a .card-link) of the sprints page and every container of the roadmap
+   task page (.task-page), whose containers span the full width of their card's
+   body (SPEC/WEB.md § Markdown Rendering, rule 13). */
+.page-body .markdown:not(.card-link .markdown):not(.task-page .markdown) {
   max-width: 80ch;
 }
 

@@ -1030,8 +1030,8 @@ func TestTaskFilters_AddNoDatabaseQueryAndEchoNoValue(t *testing.T) {
 	if strings.Contains(body, hostile) || strings.Contains(body, "alert(1)") {
 		t.Errorf("a filter value reached the page")
 	}
-	if got := strings.Count(body, "<script"); got != 3 {
-		t.Errorf("the page carries %d script elements, want the 3 it loads", got)
+	if got := strings.Count(body, "<script"); got != 2 {
+		t.Errorf("the page carries %d script elements, want the 2 it loads", got)
 	}
 	// The policy is untouched by the filters.
 	if got := rec.Header().Get("Content-Security-Policy"); got != contentSecurityPolicy {

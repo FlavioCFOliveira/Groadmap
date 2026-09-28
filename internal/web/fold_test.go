@@ -156,9 +156,8 @@ func TestTaskSearchScript_ShippedRuleIsTheServerRule(t *testing.T) {
 	})
 
 	// AC 119, the absence: the served script calls no case conversion of the
-	// platform at all. Asserted on the RAW asset, comments included, the way
-	// Acceptance Criterion 97 asserts the modal script's markup sinks — a
-	// comment that still named one would mean the file had drifted back.
+	// platform at all. Asserted on the RAW asset, comments included — a comment
+	// that still named one would mean the file had drifted back.
 	for _, conversion := range []string{"toLowerCase", "toLocaleLowerCase"} {
 		if strings.Contains(script, conversion) {
 			t.Errorf("the served script names %s; the client must fold the term with the "+
@@ -755,9 +754,8 @@ func foldRunsCoverage(runs []foldRun) int {
 var foldTableNumber = regexp.MustCompile(`-?\d+`)
 
 // scriptFoldTable extracts `var FOLD_TABLE = [ start, length, delta, ... ];` from
-// the served script, the way scriptArrayTable extracts the badge tables from the
-// modal script: the table is read out of the asset the binary ships, so what is
-// checked is what a browser would run.
+// the served script: the table is read out of the asset the binary ships, so what
+// is checked is what a browser would run.
 func scriptFoldTable(t *testing.T, script string) []foldRun {
 	t.Helper()
 

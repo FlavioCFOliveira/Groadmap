@@ -8,16 +8,17 @@ import "strconv"
 // which of the two produced it (SPEC/WEB.md § Roadmap Audit Log Page, "the two
 // nullable columns are always rendered").
 //
-// It is the same placeholder the task detail modal writes, where it is the
-// ABSENT constant of static/task-modal.js.
-// TestAuditCell_MirrorsTheTaskModalPresentation reads that file and fails if the
-// two ever disagree, so the audit table and the modal cannot drift into two
-// conventions for saying "there is nothing here".
+// It is the same placeholder the Details card of the Roadmap Task Page shows for
+// an absent value, because that card renders its absent values through
+// absentAuditCell, its absent commit hashes included (taskCommitHashCell). The audit
+// table and the task page therefore cannot drift into two conventions for saying
+// "there is nothing here"; TestAuditCell_MirrorsTheTaskPagePresentation reads the
+// served task page and fails if they ever do.
 const absentPlaceholder = "—"
 
-// The Tabler class sets an audit cell carries. Both come from the task detail
-// modal's commitItem, which presents the task's own commit hashes
-// (static/task-modal.js); they are reused here rather than chosen again.
+// The Tabler class sets an audit cell carries. The Details card of the Roadmap
+// Task Page shares the absent class and the monospaced face, and wraps a hash
+// instead of truncating it (taskHashClass).
 //
 //   - auditHashClass presents a commit hash: monospaced, because a hash is read
 //     character by character when it is compared against a repository, and
@@ -34,6 +35,12 @@ const absentPlaceholder = "—"
 const (
 	auditHashClass   = "font-monospace text-truncate"
 	auditAbsentClass = "text-secondary"
+	// taskHashClass presents a task's own commit hash on the Details card of the
+	// Roadmap Task Page: monospaced like the audit column, but shown whole and
+	// wrapping inside its datagrid column rather than truncated, because the
+	// card's column is narrow and a hash is read character by character
+	// (SPEC/WEB.md § Roadmap Task Page, A commit hash is shown whole).
+	taskHashClass = "font-monospace text-break"
 )
 
 // auditCell is one rendered cell of a nullable audit-log column: the text the
@@ -79,15 +86,13 @@ func auditRelatedEntityCell(id *int) auditCell {
 	return auditCell{Text: strconv.Itoa(*id)}
 }
 
-// auditCommitHashCell renders an audit entry's commit_hash verbatim, or the
-// absent placeholder on the operations that carry none.
+// auditCommitHashCell renders a stored commit hash verbatim, or the absent
+// placeholder where none is stored: an audit entry's commit_hash.
 //
-// The empty string counts as absent. The modal's commitItem makes the same call
-// — its `if (value)` is false for an empty string as much as for null — and here
-// it is also defence in depth: the schema requires 7 to 64 hexadecimal
-// characters, so an empty hash cannot be stored, and were one to arrive anyway a
-// monospaced empty cell would read as the rendering fault the placeholder exists
-// to rule out.
+// The empty string counts as absent, as defence in depth: the schema requires 7
+// to 64 hexadecimal characters, so an empty hash cannot be stored, and were one to
+// arrive anyway a monospaced empty cell would read as the rendering fault the
+// placeholder exists to rule out.
 func auditCommitHashCell(hash *string) auditCell {
 	if hash == nil || *hash == "" {
 		return absentAuditCell()
@@ -95,12 +100,24 @@ func auditCommitHashCell(hash *string) auditCell {
 	return auditCell{Text: *hash, Class: auditHashClass}
 }
 
-// auditFuncMap exposes the audit-cell helpers to the page templates. The
-// template calls them rather than writing the placeholder and the classes into
-// the markup, so the presence rule and the presentation it selects have one
+// taskCommitHashCell renders a task's commit_open or commit_close on the Details
+// card of the Roadmap Task Page: the stored hash whole, in the wrapping
+// monospaced class, or the same absent cell the audit table shows.
+func taskCommitHashCell(hash *string) auditCell {
+	if hash == nil || *hash == "" {
+		return absentAuditCell()
+	}
+	return auditCell{Text: *hash, Class: taskHashClass}
+}
+
+// auditFuncMap exposes the audit-cell helpers to the page templates: the audit
+// log page and the Details card of the Roadmap Task Page. The templates call them
+// rather than writing the placeholder and the classes into the markup, so the presence rule and the presentation it selects have one
 // source and stay verifiable in one place — the same reason the badge colour
 // helpers exist (see badge.go).
 var auditFuncMap = map[string]any{
 	"auditRelatedEntityCell": auditRelatedEntityCell,
 	"auditCommitHashCell":    auditCommitHashCell,
+	"absentCell":             absentAuditCell,
+	"taskCommitHashCell":     taskCommitHashCell,
 }

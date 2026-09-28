@@ -13,10 +13,11 @@ import (
 //
 // The test renders every HTML page route the server serves — the roadmap index,
 // the roadmap sprints landing page, the roadmap tasks page, a roadmap sprint
-// detail page, the roadmap audit log page, and the knowledge-graph page — and
+// detail page, a roadmap task page, the roadmap audit log page, and the
+// knowledge-graph page — and
 // asserts the rendered HTML contains no `style="` substring. Because the shared
 // partials (the admin-shell sidebar/topnavbar/head, the sprint-card partial,
-// the sprint-detail sub-template, and the per-task detail modal) are composed
+// the sprint-detail sub-template, and the comment timeline) are composed
 // into these pages, asserting the property on the fully rendered output covers
 // the partials as well.
 //
@@ -37,6 +38,7 @@ func TestPages_NoInlineStyleAttribute(t *testing.T) {
 		"/roadmaps/" + name,
 		"/roadmaps/" + name + "/tasks",
 		"/roadmaps/" + name + "/sprints/1",
+		"/roadmaps/" + name + "/tasks/1",
 		"/roadmaps/" + name + "/audit",
 		"/roadmaps/" + name + "/graph",
 	}

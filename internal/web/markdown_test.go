@@ -548,10 +548,15 @@ func TestHighlightCSS_OneStylesheetServedAndLinked(t *testing.T) {
 	}
 
 	link := `<link rel="stylesheet" href="/static/highlight.css">`
+	// The tasks page renders no Markdown field and does not link it (Acceptance
+	// Criterion 182).
+	if strings.Contains(servePage(t, mux, "/roadmaps/"+f.name+"/tasks"), "/static/highlight.css") {
+		t.Error("the tasks page links highlight.css, but it renders no Markdown field")
+	}
 	for _, path := range []string{
 		"/roadmaps/" + f.name,
-		"/roadmaps/" + f.name + "/tasks",
 		"/roadmaps/" + f.name + "/sprints/" + itoa(f.openSprintID),
+		"/roadmaps/" + f.name + "/tasks/" + itoa(f.taskID),
 	} {
 		body := servePage(t, mux, path)
 		if got := strings.Count(body, link); got != 1 {
@@ -799,123 +804,93 @@ func assertUniqueIDs(t *testing.T, label, doc string) {
 	}
 }
 
-// TestMarkdownSurfaces_TaskDetailEndpoint is Acceptance Criteria 180 (modal
-// fields), 183 (JSON path), 188, and 190 (modal): the endpoint carries each
-// field's rendering beside the unchanged raw field, and the six fragments the
-// modal shows share no id.
-func TestMarkdownSurfaces_TaskDetailEndpoint(t *testing.T) {
+// TestMarkdownSurfaces_TaskPage is Acceptance Criteria 180 (task page fields),
+// 188, and 190 (task page): the task page carries each Markdown field's rendering
+// and each comment body's rendering inside a markdown container, and the six
+// fragments it shows share no id with each other or with anything else on the
+// page.
+func TestMarkdownSurfaces_TaskPage(t *testing.T) {
 	t.Setenv("HOME", shortHome(t))
 	f := seedMarkdownFixture(t, "settlement-runbook")
 	mux := buildMux()
 
-	view := decodeTaskDetail(t, mux, f.name, f.taskID)
-	task := view.Task
-	members := map[string]string{
-		"functional_requirements": task.FunctionalRequirementsHTML,
-		"technical_requirements":  task.TechnicalRequirementsHTML,
-		"acceptance_criteria":     task.AcceptanceCriteriaHTML,
-		"completion_summary":      derefString(task.CompletionSummaryHTML),
+	body := servePage(t, mux, "/roadmaps/"+f.name+"/tasks/"+itoa(f.taskID))
+	fields := map[string]string{
+		"functional_requirements": "Functional requirements",
+		"technical_requirements":  "Technical requirements",
+		"acceptance_criteria":     "Acceptance criteria",
+		"completion_summary":      "Completion summary",
 	}
-	allIDs := make([]string, 0, 2*(len(members)+len(f.taskCommentIDs)))
-	for field, got := range members {
+	for field, title := range fields {
 		prefix := taskFieldIDPrefix(f.taskID, field)
-		if want := mdForm(t, taskFieldMarkdown, prefix, markdownInteractive); got != want {
-			t.Errorf("%s_html is not the renderer's output for the field:\n%s\nwant\n%s", field, got, want)
+		want := mdForm(t, taskFieldMarkdown, prefix, markdownInteractive)
+		if card := fieldCardSlice(t, body, title); !strings.Contains(card, `<div class="markdown">`+want+`</div>`) {
+			t.Errorf("the %s card does not carry the renderer's output for the field", title)
 		}
-		if !strings.Contains(got, "<strong>ledger</strong>") || !strings.Contains(got, "<br>") {
-			t.Errorf("%s_html is not rendered Markdown: %s", field, got)
+		if !strings.Contains(want, "<strong>ledger</strong>") || !strings.Contains(want, "<br>") {
+			t.Errorf("%s is not rendered Markdown: %s", field, want)
 		}
-		assertNoAuthorMarkup(t, field+"_html", got)
-		allIDs = append(allIDs, assertFootnotesSelfContained(t, prefix, got)...)
+		assertNoAuthorMarkup(t, field, want)
+		assertFootnotesSelfContained(t, prefix, want)
 	}
-	if len(view.Comments) != len(f.taskCommentIDs) {
-		t.Fatalf("%d comments, want %d", len(view.Comments), len(f.taskCommentIDs))
-	}
-	for i := range view.Comments {
-		c := view.Comments[i]
-		prefix := taskCommentIDPrefix(c.ID)
-		if want := mdForm(t, taskCommentMarkdown, prefix, markdownInteractive); c.BodyHTML != want {
-			t.Errorf("comment %d: body_html is not the renderer's output", c.ID)
+	comments := taskCommentsCardSlice(t, body)
+	for _, id := range f.taskCommentIDs {
+		prefix := taskCommentIDPrefix(id)
+		want := mdForm(t, taskCommentMarkdown, prefix, markdownInteractive)
+		if !strings.Contains(comments, `<div class="markdown">`+want+`</div>`) {
+			t.Errorf("comment %d: the Comments card does not carry the renderer's output", id)
 		}
-		if c.Body != taskCommentMarkdown {
-			t.Errorf("comment %d: the raw body changed: %q", c.ID, c.Body)
-		}
-		assertNoAuthorMarkup(t, "body_html", c.BodyHTML)
-		allIDs = append(allIDs, assertFootnotesSelfContained(t, prefix, c.BodyHTML)...)
+		assertNoAuthorMarkup(t, "comment body", want)
+		assertFootnotesSelfContained(t, prefix, want)
 	}
-	// The raw fields are unchanged.
-	if task.FunctionalRequirements != taskFieldMarkdown || derefString(task.CompletionSummary) != taskFieldMarkdown {
-		t.Error("a raw Markdown field is not carried unchanged")
+	if got := strings.Count(body, `<div class="markdown">`); got != len(fields)+len(f.taskCommentIDs) {
+		t.Errorf("%d markdown containers on the task page, want %d", got, len(fields)+len(f.taskCommentIDs))
 	}
-	// Six fragments, one modal: no id twice, and none equal to the shell's own.
-	sorted := slices.Clone(allIDs)
-	slices.Sort(sorted)
-	if len(slices.Compact(sorted)) != len(allIDs) {
-		t.Errorf("the modal's fragments share an id: %v", allIDs)
-	}
-	for _, id := range allIDs {
-		if strings.HasPrefix(id, "task-modal") {
-			t.Errorf("a fragment id %q collides with the modal shell's namespace", id)
-		}
-	}
+	// Six fragments, one page: no id twice.
+	assertUniqueIDs(t, "task page", body)
 	// The task title is not rendered anywhere as Markdown.
+	if !strings.Contains(body, `<h2 class="page-title">Remove the **one-cent** drift`) {
+		t.Error("the task title is not shown as plain text with its asterisks")
+	}
 	page := servePage(t, mux, "/roadmaps/"+f.name+"/tasks")
 	if !strings.Contains(page, "Remove the **one-cent** drift") {
-		t.Error("the task title is not shown as plain text with its asterisks")
+		t.Error("the task title is not shown as plain text with its asterisks on the board")
 	}
 }
 
-// TestTaskDetailView_HTMLMemberConventions is the null and empty half of
-// Acceptance Criterion 188: completion_summary_html is null exactly when the
-// summary is null, an empty raw field has an empty member, and the CLI's own Task
-// and TaskComment objects carry no _html member.
-func TestTaskDetailView_HTMLMemberConventions(t *testing.T) {
+// TestTaskFieldCards_EmptyAndNullConventions is the null and empty half of
+// Acceptance Criterion 188: a null completion summary and an empty field are
+// marked Empty and render no HTML, so their cards show the em dash and no
+// markdown container, and the CLI's own Task and TaskComment objects carry no
+// _html member.
+func TestTaskFieldCards_EmptyAndNullConventions(t *testing.T) {
 	task := &models.Task{ID: 9, FunctionalRequirements: "", TechnicalRequirements: "**x**", AcceptanceCriteria: ""}
-	view, err := newTaskDetailView(task, nil)
+	cards, err := newTaskFieldCards(task)
 	if err != nil {
-		t.Fatalf("newTaskDetailView: %v", err)
+		t.Fatalf("newTaskFieldCards: %v", err)
 	}
-	if view.Task.CompletionSummaryHTML != nil {
-		t.Errorf("completion_summary_html = %q for a null summary, want null", *view.Task.CompletionSummaryHTML)
+	wantTitles := []string{"Functional requirements", "Technical requirements", "Acceptance criteria", "Completion summary"}
+	if len(cards) != len(wantTitles) {
+		t.Fatalf("%d field cards, want %d", len(cards), len(wantTitles))
 	}
-	if view.Task.FunctionalRequirementsHTML != "" || view.Task.AcceptanceCriteriaHTML != "" {
-		t.Error("an empty raw field has a non-empty _html member")
-	}
-	if view.Comments == nil {
-		t.Error("comments must marshal as [], never null")
-	}
-	encoded, err := json.Marshal(view)
-	if err != nil {
-		t.Fatalf("marshalling: %v", err)
-	}
-	for _, want := range []string{`"completion_summary_html":null`, `"functional_requirements_html":""`, `"comments":[]`} {
-		if !bytes.Contains(encoded, []byte(want)) {
-			t.Errorf("the response lacks %s: %s", want, encoded)
+	for i, card := range cards {
+		if card.Title != wantTitles[i] {
+			t.Errorf("card %d is titled %q, want %q", i, card.Title, wantTitles[i])
 		}
 	}
-	// The members follow the raw fields, in the order note 9 fixes.
-	order := []string{`"blocks"`, `"functional_requirements_html"`, `"technical_requirements_html"`,
-		`"acceptance_criteria_html"`, `"completion_summary_html"`}
-	last := -1
-	for _, key := range order {
-		at := bytes.Index(encoded, []byte(key))
-		if at <= last {
-			t.Errorf("%s is out of order in %s", key, encoded)
+	for _, i := range []int{0, 2, 3} {
+		if !cards[i].Empty || cards[i].HTML != "" {
+			t.Errorf("the %s card of an empty or null field is not Empty: %+v", cards[i].Title, cards[i])
 		}
-		last = at
+	}
+	if cards[1].Empty || string(cards[1].HTML) != "<p><strong>x</strong></p>\n" {
+		t.Errorf("the technical requirements card = %+v, want the renderer's output", cards[1])
 	}
 
 	summary := ""
 	task.CompletionSummary = &summary
-	view, err = newTaskDetailView(task, []models.TaskComment{{ID: 4, Body: "_noted_"}})
-	if err != nil {
-		t.Fatalf("newTaskDetailView: %v", err)
-	}
-	if view.Task.CompletionSummaryHTML == nil || *view.Task.CompletionSummaryHTML != "" {
-		t.Error("an empty, non-null summary must have an empty-string member")
-	}
-	if view.Comments[0].BodyHTML != "<p><em>noted</em></p>\n" {
-		t.Errorf("body_html = %q", view.Comments[0].BodyHTML)
+	if cards, err = newTaskFieldCards(task); err != nil || !cards[3].Empty {
+		t.Errorf("an empty, non-null summary is not Empty: %+v, %v", cards[3], err)
 	}
 
 	for _, v := range []any{models.Task{}, models.TaskComment{}, models.SprintComment{}, models.Sprint{}} {
@@ -939,7 +914,7 @@ func TestMarkdownSurfaces_CSPAndScriptsUnchanged(t *testing.T) {
 		"/roadmaps/" + f.name,
 		"/roadmaps/" + f.name + "/tasks",
 		"/roadmaps/" + f.name + "/sprints/" + itoa(f.openSprintID),
-		"/roadmaps/" + f.name + "/tasks/" + itoa(f.taskID) + "/data",
+		"/roadmaps/" + f.name + "/tasks/" + itoa(f.taskID),
 	} {
 		rec := httptest.NewRecorder()
 		h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
@@ -999,7 +974,7 @@ func TestMarkdownStyles_NoForcedHorizontalScroll(t *testing.T) {
 			t.Errorf("style.css lacks %q", want)
 		}
 	}
-	for _, gone := range []string{".task-modal__text", ".sprint-description"} {
+	for _, gone := range []string{".task-modal__text", ".sprint-description", ".modal .markdown"} {
 		if strings.Contains(css, gone) {
 			t.Errorf("style.css still styles %s, which no Markdown field uses any more", gone)
 		}

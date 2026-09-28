@@ -22,8 +22,7 @@
 //     predicate is pinned in both directions: none of the five renders no footer,
 //     and any one of the five alone renders a footer holding that indicator and
 //     no other (Acceptance Criteria 85 and 91).
-//  5. The JSON the task detail modal is filled from carries no key for it, so the
-//     modal script is never fed a key that no longer exists.
+//  5. The task page, which shows a task's full field set, names it nowhere.
 //
 // The board's four query parameters are NOT touched by this removal: the header
 // search deliberately excludes the field and always did, and `q`, `type`,
@@ -34,9 +33,7 @@ package web
 
 import (
 	"context"
-	"encoding/json"
 	"io/fs"
-	"net/http"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -72,9 +69,8 @@ const (
 // It reads templatesFS and staticFS — the compiled-in filesystems the server
 // actually serves from, never the host filesystem (SPEC/WEB.md § Self-Contained
 // Deliverable) — so it cannot pass against a stale working tree, and it covers
-// the two sites the removal touched here: the tasks board card's indicator in
-// templates/tasks.html and the datagrid item in static/task-modal.js. It also
-// covers every asset neither of them is in, which is the point of sweeping
+// the site the removal touched here, the tasks board card's indicator in
+// templates/tasks.html. It also covers every asset it is not in, which is the point of sweeping
 // rather than asserting file by file.
 func TestSpecialistsRemoval_NoEmbeddedAssetNamesTheField(t *testing.T) {
 	swept := 0
@@ -527,49 +523,29 @@ func cardAnywhere(t *testing.T, columns []string, taskID int) string {
 	return ""
 }
 
-// ==================== WHAT FILLS THE MODAL ====================
+// ==================== THE TASK PAGE ====================
 
-// TestSpecialistsRemoval_TaskDetailJSONHasNoKeyForTheField decodes the endpoint
-// the modal is filled from into a generic map and asserts no key of the task
-// object names the retired field.
-//
-// Decoding into a map rather than into taskDetailView is the whole point: the
-// typed decode would silently ignore a key the struct no longer has, which is
-// exactly the failure this guards against. The modal script reads the object key
-// by key, so a key that outlived the field would reach datagridItem — and a key
-// the script no longer reads would be dead weight on every modal open
-// (SPEC/WEB.md § Task Detail Endpoint; Acceptance Criterion 15).
-func TestSpecialistsRemoval_TaskDetailJSONHasNoKeyForTheField(t *testing.T) {
+// TestSpecialistsRemoval_TaskPageHasNoItemForTheField serves the page that shows a
+// task's full field set and asserts no part of it names the retired field: the
+// Details card lists every short field, so a datagrid item that outlived the
+// field would show here (SPEC/WEB.md § Roadmap Task Page; Acceptance Criterion
+// 15).
+func TestSpecialistsRemoval_TaskPageHasNoItemForTheField(t *testing.T) {
 	t.Setenv("HOME", shortHome(t))
 	f := seedSingleIndicatorFixture(t, "settlement-platform")
 	mux := buildMux()
 
-	status, body := fetchTaskDetail(t, mux, f.name, f.commentsOnly)
-	if status != http.StatusOK {
-		t.Fatalf("GET the detail of task #%d: status = %d, want 200; body=%q",
-			f.commentsOnly, status, body)
-	}
+	body := servePage(t, mux, "/roadmaps/"+f.name+"/tasks/"+itoa(f.commentsOnly))
 
-	var envelope struct {
-		Task map[string]json.RawMessage `json:"task"`
-	}
-	if err := json.Unmarshal([]byte(body), &envelope); err != nil {
-		t.Fatalf("decoding the task detail: %v; body=%q", err, body)
-	}
-
-	// The control: the object really is the task, so an empty map cannot make the
-	// sweep below pass by having nothing to sweep.
-	for _, required := range []string{"id", "title", "functional_requirements", "subtask_count"} {
-		if _, ok := envelope.Task[required]; !ok {
-			t.Fatalf("the decoded task object has no %q key, so it is not the task payload; "+
-				"body=%q", required, body)
+	// The control: the page really is the task's page with its Details card, so
+	// the sweep below has something to sweep.
+	for _, required := range []string{`<div class="datagrid-title">Subtasks</div>`, "Functional requirements"} {
+		if !strings.Contains(body, required) {
+			t.Fatalf("the task page carries no %q, so it is not the task's full field set", required)
 		}
 	}
-
-	for key := range envelope.Task {
-		if indexOfNeedle(key) >= 0 {
-			t.Errorf("the task detail JSON still carries the key %q; the Task entity no longer "+
-				"has the field", key)
-		}
+	if at := indexOfNeedle(body); at >= 0 {
+		t.Errorf("the task page still names the retired field at byte %d: %q", at,
+			excerptAround(body, at))
 	}
 }

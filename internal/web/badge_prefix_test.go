@@ -1,7 +1,6 @@
 package web
 
 import (
-	"net/http"
 	"regexp"
 	"strings"
 	"testing"
@@ -28,8 +27,8 @@ import (
 //
 // The other half of the rule is the exclusion, and an exclusion is only enforced
 // where it is asserted: the badge label earns its place on a card because a card
-// carries no field name beside either value, which is false of the task detail
-// modal (its datagrid names every field it shows) and false of every status badge
+// carries no field name beside either value, which is false of the task page's
+// Details card (its datagrid names every field it shows) and false of every status badge
 // (its own text is the status name). Those are checked here too, so "only these
 // two badges take a badge label" is a measured property of the served bytes
 // rather than an assumption.
@@ -62,7 +61,7 @@ func TestBadgePrefix_BothBoardsRenderOnePairForm(t *testing.T) {
 	severityVariants := map[string]bool{}
 
 	for _, id := range sprintBoardMembers(&f) {
-		task := decodeTaskDetail(t, mux, f.name, id).Task
+		task := storedTask(t, f.name, id)
 
 		onTasks := cardBadgePair(t, cardMarkupOf(t, tasksBoard, id, "the tasks board"),
 			id, "the tasks board")
@@ -147,7 +146,7 @@ func TestBadgePrefix_ColourFollowsTheValueNotThePrefixedText(t *testing.T) {
 	var bandsDiffer, bandsAgree, tablesDiffer int
 
 	for _, id := range sprintBoardMembers(&f) {
-		task := decodeTaskDetail(t, mux, f.name, id).Task
+		task := storedTask(t, f.name, id)
 
 		for where, region := range boards {
 			pair := cardBadgePair(t, cardMarkupOf(t, region, id, where), id, where)
@@ -209,100 +208,58 @@ func TestBadgePrefix_ColourFollowsTheValueNotThePrefixedText(t *testing.T) {
 	}
 }
 
-// ==================== THE MODAL TAKES NO BADGE LABEL ====================
+// ==================== THE TASK PAGE TAKES NO BADGE LABEL ====================
 
-// TestBadgePrefix_TaskDetailModalRendersTheValuesBare is the gate for the
-// exclusion SPEC/WEB.md § Task Detail Modal states and Acceptance Criterion 85
-// repeats: the badge label belongs to the board card, and the same task's
-// priority and severity in the modal render as the bare integer beside the field
-// name that already names it (Acceptance Criterion 15 continues to hold).
-//
-// The modal is painted by /static/task-modal.js from the task detail endpoint, so
-// the exclusion has two halves and both are asserted:
-//
-//   - the endpoint sends the raw integers, so nothing server-side formats them on
-//     the way out;
-//   - the script writes the field itself into the badge — the badge's text
-//     argument is the bare `task.priority` expression, with no literal spliced in
-//     front of it — and the datagrid item beside it carries the field's NAME,
-//     which is the whole reason a badge label would state the same thing twice
-//     here.
-//
-// There is no browser in the Go suite and SPEC/BUILD.md rules out a JavaScript
-// toolchain, so the script is read as source. That is enough for this rule: a
-// badge label could only reach the modal's badge as a literal in the expression
-// that builds it, and the check is that the expression is the bare field
-// reference.
-func TestBadgePrefix_TaskDetailModalRendersTheValuesBare(t *testing.T) {
+// TestBadgePrefix_TaskPageRendersTheValuesBare is the gate for the exclusion
+// SPEC/WEB.md § Roadmap Task Page, No badge label on the priority and severity
+// badges, states and Acceptance Criteria 85 and 224 repeat: the badge label
+// belongs to the board card, and the same task's priority and severity on the
+// task page's Details card render as the bare integer beside the field name that
+// already names it, in the colour the mapping gives the value.
+func TestBadgePrefix_TaskPageRendersTheValuesBare(t *testing.T) {
 	t.Setenv("HOME", shortHome(t))
 	f := seedSprintBoardFixture(t, "settlement-platform")
 	mux := buildMux()
 
-	// The server half. The schema task carries the SPEC's own worked example,
-	// severity 3 and priority 5, whose card reads S3 and P5 — so if the values
-	// travelled labelled, this is where it would show.
-	status, body := fetchTaskDetail(t, mux, f.name, f.schema)
-	if status != http.StatusOK {
-		t.Fatalf("GET the detail of task #%d: status = %d, want 200; body=%q",
-			f.schema, status, body)
-	}
-	// The values reach the modal as the integers they are. Decoding into the typed
-	// view is the stronger half of that statement: a labelled value is not an
-	// integer and would not decode at all.
-	task := decodeTaskDetail(t, mux, f.name, f.schema).Task
+	// The schema task carries the SPEC's own worked example, severity 3 and
+	// priority 5, whose card reads S3 and P5.
+	task := storedTask(t, f.name, f.schema)
 	if task.Priority != 5 || task.Severity != 3 {
 		t.Fatalf("task #%d carries priority %d and severity %d, want the SPEC's worked example "+
 			"5 and 3, which the assertions below are written against",
 			f.schema, task.Priority, task.Severity)
 	}
-	// A labelled value would travel as a JSON string, so the labelled forms are
-	// looked for quoted; the retired long labels are looked for anywhere.
-	for _, label := range []string{`"S3"`, `"P5"`, "Sev:", "Pri:"} {
-		if strings.Contains(body, label) {
-			t.Errorf("the task detail endpoint carries %q; the badge label is the board card's "+
-				"and is applied where the card is rendered, never in the data\nbody: %s",
-				label, body)
+
+	page := servePage(t, mux, "/roadmaps/"+f.name+"/tasks/"+itoa(f.schema))
+	details := detailsCardSlice(t, page)
+	for label, want := range map[string]string{
+		"Priority": `<div class="datagrid-content"><span class="badge ` + priorityBadge(5) + `">5</span></div>`,
+		"Severity": `<div class="datagrid-content"><span class="badge ` + severityBadge(3) + `">3</span></div>`,
+	} {
+		if got := datagridContent(t, details, label); got != want {
+			t.Errorf("the task page's %s = %s, want %s: the field name already stands beside the "+
+				"value, so the badge carries the bare value", label, got, want)
 		}
 	}
-	// The control that keeps the two absences above from being vacuous: the card
-	// of that very task really does write the labelled strings.
+	for _, label := range []string{">S3<", ">P5<", "Sev:", "Pri:"} {
+		if strings.Contains(page, label) {
+			t.Errorf("the task page carries %q; the badge label is the board card's alone", label)
+		}
+	}
+	// The header's status badge carries the bare status too.
+	if !strings.Contains(page, `<span class="badge `+taskStatusBadge(task.Status)+`">`+string(task.Status)+`</span>`) {
+		t.Errorf("the task page's status badge does not carry the bare status %s", task.Status)
+	}
+
+	// The control that keeps the absences above from being vacuous: the card of
+	// that very task really does write the labelled strings.
 	card := cardMarkupOf(t, boardRegion(t, servePage(t, mux, "/roadmaps/"+f.name+"/tasks")),
 		f.schema, "the tasks board")
 	for _, labelled := range []string{">S3<", ">P5<"} {
 		if !strings.Contains(card, labelled) {
-			t.Errorf("the card of task #%d does not render %s, so asserting the endpoint omits "+
+			t.Errorf("the card of task #%d does not render %s, so asserting the task page omits "+
 				"the labelled form proves nothing\ncard: %s", f.schema, labelled, card)
 		}
-	}
-
-	// The script half.
-	script := stripJSComments(readEmbeddedAsset(t, "static/task-modal.js"))
-	for label, field := range map[string]string{
-		"Priority": "task.priority",
-		"Severity": "task.severity",
-	} {
-		args := jsDatagridBadgeArgs(t, script, label)
-		if len(args) != 3 {
-			t.Fatalf("the modal's %s badge is built from el(%v), want three arguments "+
-				"(tag, class, text)", label, args)
-		}
-		if args[2] != field {
-			t.Errorf("the modal's %s badge is given the text %q, want exactly %q: the datagrid "+
-				"item already writes the field's name beside the value, so the badge carries "+
-				"the bare value and a badge label would state the same thing twice (SPEC/WEB.md "+
-				"§ Task Detail Modal, No badge label on the modal's priority and severity badges)",
-				label, args[2], field)
-		}
-	}
-
-	// The modal's own status badge is filled with the bare status too. It is the
-	// third badge the modal paints and the one a blanket "label the badges"
-	// change would sweep up with the other two.
-	if !strings.Contains(script, "statusEl.textContent = task.status;") {
-		t.Errorf("the modal script does not set its status badge to the bare task.status; a " +
-			"status badge is never ambiguous — its own text is the status name — so it takes " +
-			"no badge label anywhere (SPEC/WEB.md § Roadmap Tasks Page, Card content, item 2, " +
-			"Only these two badges take a badge label)")
 	}
 }
 
@@ -347,12 +304,14 @@ func TestBadgePrefix_NoOtherBadgeTakesAPrefix(t *testing.T) {
 		"/roadmaps/" + board.name + "/tasks",
 		"/roadmaps/" + board.name + "/audit",
 		"/roadmaps/" + board.name + "/graph",
+		"/roadmaps/" + board.name + "/tasks/" + itoa(board.schema),
 		board.path(),
 		"/roadmaps/" + sprints.name,
 		"/roadmaps/" + sprints.name + "/tasks",
 		"/roadmaps/" + sprints.name + "/sprints/" + itoa(sprints.openID),
 		"/roadmaps/" + sprints.name + "/sprints/" + itoa(sprints.pendingID),
 		"/roadmaps/" + sprints.name + "/sprints/" + itoa(sprints.closedLower),
+		"/roadmaps/" + sprints.name + "/tasks/" + itoa(sprints.openTaskID),
 	}
 
 	statusNames := statusBadgeTexts()
@@ -541,7 +500,7 @@ func hasClassToken(classes, want string) bool {
 func cardMarkupOf(t *testing.T, region string, taskID int, where string) string {
 	t.Helper()
 
-	const cardClose = "</button>"
+	const cardClose = "</a>"
 
 	at := strings.Index(region, cardMarker(taskID))
 	if at < 0 {
@@ -587,7 +546,7 @@ func cardBadgePair(t *testing.T, card string, taskID int, where string) badgePai
 func splitBoardCards(t *testing.T, page string) ([]string, string) {
 	t.Helper()
 
-	const cardClose = "</button>"
+	const cardClose = "</a>"
 
 	var (
 		cards   []string
@@ -628,74 +587,4 @@ func statusBadgeTexts() map[string]bool {
 // what a one-letter badge prefix would be.
 func isASCIILetter(c byte) bool {
 	return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
-}
-
-// jsDatagridBadgeArgs returns the arguments of the el(...) call that builds the
-// badge of one named datagrid item in the modal script, so what the badge is
-// given as its text can be read rather than guessed from the surrounding source.
-func jsDatagridBadgeArgs(t *testing.T, script, label string) []string {
-	t.Helper()
-
-	open := regexp.MustCompile(`datagridItem\(\s*"` + label + `"\s*,\s*el\(`)
-	loc := open.FindStringIndex(script)
-	if loc == nil {
-		t.Fatalf("the modal script builds no %q datagrid item holding a badge; either the "+
-			"extraction is broken or the modal stopped naming the field beside the value, "+
-			"which is the reason it carries no badge label", label)
-	}
-	return jsCallArguments(t, script[loc[1]:], label)
-}
-
-// jsCallArguments splits the top-level arguments of a JavaScript call whose
-// opening parenthesis has already been consumed, ignoring commas nested inside
-// parentheses, brackets, braces, and string literals.
-func jsCallArguments(t *testing.T, rest, where string) []string {
-	t.Helper()
-
-	var (
-		args  []string
-		arg   strings.Builder
-		depth = 1
-		quote byte
-	)
-	for i := 0; i < len(rest); i++ {
-		c := rest[i]
-		if quote != 0 {
-			arg.WriteByte(c)
-			if c == '\\' && i+1 < len(rest) {
-				i++
-				arg.WriteByte(rest[i])
-				continue
-			}
-			if c == quote {
-				quote = 0
-			}
-			continue
-		}
-		switch c {
-		case '"', '\'':
-			quote = c
-			arg.WriteByte(c)
-		case '(', '[', '{':
-			depth++
-			arg.WriteByte(c)
-		case ')', ']', '}':
-			depth--
-			if depth == 0 {
-				return append(args, strings.TrimSpace(arg.String()))
-			}
-			arg.WriteByte(c)
-		case ',':
-			if depth == 1 {
-				args = append(args, strings.TrimSpace(arg.String()))
-				arg.Reset()
-				continue
-			}
-			arg.WriteByte(c)
-		default:
-			arg.WriteByte(c)
-		}
-	}
-	t.Fatalf("the call built for %q is never closed in the modal script", where)
-	return nil
 }
