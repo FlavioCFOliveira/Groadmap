@@ -4388,7 +4388,8 @@ class TestWebInterface:
             assert '<div class="markdown mb-1">' in card, f"sprint #{sprint_id}: no markdown container"
             for want in ("<strong>settlement</strong>", "window.<br>", "<li>export the settlement day</li>",
                          "the runbook, https://example.org/status and flow chart.",
-                         "<li>[x] freeze announced</li>", "<li>[ ] residual published</li>",
+                         '<li class="task-list-item"><span class="task-list-marker">[x]</span> freeze announced</li>',
+                         '<li class="task-list-item"><span class="task-list-marker">[ ]</span> residual published</li>',
                          "<h4>Runbook</h4>", '<pre class="chroma">',
                          "The last line of the description."):
                 assert want in card, f"sprint #{sprint_id}: the card lacks {want!r}"

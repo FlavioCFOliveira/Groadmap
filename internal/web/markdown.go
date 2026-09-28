@@ -194,8 +194,15 @@ func plainCodeWrapper(w util.BufWriter, c highlighting.CodeBlockContext, enterin
 //   - a fenced code block's info string is cut to its language word, so the
 //     highlighting extension reads no attribute block ({...}) from it; a language
 //     word that itself carries a brace is dropped, and the block renders
-//     unhighlighted, as any unrecognised language does (rules 3 and 6).
+//     unhighlighted, as any unrecognised language does (rules 3 and 6);
+//   - the <li> of a task-list item carries the fixed class task-list-item, in
+//     both forms, so one stylesheet rule places its checkbox or text marker
+//     where the list marker would be (rules 3, 13, and 14).
 type markdownTransformer struct{}
+
+// taskListItemClass is the fixed class of a task-list item's <li> (SPEC/WEB.md
+// § Markdown Rendering, rule 3).
+const taskListItemClass = "task-list-item"
 
 // Transform implements parser.ASTTransformer.
 func (markdownTransformer) Transform(doc *ast.Document, reader text.Reader, _ parser.Context) {
@@ -214,9 +221,25 @@ func (markdownTransformer) Transform(doc *ast.Document, reader text.Reader, _ pa
 			}
 		case *ast.FencedCodeBlock:
 			trimCodeInfo(node, source)
+		case *ast.ListItem:
+			if isTaskListItem(node) {
+				node.SetAttributeString("class", []byte(taskListItemClass))
+			}
 		}
 		return ast.WalkContinue, nil
 	})
+}
+
+// isTaskListItem reports whether a list item is a task-list item: the task-list
+// extension parses a checkbox only as the first inline of the item's first
+// block, so that is the one place it is looked for.
+func isTaskListItem(item *ast.ListItem) bool {
+	block := item.FirstChild()
+	if block == nil {
+		return false
+	}
+	_, ok := block.FirstChild().(*extast.TaskCheckBox)
+	return ok
 }
 
 // demotedHeadingLevel maps a Markdown heading level to the rendered level
@@ -469,14 +492,17 @@ func writeNodeText(w util.BufWriter, source []byte, n ast.Node) {
 }
 
 // renderTaskMarker renders a task-list checkbox, in the non-interactive form, as
-// the text marker [x] or [ ] (SPEC/WEB.md § Markdown Rendering, rule 14).
+// the text marker [x] or [ ], wrapped in a <span> carrying the fixed class
+// task-list-marker so the stylesheet can place it where the list marker would be
+// (SPEC/WEB.md § Markdown Rendering, rules 13 and 14). The space that follows
+// the marker is the one the ordinary form's checkbox is followed by.
 func renderTaskMarker(w util.BufWriter, _ []byte, node ast.Node, entering bool) (ast.WalkStatus, error) {
 	if !entering {
 		return ast.WalkContinue, nil
 	}
-	marker := "[ ] "
+	marker := `<span class="task-list-marker">[ ]</span> `
 	if node.(*extast.TaskCheckBox).IsChecked { // registered for KindTaskCheckBox only
-		marker = "[x] "
+		marker = `<span class="task-list-marker">[x]</span> `
 	}
 	_, err := w.WriteString(marker)
 	return ast.WalkContinue, err

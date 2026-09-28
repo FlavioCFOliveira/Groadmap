@@ -112,8 +112,8 @@ func TestMarkdown_GFMFootnotesAndDefinitionLists(t *testing.T) {
 		"<del>struck</del>",
 		`<a href="https://example.org/runbook" target="_blank" rel="noopener noreferrer">https://example.org/runbook</a>`,
 		`<a href="http://www.example.org" target="_blank" rel="noopener noreferrer">www.example.org</a>`,
-		`<li><input checked="" disabled="" type="checkbox"> export the settlement day</li>`,
-		`<li><input disabled="" type="checkbox"> compare the totals</li>`,
+		`<li class="task-list-item"><input checked="" disabled="" type="checkbox"> export the settlement day</li>`,
+		`<li class="task-list-item"><input disabled="" type="checkbox"> compare the totals</li>`,
 		`class="footnote-ref"`, `<div class="footnotes" role="doc-endnotes">`,
 		"<dl>", "<dt>Residual</dt>", "<dd>The difference left after reconciliation.</dd>",
 	} {
@@ -368,7 +368,8 @@ func TestMarkdown_NonInteractiveForm(t *testing.T) {
 		t.Errorf("the non-interactive form emits an interactive element:\n%s", out)
 	}
 	for _, want := range []string{
-		"<li>[x] export the settlement day</li>", "<li>[ ] compare the totals</li>",
+		`<li class="task-list-item"><span class="task-list-marker">[x]</span> export the settlement day</li>`,
+		`<li class="task-list-item"><span class="task-list-marker">[ ]</span> compare the totals</li>`,
 		"See the board, https://example.org/runbook and diagram.",
 		`<sup id="sprint-7-description-fnref:1">1</sup>`,
 		`<li id="sprint-7-description-fn:1">`,
@@ -381,7 +382,7 @@ func TestMarkdown_NonInteractiveForm(t *testing.T) {
 
 	// Apart from the links and the checkboxes, the two forms are identical.
 	ordinary := mdForm(t, src, "sprint-7-description-", markdownInteractive)
-	strip := regexp.MustCompile(`<a [^>]*>|</a>|<input[^>]*> |\[[x ]\] `)
+	strip := regexp.MustCompile(`<a [^>]*>|</a>|<input[^>]*> |<span class="task-list-marker">\[[x ]\]</span> `)
 	if a, b := strip.ReplaceAllString(ordinary, ""), strip.ReplaceAllString(out, ""); a != b {
 		t.Errorf("the forms differ beyond links and checkboxes:\nordinary: %s\nnon-interactive: %s", a, b)
 	}
@@ -706,7 +707,8 @@ func TestMarkdownSurfaces_SprintCardsAreNonInteractive(t *testing.T) {
 		for _, text := range []string{
 			"<strong>settlement</strong>", "window.<br>\nKeep", "<li>export the day</li>",
 			"the runbook, https://example.org/status and flow chart.",
-			"<li>[x] freeze announced</li>", "<li>[ ] residual published</li>",
+			`<li class="task-list-item"><span class="task-list-marker">[x]</span> freeze announced</li>`,
+			`<li class="task-list-item"><span class="task-list-marker">[ ]</span> residual published</li>`,
 			"The last line of the description.",
 		} {
 			if !strings.Contains(card, text) {
@@ -988,9 +990,9 @@ func TestMarkdownSurfaces_CSPAndScriptsUnchanged(t *testing.T) {
 func TestMarkdownStyles_NoForcedHorizontalScroll(t *testing.T) {
 	css := stripSpace(embeddedSheet(t, "static/style.css"))
 	for _, want := range []string{
-		".markdown{min-width:0;overflow-wrap:anywhere;word-break:break-word;}",
-		".markdowntable{display:block;max-width:100%;overflow-x:auto;}",
-		".markdownpre{max-width:100%;overflow-x:auto;white-space:pre;overflow-wrap:normal;word-break:normal;}",
+		".markdown{min-width:0;overflow-wrap:anywhere;word-break:break-word;",
+		".markdowntable{display:block;max-width:100%;overflow-x:auto;",
+		".markdownpre{max-width:100%;overflow-x:auto;white-space:pre;overflow-wrap:normal;word-break:normal;",
 		".detail-panel__value{white-space:pre-wrap;",
 	} {
 		if !strings.Contains(css, want) {

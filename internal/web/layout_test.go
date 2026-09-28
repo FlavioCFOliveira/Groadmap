@@ -22,6 +22,7 @@ var vendoredAssets = []string{
 	"static/vendor/tabler-icons/fonts/tabler-icons.woff2",
 	"static/vendor/inter/inter.css",
 	"static/vendor/inter/files/inter-latin-wght-normal.woff2",
+	"static/vendor/inter/files/inter-latin-wght-italic.woff2",
 	"static/vendor/d3/d3.min.js",
 	"static/vendor/d3/d3-sankey.min.js",
 	"static/graph.js",
@@ -686,6 +687,7 @@ func TestStatic_VendoredAssetsServed(t *testing.T) {
 		{"/static/vendor/d3/d3-sankey.min.js", "javascript"},
 		{"/static/graph.js", "javascript"},
 		{"/static/vendor/inter/files/inter-latin-wght-normal.woff2", ""},
+		{"/static/vendor/inter/files/inter-latin-wght-italic.woff2", ""},
 		{"/static/vendor/tabler-icons/fonts/tabler-icons.woff2", ""},
 		{"/static/favicon.svg", "image/svg"},
 	}

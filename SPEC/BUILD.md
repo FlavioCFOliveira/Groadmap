@@ -460,7 +460,8 @@ Rules:
    - all client JavaScript, including the Tabler JavaScript and the D3.js
      knowledge-graph visualisation library (and the d3-sankey plugin) and any of
      their dependencies;
-   - web fonts, including the Inter font and the Tabler Icons webfont;
+   - web fonts, including the Inter font, in its upright and its italic face, and
+     the Tabler Icons webfont;
    - icons and images, including the Tabler Icons set;
    - the favicon;
    - any other static asset the interface requires.
@@ -482,7 +483,15 @@ Rules:
    any remote origin. The fonts and icons the Tabler shell depends on are likewise
    vendored: the Inter font and the Tabler Icons webfont are committed font files
    under `internal/web/static/`, embedded with `go:embed`, and served only from
-   `/static/...` (see `WEB.md § UI Framework`). Upgrading or replacing any of these
+   `/static/...` (see `WEB.md § UI Framework`). Inter is committed as two
+   variable-weight faces from the one `@fontsource-variable/inter` source, the
+   upright `inter-latin-wght-normal.woff2` and the italic
+   `inter-latin-wght-italic.woff2`, both under `internal/web/static/vendor/inter/files/`
+   and both declared in `internal/web/static/vendor/inter/inter.css`
+   (`WEB.md § UI Framework`, rule 4). `internal/web/static/vendor/LICENSES.md`
+   records, for every vendored web asset, its location, its upstream project, and
+   its licence; the Inter entry names both faces under the SIL Open Font License
+   1.1. Upgrading or replacing any of these
    vendored Tabler assets — the framework CSS or JavaScript, the Inter font, or the
    Tabler Icons webfont — is a change to the committed asset and to this section,
    recorded in git.

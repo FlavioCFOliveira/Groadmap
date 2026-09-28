@@ -4666,8 +4666,9 @@ read from the host filesystem at runtime.
    framework's scripts) and the D3.js knowledge-graph visualisation library (and
    the d3-sankey plugin) and any of their dependencies, all in already-built
    (vendored) form.
-4. **Web fonts** — every font the interface uses, including the Inter font and
-   the Tabler Icons webfont; no font is loaded from a remote font host.
+4. **Web fonts** — every font the interface uses, including the Inter font in
+   its upright and its italic face (see [UI Framework](#ui-framework), rule 4)
+   and the Tabler Icons webfont; no font is loaded from a remote font host.
 5. **Icons and images** — any icon or image the interface displays, including the
    Tabler Icons set.
 6. **Favicon** — the site favicon.
@@ -4780,6 +4781,8 @@ the way out, on every request, and the CLI's output of these fields is unchanged
      brackets), and task lists, whose checkboxes render as
      `<input type="checkbox">` carrying the `disabled` attribute, and carrying
      `checked` for a checked item, so they can be neither checked nor unchecked;
+     the `<li>` of a task-list item carries the fixed class `task-list-item`,
+     which the renderer adds and which rule 13 styles;
    - footnotes;
    - definition lists;
    - syntax highlighting of fenced code blocks (rule 6).
@@ -4887,12 +4890,110 @@ the way out, on every request, and the CLI's output of these fields is unchanged
     blockquotes, headings, lists, and code blocks consistently with the rest of the
     interface. A `<div>` is used because a fragment contains block elements, which
     a paragraph cannot hold. The project override stylesheet `static/style.css`
-    adds only what the vendored class does not provide (see
-    [UI Framework](#ui-framework), rule 10): the content wraps within its
-    container, a long word or URL breaks rather than overflowing, and a table or a
-    code block wider than its container scrolls horizontally inside its own box.
-    Rendered Markdown therefore never makes the page, the modal, or a card scroll
-    horizontally.
+    (see [UI Framework](#ui-framework), rule 10) adds to that class the overflow
+    handling and the typography below, and nothing else.
+
+    Every rule of that addition is scoped to the `.markdown` container, so it
+    styles rendered Markdown and no other part of the interface. Its principle is
+    that rendered Markdown reads as the interface's own body text: it imposes no
+    line spacing of its own, and no vertical spacing of its own other than the
+    `1rem` bottom margin of a table (see **Block spacing** below). Where the vendored `.markdown`
+    rules depart from the interface's base styles — `line-height: 2` on the
+    container, `margin-top: 2.5rem` on a top-level `h2` to `h6`, `font-size: 1rem`,
+    `margin: 1.5rem 0`, and `padding: .5rem 1.5rem` on a top-level `blockquote`,
+    and `margin: 3em 0` on a top-level `hr` — the addition restores the base value
+    stated below, and that is the value the element's computed style carries. The
+    base values are those of the vendored Tabler stylesheet's own element rules
+    (its Bootstrap reboot and Tabler's element defaults), cited here as that
+    stylesheet states them. The vendored rules that remove the top margin of the
+    container's first child and the bottom margin of its last child stay in
+    effect. In what follows, "body text" is the size of Tabler's
+    `--tblr-body-font-size` (`0.875rem`), "the secondary colour" is
+    `var(--tblr-secondary)`, the colour Tabler's `text-secondary` utility gives,
+    and a top-level element is a direct child of the container. The same Markdown
+    therefore looks the same on every surface that shows it, in a card, in the
+    modal, and inside a comments timeline alike.
+
+    - **Overflow.** The content wraps within its container, a long word or URL
+      breaks rather than overflowing, and a table or a code block wider than its
+      container scrolls horizontally inside its own box. Rendered Markdown
+      therefore never makes the page, the modal, or a card scroll horizontally.
+    - **Line height.** The container's `line-height` is
+      `var(--tblr-body-line-height)` (`1.4285714286`), the line height of the
+      interface's body text, in place of the vendored `2`.
+    - **Block spacing.** Blocks keep the interface's base bottom margins, and the
+      addition sets none of its own: a `p`, `ul`, `ol`, and `dl` has the `1rem`
+      of the vendored `p` and `dl,ol,ul` rules, a `pre` the `1rem` of the vendored
+      `pre` rule, a `blockquote` the `0 0 1rem` of the vendored `blockquote` rule,
+      and a `dd` the `.5rem` of the vendored `dd` rule. A `table` has a bottom
+      margin of `1rem`, the same as the other blocks, in place of the `0` the
+      vendored `.markdown>table` rules resolve to. A list item carries
+      no margin, so consecutive list items are separated only by the line height,
+      and a paragraph inside a list item keeps the `1rem` of every paragraph.
+    - **Lists.** A `ul` that is not inside another list of the container shows the
+      `disc` marker, a `ul` inside one list of the container shows the `circle`
+      marker, and a `ul` inside two or more lists of the container shows the
+      `square` marker. A list that is not inside another list of the container has
+      the `1rem` bottom margin of the vendored `dl,ol,ul` rule, and a list nested
+      inside a list item of the container has the `0` bottom margin of the
+      vendored `ol ol,ol ul,ul ol,ul ul` rule; both have the `0` top margin of the
+      vendored `dl,ol,ul` rule. The marker and the margins are set by these rules
+      and depend only on lists inside the container, never on an enclosing element,
+      so a list in a comment body, which sits inside the task detail modal's or
+      the sprint page's `<ul class="timeline">`, renders the same markers and the
+      same margins as the same list in any other field.
+    - **Headings.** The HTML heading levels stay those of rule 5. An `h4` has a
+      `font-size` of `1rem` and a `line-height` of `1.5rem`; an `h5` has a
+      `font-size` of `.875rem` and a `line-height` of `1.25rem`; an `h6` has a
+      `font-size` of `.875rem`, a `line-height` of `1.25rem`, and the secondary
+      colour. These are the size and line-height pairs the vendored stylesheet
+      gives its `h3` and `h4`, so no rendered heading is smaller than body text. A
+      heading has the bottom margin of the vendored heading rule,
+      `var(--tblr-spacer)` (`.5rem`). A top-level heading has the top margin of
+      the vendored heading rule, `0`, in place of the vendored `.markdown`
+      `2.5rem`: a heading is separated from the block before it by that block's
+      own bottom margin, which is `1rem` for a paragraph, a list, a code block, a
+      blockquote, and a table alike.
+    - **Links.** An `<a>` inside the container has the colour
+      `rgb(106, 169, 227)` — the link colour of Tabler's own dark theme — and is
+      underlined, with a `text-underline-offset` of `.15em`. While the pointer
+      hovers it and while it has keyboard focus (`:hover` and `:focus-visible`), it
+      has the colour `rgb(135, 186, 233)` — the link hover colour of Tabler's own
+      dark theme — and no underline. Against the card background of the dark
+      theme, Tabler's `--tblr-bg-surface` (`#1f2937`), the two colours have
+      contrast ratios of 5.87:1 and 7.15:1, both above the 4.5:1 that WCAG 2.2
+      Success Criterion 1.4.3 (Contrast (Minimum)) requires. No link outside the
+      container changes colour.
+    - **Blockquotes, rules, and footnotes.** A `blockquote` has the `font-size`
+      of body text, the margin `0 0 1rem` of the vendored `blockquote` rule, the
+      padding `1rem 1rem 1rem` of the vendored Tabler `blockquote` rule, and the
+      secondary colour. An `hr` has the margin `2rem 0` of the vendored `hr` rule.
+      The footnotes list rule 12 describes, which the renderer emits as a `<div>`
+      carrying the class `footnotes`, has a `font-size` of `.8125rem` and the
+      secondary colour.
+    - **Task lists, definition lists, and code blocks.** A task-list item — an
+      `<li>` carrying the class `task-list-item` (rule 3) — shows no list marker,
+      and one rule serves both forms: in the ordinary form its checkbox, and in
+      the non-interactive form of rule 14 its `task-list-marker` span holding
+      `[x]` or `[ ]`, takes the place the list marker would occupy. A `dd` is indented by a left margin of
+      `1.5rem`. A `pre` has a `tab-size` of `4`.
+    - **Emphasis.** A `strong` or `b` element has a `font-weight` of `700`. An
+      italic `em` or `i` element in the Inter font is drawn from Inter's real
+      italic face (see [UI Framework](#ui-framework), rule 4), never from a slant
+      the browser synthesises from the upright face.
+    - **Line length.** On the [Roadmap Sprint Page](#roadmap-sprint-page), the
+      container of the sprint `description` and the container of every sprint
+      comment `body` have a `max-width` of `80ch`, so a line of rendered Markdown
+      holds at most about 80 characters: the width WCAG 2.2 Success Criterion
+      1.4.8 (Visual Presentation) names, and inside the 45 to 90 characters
+      Matthew Butterick's *Practical Typography* recommends. The sprint card and
+      the task detail modal are already narrow and carry no such limit.
+
+    This styling adds to the HTML the renderer emits only the fixed task-list
+    classes of rules 3 and 14, which carry no text of the author's and change no
+    visible text, and it changes nothing else in rules 1 to 12, 14, and 15: the line breaks of rule 4, the heading demotion of
+    rule 5, the Content-Security-Policy, and every safety property stay as they
+    are.
 14. **The non-interactive form, for content placed inside a link.** The sprint
     card is a single link (see
     [Shared Sprint-Card Partial](#shared-sprint-card-partial), rule 3), and HTML
@@ -4904,7 +5005,11 @@ the way out, on every request, and the CLI's output of these fields is unchanged
       autolink, a footnote reference or back-link, and the link a remote image
       becomes under rule 9 — renders as its text alone, with no `<a>` element;
     - a task-list item's checkbox renders as the text marker `[x]` for a checked
-      item or `[ ]` for an unchecked one, with no `<input>` element.
+      item or `[ ]` for an unchecked one, with no `<input>` element; the marker
+      is wrapped in a `<span>` carrying the fixed class `task-list-marker`, so
+      that rule 13 can place it where the list marker would be. The `<li>` keeps
+      the `task-list-item` class of rule 3, which the ordinary form gives it too,
+      so one rule of rule 13 styles the task-list item in both forms.
 
     Everything else — the accepted Markdown, the line breaks, the demoted
     headings, the highlighting, the filtering, the footnote identifier prefix, and
@@ -4946,7 +5051,20 @@ the way out, on every request, and the CLI's output of these fields is unchanged
    are committed font files, embedded with `go:embed`, and loaded only from
    `/static/...`. No font is loaded from a remote font host such as Google Fonts
    (see [Embedded Asset Categories](#embedded-asset-categories) and
-   [Self-Contained Deliverable](#self-contained-deliverable)).
+   [Self-Contained Deliverable](#self-contained-deliverable)). Inter is vendored
+   as two variable-weight faces taken from one source, the
+   `@fontsource-variable/inter` distribution of Inter (by Rasmus Andersson, under
+   the SIL Open Font License 1.1): the upright face
+   `static/vendor/inter/files/inter-latin-wght-normal.woff2` and the italic face
+   `static/vendor/inter/files/inter-latin-wght-italic.woff2`. The vendored
+   stylesheet `static/vendor/inter/inter.css` declares each face under both
+   family names Tabler's font stack begins with, `Inter Var` and `Inter`, by an
+   `@font-face` rule carrying `font-weight: 100 900`: the upright face with
+   `font-style: normal`, and the italic face with `font-style: italic`. Italic
+   text set in Inter is therefore drawn from the real italic face and is never a
+   slant the browser synthesises from the upright one (see
+   [Markdown Rendering](#markdown-rendering), rule 13). The licence of both faces
+   is recorded in `static/vendor/LICENSES.md`, beside every other vendored asset.
 5. Tabler is itself responsive and mobile-first; the admin-shell navigation
    sidebar collapses to an off-canvas (hamburger) menu on small viewports, so the
    pages stay usable without horizontal overflow on phones (see
@@ -8285,6 +8403,115 @@ Rules:
     construct of Acceptance Criteria 180 to 187, highlighted code included, with no
     file read from the host filesystem for the purpose (see
     [Self-Contained Deliverable](#self-contained-deliverable), rule 6).
+195. **Rendered Markdown keeps the body line height and the interface's base
+    block spacing.** Parsing `static/style.css` as served from `/static/style.css`
+    finds `line-height: var(--tblr-body-line-height)` on the `.markdown`
+    container and `margin-bottom: 1rem` on the `.markdown` `table`, and finds no
+    rule scoped to `.markdown` that sets a vertical margin — `margin-top`,
+    `margin-bottom`, or the top or bottom component of the `margin` shorthand —
+    on `p`, `pre`, or `dd`. In a browser, at the default root font size, a
+    `.markdown` container on each Markdown surface has a computed `line-height`
+    equal to 1.4285714286 times its font size, not the vendored `2`; a top-level
+    `p` or `pre` that is not the container's last child has a computed
+    `margin-bottom` of `16px`; a top-level `table` that is not the container's
+    last child has a computed `margin-bottom` of `16px`, not the vendored `0`; an `li` that is not a task-list item has a computed `margin-top` and `margin-bottom` of `0`; and a
+    `p` inside an `li` of a loose list has a computed `margin-bottom` of `16px`
+    (see [Markdown Rendering](#markdown-rendering), rule 13).
+196. **Lists show the same markers and margins on every surface.**
+    `static/style.css` sets, in rules scoped to `.markdown`,
+    `list-style-type: disc` on a `ul` inside no other list of the container,
+    `circle` on a `ul` inside one list, and `square` on a `ul` inside two or more
+    lists; a bottom margin of `1rem` on a list inside no other list of the
+    container, and of `0` on a list nested in a list item of the container; and a
+    top margin of `0` on both. A task comment `body` holding a three-level
+    bulleted list renders, in the task detail modal's comments timeline, the
+    computed markers `disc`, `circle`, and `square` and a computed
+    `margin-bottom` of `16px` on its outer list, the same as the same Markdown in a
+    task field, and a sprint comment holding it renders the same markers and
+    margins on the roadmap sprint page (see
+    [Markdown Rendering](#markdown-rendering), rule 13).
+197. **Headings follow the stated scale and spacing, and are never smaller than
+    body text.** `static/style.css` sets, under `.markdown`: on `h4`,
+    `font-size: 1rem` and `line-height: 1.5rem`; on `h5`, `font-size: .875rem`
+    and `line-height: 1.25rem`; on `h6`, `font-size: .875rem`,
+    `line-height: 1.25rem`, and the colour `var(--tblr-secondary)`; and on a
+    top-level heading, `margin-top: 0`. None of the three font sizes is below
+    `.875rem`, the value of `--tblr-body-font-size`. In a browser, a top-level
+    heading has a computed `margin-top` of `0`, not the vendored `2.5rem`, and a
+    heading that follows a paragraph, a list, a code block, a blockquote, or a
+    table is `16px` below it, the preceding block's bottom margin; it has a
+    computed `margin-bottom` of
+    `8px`, the vendored `var(--tblr-spacer)`; and the rendered HTML still carries
+    the heading levels of Acceptance Criterion 187 (see
+    [Markdown Rendering](#markdown-rendering), rule 13).
+198. **Links in rendered Markdown are distinct and legible, and no other link
+    changes.** `static/style.css` gives `.markdown a` the colour
+    `rgb(106, 169, 227)`, `text-decoration-line: underline`, and
+    `text-underline-offset: .15em`, and gives `.markdown a:hover` and
+    `.markdown a:focus-visible` the colour `rgb(135, 186, 233)` and
+    `text-decoration-line: none`. The contrast ratios of the two colours against
+    `#1f2937`, computed by the WCAG 2.2 relative-luminance formula, are each at
+    least 4.5:1 (5.87:1 and 7.15:1). No rule of `static/style.css` sets the colour
+    of an `a` element, or changes a link-colour custom property, through a
+    selector that is not scoped to `.markdown`, so the sidebar, navbar,
+    page-header, and board links keep their computed colour (see
+    [Markdown Rendering](#markdown-rendering), rule 13).
+199. **Blockquotes, rules, and footnotes take the interface's base values.**
+    `static/style.css` sets, under `.markdown`: on `blockquote`, the `font-size`
+    `var(--tblr-body-font-size)`, `margin: 0 0 1rem`, `padding: 1rem 1rem 1rem`,
+    and the colour `var(--tblr-secondary)`; on `hr`, `margin: 2rem 0`; and on
+    `.footnotes`, `font-size: .8125rem` and the colour `var(--tblr-secondary)`. In
+    a browser, a top-level `blockquote` and a top-level `hr` carry these computed
+    values, not the vendored `.markdown` values `1rem` font size, `1.5rem 0`
+    margin, and `.5rem 1.5rem` padding for the blockquote and `3em` margin for the
+    `hr` (see [Markdown Rendering](#markdown-rendering), rule 13).
+200. **Task-list items carry a fixed class and no marker, definition descriptions
+    are indented, and tabs are four columns wide.** In every Markdown field, the
+    `<li>` of a task-list item carries the class `task-list-item`, in the ordinary
+    form and in the sprint card's non-interactive form alike; in the sprint card,
+    the item's `[x]` or `[ ]` is the text content of a `<span>` carrying the class
+    `task-list-marker`, and the item's visible text still reads `[x]` or `[ ]`
+    followed by the item's text. No other `<li>` carries `task-list-item`, and no
+    other `<span>` carries `task-list-marker`. `static/style.css` sets
+    `list-style-type: none` on `.markdown .task-list-item` through a single rule
+    that serves both forms, `margin-left: 1.5rem` on `.markdown dd`, and
+    `tab-size: 4` on `.markdown pre`. In a browser, the left edge of the checkbox,
+    or in a sprint card of the `task-list-marker` span, is at the position the
+    marker of an ordinary item of the same list occupies, and an ordinary item of
+    the same list keeps its marker (see
+    [Markdown Rendering](#markdown-rendering), rules 3, 13, and 14).
+201. **Bold is 700, and italic is the real Inter italic face.** `static/style.css`
+    sets `font-weight: 700` on `.markdown strong` and `.markdown b`.
+    `/static/vendor/inter/inter.css` holds four `@font-face` rules: for each of the
+    family names `Inter Var` and `Inter`, one with `font-style: normal` whose source
+    is `./files/inter-latin-wght-normal.woff2`, and one with `font-style: italic`
+    whose source is `./files/inter-latin-wght-italic.woff2`, all four carrying
+    `font-weight: 100 900`. `GET /static/vendor/inter/files/inter-latin-wght-italic.woff2`
+    returns HTTP 200 and the committed file's bytes, served from the embedded
+    asset set with networking disabled.
+    `static/vendor/LICENSES.md` lists the italic file beside the upright one under
+    the SIL Open Font License 1.1. In a browser, an `em` element of rendered
+    Markdown is drawn from the italic face, which the browser reports as a loaded
+    `font-style: italic` face of `Inter` (see [UI Framework](#ui-framework),
+    rule 4, and [Markdown Rendering](#markdown-rendering), rule 13).
+202. **The roadmap sprint page limits a Markdown line to 80 characters.**
+    `static/style.css` carries a rule setting `max-width: 80ch` whose selector
+    matches the `.markdown` container of the sprint `description` and of every
+    sprint comment `body` on the roadmap sprint page, and matches no `.markdown`
+    container in a sprint card of the roadmap sprints page or in the task detail
+    modal. On a desktop-width viewport, the sprint description's container on the
+    roadmap sprint page has a computed `max-width` equal to 80 times the width of
+    its `0` glyph, while a sprint card's and the modal's containers have a computed
+    `max-width` of `none` (see [Markdown Rendering](#markdown-rendering), rule 13).
+203. **The typography adds only the task-list classes to the rendered HTML, and
+    leaves the safety rules unchanged.** Every rule `static/style.css` adds for
+    rendered Markdown has a selector scoped to `.markdown`, no template or
+    renderer output carries a `style` attribute for it, and the only markup the
+    typography adds to the renderer's output is the `task-list-item` class and
+    the `task-list-marker` span of Acceptance Criterion 200. Acceptance Criteria 180 to 194 continue to hold: the line breaks, the
+    heading demotion, the Content-Security-Policy, and every safety property of
+    rendered Markdown are unchanged (see
+    [Markdown Rendering](#markdown-rendering), rule 13).
 
 ## See Also
 

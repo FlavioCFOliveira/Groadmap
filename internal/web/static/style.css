@@ -477,29 +477,44 @@
 
 /* ---- Rendered Markdown (SPEC/WEB.md § Markdown Rendering, rule 13) ----
    Every Markdown field is placed in a <div class="markdown">, the class the
-   vendored Tabler distribution defines for rendered Markdown content, which
-   styles its tables, blockquotes, headings, lists, and code blocks. These rules
-   add only what that class does not provide: the content wraps within its
-   container, a long word or URL breaks rather than overflowing, and a table or a
-   code block wider than its container scrolls horizontally inside its own box,
-   so rendered Markdown never makes the page, the modal, or a card scroll
-   sideways.
+   vendored Tabler distribution defines for rendered Markdown content. These
+   rules add to that class the overflow handling and the typography of rule 13,
+   and nothing else; every selector is scoped to .markdown, so no other part of
+   the interface is affected.
 
-   min-width: 0 lets the container shrink inside a flex item (the timeline card of
-   a comment), whose automatic minimum size would otherwise be its widest
-   content. A table is made a block so that it can carry its own horizontal
-   scroll; its rows and cells keep their table layout. A code block keeps its
-   authored lines (white-space: pre) and scrolls instead of wrapping them. */
+   Overflow. The content wraps within its container, a long word or URL breaks
+   rather than overflowing, and a table or a code block wider than its
+   container scrolls horizontally inside its own box, so rendered Markdown
+   never makes the page, the modal, or a card scroll sideways. min-width: 0 lets
+   the container shrink inside a flex item (the timeline card of a comment),
+   whose automatic minimum size would otherwise be its widest content. A table
+   is made a block so that it can carry its own horizontal scroll; its rows and
+   cells keep their table layout. A code block keeps its authored lines
+   (white-space: pre) and scrolls instead of wrapping them.
+
+   Typography. Rendered Markdown reads as the interface's own body text: where
+   the vendored .markdown rules depart from the base styles (line-height: 2 on
+   the container, margin-top: 2.5rem on a top-level h2 to h6, the top-level
+   blockquote's font size, margin, and padding, and the top-level hr's 3em
+   margin), the rules below restore the base value. They follow the vendored
+   stylesheet and match or exceed the specificity of the rules they override,
+   so they win by specificity or by order. The vendored rules that remove the
+   first child's top margin and the last child's bottom margin (.markdown >
+   :first-child and .markdown > :last-child, specificity 0,2,0) stay in effect:
+   no rule below outranks them. */
 .markdown {
   min-width: 0;
   overflow-wrap: anywhere;
   word-break: break-word;
+  line-height: var(--tblr-body-line-height);
 }
 
+/* A table has the 1rem bottom margin of every other block. */
 .markdown table {
   display: block;
   max-width: 100%;
   overflow-x: auto;
+  margin-bottom: 1rem;
 }
 
 .markdown pre {
@@ -508,6 +523,125 @@
   white-space: pre;
   overflow-wrap: normal;
   word-break: normal;
+  tab-size: 4;
+}
+
+/* Lists. The markers and margins depend only on lists inside the container,
+   never on an enclosing element: a comment body sits inside the
+   <ul class="timeline"> of the modal and of the sprint page, where the
+   reboot's nested-list rules and the user agent's nested-list markers would
+   otherwise treat its top-level list as a nested one. */
+.markdown ul {
+  list-style-type: disc;
+}
+
+.markdown ul ul,
+.markdown ol ul {
+  list-style-type: circle;
+}
+
+.markdown ul ul ul,
+.markdown ul ol ul,
+.markdown ol ul ul,
+.markdown ol ol ul {
+  list-style-type: square;
+}
+
+.markdown ul,
+.markdown ol {
+  margin-top: 0;
+  margin-bottom: 1rem;
+}
+
+.markdown ul ul,
+.markdown ul ol,
+.markdown ol ul,
+.markdown ol ol {
+  margin-bottom: 0;
+}
+
+/* A task-list item (the renderer's fixed class, in both forms) shows no list
+   marker; its checkbox, or in the sprint card its [x] / [ ] text marker, takes
+   the place the marker would occupy. */
+.markdown .task-list-item {
+  list-style-type: none;
+}
+
+.markdown .task-list-item input[type="checkbox"],
+.markdown .task-list-item .task-list-marker {
+  margin-left: -1.4em;
+}
+
+/* Headings keep the levels of rule 5, at the size and line-height pairs the
+   vendored stylesheet gives its h3 and h4, so none is smaller than body text.
+   The bottom margin is the vendored heading rule's var(--tblr-spacer). */
+.markdown h4 {
+  font-size: 1rem;
+  line-height: 1.5rem;
+}
+
+.markdown h5 {
+  font-size: .875rem;
+  line-height: 1.25rem;
+}
+
+.markdown h6 {
+  font-size: .875rem;
+  line-height: 1.25rem;
+  color: var(--tblr-secondary);
+}
+
+.markdown > h4,
+.markdown > h5,
+.markdown > h6 {
+  margin-top: 0;
+}
+
+/* Links: the link and link-hover colours of Tabler's own dark theme, at
+   5.87:1 and 7.15:1 against the dark card surface #1f2937. */
+.markdown a {
+  color: rgb(106, 169, 227);
+  text-decoration-line: underline;
+  text-underline-offset: .15em;
+}
+
+.markdown a:hover,
+.markdown a:focus-visible {
+  color: rgb(135, 186, 233);
+  text-decoration-line: none;
+}
+
+.markdown blockquote {
+  font-size: var(--tblr-body-font-size);
+  margin: 0 0 1rem;
+  padding: 1rem 1rem 1rem;
+  color: var(--tblr-secondary);
+}
+
+.markdown hr {
+  margin: 2rem 0;
+}
+
+.markdown .footnotes {
+  font-size: .8125rem;
+  color: var(--tblr-secondary);
+}
+
+.markdown dd {
+  margin-left: 1.5rem;
+}
+
+.markdown strong,
+.markdown b {
+  font-weight: 700;
+}
+
+/* Line length: on the roadmap sprint page, the sprint description and every
+   sprint comment body hold at most about 80 characters a line. The selector
+   matches the .markdown containers in the page body, and excludes the sprint
+   card (a .card-link) of the sprints page and the task detail modal. */
+.page-body .markdown:not(.card-link .markdown):not(.modal .markdown) {
+  max-width: 80ch;
 }
 
 /* ---- Knowledge-graph page (SPEC/WEB.md § Roadmap Knowledge-Graph Page, Graph
