@@ -20,10 +20,11 @@ const (
 )
 
 // chrome carries the data the shared Tabler admin-shell partials need
-// (head, sidebar, top navbar, page header): the page <title>, the active
-// roadmap (empty on the index, set on a roadmap's pages so the sidebar lists
-// that roadmap's Tasks/Sprints/Graph links), the active nav section so the
-// sidebar can highlight the current view, and the page header's title column.
+// (head, sidebar, top navbar, page header): the page <title> (built by
+// documentTitle), the active roadmap (empty on the index, set on a roadmap's
+// pages so the sidebar lists that roadmap's Tasks/Sprints/Graph links), the
+// active nav section so the sidebar can highlight the current view, and the
+// page header's title column.
 // It is embedded on every page view model under the field name Chrome, which
 // the layout.html partials reference (SPEC/WEB.md § UI Framework).
 type chrome struct {
@@ -31,6 +32,48 @@ type chrome struct {
 	Roadmap string
 	Active  string
 	Heading pageHeading
+}
+
+// titleSeparator joins the segments of a page's document title: one space,
+// one ASCII hyphen-minus, one space (SPEC/WEB.md § Document Title, rule 1).
+const titleSeparator = " - "
+
+// serverHostname is the serving machine's hostname as os.Hostname reported it,
+// read once by serve at startup before any request is served, and used by every
+// page's document title for the whole session. It is empty when the lookup
+// failed or returned an empty string, which drops the hostname segment from
+// every title (SPEC/WEB.md § Document Title, rules 4 and 5). The request never
+// sets it: the Host header plays no part in the title. Tests assign it directly;
+// the package runs no test with t.Parallel, so the swap is unsynchronised.
+var serverHostname string
+
+// readHostname returns the hostname lookup reports, or the empty string when
+// lookup fails. An unavailable hostname is not an error: the caller serves
+// normally and the titles omit the hostname segment (SPEC/WEB.md § Document
+// Title, rule 5). lookup is os.Hostname in production.
+func readHostname(lookup func() (string, error)) string {
+	name, err := lookup()
+	if err != nil {
+		return ""
+	}
+	return name
+}
+
+// documentTitle builds the text of a page's <title> element: the roadmap, the
+// area, and the hostname, joined by titleSeparator. An empty roadmap (the
+// roadmap index, which belongs to no roadmap) or an empty hostname drops that
+// segment together with its separator, so a title never starts or ends in a
+// separator. The title carries no product name. It is rendered as escaped text
+// by html/template (SPEC/WEB.md § Document Title).
+func documentTitle(roadmap, area, hostname string) string {
+	title := area
+	if roadmap != "" {
+		title = roadmap + titleSeparator + title
+	}
+	if hostname != "" {
+		title += titleSeparator + hostname
+	}
+	return title
 }
 
 // pageHeading is the content of the page header's title column, rendered by
@@ -84,7 +127,7 @@ func handleIndex(w http.ResponseWriter, r *http.Request) {
 	}
 	renderHTML(w, r, "index.html", indexView{
 		Chrome: chrome{
-			Title:  "Groadmap — Roadmaps",
+			Title:  documentTitle("", "Roadmaps", serverHostname),
 			Active: "roadmaps",
 			Heading: pageHeading{
 				Title:    "Roadmaps",
@@ -119,7 +162,7 @@ func handleSprints(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	data.Chrome = chrome{
-		Title:   "Groadmap — " + name,
+		Title:   documentTitle(name, "Sprints", serverHostname),
 		Roadmap: name,
 		Active:  "sprints",
 		Heading: pageHeading{Title: "Sprints"},
@@ -159,7 +202,7 @@ func handleTasks(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	data.Chrome = chrome{
-		Title:   "Groadmap — " + name + " / Tasks",
+		Title:   documentTitle(name, "Tasks", serverHostname),
 		Roadmap: name,
 		Active:  "tasks",
 		Heading: pageHeading{Title: "Tasks"},
@@ -247,7 +290,7 @@ func handleAudit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	data.Chrome = chrome{
-		Title:   "Groadmap — " + name + " / Audit",
+		Title:   documentTitle(name, "Audit", serverHostname),
 		Roadmap: name,
 		Active:  "audit",
 		Heading: pageHeading{Title: "Audit"},
@@ -298,7 +341,7 @@ func handleSprint(w http.ResponseWriter, r *http.Request) {
 	// the sprint's id — the roadmap name is not repeated there, the shell states
 	// it twice already (SPEC/WEB.md § Shared Page-Header Partial, rule 2).
 	data.Chrome = chrome{
-		Title:   "Groadmap — " + name + " / Sprint #" + strconv.Itoa(id),
+		Title:   documentTitle(name, "Sprint #"+strconv.Itoa(id), serverHostname),
 		Roadmap: name,
 		Active:  "sprints",
 		Heading: pageHeading{
@@ -323,7 +366,7 @@ func handleGraphPage(w http.ResponseWriter, r *http.Request) {
 	}
 	renderHTML(w, r, "graph.html", graphPageView{
 		Chrome: chrome{
-			Title:   "Groadmap — " + name + " graph",
+			Title:   documentTitle(name, "Knowledge graph", serverHostname),
 			Roadmap: name,
 			Active:  "graph",
 			Heading: pageHeading{Title: "Knowledge graph"},

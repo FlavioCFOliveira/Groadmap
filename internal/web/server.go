@@ -72,6 +72,12 @@ func serve(opts options) error {
 			slog.String("hint", "use --host 127.0.0.1 to restrict to this machine"))
 	}
 
+	// Read the machine's hostname once, before any request is served; every
+	// page's document title uses this one value for the whole session. A
+	// failed or empty lookup drops the hostname segment and is not an error
+	// (SPEC/WEB.md § Server Lifecycle, step 4; § Document Title, rules 4-5).
+	serverHostname = readHostname(os.Hostname)
+
 	// Take the signals over BEFORE the URL is printed, and therefore before
 	// the browser launch that follows it.
 	//

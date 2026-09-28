@@ -21,10 +21,9 @@ import (
 // roadmap through a browser (SPEC/WEB.md § Roadmap Audit Log Page; Acceptance
 // Criterion 10).
 //
-// Where the assertions are scoped, and why. The rendered page carries an em dash
-// in its <title> ("Groadmap — <name> / Audit") and a `text-truncate` on the top
-// navbar's roadmap name, both of them present BEFORE these columns existed. A
-// document-wide `strings.Contains(body, "—")` or `…, "text-truncate"` therefore
+// Where the assertions are scoped, and why. The rendered page carries a
+// `text-truncate` on the top navbar's roadmap name, present BEFORE these columns
+// existed. A document-wide `strings.Contains(body, "text-truncate")` therefore
 // passes against the unfixed page and proves nothing. Every assertion below is
 // made on the audit table's own region, and on exact cell markup rather than on
 // a token that appears elsewhere in the shell.

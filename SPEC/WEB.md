@@ -18,6 +18,7 @@
   - [Roadmap Tasks Page](#roadmap-tasks-page)
   - [Roadmap Sprint Page](#roadmap-sprint-page)
   - [Roadmap Audit Log Page](#roadmap-audit-log-page)
+  - [Document Title](#document-title)
   - [Shared Page-Header Partial](#shared-page-header-partial)
   - [Shared Sprint-Card Partial](#shared-sprint-card-partial)
   - [Sprint Detail Sub-Template](#sprint-detail-sub-template)
@@ -408,8 +409,9 @@ For an `rmp web` invocation the implementation:
    resolved host is not a loopback address, the server prints a network-exposure
    warning to stderr (see
    [Bind Address and Port Selection](#bind-address-and-port-selection)).
-4. Registers the read-only routes (see [Routes and Pages](#routes-and-pages)),
-   configures the HTTP server timeouts (see
+4. Reads the machine's hostname once for the document titles (see
+   [Document Title](#document-title)), registers the read-only routes (see
+   [Routes and Pages](#routes-and-pages)), configures the HTTP server timeouts (see
    [HTTP Server Timeouts](#http-server-timeouts)), and starts serving.
 5. Takes `SIGINT` and `SIGTERM` over, and then prints to stdout the URL the
    server is listening on, so the user can open it manually if no browser is
@@ -2322,6 +2324,60 @@ how the `rmp web` process itself terminates.
   (see [Tasks and Sprints from SQLite](#tasks-and-sprints-from-sqlite) and
   `DATABASE.md § audit Table`).
 
+### Document Title
+
+Every HTML page carries exactly one `<title>` element, the document title a
+browser shows on its tab and in its history. This section is canonical for it. The
+document title is not the page header's title column, which
+[Shared Page-Header Partial](#shared-page-header-partial) governs, and not the
+sidebar brand, which [UI Framework](#ui-framework), rules 11 and 13, governs and
+which this section leaves unchanged.
+
+1. **Format.** The document title is the page's segments joined by the separator
+   ` - `: one space, one ASCII hyphen-minus (`U+002D`), one space. The segments
+   are, in order, the roadmap name, the area, and the hostname:
+
+   | Page | Document title |
+   |---|---|
+   | Roadmap Index | `Roadmaps - <hostname>` |
+   | Roadmap Sprints | `<roadmap> - Sprints - <hostname>` |
+   | Roadmap Tasks | `<roadmap> - Tasks - <hostname>` |
+   | Roadmap Audit Log | `<roadmap> - Audit - <hostname>` |
+   | Roadmap Knowledge-Graph | `<roadmap> - Knowledge graph - <hostname>` |
+   | Roadmap Sprint | `<roadmap> - Sprint #<id> - <hostname>` |
+
+   `<roadmap>` is the validated roadmap segment of the request path, the same
+   value that selected the database and that the top navbar shows (see
+   [UI Framework](#ui-framework), rule 19). `<id>` is the sprint's `id` in
+   decimal. For example, sprint 49 of the roadmap `groadmap`, served on a machine
+   whose hostname is `thinkpad`, has the document title
+   `groadmap - Sprint #49 - thinkpad`.
+
+2. **The roadmap index names no roadmap.** `/` belongs to no roadmap, so its
+   document title has no roadmap segment: its first segment is the area,
+   `Roadmaps`.
+
+3. **No product name.** The document title carries no fixed text other than the
+   area of rule 1 and the separator. In particular it MUST NOT contain the word
+   `Groadmap`.
+
+4. **The hostname is the serving machine's, read once.** `<hostname>` is the
+   hostname of the machine running `rmp web`, as the operating system reports it
+   through Go's `os.Hostname`. The server reads it once, at startup, before it
+   serves any request (see [Server Lifecycle](#server-lifecycle), step 4), and
+   every page of the session uses that one value. It does not depend on the HTTP
+   request: the `Host` header and every other request field play no part in it.
+
+5. **An unavailable hostname drops its segment.** When `os.Hostname` returns an
+   error or an empty string, every document title omits the hostname segment
+   together with the separator before it: the index page's title is `Roadmaps`
+   and the tasks page's is `<roadmap> - Tasks`. This is not an error: the server
+   starts and serves normally, and the exit behaviour is unchanged.
+
+6. **Values are escaped.** The document title is rendered through
+   `html/template` as text, so the roadmap name and the hostname are escaped like
+   every other value the interface shows.
+
 ### Shared Page-Header Partial
 
 Every page's header title column is rendered by **one** partial, so the six pages
@@ -2329,11 +2385,13 @@ cannot drift into six conventions for saying the same kind of thing. The partial
 renders the `<div class="col">` of the Tabler page-header row: an optional
 pretitle, the title, an optional status badge inside the title, and an optional
 lead line. A page MUST NOT hand-write a `page-pretitle` or a `page-title` element.
+The document `<title>` is a separate element, specified in
+[Document Title](#document-title).
 
 1. **The title names the view, not the roadmap.** The roadmap is named twice in
    the shell already — in the sidebar's per-roadmap section label and in the top
    navbar (see [UI Framework](#ui-framework), rule 19) — so repeating it in the
-   page title would state the same fact a third time on one screen while leaving
+   header title would state the same fact a third time on one screen while leaving
    the view the user is actually looking at unnamed on the sprints page. The
    titles are exactly:
 
@@ -2349,7 +2407,7 @@ lead line. A page MUST NOT hand-write a `page-pretitle` or a `page-title` elemen
 2. **The sprint page is the one hierarchical header.** It is the only page that
    presents an individual record rather than a view of the roadmap, so it alone
    carries a pretitle, and that pretitle is `Sprint #<ID>` — the roadmap name is
-   not repeated in it. The sprint's `title` stays the page title and keeps the
+   not repeated in it. The sprint's `title` stays the header title and keeps the
    status badge specified in
    [Roadmap Sprint Page](#roadmap-sprint-page), so the sprint remains identifiable
    by both its title and its id.
@@ -4756,7 +4814,7 @@ read from the host filesystem at runtime.
     page of every roadmap, so it would distinguish nothing, while the sidebar
     already gives each of the roadmap's views its own distinguishing glyph; a
     roadmap is identified by its name, which is what the URL, the sidebar label,
-    and the page title all use. A long name is truncated with Tabler's `text-truncate`
+    and the document title all use (see [Document Title](#document-title)). A long name is truncated with Tabler's `text-truncate`
     rather than wrapped or allowed to overflow, so the navbar keeps its height and
     the page never scrolls horizontally because of it (see
     [Responsive and Mobile-First Design](#responsive-and-mobile-first-design)). The
@@ -6561,7 +6619,7 @@ Rules:
     partial: no page hand-writes a `page-pretitle` or a `page-title` element, and
     the titles read exactly `Roadmaps`, `Sprints`, `Tasks`, `Audit`,
     `Knowledge graph`, and — on a sprint's own page — that sprint's `title` with
-    its status badge, under the pretitle `Sprint #<ID>`. No page title contains the
+    its status badge, under the pretitle `Sprint #<ID>`. No header title contains the
     roadmap name, which the shell already states in the sidebar and in the top
     navbar. Each page's actions column carries only what
     [Shared Page-Header Partial](#shared-page-header-partial) fixes: the tasks
@@ -7607,6 +7665,32 @@ Rules:
     navigation. Removing the prefix and searching again renders the graph (see
     Acceptance Criterion 50 and
     [Query-Bar Error Handling](#query-bar-error-handling), rule 3).
+173. **Every page's document title follows one format.** With a roadmap named
+    `payments` holding sprint 7, served on a machine whose hostname is `thinkpad`,
+    each HTML page carries exactly one `<title>` element, whose text is exactly:
+    `Roadmaps - thinkpad` for `GET /`; `payments - Sprints - thinkpad` for
+    `GET /roadmaps/payments`; `payments - Tasks - thinkpad` for
+    `GET /roadmaps/payments/tasks`; `payments - Audit - thinkpad` for
+    `GET /roadmaps/payments/audit`; `payments - Knowledge graph - thinkpad` for
+    `GET /roadmaps/payments/graph`; and `payments - Sprint #7 - thinkpad` for
+    `GET /roadmaps/payments/sprints/7`. Each separator is one space, one ASCII
+    hyphen-minus, and one space (see [Document Title](#document-title)).
+174. **No document title names the product.** On every page of criterion 173, the
+    `<title>` text contains no occurrence of `Groadmap`, in any letter case. The
+    sidebar brand is unaffected: each page still renders exactly one
+    `navbar-brand` element (see [UI Framework](#ui-framework), rule 13).
+175. **The hostname comes from the serving machine, not the request.** Requesting
+    any page of criterion 173 with a `Host` header naming another host, such as
+    `Host: example.org`, yields the same `<title>` text as a request carrying the
+    served host: the last segment is the hostname the machine reported at server
+    startup, and nothing in the request changes it.
+176. **An unavailable hostname drops its segment, not the server.** When the
+    hostname lookup fails, or returns an empty string, `rmp web` starts, prints its
+    URL, and serves every page with HTTP 200, and each `<title>` omits the hostname
+    segment and the separator before it: `Roadmaps` for `GET /`,
+    `payments - Tasks` for `GET /roadmaps/payments/tasks`, and
+    `payments - Sprint #7` for `GET /roadmaps/payments/sprints/7`. No title ends
+    in a separator.
 
 ## See Also
 
