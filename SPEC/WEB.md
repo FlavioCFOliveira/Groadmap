@@ -217,9 +217,8 @@ displays all of the task's fields (see [Roadmap Task Page](#roadmap-task-page)).
    status — read from that roadmap's `project.db` and using the fields and
    relationships already defined in `MODELS.md` and `DATABASE.md`. It is served at
    `/roadmaps/{name}/tasks`. Each row shows the task's `#<id>` badge, its title, its
-   type, its status, the sprint it belongs to, its priority and severity, and its
-   creation date, and ends with a `View` link; the title and the `View` link both
-   lead to the task's own page, `/roadmaps/{name}/tasks/{id}`, which is where the
+   type, its status, its severity and priority, and its creation date; the title is
+   a link to the task's own page, `/roadmaps/{name}/tasks/{id}`, which is where the
    task's full field set is shown. In the card's header, a **filter bar** — a
    `GET` form of native controls — narrows the list by sprint, status, type, and
    a search on the title and `#<id>` reference; the criteria combine conjunctively and are applied on the server. The
@@ -264,8 +263,8 @@ displays all of the task's fields (see [Roadmap Task Page](#roadmap-task-page)).
    status, its progress, and the task's position in its planned execution order —
    or stating that the task is in the backlog. It returns HTTP `404 Not Found`
    when `{id}` is not a valid integer or is not a task of the named roadmap. Each
-   card of the sprint page's board, and the title and the `View` link of each row
-   of the tasks page's list, is a link to that page, so the pointer, touch, and the
+   card of the sprint page's board, and the title of each row of the tasks page's
+   list, is a link to that page, so the pointer, touch, and the
    keyboard all follow it without any added JavaScript, and it can be opened in a
    new tab. The page only displays data: it contains no form, no edit control, and
    no submit action, and it opens no write path. The interface serves no JSON for
@@ -1088,6 +1087,10 @@ how the `rmp web` process itself terminates.
   4. **The columns are the roadmap's.** The example's assignee column, with its
      avatar, has no counterpart, because a task has no assignee; the columns are
      the ones **Row content** below fixes.
+  6. **No per-row button.** The example ends each row with a right-aligned
+     `btn btn-sm` reading `View`; this table has no such button and no actions
+     column, because the task title is already a link to the task's page (see
+     **Links to the task page** below).
   5. **A filter bar, pagination, and a rows-per-page selector are added**, the
      first in the card header's actions container and the other two in the card
      footer. The example has none of the three; this page needs them because a
@@ -1481,11 +1484,9 @@ how the `rmp web` process itself terminates.
   | `Title` | The task `title`, as a link to the task's own page (see **Links to the task page** below). A long title wraps within its cell at word boundaries; the cell carries no `text-break` and no other rule that breaks a word, and it has a minimum width of `16rem` (see **Column widths** below). |
   | `Type` | The **type badge**: a Tabler badge reading the task's `type` exactly as the `TaskType` enum spells it, coloured by the task type mapping. |
   | `Status` | The **status badge**: a Tabler badge reading the task's `status` exactly as the `TaskStatus` enum spells it, coloured by the task status mapping. |
-  | `Sprint` | The sprint the task belongs to, as plain text: `Sprint #<id>` followed by a space and the sprint's `title`. A task that belongs to no sprint shows an em dash (`—`). The cell has a minimum width of `10rem` (see **Column widths** below). |
   | `Severity` | The **severity badge**: a Tabler badge reading `S` immediately followed by the task's `severity`, coloured by the severity band mapping. |
   | `Priority` | The **priority badge**: a Tabler badge reading `P` immediately followed by the task's `priority`, coloured by the priority band mapping. |
   | `Created` | The task's `created_at`, in the display form of [Date and Time Display](#date-and-time-display), in a `<time>` element, preceded by the Tabler Icons calendar icon `<i class="ti ti-calendar me-1" aria-hidden="true"></i>`; the cell carries the Tabler class `text-secondary`, so the date is muted. |
-  | `Actions` | A link carrying the Tabler classes `btn` and `btn-sm` and reading `View`, to the task's own page (see **Links to the task page** below). The heading cell and the cell carry the Tabler class `text-end`, so the link is right-aligned. |
 
   Every badge colour is the one the mappings of
   [Status, Priority, and Severity Badge Colours](#status-priority-and-severity-badge-colours)
@@ -1493,9 +1494,13 @@ how the `rmp web` process itself terminates.
   badge labels, and the order in which severity precedes priority, are those of the
   sprint board's card, so a reader meets a task's reference, severity, priority,
   and type in one form on both pages (see
-  [Sprint Detail Sub-Template](#sprint-detail-sub-template), **The card**). Both
-  the `id` and the `title` of a sprint are shown because the `title` alone does not
-  identify a sprint. The sprint text is not a link.
+  [Sprint Detail Sub-Template](#sprint-detail-sub-template), **The card**).
+
+  The table has **no `Sprint` column and no `Actions` column**. The sprint a task
+  belongs to is shown on the task's page (see
+  [Roadmap Task Page](#roadmap-task-page)), and the list is narrowed to a sprint,
+  or to the tasks of no sprint, by the sprint filter (see **Filter bar** above); the
+  task page is opened through the title link, so the row carries no `View` link.
 
   **Column widths.** The table keeps its automatic layout, which shares the
   available width among the columns by their content. A class that breaks words
@@ -1503,9 +1508,8 @@ how the `rmp web` process itself terminates.
   under the automatic layout it lets the column shrink to the width of a few
   characters, so that at viewports of `992px` and below a title is squeezed into a
   column one or two words wide. Instead, the title cell carries a class of the
-  project override stylesheet `static/style.css` declaring `min-width: 16rem`, and
-  the Sprint cell carries a class of that stylesheet declaring `min-width: 10rem`. A title word longer than its cell is
-  not broken: the table grows wider than the card, and it scrolls horizontally
+  project override stylesheet `static/style.css` declaring `min-width: 16rem`. A
+  title word longer than its cell is not broken: the table grows wider than the card, and it scrolls horizontally
   inside its `table-responsive` container, never the page (see
   [Responsive and Mobile-First Design](#responsive-and-mobile-first-design),
   rule 9).
@@ -1514,19 +1518,18 @@ how the `rmp web` process itself terminates.
   `Task` model is shown on the task page the row links to (see
   [Roadmap Task Page](#roadmap-task-page)). The row does not redefine any field;
   `MODELS.md` and `DATABASE.md` remain canonical.
-- **Links to the task page.** Each row carries exactly two links, and both lead to
-  the task's own page, `/roadmaps/{name}/tasks/{id}`: the title, and the `View`
-  link. Following either is an ordinary navigation to a server-rendered page; the
-  list fetches nothing when a link is followed and opens no write path. Both are
-  `<a>` elements with an `href`, so a pointer click, a touch tap, and the Enter key
-  follow them through the browser's own activation behaviour with no added
-  JavaScript, and the browser's own link behaviours — opening in a new tab or
-  window, copying the address — apply to them. The `View` link's accessible name is
-  `View task #<id>: <title>`, carried by its `aria-label`, so it identifies the task
-  and still begins with its visible label text, as WCAG 2.5.3 Label in Name
-  (Level A) requires; the title link's accessible name is its visible text. Each
+- **Links to the task page.** Each row carries exactly one link, the title, and
+  it leads to the task's own page, `/roadmaps/{name}/tasks/{id}`. Following it is
+  an ordinary navigation to a server-rendered page; the list fetches nothing when
+  the link is followed and opens no write path. It is an `<a>` element with an
+  `href`, so a pointer click, a touch tap, and the Enter key follow it through the
+  browser's own activation behaviour with no added JavaScript, and the browser's
+  own link behaviours — opening in a new tab or window, copying the address —
+  apply to it. Its accessible name is its visible text, the task `title`. In the
+  keyboard's tab order a row therefore contributes one stop, its title link. The
   link shows a visible focus indicator whenever it receives keyboard focus (WCAG
-  2.2 Success Criterion 2.4.7, Focus Visible).
+  2.2 Success Criterion 2.4.7, Focus Visible; see [UI Framework](#ui-framework),
+  rule 21).
 
   **The row itself is not a link.** No `<tr>` carries an `href`, a `role`, a
   `tabindex`, or an event handler, and no row is made clickable by any other means:
@@ -1583,28 +1586,30 @@ how the `rmp web` process itself terminates.
   [Security and Constraints](#security-and-constraints)). Read-only constrains
   what the page may **change**, not what it may **show**: filtering and paginating
   alter the view of the data and never the data.
-- **Relationships shown.** The page surfaces **task-to-sprint membership**, in the
-  `Sprint` column and through the sprint filter, and introduces no other
-  relationship. The parent/subtask hierarchy and the dependency edges are shown on
+- **Relationships shown.** The page surfaces **task-to-sprint membership** through
+  the sprint filter alone — the table has no `Sprint` column — and introduces no
+  other relationship. The parent/subtask hierarchy and the dependency edges are shown on
   the task page (see [Roadmap Task Page](#roadmap-task-page)). The presentation
   MUST reflect the relationships defined in `DATABASE.md § Relationships`; it
   introduces no new relationship.
-- **Read cost.** Rendering the page performs **three** reads and no more:
+- **Read cost.** Rendering the page performs **two** reads and no more:
   1. **one** read of the roadmap's sprints, for the sprint select's options and
      for validating the `sprint` parameter (see `DATABASE.md § List Sprint Titles`);
   2. **one** read of the roadmap's tasks through the task listing, carrying one
      predicate per accepted `sprint`, `status`, and `type` value, each value a
      bound parameter, and the ordering of **Order** above (see
-     `DATABASE.md § List All`);
-  3. **one** grouped query that resolves the sprint of every task the page renders,
-     over the ids of the rendered page's rows at once (see
-     `DATABASE.md § Resolve the Sprint of Many Tasks (Grouped)`).
+     `DATABASE.md § List All`).
+
+  The page resolves no task's sprint: no row shows one, and the sprint filter is
+  applied by the second read's own predicates, so the grouped sprint-resolution
+  query (`DATABASE.md § Resolve the Sprint of Many Tasks (Grouped)`) is not issued
+  by this page.
 
   The search term, the total, the page selection, and the slicing of the page's
   rows are computed in memory over the rows the second read returned: the search's
   normalisation and folding rules cannot be expressed in SQLite, so the term is
-  applied after the read, and the page is selected after the term. When the page
-  renders no row, the third read is not issued. The page reads no comment, because
+  applied after the read, and the page is selected after the term. The page reads
+  no comment, because
   the list shows no comment information. The number of queries the page issues does
   not grow with the number of tasks, the number of sprints, the page size, or the
   number of active filters, and no query is issued per row. Following a row's link
@@ -4004,9 +4009,8 @@ re-presents an earlier, now-stale response in its place.
    and each sprint's total task count for its card footer, but no member tasks,
    because the page renders every sprint as a card with no member tasks on it; the
    tasks page reads the roadmap's sprints for its sprint filter and the task list
-   narrowed by the page's structured filters, applies the search term and selects
-   the requested page in memory, and resolves the sprint of the rows it renders in
-   one grouped query — a fixed number of queries, with none per row (see
+   narrowed by the page's structured filters, and applies the search term and
+   selects the requested page in memory — two queries, with none per row (see
    [Roadmap Tasks Page](#roadmap-tasks-page), **Read cost**); the
    sprint page reads that sprint and its member tasks in `sprint_tasks` position
    order, which its own board then groups into the three columns and orders in
@@ -4040,12 +4044,8 @@ re-presents an earlier, now-stale response in its place.
    still issued, because the Comments card is always present. Every one of these is
    a read query issued server-side while the page
    is rendered, and the number of them per page does not grow with the number of
-   tasks shown. The tasks page issues one grouped query that resolves the sprint of
-   every row it renders over the whole set of rendered task ids at once, so each row
-   can name the sprint its task belongs to (see
-   `DATABASE.md § Resolve the Sprint of Many Tasks (Grouped)`). That query is issued
-   once per page, never once per row, and it is skipped entirely when the page
-   renders no row. The
+   tasks shown. The tasks page issues no sprint-resolution query: its rows show no
+   sprint. The
    sprint page issues no sprint-resolution query at all: every card on its board
    belongs to the one sprint the page is showing, so there is nothing to resolve.
 2. The server opens the database for reading only. It MUST NOT modify rows, MUST
@@ -5152,8 +5152,7 @@ timestamp references this section and does not restate it.
     every colour adjacent to it, is required of every element that can take
     keyboard focus on the Roadmap Tasks Page and on the Roadmap Sprint Page's
     member-tasks board: on the tasks page, the filter bar's search input, its three
-    selects, its Apply button, each row's title link and `View`
-    link, every link of the pagination bar, every link of the rows-per-page
+    selects, its Apply button, each row's title link, every link of the pagination bar, every link of the rows-per-page
     selector, and the Reset link of the no-match empty state (see [Roadmap Tasks Page](#roadmap-tasks-page)); on the board, every
     task card and every column toggle (see
     [Sprint Detail Sub-Template](#sprint-detail-sub-template)). The colours adjacent
@@ -5641,7 +5640,7 @@ experience is the baseline that larger viewports enhance.
    a phone-sized viewport, and places several per line as the viewport widens; the
    card footer's range text, rows-per-page selector, and pagination bar wrap onto
    further lines likewise. Neither ever forces page-level horizontal overflow. The
-   title link, the `View` link, every filter control, the Apply control, the
+   title link, every filter control, the Apply control, the
    rows-per-page links, and the pagination links each present a
    touch-friendly hit target.
 10. **Usable member-tasks board on narrow screens.** The roadmap sprint page
@@ -6186,7 +6185,7 @@ Rules:
     valid integer, or is an integer that is not a sprint of the named roadmap, returns HTTP 404, and a
     request whose `{name}` is invalid or nonexistent returns HTTP 404.
 15. Following a task's link anywhere one is shown — the cards of the sprint page's
-    board, and the title and the `View` link of each row of the tasks page's list —
+    board, and the title of each row of the tasks page's list —
     navigates to that task's page at `/roadmaps/{name}/tasks/{id}`, which displays all
     of that task's fields (`id`, `title`, `status`, `type`, `priority`, `severity`,
     `functional_requirements`, `technical_requirements`, `acceptance_criteria`,
@@ -6771,37 +6770,35 @@ Rules:
     order yields exactly that order. Filtering and searching remove rows from the order
     and never reorder the rows that remain.
 85. Each row of the tasks page's list shows, in this order, one cell per column
-    headed `ID`, `Title`, `Type`, `Status`, `Sprint`, `Severity`, `Priority`,
-    `Created`, and `Actions`: the id badge reading `#<id>` with the classes `bg-black`
+    headed `ID`, `Title`, `Type`, `Status`, `Severity`, `Priority`, and `Created`,
+    and no other: the id badge reading `#<id>` with the classes `bg-black`
     and `text-white`; the task `title` as a link to the task page; the type badge
     reading the task's `type` exactly as the `TaskType` enum spells it and coloured by
     the task type mapping; the status badge reading the task's `status` exactly as the
-    `TaskStatus` enum spells it and coloured by the task status mapping; the sprint the
-    task belongs to as the plain text `Sprint #<id>` followed by a space and the
-    sprint's `title`, or an em dash for a task in no sprint; the severity badge reading
+    `TaskStatus` enum spells it and coloured by the task status mapping; the severity
+    badge reading
     `S` immediately followed by the task's severity; the priority badge reading `P`
     immediately followed by the task's priority, with no colon, no space, and no other
     separator between the letter and the digits; the task's `created_at` in the display
     form `YYYY-MM-DD HH:mm:ss` inside a `<time>` element whose `datetime` holds the stored
     value, preceded by `<i class="ti ti-calendar me-1" aria-hidden="true"></i>`, in a cell
-    carrying `text-secondary`; and a `View` link carrying `btn` and `btn-sm` in a cell
-    carrying `text-end`. A badge reading `3`, `S 3`, `S:3`, `Sev:3`, or `Sev: 3` (or the
+    carrying `text-secondary`. The table has no `Sprint` column and no `Actions`
+    column, and no row carries a `View` link. A badge reading `3`, `S 3`, `S:3`, `Sev:3`, or `Sev: 3` (or the
     corresponding `Pri:` form) does not satisfy this criterion. The severity and
     priority badges are coloured by the mapping applied to the value alone, so the badge
     label changes no badge colour (Acceptance Criterion 61 continues to hold). The row
-    carries no comment count, no subtask count, no dependency count, and no other field
-    (see [Roadmap Tasks Page](#roadmap-tasks-page), **Row content**).
-86. Each row carries exactly two links, and both are `<a>` elements whose `href` is
-    `/roadmaps/{name}/tasks/{id}` of the row's own task: the title, whose accessible
-    name is its visible text, and the `View` link, whose accessible name is
-    `View task #<id>: <title>`, carried by its `aria-label`. An accessible name for the
-    `View` link that does not begin with `View`, or that carries the `id` alone, does
-    not satisfy this criterion. A pointer click, a touch tap, and Enter each follow
-    either link, and a middle click opens the task page in a new tab, with no JavaScript
-    added to make any of it work. Following a link issues no request from the tasks page
-    itself and reaches no write path. Each link shows a visible focus indicator when it
-    receives keyboard focus, measured in a browser as a computed `outline` or
-    `box-shadow` on the focused link that the unfocused link does not carry (see
+    carries no comment count, no subtask count, no dependency count, no sprint, and no
+    other field (see [Roadmap Tasks Page](#roadmap-tasks-page), **Row content**).
+86. Each row carries exactly one link, the title: an `<a>` element whose `href` is
+    `/roadmaps/{name}/tasks/{id}` of the row's own task and whose accessible name is
+    its visible text. No row carries a `View` link or any other link, so tabbing
+    through the table stops once per row, on its title. A pointer click, a touch tap,
+    and Enter each follow the link, and a middle click opens the task page in a new
+    tab, with no JavaScript added to make any of it work. Following the link issues no
+    request from the tasks page itself and reaches no write path. The link shows a
+    visible focus indicator when it receives keyboard focus, measured in a browser as a
+    computed `outline` on the focused link that the unfocused link does not carry
+    (Acceptance Criterion 247 fixes its contrast; see
     [Roadmap Tasks Page](#roadmap-tasks-page), **Links to the task page**).
 87. The tasks page is read-only. The table carries no selection checkbox, no
     `table-selectable` class, and no form control of any kind; the list card carries no
@@ -6821,18 +6818,15 @@ Rules:
     when the active page size is not `25`. This link is the page's only Reset control:
     the filter bar carries none. Both answer HTTP 200
     (see [Roadmap Tasks Page](#roadmap-tasks-page), **Empty states**).
-89. Rendering the tasks page issues exactly three reads when the rendered page
-    holds at least one row — one read of the roadmap's sprints, one read of the
-    roadmap's tasks through the task listing, and one grouped query resolving the
-    sprint of the rendered rows — and exactly two when it holds none, the grouped query
-    being skipped. An instrumented count of queries is the same for a roadmap of 10
+89. Rendering the tasks page issues exactly two reads, whether or not the rendered
+    page holds a row — one read of the roadmap's sprints and one read of the roadmap's
+    tasks through the task listing — and no sprint-resolution query. An instrumented count of queries is the same for a roadmap of 10
     tasks and one of 300, for every page and every page size, and for any number of
     active filters; no query is issued per row, per page, or per filter, and no
     comment is read. The search term, the total, and the selection of the page's rows
     are computed in memory over the rows the task read returned (see
     [Roadmap Tasks Page](#roadmap-tasks-page), **Read cost**,
-    `DATABASE.md § List Sprint Titles`, `DATABASE.md § List All`, and
-    `DATABASE.md § Resolve the Sprint of Many Tasks (Grouped)`).
+    `DATABASE.md § List Sprint Titles`, and `DATABASE.md § List All`).
 90. The tasks page's markup obeys the rules already in force and introduces no
     exception: no template carries a presentational inline `style` attribute, every
     class the page emits is defined either in the vendored Tabler distribution or in
@@ -6843,27 +6837,25 @@ Rules:
     unchanged, and the page header's actions column carries nothing on this page
     (Acceptance Criteria 74 to 76 and 78 to 80 continue to hold; see
     [UI Framework](#ui-framework), rules 8 and 10).
-91. The `Sprint` cell of a task that belongs to a sprint reads `Sprint #<id>`
-    followed by a space and that sprint's `title`, as plain text and not as a link. It
-    names exactly one sprint and never a list, because `sprint_tasks.task_id` carries a
-    `UNIQUE` constraint and a task therefore belongs to at most one sprint. The `Sprint`
-    cell of a task that belongs to no sprint reads an em dash (`—`) and nothing else
-    (see [Roadmap Tasks Page](#roadmap-tasks-page), **Row content**,
-    `MODELS.md § Sprint`, and `DATABASE.md § Relationships`).
-92. Resolving the sprint of the rendered rows issues exactly one query for the
-    whole set of the rendered page's task ids, not one per row: an instrumented count of
-    sprint-resolution queries for a tasks page rendering N rows is 1, independent of N,
-    of the page size, and of how many distinct sprints those tasks belong to, and the
-    query's id set holds exactly the ids of the page's rows. A tasks page that renders
-    no row issues no sprint-resolution query at all. This is measured the same way
-    Acceptance Criterion 70 measures the comment-query count (see
-    `DATABASE.md § Resolve the Sprint of Many Tasks (Grouped)`).
+91. The tasks page shows no task's sprint: its table has no `Sprint` heading and no
+    cell holding a `Sprint #<id>` text or an em dash for a task in no sprint, for a
+    roadmap whose tasks belong to several sprints and to none. Task-to-sprint
+    membership reaches the page only through the sprint filter (Acceptance
+    Criterion 235), and the sprint of a task is shown on that task's page (see
+    [Roadmap Tasks Page](#roadmap-tasks-page), **Row content** and **Relationships
+    shown**).
+92. The tasks page issues no sprint-resolution query: an instrumented count of
+    queries through `DATABASE.md § Resolve the Sprint of Many Tasks (Grouped)` is 0 for
+    a tasks page rendering N rows, for every N, every page size, every filter, and
+    however many distinct sprints the rendered tasks belong to. The sprint filter is
+    applied by the task listing's own predicates (Acceptance Criterion 117). This is
+    measured the same way Acceptance Criterion 70 measures the comment-query count.
 93. Every task card of the Roadmap Sprint Page's member-tasks board is, in the
     served HTML, an `<a>` element with an `href` to its own task's page, and no task
     card is a `<button>`, a `<div>`, or a `<tr>`. No element carrying `role="button"`
     or `tabindex` stands in for a card or for a row of the tasks page's list, and no
     `<tr>` on any page carries an `href`, a `role`, a `tabindex`, or an event-handler
-    attribute; the tasks page's rows reach the task page only through the two links of
+    attribute; the tasks page's rows reach the task page only through the title link of
     Acceptance Criterion 86. Each card's accessible name is
     `Open details for task #<id>: <title>`, carrying the task's `id` and its `title`.
     In particular the name contains the task title, which is the card's visible label,
@@ -8640,9 +8632,9 @@ Rules:
     filter bar's `<form>` and nothing else; the header is followed by a
     `table-responsive` container holding a `<table>` carrying `table`, `table-vcenter`,
     and `card-table` and not `table-selectable`, whose `<thead>` row holds the headings
-    `ID`, `Title`, `Type`, `Status`, `Sprint`, `Severity`, `Priority`, `Created`, and
-    `Actions`, in that order, the `ID` heading carrying `w-1` and the `Actions` heading
-    carrying `text-end`; and the card ends with a `card-footer` holding one
+    `ID`, `Title`, `Type`, `Status`, `Severity`, `Priority`, and `Created`, in that
+    order and no other — no `Sprint` and no `Actions` heading — the `ID` heading
+    carrying `w-1`; and the card ends with a `card-footer` holding one
     `<div class="row g-2 align-items-center">` of exactly three `col-auto` columns — the
     range text, the rows-per-page selector, and the pagination bar, in that order — the
     third also carrying `ms-auto`. The check asserts this structure element by element,
@@ -8656,10 +8648,11 @@ Rules:
     examples `https://preview.tabler.io/cards.html` (the card as a whole),
     `https://preview.tabler.io/card-actions.html` (the card header), and
     `https://preview.tabler.io/tasks-list.html` (the table and its rows). The page
-    passes when every difference the specialist records is one of the five deviations
+    passes when every difference the specialist records is one of the six deviations
     **Modelled on three Tabler examples** permits — one card rather than one per group,
-    no selection, no add-task control and no modal, the roadmap's own columns, and the
-    added filter bar, pagination, and rows-per-page selector — and when the filter bar
+    no selection, no add-task control and no modal, the roadmap's own columns, the
+    added filter bar, pagination, and rows-per-page selector, and no per-row `View`
+    button — and when the filter bar
     in the card header, the rows, and the card footer read as Tabler's own components at
     each of the three widths. The specialist records the result, with a screenshot at
     each width, in the task that implements the page; any other difference fails the
@@ -8793,13 +8786,10 @@ Rules:
     **Compact controls**, and **Labels are programmatic, not visible**).
 244. **The title column is not squeezed.** In the served HTML of the tasks page no
     cell of the table carries `text-break`; every `Title` cell carries a class for
-    which `static/style.css` declares `min-width: 16rem`, and every `Sprint` cell
-    carries a class for which it declares `min-width: 10rem`. In a browser, for a roadmap holding a task whose title is
-    at least 120 characters of ordinary words and a task whose sprint title is at
-    least 40 characters, at each of the viewport widths `375px`, `576px`, `992px`,
+    which `static/style.css` declares `min-width: 16rem`. In a browser, for a roadmap
+    holding a task whose title is at least 120 characters of ordinary words, at each of the viewport widths `375px`, `576px`, `992px`,
     and `1440px`: every rendered `Title` cell is at least `16rem` wide; no title is
-    broken inside a word; every rendered `Sprint` cell is at least `10rem` wide; and where the table is wider than the card, it
-    scrolls horizontally inside its `table-responsive` container while `<body>`
+    broken inside a word; and where the table is wider than the card, it scrolls horizontally inside its `table-responsive` container while `<body>`
     produces no horizontal overflow (Acceptance Criterion 128 continues to hold; see
     [Roadmap Tasks Page](#roadmap-tasks-page), **Column widths**).
 245. **The active page size is shown by more than colour, with sufficient
@@ -8861,7 +8851,7 @@ Rules:
     a browser, in the dark theme the interface serves, moving keyboard focus with
     Tab onto each kind of focusable element that UI Framework rule 21 names for the
     tasks page and for the sprint board — the search input, each select, Apply, the
-    no-match empty state's Reset link, a row's title link, a row's `View` link, a pagination link, the active and
+    no-match empty state's Reset link, a row's title link, a pagination link, the active and
     an inactive rows-per-page link, a board card, and a column toggle — gives the
     element a computed `outline` whose style is `solid`, whose width is at least
     `2px`, and whose colour has a contrast ratio of at least 3:1 against the computed
@@ -8946,7 +8936,7 @@ Rules:
   `COMMANDS.md § List Tasks`
 - Keyboard operability of a task card and of a task row: why the sprint board's
   card is a link with an `href`, why a row of the tasks page's list is not a link
-  and carries two, and why no script may be added to compensate →
+  and carries one, its title, and why no script may be added to compensate →
   [Sprint Detail Sub-Template](#sprint-detail-sub-template),
   [Roadmap Tasks Page](#roadmap-tasks-page), [Security Headers](#security-headers),
   and [Frontend Rules](#frontend-rules)
@@ -8954,9 +8944,10 @@ Rules:
   page's Sprint card, and the density of in-sprint positions its position line
   relies on → `STATE_MACHINE.md § Sprint Membership and the BACKLOG Status` and
   `DATABASE.md § Position Density Within a Sprint`
-- Sprint membership shown in each row of the tasks page's list, the `UNIQUE` constraint that limits a
-  task to one sprint, and the grouped query that resolves the sprint of every
-  rendered task in one round trip → `MODELS.md § Sprint`,
+- Sprint membership, by which the tasks page's sprint filter narrows its list and
+  which the task page shows, the `UNIQUE` constraint that limits a task to one
+  sprint, and the grouped query that resolves the sprint of a set of tasks in one
+  round trip, which the task page uses → `MODELS.md § Sprint`,
   `DATABASE.md § sprint_tasks Table (1:N Relationship)`,
   `DATABASE.md § Relationships`, and
   `DATABASE.md § Resolve the Sprint of Many Tasks (Grouped)`

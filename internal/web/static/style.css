@@ -532,13 +532,12 @@
 }
 
 /* The table keeps its automatic layout, which shares the width among the
-   columns by their content. The title and Sprint cells carry a floor instead of
-   a class that breaks words, so a title wraps at word boundaries and is never
-   squeezed into a column one or two words wide; where the floors make the table
-   wider than the card, it scrolls inside its table-responsive container
-   (Row content, Column widths). */
+   columns by their content. The title cell carries a floor instead of a class
+   that breaks words, so a title wraps at word boundaries and is never squeezed
+   into a column one or two words wide; where the floor makes the table wider
+   than the card, it scrolls inside its table-responsive container (Row content,
+   Column widths). */
 .task-list__title { min-width: 16rem; }
-.task-list__sprint { min-width: 10rem; }
 
 /* The active rows-per-page link is drawn with a solid primary fill that the
    inactive links do not carry, so the state is not shown by hue alone. The
@@ -556,7 +555,7 @@
 /* ---- Keyboard focus on the tasks list and the sprint board
    (SPEC/WEB.md § UI Framework, rule 21) ----
    Every element that takes keyboard focus on the tasks page — the filter bar's
-   input, selects, and Apply, each row's two links, the pagination links,
+   input, selects, and Apply, each row's title link, the pagination links,
    the rows-per-page links, and the no-match empty state's Reset link — carries
    the light-grey 2px solid outline the
    header back links carry, on its :focus-visible state only. Its colour, #dce1e7,
@@ -581,7 +580,6 @@
    colours, a darkened primary on the Apply button, against which the outline
    is not what marks the focus. The outline alone marks it. */
 .card-actions .btn:focus-visible,
-.card-table .btn:focus-visible,
 .card-footer .btn:focus-visible,
 .card-body > .empty > .empty-action .btn:focus-visible {
   --tblr-btn-hover-color: var(--tblr-btn-color);

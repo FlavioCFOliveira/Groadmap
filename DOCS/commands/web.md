@@ -92,7 +92,7 @@ All routes serve `GET` and `HEAD` only. Any other HTTP method on any route retur
 |-------|---------|----------|
 | `/` | Roadmap index: every roadmap under `~/.roadmaps/`, with links to each roadmap's sprints landing page and graph page (empty-state message when none) | HTML |
 | `/roadmaps/{name}` | Roadmap sprints page and landing page: that roadmap's sprints in three tabs (Próximos / Actual / Concluídos, Actual default), each tab carrying a count badge in the colour of the sprint status it groups; every sprint rendered through the same sprint card and linking to its own page. Selecting a roadmap on the index lands here | HTML |
-| `/roadmaps/{name}/tasks` | Roadmap tasks page: every task of that roadmap, of any status, as one paginated list (ID, title, type, status, sprint, severity, priority, created, View); filtered and paginated on the server through the `q`, `sprint`, `status`, `type`, `page` and `size` query parameters; each row links to that task's own page. See [The Tasks Page](#the-tasks-page) | HTML |
+| `/roadmaps/{name}/tasks` | Roadmap tasks page: every task of that roadmap, of any status, as one paginated list (ID, title, type, status, severity, priority, created); filtered and paginated on the server through the `q`, `sprint`, `status`, `type`, `page` and `size` query parameters; each row links to that task's own page. See [The Tasks Page](#the-tasks-page) | HTML |
 | `/roadmaps/{name}/sprints/{id}` | Dedicated sprint page: all sprint details, the sprint's member tasks as a three-column board in planned execution order, and the sprint's own Comments card; each task card links to that task's own page. See [The Sprint Board](#the-sprint-board) | HTML |
 | `/roadmaps/{name}/tasks/{id}` | Dedicated task page: every field of the task, a small context of the sprint it belongs to, its four Markdown text fields, and its Comments card. A task id that is not an integer or names no task in that roadmap returns HTTP `404`. No path exists below it, so `/roadmaps/{name}/tasks/{id}/data` also returns `404`. See [The Task Page](#the-task-page) | HTML |
 | `/roadmaps/{name}/audit` | Roadmap audit log page: that roadmap's full audit log, showing every field of an audit entry (columns ID, Operation, Entity Type, Entity ID, Related Entity ID, Commit, Performed At, in that order; the two nullable columns are always present and render an em dash where the entry carries no value), ordered by Performed At descending (most recent first), paginated at 100 entries per page via the `page` query parameter (1-based, default 1; out-of-range or non-numeric values are clamped to the nearest valid page) with Previous/Next controls and a "Page X of Y" indicator | HTML |
@@ -117,16 +117,14 @@ All routes serve `GET` and `HEAD` only. Any other HTTP method on any route retur
   | `Title` | The task `title`, as a link to the task's own page |
   | `Type` | The type badge, coloured by task type |
   | `Status` | The status badge, coloured by task status |
-  | `Sprint` | `Sprint #<id>` followed by the sprint's `title`, as plain text; an em dash (`—`) for a task in no sprint |
   | `Severity` | The severity badge, `S<n>`, coloured by severity band |
   | `Priority` | The priority badge, `P<n>`, coloured by priority band |
   | `Created` | The task's `created_at`, muted, after a calendar icon |
-  | `Actions` | A right-aligned `View` link to the task's own page |
 
   The badges are the same badges, with the same colours and the same `S` and `P` prefixes, as those of the sprint board's cards. A long title wraps at word boundaries and is never broken mid-word; when the table is wider than the card it scrolls horizontally inside the card, never the page.
 - **Footer.** The range text `Showing <a> to <b> of <n> entries`, where `<n>` is the number of tasks the filters admit; a rows-per-page selector offering `10`, `25`, `50` and `100`, with `25` the default and the active size drawn with a solid fill; and a numbered pagination bar with Previous and Next controls, the same bar the audit log page uses.
 
-Each row carries exactly two links, the title and `View`, and both lead to the task's page, `/roadmaps/{name}/tasks/{id}` (see [The Task Page](#the-task-page)). The row itself is not a link.
+Each row carries exactly one link, the title, which leads to the task's page, `/roadmaps/{name}/tasks/{id}` (see [The Task Page](#the-task-page)). The row itself is not a link.
 
 Rows appear in descending `priority`, then ascending `created_at`, then ascending `id`. The first two keys are the default order of `rmp task list`; the third makes the order total, so a task lands on the same page on every request. Filtering removes rows from that order and never reorders the rows that remain.
 
@@ -178,7 +176,7 @@ When no task satisfies the request, the card keeps its header and filter bar, so
 
 The page is read-only: it offers no control that creates, edits, moves or reorders a task, no selection and no modal. The filter form only narrows what the page shows, and the `rmp` CLI remains the sole write path.
 
-Rendering the page performs three reads and no more: one read of the roadmap's sprints (for the sprint options and to validate `sprint`), one read of the roadmap's tasks carrying the accepted `sprint`, `status` and `type` values as bound SQL parameters, and one grouped query resolving the sprint of every row on the rendered page. The search, the total and the page are computed in memory over the rows already read. The `-l, --limit` default of `rmp task list` is not applied, so the total in the footer is the true number of matching tasks. The number of queries does not grow with the number of tasks, the page size, or the number of active filters.
+Rendering the page performs two reads and no more: one read of the roadmap's sprints (for the sprint options and to validate `sprint`), and one read of the roadmap's tasks carrying the accepted `sprint`, `status` and `type` values as bound SQL parameters. The page resolves no task's sprint, because no row shows one. The search, the total and the page are computed in memory over the rows already read. The `-l, --limit` default of `rmp task list` is not applied, so the total in the footer is the true number of matching tasks. The number of queries does not grow with the number of tasks, the page size, or the number of active filters.
 
 ## The Sprint Board
 

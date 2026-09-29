@@ -1592,7 +1592,7 @@ ORDER BY st.task_id ASC;
 
 **Index.** The query needs no new index. `WHERE st.task_id IN (...)` is served by `idx_sprint_tasks_task_id`, the single-column index the `sprint_tasks` DDL already declares on `task_id`, and by the implicit unique index SQLite creates for that column's `UNIQUE` constraint. The join resolves `sprints` by its primary key. See Performance Optimization below.
 
-**Use case:** the read-only web interface's tasks page shows, in each row of its list, the sprint that task belongs to, so it MUST resolve the sprint of every task of the rendered page with this single grouped query, over the ids of that page's rows, rather than one query per row (see `WEB.md § Roadmap Tasks Page`). The roadmap task page resolves the sprint of its one task through the same statement, over a set holding that one id (see `WEB.md § Roadmap Task Page`).
+**Use case:** the read-only web interface's roadmap task page resolves the sprint of its one task through this statement, over a set holding that one id (see `WEB.md § Roadmap Task Page`). The web tasks page does not issue it: its list shows no task's sprint, and its sprint filter is applied by the membership predicates of the listing it reads (see `List All` above and `WEB.md § Roadmap Tasks Page`). A caller that must resolve the sprints of several tasks MUST do so with this single grouped query over the whole id set, never with one query per task.
 
 ### Audit Queries
 

@@ -496,11 +496,10 @@ func TestTaskList_CardFollowsTheTablerExamples(t *testing.T) {
 		headings = append(headings, m[2])
 		headingClasses = append(headingClasses, m[1])
 	}
-	if want := []string{"ID", "Title", "Type", "Status", "Sprint", "Severity", "Priority", "Created", "Actions"}; !slices.Equal(headings, want) {
+	if want := []string{"ID", "Title", "Type", "Status", "Severity", "Priority", "Created"}; !slices.Equal(headings, want) {
 		t.Errorf("the headings are %v, want %v", headings, want)
-	} else if headingClasses[0] != ` class="w-1"` || headingClasses[8] != ` class="text-end"` {
-		t.Errorf("the ID heading carries %q and the Actions heading %q, want w-1 and text-end",
-			headingClasses[0], headingClasses[8])
+	} else if headingClasses[0] != ` class="w-1"` || slices.ContainsFunc(headingClasses[1:], func(c string) bool { return c != "" }) {
+		t.Errorf("the headings carry the classes %q, want w-1 on ID alone", headingClasses)
 	}
 
 	// The footer, last child of the card.
@@ -523,12 +522,12 @@ func stripTemplateComments(s string) string { return strings.TrimSpace(s) }
 
 // TestTaskList_RowContent is the gate for Acceptance Criteria 85, 86, 91, and 93
 // on the list, and for the list half of Acceptance Criterion 61: each row carries,
-// in order, the id badge, the title link, the type badge, the status badge, the
-// sprint text or an em dash, the S and P badges, the created date in a <time>
-// preceded by the calendar icon in a text-secondary cell, and the View link in a
-// text-end cell; exactly two links, both to the task's page, the View link named
-// "View task #<id>: <title>"; no row carrying an href, a role, a tabindex, or an
-// event handler; and no comment, subtask, or dependency count.
+// in order, the id badge, the title link, the type badge, the status badge, the S
+// and P badges, and the created date in a <time> preceded by the calendar icon in
+// a text-secondary cell, and nothing else — no sprint, no Sprint #<id> text, no em
+// dash, no View link; exactly one link, the title, to the task's page, with no
+// aria-label; no row carrying an href, a role, a tabindex, or an event handler;
+// and no comment, subtask, or dependency count.
 func TestTaskList_RowContent(t *testing.T) {
 	t.Setenv("HOME", shortHome(t))
 	f := seedListFixture(t, "payments-platform", 12)
@@ -536,36 +535,44 @@ func TestTaskList_RowContent(t *testing.T) {
 	body := servePage(t, mux, listPath(f.name, nil))
 	main := boardRegion(t, body)
 
-	sprintTitle := map[int]string{f.sprintA: "Checkout hardening", f.sprintB: "Settlement reconciliation"}
+	inSprint := 0
 	for _, task := range f.tasks {
+		if task.sprint != 0 {
+			inSprint++
+		}
 		row := rowMarkupOf(t, main, task.id, "the tasks list")
 		link := `/roadmaps/` + f.name + `/tasks/` + itoa(task.id)
-		sprintCell := "&mdash;"
-		if task.sprint != 0 {
-			sprintCell = "Sprint #" + itoa(task.sprint) + " " + sprintTitle[task.sprint]
-		}
 		want := `<tr>` +
 			`<td><span class="badge bg-black text-white">#` + itoa(task.id) + `</span></td>` +
 			`<td class="task-list__title"><a href="` + link + `">` + rendered(task.title) + `</a></td>` +
 			`<td><span class="badge ` + wantTaskTypeVariant[task.taskType] + `">` + string(task.taskType) + `</span></td>` +
 			`<td><span class="badge ` + taskStatusBadge(task.status) + `">` + string(task.status) + `</span></td>` +
-			`<td class="task-list__sprint">` + sprintCell + `</td>` +
 			`<td><span class="badge ` + severityBadge(task.severity) + `">S` + itoa(task.severity) + `</span></td>` +
 			`<td><span class="badge ` + priorityBadge(task.priority) + `">P` + itoa(task.priority) + `</span></td>` +
 			`<td class="text-secondary text-nowrap"><i class="ti ti-calendar me-1" aria-hidden="true"></i>` +
 			`<time datetime="` + task.created + `">` + displayOf(task.created) + `</time></td>` +
-			`<td class="text-end"><a class="btn btn-sm" href="` + link + `" aria-label="View task #` + itoa(task.id) + `: ` + rendered(task.title) + `">View</a></td>` +
 			`</tr>`
 		if got := collapseMarkup(row); got != want {
 			t.Errorf("task #%d's row is\n  %s\nwant\n  %s", task.id, got, want)
 		}
-		if got := strings.Count(row, "<a "); got != 2 {
-			t.Errorf("task #%d's row carries %d links, want exactly 2", task.id, got)
+		if got := strings.Count(row, "<a "); got != 1 {
+			t.Errorf("task #%d's row carries %d links, want exactly 1", task.id, got)
 		}
-		for _, forbidden := range []string{"ti-message", "ti-subtask", "ti-link", "Comments", "Subtasks", "Depends", "Blocks"} {
+		for _, forbidden := range []string{"ti-message", "ti-subtask", "ti-link", "Comments", "Subtasks", "Depends", "Blocks",
+			"Sprint #", "&mdash;", ">View<", "aria-label", "task-list__sprint"} {
 			if strings.Contains(row, forbidden) {
 				t.Errorf("task #%d's row carries %q; the row shows no count", task.id, forbidden)
 			}
+		}
+	}
+
+	if inSprint == 0 || inSprint == len(f.tasks) {
+		t.Fatalf("the fixture's tasks are all in sprints or all in none; the absence of a sprint cell proves nothing")
+	}
+	table := main[mustIndex(t, main, "<table"):mustIndex(t, main, "</table>")]
+	for _, forbidden := range []string{"<th>Sprint</th>", "Actions</th>", "Sprint #", "&mdash;"} {
+		if strings.Contains(table, forbidden) {
+			t.Errorf("the table carries %q; it shows no task's sprint and has no Actions column", forbidden)
 		}
 	}
 
@@ -583,7 +590,7 @@ func TestTaskList_RowContent(t *testing.T) {
 		}
 	}
 
-	// Following a row's two links serves that task's page.
+	// Following a row's link serves that task's page.
 	task := f.tasks[0]
 	page := servePage(t, mux, "/roadmaps/"+f.name+"/tasks/"+itoa(task.id))
 	if !strings.Contains(page, `<div class="page-pretitle">Task #`+itoa(task.id)+` <span class="badge `) {
@@ -594,8 +601,8 @@ func TestTaskList_RowContent(t *testing.T) {
 // TestTaskList_TitleColumnIsNotSqueezed is the gate for the served-markup and
 // stylesheet half of Acceptance Criteria 128 and 244: no cell of the table
 // carries text-break, every Title cell carries the class the project stylesheet
-// floors at 16rem and every Sprint cell the class it floors at 10rem, and the
-// table sits inside its table-responsive container. A long title in the fixture
+// floors at 16rem, the stylesheet carries no Sprint-cell rule, and the table sits
+// inside its table-responsive container. A long title in the fixture
 // proves the classes do not depend on the title's length.
 func TestTaskList_TitleColumnIsNotSqueezed(t *testing.T) {
 	t.Setenv("HOME", shortHome(t))
@@ -626,17 +633,15 @@ func TestTaskList_TitleColumnIsNotSqueezed(t *testing.T) {
 	if got := strings.Count(table, `<td class="task-list__title"><a href=`); got != rows {
 		t.Errorf("%d of %d Title cells carry task-list__title", got, rows)
 	}
-	if got := strings.Count(table, `<td class="task-list__sprint">`); got != rows {
-		t.Errorf("%d of %d Sprint cells carry task-list__sprint", got, rows)
-	}
 	if !strings.Contains(table, `<td class="task-list__title"><a href="/roadmaps/`+f.name+`/tasks/`) || !strings.Contains(table, long) {
 		t.Errorf("the long title is not rendered whole in its Title cell")
 	}
 	sheet := projectStyleSheet(t)
-	for class, want := range map[string]string{".task-list__title": "16rem", ".task-list__sprint": "10rem"} {
-		if got := cssDeclarations(soleCSSRule(t, sheet, class), "min-width"); !slices.Equal(got, []string{want}) {
-			t.Errorf("static/style.css declares min-width %v for %s, want %s", got, class, want)
-		}
+	if got := cssDeclarations(soleCSSRule(t, sheet, ".task-list__title"), "min-width"); !slices.Equal(got, []string{"16rem"}) {
+		t.Errorf("static/style.css declares min-width %v for .task-list__title, want 16rem", got)
+	}
+	if blocks := cssRuleBlocks(sheet, ".task-list__sprint"); len(blocks) != 0 {
+		t.Errorf("static/style.css still carries a rule for the removed Sprint cell: %v", blocks)
 	}
 }
 
@@ -866,10 +871,10 @@ func TestTaskList_EmptyStates(t *testing.T) {
 // ==================== READ COST AND BOUND PARAMETERS ====================
 
 // TestTaskList_ReadCost is the gate for Acceptance Criteria 89, 92, and 105 (its
-// read half): three reads when the page renders a row — the sprint titles, the
-// task listing, and one grouped sprint resolution over exactly the page's row ids
-// — and two when it renders none; the same count for 10 tasks and 300, for every
-// page, page size and number of filters, with a term or without; no comment read.
+// read half): exactly two reads whether or not the page renders a row — the
+// sprint titles and the task listing — and no sprint-resolution query; the same
+// count for 10 tasks and 300, for every page, page size and number of filters,
+// with a term or without; no comment read.
 func TestTaskList_ReadCost(t *testing.T) {
 	t.Setenv("HOME", shortHome(t))
 	small := seedListFixture(t, "payments-small", 10)
@@ -890,26 +895,12 @@ func TestTaskList_ReadCost(t *testing.T) {
 			if err != nil {
 				t.Fatalf("%d tasks %v: readTaskList: %v", len(f.tasks), params, err)
 			}
-			wantGrouped := 1
-			if len(data.Rows) == 0 {
-				wantGrouped = 0
-			}
-			if src.sprintTitles != 1 || src.taskList != 1 || src.groupedTaskSprints != wantGrouped {
-				t.Errorf("%d tasks %v: reads = %d sprint titles, %d listings, %d grouped sprint reads; want 1, 1, %d",
-					len(f.tasks), params, src.sprintTitles, src.taskList, src.groupedTaskSprints, wantGrouped)
+			if src.sprintTitles != 1 || src.taskList != 1 || src.groupedTaskSprints != 0 {
+				t.Errorf("%d tasks %v (%d rows): reads = %d sprint titles, %d listings, %d sprint resolutions; want 1, 1, 0",
+					len(f.tasks), params, len(data.Rows), src.sprintTitles, src.taskList, src.groupedTaskSprints)
 			}
 			if src.groupedCommentCounts+src.perTaskComments+src.sprintComments+src.boundedTaskList+src.sprintListings+src.sprintTasks != 0 {
-				t.Errorf("%d tasks %v: the page issued a read beyond its three", len(f.tasks), params)
-			}
-			if wantGrouped == 1 {
-				ids := make([]int, len(data.Rows))
-				for i := range data.Rows {
-					ids[i] = data.Rows[i].ID
-				}
-				if !slices.Equal(src.lastSprintIDs, ids) {
-					t.Errorf("%d tasks %v: the grouped read was given %v, want the page's rows %v",
-						len(f.tasks), params, src.lastSprintIDs, ids)
-				}
+				t.Errorf("%d tasks %v: the page issued a read beyond its two", len(f.tasks), params)
 			}
 		}
 	}
@@ -1624,7 +1615,7 @@ func TestTaskList_PaginationBarAndSizeSelector(t *testing.T) {
 			q := tasksQuery{Size: 10}
 			data := tasksData{
 				Name:      "payments-platform",
-				Rows:      []taskRow{{Task: models.Task{ID: 1, Title: "Reconcile the payout file", Type: models.TypeTask, Status: models.StatusDoing, CreatedAt: "2026-03-01T09:00:00.000Z"}}},
+				Rows:      []models.Task{{ID: 1, Title: "Reconcile the payout file", Type: models.TypeTask, Status: models.StatusDoing, CreatedAt: "2026-03-01T09:00:00.000Z"}},
 				PageItems: taskPageLinks(&q, "payments-platform", current, pages),
 				Total:     pages * 10, First: 1, Last: 1, Page: current, Pages: pages,
 				Filters: taskFilterBar{Size: 10},

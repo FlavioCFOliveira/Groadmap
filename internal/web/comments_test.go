@@ -750,10 +750,9 @@ func TestCommentTypeBadge_NeutralForEveryType(t *testing.T) {
 // so the counter is a falsifiable guard that the seam still holds if that
 // interface is ever widened; the sprint-page and endpoint tests exercise it
 // directly to prove it counts.
-// groupedTaskSprints counts the tasks page's third read, the grouped sprint
-// resolution, and lastSprintIDs records the id set it was given, so Acceptance
-// Criterion 92 is measured on the same instrument as Criterion 70: one query for
-// the whole set of rendered task ids, and none for a page that renders no task.
+// groupedTaskSprints counts the grouped sprint resolution, and lastSprintIDs
+// records the id set it was given, so Acceptance Criterion 92 is measured on the
+// same instrument as Criterion 70: the tasks page and the sprint page issue none.
 //
 // sprintListings counts the sprints page's ONLY read, the sprint listing, and
 // sprintTasks counts the per-sprint member-task read that page must never take:

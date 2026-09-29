@@ -1273,12 +1273,12 @@ class TestWebInterface:
         """AC9, AC81, AC83, AC85, AC86, AC87, AC91, AC107, AC232: the tasks page
         is ONE Tabler card — a header holding the "Task list" title block and a
         card-actions GET filter bar, a table-responsive table with one row per
-        task of the page in nine columns, and a footer with the range text, the
+        task of the page in seven columns, and a footer with the range text, the
         rows-per-page selector and the pagination bar — with no board, no card
         per task, no modal, no selection, and no script of its own. Each row
-        carries the id, type, status, severity and priority badges, the sprint as
-        `Sprint #<id> <title>` or an em dash, the created date, and exactly two
-        links to the task's page, the View link named "View task #<id>: <title>".
+        carries the id, type, status, severity and priority badges and the
+        created date, no sprint, no View link and no Actions column, and exactly
+        one link to the task's page: the title, named by its visible text.
         """
         record = self._seed_list_roadmap("payments_catalogue", 60)
         tasks = record["tasks"]
@@ -1298,8 +1298,8 @@ class TestWebInterface:
             r'action="/roadmaps/payments_catalogue/tasks">', main, re.S), "the card header is not the Tabler title block and card-actions form"
         assert "card-subtitle" not in main
         headings = re.findall(r"<th(?: class=\"[^\"]*\")?>([^<]*)</th>", main)
-        assert headings == ["ID", "Title", "Type", "Status", "Sprint", "Severity", "Priority", "Created", "Actions"], headings
-        assert '<th class="w-1">ID</th>' in main and '<th class="text-end">Actions</th>' in main
+        assert headings == ["ID", "Title", "Type", "Status", "Severity", "Priority", "Created"], headings
+        assert '<th class="w-1">ID</th>' in main and "Actions</th>" not in main
         scripts = re.findall(r"<script\b([^>]*)>", body)
         assert scripts == [' src="/static/vendor/tabler/tabler.min.js"'], scripts
 
@@ -1313,12 +1313,16 @@ class TestWebInterface:
                          r'<div class="col-auto ms-auto">\s*<nav aria-label="Task list pages">', main, re.S), (
             "the card footer is not three col-auto columns with the pagination bar at the trailing edge")
 
-        # Row content, for a sprint member and a task in no sprint.
+        # Row content, for a sprint member and a task in no sprint: neither row
+        # shows a sprint.
         statuses = {task["status"] for task in tasks.values()}
         assert statuses == set(self.TASK_STATUSES), f"the fixture spans only {statuses}"
         member = next(i for i in want[:25] if tasks[i]["sprint"] == record["sprint_a"])
         loose = next(i for i in want[:25] if tasks[i]["sprint"] == 0)
-        for task_id, sprint_text in ((member, f"Sprint #{record['sprint_a']} Checkout hardening"), (loose, "&mdash;")):
+        table = main[main.index("<table"):main.index("</table>")]
+        for absent in ("Sprint #", "&mdash;", ">View<", "aria-label", "task-list__sprint"):
+            assert absent not in table, f"the table carries {absent!r}; it shows no sprint and no View link"
+        for task_id in (member, loose):
             task = tasks[task_id]
             row = re.sub(r">\s+<", "><", self._list_row(body, task_id))
             href = f"/roadmaps/payments_catalogue/tasks/{task_id}"
@@ -1328,13 +1332,11 @@ class TestWebInterface:
                 f'<td class="task-list__title"><a href="{href}">{title}</a></td>',
                 f'<span class="badge {self.TASK_TYPE_BADGE[task["type"]]}">{task["type"]}</span>',
                 f'<span class="badge {self.TASK_STATUS_BADGE[task["status"]]}">{task["status"]}</span>',
-                f'<td class="task-list__sprint">{sprint_text}</td>',
                 f'>S{task["severity"]}</span>', f'>P{task["priority"]}</span>',
                 '<td class="text-secondary text-nowrap"><i class="ti ti-calendar me-1" aria-hidden="true"></i><time datetime="',
-                f'<td class="text-end"><a class="btn btn-sm" href="{href}" aria-label="View task #{task_id}: {title}">View</a></td>',
             ):
                 assert piece in row, f"task #{task_id}'s row lacks {piece!r}: {row}"
-            assert row.count("<a ") == 2 and row.count(f'href="{href}"') == 2, row
+            assert row.count("<a ") == 1 and row.count(f'href="{href}"') == 1, row
             assert row.index(f">S{task['severity']}<") < row.index(f">P{task['priority']}<"), "severity must precede priority"
             for forbidden in ("ti-message", "ti-subtask", "Comments", "role=", "tabindex"):
                 assert forbidden not in row, f"task #{task_id}'s row carries {forbidden!r}"
@@ -1741,7 +1743,7 @@ class TestWebInterface:
         href serves that task's page. No script was added for it (SPEC/WEB.md
         § Sprint Detail Sub-Template, The card is a link to the task page;
         Acceptance Criteria 93 and 135). The tasks page renders rows, not cards:
-        test_tasks_page_renders_one_paginated_list covers its two links (AC86)."""
+        test_tasks_page_renders_one_paginated_list covers its one link (AC86)."""
         proc, port = self._start(["--port", "0"])
 
         for path in (
@@ -3955,8 +3957,8 @@ class TestWebInterface:
     # ====================================================================
 
     def test_task_page_wiring_and_content(self):
-        """Following a task's link — a card of the sprint board, or the title and
-        the View link of a row of the tasks page's list — navigates to the task's
+        """Following a task's link — a card of the sprint board, or the title
+        link of a row of the tasks page's list — navigates to the task's
         own page, which carries every field of the task in the HTML the server
         sends and contains no form, no edit control, and no submit (Acceptance
         Criteria 15 and 94). Neither page carries a task's long text; the tasks
@@ -3980,7 +3982,7 @@ class TestWebInterface:
                 assert submits == 1 and inputs == 2, (
                     f"{path}: the filter bar carries {submits} submits and {inputs} inputs, want 1 and 2"
                 )
-                assert body.count(href) == 2, f"{path}: task #{t1}'s row carries {body.count(href)} links, want 2"
+                assert body.count(href) == 1, f"{path}: task #{t1}'s row carries {body.count(href)} links, want 1"
             else:
                 assert "<form" not in low and 'type="submit"' not in low, f"{path}: a form or a submit"
                 assert low.count("<input") == 0, f"{path}: carries an input"
@@ -6254,9 +6256,17 @@ class TestWebInterface:
             # back to exactly what the user wrote. The extraction is bounded by
             # the quote characters, so a label that had swallowed a stray quote
             # would come back truncated and fail to decode.
-            # The sprint card is named "Open details for task #<id>: <title>" and
-            # the list row's View link "View task #<id>: <title>" (AC86, AC93).
-            prefix = "View task" if path.endswith("/tasks") else "Open details for task"
+            # The sprint card is named "Open details for task #<id>: <title>"
+            # (AC93); the list row's one link is the title, named by its visible
+            # text, which decodes back to the title exactly (AC86).
+            if path.endswith("/tasks"):
+                m = re.search(rf'<a href="/roadmaps/escaping_demo/tasks/{task_id}">([^<]*)</a>', body)
+                assert m and html_lib.unescape(m.group(1)) == hostile, f"{path}: the title link text does not decode to the title"
+                assert body.count(f'href="/roadmaps/escaping_demo/tasks/{task_id}"') == 1, (
+                    f"{path}: the hostile title broke the markup"
+                )
+                continue
+            prefix = "Open details for task"
             labels = [
                 m for m in re.findall(r'aria-label="([^"]*)"', body)
                 if m.startswith(f"{prefix} #{task_id}:")
@@ -6268,10 +6278,8 @@ class TestWebInterface:
                 )
 
             # And the markup kept its shape: the card carries the task's href
-            # once, the list row twice (its title and its View link), not
-            # fragments produced by a broken attribute.
-            want_links = 2 if path.endswith("/tasks") else 1
-            assert body.count(f'href="/roadmaps/escaping_demo/tasks/{task_id}"') == want_links, (
+            # once, not fragments produced by a broken attribute.
+            assert body.count(f'href="/roadmaps/escaping_demo/tasks/{task_id}"') == 1, (
                 f"{path}: the hostile title broke the markup"
             )
 

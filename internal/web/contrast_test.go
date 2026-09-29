@@ -314,8 +314,6 @@ func focusTargets() []focusTarget {
 		{"status select", control("select.form-select.form-select-sm#task-filter-status[name=status]")},
 		{"Apply button", control("button.btn.btn-primary.btn-sm[type=submit]")},
 		{"row title link", describe(append(row, "td.task-list__title", "a[href=/roadmaps/payments/tasks/7]"+kb)...)},
-		{"row View link", describe(append(row, "td.text-end",
-			"a.btn.btn-sm[href=/roadmaps/payments/tasks/7][aria-label=View task #7: Rotate the keys]"+kb)...)},
 		{"pagination link", describe(append(append([]string(nil), footerPath...), "div.col-auto.ms-auto",
 			"nav[aria-label=Task list pages]", "ul.pagination.m-0", "li.page-item", "a.page-link[href=/roadmaps/payments/tasks?page=2]"+kb)...)},
 		{"active rows-per-page link", sizeLink(true, kb)},

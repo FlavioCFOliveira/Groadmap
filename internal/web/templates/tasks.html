@@ -92,35 +92,32 @@
                     <th>Title</th>
                     <th>Type</th>
                     <th>Status</th>
-                    <th>Sprint</th>
                     <th>Severity</th>
                     <th>Priority</th>
                     <th>Created</th>
-                    <th class="text-end">Actions</th>
                   </tr>
                 </thead>
                 <tbody>
                   {{range .Rows}}
                   {{/*
                     One task. The row itself is not a link: it carries no href,
-                    role, tabindex, or handler. The title and the View link are its
-                    two links, both to the task's own page. The id, severity,
-                    priority, and type badges are those of the sprint board's card,
-                    in its order and colours. The title and Sprint cells carry the
-                    minimum widths of the project stylesheet, and no class that
-                    breaks a word (SPEC/WEB.md § Roadmap Tasks Page, Row content;
-                    Column widths; Links to the task page).
+                    role, tabindex, or handler. The title is its one link, to the
+                    task's own page. The id, severity, priority, and type badges are
+                    those of the sprint board's card, in its order and colours. The
+                    row shows no sprint: membership reaches the page only through
+                    the sprint filter. The title cell carries the minimum width of
+                    the project stylesheet, and no class that breaks a word
+                    (SPEC/WEB.md § Roadmap Tasks Page, Row content; Column widths;
+                    Links to the task page).
                   */}}
                   <tr>
                     <td><span class="badge bg-black text-white">#{{.ID}}</span></td>
                     <td class="task-list__title"><a href="/roadmaps/{{$.Name}}/tasks/{{.ID}}">{{.Title}}</a></td>
                     <td><span class="badge {{taskTypeBadge .Type}}">{{.Type}}</span></td>
                     <td><span class="badge {{taskStatusBadge .Status}}">{{.Status}}</span></td>
-                    <td class="task-list__sprint">{{with .Sprint}}Sprint #{{.ID}} {{.Title}}{{else}}&mdash;{{end}}</td>
                     <td><span class="badge {{severityBadge .Severity}}">S{{.Severity}}</span></td>
                     <td><span class="badge {{priorityBadge .Priority}}">P{{.Priority}}</span></td>
                     <td class="text-secondary text-nowrap"><i class="ti ti-calendar me-1" aria-hidden="true"></i>{{timestamp .CreatedAt}}</td>
-                    <td class="text-end"><a class="btn btn-sm" href="/roadmaps/{{$.Name}}/tasks/{{.ID}}" aria-label="View task #{{.ID}}: {{.Title}}">View</a></td>
                   </tr>
                   {{end}}
                 </tbody>

@@ -193,8 +193,8 @@ func TestSpecialistsRemoval_NoPackageSourceNamesTheField(t *testing.T) {
 // stands between that and a page.
 func TestSpecialistsRemoval_ViewModelExposesNothingForTheField(t *testing.T) {
 	// The two view models a task reaches a template through: the sprint board's
-	// card and the tasks page's list row.
-	for _, viewType := range []reflect.Type{reflect.TypeOf(taskView{}), reflect.TypeOf(taskRow{})} {
+	// card, and the tasks page's list row, which is the task itself.
+	for _, viewType := range []reflect.Type{reflect.TypeOf(taskView{}), reflect.TypeOf(models.Task{})} {
 		// Fields, embedded ones included. FieldByName traverses the embedded struct
 		// exactly as the template's name resolution does.
 		for _, name := range promotedFieldNames(viewType) {

@@ -13,7 +13,7 @@ import (
 )
 
 // This file is the gate for the ways a task links to its own page — the card of
-// the sprint page's board and the two links of each row of the tasks page's list —
+// the sprint page's board and the title link of each row of the tasks page's list —
 // and for the removal of the task detail modal, its script, and its JSON endpoint
 // (SPEC/WEB.md § Sprint Detail Sub-Template, The card is a link to the task page;
 // § Roadmap Tasks Page, Links to the task page; § Routes and Pages, rule 5;
@@ -21,7 +21,7 @@ import (
 //
 // A link with an href is natively focusable and natively activatable: a click, a
 // tap, and Enter follow it with no script, and a middle click opens it in a new
-// tab. That is why the card and the row's two links are <a> elements and why
+// tab. That is why the card and the row's title link are <a> elements and why
 // nothing else — no <button>, no <div> or <tr> carrying a role and a tabindex —
 // stands in for them.
 
@@ -273,7 +273,8 @@ const hostileTitle = `Reject "quoted" <b>bold</b> & O'Brien &amp; 100% > 50%`
 
 // TestTaskCards_AccessibleNameEscapesAHostileTitle proves the accessible name
 // composed from the task title is safe in the attribute context on the sprint
-// board and in the tasks page's list:
+// board, and that the tasks page's list renders the title as the text of its one
+// link, likewise escaped:
 // the attribute stays delimited, no title character reaches the page unescaped,
 // and the value decodes back to exactly the title the user wrote.
 func TestTaskCards_AccessibleNameEscapesAHostileTitle(t *testing.T) {
@@ -289,9 +290,11 @@ func TestTaskCards_AccessibleNameEscapesAHostileTitle(t *testing.T) {
 		body := servePage(t, mux, path)
 		prefix := "Open details for task #"
 		want := wantAccessibleName(taskID, renderedTitleOf(t, f.name, f.openTaskID))
-		if strings.HasSuffix(path, "/tasks") {
-			prefix = "View task #"
-			want = `aria-label="View task #` + taskID + `: ` + renderedTitleOf(t, f.name, f.openTaskID) + `"`
+		onList := strings.HasSuffix(path, "/tasks")
+		if onList {
+			// The list's one link per row is the title, whose accessible name is its
+			// visible text (Acceptance Criterion 86).
+			want = `<a href="/roadmaps/` + f.name + `/tasks/` + taskID + `">` + renderedTitleOf(t, f.name, f.openTaskID) + `</a>`
 		}
 		if !strings.Contains(body, want) {
 			t.Errorf("%s: the card of task #%s does not carry the escaped accessible name %s",
@@ -307,6 +310,18 @@ func TestTaskCards_AccessibleNameEscapesAHostileTitle(t *testing.T) {
 		}
 
 		var found bool
+		if onList {
+			start := strings.Index(body, `<a href="/roadmaps/`+f.name+`/tasks/`+taskID+`">`)
+			if start >= 0 {
+				text := body[start:]
+				text = text[strings.Index(text, ">")+1 : strings.Index(text, "</a>")]
+				found = html.UnescapeString(text) == hostileTitle
+			}
+			if !found {
+				t.Errorf("%s: the title link of task #%s does not decode to the title exactly as it was written", path, taskID)
+			}
+			found = true
+		}
 		for _, m := range reLabel.FindAllStringSubmatch(body, -1) {
 			if !strings.HasPrefix(m[1], prefix+taskID+":") {
 				continue

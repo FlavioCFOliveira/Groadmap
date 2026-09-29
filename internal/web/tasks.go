@@ -23,9 +23,9 @@ import (
 //     a value that is not accepted is dropped at this boundary, so nothing
 //     downstream can apply it, echo it, or put it in a link (Query parameters,
 //     Validation).
-//  2. readTaskList performs the page's three reads: the sprint titles, the task
-//     listing narrowed by the structured filters as bound parameters, and the
-//     grouped sprint resolution of the rendered rows (Read cost).
+//  2. readTaskList performs the page's two reads: the sprint titles and the task
+//     listing narrowed by the structured filters as bound parameters. The page
+//     shows no task's sprint, so it resolves none (Read cost).
 //  3. The search term, the total, the page selection, and the slicing are applied
 //     in memory over the rows the listing returned (Pagination).
 
@@ -269,14 +269,6 @@ func matchesSearch(task *models.Task, folded string) bool {
 	return strings.Contains("#"+strconv.Itoa(task.ID), folded)
 }
 
-// taskRow is one row of the list: the task and the sprint it belongs to, nil
-// when it belongs to none. A task belongs to at most one sprint, which
-// sprint_tasks.task_id's UNIQUE constraint guarantees.
-type taskRow struct {
-	Sprint *db.SprintRef
-	models.Task
-}
-
 // filterOption is one option of a filter-bar select: the value the parameter
 // carries, the text the option shows, and whether this request selected it.
 // Value and Label are the SERVER's own strings — an enum value or a sprint of
@@ -321,7 +313,7 @@ type taskSizeLink struct {
 
 // tasksData is the view model of the roadmap tasks page. It is read-only.
 //
-// Rows are the rows of the rendered page only. Total is the number of tasks
+// Rows are the tasks of the rendered page only. Total is the number of tasks
 // satisfying every accepted criterion — the filtered total — and First and Last
 // are the positions of the page's first and last rows in the filtered order.
 // Page is the rendered page, already clamped into 1..Pages. PrevURL and NextURL
@@ -332,7 +324,7 @@ type taskSizeLink struct {
 // requested with no criterion, and a request with at least one accepted criterion
 // that no task satisfies (SPEC/WEB.md § Roadmap Tasks Page, Empty states).
 type tasksData struct {
-	Rows      []taskRow
+	Rows      []models.Task
 	PageItems []taskPageLink
 	SizeLinks []taskSizeLink
 	Name      string
@@ -350,15 +342,14 @@ type tasksData struct {
 }
 
 // tasksSource is the complete read surface of the roadmap tasks page: the sprint
-// titles, the filtered task listing, and the grouped sprint resolution. The
-// per-task and per-sprint reads, and every comment read, are deliberately absent,
-// so the page cannot express one query per row and reads no comment
-// (SPEC/WEB.md § Roadmap Tasks Page, Read cost; Acceptance Criteria 70, 89 and
-// 92). *db.DB satisfies the interface.
+// titles and the filtered task listing. The per-task and per-sprint reads, the
+// sprint resolution, and every comment read are deliberately absent, so the page
+// cannot express one query per row, resolves no task's sprint, and reads no
+// comment (SPEC/WEB.md § Roadmap Tasks Page, Read cost; Acceptance Criteria 70,
+// 89 and 92). *db.DB satisfies the interface.
 type tasksSource interface {
 	ListSprintTitles(ctx context.Context) ([]db.SprintRef, error)
 	ListAllTasks(ctx context.Context, filter *db.TaskListFilter) ([]models.Task, error)
-	taskSprintReader
 }
 
 // loadTasks reads a roadmap's tasks page read-only. It opens the roadmap
@@ -377,10 +368,9 @@ func loadTasks(ctx context.Context, name string, values url.Values) (tasksData, 
 
 // readTaskList is the tasks page's entire read, against the page's read surface
 // rather than a concrete connection, so a test can count what a render costs. It
-// is THREE reads when the rendered page holds a row and TWO when it holds none:
-// the sprint titles, the filtered task listing, and — only for a non-empty page —
-// the grouped sprint resolution over the rendered rows' ids (SPEC/WEB.md
-// § Roadmap Tasks Page, Read cost).
+// is exactly TWO reads, whether or not the rendered page holds a row: the sprint
+// titles and the filtered task listing (SPEC/WEB.md § Roadmap Tasks Page, Read
+// cost).
 func readTaskList(ctx context.Context, src tasksSource, name string, values url.Values) (tasksData, error) {
 	sprints, err := src.ListSprintTitles(ctx)
 	if err != nil {
@@ -433,24 +423,7 @@ func readTaskList(ctx context.Context, src tasksSource, name string, values url.
 
 	start := (page - 1) * q.Size
 	end := min(start+q.Size, total)
-	rows := make([]taskRow, 0, end-start)
-	ids := make([]int, 0, end-start)
-	for i := start; i < end; i++ {
-		rows = append(rows, taskRow{Task: matched[i]})
-		ids = append(ids, matched[i].ID)
-	}
-
-	resolved, err := src.GetSprintsByTasks(ctx, ids)
-	if err != nil {
-		return tasksData{}, err
-	}
-	for i := range rows {
-		if sprint, ok := resolved[rows[i].ID]; ok {
-			rows[i].Sprint = &sprint
-		}
-	}
-
-	data.Rows = rows
+	data.Rows = matched[start:end:end]
 	data.First = start + 1
 	data.Last = end
 	data.PageItems = taskPageLinks(&q, name, page, pages)
