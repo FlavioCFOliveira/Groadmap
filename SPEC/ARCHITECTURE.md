@@ -325,9 +325,11 @@ Groadmap/
 │   │   ├── roadmap.go     # Roadmap subcommands
 │   │   ├── task.go        # Task subcommands
 │   │   ├── sprint.go      # Sprint subcommands
-│   │   ├── comment.go     # Comment subcommands of the task and sprint families
-│   │   ├── graph.go       # Graph subcommands (GoGraph integration)
-│   │   └── web.go         # web command (starts the embedded HTTP server)
+│   │   ├── comments.go    # Comment subcommands of the task and sprint families
+│   │   ├── graph.go       # Graph family: help, statement sources, result JSON (see module 6)
+│   │   ├── graph_client.go # graph client subcommand
+│   │   ├── graph_serve.go # graph serve subcommand
+│   │   └── registry_web.go # web command entry (calls internal/web)
 │   ├── graphstore/        # The graph store's lifecycle: open, checkpoint, close
 │   │   └── graphstore.go  # The ONE open/checkpoint sequence; only graphserve calls it
 │   ├── graphclient/       # Reaching a roadmap's graph server: resolution + Bolt v5 client
@@ -336,8 +338,22 @@ Groadmap/
 │   ├── graphserve/        # The graph server's lifecycle: listener, options, drain, shutdown
 │   ├── signals/           # The ONE registration for SIGINT and SIGTERM; every surface takes the action over
 │   ├── web/               # Embedded HTTP server (net/http)
-│   │   ├── server.go      # Server construction, routes, graceful shutdown
-│   │   ├── handlers.go    # Read-only route handlers (index, sprints, tasks, sprint, graph, data)
+│   │   ├── web.go         # Run: argument parsing, help text
+│   │   ├── server.go      # Startup migration, listener binding, graceful shutdown
+│   │   ├── routes.go      # Route table, security headers, roadmap resolution
+│   │   ├── pages.go       # Read-only route handlers (index, sprints, tasks, sprint, task, audit, graph, data)
+│   │   ├── data.go        # Page data reads and the graph data endpoint's statement path
+│   │   ├── tasks.go       # Tasks page request: filters, search, pagination state
+│   │   ├── fold.go        # Tasks page search-text preparation
+│   │   ├── pagination.go  # Numbered pagination bar
+│   │   ├── audit.go       # Audit log page cells
+│   │   ├── badge.go       # Status, type, priority, and severity badge classes
+│   │   ├── timestamp.go   # Date and time display form
+│   │   ├── markdown.go    # Server-side Markdown renderer (goldmark, chroma)
+│   │   ├── literalmask.go # Literal masking for the node-limit injection
+│   │   ├── logging.go     # Server diagnostic logger
+│   │   ├── embed.go       # Package documentation, embedded assets, template functions
+│   │   ├── highlightcss_gen.go # go generate tool for static/highlight.css (excluded from the build)
 │   │   ├── templates/     # Embedded html/template files (go:embed)
 │   │   └── static/        # Embedded CSS/JS (vendored Tabler framework, D3.js + d3-sankey), fonts (Inter, Tabler Icons) (go:embed)
 │   ├── db/
@@ -350,7 +366,6 @@ Groadmap/
 │   │   ├── task.go        # Task structs, enums
 │   │   ├── sprint.go      # Sprint structs, enums
 │   │   ├── comment.go     # TaskComment and SprintComment structs, CommentType enum
-│   │   ├── roadmap.go     # Roadmap structures
 │   │   ├── audit.go       # Audit log structures
 │   │   └── consts.go      # Constants (limits, defaults)
 │   └── utils/
@@ -490,9 +505,12 @@ version is written. The risk analysis and required mitigations are in
 ### 7. internal/web/ and the embedded HTTP server
 
 - Implements the web interface started by `rmp web`. The command entry point is
-  `internal/commands/web.go`; the server itself lives in `internal/web/`.
-- Built on Go's standard-library `net/http` only. It introduces no third-party
-  web framework and no external runtime dependency.
+  `internal/commands/registry_web.go`; the server itself lives in `internal/web/`.
+- Built on Go's standard-library `net/http` only: it introduces no third-party
+  web framework. The third-party modules it imports — GoGraph (`cypher/expr` and
+  `cypher/parser`, see module 6) and the goldmark and chroma modules of the
+  Markdown renderer below — are compiled into the binary, so the package needs
+  nothing external at run time.
 - Renders the Markdown fields — the task requirement, acceptance-criteria, and
   completion-summary fields, the task and sprint comment bodies, and the sprint
   description — through one server-side Markdown renderer built on the compiled-in

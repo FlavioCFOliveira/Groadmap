@@ -1408,14 +1408,11 @@ argument at all**: it declares a maximum of zero, which is what
 written bare on the command line is therefore not a third source. It is an excess
 positional argument, and the subcommand refuses it.
 
-`graph client` declares the same maximum of zero and refuses a positional
-argument the same way, with the same line, for the same reason: it takes its
-statement from the same two sources and from no third one. `graph serve` declares
-a maximum of zero as well, and refuses an excess positional argument under the
-CLI-wide wording of `COMMANDS.md § Positional Arguments`, rule 1, rather than the
-line below, because it takes no Cypher statement at all and the hint names two
-sources it does not have. Everything the rules below say of `graph client` holds
-of `graph client` word for word.
+`graph serve` declares a maximum of zero as well, but refuses an excess
+positional argument under the CLI-wide wording of
+`COMMANDS.md § Positional Arguments`, rule 1, rather than the line below, because
+it takes no Cypher statement at all and the hint names two sources it does not
+have.
 
 The rules are:
 
@@ -2127,9 +2124,11 @@ Behaviour:
    same two reasons (see
    [Query Notifications as Diagnostics](#query-notifications-as-diagnostics) and
    [Query Plans: The EXPLAIN and PROFILE Prefixes](#query-plans-the-explain-and-profile-prefixes)).
-2. **Both surfaces publish them, and publish the same object.** `rmp graph
-   execute` reads them from the engine it opened, or from the server it resolved;
-   `rmp graph client` reads them from the server it was pointed at. The identity
+2. **`rmp graph client` publishes them as the graph server reported them.** The
+   server that ran the statement returns them with its result, and `rmp graph
+   client` publishes them beside that result. The web graph data endpoint does not
+   publish them: its document carries nodes and edges only
+   (`DATA_FORMATS.md § Graph View Data`). The identity
    `DATA_FORMATS.md § Graph Client Result` requires binds them with no exception:
    they describe the statement and the graph, not the duration of the run, which
    is the one thing that section exempts.
@@ -2350,10 +2349,9 @@ Behaviour:
    is a real and unbounded cost, and it is the reason the condition must be
    reported rather than absorbed — but it is not a durability failure, and a
    diagnostic that read as one would be worse than none.
-8. **Every surface that holds the checkpoint error MUST classify it; the one that
-   does not hold it MUST NOT pretend to.** The synchronous checkpoint of a
-   short-lived invocation and the graph server's shutdown checkpoint both return
-   an error to Groadmap, so both MUST recognise
+8. **The checkpoint that returns its error MUST classify it; the one that does
+   not return it MUST NOT pretend to.** The graph server's shutdown checkpoint
+   returns an error to Groadmap, so it MUST recognise
    `store/snapshot.ErrFieldTooLong` with `errors.Is` and report this condition
    rather than the general one. The graph server's in-flight checkpoint does not:
    it runs on the engine's own cadence loop
@@ -3589,22 +3587,20 @@ something.
    constructor that avoids this is fixed by
    [Engine Constructor by Path](#engine-constructor-by-path), and the server is on
    that one path like every other surface.
-3. **The server checkpoints; it does not checkpoint per write.** The rule for a
-   short-lived invocation — checkpoint synchronously after any transaction that
-   appended to the log (see
-   [Synchronous Checkpoint on Write](#synchronous-checkpoint-on-write)) — exists
-   because such an invocation has no later opportunity: it is about to exit. A
-   server has later opportunities, and a full snapshot after every committed write
-   would make every write cost the whole live graph while its neighbours waited
-   for the quiesce that capture takes.
+3. **The server checkpoints; it does not checkpoint per write.**
+   [Synchronous Checkpoint on Write](#synchronous-checkpoint-on-write) fixes when
+   a checkpoint is owed, not that one follows every write. A full snapshot after
+   every committed write would make every write cost the whole live graph while
+   its neighbours waited for the quiesce that capture takes, so the server folds
+   at the moments rules 4 and 5 fix.
 4. **The server MUST checkpoint at shutdown when, and only when, the write-ahead
    log has grown since it was last folded**, after the drain and before it
    releases the lock, so that the log the next open replays is short and the
-   snapshot on disk is current. The condition is the same one
-   [Synchronous Checkpoint on Write](#synchronous-checkpoint-on-write) applies to
-   a short-lived invocation, and it MUST be the same realisation of that condition
-   rather than a second one beside it: one comparison and one mark, so that the
-   two cannot drift. A shutdown that owes no fold writes nothing at all —
+   snapshot on disk is current. The condition is the one
+   [Synchronous Checkpoint on Write](#synchronous-checkpoint-on-write) fixes, and
+   the server MUST apply the single realisation of it that the store lifecycle
+   owns rather than a second one beside it: one comparison and one mark, so that
+   no copy can drift from it. A shutdown that owes no fold writes nothing at all —
    `snapshot/` and `wal` are left byte for byte as the server found them — which
    is what makes the guarantee in rule 8 below hold at the surface a long-lived
    process exposes.

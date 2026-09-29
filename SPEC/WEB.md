@@ -3562,8 +3562,9 @@ of an internal read error, and what the body carries.
    originate from the page's own dropdown, this state is normally only reachable by
    a crafted request, but the endpoint rejects it rather than guessing a value. The
    endpoint answers HTTP `400 Bad Request` with `kind` `invalid_limit`. The
-   rejection is decided before the graph store is opened, so it opens nothing,
-   reads nothing, and writes nothing.
+   rejection is decided before the roadmap's graph server is resolved and before
+   the statement is sent, so it contacts no server, reads nothing, and writes
+   nothing.
 
 2. **The statement failed to execute.** When the submitted statement fails in the
    engine — invalid Cypher syntax, for example, or a schema statement the engine
@@ -3719,10 +3720,12 @@ of an internal read error, and what the body carries.
    written. Rule 10 names the fourth and rule 11 the fifth. It is not an outcome
    a connected client can observe, so no client-side test can assert it.
 
-   **A cancelled statement may already have committed.** The endpoint runs the
-   caller's statement on the transactional path, so a disconnect that arrives after
-   the commit and before the response cancels nothing that matters: the change is
-   durable, and the checkpoint that follows it runs to completion. A disconnect
+   **A cancelled statement may already have committed.** The graph server runs the
+   caller's statement on the transactional path, and a commit is durable before the
+   server acknowledges it, so a disconnect that arrives after the commit and before
+   the response cancels nothing that matters: the change is durable in the server,
+   which folds it into its snapshot on its own cadence and at its own shutdown
+   (`GRAPH.md § Durability and Checkpointing in a Long-Lived Process`). A disconnect
    that arrives before the commit leaves the transaction uncommitted and the graph
    unchanged. Which of the two happened is not reported to anyone, because the
    caller is gone.
@@ -7408,14 +7411,13 @@ Rules:
     page. The sprints, tasks, audit, and index page headers carry no actions column
     content — the tasks page's filter bar sits in its list card's header — and no
     page header links to the knowledge-graph page (Acceptance Criterion 100).
-110. `GET /roadmaps/{name}/graph/data` executes the caller's query under a
-    5-second deadline derived from the request context. A query that would run for
-    longer is cancelled when the budget is exhausted instead of running to
-    completion: the request is answered as a query execution failure, and the page
-    shows the same "query failed to execute" message it shows for a query that
-    fails in the engine — distinct from the "query rejected: not read-only" message
-    of Acceptance Criterion 47 and from the invalid-limit message of Acceptance
-    Criterion 48. The request is answered HTTP `400 Bad Request` with `kind`
+110. `GET /roadmaps/{name}/graph/data` executes the caller's query under the
+    5-second budget of [Graph Query Time Budget](#graph-query-time-budget), which
+    the roadmap's graph server enforces. A query that would run for longer is cut
+    when the budget is exhausted instead of running to completion: the request is
+    answered as a query execution failure, and the page shows the same "query
+    failed to execute" message it shows for a query that fails in the engine —
+    distinct from the invalid-limit message of Acceptance Criterion 48. The request is answered HTTP `400 Bad Request` with `kind`
     `execution`, the same status and the same kind a query that fails in the engine
     receives, so no new HTTP status and no new exit code is introduced. This is
     proven with a query whose work the node limit does not bound, such as an
@@ -7423,10 +7425,11 @@ Rules:
     returns a single row and is therefore unaffected by the injected `LIMIT`. A
     query that completes within the budget returns exactly the response it returned
     before the budget existed, with nothing truncated and no ordering changed, and
-    a client that disconnects still cancels the query immediately. A cancelled
-    request writes nothing: the store is unchanged, no checkpoint runs, no
-    write-ahead log is truncated, and the server keeps serving later requests (see
-    [Graph Query Time Budget](#graph-query-time-budget)).
+    a client that disconnects still cancels the query immediately. A cut query
+    writes nothing: the graph server rolls it back, takes no checkpoint on its
+    account, truncates no write-ahead log, and keeps serving later requests (see
+    [Graph Query Time Budget](#graph-query-time-budget) and
+    `GRAPH.md § Statement Time Budget`).
 111. `GET /roadmaps/{name}/graph/data` injects no node `LIMIT` into a statement
     that admits no `LIMIT` clause, and runs it instead of failing it in the parser.
     The criterion is over the **rule**, not over a list of forms, so it MUST assert
@@ -9416,10 +9419,12 @@ Rules:
 - Graph view data JSON shape → `DATA_FORMATS.md § Graph View Data`
 - Graph element and property-type JSON mapping reused by the graph data endpoint
   → `DATA_FORMATS.md § Graph Query Result`
-- Graph access, recovery, and the checkpoint the endpoint runs after a statement
-  that wrote → `GRAPH.md § Engine Construction and Lifecycle` and
-  `GRAPH.md § Synchronous Checkpoint on Write`
-- The store access lock a web graph request takes, its contention rules, and the
+- Graph access through the roadmap's graph server → `GRAPH.md § Server Resolution`
+- Recovery, and the checkpoint the graph server runs → `GRAPH.md § Engine
+  Construction and Lifecycle`, `GRAPH.md § Synchronous Checkpoint on Write`, and
+  `GRAPH.md § Durability and Checkpointing in a Long-Lived Process`
+- The store access lock the graph server holds for its lifetime, its contention
+  rules, and the
   exhaustive list of what a statement that writes nothing changes on disk →
   `GRAPH.md § Concurrency and Recovery`,
   `GRAPH.md § What a Statement That Writes Nothing Changes on Disk`,

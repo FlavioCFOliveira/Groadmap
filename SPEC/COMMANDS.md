@@ -1190,7 +1190,7 @@ inside the second message.
 
 **Output (success):** `{"id": 42}`, exit code 0.
 
-**Error Output:** Validation errors written to stderr with exit code 6.
+**Error Output:** Refusals written to stderr with exit code `2`, `3`, `4`, or `6`.
 
 **Exit Codes:** The command emits `0`, `2`, `3`, `4`, or `6`:
 | Exit Code | Condition |
