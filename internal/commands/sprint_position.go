@@ -78,7 +78,7 @@ func sprintBottom(args []string) error {
 	// report a misleading "task does not belong to sprint" (exit 6) instead
 	// of the correct "sprint not found" (exit 4). Keeping the check here
 	// makes `top` and `bottom` behave identically for a missing sprint.
-	if _, err = database.GetSprint(ctx, sprintID); err != nil {
+	if err := database.CheckSprintExists(ctx, sprintID); err != nil {
 		return err
 	}
 
@@ -155,7 +155,7 @@ func sprintMoveToPosition(args []string, position int) error {
 	defer cancel()
 
 	// Verify sprint exists
-	_, err = database.GetSprint(ctx, sprintID)
+	err = database.CheckSprintExists(ctx, sprintID)
 	if err != nil {
 		return err
 	}

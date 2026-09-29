@@ -62,11 +62,11 @@ func taskRemove(args []string) error {
 	defer cancel()
 
 	// Fail-fast: verify all tasks exist and are in BACKLOG before deleting any (task #78).
-	tasks, err := database.GetTasks(ctx, ids)
+	tasks, err := database.GetTaskStates(ctx, ids)
 	if err != nil {
 		return err
 	}
-	if err := utils.TasksNotFoundError(utils.MissingIDs(ids, taskIDsOf(tasks))); err != nil {
+	if err := utils.TasksNotFoundError(utils.MissingIDs(ids, taskStateIDsOf(tasks))); err != nil {
 		return err
 	}
 	for i := range tasks {
@@ -102,6 +102,8 @@ func taskRemove(args []string) error {
 			return err
 		}
 
+		audit := db.NewAuditWriter(tx)
+		defer audit.Close() //nolint:errcheck // releasing the statement; the transaction releases it too
 		for _, id := range ids {
 			// Delete task
 			result, err := tx.Exec("DELETE FROM tasks WHERE id = ?", id)
@@ -117,7 +119,7 @@ func taskRemove(args []string) error {
 				return fmt.Errorf("%w: task %d not found", utils.ErrNotFound, id)
 			}
 
-			if err := db.LogAuditTx(tx, models.OpTaskDelete, models.EntityTask, id, utils.NowISO8601()); err != nil {
+			if err := audit.Log(models.OpTaskDelete, models.EntityTask, id, utils.NowISO8601()); err != nil {
 				return err
 			}
 		}
@@ -346,11 +348,11 @@ func taskSetStatus(args []string) error {
 	defer cancel()
 
 	// Validate status transitions using batch query (O(1) vs N+1)
-	tasks, err := database.GetTasks(ctx, ids)
+	tasks, err := database.GetTaskStates(ctx, ids)
 	if err != nil {
 		return err
 	}
-	if err := utils.TasksNotFoundError(utils.MissingIDs(ids, taskIDsOf(tasks))); err != nil {
+	if err := utils.TasksNotFoundError(utils.MissingIDs(ids, taskStateIDsOf(tasks))); err != nil {
 		return err
 	}
 	for i := range tasks {
@@ -492,8 +494,10 @@ func taskSetStatus(args []string) error {
 		// timestamp captured for the invocation. The write is inside the same
 		// transaction as the UPDATE above, so a batch that fails anywhere
 		// leaves the audit table untouched.
+		audit := db.NewAuditWriter(tx)
+		defer audit.Close() //nolint:errcheck // releasing the statement; the transaction releases it too
 		for _, id := range ids {
-			if err := db.LogAuditTx(tx, auditOp, models.EntityTask, id, now, auditOpts...); err != nil {
+			if err := audit.Log(auditOp, models.EntityTask, id, now, auditOpts...); err != nil {
 				return err
 			}
 		}
@@ -593,11 +597,11 @@ func taskReopen(args []string) error {
 	ctx, cancel := db.WithDefaultTimeout()
 	defer cancel()
 
-	tasks, err := database.GetTasks(ctx, ids)
+	tasks, err := database.GetTaskStates(ctx, ids)
 	if err != nil {
 		return err
 	}
-	if err := utils.TasksNotFoundError(utils.MissingIDs(ids, taskIDsOf(tasks))); err != nil {
+	if err := utils.TasksNotFoundError(utils.MissingIDs(ids, taskStateIDsOf(tasks))); err != nil {
 		return err
 	}
 
@@ -663,8 +667,10 @@ func taskReopen(args []string) error {
 			}
 		}
 
+		audit := db.NewAuditWriter(tx)
+		defer audit.Close() //nolint:errcheck // releasing the statement; the transaction releases it too
 		for _, id := range toReopen {
-			if err := db.LogAuditTx(tx, models.OpTaskReopen, models.EntityTask, id, now); err != nil {
+			if err := audit.Log(models.OpTaskReopen, models.EntityTask, id, now); err != nil {
 				return err
 			}
 		}
@@ -755,11 +761,11 @@ func taskSetPriority(args []string) error {
 	// this, nonexistent IDs returned exit 0, mutated valid tasks in a mixed
 	// batch, and wrote phantom audit rows for IDs that do not exist
 	// (SPEC/COMMANDS.md § Change Priority). Mirrors task remove/stat/reopen.
-	tasks, err := database.GetTasks(ctx, ids)
+	tasks, err := database.GetTaskStates(ctx, ids)
 	if err != nil {
 		return err
 	}
-	if err := utils.TasksNotFoundError(utils.MissingIDs(ids, taskIDsOf(tasks))); err != nil {
+	if err := utils.TasksNotFoundError(utils.MissingIDs(ids, taskStateIDsOf(tasks))); err != nil {
 		return err
 	}
 
@@ -776,8 +782,10 @@ func taskSetPriority(args []string) error {
 		}
 
 		// Log audit with same timestamp
+		audit := db.NewAuditWriter(tx)
+		defer audit.Close() //nolint:errcheck // releasing the statement; the transaction releases it too
 		for _, id := range ids {
-			if err := db.LogAuditTx(tx, models.OpTaskPriorityChange, models.EntityTask, id, now); err != nil {
+			if err := audit.Log(models.OpTaskPriorityChange, models.EntityTask, id, now); err != nil {
 				return err
 			}
 		}
@@ -851,11 +859,11 @@ func taskSetSeverity(args []string) error {
 	// this, nonexistent IDs returned exit 0, mutated valid tasks in a mixed
 	// batch, and wrote phantom audit rows for IDs that do not exist
 	// (SPEC/COMMANDS.md § Change Severity). Mirrors task remove/stat/reopen.
-	tasks, err := database.GetTasks(ctx, ids)
+	tasks, err := database.GetTaskStates(ctx, ids)
 	if err != nil {
 		return err
 	}
-	if err := utils.TasksNotFoundError(utils.MissingIDs(ids, taskIDsOf(tasks))); err != nil {
+	if err := utils.TasksNotFoundError(utils.MissingIDs(ids, taskStateIDsOf(tasks))); err != nil {
 		return err
 	}
 
@@ -872,8 +880,10 @@ func taskSetSeverity(args []string) error {
 		}
 
 		// Log audit with same timestamp
+		audit := db.NewAuditWriter(tx)
+		defer audit.Close() //nolint:errcheck // releasing the statement; the transaction releases it too
 		for _, id := range ids {
-			if err := db.LogAuditTx(tx, models.OpTaskSeverityChange, models.EntityTask, id, now); err != nil {
+			if err := audit.Log(models.OpTaskSeverityChange, models.EntityTask, id, now); err != nil {
 				return err
 			}
 		}

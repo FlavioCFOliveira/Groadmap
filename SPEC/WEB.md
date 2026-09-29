@@ -3150,15 +3150,17 @@ shows sprints as compact cards through the shared sprint-card partial instead (s
        [Roadmap Tasks Page](#roadmap-tasks-page)).
    - **Read cost: one grouped comment count, and nothing per card.** The card shows
      a comment count, so the page reads one. That count is read with **one grouped
-     query** over the whole set of rendered member-task ids (see
-     `DATABASE.md § Count Comments for Many Parents (Grouped)`) — never one query
-     per card, and never a comment **body**: the card displays a number, and reading
+     query** over the sprint's member tasks, selected by the sprint id with a
+     sub-select on `sprint_tasks` rather than by a list of the member ids, so the
+     query binds one parameter whatever the number of members (see
+     `DATABASE.md § Count Comments for Many Parents (Grouped)`, the member tasks of
+     one sprint) — never one query per card, and never a comment **body**: the card displays a number, and reading
      the text of every comment of every member task in order to display a number
      would be work the page throws away. A member task's comment text is read only
      by that task's own page, one task at a time (see
      [Roadmap Task Page](#roadmap-task-page)). When the sprint has no member task the page issues no such
-     query at all, because the query takes a set of rendered task ids and that set
-     is empty.
+     query at all, because the member-task read has already shown that there is no
+     card to count for.
 
      The page therefore issues exactly **two** comment reads whatever the number of
      member tasks: the sprint's own comment listing, which the Comments card renders
@@ -4270,7 +4272,7 @@ re-presents an earlier, now-stale response in its place.
    one task at a time (see [Roadmap Task Page](#roadmap-task-page)). A page that
    shows many tasks therefore reads only what it displays itself: the sprint
    page's board reads a comment **count** per rendered task, in one grouped counting
-   query over the whole set of rendered task ids, because a card shows a count and
+   query over the sprint's member tasks, because a card shows a count and
    no comment text (see
    `DATABASE.md § Count Comments for Many Parents (Grouped)`), and the tasks page's
    list, which shows no comment information, reads no comment at all. The Roadmap
@@ -4279,8 +4281,8 @@ re-presents an earlier, now-stale response in its place.
    page therefore issues exactly **two** comment reads — the sprint's own listing
    and the one grouped count over its member tasks — whatever the number of member
    tasks, and it reads the comment **body** of no member task. The grouped count is
-   skipped entirely when the sprint has no member task, because it takes a set of
-   rendered task ids and that set is empty; the sprint's own comment listing is
+   skipped entirely when the sprint has no member task, because there is no card to
+   count for; the sprint's own comment listing is
    still issued, because the Comments card is always present. Every one of these is
    a read query issued server-side while the page
    is rendered, and the number of them per page does not grow with the number of
@@ -6908,8 +6910,8 @@ Rules:
     information. On the sprint page it
     is 2, whatever N is: one listing query for that sprint's **own** comments, which
     the Comments card renders in full as a log (see `DATABASE.md § Comments`), plus
-    one grouped **counting** query over the whole set of rendered member-task ids,
-    which is what gives each board card its comment number (see
+    one grouped **counting** query over the sprint's member tasks, selected by the
+    sprint id, which is what gives each board card its comment number (see
     `DATABASE.md § Count Comments for Many Parents (Grouped)`). The sprint page issues no
     comment-listing query for a member task, so it reads the comment **body** of no
     task it renders. A page that renders no task issues no task-comment query of
@@ -7749,8 +7751,8 @@ Rules:
     [Responsive and Mobile-First Design](#responsive-and-mobile-first-design),
     rule 10).
 137. The comment number on each card of the sprint's member-tasks board comes from
-    **one** grouped counting query issued over the whole set of rendered member-task
-    ids, never one query per card: an instrumented count of comment-counting queries
+    **one** grouped counting query issued over the sprint's member tasks, selected by
+    the sprint id with one bound parameter, never one query per card: an instrumented count of comment-counting queries
     for a sprint page rendering N member tasks is 1, independent of N, and of
     comment-listing queries for member tasks is 0 (see
     `DATABASE.md § Count Comments for Many Parents (Grouped)` and Acceptance

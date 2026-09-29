@@ -102,7 +102,7 @@ func sprintOpenTasks(args []string) error {
 	defer cancel()
 
 	// Verify sprint exists before querying tasks.
-	if _, err = database.GetSprint(ctx, sprintID); err != nil {
+	if err := database.CheckSprintExists(ctx, sprintID); err != nil {
 		return err
 	}
 
@@ -155,8 +155,9 @@ func sprintStats(args []string) error {
 		return err
 	}
 
-	// Get sprint tasks
-	tasks, err := database.GetSprintTasksFull(ctx, sprintID, nil, false)
+	// The member tasks in position order. The statistics read only their ids
+	// and statuses, so the lean projection is read rather than the full rows.
+	states, err := database.GetSprintTaskStates(ctx, sprintID)
 	if err != nil {
 		return err
 	}
@@ -167,7 +168,7 @@ func sprintStats(args []string) error {
 		return err
 	}
 
-	stats := models.CalculateSprintStats(sprintID, tasks)
+	stats := models.CalculateSprintStats(sprintID, tasksOfStates(states))
 	stats.ApplySprintMetrics(sprint, burndown, utils.NowISO8601())
 	return utils.PrintJSON(stats)
 }
@@ -264,11 +265,11 @@ func sprintAddTasks(args []string) error {
 	// Fail-fast: confirm every task exists before any mutation. Without this,
 	// the SQLite FOREIGN KEY constraint surfaces a generic DB error (exit 1)
 	// instead of the documented utils.ErrNotFound (exit 4).
-	existing, err := database.GetTasks(ctx, taskIDs)
+	existing, err := database.GetTaskStates(ctx, taskIDs)
 	if err != nil {
 		return err
 	}
-	if err := utils.TasksNotFoundError(utils.MissingIDs(taskIDs, taskIDsOf(existing))); err != nil {
+	if err := utils.TasksNotFoundError(utils.MissingIDs(taskIDs, taskStateIDsOf(existing))); err != nil {
 		return err
 	}
 
@@ -279,13 +280,13 @@ func sprintAddTasks(args []string) error {
 	// standalone read cannot. The error contract here matches the transactional
 	// one so the message is identical regardless of which check trips first.
 	if sprint.MaxTasks != nil {
-		activeTasks, activeErr := database.GetActiveSprintTasks(ctx, sprintID)
+		activeCount, activeErr := database.CountActiveSprintTasks(ctx, sprintID)
 		if activeErr != nil {
 			return fmt.Errorf("checking sprint capacity: %w", activeErr)
 		}
-		if len(activeTasks)+len(taskIDs) > *sprint.MaxTasks {
+		if activeCount+len(taskIDs) > *sprint.MaxTasks {
 			return fmt.Errorf("%w: adding %d task(s) would exceed sprint #%d capacity (%d/%d tasks active)",
-				utils.ErrValidation, len(taskIDs), sprintID, len(activeTasks), *sprint.MaxTasks)
+				utils.ErrValidation, len(taskIDs), sprintID, activeCount, *sprint.MaxTasks)
 		}
 	}
 
@@ -342,7 +343,7 @@ func sprintRemoveTasks(args []string) error {
 	// remove-tasks does not block CLOSED sprints, and the documented
 	// task-carryover workflow (move incomplete tasks out of a closed sprint
 	// into the next one) depends on it.
-	if _, err := database.GetSprint(ctx, sprintID); err != nil {
+	if err := database.CheckSprintExists(ctx, sprintID); err != nil {
 		return err
 	}
 
@@ -371,6 +372,8 @@ func sprintRemoveTasks(args []string) error {
 
 	// Remove within transaction with audit
 	return database.WithTransaction(func(tx *sql.Tx) error {
+		audit := db.NewAuditWriter(tx)
+		defer audit.Close() //nolint:errcheck // releasing the statement; the transaction releases it too
 		for _, taskID := range taskIDs {
 			// Remove from sprint_tasks, scoped to the named sprint.
 			if _, err := tx.Exec(
@@ -413,11 +416,11 @@ func sprintRemoveTasks(args []string) error {
 			// Task Assignment). The same operation written by
 			// `task stat <ids> BACKLOG` names no counterpart, because no sprint
 			// is party to that invocation.
-			if err := db.LogAuditTx(tx, models.OpSprintRemoveTask, models.EntitySprint, sprintID, now,
+			if err := audit.Log(models.OpSprintRemoveTask, models.EntitySprint, sprintID, now,
 				db.WithRelatedEntity(taskID)); err != nil {
 				return err
 			}
-			if err := db.LogAuditTx(tx, models.OpTaskStatusBacklog, models.EntityTask, taskID, now,
+			if err := audit.Log(models.OpTaskStatusBacklog, models.EntityTask, taskID, now,
 				db.WithRelatedEntity(sprintID)); err != nil {
 				return err
 			}

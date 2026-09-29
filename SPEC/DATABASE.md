@@ -170,20 +170,27 @@ CREATE TABLE IF NOT EXISTS tasks (
     severity INTEGER NOT NULL DEFAULT 0 CHECK(severity >= 0 AND severity <= 9)
 );
 
--- Indexes for frequent queries
-CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
-CREATE INDEX IF NOT EXISTS idx_tasks_type ON tasks(type);
-CREATE INDEX IF NOT EXISTS idx_tasks_priority ON tasks(priority);
+-- Covers: the creation-date ordering of the task listing
 CREATE INDEX IF NOT EXISTS idx_tasks_created_at ON tasks(created_at);
 
--- Composite indexes for multi-criteria queries (TASK-P001)
--- Covers: ListTasks with status filter + priority ordering
-CREATE INDEX IF NOT EXISTS idx_tasks_status_priority ON tasks(status, priority DESC);
--- Covers: Priority filtering with date ordering (matches ListTasks ORDER BY)
+-- Composite indexes, each supplying one ordering of the task listing in full,
+-- tie-breaker included, so the listing needs no sort step (see Index Design Rationale)
+-- Covers: the status filter in the default ordering, and the status ordering
+CREATE INDEX IF NOT EXISTS idx_tasks_status_priority ON tasks(status, priority DESC, created_at ASC);
+-- Covers: the type filter in the default ordering
+CREATE INDEX IF NOT EXISTS idx_tasks_type ON tasks(type, priority DESC, created_at ASC);
+-- Covers: the default ordering (matches ListTasks ORDER BY)
 CREATE INDEX IF NOT EXISTS idx_tasks_priority_created ON tasks(priority DESC, created_at ASC);
+-- Covers: the severity ordering
+CREATE INDEX IF NOT EXISTS idx_tasks_severity_priority ON tasks(severity DESC, priority DESC, created_at ASC);
 -- Covers: sub-task hierarchy lookups (GetSubTasks)
 CREATE INDEX IF NOT EXISTS idx_tasks_parent_task_id ON tasks(parent_task_id);
 ```
+
+**No single-column index on `status` or on `priority`.** Each would be a leading
+prefix of a composite index above (`idx_tasks_status_priority` and
+`idx_tasks_priority_created`), which serves every lookup the single-column index
+could serve, so it would cost write time on every task change and buy nothing.
 
 ### `sprints` Table
 
@@ -226,19 +233,19 @@ CREATE TABLE IF NOT EXISTS sprint_tasks (
     FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE CASCADE
 );
 
--- Indexes
-CREATE INDEX IF NOT EXISTS idx_sprint_tasks_task_id ON sprint_tasks(task_id);
-
--- Composite index for sprint task lookups (TASK-P001)
--- Covers: GetSprintTasks and sprint-task relationship queries
-CREATE INDEX IF NOT EXISTS idx_sprint_tasks_lookup ON sprint_tasks(sprint_id, task_id);
-
 -- Unique composite index for sprint task ordering (TASK-ORDER-001)
 -- Covers: Sprint task listing ordered by position
 -- Enforces: no two member tasks of one sprint hold the same position, which is what
 -- makes the planned execution order total (see Position Uniqueness Within a Sprint below)
 CREATE UNIQUE INDEX IF NOT EXISTS idx_sprint_tasks_order ON sprint_tasks(sprint_id, position ASC);
 ```
+
+**The two constraints are the lookup indexes.** SQLite creates an index for the
+composite `PRIMARY KEY (sprint_id, task_id)` and one for the `UNIQUE` constraint on
+`task_id`. The first serves every lookup by `sprint_id`, and by the pair; the second
+serves every lookup by `task_id`. No index is declared over `(sprint_id, task_id)` or
+over `task_id` alone, because each would duplicate one of those two exactly and would
+cost write time on every membership change.
 
 #### Position Uniqueness Within a Sprint
 
@@ -398,8 +405,8 @@ each runs once.
 | `sprint add-tasks`, for a task that already belonged to another sprint | The `ON CONFLICT(task_id)` clause re-parents the task's single row, which leaves the other sprint's run | **Leaves a gap**, in the sprint the task left — a sprint the command does not name. That sprint MUST be compacted in the same transaction |
 | `sprint move-tasks`, destination sprint | Appends after the destination's current `MAX(position)`, preserving the relative order of the moved tasks | **Preserves**, for the same reason as `sprint add-tasks` |
 | `sprint move-tasks`, source sprint | Re-parents the moved rows away from it | **Leaves a gap.** The source sprint MUST be compacted in the same transaction |
-| `sprint reorder` | Parks the whole sprint and writes `0..N-1` (`Reorder Sprint Tasks (Set Exact Order)` below) | **Repairs.** The result is dense whatever the run was before |
-| `sprint move-to`, `sprint top`, `sprint bottom` | Park the whole sprint and write `0..N-1` (`Move Task to Position` below) | **Repairs the run, but reads it first.** The written run is dense, yet these three decide what to write from the run they find, so over a sparse run they can decide to do nothing at all (reason 2 above). Repairing afterwards is not a substitute for the removals compacting |
+| `sprint reorder` | Writes `0..N-1` in the requested order, rewriting only the members whose position changes (`Reorder Sprint Tasks (Set Exact Order)` below) | **Repairs.** Every member ends at its index in the requested order, whatever the run was before |
+| `sprint move-to`, `sprint top`, `sprint bottom` | Permute the positions already held by the members between the moved task's current rank and its target rank (`Move Task to Position` below) | **Preserves, and depends on it.** These three decide what to write from the run they find, so over a sparse run they can decide to do nothing at all (reason 2 above). They repair nothing, which is why the removals must compact |
 | `sprint swap` | Exchanges the two values the two named tasks already hold (`Swap Tasks` below) | **Preserves.** It opens no gap and closes none |
 | `sprint remove-tasks` | Deletes the named membership rows, then compacts (`Remove from Sprint` below) | **Repairs** |
 | `sprint remove` | Deletes every membership row of the sprint, then the sprint itself (`Clear All Tasks from Sprint` below) | **Trivially satisfied**: neither member nor sprint remains |
@@ -417,7 +424,17 @@ so that no committed state holds a gap and no reader ever observes one. The obli
 follows the row, not the command: only the source side of `sprint move-tasks` names the
 sprint it must repair. The other three repair a sprint the caller's arguments do not
 mention at all, so each of them must first read which sprint the row it is removing
-belonged to.
+belonged to. That read is one set-based statement over the whole set of task ids,
+never one statement per task, and it is chunked like every other `IN` list:
+
+```sql
+SELECT DISTINCT sprint_id FROM sprint_tasks WHERE task_id IN (?, ?, ...) ORDER BY sprint_id ASC;
+```
+
+It runs inside the transaction of the removal, before the removal, and a task with no
+membership row contributes nothing. The union of the chunks' results is returned in
+ascending `sprint_id` order, so that the sprints are compacted in a deterministic
+order.
 
 **The obligation is not suspended for a `CLOSED` sprint.** A removal that reaches a
 closed sprint has already changed that sprint's membership; leaving the survivors with
@@ -447,9 +464,10 @@ Four properties define it:
 - **It runs inside the caller's transaction**, so the removal and its repair commit
   together. A separate transaction would leave a window in which the removal is
   durable and the gap is visible.
-- **It is idempotent.** Run against a sprint that is already dense, it assigns every
-  member the value it already holds. A write path may therefore call it
-  unconditionally rather than first testing whether a gap exists.
+- **It is idempotent.** It writes only the members whose position differs from
+  their index, so run against a sprint that is already dense it writes no row. A
+  write path may therefore call it unconditionally rather than first testing whether
+  a gap exists.
 
 **What a test must show.** The guarantee lives in the write paths, so the tests are
 where it is verified:
@@ -483,15 +501,20 @@ CREATE TABLE IF NOT EXISTS audit (
     performed_at TEXT NOT NULL  -- ISO 8601 UTC
 );
 
--- Indexes for efficient lookup
-CREATE INDEX IF NOT EXISTS idx_audit_entity ON audit(entity_type, entity_id);
-CREATE INDEX IF NOT EXISTS idx_audit_operation ON audit(operation);
-CREATE INDEX IF NOT EXISTS idx_audit_performed_at ON audit(performed_at);
+-- Indexes for efficient lookup. Each carries performed_at DESC after its equality
+-- columns, so the read it serves is returned in the audit order with no sort step.
+-- Covers: the entity history (entity_type and entity_id)
+CREATE INDEX IF NOT EXISTS idx_audit_entity ON audit(entity_type, entity_id, performed_at DESC);
+-- Covers: the operation filter, alone or combined with the entity-type filter
+CREATE INDEX IF NOT EXISTS idx_audit_operation ON audit(operation, performed_at DESC, entity_type);
 
--- Composite index for audit date range queries (TASK-P001)
--- Covers: GetAuditEntries with date range filters
+-- Covers: the unfiltered log and GetAuditEntries with date range filters
 CREATE INDEX IF NOT EXISTS idx_audit_date ON audit(performed_at DESC);
 ```
+
+**One index on `performed_at`, not two.** SQLite reads an index in either direction,
+so a second index over `performed_at` in ascending order would duplicate
+`idx_audit_date` and cost write time on every audited operation.
 
 **Fields:**
 - `operation`: Operation type (for example `TASK_STATUS_DOING`, `SPRINT_START`). Values validated by application.
@@ -856,9 +879,11 @@ CREATE TABLE IF NOT EXISTS task_dependencies (
     FOREIGN KEY (depends_on_task_id) REFERENCES tasks(id) ON DELETE CASCADE
 );
 
-CREATE INDEX IF NOT EXISTS idx_task_deps_task_id ON task_dependencies(task_id);
 CREATE INDEX IF NOT EXISTS idx_task_deps_depends_on ON task_dependencies(depends_on_task_id);
 ```
+
+**No index on `task_id` alone.** It is the leading column of the primary key, whose
+index serves every lookup by `task_id`; a separate index would duplicate that prefix.
 
 **Semantics:** A row `(A, B)` means "task A depends on task B". Task A cannot be marked COMPLETED until task B is COMPLETED. Circular dependencies are rejected by the application using BFS traversal of existing dependencies.
 
@@ -1018,11 +1043,10 @@ ORDER BY t.priority DESC, t.created_at ASC, t.id ASC;
   The two sprint predicates are mutually exclusive, because the page's `sprint`
   parameter carries one value. The page offers no priority or severity filter, so the
   web read never carries the listing's `priority` or `severity` predicate. The sprint-id predicate's subquery is a covering
-  search of `idx_sprint_tasks_lookup`, whose leading column is `sprint_id`, and the
-  no-sprint predicate's correlated subquery is a covering search of an index on
-  `sprint_tasks.task_id` — the implicit unique index of that column's `UNIQUE`
-  constraint, or `idx_sprint_tasks_task_id`, as the planner chooses; no index is
-  added for either.
+  search of the index of the `sprint_tasks` primary key, whose leading column is
+  `sprint_id`, and the no-sprint predicate's correlated subquery is a covering search
+  of the implicit unique index of the `UNIQUE` constraint on `sprint_tasks.task_id`;
+  no index is added for either.
 - **Ordering.** The default ordering with `t.id ASC` appended as its final key. The
   page paginates the result, and a page boundary that fell between two rows equal on
   `priority` and `created_at` would otherwise be free to fall differently on two
@@ -1294,9 +1318,17 @@ properties of the routine).
 -- 1. Read the sprint's surviving members in their current order.
 SELECT task_id, position FROM sprint_tasks WHERE sprint_id = ? ORDER BY position ASC, task_id ASC;
 
--- 2. Assign the dense run. For the member at index i of that sequence:
+-- 2. Assign the dense run. For the member at index i of that sequence, only when
+--    the position it holds is not already i:
 UPDATE sprint_tasks SET position = ? WHERE sprint_id = ? AND task_id = ?;
 ```
+
+**Step 2 is one prepared statement, executed once per member it writes.** The
+statement is prepared once in the caller's transaction and reused for every member,
+and a member that already holds its index is not written. Neither rule changes the
+result: skipping a member leaves it holding exactly the value the write would have
+given it. The same two rules bind the per-member assignments of `Reorder Sprint Tasks
+(Set Exact Order)` and `Move Task to Position` below.
 
 **This sequence needs no parking step**, and it is the only position-writing sequence in
 this document that does not. It renumbers downwards over an ascending read, so the value
@@ -1310,14 +1342,21 @@ exception to is under `Position Uniqueness Within a Sprint`.
 Updates positions for all tasks in a sprint based on a provided ordered list of task IDs.
 
 ```sql
--- Transaction:
--- 1. Park every member of the sprint in the negative range, so that no value the
+-- Transaction. The members that change are those whose current position is not
+-- their index i in the ordered list; the others are not written.
+-- 1. Park every member that changes in the negative range, so that no value the
 --    assignment below writes is still held by another row of the same sprint.
-UPDATE sprint_tasks SET position = -1 - position WHERE sprint_id = ?;
+--    For each member that changes:
+UPDATE sprint_tasks SET position = -1 - position WHERE sprint_id = ? AND task_id = ?;
 
--- 2. Assign the final positions. For each task ID in the ordered list at index i:
+-- 2. Assign the final positions. For each member that changes, at index i of the
+--    ordered list:
 UPDATE sprint_tasks SET position = ? WHERE sprint_id = ? AND task_id = ?;
 ```
+
+Each of the two statements is prepared once in the transaction and executed once per
+member that changes (see `Compact Sprint Positions` above). A reorder that names the
+current order writes no row.
 
 **The parking step is required, not an optimisation.** A reorder is a permutation, so
 assigning the final positions directly makes the first task of the new order claim a
@@ -1326,7 +1365,9 @@ position another task still holds, and the unique index rejects the statement (s
 negative range works because `-1 - position` maps distinct non-negative positions to
 distinct negative ones, so the parked state satisfies the constraint too, and the
 whole sequence runs in one transaction, so no reader ever observes a negative
-position.
+position. Parking only the members that change is sufficient: a member that keeps its
+position already holds its index, and no member that changes is assigned an index
+that a kept member holds, because the indexes of the list are distinct.
 
 **Validation:** All task IDs in the ordered list must belong to the sprint, the list
 must contain no duplicate, and it must name every member of the sprint. The
@@ -1345,21 +1386,31 @@ Moves a single task to a specific position, updating positions of other tasks ac
 -- 1. Get current position of the task
 SELECT position FROM sprint_tasks WHERE sprint_id = ? AND task_id = ?;
 
--- 2. Park every member of the sprint in the negative range.
-UPDATE sprint_tasks SET position = -1 - position WHERE sprint_id = ?;
+-- 2. Park the affected range: every member whose rank lies between the moved task's
+--    current rank and its target rank, both included. For each such member:
+UPDATE sprint_tasks SET position = -1 - position WHERE sprint_id = ? AND task_id = ?;
 
--- 3. Assign the final positions: the members in their previous order, with the moved
---    task lifted out and re-inserted at the target slot. For each task at index i of
---    that sequence:
+-- 3. Assign the final positions: the members of the range in their new order, with
+--    the moved task lifted out and re-inserted at the target slot, receive in
+--    ascending order the positions the range held before step 2. For each member of
+--    the range:
 UPDATE sprint_tasks SET position = ? WHERE sprint_id = ? AND task_id = ?;
 ```
+
+**Only the affected range is written.** A member ranked before both the current and
+the target rank, or after both, keeps its position and is not written. The range
+receives a permutation of the positions it already held, so no assignment can land on
+a value a member outside the range holds. Each of the two per-member statements is
+prepared once in the transaction and executed once per member of the range (see
+`Compact Sprint Positions` above). A move to the rank the task already holds writes no
+row.
 
 **A range shift cannot express this move.** The shift form —
 `UPDATE ... SET position = position + 1 WHERE position >= ? AND position < ?` — walks
 a contiguous run of rows and moves each onto the value its neighbour still holds, so
-the unique index rejects it on the first row, in both directions. Parking the sprint
-and then writing the resulting permutation produces the same final state and never
-presents a duplicate.
+the unique index rejects it on the first row, in both directions. Parking the range
+and then writing its permutation produces the same final state and never presents a
+duplicate.
 
 **Validation:** The target position must be an integer between 0 and 2147483647 (MaxInt32) inclusive. A value less than 0 or greater than 2147483647 is rejected as a validation error.
 
@@ -1411,7 +1462,7 @@ task still holds.
 -- Get current max position, then use Move Task to Position logic
 ```
 
-Both reuse `Move Task to Position` above in full, parking step included.
+Both reuse `Move Task to Position` above in full, parking of the affected range included.
 
 #### Delete Task
 
@@ -1581,7 +1632,7 @@ ORDER BY sprint_id ASC, task_id ASC;
 
 **Ordering.** `sprint_id` ascending groups the rows of one sprint together, so the result is walkable in a single pass; `task_id` ascending fixes the order of the ids inside each sprint, and that is the order the `tasks` field publishes (`MODELS.md § Sprint Field Constraints`). The ordering is fixed by the statement, so it is a property of the read and not an accident of how the rows happen to be stored. Neither column is the sprint's planned execution order: that order is `sprint_tasks.position`, read through the sprint task listings in `List by Sprint` above.
 
-**Index.** Served by `idx_sprint_tasks_lookup`, whose columns are exactly `(sprint_id, task_id)`: the leading column serves the `IN` lookup and the pair serves the ordering, so the statement needs no sort step and reads no table row, and the query plan reports a covering index search. The composite primary key of `sprint_tasks` covers the same two columns in the same order. No index is added for this query. See Performance Optimization below.
+**Index.** Served by the index of the composite primary key of `sprint_tasks`, whose columns are exactly `(sprint_id, task_id)`: the leading column serves the `IN` lookup and the pair serves the ordering, so the statement needs no sort step and reads no table row, and the query plan reports a covering index search. No index is added for this query. See Performance Optimization below.
 
 #### Resolve the Sprint of Many Tasks (Grouped)
 
@@ -1605,7 +1656,7 @@ ORDER BY st.task_id ASC;
 
 **Ordering.** `task_id` ascending. The order makes the result walkable in one pass against a caller-side set of task ids; it carries no other meaning, and no tie-breaker is needed because at most one row exists per task id.
 
-**Index.** The query needs no new index. `WHERE st.task_id IN (...)` is served by `idx_sprint_tasks_task_id`, the single-column index the `sprint_tasks` DDL already declares on `task_id`, and by the implicit unique index SQLite creates for that column's `UNIQUE` constraint. The join resolves `sprints` by its primary key. See Performance Optimization below.
+**Index.** The query needs no new index. `WHERE st.task_id IN (...)` is served by the implicit unique index SQLite creates for the `UNIQUE` constraint on `sprint_tasks.task_id`. The join resolves `sprints` by its primary key. See Performance Optimization below.
 
 **Use case:** the read-only web interface's roadmap task page resolves the sprint of its one task through this statement, over a set holding that one id (see `WEB.md § Roadmap Task Page`). The web tasks page does not issue it: its list shows no task's sprint, and its sprint filter is applied by the membership predicates of the listing it reads (see `List All` above and `WEB.md § Roadmap Tasks Page`). A caller that must resolve the sprints of several tasks MUST do so with this single grouped query over the whole id set, never with one query per task.
 
@@ -1623,6 +1674,12 @@ because a shorter statement was reused.
 INSERT INTO audit (operation, entity_type, entity_id, related_entity_id, commit_hash, performed_at)
 VALUES (?, ?, ?, ?, ?, ?);
 ```
+
+**One prepared statement per transaction.** A transaction that writes audit rows
+prepares this statement once and executes it once per row, whatever the number of
+rows and whichever operations they record. The per-operation rules on
+`related_entity_id` and `commit_hash` are applied to each row before it is written,
+exactly as for a single row, so batching the writes changes no stored value.
 
 **Examples by operation:**
 
@@ -1880,6 +1937,18 @@ ORDER BY task_id ASC;
 
 **Empty id set.** When the id set is empty, the application skips the query entirely instead of issuing a statement with an empty `IN` list, as every grouped read that takes a set of ids does.
 
+**The member tasks of one sprint.** When the set is exactly the membership of one sprint, the id list is replaced by a sub-select on `sprint_tasks`, so the statement binds one parameter whatever the number of members:
+
+```sql
+SELECT task_id, COUNT(*) AS comment_count
+FROM task_comments
+WHERE task_id IN (SELECT task_id FROM sprint_tasks WHERE sprint_id = ?)
+GROUP BY task_id
+ORDER BY task_id ASC;
+```
+
+The result is the one the id-list form returns for that sprint's member ids. The sub-select is served by the index of the `sprint_tasks` primary key, whose leading column is `sprint_id`.
+
 **Index.** Served by `idx_task_comments_task_created`, whose leading column is `task_id`; the aggregate needs no further index and reads no `body` value. See Performance Optimization below.
 
 **Use case:** the sprint page's member-tasks board of the read-only web interface (see `WEB.md § Sprint Detail Sub-Template`) shows a comment count on each card but no comment text, because a task's comments are shown on that task's own page, which the card links to (see `WEB.md § Roadmap Task Page`). The board therefore never reads a comment body in order to display a number, and no read anywhere loads the comment text of several tasks at once: a task's comments are read one task at a time, through the single-parent listing above.
@@ -1984,6 +2053,12 @@ so that the database never reaches a state where `tasks.status` and the
    same transaction. Either the whole edit and all N entries commit, or none of them
    does; a committed edit whose audit record names only some of the fields it
    changed is forbidden.
+10. **Creating a roadmap's schema (`CreateSchema`).** Every table and index of
+    `DDL - Table Creation` above and the three `_metadata` rows MUST be created in
+    one transaction. Either the whole schema and its metadata commit, or none of them
+    does: a failure leaves no table, no index, and no `_metadata` row in the database,
+    so no database can hold a partial schema or a schema without a
+    `schema_version`.
 
 These guarantees extend the general transactional-integrity requirement in
 `ARCHITECTURE.md § Security Guarantees` (every modification, including its audit
@@ -2105,9 +2180,12 @@ The following composite indexes are designed to optimize frequently executed que
 
 | Index Name | Table | Columns | Purpose |
 |------------|-------|---------|---------|
-| `idx_tasks_status_priority` | tasks | (status, priority DESC) | Optimizes ListTasks with status filter and priority ordering |
+| `idx_tasks_status_priority` | tasks | (status, priority DESC, created_at ASC) | Serves the task listing filtered by status in the default ordering, and the status ordering, with no sort step |
+| `idx_tasks_type` | tasks | (type, priority DESC, created_at ASC) | Serves the task listing filtered by type in the default ordering, with no sort step |
 | `idx_tasks_priority_created` | tasks | (priority DESC, created_at) | Optimizes priority filtering with date-based ordering |
-| `idx_sprint_tasks_lookup` | sprint_tasks | (sprint_id, task_id) | Optimizes sprint task relationship lookups, and the grouped membership read of many sprints |
+| `idx_tasks_severity_priority` | tasks | (severity DESC, priority DESC, created_at ASC) | Serves the severity ordering of the task listing, with no sort step |
+| `idx_audit_entity` | audit | (entity_type, entity_id, performed_at DESC) | Serves the entity history in the audit order, with no sort step |
+| `idx_audit_operation` | audit | (operation, performed_at DESC, entity_type) | Serves the operation filter in the audit order, with no sort step |
 | `idx_audit_date` | audit | (performed_at DESC) | Optimizes audit log date range queries |
 | `idx_task_comments_task_created` | task_comments | (task_id, created_at ASC) | Optimizes the comment listing of one task, and the grouped comment count of many tasks |
 | `idx_sprint_comments_sprint_created` | sprint_comments | (sprint_id, created_at ASC) | Optimizes the comment listing of one sprint |
@@ -2124,19 +2202,21 @@ application issues is served by the named index and needs no sort and no table
 read. That claim is exact, and `Verification` below states how it is settled, on
 the production statement rather than on a retyped one.
 
-**idx_tasks_status_priority:**
-- Query pattern: `WHERE status = ? ORDER BY priority DESC`
-- Without index: Full table scan + sort operation
-- With index: Index scan only, no sort needed
+**idx_tasks_status_priority, idx_tasks_type and idx_tasks_severity_priority:**
+- Query patterns: `WHERE status = ? ORDER BY priority DESC, created_at ASC`; `ORDER BY status ASC, priority DESC, created_at ASC`; `WHERE type = ? ORDER BY priority DESC, created_at ASC`; `ORDER BY severity DESC, priority DESC, created_at ASC` (the orderings of `List All` above)
+- Each index holds the columns of one ordering in its order and direction, tie-breaker included, after the column the predicate fixes by equality, so the listing is read in index order and needs no sort step
+- An index whose columns stopped at the first ordering key would leave the remaining keys to a sort step over every matching row, which is the work these indexes exist to remove
+- A listing read in the order of one of these indexes returns rows equal on every ordering key in ascending `id` order, because SQLite keeps equal index entries in `rowid` order; that is the order the default ordering already returns through `idx_tasks_priority_created`
 
 **idx_tasks_priority_created:**
 - Query pattern: `WHERE priority >= ? ORDER BY created_at`
 - Supports priority-based filtering with chronological ordering
 
-**idx_sprint_tasks_lookup:**
+**The index of the `sprint_tasks` primary key `(sprint_id, task_id)`:**
 - Query pattern: `WHERE sprint_id = ?` in sprint_tasks table
-- Optimizes GetSprintTasks and sprint membership checks
+- Serves GetSprintTasks and sprint membership checks
 - The same index serves the grouped `WHERE sprint_id IN (...) ORDER BY sprint_id ASC, task_id ASC` read that resolves the `tasks` and `task_count` of every sprint the sprint listing returns (see `Read the Membership of Many Sprints (Grouped)` above): the leading column serves the lookup and the pair serves the ordering, so that read needs no sort step and touches no table row
+- SQLite creates it for the primary key, so no index is declared for these reads
 
 **idx_sprint_tasks_order:**
 - Query pattern: `WHERE sprint_id = ? ORDER BY position ASC` in the `sprint_tasks` table
@@ -2148,13 +2228,55 @@ the production statement rather than on a retyped one.
 - Query pattern: `WHERE performed_at >= ? AND performed_at <= ?`
 - Essential for audit log pagination and date range filtering
 
+**idx_audit_entity and idx_audit_operation:**
+- Query patterns: `WHERE entity_type = ? AND entity_id = ? ORDER BY performed_at DESC` and `WHERE operation = ? ORDER BY performed_at DESC`, the entity history and the operation filter of `Query Audit Entries` above
+- `performed_at DESC` follows the equality columns, so the rows are read in the audit order and the `LIMIT` stops the read early, with no sort step
+- `entity_type` trails `idx_audit_operation` so that an operation filter combined with an entity-type filter is resolved inside the index
+- A read in the order of one of these indexes returns rows equal on `performed_at` in ascending `id` order, because SQLite keeps equal index entries in `rowid` order; that is the order the unfiltered log already returns through `idx_audit_date`
+
 **idx_task_comments_task_created and idx_sprint_comments_sprint_created:**
 - Query pattern: `WHERE task_id = ? ORDER BY created_at ASC` (and the `sprint_id` equivalent)
 - The leading column serves the parent lookup and the trailing column serves the listing order, so one index covers both and no sort step is needed
 - The same index serves the grouped `WHERE task_id IN (...) GROUP BY task_id` count the web interface's sprint board uses to show a comment count per card without reading any body
 - A single index per table is sufficient: every comment listing filters on the parent key, so no query ever scans a comment table without it, and no listing is ordered by any other column
 
-**Grouped sprint resolution needs no new index.** The grouped query that resolves the sprint of many tasks at once (see `Resolve the Sprint of Many Tasks (Grouped)` above) filters with `WHERE sprint_tasks.task_id IN (...)` and joins `sprints` by primary key. The `task_id` lookup is already served by `idx_sprint_tasks_task_id`, the single-column index the `sprint_tasks` DDL declares, and by the implicit unique index SQLite creates for the `UNIQUE` constraint on that column. No index is added for this query, and `idx_sprint_tasks_lookup` (leading column `sprint_id`) is not the index that serves it.
+**No index duplicates another, or a prefix of another.** An index whose columns are a
+leading prefix of another index, or of a constraint's implicit index, serves no lookup
+the longer index does not serve, and it costs write time on every row change. The
+schema therefore declares no index on `tasks(status)`, `tasks(priority)`,
+`sprint_tasks(task_id)`, `sprint_tasks(sprint_id, task_id)`,
+`task_dependencies(task_id)`, or a second index on `audit(performed_at)`.
+
+**Grouped sprint resolution needs no new index.** The grouped query that resolves the sprint of many tasks at once (see `Resolve the Sprint of Many Tasks (Grouped)` above) filters with `WHERE sprint_tasks.task_id IN (...)` and joins `sprints` by primary key. The `task_id` lookup is served by the implicit unique index SQLite creates for the `UNIQUE` constraint on that column. No index is added for this query, and the index of the primary key (leading column `sprint_id`) is not the index that serves it.
+
+### Join Order of the Sprint Completion Counts
+
+Two statements count the `COMPLETED` member tasks of a sprint: the per-sprint count of
+the average-velocity computation (`COMMANDS.md § Get Roadmap Statistics`) and the daily
+completion counts of the burndown (`COMMANDS.md § Sprint Statistics`). Each MUST drive
+the join from `sprint_tasks` and fix that order with `CROSS JOIN`:
+
+```sql
+-- Average velocity: the completed count of one closed sprint s
+SELECT COUNT(*) FROM sprint_tasks st CROSS JOIN tasks t ON t.id = st.task_id
+WHERE st.sprint_id = s.id AND t.status = 'COMPLETED';
+
+-- Burndown: completions per day of one sprint
+SELECT substr(t.closed_at, 1, 10) AS completion_date, COUNT(*) AS completed_count
+FROM sprint_tasks st CROSS JOIN tasks t ON t.id = st.task_id
+WHERE st.sprint_id = ? AND t.status = 'COMPLETED' AND t.closed_at IS NOT NULL
+GROUP BY completion_date
+ORDER BY completion_date ASC;
+```
+
+**Why the order is fixed.** The application never runs `ANALYZE`, so the planner has no
+statistics, and with `INNER JOIN` it is free to drive the join from `tasks` through
+`idx_tasks_status_priority`: it then walks every `COMPLETED` task of the roadmap and
+probes `sprint_tasks` for each, for every sprint counted. In SQLite, `CROSS JOIN` makes
+the left table the outer loop and leaves the result unchanged. The plan is therefore a
+search of the `sprint_tasks` primary-key index by `sprint_id`, followed by one
+primary-key lookup of `tasks` per member, and its cost follows the size of the sprint,
+not the size of the roadmap.
 
 ### Verification
 

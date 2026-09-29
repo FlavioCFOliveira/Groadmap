@@ -132,9 +132,8 @@ type DB struct {
 }
 
 // Placeholders returns a comma-separated string of n SQL "?" placeholders,
-// pulled from the connection's pre-generated cache when n is in range.
-// Use from command handlers to build IN (...) clauses without re-allocating
-// a []string + strings.Join on each call.
+// generated on demand (see QueryCache). Use from command handlers to build
+// IN (...) clauses.
 func (db *DB) Placeholders(n int) string {
 	return db.queryCache.GetPlaceholders(n)
 }

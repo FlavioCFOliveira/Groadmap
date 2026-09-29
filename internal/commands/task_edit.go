@@ -210,11 +210,11 @@ func taskEdit(args []string) error {
 		defer cancel()
 
 		ids := []int{taskID}
-		tasks, lookupErr := database.GetTasks(ctx, ids)
+		tasks, lookupErr := database.GetTaskStates(ctx, ids)
 		if lookupErr != nil {
 			return lookupErr
 		}
-		return utils.TasksNotFoundError(utils.MissingIDs(ids, taskIDsOf(tasks)))
+		return utils.TasksNotFoundError(utils.MissingIDs(ids, taskStateIDsOf(tasks)))
 	}
 
 	// Capture timestamp once for the entire operation: every entry this

@@ -154,7 +154,7 @@ func sprintLifecycle(args []string, newStatus models.SprintStatus, op models.Aud
 
 	// Block close when tasks are still SPRINT, DOING or TESTING unless --force is given.
 	if newStatus == models.SprintClosed {
-		activeTasks, err := database.GetActiveSprintTasks(ctx, sprintID)
+		activeTasks, err := database.GetActiveSprintTaskStates(ctx, sprintID)
 		if err != nil {
 			return fmt.Errorf("checking active tasks: %w", err)
 		}

@@ -84,7 +84,7 @@ func sprintReorder(args []string) error {
 	defer cancel()
 
 	// Verify sprint exists
-	_, err = database.GetSprint(ctx, sprintID)
+	err = database.CheckSprintExists(ctx, sprintID)
 	if err != nil {
 		return err
 	}
@@ -193,7 +193,7 @@ func sprintMoveTo(args []string) error {
 	defer cancel()
 
 	// Verify sprint exists
-	_, err = database.GetSprint(ctx, sprintID)
+	err = database.CheckSprintExists(ctx, sprintID)
 	if err != nil {
 		return err
 	}
@@ -304,7 +304,7 @@ func sprintSwap(args []string) error {
 	defer cancel()
 
 	// Verify sprint exists
-	_, err = database.GetSprint(ctx, sprintID)
+	err = database.CheckSprintExists(ctx, sprintID)
 	if err != nil {
 		return err
 	}

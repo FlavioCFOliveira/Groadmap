@@ -391,11 +391,7 @@ Multiple database functions build SQL queries using `fmt.Sprintf` with `strings.
 
 **Affected Operations:**
 - `GetTasks` - IN clause for task IDs
-- `UpdateTaskStatus` - IN clause for task IDs
-- `UpdateTaskPriority` - IN clause for task IDs
-- `UpdateTaskSeverity` - IN clause for task IDs
 - `AddTasksToSprint` - IN clause for task IDs
-- `RemoveTasksFromSprint` - IN clause for task IDs
 
 **The overhead is a recompilation on every execution**, because a query string
 that is unique to its call can match nothing SQLite has already compiled. No
@@ -404,32 +400,33 @@ a figure no check re-derives is one a reader would be entitled to trust.
 
 ### Cache Strategy
 
-Pre-generate and cache query templates for common IN clause sizes to enable SQLite query plan reuse.
+Every batch operation of a given normalised size takes the same query text, so SQLite
+is presented with a statement it has already compiled. The text is generated on
+demand, when an operation asks for it, and nothing is precomputed when a database is
+opened: opening a roadmap costs no template or placeholder generation, and a command
+that issues no batch operation generates none.
 
-**Cached Sizes:**
-- **Standard sizes:** 1-100 (individual caches)
-- **Large batches:** 250, 500, 1000
+**Normalised sizes.** A requested size is normalised before the text is generated:
 
-Total cached templates: 103
+| Requested size *n* | Normalised size |
+|--------------------|-----------------|
+| *n* ≤ 0 | 1 |
+| 1 ≤ *n* ≤ 100 | *n* |
+| 101 ≤ *n* ≤ 250 | 250 |
+| 251 ≤ *n* ≤ 500 | 500 |
+| *n* > 500 | 1000 |
+
+The template of an operation is its SQL with one `?` placeholder per unit of the
+normalised size, comma-separated. A placeholder list requested on its own, outside a
+template, holds exactly *n* placeholders.
 
 ### Data Structures
 
 ```go
-// QueryCache stores pre-generated query templates for batch operations
-type QueryCache struct {
-    templates    map[string]string
-    placeholders []string
-    mu           sync.RWMutex
-}
-
-// Operation types for cache keys
+// Operation types for template keys
 const (
-    OpGetTasks              = "get_tasks"
-    OpUpdateTaskStatus      = "update_task_status"
-    OpUpdateTaskPriority    = "update_task_priority"
-    OpUpdateTaskSeverity    = "update_task_severity"
-    OpAddTasksToSprint      = "add_tasks_to_sprint"
-    OpRemoveTasksFromSprint = "remove_tasks_from_sprint"
+    OpGetTasks         = "get_tasks"
+    OpAddTasksToSprint = "add_tasks_to_sprint"
 )
 ```
 
@@ -451,23 +448,24 @@ These are the requirements on the cache, and every one of them is settled by
 inspection rather than by measurement
 (`BUILD.md § No Benchmarks and No Performance-Measurement Tests`):
 
-- A batch operation of a cached size MUST take its query text from the cache
-  rather than build a new string, so that repeated operations of that size
-  present SQLite with a query it has already compiled. The requirement is on the
-  **identity** of the text: the same operation at the same size yields the same
-  string on every call.
-- The cached sizes MUST be exactly those listed above, and the template count
-  MUST be the 103 that set yields.
+- A batch operation MUST take its query text from the template of its operation
+  at its normalised size, so that repeated operations of that size present SQLite
+  with a query it has already compiled. The requirement is on the **identity** of
+  the text: the same operation at the same requested size yields the same string on
+  every call, and two requested sizes with the same normalised size yield the same
+  string.
+- The normalised sizes MUST be exactly those of the table above.
+- Opening a database MUST NOT generate any template or placeholder list.
 - A list of any length MUST be processed correctly, including one above the
   largest cached size and one above the SQLite variable limit, which
   `BatchProcessor` chunks. Correctness here is the set of rows affected, and it
   MUST NOT depend on how the list was chunked.
 - The implementation MUST be safe under concurrent access, proven by the race
-  detector over concurrent readers and writers of the cache.
+  detector over concurrent callers.
 
-No throughput figure, cache-hit rate, or improvement percentage is required or
-published. The cache is justified by the recompilation it removes, and that
-removal is visible in the query text without timing anything.
+No throughput figure or improvement percentage is required or published. The
+strategy is justified by the recompilation it removes, and that removal is visible
+in the query text without timing anything.
 
 ## Graph Store Concurrency
 
@@ -730,8 +728,9 @@ across distinct nodes the remedy rather than reducing the writer count.
 3. **WAL Mode**: Use `PRAGMA journal_mode=WAL;` to improve concurrency for read/write operations.
 4. **Foreign Keys**: Explicitly enable `PRAGMA foreign_keys=ON;` on every connection to enforce constraints and cascading actions.
 5. **Bulk Operations**: Encapsulate multiple updates in a single transaction. Batch ID lists larger than 500 to avoid SQLite variable limits.
-6. **Streaming Output**: Use `json.Encoder` for large result sets (e.g., `audit list`) to stream JSON directly to `stdout` instead of buffering.
+6. **Streaming Output, in one pass**: A command result written to `stdout` as JSON is encoded in a single pass that applies the indentation as it encodes; no second pass re-indents bytes already encoded. The bytes written are fixed by `DATA_FORMATS.md § Implementation Notes` and by these rules, which the encoder MUST reproduce exactly: two-space indentation and no prefix; one trailing newline; `<`, `>` and `&` written literally, not escaped; U+2028 and U+2029 escaped as `\u2028` and `\u2029`; an invalid UTF-8 byte in a string replaced by U+FFFD; an empty array written as `[]`. The `--ai-help` contract is produced by its own generator and is outside this rule (`DATA_FORMATS.md § AI Agent Contract`).
 7. **Concurrency**: Leverage Go's concurrency for independent read operations, but ensure writes are strictly sequential per roadmap file.
+8. **Read only the columns the caller uses**: A command that needs, of a set of tasks, only their ids, statuses, severities or priorities, or only how many there are, reads a projection of those columns or a `COUNT(*)`, never the complete `Task` object with its subtask count and dependency sets. The complete object is read only where the command publishes it. The projection changes no output: the values a command reports and the decisions it takes come from the same columns either way.
 
 ## See Also
 
