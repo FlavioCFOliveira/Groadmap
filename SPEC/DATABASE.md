@@ -998,8 +998,8 @@ read-only web interface's task list reads the roadmap's tasks through this state
 ```sql
 SELECT ...  -- the select list of List All above, unchanged
 FROM tasks t WHERE 1=1
-  AND t.status = ?                                  -- only when a status filter is accepted
-  AND t.type = ?                                    -- only when a type filter is accepted
+  AND t.status IN (?, ...)                          -- only when a status value is active; one ? per distinct value
+  AND t.type IN (?, ...)                            -- only when a type value is active; one ? per distinct value
   AND t.id IN (SELECT st.task_id FROM sprint_tasks st WHERE st.sprint_id = ?)
                                                     -- only when a sprint id is accepted
   AND NOT EXISTS (SELECT 1 FROM sprint_tasks st WHERE st.task_id = t.id)
@@ -1007,9 +1007,14 @@ FROM tasks t WHERE 1=1
 ORDER BY t.priority DESC, t.created_at ASC, t.id ASC;
 ```
 
-- **Predicates.** Each predicate is appended only when the page accepted a value
-  for its filter, and every value is a bound parameter; no value the page receives
-  is concatenated into the SQL, and a value the page ignored reaches no statement.
+- **Predicates.** Each predicate is appended only when the page's active filter
+  state has a value for its filter, and every value is a bound parameter; no value
+  the page receives is concatenated into the SQL, and a value the page ignored
+  reaches no statement. The page's status and type filters each accept several
+  values, which combine by OR within the filter: the status predicate is one
+  `IN` list holding one placeholder per distinct active status value, and the type
+  predicate likewise, so a filter with one active value carries a one-element
+  list.
   The two sprint predicates are mutually exclusive, because the page's `sprint`
   parameter carries one value. The page offers no priority or severity filter, so the
   web read never carries the listing's `priority` or `severity` predicate. The sprint-id predicate's subquery is a covering
@@ -1536,6 +1541,16 @@ SELECT id, title FROM sprints ORDER BY order_index ASC;
 **Use case:** the read-only web interface's tasks page offers one option per sprint in its sprint filter, labelled by the sprint's `id` and `title`, and accepts a `sprint` parameter only when it names one of these ids (see `WEB.md § Roadmap Tasks Page`). The statement reads `sprints` alone: it joins nothing and reads no membership, because the filter needs neither a sprint's tasks nor its task count.
 
 **Ordering.** `order_index` ascending, the order `rmp sprint list` returns (see `COMMANDS.md § List Sprints`). `order_index` is unique across the roadmap (`idx_sprints_order`), so the order is total and needs no tie-breaker, and the index serves it with no sort step.
+
+#### Count Roadmap Tasks
+
+Returns the number of tasks the roadmap holds, of any status, and nothing else.
+
+```sql
+SELECT COUNT(*) FROM tasks;
+```
+
+**Use case:** the read-only web interface's tasks page issues this statement only when its filtered list is empty and its task read carried at least one filter predicate, to tell a roadmap that holds no task, which shows the `No tasks yet` empty state whatever the filters, from a roadmap whose tasks the filters all exclude (see `WEB.md § Roadmap Tasks Page`, **Empty states** and **Read cost**). It takes no parameter.
 
 #### Read the Membership of Many Sprints (Grouped)
 

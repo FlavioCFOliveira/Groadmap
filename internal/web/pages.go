@@ -195,17 +195,30 @@ func handleSprints(w http.ResponseWriter, r *http.Request) {
 // on the server, each row linking to that task's own page (SPEC/WEB.md § Roadmap
 // Tasks Page).
 //
-// No query parameter can change this route's status codes: every value maps to
-// a list, an unacceptable one being ignored as though absent. The {name} is
-// validated and confirmed to exist before any data read; an invalid or unknown
-// name yields 404 (handled by resolveRoadmap), an internal read error yields 500.
+// No query parameter and no cookie content can change this route's status codes:
+// every value maps to a list, an unacceptable one being ignored as though absent.
+// The {name} is validated and confirmed to exist before any data read; an invalid
+// or unknown name yields 404 (handled by resolveRoadmap), an internal read error
+// yields 500.
+//
+// The response depends on the request's Cookie header as well as on its URL, so
+// every response of the route, whatever its status, carries Vary: Cookie beside
+// the Cache-Control: no-store the security-header middleware sets; the route
+// emits no validator and evaluates no conditional header, so it never answers 304
+// (SPEC/WEB.md § Cache Policy, rule 5). Only an HTTP 200 response to an explicit
+// request sets the filter-state cookie; a HEAD request runs this same handler,
+// so its response carries the same headers, Set-Cookie included (SPEC/WEB.md
+// § Roadmap Tasks Page, Filter persistence).
 func handleTasks(w http.ResponseWriter, r *http.Request) {
+	w.Header().Add("Vary", "Cookie")
+
 	name, ok := resolveRoadmap(w, r)
 	if !ok {
 		return
 	}
 
-	data, err := loadTasks(r.Context(), name, r.URL.Query())
+	req := newTasksRequest(r)
+	data, err := loadTasks(r.Context(), name, &req)
 	if err != nil {
 		logServerError(r, "task list load failed", err, slog.String("roadmap", name))
 		http.Error(w, "internal server error", http.StatusInternalServerError)
@@ -216,6 +229,11 @@ func handleTasks(w http.ResponseWriter, r *http.Request) {
 		Roadmap: name,
 		Active:  "tasks",
 		Heading: pageHeading{Title: "Tasks"},
+	}
+	if req.explicit {
+		if cookie := filterCookie(data.query.cookieValue()); cookie != nil {
+			http.SetCookie(w, cookie)
+		}
 	}
 	renderHTML(w, r, "tasks.html", data)
 }
@@ -488,6 +506,10 @@ func renderHTML(w http.ResponseWriter, r *http.Request, name string, data any) {
 		// (SPEC/WEB.md § What Is Logged). The handler that called us has
 		// nothing further to log on the way out.
 		logServerError(r, "page template execution failed", err, slog.String("template", name))
+		// A 500 sets no cookie, so a Set-Cookie the handler staged for the
+		// 200 it expected is withdrawn (SPEC/WEB.md § Roadmap Tasks Page,
+		// Filter persistence, Which responses set it).
+		w.Header().Del("Set-Cookie")
 		http.Error(w, "internal server error", http.StatusInternalServerError)
 		return
 	}

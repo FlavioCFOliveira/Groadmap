@@ -29,9 +29,10 @@
             The page is READ-ONLY. Its one form is the filter bar, which submits by
             GET to this page and only narrows what the page shows; every other
             control is a GET link. Filtering, searching, and paginating are done by
-            the server on each request, so the page works without JavaScript and
-            loads no script of its own (SPEC/WEB.md § Roadmap Tasks Page,
-            Read-only; The page works without JavaScript).
+            the server on each request, and no script changes the list after load.
+            The page loads no project script of its own: its one script is the
+            vendored Tabler script, which only opens the Status and Type dropdowns
+            (SPEC/WEB.md § Roadmap Tasks Page, Read-only; Scripts).
           */}}
           <div class="card">
             <div class="card-header flex-wrap gap-2">
@@ -44,20 +45,27 @@
                   trailing-aligned on the card title's line, and every control
                   carries a real <label>, associated by for/id and visually hidden:
                   the label stays the control's accessible name, and the input's
-                  placeholder or the select's shown option says what it is. A
-                  select's first option is the value meaning "no filter on this
-                  dimension", never the control's name. Each option set is
-                  the server's own enumeration, so a request's value only decides
-                  which option is selected and is never echoed as text; the term is
-                  the one caller-supplied string echoed, into the input's value,
-                  escaped by html/template. The hidden size input keeps the page
-                  size, and the form carries no page field, so applying the filters
-                  returns to page 1. The bar holds search, sprint, status, type, and
-                  Apply, and nothing else: no priority or severity filter and no
-                  Reset control, so the whole bar fits on the card title's line; the
-                  one Reset link is the no-match empty state's (SPEC/WEB.md
-                  § Roadmap Tasks Page, Filter bar;
-                  Compact controls; Labels are programmatic, not visible).
+                  placeholder, the select's shown option, or the dropdown toggle's
+                  text says what it is. The sprint select's first option and a
+                  toggle's any text are the value meaning "no filter on this
+                  dimension", never the control's name. Status and type are Tabler
+                  dropdowns of checkboxes, with no any checkbox: a dimension with no
+                  box checked is not filtered. The toggle's text is the server's
+                  statement of the applied state, and its span is the toggle's
+                  accessible description through aria-describedby. Checking a box
+                  submits nothing; Apply, or Enter in the search input, submits the
+                  form. Each option set and checkbox set is the server's own
+                  enumeration, so an active value only decides which option is
+                  selected or which box is checked and is never echoed as text; the
+                  term is the one caller-supplied string echoed, into the input's
+                  value, escaped by html/template. The hidden size input keeps the
+                  page size, and the form carries no page field, so applying the
+                  filters returns to page 1. The bar holds search, sprint, status,
+                  type, and Apply, and nothing else: no priority or severity filter
+                  and no Reset control; the one Reset link is the no-match empty
+                  state's (SPEC/WEB.md § Roadmap Tasks Page, Filter bar;
+                  Multi-select dropdowns; Compact controls; Labels are
+                  programmatic, not visible).
                 */}}
                 <form class="row g-2 align-items-end justify-content-end" method="get" action="/roadmaps/{{.Name}}/tasks">
                   <input type="hidden" name="size" value="{{.Filters.Size}}">
@@ -71,11 +79,17 @@
                   </div>
                   <div class="col-12 col-sm-auto">
                     <label class="visually-hidden" for="task-filter-status">Status</label>
-                    <select class="form-select form-select-sm" id="task-filter-status" name="status">{{range .Filters.Statuses}}<option value="{{.Value}}"{{if .Selected}} selected{{end}}>{{.Label}}</option>{{end}}</select>
+                    <div class="dropdown">
+                      <button type="button" class="form-select form-select-sm" id="task-filter-status" data-bs-toggle="dropdown" data-bs-auto-close="outside" aria-describedby="task-filter-status-text"><span id="task-filter-status-text">{{.Filters.StatusText}}</span></button>
+                      <div class="dropdown-menu">{{range .Filters.Statuses}}<label class="dropdown-item"><input type="checkbox" class="form-check-input" name="status" value="{{.Value}}"{{if .Checked}} checked{{end}}>{{.Value}}</label>{{end}}</div>
+                    </div>
                   </div>
                   <div class="col-12 col-sm-auto">
                     <label class="visually-hidden" for="task-filter-type">Type</label>
-                    <select class="form-select form-select-sm" id="task-filter-type" name="type">{{range .Filters.Types}}<option value="{{.Value}}"{{if .Selected}} selected{{end}}>{{.Label}}</option>{{end}}</select>
+                    <div class="dropdown">
+                      <button type="button" class="form-select form-select-sm" id="task-filter-type" data-bs-toggle="dropdown" data-bs-auto-close="outside" aria-describedby="task-filter-type-text"><span id="task-filter-type-text">{{.Filters.TypeText}}</span></button>
+                      <div class="dropdown-menu">{{range .Filters.Types}}<label class="dropdown-item"><input type="checkbox" class="form-check-input" name="type" value="{{.Value}}"{{if .Checked}} checked{{end}}>{{.Value}}</label>{{end}}</div>
+                    </div>
                   </div>
                   <div class="col-12 col-sm-auto">
                     <button type="submit" class="btn btn-primary btn-sm">Apply</button>
@@ -126,8 +140,8 @@
             {{/*
               The footer: range text, rows-per-page selector, and the numbered
               pagination bar, the last pushed to the trailing edge. Every link keeps
-              the request's accepted filters (SPEC/WEB.md § Roadmap Tasks Page,
-              Pagination).
+              the filters of the active filter state (SPEC/WEB.md § Roadmap Tasks
+              Page, Pagination; Links keep the filters).
             */}}
             <div class="card-footer">
               <div class="row g-2 align-items-center">
@@ -172,15 +186,16 @@
             {{else}}
             {{/*
               The empty states, inside the card, which keeps its header and filter
-              bar: a roadmap with no task, and a request whose criteria no task
-              satisfies. One message covers the term and the filters together
-              (SPEC/WEB.md § Roadmap Tasks Page, Empty states).
+              bar: a roadmap with no task, whatever the filters, and a roadmap
+              whose tasks the active criteria all exclude. One message covers the
+              term and the filters together; its Reset link restores the default
+              filter state (SPEC/WEB.md § Roadmap Tasks Page, Empty states).
             */}}
             <div class="card-body">
               <div class="empty">
                 {{if .NoMatch}}
                 <p class="empty-title">No task matches the filters</p>
-                <p class="empty-subtitle text-secondary">Change the search or the filters above, or reset them to see every task.</p>
+                <p class="empty-subtitle text-secondary">Change the search or the filters above, or reset them to the defaults.</p>
                 <div class="empty-action">
                   <a class="btn" href="{{.Filters.ResetURL}}">Reset</a>
                 </div>

@@ -16,10 +16,12 @@
               The one navigation link of the actions column. It returns to the
               roadmap's tasks page, the parent view of the record on display, a
               relationship the sidebar's flat list of views does not express. It
-              carries no query parameter, so it opens the board unnarrowed; the
-              way to the sprint page is the Sprint card's link below, so each
-              destination is offered once (SPEC/WEB.md § Roadmap Task Page, The way
-              back; § Shared Page-Header Partial, rule 5). The column is full width
+              carries no query parameter, so it opens the list on its first page
+              with the filter state stored in the tasks page's cookie, or the
+              default filter state when none is stored; the way to the sprint page
+              is the Sprint card's link below, so each destination is offered once
+              (SPEC/WEB.md § Roadmap Task Page, The way back; § Shared Page-Header
+              Partial, rule 5). The column is full width
               below the sm breakpoint, so it takes its own row below a long title
               instead of squeezing it (SPEC/WEB.md § UI Framework, rule 16).
             */}}

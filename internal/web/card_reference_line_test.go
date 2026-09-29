@@ -234,7 +234,7 @@ func TestBoardCards_EveryTaskTypeRendersItsVariant(t *testing.T) {
 // TestBoardCards_TypeMappingReachesNoOtherSurface is the exclusion clause of
 // Acceptance Criterion 177: outside the board cards and the list rows, no badge on
 // either page reads a task type, and the type filter offers the ten values as plain
-// options with no colour.
+// checkboxes of its dropdown, with no colour.
 func TestBoardCards_TypeMappingReachesNoOtherSurface(t *testing.T) {
 	t.Setenv("HOME", shortHome(t))
 	f := seedReferenceLineFixture(t, "merchant-settlement")
@@ -257,9 +257,10 @@ func TestBoardCards_TypeMappingReachesNoOtherSurface(t *testing.T) {
 
 	page := servePage(t, mux, f.tasksPath())
 	for _, taskType := range models.ValidTaskTypes {
-		option := `<option value="` + string(taskType) + `">` + string(taskType) + `</option>`
-		if !strings.Contains(page, option) {
-			t.Errorf("the type filter no longer offers %q as the plain option %s", taskType, option)
+		box := `<label class="dropdown-item"><input type="checkbox" class="form-check-input" name="type" value="` +
+			string(taskType) + `">` + string(taskType) + `</label>`
+		if !strings.Contains(page, box) {
+			t.Errorf("the type filter no longer offers %q as the plain checkbox %s", taskType, box)
 		}
 	}
 }

@@ -1179,9 +1179,20 @@ class TestWebInterface:
         parsed = {
             "ids": [int(m) for m in re.findall(
                 r'<tr>\s*<td><span class="badge bg-black text-white">#(\d+)</span></td>', body)],
-            "range": None, "selects": {}, "search": None, "size": None, "reset": None,
-            "empty": None, "items": [], "prev": None, "next": None, "sizes": [],
+            "range": None, "selects": {}, "checks": {}, "toggles": {}, "search": None, "size": None,
+            "reset": None, "empty": None, "items": [], "prev": None, "next": None, "sizes": [],
         }
+        for toggle_id, described_by, span_id, text, menu in re.findall(
+                r'<div class="dropdown">\s*<button type="button" class="form-select form-select-sm" id="([^"]*)" '
+                r'data-bs-toggle="dropdown" data-bs-auto-close="outside" aria-describedby="([^"]*)">'
+                r'<span id="([^"]*)">([^<]*)</span></button>\s*<div class="dropdown-menu">(.*?)</div>\s*</div>', body, re.S):
+            boxes = re.findall(
+                r'<label class="dropdown-item"><input type="checkbox" class="form-check-input" '
+                r'name="([a-z]+)" value="([^"]*)"( checked)?>([^<]*)</label>', menu)
+            name = boxes[0][0] if boxes else toggle_id
+            parsed["checks"][name] = [(html_lib.unescape(value), bool(checked)) for _, value, checked, _ in boxes]
+            parsed["toggles"][name] = {"id": toggle_id, "describedby": described_by, "span": span_id,
+                                       "text": html_lib.unescape(text)}
         m = re.search(r'<p class="m-0 text-secondary">Showing <span>(\d+)</span> to <span>(\d+)</span> '
                       r'of <span>(\d+)</span> entries</p>', body)
         if m:
@@ -1228,6 +1239,12 @@ class TestWebInterface:
         chosen = [value for value, _, selected in parsed["selects"][name] if selected]
         assert len(chosen) == 1, f"the {name} select marks {len(chosen)} options selected: {chosen}"
         return chosen[0]
+
+    @staticmethod
+    def _checked(parsed, name):
+        """The values of a dropdown's checked boxes, in menu order."""
+        assert name in parsed["checks"], f"the page has no {name} dropdown of the specified shape"
+        return [value for value, checked in parsed["checks"][name] if checked]
 
     @staticmethod
     def _current_page(parsed):
@@ -1283,15 +1300,20 @@ class TestWebInterface:
         record = self._seed_list_roadmap("payments_catalogue", 60)
         tasks = record["tasks"]
         proc, port = self._start(["--port", "0"])
-        headers, body, parsed = self._list(port, "/roadmaps/payments_catalogue/tasks")
+        # Explicit, with no filter: every task, COMPLETED ones included. A bare
+        # request would apply the default status selection.
+        headers, body, parsed = self._list(port, "/roadmaps/payments_catalogue/tasks?size=25")
 
         assert headers.get("cache-control") == "no-store", headers.get("cache-control")
         main = re.search(r'<main class="page-body">(.*?)</main>', body, re.S).group(1)
         assert main.count('<div class="card">') == 1, "the page renders more than one card"
         assert main.count("<table") == 1 and '<table class="table table-vcenter card-table">' in main
-        for forbidden in ("task-board", "card-sm card-link", "table-selectable", 'type="checkbox"',
+        for forbidden in ("task-board", "card-sm card-link", "table-selectable",
                           'class="modal', 'data-bs-toggle="modal"', "task-search.js", "style="):
             assert forbidden not in body, f"the tasks page carries {forbidden!r}"
+        # The only checkboxes are the filter bar's Status and Type dropdown boxes.
+        form = body[body.index("<form"):body.index("</form>")]
+        assert body.count('type="checkbox"') == form.count('type="checkbox"') == 15, "a checkbox outside the dropdowns"
         assert re.search(
             r'<div class="card-header flex-wrap gap-2">\s*<div>\s*<h2 class="card-title">Task list</h2>\s*</div>\s*'
             r'<div class="card-actions">\s*(?:\{\{.*?\}\}\s*)?<form class="row g-2 align-items-end justify-content-end" method="get" '
@@ -1349,18 +1371,20 @@ class TestWebInterface:
             assert status == 404, f"GET {path}: {status}, want 404"
 
     def test_tasks_page_each_filter_narrows_the_list(self):
-        """AC112, AC113, AC234, AC235, AC243, AC244: the filter bar offers search,
-        sprint, status, and type, each a compact control with one visually
-        hidden label, with its fixed option set, then Apply, and no priority or
-        severity filter and no Reset control; status and type are equalities,
-        sprint is membership — `none` the tasks of no sprint whatever their
-        status — priority and severity are not parameters of the page, and each
-        select shows the value that produced the list."""
+        """AC112, AC113, AC234, AC235, AC243, AC244, AC248: the filter bar offers
+        search, a sprint select, and Status and Type dropdowns of checkboxes, each
+        control with one visually hidden label, then Apply, and no priority or
+        severity filter and no Reset control; status and type match any one of
+        their checked values (OR within, AND across), sprint is membership —
+        `none` the tasks of no sprint whatever their status — priority and
+        severity are not parameters of the page, and each control shows the
+        state that produced the list, a dropdown's toggle reading its one value
+        or `<n> selected`."""
         record = self._seed_list_roadmap("payments_catalogue", 45)
         tasks, sprint_a, sprint_b = record["tasks"], record["sprint_a"], record["sprint_b"]
         proc, port = self._start(["--port", "0"])
         base = "/roadmaps/payments_catalogue/tasks"
-        _, body, parsed = self._list(port, base)
+        _, body, parsed = self._list(port, f"{base}?size=25")
 
         for name, label in (("q", "Search"), ("sprint", "Sprint"), ("status", "Status"), ("type", "Type")):
             assert body.count(f'for="task-filter-{name}"') == 1, label
@@ -1369,14 +1393,18 @@ class TestWebInterface:
         assert [label for _, label, _ in parsed["selects"]["sprint"]] == [
             "Any sprint", "No sprint", f"Sprint #{sprint_a} Checkout hardening",
             f"Sprint #{sprint_b} Settlement reconciliation"]
-        assert [v for v, _, _ in parsed["selects"]["status"]] == ["", *self.TASK_STATUSES]
-        assert [v for v, _, _ in parsed["selects"]["type"]] == ["", *self.TASK_TYPES]
-        assert sorted(parsed["selects"]) == ["sprint", "status", "type"], sorted(parsed["selects"])
+        assert [v for v, _ in parsed["checks"]["status"]] == list(self.TASK_STATUSES)
+        assert sorted(v for v, _ in parsed["checks"]["type"]) == sorted(self.TASK_TYPES)
+        assert sorted(parsed["selects"]) == ["sprint"], sorted(parsed["selects"])
+        for name, any_text in (("status", "Any status"), ("type", "Any type")):
+            toggle = parsed["toggles"][name]
+            assert toggle["text"] == any_text and self._checked(parsed, name) == [], (name, toggle)
+            assert toggle["describedby"] == toggle["span"] and body.count(f'id="{toggle["span"]}"') == 1, toggle
         assert '<button type="submit" class="btn btn-primary btn-sm">Apply</button>' in body
         form = body[body.index("<form"):body.index("</form>")]
         for forbidden in ('name="priority"', 'name="severity"', "Reset", "<a "):
             assert forbidden not in form, f"the filter bar carries {forbidden!r}"
-        assert form.count("<label") == 4 and form.count('class="col-12 col-sm-auto"') == 5
+        assert form.count('<label class="visually-hidden"') == 4 and form.count('class="col-12 col-sm-auto"') == 5
         assert 'placeholder="Search"' in body and "text-break" not in body.split("<table", 1)[1].split("</table>", 1)[0]
         assert parsed["reset"] is None and parsed["size"] == "25"
 
@@ -1386,13 +1414,26 @@ class TestWebInterface:
             assert got == want, f"?{query} lists {got}, want {want}"
             if select:
                 _, _, shown = self._list(port, f"{base}?{query}")
-                assert self._selected(shown, select) == value, f"?{query}: the {select} select shows another value"
+                if select == "sprint":
+                    assert self._selected(shown, select) == value, f"?{query}: the sprint select shows another value"
+                else:
+                    assert self._checked(shown, select) == value, f"?{query}: the {select} dropdown checks another set"
             return got
 
         for status in self.TASK_STATUSES:
-            check(f"status={status}", lambda t, s=status: t["status"] == s, "status", status)
+            check(f"status={status}", lambda t, s=status: t["status"] == s, "status", [status])
         for task_type in ("BUG", "IMPROVEMENT", "USER_STORY"):
-            check(f"type={task_type}", lambda t, y=task_type: t["type"] == y, "type", task_type)
+            check(f"type={task_type}", lambda t, y=task_type: t["type"] == y, "type", [task_type])
+        # Several values of one dimension combine by OR, the dimensions by AND,
+        # and a repeated value counts once.
+        both = check("status=TESTING&status=DOING", lambda t: t["status"] in ("DOING", "TESTING"),
+                     "status", ["DOING", "TESTING"])
+        assert both and check("status=DOING&status=DOING", lambda t: t["status"] == "DOING") == \
+            self._expect(tasks, lambda t: t["status"] == "DOING")
+        check("status=DOING&status=TESTING&type=BUG&type=TASK&type=EPIC",
+              lambda t: t["status"] in ("DOING", "TESTING") and t["type"] in ("BUG", "TASK", "EPIC"))
+        _, _, shown = self._list(port, f"{base}?status=DOING&status=TESTING&type=BUG")
+        assert shown["toggles"]["status"]["text"] == "2 selected" and shown["toggles"]["type"]["text"] == "BUG", shown["toggles"]
         # priority and severity are not parameters of the page: any value lists
         # what the request lists without it, and no generated link carries it.
         for param in ("priority", "severity"):
@@ -1432,7 +1473,7 @@ class TestWebInterface:
             assert got == want, f"mask {mask:04b} ?{query} lists {got}, want {want}"
             if want:
                 non_empty += 1
-                _, _, parsed = self._list(port, f"/roadmaps/payments_catalogue/tasks?{query}")
+                _, _, parsed = self._list(port, f"/roadmaps/payments_catalogue/tasks?{query or 'size=25'}")
                 assert parsed["range"][2] == len(want), f"?{query}: range states {parsed['range']}"
         assert non_empty >= 8, f"only {non_empty} combinations list any task"
         _, _, forward = self._list(port, "/roadmaps/payments_catalogue/tasks?status=SPRINT&type=TASK&q=cache")
@@ -1446,7 +1487,8 @@ class TestWebInterface:
         Cache-Control no-store, exactly the list without it, the select on its
         any option, the value in no generated link and nowhere in the page, the
         other parameters still applied; a repeated parameter reads its first
-        value, and unknown parameters are ignored. The roadmap is intact after."""
+        value while each occurrence of a repeatable status or type is validated on
+        its own, and unknown parameters are ignored. The roadmap is intact after."""
         record = self._seed_list_roadmap("payments_catalogue", 30)
         tasks = record["tasks"]
         # A roadmap whose third sprint id is not a sprint of the catalogue.
@@ -1476,8 +1518,11 @@ class TestWebInterface:
             for value in values:
                 body, parsed = served(f"{param}={value}&{kept}={kept_value}&size=100")
                 assert parsed["ids"] == baseline["ids"], f"{param}={value!r} changed the list"
-                assert self._selected(parsed, param) == "", f"{param}={value!r}: the select left its any option"
-                assert self._selected(parsed, kept) == kept_value, f"{param}={value!r}: the {kept} filter was lost"
+                if param == "sprint":
+                    assert self._selected(parsed, param) == "", f"{param}={value!r}: the select left its any option"
+                else:
+                    assert self._checked(parsed, param) == [], f"{param}={value!r}: a box is checked"
+                assert self._checked(parsed, kept) == [kept_value], f"{param}={value!r}: the {kept} filter was lost"
                 links = [i["href"] for i in parsed["items"] if i["href"]] + [s["href"] for s in parsed["sizes"]]
                 for link in links + ([parsed["reset"]] if parsed["reset"] else []):
                     assert param not in urllib.parse.parse_qs(urllib.parse.urlsplit(link).query), (
@@ -1491,7 +1536,11 @@ class TestWebInterface:
                 _, parsed = served(f"{param}={value}&size=100")
                 assert parsed["ids"] == unfiltered["ids"], f"{param}={value!r} changed the list"
         _, repeated = served("type=BUG&type=EPIC&size=100")
-        assert repeated["ids"] == self._expect(tasks, lambda t: t["type"] == "BUG")
+        assert repeated["ids"] == self._expect(tasks, lambda t: t["type"] in ("BUG", "EPIC"))
+        _, mixed = served("type=BUG&type=bug&size=100")
+        assert mixed["ids"] == self._expect(tasks, lambda t: t["type"] == "BUG") and self._checked(mixed, "type") == ["BUG"]
+        _, first_sprint = served(f"sprint={record['sprint_a']}&sprint={record['sprint_b']}&size=100")
+        assert first_sprint["ids"] == self._expect(tasks, lambda t: t["sprint"] == record["sprint_a"])
         _, unknown = served("assignee=alice&sort=title&limit=5&size=100")
         assert unknown["ids"] == unfiltered["ids"]
         listed = self.test.list_tasks("payments_catalogue", limit=100)
@@ -1505,7 +1554,8 @@ class TestWebInterface:
         to 25; every generated link keeps the accepted filters and following it
         shows them applied; submitting the form keeps the size and returns to
         page 1, and submitting it cleared lists every task at the same size;
-        the no-match Reset link clears the filters and keeps the size."""
+        the no-match Reset link restores the default statuses and keeps the
+        size."""
         record = self._seed_list_roadmap("payments_catalogue", 60)
         tasks = record["tasks"]
         proc, port = self._start(["--port", "0"])
@@ -1558,26 +1608,31 @@ class TestWebInterface:
             assert followed["ids"] == admitted[(page - 1) * size:page * size], f"following {link}"
         assert start["reset"] is None, "a list with rows carries a Reset link; the bar has none"
         _, _, no_match = self._list(port, f"{base}?q=no+task+is+titled+like+this&status=DOING&size=10&page=2")
-        assert no_match["reset"] == f"{base}?size=10", no_match["reset"]
+        defaults = "status=BACKLOG&status=SPRINT&status=DOING&status=TESTING"
+        assert no_match["reset"] == f"{base}?{defaults}&size=10", no_match["reset"]
         _, _, reset = self._list(port, no_match["reset"])
-        assert self._current_page(reset) == 1 and reset["ids"] == want[:10] and self._selected(reset, "status") == ""
+        open_tasks = self._expect(tasks, lambda t: t["status"] != "COMPLETED")
+        assert self._current_page(reset) == 1 and reset["ids"] == open_tasks[:10]
+        assert self._checked(reset, "status") == ["BACKLOG", "SPRINT", "DOING", "TESTING"]
 
-        # Submitting the real form: its fields as the served HTML defines them,
-        # with the status select changed.
+        # Submitting the real form: its fields as the served HTML defines them —
+        # the search input, the hidden size, the sprint select, and one field per
+        # checked box — with the given fields replaced.
         def submit(body, parsed, changes):
             form = body[body.index("<form"):body.index("</form>")]
             action = html_lib.unescape(re.search(r'action="([^"]*)"', form).group(1))
-            fields = {name: html_lib.unescape(value) for name, value in re.findall(
+            fields = {name: [html_lib.unescape(value)] for name, value in re.findall(
                 r'<input type="(?:hidden|search)"[^>]* name="([a-z]+)"(?: placeholder="[^"]*")? value="([^"]*)">', form)}
-            for name in ("sprint", "status", "type"):
-                fields[name] = self._selected(parsed, name)
+            fields["sprint"] = [self._selected(parsed, "sprint")]
+            for name in ("status", "type"):
+                fields[name] = self._checked(parsed, name)
             assert sorted(fields) == ["q", "size", "sprint", "status", "type"], fields
             fields.update(changes)
-            return f"{action}?{urllib.parse.urlencode(fields)}"
+            return f"{action}?{urllib.parse.urlencode(fields, doseq=True)}"
 
         _, body, parsed = self._list(port, f"{base}?q=the&size=10&page=3")
         assert self._current_page(parsed) == 3
-        submitted = submit(body, parsed, {"status": "DOING"})
+        submitted = submit(body, parsed, {"status": ["DOING"]})
         assert "page=" not in submitted and "size=10" in submitted, submitted
         filtered_body = self._req(port, submitted)[2]
         filtered = self._parse_list(filtered_body)
@@ -1585,24 +1640,46 @@ class TestWebInterface:
         assert self._current_page(filtered) == 1 and filtered["ids"] == doing_the[:10]
         _, _, reloaded = self._list(port, submitted)
         assert reloaded["ids"] == filtered["ids"]
-        cleared_url = submit(filtered_body, filtered, {"q": "", "sprint": "", "status": "", "type": ""})
+        cleared_url = submit(filtered_body, filtered, {"q": [""], "sprint": [""], "status": [], "type": []})
         _, _, cleared = self._list(port, cleared_url)
-        assert self._current_page(cleared) == 1 and cleared["ids"] == want[:10] and self._selected(cleared, "status") == ""
+        assert self._current_page(cleared) == 1 and cleared["ids"] == want[:10] and self._checked(cleared, "status") == []
+        assert cleared["range"][2] == len(tasks), "clearing the form does not list every task, COMPLETED included"
         _, body, parsed = self._list(port, base)
-        assert "size=25" in submit(body, parsed, {}), "at the default size the form does not submit size=25"
+        default_submit = submit(body, parsed, {})
+        assert "size=25" in default_submit and defaults in default_submit, (
+            f"under the defaults the form submits {default_submit}")
 
     def test_tasks_page_empty_states(self):
-        """AC88, AC102: with no task to show the card keeps its header and filter
-        bar and shows Tabler's empty state instead of the table and the footer —
-        "No tasks yet" for a roadmap with no task, "No task matches the filters"
-        with a Reset link for a request no task satisfies — both HTTP 200."""
+        """AC88, AC102, AC249: with no task to show the card keeps its header and
+        filter bar and shows Tabler's empty state instead of the table and the
+        footer — "No tasks yet" for a roadmap with no task whatever the filters,
+        "No task matches the filters" with a Reset link to the default statuses
+        for a roadmap whose tasks the filters all exclude, the defaults over a
+        roadmap of COMPLETED tasks included — all HTTP 200."""
         self._run(["roadmap", "create", "clearing_house"])
         record = self._seed_list_roadmap("payments_catalogue", 12)
+        # A roadmap whose every task is COMPLETED.
+        self._run(["roadmap", "create", "archived_settlements"])
+        closed = []
+        for title in ("Close the March settlement window", "Archive the Q1 chargeback evidence"):
+            _, out, _ = self._run(["task", "create", "-r", "archived_settlements", "-t", title,
+                                   "-fr", "Closed work kept for the audit trail.", "-tr", "Nothing left to change.",
+                                   "-ac", "The work is archived."])
+            closed.append(str(json.loads(out)["id"]))
+        archive_sprint = self.test.create_sprint("archived_settlements", "Close the quarter", title="Q1 close")
+        self._run(["sprint", "add-tasks", "-r", "archived_settlements", str(archive_sprint), ",".join(closed)])
+        self._run(["sprint", "start", "-r", "archived_settlements", str(archive_sprint)])
+        self._run(["task", "stat", "-r", "archived_settlements", ",".join(closed), "DOING", "--commit-open", "5d6a2cd"])
+        self._run(["task", "stat", "-r", "archived_settlements", ",".join(closed), "TESTING"])
+        self._run(["task", "stat", "-r", "archived_settlements", ",".join(closed), "COMPLETED", "--commit-close", "4999725"])
         proc, port = self._start(["--port", "0"])
         for path, title in (
             ("/roadmaps/clearing_house/tasks", "No tasks yet"),
+            ("/roadmaps/clearing_house/tasks?status=DOING", "No tasks yet"),
+            ("/roadmaps/clearing_house/tasks?size=25", "No tasks yet"),
             ("/roadmaps/payments_catalogue/tasks?q=no+task+is+titled+like+this", "No task matches the filters"),
             ("/roadmaps/payments_catalogue/tasks?status=COMPLETED&sprint=none", "No task matches the filters"),
+            ("/roadmaps/archived_settlements/tasks", "No task matches the filters"),
         ):
             _, body, parsed = self._list(port, path)
             main = re.search(r'<main class="page-body">(.*?)</main>', body, re.S).group(1)
@@ -1614,8 +1691,147 @@ class TestWebInterface:
             if title == "No tasks yet":
                 assert "rmp task create" in main and "empty-action" not in main
             else:
-                assert re.search(r'<div class="empty-action">\s*<a class="btn" href="/roadmaps/payments_catalogue/tasks">Reset</a>', main)
+                roadmap = path.split("/")[2]
+                reset = (f'/roadmaps/{roadmap}/tasks?status=BACKLOG&amp;status=SPRINT&amp;status=DOING'
+                         f'&amp;status=TESTING')
+                assert re.search(r'<div class="empty-action">\s*<a class="btn" href="' + re.escape(reset) + r'">Reset</a>', main), (
+                    f"{path}: the Reset link does not restore the default statuses")
                 assert main.count(">Reset</a>") == 1, "the empty state's Reset link is not the page's only one"
+        _, _, archived = self._list(port, "/roadmaps/archived_settlements/tasks?size=25")
+        assert sorted(archived["ids"]) == sorted(int(i) for i in closed), "the COMPLETED tasks are not listed unfiltered"
+
+    @staticmethod
+    def _req_raw(port, path, method="GET", cookie=None, extra=None, timeout=5):
+        """Request a raw path, optionally carrying a Cookie header and extra
+        headers, and return (status, header list, body): the list keeps every
+        occurrence, so repeated Set-Cookie headers stay countable."""
+        conn = http.client.HTTPConnection("127.0.0.1", port, timeout=timeout)
+        try:
+            headers = dict(extra or {})
+            if cookie is not None:
+                headers["Cookie"] = cookie
+            conn.request(method, path, headers=headers)
+            resp = conn.getresponse()
+            body = resp.read().decode("utf-8", "replace")
+            return resp.status, [(k.lower(), v) for k, v in resp.getheaders()], body
+        finally:
+            conn.close()
+
+    def test_tasks_page_filter_state_cookie(self):
+        """AC249, AC250, AC251, AC252, AC253, AC254: a bare request with no
+        cookie applies the defaults — every status but COMPLETED — and sets no
+        cookie; an explicit request, GET or HEAD, sets rmp_tasks_filters with
+        Path=/, Max-Age=31536000, HttpOnly and SameSite=Lax and the accepted
+        state, never the page; a bare request carrying that cookie restores the
+        state on page 1 without rewriting it, a foreign sprint id and every
+        unaccepted part being ignored; an oversized value is not written; every
+        response varies by Cookie, is no-store, and is never a 304; the cookie's
+        term is echoed escaped, and no request writes to the roadmap."""
+        record = self._seed_list_roadmap("payments_catalogue", 60)
+        tasks, sprint_a = record["tasks"], record["sprint_a"]
+        other = self._seed_list_roadmap("treasury_ops", 9)
+        # A third sprint gives the catalogue a sprint id the treasury roadmap lacks.
+        extra_sprint = self.test.create_sprint("payments_catalogue", "Automate chargeback responses",
+                                               title="Chargeback automation")
+        assert extra_sprint not in (other["sprint_a"], other["sprint_b"])
+        audit_before = json.loads(self._run(["audit", "stats", "-r", "payments_catalogue"])[1]).get("total_entries")
+        proc, port = self._start(["--port", "0"])
+        base = "/roadmaps/payments_catalogue/tasks"
+
+        def cookies_of(headers):
+            return [v for k, v in headers if k == "set-cookie"]
+
+        def header(headers, name):
+            return [v for k, v in headers if k == name]
+
+        # AC249: the defaults.
+        status, headers, body = self._req_raw(port, base)
+        parsed = self._parse_list(body)
+        open_tasks = self._expect(tasks, lambda t: t["status"] != "COMPLETED")
+        assert status == 200 and parsed["ids"] == open_tasks[:25] and parsed["range"][2] == len(open_tasks)
+        assert len(open_tasks) < len(tasks), "the fixture has no COMPLETED task to exclude"
+        assert self._checked(parsed, "status") == ["BACKLOG", "SPRINT", "DOING", "TESTING"]
+        assert parsed["toggles"]["status"]["text"] == "4 selected" and parsed["toggles"]["type"]["text"] == "Any type"
+        assert self._checked(parsed, "type") == [] and self._selected(parsed, "sprint") == "" and parsed["search"] == ""
+        assert cookies_of(headers) == [], "a bare request set the cookie"
+        assert "Cookie" in ", ".join(header(headers, "vary")) and header(headers, "cache-control") == ["no-store"]
+
+        # AC250: an explicit request, GET and HEAD, sets the cookie.
+        explicit = (f"{base}?q=the&sprint={sprint_a}&status=TESTING&status=DOING&status=SPRINT"
+                    f"&type=TASK&type=BUG&type=EPIC&size=10&page=2")
+        stored = f"q=the&sprint={sprint_a}&status=SPRINT&status=DOING&status=TESTING&type=TASK&type=BUG&type=EPIC&size=10"
+        for method in ("GET", "HEAD"):
+            status, headers, head_body = self._req_raw(port, explicit, method=method)
+            set_cookies = cookies_of(headers)
+            assert status == 200 and len(set_cookies) == 1, f"{method}: {status} {set_cookies}"
+            pair, *attrs = set_cookies[0].split("; ")
+            assert pair == f"rmp_tasks_filters={stored}", f"{method}: {pair}"
+            assert sorted(attrs) == ["HttpOnly", "Max-Age=31536000", "Path=/", "SameSite=Lax"], attrs
+            if method == "HEAD":
+                assert head_body == "", "a HEAD response carries a body"
+        for query, value in (("size=25", "size=25"), ("status=doing", "size=25"),
+                             ("q=" + urllib.parse.quote('refund; "cache", now') + "&type=BUG", None)):
+            _, headers, _ = self._req_raw(port, f"{base}?{query}")
+            got = cookies_of(headers)[0].split(";", 1)[0].split("=", 1)[1]
+            assert re.fullmatch(r"[A-Za-z0-9\-._~%+&=]*", got), f"?{query}: the value {got!r} leaves the cookie-octet set"
+            if value is not None:
+                assert got == value, f"?{query}: {got!r}, want {value!r}"
+        status, headers, _ = self._req_raw(port, "/roadmaps/no_such_roadmap/tasks?status=DOING")
+        assert status == 404 and cookies_of(headers) == [] and "Cookie" in ", ".join(header(headers, "vary"))
+
+        # AC251: a bare request restores the stored state, validated per roadmap.
+        want = self._expect(tasks, lambda t: "the" in t["title"].lower() and t["sprint"] == sprint_a
+                            and t["status"] in ("SPRINT", "DOING", "TESTING") and t["type"] in ("TASK", "BUG", "EPIC"))
+        assert want, "the stored filters admit no task; the restoration check proves nothing"
+        for path in (base, f"{base}?priority=3"):
+            status, headers, body = self._req_raw(port, path, cookie=f"rmp_tasks_filters={stored}")
+            parsed = self._parse_list(body)
+            assert status == 200 and parsed["ids"] == want[:10] and self._current_page(parsed) == 1, (path, parsed["ids"], want)
+            assert parsed["search"] == "the" and self._selected(parsed, "sprint") == str(sprint_a) and parsed["size"] == "10"
+            assert self._checked(parsed, "status") == ["SPRINT", "DOING", "TESTING"]
+            assert parsed["toggles"]["type"]["text"] == "3 selected"
+            assert cookies_of(headers) == [], f"{path}: a bare request rewrote the cookie"
+        foreign = f"q=the&sprint={extra_sprint}&status=BACKLOG&status=SPRINT&size=50"
+        _, _, body = self._req_raw(port, "/roadmaps/treasury_ops/tasks", cookie=f"rmp_tasks_filters={foreign}")
+        parsed = self._parse_list(body)
+        treasury_want = self._expect(other["tasks"], lambda t: "the" in t["title"].lower()
+                                     and t["status"] in ("BACKLOG", "SPRINT"))
+        assert treasury_want and parsed["ids"] == treasury_want, (parsed["ids"], treasury_want)
+        assert self._selected(parsed, "sprint") == "" and parsed["size"] == "50", "the foreign sprint was not ignored"
+        junk = "status=doing&type=BUG,EPIC&sprint=007&size=20&page=3&q=%zz&status=DOING"
+        status, _, body = self._req_raw(port, base, cookie=f"rmp_tasks_filters={junk}")
+        parsed = self._parse_list(body)
+        doing = self._expect(tasks, lambda t: t["status"] == "DOING")
+        assert status == 200 and parsed["ids"] == doing[:25] and parsed["size"] == "25" and self._current_page(parsed) == 1
+        _, _, body = self._req_raw(port, base, cookie="rmp_tasks_filters=assignee=alice")
+        assert self._parse_list(body)["range"][2] == len(tasks), "a cookie with no accepted part must list every task"
+        _, _, body = self._req_raw(port, base, cookie="rmp_tasks_filters=status=DOING&size=100; rmp_tasks_filters=status=BACKLOG")
+        assert self._checked(self._parse_list(body), "status") == ["DOING"], "the first cookie occurrence was not read"
+
+        # AC252: an oversized value is not written; the earlier cookie stays usable.
+        long_term = "a" * 3991
+        status, headers, body = self._req_raw(port, f"{base}?q={long_term}", cookie="rmp_tasks_filters=status=DOING&size=25")
+        assert status == 200 and cookies_of(headers) == [] and self._parse_list(body)["search"] == long_term
+        _, headers, _ = self._req_raw(port, f"{base}?q={long_term[:-1]}")
+        assert len(cookies_of(headers)) == 1, "a value of exactly 4000 bytes was not written"
+
+        # AC253: never a 304, whatever the conditional headers.
+        for extra in ({"If-None-Match": "*"}, {"If-Modified-Since": "Fri, 01 Jan 2100 00:00:00 GMT"}):
+            status, headers, body = self._req_raw(port, base, extra=extra)
+            assert status == 200 and "</html>" in body, f"{extra}: {status}"
+            assert not header(headers, "etag") and not header(headers, "last-modified")
+
+        # AC254: the cookie's term is data; nothing reached the roadmap.
+        _, _, body = self._req_raw(port, base, cookie="rmp_tasks_filters=q=%3Cscript%3Ealert(1)%3C%2Fscript%3E")
+        assert self._parse_list(body)["search"] == "<script>alert(1)</script>" and "<script>alert" not in body
+        _, _, body = self._req_raw(port, base, cookie="rmp_tasks_filters=status=DOING%27+OR+%271%27%3D%271&sprint=1+OR+1%3D1")
+        assert self._parse_list(body)["range"][2] == len(tasks) and "OR '1'" not in html_lib.unescape(body)
+        assert len(self.test.list_tasks("payments_catalogue", limit=100)) == len(tasks)
+        audit_after = json.loads(self._run(["audit", "stats", "-r", "payments_catalogue"])[1]).get("total_entries")
+        assert audit_after == audit_before, f"serving the tasks page changed the audit log: {audit_before} -> {audit_after}"
+        _, _, task_page = self._req_raw(port, f"{base}/{want[0]}")
+        assert f'href="{base}"><i class="ti ti-arrow-left me-1"></i>Back to tasks</a>' in task_page
+        assert f'<a class="nav-link" href="{base}"' in task_page and "/tasks?" not in task_page
 
     def test_tasks_page_search_rules(self):
         """AC101, AC103, AC105, AC106, AC118, AC121, AC152, AC153: the search
@@ -3427,7 +3643,9 @@ class TestWebInterface:
         proc, port = self._start(["--port", "0"])
 
         # ---- the tasks page's list: each row's status badge ----
-        status_code, _, tasks_body = self._req(port, f"/roadmaps/{roadmap}/tasks")
+        # Explicit, with no filter: every status, COMPLETED included; a bare
+        # request would apply the default status selection.
+        status_code, _, tasks_body = self._req(port, f"/roadmaps/{roadmap}/tasks?size=25")
         assert status_code == 200
         assert 'data-role="task-board' not in tasks_body, "the tasks page renders a board"
         row_variants = set()
@@ -3856,7 +4074,8 @@ class TestWebInterface:
             )
 
         # The board pages carry none of the free text, and the title stays text.
-        _, _, tasks_page = self._req(port, f"/roadmaps/{roadmap}/tasks")
+        # Explicit, with no filter, so the list holds the task whatever its status.
+        _, _, tasks_page = self._req(port, f"/roadmaps/{roadmap}/tasks?size=25")
         assert "<strong>residual</strong>" not in tasks_page, "the task free-text reached the board page"
         assert "Remove the **one-cent** drift" in tasks_page, "the task title is not plain text"
         assert '<h2 class="page-title">Remove the **one-cent** drift</h2>' in page
@@ -3978,9 +4197,11 @@ class TestWebInterface:
             low = body.lower()
             if path.endswith("/tasks"):
                 assert low.count("<form") == 1 and 'method="get"' in low, f"{path}: the filter bar is not one GET form"
+                # The search box, the hidden size, and one checkbox per TaskStatus
+                # (5) and TaskType (10) value in the Status and Type dropdowns.
                 submits, inputs = low.count('type="submit"'), low.count("<input")
-                assert submits == 1 and inputs == 2, (
-                    f"{path}: the filter bar carries {submits} submits and {inputs} inputs, want 1 and 2"
+                assert submits == 1 and inputs == 17, (
+                    f"{path}: the filter bar carries {submits} submits and {inputs} inputs, want 1 and 17"
                 )
                 assert body.count(href) == 1, f"{path}: task #{t1}'s row carries {body.count(href)} links, want 1"
             else:

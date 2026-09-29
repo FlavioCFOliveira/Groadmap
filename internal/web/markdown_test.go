@@ -852,9 +852,10 @@ func TestMarkdownSurfaces_TaskPage(t *testing.T) {
 	if !strings.Contains(body, `<h2 class="page-title">Remove the **one-cent** drift`) {
 		t.Error("the task title is not shown as plain text with its asterisks")
 	}
-	page := servePage(t, mux, "/roadmaps/"+f.name+"/tasks")
+	// Explicit, with no filter, so the list holds the task whatever its status.
+	page := servePage(t, mux, "/roadmaps/"+f.name+"/tasks?size=25")
 	if !strings.Contains(page, "Remove the **one-cent** drift") {
-		t.Error("the task title is not shown as plain text with its asterisks on the board")
+		t.Error("the task title is not shown as plain text with its asterisks on the tasks list")
 	}
 }
 

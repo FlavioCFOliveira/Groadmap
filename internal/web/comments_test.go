@@ -775,7 +775,16 @@ type countingSource struct {
 	taskList             int
 	boundedTaskList      int
 	sprintTasks          int
+	taskCounts           int
 	lastTaskFilter       *db.TaskListFilter
+}
+
+// CountTasks is the tasks page's third read, the roadmap's task count, which the
+// page issues only when its filtered list is empty and its task read carried a
+// predicate (SPEC/DATABASE.md § Count Roadmap Tasks).
+func (c *countingSource) CountTasks(ctx context.Context) (int, error) {
+	c.taskCounts++
+	return c.DB.CountTasks(ctx)
 }
 
 // ListSprintTitles is the tasks page's sprint read: the id and title of every
@@ -902,7 +911,7 @@ func TestTasksPage_IssuesNoCommentQuery(t *testing.T) {
 		ids := seedTasksWithComments(t, name, taskCount)
 		src := openCounting(t, name)
 
-		data, err := readTaskList(context.Background(), src, name, url.Values{})
+		data, err := readTaskList(context.Background(), src, name, explicitTasks(url.Values{"size": {"25"}}))
 		if err != nil {
 			t.Fatalf("%d tasks: readTaskList: %v", taskCount, err)
 		}

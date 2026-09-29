@@ -531,6 +531,18 @@
   height: calc(1rem + .625rem + calc(var(--tblr-border-width) * 2));
 }
 
+/* The Status and Type dropdown toggles are buttons styled as small selects. A
+   button centres its text and wraps it; a select does neither, so the toggle
+   starts its text at the leading edge and keeps it on one line, as the sprint
+   select beside it does. Each checkbox of a dropdown's menu is spaced from its
+   value's text, which the vendored rule leaves touching it (Filter bar,
+   Multi-select dropdowns). */
+.card-actions .dropdown > .form-select {
+  text-align: start;
+  white-space: nowrap;
+}
+.card-actions .dropdown-item > .form-check-input { margin: 0 .5rem 0 0; }
+
 /* The table keeps its automatic layout, which shares the width among the
    columns by their content. The title cell carries a floor instead of a class
    that breaks words, so a title wraps at word boundaries and is never squeezed
@@ -555,7 +567,8 @@
 /* ---- Keyboard focus on the tasks list and the sprint board
    (SPEC/WEB.md § UI Framework, rule 21) ----
    Every element that takes keyboard focus on the tasks page — the filter bar's
-   input, selects, and Apply, each row's title link, the pagination links,
+   input, sprint select, two dropdown toggles, every checkbox of their menus, and
+   Apply, each row's title link, the pagination links,
    the rows-per-page links, and the no-match empty state's Reset link — carries
    the light-grey 2px solid outline the
    header back links carry, on its :focus-visible state only. Its colour, #dce1e7,
@@ -563,9 +576,11 @@
    the Apply button and of the active rows-per-page link. The vendored focus rings
    are translucent mixes of the primary colour that reach neither. The selectors
    outrank the vendored `.form-control:focus`, `.form-select:focus`,
-   `.btn:focus-visible`, and `.page-link:focus`, so no !important is needed. */
+   `.form-check-input:focus-visible`, `.btn:focus-visible`, and
+   `.page-link:focus`, so no !important is needed. */
 .card-actions .form-control:focus-visible,
 .card-actions .form-select:focus-visible,
+.card-actions .form-check-input:focus-visible,
 .card-actions .btn:focus-visible,
 .card-table a:focus-visible,
 .card-footer .page-link:focus-visible,

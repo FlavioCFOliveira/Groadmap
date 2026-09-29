@@ -16,7 +16,7 @@ The SPEC is unversioned. Git is the source of truth for its evolution — recove
 | Knowledge graph feature (design, persistence, what is and is not checked) | `GRAPH.md` |
 | Web interface (`rmp web`, server, pages, graph viz) | `WEB.md` |
 | Web roadmap sprints page / landing (`/roadmaps/{name}`, sprint tabs Próximos / Actual / Concluídos) | `WEB.md § Roadmap Sprints Page` |
-| Web roadmap tasks page (`/roadmaps/{name}/tasks`, one paginated task list in a Tabler card, the card-header filter bar — search, sprint, status, type, minimum priority, minimum severity — the query parameters and their validation, server-side pagination and rows-per-page selector) | `WEB.md § Roadmap Tasks Page` |
+| Web roadmap tasks page (`/roadmaps/{name}/tasks`, one paginated task list in a Tabler card, the card-header filter bar — search, sprint, status and type multi-select dropdowns — the query parameters and their validation, the filter-state cookie and the default filter state, server-side pagination and rows-per-page selector) | `WEB.md § Roadmap Tasks Page` |
 | Web tasks-page search text rules (trim by White_Space, Unicode NFC normalisation, simple lowercase fold, applied on the server) | `WEB.md § Roadmap Tasks Page` |
 | Web sprint page (`/roadmaps/{name}/sprints/{id}`) | `WEB.md § Roadmap Sprint Page` |
 | Web shared sprint-card partial (header, description, task-count footer; used by all three sprints-page tabs) | `WEB.md § Shared Sprint-Card Partial` |

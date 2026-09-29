@@ -92,7 +92,7 @@ All routes serve `GET` and `HEAD` only. Any other HTTP method on any route retur
 |-------|---------|----------|
 | `/` | Roadmap index: every roadmap under `~/.roadmaps/`, with links to each roadmap's sprints landing page and graph page (empty-state message when none) | HTML |
 | `/roadmaps/{name}` | Roadmap sprints page and landing page: that roadmap's sprints in three tabs (Próximos / Actual / Concluídos, Actual default), each tab carrying a count badge in the colour of the sprint status it groups; every sprint rendered through the same sprint card and linking to its own page. Selecting a roadmap on the index lands here | HTML |
-| `/roadmaps/{name}/tasks` | Roadmap tasks page: every task of that roadmap, of any status, as one paginated list (ID, title, type, status, severity, priority, created); filtered and paginated on the server through the `q`, `sprint`, `status`, `type`, `page` and `size` query parameters; each row links to that task's own page. See [The Tasks Page](#the-tasks-page) | HTML |
+| `/roadmaps/{name}/tasks` | Roadmap tasks page: the roadmap's tasks, of any status, as one paginated list (ID, title, type, status, severity, priority, created); filtered and paginated on the server through the `q`, `sprint`, `status`, `type`, `page` and `size` query parameters, with the filter state remembered in the `rmp_tasks_filters` cookie; each row links to that task's own page. See [The Tasks Page](#the-tasks-page) | HTML |
 | `/roadmaps/{name}/sprints/{id}` | Dedicated sprint page: all sprint details, the sprint's member tasks as a three-column board in planned execution order, and the sprint's own Comments card; each task card links to that task's own page. See [The Sprint Board](#the-sprint-board) | HTML |
 | `/roadmaps/{name}/tasks/{id}` | Dedicated task page: every field of the task, a small context of the sprint it belongs to, its four Markdown text fields, and its Comments card. A task id that is not an integer or names no task in that roadmap returns HTTP `404`. No path exists below it, so `/roadmaps/{name}/tasks/{id}/data` also returns `404`. See [The Task Page](#the-task-page) | HTML |
 | `/roadmaps/{name}/audit` | Roadmap audit log page: that roadmap's full audit log, showing every field of an audit entry (columns ID, Operation, Entity Type, Entity ID, Related Entity ID, Commit, Performed At, in that order; the two nullable columns are always present and render an em dash where the entry carries no value), ordered by Performed At descending (most recent first), paginated at 100 entries per page via the `page` query parameter (1-based, default 1; out-of-range or non-numeric values are clamped to the nearest valid page) with Previous/Next controls and a "Page X of Y" indicator | HTML |
@@ -136,47 +136,57 @@ The filter bar is an ordinary HTML form submitted by `GET` to the page itself. I
 |---------|-----------|--------|------------|
 | Search box | `q` | Any text | The task `title` or its `#<id>` reference contains the text |
 | Sprint | `sprint` | `Any sprint`, `No sprint` (`none`), or one option per sprint of the roadmap, shown as `Sprint #<id> <title>` in the planned sprint order | Membership: tasks in no sprint, or tasks of that sprint |
-| Status | `status` | `Any status`, then `BACKLOG`, `SPRINT`, `DOING`, `TESTING`, `COMPLETED` | The task's `status` equals the value |
-| Type | `type` | `Any type`, then the ten task types | The task's `type` equals the value |
+| Status | `status` | A dropdown of checkboxes: `BACKLOG`, `SPRINT`, `DOING`, `TESTING`, `COMPLETED` | The task's `status` equals any checked value |
+| Type | `type` | A dropdown of checkboxes: the ten task types | The task's `type` equals any checked value |
 | Apply | - | - | Submits the form |
 
-Choosing values and activating Apply, or pressing Enter in the search box, submits the form and the server renders the filtered list; selecting a value does not submit by itself. Applying the filters always returns to page 1 and keeps the current page size. There is no priority filter, no severity filter and no reset button: priority and severity remain visible in every row, and the filters are cleared by returning each control to its *any* option, or by the `Reset` link shown when nothing matches.
+Choosing values and activating Apply, or pressing Enter in the search box, submits the form and the server renders the filtered list; choosing a sprint or checking a box does not submit by itself. A dropdown with no box checked does not filter its dimension; its toggle reads `Any status` or `Any type`, the value itself when one box is checked, or `<n> selected` when several are. Applying the filters always returns to page 1 and keeps the current page size. There is no priority filter, no severity filter and no reset button: priority and severity remain visible in every row. The filters are removed by choosing `Any sprint`, unchecking every box and emptying the search box, then applying; the `Reset` link shown when nothing matches restores the default filter state (see [Filter persistence](#filter-persistence)).
 
-- **The criteria combine conjunctively.** A task is listed when it satisfies every active criterion, and a request with no active criterion lists every task. `?q=cache&status=DOING&type=BUG` lists the `DOING` tasks of type `BUG` whose title or `#<id>` reference contains `cache`, and no other task.
+- **OR within a dimension, AND across dimensions.** Several checked statuses admit a task whose status is any one of them, and likewise for types. A task is listed when it satisfies every active criterion, and a request with no active criterion lists every task. `?q=cache&status=DOING&status=TESTING&type=BUG` lists the tasks of type `BUG` whose status is `DOING` or `TESTING` and whose title or `#<id>` reference contains `cache`, and no other task.
 - **What the search matches.** Only the `title` and the reference written with its leading `#`, so both `42` and `#42` find task 42. Matching is case-insensitive substring matching after trimming surrounding whitespace from the term and applying Unicode normalisation (NFC), so a title typed with a precomposed `é` and one typed with `e` plus a combining accent are found by either spelling. Accents are not ignored: `cafe` does not find `Café`. Every other task field is excluded.
 - **Every control has an accessible name.** Each control carries a programmatic label, and each is reachable and operable from the keyboard.
 
 ### Query parameters and pagination
 
-Filtering and pagination are performed **on the server**, and the whole state of the list lives in the URL, so a filtered page survives a reload, can be bookmarked or shared, and is restored by the browser's Back navigation. The page accepts exactly six parameters:
+Filtering and pagination are performed **on the server**, and the state of the list travels in the URL, so a filtered page survives a reload, can be bookmarked or shared, and is restored by the browser's Back navigation. The page accepts exactly six parameters:
 
 | Parameter | Accepted value |
 |-----------|----------------|
 | `q` | Any string |
 | `sprint` | `none`, or the `id` of a sprint of this roadmap |
-| `status` | One of the five task statuses, spelled exactly as the enum spells it |
-| `type` | One of the ten task types, spelled exactly as the enum spells it |
+| `status` | Repeatable; each occurrence one of the five task statuses, spelled exactly as the enum spells it |
+| `type` | Repeatable; each occurrence one of the ten task types, spelled exactly as the enum spells it |
 | `page` | An integer of at least `1` (1-based page number) |
 | `size` | `10`, `25`, `50` or `100` (rows per page; default `25`) |
 
 Every pagination link and rows-per-page link keeps the active filters. Changing the page size returns to page 1.
 
-**An invalid value is ignored, never an error.** A `sprint`, `status` or `type` value that is not accepted — a wrong case (`bug` for `BUG`), a sign, surrounding spaces, a leading zero, the `id` of another roadmap's sprint, or an empty value — lists exactly what the request would list without that parameter, and the control shows its *any* option. An unusable `page` falls back to `1`, and a `page` beyond the last page renders the last page. An unusable `size` falls back to `25`. A parameter the server cannot decode is treated as absent, a repeated parameter is read from its first occurrence, and any other parameter — `priority` and `severity` included — is ignored. The parameters are independent: an ignored one leaves the others applied. Whatever the parameters carry, the page answers HTTP `200`.
+**An invalid value is ignored, never an error.** A `sprint`, `status` or `type` value that is not accepted — a wrong case (`bug` for `BUG`), a sign, surrounding spaces, a leading zero, the `id` of another roadmap's sprint, or an empty value — lists exactly what the request would list without that value, and the control shows its *any* state. Each occurrence of `status` and `type` is validated on its own, so `?status=DOING&status=doing` filters by `DOING` alone, and a value repeated counts once. An unusable `page` falls back to `1`, and a `page` beyond the last page renders the last page. An unusable `size` falls back to `25`. A parameter the server cannot decode is treated as absent, a repeated `q`, `sprint`, `page` or `size` is read from its first occurrence, and any other parameter — `priority` and `severity` included — is ignored. The parameters are independent: an ignored one leaves the others applied. Whatever the parameters carry, the page answers HTTP `200`.
 
-The page works without JavaScript: it loads no script of its own, and filtering, paginating and changing the page size all work with scripting disabled.
+The page loads no script of its own. Its one script is the vendored Tabler script, which opens the Status and Type dropdowns; filtering still submits through Apply, and the list and every control are rendered by the server. With scripting disabled the dropdowns do not open, so the checked statuses and types cannot be changed, while the search, the sprint select, Apply, pagination and the page-size selector still work.
+
+### Filter persistence
+
+The filter state — `q`, `sprint`, `status`, `type` and `size`, never `page` — is remembered across visits in one cookie, `rmp_tasks_filters`, which the server sets and reads; no script touches it and the page uses no browser storage. The cookie is shared by every roadmap and set with `Path=/`, `Max-Age=31536000` (one year), `HttpOnly` and `SameSite=Lax`.
+
+- **A request carrying any of the six parameters** takes its state from the URL alone and its HTTP 200 response sets the cookie to the accepted state. A value longer than 4000 bytes, which only a long search term can produce, is not written, and the cookie already held stays as it was.
+- **A request carrying none of them** — such as the sidebar's Tasks link or a task page's `Back to tasks` link — renders page 1 from the cookie, and never rewrites it. Every cookie part is validated as a URL parameter would be, for the roadmap being viewed, so a sprint of another roadmap is ignored.
+- **With no cookie**, the defaults apply: every status except `COMPLETED`, every type, every sprint, no search, 25 rows per page.
+
+The cookie holds a presentation choice only: it is not a session and grants nothing, and it is never written to a roadmap database or graph store. The page's responses carry `Vary: Cookie` besides `Cache-Control: no-store`, and never answer `304`.
 
 ### Empty states
 
 When no task satisfies the request, the card keeps its header and filter bar, so the filters can be changed in place, and shows an empty state in place of the table and footer:
 
-- A roadmap with no task, requested with no active filter, shows `No tasks yet` and points to `rmp task create`.
-- A request with at least one active filter that no task satisfies shows `No task matches the filters` with a `Reset` link, which clears the search and every filter and keeps the page size.
+- A roadmap with no task shows `No tasks yet` and points to `rmp task create`, whatever the filters, and offers no `Reset` link.
+- A roadmap holding tasks, none of which satisfies the active filters — including one whose tasks are all `COMPLETED`, under the defaults — shows `No task matches the filters` with a `Reset` link. The link restores the default filter state (`?status=BACKLOG&status=SPRINT&status=DOING&status=TESTING`), keeps the page size, and, being an explicit request, stores that state in the cookie.
 
 ### Read-only and read cost
 
 The page is read-only: it offers no control that creates, edits, moves or reorders a task, no selection and no modal. The filter form only narrows what the page shows, and the `rmp` CLI remains the sole write path.
 
-Rendering the page performs two reads and no more: one read of the roadmap's sprints (for the sprint options and to validate `sprint`), and one read of the roadmap's tasks carrying the accepted `sprint`, `status` and `type` values as bound SQL parameters. The page resolves no task's sprint, because no row shows one. The search, the total and the page are computed in memory over the rows already read. The `-l, --limit` default of `rmp task list` is not applied, so the total in the footer is the true number of matching tasks. The number of queries does not grow with the number of tasks, the page size, or the number of active filters.
+Rendering the page performs two reads: one read of the roadmap's sprints (for the sprint options and to validate `sprint`), and one read of the roadmap's tasks carrying the accepted `sprint`, `status` and `type` values as bound SQL parameters. A third read, a count of the roadmap's tasks, is issued only when that filtered read is empty and carried a sprint, status or type predicate, to choose between the two empty states. The page resolves no task's sprint, because no row shows one. The search, the total and the page are computed in memory over the rows already read. The `-l, --limit` default of `rmp task list` is not applied, so the total in the footer is the true number of matching tasks. The number of queries — two, or three for an empty filtered list — does not grow with the number of tasks, the page size, or the number of active filters.
 
 ## The Sprint Board
 

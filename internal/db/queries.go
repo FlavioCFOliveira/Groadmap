@@ -27,6 +27,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -176,6 +177,14 @@ func (db *DB) GetTasks(ctx context.Context, ids []int) ([]models.Task, error) {
 // sprint. The page's sprint parameter carries one value, so a caller sets at most
 // one of them; when both are set, both predicates are appended and the conjunction
 // admits no task.
+//
+// Statuses and TaskTypes are the web tasks page's multi-value status and type
+// predicates (SPEC/DATABASE.md § Main SQL Queries, "List All"): a non-empty
+// Statuses appends one `t.status IN (?, ...)` holding one placeholder per
+// DISTINCT value, so the values combine by OR within the dimension, and TaskTypes
+// likewise for `t.type`. An empty slice appends nothing. They are independent of
+// the CLI's single-value Status and TaskType: a caller that sets both forms gets
+// both predicates, combined by AND.
 type TaskListFilter struct {
 	Status       *models.TaskStatus
 	MinPriority  *int
@@ -185,6 +194,8 @@ type TaskListFilter struct {
 	CreatedUntil *time.Time // inclusive upper bound on created_at
 	SprintID     *int       // only the member tasks of this sprint
 	Sort         string     // "priority" (default), "created", "status", "severity"
+	Statuses     []models.TaskStatus
+	TaskTypes    []models.TaskType
 	Limit        int
 	NoSprint     bool // only the tasks that belong to no sprint
 }
@@ -265,6 +276,18 @@ func buildListTasksQuery(filter *TaskListFilter) (string, []any) {
 		query += " AND t.type = ?"
 		args = append(args, string(*filter.TaskType))
 	}
+	// The web tasks page's multi-value predicates: one IN list per dimension, one
+	// bound placeholder per distinct value, nothing interpolated.
+	if len(filter.Statuses) > 0 {
+		var clause string
+		clause, args = appendDistinctIn(" AND t.status IN (", filter.Statuses, args)
+		query += clause
+	}
+	if len(filter.TaskTypes) > 0 {
+		var clause string
+		clause, args = appendDistinctIn(" AND t.type IN (", filter.TaskTypes, args)
+		query += clause
+	}
 	if filter.CreatedSince != nil {
 		query += " AND t.created_at >= ?"
 		args = append(args, filter.CreatedSince.UTC().Format(time.RFC3339))
@@ -310,6 +333,31 @@ func buildListTasksQuery(filter *TaskListFilter) (string, []any) {
 	return query, args
 }
 
+// appendDistinctIn renders the tail of an IN predicate — the given prefix, one
+// "?" per DISTINCT value, and the closing parenthesis — and appends each distinct
+// value to args as a bound parameter, in first-occurrence order. A value repeated
+// in values is bound once, so the list carries one placeholder per distinct value
+// whatever the caller passed (SPEC/DATABASE.md § Main SQL Queries, "List All",
+// Predicates). values must not be empty.
+func appendDistinctIn[T ~string](prefix string, values []T, args []any) (string, []any) {
+	var b strings.Builder
+	b.WriteString(prefix)
+	written := 0
+	for i, value := range values {
+		if slices.Contains(values[:i], value) {
+			continue
+		}
+		if written > 0 {
+			b.WriteString(", ")
+		}
+		b.WriteByte('?')
+		args = append(args, string(value))
+		written++
+	}
+	b.WriteByte(')')
+	return b.String(), args
+}
+
 // ListAllTasks returns every task of the roadmap that the filter admits, with no
 // LIMIT and no OFFSET, in the order priority DESC, created_at ASC, id ASC.
 //
@@ -321,8 +369,9 @@ func buildListTasksQuery(filter *TaskListFilter) (string, []any) {
 // filters alone and never by a page: the page states the filtered total as a
 // fact, and a truncated read would publish a wrong total as a true one.
 //
-// The filter's Status, TaskType, MinPriority, MinSeverity, SprintID and NoSprint
-// fields each append one predicate, every value bound as a parameter. Its Sort
+// The filter's Status, TaskType, Statuses, TaskTypes, MinPriority, MinSeverity,
+// SprintID and NoSprint fields each append one predicate, every value bound as a
+// parameter. Its Sort
 // and Limit fields are ignored: the ordering is always the total one above, and
 // the display default that sizes `rmp task list` output (models.DefaultTaskLimit)
 // and the per-invocation cap (models.MaxTaskLimit) are deliberately NOT applied.
@@ -1434,6 +1483,22 @@ func (db *DB) ListSprintTitles(ctx context.Context) ([]SprintRef, error) {
 		return nil, fmt.Errorf("iterating sprint title rows: %w", err)
 	}
 	return sprints, nil
+}
+
+// CountTasks returns the number of tasks the roadmap holds, of any status, and
+// nothing else (SPEC/DATABASE.md § Count Roadmap Tasks). It takes no parameter.
+//
+// It is the web tasks page's third read, issued only when the page's filtered
+// list is empty and its task read carried at least one filter predicate: it tells
+// a roadmap that holds no task from one whose tasks the filters all exclude
+// (SPEC/WEB.md § Roadmap Tasks Page, Empty states and Read cost). It is
+// read-only and never writes an audit entry.
+func (db *DB) CountTasks(ctx context.Context) (int, error) {
+	var total int
+	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM tasks`).Scan(&total); err != nil {
+		return 0, fmt.Errorf("counting tasks: %w", err)
+	}
+	return total, nil
 }
 
 // GetSprintsByTasks returns the sprint each of the given tasks belongs to, keyed

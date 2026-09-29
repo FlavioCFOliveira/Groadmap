@@ -132,7 +132,8 @@ The web interface exposes the following kinds of page for each roadmap:
    and each row linking to that task's own page. A filter bar in the card's header
    narrows the list by sprint, status, type, and a search on the title and the
    `#<id>` reference, and the card's footer paginates it; the filters, the
-   page, and the page size travel in the URL.
+   page, and the page size travel in the URL, and the filter state is remembered
+   across visits in a cookie the server sets.
 4. A roadmap sprint page that shows the details of a single sprint and the
    sprint's member tasks as a Kanban board of three fixed columns — `WAITING`,
    `DOING`, and `CLOSED` — whose cards follow the planned in-sprint execution
@@ -221,11 +222,16 @@ displays all of the task's fields (see [Roadmap Task Page](#roadmap-task-page)).
    a link to the task's own page, `/roadmaps/{name}/tasks/{id}`, which is where the
    task's full field set is shown. In the card's header, a **filter bar** — a
    `GET` form of native controls — narrows the list by sprint, status, type, and
-   a search on the title and `#<id>` reference; the criteria combine conjunctively and are applied on the server. The
+   a search on the title and `#<id>` reference; status and type are multi-selects
+   whose values combine by OR within their dimension, the criteria combine conjunctively across dimensions, and all are applied on the server. The
    list is **paginated on the server**, with the range text, a rows-per-page
    selector, and Tabler pagination in the card footer. Every filter, the page, and the page size travel
    in the URL query string (`q`, `sprint`, `status`, `type`, `page`, and `size`), so a filtered page survives a reload and can be
-   shared, and the page works fully without JavaScript. The page is read-only: the
+   shared. A request carrying none of those parameters restores the filter state
+   that the last request carrying them stored in a server-set cookie, or applies the defaults
+   (every status except `COMPLETED`). The page loads no project script of its
+   own; only opening the status and type dropdowns needs the vendored Tabler
+   script. The page is read-only: the
    form only narrows what is shown (see [Roadmap Tasks Page](#roadmap-tasks-page)
    and [Roadmap Task Page](#roadmap-task-page)).
 8. When a user selects a roadmap on the index page, the user lands on that
@@ -862,6 +868,27 @@ showing a state that no longer matches the data.
    releases the handle (see [Read-Only Data Flow](#read-only-data-flow)). The
    `no-store` header ensures the freshly read state is what the user actually sees,
    rather than a previously cached response.
+5. **The tasks page varies by cookie, and no response of it is reused.** A
+   response of the roadmap tasks page (`/roadmaps/{name}/tasks`) depends on the
+   request's `Cookie` header as well as on its URL, and the HTTP 200 response to an
+   explicit request carries a `Set-Cookie` header (see
+   [Roadmap Tasks Page](#roadmap-tasks-page), **Filter persistence**). Its
+   responses therefore carry, besides `Cache-Control: no-store`
+   (rule 1), the header `Vary: Cookie` (RFC 9110, Section 12.5.5): every response
+   of the route's `GET` and `HEAD` handling carries it — to an explicit request, to
+   a bare request, and a `404` alike — whether or not it sets the cookie. A `405`
+   answered by the method fallback to any other method carries no `Vary`, because
+   it does not depend on the cookie. The route emits no `ETag` and no
+   `Last-Modified` header, evaluates no conditional request header
+   (`If-None-Match`, `If-Modified-Since`), and never answers `304 Not Modified`:
+   every request is answered with the full response for its own URL and its own
+   cookie. `no-store` forbids every cache to store the response (RFC 9111,
+   Section 5.2.2.5), so no stored response — one carrying `Set-Cookie`, or one
+   produced for another cookie — can be served for a later request; `Vary: Cookie`
+   additionally declares the dependency, so that no cache keys a response of the
+   route on its URL alone. A `HEAD`
+   response carries the headers the `GET` response to the same request carries,
+   `Vary`, `Cache-Control`, and `Set-Cookie` included.
 
 ## Routes and Pages
 
@@ -873,7 +900,7 @@ produced from embedded `html/template` templates. Page routes return HTML
 |-------|--------|---------|----------|
 | `/` | GET, HEAD | Roadmap index | HTML list of roadmaps |
 | `/roadmaps/{name}` | GET, HEAD | Roadmap sprints page (landing; sprint tabs) | HTML |
-| `/roadmaps/{name}/tasks` | GET, HEAD | Roadmap tasks page (one paginated task list; optional `q`, `sprint`, `status`, and `type` filter parameters and optional `page` and `size` pagination parameters, see [Roadmap Tasks Page](#roadmap-tasks-page)) | HTML |
+| `/roadmaps/{name}/tasks` | GET, HEAD | Roadmap tasks page (one paginated task list; optional `q` and `sprint` filter parameters, optional repeatable `status` and `type` filter parameters, and optional `page` and `size` pagination parameters; a request carrying none of the six takes its filter state from the `rmp_tasks_filters` cookie or the defaults, and a request carrying any of them sets that cookie; see [Roadmap Tasks Page](#roadmap-tasks-page)) | HTML |
 | `/roadmaps/{name}/tasks/{id}` | GET, HEAD | Roadmap task page (one task's fields, its comments, and its sprint context; see [Roadmap Task Page](#roadmap-task-page)) | HTML |
 | `/roadmaps/{name}/sprints/{id}` | GET, HEAD | Roadmap sprint page (the sprint's details and its member-tasks board) | HTML |
 | `/roadmaps/{name}/audit` | GET, HEAD | Roadmap audit log page (full audit log, paginated; optional `page` parameter; see [Roadmap Audit Log Page](#roadmap-audit-log-page)) | HTML |
@@ -920,7 +947,8 @@ HTTP status mapping for page and data routes:
 | Task `{id}` not a valid integer, or not a task of the roadmap | 404 |
 | Audit `page` parameter out of range, non-integer, or garbage | 200 (clamped to nearest valid page; see [Roadmap Audit Log Page](#roadmap-audit-log-page)) |
 | Tasks `q` search parameter absent, empty, unmatched, or undecodable | 200 (never an error; see [Roadmap Tasks Page](#roadmap-tasks-page)) |
-| Tasks `sprint`, `status`, or `type` filter parameter absent, unknown, malformed, or undecodable; or any parameter the page does not accept, `priority` and `severity` included | 200 (never an error; the parameter is ignored as though absent; see [Roadmap Tasks Page](#roadmap-tasks-page)) |
+| Tasks `sprint` filter parameter, or any occurrence of the repeatable `status` or `type` filter parameter, absent, unknown, malformed, or undecodable; a repeated or duplicated occurrence; or any parameter the page does not accept, `priority` and `severity` included | 200 (never an error; each unaccepted parameter or occurrence is ignored as though absent, and a duplicated value counts once; see [Roadmap Tasks Page](#roadmap-tasks-page)) |
+| Tasks request carrying none of the six parameters, with a `rmp_tasks_filters` cookie absent, or holding unaccepted, undecodable, or foreign-roadmap parts | 200 (never an error; each unaccepted part of the cookie is ignored, and an absent cookie gives the defaults; see [Roadmap Tasks Page](#roadmap-tasks-page), **Filter persistence**) |
 | Tasks `page` or `size` pagination parameter absent, non-integer, not an allowed value, or undecodable, or `page` beyond the last page | 200 (never an error; `page` falls back to 1 and `size` to 25, and a `page` beyond the last page renders the last page; see [Roadmap Tasks Page](#roadmap-tasks-page)) |
 | Graph data `limit` not one of the six allowed values | 400 (`kind` `invalid_limit`; the query is not executed; see [Query-Bar Error Handling](#query-bar-error-handling)) |
 | Graph data `q` carries an `EXPLAIN` or `PROFILE` prefix the engine's parser recognises, and `limit` is allowed | 400 (`kind` `plan_prefix`; the statement is not sent, and the answer is the same with no graph server listening; see [Query-Bar Error Handling](#query-bar-error-handling)) |
@@ -1116,7 +1144,7 @@ how the `rmp web` process itself terminates.
   [Responsive and Mobile-First Design](#responsive-and-mobile-first-design),
   rule 9).
 - **Filter bar.** The filter bar is a **`GET` form** of native Tabler form
-  controls, placed inside the list card header's actions container (see **The card
+  controls and Tabler dropdowns, placed inside the list card header's actions container (see **The card
   header** above), whose `action` is the page's own path,
   `/roadmaps/{name}/tasks`. It is the page's only form. The page header's actions
   column carries nothing on this page (see
@@ -1135,18 +1163,14 @@ how the `rmp web` process itself terminates.
      `rmp sprint list` returns (see `COMMANDS.md § List Sprints`). Both the `id` and
      the `title` are shown because the `title` alone does not identify a sprint:
      `MODELS.md § Sprint` places no uniqueness constraint on it;
-  3. a **status select** — `<select class="form-select form-select-sm" name="status">`
-     — labelled `Status`, offering
-     `Any status` (value empty) and then the five `TaskStatus` values
-     (`MODELS.md § Enums`) in the order of the task state machine's flow
+  3. a **status multi-select** — a Tabler dropdown labelled `Status` (see
+     **Multi-select dropdowns** below) holding one checkbox per `TaskStatus` value
+     (`MODELS.md § Enums`), in the order of the task state machine's flow
      (`STATE_MACHINE.md § Task State Machine`): `BACKLOG`, `SPRINT`, `DOING`,
-     `TESTING`, `COMPLETED`, each option's value and text being the value exactly
-     as the enum spells it;
-  4. a **type select** — `<select class="form-select form-select-sm" name="type">` —
-     labelled `Type`, offering `Any type`
-     (value empty) and then the ten `TaskType` values in the order
-     `MODELS.md § Enums` lists them, each option's value and text being the value
-     exactly as the enum spells it;
+     `TESTING`, `COMPLETED`;
+  4. a **type multi-select** — a Tabler dropdown labelled `Type` (see
+     **Multi-select dropdowns** below) holding one checkbox per `TaskType` value,
+     in the order `MODELS.md § Enums` lists the ten values;
   5. an **Apply** control,
      `<button type="submit" class="btn btn-primary btn-sm">Apply</button>`.
 
@@ -1154,9 +1178,54 @@ how the `rmp web` process itself terminates.
   no severity filter, and no Reset control, so that the whole bar fits on the card
   title's line (see **Compact controls** below). A task's priority and severity
   remain shown in its row (see **Row content** below); they only do not narrow the
-  list. Clearing the filters is done by choosing each select's *any* option and
-  emptying the search input, then applying, or by following the Reset link of the
-  no-match empty state (see **Empty states** below).
+  list. Removing every filter is done by choosing `Any sprint`, unchecking every
+  status and type checkbox, and emptying the search input, then applying.
+  Returning to the default filter state is done by following the Reset link of
+  the no-match empty state (see **Empty states** and **Filter persistence**
+  below).
+
+  **Multi-select dropdowns.** The status and the type controls are each one Tabler
+  dropdown, `<div class="dropdown">`, made of two parts:
+  - a **toggle button** styled as a small select,
+    `<button type="button" class="form-select form-select-sm" data-bs-toggle="dropdown" data-bs-auto-close="outside" aria-describedby="<ID>">`,
+    whose text states the dimension's active values (see below) and is held in a
+    `<span id="<ID>">` inside the button, `<ID>` being unique in the page; and
+  - a **menu**, `<div class="dropdown-menu">`, holding one checkbox per enum
+    value in the order fixed above, each checkbox being
+    `<input type="checkbox" class="form-check-input" name="status" value="<VALUE>">`
+    (`name="type"` in the type dropdown) inside a `<label class="dropdown-item">`
+    whose text is the value exactly as the enum spells it. `<VALUE>` is that same
+    spelling.
+
+  The menu carries **no** *any* checkbox: a dimension with no box checked is a
+  dimension with no filter, and it admits every value. `data-bs-auto-close="outside"`
+  keeps the menu open while boxes are checked and unchecked in it, and closes it
+  on a click outside it. Checking or unchecking a box does not submit the form;
+  the form is submitted only by activating Apply or by pressing Enter in the search
+  input (see **Scripts** below). A box is
+  `checked` in the served HTML exactly when its value is one of the dimension's
+  active values (see **Each control shows the filter state that produced the
+  list** below).
+
+  The toggle's text is computed by the server from the dimension's active values
+  and never changes after the page loads:
+  - `Any status` (`Any type` for the type dropdown) when the dimension has no
+    active value;
+  - the value itself, exactly as the enum spells it, when it has exactly one;
+  - `<n> selected`, where `<n>` is the number of active values written in ASCII
+    decimal digits, when it has two or more — for example `4 selected`.
+
+  Checking or unchecking a box before applying does not change the toggle's text:
+  the text states the filter state that produced the list, not the state of the
+  boxes the reader has not applied yet.
+
+  **The toggle's text is its accessible description.** The toggle's
+  `aria-describedby` names the `<span>` that holds its text, so the text —
+  `Any status`, `Any type`, the one active value, or `<n> selected` — is the
+  toggle's accessible description, while its visually hidden `<label>` stays its
+  accessible name (see **Labels are programmatic, not visible** below). A screen
+  reader therefore announces the control as its name, its role, and its applied
+  state, for example "Status, button, 4 selected".
 
   The form **always** carries the active page size in a hidden input named `size`,
   the default `25` included, so applying the filters keeps the page size, and it
@@ -1166,28 +1235,36 @@ how the `rmp web` process itself terminates.
 
   **Compact controls.** The bar sits in the card header beside the card title, so
   its controls are Tabler's small variants: every input carries `form-control-sm`,
-  every select `form-select-sm`, and Apply `btn-sm`. The sprint
+  the sprint select and both dropdown toggles `form-select-sm`, and Apply `btn-sm`. The sprint
   select's width is capped at `16rem` by a `max-width: 16rem` declared for a class
   of the project override stylesheet `static/style.css`, inside a media query that
   applies from Tabler's `sm` breakpoint (`576px`) up, so that a long sprint `title`
   does not widen the bar; below that breakpoint the cap does not apply, and the
   sprint select fills its row like every other control. The option text is not
   changed, and the full text of every option remains in the served HTML. The small
-  selects, the small search input, and the Apply button have **one rendered
+  sprint select, the two small dropdown toggles, the small search input, and the
+  Apply button have **one rendered
   height**: where the vendored `form-select-sm` renders taller than
   `form-control-sm` and `btn-sm`, the project override stylesheet aligns it, so the
   controls of a line of the bar share one height.
 
-  **Labels are programmatic, not visible.** Every control carries a real
-  `<label>` associated with it by `for` and `id`, naming what the control filters,
+  **Labels are programmatic, not visible.** The search input, the sprint select,
+  and each of the two dropdown toggle buttons carries a real
+  `<label>` associated with it by `for` and `id` — for a dropdown, the `id` is the
+  toggle button's — naming what the control filters,
   and every such label carries Tabler's `visually-hidden` class: it is not
   displayed, and it remains the control's accessible name. What each control is
   stays visible through its own text: the search input's `placeholder` reads
-  `Search`, the label's own text, and each select shows its first option — `Any
-  sprint`, `Any status`, `Any type` — or the value selected, whose text names the
-  dimension (`Sprint #<id> …`) or is a value of the enum the label names. The first option of a select is a **value**
-  meaning *no filter on this dimension*, not the control's name, and neither it nor
-  the `placeholder` replaces the label: the label is present in every case. The
+  `Search`, the label's own text; the sprint select shows its first option, `Any
+  sprint`, or the sprint selected, whose text names the dimension
+  (`Sprint #<id> …`); and each dropdown toggle shows `Any status` or `Any type`, a
+  value of the enum the label names, or `<n> selected` (see **Multi-select
+  dropdowns** above), which is also the toggle's accessible description through
+  `aria-describedby`. Each checkbox of a dropdown's menu is named by its own
+  `<label class="dropdown-item">`, whose text is its value. The first option of the
+  sprint select and the *any* text of a toggle are a **value**
+  meaning *no filter on this dimension*, not the control's name, and neither they nor
+  the `placeholder` replace the label: the label is present in every case. The
   search input's accessible name, `Search`, contains its visible placeholder text,
   as WCAG 2.5.3 Label in Name (Level A) requires. Because the placeholder is the
   search input's only visible label, its text has a contrast ratio of at least
@@ -1197,13 +1274,18 @@ how the `rmp web` process itself terminates.
   [UI Framework](#ui-framework), rule 10). Every control is reachable and
   operable from the keyboard.
 
-  **Each control shows the value that produced the list.** On every response the
-  search input's `value` is the `q` the request carried, with each byte that is not
-  part of a valid UTF-8 sequence replaced by `U+FFFD` (REPLACEMENT CHARACTER), and
-  each select marks as
-  `selected` the option equal to its parameter's accepted value, or its first
-  option — the *any* option — when the parameter is absent or was ignored (see
-  **Query parameters** below). The form is laid out on Tabler's grid, as
+  **Each control shows the filter state that produced the list.** The **active
+  filter state** of a response is the `q`, `sprint`, `status`, `type`, and `size`
+  the list was produced from, whichever source supplied them — the URL, the
+  filter-state cookie, or the defaults (see **Filter persistence** below). On every
+  response the
+  search input's `value` is the active `q`, with each byte that is not
+  part of a valid UTF-8 sequence replaced by `U+FFFD` (REPLACEMENT CHARACTER); the
+  sprint select marks as
+  `selected` the option equal to the active `sprint`, or its first
+  option — the *any* option — when there is none; and each dropdown marks as
+  `checked` exactly the boxes of the dimension's active values, and no box when the
+  dimension has none (see **Query parameters** below). The form is laid out on Tabler's grid, as
   `<form class="row g-2 align-items-end justify-content-end">` with each control and
   its label in a `col-12 col-sm-auto` column, so the controls are **trailing-aligned**:
   at a viewport width of `1440px` the whole bar sits on the card title's line,
@@ -1220,11 +1302,21 @@ how the `rmp web` process itself terminates.
   [Responsive and Mobile-First Design](#responsive-and-mobile-first-design),
   rule 9).
 
-  **The page works without JavaScript.** The filter bar is an ordinary HTML form:
-  choosing values and activating Apply, or pressing Enter in the search input,
-  submits it by `GET`, and the server renders the filtered list. No script is
-  needed to filter, to paginate, or to change the page size; the page loads no
-  script of its own, and selecting a value does not submit the form by itself.
+  **Scripts.** The page loads no project script of its own. The one script it loads
+  is the vendored Tabler script, `/static/vendor/tabler/tabler.min.js`, as the
+  other pages do, and opening the Status and Type dropdowns needs it: Tabler's
+  dropdown behaviour is what shows and hides a dropdown's menu. Nothing else on the
+  page needs a script. The filter bar is an ordinary HTML form: activating Apply,
+  or pressing Enter in the search input, submits it by `GET`, and the server
+  renders the filtered list; checking or unchecking a box, or choosing a sprint,
+  does not submit the form by itself. The list, the range text, the pagination
+  bar, the rows-per-page selector, and the state of every control are rendered by
+  the server, and no script changes any of them after load. With scripting
+  disabled the dropdown menus do not open, so the status and type boxes cannot be
+  changed; the list still renders, and the search, the sprint select, Apply, the
+  pagination bar, and the rows-per-page selector still work, and a submission
+  still carries the boxes the server marked `checked`, because a checked box is
+  submitted whether or not its menu is shown.
 - **Query parameters.** The filters, the page, and the page size travel in the URL
   query string of `/roadmaps/{name}/tasks`, so a filtered page survives a reload,
   can be bookmarked and shared, and is restored by the browser's Back navigation.
@@ -1234,10 +1326,17 @@ how the `rmp web` process itself terminates.
   |---|---|---|
   | `q` | any string | The search term (see **The text search** below) |
   | `sprint` | `none`, or the `id` of a sprint of the roadmap written as a canonical decimal integer | `none`: only tasks that belong to no sprint; an `id`: only the tasks of that sprint |
-  | `status` | one of the five `TaskStatus` values, exactly as the enum spells it | Only tasks whose `status` equals the value |
-  | `type` | one of the ten `TaskType` values, exactly as the enum spells it | Only tasks whose `type` equals the value |
+  | `status` | repeatable; each occurrence one of the five `TaskStatus` values, exactly as the enum spells it | Only tasks whose `status` equals one of the accepted values |
+  | `type` | repeatable; each occurrence one of the ten `TaskType` values, exactly as the enum spells it | Only tasks whose `type` equals one of the accepted values |
   | `page` | a canonical decimal integer of at least `1` | The 1-based page of the list to render (see **Pagination** below) |
   | `size` | `10`, `25`, `50`, or `100` | The number of rows per page (see **Pagination** below) |
+
+  `status` and `type` are **repeatable**: a request names several values of one
+  dimension by repeating the parameter, `?status=DOING&status=TESTING`. The
+  **accepted values** of a repeatable parameter are the distinct values among its
+  accepted occurrences; a value that occurs more than once counts once. A
+  repeatable parameter with no accepted occurrence has no accepted value, and its
+  dimension is not filtered.
 
   A **canonical decimal integer** is one or more ASCII digits (`0` to `9`), the
   first of which is not `0`, with no sign, no whitespace, and no other character.
@@ -1252,12 +1351,18 @@ how the `rmp web` process itself terminates.
   table above is handled as follows:
   1. **A filter parameter** — `sprint`, `status`, or `type` — whose value is not
      accepted is **ignored**: the list is rendered exactly as though that parameter
-     were absent, and its control shows its *any* option. This covers a value that
+     were absent, and its control shows its *any* state — the *any* option of the
+     sprint select, no box checked in a dropdown. For the repeatable `status` and
+     `type`, the rule applies to **each occurrence on its own**: an occurrence
+     whose value is not accepted is ignored, and the parameter's other occurrences
+     are unaffected, so `?status=DOING&status=doing` filters by `DOING` alone, and
+     only a parameter none of whose occurrences is accepted leaves its dimension
+     unfiltered. This covers a value that
      differs from an accepted one only in case, a value carrying a sign,
      surrounding spaces, a leading zero, or any other decoration, a `sprint` that is neither `none` nor the `id` of a sprint of **this** roadmap —
      the `id` of a sprint of another roadmap, or of no sprint, included — and a
-     parameter present with an empty value, which is also the value the *any*
-     options submit.
+     parameter or occurrence present with an empty value, which is also the value
+     the sprint select's *any* option submits.
   2. **`page`** whose value is not a canonical decimal integer — absent, empty,
      `0`, negative, fractional, decorated, or not a number — **falls back to `1`**.
      A canonical `page` greater than the last page, however large, renders **the
@@ -1268,11 +1373,14 @@ how the `rmp web` process itself terminates.
      **The text search** below).
   5. **A parameter the server cannot decode** — one whose percent-encoding is
      malformed — is treated as absent, and the parameters that decode are applied
-     unaffected.
-  6. **One value is read per parameter.** A URL that repeats a parameter —
-     `?type=BUG&type=EPIC` — is read as its **first** occurrence, and the remaining
-     occurrences are ignored. A single value that packs several — `?type=BUG,EPIC`
-     — is one string that is not an accepted value, and rule 1 ignores it.
+     unaffected. For `status` and `type`, an occurrence that cannot be decoded is
+     ignored on its own, as rule 1 ignores an unaccepted one.
+  6. **One value is read per non-repeatable parameter.** A URL that repeats `q`,
+     `sprint`, `page`, or `size` — `?sprint=4&sprint=7` — is read as its **first**
+     occurrence, and the remaining occurrences are ignored. Every occurrence of
+     `status` and of `type` is read (see above). A single value that packs
+     several — `?type=BUG,EPIC` — is one string that is not an accepted value, and
+     rule 1 ignores that occurrence.
   7. **The parameters are independent.** An ignored parameter narrows nothing and
      leaves every accepted parameter applied, and the list depends on which values
      are present, never on the order in which the query string carries them.
@@ -1288,21 +1396,118 @@ how the `rmp web` process itself terminates.
   concatenated or interpolated into SQL text, and an ignored value reaches no
   statement at all (see `DATABASE.md § List All`). `q`, `page`, and `size` never
   reach SQL: they are applied in memory (see **Read cost** below).
-- **What each filter matches, and how the criteria compose.** Each accepted filter
-  is one criterion, and the search term, when it is not empty, is one more:
+- **Filter persistence.** The page remembers the reader's filter state across
+  visits in one cookie that the server sets and reads; no script reads or writes
+  it, and the page uses no browser storage (`localStorage`, `sessionStorage`, or
+  IndexedDB).
+  - **Explicit and bare requests.** A request to `/roadmaps/{name}/tasks` is
+    **explicit** when its URL query string carries at least one occurrence of a
+    parameter the page accepts — `q`, `sprint`, `status`, `type`, `page`, or
+    `size` — whatever that occurrence's value, empty, unaccepted, or undecodable
+    included. A request that carries none of the six is **bare**, whether its
+    query string is empty or carries only parameters the page does not accept,
+    such as `priority`.
+  - **An explicit request takes its state from the URL alone.** Its active filter
+    state is the one the query parameters give, with an absent parameter meaning
+    no filter on its dimension, an empty search, or the default page size `25`,
+    as **Query parameters** above states; the cookie is not read. Its HTTP 200
+    response carries a `Set-Cookie` header setting the cookie to the request's
+    accepted `q`, `sprint`, `status`, `type`, and `size` (see **The cookie's
+    value** below).
+  - **A bare request takes its state from the cookie, or from the defaults.** When
+    the request carries the cookie, its active filter state is the one the
+    cookie's value gives; when it does not, the active filter state is the
+    **defaults**. A bare request always renders page 1, and its response carries
+    no `Set-Cookie` header: a bare request never rewrites the cookie.
+  - **The defaults.** Status: `BACKLOG`, `SPRINT`, `DOING`, and `TESTING` — every
+    `TaskStatus` value except `COMPLETED`; type: no value, so every type; sprint:
+    none, so every task; `q`: empty; size: `25`; page: `1`.
+  - **The cookie.** One cookie, named `rmp_tasks_filters`, shared by every roadmap:
+    its state is global, not per roadmap. The server sets it with exactly these
+    attributes: `Path=/`, `Max-Age=31536000` (one year), `HttpOnly`, and
+    `SameSite=Lax`. It carries no `Domain` attribute, so it is a host-only cookie,
+    no `Expires` attribute, and no `Secure` attribute: the server speaks plain HTTP
+    on every bind address, the loopback default included (see
+    [Bind Address and Port Selection](#bind-address-and-port-selection)), and a
+    user agent returns a `Secure` cookie only over a secure channel (RFC 6265,
+    Section 4.1.2.5), so the attribute would stop the cookie from ever being sent
+    back. Cookies are not isolated by port (RFC 6265, Section 8.5), so every
+    `rmp web` server a browser reaches through one host name shares the cookie.
+  - **The cookie's value.** The value is a query string in the
+    `application/x-www-form-urlencoded` form, holding, in this order: `q`, when
+    the term is not empty after the trim, as the search input echoes it (each byte
+    that is not part of a valid UTF-8 sequence replaced by `U+FFFD`); `sprint`,
+    when a sprint filter is accepted; one `status` per accepted status value and
+    one `type` per accepted type value, each set in its enum order (see **Filter
+    bar** above); and `size`, always, `25` included — for example
+    `sprint=4&status=DOING&status=TESTING&size=25`. It never carries `page`. Every
+    name and value is percent-encoded, a space being written `+`, so that the value
+    holds only ASCII letters and digits and the characters `-`, `.`, `_`, `~`, `%`,
+    `+`, `&`, and `=`, each of which is a `cookie-octet` (RFC 6265, Section 4.1.1).
+    An explicit request whose accepted state holds no filter and no term sets the
+    value `size=<n>` alone, so the next bare request lists every task rather than
+    the defaults.
+  - **The size limit.** RFC 6265, Section 6.1, obliges a user agent to store only
+    cookies of at least 4096 bytes, name, value, and attributes together. When the
+    encoded value would exceed **4000 bytes** — which only a long search term can
+    cause — the response carries no `Set-Cookie` header, and the cookie the browser
+    already holds, if any, stays as it was. The page itself is rendered from the
+    request's URL as for any explicit request.
+  - **Reading the cookie validates it like a URL.** The server parses the value as
+    a query string and validates every part by exactly the rules of **Query
+    parameters** above, applied to the roadmap being viewed: each part that is not
+    accepted is ignored on its own, and the other parts are applied. A `sprint`
+    that is not `none` and not the `id` of a sprint of **this** roadmap is ignored,
+    because the one cookie serves every roadmap; a `page`, and every name other
+    than `q`, `sprint`, `status`, `type`, and `size`, is ignored. A cookie present
+    with no accepted part gives the state with no filter, no term, and size `25`,
+    not the defaults: the defaults apply only when the cookie is absent. When the
+    `Cookie` request header carries the name more than once, the first occurrence
+    is read. No cookie content produces an error page or a status other than the
+    route's own (see [Routes and Pages](#routes-and-pages)).
+  - **Which responses set it.** Only an HTTP 200 response to an explicit request
+    sets the cookie, a `HEAD` request's response included: `HEAD` carries the
+    headers `GET` carries for the same request, `Set-Cookie` among them. A `404`,
+    a `405`, or a `500` of this route sets no cookie.
+  - **Links from other pages are bare.** Every link another page generates to the
+    tasks page — the sidebar's Tasks entry, and the task page's `Back to tasks`
+    link (see [Roadmap Task Page](#roadmap-task-page), **The way back**) —
+    carries no query parameter, so following it restores the stored filter state.
+    Every link this page generates to itself is explicit (see **Links keep the
+    filters** below).
+  - **What the cookie is, and is not.** The cookie holds a presentation choice
+    only. Its values reach the page only after the validation above and through
+    the same `html/template` escaping as a URL value (see **Escaping** below), and
+    they reach SQL only as bound parameters, as URL values do. The cookie grants
+    nothing: it is not a session, an identity, or an authorisation, and the server
+    has none of those (see [Security and Constraints](#security-and-constraints),
+    rule 3). It is never written to any roadmap database or graph store, and the
+    server keeps no copy of it. How the route's responses are cached with the
+    cookie in play is fixed by [Cache Policy](#cache-policy), rule 5.
+- **What each filter matches, and how the criteria compose.** Each filter of the
+  active filter state that has a value is one criterion — a dimension with several
+  active values is still one criterion — and the search term, when it is not
+  empty, is one more:
   - **Sprint is membership.** `none` admits a task that has no `sprint_tasks` row;
     a sprint `id` admits a task whose `sprint_tasks` row names that sprint. A task
     belongs to at most one sprint (see `DATABASE.md § Relationships`), so the two
     forms partition the roadmap's tasks between them and the sprints.
-  - **Status and type are equalities**, against the value exactly as
-    `MODELS.md § Enums` spells it.
+  - **Status and type are set memberships.** A task satisfies the status criterion
+    when its `status` equals **any one** of the active status values, and the type
+    criterion when its `type` equals any one of the active type values, each
+    compared exactly against the spelling in `MODELS.md § Enums`. Within one
+    dimension the values combine by **OR**. A dimension with no active value is no
+    criterion and admits every task.
 
-  The list shows the tasks that satisfy **every** active criterion, and a request
+  Across dimensions the criteria combine by **AND**: the list shows the tasks that
+  satisfy **every** active criterion, and a request
   with no active criterion shows every task of the roadmap. The conjunction is
-  total: `?q=cache&status=DOING&type=BUG` shows the `DOING` tasks of type `BUG`
+  total: `?q=cache&status=DOING&status=TESTING&type=BUG` shows the tasks of type
+  `BUG` whose status is `DOING` or `TESTING` and
   whose title or `#<id>` reference contains `cache`, and no other task.
   Adding a criterion can only shrink the list, never grow it, and no criterion
-  re-admits a task another excluded.
+  re-admits a task another excluded. Adding a further value to a dimension that
+  already has one can only grow the list, because it widens that dimension's OR.
 - **The text search.** The search answers "which task is this?" from what
   identifies a task in its row.
   - **What it matches.** A task has exactly two **searchable texts**, two things its
@@ -1458,8 +1663,10 @@ how the `rmp web` process itself terminates.
     [UI Framework](#ui-framework), rule 10).
   - **Links keep the filters.** Every link the page generates to the page itself —
     each page number and chevron of the pagination bar, and each rows-per-page
-    link — carries every accepted filter parameter of the current
-    request, with its accepted value, and no ignored one. A pagination link sets
+    link — carries every filter of the active filter state, whether the URL, the
+    cookie, or the defaults supplied it: `sprint` with its active value, and one
+    `status` or `type` occurrence per active value of that repeatable parameter,
+    every active value included; it carries no ignored value. A pagination link sets
     `page` and keeps `size`; a rows-per-page link sets `size` and carries no
     `page`, so changing the page size returns to page 1; submitting the filter bar
     carries no `page`, so changing a filter returns to page 1. A generated link
@@ -1467,7 +1674,11 @@ how the `rmp web` process itself terminates.
     `25`, and `q` only when the term is not empty after the trim; the `q` a link
     carries is the term as the search input echoes it, with each byte that is not
     part of a valid UTF-8 sequence replaced by `U+FFFD`, then percent-encoded; the
-    order of parameters in a generated link carries no meaning. The filter bar's form is not
+    order of parameters in a generated link carries no meaning. A generated link
+    is always an explicit request (see **Filter persistence** above): a link that
+    these rules would leave with no parameter at all — page 1, size `25`, no
+    filter, and no term — carries `size=25`, so that following it reproduces the
+    list it names rather than the stored state. The filter bar's form is not
     a generated link: it carries `size` on every submission, `25` included (see
     **Filter bar** above).
   - **What the total costs.** The total is the size of the filtered set the page
@@ -1543,16 +1754,25 @@ how the `rmp web` process itself terminates.
   rendered.
   The page never replaces the card with a page-level empty state. Two conditions
   read differently:
-  - **A roadmap with no task**, requested with no active criterion, shows the title
+  - **A roadmap with no task** shows the title
     `No tasks yet` and a subtitle stating that tasks are created with the CLI,
-    `rmp task create`.
-  - **A request with at least one active criterion that no task satisfies** shows
+    `rmp task create`, and no Reset link, whatever the active filter state — from
+    the URL, from the cookie, or the defaults — because no filter can make a task
+    appear. Whether the roadmap holds any task is established only when the
+    filtered list is empty (see **Read cost** below).
+  - **A roadmap that holds at least one task, none of which satisfies the active
+    criteria** — a roadmap whose tasks are all `COMPLETED`, requested under the
+    defaults, among them — shows
     the title `No task matches the filters` and a subtitle inviting the reader to
     change or reset the filters, with a link carrying the Tabler class `btn` and
     reading `Reset` in the empty state's `empty-action`. Its `href` is the page's
-    path with no filter parameter, no `q`, and no `page`, carrying `size` only when
-    the active page size is not `25`, so following it clears the search and every
-    filter and keeps the page size. One message covers the term and the filters
+    path carrying the defaults written explicitly — the four default status
+    values, one `status` occurrence each (see **Filter persistence** above) — with
+    no `sprint`, no `type`, no `q`, and no `page`, and carrying `size` only when
+    the active page size is not `25`: for example
+    `/roadmaps/{name}/tasks?status=BACKLOG&status=SPRINT&status=DOING&status=TESTING`.
+    Following it restores the default filter state and keeps the page size, and,
+    being an explicit request, writes that state to the cookie. One message covers the term and the filters
     together, because the list is their conjunction and naming one of them would
     attribute the empty result to a cause the page cannot know.
 - **Escaping.** The term is the one caller-supplied string this page echoes back —
@@ -1560,10 +1780,15 @@ how the `rmp web` process itself terminates.
   sequence replaced by `U+FFFD`, so the page never carries an invalid byte — and it
   is escaped there by `html/template`'s
   contextual auto-escaping (see [Frontend Rules](#frontend-rules), rule 1), as is
-  every task and sprint value the page renders. A filter value is never echoed as
-  text: it only decides which of the options the server emitted from an enum or
-  from the roadmap's own sprints is marked `selected`, so no caller-supplied
-  string other than the term reaches the page. A term containing HTML markup
+  every task and sprint value the page renders. A term read from the filter-state
+  cookie is echoed and escaped exactly as a term read from the URL (see **Filter
+  persistence** above). A filter value, from the URL or from the cookie, is never
+  echoed as caller-supplied text: it only decides which of the options the server
+  emitted from the roadmap's own sprints is marked `selected`, which of the
+  checkboxes the server emitted from an enum are marked `checked`, and which of the
+  server's own texts a dropdown toggle shows — the *any* text, the enum's own
+  spelling of the one active value, or the count of active values — so no
+  caller-supplied string other than the term reaches the page. A term containing HTML markup
   therefore renders as visible characters and introduces no element, attribute, or
   script into the page. Generated links percent-encode every parameter value they
   carry.
@@ -1571,17 +1796,20 @@ how the `rmp web` process itself terminates.
   exception to them. Templates carry no inline `style` attribute, every class the
   page emits is defined in the vendored Tabler distribution or in the project
   override stylesheet `static/style.css`, and the page uses Tabler's own components
-  — form controls, the card, the table, badges, the button group, pagination, and
-  the empty state — without hand-rolling any of them (see
+  — form controls, dropdowns, the card, the table, badges, the button group,
+  pagination, and the empty state — without hand-rolling any of them (see
   [UI Framework](#ui-framework), rules 8 and 10). The page introduces no inline
-  script and loads no script of its own, and the Content-Security-Policy in
+  script and loads no project script of its own — its one script is the vendored
+  Tabler script (see **Scripts** above) — and the Content-Security-Policy in
   [Security Headers](#security-headers) is unchanged. The page keeps the admin
   shell and the page header every other page uses, governed by
   [UI Framework](#ui-framework), rules 11 to 18.
 - **Read-only.** The page renders data only. It offers no control that creates,
   edits, deletes, moves, or reorders a task, no selection, and no modal. Its one
   form submits by `GET` to the page itself and only narrows what the page shows;
-  like every other request to the interface it writes nothing, and the `rmp` CLI
+  like every other request to the interface it writes nothing to any roadmap
+  database or graph store — the one state an explicit request changes is the
+  browser's filter-state cookie (see **Filter persistence** above) — and the `rmp` CLI
   remains the sole write path for every task (see
   [Security and Constraints](#security-and-constraints)). Read-only constrains
   what the page may **change**, not what it may **show**: filtering and paginating
@@ -1592,13 +1820,22 @@ how the `rmp web` process itself terminates.
   the task page (see [Roadmap Task Page](#roadmap-task-page)). The presentation
   MUST reflect the relationships defined in `DATABASE.md § Relationships`; it
   introduces no new relationship.
-- **Read cost.** Rendering the page performs **two** reads and no more:
+- **Read cost.** Rendering the page performs **two** reads, and a third only in
+  the case item 3 names:
   1. **one** read of the roadmap's sprints, for the sprint select's options and
-     for validating the `sprint` parameter (see `DATABASE.md § List Sprint Titles`);
+     for validating the active `sprint`, whether the URL or the cookie supplied it
+     (see `DATABASE.md § List Sprint Titles`);
   2. **one** read of the roadmap's tasks through the task listing, carrying one
-     predicate per accepted `sprint`, `status`, and `type` value, each value a
-     bound parameter, and the ordering of **Order** above (see
-     `DATABASE.md § List All`).
+     predicate per filtered dimension — sprint, status, and type — with one bound
+     parameter per distinct active value of that dimension, and the ordering of
+     **Order** above (see `DATABASE.md § List All`);
+  3. **one** count of the roadmap's tasks (see `DATABASE.md § Count Roadmap
+     Tasks`), issued **only** when the filtered list is empty and the task read
+     carried at least one predicate, to choose between the two empty states (see
+     **Empty states** above). When the task read carried no predicate, it
+     returned every task of the roadmap, so the roadmap holds a task exactly when
+     it returned a row, and no count is issued; a non-empty filtered list issues
+     no count either.
 
   The page resolves no task's sprint: no row shows one, and the sprint filter is
   applied by the second read's own predicates, so the grouped sprint-resolution
@@ -1610,7 +1847,8 @@ how the `rmp web` process itself terminates.
   normalisation and folding rules cannot be expressed in SQLite, so the term is
   applied after the read, and the page is selected after the term. The page reads
   no comment, because
-  the list shows no comment information. The number of queries the page issues does
+  the list shows no comment information. The number of queries the page issues —
+  two, or three for an empty filtered list — does
   not grow with the number of tasks, the number of sprints, the page size, or the
   number of active filters, and no query is issued per row. Following a row's link
   to its task page is a separate request for that one task, made only when the user
@@ -1739,7 +1977,9 @@ how the `rmp web` process itself terminates.
   `Back to tasks`, in the idiom the Roadmap Sprint Page uses for its own back link
   (see [Roadmap Sprint Page](#roadmap-sprint-page) and
   [UI Framework](#ui-framework), rule 16). The link carries no query parameter, so
-  it opens the list unfiltered, on its first page, at the default page size; a
+  it opens the list on its first page with the filter state stored in the tasks
+  page's filter-state cookie, or with the default filter state when no cookie is
+  stored (see [Roadmap Tasks Page](#roadmap-tasks-page), **Filter persistence**); a
   reader who reached the page from a filtered list, or from a later page of it,
   returns to that exact list with the browser's own Back navigation, because the
   list's filters, page, and page size travel in its URL (see
@@ -5151,8 +5391,9 @@ timestamp references this section and does not restate it.
     The same indicator, with the same thickness and the same 3:1 contrast against
     every colour adjacent to it, is required of every element that can take
     keyboard focus on the Roadmap Tasks Page and on the Roadmap Sprint Page's
-    member-tasks board: on the tasks page, the filter bar's search input, its three
-    selects, its Apply button, each row's title link, every link of the pagination bar, every link of the rows-per-page
+    member-tasks board: on the tasks page, the filter bar's search input, its sprint
+    select, its two dropdown toggle buttons, every checkbox of their menus, its
+    Apply button, each row's title link, every link of the pagination bar, every link of the rows-per-page
     selector, and the Reset link of the no-match empty state (see [Roadmap Tasks Page](#roadmap-tasks-page)); on the board, every
     task card and every column toggle (see
     [Sprint Detail Sub-Template](#sprint-detail-sub-template)). The colours adjacent
@@ -6076,12 +6317,19 @@ Rules:
    page, the knowledge-graph page shell, the graph data
    endpoint, and the data-state-dependent error responses) carries
    `Cache-Control: no-store`, so no client-side or intermediary cache re-presents a
-   state that no longer matches the database or store. Embedded `/static/...`
+   state that no longer matches the database or store. The roadmap tasks page,
+   whose response also depends on its filter-state cookie, additionally carries
+   `Vary: Cookie` and never answers `304` ([Cache Policy](#cache-policy), rule 5).
+   Embedded `/static/...`
    assets are immutable and are excluded from this rule, remaining cacheable (see
    [Cache Policy](#cache-policy)).
 12. **No second source of truth.** The web interface stores nothing of its own.
    The CLI's SQLite databases and GoGraph stores remain the single source of
    truth, and the interface holds no cache, no index, and no derived copy of them.
+   The one cookie it sets, the roadmap tasks page's filter-state cookie, is held by
+   the browser, not by the server; it records a presentation choice, never roadmap
+   data, and the server writes it to no database or store and keeps no copy of it
+   (see [Roadmap Tasks Page](#roadmap-tasks-page), **Filter persistence**).
    The CLI is the sole write path for roadmap data. It is **not** the sole write path
    for a knowledge graph: the graph data endpoint sends its statement to the same
    graph server `rmp graph client` sends to, which writes into the one GoGraph
@@ -6134,12 +6382,14 @@ Rules:
    from the sprints page. The page renders no board, no column per status, and no card
    per task, and a task's full field set is reached through the task page each row
    links to. The page's only form is its filter bar, which submits by `GET` and changes
-   nothing; the page contains no form, button, or link that submits a change.
+   no data; the page contains no form, button, or link that submits a change.
    `GET /roadmaps/{name}/tasks` for a non-existent roadmap, or a request whose `{name}`
    violates the roadmap-name rules, returns HTTP 404 without touching the filesystem
    outside `~/.roadmaps/`. Acceptance Criteria 81, 84 to 88, 90 to 93, 128, 232, 233,
    and 244 define the list itself; Acceptance Criteria 100 to 107, 112 to 119, 121,
-   122, 129, 152 to 155, 234 to 238, and 243 define the filter bar and the search;
+   122, 129, 152 to 155, 234 to 238, 243, and 248 define the filter bar and the search;
+   Acceptance Criteria 249 to 254 define the filter-state cookie, the defaults, and
+   the route's caching;
    Acceptance Criteria 82, 83, 89, 239 to 242, and 245 define the pagination;
    Acceptance Criteria 246 and 247 fix the contrast of the badges, of the search
    placeholder, and of the focus indicator; and Acceptance Criteria 94 to 99 and 221 to 231 fix the task page the
@@ -6810,17 +7060,25 @@ Rules:
 88. When no task satisfies a request, the list card keeps its header and its filter
     bar, renders no table and no card footer, and shows Tabler's empty-state markup
     (`<div class="empty">`) in a `card-body`, never a page-level empty state. A roadmap
-    with no task, requested with no active criterion, shows the empty-state title
-    `No tasks yet`; a request carrying at least one accepted criterion that no task
-    satisfies shows the title `No task matches the filters` and, in the empty state's
+    with no task shows the empty-state title
+    `No tasks yet` and no Reset link, whatever the active filter state — no
+    criterion, URL filters, cookie filters, or the defaults; a roadmap holding at
+    least one task, none of which satisfies the active criteria, shows the title
+    `No task matches the filters` and, in the empty state's
     `empty-action`, a link carrying `btn` and reading `Reset`, whose `href` is the
-    page's path with no filter parameter, no `q`, and no `page`, and with `size` only
+    page's path carrying exactly the four default status values — `status=BACKLOG`,
+    `status=SPRINT`, `status=DOING`, and `status=TESTING` — and no `sprint`, no
+    `type`, no `q`, and no `page`, and with `size` only
     when the active page size is not `25`. This link is the page's only Reset control:
     the filter bar carries none. Both answer HTTP 200
     (see [Roadmap Tasks Page](#roadmap-tasks-page), **Empty states**).
-89. Rendering the tasks page issues exactly two reads, whether or not the rendered
-    page holds a row — one read of the roadmap's sprints and one read of the roadmap's
-    tasks through the task listing — and no sprint-resolution query. An instrumented count of queries is the same for a roadmap of 10
+89. Rendering the tasks page issues exactly two reads — one read of the roadmap's
+    sprints and one read of the roadmap's tasks through the task listing — and no
+    sprint-resolution query, plus exactly one count of the roadmap's tasks
+    (`DATABASE.md § Count Roadmap Tasks`) when, and only when, the filtered list is
+    empty and the task read carried at least one sprint, status, or type predicate.
+    A request whose list holds a row issues no count, and neither does an empty list
+    whose task read carried no predicate. An instrumented count of queries is the same for a roadmap of 10
     tasks and one of 300, for every page and every page size, and for any number of
     active filters; no query is issued per row, per page, or per filter, and no
     comment is read. The search term, the total, and the selection of the page's rows
@@ -6949,25 +7207,35 @@ Rules:
 102. A term that matches no task, alone or together with the filters, renders the
     no-match empty state of Acceptance Criterion 88 — one message covering the term and
     the filters together — and that state is distinct from the state of a roadmap that
-    holds no task at all, requested with no criterion (see
+    holds no task at all, which shows `No tasks yet` whatever the criteria (see
     [Roadmap Tasks Page](#roadmap-tasks-page), **Empty states**).
 103. The term travels in the `q` URL query parameter on `/roadmaps/{name}/tasks`.
     Submitting the filter bar puts the search input's value in `q`, and reloading the
     resulting URL renders the identical list. The search input of every response shows
-    the `q` the request carried, and every link the page generates to itself carries
+    the active `q` — the one the request carried, or, for a request carrying none of
+    the six parameters, the one its filter-state cookie carried — and every link the
+    page generates to itself carries
     `q` while the term is not empty after the trim, and carries no `q` otherwise. The
     `q` a generated link carries is the term as echoed: for a `q` holding an invalid
     UTF-8 byte, the link carries `U+FFFD` in its place, percent-encoded as `%EF%BF%BD`,
     and never the invalid byte.
-104. The tasks page filters, searches, and paginates **without JavaScript**. For any
-    roadmap and any combination of the six parameters, the HTML the server sends
-    already carries the final list — the rows, the range text, the pagination bar, the
-    selected option of every select, and the empty state where applicable — and no
-    script changes any of it after load: the page loads no script of its own, and a
-    browser with scripting disabled renders and navigates the same list. The check
-    compares, for the same URL, the list a browser renders with scripting enabled and
-    the one it renders with scripting disabled, and they are identical. Requesting the
-    same URL twice, with the roadmap unchanged, returns the same list.
+104. The tasks page's list is **rendered on the server**, and scripts only open the
+    dropdowns. For any roadmap, any combination of the six parameters, and any
+    filter-state cookie, the HTML the server sends already carries the final list —
+    the rows, the range text, the pagination bar, the selected option of the sprint
+    select, the `checked` boxes and the text of each dropdown toggle, and the empty
+    state where applicable — and no script changes any of it after load: the page
+    loads no project script of its own, its one script being
+    `/static/vendor/tabler/tabler.min.js`. The check compares, for the same URL and
+    the same cookie, the list a browser renders with scripting enabled and the one
+    it renders with scripting disabled, and they are identical; with scripting
+    disabled, the search, the sprint select, Apply, the pagination links, and the
+    rows-per-page links still work, and submitting the form still carries the boxes
+    the server marked `checked`. With scripting enabled, activating a dropdown's
+    toggle opens its menu, checking a box leaves the menu open and submits nothing,
+    and the form is submitted only by Apply or by Enter in the search input.
+    Requesting the same URL twice, with the same cookie and the roadmap unchanged,
+    returns the same list.
 105. No `q` value produces an error page: a term matching nothing, a term longer
     than any searchable text, and a `q` the server cannot decode each return HTTP 200,
     the last treated as though `q` were absent. A term whose bytes are not valid UTF-8
@@ -6986,9 +7254,9 @@ Rules:
     writes it anywhere. Every generated link percent-encodes the parameter values it
     carries. This is proven by a test that fails if the term is written as markup
     (rule 7 of [Security and Constraints](#security-and-constraints) governs).
-107. The tasks page introduces no inline script, loads no script of its own, and
-    makes no Content-Security-Policy change: every script it loads is the admin shell's,
-    from `/static/`, and the policy remains exactly the value fixed in Acceptance
+107. The tasks page introduces no inline script, loads no project script of its
+    own, and makes no Content-Security-Policy change: the only script it loads is the
+    vendored `/static/vendor/tabler/tabler.min.js`, and the policy remains exactly the value fixed in Acceptance
     Criterion 33 (Acceptance Criteria 23 and 98 continue to hold). Every class the
     filter bar, the table, and the footer emit resolves in the embedded stylesheets and
     no template carries a `style` attribute (Acceptance Criterion 62 continues to
@@ -7082,25 +7350,37 @@ Rules:
 112. The filter bar offers **both** a status filter and a sprint filter, beside the
     type filter and the search input: four controls in the order search, sprint,
     status, type, followed by the Apply control, and nothing else — no priority
-    filter, no severity filter, and no Reset control. The status select offers
-    `Any status` and then `BACKLOG`, `SPRINT`, `DOING`, `TESTING`, and `COMPLETED`, in
-    that order; the type select offers `Any type` and then the ten `TaskType` values in
-    the order `MODELS.md § Enums` lists them. The form carries no control named
-    `priority` or `severity`. Each select's
-    first option carries an empty value and is the selected one whenever its parameter
-    is absent or ignored. Each control carries a `<label>` associated with it by `for`
+    filter, no severity filter, and no Reset control. The status dropdown's menu
+    holds one checkbox named `status` per value `BACKLOG`, `SPRINT`, `DOING`,
+    `TESTING`, and `COMPLETED`, in that order; the type dropdown's menu holds one
+    checkbox named `type` per `TaskType` value, in the order `MODELS.md § Enums`
+    lists them; neither menu holds an *any* checkbox. The form carries no control named
+    `priority` or `severity`. The sprint select's
+    first option carries an empty value and is the selected one whenever no sprint
+    filter is active, and a dropdown checks no box whenever its dimension has no
+    active value. The search input, the sprint select, and each dropdown's toggle
+    button carry a `<label>` associated with it by `for`
     and `id`, naming the dimension it filters and carrying `visually-hidden` — neither
-    a first option nor a `placeholder` replaces it — and each is reachable and
-    operable from the keyboard (see [Roadmap Tasks Page](#roadmap-tasks-page),
-    **Filter bar**).
+    a first option, a toggle's text, nor a `placeholder` replaces it — and every
+    control, each checkbox included, is reachable and
+    operable from the keyboard. Each dropdown's toggle button carries
+    `aria-describedby` naming the `id` of the one `<span>` inside it that holds its
+    visible text, so that, in a browser's accessibility tree, the toggle's accessible
+    name is `Status` (`Type`) and its accessible description is its visible text —
+    `Any status`, `Any type`, the one active value, or `<n> selected` — for example
+    name `Status` and description `4 selected` under the defaults (see
+    [Roadmap Tasks Page](#roadmap-tasks-page), **Filter bar** and **Multi-select
+    dropdowns**).
 113. Each filter narrows the list by its own dimension. A task matches the status
-    filter when its `status` is **equal** to the selected value, and the type filter
-    when its `type` is **equal** to it, each compared exactly against the spelling in
+    filter when its `status` is **equal** to any one of the active status values, and
+    the type filter when its `type` is **equal** to any one of the active type values,
+    each compared exactly against the spelling in
     `MODELS.md § Enums`; it matches the sprint filter by membership (Acceptance
     Criterion 235). The page offers no priority or severity filter: a request carrying
     `priority` or `severity`, with any value — `7`, `0`, `abc`, or empty — lists exactly
     the tasks the same request lists without it, answers HTTP 200, and no link the page
-    generates carries either parameter. Each parameter carries at most one value.
+    generates carries either parameter. `q`, `sprint`, `page`, and `size` each carry
+    at most one value; `status` and `type` carry any number.
 114. The filters combine **conjunctively**, with each other and with the search
     term: the list holds exactly the tasks satisfying every accepted criterion, and a
     request with no accepted criterion lists every task of the roadmap. A request for
@@ -7118,8 +7398,10 @@ Rules:
     them; and, for every filter parameter, for a value carrying surrounding spaces, for
     a parameter present with an empty value, and for a parameter the server cannot
     decode. The other parameters are unaffected: with an ignored `type` and an accepted
-    `status`, the list is narrowed by the status alone. A repeated parameter
-    (`?type=BUG&type=EPIC`) is read as its first occurrence, and a comma-packed value
+    `status`, the list is narrowed by the status alone. For `status` and `type` the
+    rule applies to each occurrence on its own: `?type=BUG&type=bug` is narrowed by
+    `BUG` alone, and `?type=BUG&type=EPIC` by both values. A repeated `sprint`
+    (`?sprint=4&sprint=7`) is read as its first occurrence, and a comma-packed value
     (`?type=BUG,EPIC`) is one string, matches no `TaskType` value, and is ignored whole
     (see [Roadmap Tasks Page](#roadmap-tasks-page), **Query parameters**).
 116. The filter bar is a `<form method="get">` whose `action` is
@@ -7130,21 +7412,27 @@ Rules:
     carried only when it is not `25` applies to generated links alone (Acceptance
     Criterion 241). Its Apply control is `<button type="submit">` carrying `btn`,
     `btn-primary`, and `btn-sm`, and the form carries no Reset control. Submitting the
-    form, then reloading the resulting URL, then submitting it again with every select
-    on its *any* option and an empty search input, renders in turn the filtered list,
-    the identical filtered list, and the unfiltered list at the same page size (see
+    form, then reloading the resulting URL, then submitting it again with the sprint
+    select on `Any sprint`, every status and type box unchecked, and an empty search
+    input, renders in turn the filtered list,
+    the identical filtered list, and the unfiltered list — every task, `COMPLETED`
+    tasks included — at the same page size (see
     [Roadmap Tasks Page](#roadmap-tasks-page), **Filter bar**).
-117. Filter values reach SQL only as **bound parameters**. The task read carries one
-    predicate per accepted `sprint`, `status`, and `type` value, each value bound as a
-    parameter of the prepared statement, and no predicate for an ignored value; it
+117. Filter values reach SQL only as **bound parameters**, whether the URL or the
+    filter-state cookie supplied them. The task read carries one
+    predicate per filtered dimension — sprint, status, and type — with each distinct
+    active value bound as a
+    parameter of the prepared statement, and no predicate and no parameter for an ignored value; it
     carries no `priority` and no `severity` predicate, whatever the request carries. The check captures the SQL text the page issues and asserts
     that no parameter value appears in it, for accepted values and for hostile ones —
     `status=DOING' OR '1'='1`, `type=BUG;DROP TABLE tasks`, `sprint=1 OR 1=1` —
     which are ignored by Acceptance Criterion 115 and reach no statement at all; after
-    such requests the roadmap's tasks are intact. `q`, `page`, and `size` never reach
-    SQL. No filter value is echoed into the page as text: each select's options are the
-    server's own enumeration of an enum or of the roadmap's sprints, and
-    a value only decides which of them is `selected` (see
+    such requests the roadmap's tasks are intact; the same hostile values carried in
+    the cookie are ignored likewise. `q`, `page`, and `size` never reach
+    SQL. No filter value is echoed into the page as text: the sprint select's options
+    and the dropdowns' checkboxes are the
+    server's own enumeration of the roadmap's sprints or of an enum, and
+    a value only decides which of them is `selected` or `checked` (see
     [Roadmap Tasks Page](#roadmap-tasks-page), **Query parameters**, and
     `DATABASE.md § List All`).
 118. The task's searchable text and the term are folded by Unicode's **simple
@@ -8663,13 +8951,22 @@ Rules:
     labelled `Sprint`, offering `Any sprint` with an empty value, `No sprint` with the
     value `none`, and one option per sprint of the roadmap, in ascending sprint `Order`,
     whose value is the sprint's `id` and whose text is `Sprint #<id>` followed by a space
-    and the sprint's `title`; `<select name="status">` labelled `Status`;
-    `<select name="type">` labelled `Type`; and the Apply button — and no other
-    control, with the options Acceptance Criterion 112 fixes for the status and type
-    selects. On every response each select marks as `selected`
-    exactly one option: the one equal to its parameter's accepted value, or its first
-    option when the parameter is absent or ignored; and the search input's `value` is
-    the `q` the request carried. The check covers a roadmap with no sprint, whose sprint
+    and the sprint's `title`; the status dropdown, `<div class="dropdown">` holding
+    `<button type="button" class="form-select form-select-sm" data-bs-toggle="dropdown" data-bs-auto-close="outside" aria-describedby="<ID>">`
+    labelled `Status`, holding its text in `<span id="<ID>">`, and a `<div class="dropdown-menu">` of
+    `<label class="dropdown-item">` elements each holding
+    `<input type="checkbox" class="form-check-input" name="status" value="<VALUE>">`;
+    the type dropdown, of the same markup with `name="type"`, labelled `Type`; and
+    the Apply button — and no other
+    control, with the checkboxes Acceptance Criterion 112 fixes. On every response
+    the sprint select marks as `selected`
+    exactly one option: the one equal to the active `sprint`, or its first
+    option when there is none; each dropdown marks as `checked` exactly the boxes of
+    its dimension's active values, and its toggle reads `Any status` (`Any type`)
+    when none is checked, the value itself when one is, and `<n> selected` when
+    `<n>` of two or more are; and the search input's `value` is
+    the active `q`. The check covers a dimension with zero, one, two, and every value
+    active, and it covers a roadmap with no sprint, whose sprint
     select offers `Any sprint` and `No sprint` only, and a roadmap with two sprints of
     the same `title`, whose two options differ by their `Sprint #<id>` text (see
     [Roadmap Tasks Page](#roadmap-tasks-page), **Filter bar**).
@@ -8685,8 +8982,9 @@ Rules:
 236. **Every parameter is validated, and an ignored one is visible as *any*.** For each
     of the three filter parameters and for each unacceptable value Acceptance
     Criterion 115 lists, the response is HTTP 200, carries `Cache-Control: no-store`,
-    lists exactly the tasks the same request lists without that parameter, marks the
-    parameter's *any* option as `selected`, and carries the ignored value in no link the
+    lists exactly the tasks the same request lists without that parameter, shows the
+    parameter's *any* state — the sprint select's first option `selected`, or no box
+    of the dropdown `checked` — and carries the ignored value in no link the
     page generates. A request whose query string carries parameters not among the six —
     `priority` and `severity` among them — lists exactly what it lists without them,
     and no link the page generates carries them. No parameter value, alone or combined with
@@ -8694,11 +8992,12 @@ Rules:
     [Roadmap Tasks Page](#roadmap-tasks-page), **Query parameters**, and
     [Routes and Pages](#routes-and-pages)).
 237. **Applying the filters returns to page 1 and keeps the page size.** On page 3 of
-    a list at page size `10`, submitting the filter bar with a new status requests a URL
+    a list at page size `10`, submitting the filter bar with a new status box checked
+    requests a URL
     that carries `size=10` and no `page`, and renders page 1 of the newly filtered list
-    at page size `10`. Submitting the form again from that list with every select on
-    its *any* option and an empty search input renders page 1 of the unfiltered list
-    at page size `10`. The check submits the real form — its fields as the served
+    at page size `10`. Submitting the form again from that list with the sprint select
+    on `Any sprint`, every box unchecked, and an empty search input renders page 1 of
+    the unfiltered list at page size `10`. The check submits the real form — its fields as the served
     HTML defines them — rather than composing the URL itself, because a form that
     carried a `page` field, or no `size` field, would fail only when submitted (see
     [Roadmap Tasks Page](#roadmap-tasks-page), **Filter bar**).
@@ -8732,10 +9031,16 @@ Rules:
     **Pagination**).
 241. **Every generated link keeps the active filters.** On a filtered list, every
     link the page generates to itself — each page number and chevron of the pagination
-    bar, and each rows-per-page link — carries each accepted filter parameter of the
-    request with its accepted value, and carries no ignored parameter and no
-    parameter the page does not accept, `priority` and `severity` included. The
-    no-match empty state's Reset link carries no filter parameter and no `q`
+    bar, and each rows-per-page link — carries each filter of the active filter
+    state, whether the URL, the cookie, or the defaults supplied it: the active
+    `sprint`, and one `status` or `type` occurrence per active value, every active
+    value included — for `?status=DOING&status=TESTING&size=10`, each link carries
+    both `status=DOING` and `status=TESTING`. It carries no ignored value and no
+    parameter the page does not accept, `priority` and `severity` included. On a
+    bare request answered from the defaults, every generated link carries the four
+    default status values. A generated link that would carry no parameter at all
+    carries `size=25`. The no-match empty state's Reset link carries the four
+    default status values and no other filter parameter and no `q`
     (Acceptance Criterion 88). A pagination link carries `page` only when its
     target is greater than `1`, and carries `size` only when the active page size is
     not `25`; a rows-per-page link carries its own `size` only when it is not `25`, and
@@ -8760,10 +9065,11 @@ Rules:
     [UI Framework](#ui-framework), rule 15).
 243. **The filter bar is compact and trailing-aligned.** In the served HTML of the
     tasks page, the search input carries `form-control` and `form-control-sm` and the
-    attribute `placeholder="Search"`; each of the three selects carries `form-select`
+    attribute `placeholder="Search"`; the sprint select and the two dropdown toggle
+    buttons each carry `form-select`
     and `form-select-sm`; and the Apply button carries `btn`, `btn-primary`, and
-    `btn-sm`. Each of the four filter controls — the search input and the three
-    selects — has exactly one `<label>` whose `for` equals the control's `id`, and
+    `btn-sm`. Each of the four filter controls — the search input, the sprint
+    select, and the two dropdown toggle buttons — has exactly one `<label>` whose `for` equals the control's `id`, and
     every such label carries `visually-hidden`. The sprint select carries a class for
     which `static/style.css` declares `max-width: 16rem` inside a media query whose
     condition is `min-width: 576px`, and declares no `max-width` for it outside one. The form carries
@@ -8778,7 +9084,8 @@ Rules:
     control coincides with the right edge of the `card-actions` container, placed as
     in Tabler's card-actions example, and no label is displayed; at `992px` and
     `576px` each line of controls ends at that same trailing edge. At each of `375px`,
-    `576px`, `992px`, and `1440px`, the three selects, the search input, and the Apply
+    `576px`, `992px`, and `1440px`, the sprint select, the two dropdown toggles, the
+    search input, and the Apply
     button have one computed rendered height, to the pixel; at `1440px` and `576px` the
     sprint select is no wider than `16rem`, and at `375px` it is as wide as the search
     input, filling its row (Acceptance Criterion 129
@@ -8850,7 +9157,8 @@ Rules:
 247. **The focus indicator reaches 3:1 on the tasks list and the sprint board.** In
     a browser, in the dark theme the interface serves, moving keyboard focus with
     Tab onto each kind of focusable element that UI Framework rule 21 names for the
-    tasks page and for the sprint board — the search input, each select, Apply, the
+    tasks page and for the sprint board — the search input, the sprint select, each
+    dropdown toggle, a checkbox of an open dropdown menu, Apply, the
     no-match empty state's Reset link, a row's title link, a pagination link, the active and
     an inactive rows-per-page link, a board card, and a column toggle — gives the
     element a computed `outline` whose style is `solid`, whose width is at least
@@ -8863,6 +9171,91 @@ Rules:
     focused by a pointer click that does not match `:focus-visible` carries no such
     outline, and no template carries a `style` attribute for it (Acceptance
     Criterion 229 continues to hold; see [UI Framework](#ui-framework), rule 21).
+248. **Status and type are multi-value filters, OR within a dimension and AND
+    across.** For a roadmap whose tasks cover every status and several types,
+    `?status=DOING&status=TESTING` lists exactly the tasks whose status is `DOING`
+    or `TESTING`; `?status=DOING&status=TESTING&type=BUG&type=EPIC` lists exactly
+    those of them whose type is `BUG` or `EPIC`; and `?status=DOING&status=DOING`
+    lists exactly what `?status=DOING` lists. In each response the dropdowns mark
+    as `checked` exactly the boxes of the values requested, and the toggles read
+    `2 selected` for two values and the value itself for one. Adding a second value
+    to a dimension never removes a task from the list; adding a first value to a
+    dimension never adds one (see [Roadmap Tasks Page](#roadmap-tasks-page), **Query
+    parameters** and **What each filter matches, and how the criteria compose**).
+249. **A bare request with no cookie applies the defaults, and Reset restores
+    them.** `GET /roadmaps/{name}/tasks` with no query string and no
+    `rmp_tasks_filters` cookie lists page 1 of every task whose status is not
+    `COMPLETED`, at 25 rows per page, with the status boxes `BACKLOG`, `SPRINT`,
+    `DOING`, and `TESTING` checked, `COMPLETED` unchecked, the status toggle
+    reading `4 selected`, no type box checked and the type toggle reading
+    `Any type`, the sprint select on `Any sprint`, and an empty search input; its
+    response carries no `Set-Cookie` header. On a roadmap whose tasks are all
+    `COMPLETED`, that request renders the no-match empty state, `No task matches
+    the filters`; on a roadmap holding no task, it renders `No tasks yet` with no
+    Reset link, and so does a bare request whose cookie filters by status, and an
+    explicit `?status=DOING`. Following the
+    no-match empty state's Reset link lists the same default list, and its response
+    sets the cookie to the value
+    `status=BACKLOG&status=SPRINT&status=DOING&status=TESTING&size=25` (see
+    [Roadmap Tasks Page](#roadmap-tasks-page), **Filter persistence** and
+    **Empty states**).
+250. **An explicit request sets the cookie, with fixed attributes and value.** The
+    HTTP 200 response to `GET` and to `HEAD` of
+    `/roadmaps/{name}/tasks?q=cache&sprint=<id>&status=TESTING&status=DOING&type=BUG&size=50&page=2`
+    carries exactly one `Set-Cookie` header, naming `rmp_tasks_filters`, whose
+    attributes are exactly `Path=/`, `Max-Age=31536000`, `HttpOnly`, and
+    `SameSite=Lax` — no `Domain`, no `Expires`, and no `Secure` — and whose value
+    is `q=cache&sprint=<id>&status=DOING&status=TESTING&type=BUG&size=50`: the status
+    values in enum order, `size` present, and no `page`. A term holding a space, a
+    `;`, a `,`, or a `"` is percent-encoded so that the value holds only the
+    characters **Filter persistence** lists. A request carrying only `?size=25`
+    sets the value `size=25`, and a request carrying only unaccepted occurrences,
+    such as `?status=doing`, sets `size=25` likewise. The same explicit request for
+    a roadmap that does not exist answers `404` and sets no cookie (see
+    [Roadmap Tasks Page](#roadmap-tasks-page), **Filter persistence**).
+251. **A bare request restores the stored state, validated for the roadmap
+    viewed.** After the explicit request of Acceptance Criterion 250, a request to
+    the same roadmap's `/roadmaps/{name}/tasks` with no query string, carrying the
+    cookie that request set, lists page 1 of exactly the list that request
+    filtered, at 50 rows per page, with every control showing that state, and its
+    response carries no `Set-Cookie` header; a request whose query string carries
+    only `priority=3` is bare and renders the same. The same cookie sent to a
+    second roadmap that has no sprint with that `id` applies `q`, `status`, `type`,
+    and `size` and ignores `sprint`, the sprint select showing `Any sprint`. A
+    cookie holding `status=doing`, `type=BUG,EPIC`, `sprint=007`, `size=20`,
+    `page=3`, a malformed percent-encoding, and an accepted `status=DOING` lists
+    exactly the `DOING` tasks at 25 rows per page, page 1; a cookie with no accepted
+    part lists every task, `COMPLETED` tasks included, not the defaults. Every one
+    of these requests answers HTTP 200 (see [Roadmap Tasks Page](#roadmap-tasks-page),
+    **Filter persistence**).
+252. **An oversized cookie value is not written.** With a cookie already set to
+    `status=DOING&size=25`, an explicit request whose `q` makes the encoded value
+    longer than 4000 bytes renders the list its URL names and carries no
+    `Set-Cookie` header; a following bare request carrying the browser's cookie
+    lists the `DOING` tasks, as the earlier cookie states. An explicit request whose
+    encoded value is exactly 4000 bytes long sets the cookie (see
+    [Roadmap Tasks Page](#roadmap-tasks-page), **Filter persistence**, **The size
+    limit**).
+253. **The tasks route varies by cookie and is never answered from a cache.**
+    Every response of `/roadmaps/{name}/tasks` — to an explicit request, to a bare
+    request with and without the cookie, and a `404` — carries `Vary: Cookie` and
+    `Cache-Control: no-store`, and none carries an `ETag` or a `Last-Modified`
+    header; a `POST` to the route is answered `405` with no `Vary` header.
+    A request carrying `If-None-Match: *` or an `If-Modified-Since` date in
+    the future is answered HTTP 200 with the full page, never `304`. For each of
+    those requests, the `HEAD` response carries the same header names and values as
+    the `GET` response, `Set-Cookie` included where the `GET` carries it, and no
+    body (see [Cache Policy](#cache-policy), rule 5).
+254. **The cookie is data, not markup, and grants nothing.** A cookie whose `q`
+    decodes to `<script>alert(1)</script>` renders it as visible characters in the
+    search input's `value` and introduces no element into the page; a cookie
+    carrying `status=DOING' OR '1'='1` or `sprint=1 OR 1=1` has that part ignored,
+    and the captured SQL text contains no cookie value. After every request of
+    Acceptance Criteria 249 to 253, the roadmap's `project.db` holds the same rows
+    and the same audit entries as before. The sidebar's Tasks entry and the task
+    page's `Back to tasks` link carry no query string on every page (see
+    [Roadmap Tasks Page](#roadmap-tasks-page), **Filter persistence**, and
+    [Security and Constraints](#security-and-constraints), rules 7 and 12).
 
 ## See Also
 

@@ -242,3 +242,108 @@ func TestListSprintTitles(t *testing.T) {
 		t.Errorf("ListSprintTitles = %v, want %v in ascending order_index", got, want)
 	}
 }
+
+// TestListAllTasks_MultiValuePredicatesAreOrWithinAndAcross is the database half
+// of SPEC/WEB.md Acceptance Criteria 113 and 248: Statuses and TaskTypes each admit
+// a task whose value equals ANY one of theirs (OR within the dimension), the two
+// dimensions and the sprint predicates combine by AND, a one-element list admits
+// what that single value admits, a repeated value changes nothing, and an empty
+// list filters nothing.
+func TestListAllTasks_MultiValuePredicatesAreOrWithinAndAcross(t *testing.T) {
+	database, cleanup := setupTestDB(t)
+	defer cleanup()
+	tasks, sprintA, _ := seedFilteredRoadmap(t, database)
+
+	doing, testing_, bug, epic := models.StatusDoing, models.StatusTesting, models.TypeBug, models.TypeEpic
+	cases := []struct {
+		filter *TaskListFilter
+		keep   func(filteredTask) bool
+		name   string
+	}{
+		{&TaskListFilter{Statuses: []models.TaskStatus{doing}}, func(x filteredTask) bool { return x.status == doing }, "one status"},
+		{&TaskListFilter{Statuses: []models.TaskStatus{doing, testing_}},
+			func(x filteredTask) bool { return x.status == doing || x.status == testing_ }, "two statuses"},
+		{&TaskListFilter{Statuses: []models.TaskStatus{doing, doing, testing_, doing}},
+			func(x filteredTask) bool { return x.status == doing || x.status == testing_ }, "repeated status"},
+		{&TaskListFilter{TaskTypes: []models.TaskType{bug, epic}},
+			func(x filteredTask) bool { return x.taskType == bug || x.taskType == epic }, "two types"},
+		{&TaskListFilter{Statuses: []models.TaskStatus{doing, testing_}, TaskTypes: []models.TaskType{bug, epic}},
+			func(x filteredTask) bool {
+				return (x.status == doing || x.status == testing_) && (x.taskType == bug || x.taskType == epic)
+			}, "statuses and types"},
+		{&TaskListFilter{Statuses: []models.TaskStatus{doing, testing_}, SprintID: &sprintA},
+			func(x filteredTask) bool { return (x.status == doing || x.status == testing_) && x.sprint == sprintA }, "statuses and sprint"},
+		{&TaskListFilter{Statuses: []models.TaskStatus{}, TaskTypes: []models.TaskType{}},
+			func(filteredTask) bool { return true }, "empty lists"},
+	}
+	nonEmpty := 0
+	for _, c := range cases {
+		got, err := database.ListAllTasks(testContext(), c.filter)
+		if err != nil {
+			t.Fatalf("%s: ListAllTasks: %v", c.name, err)
+		}
+		ids := make([]int, len(got))
+		for i := range got {
+			ids[i] = got[i].ID
+		}
+		want := expectFiltered(tasks, c.keep)
+		if len(want) > 0 {
+			nonEmpty++
+		}
+		if !slices.Equal(ids, want) {
+			t.Errorf("%s: ListAllTasks = %v, want %v", c.name, ids, want)
+		}
+	}
+	if nonEmpty != len(cases) {
+		t.Fatalf("only %d of %d cases admit a task; the data does not exercise the predicates", nonEmpty, len(cases))
+	}
+}
+
+// TestListAllTasks_BindsOnePlaceholderPerDistinctValue is the SQL half of
+// SPEC/DATABASE.md § List All, Predicates, for the multi-value filters: the status
+// predicate is one IN list with one bound placeholder per DISTINCT value, and the
+// type predicate likewise; the SQL text carries no value, and a one-value list
+// carries a one-element IN.
+func TestListAllTasks_BindsOnePlaceholderPerDistinctValue(t *testing.T) {
+	query, args := buildListTasksQuery(&TaskListFilter{
+		Statuses:  []models.TaskStatus{models.StatusTesting, models.StatusDoing, models.StatusTesting},
+		TaskTypes: []models.TaskType{models.TypeBug},
+		Sort:      sortPriorityThenID,
+	})
+	for _, value := range []string{"TESTING", "DOING", "BUG"} {
+		if strings.Contains(query, value) {
+			t.Errorf("the SQL text carries the value %q; every value is bound", value)
+		}
+	}
+	if strings.Count(query, "AND t.status IN (?, ?)") != 1 || strings.Count(query, "AND t.type IN (?)") != 1 {
+		t.Errorf("the SQL text does not carry one IN list per dimension with one ? per distinct value: %s", query)
+	}
+	if strings.Contains(query, "t.status = ?") || strings.Contains(query, "t.type = ?") {
+		t.Errorf("the multi-value filters appended an equality predicate: %s", query)
+	}
+	if want := []any{"TESTING", "DOING", "BUG"}; !slices.Equal(args, want) {
+		t.Errorf("the bound arguments are %v, want %v", args, want)
+	}
+}
+
+// TestCountTasks returns the number of tasks the roadmap holds, of any status,
+// and 0 for a roadmap with no task (SPEC/DATABASE.md § Count Roadmap Tasks).
+func TestCountTasks(t *testing.T) {
+	database, cleanup := setupTestDB(t)
+	defer cleanup()
+
+	if n, err := database.CountTasks(testContext()); err != nil || n != 0 {
+		t.Fatalf("CountTasks on no task = %d, %v; want 0", n, err)
+	}
+	tasks, _, _ := seedFilteredRoadmap(t, database)
+	statuses := map[models.TaskStatus]bool{}
+	for _, task := range tasks {
+		statuses[task.status] = true
+	}
+	if len(statuses) != len(models.ValidTaskStatuses) {
+		t.Fatalf("the fixture spans %d statuses, want all %d", len(statuses), len(models.ValidTaskStatuses))
+	}
+	if n, err := database.CountTasks(testContext()); err != nil || n != len(tasks) {
+		t.Errorf("CountTasks = %d, %v; want every task of every status, %d", n, err, len(tasks))
+	}
+}

@@ -582,13 +582,14 @@ func TestTaskCards_LinkToTheTaskPageAndThePagesStayReadOnly(t *testing.T) {
 		// Read-only. The sprint page carries no form, no submit control and no
 		// input. The tasks page carries exactly one form — its filter bar, which
 		// submits by GET to the page itself and only narrows what the page shows —
-		// holding exactly two inputs, the search box and the hidden page size
-		// (SPEC/WEB.md § Roadmap Tasks Page, Read-only; § Sprint Detail
-		// Sub-Template, rule 3, Read-only; Acceptance Criterion 87).
+		// holding the search box, the hidden page size, and one checkbox per
+		// TaskStatus and TaskType value in its Status and Type dropdowns
+		// (SPEC/WEB.md § Roadmap Tasks Page, Read-only; Multi-select dropdowns;
+		// § Sprint Detail Sub-Template, rule 3, Read-only; Acceptance Criterion 87).
 		low := strings.ToLower(body)
 		wantForms, wantSubmits, wantInputs := 0, 0, 0
 		if strings.HasSuffix(path, "/tasks") {
-			wantForms, wantSubmits, wantInputs = 1, 1, 2
+			wantForms, wantSubmits, wantInputs = 1, 1, 2+len(models.ValidTaskStatuses)+len(models.ValidTaskTypes)
 			form := low[max(strings.Index(low, "<form"), 0):]
 			if !strings.HasPrefix(form, `<form class="row g-2 align-items-end justify-content-end" method="get" action="/roadmaps/`+f.name+`/tasks">`) {
 				t.Errorf("page %s: the one form is not the GET filter bar targeting the page itself: %.120s", path, form)

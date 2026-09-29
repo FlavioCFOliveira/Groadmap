@@ -21,8 +21,13 @@ import (
 // This file is the gate for the roadmap tasks page: one paginated task list in a
 // Tabler card, filtered and paginated on the server (SPEC/WEB.md § Roadmap Tasks
 // Page; Acceptance Criteria 9, 81 to 93, 100, 102 to 104, 106, 107, 112 to 117,
-// 128, 129, and 232 to 242). The search text rules are gated in
-// tasks_search_test.go.
+// 128, 129, 232 to 242, and 248). The search text rules are gated in
+// tasks_search_test.go, and the filter-state cookie, the defaults, and the
+// route's caching in tasks_filter_state_test.go.
+//
+// A request carrying none of the six parameters is BARE and takes its state from
+// the filter-state cookie or the defaults, which exclude COMPLETED; a test that
+// means "every task" therefore requests the page explicitly, with size=25.
 //
 // Every expectation is computed from the task data the fixture created — its own
 // record of each task's status, type, priority, severity, sprint, creation time and
@@ -170,6 +175,26 @@ func (f listFixture) expect(keep func(listTask) bool) []int {
 // all admits every task.
 func all(listTask) bool { return true }
 
+// explicitTasks is the tasks page's input for an explicit request carrying the
+// given query parameters: its state comes from the URL alone.
+func explicitTasks(values url.Values) *tasksRequest {
+	return &tasksRequest{values: values, explicit: true}
+}
+
+// bareTasks is the tasks page's input for a bare request, carrying the
+// filter-state cookie's raw value when cookie is not nil.
+func bareTasks(cookie *string) *tasksRequest {
+	req := &tasksRequest{values: url.Values{}}
+	if cookie != nil {
+		req.cookie, req.hasCookie = *cookie, true
+	}
+	return req
+}
+
+// everyTask is the query of an explicit request with no filter at the default
+// page size: it lists every task of the roadmap, COMPLETED ones included.
+func everyTask() url.Values { return url.Values{"size": {"25"}} }
+
 // listPath is the tasks page's path with the given query parameters.
 func listPath(name string, params url.Values) string {
 	if len(params) == 0 {
@@ -201,9 +226,23 @@ type servedSizeLink struct {
 	current    bool
 }
 
+// servedCheck is one checkbox of a served dropdown menu.
+type servedCheck struct {
+	value, label string
+	checked      bool
+}
+
+// servedDropdownToggle is a served dropdown's toggle button: its id, the id its
+// aria-describedby names, and the text of the span that id names.
+type servedDropdownToggle struct {
+	id, describedBy, spanID, text string
+}
+
 // servedList is what a served tasks page states, read from its HTML alone.
 type servedList struct {
 	selects    map[string][]servedOption
+	checks     map[string][]servedCheck
+	toggles    map[string]servedDropdownToggle
 	body       string
 	search     string
 	hiddenSize string
@@ -223,6 +262,8 @@ type servedList struct {
 var (
 	reListRowID   = regexp.MustCompile(`<tr>\s*<td><span class="badge bg-black text-white">#(\d+)</span></td>`)
 	reRangeText   = regexp.MustCompile(`<p class="m-0 text-secondary">Showing <span>(\d+)</span> to <span>(\d+)</span> of <span>(\d+)</span> entries</p>`)
+	reDropdown    = regexp.MustCompile(`(?s)<div class="dropdown">\s*<button type="button" class="form-select form-select-sm" id="([^"]*)" data-bs-toggle="dropdown" data-bs-auto-close="outside" aria-describedby="([^"]*)"><span id="([^"]*)">([^<]*)</span></button>\s*<div class="dropdown-menu">(.*?)</div>\s*</div>`)
+	reCheck       = regexp.MustCompile(`<label class="dropdown-item"><input type="checkbox" class="form-check-input" name="([a-z]+)" value="([^"]*)"( checked)?>([^<]*)</label>`)
 	reSelectBlock = regexp.MustCompile(`(?s)<select class="form-select form-select-sm(?: task-list__sprint-select)?" id="task-filter-[a-z]+" name="([a-z]+)">(.*?)</select>`)
 	reOption      = regexp.MustCompile(`<option value="([^"]*)"( selected)?>([^<]*)</option>`)
 	reSearchInput = regexp.MustCompile(`<input type="search" class="form-control form-control-sm" id="task-filter-q" name="q" placeholder="Search" value="([^"]*)">`)
@@ -237,7 +278,17 @@ var (
 func parseList(t *testing.T, body string) servedList {
 	t.Helper()
 
-	s := servedList{body: body, selects: map[string][]servedOption{}}
+	s := servedList{body: body, selects: map[string][]servedOption{}, checks: map[string][]servedCheck{}, toggles: map[string]servedDropdownToggle{}}
+	for _, m := range reDropdown.FindAllStringSubmatch(body, -1) {
+		var name string
+		for _, c := range reCheck.FindAllStringSubmatch(m[5], -1) {
+			name = c[1]
+			s.checks[name] = append(s.checks[name], servedCheck{
+				value: html.UnescapeString(c[2]), label: html.UnescapeString(c[4]), checked: c[3] != "",
+			})
+		}
+		s.toggles[name] = servedDropdownToggle{id: m[1], describedBy: m[2], spanID: m[3], text: html.UnescapeString(m[4])}
+	}
 	for _, m := range reListRowID.FindAllStringSubmatch(body, -1) {
 		s.ids = append(s.ids, mustInt(t, m[1]))
 	}
@@ -307,6 +358,35 @@ func (s *servedList) selected(t *testing.T, name string) string {
 		t.Fatalf("the %s select marks %d options selected (%v), want exactly 1", name, len(picked), picked)
 	}
 	return picked[0]
+}
+
+// checked returns the values of a dropdown's checked boxes, in menu order,
+// failing when the page carries no such dropdown.
+func (s *servedList) checked(t *testing.T, name string) []string {
+	t.Helper()
+
+	boxes, ok := s.checks[name]
+	if !ok {
+		t.Fatalf("the served page has no %s dropdown of the specified shape", name)
+	}
+	values := []string{}
+	for _, box := range boxes {
+		if box.checked {
+			values = append(values, box.value)
+		}
+	}
+	return values
+}
+
+// toggleText is the visible text of a dropdown's toggle.
+func (s *servedList) toggleText(t *testing.T, name string) string {
+	t.Helper()
+
+	toggle, ok := s.toggles[name]
+	if !ok {
+		t.Fatalf("the served page has no %s dropdown toggle of the specified shape", name)
+	}
+	return toggle.text
 }
 
 // currentPage is the number of the pagination bar's active item.
@@ -391,7 +471,7 @@ func TestTaskList_IsOneListCard(t *testing.T) {
 	f := seedListFixture(t, "payments-platform", 20)
 	mux := buildMux()
 
-	body := servePage(t, mux, listPath(f.name, nil))
+	body := servePage(t, mux, listPath(f.name, everyTask()))
 	main := boardRegion(t, body)
 	if got := strings.Count(main, `<div class="card">`); got != 1 {
 		t.Errorf("the page renders %d list cards, want exactly 1", got)
@@ -663,10 +743,11 @@ func collapseMarkup(s string) string {
 
 // TestTaskList_ReadOnlyAndScriptFree is the gate for Acceptance Criteria 87, 104,
 // 107, and 122: the table carries no selection checkbox and no table-selectable,
-// the card no add-task button, the page no modal; the one form is a GET form; the
-// page loads the admin shell's script alone, from /static/, and no inline script;
-// its Content-Security-Policy is the fixed one; every class it emits and no
-// style attribute; and the same URL requested twice serves the same list.
+// the card no add-task button, the page no modal; the one form is a GET form, and
+// its only checkboxes and type="button" buttons are the Status and Type dropdowns';
+// the page loads the vendored tabler.min.js alone and no inline script; its
+// Content-Security-Policy is the fixed one; no style attribute; and the same URL
+// requested twice serves the same list.
 func TestTaskList_ReadOnlyAndScriptFree(t *testing.T) {
 	t.Setenv("HOME", shortHome(t))
 	f := seedListFixture(t, "payments-platform", 30)
@@ -685,12 +766,22 @@ func TestTaskList_ReadOnlyAndScriptFree(t *testing.T) {
 	body := rec.Body.String()
 
 	for _, forbidden := range []string{
-		`type="checkbox"`, "table-selectable", `class="modal`, `data-bs-toggle="modal"`, "New Task",
-		"style=", "task-search.js", "sprint-board.js", "<button type=\"button\"",
+		"table-selectable", `class="modal`, `data-bs-toggle="modal"`, "New Task",
+		"style=", "task-search.js", "sprint-board.js",
 	} {
 		if strings.Contains(body, forbidden) {
 			t.Errorf("the page carries %q", forbidden)
 		}
+	}
+	// Every checkbox and every type="button" button is the filter bar's: one box
+	// per TaskStatus and TaskType value, and the two dropdown toggles.
+	form := body[mustIndex(t, body, "<form"):mustIndex(t, body, "</form>")]
+	wantBoxes := len(models.ValidTaskStatuses) + len(models.ValidTaskTypes)
+	if got, inForm := strings.Count(body, `type="checkbox"`), strings.Count(form, `type="checkbox"`); got != wantBoxes || inForm != wantBoxes {
+		t.Errorf("the page carries %d checkboxes, %d of them in the filter bar; want the %d dropdown boxes alone", got, inForm, wantBoxes)
+	}
+	if got, inForm := strings.Count(body, `<button type="button"`), strings.Count(form, `<button type="button"`); got != 2 || inForm != 2 {
+		t.Errorf("the page carries %d type=\"button\" buttons, %d in the filter bar; want the two dropdown toggles alone", got, inForm)
 	}
 	if got := strings.Count(body, "<form"); got != 1 || !strings.Contains(body, `method="get"`) {
 		t.Errorf("the page carries %d forms (method get present: %v), want exactly one GET form",
@@ -698,7 +789,7 @@ func TestTaskList_ReadOnlyAndScriptFree(t *testing.T) {
 	}
 	scripts := regexp.MustCompile(`<script\b[^>]*>`).FindAllString(body, -1)
 	if len(scripts) != 1 || scripts[0] != `<script src="/static/vendor/tabler/tabler.min.js">` {
-		t.Errorf("the page loads the scripts %v, want the admin shell's tabler.min.js alone", scripts)
+		t.Errorf("the page loads the scripts %v, want the vendored tabler.min.js alone", scripts)
 	}
 	if got := rec.Header().Get("Content-Security-Policy"); got != contentSecurityPolicy {
 		t.Errorf("Content-Security-Policy = %q, want %q", got, contentSecurityPolicy)
@@ -769,7 +860,7 @@ func TestTaskList_ReadsEveryTaskBeyondTheListingLimit(t *testing.T) {
 	f := seedListFixture(t, "payments-platform", total)
 	mux := buildMux()
 
-	s := fetchList(t, mux, listPath(f.name, nil))
+	s := fetchList(t, mux, listPath(f.name, everyTask()))
 	if s.total != total {
 		t.Errorf("the range text states %d entries, want the roadmap's %d", s.total, total)
 	}
@@ -790,7 +881,7 @@ func TestTaskList_RangeText(t *testing.T) {
 		params             url.Values
 		first, last, total int
 	}{
-		{url.Values{}, 1, 25, 60},
+		{everyTask(), 1, 25, 60},
 		{url.Values{"page": {"3"}}, 51, 60, 60},
 		{url.Values{"status": {"DOING"}}, 1, len(f.expect(func(x listTask) bool { return x.status == models.StatusDoing })),
 			len(f.expect(func(x listTask) bool { return x.status == models.StatusDoing }))},
@@ -804,131 +895,216 @@ func TestTaskList_RangeText(t *testing.T) {
 	}
 }
 
-// TestTaskList_EmptyStates is the gate for Acceptance Criteria 88 and 102: with no
-// task to show, the card keeps its header and filter bar, renders no table and no
-// footer, and shows Tabler's empty state in a card-body — "No tasks yet" for an
-// empty roadmap with no criterion, "No task matches the filters" with the Reset
-// link in its empty-action for a request whose criteria nothing satisfies,
-// whether the criterion is a term, a filter, or both — each answering 200.
+// TestTaskList_EmptyStates is the gate for Acceptance Criteria 88 and 102, and the
+// empty-state half of 249: with no task to show, the card keeps its header and
+// filter bar, renders no table and no footer, and shows Tabler's empty state in a
+// card-body. A roadmap that holds no task shows "No tasks yet", with no Reset link,
+// whatever the active filter state — the defaults, URL filters, cookie filters, or
+// no criterion. A roadmap holding tasks none of which satisfies the active
+// criteria — a term, filters, both, or the defaults over a roadmap whose tasks are
+// all COMPLETED — shows "No task matches the filters" with the Reset link, whose
+// href carries the four default status values. Each answers 200.
 func TestTaskList_EmptyStates(t *testing.T) {
 	t.Setenv("HOME", shortHome(t))
 	if err := createEmptyRoadmap("clearing-house"); err != nil {
 		t.Fatalf("creating the empty roadmap: %v", err)
 	}
 	f := seedListFixture(t, "payments-platform", 20)
+	closed := seedListFixture(t, "archived-settlements", 6)
+	database, err := db.Open(closed.name)
+	if err != nil {
+		t.Fatalf("opening roadmap: %v", err)
+	}
+	ids := make([]int, 0, len(closed.tasks))
+	for _, task := range closed.tasks {
+		ids = append(ids, task.id)
+	}
+	forceTaskLifecycle(t, database, ids, models.StatusCompleted)
+	_ = database.Close()
 	mux := buildMux()
 
-	assertEmpty := func(path, wantTitle string) string {
+	assertEmpty := func(req *http.Request, wantTitle string) string {
 		t.Helper()
-		body := servePage(t, mux, path)
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("%s: status = %d, want 200", req.URL, rec.Code)
+		}
+		body := rec.Body.String()
 		main := boardRegion(t, body)
 		for _, gone := range []string{"<table", `<div class="card-footer">`, "Task list pages", "Rows per page"} {
 			if strings.Contains(main, gone) {
-				t.Errorf("%s: the empty list still carries %q", path, gone)
+				t.Errorf("%s: the empty list still carries %q", req.URL, gone)
 			}
 		}
 		for _, kept := range []string{`<div class="card-header flex-wrap gap-2">`, "<form", `<div class="card-body">`, `<div class="empty">`} {
 			if !strings.Contains(main, kept) {
-				t.Errorf("%s: the empty list lost %q", path, kept)
+				t.Errorf("%s: the empty list lost %q", req.URL, kept)
 			}
 		}
 		if got := parseList(t, body).emptyTitle; got != wantTitle {
-			t.Errorf("%s: the empty state reads %q, want %q", path, got, wantTitle)
+			t.Errorf("%s: the empty state reads %q, want %q", req.URL, got, wantTitle)
 		}
 		return main
 	}
-
-	noTasks := assertEmpty(listPath("clearing-house", nil), "No tasks yet")
-	if !strings.Contains(noTasks, "rmp task create") || strings.Contains(noTasks, "empty-action") {
-		t.Errorf("the no-task state does not name rmp task create, or carries a Reset action")
+	get := func(path string) *http.Request { return httptest.NewRequest(http.MethodGet, path, nil) }
+	withCookie := func(path, value string) *http.Request {
+		req := get(path)
+		req.AddCookie(&http.Cookie{Name: tasksFilterCookie, Value: value})
+		return req
 	}
 
-	for _, params := range []url.Values{
-		{"q": {"no task is titled like this"}},
-		{"status": {"DOING"}, "type": {"CHORE"}, "sprint": {"none"}},
-		{"q": {"cache"}, "sprint": {"none"}, "status": {"COMPLETED"}, "type": {"SPIKE"}},
+	// A roadmap with no task: "No tasks yet" and no Reset, whatever the state.
+	for _, req := range []*http.Request{
+		get(listPath("clearing-house", nil)),                                         // the defaults
+		get(listPath("clearing-house", everyTask())),                                 // no criterion
+		get(listPath("clearing-house", url.Values{"status": {"DOING"}})),             // URL filter
+		get(listPath("clearing-house", url.Values{"q": {"cache"}, "type": {"BUG"}})), // term and filter
+		withCookie(listPath("clearing-house", nil), "status=DOING&size=25"),          // cookie filter
 	} {
-		main := assertEmpty(listPath(f.name, params), "No task matches the filters")
+		main := assertEmpty(req, "No tasks yet")
+		if !strings.Contains(main, "rmp task create") || strings.Contains(main, "empty-action") || strings.Contains(main, ">Reset</a>") {
+			t.Errorf("%s: the no-task state does not name rmp task create, or carries a Reset action", req.URL)
+		}
+	}
+
+	resetHref := "/roadmaps/" + f.name + "/tasks?status=BACKLOG&amp;status=SPRINT&amp;status=DOING&amp;status=TESTING"
+	for _, req := range []*http.Request{
+		get(listPath(f.name, url.Values{"q": {"no task is titled like this"}})),
+		get(listPath(f.name, url.Values{"status": {"DOING"}, "type": {"CHORE"}, "sprint": {"none"}})),
+		get(listPath(f.name, url.Values{"q": {"cache"}, "sprint": {"none"}, "status": {"COMPLETED"}, "type": {"SPIKE"}})),
+		withCookie(listPath(f.name, nil), "q=no+task+is+titled+like+this&size=25"),
+		get(listPath(closed.name, nil)), // the defaults over a roadmap whose tasks are all COMPLETED
+	} {
+		main := assertEmpty(req, "No task matches the filters")
 		action := `<div class="empty-action">`
 		at := strings.Index(main, action)
 		if at < 0 {
-			t.Errorf("%v: the no-match state carries no empty-action", params)
+			t.Errorf("%s: the no-match state carries no empty-action", req.URL)
 			continue
 		}
-		if !strings.Contains(main[at:], `<a class="btn" href="/roadmaps/`+f.name+`/tasks">Reset</a>`) {
-			t.Errorf("%v: the empty-action does not hold the Reset link to the bare path", params)
+		name := f.name
+		if strings.Contains(req.URL.Path, closed.name) {
+			name = closed.name
+		}
+		want := strings.Replace(resetHref, f.name, name, 1)
+		if !strings.Contains(main[at:], `<a class="btn" href="`+want+`">Reset</a>`) {
+			t.Errorf("%s: the empty-action does not hold the Reset link to the defaults %s", req.URL, want)
 		}
 		// The empty state's link is the page's only Reset control.
 		if got := strings.Count(main, ">Reset</a>"); got != 1 {
-			t.Errorf("%v: the page carries %d Reset links, want the empty state's alone", params, got)
+			t.Errorf("%s: the page carries %d Reset links, want the empty state's alone", req.URL, got)
 		}
 	}
-	// An accepted criterion on an empty roadmap is still a request no task
-	// satisfies.
-	assertEmpty(listPath("clearing-house", url.Values{"status": {"DOING"}}), "No task matches the filters")
+	// The all-COMPLETED roadmap lists its tasks once the defaults are replaced.
+	if s := fetchList(t, mux, listPath(closed.name, everyTask())); s.total != len(closed.tasks) {
+		t.Errorf("the all-COMPLETED roadmap lists %d tasks with no filter, want %d", s.total, len(closed.tasks))
+	}
 }
 
 // ==================== READ COST AND BOUND PARAMETERS ====================
 
 // TestTaskList_ReadCost is the gate for Acceptance Criteria 89, 92, and 105 (its
-// read half): exactly two reads whether or not the page renders a row — the
-// sprint titles and the task listing — and no sprint-resolution query; the same
-// count for 10 tasks and 300, for every page, page size and number of filters,
-// with a term or without; no comment read.
+// read half): two reads — the sprint titles and the task listing — and no
+// sprint-resolution query, plus exactly one task count when, and only when, the
+// filtered list is empty and the task read carried a sprint, status, or type
+// predicate; the same count for 10 tasks and 300, for every page, page size and
+// number of filters, with a term or without, whether the URL, the cookie, or the
+// defaults supplied the state; no comment read.
 func TestTaskList_ReadCost(t *testing.T) {
 	t.Setenv("HOME", shortHome(t))
 	small := seedListFixture(t, "payments-small", 10)
 	large := seedListFixture(t, "payments-large", 300)
+	if err := createEmptyRoadmap("clearing-house"); err != nil {
+		t.Fatalf("creating the empty roadmap: %v", err)
+	}
 
+	cookie := func(v string) *string { return &v }
+	type readCase struct {
+		req       *tasksRequest
+		wantCount int
+	}
 	for _, f := range []listFixture{small, large} {
-		for _, params := range []url.Values{
-			{},
-			{"page": {"2"}, "size": {"10"}},
-			{"size": {"100"}},
-			{"status": {"DOING"}, "type": {"TASK"}, "sprint": {itoa(f.sprintA)}},
-			{"priority": {"3"}, "severity": {"2"}},
-			{"q": {"cache"}, "sprint": {"none"}},
-			{"q": {"no task is titled like this"}},
+		for _, c := range []readCase{
+			{explicitTasks(url.Values{}), 0},
+			{explicitTasks(url.Values{"page": {"2"}, "size": {"10"}}), 0},
+			{explicitTasks(url.Values{"size": {"100"}}), 0},
+			// Non-empty lists under predicates, in both fixtures: no count.
+			{explicitTasks(url.Values{"status": {"BACKLOG", "SPRINT"}, "type": {"TASK", "BUG", "USER_STORY"}}), 0},
+			{explicitTasks(url.Values{"sprint": {itoa(f.sprintA)}, "status": {"BACKLOG", "DOING"}}), 0},
+			{explicitTasks(url.Values{"priority": {"3"}, "severity": {"2"}}), 0},
+			{explicitTasks(url.Values{"q": {"cache"}, "sprint": {"none"}}), 0},
+			{bareTasks(nil), 0},                            // the defaults, rows found
+			{bareTasks(cookie("status=DOING&size=10")), 0}, // the cookie, rows found
+			// An empty filtered list with no predicate: the listing returned every
+			// task, so no count is issued.
+			{explicitTasks(url.Values{"q": {"no task is titled like this"}}), 0},
+			// An empty filtered list whose read carried a predicate: one count.
+			{explicitTasks(url.Values{"q": {"no task is titled like this"}, "status": {"DOING", "TESTING"}}), 1},
+			{explicitTasks(url.Values{"status": {"DOING"}, "type": {"CHORE"}, "sprint": {"none"}}), 1},
+			{bareTasks(cookie("q=no+task+is+titled+like+this&type=BUG&size=25")), 1},
 		} {
 			src := openCounting(t, f.name)
-			data, err := readTaskList(context.Background(), src, f.name, params)
+			data, err := readTaskList(context.Background(), src, f.name, c.req)
 			if err != nil {
-				t.Fatalf("%d tasks %v: readTaskList: %v", len(f.tasks), params, err)
+				t.Fatalf("%d tasks %+v: readTaskList: %v", len(f.tasks), c.req, err)
 			}
-			if src.sprintTitles != 1 || src.taskList != 1 || src.groupedTaskSprints != 0 {
-				t.Errorf("%d tasks %v (%d rows): reads = %d sprint titles, %d listings, %d sprint resolutions; want 1, 1, 0",
-					len(f.tasks), params, len(data.Rows), src.sprintTitles, src.taskList, src.groupedTaskSprints)
+			if src.sprintTitles != 1 || src.taskList != 1 || src.groupedTaskSprints != 0 || src.taskCounts != c.wantCount {
+				t.Errorf("%d tasks %+v (%d rows): reads = %d sprint titles, %d listings, %d sprint resolutions, %d counts; want 1, 1, 0, %d",
+					len(f.tasks), c.req, len(data.Rows), src.sprintTitles, src.taskList, src.groupedTaskSprints, src.taskCounts, c.wantCount)
 			}
 			if src.groupedCommentCounts+src.perTaskComments+src.sprintComments+src.boundedTaskList+src.sprintListings+src.sprintTasks != 0 {
-				t.Errorf("%d tasks %v: the page issued a read beyond its two", len(f.tasks), params)
+				t.Errorf("%d tasks %+v: the page issued a read beyond its own", len(f.tasks), c.req)
 			}
+			// The case data is what the criterion needs: a counted case renders an
+			// empty list, and every predicate case without a count renders rows.
+			if (c.wantCount == 1) != (len(data.Rows) == 0) && data.query.hasPredicate() {
+				t.Fatalf("%d tasks %+v: %d rows; the case does not exercise what it claims", len(f.tasks), c.req, len(data.Rows))
+			}
+		}
+	}
+
+	// A roadmap with no task: the defaults carry a status predicate, so the empty
+	// list takes the count, which says the roadmap holds nothing; an empty list
+	// with no predicate needs none.
+	for _, c := range []readCase{{bareTasks(nil), 1}, {explicitTasks(everyTask()), 0}} {
+		src := openCounting(t, "clearing-house")
+		data, err := readTaskList(context.Background(), src, "clearing-house", c.req)
+		if err != nil {
+			t.Fatalf("empty roadmap: readTaskList: %v", err)
+		}
+		if src.taskCounts != c.wantCount || !data.NoTasks || data.NoMatch {
+			t.Errorf("empty roadmap %+v: %d counts (want %d), NoTasks %v, NoMatch %v; want the no-task state",
+				c.req, src.taskCounts, c.wantCount, data.NoTasks, data.NoMatch)
 		}
 	}
 }
 
 // TestTaskList_FilterValuesAreBoundAndHostileValuesReachNothing is the gate for
-// the web half of Acceptance Criteria 113 and 117: an accepted value reaches the task read
-// as a field of the listing's filter — the listing binds each one as a parameter,
-// which internal/db's TestListAllTasks_BindsEveryFilterValue pins on the SQL text —
-// and a hostile value is ignored and reaches no statement at all; the roadmap's
-// tasks are intact afterwards; q, page and size never reach the read, nor does any
-// priority or severity parameter; and no filter value is echoed into the page as
-// text.
+// the web half of Acceptance Criteria 113, 117, and 254: an accepted value reaches
+// the task read as a field of the listing's filter — each distinct value once; the
+// listing binds each one as a parameter, which internal/db's
+// TestListAllTasks_BindsEveryFilterValue pins on the SQL text — and a hostile
+// value, from the URL or from the cookie, is ignored and reaches no statement at
+// all; the roadmap's tasks are intact afterwards; q, page and size never reach
+// the read, nor does any priority or severity parameter; and no filter value is
+// echoed into the page as text.
 func TestTaskList_FilterValuesAreBoundAndHostileValuesReachNothing(t *testing.T) {
 	t.Setenv("HOME", shortHome(t))
 	f := seedListFixture(t, "payments-platform", 30)
 
 	src := openCounting(t, f.name)
-	if _, err := readTaskList(context.Background(), src, f.name, url.Values{
-		"status": {"DOING"}, "type": {"BUG"}, "priority": {"4"}, "severity": {"0"},
+	if _, err := readTaskList(context.Background(), src, f.name, explicitTasks(url.Values{
+		"status": {"TESTING", "DOING", "doing", "DOING"}, "type": {"BUG", "EPIC", "BUG"}, "priority": {"4"}, "severity": {"0"},
 		"sprint": {itoa(f.sprintB)}, "q": {"cache"}, "page": {"2"}, "size": {"10"},
-	}); err != nil {
+	})); err != nil {
 		t.Fatalf("readTaskList: %v", err)
 	}
 	got := src.lastTaskFilter
-	if got == nil || got.Status == nil || *got.Status != models.StatusDoing || got.TaskType == nil ||
-		*got.TaskType != models.TypeBug || got.SprintID == nil || *got.SprintID != f.sprintB || got.NoSprint {
-		t.Errorf("the accepted values did not all reach the listing's filter: %+v", got)
+	if got == nil || !slices.Equal(got.Statuses, []models.TaskStatus{models.StatusDoing, models.StatusTesting}) ||
+		!slices.Equal(got.TaskTypes, []models.TaskType{models.TypeBug, models.TypeEpic}) ||
+		got.SprintID == nil || *got.SprintID != f.sprintB || got.NoSprint || got.Status != nil || got.TaskType != nil {
+		t.Errorf("the accepted values did not all reach the listing's filter, each once: %+v", got)
 	}
 	// priority and severity are not parameters of the page: whatever the request
 	// carries, the read has no priority and no severity predicate.
@@ -940,20 +1116,23 @@ func TestTaskList_FilterValuesAreBoundAndHostileValuesReachNothing(t *testing.T)
 	}
 
 	before := countRoadmapTasks(t, f.name)
-	for _, hostile := range []url.Values{
+	hostiles := []url.Values{
 		{"status": {"DOING' OR '1'='1"}},
 		{"type": {"BUG;DROP TABLE tasks"}},
 		{"sprint": {"1 OR 1=1"}},
 		{"priority": {"1; DELETE FROM tasks"}},
 		{"severity": {"0) OR (1=1"}},
-	} {
-		src := openCounting(t, f.name)
-		if _, err := readTaskList(context.Background(), src, f.name, hostile); err != nil {
-			t.Fatalf("%v: readTaskList: %v", hostile, err)
-		}
-		if g := src.lastTaskFilter; g == nil || g.Status != nil || g.TaskType != nil || g.MinPriority != nil ||
-			g.MinSeverity != nil || g.SprintID != nil || g.NoSprint {
-			t.Errorf("%v: the ignored value reached the listing's filter: %+v", hostile, g)
+	}
+	for _, hostile := range hostiles {
+		for _, req := range []*tasksRequest{explicitTasks(hostile), bareTasks(new(hostile.Encode()))} {
+			src := openCounting(t, f.name)
+			if _, err := readTaskList(context.Background(), src, f.name, req); err != nil {
+				t.Fatalf("%v: readTaskList: %v", hostile, err)
+			}
+			if g := src.lastTaskFilter; g == nil || len(g.Statuses) != 0 || len(g.TaskTypes) != 0 || g.Status != nil ||
+				g.TaskType != nil || g.MinPriority != nil || g.MinSeverity != nil || g.SprintID != nil || g.NoSprint {
+				t.Errorf("%v (explicit %v): the ignored value reached the listing's filter: %+v", hostile, req.explicit, g)
+			}
 		}
 		body := servePage(t, buildMux(), listPath(f.name, hostile))
 		for _, v := range hostile {
@@ -970,20 +1149,24 @@ func TestTaskList_FilterValuesAreBoundAndHostileValuesReachNothing(t *testing.T)
 // ==================== THE FILTER BAR ====================
 
 // TestTaskList_FilterBarControls is the gate for Acceptance Criteria 100, 112, 116,
-// 234, and the served-markup half of 243: the form's controls, in order, each the
-// compact Tabler variant with exactly one programmatically associated label
-// carrying visually-hidden, the search input's Search placeholder, the option sets
-// of the three selects, the hidden size, and the Apply control — and nothing else:
-// no priority or severity control and no Reset control — and on every response
-// exactly one selected option per select; the sprint select carries the
-// class the project stylesheet caps at 16rem, and the form is trailing-aligned;
-// for a roadmap with no sprint the sprint select offers its two fixed options
-// only, and two sprints of one title differ by their Sprint #<id> text.
+// 234, and the served-markup half of 243: the form's controls, in order — the
+// search input, the sprint select, the Status and Type dropdowns, and Apply —
+// each the compact Tabler variant with exactly one programmatically associated
+// label carrying visually-hidden, and nothing else: no priority or severity
+// control and no Reset control. Each dropdown is a toggle button styled as a small
+// select, described by the span holding its text, over a menu of one checkbox per
+// enum value in enum order and no any box. On every response the sprint select
+// marks exactly one option selected, each dropdown checks exactly the active
+// values, and its toggle reads the any text, the one value, or "<n> selected" —
+// for zero, one, two, and every value. The sprint select carries the class the
+// project stylesheet caps at 16rem; for a roadmap with no sprint it offers its two
+// fixed options only, and two sprints of one title differ by their Sprint #<id>
+// text.
 func TestTaskList_FilterBarControls(t *testing.T) {
 	t.Setenv("HOME", shortHome(t))
 	f := seedListFixture(t, "payments-platform", 10)
 	mux := buildMux()
-	body := servePage(t, mux, listPath(f.name, nil))
+	body := servePage(t, mux, listPath(f.name, everyTask()))
 	form := body[mustIndex(t, body, "<form"):mustIndex(t, body, "</form>")]
 
 	// The controls, in order, each labelled by a visually hidden label.
@@ -994,17 +1177,35 @@ func TestTaskList_FilterBarControls(t *testing.T) {
 		`<label class="visually-hidden" for="task-filter-sprint">Sprint</label>`,
 		`<select class="form-select form-select-sm task-list__sprint-select" id="task-filter-sprint" name="sprint">`,
 		`<label class="visually-hidden" for="task-filter-status">Status</label>`,
-		`<select class="form-select form-select-sm" id="task-filter-status" name="status">`,
+		`<div class="dropdown">`,
+		`<button type="button" class="form-select form-select-sm" id="task-filter-status" data-bs-toggle="dropdown" data-bs-auto-close="outside" aria-describedby="task-filter-status-text"><span id="task-filter-status-text">Any status</span></button>`,
+		`<div class="dropdown-menu">`,
 		`<label class="visually-hidden" for="task-filter-type">Type</label>`,
-		`<select class="form-select form-select-sm" id="task-filter-type" name="type">`,
+		`<div class="dropdown">`,
+		`<button type="button" class="form-select form-select-sm" id="task-filter-type" data-bs-toggle="dropdown" data-bs-auto-close="outside" aria-describedby="task-filter-type-text"><span id="task-filter-type-text">Any type</span></button>`,
+		`<div class="dropdown-menu">`,
 		`<button type="submit" class="btn btn-primary btn-sm">Apply</button>`,
 	}
-	// Exactly one label per control, each carrying visually-hidden, and no label
-	// is displayed (Acceptance Criterion 243).
+	// Exactly one visually hidden label per filter control; every other label of
+	// the form is a checkbox's dropdown-item (Acceptance Criterion 243).
 	reLabel := regexp.MustCompile(`<label([^>]*)>`)
 	labels := reLabel.FindAllStringSubmatch(form, -1)
-	if len(labels) != 4 {
-		t.Errorf("the filter bar carries %d labels, want exactly one for each of its four filter controls", len(labels))
+	hidden := 0
+	for _, l := range labels {
+		switch l[1] {
+		case ` class="dropdown-item"`:
+		default:
+			hidden++
+			if !strings.Contains(l[1], `class="visually-hidden"`) {
+				t.Errorf("the label %q does not carry visually-hidden", l[0])
+			}
+		}
+	}
+	if hidden != 4 {
+		t.Errorf("the filter bar carries %d control labels, want exactly one for each of its four filter controls", hidden)
+	}
+	if want := 4 + len(models.ValidTaskStatuses) + len(models.ValidTaskTypes); len(labels) != want {
+		t.Errorf("the filter bar carries %d labels, want %d: four control labels and one per checkbox", len(labels), want)
 	}
 	for _, forbidden := range []string{`name="priority"`, `name="severity"`, "Reset", "<a "} {
 		if strings.Contains(form, forbidden) {
@@ -1015,13 +1216,16 @@ func TestTaskList_FilterBarControls(t *testing.T) {
 		if got := strings.Count(form, `for="task-filter-`+id+`"`); got != 1 {
 			t.Errorf("the control task-filter-%s has %d labels, want exactly 1", id, got)
 		}
-		if got := strings.Count(form, `id="task-filter-`+id+`"`); got != 1 {
+		if got := strings.Count(body, `id="task-filter-`+id+`"`); got != 1 {
 			t.Errorf("the id task-filter-%s is carried %d times, want exactly 1", id, got)
 		}
 	}
-	for _, l := range labels {
-		if !strings.Contains(l[1], `class="visually-hidden"`) {
-			t.Errorf("the label %q does not carry visually-hidden", l[0])
+	// The id each toggle's aria-describedby names is unique in the page and is
+	// the span inside that toggle.
+	for _, name := range []string{"status", "type"} {
+		toggle := parseList(t, body).toggles[name]
+		if toggle.describedBy == "" || toggle.describedBy != toggle.spanID || strings.Count(body, `id="`+toggle.spanID+`"`) != 1 {
+			t.Errorf("the %s toggle's aria-describedby %q does not name its own span (%q) uniquely", name, toggle.describedBy, toggle.spanID)
 		}
 	}
 	// The sprint select's class is capped at 16rem by the project stylesheet, from
@@ -1067,14 +1271,12 @@ func TestTaskList_FilterBarControls(t *testing.T) {
 	}
 
 	s := parseList(t, body)
-	optionValues := func(name string) (values, labels []string) {
-		for _, o := range s.selects[name] {
-			values = append(values, o.value)
-			labels = append(labels, o.label)
-		}
-		return values, labels
+	sprintValues := make([]string, 0, len(s.selects["sprint"]))
+	sprintLabels := make([]string, 0, len(s.selects["sprint"]))
+	for _, o := range s.selects["sprint"] {
+		sprintValues = append(sprintValues, o.value)
+		sprintLabels = append(sprintLabels, o.label)
 	}
-	sprintValues, sprintLabels := optionValues("sprint")
 	if want := []string{"", "none", itoa(f.sprintA), itoa(f.sprintB)}; !slices.Equal(sprintValues, want) {
 		t.Errorf("the sprint select offers %v, want %v", sprintValues, want)
 	}
@@ -1082,41 +1284,76 @@ func TestTaskList_FilterBarControls(t *testing.T) {
 		"Sprint #" + itoa(f.sprintB) + " Settlement reconciliation"}; !slices.Equal(sprintLabels, want) {
 		t.Errorf("the sprint select reads %v, want %v", sprintLabels, want)
 	}
-	statusValues, statusLabels := optionValues("status")
-	if want := []string{"", "BACKLOG", "SPRINT", "DOING", "TESTING", "COMPLETED"}; !slices.Equal(statusValues, want) ||
-		statusLabels[0] != "Any status" {
-		t.Errorf("the status select offers %v / %v", statusValues, statusLabels)
+	boxValues := func(name string) []string {
+		values := make([]string, 0, len(s.checks[name]))
+		for _, c := range s.checks[name] {
+			if c.label != c.value {
+				t.Errorf("the %s box %q is labelled %q; its label is its value", name, c.value, c.label)
+			}
+			values = append(values, c.value)
+		}
+		return values
 	}
-	typeValues, typeLabels := optionValues("type")
-	wantTypes := make([]string, 0, len(models.ValidTaskTypes)+1)
-	wantTypes = append(wantTypes, "")
+	wantStatuses := make([]string, 0, len(models.ValidTaskStatuses))
+	for _, st := range models.ValidTaskStatuses {
+		wantStatuses = append(wantStatuses, string(st))
+	}
+	if got := boxValues("status"); !slices.Equal(got, []string{"BACKLOG", "SPRINT", "DOING", "TESTING", "COMPLETED"}) ||
+		!slices.Equal(got, wantStatuses) {
+		t.Errorf("the status menu offers %v", got)
+	}
+	wantTypes := make([]string, 0, len(models.ValidTaskTypes))
 	for _, tt := range models.ValidTaskTypes {
 		wantTypes = append(wantTypes, string(tt))
 	}
-	if !slices.Equal(typeValues, wantTypes) || typeLabels[0] != "Any type" {
-		t.Errorf("the type select offers %v / %v", typeValues, typeLabels)
+	if got := boxValues("type"); !slices.Equal(got, wantTypes) {
+		t.Errorf("the type menu offers %v, want %v", got, wantTypes)
 	}
-	if len(s.selects) != 3 {
-		t.Errorf("the filter bar carries %d selects, want sprint, status, and type alone", len(s.selects))
+	if len(s.selects) != 1 || len(s.checks) != 2 {
+		t.Errorf("the filter bar carries %d selects and %d dropdowns, want the sprint select and the two dropdowns", len(s.selects), len(s.checks))
 	}
-	for _, name := range []string{"sprint", "status", "type"} {
-		if got := s.selected(t, name); got != "" {
-			t.Errorf("with no parameter the %s select selects %q, want its any option", name, got)
+	if got := s.selected(t, "sprint"); got != "" {
+		t.Errorf("with no filter the sprint select selects %q, want its any option", got)
+	}
+	for name, anyText := range map[string]string{"status": "Any status", "type": "Any type"} {
+		if got := s.checked(t, name); len(got) != 0 || s.toggleText(t, name) != anyText {
+			t.Errorf("with no filter the %s dropdown checks %v and reads %q, want nothing checked and %q",
+				name, got, s.toggleText(t, name), anyText)
 		}
 	}
 
-	// Each select shows the accepted value that produced the list, and the search
-	// input shows the term.
-	chosen := parseList(t, servePage(t, mux, listPath(f.name, url.Values{
-		"q": {"Refund cache"}, "sprint": {"none"}, "status": {"TESTING"}, "type": {"EPIC"},
-	})))
-	for name, want := range map[string]string{"sprint": "none", "status": "TESTING", "type": "EPIC"} {
-		if got := chosen.selected(t, name); got != want {
-			t.Errorf("the %s select selects %q, want %q", name, got, want)
-		}
+	// Each control shows the active value that produced the list — zero, one, two,
+	// and every value of a dimension — and the search input shows the term.
+	allTypes := make([]string, 0, len(models.ValidTaskTypes))
+	for _, tt := range models.ValidTaskTypes {
+		allTypes = append(allTypes, string(tt))
 	}
-	if chosen.search != "Refund cache" {
-		t.Errorf("the search input shows %q, want the q the request carried", chosen.search)
+	for _, c := range []struct {
+		params               url.Values
+		sprint               string
+		statuses, types      []string
+		statusText, typeText string
+	}{
+		{url.Values{"q": {"Refund cache"}, "sprint": {"none"}, "status": {"TESTING"}, "type": {"EPIC"}},
+			"none", []string{"TESTING"}, []string{"EPIC"}, "TESTING", "EPIC"},
+		{url.Values{"status": {"TESTING", "DOING"}, "type": {"BUG", "TASK", "BUG"}, "sprint": {itoa(f.sprintB)}},
+			itoa(f.sprintB), []string{"DOING", "TESTING"}, []string{"TASK", "BUG"}, "2 selected", "2 selected"},
+		{url.Values{"status": {"COMPLETED", "TESTING", "DOING", "SPRINT", "BACKLOG"}, "type": allTypes},
+			"", []string{"BACKLOG", "SPRINT", "DOING", "TESTING", "COMPLETED"}, allTypes, "5 selected", "10 selected"},
+	} {
+		chosen := parseList(t, servePage(t, mux, listPath(f.name, c.params)))
+		if got := chosen.selected(t, "sprint"); got != c.sprint {
+			t.Errorf("%v: the sprint select selects %q, want %q", c.params, got, c.sprint)
+		}
+		if got := chosen.checked(t, "status"); !slices.Equal(got, c.statuses) || chosen.toggleText(t, "status") != c.statusText {
+			t.Errorf("%v: the status dropdown checks %v and reads %q, want %v and %q", c.params, got, chosen.toggleText(t, "status"), c.statuses, c.statusText)
+		}
+		if got := chosen.checked(t, "type"); !slices.Equal(got, c.types) || chosen.toggleText(t, "type") != c.typeText {
+			t.Errorf("%v: the type dropdown checks %v and reads %q, want %v and %q", c.params, got, chosen.toggleText(t, "type"), c.types, c.typeText)
+		}
+		if chosen.search != c.params.Get("q") {
+			t.Errorf("%v: the search input shows %q, want the active q", c.params, chosen.search)
+		}
 	}
 
 	// A roadmap with no sprint, and a roadmap with two sprints of one title.
@@ -1266,7 +1503,11 @@ func TestTaskList_CriteriaComposeInEveryCombination(t *testing.T) {
 			t.Errorf("mask %04b %v lists %v, want %v", mask, params, got, want)
 		}
 		if len(want) > 0 {
-			if s := fetchList(t, mux, listPath(f.name, params)); s.total != len(want) {
+			explicit := params
+			if len(explicit) == 0 {
+				explicit = everyTask() // a request with no parameter would be bare
+			}
+			if s := fetchList(t, mux, listPath(f.name, explicit)); s.total != len(want) {
 				t.Errorf("mask %04b: the range text states %d entries, want %d", mask, s.total, len(want))
 			}
 		}
@@ -1286,9 +1527,11 @@ func TestTaskList_CriteriaComposeInEveryCombination(t *testing.T) {
 // TestTaskList_UnacceptableParametersAreIgnored is the gate for Acceptance
 // Criteria 115 and 236: for each filter parameter and each unacceptable value the
 // response is 200 with Cache-Control no-store, lists exactly what the request
-// lists without that parameter, selects the any option, and carries the value in
-// no generated link; the other parameters stay applied; a repeated parameter is
-// read as its first occurrence; unknown parameters are ignored.
+// lists without that parameter, shows the parameter's any state — the sprint
+// select's first option, or no box of the dropdown checked — and carries the value
+// in no generated link; the other parameters stay applied. For status and type the
+// rule applies to each occurrence on its own; a repeated sprint is read as its
+// first occurrence; unknown parameters are ignored.
 func TestTaskList_UnacceptableParametersAreIgnored(t *testing.T) {
 	t.Setenv("HOME", shortHome(t))
 	f := seedListFixture(t, "payments-platform", 40)
@@ -1334,11 +1577,15 @@ func TestTaskList_UnacceptableParametersAreIgnored(t *testing.T) {
 			if !slices.Equal(s.ids, baseline.ids) {
 				t.Errorf("%s=%q lists %v, want the list without it %v", param, value, s.ids, baseline.ids)
 			}
-			if got := s.selected(t, param); got != "" {
-				t.Errorf("%s=%q: the select selects %q, want its any option", param, value, got)
+			if param == "sprint" {
+				if got := s.selected(t, param); got != "" {
+					t.Errorf("%s=%q: the select selects %q, want its any option", param, value, got)
+				}
+			} else if got := s.checked(t, param); len(got) != 0 {
+				t.Errorf("%s=%q: the dropdown checks %v, want no box", param, value, got)
 			}
-			if got := s.selected(t, keptParam); got != keptValue {
-				t.Errorf("%s=%q: the accepted %s is no longer selected (%q)", param, value, keptParam, got)
+			if got := s.checked(t, keptParam); !slices.Equal(got, []string{keptValue}) {
+				t.Errorf("%s=%q: the accepted %s is no longer the one checked value (%v)", param, value, keptParam, got)
 			}
 			for _, link := range generatedLinks(&s) {
 				if u, perr := url.Parse(link); perr != nil || u.Query().Has(param) {
@@ -1360,10 +1607,24 @@ func TestTaskList_UnacceptableParametersAreIgnored(t *testing.T) {
 		}
 	}
 
-	// A repeated parameter is read as its first occurrence.
+	// Each occurrence of a repeatable parameter is validated on its own: an
+	// unaccepted one is ignored and the others stay applied; two accepted ones both
+	// apply. A repeated sprint is read as its first occurrence.
+	bugs := f.expect(func(x listTask) bool { return x.taskType == models.TypeBug })
+	for _, query := range []string{"type=BUG&type=bug", "type=bug&type=BUG", "type=BUG&type=%zz", "type=BUG,EPIC&type=BUG"} {
+		if got, _ := serve(query + "&size=100"); !slices.Equal(got.ids, bugs) || !slices.Equal(got.checked(t, "type"), []string{"BUG"}) {
+			t.Errorf("%s lists %v with %v checked, want the BUG tasks %v with BUG alone checked", query, got.ids, got.checked(t, "type"), bugs)
+		}
+	}
 	repeated, _ := serve("type=BUG&type=EPIC&size=100")
-	if want := f.expect(func(x listTask) bool { return x.taskType == models.TypeBug }); !slices.Equal(repeated.ids, want) {
-		t.Errorf("type=BUG&type=EPIC lists %v, want the BUG tasks %v", repeated.ids, want)
+	if want := f.expect(func(x listTask) bool {
+		return x.taskType == models.TypeBug || x.taskType == models.TypeEpic
+	}); !slices.Equal(repeated.ids, want) {
+		t.Errorf("type=BUG&type=EPIC lists %v, want the BUG and EPIC tasks %v", repeated.ids, want)
+	}
+	firstSprint, _ := serve("sprint=" + itoa(f.sprintA) + "&sprint=" + itoa(f.sprintB) + "&size=100")
+	if want := f.expect(func(x listTask) bool { return x.sprint == f.sprintA }); !slices.Equal(firstSprint.ids, want) {
+		t.Errorf("a repeated sprint lists %v, want the first sprint's tasks %v", firstSprint.ids, want)
 	}
 	// Parameters not among the six are ignored.
 	unknown, _ := serve("assignee=alice&sort=title&limit=5&size=100")
@@ -1394,9 +1655,12 @@ func generatedLinks(s *servedList) []string {
 }
 
 // submitFilterBar submits the served filter bar as a browser does: every named
-// field as the served HTML defines it, with the given fields changed, returning
-// the URL the submission requests.
-func submitFilterBar(t *testing.T, body string, changes map[string]string) string {
+// field as the served HTML defines it — the search input and the hidden size, the
+// sprint select's selected option, and one field per checked box — with the given
+// fields changed, returning the URL the submission requests. A change replaces
+// every occurrence of its field; a nil change of status or type unchecks every box
+// of that dropdown.
+func submitFilterBar(t *testing.T, body string, changes map[string][]string) string {
 	t.Helper()
 	form := body[mustIndex(t, body, "<form"):mustIndex(t, body, "</form>")]
 	action := regexp.MustCompile(`action="([^"]*)"`).FindStringSubmatch(form)[1]
@@ -1405,24 +1669,32 @@ func submitFilterBar(t *testing.T, body string, changes map[string]string) strin
 		fields.Add(m[1], html.UnescapeString(m[2]))
 	}
 	s := parseList(t, body)
-	for name := range s.selects {
-		fields.Add(name, s.selected(t, name))
+	fields.Set("sprint", s.selected(t, "sprint"))
+	for _, name := range []string{"status", "type"} {
+		for _, value := range s.checked(t, name) {
+			fields.Add(name, value)
+		}
 	}
-	if !fields.Has("q") || !fields.Has("size") || len(fields) != 5 {
-		t.Fatalf("the served form submits %v; want q, sprint, status, type, and size", fields)
+	if !fields.Has("q") || !fields.Has("size") || !fields.Has("sprint") {
+		t.Fatalf("the served form submits %v; want q, sprint, and size, and one field per checked box", fields)
 	}
-	for name, value := range changes {
-		fields.Set(name, value)
+	for name, values := range changes {
+		if values == nil {
+			fields.Del(name)
+			continue
+		}
+		fields[name] = values
 	}
 	return html.UnescapeString(action) + "?" + fields.Encode()
 }
 
 // TestTaskList_ApplyingTheFormReturnsToPageOneAndKeepsTheSize is the gate for
 // Acceptance Criteria 116 and 237: on page 3 at size 10, submitting the real form
-// with a new status requests a URL carrying size=10 and no page and renders page 1
-// of the new list at size 10; reloading it renders the same list; submitting the
-// form again with every select on its any option and an empty search input renders
-// page 1 of the unfiltered list at size 10. At the default size the form still
+// with a new status box checked requests a URL carrying size=10 and no page and
+// renders page 1 of the new list at size 10; reloading it renders the same list;
+// submitting the form again with the sprint select on Any sprint, every box
+// unchecked, and an empty search input renders page 1 of the unfiltered list —
+// COMPLETED tasks included — at size 10. At the default size the form still
 // submits size=25.
 func TestTaskList_ApplyingTheFormReturnsToPageOneAndKeepsTheSize(t *testing.T) {
 	t.Setenv("HOME", shortHome(t))
@@ -1433,7 +1705,7 @@ func TestTaskList_ApplyingTheFormReturnsToPageOneAndKeepsTheSize(t *testing.T) {
 	if startList := parseList(t, start); startList.currentPage(t) != 3 {
 		t.Fatalf("the starting page is not page 3")
 	}
-	submitted := submitFilterBar(t, start, map[string]string{"status": "DOING"})
+	submitted := submitFilterBar(t, start, map[string][]string{"status": {"DOING"}})
 	u, _ := url.Parse(submitted)
 	if u.Query().Has("page") || u.Query().Get("size") != "10" {
 		t.Fatalf("the submitted form requests %q; want no page and size 10", submitted)
@@ -1444,34 +1716,38 @@ func TestTaskList_ApplyingTheFormReturnsToPageOneAndKeepsTheSize(t *testing.T) {
 	})
 	filteredBody := servePage(t, mux, submitted)
 	filtered := parseList(t, filteredBody)
-	if filtered.currentPage(t) != 1 || !slices.Equal(filtered.ids, want[:min(10, len(want))]) || filtered.selected(t, "status") != "DOING" {
+	if filtered.currentPage(t) != 1 || !slices.Equal(filtered.ids, want[:min(10, len(want))]) || !slices.Equal(filtered.checked(t, "status"), []string{"DOING"}) {
 		t.Errorf("the submitted form renders page %d with %v, want page 1 of %v at size 10", filtered.currentPage(t), filtered.ids, want)
 	}
 	if reload := fetchList(t, mux, submitted); !slices.Equal(reload.ids, filtered.ids) {
 		t.Errorf("reloading the submitted URL renders a different list")
 	}
 
-	// Clearing: every select on its any option and an empty search input.
-	cleared := fetchList(t, mux, submitFilterBar(t, filteredBody, map[string]string{"q": "", "sprint": "", "status": "", "type": ""}))
-	if cleared.currentPage(t) != 1 || !slices.Equal(cleared.ids, f.expect(all)[:10]) || cleared.selected(t, "status") != "" {
+	// Clearing: Any sprint, every box unchecked, and an empty search input.
+	cleared := fetchList(t, mux, submitFilterBar(t, filteredBody, map[string][]string{"q": {""}, "sprint": {""}, "status": nil, "type": nil}))
+	if cleared.currentPage(t) != 1 || !slices.Equal(cleared.ids, f.expect(all)[:10]) || len(cleared.checked(t, "status")) != 0 ||
+		cleared.total != len(f.tasks) {
 		t.Errorf("clearing the form renders page %d with %v, want page 1 of the unfiltered list at size 10", cleared.currentPage(t), cleared.ids)
 	}
 
 	// At the default page size the form submits size=25.
-	if got := submitFilterBar(t, servePage(t, mux, listPath(f.name, nil)), nil); !strings.Contains(got, "size=25") {
-		t.Errorf("at the default size the form requests %q, want size=25", got)
+	if got := submitFilterBar(t, servePage(t, mux, listPath(f.name, nil)), nil); !strings.Contains(got, "size=25") ||
+		!strings.Contains(got, "status=BACKLOG&status=SPRINT&status=DOING&status=TESTING") {
+		t.Errorf("under the defaults the form requests %q, want size=25 and the four checked default statuses", got)
 	}
 }
 
 // TestTaskList_ResetIsTheEmptyStatesAlone is the gate for the Reset halves of
-// Acceptance Criteria 88 and 241: the page's only Reset control is the no-match
-// empty state's link, carrying btn; its href is the bare path, keeping size only
-// when it is not 25 and carrying no filter, no q, and no page; following it
-// renders page 1 of the unfiltered list at that size.
+// Acceptance Criteria 88, 241, and 249: the page's only Reset control is the
+// no-match empty state's link, carrying btn; its href carries the four default
+// status values and no other filter, no q, and no page, keeping size only when it
+// is not 25; following it renders page 1 of the default list at that size.
 func TestTaskList_ResetIsTheEmptyStatesAlone(t *testing.T) {
 	t.Setenv("HOME", shortHome(t))
 	f := seedListFixture(t, "payments-platform", 30)
 	mux := buildMux()
+	defaults := "status=BACKLOG&status=SPRINT&status=DOING&status=TESTING"
+	notCompleted := f.expect(func(x listTask) bool { return x.status != models.StatusCompleted })
 
 	if s := fetchList(t, mux, listPath(f.name, url.Values{"status": {"DOING"}, "size": {"10"}})); s.resetHref != "" {
 		t.Errorf("a list with rows carries a Reset link %q; the bar has none", s.resetHref)
@@ -1479,15 +1755,17 @@ func TestTaskList_ResetIsTheEmptyStatesAlone(t *testing.T) {
 	noMatch := fetchList(t, mux, listPath(f.name, url.Values{
 		"q": {"no task is titled like this"}, "sprint": {"none"}, "status": {"DOING"}, "type": {"BUG"}, "size": {"10"}, "page": {"2"},
 	}))
-	if noMatch.resetHref != "/roadmaps/"+f.name+"/tasks?size=10" {
-		t.Errorf("the no-match Reset links to %q, want the path with size=10 alone", noMatch.resetHref)
+	if noMatch.resetHref != "/roadmaps/"+f.name+"/tasks?"+defaults+"&size=10" {
+		t.Errorf("the no-match Reset links to %q, want the defaults with size=10", noMatch.resetHref)
 	}
 	reset := fetchList(t, mux, noMatch.resetHref)
-	if reset.currentPage(t) != 1 || !slices.Equal(reset.ids, f.expect(all)[:10]) {
-		t.Errorf("following Reset renders page %d with %v, want page 1 of the unfiltered list at size 10", reset.currentPage(t), reset.ids)
+	if reset.currentPage(t) != 1 || !slices.Equal(reset.ids, notCompleted[:10]) || reset.total != len(notCompleted) ||
+		!slices.Equal(reset.checked(t, "status"), []string{"BACKLOG", "SPRINT", "DOING", "TESTING"}) || reset.toggleText(t, "status") != "4 selected" {
+		t.Errorf("following Reset renders page %d with %v (%d in all), want page 1 of the default list at size 10",
+			reset.currentPage(t), reset.ids, reset.total)
 	}
-	if got := fetchList(t, mux, listPath(f.name, url.Values{"q": {"no task is titled like this"}})).resetHref; got != "/roadmaps/"+f.name+"/tasks" {
-		t.Errorf("at the default size Reset links to %q, want the bare path", got)
+	if got := fetchList(t, mux, listPath(f.name, url.Values{"q": {"no task is titled like this"}})).resetHref; got != "/roadmaps/"+f.name+"/tasks?"+defaults {
+		t.Errorf("at the default size Reset links to %q, want the defaults alone", got)
 	}
 }
 
@@ -1534,12 +1812,13 @@ func TestTaskList_PageAndSizeFallBack(t *testing.T) {
 }
 
 // TestTaskList_GeneratedLinksKeepTheFilters is the gate for Acceptance Criteria
-// 103 and 241: every link the page generates to itself carries each accepted
-// filter with its accepted value, and no ignored parameter and no parameter the page
-// does not accept, priority and severity included; page only
-// above 1, size only when not 25, q only while the term is not empty after the
-// trim; following each link shows the same filters applied at the page and size
-// the link named.
+// 103 and 241: every link the page generates to itself carries each filter of the
+// active filter state — one status or type occurrence per active value, whether
+// the URL or the defaults supplied it — and no ignored parameter and no parameter
+// the page does not accept, priority and severity included; page only above 1,
+// size only when not 25, q only while the term is not empty after the trim, and
+// size=25 on a link that would otherwise carry nothing; following each link shows
+// the same filters applied at the page and size the link named.
 func TestTaskList_GeneratedLinksKeepTheFilters(t *testing.T) {
 	t.Setenv("HOME", shortHome(t))
 	f := seedListFixture(t, "payments-platform", 180)
@@ -1600,6 +1879,42 @@ func TestTaskList_GeneratedLinksKeepTheFilters(t *testing.T) {
 	}
 	if blank.total != len(f.tasks) {
 		t.Errorf("a whitespace-only term lists %d tasks, want every one of %d", blank.total, len(f.tasks))
+	}
+
+	// Every active value of a repeatable parameter travels in every link.
+	multi := fetchList(t, mux, listPath(f.name, url.Values{"status": {"DOING", "TESTING"}, "size": {"10"}}))
+	multiLinks := generatedLinks(&multi)
+	if len(multiLinks) < 4 {
+		t.Fatalf("the DOING or TESTING list generates %d links, too few to exercise", len(multiLinks))
+	}
+	for _, link := range multiLinks {
+		u, _ := url.Parse(link)
+		if got := u.Query()["status"]; !slices.Equal(got, []string{"DOING", "TESTING"}) {
+			t.Errorf("the link %q carries status %v, want both DOING and TESTING", link, got)
+		}
+	}
+
+	// A bare request answered from the defaults: every link carries the four
+	// default status values, and so reproduces the default list explicitly.
+	bare := fetchList(t, mux, listPath(f.name, nil))
+	for _, link := range generatedLinks(&bare) {
+		u, _ := url.Parse(link)
+		if got := u.Query()["status"]; !slices.Equal(got, []string{"BACKLOG", "SPRINT", "DOING", "TESTING"}) {
+			t.Errorf("under the defaults the link %q carries status %v, want the four default values", link, got)
+		}
+	}
+
+	// A link that would carry no parameter at all carries size=25, so following it
+	// is an explicit request for that list rather than the stored state.
+	plain := fetchList(t, mux, listPath(f.name, url.Values{"size": {"10"}, "page": {"2"}}))
+	for _, link := range append(generatedLinks(&plain), plain.prevHref) {
+		u, _ := url.Parse(link)
+		if len(u.Query()) == 0 {
+			t.Errorf("the link %q carries no parameter; a generated link is always explicit", link)
+		}
+	}
+	if want := "/roadmaps/" + f.name + "/tasks?size=25"; !slices.ContainsFunc(plain.sizeLinks, func(l servedSizeLink) bool { return l.href == want }) {
+		t.Errorf("the rows-per-page link to 25 is not %s: %+v", want, plain.sizeLinks)
 	}
 }
 
