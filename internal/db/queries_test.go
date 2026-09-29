@@ -1438,7 +1438,7 @@ func TestTaskListingIsUnbounded(t *testing.T) {
 	}
 
 	// Every id of the listing is selected, so the rows carry the ordering keys.
-	all, err := db.ReadTaskListPage(testContext(), nil, func(listing []TaskRef) []int {
+	all, err := db.ReadTaskListPage(testContext(), nil, false, func(listing []TaskRef) []int {
 		ids := make([]int, len(listing))
 		for i := range listing {
 			ids[i] = listing[i].ID

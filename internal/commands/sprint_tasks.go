@@ -155,20 +155,19 @@ func sprintStats(args []string) error {
 		return err
 	}
 
-	// The member tasks in position order. The statistics read only their ids
-	// and statuses, so the lean projection is read rather than the full rows.
+	// The member read: the member tasks in position order, of which the
+	// statistics read only their ids, statuses and closed_at, so the lean
+	// projection is read rather than the full rows. The burndown is derived from
+	// the same rows, so no member is read twice (SPEC/DATABASE.md § Join Order of
+	// the Sprint Completion Counts).
 	states, err := database.GetSprintTaskStates(ctx, sprintID)
 	if err != nil {
 		return err
 	}
+	tasks := tasksOfStates(states)
+	burndown := models.CalculateSprintBurndown(sprint, tasks)
 
-	// Compute burndown series from task closed_at dates.
-	burndown, err := database.GetSprintBurndown(ctx, sprintID)
-	if err != nil {
-		return err
-	}
-
-	stats := models.CalculateSprintStats(sprintID, tasksOfStates(states))
+	stats := models.CalculateSprintStats(sprintID, tasks)
 	stats.ApplySprintMetrics(sprint, burndown, utils.NowISO8601())
 	return utils.PrintJSON(stats)
 }

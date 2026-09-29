@@ -1,6 +1,7 @@
 package db
 
 import (
+	"database/sql"
 	"errors"
 	"fmt"
 	"slices"
@@ -21,6 +22,18 @@ func statesOfTasks(tasks []models.Task) []TaskState {
 	out := make([]TaskState, len(tasks))
 	for i := range tasks {
 		out[i] = TaskState{ID: tasks[i].ID, Status: tasks[i].Status, Severity: tasks[i].Severity}
+	}
+	return out
+}
+
+// membersOfTasks projects full task rows onto the member read of a sprint.
+func membersOfTasks(tasks []models.Task) []SprintMemberState {
+	out := make([]SprintMemberState, len(tasks))
+	for i := range tasks {
+		out[i].TaskState = TaskState{ID: tasks[i].ID, Status: tasks[i].Status, Severity: tasks[i].Severity}
+		if tasks[i].ClosedAt != nil {
+			out[i].ClosedAt = sql.NullString{String: *tasks[i].ClosedAt, Valid: true}
+		}
 	}
 	return out
 }
@@ -105,8 +118,17 @@ func TestSprintTaskStatesMatchTheFullReads(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetSprintTaskStates: %v", err)
 	}
-	if want := statesOfTasks(full); !slices.Equal(lean, want) {
+	if want := membersOfTasks(full); !slices.Equal(lean, want) {
 		t.Errorf("GetSprintTaskStates differs from GetSprintTasksFull:\n got %v\nwant %v", lean, want)
+	}
+	closed := 0
+	for i := range lean {
+		if lean[i].ClosedAt.Valid {
+			closed++
+		}
+	}
+	if closed == 0 || closed == len(lean) {
+		t.Fatalf("%d of %d members carry a closed_at; the fixture does not exercise both cases", closed, len(lean))
 	}
 
 	var wantActive []TaskState

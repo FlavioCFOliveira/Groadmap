@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"slices"
 
 	"github.com/FlavioCFOliveira/Groadmap/internal/utils"
 )
@@ -307,6 +308,67 @@ func CalculateSprintStats(sprintID int, tasks []Task) SprintStats {
 	}
 
 	return stats
+}
+
+// CalculateSprintBurndown derives a sprint's burndown series from its member
+// tasks (SPEC/COMMANDS.md § Sprint Statistics, Burndown Computation;
+// SPEC/DATABASE.md § Join Order of the Sprint Completion Counts). The total is
+// the number of members. A completion is a member whose Status is COMPLETED and
+// whose ClosedAt is set; completions are grouped by the first ten characters of
+// ClosedAt, the calendar date, in ascending order of that date. The series opens
+// with the sprint's start date and every member remaining when that date precedes
+// the first completion date, then gives the members remaining after each day's
+// completions, never below zero. A sprint with no completion has an empty,
+// non-nil series.
+//
+// Only a task's Status and ClosedAt are read.
+func CalculateSprintBurndown(sprint *Sprint, tasks []Task) []BurndownEntry {
+	var dates []string
+	for i := range tasks {
+		if tasks[i].Status == StatusCompleted && tasks[i].ClosedAt != nil {
+			dates = append(dates, leadingChars(*tasks[i].ClosedAt, 10))
+		}
+	}
+	if len(dates) == 0 {
+		return []BurndownEntry{}
+	}
+	slices.Sort(dates)
+
+	// The series starts on the sprint's start date when it has one, and on the
+	// first completion date otherwise.
+	startDate := dates[0]
+	if sprint.StartedAt != nil && *sprint.StartedAt != "" {
+		startDate = (*sprint.StartedAt)[:10]
+	}
+
+	entries := make([]BurndownEntry, 0, 8)
+	if startDate < dates[0] {
+		entries = append(entries, BurndownEntry{Date: startDate, TasksRemaining: len(tasks)})
+	}
+	remaining := len(tasks)
+	for i := 0; i < len(dates); {
+		j := i + 1
+		for j < len(dates) && dates[j] == dates[i] {
+			j++
+		}
+		remaining = max(remaining-(j-i), 0)
+		entries = append(entries, BurndownEntry{Date: dates[i], TasksRemaining: remaining})
+		i = j
+	}
+	return entries
+}
+
+// leadingChars returns the first n characters (code points) of s, or s whole
+// when it holds fewer: the result SQLite's substr(s, 1, n) gives for text.
+func leadingChars(s string, n int) string {
+	count := 0
+	for i := range s {
+		if count == n {
+			return s[:i]
+		}
+		count++
+	}
+	return s
 }
 
 // ApplySprintMetrics enriches a SprintStats with velocity, days_elapsed, days_remaining, and burndown.

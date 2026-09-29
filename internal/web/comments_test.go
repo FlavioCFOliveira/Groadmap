@@ -779,6 +779,7 @@ type countingSource struct {
 	taskCounts           int
 	lastTaskFilter       *db.TaskListFilter
 	lastPageIDs          []int
+	lastWithTitle        bool
 }
 
 // CountTasks is the tasks page's third read, the roadmap's task count, which the
@@ -811,13 +812,15 @@ func (c *countingSource) ListSprints(ctx context.Context,
 // page asked for, and the ids the page selected are recorded as lastPageIDs:
 // internal/db issues the page-rows read exactly when they are not empty, binding
 // exactly them (TestReadTaskListPage_PageRowsReadBindsOnlyTheSelectedIDs), so
-// pageRows counts that read.
-func (c *countingSource) ReadTaskListPage(ctx context.Context, filter *db.TaskListFilter,
+// pageRows counts that read. Whether the listing was asked for the titles is
+// recorded as lastWithTitle.
+func (c *countingSource) ReadTaskListPage(ctx context.Context, filter *db.TaskListFilter, withTitle bool,
 	selectPage func([]db.TaskRef) []int) ([]db.TaskRow, error) {
 	c.taskList++
 	c.lastTaskFilter = filter
+	c.lastWithTitle = withTitle
 	c.lastPageIDs = nil
-	return c.DB.ReadTaskListPage(ctx, filter, func(listing []db.TaskRef) []int {
+	return c.DB.ReadTaskListPage(ctx, filter, withTitle, func(listing []db.TaskRef) []int {
 		ids := selectPage(listing)
 		c.lastPageIDs = append([]int(nil), ids...)
 		if len(ids) > 0 {

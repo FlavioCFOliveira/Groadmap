@@ -47,7 +47,8 @@ func seedPageTasks(t *testing.T, database *DB, n int) []int {
 
 // TestReadTaskListPage_PageRowsReadBindsOnlyTheSelectedIDs is the gate for the
 // page-rows half of SPEC/WEB.md Acceptance Criterion 89, measured at the driver
-// boundary: one listing statement projecting id and title alone, then one
+// boundary: one listing statement projecting the id alone without a term and the
+// id and title with one, then one
 // page-rows statement projecting exactly the seven shown columns and binding
 // exactly the selected ids, the rows returned in the selection's order with the
 // stored values; and no page-rows statement at all for an empty selection.
@@ -56,91 +57,102 @@ func TestReadTaskListPage_PageRowsReadBindsOnlyTheSelectedIDs(t *testing.T) {
 	defer cleanup()
 	seedPageTasks(t, database, 40)
 
-	listingSQL, _ := buildTaskListingQuery(nil)
+	for _, withTitle := range []bool{false, true} {
+		listingSQL, _ := buildTaskListingQuery(nil, withTitle)
 
-	for _, pick := range []struct {
-		name       string
-		start, end int
-	}{
-		{"first page of 10", 0, 10},
-		{"a middle slice", 13, 21},
-		{"the last row", 39, 40},
-		{"no row", 0, 0},
-	} {
-		t.Run(pick.name, func(t *testing.T) {
-			counter.reset()
-			var listing []TaskRef
-			var selected []int
-			rows, err := database.ReadTaskListPage(testContext(), nil, func(l []TaskRef) []int {
-				listing = slices.Clone(l)
-				for _, ref := range l[pick.start:pick.end] {
-					selected = append(selected, ref.ID)
+		for _, pick := range []struct {
+			name       string
+			start, end int
+		}{
+			{"first page of 10", 0, 10},
+			{"a middle slice", 13, 21},
+			{"the last row", 39, 40},
+			{"no row", 0, 0},
+		} {
+			t.Run(fmt.Sprintf("%s, withTitle=%v", pick.name, withTitle), func(t *testing.T) {
+				counter.reset()
+				var listing []TaskRef
+				var selected []int
+				rows, err := database.ReadTaskListPage(testContext(), nil, withTitle, func(l []TaskRef) []int {
+					listing = slices.Clone(l)
+					for _, ref := range l[pick.start:pick.end] {
+						selected = append(selected, ref.ID)
+					}
+					return selected
+				})
+				if err != nil {
+					t.Fatalf("ReadTaskListPage: %v", err)
 				}
-				return selected
+				if len(listing) != 40 {
+					t.Fatalf("the listing returned %d tasks, want 40", len(listing))
+				}
+				// The listing carries a title exactly when it was asked for one.
+				for _, ref := range listing {
+					if (ref.Title != "") != withTitle {
+						t.Fatalf("listing row %+v with withTitle=%v", ref, withTitle)
+					}
+				}
+
+				if got := counter.executed(listingSQL); got != 1 {
+					t.Errorf("the task listing ran %d times, want once", got)
+				}
+				if len(selected) == 0 {
+					if counter.count() != 1 || rows != nil {
+						t.Errorf("an empty selection issued %d statements and returned %d rows; want the listing alone",
+							counter.count(), len(rows))
+					}
+					return
+				}
+
+				rowsSQL, rowsArgs := buildTaskRowsQuery(selected)
+				if got := counter.executed(rowsSQL); got != 1 || counter.count() != 2 {
+					t.Errorf("the page-rows read ran %d times among %d statements; want once among 2", got, counter.count())
+				}
+				if strings.Count(rowsSQL, "?") != len(selected) {
+					t.Errorf("the page-rows read carries %d placeholders for %d selected ids: %s",
+						strings.Count(rowsSQL, "?"), len(selected), rowsSQL)
+				}
+				wantArgs := make([]any, len(selected))
+				for i, id := range selected {
+					wantArgs[i] = id
+				}
+				if !slices.Equal(rowsArgs, wantArgs) {
+					t.Errorf("the page-rows read binds %v, want exactly the selected ids %v", rowsArgs, wantArgs)
+				}
+
+				gotIDs := make([]int, len(rows))
+				for i := range rows {
+					gotIDs[i] = rows[i].ID
+					stored, gerr := database.GetTask(testContext(), rows[i].ID)
+					if gerr != nil {
+						t.Fatalf("GetTask(%d): %v", rows[i].ID, gerr)
+					}
+					want := TaskRow{ID: stored.ID, Title: stored.Title, Type: stored.Type, Status: stored.Status,
+						Severity: stored.Severity, Priority: stored.Priority, CreatedAt: stored.CreatedAt}
+					if rows[i] != want {
+						t.Errorf("row %d = %+v, want the stored %+v", i, rows[i], want)
+					}
+				}
+				if !slices.Equal(gotIDs, selected) {
+					t.Errorf("the rows come in the order %v, want the selection's order %v", gotIDs, selected)
+				}
 			})
-			if err != nil {
-				t.Fatalf("ReadTaskListPage: %v", err)
-			}
-			if len(listing) != 40 {
-				t.Fatalf("the listing returned %d tasks, want 40", len(listing))
-			}
-
-			if got := counter.executed(listingSQL); got != 1 {
-				t.Errorf("the task listing ran %d times, want once", got)
-			}
-			if len(selected) == 0 {
-				if counter.count() != 1 || rows != nil {
-					t.Errorf("an empty selection issued %d statements and returned %d rows; want the listing alone",
-						counter.count(), len(rows))
-				}
-				return
-			}
-
-			rowsSQL, rowsArgs := buildTaskRowsQuery(selected)
-			if got := counter.executed(rowsSQL); got != 1 || counter.count() != 2 {
-				t.Errorf("the page-rows read ran %d times among %d statements; want once among 2", got, counter.count())
-			}
-			if strings.Count(rowsSQL, "?") != len(selected) {
-				t.Errorf("the page-rows read carries %d placeholders for %d selected ids: %s",
-					strings.Count(rowsSQL, "?"), len(selected), rowsSQL)
-			}
-			wantArgs := make([]any, len(selected))
-			for i, id := range selected {
-				wantArgs[i] = id
-			}
-			if !slices.Equal(rowsArgs, wantArgs) {
-				t.Errorf("the page-rows read binds %v, want exactly the selected ids %v", rowsArgs, wantArgs)
-			}
-
-			gotIDs := make([]int, len(rows))
-			for i := range rows {
-				gotIDs[i] = rows[i].ID
-				stored, gerr := database.GetTask(testContext(), rows[i].ID)
-				if gerr != nil {
-					t.Fatalf("GetTask(%d): %v", rows[i].ID, gerr)
-				}
-				want := TaskRow{ID: stored.ID, Title: stored.Title, Type: stored.Type, Status: stored.Status,
-					Severity: stored.Severity, Priority: stored.Priority, CreatedAt: stored.CreatedAt}
-				if rows[i] != want {
-					t.Errorf("row %d = %+v, want the stored %+v", i, rows[i], want)
-				}
-			}
-			if !slices.Equal(gotIDs, selected) {
-				t.Errorf("the rows come in the order %v, want the selection's order %v", gotIDs, selected)
-			}
-		})
+		}
 	}
 }
 
 // TestTaskListPage_StatementProjections pins each statement's projection on the
-// columns SQLite reports for it: id and title for the task listing, the seven
+// columns SQLite reports for it: id and title for the task listing with a term,
+// id alone for the task listing without one, the seven
 // shown columns for the page-rows read, and nothing else.
 func TestTaskListPage_StatementProjections(t *testing.T) {
 	database, cleanup := setupTestDB(t)
 	defer cleanup()
 	ids := seedPageTasks(t, database, 3)
 
-	listingSQL, listingArgs := buildTaskListingQuery(&TaskListFilter{Statuses: []models.TaskStatus{models.StatusDoing}})
+	doing := &TaskListFilter{Statuses: []models.TaskStatus{models.StatusDoing}}
+	listingSQL, listingArgs := buildTaskListingQuery(doing, true)
+	idListingSQL, idListingArgs := buildTaskListingQuery(doing, false)
 	rowsSQL, rowsArgs := buildTaskRowsQuery(ids)
 	for _, c := range []struct {
 		name  string
@@ -148,7 +160,8 @@ func TestTaskListPage_StatementProjections(t *testing.T) {
 		args  []any
 		want  []string
 	}{
-		{"task listing", listingSQL, listingArgs, []string{"id", "title"}},
+		{"task listing with a term", listingSQL, listingArgs, []string{"id", "title"}},
+		{"task listing without a term", idListingSQL, idListingArgs, []string{"id"}},
 		{"page-rows read", rowsSQL, rowsArgs, pageRowsColumns},
 	} {
 		rows, err := database.QueryContext(testContext(), c.query, c.args...)
@@ -187,7 +200,7 @@ func TestReadTaskListPage_BothReadsSeeOneSnapshot(t *testing.T) {
 	const renamed = "Renamed while the page was being read"
 
 	var listedTitle string
-	rows, err := database.ReadTaskListPage(testContext(), nil, func(listing []TaskRef) []int {
+	rows, err := database.ReadTaskListPage(testContext(), nil, true, func(listing []TaskRef) []int {
 		for _, ref := range listing {
 			if ref.ID == target {
 				listedTitle = ref.Title
@@ -206,7 +219,7 @@ func TestReadTaskListPage_BothReadsSeeOneSnapshot(t *testing.T) {
 	}
 
 	// The control: the write did land, so a later read sees it.
-	after, err := database.ReadTaskListPage(testContext(), nil, func([]TaskRef) []int { return []int{target} })
+	after, err := database.ReadTaskListPage(testContext(), nil, false, func([]TaskRef) []int { return []int{target} })
 	if err != nil {
 		t.Fatalf("ReadTaskListPage after the write: %v", err)
 	}

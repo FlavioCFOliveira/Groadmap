@@ -587,7 +587,7 @@ type tasksData struct {
 // cost; Acceptance Criteria 70, 89 and 92). *db.DB satisfies the interface.
 type tasksSource interface {
 	ListSprintTitles(ctx context.Context) ([]db.SprintRef, error)
-	ReadTaskListPage(ctx context.Context, filter *db.TaskListFilter,
+	ReadTaskListPage(ctx context.Context, filter *db.TaskListFilter, withTitle bool,
 		selectPage func(listing []db.TaskRef) []int) ([]db.TaskRow, error)
 	CountTasks(ctx context.Context) (int, error)
 }
@@ -631,8 +631,14 @@ func readTaskList(ctx context.Context, src tasksSource, name string, req *tasksR
 	// the term, so the listing is bounded by the filters alone and the total is
 	// correct by construction. Only the selected page's ids reach the page-rows
 	// read.
+	//
+	// The listing carries each task's title only when the request carries a term
+	// to match it against — a q that is not empty after the trim, the one test
+	// matchesSearch applies — and its id alone otherwise: the rows the page shows
+	// take their titles from the page-rows read (SPEC/WEB.md § Roadmap Tasks Page,
+	// Read cost).
 	var read, total, page, pages, start, end int
-	rows, err := src.ReadTaskListPage(ctx, q.listFilter(), func(listing []db.TaskRef) []int {
+	rows, err := src.ReadTaskListPage(ctx, q.listFilter(), q.folded != "", func(listing []db.TaskRef) []int {
 		read = len(listing)
 
 		// The search removes rows from the listing's order and never reorders the

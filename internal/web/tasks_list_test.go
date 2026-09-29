@@ -2051,3 +2051,74 @@ func TestTaskList_PaginationBarAndSizeSelector(t *testing.T) {
 		t.Errorf("the pagination bar is not a Tabler pagination inside <nav aria-label=\"Task list pages\">")
 	}
 }
+
+// TestTaskList_ListingReadsTitlesOnlyForATerm is the gate for the projection rule
+// of SPEC/WEB.md § Roadmap Tasks Page, Read cost, and DATABASE.md § List All: the
+// task listing is asked for the titles exactly when the request carries a search
+// term — a q that is not empty after the trim — and for the ids alone otherwise,
+// whether the state comes from the URL, from the cookie, or from the defaults. A
+// whitespace-only q carries no term, so it reads the ids alone and renders the
+// same list as no q at all; a term still finds its tasks by title and by
+// reference.
+func TestTaskList_ListingReadsTitlesOnlyForATerm(t *testing.T) {
+	t.Setenv("HOME", shortHome(t))
+	f := seedListFixture(t, "payments-platform", 30)
+
+	type outcome struct {
+		ids   []int
+		total int
+	}
+	read := func(label string, req *tasksRequest, wantTitle bool) outcome {
+		t.Helper()
+		src := openCounting(t, f.name)
+		data, err := readTaskList(context.Background(), src, f.name, req)
+		if err != nil {
+			t.Fatalf("%s: readTaskList: %v", label, err)
+		}
+		if src.taskList != 1 || src.lastWithTitle != wantTitle {
+			t.Errorf("%s: %d listings, titles requested = %v; want 1 listing with titles requested = %v",
+				label, src.taskList, src.lastWithTitle, wantTitle)
+		}
+		ids := make([]int, len(data.Rows))
+		for i := range data.Rows {
+			ids[i] = data.Rows[i].ID
+		}
+		return outcome{ids: ids, total: data.Total}
+	}
+
+	all := url.Values{"size": {"100"}}
+	withQ := func(q string) url.Values {
+		v := url.Values{"size": {"100"}}
+		v.Set("q", q)
+		return v
+	}
+
+	none := read("no q", explicitTasks(all), false)
+	if none.total != 30 {
+		t.Fatalf("no q: %d tasks listed, want all 30", none.total)
+	}
+	// Each of these is empty after the trim of SPEC/WEB.md § Roadmap Tasks Page,
+	// The trim rule, which the page applies through trimSearchTerm.
+	for _, blank := range []string{"", " ", "\t \t", "\u00a0\u3000 "} {
+		if trimSearchTerm(blank) != "" {
+			t.Fatalf("q=%q is not empty after the trim; the case proves nothing", blank)
+		}
+		got := read(fmt.Sprintf("q=%q", blank), explicitTasks(withQ(blank)), false)
+		if got.total != none.total || !slices.Equal(got.ids, none.ids) {
+			t.Errorf("q=%q: listed %d tasks %v, want the list with no q, %d tasks %v", blank, got.total, got.ids, none.total, none.ids)
+		}
+	}
+	read("defaults", bareTasks(nil), false)
+	read("cookie without q", bareTasks(new("status=DOING")), false)
+	read("cookie with a whitespace-only q", bareTasks(new("q=+++&status=DOING")), false)
+	read("cookie with q", bareTasks(new("q=cache&status=DOING")), true)
+
+	byTitle := read("q=cache", explicitTasks(withQ("  cache  ")), true)
+	if byTitle.total == 0 || byTitle.total == none.total {
+		t.Errorf("q=cache: %d tasks listed, want a proper subset of the %d", byTitle.total, none.total)
+	}
+	byRef := read("q=#7", explicitTasks(withQ("#7")), true)
+	if len(byRef.ids) == 0 {
+		t.Errorf("q=#7: no task found by its reference")
+	}
+}

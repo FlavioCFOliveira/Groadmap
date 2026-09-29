@@ -19,7 +19,7 @@ import (
 func listingIDs(t *testing.T, database *DB, filter *TaskListFilter) []int {
 	t.Helper()
 	var ids []int
-	if _, err := database.ReadTaskListPage(testContext(), filter, func(listing []TaskRef) []int {
+	if _, err := database.ReadTaskListPage(testContext(), filter, false, func(listing []TaskRef) []int {
 		ids = make([]int, len(listing))
 		for i := range listing {
 			ids[i] = listing[i].ID
@@ -184,10 +184,16 @@ func TestTaskListing_BindsEveryFilterValue(t *testing.T) {
 	doing, bug, prio, sev, sprint := models.StatusDoing, models.TypeBug, 7, 4, 913
 	filter := &TaskListFilter{Status: &doing, TaskType: &bug, MinPriority: &prio, MinSeverity: &sev,
 		SprintID: &sprint}
-	query, args := buildTaskListingQuery(filter)
+	query, args := buildTaskListingQuery(filter, true)
 
 	if !strings.HasPrefix(query, "SELECT t.id, t.title FROM tasks t WHERE 1=1") {
-		t.Errorf("the task listing does not project exactly t.id and t.title: %s", query)
+		t.Errorf("the task listing with a term does not project exactly t.id and t.title: %s", query)
+	}
+	// Without a term the statement is the same but for its projection, t.id alone.
+	idOnly, idOnlyArgs := buildTaskListingQuery(filter, false)
+	if want := "SELECT t.id FROM tasks t WHERE 1=1" + strings.TrimPrefix(query, "SELECT t.id, t.title FROM tasks t WHERE 1=1"); idOnly != want || !slices.Equal(idOnlyArgs, args) {
+		t.Errorf("the task listing without a term is not the same statement projecting t.id alone:\n got %s %v\nwant %s %v",
+			idOnly, idOnlyArgs, want, args)
 	}
 	for _, value := range []string{"DOING", "BUG", "913"} {
 		if strings.Contains(query, value) {
@@ -211,11 +217,11 @@ func TestTaskListing_BindsEveryFilterValue(t *testing.T) {
 		t.Errorf("the SQL text does not end in the total order with no LIMIT and no OFFSET: %s", query)
 	}
 
-	noSprint, noArgs := buildTaskListingQuery(&TaskListFilter{NoSprint: true})
+	noSprint, noArgs := buildTaskListingQuery(&TaskListFilter{NoSprint: true}, false)
 	if !strings.Contains(noSprint, "AND NOT EXISTS (SELECT 1 FROM sprint_tasks st WHERE st.task_id = t.id)") || len(noArgs) != 0 {
 		t.Errorf("the no-sprint predicate is missing or binds an argument: %s %v", noSprint, noArgs)
 	}
-	bare, bareArgs := buildTaskListingQuery(nil)
+	bare, bareArgs := buildTaskListingQuery(nil, false)
 	if strings.Contains(bare, " AND ") || len(bareArgs) != 0 {
 		t.Errorf("a filter with no value appends a predicate: %s %v", bare, bareArgs)
 	}
@@ -314,7 +320,7 @@ func TestTaskListing_BindsOnePlaceholderPerDistinctValue(t *testing.T) {
 	query, args := buildTaskListingQuery(&TaskListFilter{
 		Statuses:  []models.TaskStatus{models.StatusTesting, models.StatusDoing, models.StatusTesting},
 		TaskTypes: []models.TaskType{models.TypeBug},
-	})
+	}, false)
 	for _, value := range []string{"TESTING", "DOING", "BUG"} {
 		if strings.Contains(query, value) {
 			t.Errorf("the SQL text carries the value %q; every value is bound", value)

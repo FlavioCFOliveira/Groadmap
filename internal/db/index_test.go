@@ -488,21 +488,29 @@ func TestTaskListPage_IndexesServeBothReads(t *testing.T) {
 		{&TaskListFilter{Statuses: defaults}, "the default four status values", "idx_tasks_status_priority", true},
 	}
 	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			query, args := buildTaskListingQuery(c.filter)
-			plan := queryPlan(t, database, query, args...)
-			if !strings.Contains(plan, c.wantIndex) {
-				t.Errorf("the task listing does not use %s.\nplan: %s\nquery: %s", c.wantIndex, plan, query)
-			}
-			// A scan in an index's order is the plan the no-predicate case names; a
-			// scan of the table itself is never acceptable.
-			if strings.Contains(plan, "SCAN t | ") {
-				t.Errorf("the task listing scans tasks in full.\nplan: %s", plan)
-			}
-			if !c.sorted && strings.Contains(plan, "TEMP B-TREE") {
-				t.Errorf("the index must supply the whole ordering, but the plan sorts.\nplan: %s", plan)
-			}
-		})
+		for _, withTitle := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s, withTitle=%v", c.name, withTitle), func(t *testing.T) {
+				query, args := buildTaskListingQuery(c.filter, withTitle)
+				plan := queryPlan(t, database, query, args...)
+				if !strings.Contains(plan, c.wantIndex) {
+					t.Errorf("the task listing does not use %s.\nplan: %s\nquery: %s", c.wantIndex, plan, query)
+				}
+				// Without a term the listing projects t.id alone, which the index
+				// carries as the row id: the index covers the statement and no
+				// table row is read (SPEC/DATABASE.md § List All, Indexes).
+				if !withTitle && !strings.Contains(plan, "USING COVERING INDEX "+c.wantIndex+" ") {
+					t.Errorf("the id-only listing is not covered by %s.\nplan: %s", c.wantIndex, plan)
+				}
+				// A scan in an index's order is the plan the no-predicate case names; a
+				// scan of the table itself is never acceptable.
+				if strings.Contains(plan, "SCAN t | ") {
+					t.Errorf("the task listing scans tasks in full.\nplan: %s", plan)
+				}
+				if !c.sorted && strings.Contains(plan, "TEMP B-TREE") {
+					t.Errorf("the index must supply the whole ordering, but the plan sorts.\nplan: %s", plan)
+				}
+			})
+		}
 	}
 
 	selected := fixture.commentedTaskIDs

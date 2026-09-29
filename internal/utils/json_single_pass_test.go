@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"math"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -230,4 +231,108 @@ func TestPrintJSON_WriteErrorIsReturned(t *testing.T) {
 	if !errors.Is(err, errWriteRefused) || !strings.HasPrefix(err.Error(), "encoding JSON: ") {
 		t.Errorf("WriteJSON to a failing writer returned %v, want the wrapped write error", err)
 	}
+}
+
+// TestPrintJSON_LargeOutputAcrossChunks holds outputs larger than one in-memory
+// chunk to the reference bytes, including outputs whose length puts the trailing
+// newline exactly on a chunk boundary, one byte before it, and one after it.
+func TestPrintJSON_LargeOutputAcrossChunks(t *testing.T) {
+	const chunk = 64 << 10
+	payloads := map[string]any{}
+	// A top-level string of n bytes encodes as n+2 bytes, and the newline makes
+	// n+3: these lengths end the output around the first and third boundaries.
+	for _, total := range []int{chunk - 1, chunk, chunk + 1, 3*chunk - 1, 3 * chunk, 3*chunk + 1} {
+		payloads["string of "+strconv.Itoa(total)+" output bytes"] = strings.Repeat("r", total-3)
+	}
+	tasks := make([]models.Task, 4000)
+	for i := range tasks {
+		tasks[i] = models.Task{
+			ID:                     i + 1,
+			Title:                  "Reconcile the settlement batch of merchant " + strconv.Itoa(i+1),
+			Status:                 models.StatusDoing,
+			Type:                   models.TypeTask,
+			FunctionalRequirements: "Every settled charge appears in exactly one batch & no batch is <empty>.",
+			CreatedAt:              "2026-06-01T09:00:00.000Z",
+			Priority:               i % 10,
+		}
+	}
+	payloads["4,000 tasks"] = tasks
+
+	for name, v := range payloads {
+		want, err := indentingEncoder(v)
+		if err != nil {
+			t.Fatalf("%s: reference encoding: %v", name, err)
+		}
+		var got bytes.Buffer
+		if err := utils.WriteJSON(&got, v); err != nil {
+			t.Fatalf("%s: WriteJSON: %v", name, err)
+		}
+		if !bytes.Equal(got.Bytes(), want) {
+			t.Errorf("%s: %d bytes written, want the reference's %d bytes", name, got.Len(), len(want))
+		}
+	}
+}
+
+// TestPrintJSON_LateFailureWritesNothing: a value whose encoding fails after
+// more than one chunk of output has been produced writes nothing at all, so no
+// partial result reaches stdout.
+func TestPrintJSON_LateFailureWritesNothing(t *testing.T) {
+	v := []any{strings.Repeat("s", 200<<10), math.NaN()}
+	_, wantErr := indentingEncoder(v)
+	if wantErr == nil {
+		t.Fatal("the reference encoder accepted NaN")
+	}
+	var out bytes.Buffer
+	err := utils.WriteJSON(&out, v)
+	if err == nil || err.Error() != "encoding JSON: "+wantErr.Error() {
+		t.Errorf("WriteJSON returned %v, want the reference error %v", err, wantErr)
+	}
+	if out.Len() != 0 {
+		t.Errorf("%d bytes written for a value that failed to encode", out.Len())
+	}
+}
+
+// countingWriter records the size of every write it receives.
+type countingWriter struct{ sizes []int }
+
+func (c *countingWriter) Write(p []byte) (int, error) {
+	c.sizes = append(c.sizes, len(p))
+	return len(p), nil
+}
+
+// TestPrintJSON_WriteStopsAtTheFirstError: when the destination fails part-way
+// through a multi-chunk output, the error is returned and no later chunk is
+// written.
+func TestPrintJSON_WriteStopsAtTheFirstError(t *testing.T) {
+	var w stopAfterWriter
+	err := utils.WriteJSON(&w, strings.Repeat("w", 300<<10))
+	if !errors.Is(err, errWriteRefused) {
+		t.Fatalf("WriteJSON returned %v, want the wrapped write error", err)
+	}
+	if w.calls != 2 {
+		t.Errorf("%d writes attempted, want 2 (one accepted, one refused)", w.calls)
+	}
+
+	var sizes countingWriter
+	if err := utils.WriteJSON(&sizes, strings.Repeat("w", 300<<10)); err != nil {
+		t.Fatalf("WriteJSON: %v", err)
+	}
+	total := 0
+	for _, n := range sizes.sizes {
+		total += n
+	}
+	if len(sizes.sizes) < 2 || total != 300<<10+3 {
+		t.Errorf("writes %v total %d bytes, want several writes totalling %d", sizes.sizes, total, 300<<10+3)
+	}
+}
+
+// stopAfterWriter accepts its first write and refuses every later one.
+type stopAfterWriter struct{ calls int }
+
+func (s *stopAfterWriter) Write(p []byte) (int, error) {
+	s.calls++
+	if s.calls > 1 {
+		return 0, errWriteRefused
+	}
+	return len(p), nil
 }

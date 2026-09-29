@@ -1012,7 +1012,7 @@ ORDER BY t.priority DESC, t.created_at ASC;
 - **`subtask_count`**, the number of direct subtasks, produced by the correlated subquery above. It is not a stored column — `MODELS.md § Task` defines it as computed — and this statement is where its value comes from, so the caller needs no second query and no per-task query to obtain it.
 - **`depends_on_csv`** and **`blocks_csv`**, the task's two dependency sets, each a comma-separated list of task ids in ascending id order (fixed by the inner `ORDER BY`) and the empty string when the set is empty (`COALESCE`). The application parses them into the task's `depends_on` and `blocks` values, which keeps the listing free of one dependency query per task.
 
-**One statement, several shapes.** The listing is assembled rather than fixed. It opens `WHERE 1=1` so that each optional predicate can be appended as a further `AND` — the status filter of `List by Status` below, and the priority, severity, type, and creation-date filters of the same listing — and it carries one of four orderings: `t.priority DESC, t.created_at ASC` (the default, shown above), `t.created_at ASC`, `t.status ASC, t.priority DESC, t.created_at ASC`, or `t.severity DESC, t.priority DESC, t.created_at ASC`. `COMMANDS.md § List Tasks` is canonical for which caller selects which. The web tasks page reads the same statement with a two-column projection, sprint-membership predicates of its own, and a fifth ordering, all described below. Every filter value is a bound parameter; none is concatenated into the SQL, and a value used in a `LIKE` predicate has its wildcards escaped first.
+**One statement, several shapes.** The listing is assembled rather than fixed. It opens `WHERE 1=1` so that each optional predicate can be appended as a further `AND` — the status filter of `List by Status` below, and the priority, severity, type, and creation-date filters of the same listing — and it carries one of four orderings: `t.priority DESC, t.created_at ASC` (the default, shown above), `t.created_at ASC`, `t.status ASC, t.priority DESC, t.created_at ASC`, or `t.severity DESC, t.priority DESC, t.created_at ASC`. `COMMANDS.md § List Tasks` is canonical for which caller selects which. The web tasks page reads the same statement with a projection of its own, sprint-membership predicates of its own, and a fifth ordering, all described below. Every filter value is a bound parameter; none is concatenated into the SQL, and a value used in a `LIKE` predicate has its wildcards escaped first.
 
 **Result-set size:** The listing itself imposes no bound: it carries no `OFFSET`, and it carries a `LIMIT ?` only when the caller asks for one. Any bound on the number of rows a caller receives is therefore the caller's, not this query's.
 
@@ -1025,7 +1025,7 @@ transaction, so the second sees the roadmap exactly as the first saw it.
 The task listing, filtered and never paginated:
 
 ```sql
-SELECT t.id, t.title
+SELECT t.id, t.title                                -- t.id alone when the request carries no search term
 FROM tasks t WHERE 1=1
   AND t.status IN (?, ...)                          -- only when a status value is active; one ? per distinct value
   AND t.type IN (?, ...)                            -- only when a type value is active; one ? per distinct value
@@ -1036,10 +1036,15 @@ FROM tasks t WHERE 1=1
 ORDER BY t.priority DESC, t.created_at ASC, t.id ASC;
 ```
 
-- **Projection.** `t.id` and `t.title`, and no other column: they are the whole
-  searchable text the page matches its term against, and `t.id` selects the page's
-  rows. The ordering keys are applied by the statement and are not projected. The
-  statement computes no subtask count and no dependency set.
+- **Projection.** `t.id` alone when the request carries no search term, and
+  `t.id` and `t.title` when it carries one (a `q` that is empty after the trim
+  carries none; see `WEB.md § Roadmap Tasks Page`, **The text search**), and no
+  other column in either case. `t.id` selects the page's rows; `t.id` and
+  `t.title` are the whole searchable text the page matches its term against, so the
+  title is read only when there is a term to match. Whether a term is present
+  decides the projection alone: the term's value is never bound. The ordering keys
+  are applied by the statement and are not projected. The statement computes no
+  subtask count and no dependency set.
 - **Predicates.** Each predicate is appended only when the page's active filter
   state has a value for its filter, and every value is a bound parameter; no value
   the page receives is concatenated into the SQL, and a value the page ignored
@@ -1072,7 +1077,15 @@ ORDER BY t.priority DESC, t.created_at ASC, t.id ASC;
   without a single status or type value — the index serves the lookup and the
   admitted rows are sorted once. `idx_tasks_severity_priority` does not serve this
   statement, which neither filters nor orders by `severity`. No index carries
-  `title`, so each admitted row is read from the table.
+  `title`, so with a term each admitted row is read from the table. Without a term
+  the statement projects `t.id` alone, which every index carries as the row id, so
+  the index read covers the statement and reads no table row whenever the index it
+  uses holds every column its predicates and ordering name: with no status, no
+  type, and no sprint-id predicate, and with status values alone or type values
+  alone, with or without a sprint predicate. With the sprint-id predicate and no
+  status or type value, the admitted rows are looked up by primary key; with both
+  status and type values, no index holds both columns, so the rows the index
+  admits are read from the table to test the other.
 - **No `LIMIT` and no `OFFSET`.** The page applies its search term in memory, after
   this read, because the term's Unicode normalisation and folding cannot be expressed
   in SQLite, and it selects the requested page after the term. The read therefore
@@ -1849,38 +1862,56 @@ The shapes combine: supplying an entity, an operation, and a date range at once 
 
 #### Audit Statistics
 
-```sql
--- Total entries count
-SELECT COUNT(*) as total_entries FROM audit;
+`rmp audit stats` (`COMMANDS.md § Audit Statistics`) reads four statements, all in
+**one** read transaction, so every figure describes the same snapshot of the log:
 
--- Count by operation type
-SELECT operation, COUNT(*) as count
-FROM audit
-GROUP BY operation
-ORDER BY count DESC;
+```sql
+-- Count by operation
+SELECT operation, COUNT(*) FROM audit WHERE 1=1
+  AND performed_at >= ?                             -- only with --since
+  AND performed_at <= ?                             -- only with --until
+GROUP BY operation;
 
 -- Count by entity type
-SELECT entity_type, COUNT(*) as count
-FROM audit
+SELECT entity_type, COUNT(*) FROM audit WHERE 1=1
+  AND performed_at >= ?                             -- only with --since
+  AND performed_at <= ?                             -- only with --until
 GROUP BY entity_type;
 
--- Statistics for specific period
-SELECT
-    COUNT(*) as total_entries,
-    COUNT(CASE WHEN entity_type = 'TASK' THEN 1 END) as task_entries,
-    COUNT(CASE WHEN entity_type = 'SPRINT' THEN 1 END) as sprint_entries,
-    MIN(performed_at) as first_entry,
-    MAX(performed_at) as last_entry
-FROM audit
-WHERE performed_at >= ? AND performed_at <= ?;
+-- Oldest entry
+SELECT MIN(performed_at) FROM audit WHERE 1=1
+  AND performed_at >= ?                             -- only with --since
+  AND performed_at <= ?;                            -- only with --until
 
--- Count by operation for specific period
-SELECT operation, COUNT(*) as count
-FROM audit
-WHERE performed_at >= ? AND performed_at <= ?
-GROUP BY operation
-ORDER BY count DESC;
+-- Newest entry
+SELECT MAX(performed_at) FROM audit WHERE 1=1
+  AND performed_at >= ?                             -- only with --since
+  AND performed_at <= ?;                            -- only with --until
 ```
+
+- **The fields.** `by_operation` holds one key per row of the first statement,
+  and `by_entity_type` one per row of the second. `total_entries` is the sum of the
+  counts of the first statement; no statement counts the entries a second time.
+  `first_entry_at` is the result of the third statement and `last_entry_at` that of
+  the fourth; each is `NULL`, published as `null`, when no entry passes the
+  filters. Every entry has one operation and one entity type, so the counts of
+  either grouping sum to the same total.
+- **The filters.** Both bounds are inclusive and each is appended only when its
+  flag is given; every statement carries the same bounds, bound as parameters.
+- **Four statements, not one grouping.** No index is ordered by the pair
+  `(operation, entity_type)`, so a single `GROUP BY operation, entity_type` sorts
+  every entry it counts. Each grouping above follows the leading column of one
+  index: with no date bound or with one, the first is read in the order of
+  `idx_audit_operation` and the second in that of `idx_audit_entity`, each index
+  covering its statement, so neither sorts. With both bounds, the planner may read
+  the range through `idx_audit_date` instead and group the entries it admits; the
+  result is the same. The third and fourth statements are each a search of
+  `idx_audit_date` that stops at the first entry within the bounds. The oldest and
+  newest entries are two statements because one statement holding both `MIN` and
+  `MAX` reads the whole index rather than one entry at each end.
+- **One read transaction.** The four statements MUST share one read transaction.
+  Read apart, an entry written between two of them would be counted by one figure
+  and missed by another, and the output would describe no state the log ever held.
 
 #### Clear Audit (Maintenance)
 
@@ -2259,6 +2290,7 @@ the production statement rather than on a retyped one.
 - Query patterns: `WHERE entity_type = ? AND entity_id = ? ORDER BY performed_at DESC` and `WHERE operation = ? ORDER BY performed_at DESC`, the entity history and the operation filter of `Query Audit Entries` above
 - `performed_at DESC` follows the equality columns, so the rows are read in the audit order and the `LIMIT` stops the read early, with no sort step
 - `entity_type` trails `idx_audit_operation` so that an operation filter combined with an entity-type filter is resolved inside the index
+- Each also serves one grouping of `Audit Statistics` above: `GROUP BY operation` is read in the order of `idx_audit_operation` and `GROUP BY entity_type` in that of `idx_audit_entity`, each index covering its statement, so neither grouping sorts when it carries at most one date bound
 - A read in the order of one of these indexes returns rows equal on `performed_at` in ascending `id` order, because SQLite keeps equal index entries in `rowid` order; that is the order the unfiltered log already returns through `idx_audit_date`
 
 **idx_task_comments_task_created and idx_sprint_comments_sprint_created:**
@@ -2278,32 +2310,55 @@ schema therefore declares no index on `tasks(status)`, `tasks(priority)`,
 
 ### Join Order of the Sprint Completion Counts
 
-Two statements count the `COMPLETED` member tasks of a sprint: the per-sprint count of
-the average-velocity computation (`COMMANDS.md § Get Roadmap Statistics`) and the daily
-completion counts of the burndown (`COMMANDS.md § Sprint Statistics`). Each MUST drive
-the join from `sprint_tasks` and fix that order with `CROSS JOIN`:
+Two reads count or list the member tasks of a sprint for its statistics: the
+average-velocity read (`COMMANDS.md § Get Roadmap Statistics`) and the member read
+of `rmp sprint stats` (`COMMANDS.md § Sprint Statistics`). Each MUST drive the join
+from `sprint_tasks` and fix that order with `CROSS JOIN`.
 
 ```sql
--- Average velocity: the completed count of one closed sprint s
-SELECT COUNT(*) FROM sprint_tasks st CROSS JOIN tasks t ON t.id = st.task_id
-WHERE st.sprint_id = s.id AND t.status = 'COMPLETED';
+-- Average velocity: the most recent closed sprints first, then the completed
+-- count of those sprints alone
+SELECT s.id, s.started_at, s.closed_at,
+       (SELECT COUNT(*) FROM sprint_tasks st CROSS JOIN tasks t ON t.id = st.task_id
+        WHERE st.sprint_id = s.id AND t.status = 'COMPLETED') AS completed_count
+FROM (SELECT id, started_at, closed_at FROM sprints
+      WHERE status = 'CLOSED' AND started_at IS NOT NULL AND closed_at IS NOT NULL
+      ORDER BY closed_at DESC
+      LIMIT ?) s                                    -- 5
+ORDER BY s.closed_at DESC;
 
--- Burndown: completions per day of one sprint
-SELECT substr(t.closed_at, 1, 10) AS completion_date, COUNT(*) AS completed_count
+-- Sprint statistics: every member task of one sprint, in position order
+SELECT t.id, t.status, t.severity, t.closed_at
 FROM sprint_tasks st CROSS JOIN tasks t ON t.id = st.task_id
-WHERE st.sprint_id = ? AND t.status = 'COMPLETED' AND t.closed_at IS NOT NULL
-GROUP BY completion_date
-ORDER BY completion_date ASC;
+WHERE st.sprint_id = ?
+ORDER BY st.position ASC;
 ```
+
+**The velocity read limits before it counts.** The inner statement selects the
+closed sprints that have both dates, the most recent first by `closed_at`, and
+applies the `LIMIT` there, so the completed count is computed for the selected
+sprints alone and never for a closed sprint the average does not use. The outer
+`ORDER BY` returns the selected sprints in the same order, the order in which the
+average sums their rates.
+
+**The burndown is derived from the member read.** The member read is the lean
+read of a sprint's member tasks that `rmp sprint show` also issues, carrying
+`closed_at` besides the columns that command uses. `rmp sprint stats` issues no
+statement of its own for the burndown and reads no member twice. The burndown's total is the number of rows
+the member read returned; its completions per day are those rows whose `status` is
+`COMPLETED` and whose `closed_at` is not `NULL`, grouped by the first ten
+characters of `closed_at`, the calendar date `YYYY-MM-DD`, in ascending order of
+that date (`COMMANDS.md § Sprint Statistics`, **Burndown Computation**).
 
 **Why the order is fixed.** The application never runs `ANALYZE`, so the planner has no
 statistics, and with `INNER JOIN` it is free to drive the join from `tasks` through
 `idx_tasks_status_priority`: it then walks every `COMPLETED` task of the roadmap and
 probes `sprint_tasks` for each, for every sprint counted. In SQLite, `CROSS JOIN` makes
 the left table the outer loop and leaves the result unchanged. The plan is therefore a
-search of the `sprint_tasks` primary-key index by `sprint_id`, followed by one
-primary-key lookup of `tasks` per member, and its cost follows the size of the sprint,
-not the size of the roadmap.
+search of `sprint_tasks` by `sprint_id` — through the primary-key index for the
+completed count, and through `idx_sprint_tasks_order` for the member read, which
+supplies the position order — followed by one primary-key lookup of `tasks` per
+member, and its cost follows the size of the sprint, not the size of the roadmap.
 
 ### Verification
 
@@ -2328,7 +2383,7 @@ The bind arguments are required even to plan the statement, so a check passes th
 
 **A hand-written lookalike proves nothing, and this is why the statement is taken from the builder rather than retyped.** SQLite plans a statement from its select list, its predicates, its ordering and its limit; a lookalike differs from the real statement in each of those, so it can be served by a different index — or by none — than the statement it stands in for. A check written that way certifies a query the application never issues, and it keeps passing while the real statement drifts away from its index. Taking the SQL from the builder is what makes that drift fail the check instead of hiding behind it.
 
-This verification is automated, not left to hand-running: `internal/db/index_test.go` plans the production statements of the task listing, the web tasks page's task listing and page-rows read (`List All` above), the audit listing, the sprint membership lookup, and the comment listings, and asserts the three expectations above for each. The production builders are separated from execution precisely so a check can obtain that SQL.
+This verification is automated, not left to hand-running: `internal/db/index_test.go` plans the production statements of the task listing, the web tasks page's task listing, in both of its projections, and its page-rows read (`List All` above), the audit listing, the sprint membership lookup, and the comment listings, and asserts the three expectations above for each. The production builders are separated from execution precisely so a check can obtain that SQL.
 
 ---
 

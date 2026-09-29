@@ -43,6 +43,20 @@ type stmtCounter struct {
 	mu       sync.Mutex
 	prepares []string
 	execs    []string
+
+	// before, when set, runs just before each counted execution, with the
+	// statement's text, outside mu.
+	before atomic.Pointer[func(query string)]
+}
+
+// setBeforeExecute installs fn to run just before each counted execution, or
+// removes the hook when fn is nil.
+func (c *stmtCounter) setBeforeExecute(fn func(query string)) {
+	if fn == nil {
+		c.before.Store(nil)
+		return
+	}
+	c.before.Store(&fn)
 }
 
 func (c *stmtCounter) add()       { c.n.Add(1) }
@@ -57,6 +71,9 @@ func (c *stmtCounter) reset() {
 
 // executedText counts one execution of the statement whose text is query.
 func (c *stmtCounter) executedText(query string) {
+	if fn := c.before.Load(); fn != nil {
+		(*fn)(query)
+	}
 	c.add()
 	c.mu.Lock()
 	c.execs = append(c.execs, query)

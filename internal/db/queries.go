@@ -262,10 +262,16 @@ const taskListFullSelect = `SELECT t.id, t.title, t.status, t.type, t.functional
 		        (SELECT COUNT(*) FROM tasks s WHERE s.parent_task_id = t.id) AS subtask_count` + taskDepsSelect + `
 		      FROM tasks t WHERE 1=1`
 
-// taskListingSelect is the listing's head for the web tasks page's task listing:
-// each task's id and title, and no other column (SPEC/DATABASE.md § Main SQL
-// Queries, "List All", "The web tasks page's two reads", Projection).
-const taskListingSelect = `SELECT t.id, t.title FROM tasks t WHERE 1=1`
+// taskListingSelect and taskListingIDSelect are the listing's heads for the web
+// tasks page's task listing: each task's id and title when the request carries a
+// search term, and each task's id alone when it carries none, and no other
+// column in either case (SPEC/DATABASE.md § Main SQL Queries, "List All", "The
+// web tasks page's two reads", Projection). Without a term the title is read by
+// nothing, and the id alone lets an index cover the statement.
+const (
+	taskListingSelect   = `SELECT t.id, t.title FROM tasks t WHERE 1=1`
+	taskListingIDSelect = `SELECT t.id FROM tasks t WHERE 1=1`
+)
 
 // buildTaskListQuery appends the listing's predicates, ordering and optional
 // LIMIT to head, a select list ending in "FROM tasks t WHERE 1=1".
@@ -377,7 +383,8 @@ func appendDistinctIn[T ~string](prefix string, values []T, args []any) (string,
 // TaskRef is one row of the web tasks page's task listing: a task's id and
 // title, the whole searchable text of the page and the key that selects its
 // rows (SPEC/DATABASE.md § Main SQL Queries, "List All", "The web tasks page's
-// two reads"). It is deliberately not a partially populated models.Task.
+// two reads"). Title is read only when the listing is asked for it, and is empty
+// otherwise. It is deliberately not a partially populated models.Task.
 type TaskRef struct {
 	Title string
 	ID    int
@@ -407,8 +414,9 @@ type queryer interface {
 // transaction (SPEC/DATABASE.md § Main SQL Queries, "List All", "The web tasks
 // page's two reads"; SPEC/WEB.md § Roadmap Tasks Page, Read cost):
 //
-//  1. the task listing: the id and title of every task the filter admits, with
-//     no LIMIT and no OFFSET, in the order priority DESC, created_at ASC, id ASC;
+//  1. the task listing: the id of every task the filter admits, and its title
+//     when withTitle is set, with no LIMIT and no OFFSET, in the order priority
+//     DESC, created_at ASC, id ASC;
 //  2. the page-rows read: the seven shown columns of the tasks whose ids
 //     selectPage returned, issued only when it returned at least one id.
 //
@@ -426,7 +434,11 @@ type queryer interface {
 // is always the total one above, and neither the `rmp task list` display default
 // (models.DefaultTaskLimit) nor its cap (models.MaxTaskLimit) is applied. A nil
 // filter admits every task. The caller's struct is never mutated.
-func (db *DB) ReadTaskListPage(ctx context.Context, filter *TaskListFilter,
+//
+// withTitle is set exactly when the caller has a search term to match: the title
+// is then projected and every TaskRef carries it; otherwise the listing projects
+// the id alone and every TaskRef's Title is empty.
+func (db *DB) ReadTaskListPage(ctx context.Context, filter *TaskListFilter, withTitle bool,
 	selectPage func(listing []TaskRef) []int) ([]TaskRow, error) {
 	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
@@ -436,7 +448,7 @@ func (db *DB) ReadTaskListPage(ctx context.Context, filter *TaskListFilter,
 	// the error that caused it is the one returned.
 	defer func() { _ = tx.Rollback() }()
 
-	rows, err := readTaskListPage(ctx, tx, filter, selectPage)
+	rows, err := readTaskListPage(ctx, tx, filter, withTitle, selectPage)
 	if err != nil {
 		return nil, err
 	}
@@ -448,9 +460,9 @@ func (db *DB) ReadTaskListPage(ctx context.Context, filter *TaskListFilter,
 
 // readTaskListPage is ReadTaskListPage's two statements on a given queryer, so a
 // test can run them on its own connection.
-func readTaskListPage(ctx context.Context, q queryer, filter *TaskListFilter,
+func readTaskListPage(ctx context.Context, q queryer, filter *TaskListFilter, withTitle bool,
 	selectPage func(listing []TaskRef) []int) ([]TaskRow, error) {
-	listing, err := listTaskRefs(ctx, q, filter)
+	listing, err := listTaskRefs(ctx, q, filter, withTitle)
 	if err != nil {
 		return nil, err
 	}
@@ -463,20 +475,25 @@ func readTaskListPage(ctx context.Context, q queryer, filter *TaskListFilter,
 
 // buildTaskListingQuery assembles the web tasks page's task listing: the
 // listing's predicates and its fifth, total ordering, projecting t.id and t.title
-// alone, with no LIMIT. The ordering keys are applied, not projected.
-func buildTaskListingQuery(filter *TaskListFilter) (string, []any) {
+// when withTitle is set and t.id alone otherwise, with no LIMIT. The ordering
+// keys are applied, not projected.
+func buildTaskListingQuery(filter *TaskListFilter, withTitle bool) (string, []any) {
 	effective := TaskListFilter{}
 	if filter != nil {
 		effective = *filter
 	}
 	effective.Sort = sortPriorityThenID
 	effective.Limit = 0
-	return buildTaskListQuery(taskListingSelect, &effective)
+	if withTitle {
+		return buildTaskListQuery(taskListingSelect, &effective)
+	}
+	return buildTaskListQuery(taskListingIDSelect, &effective)
 }
 
-// listTaskRefs runs the task listing and returns its rows in its order.
-func listTaskRefs(ctx context.Context, q queryer, filter *TaskListFilter) ([]TaskRef, error) {
-	query, args := buildTaskListingQuery(filter)
+// listTaskRefs runs the task listing and returns its rows in its order, each
+// with its title when withTitle is set.
+func listTaskRefs(ctx context.Context, q queryer, filter *TaskListFilter, withTitle bool) ([]TaskRef, error) {
+	query, args := buildTaskListingQuery(filter, withTitle)
 	rows, err := q.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("listing every task: %w", err)
@@ -486,7 +503,13 @@ func listTaskRefs(ctx context.Context, q queryer, filter *TaskListFilter) ([]Tas
 	refs := make([]TaskRef, 0, 64)
 	for rows.Next() {
 		var ref TaskRef
-		if err := rows.Scan(&ref.ID, &ref.Title); err != nil {
+		var err error
+		if withTitle {
+			err = rows.Scan(&ref.ID, &ref.Title)
+		} else {
+			err = rows.Scan(&ref.ID)
+		}
+		if err != nil {
 			return nil, fmt.Errorf("scanning task listing row: %w", err)
 		}
 		refs = append(refs, ref)
@@ -1792,26 +1815,48 @@ func taskStatesQuery(placeholders string) string {
 	)
 }
 
-// sprintTaskStatesQuery reads the lean projection of every member task of one
-// sprint in the sprint's planned order. The join is driven from sprint_tasks,
-// through the ordering index, with one primary-key lookup of tasks per member.
-// position is unique within a sprint, so the order is total.
-const sprintTaskStatesQuery = `SELECT t.id, t.status, t.severity
+// sprintTaskStatesQuery is the member read of a sprint: the lean projection of
+// every member task, with its closed_at, in the sprint's planned order. The join
+// is driven from sprint_tasks, through the ordering index, with one primary-key
+// lookup of tasks per member. position is unique within a sprint, so the order
+// is total (SPEC/DATABASE.md § Join Order of the Sprint Completion Counts).
+const sprintTaskStatesQuery = `SELECT t.id, t.status, t.severity, t.closed_at
 	 FROM sprint_tasks st CROSS JOIN tasks t ON t.id = st.task_id
 	 WHERE st.sprint_id = ?
 	 ORDER BY st.position ASC`
 
-// GetSprintTaskStates reads the lean projection of every member task of a
-// sprint, ordered by position: the tasks, and the order, GetSprintTasksFull
-// returns for the sprint with no status filter and position ordering.
-func (db *DB) GetSprintTaskStates(ctx context.Context, sprintID int) ([]TaskState, error) {
+// SprintMemberState is one row of the member read of a sprint: the lean
+// projection of a member task and its closed_at, which `rmp sprint stats`
+// derives the burndown from (SPEC/DATABASE.md § Join Order of the Sprint
+// Completion Counts). ClosedAt is invalid when the task's closed_at is NULL.
+type SprintMemberState struct {
+	ClosedAt sql.NullString
+	TaskState
+}
+
+// GetSprintTaskStates is the member read of a sprint: the lean projection and
+// the closed_at of every member task, ordered by position — the tasks, and the
+// order, GetSprintTasksFull returns for the sprint with no status filter and
+// position ordering.
+func (db *DB) GetSprintTaskStates(ctx context.Context, sprintID int) ([]SprintMemberState, error) {
 	rows, err := db.QueryContext(ctx, sprintTaskStatesQuery, sprintID)
 	if err != nil {
 		return nil, fmt.Errorf("querying sprint tasks: %w", err)
 	}
 	defer rows.Close()
 
-	return scanTaskStates(rows)
+	members := []SprintMemberState{}
+	for rows.Next() {
+		var m SprintMemberState
+		if err := rows.Scan(&m.ID, &m.Status, &m.Severity, &m.ClosedAt); err != nil {
+			return nil, fmt.Errorf("scanning task state: %w", err)
+		}
+		members = append(members, m)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterating task states: %w", err)
+	}
+	return members, nil
 }
 
 // activeSprintTaskStatesQuery reads the lean projection of the active member
@@ -1868,21 +1913,6 @@ func (db *DB) CheckSprintExists(ctx context.Context, id int) error {
 		return fmt.Errorf("querying sprint: %w", err)
 	}
 	return nil
-}
-
-// sprintStartedAt reads one sprint's started_at by its id, failing exactly as
-// GetSprint fails: a missing sprint is utils.ErrNotFound with the message
-// "sprint <id>". It reads no other column and no membership row.
-func (db *DB) sprintStartedAt(ctx context.Context, id int) (sql.NullString, error) {
-	var startedAt sql.NullString
-	err := db.QueryRowContext(ctx, "SELECT started_at FROM sprints WHERE id = ?", id).Scan(&startedAt)
-	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return startedAt, fmt.Errorf("%w: sprint %d", utils.ErrNotFound, id)
-		}
-		return startedAt, fmt.Errorf("querying sprint: %w", err)
-	}
-	return startedAt, nil
 }
 
 // sprintMember is one row of sprint_tasks as the ordering routines read it: a
@@ -2984,65 +3014,123 @@ func (db *DB) GetEntityHistory(ctx context.Context, entityType string, entityID 
 //	    fmt.Printf("  %s: %d\n", op, count)
 //	}
 func (db *DB) GetAuditStats(ctx context.Context, since, until *string) (*models.AuditStats, error) {
+	q := buildAuditStatsQueries(since, until)
+
+	// The four statements share ONE read transaction, so every figure describes
+	// the same snapshot of the log (SPEC/DATABASE.md § Audit Statistics).
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, fmt.Errorf("beginning the audit stats read: %w", err)
+	}
+	// A no-op once Commit has run; on an error path it releases the snapshot, and
+	// the error that caused it is the one returned.
+	defer func() { _ = tx.Rollback() }()
+
 	stats := &models.AuditStats{
 		ByOperation:  make(map[string]int),
 		ByEntityType: make(map[string]int),
 	}
+	// total_entries is the sum of the per-operation counts: every entry has one
+	// operation, and no statement counts the entries a second time.
+	if stats.TotalEntries, err = readAuditCounts(ctx, tx, q.byOperation, q.args, stats.ByOperation); err != nil {
+		return nil, err
+	}
+	if _, err = readAuditCounts(ctx, tx, q.byEntityType, q.args, stats.ByEntityType); err != nil {
+		return nil, err
+	}
+	if stats.FirstEntryAt, err = readAuditBound(ctx, tx, q.first, q.args); err != nil {
+		return nil, err
+	}
+	if stats.LastEntryAt, err = readAuditBound(ctx, tx, q.last, q.args); err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("ending the audit stats read: %w", err)
+	}
+	return stats, nil
+}
 
-	// One pass over the audit table, grouped by (operation, entity_type),
-	// returns enough information to derive every field of AuditStats:
-	//   total = sum(cnt)
-	//   ByOperation[op]    = sum(cnt) per op
-	//   ByEntityType[et]   = sum(cnt) per et
-	//   FirstEntryAt       = min(min_at)
-	//   LastEntryAt        = max(max_at)
-	var qb strings.Builder
-	qb.Grow(256)
-	qb.WriteString(`SELECT operation, entity_type, COUNT(*), MIN(performed_at), MAX(performed_at) FROM audit WHERE 1=1`)
+// auditStatsQueries are the four statements of `rmp audit stats` and the bind
+// arguments every one of them takes (SPEC/DATABASE.md § Audit Statistics).
+type auditStatsQueries struct {
+	byOperation  string
+	byEntityType string
+	first        string
+	last         string
+	args         []any
+}
+
+// buildAuditStatsQueries assembles the four statements of GetAuditStats, each
+// carrying the same inclusive date bounds, appended only for the bounds given
+// and bound as parameters. Assembly is separated from execution so the index
+// tests plan the exact SQL production runs.
+func buildAuditStatsQueries(since, until *string) auditStatsQueries {
+	where := " FROM audit WHERE 1=1"
 	args := make([]any, 0, 2)
 	if since != nil {
-		qb.WriteString(" AND performed_at >= ?")
+		where += " AND performed_at >= ?"
 		args = append(args, *since)
 	}
 	if until != nil {
-		qb.WriteString(" AND performed_at <= ?")
+		where += " AND performed_at <= ?"
 		args = append(args, *until)
 	}
-	qb.WriteString(" GROUP BY operation, entity_type")
+	return auditStatsQueries{
+		byOperation:  "SELECT operation, COUNT(*)" + where + " GROUP BY operation",
+		byEntityType: "SELECT entity_type, COUNT(*)" + where + " GROUP BY entity_type",
+		first:        "SELECT MIN(performed_at)" + where,
+		last:         "SELECT MAX(performed_at)" + where,
+		args:         args,
+	}
+}
 
-	rows, err := db.QueryContext(ctx, qb.String(), args...)
+// readAuditCounts runs one grouping statement of the audit statistics, stores
+// each group's count in counts, and returns the sum of the counts.
+func readAuditCounts(ctx context.Context, q queryer, query string, args []any, counts map[string]int) (int, error) {
+	rows, err := q.QueryContext(ctx, query, args...)
+	if err != nil {
+		return 0, fmt.Errorf("aggregating audit stats: %w", err)
+	}
+	defer rows.Close()
+
+	total := 0
+	for rows.Next() {
+		var key string
+		var n int
+		if err := rows.Scan(&key, &n); err != nil {
+			return 0, fmt.Errorf("scanning audit stats row: %w", err)
+		}
+		counts[key] = n
+		total += n
+	}
+	if err := rows.Err(); err != nil {
+		return 0, fmt.Errorf("iterating audit stats rows: %w", err)
+	}
+	return total, nil
+}
+
+// readAuditBound runs the oldest- or newest-entry statement of the audit
+// statistics and returns its value, or nil when no entry passes the filters.
+func readAuditBound(ctx context.Context, q queryer, query string, args []any) (*string, error) {
+	rows, err := q.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("aggregating audit stats: %w", err)
 	}
 	defer rows.Close()
 
-	for rows.Next() {
-		var op, ent string
-		var cnt int
-		var minAt, maxAt sql.NullString
-		if err := rows.Scan(&op, &ent, &cnt, &minAt, &maxAt); err != nil {
+	var bound sql.NullString
+	if rows.Next() {
+		if err := rows.Scan(&bound); err != nil {
 			return nil, fmt.Errorf("scanning audit stats row: %w", err)
-		}
-		stats.TotalEntries += cnt
-		stats.ByOperation[op] += cnt
-		stats.ByEntityType[ent] += cnt
-		if minAt.Valid {
-			if stats.FirstEntryAt == nil || minAt.String < *stats.FirstEntryAt {
-				v := minAt.String
-				stats.FirstEntryAt = &v
-			}
-		}
-		if maxAt.Valid {
-			if stats.LastEntryAt == nil || maxAt.String > *stats.LastEntryAt {
-				v := maxAt.String
-				stats.LastEntryAt = &v
-			}
 		}
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("iterating audit stats rows: %w", err)
 	}
-	return stats, nil
+	if !bound.Valid {
+		return nil, nil
+	}
+	return &bound.String, nil
 }
 
 // ==================== SPRINT TASK ORDERING QUERIES ====================
@@ -3479,11 +3567,13 @@ func (db *DB) getTaskStatsByStatus(ctx context.Context) (*models.TaskStatsSummar
 	return stats, nil
 }
 
-// ==================== SPRINT VELOCITY AND BURNDOWN QUERIES ====================
+// ==================== SPRINT VELOCITY QUERIES ====================
 
-// The two statements below count the COMPLETED member tasks of a sprint, and
-// each drives the join from sprint_tasks, fixing that order with CROSS JOIN
-// (SPEC/DATABASE.md § Join Order of the Sprint Completion Counts).
+// The completed count of the average velocity, like the member read of a sprint
+// (sprintTaskStatesQuery), drives the join from sprint_tasks and fixes that
+// order with CROSS JOIN (SPEC/DATABASE.md § Join Order of the Sprint Completion
+// Counts). The burndown of `rmp sprint stats` is derived from the member read and
+// has no statement of its own.
 //
 // The application never runs ANALYZE, so the planner has no statistics, and with
 // an INNER JOIN it is free to drive the join from tasks through
@@ -3492,118 +3582,25 @@ func (db *DB) getTaskStatsByStatus(ctx context.Context) (*models.TaskStatsSummar
 // JOIN makes the left table the outer loop and leaves the result unchanged, so
 // the plan is a search of the sprint_tasks primary-key index by sprint_id
 // followed by one primary-key lookup of tasks per member: its cost follows the
-// size of the sprint, not the size of the roadmap. They are package-level so the
-// index tests plan the exact SQL production runs.
+// size of the sprint, not the size of the roadmap. The statement is
+// package-level so the index tests plan the exact SQL production runs.
 var (
-	// burndownCompletionsQuery reads the completions per day of one sprint.
-	// SQLite substr extracts the date portion (YYYY-MM-DD) from the ISO 8601
-	// timestamp.
-	burndownCompletionsQuery = `SELECT substr(t.closed_at, 1, 10) AS completion_date, COUNT(*) AS completed_count
-		 FROM sprint_tasks st CROSS JOIN tasks t ON t.id = st.task_id
-		 WHERE st.sprint_id = ?
-		   AND t.status = ` + sqlStatusCompleted + `
-		   AND t.closed_at IS NOT NULL
-		 GROUP BY completion_date
-		 ORDER BY completion_date ASC`
-
 	// averageVelocityQuery reads the last N closed sprints that have both
-	// started_at and closed_at set, each with its completed count.
+	// started_at and closed_at set, each with its completed count. The LIMIT is
+	// applied in the inner statement, so the count runs for the selected sprints
+	// alone; the outer ORDER BY returns them most recent first (SPEC/DATABASE.md
+	// § Join Order of the Sprint Completion Counts).
 	averageVelocityQuery = `SELECT s.id, s.started_at, s.closed_at,
 		        (SELECT COUNT(*) FROM sprint_tasks st CROSS JOIN tasks t ON t.id = st.task_id
 		         WHERE st.sprint_id = s.id AND t.status = ` + sqlStatusCompleted + `) AS completed_count
-		 FROM sprints s
-		 WHERE s.status = ` + sqlSprintClosed + `
-		   AND s.started_at IS NOT NULL
-		   AND s.closed_at IS NOT NULL
-		 ORDER BY s.closed_at DESC
-		 LIMIT ?`
+		 FROM (SELECT id, started_at, closed_at FROM sprints
+		       WHERE status = ` + sqlSprintClosed + `
+		         AND started_at IS NOT NULL
+		         AND closed_at IS NOT NULL
+		       ORDER BY closed_at DESC
+		       LIMIT ?) s
+		 ORDER BY s.closed_at DESC`
 )
-
-// GetSprintBurndown computes the burndown series for a sprint.
-// It derives completion dates from tasks.closed_at for all tasks that belong to the sprint.
-// Returns a slice of BurndownEntry ordered by date ascending, starting from the sprint start date
-// with total_tasks remaining and decrementing by completions per day.
-// Returns an empty slice when no tasks have been completed.
-func (db *DB) GetSprintBurndown(ctx context.Context, sprintID int) ([]models.BurndownEntry, error) {
-	// The series needs only the sprint's start date, so only started_at is read,
-	// by the sprint's id; a missing sprint fails exactly as GetSprint fails
-	// (SPEC/IMPLEMENTATION.md, Performance Guidelines, item 8).
-	startedAt, err := db.sprintStartedAt(ctx, sprintID)
-	if err != nil {
-		return nil, fmt.Errorf("getting sprint for burndown: %w", err)
-	}
-
-	// Count total tasks in the sprint.
-	var totalTasks int
-	err = db.QueryRowContext(ctx,
-		`SELECT COUNT(*) FROM sprint_tasks WHERE sprint_id = ?`,
-		sprintID,
-	).Scan(&totalTasks)
-	if err != nil {
-		return nil, fmt.Errorf("counting sprint tasks for burndown: %w", err)
-	}
-
-	// Query completions per day: tasks in this sprint that have a closed_at date (COMPLETED status).
-	rows, err := db.QueryContext(ctx, burndownCompletionsQuery, sprintID)
-	if err != nil {
-		return nil, fmt.Errorf("querying burndown completions: %w", err)
-	}
-	defer rows.Close()
-
-	type dailyCount struct {
-		date  string
-		count int
-	}
-
-	var dailyCounts []dailyCount
-	for rows.Next() {
-		var dc dailyCount
-		if scanErr := rows.Scan(&dc.date, &dc.count); scanErr != nil {
-			return nil, fmt.Errorf("scanning burndown row: %w", scanErr)
-		}
-		dailyCounts = append(dailyCounts, dc)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterating burndown rows: %w", err)
-	}
-
-	if len(dailyCounts) == 0 {
-		return []models.BurndownEntry{}, nil
-	}
-
-	// Build the burndown series.
-	// If sprint has a started_at, use it as the baseline; otherwise start from the first completion date.
-	var startDate string
-	if startedAt.Valid && startedAt.String != "" {
-		startDate = startedAt.String[:10] // Extract YYYY-MM-DD
-	} else {
-		startDate = dailyCounts[0].date
-	}
-
-	entries := make([]models.BurndownEntry, 0, len(dailyCounts)+1)
-
-	// Include start day with all tasks remaining (before any completions).
-	if startDate < dailyCounts[0].date {
-		entries = append(entries, models.BurndownEntry{
-			Date:           startDate,
-			TasksRemaining: totalTasks,
-		})
-	}
-
-	remaining := totalTasks
-	for _, dc := range dailyCounts {
-		remaining -= dc.count
-		if remaining < 0 {
-			remaining = 0
-		}
-		entries = append(entries, models.BurndownEntry{
-			Date:           dc.date,
-			TasksRemaining: remaining,
-		})
-	}
-
-	return entries, nil
-}
 
 // GetAverageVelocity computes the average velocity across the last N closed sprints.
 // Velocity for each sprint = completed_tasks / sprint_duration_days.

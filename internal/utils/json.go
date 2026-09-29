@@ -46,15 +46,69 @@ func PrintJSON(v any) error {
 }
 
 // writeJSON is PrintJSON writing to w: the value is encoded in full, in one pass,
-// before a single write of the encoded bytes and the trailing newline.
+// into memory, and only then are the encoded bytes and the trailing newline
+// written, so a value that cannot be encoded writes nothing.
+//
+// The encoded bytes are held in fixed-size chunks rather than in one growing
+// slice: a large result (several megabytes for a sprint of thousands of tasks)
+// is then never reallocated and copied as it grows, and each chunk is written in
+// turn once the encoding has succeeded.
 func writeJSON(w io.Writer, v any) error {
-	out, err := jsonv2.Marshal(v, printJSONOptions)
-	if err != nil {
+	var out chunkedBuffer
+	if err := jsonv2.MarshalWrite(&out, v, printJSONOptions); err != nil {
 		return fmt.Errorf("encoding JSON: %w", err)
 	}
-	out = append(out, '\n')
-	if _, err := w.Write(out); err != nil {
+	out.writeByte('\n')
+	if err := out.writeTo(w); err != nil {
 		return fmt.Errorf("encoding JSON: %w", err)
+	}
+	return nil
+}
+
+// jsonChunkSize is the capacity of each chunk of a chunkedBuffer.
+const jsonChunkSize = 64 << 10
+
+// chunkedBuffer is an in-memory io.Writer that stores what it is given in
+// chunks of jsonChunkSize bytes. A chunk, once allocated, is never reallocated,
+// copied, or moved, so appending costs one copy of the written bytes whatever
+// the total size.
+type chunkedBuffer struct {
+	chunks [][]byte
+}
+
+// Write appends p to the buffer. It never fails.
+func (b *chunkedBuffer) Write(p []byte) (int, error) {
+	n := len(p)
+	for len(p) > 0 {
+		last := b.tail()
+		k := min(cap(*last)-len(*last), len(p))
+		*last = append(*last, p[:k]...)
+		p = p[k:]
+	}
+	return n, nil
+}
+
+// writeByte appends one byte to the buffer.
+func (b *chunkedBuffer) writeByte(c byte) {
+	last := b.tail()
+	*last = append(*last, c)
+}
+
+// tail returns the last chunk, allocating a new one first when there is none or
+// when the last one is full.
+func (b *chunkedBuffer) tail() *[]byte {
+	if n := len(b.chunks); n == 0 || len(b.chunks[n-1]) == cap(b.chunks[n-1]) {
+		b.chunks = append(b.chunks, make([]byte, 0, jsonChunkSize))
+	}
+	return &b.chunks[len(b.chunks)-1]
+}
+
+// writeTo writes every chunk to w, in order, and stops at the first error.
+func (b *chunkedBuffer) writeTo(w io.Writer) error {
+	for _, chunk := range b.chunks {
+		if _, err := w.Write(chunk); err != nil {
+			return err
+		}
 	}
 	return nil
 }

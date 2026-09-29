@@ -30,18 +30,21 @@ func taskStateIDsOf(states []db.TaskState) []int {
 	return ids
 }
 
-// tasksOfStates renders lean task projections as the task values the sprint
-// report calculators take (models.CalculateSprintStats and
-// models.CalculateSprintShowResult). Those calculators read a task's ID, Status
-// and Severity and nothing else, which are exactly the columns a TaskState
-// carries, so the report computed from these values is the one the full rows
-// would produce (SPEC/IMPLEMENTATION.md, "Read only the columns the caller
-// uses"). The values are for those calculators only: every other field is its
-// zero value.
-func tasksOfStates(states []db.TaskState) []models.Task {
+// tasksOfStates renders the member read of a sprint as the task values the
+// sprint report calculators take (models.CalculateSprintStats,
+// models.CalculateSprintShowResult and models.CalculateSprintBurndown). Those
+// calculators read a task's ID, Status, Severity and ClosedAt and nothing else,
+// which are exactly the columns the member read carries, so the report computed
+// from these values is the one the full rows would produce
+// (SPEC/IMPLEMENTATION.md, "Read only the columns the caller uses"). The values
+// are for those calculators only: every other field is its zero value.
+func tasksOfStates(states []db.SprintMemberState) []models.Task {
 	tasks := make([]models.Task, len(states))
 	for i := range states {
 		tasks[i] = models.Task{ID: states[i].ID, Status: states[i].Status, Severity: states[i].Severity}
+		if states[i].ClosedAt.Valid {
+			tasks[i].ClosedAt = &states[i].ClosedAt.String
+		}
 	}
 	return tasks
 }

@@ -213,7 +213,7 @@ func roadmapTaskTitles(t *testing.T, roadmap string) map[int]string {
 	defer database.Close() //nolint:errcheck // test cleanup
 
 	var titles map[int]string
-	if _, err := database.ReadTaskListPage(context.Background(), nil, func(listing []db.TaskRef) []int {
+	if _, err := database.ReadTaskListPage(context.Background(), nil, true, func(listing []db.TaskRef) []int {
 		titles = make(map[int]string, len(listing))
 		for _, ref := range listing {
 			titles[ref.ID] = ref.Title

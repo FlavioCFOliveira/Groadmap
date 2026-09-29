@@ -542,20 +542,24 @@ func TestListingAndAuditReadsNeedNoSortStep(t *testing.T) {
 }
 
 // TestSprintCompletionCountsDriveFromSprintTasks settles SPEC/DATABASE.md § Join
-// Order of the Sprint Completion Counts: the velocity count and the burndown
-// count each search sprint_tasks by sprint_id first, then look each member task
-// up by its primary key, and each fixes that order with CROSS JOIN.
+// Order of the Sprint Completion Counts: the velocity count and the member read
+// of `sprint stats` each search sprint_tasks by sprint_id first — the velocity
+// count through the primary-key index, the member read through
+// idx_sprint_tasks_order — then look each member task up by its primary key, and
+// each fixes that order with CROSS JOIN.
 func TestSprintCompletionCountsDriveFromSprintTasks(t *testing.T) {
 	database, cleanup := setupTestDB(t)
 	defer cleanup()
 	seedIndexFixture(t, database)
 
 	for name, c := range map[string]struct {
-		query string
-		args  []any
+		query  string
+		search string
+		args   []any
 	}{
-		"average velocity": {averageVelocityQuery, []any{5}},
-		"burndown":         {burndownCompletionsQuery, []any{1}},
+		"average velocity": {averageVelocityQuery,
+			"SEARCH st USING COVERING INDEX " + constraintIndexOf(t, database, "sprint_tasks", "pk") + " (sprint_id=?)", []any{5}},
+		"member read": {sprintTaskStatesQuery, "SEARCH st USING INDEX idx_sprint_tasks_order (sprint_id=?)", []any{1}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			if !strings.Contains(c.query, "FROM sprint_tasks st CROSS JOIN tasks t") {
@@ -563,13 +567,13 @@ func TestSprintCompletionCountsDriveFromSprintTasks(t *testing.T) {
 					"`sprint_tasks st CROSS JOIN tasks t`:\n%s", c.query)
 			}
 			plan := queryPlan(t, database, c.query, c.args...)
-			st := strings.Index(plan, "SEARCH st USING COVERING INDEX "+constraintIndexOf(t, database, "sprint_tasks", "pk")+" (sprint_id=?)")
+			st := strings.Index(plan, c.search)
 			tk := strings.Index(plan, "SEARCH t USING INTEGER PRIMARY KEY (rowid=?)")
 			if st < 0 || tk < 0 || st > tk {
-				t.Errorf("the count does not search sprint_tasks by sprint_id and then tasks by primary key.\nplan: %s", plan)
+				t.Errorf("the read does not search sprint_tasks by sprint_id and then tasks by primary key.\nplan: %s", plan)
 			}
 			if strings.Contains(plan, "idx_tasks_status_priority") {
-				t.Errorf("the count walks the tasks-by-status index.\nplan: %s", plan)
+				t.Errorf("the read walks the tasks-by-status index.\nplan: %s", plan)
 			}
 		})
 	}
@@ -615,10 +619,24 @@ func TestSprintCompletionCountsAreUnchanged(t *testing.T) {
 		t.Fatalf("closing the sprint: %v", err)
 	}
 
-	burndown, err := database.GetSprintBurndown(ctx, sprintID)
+	// The burndown is derived from the member read (SPEC/DATABASE.md § Join Order
+	// of the Sprint Completion Counts).
+	sprint, err := database.GetSprint(ctx, sprintID)
 	if err != nil {
-		t.Fatalf("burndown: %v", err)
+		t.Fatalf("reading the sprint: %v", err)
 	}
+	members, err := database.GetSprintTaskStates(ctx, sprintID)
+	if err != nil {
+		t.Fatalf("member read: %v", err)
+	}
+	tasks := make([]models.Task, len(members))
+	for i := range members {
+		tasks[i] = models.Task{ID: members[i].ID, Status: members[i].Status}
+		if members[i].ClosedAt.Valid {
+			tasks[i].ClosedAt = &members[i].ClosedAt.String
+		}
+	}
+	burndown := models.CalculateSprintBurndown(sprint, tasks)
 	want := []models.BurndownEntry{
 		{Date: "2026-04-01", TasksRemaining: 5},
 		{Date: "2026-04-02", TasksRemaining: 3},

@@ -1394,9 +1394,10 @@ how the `rmp web` process itself terminates.
   `status`, and `type` are passed to the task listing as
   bound parameters of its prepared statement; no parameter value is ever
   concatenated or interpolated into SQL text, and an ignored value reaches no
-  statement at all (see `DATABASE.md § List All`). `q`, `page`, and `size` never
-  reach SQL: they are applied in memory, and the page-rows read binds only the ids
-  of the tasks they selected (see **Read cost** below).
+  statement at all (see `DATABASE.md § List All`). The values of `q`, `page`, and
+  `size` never reach SQL: they are applied in memory, and the page-rows read binds
+  only the ids of the tasks they selected. Whether a term is present decides only
+  the task listing's projection (see **Read cost** below).
 - **Filter persistence.** The page remembers the reader's filter state across
   visits in one cookie that the server sets and reads; no script reads or writes
   it, and the page uses no browser storage (`localStorage`, `sessionStorage`, or
@@ -1831,8 +1832,9 @@ how the `rmp web` process itself terminates.
      the structured filters admit, carrying one predicate per filtered
      dimension — sprint, status, and type — with one bound parameter per distinct
      active value of that dimension, in the ordering of **Order** above, and
-     projecting each task's `id` and `title` and no other column (see
-     `DATABASE.md § List All`, "The web tasks page's two reads");
+     projecting each task's `id` and no other column when the request carries no
+     search term, and each task's `id` and `title` and no other column when it
+     carries one (see `DATABASE.md § List All`, "The web tasks page's two reads");
   3. **one** read of the rows the page renders, the **page-rows read**: the seven
      columns a row shows — `id`, `title`, `type`, `status`, `severity`, `priority`,
      and `created_at` — of each task of the selected page, and no other column,
@@ -1846,10 +1848,14 @@ how the `rmp web` process itself terminates.
      it returned a row, and no count is issued; a non-empty filtered list issues
      no count either.
 
-  **What the task listing carries.** The `id` and the `title` are the whole
-  searchable text (see **The text search** above), and the `id` is also what
-  selects the page's rows. The ordering is applied by the listing itself, so its
-  keys are not projected. Nothing else on the page reads a field of every
+  **What the task listing carries.** The `id` is what selects the page's rows,
+  and the `id` and the `title` are the whole searchable text (see **The text
+  search** above). The `title` is therefore read only when the request carries a
+  term, that is, a `q` that is not empty after the trim; without one, nothing on
+  the page reads the `title` of a task it does not show, and the rows it shows take
+  theirs from the page-rows read. Whether a term is present decides the projection
+  alone: the term's value never reaches SQL. The ordering is applied by the listing
+  itself, so its keys are not projected. Nothing else on the page reads a field of every
   matching task: the total is the number of rows that remain after the term, the
   page count and the range text follow from it, the empty state is chosen from the
   listing's own row count or from the count of item 4, and the filter bar is built
@@ -4279,8 +4285,9 @@ re-presents an earlier, now-stale response in its place.
    `DATABASE.md § Main SQL Queries`. The sprints page reads the roadmap's sprints
    and each sprint's total task count for its card footer, but no member tasks,
    because the page renders every sprint as a card with no member tasks on it; the
-   tasks page reads the roadmap's sprints for its sprint filter and the id and title
-   of each task the page's structured filters admit, and applies the search term and
+   tasks page reads the roadmap's sprints for its sprint filter and the id of each
+   task the page's structured filters admit, with its title when the request
+   carries a search term, and applies the search term and
    selects the requested page in memory, then reads the shown columns of that page's
    tasks alone — three queries, with none per row (see
    [Roadmap Tasks Page](#roadmap-tasks-page), **Read cost**); the
@@ -7181,7 +7188,9 @@ Rules:
     when, the task listing carried at least one sprint, status, or type predicate.
     A request whose list holds a row issues no count, and neither does an empty list
     whose task listing carried no predicate. The task listing projects each task's
-    `id` and `title` and no other column, and the page-rows read selects the ids of
+    `id` and no other column when the request carries no search term, and each
+    task's `id` and `title` and no other column when it carries one; a `q` that is
+    empty after the trim carries no term. The page-rows read selects the ids of
     the rendered page's tasks and no other id: an instrumented capture of the
     statements shows at most `size` bound ids in the page-rows read, for every page
     and every page size. An instrumented count of queries is the same for a roadmap
@@ -7538,8 +7547,9 @@ Rules:
     `status=DOING' OR '1'='1`, `type=BUG;DROP TABLE tasks`, `sprint=1 OR 1=1` —
     which are ignored by Acceptance Criterion 115 and reach no statement at all; after
     such requests the roadmap's tasks are intact; the same hostile values carried in
-    the cookie are ignored likewise. `q`, `page`, and `size` never reach
-    SQL: the page-rows read binds only the ids of the page's tasks. No filter value is echoed into the page as text: the sprint select's options
+    the cookie are ignored likewise. No value of `q`, `page`, or `size` reaches
+    SQL: the page-rows read binds only the ids of the page's tasks, and whether a
+    term is present decides only the task listing's projection. No filter value is echoed into the page as text: the sprint select's options
     and the dropdowns' checkboxes are the
     server's own enumeration of the roadmap's sprints or of an enum, and
     a value only decides which of them is `selected` or `checked` (see
