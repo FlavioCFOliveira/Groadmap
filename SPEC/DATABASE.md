@@ -1618,7 +1618,7 @@ ORDER BY sprint_id ASC, task_id ASC;
 
 **What it answers.** A `Sprint` object carries two fields that are not columns of `sprints` and are computed on every read: `tasks`, the ids of its member tasks, and `task_count`, how many there are (`MODELS.md § Sprint`). The sprint listing returns both fields populated for every sprint it returns (`COMMANDS.md § List Sprints`), and this statement is where their values come from.
 
-**Bounded query count.** The listing costs a bounded number of queries that does not grow with the number of sprints: one read of `sprints` for the sprint rows themselves, then this **one** grouped read over the ids those rows carry. The listing issues no query per sprint and no query per returned id. This is the same shape, adopted for the same reason, as `Count Comments for Many Parents (Grouped)` and `Resolve the Sprint of Many Tasks (Grouped)` below: a listing must not pay one round trip per row it returns.
+**Bounded query count.** The listing costs a bounded number of queries that does not grow with the number of sprints: one read of `sprints` for the sprint rows themselves, then this **one** grouped read over the ids those rows carry. The listing issues no query per sprint and no query per returned id. This is the same shape, adopted for the same reason, as `Resolve the Sprint of Many Tasks (Grouped)` below: a listing must not pay one round trip per row it returns.
 
 **Counting is not a second query.** `task_count` is the number of ids this statement returns for that sprint. No `COUNT(*)` statement is issued to obtain it, so the count and the id list are two readings of one result and can never disagree.
 
@@ -1851,7 +1851,7 @@ DELETE FROM audit WHERE performed_at < ?;
 
 ### Comments
 
-Every statement below exists in a `task_comments` form and a `sprint_comments` form, with the single exception noted under `Count Comments for Many Parents (Grouped)`. The two forms are identical apart from the table name and the parent-key column (`task_id` / `sprint_id`); only the task form is written out where the sprint form adds nothing.
+Every statement below exists in a `task_comments` form and a `sprint_comments` form, with the single exception noted under `Count Comments for the Member Tasks of One Sprint (Grouped)`. The two forms are identical apart from the table name and the parent-key column (`task_id` / `sprint_id`); only the task form is written out where the sprint form adds nothing.
 
 #### Insert Comment
 
@@ -1919,27 +1919,14 @@ DELETE FROM task_comments WHERE id = ?;
 
 The row is removed outright; there is no soft delete and no tombstone. The delete and its audit entry (`TASK_COMMENT_DELETE` / `SPRINT_COMMENT_DELETE`) MUST run in the same transaction.
 
-#### Count Comments for Many Parents (Grouped)
+#### Count Comments for the Member Tasks of One Sprint (Grouped)
 
-Returns how many comments each task of a given set has, in one round trip, without reading any comment body.
-
-```sql
--- Comment counts for several tasks at once. The IN list is built from the same
--- number of placeholders as ids, never by string concatenation.
-SELECT task_id, COUNT(*) AS comment_count
-FROM task_comments
-WHERE task_id IN (?, ?, ...)
-GROUP BY task_id
-ORDER BY task_id ASC;
-```
-
-**No row for a task without comments.** A task with no comment produces no group, so the result carries no entry for that task id and the caller reads its count as zero. The query never returns a row whose `comment_count` is `0`.
-
-**Empty id set.** When the id set is empty, the application skips the query entirely instead of issuing a statement with an empty `IN` list, as every grouped read that takes a set of ids does.
-
-**The member tasks of one sprint.** When the set is exactly the membership of one sprint, the id list is replaced by a sub-select on `sprint_tasks`, so the statement binds one parameter whatever the number of members:
+Returns how many comments each member task of one sprint has, in one round trip, without reading any comment body.
 
 ```sql
+-- Comment counts for every member task of one sprint. The member tasks are
+-- selected by the sprint id through a sub-select on sprint_tasks, so the
+-- statement binds one parameter whatever the number of members.
 SELECT task_id, COUNT(*) AS comment_count
 FROM task_comments
 WHERE task_id IN (SELECT task_id FROM sprint_tasks WHERE sprint_id = ?)
@@ -1947,9 +1934,9 @@ GROUP BY task_id
 ORDER BY task_id ASC;
 ```
 
-The result is the one the id-list form returns for that sprint's member ids. The sub-select is served by the index of the `sprint_tasks` primary key, whose leading column is `sprint_id`.
+**No row for a task without comments.** A member task with no comment produces no group, so the result carries no entry for that task id and the caller reads its count as zero. The query never returns a row whose `comment_count` is `0`.
 
-**Index.** Served by `idx_task_comments_task_created`, whose leading column is `task_id`; the aggregate needs no further index and reads no `body` value. See Performance Optimization below.
+**Index.** The outer aggregate is served by `idx_task_comments_task_created`, whose leading column is `task_id`; it needs no further index and reads no `body` value. The sub-select is served by the index of the `sprint_tasks` primary key, whose leading column is `sprint_id`. See Performance Optimization below.
 
 **Use case:** the sprint page's member-tasks board of the read-only web interface (see `WEB.md § Sprint Detail Sub-Template`) shows a comment count on each card but no comment text, because a task's comments are shown on that task's own page, which the card links to (see `WEB.md § Roadmap Task Page`). The board therefore never reads a comment body in order to display a number, and no read anywhere loads the comment text of several tasks at once: a task's comments are read one task at a time, through the single-parent listing above.
 
@@ -2187,7 +2174,7 @@ The following composite indexes are designed to optimize frequently executed que
 | `idx_audit_entity` | audit | (entity_type, entity_id, performed_at DESC) | Serves the entity history in the audit order, with no sort step |
 | `idx_audit_operation` | audit | (operation, performed_at DESC, entity_type) | Serves the operation filter in the audit order, with no sort step |
 | `idx_audit_date` | audit | (performed_at DESC) | Optimizes audit log date range queries |
-| `idx_task_comments_task_created` | task_comments | (task_id, created_at ASC) | Optimizes the comment listing of one task, and the grouped comment count of many tasks |
+| `idx_task_comments_task_created` | task_comments | (task_id, created_at ASC) | Optimizes the comment listing of one task, and the grouped comment count of the member tasks of one sprint |
 | `idx_sprint_comments_sprint_created` | sprint_comments | (sprint_id, created_at ASC) | Optimizes the comment listing of one sprint |
 
 ### Index Design Rationale
@@ -2237,7 +2224,7 @@ the production statement rather than on a retyped one.
 **idx_task_comments_task_created and idx_sprint_comments_sprint_created:**
 - Query pattern: `WHERE task_id = ? ORDER BY created_at ASC` (and the `sprint_id` equivalent)
 - The leading column serves the parent lookup and the trailing column serves the listing order, so one index covers both and no sort step is needed
-- The same index serves the grouped `WHERE task_id IN (...) GROUP BY task_id` count the web interface's sprint board uses to show a comment count per card without reading any body
+- The same index serves the grouped `WHERE task_id IN (SELECT task_id FROM sprint_tasks WHERE sprint_id = ?) GROUP BY task_id` count the web interface's sprint board uses to show a comment count per card without reading any body
 - A single index per table is sufficient: every comment listing filters on the parent key, so no query ever scans a comment table without it, and no listing is ordered by any other column
 
 **No index duplicates another, or a prefix of another.** An index whose columns are a

@@ -1178,7 +1178,7 @@ func groupedSprintMembershipQuery(placeholders string) string {
 // by sprint id, in ONE statement whatever the number of sprints.
 //
 // A sprint that holds no task is ABSENT from the map, exactly as in
-// GetSprintsByTasks and CountTaskCommentsByTasks: it has no sprint_tasks row, so
+// GetSprintsByTasks and CountTaskCommentsBySprint: it has no sprint_tasks row, so
 // the absence of an entry is the answer, and the caller reads a missing key as
 // the empty set. Callers publishing the value MUST turn that nil into an empty
 // slice, never a JSON null (SPEC/DATA_FORMATS.md § Implementation Notes, Empty
@@ -1517,7 +1517,7 @@ func (db *DB) CountTasks(ctx context.Context) (int, error) {
 // Page, Read cost; SPEC/DATABASE.md § Resolve the Sprint of Many Tasks (Grouped)).
 //
 // A task that belongs to no sprint is ABSENT from the map, exactly as in
-// CountTaskCommentsByTasks and CountSubTasksByParents: it has no sprint_tasks row,
+// CountTaskCommentsBySprint and CountSubTasksByParents: it has no sprint_tasks row,
 // so the absence of an entry is the answer, and the zero value a caller reads for
 // a missing key is the zero SprintRef. At most one entry exists per task, which
 // the schema guarantees rather than the query: sprint_tasks.task_id carries a

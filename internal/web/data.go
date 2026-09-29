@@ -266,7 +266,7 @@ type sprintsData struct {
 // comment TEXT is deliberately absent: it is read only by that task's own page,
 // one task at a time, so the board never reads a comment body in order to display
 // a number (SPEC/WEB.md § Sprint Detail Sub-Template, Read cost;
-// SPEC/DATABASE.md § Count Comments for Many Parents (Grouped)).
+// SPEC/DATABASE.md § Count Comments for the Member Tasks of One Sprint (Grouped)).
 type taskView struct {
 	models.Task
 	CommentCount int
@@ -541,9 +541,10 @@ type graphView struct {
 	Edges []map[string]any `json:"edges"`
 }
 
-// taskCommentCounter is the ONLY comment read the tasks page is given: the
-// grouped COUNT over the whole set of rendered task ids, one statement for every
-// task (SPEC/DATABASE.md § Count Comments for Many Parents (Grouped)).
+// taskCommentCounter is the ONLY task-comment read the sprint page is given: the
+// grouped COUNT over the sprint's member tasks, one statement binding one
+// parameter, the sprint id, for every card (SPEC/DATABASE.md § Count Comments for
+// the Member Tasks of One Sprint (Grouped)).
 //
 // The per-task listing (db.ListTaskComments) is deliberately absent from this
 // interface, and it is the only read that could bring a comment BODY onto this
@@ -553,7 +554,7 @@ type graphView struct {
 // comment text is read only by that task's own page. *db.DB satisfies the
 // interface.
 type taskCommentCounter interface {
-	CountTaskCommentsByTasks(ctx context.Context, taskIDs []int) (map[int]int, error)
+	CountTaskCommentsBySprint(ctx context.Context, sprintID int) (map[int]int, error)
 }
 
 // taskSprintReader is the grouped sprint resolution over a whole set of task ids,
@@ -601,8 +602,8 @@ type sprintsSource interface {
 //
 // The page makes exactly TWO comment reads, whatever the number of member tasks:
 // the sprint's own listing, which the Comments card renders in full as a log, and
-// ONE grouped count over the whole set of rendered member-task ids, which is what
-// gives each board card its comment number. Neither grows with the member-task
+// ONE grouped count over the sprint's member tasks, selected by the sprint id,
+// which is what gives each board card its comment number. Neither grows with the member-task
 // count (SPEC/WEB.md § Sprint Detail Sub-Template, Read cost; Acceptance Criteria
 // 70 and 137).
 //
@@ -703,24 +704,25 @@ func newTaskViews(tasks []models.Task) []taskView {
 	return views
 }
 
-// attachCommentCounts reads the comment COUNT of EVERY view in one grouped query
-// over the whole set of rendered task ids — never one per card, and never the
-// comment bodies (SPEC/DATABASE.md § Count Comments for Many Parents (Grouped);
-// SPEC/WEB.md Acceptance Criterion 70).
+// attachCommentCounts reads the comment COUNT of EVERY view, the member tasks of
+// sprint sprintID, in one grouped query over that sprint's members, selected by
+// the sprint id rather than by a list of the member ids, so the statement binds
+// one parameter whatever the number of cards — never one query per card, and
+// never the comment bodies (SPEC/DATABASE.md § Count Comments for the Member
+// Tasks of One Sprint (Grouped); SPEC/WEB.md Acceptance Criteria 70 and 137).
 //
-// A page that renders no task issues no comment query at all: the read is skipped
-// outright rather than called with an empty id set (which
-// db.CountTaskCommentsByTasks would also answer without a statement).
+// A page that renders no task issues no comment query at all: the member-task
+// read has already shown that there is no card to count for.
 //
 // A task with no comment is ABSENT from the grouped map, and the zero value a
 // missing key yields is already the right count, so the pairing needs no presence
 // check.
-func attachCommentCounts(ctx context.Context, r taskCommentCounter, views []taskView) error {
+func attachCommentCounts(ctx context.Context, r taskCommentCounter, sprintID int, views []taskView) error {
 	if len(views) == 0 {
 		return nil
 	}
 
-	counts, err := r.CountTaskCommentsByTasks(ctx, taskViewIDs(views))
+	counts, err := r.CountTaskCommentsBySprint(ctx, sprintID)
 	if err != nil {
 		return err
 	}
@@ -729,16 +731,6 @@ func attachCommentCounts(ctx context.Context, r taskCommentCounter, views []task
 		views[i].CommentCount = counts[views[i].ID]
 	}
 	return nil
-}
-
-// taskViewIDs is the set of rendered task ids, in render order, which is what
-// every grouped read of this page is given.
-func taskViewIDs(views []taskView) []int {
-	ids := make([]int, len(views))
-	for i := range views {
-		ids[i] = views[i].ID
-	}
-	return ids
 }
 
 // taskPageSource is the complete read surface of the Roadmap Task Page: the task,
@@ -1046,7 +1038,8 @@ func loadSprint(ctx context.Context, name string, id int) (sprintPageData, error
 // readSprint is the sprint page's entire read, expressed against the page's read
 // surface rather than a concrete connection: the sprint, its member tasks in
 // planned in-sprint execution order, the comment COUNT of every one of those
-// tasks in ONE grouped query, and the sprint's OWN comments (SPEC/WEB.md
+// tasks in ONE grouped query selected by the sprint id, and the sprint's OWN
+// comments (SPEC/WEB.md
 // § Roadmap Sprint Page; § Tasks and Sprints from SQLite, rule 1).
 //
 // TWO comment reads, and only two, whatever the number of member tasks: the
@@ -1056,9 +1049,8 @@ func loadSprint(ctx context.Context, name string, id int) (sprintPageData, error
 // the text of a member task's comments is read only by that task's own page
 // (Acceptance Criteria 70 and 137).
 //
-// A sprint with no member task costs one of those two: the grouped count takes
-// the set of rendered task ids, and that set is empty, so it is skipped outright
-// rather than issued against an empty IN list. The Comments card is always
+// A sprint with no member task costs one of those two: there is no card to count
+// for, so the grouped count is skipped outright. The Comments card is always
 // present, so the sprint's own listing is issued regardless.
 //
 // Grouping the member tasks into the board's three columns AND ordering each
@@ -1081,9 +1073,9 @@ func readSprint(ctx context.Context, src sprintSource, name string, id int) (spr
 	views := newTaskViews(orderedTasks)
 
 	// The comment count of every rendered member task, in one grouped query over
-	// the whole set of ids (SPEC/DATABASE.md § Count Comments for Many Parents
-	// (Grouped)).
-	if err := attachCommentCounts(ctx, src, views); err != nil {
+	// the sprint's members, binding the sprint id alone (SPEC/DATABASE.md § Count
+	// Comments for the Member Tasks of One Sprint (Grouped)).
+	if err := attachCommentCounts(ctx, src, sprint.ID, views); err != nil {
 		return sprintPageData{}, err
 	}
 

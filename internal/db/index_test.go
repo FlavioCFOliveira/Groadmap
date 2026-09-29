@@ -150,10 +150,10 @@ func TestCompositeIndexesServeTheProductionQueries(t *testing.T) {
 			// index serves the grouped WHERE task_id IN (...) read the web
 			// interface uses, and that the count reads no body at all. Both
 			// claims are asserted here, not assumed (SPEC/DATABASE.md § Count
-			// Comments for Many Parents (Grouped), Index).
-			name:      "grouped task comment COUNT over three tasks",
-			query:     groupedTaskCommentCountsQuery(db.Placeholders(3)),
-			args:      []any{commentedTasks[0], commentedTasks[1], commentedTasks[2]},
+			// Comments for the Member Tasks of One Sprint (Grouped), Index).
+			name:      "grouped task comment COUNT over the members of one sprint",
+			query:     sprintTaskCommentCountsQuery,
+			args:      []any{fixture.sprintID},
 			wantIndex: "idx_task_comments_task_created",
 			noScanOf:  "task_comments",
 		},

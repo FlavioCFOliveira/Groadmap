@@ -3153,9 +3153,9 @@ shows sprints as compact cards through the shared sprint-card partial instead (s
      query** over the sprint's member tasks, selected by the sprint id with a
      sub-select on `sprint_tasks` rather than by a list of the member ids, so the
      query binds one parameter whatever the number of members (see
-     `DATABASE.md § Count Comments for Many Parents (Grouped)`, the member tasks of
-     one sprint) — never one query per card, and never a comment **body**: the card displays a number, and reading
-     the text of every comment of every member task in order to display a number
+     `DATABASE.md § Count Comments for the Member Tasks of One Sprint (Grouped)`) —
+     never one query per card, and never a comment **body**: the card displays a
+     number, and reading the text of every comment of every member task in order to display a number
      would be work the page throws away. A member task's comment text is read only
      by that task's own page, one task at a time (see
      [Roadmap Task Page](#roadmap-task-page)). When the sprint has no member task the page issues no such
@@ -4274,7 +4274,7 @@ re-presents an earlier, now-stale response in its place.
    page's board reads a comment **count** per rendered task, in one grouped counting
    query over the sprint's member tasks, because a card shows a count and
    no comment text (see
-   `DATABASE.md § Count Comments for Many Parents (Grouped)`), and the tasks page's
+   `DATABASE.md § Count Comments for the Member Tasks of One Sprint (Grouped)`), and the tasks page's
    list, which shows no comment information, reads no comment at all. The Roadmap
    Sprint Page additionally presents the sprint's own comment log, so it reads that sprint's
    comments in full in one further query (see `DATABASE.md § Comments`): the sprint
@@ -4546,9 +4546,10 @@ not a convenience.
 6. **The Markdown renderer is compiled in.** The server-side Markdown renderer
    (see [Markdown Rendering](#markdown-rendering)) is built from Go modules that
    are compiled into the binary: `github.com/yuin/goldmark`,
-   `github.com/yuin/goldmark-highlighting/v2`, and
-   `github.com/alecthomas/chroma/v2`, together with the regular-expression module
-   chroma itself requires, `dlclark/regexp2`. None of them loads anything at
+   `github.com/alecthomas/chroma/v2`, and the regular-expression module chroma
+   requires, `dlclark/regexp2`, together with the generated lexer registry of
+   [Markdown Rendering](#markdown-rendering), rule 6, whose lexer and style
+   definitions are embedded in the binary. None of them loads anything at
    runtime: no
    lexer, style, or other data file is read from the host filesystem or fetched
    from a remote origin. The syntax-highlighting stylesheet is an embedded
@@ -4713,13 +4714,81 @@ the way out, on every request, and the CLI's output of these fields is unchanged
    level 3 to 6 renders as `<h6>`. A rendered heading carries no `id` attribute.
 6. **Fenced code blocks are highlighted by their declared language only.** A
    fenced code block whose info string begins with a language name that
-   `github.com/alecthomas/chroma/v2` recognises is highlighted by chroma, through
-   `github.com/yuin/goldmark-highlighting/v2`, and its tokens are marked with
-   chroma's CSS classes, never with a `style` attribute. A fenced code block with no info
-   string, or with a language name chroma does not recognise, and every indented
-   code block, renders unhighlighted: a monospaced preformatted block whose text
-   carries no token class. The renderer never guesses a block's language from its
-   content, so the same block renders the same way whatever it contains.
+   `github.com/alecthomas/chroma/v2` recognises is highlighted by chroma, and its
+   tokens are marked with chroma's CSS classes, never with a `style` attribute. A
+   fenced code block with no info string, or with a language name chroma does not
+   recognise, and every indented code block, renders unhighlighted: a monospaced
+   preformatted block whose text carries no token class. The renderer never
+   guesses a block's language from its content, so the same block renders the same
+   way whatever it contains.
+
+   The highlighting is a goldmark extension of the renderer's own, which renders
+   every fenced code block in place of goldmark's default fenced-code renderer. It
+   behaves exactly as follows:
+   - **The language.** The language name is the info string's first word: the
+     info string cut at its first space, taken byte for byte, with no unescaping.
+     When that word is empty or carries a `{`, the block declares no language. No
+     attribute of the block is read from the info string, so no block carries line
+     numbers, highlighted lines, a style of its own, or a request not to be
+     highlighted.
+   - **The lookup.** A name is recognised when the lexer registry resolves it to a
+     lexer, trying in this order: a lexer's name, a lexer's alias, the name in
+     lower case as a lexer's name, the name in lower case as a lexer's alias, and
+     finally the file-name patterns of every lexer, matched against
+     `filename.<name>` and against `<name>` itself, the match of highest priority
+     winning. This is the lookup chroma's own lexer registry performs.
+   - **No guessing and no fallback.** A name the registry does not resolve is not
+     recognised: no lexer is chosen by analysing the block's content, and chroma's
+     fallback lexer is never used.
+   - **The markup of a highlighted block.** The lexer is coalesced, so adjacent
+     tokens of one type become one, and it tokenises the block's text, which is the
+     concatenation of the block's lines. The tokens are written by chroma's HTML
+     formatter in class-based form with no other formatter option — no line
+     numbers, no highlighted lines, and the default tab width — and against the
+     `github-dark` style that rule 7 names. The formatter writes its own
+     `<pre class="chroma">` element, and the extension writes nothing around it.
+   - **The markup of an unhighlighted fenced block.** It is `<pre><code>`, then the
+     block's text with `&`, `<`, `>`, and `"` escaped, then `</code></pre>`
+     followed by a newline. The `<code>` element carries no attribute: no class is
+     taken from the info string (see rule 11). A block whose lexer fails to
+     tokenise its text renders the same way.
+   - **The lexer registry.** The lexers are held in a registry that is generated
+     from the module source of the chroma version `go.mod` pins, committed to the
+     repository, and compiled into the binary. It holds every lexer that version
+     ships, both the lexers chroma defines in its embedded XML definitions and the
+     lexers it defines in Go, each with the configuration chroma gives it — its
+     name, aliases, file-name patterns, MIME types, priority, rules, and
+     delegation to other lexers — and it registers them in the order chroma's own
+     global registry does, so that every name resolves to the same lexer in both.
+     A lexer that looks up another lexer while tokenising — a delegating lexer, a
+     rule that hands a span to another language, a code block inside a Markdown
+     or reStructuredText lexer, an HTTP body chosen by its MIME type — looks it up
+     in this registry. The same generated data carries the `github-dark` style
+     definition of that chroma version.
+   - **Built on first use.** Neither the registry nor the style is built while the
+     program initialises. Both are built once, on the first rendering of a fenced
+     code block that declares a language, safely under concurrent requests, and
+     are then read-only for the life of the process. An `rmp` invocation that
+     renders no such block never builds them. Initialising the package that holds
+     the generated data parses no lexer or style definition, compiles no regular
+     expression, and constructs no lexer. The registry is configuration, not a
+     cache of rendered output (see rule 2).
+   - **No chroma registry package.** No package compiled into the `rmp` binary
+     imports `github.com/alecthomas/chroma/v2/lexers` or
+     `github.com/alecthomas/chroma/v2/styles`, because each builds its whole
+     registry in a package-level initialiser that every invocation would pay.
+     Tests and the generators, which the binary does not contain, may import them.
+   - **Generated, committed, and checked for staleness.** A generator run by
+     `go generate` writes the registry from the pinned chroma module, and its
+     output is committed, so `go build` runs no generation step. A test
+     regenerates the registry in memory and fails when the committed files differ
+     from it, so an upgrade of chroma cannot ship with a stale registry. Because
+     the generated files copy chroma's lexer and style definitions, they carry
+     chroma's copyright and permission notice.
+   - **Output identical to chroma's own registry.** For every language name chroma
+     recognises, the HTML the renderer emits is byte for byte the HTML that the
+     same lexer taken from chroma's own global registry produces under the rules
+     above.
 7. **One syntax-highlighting stylesheet, dark.** The colours of highlighted
    tokens come from one embedded stylesheet, served from `/static/highlight.css`.
    It holds the CSS chroma produces, in class-based form, for its `github-dark`
@@ -6912,7 +6981,7 @@ Rules:
     the Comments card renders in full as a log (see `DATABASE.md § Comments`), plus
     one grouped **counting** query over the sprint's member tasks, selected by the
     sprint id, which is what gives each board card its comment number (see
-    `DATABASE.md § Count Comments for Many Parents (Grouped)`). The sprint page issues no
+    `DATABASE.md § Count Comments for the Member Tasks of One Sprint (Grouped)`). The sprint page issues no
     comment-listing query for a member task, so it reads the comment **body** of no
     task it renders. A page that renders no task issues no task-comment query of
     either kind: a sprint with no member task skips the grouped count entirely, while
@@ -7755,7 +7824,7 @@ Rules:
     the sprint id with one bound parameter, never one query per card: an instrumented count of comment-counting queries
     for a sprint page rendering N member tasks is 1, independent of N, and of
     comment-listing queries for member tasks is 0 (see
-    `DATABASE.md § Count Comments for Many Parents (Grouped)` and Acceptance
+    `DATABASE.md § Count Comments for the Member Tasks of One Sprint (Grouped)` and Acceptance
     Criterion 70). A sprint with no member task issues no such query at all. The
     subtask number on a card costs no query of its own, because the sprint's
     member-task read already returns each task's `subtask_count`; grouping the tasks
@@ -8473,9 +8542,9 @@ Rules:
     scroll horizontally inside their own box (Acceptance Criterion 27 continues to hold;
     see [Markdown Rendering](#markdown-rendering), rule 13).
 194. **The renderer is compiled into the binary.** The first `require` block of
-    `go.mod` names `github.com/yuin/goldmark`,
-    `github.com/yuin/goldmark-highlighting/v2`, and
-    `github.com/alecthomas/chroma/v2`, and with networking disabled and only the
+    `go.mod` names `github.com/yuin/goldmark` and
+    `github.com/alecthomas/chroma/v2` and does not name
+    `github.com/yuin/goldmark-highlighting/v2`, and with networking disabled and only the
     `rmp` binary present on disk, the pages render every Markdown
     construct of Acceptance Criteria 180 to 187, highlighted code included, with no
     file read from the host filesystem for the purpose (see
@@ -9258,6 +9327,35 @@ Rules:
     page's `Back to tasks` link carry no query string on every page (see
     [Roadmap Tasks Page](#roadmap-tasks-page), **Filter persistence**, and
     [Security and Constraints](#security-and-constraints), rules 7 and 12).
+255. **Highlighting matches chroma's own registry for every language.** For every
+    name and every alias of every lexer in the pinned chroma's global registry, a
+    fenced code block declaring that language renders byte for byte the HTML the
+    lexer that chroma's own registry resolves for that name produces, coalesced and
+    written by chroma's HTML formatter in class-based form against the
+    `github-dark` style, with nothing written around it. For each of those names,
+    for the name in upper case, and for the extension of each file-name pattern
+    those lexers declare, the generated registry resolves the same lexer, by name,
+    as chroma's own registry, and a name neither registry resolves renders as the
+    unhighlighted block of [Markdown Rendering](#markdown-rendering), rule 6, with
+    no `class` attribute (see [Markdown Rendering](#markdown-rendering), rule 6).
+256. **The lexer registry is not built at start-up.** The list of packages the
+    `rmp` binary is built from (`go list -deps ./cmd/rmp`) contains neither
+    `github.com/alecthomas/chroma/v2/lexers` nor
+    `github.com/alecthomas/chroma/v2/styles` and does contain
+    `github.com/alecthomas/chroma/v2`. After the web package is initialised and
+    before any Markdown is rendered, the lexer registry and the style are not
+    built; rendering a Markdown field with no fenced code block, or with only
+    fenced code blocks that declare no language, still leaves them unbuilt; the
+    first rendering of a fenced code block declaring a language builds them, and
+    concurrent first renderings build them exactly once (see
+    [Markdown Rendering](#markdown-rendering), rule 6).
+257. **A stale lexer registry fails the test gate.** Regenerating the registry in
+    memory from the chroma version `go.mod` pins yields exactly the committed
+    generated files; a committed file changed by hand, a lexer definition missing
+    from them, or a pin of chroma to another version whose lexers differ fails the
+    test gate until `go generate` is run again. The committed generated files carry
+    chroma's copyright and permission notice (see
+    [Markdown Rendering](#markdown-rendering), rule 6).
 
 ## See Also
 
