@@ -18,8 +18,11 @@ var specComposite = []struct {
 	table string
 }{
 	{"idx_tasks_status_priority", "tasks"},
+	{"idx_tasks_type", "tasks"},
 	{"idx_tasks_priority_created", "tasks"},
-	{"idx_sprint_tasks_lookup", "sprint_tasks"},
+	{"idx_tasks_severity_priority", "tasks"},
+	{"idx_audit_entity", "audit"},
+	{"idx_audit_operation", "audit"},
 	{"idx_audit_date", "audit"},
 	{"idx_task_comments_task_created", "task_comments"},
 	{"idx_sprint_comments_sprint_created", "sprint_comments"},
@@ -99,10 +102,12 @@ func TestCompositeIndexesServeTheProductionQueries(t *testing.T) {
 			noScanOf:  "tasks",
 		},
 		{
+			// Served by the index of the sprint_tasks primary key; no index is
+			// declared for it (SPEC/DATABASE.md § Index Design Rationale).
 			name:      "sprint membership lookup",
 			query:     sprintTasksLookupQuery,
 			args:      []any{1},
-			wantIndex: "idx_sprint_tasks_lookup",
+			wantIndex: constraintIndexOf(t, db, "sprint_tasks", "pk"),
 			noScanOf:  "sprint_tasks",
 		},
 		{
@@ -145,10 +150,10 @@ func TestCompositeIndexesServeTheProductionQueries(t *testing.T) {
 			// index serves the grouped WHERE task_id IN (...) read the web
 			// interface uses, and that the count reads no body at all. Both
 			// claims are asserted here, not assumed (SPEC/DATABASE.md § Count
-			// Comments for Many Parents (Grouped), Index).
-			name:      "grouped task comment COUNT over three tasks",
-			query:     groupedTaskCommentCountsQuery(db.Placeholders(3)),
-			args:      []any{commentedTasks[0], commentedTasks[1], commentedTasks[2]},
+			// Comments for the Member Tasks of One Sprint (Grouped), Index).
+			name:      "grouped task comment COUNT over the members of one sprint",
+			query:     sprintTaskCommentCountsQuery,
+			args:      []any{fixture.sprintID},
 			wantIndex: "idx_task_comments_task_created",
 			noScanOf:  "task_comments",
 		},
@@ -298,11 +303,9 @@ func seedIndexFixture(t *testing.T, db *DB) indexFixtureIDs {
 // lookup is already served by an index on sprint_tasks.task_id and the join
 // resolves sprints by primary key.
 //
-// The assertion is deliberately not tied to one index NAME: sprint_tasks.task_id
-// carries a UNIQUE constraint, for which SQLite creates an implicit index, and
-// the DDL also declares idx_sprint_tasks_task_id on the same column. The planner
-// is free to take either, and the SPEC names both. What must hold is that it
-// takes ONE of them rather than scanning the table.
+// sprint_tasks.task_id carries a UNIQUE constraint, for which SQLite creates an
+// implicit index, and that index is the one that serves the lookup: no index is
+// declared on the column, because it would duplicate the implicit one.
 func TestGroupedSprintResolutionNeedsNoNewIndex(t *testing.T) {
 	db, cleanup := setupTestDB(t)
 	defer cleanup()
@@ -321,11 +324,8 @@ func TestGroupedSprintResolutionNeedsNoNewIndex(t *testing.T) {
 
 	plan := queryPlan(t, db, groupedTaskSprintsQuery(db.Placeholders(3)), args...)
 
-	// The membership lookup is served by an index on task_id, whichever of the two
-	// the planner picks.
-	usesTaskIDIndex := strings.Contains(plan, "idx_sprint_tasks_task_id") ||
-		strings.Contains(plan, "sqlite_autoindex_sprint_tasks_1")
-	if !usesTaskIDIndex {
+	// The membership lookup is served by the implicit index of UNIQUE(task_id).
+	if !strings.Contains(plan, constraintIndexOf(t, db, "sprint_tasks", "u")) {
 		t.Errorf("the grouped sprint read is not served by an index on sprint_tasks.task_id.\nplan: %s", plan)
 	}
 	if strings.Contains(plan, "SCAN sprint_tasks") || strings.Contains(plan, "SCAN st") {
@@ -367,9 +367,7 @@ func TestGroupedSprintResolutionNeedsNoNewIndex(t *testing.T) {
 	}
 
 	want := []string{
-		"idx_sprint_tasks_lookup",
 		"idx_sprint_tasks_order",
-		"idx_sprint_tasks_task_id",
 		"sqlite_autoindex_sprint_tasks_1", // the UNIQUE constraint on task_id
 		"sqlite_autoindex_sprint_tasks_2", // the (sprint_id, task_id) primary key
 	}
@@ -383,9 +381,10 @@ func TestGroupedSprintResolutionNeedsNoNewIndex(t *testing.T) {
 // TestGroupedSprintMembershipReadIsCoveredByTheLookupIndex asserts the claim
 // SPEC/DATABASE.md § Read the Membership of Many Sprints (Grouped) makes about
 // the read that resolves the membership of every sprint the listing returns:
-// idx_sprint_tasks_lookup covers it exactly — its columns are (sprint_id,
-// task_id), the leading column serving the IN lookup and the pair serving the
-// ordering — so the statement needs no sort step and reads no table row.
+// the index of the sprint_tasks primary key covers it exactly — its columns are
+// (sprint_id, task_id), the leading column serving the IN lookup and the pair
+// serving the ordering — so the statement needs no sort step and reads no table
+// row.
 //
 // The SQL is the production builder's, planned with the placeholder count
 // production builds for the ids it is given, so a statement that drifts away from
@@ -406,9 +405,10 @@ func TestGroupedSprintMembershipReadIsCoveredByTheLookupIndex(t *testing.T) {
 	// touches no sprint_tasks row. A plain "SEARCH ... USING INDEX" would mean
 	// every matched row is fetched from the table for a value the index already
 	// holds.
-	if !strings.Contains(plan, "COVERING INDEX idx_sprint_tasks_lookup") {
+	pk := constraintIndexOf(t, db, "sprint_tasks", "pk")
+	if !strings.Contains(plan, "COVERING INDEX "+pk) {
 		t.Errorf("the grouped membership read is not served as a covering index search on "+
-			"idx_sprint_tasks_lookup.\nplan: %s", plan)
+			"%s, the index of the primary key.\nplan: %s", pk, plan)
 	}
 	if strings.Contains(plan, "SCAN sprint_tasks") {
 		t.Errorf("the grouped membership read falls back to a full scan of sprint_tasks.\nplan: %s", plan)
@@ -427,5 +427,96 @@ func TestGroupedSprintMembershipReadIsCoveredByTheLookupIndex(t *testing.T) {
 			t.Errorf("the grouped membership read touches %s; it must read sprint_tasks alone.\nplan: %s",
 				table, plan)
 		}
+	}
+}
+
+// constraintIndexOf returns the name of the implicit index SQLite created on
+// table for the constraint of the given origin: "pk" for the primary key, "u"
+// for a UNIQUE constraint. It fails the test unless exactly one such index
+// exists, so an assertion naming it can never pass vacuously.
+func constraintIndexOf(t *testing.T, db *DB, table, origin string) string {
+	t.Helper()
+
+	rows, err := db.Query(`SELECT name FROM pragma_index_list(?) WHERE origin = ?`, table, origin)
+	if err != nil {
+		t.Fatalf("listing the %s indexes of %s: %v", origin, table, err)
+	}
+	defer rows.Close()
+
+	var names []string
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			t.Fatalf("scanning index name: %v", err)
+		}
+		names = append(names, name)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterating index names: %v", err)
+	}
+	if len(names) != 1 {
+		t.Fatalf("%s carries %d indexes of origin %q, want exactly 1: %v", table, len(names), origin, names)
+	}
+	return names[0]
+}
+
+// TestTaskListPage_IndexesServeBothReads is SPEC/DATABASE.md § Verification for
+// the web tasks page's two statements, planned from the production builders: the
+// task listing reads idx_tasks_status_priority for one status value,
+// idx_tasks_type for one type value, and idx_tasks_priority_created with no
+// status, type or sprint predicate, each supplying the whole ordering with no
+// sort step and never scanning tasks in full; with several status values (the
+// page's default) the status index serves the lookup; the page-rows read is a
+// search of the tasks primary key.
+func TestTaskListPage_IndexesServeBothReads(t *testing.T) {
+	database, cleanup := setupTestDB(t)
+	defer cleanup()
+	fixture := seedIndexFixture(t, database)
+
+	backlog, bug := models.StatusBacklog, models.TypeBug
+	defaults := []models.TaskStatus{models.StatusBacklog, models.StatusSprint, models.StatusDoing, models.StatusTesting}
+	cases := []struct {
+		filter    *TaskListFilter
+		name      string
+		wantIndex string
+		sorted    bool
+	}{
+		{&TaskListFilter{Statuses: []models.TaskStatus{backlog}}, "one status value", "idx_tasks_status_priority", false},
+		{&TaskListFilter{TaskTypes: []models.TaskType{bug}}, "one type value", "idx_tasks_type", false},
+		{&TaskListFilter{NoSprint: true}, "no status, type or sprint-id predicate", "idx_tasks_priority_created", false},
+		{nil, "no predicate", "idx_tasks_priority_created", false},
+		{&TaskListFilter{Statuses: defaults}, "the default four status values", "idx_tasks_status_priority", true},
+	}
+	for _, c := range cases {
+		for _, withTitle := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s, withTitle=%v", c.name, withTitle), func(t *testing.T) {
+				query, args := buildTaskListingQuery(c.filter, withTitle)
+				plan := queryPlan(t, database, query, args...)
+				if !strings.Contains(plan, c.wantIndex) {
+					t.Errorf("the task listing does not use %s.\nplan: %s\nquery: %s", c.wantIndex, plan, query)
+				}
+				// Without a term the listing projects t.id alone, which the index
+				// carries as the row id: the index covers the statement and no
+				// table row is read (SPEC/DATABASE.md § List All, Indexes).
+				if !withTitle && !strings.Contains(plan, "USING COVERING INDEX "+c.wantIndex+" ") {
+					t.Errorf("the id-only listing is not covered by %s.\nplan: %s", c.wantIndex, plan)
+				}
+				// A scan in an index's order is the plan the no-predicate case names; a
+				// scan of the table itself is never acceptable.
+				if strings.Contains(plan, "SCAN t | ") {
+					t.Errorf("the task listing scans tasks in full.\nplan: %s", plan)
+				}
+				if !c.sorted && strings.Contains(plan, "TEMP B-TREE") {
+					t.Errorf("the index must supply the whole ordering, but the plan sorts.\nplan: %s", plan)
+				}
+			})
+		}
+	}
+
+	selected := fixture.commentedTaskIDs
+	rowsSQL, rowsArgs := buildTaskRowsQuery(selected)
+	plan := queryPlan(t, database, rowsSQL, rowsArgs...)
+	if !strings.Contains(plan, "SEARCH t USING INTEGER PRIMARY KEY (rowid=?)") || strings.Contains(plan, "SCAN t") {
+		t.Errorf("the page-rows read is not a search of the tasks primary key.\nplan: %s", plan)
 	}
 }

@@ -10,9 +10,9 @@ import (
 	"html/template"
 	"strconv"
 
+	"github.com/alecthomas/chroma/v2"
 	chromahtml "github.com/alecthomas/chroma/v2/formatters/html"
 	"github.com/yuin/goldmark"
-	highlighting "github.com/yuin/goldmark-highlighting/v2"
 	"github.com/yuin/goldmark/ast"
 	"github.com/yuin/goldmark/extension"
 	extast "github.com/yuin/goldmark/extension/ast"
@@ -22,6 +22,7 @@ import (
 	"github.com/yuin/goldmark/text"
 	"github.com/yuin/goldmark/util"
 
+	"github.com/FlavioCFOliveira/Groadmap/internal/highlight"
 	"github.com/FlavioCFOliveira/Groadmap/internal/models"
 )
 
@@ -40,12 +41,14 @@ const (
 	markdownNonInteractive
 )
 
-// highlightStyle is the chroma style the syntax-highlighting stylesheet is
-// generated from and the class set the highlighted HTML is emitted against. The
-// two MUST name the same style: which token types a highlighted block marks with
-// a class depends on the style's entries (SPEC/WEB.md § Markdown Rendering,
-// rule 7).
-const highlightStyle = "github-dark"
+// highlightStyle names the chroma style the syntax-highlighting stylesheet is
+// generated from (highlightcss_gen.go). It is the name of the one style package
+// highlight carries, highlight.HighlightStyle, and that style — not a lookup of
+// this name — is what highlighted HTML is emitted against. The stylesheet and the
+// HTML MUST come from the same style, because which token types a highlighted
+// block marks with a class depends on the style's entries (SPEC/WEB.md
+// § Markdown Rendering, rule 7).
+const highlightStyle = highlight.StyleName
 
 // footnotePrefixAttr is the name of the document-level attribute that carries the
 // footnote identifier prefix of the field being rendered. It is set by
@@ -77,8 +80,9 @@ var markdownRenderers = [...]goldmark.Markdown{
 //     so raw HTML is omitted; neither the attribute syntax nor automatic heading
 //     identifiers is enabled.
 //   - Hard wraps: a single newline inside a paragraph renders as <br>.
-//   - Fenced code blocks are highlighted by chroma, through goldmark-highlighting,
-//     with CSS classes and never inline styles, by the declared language only.
+//   - Fenced code blocks are highlighted by chroma, through the renderer's own
+//     codeHighlighting extension, with CSS classes and never inline styles, by
+//     the declared language only.
 //   - Table cells carry no alignment attribute of goldmark's own; the transformer
 //     gives them the Tabler text-alignment class instead.
 func newMarkdownRenderer(form markdownForm) goldmark.Markdown {
@@ -90,12 +94,7 @@ func newMarkdownRenderer(form markdownForm) goldmark.Markdown {
 			extension.TaskList,
 			extension.NewFootnote(extension.WithFootnoteIDPrefixFunction(footnoteIDPrefix)),
 			extension.DefinitionList,
-			highlighting.NewHighlighting(
-				highlighting.WithStyle(highlightStyle),
-				highlighting.WithGuessLanguage(false),
-				highlighting.WithFormatOptions(chromahtml.WithClasses(true)),
-				highlighting.WithWrapperRenderer(plainCodeWrapper),
-			),
+			codeHighlighting{},
 		),
 		goldmark.WithParserOptions(
 			parser.WithASTTransformers(util.Prioritized(markdownTransformer{}, 100)),
@@ -169,22 +168,73 @@ func sprintCommentIDPrefix(commentID int) string {
 	return "sprint-comment-" + strconv.Itoa(commentID) + "-"
 }
 
-// plainCodeWrapper is the goldmark-highlighting wrapper renderer. A highlighted
-// block needs no wrapper — chroma emits its own <pre> — so nothing is written for
-// it. An unhighlighted block (no info string, or a language chroma does not
-// recognise) is wrapped in a bare <pre><code>: the extension's own fallback would
-// write a language-<name> class taken from the author's info string, and no
-// attribute value of the output may come from the source (SPEC/WEB.md § Markdown
-// Rendering, rules 6 and 11).
-func plainCodeWrapper(w util.BufWriter, c highlighting.CodeBlockContext, entering bool) {
-	if c.Highlighted() {
-		return
+// codeHighlighting is the goldmark extension that renders every fenced code
+// block in place of goldmark's default fenced-code renderer (SPEC/WEB.md
+// § Markdown Rendering, rule 6). It is registered at priority 200, which takes
+// the fenced-code-block kind from goldmark's core renderer (1000).
+type codeHighlighting struct{}
+
+// Extend implements goldmark.Extender.
+func (codeHighlighting) Extend(m goldmark.Markdown) {
+	m.Renderer().AddOptions(renderer.WithNodeRenderers(util.Prioritized(fencedCodeRenderer{}, 200)))
+}
+
+// fencedCodeRenderer renders a fenced code block.
+type fencedCodeRenderer struct{}
+
+// RegisterFuncs implements renderer.NodeRenderer.
+func (fencedCodeRenderer) RegisterFuncs(reg renderer.NodeRendererFuncRegisterer) {
+	reg.Register(ast.KindFencedCodeBlock, renderFencedCode)
+}
+
+// renderFencedCode renders a fenced code block highlighted when its declared
+// language resolves to a lexer of the generated registry, and as a bare
+// <pre><code> otherwise.
+//
+// The language is the info string's first word, taken byte for byte:
+// markdownTransformer has already cut the info string to it, and dropped it when
+// it was empty or carried a brace, so no attribute of the block is read from the
+// info string. A name the registry does not resolve is not highlighted: no lexer
+// is guessed from the content and no fallback lexer is used.
+//
+// A highlighted block is the coalesced lexer's tokens of the block's text, the
+// concatenation of its lines, written by chroma's HTML formatter in class-based
+// form with no other option, against the style package highlight carries. The
+// formatter writes its own <pre class="chroma">, and nothing is written around
+// it. A block whose lexer fails to tokenise its text renders unhighlighted.
+//
+// The formatter's result is not checked, as it never was: the only failure it
+// reports that the writer does not also hold is the iterator's, and a write
+// error is sticky on the bufio-backed writer and fails the render (see
+// markdownNodeRenderer).
+func renderFencedCode(w util.BufWriter, source []byte, node ast.Node, entering bool) (ast.WalkStatus, error) {
+	if !entering {
+		return ast.WalkContinue, nil
 	}
-	if entering {
-		_, _ = w.WriteString("<pre><code>")
-		return
+	n := node.(*ast.FencedCodeBlock) // registered for ast.KindFencedCodeBlock only
+	lines := n.Lines()
+	if language := n.Language(source); language != nil {
+		if lexer := highlight.ResolveLexer(string(language)); lexer != nil {
+			var code bytes.Buffer
+			for i := range lines.Len() {
+				seg := lines.At(i)
+				code.Write(seg.Value(source))
+			}
+			if iterator, err := chroma.Coalesce(lexer).Tokenise(nil, code.String()); err == nil {
+				_ = chromahtml.New(chromahtml.WithClasses(true)).Format(w, highlight.HighlightStyle(), iterator)
+				return ast.WalkContinue, nil
+			}
+		}
 	}
-	_, _ = w.WriteString("</code></pre>\n")
+	// The unhighlighted block: no class, and no attribute taken from the info
+	// string (SPEC/WEB.md § Markdown Rendering, rules 6 and 11).
+	_, _ = w.WriteString("<pre><code>")
+	for i := range lines.Len() {
+		seg := lines.At(i)
+		html.DefaultWriter.RawWrite(w, seg.Value(source))
+	}
+	_, err := w.WriteString("</code></pre>\n")
+	return ast.WalkContinue, err
 }
 
 // markdownTransformer rewrites the parsed document before it is rendered:
@@ -194,7 +244,7 @@ func plainCodeWrapper(w util.BufWriter, c highlighting.CodeBlockContext, enterin
 //   - a table cell's alignment becomes the Tabler class text-start, text-center,
 //     or text-end (rule 11);
 //   - a fenced code block's info string is cut to its language word, so the
-//     highlighting extension reads no attribute block ({...}) from it; a language
+//     fenced-code renderer reads no attribute block ({...}) from it; a language
 //     word that itself carries a brace is dropped, and the block renders
 //     unhighlighted, as any unrecognised language does (rules 3 and 6);
 //   - the <li> of a task-list item carries the fixed class task-list-item, in
@@ -274,7 +324,7 @@ func alignmentClass(a extast.Alignment) string {
 
 // trimCodeInfo cuts a fenced code block's info string to its first word — the
 // word goldmark itself takes as the language — and drops it entirely when that
-// word carries a brace, so no attribute block reaches the highlighting extension.
+// word carries a brace, so no attribute block reaches the fenced-code renderer.
 func trimCodeInfo(n *ast.FencedCodeBlock, source []byte) {
 	if n.Info == nil {
 		return

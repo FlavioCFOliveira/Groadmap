@@ -1755,10 +1755,11 @@ func TestSprintBoard_CommentCountIsOneGroupedQueryWhateverN(t *testing.T) {
 		}
 
 		// The one query covered EVERY rendered card, which is what makes one query
-		// sufficient rather than merely few.
-		if len(src.lastGroupedIDs) != members {
-			t.Errorf("%d members: the comment count was given %d ids, want %d",
-				members, len(src.lastGroupedIDs), members)
+		// sufficient rather than merely few: it selects the members by the sprint
+		// id, whatever their number.
+		if src.lastCountedSprint != sprintID {
+			t.Errorf("%d members: the comment count was taken for sprint #%d, want sprint #%d",
+				members, src.lastCountedSprint, sprintID)
 		}
 
 		// The subtask number costs no query of its own: the member-task read
@@ -1783,12 +1784,12 @@ func TestSprintBoard_CommentCountIsOneGroupedQueryWhateverN(t *testing.T) {
 				members, len(data.Columns), len(sprintBoardColumns))
 		}
 
-		// The control that makes those counts falsifiable: the per-card alternative
-		// the SPEC forbids, measured on the same instrument.
+		// The control that makes those counts falsifiable: one count read per card,
+		// the shape the SPEC forbids, measured on the same instrument, registers one
+		// read per card.
 		src.groupedCommentCounts = 0
-		for i := range data.Tasks {
-			if _, err := src.CountTaskCommentsByTasks(context.Background(),
-				[]int{data.Tasks[i].ID}); err != nil {
+		for range data.Tasks {
+			if _, err := src.CountTaskCommentsBySprint(context.Background(), sprintID); err != nil {
 				t.Fatalf("%d members: per-card control read: %v", members, err)
 			}
 		}

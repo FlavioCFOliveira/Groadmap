@@ -119,7 +119,7 @@ A non-test source file authored by the project. Test sources are `Test` nodes, n
 
 Build and deployment artefacts are `CodeFile`s on the same terms as program source. The
 `Makefile`, `install.sh`, the workflow files under `.github/workflows/`, `.gitignore`,
-`.gosec.yaml` and `.golangci.yml` are each a file the project authored and maintains, each
+`.gitattributes`, `.gosec.yaml` and `.golangci.yml` are each a file the project authored and maintains, each
 realises a requirement the SPEC states, and each is verified by a test; nothing about them
 justifies a label of their own. Their `package` is the directory that owns them -- `.` for a
 repository-root file, and `.github/workflows` for a workflow -- rather than a Go import path,
@@ -146,7 +146,7 @@ form.
 | `path` | yes | Same as `key`. |
 | `file` | yes | Base name. |
 | `package` | yes | Owning component's path. |
-| `language` | yes | `Go`, `Python`, `HTML`, `CSS`, `JavaScript`, `SVG`, `Bash`, `YAML`, `Make` or `Gitignore`. The last four are the build and deployment artefacts described above. |
+| `language` | yes | `Go`, `Python`, `HTML`, `CSS`, `JavaScript`, `SVG`, `Bash`, `YAML`, `Make`, `Gitignore` or `Gitattributes`. The last five are the build and deployment artefacts described above. |
 | `gitCommit`, `gitDate` | yes | Provenance. |
 
 ### Spec

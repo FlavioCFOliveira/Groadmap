@@ -764,7 +764,7 @@ func TestCommentTypeBadge_NeutralForEveryType(t *testing.T) {
 // read-cost test exercises it directly to prove it counts.
 type countingSource struct {
 	*db.DB
-	lastGroupedIDs       []int
+	lastCountedSprint    int
 	lastSprintIDs        []int
 	groupedCommentCounts int
 	groupedTaskSprints   int
@@ -773,10 +773,13 @@ type countingSource struct {
 	sprintListings       int
 	sprintTitles         int
 	taskList             int
+	pageRows             int
 	boundedTaskList      int
 	sprintTasks          int
 	taskCounts           int
 	lastTaskFilter       *db.TaskListFilter
+	lastPageIDs          []int
+	lastWithTitle        bool
 }
 
 // CountTasks is the tasks page's third read, the roadmap's task count, which the
@@ -803,13 +806,28 @@ func (c *countingSource) ListSprints(ctx context.Context,
 	return c.DB.ListSprints(ctx, status)
 }
 
-// ListAllTasks is the read the tasks page performs: every task the structured
-// filters admit, never bounded by a page. The filter is recorded so a test can
-// assert which predicates the page asked for.
-func (c *countingSource) ListAllTasks(ctx context.Context, filter *db.TaskListFilter) ([]models.Task, error) {
+// ReadTaskListPage is the tasks page's task listing — every task the structured
+// filters admit, never bounded by a page — and its page-rows read, in one read
+// transaction. The filter is recorded so a test can assert which predicates the
+// page asked for, and the ids the page selected are recorded as lastPageIDs:
+// internal/db issues the page-rows read exactly when they are not empty, binding
+// exactly them (TestReadTaskListPage_PageRowsReadBindsOnlyTheSelectedIDs), so
+// pageRows counts that read. Whether the listing was asked for the titles is
+// recorded as lastWithTitle.
+func (c *countingSource) ReadTaskListPage(ctx context.Context, filter *db.TaskListFilter, withTitle bool,
+	selectPage func([]db.TaskRef) []int) ([]db.TaskRow, error) {
 	c.taskList++
 	c.lastTaskFilter = filter
-	return c.DB.ListAllTasks(ctx, filter)
+	c.lastWithTitle = withTitle
+	c.lastPageIDs = nil
+	return c.DB.ReadTaskListPage(ctx, filter, withTitle, func(listing []db.TaskRef) []int {
+		ids := selectPage(listing)
+		c.lastPageIDs = append([]int(nil), ids...)
+		if len(ids) > 0 {
+			c.pageRows++
+		}
+		return ids
+	})
 }
 
 // ListTasks is the CLI's bounded listing, which the tasks page must NOT use: its
@@ -828,13 +846,14 @@ func (c *countingSource) GetSprintTasksFull(ctx context.Context, sprintID int,
 	return c.DB.GetSprintTasksFull(ctx, sprintID, status, orderByPriority)
 }
 
-// CountTaskCommentsByTasks is the comment read a page performs: the count, never
-// the bodies.
-func (c *countingSource) CountTaskCommentsByTasks(ctx context.Context,
-	taskIDs []int) (map[int]int, error) {
+// CountTaskCommentsBySprint is the comment read the sprint page performs: the
+// count over the sprint's member tasks, selected by the sprint id, never the
+// bodies. The sprint id it was given is recorded.
+func (c *countingSource) CountTaskCommentsBySprint(ctx context.Context,
+	sprintID int) (map[int]int, error) {
 	c.groupedCommentCounts++
-	c.lastGroupedIDs = append([]int(nil), taskIDs...)
-	return c.DB.CountTaskCommentsByTasks(ctx, taskIDs)
+	c.lastCountedSprint = sprintID
+	return c.DB.CountTaskCommentsBySprint(ctx, sprintID)
 }
 
 func (c *countingSource) ListTaskComments(ctx context.Context, taskID int,
@@ -964,21 +983,17 @@ func TestSprintPage_CommentQueryCount(t *testing.T) {
 	}
 	if src.groupedCommentCounts != 1 {
 		t.Errorf("the sprint page issued %d task-comment-count queries, want exactly 1: one "+
-			"grouped count over the whole set of rendered member-task ids",
+			"grouped count over the sprint's member tasks",
 			src.groupedCommentCounts)
 	}
 	// That one query covered EVERY rendered card, which is what makes one query
-	// sufficient rather than merely few.
-	if len(src.lastGroupedIDs) != len(data.Tasks) {
-		t.Errorf("the comment count was given %d ids, want the board's %d member tasks",
-			len(src.lastGroupedIDs), len(data.Tasks))
+	// sufficient rather than merely few: it selects the members by the sprint id,
+	// and no id list was built.
+	if src.lastCountedSprint != f.sprintID {
+		t.Errorf("the comment count was taken for sprint #%d, want the page's sprint #%d",
+			src.lastCountedSprint, f.sprintID)
 	}
-	for i := range data.Tasks {
-		if i < len(src.lastGroupedIDs) && src.lastGroupedIDs[i] != data.Tasks[i].ID {
-			t.Errorf("the comment-count id at %d is #%d, want #%d",
-				i, src.lastGroupedIDs[i], data.Tasks[i].ID)
-		}
-	}
+
 	if src.perTaskComments != 0 {
 		t.Errorf("the sprint page issued %d per-task comment queries, want 0: a card shows a "+
 			"count and a member task's comment TEXT is read only by its own page",
@@ -1006,8 +1021,7 @@ func TestSprintPage_CommentQueryCount(t *testing.T) {
 	// The control that makes the count and the zero falsifiable: both reads are
 	// reachable on this same instrument and both are counted when taken, so "1" is
 	// a measurement rather than an instrument that never moves.
-	if _, err := src.CountTaskCommentsByTasks(context.Background(),
-		[]int{f.loggedTaskID, f.markupTaskID}); err != nil {
+	if _, err := src.CountTaskCommentsBySprint(context.Background(), f.sprintID); err != nil {
 		t.Fatalf("control count read: %v", err)
 	}
 	if _, err := src.ListTaskComments(context.Background(), f.loggedTaskID, nil); err != nil {

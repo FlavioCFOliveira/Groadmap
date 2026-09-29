@@ -175,7 +175,7 @@ The `_metadata` table records the active schema version. Migration steps and the
 
 ### Current Schema Version
 
-`SchemaVersion = "1.14.0"` (defined in `internal/db/schema.go`).
+`SchemaVersion = "1.15.0"` (defined in `internal/db/schema.go`).
 
 ### Migration Commands
 
@@ -933,6 +933,62 @@ statement is transcribed in each migration instead.
 10. After the migration, `SELECT value FROM _metadata WHERE key = 'schema_version'` returns `1.14.0`.
 11. A fresh database created at 1.14.0 receives its positions from the write paths alone and requires no repair.
 12. Against a migrated database, `sprint move-to`, `sprint top` and `sprint bottom` move a member that previously sat above a gap, instead of reporting success without moving it.
+
+### Migration 1.14.0 → 1.15.0
+
+Replaces the index set of the `tasks`, `sprint_tasks`, `audit` and
+`task_dependencies` tables with the one `DATABASE.md § DDL - Table Creation` declares.
+Six indexes are dropped because each duplicates another index, or a leading prefix of
+one, or the implicit index of a constraint. Four indexes are recreated under the same
+name with the ordering columns of the reads they serve appended, so that those reads
+need no sort step. One index is added for the severity ordering of the task listing.
+The reasons for each index are in `DATABASE.md § Index Design Rationale`.
+
+The migration adds no column and rebuilds no table, and it changes no row: only index
+definitions change. No read returns different rows or a different order after it.
+
+```sql
+-- 1. Drop the indexes that duplicate another index or a prefix of one.
+DROP INDEX IF EXISTS idx_tasks_status;          -- prefix of idx_tasks_status_priority
+DROP INDEX IF EXISTS idx_tasks_priority;        -- prefix of idx_tasks_priority_created
+DROP INDEX IF EXISTS idx_sprint_tasks_task_id;  -- duplicate of the UNIQUE(task_id) index
+DROP INDEX IF EXISTS idx_sprint_tasks_lookup;   -- duplicate of the PRIMARY KEY index
+DROP INDEX IF EXISTS idx_task_deps_task_id;     -- prefix of the PRIMARY KEY index
+DROP INDEX IF EXISTS idx_audit_performed_at;    -- duplicate of idx_audit_date
+
+-- 2. Recreate four indexes under the same name, with the ordering columns appended.
+DROP INDEX IF EXISTS idx_tasks_status_priority;
+CREATE INDEX IF NOT EXISTS idx_tasks_status_priority ON tasks(status, priority DESC, created_at ASC);
+DROP INDEX IF EXISTS idx_tasks_type;
+CREATE INDEX IF NOT EXISTS idx_tasks_type ON tasks(type, priority DESC, created_at ASC);
+DROP INDEX IF EXISTS idx_audit_entity;
+CREATE INDEX IF NOT EXISTS idx_audit_entity ON audit(entity_type, entity_id, performed_at DESC);
+DROP INDEX IF EXISTS idx_audit_operation;
+CREATE INDEX IF NOT EXISTS idx_audit_operation ON audit(operation, performed_at DESC, entity_type);
+
+-- 3. Add the index of the severity ordering.
+CREATE INDEX IF NOT EXISTS idx_tasks_severity_priority ON tasks(severity DESC, priority DESC, created_at ASC);
+
+-- Update schema version
+UPDATE _metadata SET value = '1.15.0' WHERE key = 'schema_version';
+```
+
+The migration runs in one transaction, like every migration: a failure rolls every
+step back and leaves `_metadata.schema_version` at `1.14.0`. Re-applying it is a no-op
+in effect, because every drop is guarded by `IF EXISTS` and every creation by
+`IF NOT EXISTS`, and a recreated index is dropped and created again with the same
+definition.
+
+#### Acceptance criteria
+
+1. After the migration, `PRAGMA index_list` on `tasks`, `sprint_tasks`, `audit` and `task_dependencies` reports, table by table, exactly the indexes a fresh database created at 1.15.0 reports, and `PRAGMA index_xinfo` reports the same columns, order and direction for each of them.
+2. After the migration, none of `idx_tasks_status`, `idx_tasks_priority`, `idx_sprint_tasks_task_id`, `idx_sprint_tasks_lookup`, `idx_task_deps_task_id` or `idx_audit_performed_at` exists.
+3. The migration leaves the row count of every table unchanged, and leaves every row unchanged.
+4. After the migration, the query plans of the task listing filtered by status, filtered by type, and sorted by status or by severity, and of the audit read filtered by operation and of the entity history, taken from the production builders, name the index `DATABASE.md § Index Design Rationale` assigns to each and contain no `TEMP B-TREE`.
+5. On a database whose rows tie on every ordering key, every task listing and every audit read returns the same rows in the same order before and after the migration.
+6. Running the migration set twice against the same database produces the same result as running it once, and raises no error.
+7. If any step fails, `_metadata.schema_version` remains `1.14.0` and the index set is the one the database held before the migration.
+8. After the migration, `SELECT value FROM _metadata WHERE key = 'schema_version'` returns `1.15.0`.
 
 ## Release Process
 

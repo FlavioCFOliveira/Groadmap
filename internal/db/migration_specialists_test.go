@@ -293,10 +293,13 @@ func TestMigrateV1_9_0_toV1_10_0_OnNextOpen(t *testing.T) {
 			fx.childTaskID, parent, fx.parentTaskID)
 	}
 
-	// The seven task indexes survive.
+	// The task indexes survive the rebuild. The open runs the whole migration
+	// chain, so what must be present is the task index set of the current schema:
+	// migration 1.15.0 dropped idx_tasks_status and idx_tasks_priority, which the
+	// rebuild of 1.10.0 had carried over (SPEC/VERSION.md § Migration 1.14.0 → 1.15.0).
 	for _, index := range []string{
-		"idx_tasks_status", "idx_tasks_type", "idx_tasks_priority", "idx_tasks_created_at",
-		"idx_tasks_status_priority", "idx_tasks_priority_created", "idx_tasks_parent_task_id",
+		"idx_tasks_type", "idx_tasks_created_at", "idx_tasks_status_priority",
+		"idx_tasks_priority_created", "idx_tasks_severity_priority", "idx_tasks_parent_task_id",
 	} {
 		var name string
 		err := database.QueryRow(

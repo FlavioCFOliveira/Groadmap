@@ -1404,7 +1404,7 @@ func TestEmptyListsAreNonNil(t *testing.T) {
 
 // ==================== UNBOUNDED LISTING FOR THE WEB TASKS PAGE ====================
 
-// TestListAllTasksIsUnbounded is the gate for SPEC/DATABASE.md § Main SQL
+// TestTaskListingIsUnbounded is the gate for SPEC/DATABASE.md § Main SQL
 // Queries, "List All": the listing the web interface's tasks page reads carries
 // no LIMIT, so it returns every task the filters admit however many there are.
 //
@@ -1414,7 +1414,7 @@ func TestEmptyListsAreNonNil(t *testing.T) {
 //
 // The CLI's clamp is asserted alongside it, on the same data: the two reads must
 // differ, or the unbounded one is not doing anything.
-func TestListAllTasksIsUnbounded(t *testing.T) {
+func TestTaskListingIsUnbounded(t *testing.T) {
 	db, cleanup := setupTestDB(t)
 	defer cleanup()
 
@@ -1437,12 +1437,19 @@ func TestListAllTasksIsUnbounded(t *testing.T) {
 		}
 	}
 
-	all, err := db.ListAllTasks(testContext(), nil)
+	// Every id of the listing is selected, so the rows carry the ordering keys.
+	all, err := db.ReadTaskListPage(testContext(), nil, false, func(listing []TaskRef) []int {
+		ids := make([]int, len(listing))
+		for i := range listing {
+			ids[i] = listing[i].ID
+		}
+		return ids
+	})
 	if err != nil {
-		t.Fatalf("ListAllTasks: %v", err)
+		t.Fatalf("ReadTaskListPage: %v", err)
 	}
 	if len(all) != total {
-		t.Errorf("ListAllTasks returned %d tasks, want every one of the %d in the roadmap",
+		t.Errorf("the task listing returned %d tasks, want every one of the %d in the roadmap",
 			len(all), total)
 	}
 

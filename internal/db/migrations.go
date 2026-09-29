@@ -93,6 +93,11 @@ var migrations = []Migration{
 		Name:    "Densify sprint_tasks positions so every sprint holds exactly the run 0..N-1",
 		Apply:   migrateV1_13_0_toV1_14_0,
 	},
+	{
+		Version: "1.15.0",
+		Name:    "Replace the task, sprint_tasks, audit and task_dependencies index set with one free of duplicates that serves each listing order with no sort step",
+		Apply:   migrateV1_14_0_toV1_15_0,
+	},
 }
 
 // RunMigrations executes all pending migrations in a transaction.
@@ -931,6 +936,60 @@ func migrateV1_13_0_toV1_14_0(tx *sql.Tx) error {
 	}
 
 	return nil
+}
+
+// migrateV1_14_0_toV1_15_0 replaces the index set of the tasks, sprint_tasks,
+// audit and task_dependencies tables with the one SPEC/DATABASE.md § DDL - Table
+// Creation declares (SPEC/VERSION.md § Migration 1.14.0 → 1.15.0; the reasons
+// for each index are in SPEC/DATABASE.md § Index Design Rationale).
+//
+// Six indexes are dropped because each duplicates another index, a leading
+// prefix of one, or the implicit index of a constraint, and so costs write time
+// on every row change while serving no lookup the longer index does not. Four
+// are recreated under the same name with the ordering columns of the reads they
+// serve appended, so those reads need no sort step. One is added for the
+// severity ordering of the task listing.
+//
+// Only index definitions change: no column is added, no table is rebuilt, and no
+// row is touched. The statements are transcribed from the SPEC rather than
+// shared with CreateSchema, because a migration is a frozen historical artefact
+// (see migrateV1_13_0_toV1_14_0).
+//
+// Idempotent: every drop is guarded by IF EXISTS and every creation by IF NOT
+// EXISTS, and a recreated index is dropped and created again with the same
+// definition, so re-applying the migration is a no-op in effect.
+func migrateV1_14_0_toV1_15_0(tx *sql.Tx) error {
+	for _, step := range indexSet1150Steps {
+		if _, err := tx.Exec(step); err != nil {
+			return fmt.Errorf("replacing the index set (%s): %w", step, err)
+		}
+	}
+	return nil
+}
+
+// indexSet1150Steps are the statements of migration 1.14.0 → 1.15.0, in the
+// order SPEC/VERSION.md gives them.
+var indexSet1150Steps = []string{
+	// 1. Drop the indexes that duplicate another index or a prefix of one.
+	`DROP INDEX IF EXISTS idx_tasks_status`,         // prefix of idx_tasks_status_priority
+	`DROP INDEX IF EXISTS idx_tasks_priority`,       // prefix of idx_tasks_priority_created
+	`DROP INDEX IF EXISTS idx_sprint_tasks_task_id`, // duplicate of the UNIQUE(task_id) index
+	`DROP INDEX IF EXISTS idx_sprint_tasks_lookup`,  // duplicate of the PRIMARY KEY index
+	`DROP INDEX IF EXISTS idx_task_deps_task_id`,    // prefix of the PRIMARY KEY index
+	`DROP INDEX IF EXISTS idx_audit_performed_at`,   // duplicate of idx_audit_date
+
+	// 2. Recreate four indexes under the same name, with the ordering columns appended.
+	`DROP INDEX IF EXISTS idx_tasks_status_priority`,
+	`CREATE INDEX IF NOT EXISTS idx_tasks_status_priority ON tasks(status, priority DESC, created_at ASC)`,
+	`DROP INDEX IF EXISTS idx_tasks_type`,
+	`CREATE INDEX IF NOT EXISTS idx_tasks_type ON tasks(type, priority DESC, created_at ASC)`,
+	`DROP INDEX IF EXISTS idx_audit_entity`,
+	`CREATE INDEX IF NOT EXISTS idx_audit_entity ON audit(entity_type, entity_id, performed_at DESC)`,
+	`DROP INDEX IF EXISTS idx_audit_operation`,
+	`CREATE INDEX IF NOT EXISTS idx_audit_operation ON audit(operation, performed_at DESC, entity_type)`,
+
+	// 3. Add the index of the severity ordering.
+	`CREATE INDEX IF NOT EXISTS idx_tasks_severity_priority ON tasks(severity DESC, priority DESC, created_at ASC)`,
 }
 
 // reclassifyStatusChangeSteps rewrites the operation of a legacy

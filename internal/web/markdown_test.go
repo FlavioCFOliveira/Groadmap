@@ -1007,7 +1007,8 @@ func TestGraphDetailPanel_StaysPlainText(t *testing.T) {
 
 // TestMarkdownRenderer_CompiledIn is Acceptance Criterion 194 and SPEC/BUILD.md
 // § Markdown Rendering Rules, rules 1 to 3: go.mod's first require block names
-// the three modules at exact versions, and the renderer highlights code with the
+// goldmark, chroma, and chroma's regular-expression module at exact versions and
+// does not name goldmark-highlighting, and the renderer highlights code with the
 // working directory and HOME pointed at empty directories, so no lexer or style
 // is read from the host filesystem.
 func TestMarkdownRenderer_CompiledIn(t *testing.T) {
@@ -1020,14 +1021,14 @@ func TestMarkdownRenderer_CompiledIn(t *testing.T) {
 		t.Fatal("go.mod has no require block")
 	}
 	block, _, _ = strings.Cut(block, ")")
-	for _, module := range []string{"github.com/yuin/goldmark ", "github.com/yuin/goldmark-highlighting/v2 ", "github.com/alecthomas/chroma/v2 "} {
+	for _, module := range []string{"github.com/yuin/goldmark ", "github.com/alecthomas/chroma/v2 ", "github.com/dlclark/regexp2/v2 "} {
 		line := regexp.MustCompile(`(?m)^\s*` + regexp.QuoteMeta(module) + `(v\S+)\s*$`).FindStringSubmatch(block)
 		if line == nil {
 			t.Errorf("the first require block of go.mod does not pin %s at an exact version", module)
 		}
 	}
-	if !strings.Contains(string(gomod), "github.com/dlclark/regexp2") {
-		t.Error("go.mod does not pin chroma's regular-expression module")
+	if strings.Contains(string(gomod), "github.com/yuin/goldmark-highlighting") {
+		t.Error("go.mod names github.com/yuin/goldmark-highlighting/v2, which the renderer no longer uses")
 	}
 
 	t.Chdir(t.TempDir())

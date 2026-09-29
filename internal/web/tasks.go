@@ -452,7 +452,7 @@ func filterCookie(value string) *http.Cookie {
 // reference as the literal string "#42" is what lets both "42" and "#42" find
 // task 42 under the one substring rule. No other field is searched (SPEC/WEB.md
 // § Roadmap Tasks Page, The text search; Acceptance Criterion 101).
-func matchesSearch(task *models.Task, folded string) bool {
+func matchesSearch(task *db.TaskRef, folded string) bool {
 	if folded == "" {
 		return true
 	}
@@ -560,7 +560,7 @@ type taskSizeLink struct {
 // query is the active filter state the page was produced from; the handler
 // writes it to the filter-state cookie for an explicit request.
 type tasksData struct {
-	Rows      []models.Task
+	Rows      []db.TaskRow
 	PageItems []taskPageLink
 	SizeLinks []taskSizeLink
 	Name      string
@@ -579,14 +579,16 @@ type tasksData struct {
 }
 
 // tasksSource is the complete read surface of the roadmap tasks page: the sprint
-// titles, the filtered task listing, and the roadmap's task count. The per-task
+// titles, the task listing with the page-rows read of the selected page, and the
+// roadmap's task count. The per-task
 // and per-sprint reads, the sprint resolution, and every comment read are
 // deliberately absent, so the page cannot express one query per row, resolves no
 // task's sprint, and reads no comment (SPEC/WEB.md § Roadmap Tasks Page, Read
 // cost; Acceptance Criteria 70, 89 and 92). *db.DB satisfies the interface.
 type tasksSource interface {
 	ListSprintTitles(ctx context.Context) ([]db.SprintRef, error)
-	ListAllTasks(ctx context.Context, filter *db.TaskListFilter) ([]models.Task, error)
+	ReadTaskListPage(ctx context.Context, filter *db.TaskListFilter, withTitle bool,
+		selectPage func(listing []db.TaskRef) []int) ([]db.TaskRow, error)
 	CountTasks(ctx context.Context) (int, error)
 }
 
@@ -606,9 +608,12 @@ func loadTasks(ctx context.Context, name string, req *tasksRequest) (tasksData, 
 
 // readTaskList is the tasks page's entire read, against the page's read surface
 // rather than a concrete connection, so a test can count what a render costs. It
-// is TWO reads — the sprint titles and the filtered task listing — and a third,
-// the roadmap's task count, only when the filtered list is empty and the listing
-// carried at least one predicate (SPEC/WEB.md § Roadmap Tasks Page, Read cost).
+// is the sprint titles, the lean task listing, and the page-rows read of the
+// selected page's tasks — the last issued only when the filtered list holds a
+// row — with the listing and the page-rows read in one read transaction; and
+// the roadmap's task count, only when the filtered list is empty and the
+// listing carried at least one predicate (SPEC/WEB.md § Roadmap Tasks Page, Read
+// cost).
 func readTaskList(ctx context.Context, src tasksSource, name string, req *tasksRequest) (tasksData, error) {
 	sprints, err := src.ListSprintTitles(ctx)
 	if err != nil {
@@ -621,30 +626,48 @@ func readTaskList(ctx context.Context, src tasksSource, name string, req *tasksR
 
 	q := resolveTasksQuery(req, sprintIDs)
 
-	// Every task the structured filters admit, with no LIMIT and no OFFSET: the
-	// term is applied below, and the page after the term, so the read is bounded
-	// by the filters alone and the total is correct by construction.
-	tasks, err := src.ListAllTasks(ctx, q.listFilter())
+	// The task listing holds every task the structured filters admit, with no
+	// LIMIT and no OFFSET: the term is applied in selectPage, and the page after
+	// the term, so the listing is bounded by the filters alone and the total is
+	// correct by construction. Only the selected page's ids reach the page-rows
+	// read.
+	//
+	// The listing carries each task's title only when the request carries a term
+	// to match it against — a q that is not empty after the trim, the one test
+	// matchesSearch applies — and its id alone otherwise: the rows the page shows
+	// take their titles from the page-rows read (SPEC/WEB.md § Roadmap Tasks Page,
+	// Read cost).
+	var read, total, page, pages, start, end int
+	rows, err := src.ReadTaskListPage(ctx, q.listFilter(), q.folded != "", func(listing []db.TaskRef) []int {
+		read = len(listing)
+
+		// The search removes rows from the listing's order and never reorders the
+		// rows that remain; filtering in place keeps that order.
+		matched := listing[:0]
+		for i := range listing {
+			if matchesSearch(&listing[i], q.folded) {
+				matched = append(matched, listing[i])
+			}
+		}
+
+		total = len(matched)
+		pages = 1
+		if total > 0 {
+			pages = (total + q.Size - 1) / q.Size
+		}
+		page = min(q.Page, pages)
+		start = (page - 1) * q.Size
+		end = min(start+q.Size, total)
+
+		ids := make([]int, 0, end-start)
+		for i := start; i < end; i++ {
+			ids = append(ids, matched[i].ID)
+		}
+		return ids
+	})
 	if err != nil {
 		return tasksData{}, err
 	}
-	read := len(tasks)
-
-	// The search removes rows from the listing's order and never reorders the
-	// rows that remain; filtering in place keeps that order.
-	matched := tasks[:0]
-	for i := range tasks {
-		if matchesSearch(&tasks[i], q.folded) {
-			matched = append(matched, tasks[i])
-		}
-	}
-
-	total := len(matched)
-	pages := 1
-	if total > 0 {
-		pages = (total + q.Size - 1) / q.Size
-	}
-	page := min(q.Page, pages)
 
 	data := tasksData{
 		Name:    name,
@@ -670,9 +693,7 @@ func readTaskList(ctx context.Context, src tasksSource, name string, req *tasksR
 		return data, nil
 	}
 
-	start := (page - 1) * q.Size
-	end := min(start+q.Size, total)
-	data.Rows = matched[start:end:end]
+	data.Rows = rows
 	data.First = start + 1
 	data.Last = end
 	data.PageItems = taskPageLinks(&q, name, page, pages)

@@ -1,17 +1,32 @@
 package db
 
 import (
+	"database/sql"
 	"fmt"
 
 	"github.com/FlavioCFOliveira/Groadmap/internal/utils"
 )
 
 // SchemaVersion is the current database schema version.
-const SchemaVersion = "1.14.0"
+const SchemaVersion = "1.15.0"
 
-// CreateSchema creates all database tables and indexes.
-// This implements the DDL from SPEC/DATABASE.md.
+// CreateSchema creates all database tables and indexes, and the three
+// _metadata rows, in ONE transaction. This implements the DDL from
+// SPEC/DATABASE.md.
+//
+// Either the whole schema and its metadata commit, or none of them does: a
+// failure leaves no table, no index and no _metadata row behind, so no database
+// can hold a partial schema or a schema without a schema_version
+// (SPEC/DATABASE.md § Transactional Atomicity Guarantees, item 10). One
+// transaction is also one commit, where executing each statement on its own
+// committed, and synced, once per statement.
 func (db *DB) CreateSchema() error {
+	return db.createSchema(schemaDDL())
+}
+
+// schemaDDL returns the DDL statements of the current schema, in the order they
+// must run.
+func schemaDDL() []string {
 	// Tasks table - aligned with SPEC/DATABASE.md v1.0.0
 	tasksDDL := `
 CREATE TABLE IF NOT EXISTS tasks (
@@ -42,14 +57,20 @@ CREATE TABLE IF NOT EXISTS tasks (
     severity INTEGER NOT NULL DEFAULT 0 CHECK(severity >= 0 AND severity <= 9)
 );
 
-CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
-CREATE INDEX IF NOT EXISTS idx_tasks_type ON tasks(type);
-CREATE INDEX IF NOT EXISTS idx_tasks_priority ON tasks(priority);
+-- Covers: the creation-date ordering of the task listing
 CREATE INDEX IF NOT EXISTS idx_tasks_created_at ON tasks(created_at);
 
--- Composite indexes for multi-criteria queries (TASK-P001)
-CREATE INDEX IF NOT EXISTS idx_tasks_status_priority ON tasks(status, priority DESC);
+-- Composite indexes, each supplying one ordering of the task listing in full,
+-- tie-breaker included, so the listing needs no sort step. No single-column index
+-- on status or priority: each would be a leading prefix of one of these.
+-- Covers: the status filter in the default ordering, and the status ordering
+CREATE INDEX IF NOT EXISTS idx_tasks_status_priority ON tasks(status, priority DESC, created_at ASC);
+-- Covers: the type filter in the default ordering
+CREATE INDEX IF NOT EXISTS idx_tasks_type ON tasks(type, priority DESC, created_at ASC);
+-- Covers: the default ordering (matches ListTasks ORDER BY)
 CREATE INDEX IF NOT EXISTS idx_tasks_priority_created ON tasks(priority DESC, created_at ASC);
+-- Covers: the severity ordering
+CREATE INDEX IF NOT EXISTS idx_tasks_severity_priority ON tasks(severity DESC, priority DESC, created_at ASC);
 
 -- Index for sub-task hierarchy lookups
 CREATE INDEX IF NOT EXISTS idx_tasks_parent_task_id ON tasks(parent_task_id);
@@ -92,10 +113,9 @@ CREATE TABLE IF NOT EXISTS sprint_tasks (
     FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE CASCADE
 );
 
-CREATE INDEX IF NOT EXISTS idx_sprint_tasks_task_id ON sprint_tasks(task_id);
-
--- Composite index for sprint task lookups (TASK-P001)
-CREATE INDEX IF NOT EXISTS idx_sprint_tasks_lookup ON sprint_tasks(sprint_id, task_id);
+-- The implicit indexes of the PRIMARY KEY (sprint_id, task_id) and of UNIQUE(task_id)
+-- are the lookup indexes: no index is declared over either column set, because it
+-- would duplicate one of them exactly.
 
 -- Unique composite index for sprint task ordering (TASK-ORDER-001)
 -- Covers: sprint task listing ordered by position.
@@ -118,11 +138,15 @@ CREATE TABLE IF NOT EXISTS audit (
     performed_at TEXT NOT NULL
 );
 
-CREATE INDEX IF NOT EXISTS idx_audit_entity ON audit(entity_type, entity_id);
-CREATE INDEX IF NOT EXISTS idx_audit_operation ON audit(operation);
-CREATE INDEX IF NOT EXISTS idx_audit_performed_at ON audit(performed_at);
+-- Each carries performed_at DESC after its equality columns, so the read it serves
+-- is returned in the audit order with no sort step.
+-- Covers: the entity history (entity_type and entity_id)
+CREATE INDEX IF NOT EXISTS idx_audit_entity ON audit(entity_type, entity_id, performed_at DESC);
+-- Covers: the operation filter, alone or combined with the entity-type filter
+CREATE INDEX IF NOT EXISTS idx_audit_operation ON audit(operation, performed_at DESC, entity_type);
 
--- Composite index for audit date range queries (TASK-P001)
+-- Covers: the unfiltered log and the date range filters. One index on performed_at,
+-- not two: SQLite reads an index in either direction.
 CREATE INDEX IF NOT EXISTS idx_audit_date ON audit(performed_at DESC);
 `
 
@@ -144,7 +168,7 @@ CREATE TABLE IF NOT EXISTS task_dependencies (
     FOREIGN KEY (depends_on_task_id) REFERENCES tasks(id) ON DELETE CASCADE
 );
 
-CREATE INDEX IF NOT EXISTS idx_task_deps_task_id ON task_dependencies(task_id);
+-- No index on task_id alone: it is the leading column of the primary key.
 CREATE INDEX IF NOT EXISTS idx_task_deps_depends_on ON task_dependencies(depends_on_task_id);
 `
 
@@ -185,28 +209,45 @@ CREATE TABLE IF NOT EXISTS sprint_comments (
 CREATE INDEX IF NOT EXISTS idx_sprint_comments_sprint_created ON sprint_comments(sprint_id, created_at ASC);
 `
 
-	// Execute all DDL statements. The comment tables come last: each carries a
-	// foreign key onto a table declared above it.
-	statements := []string{
+	// The comment tables come last: each carries a foreign key onto a table
+	// declared above it.
+	return []string{
 		tasksDDL, sprintsDDL, sprintTasksDDL, auditDDL, metadataDDL, taskDependenciesDDL,
 		taskCommentsDDL, sprintCommentsDDL,
 	}
+}
+
+// createSchema executes statements and then inserts the metadata rows, all
+// inside one transaction that is committed only when every step succeeded. It
+// takes the statements as a parameter so a test can make one of them fail and
+// observe that nothing was left behind.
+func (db *DB) createSchema(statements []string) error {
+	tx, err := db.Begin()
+	if err != nil {
+		return fmt.Errorf("beginning schema transaction: %w", err)
+	}
+	// A rollback after a successful commit is a no-op that returns
+	// sql.ErrTxDone; on every failure path it discards the partial schema.
+	defer tx.Rollback() //nolint:errcheck // rollback on failure; the original error is returned
+
 	for _, ddl := range statements {
-		if _, err := db.Exec(ddl); err != nil {
+		if _, err := tx.Exec(ddl); err != nil {
 			return fmt.Errorf("executing schema DDL: %w", err)
 		}
 	}
 
-	// Insert metadata
-	if err := db.insertMetadata(); err != nil {
+	if err := insertMetadataTx(tx); err != nil {
 		return fmt.Errorf("inserting metadata: %w", err)
 	}
 
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("committing schema: %w", err)
+	}
 	return nil
 }
 
-// insertMetadata inserts the initial metadata values.
-func (db *DB) insertMetadata() error {
+// insertMetadataTx inserts the initial metadata values inside tx.
+func insertMetadataTx(tx *sql.Tx) error {
 	now := utils.NowISO8601()
 
 	metadata := map[string]string{
@@ -216,7 +257,7 @@ func (db *DB) insertMetadata() error {
 	}
 
 	for key, value := range metadata {
-		_, err := db.Exec(
+		_, err := tx.Exec(
 			"INSERT OR REPLACE INTO _metadata (key, value) VALUES (?, ?)",
 			key, value,
 		)

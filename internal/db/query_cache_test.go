@@ -3,6 +3,7 @@ package db
 import (
 	"context"
 	"fmt"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -12,7 +13,7 @@ import (
 
 // TestQueryCacheGetQueryCachedSizes verifies that GetQuery returns a template
 // whose interpolated placeholder count matches the requested size for sizes
-// that are pre-cached individually (1-100).
+// that normalise to themselves (1-100).
 //
 // Every test in this file that needs one batch-update template names
 // OpAddTasksToSprint, because it is now the only one. The eight it used to
@@ -36,7 +37,7 @@ func TestQueryCacheGetQueryCachedSizes(t *testing.T) {
 }
 
 // TestQueryCacheNormalizeSize verifies that out-of-band sizes normalize to the
-// nearest larger cached bucket (250, 500, 1000) and that the returned template
+// nearest larger normalised size (250, 500, 1000) and that the returned template
 // carries that bucket's placeholder count, not the requested count.
 func TestQueryCacheNormalizeSize(t *testing.T) {
 	qc := NewQueryCache()
@@ -46,7 +47,7 @@ func TestQueryCacheNormalizeSize(t *testing.T) {
 		wantBkt   int
 	}{
 		{0, 1},     // non-positive clamps up to 1
-		{101, 250}, // just above the individually-cached band
+		{101, 250}, // just above the band that keeps its own size
 		{250, 250},
 		{300, 500},
 		{500, 500},
@@ -65,46 +66,62 @@ func TestQueryCacheNormalizeSize(t *testing.T) {
 	}
 }
 
-// TestQueryCacheOnDemandFallback verifies the generateQuery fallback path. For
-// a known operation every size normalizes onto a pre-cached bucket, so the
-// fallback is reached only defensively; we therefore exercise generateQuery
-// directly with an arbitrary (uncached) placeholder count and assert it yields
-// the exact same SQL as the shared buildTemplates source of truth.
-func TestQueryCacheOnDemandFallback(t *testing.T) {
+// TestQueryCacheHoldsNoPrecomputedState pins the on-demand rule of
+// SPEC/IMPLEMENTATION.md § Cache Strategy: opening a database MUST NOT generate
+// any template or placeholder list. Open and OpenReadOnly construct the cache
+// with NewQueryCache, so a cache type that holds no field cannot carry anything
+// generated at open time. A field added back to QueryCache, to hold a
+// precomputed table, fails here.
+func TestQueryCacheHoldsNoPrecomputedState(t *testing.T) {
+	if n := reflect.TypeOf(QueryCache{}).NumField(); n != 0 {
+		t.Fatalf("QueryCache declares %d field(s); it must hold no state, so that opening a "+
+			"database generates no template or placeholder list", n)
+	}
+	if got := NewQueryCache(); *got != (QueryCache{}) {
+		t.Fatalf("NewQueryCache() = %+v, want the zero value", *got)
+	}
+}
+
+// TestQueryCacheTextIdentityAcrossCalls pins the identity requirement: the same
+// operation at the same requested size yields the same text on every call, and
+// two requested sizes with the same normalised size yield the same text.
+func TestQueryCacheTextIdentityAcrossCalls(t *testing.T) {
 	qc := NewQueryCache()
-
-	const size = 1500 // an arbitrary, non-bucket size
-	got := qc.generateQuery(OpAddTasksToSprint, size)
-	if n := countINPlaceholders(t, got); n != size {
-		t.Fatalf("on-demand size %d: IN has %d placeholders, want %d", size, n, size)
+	for _, op := range []string{OpGetTasks, OpAddTasksToSprint} {
+		for _, size := range []int{1, 7, 100} {
+			if a, b := qc.GetQuery(op, size), qc.GetQuery(op, size); a != b {
+				t.Errorf("%s at size %d yields two different texts", op, size)
+			}
+		}
+		pairs := [][2]int{{-3, 1}, {0, 1}, {101, 250}, {251, 500}, {501, 1000}, {5000, 1000}}
+		for _, p := range pairs {
+			if a, b := qc.GetQuery(op, p[0]), qc.GetQuery(op, p[1]); a != b {
+				t.Errorf("%s: sizes %d and %d normalise alike but yield different texts", op, p[0], p[1])
+			}
+		}
 	}
-
-	// The fallback must agree with buildTemplates for the same placeholder run.
-	want := buildTemplates(generatePlaceholders(size))[OpAddTasksToSprint]
-	if got != want {
-		t.Errorf("on-demand template diverges from buildTemplates output\n got: %q\nwant: %q", got, want)
-	}
-
-	// An unknown operation returns empty from the fallback.
-	if q := qc.generateQuery("nope", size); q != "" {
-		t.Errorf("generateQuery(unknown) = %q, want empty", q)
+	// A template for an arbitrary placeholder run agrees with buildTemplate.
+	const size = 1500
+	want := buildTemplate(OpAddTasksToSprint, generatePlaceholders(size))
+	if n := countINPlaceholders(t, want); n != size {
+		t.Fatalf("buildTemplate at %d placeholders: IN has %d", size, n)
 	}
 }
 
 // TestQueryCacheUnknownOperation verifies that an unknown operation key yields
-// an empty string from both the cached and on-demand paths (defensive: callers
+// an empty string at every size (defensive: callers
 // must never pass an unregistered op).
 func TestQueryCacheUnknownOperation(t *testing.T) {
 	qc := NewQueryCache()
 	if q := qc.GetQuery("does_not_exist", 10); q != "" {
-		t.Errorf("unknown op (cached size) = %q, want empty", q)
+		t.Errorf("unknown op (size 10) = %q, want empty", q)
 	}
 	if q := qc.GetQuery("does_not_exist", 5000); q != "" {
-		t.Errorf("unknown op (fallback size) = %q, want empty", q)
+		t.Errorf("unknown op (size 5000) = %q, want empty", q)
 	}
 }
 
-// TestQueryCacheGetPlaceholders verifies cached and out-of-range placeholder
+// TestQueryCacheGetPlaceholders verifies small, large and negative placeholder
 // generation.
 func TestQueryCacheGetPlaceholders(t *testing.T) {
 	qc := NewQueryCache()
@@ -120,20 +137,20 @@ func TestQueryCacheGetPlaceholders(t *testing.T) {
 		}
 	}
 
-	// Above the pre-generated range (1000), fall back to generation.
+	// A count above the largest normalised size is generated exactly.
 	const big = 1200
 	if got := qc.GetPlaceholders(big); strings.Count(got, "?") != big {
 		t.Errorf("GetPlaceholders(%d): got %d placeholders, want %d", big, strings.Count(got, "?"), big)
 	}
-	// Negative count falls back to the empty generator.
+	// A negative count yields the empty list.
 	if got := qc.GetPlaceholders(-1); got != "" {
 		t.Errorf("GetPlaceholders(-1) = %q, want empty", got)
 	}
 }
 
 // TestQueryCacheTemplatesMatchProductionQueries is the reconciliation guard: it
-// pins each cached template to the exact SQL its production builder constructs.
-// If a builder's query shape changes without updating buildTemplates (or vice
+// pins each template to the exact SQL its production builder constructs.
+// If a builder's query shape changes without updating buildTemplate (or vice
 // versa), this test fails — preventing the silent template/schema drift that
 // originally left the cache referencing non-existent columns.
 func TestQueryCacheTemplatesMatchProductionQueries(t *testing.T) {
@@ -160,7 +177,7 @@ func TestQueryCacheTemplatesMatchProductionQueries(t *testing.T) {
 	}
 }
 
-// TestQueryCacheGetTasksTemplateExecutesAgainstRealSchema proves the cached
+// TestQueryCacheGetTasksTemplateExecutesAgainstRealSchema proves the
 // OpGetTasks template is valid against the production schema and returns the
 // expected rows — the column drift that previously made the template reference
 // non-existent columns would surface here as a SQL error.
@@ -170,7 +187,7 @@ func TestQueryCacheGetTasksTemplateExecutesAgainstRealSchema(t *testing.T) {
 
 	ids := seedTasks(t, db, 4)
 
-	// Execute the cached template directly (not via GetTasks) to isolate the
+	// Execute the template directly (not via GetTasks) to isolate the
 	// template's correctness against the real schema.
 	query := db.queryCache.GetQuery(OpGetTasks, len(ids))
 	args := make([]any, len(ids))
@@ -179,16 +196,16 @@ func TestQueryCacheGetTasksTemplateExecutesAgainstRealSchema(t *testing.T) {
 	}
 	rows, err := db.QueryContext(context.Background(), query, args...)
 	if err != nil {
-		t.Fatalf("cached OpGetTasks template failed against real schema: %v", err)
+		t.Fatalf("OpGetTasks template failed against real schema: %v", err)
 	}
 	defer rows.Close()
 
 	tasks, err := scanTasksWithDeps(rows)
 	if err != nil {
-		t.Fatalf("scanning cached-template rows: %v", err)
+		t.Fatalf("scanning template rows: %v", err)
 	}
 	if len(tasks) != len(ids) {
-		t.Fatalf("cached template returned %d tasks, want %d", len(tasks), len(ids))
+		t.Fatalf("template returned %d tasks, want %d", len(tasks), len(ids))
 	}
 }
 

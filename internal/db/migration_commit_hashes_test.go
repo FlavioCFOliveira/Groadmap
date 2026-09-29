@@ -334,8 +334,8 @@ func TestMigrateV1_10_0_toV1_11_0_OnNextOpen(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reading schema version after open: %v", err)
 	}
-	if version != "1.14.0" {
-		t.Fatalf("schema_version after open = %q, want 1.14.0 (SPEC/VERSION.md § Current Schema Version)", version)
+	if version != "1.15.0" {
+		t.Fatalf("schema_version after open = %q, want 1.15.0 (SPEC/VERSION.md § Current Schema Version)", version)
 	}
 	if version != SchemaVersion {
 		t.Errorf("schema_version after open = %q but the SchemaVersion constant is %q; a migrated "+
@@ -785,12 +785,6 @@ func TestCommitHashesRoundTripThroughEveryTaskReadPath(t *testing.T) {
 	}
 	assertCarriesHashes("ListTasks", listed)
 
-	all, err := database.ListAllTasks(ctx, nil)
-	if err != nil {
-		t.Fatalf("ListAllTasks: %v", err)
-	}
-	assertCarriesHashes("ListAllTasks", all)
-
 	subtasks, err := database.GetSubTasks(ctx, blockerID)
 	if err != nil {
 		t.Fatalf("GetSubTasks: %v", err)
@@ -814,12 +808,6 @@ func TestCommitHashesRoundTripThroughEveryTaskReadPath(t *testing.T) {
 		t.Fatalf("GetBlocking: %v", err)
 	}
 	assertCarriesHashes("GetBlocking", blocking)
-
-	active, err := database.GetActiveSprintTasks(ctx, sprintID)
-	if err != nil {
-		t.Fatalf("GetActiveSprintTasks: %v", err)
-	}
-	assertCarriesHashes("GetActiveSprintTasks", active)
 
 	full, err := database.GetSprintTasksFull(ctx, sprintID, nil, false)
 	if err != nil {

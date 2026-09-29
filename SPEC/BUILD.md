@@ -109,9 +109,9 @@ module is the one `go.mod` pins.
 | Module | Path | Purpose |
 |--------|------|---------|
 | GoGraph | `github.com/FlavioCFOliveira/GoGraph` | Labelled property graph, Cypher engine, and durable store backing the `graph` command. See `GRAPH.md`. |
-| Syntax highlighting | `github.com/alecthomas/chroma/v2` | The lexers and styles that highlight a fenced code block of a Markdown field in the web interface by its declared language, and the CSS of the syntax-highlighting stylesheet. See `WEB.md § Markdown Rendering` and Markdown Rendering Rules below. |
+| Syntax highlighting | `github.com/alecthomas/chroma/v2` | The lexer engine and the HTML formatter that highlight a fenced code block of a Markdown field in the web interface by its declared language, the source of the generated lexer registry and style those blocks are highlighted with, and the CSS of the syntax-highlighting stylesheet. Only its root package and `formatters/html` are compiled into the binary. See `WEB.md § Markdown Rendering` and Markdown Rendering Rules below. |
+| Regular expressions | `github.com/dlclark/regexp2/v2` | The regular-expression engine chroma requires. Groadmap imports it directly because the generated lexer registry holds a copy of chroma's Raku lexer, whose Go source imports it. See Markdown Rendering Rules below. |
 | Markdown | `github.com/yuin/goldmark` | The CommonMark-compliant parser and renderer, with its GitHub Flavored Markdown, footnote, and definition-list extensions, that turns a Markdown field into the HTML the web interface shows. See `WEB.md § Markdown Rendering` and Markdown Rendering Rules below. |
-| Markdown highlighting bridge | `github.com/yuin/goldmark-highlighting/v2` | The goldmark extension that hands a fenced code block to chroma and emits chroma's class-based markup. See `WEB.md § Markdown Rendering` and Markdown Rendering Rules below. |
 | System calls | `golang.org/x/sys` | The operating-system calls the Go standard library does not publish. Groadmap imports the module at four sites, and each of the four compiles for one platform family only. `golang.org/x/sys/unix` is imported by `internal/terminal/terminal_unix.go`, for the `TIOCGWINSZ` ioctl that decides whether a stream is a terminal, and by `internal/testenv/pty_linux.go`, for the `/dev/ptmx` sequence that opens a pseudo-terminal pair. `golang.org/x/sys/windows` is imported by `internal/terminal/terminal_windows.go`, for the `GetConsoleMode` call that asks the console subsystem that same terminal question, and by `internal/graphlock/graphlock_windows.go`, for the `LockFileEx` and `UnlockFileEx` calls that are the graph store's mutual exclusion on that platform. See `GRAPH.md § Concurrency and Recovery` for the lock the last of those four implements. |
 | Unicode data | `golang.org/x/text` | The Unicode character data the roadmap tasks page's search normalises a term and a task's searchable text by, and the knowledge-graph key comparison normalises keys by. `internal/unicodenorm` imports `golang.org/x/text/unicode/norm` — the Go project's own implementation of the normalisation forms UAX #15 defines — and no other package of the module. See `WEB.md § Roadmap Tasks Page` and `GRAPH.md § Node Key Uniqueness` for the rules that normalisation serves, and Unicode Data Rules below. |
 | SQLite driver | `modernc.org/sqlite` | Pure-Go SQLite driver backing every roadmap database (`~/.roadmaps/<name>/project.db`). It is the storage engine for all task, sprint, and audit data: `internal/db` registers it under the driver name `sqlite` and opens every database connection through it. Being pure Go, it needs no C toolchain and builds under `CGO_ENABLED=0`. See `DATABASE.md` for the schema it stores, `ARCHITECTURE.md § 3. internal/db/` for the layer that opens it, and `IMPLEMENTATION.md § Database Connections` for the entry point and DSN form that layer must use. |
@@ -294,29 +294,47 @@ module is the one `go.mod` pins.
 
 #### Markdown Rendering Rules
 
-1. `github.com/yuin/goldmark`, `github.com/yuin/goldmark-highlighting/v2`, and
-   `github.com/alecthomas/chroma/v2` MUST each be pinned to an exact, immutable
+1. `github.com/yuin/goldmark`, `github.com/alecthomas/chroma/v2`, and
+   `github.com/dlclark/regexp2/v2` MUST each be pinned to an exact, immutable
    version in `go.mod`, not a floating reference, so that every build of a given
    commit renders the same stored Markdown into the same HTML. `go.sum` MUST record
    the checksum of each pinned version, and the build MUST fail if a checksum does
    not match.
-2. **chroma's regular-expression module is an indirect dependency, pinned like the
-   others.** chroma requires `dlclark/regexp2`, under the module path the pinned
-   chroma's own `go.mod` names. Groadmap does not import it, so it is not a row of
-   the table above; `go.mod` pins it to an exact version in its indirect `require`
-   block, and `go.sum` records its checksum.
-3. **All four modules are pure Go and compiled in.** None needs a C toolchain, so
-   the build stays under `CGO_ENABLED=0`, and none loads a lexer, a style, or any
-   other file at runtime or fetches anything from the network: the renderer is
-   part of the binary (see `WEB.md § Self-Contained Deliverable`).
-4. **An upgrade of any of the three direct modules changes rendered output, and is
+2. **chroma's regular-expression module is a direct dependency.** chroma requires
+   `dlclark/regexp2`, under the module path the pinned chroma's own `go.mod` names,
+   and the generated lexer registry imports it too, through its copy of chroma's
+   Raku lexer (rule 5). It is therefore a row of the table above, pinned in the
+   first `require` block of `go.mod`, and `go.sum` records its checksum.
+3. **All three modules are pure Go and compiled in.** None needs a C toolchain, so
+   the build stays under `CGO_ENABLED=0`, and neither they nor the generated lexer
+   registry load a lexer, a style, or any other file at runtime or fetch anything
+   from the network: the renderer is part of the binary (see
+   `WEB.md § Self-Contained Deliverable`).
+4. **An upgrade of any of the three modules changes rendered output, and is
    re-validated as such.** The HTML these modules produce is what the web interface
    inserts without escaping, so an upgrade MUST be re-validated against the
    Markdown acceptance criteria of `WEB.md § Acceptance Criteria`, including those
    that prove raw HTML is not emitted and dangerous links are not active. An
    upgrade of chroma also changes the CSS of the syntax-highlighting
-   stylesheet, which the test gate holds equal to the pinned chroma's output (see
-   `WEB.md § Markdown Rendering`, rule 7).
+   stylesheet and the generated lexer registry, which the test gate holds equal to
+   the pinned chroma's output (see `WEB.md § Markdown Rendering`, rules 6 and 7).
+5. **The lexer registry is generated from the pinned chroma and committed.** The
+   lexers and the `github-dark` style that highlight a fenced code block come from
+   a registry generated from the module source of the chroma version `go.mod`
+   pins: a copy of every lexer that version ships, both those defined in its
+   embedded XML definitions and those defined in Go, and of that style's
+   definition. The generator runs through `go generate`, beside the generator of
+   the syntax-highlighting stylesheet, and its output is committed, so `go build`
+   runs no generation step. A test regenerates the registry in memory and fails
+   when the committed files differ from it. The generated files carry chroma's
+   copyright and permission notice. The registry's contents, lookup, and
+   construction are specified in `WEB.md § Markdown Rendering`, rule 6.
+6. **chroma's registry packages are not compiled into the binary.**
+   `github.com/alecthomas/chroma/v2/lexers` and
+   `github.com/alecthomas/chroma/v2/styles` each build their whole registry in a
+   package-level initialiser, which every `rmp` invocation would pay whatever it
+   does. No package compiled into the `rmp` binary imports either; tests and the
+   generators, which the binary does not contain, may.
 
 ## Vendored Web Assets
 

@@ -1391,11 +1391,13 @@ how the `rmp web` process itself terminates.
   [Routes and Pages](#routes-and-pages)).
 
   **Values reach SQL only as bound parameters.** The accepted values of `sprint`,
-  `status`, and `type` are passed to the task read as
+  `status`, and `type` are passed to the task listing as
   bound parameters of its prepared statement; no parameter value is ever
   concatenated or interpolated into SQL text, and an ignored value reaches no
-  statement at all (see `DATABASE.md § List All`). `q`, `page`, and `size` never
-  reach SQL: they are applied in memory (see **Read cost** below).
+  statement at all (see `DATABASE.md § List All`). The values of `q`, `page`, and
+  `size` never reach SQL: they are applied in memory, and the page-rows read binds
+  only the ids of the tasks they selected. Whether a term is present decides only
+  the task listing's projection (see **Read cost** below).
 - **Filter persistence.** The page remembers the reader's filter state across
   visits in one cookie that the server sets and reads; no script reads or writes
   it, and the page uses no browser storage (`localStorage`, `sessionStorage`, or
@@ -1683,7 +1685,7 @@ how the `rmp web` process itself terminates.
     **Filter bar** above).
   - **What the total costs.** The total is the size of the filtered set the page
     already holds in memory, so it costs no query of its own, and it is correct by
-    construction: the task read is bounded by the filters alone and never by a
+    construction: the task listing is bounded by the filters alone and never by a
     page, and the `rmp task list` display default — `-l, --limit <n>`, default
     `100` (see `COMMANDS.md § List Tasks`) — MUST NOT be applied to it.
 - **Row content.** The table's header row, inside `<thead>`, names the columns;
@@ -1820,35 +1822,68 @@ how the `rmp web` process itself terminates.
   the task page (see [Roadmap Task Page](#roadmap-task-page)). The presentation
   MUST reflect the relationships defined in `DATABASE.md § Relationships`; it
   introduces no new relationship.
-- **Read cost.** Rendering the page performs **two** reads, and a third only in
-  the case item 3 names:
+- **Read cost.** Rendering the page performs **three** reads when the filtered
+  list holds a row, and **two** — or three, in the case item 4 names — when it
+  is empty:
   1. **one** read of the roadmap's sprints, for the sprint select's options and
      for validating the active `sprint`, whether the URL or the cookie supplied it
      (see `DATABASE.md § List Sprint Titles`);
-  2. **one** read of the roadmap's tasks through the task listing, carrying one
-     predicate per filtered dimension — sprint, status, and type — with one bound
-     parameter per distinct active value of that dimension, and the ordering of
-     **Order** above (see `DATABASE.md § List All`);
-  3. **one** count of the roadmap's tasks (see `DATABASE.md § Count Roadmap
-     Tasks`), issued **only** when the filtered list is empty and the task read
+  2. **one** lean read of the roadmap's tasks, the **task listing**: every task
+     the structured filters admit, carrying one predicate per filtered
+     dimension — sprint, status, and type — with one bound parameter per distinct
+     active value of that dimension, in the ordering of **Order** above, and
+     projecting each task's `id` and no other column when the request carries no
+     search term, and each task's `id` and `title` and no other column when it
+     carries one (see `DATABASE.md § List All`, "The web tasks page's two reads");
+  3. **one** read of the rows the page renders, the **page-rows read**: the seven
+     columns a row shows — `id`, `title`, `type`, `status`, `severity`, `priority`,
+     and `created_at` — of each task of the selected page, and no other column,
+     selected by the ids the task listing supplied, and issued **only** when the filtered list holds a row
+     (see `DATABASE.md § List All`, "The web tasks page's two reads");
+  4. **one** count of the roadmap's tasks (see `DATABASE.md § Count Roadmap
+     Tasks`), issued **only** when the filtered list is empty and the task listing
      carried at least one predicate, to choose between the two empty states (see
-     **Empty states** above). When the task read carried no predicate, it
+     **Empty states** above). When the task listing carried no predicate, it
      returned every task of the roadmap, so the roadmap holds a task exactly when
      it returned a row, and no count is issued; a non-empty filtered list issues
      no count either.
 
+  **What the task listing carries.** The `id` is what selects the page's rows,
+  and the `id` and the `title` are the whole searchable text (see **The text
+  search** above). The `title` is therefore read only when the request carries a
+  term, that is, a `q` that is not empty after the trim; without one, nothing on
+  the page reads the `title` of a task it does not show, and the rows it shows take
+  theirs from the page-rows read. Whether a term is present decides the projection
+  alone: the term's value never reaches SQL. The ordering is applied by the listing
+  itself, so its keys are not projected. Nothing else on the page reads a field of every
+  matching task: the total is the number of rows that remain after the term, the
+  page count and the range text follow from it, the empty state is chosen from the
+  listing's own row count or from the count of item 4, and the filter bar is built
+  from the sprints of item 1.
+
+  **The page-rows read.** It selects at most `size` ids, and never more than the
+  largest page size, `100`, in one statement. It returns the rows in `id` order;
+  the page renders them in the order in which the task listing returned their ids,
+  so the rendered order is exactly the order of **Order** above. The task listing
+  and the page-rows read run in **one** read transaction, so the second sees the
+  roadmap exactly as the first saw it: every id the page selects has its row, and
+  no row differs from the task the listing admitted. The page renders exactly what
+  one read of every matching task's row would have produced. The page reads no
+  subtask count, no dependency set, no requirement text, and no other column its
+  rows do not show (see **Row content** above).
+
   The page resolves no task's sprint: no row shows one, and the sprint filter is
-  applied by the second read's own predicates, so the grouped sprint-resolution
+  applied by the task listing's own predicates, so the grouped sprint-resolution
   query (`DATABASE.md § Resolve the Sprint of Many Tasks (Grouped)`) is not issued
   by this page.
 
   The search term, the total, the page selection, and the slicing of the page's
-  rows are computed in memory over the rows the second read returned: the search's
+  ids are computed in memory over the rows the task listing returned: the search's
   normalisation and folding rules cannot be expressed in SQLite, so the term is
   applied after the read, and the page is selected after the term. The page reads
   no comment, because
   the list shows no comment information. The number of queries the page issues —
-  two, or three for an empty filtered list — does
+  three for a filtered list holding a row, two or three for an empty one — does
   not grow with the number of tasks, the number of sprints, the page size, or the
   number of active filters, and no query is issued per row. Following a row's link
   to its task page is a separate request for that one task, made only when the user
@@ -3150,15 +3185,17 @@ shows sprints as compact cards through the shared sprint-card partial instead (s
        [Roadmap Tasks Page](#roadmap-tasks-page)).
    - **Read cost: one grouped comment count, and nothing per card.** The card shows
      a comment count, so the page reads one. That count is read with **one grouped
-     query** over the whole set of rendered member-task ids (see
-     `DATABASE.md § Count Comments for Many Parents (Grouped)`) — never one query
-     per card, and never a comment **body**: the card displays a number, and reading
-     the text of every comment of every member task in order to display a number
+     query** over the sprint's member tasks, selected by the sprint id with a
+     sub-select on `sprint_tasks` rather than by a list of the member ids, so the
+     query binds one parameter whatever the number of members (see
+     `DATABASE.md § Count Comments for the Member Tasks of One Sprint (Grouped)`) —
+     never one query per card, and never a comment **body**: the card displays a
+     number, and reading the text of every comment of every member task in order to display a number
      would be work the page throws away. A member task's comment text is read only
      by that task's own page, one task at a time (see
      [Roadmap Task Page](#roadmap-task-page)). When the sprint has no member task the page issues no such
-     query at all, because the query takes a set of rendered task ids and that set
-     is empty.
+     query at all, because the member-task read has already shown that there is no
+     card to count for.
 
      The page therefore issues exactly **two** comment reads whatever the number of
      member tasks: the sprint's own comment listing, which the Comments card renders
@@ -4248,9 +4285,11 @@ re-presents an earlier, now-stale response in its place.
    `DATABASE.md § Main SQL Queries`. The sprints page reads the roadmap's sprints
    and each sprint's total task count for its card footer, but no member tasks,
    because the page renders every sprint as a card with no member tasks on it; the
-   tasks page reads the roadmap's sprints for its sprint filter and the task list
-   narrowed by the page's structured filters, and applies the search term and
-   selects the requested page in memory — two queries, with none per row (see
+   tasks page reads the roadmap's sprints for its sprint filter and the id of each
+   task the page's structured filters admit, with its title when the request
+   carries a search term, and applies the search term and
+   selects the requested page in memory, then reads the shown columns of that page's
+   tasks alone — three queries, with none per row (see
    [Roadmap Tasks Page](#roadmap-tasks-page), **Read cost**); the
    sprint page reads that sprint and its member tasks in `sprint_tasks` position
    order, which its own board then groups into the three columns and orders in
@@ -4270,17 +4309,17 @@ re-presents an earlier, now-stale response in its place.
    one task at a time (see [Roadmap Task Page](#roadmap-task-page)). A page that
    shows many tasks therefore reads only what it displays itself: the sprint
    page's board reads a comment **count** per rendered task, in one grouped counting
-   query over the whole set of rendered task ids, because a card shows a count and
+   query over the sprint's member tasks, because a card shows a count and
    no comment text (see
-   `DATABASE.md § Count Comments for Many Parents (Grouped)`), and the tasks page's
+   `DATABASE.md § Count Comments for the Member Tasks of One Sprint (Grouped)`), and the tasks page's
    list, which shows no comment information, reads no comment at all. The Roadmap
    Sprint Page additionally presents the sprint's own comment log, so it reads that sprint's
    comments in full in one further query (see `DATABASE.md § Comments`): the sprint
    page therefore issues exactly **two** comment reads — the sprint's own listing
    and the one grouped count over its member tasks — whatever the number of member
    tasks, and it reads the comment **body** of no member task. The grouped count is
-   skipped entirely when the sprint has no member task, because it takes a set of
-   rendered task ids and that set is empty; the sprint's own comment listing is
+   skipped entirely when the sprint has no member task, because there is no card to
+   count for; the sprint's own comment listing is
    still issued, because the Comments card is always present. Every one of these is
    a read query issued server-side while the page
    is rendered, and the number of them per page does not grow with the number of
@@ -4544,9 +4583,10 @@ not a convenience.
 6. **The Markdown renderer is compiled in.** The server-side Markdown renderer
    (see [Markdown Rendering](#markdown-rendering)) is built from Go modules that
    are compiled into the binary: `github.com/yuin/goldmark`,
-   `github.com/yuin/goldmark-highlighting/v2`, and
-   `github.com/alecthomas/chroma/v2`, together with the regular-expression module
-   chroma itself requires, `dlclark/regexp2`. None of them loads anything at
+   `github.com/alecthomas/chroma/v2`, and the regular-expression module chroma
+   requires, `dlclark/regexp2`, together with the generated lexer registry of
+   [Markdown Rendering](#markdown-rendering), rule 6, whose lexer and style
+   definitions are embedded in the binary. None of them loads anything at
    runtime: no
    lexer, style, or other data file is read from the host filesystem or fetched
    from a remote origin. The syntax-highlighting stylesheet is an embedded
@@ -4711,13 +4751,81 @@ the way out, on every request, and the CLI's output of these fields is unchanged
    level 3 to 6 renders as `<h6>`. A rendered heading carries no `id` attribute.
 6. **Fenced code blocks are highlighted by their declared language only.** A
    fenced code block whose info string begins with a language name that
-   `github.com/alecthomas/chroma/v2` recognises is highlighted by chroma, through
-   `github.com/yuin/goldmark-highlighting/v2`, and its tokens are marked with
-   chroma's CSS classes, never with a `style` attribute. A fenced code block with no info
-   string, or with a language name chroma does not recognise, and every indented
-   code block, renders unhighlighted: a monospaced preformatted block whose text
-   carries no token class. The renderer never guesses a block's language from its
-   content, so the same block renders the same way whatever it contains.
+   `github.com/alecthomas/chroma/v2` recognises is highlighted by chroma, and its
+   tokens are marked with chroma's CSS classes, never with a `style` attribute. A
+   fenced code block with no info string, or with a language name chroma does not
+   recognise, and every indented code block, renders unhighlighted: a monospaced
+   preformatted block whose text carries no token class. The renderer never
+   guesses a block's language from its content, so the same block renders the same
+   way whatever it contains.
+
+   The highlighting is a goldmark extension of the renderer's own, which renders
+   every fenced code block in place of goldmark's default fenced-code renderer. It
+   behaves exactly as follows:
+   - **The language.** The language name is the info string's first word: the
+     info string cut at its first space, taken byte for byte, with no unescaping.
+     When that word is empty or carries a `{`, the block declares no language. No
+     attribute of the block is read from the info string, so no block carries line
+     numbers, highlighted lines, a style of its own, or a request not to be
+     highlighted.
+   - **The lookup.** A name is recognised when the lexer registry resolves it to a
+     lexer, trying in this order: a lexer's name, a lexer's alias, the name in
+     lower case as a lexer's name, the name in lower case as a lexer's alias, and
+     finally the file-name patterns of every lexer, matched against
+     `filename.<name>` and against `<name>` itself, the match of highest priority
+     winning. This is the lookup chroma's own lexer registry performs.
+   - **No guessing and no fallback.** A name the registry does not resolve is not
+     recognised: no lexer is chosen by analysing the block's content, and chroma's
+     fallback lexer is never used.
+   - **The markup of a highlighted block.** The lexer is coalesced, so adjacent
+     tokens of one type become one, and it tokenises the block's text, which is the
+     concatenation of the block's lines. The tokens are written by chroma's HTML
+     formatter in class-based form with no other formatter option — no line
+     numbers, no highlighted lines, and the default tab width — and against the
+     `github-dark` style that rule 7 names. The formatter writes its own
+     `<pre class="chroma">` element, and the extension writes nothing around it.
+   - **The markup of an unhighlighted fenced block.** It is `<pre><code>`, then the
+     block's text with `&`, `<`, `>`, and `"` escaped, then `</code></pre>`
+     followed by a newline. The `<code>` element carries no attribute: no class is
+     taken from the info string (see rule 11). A block whose lexer fails to
+     tokenise its text renders the same way.
+   - **The lexer registry.** The lexers are held in a registry that is generated
+     from the module source of the chroma version `go.mod` pins, committed to the
+     repository, and compiled into the binary. It holds every lexer that version
+     ships, both the lexers chroma defines in its embedded XML definitions and the
+     lexers it defines in Go, each with the configuration chroma gives it — its
+     name, aliases, file-name patterns, MIME types, priority, rules, and
+     delegation to other lexers — and it registers them in the order chroma's own
+     global registry does, so that every name resolves to the same lexer in both.
+     A lexer that looks up another lexer while tokenising — a delegating lexer, a
+     rule that hands a span to another language, a code block inside a Markdown
+     or reStructuredText lexer, an HTTP body chosen by its MIME type — looks it up
+     in this registry. The same generated data carries the `github-dark` style
+     definition of that chroma version.
+   - **Built on first use.** Neither the registry nor the style is built while the
+     program initialises. Both are built once, on the first rendering of a fenced
+     code block that declares a language, safely under concurrent requests, and
+     are then read-only for the life of the process. An `rmp` invocation that
+     renders no such block never builds them. Initialising the package that holds
+     the generated data parses no lexer or style definition, compiles no regular
+     expression, and constructs no lexer. The registry is configuration, not a
+     cache of rendered output (see rule 2).
+   - **No chroma registry package.** No package compiled into the `rmp` binary
+     imports `github.com/alecthomas/chroma/v2/lexers` or
+     `github.com/alecthomas/chroma/v2/styles`, because each builds its whole
+     registry in a package-level initialiser that every invocation would pay.
+     Tests and the generators, which the binary does not contain, may import them.
+   - **Generated, committed, and checked for staleness.** A generator run by
+     `go generate` writes the registry from the pinned chroma module, and its
+     output is committed, so `go build` runs no generation step. A test
+     regenerates the registry in memory and fails when the committed files differ
+     from it, so an upgrade of chroma cannot ship with a stale registry. Because
+     the generated files copy chroma's lexer and style definitions, they carry
+     chroma's copyright and permission notice.
+   - **Output identical to chroma's own registry.** For every language name chroma
+     recognises, the HTML the renderer emits is byte for byte the HTML that the
+     same lexer taken from chroma's own global registry produces under the rules
+     above.
 7. **One syntax-highlighting stylesheet, dark.** The colours of highlighted
    tokens come from one embedded stylesheet, served from `/static/highlight.css`.
    It holds the CSS chroma produces, in class-based form, for its `github-dark`
@@ -6908,9 +7016,9 @@ Rules:
     information. On the sprint page it
     is 2, whatever N is: one listing query for that sprint's **own** comments, which
     the Comments card renders in full as a log (see `DATABASE.md § Comments`), plus
-    one grouped **counting** query over the whole set of rendered member-task ids,
-    which is what gives each board card its comment number (see
-    `DATABASE.md § Count Comments for Many Parents (Grouped)`). The sprint page issues no
+    one grouped **counting** query over the sprint's member tasks, selected by the
+    sprint id, which is what gives each board card its comment number (see
+    `DATABASE.md § Count Comments for the Member Tasks of One Sprint (Grouped)`). The sprint page issues no
     comment-listing query for a member task, so it reads the comment **body** of no
     task it renders. A page that renders no task issues no task-comment query of
     either kind: a sprint with no member task skips the grouped count entirely, while
@@ -6994,7 +7102,7 @@ Rules:
     a request whose criteria admit N tasks, the pages of the list at any page size
     together carry exactly N rows, no task is omitted, no task appears on two pages,
     and a task whose status or sprint changes is admitted or excluded accordingly on the
-    next request. This holds for every N, with no upper bound: the page's task read is
+    next request. This holds for every N, with no upper bound: the page's task listing is
     bounded by the filters alone and never by a page, and the `rmp task list` display
     default of `100` is not applied to it. For a roadmap holding more than 100 tasks,
     requested with no criterion, the range text states the roadmap's full task count and
@@ -7072,17 +7180,28 @@ Rules:
     when the active page size is not `25`. This link is the page's only Reset control:
     the filter bar carries none. Both answer HTTP 200
     (see [Roadmap Tasks Page](#roadmap-tasks-page), **Empty states**).
-89. Rendering the tasks page issues exactly two reads — one read of the roadmap's
-    sprints and one read of the roadmap's tasks through the task listing — and no
-    sprint-resolution query, plus exactly one count of the roadmap's tasks
-    (`DATABASE.md § Count Roadmap Tasks`) when, and only when, the filtered list is
-    empty and the task read carried at least one sprint, status, or type predicate.
+89. Rendering the tasks page issues exactly three reads when the filtered list holds
+    a row — one read of the roadmap's sprints, one read of the roadmap's tasks through
+    the task listing, and one page-rows read — and no sprint-resolution query. When
+    the filtered list is empty it issues no page-rows read, and it issues exactly one
+    count of the roadmap's tasks (`DATABASE.md § Count Roadmap Tasks`) when, and only
+    when, the task listing carried at least one sprint, status, or type predicate.
     A request whose list holds a row issues no count, and neither does an empty list
-    whose task read carried no predicate. An instrumented count of queries is the same for a roadmap of 10
-    tasks and one of 300, for every page and every page size, and for any number of
-    active filters; no query is issued per row, per page, or per filter, and no
-    comment is read. The search term, the total, and the selection of the page's rows
-    are computed in memory over the rows the task read returned (see
+    whose task listing carried no predicate. The task listing projects each task's
+    `id` and no other column when the request carries no search term, and each
+    task's `id` and `title` and no other column when it carries one; a `q` that is
+    empty after the trim carries no term. The page-rows read selects the ids of
+    the rendered page's tasks and no other id: an instrumented capture of the
+    statements shows at most `size` bound ids in the page-rows read, for every page
+    and every page size. An instrumented count of queries is the same for a roadmap
+    of 10 tasks and one of 300, for every page and every page size, and for any
+    number of active filters; no query is issued per row, per page, or per filter,
+    and no comment is read. The search term, the total, and the selection of the
+    page's rows are computed in memory over the rows the task listing returned, and
+    the rendered page is byte-identical to the page rendered from one read of every
+    matching task's row. The page-rows read projects exactly `id`, `title`, `type`,
+    `status`, `severity`, `priority`, and `created_at`, and computes no subtask count
+    and no dependency set (see
     [Roadmap Tasks Page](#roadmap-tasks-page), **Read cost**,
     `DATABASE.md § List Sprint Titles`, and `DATABASE.md § List All`).
 90. The tasks page's markup obeys the rules already in force and introduces no
@@ -7419,7 +7538,7 @@ Rules:
     tasks included — at the same page size (see
     [Roadmap Tasks Page](#roadmap-tasks-page), **Filter bar**).
 117. Filter values reach SQL only as **bound parameters**, whether the URL or the
-    filter-state cookie supplied them. The task read carries one
+    filter-state cookie supplied them. The task listing carries one
     predicate per filtered dimension — sprint, status, and type — with each distinct
     active value bound as a
     parameter of the prepared statement, and no predicate and no parameter for an ignored value; it
@@ -7428,8 +7547,9 @@ Rules:
     `status=DOING' OR '1'='1`, `type=BUG;DROP TABLE tasks`, `sprint=1 OR 1=1` —
     which are ignored by Acceptance Criterion 115 and reach no statement at all; after
     such requests the roadmap's tasks are intact; the same hostile values carried in
-    the cookie are ignored likewise. `q`, `page`, and `size` never reach
-    SQL. No filter value is echoed into the page as text: the sprint select's options
+    the cookie are ignored likewise. No value of `q`, `page`, or `size` reaches
+    SQL: the page-rows read binds only the ids of the page's tasks, and whether a
+    term is present decides only the task listing's projection. No filter value is echoed into the page as text: the sprint select's options
     and the dropdowns' checkboxes are the
     server's own enumeration of the roadmap's sprints or of an enum, and
     a value only decides which of them is `selected` or `checked` (see
@@ -7749,11 +7869,11 @@ Rules:
     [Responsive and Mobile-First Design](#responsive-and-mobile-first-design),
     rule 10).
 137. The comment number on each card of the sprint's member-tasks board comes from
-    **one** grouped counting query issued over the whole set of rendered member-task
-    ids, never one query per card: an instrumented count of comment-counting queries
+    **one** grouped counting query issued over the sprint's member tasks, selected by
+    the sprint id with one bound parameter, never one query per card: an instrumented count of comment-counting queries
     for a sprint page rendering N member tasks is 1, independent of N, and of
     comment-listing queries for member tasks is 0 (see
-    `DATABASE.md § Count Comments for Many Parents (Grouped)` and Acceptance
+    `DATABASE.md § Count Comments for the Member Tasks of One Sprint (Grouped)` and Acceptance
     Criterion 70). A sprint with no member task issues no such query at all. The
     subtask number on a card costs no query of its own, because the sprint's
     member-task read already returns each task's `subtask_count`; grouping the tasks
@@ -8471,9 +8591,9 @@ Rules:
     scroll horizontally inside their own box (Acceptance Criterion 27 continues to hold;
     see [Markdown Rendering](#markdown-rendering), rule 13).
 194. **The renderer is compiled into the binary.** The first `require` block of
-    `go.mod` names `github.com/yuin/goldmark`,
-    `github.com/yuin/goldmark-highlighting/v2`, and
-    `github.com/alecthomas/chroma/v2`, and with networking disabled and only the
+    `go.mod` names `github.com/yuin/goldmark` and
+    `github.com/alecthomas/chroma/v2` and does not name
+    `github.com/yuin/goldmark-highlighting/v2`, and with networking disabled and only the
     `rmp` binary present on disk, the pages render every Markdown
     construct of Acceptance Criteria 180 to 187, highlighted code included, with no
     file read from the host filesystem for the purpose (see
@@ -9256,6 +9376,35 @@ Rules:
     page's `Back to tasks` link carry no query string on every page (see
     [Roadmap Tasks Page](#roadmap-tasks-page), **Filter persistence**, and
     [Security and Constraints](#security-and-constraints), rules 7 and 12).
+255. **Highlighting matches chroma's own registry for every language.** For every
+    name and every alias of every lexer in the pinned chroma's global registry, a
+    fenced code block declaring that language renders byte for byte the HTML the
+    lexer that chroma's own registry resolves for that name produces, coalesced and
+    written by chroma's HTML formatter in class-based form against the
+    `github-dark` style, with nothing written around it. For each of those names,
+    for the name in upper case, and for the extension of each file-name pattern
+    those lexers declare, the generated registry resolves the same lexer, by name,
+    as chroma's own registry, and a name neither registry resolves renders as the
+    unhighlighted block of [Markdown Rendering](#markdown-rendering), rule 6, with
+    no `class` attribute (see [Markdown Rendering](#markdown-rendering), rule 6).
+256. **The lexer registry is not built at start-up.** The list of packages the
+    `rmp` binary is built from (`go list -deps ./cmd/rmp`) contains neither
+    `github.com/alecthomas/chroma/v2/lexers` nor
+    `github.com/alecthomas/chroma/v2/styles` and does contain
+    `github.com/alecthomas/chroma/v2`. After the web package is initialised and
+    before any Markdown is rendered, the lexer registry and the style are not
+    built; rendering a Markdown field with no fenced code block, or with only
+    fenced code blocks that declare no language, still leaves them unbuilt; the
+    first rendering of a fenced code block declaring a language builds them, and
+    concurrent first renderings build them exactly once (see
+    [Markdown Rendering](#markdown-rendering), rule 6).
+257. **A stale lexer registry fails the test gate.** Regenerating the registry in
+    memory from the chroma version `go.mod` pins yields exactly the committed
+    generated files; a committed file changed by hand, a lexer definition missing
+    from them, or a pin of chroma to another version whose lexers differ fails the
+    test gate until `go generate` is run again. The committed generated files carry
+    chroma's copyright and permission notice (see
+    [Markdown Rendering](#markdown-rendering), rule 6).
 
 ## See Also
 

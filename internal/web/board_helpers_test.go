@@ -179,11 +179,11 @@ func countRoadmapTasks(t *testing.T, name string) int {
 	}
 	defer database.Close() //nolint:errcheck // test cleanup
 
-	tasks, err := database.ListAllTasks(context.Background(), nil)
+	n, err := database.CountTasks(context.Background())
 	if err != nil {
-		t.Fatalf("listing the tasks of %q: %v", name, err)
+		t.Fatalf("counting the tasks of %q: %v", name, err)
 	}
-	return len(tasks)
+	return n
 }
 
 // equalIDs reports whether two id sequences are the same, in the same order.
@@ -212,13 +212,15 @@ func roadmapTaskTitles(t *testing.T, roadmap string) map[int]string {
 	}
 	defer database.Close() //nolint:errcheck // test cleanup
 
-	tasks, err := database.ListAllTasks(context.Background(), nil)
-	if err != nil {
+	var titles map[int]string
+	if _, err := database.ReadTaskListPage(context.Background(), nil, true, func(listing []db.TaskRef) []int {
+		titles = make(map[int]string, len(listing))
+		for _, ref := range listing {
+			titles[ref.ID] = ref.Title
+		}
+		return nil
+	}); err != nil {
 		t.Fatalf("listing the tasks of %q: %v", roadmap, err)
-	}
-	titles := make(map[int]string, len(tasks))
-	for i := range tasks {
-		titles[tasks[i].ID] = tasks[i].Title
 	}
 	return titles
 }

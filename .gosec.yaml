@@ -50,23 +50,23 @@
 #
 # TWO COUNTS, BOTH TRUE, MEASURING DIFFERENT THINGS.
 #
-#   60  RULES suppressed in the module, the number this register accounts for
+#   63  RULES suppressed in the module, the number this register accounts for
 #       and the number the gate sweeps. It counts rules, not directives: a
 #       directive naming two rules counts once under each, and the module has
 #       exactly one such directive — the `#nosec G302 G703` on
 #       internal/graphstore/graphstore.go's checkpoint chmod, which is both a
 #       directory-permission finding and a taint-analysis one. So the module
-#       carries 59 directives suppressing 60 rules. The gate reads comment
+#       carries 62 directives suppressing 63 rules. The gate reads comment
 #       groups the way gosec does, so the tag counts only where the scanner
 #       honours it.
-#   46  rules suppressed outside _test.go, across 45 directives. gosec does not
-#       scan _test.go files unless -tests is passed, and 14 of the 60 are in
-#       test files: 60 - 14 = 46. That the scanner does not read those 14 is an
+#   48  rules suppressed outside _test.go, across 47 directives. gosec does not
+#       scan _test.go files unless -tests is passed, and 15 of the 63 are in
+#       test files: 63 - 15 = 48. That the scanner does not read those 15 is an
 #       accepted gap, measured and reasoned in SPEC/BUILD.md § Security Scan;
 #       the register accounts for them anyway, so they stay reviewed even where
 #       the scanner is silent.
 #
-#       gosec's own summary prints `Nosec: 45`, and the difference is the
+#       gosec's own summary prints `Nosec: 47`, and the difference is the
 #       two-rule directive: gosec counts DIRECTIVES it honoured, this register
 #       counts RULES accepted. The two figures agreed while every directive
 #       named one rule, and the release notes quoted that agreement; they no
@@ -100,7 +100,24 @@
 # chmod, which is both a directory-permission finding and a taint-analysis one —
 # so the totals below are the number of directives plus one.
 #
-# totals: 60 suppressions, 46 outside _test.go
+# totals: 63 suppressions, 48 outside _test.go
+#
+# G101 Look for hard coded credentials (CWE-798)  [1]
+#   internal/highlight/generated_caddyfile.go          1
+#   Reason: The flagged value is caddyfileMatcherTokenRegexp, a regular
+#     expression that matches the matcher tokens of a Caddyfile (the [<matcher>]
+#     stub, @name, /path and *). The rule fires on the word "Token" in the
+#     variable's name; the value is a pattern chroma's Caddyfile lexer is built
+#     from, and no key, password or other secret. The file is the copy of
+#     chroma's lexers/caddyfile.go that internal/highlight/registry_gen.go
+#     generates (SPEC/WEB.md § Markdown Rendering, rule 6), and chroma's source
+#     already exempts the line from gosec with `nolint: gosec`. The directive is
+#     written by the generator, from its gosecAccepted list, which names this one
+#     declaration; generation fails if chroma stops declaring it, and
+#     TestGeneratedRegistryIsCurrent fails if the committed file loses it. It
+#     would stop being acceptable if the generator ever attached it to another
+#     declaration, or if chroma ever assigned that variable anything but a
+#     pattern.
 #
 # G104 Audit errors not checked (CWE-703)  [11]
 #   internal/db/connection.go                          6
@@ -149,14 +166,13 @@
 #     HTTPS, where the cookie must then carry Secure, or if the cookie ever
 #     carried anything other than filter state.
 #
-# G201 SQL query construction using format string (CWE-89)  [21]
+# G201 SQL query construction using format string (CWE-89)  [22]
 #   internal/commands/sprint_crud.go                   1
 #   internal/commands/sprint_membership_audit_test.go  1
 #   internal/commands/task_edit.go                     1
 #   internal/commands/task_mutate.go                   8
-#   internal/db/comments.go                            1
 #   internal/db/migrations.go                          1
-#   internal/db/queries.go                             8
+#   internal/db/queries.go                             10
 #   Reason: No user value is ever interpolated; every one travels as a bound ?
 #     parameter. What fmt.Sprintf assembles is one of four things. (a) A
 #     placeholder list from db.Placeholders / QueryCache.GetPlaceholders, whose
@@ -182,6 +198,21 @@
 #     TestColumnExistsRefusesUnsafeTableIdentifier, which fails on all four
 #     shapes when the guard is removed, and the column being looked for is bound.
 #     (d) A column name in one test helper, literal at both call sites.
+#     Two of the ten in internal/db/queries.go are the grouped reads of
+#     SPEC/DATABASE.md § Read the Membership of Many Sprints (Grouped) and
+#     § Resolve the Sprint of Many Tasks (Grouped), groupedSprintMembershipQuery
+#     and groupedTaskSprintsQuery; each is kind (a), a placeholder list from
+#     db.Placeholders, and each id is bound.
+#
+# G202 SQL query construction using string concatenation (CWE-89)  [1]
+#   internal/db/index_set_test.go                      1
+#   Reason: tableContents, a test helper that renders every row of every table
+#     so a test can prove a migration changed no row, concatenates a table name
+#     into "SELECT * FROM <table> ORDER BY rowid". The name comes only from the
+#     fixed list of eight table-name literals the loop ranges over, inside the
+#     helper itself; no caller, flag, or row value reaches it, and SQLite does
+#     not accept a bound parameter as a table name. Test-only; no production
+#     path builds a statement this way.
 #
 # G203 Use of unescaped data in HTML templates (CWE-79)  [3]
 #   internal/web/markdown.go                           1
@@ -319,21 +350,21 @@
 # TWO OBSERVATIONS THIS REGISTER MAKES DELIBERATELY, because a reviewer who
 # trusts the list should also know what the list does not mean.
 #
-# A suppression is not evidence that gosec had a finding. Of the 46 rules
-# suppressed outside test files, 31 suppress a reported finding and 15 currently
+# A suppression is not evidence that gosec had a finding. Of the 48 rules
+# suppressed outside test files, 32 suppress a reported finding and 16 currently
 # suppress nothing: gosec's G201 does not follow fmt.Sprintf through a query
 # issued on the embedded *sql.DB or through a function that only returns the
 # assembled string, G104 does not report an error discarded by an explicit
 # `_ =` or returned by a deferred call, and the G703 half of the two-rule
 # directive on internal/graphstore/graphstore.go's checkpoint chmod has no
-# finding at that node. Those 15 are documentation at the site rather than an
+# finding at that node. Those 16 are documentation at the site rather than an
 # accepted finding.
 # They are kept and listed because they are still standing scope-limited
 # suppressions: if the rule starts reporting at that node, they will silence it.
 #
 # The split is MEASURED rather than counted by hand, and it is reproducible:
 # `gosec -nosec=true -exclude-dir=.claude/worktrees ./...` disables suppression
-# handling and reports 31 issues where the ordinary run reports 0.
+# handling and reports 32 issues where the ordinary run reports 0.
 #
 # A #nosec is a permanent blindfold over one node. Every G201 line above means
 # that if the statement at that site is ever edited to interpolate a value

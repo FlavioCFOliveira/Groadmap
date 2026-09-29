@@ -310,12 +310,14 @@ func sprintShow(args []string) error {
 		return err
 	}
 
-	tasks, err := database.GetSprintTasksFull(ctx, sprintID, nil, false)
+	// The report reads only the member tasks' ids, statuses and severities, so
+	// the lean projection is read rather than the full rows.
+	states, err := database.GetSprintTaskStates(ctx, sprintID)
 	if err != nil {
 		return err
 	}
 
-	result := models.CalculateSprintShowResult(sprint, tasks)
+	result := models.CalculateSprintShowResult(sprint, tasksOfStates(states))
 	return utils.PrintJSON(result)
 }
 
