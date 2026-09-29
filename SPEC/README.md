@@ -16,12 +16,14 @@ The SPEC is unversioned. Git is the source of truth for its evolution — recove
 | Knowledge graph feature (design, persistence, what is and is not checked) | `GRAPH.md` |
 | Web interface (`rmp web`, server, pages, graph viz) | `WEB.md` |
 | Web roadmap sprints page / landing (`/roadmaps/{name}`, sprint tabs Próximos / Actual / Concluídos) | `WEB.md § Roadmap Sprints Page` |
-| Web roadmap tasks page (`/roadmaps/{name}/tasks`, Kanban task board, header search and type / priority / severity filters) | `WEB.md § Roadmap Tasks Page` |
-| Web board search text rules (trim by White_Space, Unicode NFC normalisation, simple lowercase fold, and the three tables shipped to the browser) | `WEB.md § Roadmap Tasks Page` |
+| Web roadmap tasks page (`/roadmaps/{name}/tasks`, one paginated task list in a Tabler card, the card-header filter bar — search, sprint, status and type multi-select dropdowns — the query parameters and their validation, the filter-state cookie and the default filter state, server-side pagination and rows-per-page selector) | `WEB.md § Roadmap Tasks Page` |
+| Web tasks-page search text rules (trim by White_Space, Unicode NFC normalisation, simple lowercase fold, applied on the server) | `WEB.md § Roadmap Tasks Page` |
 | Web sprint page (`/roadmaps/{name}/sprints/{id}`) | `WEB.md § Roadmap Sprint Page` |
 | Web shared sprint-card partial (header, description, task-count footer; used by all three sprints-page tabs) | `WEB.md § Shared Sprint-Card Partial` |
-| Web sprint detail sub-template (status summary line, metadata datagrid, member-tasks board; single sprint page only) | `WEB.md § Sprint Detail Sub-Template` |
-| Web task detail modal (read-only task popup) | `WEB.md § Task Detail Modal` |
+| Web sprint detail sub-template (metadata datagrid, member-tasks board; single sprint page only) | `WEB.md § Sprint Detail Sub-Template` |
+| Web task page (`/roadmaps/{name}/tasks/{id}`, every task field, the comments timeline, the sprint context card with position and progress, the way back to the tasks page) | `WEB.md § Roadmap Task Page` |
+| Web Markdown rendering of the long free-text fields (task requirements, acceptance criteria, completion summary, task and sprint comment bodies, sprint description): the one server-side goldmark renderer, extensions, line breaks, demoted headings, chroma highlighting and its dark stylesheet, link and image rules, raw-HTML omission, the sprint card's non-interactive form, the typography of rendered Markdown (body line height and base block spacing, list markers, heading scale, link colours, the real Inter italic face, the sprint page's 80-character line length, which the task page does not carry) | `WEB.md § Markdown Rendering` |
+| Web date and time display (the `YYYY-MM-DD HH:mm:ss` form every page shows, in UTC as stored, truncated to the second; the one Go formatter; the `<time datetime>` value; the surfaces it governs and the JSON it leaves in ISO 8601) | `WEB.md § Date and Time Display` |
 | Web graph labels sidebar (node-label / edge-type inventory, counts, section totals, highlight, collapse/expand) | `WEB.md § Graph Labels Sidebar` |
 | Web graph query bar (editable Cypher query box, Search button, node-limit dropdown) | `WEB.md § Graph Query Bar` |
 | Web graph query-bar error handling (the failure classes, the refusal of an `EXPLAIN` or `PROFILE` prefix among them, the order they are decided in, and the boundary against the internal read error) | `WEB.md § Query-Bar Error Handling` |
@@ -32,8 +34,8 @@ The SPEC is unversioned. Git is the source of truth for its evolution — recove
 | Web graph data endpoint JSON shape | `DATA_FORMATS.md § Graph View Data` |
 | Self-contained web binary (offline, no CDN, embedded asset categories) | `WEB.md § Self-Contained Deliverable` |
 | Responsive / mobile-first web design | `WEB.md § Responsive and Mobile-First Design` |
-| Web UI framework (Tabler admin shell, dark theme, Tabler-fidelity rules, card tabs) | `WEB.md § UI Framework` |
-| Web status / priority / severity badge colours (semantic Tabler `bg-*-lt` mapping, including the count badges of the sprints-page tabs and of both Kanban boards' columns) | `WEB.md § Status, Priority, and Severity Badge Colours` |
+| Web UI framework (Tabler admin shell, dark theme, Tabler-fidelity rules, card tabs, the record pages' narrow-viewport header actions, constant sidebar-to-content gap, visible keyboard focus on the header back links and sidebar links) | `WEB.md § UI Framework` |
+| Web status / priority / severity / task type badge colours (semantic Tabler `bg-*-lt` mapping, including the type badge on the sprint board's cards and in the tasks page's rows, and the count badges of the sprints-page tabs and of the sprint board's columns) | `WEB.md § Status, Priority, and Severity Badge Colours` |
 | Web HTTP security headers (CSP, X-Frame-Options, etc.) | `WEB.md § Security Headers` |
 | Web HTTP server timeouts (read-header, write, idle) and the graph data endpoint's query time budget | `WEB.md § HTTP Server Timeouts` |
 | Vendored web assets / embedded Tabler framework and D3.js (with d3-sankey) | `BUILD.md § Vendored Web Assets` |
@@ -53,7 +55,7 @@ The SPEC is unversioned. Git is the source of truth for its evolution — recove
 | Comment positional argument count, and what the one id identifies on each comment subcommand | `COMMANDS.md § Comment Positional Argument Contract` |
 | Comment JSON shape | `DATA_FORMATS.md § Task Comment` and `DATA_FORMATS.md § Sprint Comment` |
 | Comment tables, DDL, and cascade rules | `DATABASE.md § task_comments Table` and `DATABASE.md § sprint_comments Table` |
-| Web comment presentation (task modal timeline, sprint Comments card) | `WEB.md § Task Detail Modal` and `WEB.md § Sprint Detail Sub-Template` |
+| Web comment presentation (task page Comments card, sprint Comments card) | `WEB.md § Roadmap Task Page` and `WEB.md § Sprint Detail Sub-Template` |
 | Sprint `description` semantics (must state the sprint's high-level goal) | `MODELS.md § Sprint Field Constraints` |
 | Sprint membership fields (`tasks` as ids, `task_count`, what an empty sprint reports, which reads populate them) | `MODELS.md § Sprint Field Constraints` and `COMMANDS.md § List Sprints` |
 | Sprint membership read cost (one grouped read for the whole listing, no query per sprint) | `DATABASE.md § Read the Membership of Many Sprints (Grouped)` |
@@ -89,7 +91,7 @@ The SPEC is unversioned. Git is the source of truth for its evolution — recove
 | What one graph statement costs in resident memory, what that memory is made of, what happens when the cost cannot be served, and why no setting bounds it | `GRAPH.md § Peak Resident Memory` |
 | What a statement that writes nothing does and does not change on disk (the recovery repair performed on open) | `GRAPH.md § What a Statement That Writes Nothing Changes on Disk` |
 | Go toolchain / external dependencies | `BUILD.md § Go Toolchain` |
-| Dependency pinning rules (the four direct modules — GoGraph, `golang.org/x/sys`, `golang.org/x/text`, `modernc.org/sqlite` — and the exact `modernc.org/libc` / `modernc.org/memory` pins, which are not held to the versions the driver requires); the versions themselves are written only in `go.mod` | `BUILD.md § External Dependencies` |
+| Dependency pinning rules (the seven direct modules — GoGraph, `github.com/alecthomas/chroma/v2`, `github.com/yuin/goldmark`, `github.com/yuin/goldmark-highlighting/v2`, `golang.org/x/sys`, `golang.org/x/text`, `modernc.org/sqlite` — and the exact `modernc.org/libc` / `modernc.org/memory` pins, which are not held to the versions the driver requires); the versions themselves are written only in `go.mod` | `BUILD.md § External Dependencies` |
 | AI agent contract (CLI surface) | `COMMANDS.md § AI Help` |
 | AI agent contract (JSON schema) | `DATA_FORMATS.md § AI Agent Contract` |
 | AI agent contract (generation) | `ARCHITECTURE.md § AI Agent Contract Generation` |
@@ -150,7 +152,7 @@ The SPEC is unversioned. Git is the source of truth for its evolution — recove
 | `DATA_FORMATS.md` | JSON schemas, input/output formats |
 | `HELP.md` | CLI help skeleton and structure |
 | `GRAPH.md` | Knowledge graph feature: GoGraph integration, persistence, multi-layer conventions, and the dedicated graph server and its client, which are the only way a statement reaches a graph |
-| `WEB.md` | Web interface: `rmp web` server, server-rendered pages, interactive knowledge-graph visualisation, embedded assets |
+| `WEB.md` | Web interface: `rmp web` server, server-rendered pages, Markdown rendering of long free-text fields, interactive knowledge-graph visualisation, embedded assets |
 | `MODELS.md` | Structs, enums, memory layout |
 | `STATE_MACHINE.md` | Task and Sprint state transitions |
 | `ARCHITECTURE.md` | System design, modules, error handling, exit codes |
@@ -214,8 +216,9 @@ To prevent drift across SPEC files, the following topics have a single authorita
 | Write counters JSON (the eleven published keys, the rule that omits a zero, and the rule that omits the whole block for a statement that changed nothing) | `DATA_FORMATS.md § Graph Query Counters` |
 | Web graph view-data JSON shape | `DATA_FORMATS.md § Graph View Data` |
 | One realisation of the graph value mapping (which surfaces are bound, what each still owns, why the Path rendering is not shared, and what preserves the byte identity) | `DATA_FORMATS.md § One Realisation of the Mapping` |
-| Board search text preparation (the trim, normalisation, and folding rules; the single implementation of each; the tables shipped to the browser) | `WEB.md § Roadmap Tasks Page` |
+| Tasks-page search text preparation (the trim, normalisation, and folding rules; the single server implementation of each) | `WEB.md § Roadmap Tasks Page` |
 | Web UI framework (Tabler admin shell, dark theme) | `WEB.md § UI Framework` |
+| Markdown rendering of the web interface's long free-text fields (the one renderer, its safety boundary, the only HTML inserted unescaped) | `WEB.md § Markdown Rendering` |
 | Vendored web assets / embedded Tabler framework and D3.js (with d3-sankey) | `BUILD.md § Vendored Web Assets` |
 | Graph store concurrency / store locking / recovery | `IMPLEMENTATION.md § Graph Store Concurrency` (contract in `GRAPH.md § Concurrency and Recovery`) |
 | Graph store lock file (`write.lock`) | `GRAPH.md § Concurrency and Recovery` (layout in `GRAPH.md § Persistence Layout`) |
@@ -242,6 +245,7 @@ To prevent drift across SPEC files, the following topics have a single authorita
 - Format example: `2026-05-12T14:30:00.000Z` — three digits of milliseconds and an explicit `Z`.
 - This applies to: database columns, JSON output, audit log entries, version metadata, and the `time` attribute of every log record the two long-lived servers write to stderr.
 - Canonical source, including the boundary against knowledge-graph temporal values: `DATA_FORMATS.md § Dates - ISO 8601 with UTC`.
+- The web interface displays a stored timestamp to a reader as `YYYY-MM-DD HH:mm:ss`, in UTC as stored; that display form is presentation only, and every JSON the interface serves stays in the format above: `WEB.md § Date and Time Display`.
 
 ### Process Output
 

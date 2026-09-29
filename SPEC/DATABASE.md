@@ -987,22 +987,56 @@ ORDER BY t.priority DESC, t.created_at ASC;
 - **`subtask_count`**, the number of direct subtasks, produced by the correlated subquery above. It is not a stored column — `MODELS.md § Task` defines it as computed — and this statement is where its value comes from, so the caller needs no second query and no per-task query to obtain it.
 - **`depends_on_csv`** and **`blocks_csv`**, the task's two dependency sets, each a comma-separated list of task ids in ascending id order (fixed by the inner `ORDER BY`) and the empty string when the set is empty (`COALESCE`). The application parses them into the task's `depends_on` and `blocks` values, which keeps the listing free of one dependency query per task.
 
-**One statement, several shapes.** The listing is assembled rather than fixed. It opens `WHERE 1=1` so that each optional predicate can be appended as a further `AND` — the status filter of `List by Status` below, and the priority, severity, type, and creation-date filters of the same listing — and it carries one of four orderings: `t.priority DESC, t.created_at ASC` (the default, shown above), `t.created_at ASC`, `t.status ASC, t.priority DESC, t.created_at ASC`, or `t.severity DESC, t.priority DESC, t.created_at ASC`. `COMMANDS.md § List Tasks` is canonical for which caller selects which. Every filter value is a bound parameter; none is concatenated into the SQL, and a value used in a `LIKE` predicate has its wildcards escaped first.
+**One statement, several shapes.** The listing is assembled rather than fixed. It opens `WHERE 1=1` so that each optional predicate can be appended as a further `AND` — the status filter of `List by Status` below, and the priority, severity, type, and creation-date filters of the same listing — and it carries one of four orderings: `t.priority DESC, t.created_at ASC` (the default, shown above), `t.created_at ASC`, `t.status ASC, t.priority DESC, t.created_at ASC`, or `t.severity DESC, t.priority DESC, t.created_at ASC`. `COMMANDS.md § List Tasks` is canonical for which caller selects which. The web tasks page reads the same statement with sprint-membership predicates of its own and a fifth ordering, both described below. Every filter value is a bound parameter; none is concatenated into the SQL, and a value used in a `LIKE` predicate has its wildcards escaped first.
 
 **Result-set size:** The listing itself imposes no bound: it carries no `OFFSET`, and it carries a `LIMIT ?` only when the caller asks for one. Any bound on the number of rows a caller receives is therefore the caller's, not this query's.
 
-**The web tasks page reads this listing unbounded.** The read-only web interface's
-Kanban task board reads every task of the roadmap through this statement, with no
-`LIMIT` applied and no pagination (see `WEB.md § Roadmap Tasks Page`). The display
-default that sizes `rmp task list` output — `-l, --limit <n>`, default `100` (see
-`COMMANDS.md § List Tasks`) — MUST NOT be applied to this read. That default exists
-to size the output of one command invocation, where a caller who wants more asks for
-more and can see that the listing was cut. The board has no such affordance: it
-groups the tasks it reads into five columns and presents a count on each column
-header as a statement of fact about the roadmap. A partial read would therefore not
-merely show fewer cards, it would publish wrong counts as true ones, with nothing on
-the page to reveal that anything was omitted. Reading every row is what makes those
-counts correct by construction.
+**The web tasks page reads this listing filtered, and never paginated.** The
+read-only web interface's task list reads the roadmap's tasks through this statement
+(see `WEB.md § Roadmap Tasks Page`), in this shape:
+
+```sql
+SELECT ...  -- the select list of List All above, unchanged
+FROM tasks t WHERE 1=1
+  AND t.status IN (?, ...)                          -- only when a status value is active; one ? per distinct value
+  AND t.type IN (?, ...)                            -- only when a type value is active; one ? per distinct value
+  AND t.id IN (SELECT st.task_id FROM sprint_tasks st WHERE st.sprint_id = ?)
+                                                    -- only when a sprint id is accepted
+  AND NOT EXISTS (SELECT 1 FROM sprint_tasks st WHERE st.task_id = t.id)
+                                                    -- only when the no-sprint filter is accepted
+ORDER BY t.priority DESC, t.created_at ASC, t.id ASC;
+```
+
+- **Predicates.** Each predicate is appended only when the page's active filter
+  state has a value for its filter, and every value is a bound parameter; no value
+  the page receives is concatenated into the SQL, and a value the page ignored
+  reaches no statement. The page's status and type filters each accept several
+  values, which combine by OR within the filter: the status predicate is one
+  `IN` list holding one placeholder per distinct active status value, and the type
+  predicate likewise, so a filter with one active value carries a one-element
+  list.
+  The two sprint predicates are mutually exclusive, because the page's `sprint`
+  parameter carries one value. The page offers no priority or severity filter, so the
+  web read never carries the listing's `priority` or `severity` predicate. The sprint-id predicate's subquery is a covering
+  search of `idx_sprint_tasks_lookup`, whose leading column is `sprint_id`, and the
+  no-sprint predicate's correlated subquery is a covering search of an index on
+  `sprint_tasks.task_id` — the implicit unique index of that column's `UNIQUE`
+  constraint, or `idx_sprint_tasks_task_id`, as the planner chooses; no index is
+  added for either.
+- **Ordering.** The default ordering with `t.id ASC` appended as its final key. The
+  page paginates the result, and a page boundary that fell between two rows equal on
+  `priority` and `created_at` would otherwise be free to fall differently on two
+  requests, so the `id` key makes the order total. This ordering is the web page's
+  alone; `rmp task list` keeps the four orderings named above.
+- **No `LIMIT` and no `OFFSET`.** The page applies its search term in memory, after
+  this read, because the term's Unicode normalisation and folding cannot be expressed
+  in SQLite, and it selects the requested page after the term. The read therefore
+  returns every row the filters admit, and the page's total — the number of tasks
+  satisfying every criterion, which the page states as a fact — is correct by
+  construction. The display default that sizes `rmp task list` output —
+  `-l, --limit <n>`, default `100` (see `COMMANDS.md § List Tasks`) — MUST NOT be
+  applied to this read: a truncated read would publish a wrong total as a true one,
+  with nothing on the page to reveal that anything was omitted.
 
 #### List by Status
 
@@ -1496,6 +1530,28 @@ DELETE FROM sprint_tasks WHERE sprint_id = ?;
 DELETE FROM sprints WHERE id = ?;
 ```
 
+#### List Sprint Titles
+
+Returns the `id` and `title` of every sprint of the roadmap, in the sprints' planned execution order, and nothing else.
+
+```sql
+SELECT id, title FROM sprints ORDER BY order_index ASC;
+```
+
+**Use case:** the read-only web interface's tasks page offers one option per sprint in its sprint filter, labelled by the sprint's `id` and `title`, and accepts a `sprint` parameter only when it names one of these ids (see `WEB.md § Roadmap Tasks Page`). The statement reads `sprints` alone: it joins nothing and reads no membership, because the filter needs neither a sprint's tasks nor its task count.
+
+**Ordering.** `order_index` ascending, the order `rmp sprint list` returns (see `COMMANDS.md § List Sprints`). `order_index` is unique across the roadmap (`idx_sprints_order`), so the order is total and needs no tie-breaker, and the index serves it with no sort step.
+
+#### Count Roadmap Tasks
+
+Returns the number of tasks the roadmap holds, of any status, and nothing else.
+
+```sql
+SELECT COUNT(*) FROM tasks;
+```
+
+**Use case:** the read-only web interface's tasks page issues this statement only when its filtered list is empty and its task read carried at least one filter predicate, to tell a roadmap that holds no task, which shows the `No tasks yet` empty state whatever the filters, from a roadmap whose tasks the filters all exclude (see `WEB.md § Roadmap Tasks Page`, **Empty states** and **Read cost**). It takes no parameter.
+
 #### Read the Membership of Many Sprints (Grouped)
 
 Returns the member task ids of each sprint of a given set, in one round trip, so that a caller can walk the result once and index it by sprint.
@@ -1551,7 +1607,7 @@ ORDER BY st.task_id ASC;
 
 **Index.** The query needs no new index. `WHERE st.task_id IN (...)` is served by `idx_sprint_tasks_task_id`, the single-column index the `sprint_tasks` DDL already declares on `task_id`, and by the implicit unique index SQLite creates for that column's `UNIQUE` constraint. The join resolves `sprints` by its primary key. See Performance Optimization below.
 
-**Use case:** the read-only web interface renders the roadmap's tasks as a Kanban board and shows on each card the sprint that task belongs to, so it MUST resolve the sprint of every rendered task with this single grouped query rather than one query per task or one query per board column (see `WEB.md § Roadmap Tasks Page`).
+**Use case:** the read-only web interface's roadmap task page resolves the sprint of its one task through this statement, over a set holding that one id (see `WEB.md § Roadmap Task Page`). The web tasks page does not issue it: its list shows no task's sprint, and its sprint filter is applied by the membership predicates of the listing it reads (see `List All` above and `WEB.md § Roadmap Tasks Page`). A caller that must resolve the sprints of several tasks MUST do so with this single grouped query over the whole id set, never with one query per task.
 
 ### Audit Queries
 
@@ -1826,7 +1882,7 @@ ORDER BY task_id ASC;
 
 **Index.** Served by `idx_task_comments_task_created`, whose leading column is `task_id`; the aggregate needs no further index and reads no `body` value. See Performance Optimization below.
 
-**Use case:** the two boards of the read-only web interface — the roadmap tasks page's Kanban task board and the sprint page's member-tasks board (see `WEB.md § Roadmap Tasks Page` and `WEB.md § Sprint Detail Sub-Template`) — each show a comment count on a card but no comment text, because the card's modal loads a task's comments on demand from its own endpoint (see `WEB.md § Task Detail Endpoint`). Neither board therefore ever reads a comment body in order to display a number, and no read anywhere loads the comment text of several tasks at once: a task's comments are read one task at a time, through the single-parent listing above.
+**Use case:** the sprint page's member-tasks board of the read-only web interface (see `WEB.md § Sprint Detail Sub-Template`) shows a comment count on each card but no comment text, because a task's comments are shown on that task's own page, which the card links to (see `WEB.md § Roadmap Task Page`). The board therefore never reads a comment body in order to display a number, and no read anywhere loads the comment text of several tasks at once: a task's comments are read one task at a time, through the single-parent listing above.
 
 This statement has no `sprint_comments` form: the Roadmap Sprint Page presents one sprint's comment log in full through the single-parent listing, and no surface counts the comments of several sprints at once.
 
@@ -2095,7 +2151,7 @@ the production statement rather than on a retyped one.
 **idx_task_comments_task_created and idx_sprint_comments_sprint_created:**
 - Query pattern: `WHERE task_id = ? ORDER BY created_at ASC` (and the `sprint_id` equivalent)
 - The leading column serves the parent lookup and the trailing column serves the listing order, so one index covers both and no sort step is needed
-- The same index serves the grouped `WHERE task_id IN (...) GROUP BY task_id` count the web interface's task board uses to show a comment count per card without reading any body
+- The same index serves the grouped `WHERE task_id IN (...) GROUP BY task_id` count the web interface's sprint board uses to show a comment count per card without reading any body
 - A single index per table is sufficient: every comment listing filters on the parent key, so no query ever scans a comment table without it, and no listing is ordered by any other column
 
 **Grouped sprint resolution needs no new index.** The grouped query that resolves the sprint of many tasks at once (see `Resolve the Sprint of Many Tasks (Grouped)` above) filters with `WHERE sprint_tasks.task_id IN (...)` and joins `sprints` by primary key. The `task_id` lookup is already served by `idx_sprint_tasks_task_id`, the single-column index the `sprint_tasks` DDL declares, and by the implicit unique index SQLite creates for the `UNIQUE` constraint on that column. No index is added for this query, and `idx_sprint_tasks_lookup` (leading column `sprint_id`) is not the index that serves it.

@@ -2,6 +2,7 @@ package web
 
 import (
 	"io/fs"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -30,6 +31,7 @@ func TestTablerFidelity_PageHeaderGutter(t *testing.T) {
 		"/roadmaps/" + name,
 		"/roadmaps/" + name + "/tasks",
 		"/roadmaps/" + name + "/sprints/1",
+		"/roadmaps/" + name + "/tasks/1",
 		"/roadmaps/" + name + "/audit",
 		"/roadmaps/" + name + "/graph",
 	}
@@ -163,24 +165,26 @@ func TestShell_CarriesNoFooterAnywhere(t *testing.T) {
 }
 
 // The tests below are the regression guards for the admin-shell fidelity rules
-// in SPEC/WEB.md § UI Framework. Each one was written against the Tabler v1.4.0
-// sources that match the vendored distribution — the version banner in
-// static/vendor/tabler/tabler.min.css and core/package.json on the Tabler
-// repository both read 1.4.0 — and each asserts both the shape Tabler uses and
-// the absence of the shape it replaced, so a divergence cannot come back
-// unnoticed.
+// in SPEC/WEB.md § UI Framework. Each one is checked against the Tabler sources
+// of the vendored release — the version banner in
+// static/vendor/tabler/tabler.min.css reads 1.6.0, and the sources cited are
+// those of the @tabler/core@1.6.0 tag of the Tabler repository — and each
+// asserts both the shape Tabler uses and the absence of the shape it replaced,
+// so a divergence cannot come back unnoticed.
 
 // allPagePaths is every route that renders the admin shell: the four of
-// pagePaths plus the sprint detail page and the audit log page. The shell rules
-// hold on all six, so the fidelity guards below sweep the complete set rather
-// than the subset pagePaths covers. The caller must have seeded the roadmap with
-// both seedRoadmap (which creates sprint 1) and seedRoadmapWithAudit.
+// pagePaths plus the sprint detail page, the task page, and the audit log page.
+// The shell rules hold on all seven, so the fidelity guards below sweep the
+// complete set rather than the subset pagePaths covers. The caller must have
+// seeded the roadmap with both seedRoadmap (which creates task 1 and sprint 1)
+// and seedRoadmapWithAudit.
 func allPagePaths(name string) []string {
 	return []string{
 		"/",
 		"/roadmaps/" + name,
 		"/roadmaps/" + name + "/tasks",
 		"/roadmaps/" + name + "/sprints/1",
+		"/roadmaps/" + name + "/tasks/1",
 		"/roadmaps/" + name + "/audit",
 		"/roadmaps/" + name + "/graph",
 	}
@@ -199,7 +203,7 @@ func allPagePaths(name string) []string {
 func topNavbarRegion(t *testing.T, path, body string) string {
 	t.Helper()
 
-	const open = `<header class="navbar navbar-expand-md d-print-none">`
+	const open = `<header class="navbar d-print-none">`
 	start := strings.Index(body, open)
 	if start < 0 {
 		t.Fatalf("page %s: no top navbar in the response, so any assertion on it would be vacuous", path)
@@ -349,8 +353,9 @@ func topNavbarDefinition(t *testing.T) string {
 // (docs/content/ui/layout/page-layouts.mdx) and its built shell
 // (shared/layouts/DefaultLayout.astro), and the vendored stylesheet is written
 // for it: `.navbar-expand-lg.navbar-vertical~.navbar` and the matching
-// `~.page-wrapper` rule give the header and the wrapper the same 15rem offset
-// through the sibling combinator, which never applies to a nested header.
+// `~.page-wrapper` rule give the header and the wrapper the same inline-start
+// offset, the sidebar's width (--tblr-sidebar-width, 16rem), through the sibling
+// combinator, which never applies to a nested header.
 func TestTablerFidelity_TopNavbarIsSiblingOfPageWrapper(t *testing.T) {
 	t.Setenv("HOME", shortHome(t))
 	name := seedRoadmap(t, "platform-core")
@@ -360,7 +365,7 @@ func TestTablerFidelity_TopNavbarIsSiblingOfPageWrapper(t *testing.T) {
 	for _, path := range allPagePaths(name) {
 		body := servePage(t, mux, path)
 
-		header := strings.Index(body, `<header class="navbar navbar-expand-md d-print-none">`)
+		header := strings.Index(body, `<header class="navbar d-print-none">`)
 		closing := strings.Index(body, "</header>")
 		wrapper := strings.Index(body, `<div class="page-wrapper">`)
 		if header < 0 || closing < 0 || wrapper < 0 {
@@ -415,7 +420,7 @@ func TestTablerFidelity_SingleTogglerAndSingleBrand(t *testing.T) {
 }
 
 // TestTablerFidelity_SidebarCollapseIsNavLandmark asserts the sidebar collapse
-// is the labelled <nav> element Tabler v1.4.0 renders
+// is the labelled <nav> element Tabler v1.6.0 renders
 // (shared/components/navbar/Sidebar.astro: `<nav class="collapse
 // navbar-collapse" id="sidebar-menu" aria-label="Sidebar">`), not a bare div.
 func TestTablerFidelity_SidebarCollapseIsNavLandmark(t *testing.T) {
@@ -453,6 +458,9 @@ func TestTablerFidelity_ActiveSidebarLinkCarriesAriaCurrent(t *testing.T) {
 		"/roadmaps/" + name + "/tasks": `href="/roadmaps/` + name + `/tasks" aria-current="page"`,
 		"/roadmaps/" + name + "/audit": `href="/roadmaps/` + name + `/audit" aria-current="page"`,
 		"/roadmaps/" + name + "/graph": `href="/roadmaps/` + name + `/graph" aria-current="page"`,
+		// A task's own page belongs to the Tasks view (SPEC/WEB.md § Roadmap Task
+		// Page, Active view).
+		"/roadmaps/" + name + "/tasks/1": `href="/roadmaps/` + name + `/tasks" aria-current="page"`,
 	}
 	for path, want := range cases {
 		body := servePage(t, mux, path)
@@ -525,19 +533,19 @@ func TestTablerFidelity_PageHeaderActionsAreHiddenInPrint(t *testing.T) {
 	seedRoadmapWithAudit(t, name, 3)
 	mux := buildMux()
 
-	// Only the three pages whose header carries a control or a hierarchical link
-	// have an actions column at all: the tasks board's search input, the sprint
-	// page's back link, and the graph page's layout dropdown. The index, sprints
-	// and audit headers carry none, which TestPageHeader_SharedPartialAndActions
-	// asserts (SPEC/WEB.md § Shared Page-Header Partial, rule 5).
-	for _, path := range []string{
-		"/roadmaps/" + name + "/tasks",
-		"/roadmaps/" + name + "/sprints/1",
-		"/roadmaps/" + name + "/graph",
+	// Only the pages whose header carries a control or a hierarchical link have an
+	// actions column at all: the sprint page's and the task page's back links, and
+	// the graph page's layout dropdown. The index, sprints, tasks and audit headers
+	// carry none, which TestPageHeader_SharedPartialAndActions asserts
+	// (SPEC/WEB.md § Shared Page-Header Partial, rule 5).
+	for path, column := range map[string]string{
+		"/roadmaps/" + name + "/sprints/1": `<div class="col-12 col-sm-auto ms-auto d-print-none">`,
+		"/roadmaps/" + name + "/tasks/1":   `<div class="col-12 col-sm-auto ms-auto d-print-none">`,
+		"/roadmaps/" + name + "/graph":     `<div class="col-auto ms-auto d-print-none">`,
 	} {
 		body := servePage(t, mux, path)
-		if !strings.Contains(body, `<div class="col-auto ms-auto d-print-none">`) {
-			t.Errorf("page %s: the page-header actions column is missing Tabler's d-print-none", path)
+		if !strings.Contains(body, column) {
+			t.Errorf("page %s: the page-header actions column is not %s", path, column)
 		}
 		if strings.Contains(body, `<div class="col-auto ms-auto">`) {
 			t.Errorf("page %s: a page-header actions column regressed to the print-visible variant", path)
@@ -548,8 +556,8 @@ func TestTablerFidelity_PageHeaderActionsAreHiddenInPrint(t *testing.T) {
 // TestTablerFidelity_FluidLayoutUsesContainerXl asserts the page containers use
 // Tabler's fluid idiom: `<body class="layout-fluid">` plus `container-xl`
 // containers. The vendored stylesheet carries `.layout-fluid .container,
-// .layout-fluid [class*=" container-"], .layout-fluid [class^=container-]
-// {max-width:100%}` for exactly that pairing; with `container-fluid` containers
+// .layout-fluid [class*=" container-"], .layout-fluid [class^=container-]`
+// selectors, which set max-width:100%, for exactly that pairing; with `container-fluid` containers
 // the body class does nothing at all.
 //
 // The single container-fluid Tabler itself uses — the one inside the vertical
@@ -632,12 +640,9 @@ var styleSheetPaths = []string{
 // `navbar-divider` ship propped up by project CSS.
 var structuralHookClasses = map[string]string{
 	// Tabler's own component skeletons: shared/ui/DatagridItem.astro emits the
-	// item and content wrappers, only the title of which is styled.
-	"datagrid-item":    "Tabler DatagridItem structure",
+	// item and content wrappers, only the title of which is styled. (The item is
+	// now also selected by the task page's Details grid rule in style.css.)
 	"datagrid-content": "Tabler DatagridItem structure",
-	// shared/components/navbar/NavbarMenu.astro wraps every nav-link label in
-	// this span; the vertical navbar styles the link, not the span.
-	"nav-link-title": "Tabler NavbarMenu structure",
 	// Project BEM block and element names whose styled members are the
 	// children: static/style.css styles .graph-query-bar__row and
 	// .labels-sidebar__heading, and these two are their unstyled hooks.
@@ -746,7 +751,7 @@ func isClassNameByte(b byte) bool {
 }
 
 // TestTablerFidelity_PageBodyIsTheMainLandmark asserts the page body is the
-// <main class="page-body"> landmark Tabler v1.4.0's built shell renders
+// <main class="page-body"> landmark Tabler v1.6.0's built shell renders
 // (shared/layouts/DefaultLayout.astro: `<main id="content" class="page-body">`),
 // and that exactly one exists per page.
 //
@@ -810,27 +815,62 @@ func TestPageHeader_SharedPartialAndActions(t *testing.T) {
 		if !strings.Contains(body, want) {
 			t.Errorf("page %s: header title is not %s", path, want)
 		}
-		// None of these five carries a pretitle: the sprint page is the only
-		// hierarchical header.
+		// None of these five carries a pretitle: the sprint page and the task page
+		// are the only hierarchical headers.
 		if strings.Contains(body, "page-pretitle") {
-			t.Errorf("page %s: renders a pretitle; only a sprint's own page carries one", path)
+			t.Errorf("page %s: renders a pretitle; only a sprint's or a task's own page carries one", path)
 		}
 	}
 
-	// The sprint page: pretitle Sprint #<id>, title the sprint's own title with
-	// its status badge, and no roadmap name in either.
-	sprintBody := servePage(t, mux, "/roadmaps/"+name+"/sprints/1")
-	if !strings.Contains(sprintBody, `<div class="page-pretitle">Sprint #1</div>`) {
-		t.Errorf("sprint page: pretitle is not the sprint id alone")
+	// The sprint page: pretitle Sprint #<id> followed, after one space, by the
+	// sprint's status badge (PENDING -> bg-secondary-lt, the sprint status
+	// mapping); the title is the sprint's own title alone; no roadmap name in
+	// either.
+	sprintPath := "/roadmaps/" + name + "/sprints/1"
+	sprintBody := servePage(t, mux, sprintPath)
+	sprintColumn := titleColumn(t, sprintPath, sprintBody)
+	const wantPretitle = `<div class="page-pretitle">Sprint #1 <span class="badge bg-secondary-lt">PENDING</span></div>`
+	if !strings.Contains(sprintColumn, wantPretitle) {
+		t.Errorf("sprint page: pretitle is not Sprint #1 followed by the status badge; column=%q", sprintColumn)
 	}
-	// seedRoadmap's sprint 1, verbatim: the title column shows the sprint's own
-	// title, not a composed one, and carries the status badge.
+	// seedRoadmap's sprint 1, verbatim: the title is the sprint's own title,
+	// not a composed one, and carries no badge.
 	const seededSprintTitle = "Ship the read-only web UI for roadmap inspection"
-	wantTitle := `<h2 class="page-title">` + seededSprintTitle +
-		`<span class="badge bg-secondary-lt ms-2">PENDING</span></h2>`
-	if !strings.Contains(sprintBody, wantTitle) {
-		t.Errorf("sprint page: header title is not the sprint's title with its status badge; header=%q",
-			headerRegion(t, "/roadmaps/"+name+"/sprints/1", sprintBody))
+	wantTitle := `<h2 class="page-title">` + seededSprintTitle + `</h2>`
+	if !strings.Contains(sprintColumn, wantTitle) {
+		t.Errorf("sprint page: header title is not the sprint's title alone; column=%q", sprintColumn)
+	}
+	h2Start := strings.Index(sprintColumn, `<h2 class="page-title">`)
+	if h2Start < 0 {
+		t.Fatalf("sprint page: no page-title in the title column; column=%q", sprintColumn)
+	}
+	if h2 := sprintColumn[h2Start:]; strings.Contains(h2[:strings.Index(h2, "</h2>")+len("</h2>")], "badge") {
+		t.Errorf("sprint page: the page-title carries a badge; it belongs in the pretitle; column=%q", sprintColumn)
+	}
+
+	// The task page: pretitle Task #<id> followed by the task's status badge
+	// (seedRoadmap's task 1 joined sprint 1, so it is SPRINT -> bg-cyan-lt, the
+	// task status mapping); the title is the task's own title alone.
+	taskPath := "/roadmaps/" + name + "/tasks/1"
+	taskColumn := titleColumn(t, taskPath, servePage(t, mux, taskPath))
+	for _, want := range []string{
+		`<div class="page-pretitle">Task #1 <span class="badge bg-cyan-lt">SPRINT</span></div>`,
+		`<h2 class="page-title">Wire read-only web server to SQLite</h2>`,
+	} {
+		if !strings.Contains(taskColumn, want) {
+			t.Errorf("task page: the title column does not carry %s; column=%q", want, taskColumn)
+		}
+	}
+
+	// No other page's header title column carries a badge: the two record pages'
+	// status badges are the only ones, and they live in the pretitle.
+	for _, path := range allPagePaths(name) {
+		if path == sprintPath || path == taskPath {
+			continue
+		}
+		if column := titleColumn(t, path, servePage(t, mux, path)); strings.Contains(column, "badge") {
+			t.Errorf("page %s: the header's title column carries a badge; only the sprint page's pretitle does; column=%q", path, column)
+		}
 	}
 
 	// The roadmap name belongs to the shell, not to any page title. The check is
@@ -846,22 +886,33 @@ func TestPageHeader_SharedPartialAndActions(t *testing.T) {
 	// The actions column: a control that acts on the page, or the sprint page's
 	// hierarchical back link. Never navigation the sidebar already carries.
 	withActions := map[string]string{
-		"/roadmaps/" + name + "/tasks":     `data-role="task-search"`,
 		"/roadmaps/" + name + "/graph":     `id="layout-select"`,
 		"/roadmaps/" + name + "/sprints/1": `href="/roadmaps/` + name + `"`,
+		"/roadmaps/" + name + "/tasks/1":   `href="/roadmaps/` + name + `/tasks"><i class="ti ti-arrow-left me-1"></i>Back to tasks</a>`,
 	}
+	// The two record pages' actions column is full width below sm, so it wraps
+	// below a long record title; every other page keeps col-auto (Acceptance
+	// Criteria 78 and 230).
+	recordPages := map[string]bool{"/roadmaps/" + name + "/sprints/1": true, "/roadmaps/" + name + "/tasks/1": true}
 	for path, want := range withActions {
 		header := headerRegion(t, path, servePage(t, mux, path))
-		if !strings.Contains(header, `<div class="col-auto ms-auto d-print-none">`) {
-			t.Errorf("page %s: header lost its actions column", path)
+		column := `<div class="col-auto ms-auto d-print-none">`
+		if recordPages[path] {
+			column = `<div class="col-12 col-sm-auto ms-auto d-print-none">`
+		}
+		if !strings.Contains(header, column) {
+			t.Errorf("page %s: header actions column is not %s", path, column)
 		}
 		if !strings.Contains(header, want) {
 			t.Errorf("page %s: header actions column no longer carries %s", path, want)
 		}
 	}
-	for _, path := range []string{"/", "/roadmaps/" + name, "/roadmaps/" + name + "/audit"} {
+	// The tasks page's header carries no actions column content: its filter bar
+	// sits in the header of its task-list card (Acceptance Criteria 100 and 109).
+	for _, path := range []string{"/", "/roadmaps/" + name, "/roadmaps/" + name + "/tasks", "/roadmaps/" + name + "/audit"} {
 		header := headerRegion(t, path, servePage(t, mux, path))
-		if strings.Contains(header, "col-auto ms-auto") {
+		if strings.Contains(header, "col-auto ms-auto") || strings.Contains(header, "<input") ||
+			strings.Contains(header, "<select") {
 			t.Errorf("page %s: header carries an actions column; it should have none; header=%q", path, header)
 		}
 	}
@@ -907,8 +958,8 @@ func TestPageHeader_SharedPartialAndActions(t *testing.T) {
 			}
 		}
 	}
-	if pages != 6 {
-		t.Fatalf("found %d page templates carrying a page header, want 6; the sweep is not covering what it claims", pages)
+	if pages != 7 {
+		t.Fatalf("found %d page templates carrying a page header, want 7; the sweep is not covering what it claims", pages)
 	}
 }
 
@@ -928,8 +979,8 @@ func titleColumn(t *testing.T, path, body string) string {
 	end := strings.Index(rest, "</div>\n            </div>")
 	if end < 0 {
 		// Fall back to the start of the actions column, or the end of the row.
-		if i := strings.Index(rest, `<div class="col-auto`); i >= 0 {
-			return rest[:i]
+		if loc := regexp.MustCompile(`<div class="col-(?:auto|12 col-sm-auto) ms-auto`).FindStringIndex(rest); loc != nil {
+			return rest[:loc[0]]
 		}
 		return rest
 	}
@@ -954,4 +1005,136 @@ func headerRegion(t *testing.T, path, body string) string {
 		t.Fatalf("page %s: no page body follows the page header", path)
 	}
 	return rest[:end]
+}
+
+// scrollbarOffsetDeclarations returns every declaration of sheet, conditional
+// or not, whose value derives a length from the viewport width minus the
+// document width — `calc(100vw - 100%)` in any spacing. That length is the width
+// of the vertical scrollbar when one is present and zero when none is, so any
+// rule that offsets the document or a shell region by it moves the content
+// between a page that scrolls and one that does not (SPEC/WEB.md § UI
+// Framework, rule 20).
+func scrollbarOffsetDeclarations(sheet string) []string {
+	var found []string
+	for _, rule := range parseCSSRules(sheet) {
+		for _, decl := range splitCSSDeclarations(rule.decls) {
+			if strings.Contains(stripSpace(decl), "100vw-100%") {
+				found = append(found, normaliseSelector(rule.prelude)+" { "+strings.TrimSpace(decl)+" }")
+			}
+		}
+	}
+	return found
+}
+
+// TestUIFramework_NoScrollbarDependentDocumentOffset is the regression guard for
+// SPEC/WEB.md § UI Framework, rule 20, and the stylesheet half of Acceptance
+// Criterion 219: no stylesheet served under /static/... offsets anything by the
+// viewport width minus the document width.
+//
+// Tabler v1.4.0 shipped `@media (min-width:992px){:host,:root{margin-left:
+// calc(100vw - 100%)}}`, which pushed the whole document right by the scrollbar
+// width on a page that scrolls vertically: the sidebar-to-content gap was 15px
+// wider on the sprint and audit pages than on the others, and it jumped whenever
+// the scrollbar was hidden. The sweep walks the embedded filesystem, so a
+// stylesheet added later is covered without editing this test.
+func TestUIFramework_NoScrollbarDependentDocumentOffset(t *testing.T) {
+	// Falsifiability control: the detector must flag the exact v1.4.0 rule and
+	// a differently spaced form of it, or a clean sweep proves nothing.
+	for _, bad := range []string{
+		"@media (min-width:992px){:host,:root{margin-left:calc(100vw - 100%)}}",
+		"html { padding-inline-start: calc( 100vw-100% ); }",
+	} {
+		if len(scrollbarOffsetDeclarations(bad)) != 1 {
+			t.Fatalf("the detector does not flag %q", bad)
+		}
+	}
+
+	swept := map[string]bool{}
+	err := fs.WalkDir(staticFS, "static", func(path string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() || !strings.HasSuffix(path, ".css") {
+			return err
+		}
+		swept[path] = true
+		for _, decl := range scrollbarOffsetDeclarations(readEmbeddedAsset(t, path)) {
+			t.Errorf("%s carries a scrollbar-dependent offset: %s", path, decl)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("walking the embedded static filesystem: %v", err)
+	}
+	for _, want := range []string{"static/vendor/tabler/tabler.min.css", "static/style.css"} {
+		if !swept[want] {
+			t.Errorf("the sweep did not reach %s; the walk is broken", want)
+		}
+	}
+}
+
+// tablerBannerRe captures the release named in the licence banner at the head
+// of a vendored Tabler file. The CSS and the JavaScript write the banner's
+// comment lines with different leading spacing, so the pattern anchors on the
+// banner text alone.
+var tablerBannerRe = regexp.MustCompile(`^(?:@charset "UTF-8";)?\s*/\*!\s*\*?\s*Tabler v(\d+\.\d+\.\d+) \(https://tabler\.io\)`)
+
+// TestVendoredTabler_CSSAndJSFromTheSameRelease is the SPEC/BUILD.md checklist
+// criterion of § Vendored Web Assets, rule 3: the release named in the banner at
+// the head of the committed tabler.min.css equals the release named in the
+// banner at the head of the committed tabler.min.js.
+func TestVendoredTabler_CSSAndJSFromTheSameRelease(t *testing.T) {
+	versions := map[string]string{}
+	for _, path := range []string{"static/vendor/tabler/tabler.min.css", "static/vendor/tabler/tabler.min.js"} {
+		m := tablerBannerRe.FindStringSubmatch(readEmbeddedAsset(t, path))
+		if m == nil {
+			t.Fatalf("%s does not open with a Tabler licence banner naming its release", path)
+		}
+		versions[path] = m[1]
+	}
+	if css, js := versions["static/vendor/tabler/tabler.min.css"], versions["static/vendor/tabler/tabler.min.js"]; css != js {
+		t.Errorf("the vendored Tabler CSS is release %s and the JavaScript is release %s; "+
+			"both come from the same release and are upgraded together", css, js)
+	}
+}
+
+// headerOpenTagRe captures the class attribute of every <header> element's
+// opening tag.
+var headerOpenTagRe = regexp.MustCompile(`<header\b[^>]*\bclass="([^"]*)"`)
+
+// TestTablerFidelity_TopNavbarCarriesNoExpandClass is the regression guard for
+// SPEC/WEB.md § UI Framework, rule 12, and Acceptance Criterion 74: the top
+// <header> carries no class beginning with navbar-expand.
+//
+// Tabler v1.6.0 treats a horizontal navbar that expands at a breakpoint as the
+// page's primary navigation: while <html> carries no data-bs-navbar-position
+// attribute, its `.page:has(> [class*=navbar-expand]:not(.navbar-vertical))
+// >.navbar-vertical` rule hides the vertical sidebar and a companion rule sets
+// --tblr-sidebar-width to 0px on the header and the page wrapper. The shell's
+// former `navbar-expand-md` header therefore hid the sidebar on every page and
+// placed the content at the viewport's left edge after the upgrade.
+func TestTablerFidelity_TopNavbarCarriesNoExpandClass(t *testing.T) {
+	t.Setenv("HOME", shortHome(t))
+	name := seedRoadmap(t, "platform-core")
+	seedRoadmapWithAudit(t, name, 3)
+	mux := buildMux()
+
+	// Falsifiability control: the extraction must see the former header's class.
+	if m := headerOpenTagRe.FindStringSubmatch(`<header class="navbar navbar-expand-md d-print-none">`); m == nil ||
+		!strings.Contains(m[1], "navbar-expand-md") {
+		t.Fatal("the header extraction does not read the class attribute; the sweep below would be vacuous")
+	}
+
+	for _, path := range allPagePaths(name) {
+		headers := headerOpenTagRe.FindAllStringSubmatch(servePage(t, mux, path), -1)
+		if len(headers) == 0 {
+			t.Errorf("page %s renders no <header> with a class attribute; the top navbar is missing", path)
+			continue
+		}
+		for _, m := range headers {
+			for _, class := range strings.Fields(m[1]) {
+				if strings.HasPrefix(class, "navbar-expand") {
+					t.Errorf("page %s: the <header> carries %q, which makes Tabler hide the vertical "+
+						"sidebar and drop its offset", path, class)
+				}
+			}
+		}
+	}
 }

@@ -449,8 +449,9 @@ func TestOrdinaryOutcomesAreNotLogged(t *testing.T) {
 		{"unmapped path", http.MethodGet, "/no/such/page", http.StatusNotFound},
 		{"non-integer sprint id", http.MethodGet, "/roadmaps/" + name + "/sprints/not-a-number", http.StatusNotFound},
 		{"unknown sprint id", http.MethodGet, "/roadmaps/" + name + "/sprints/9999", http.StatusNotFound},
-		{"non-integer task id", http.MethodGet, "/roadmaps/" + name + "/tasks/not-a-number/data", http.StatusNotFound},
-		{"unknown task id", http.MethodGet, "/roadmaps/" + name + "/tasks/9999/data", http.StatusNotFound},
+		{"non-integer task id", http.MethodGet, "/roadmaps/" + name + "/tasks/not-a-number", http.StatusNotFound},
+		{"unknown task id", http.MethodGet, "/roadmaps/" + name + "/tasks/9999", http.StatusNotFound},
+		{"path below a task page", http.MethodGet, "/roadmaps/" + name + "/tasks/1/data", http.StatusNotFound},
 		{"write method on a known path", http.MethodPost, "/roadmaps/" + name, http.StatusMethodNotAllowed},
 		{"delete method on the index", http.MethodDelete, "/", http.StatusMethodNotAllowed},
 	}

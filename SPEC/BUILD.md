@@ -30,10 +30,11 @@ three:
    Groadmap builds on the current Go release line. Where the two constraints above
    would admit an older release line, this decision is what sets the floor, and it
    is a decision rather than a consequence. Moving the floor onto a new release
-   line can also change the Unicode version the board search reads, because
-   `golang.org/x/text/unicode/norm` selects its character data by toolchain (see
-   `Unicode Data Rules`, Rule 5). Such an adoption is chosen and not inherited, and
-   Rule 5 requires it to be treated as a change to the board search.
+   line can also change the Unicode version the tasks page's search and the graph
+   key comparison read, because `golang.org/x/text/unicode/norm` selects its
+   character data by toolchain (see `Unicode Data Rules`, Rule 5). Such an adoption
+   is chosen and not inherited, and Rule 5 requires it to be treated as a change to
+   both.
 
 The four advisories item 2 names:
 
@@ -91,7 +92,7 @@ the `go` directive of `go.mod` names.
 
 ### External Dependencies
 
-Groadmap has exactly **four** direct module dependencies. Each one is listed
+Groadmap has exactly **seven** direct module dependencies. Each one is listed
 below, and each one is governed by its own set of rules.
 
 The table lists them in the order the first `require` block of `go.mod` lists
@@ -108,8 +109,11 @@ module is the one `go.mod` pins.
 | Module | Path | Purpose |
 |--------|------|---------|
 | GoGraph | `github.com/FlavioCFOliveira/GoGraph` | Labelled property graph, Cypher engine, and durable store backing the `graph` command. See `GRAPH.md`. |
+| Syntax highlighting | `github.com/alecthomas/chroma/v2` | The lexers and styles that highlight a fenced code block of a Markdown field in the web interface by its declared language, and the CSS of the syntax-highlighting stylesheet. See `WEB.md § Markdown Rendering` and Markdown Rendering Rules below. |
+| Markdown | `github.com/yuin/goldmark` | The CommonMark-compliant parser and renderer, with its GitHub Flavored Markdown, footnote, and definition-list extensions, that turns a Markdown field into the HTML the web interface shows. See `WEB.md § Markdown Rendering` and Markdown Rendering Rules below. |
+| Markdown highlighting bridge | `github.com/yuin/goldmark-highlighting/v2` | The goldmark extension that hands a fenced code block to chroma and emits chroma's class-based markup. See `WEB.md § Markdown Rendering` and Markdown Rendering Rules below. |
 | System calls | `golang.org/x/sys` | The operating-system calls the Go standard library does not publish. Groadmap imports the module at four sites, and each of the four compiles for one platform family only. `golang.org/x/sys/unix` is imported by `internal/terminal/terminal_unix.go`, for the `TIOCGWINSZ` ioctl that decides whether a stream is a terminal, and by `internal/testenv/pty_linux.go`, for the `/dev/ptmx` sequence that opens a pseudo-terminal pair. `golang.org/x/sys/windows` is imported by `internal/terminal/terminal_windows.go`, for the `GetConsoleMode` call that asks the console subsystem that same terminal question, and by `internal/graphlock/graphlock_windows.go`, for the `LockFileEx` and `UnlockFileEx` calls that are the graph store's mutual exclusion on that platform. See `GRAPH.md § Concurrency and Recovery` for the lock the last of those four implements. |
-| Unicode data | `golang.org/x/text` | The Unicode character data the roadmap tasks board's search normalises a term and a task's searchable text by. `internal/unicodenorm` imports `golang.org/x/text/unicode/norm` — the Go project's own implementation of the normalisation forms UAX #15 defines — and no other package of the module. See `WEB.md § Roadmap Tasks Page` for the rule that normalisation serves and for the check that holds the client's copy of it equal to the server's. |
+| Unicode data | `golang.org/x/text` | The Unicode character data the roadmap tasks page's search normalises a term and a task's searchable text by, and the knowledge-graph key comparison normalises keys by. `internal/unicodenorm` imports `golang.org/x/text/unicode/norm` — the Go project's own implementation of the normalisation forms UAX #15 defines — and no other package of the module. See `WEB.md § Roadmap Tasks Page` and `GRAPH.md § Node Key Uniqueness` for the rules that normalisation serves, and Unicode Data Rules below. |
 | SQLite driver | `modernc.org/sqlite` | Pure-Go SQLite driver backing every roadmap database (`~/.roadmaps/<name>/project.db`). It is the storage engine for all task, sprint, and audit data: `internal/db` registers it under the driver name `sqlite` and opens every database connection through it. Being pure Go, it needs no C toolchain and builds under `CGO_ENABLED=0`. See `DATABASE.md` for the schema it stores, `ARCHITECTURE.md § 3. internal/db/` for the layer that opens it, and `IMPLEMENTATION.md § Database Connections` for the entry point and DSN form that layer must use. |
 
 #### GoGraph Rules
@@ -178,116 +182,27 @@ module is the one `go.mod` pins.
 
    The pin carries more weight here than for any other dependency, and for a
    different reason. This module carries Unicode character data, and that data
-   decides **which tasks a search term finds** on the roadmap tasks board (see
-   `WEB.md § Roadmap Tasks Page`). A floated version is therefore not merely a
-   build that differs from another build: it is a product that answers the same
-   user's search differently.
+   decides **which tasks a search term finds** on the roadmap tasks page (see
+   `WEB.md § Roadmap Tasks Page`) and which knowledge-graph node keys count as the
+   same key (see `GRAPH.md § Node Key Uniqueness`). A floated version is therefore
+   not merely a build that differs from another build: it is a product that answers
+   the same user's search differently.
 2. **The module is admitted because the standard library cannot do this.** Go's
    `unicode` package publishes case mappings, character categories, and scripts,
    but it publishes no canonical decomposition data and no composition data. There
    is no way to normalise on the server without a module that carries that data,
    and `golang.org/x/text/unicode/norm` is the Go project's own implementation of
-   it. Admitting a fourth direct dependency was accepted deliberately on that
+   it. Admitting this direct dependency was accepted deliberately on that
    ground, and on no other.
-3. **The server normalises with this module, and the browser's copy of the rule
-   is derived from the module's data and proven equal to it.** Groadmap's server
-   takes Normalization Form C from `golang.org/x/text/unicode/norm` — `norm.NFC` —
-   for the roadmap tasks board's search and for the key comparison of
-   `GRAPH.md § Node Key Uniqueness`. The browser cannot call the module, so the
-   binary ships it the rule as three tables Groadmap derives from the module's
-   character data — the full canonical decompositions, the canonical combining
-   classes, and the primary composites — together with a script that runs UAX
-   #15's algorithm over them. `WEB.md § Roadmap Tasks Page` is canonical for the
-   tables and for the checks that hold the shipped copy equal to `norm.NFC`; this
-   rule fixes where the tables' data comes from and what Groadmap keeps in order
-   to check them.
-
-   **Groadmap keeps a Go statement of the browser's algorithm, in
-   `internal/unicodenorm`, and the server does not normalise through it.** It
-   decomposes with the data the first table carries, orders by the classes the
-   second carries, and composes from the pairs the third carries, as the shipped
-   script does. Its only use is as the subject of the checks that hold the shipped
-   rule equal to the server's: those checks have to run the shipped rule somewhere,
-   and no Go test can run the script itself (see `WEB.md § Roadmap Tasks Page`).
-   Putting it on the server's search path would make the server answer with the
-   browser's copy, and leave `norm.NFC` answering nothing any check compares.
-
-   **The primary composites are derived, and the derivation reads one character
-   property.** A primary composite is a code point whose canonical decomposition
-   is two characters, the first of them a starter, that Unicode does not exclude
-   from composition. The decompositions come from the module. The exclusion is
-   Unicode's Full_Composition_Exclusion property, and **exactly one query reads
-   it: `norm.NFC.IsNormalString` of the single code point.** For a code point
-   carrying a canonical decomposition, that query is false exactly when the
-   property is true. It returns a property of its argument rather than a
-   transformed string, and it runs in the one-time derivation of the tables —
-   once per process on the server, and once per run of the generator — never on a
-   search.
-
-   **`norm.NFC.QuickSpanString` is NOT that lookup, and MUST NOT be used as one.**
-   It reports a boundary up to which a string is *quick-checked* to be in
-   Normalization Form C, and its own documentation states that the boundary is not
-   guaranteed to be the largest such. For a single code point the boundary is
-   therefore the whole of it or none of it, and none of it means NFC_QC **is not
-   Yes** — `No` **or** `Maybe` — where the property this lookup needs is `No`
-   alone. NFC_QC=Maybe is carried by every code point that can be the second
-   element of a primary composite, and such a code point is not excluded from
-   composition; it is the reason the composition table has any entries at all.
-
-   The two questions had the same answer under Unicode 15.0.0, because no code
-   point then carried both a canonical decomposition and NFC_QC=Maybe, and the
-   distinction was invisible for exactly that reason. Unicode 16.0.0 introduced
-   twelve that do — `U+113C5`, `U+113C7` and `U+113C8`, `U+16121` through
-   `U+16128`, and `U+16D68` — and the quick-check form reported all twelve as
-   excluded, dropping their composites from the table and leaving the shipped rule
-   returning the decomposition of a code point that composes, which is not
-   Normalization Form C. The two forms disagree on **132** code points in all; the
-   other 120 carry no canonical decomposition, and the derivation never asks the
-   question of a code point that carries none, so those never reached the table.
-   Twelve was the symptom; the predicate was the fault.
-
-   **The exclusions are not derivable from the decomposition data, which is why
-   the derivation reads a property.** A script exclusion such as `U+0958`, and a
-   post-composition-version exclusion such as `U+2ADC`, decompose exactly as an
-   ordinary composite does, so no inspection of the decompositions can separate
-   them; the exclusions have to be read from somewhere. Reading the property from
-   the same module that supplies the decompositions makes the two move together
-   when the Unicode version moves. The alternative is to write the exclusions into
-   this specification, or into the code, as a list, and that is precisely the
-   stored copy of expected results that `WEB.md § Roadmap Tasks Page`, **What keeps
-   the shipped rule equal to the server's**, refuses: such a list would go stale in
-   silence the day the Unicode version changed, in the one document a reader
-   trusts.
-
-   **A test MAY hold the derived exclusions to a transcribed copy of the property,
-   and the transcription is deliberate.** The reference the test in
-   `internal/unicodenorm` compares against is copied from
-   `DerivedNormalizationProps.txt` of the Unicode Character Database. It is
-   neither derived nor fetched, and three reasons rule out the alternatives:
-
-   - **The property has four sources, and two of them cannot be derived at all.**
-     UAX #15, under *Composition Exclusion Types*, names four: script-specific
-     exclusions, post composition version exclusions, singleton decompositions,
-     and non-starter decompositions. Of the first two it states that the list
-     "cannot be computed from the decomposition mappings in the Unicode Character
-     Database, and must instead be explicitly listed".
-   - **The last two are not derivable from this module either.**
-     `norm.NFD.Properties(b).Decomposition()` returns the FULL, recursive
-     canonical decomposition, so a singleton such as `U+212B` — whose one-step
-     mapping is `U+00C5` — is indistinguishable from an ordinary two-character
-     composite. Deriving them would mean transcribing `UnicodeData.txt` instead,
-     which is larger and no more authoritative.
-   - **Asking the module is what the test exists to check.** A reference has to
-     come from outside the thing measured, so the module cannot be it.
-
-   Admitting a stored copy here does not contradict what the paragraph above
-   refuses for this specification and for the code. That refusal is of a stored
-   copy the rule is READ from; this is a reference the rule is HELD to, and when
-   the Unicode version moves it fails the test and names the code points rather
-   than going stale in silence. Fetching the file at test time is forbidden for
-   the same reason: a test that reached the network would fail offline, and would
-   follow a property that had moved instead of reporting it.
-
+3. **The server normalises with this module, and nothing else normalises.**
+   Groadmap takes Normalization Form C from `golang.org/x/text/unicode/norm` —
+   `norm.NFC` — through one function in `internal/unicodenorm`, and both the
+   roadmap tasks page's search and the key comparison of
+   `GRAPH.md § Node Key Uniqueness` normalise through that function. Groadmap
+   derives no normalisation data of its own from the module, ships no normalisation
+   data or algorithm to the browser, and keeps no second statement of the
+   algorithm: the search is applied on the server alone (see
+   `WEB.md § Roadmap Tasks Page`).
 4. **The import adds exactly one module to the graph.**
    `golang.org/x/text/unicode/norm` imports the standard library and
    `golang.org/x/text/transform`, which is a package of the same module.
@@ -321,44 +236,12 @@ module is the one `go.mod` pins.
    The other half of that rule is already in the same position: the case fold
    reads the standard library's own tables, so its Unicode version comes from the
    toolchain alone. **Raising the Go floor in `Go Toolchain` is consequently also a
-   change to the board search, and MUST be treated as one.** So is a build made
-   with a toolchain newer than that floor, which no pin can prevent and which
-   Rule 6 is what catches.
-6. **Unlike the driver's coupling, a drift here IS caught, and by an ordinary
-   test.** `SQLite Driver Rules`, Rule 4 records that no gate detects a
-   mismatched `modernc.org/libc`. The opposite holds for this module. The copy of
-   the rule the binary ships to the browser is generated from the character data
-   the server's normalisation reads, and a guard test compares the two over the
-   whole of Unicode, so a change of Unicode version — whether the module version or the toolchain that ran
-   produced it — fails the `test` gate until that shipped copy is regenerated from
-   the new data. A server whose rule moved is **caught**, never silently followed.
-   The check itself is specified in `WEB.md § Roadmap Tasks Page`.
-
-   What that gate does not do is decide whether the new Unicode version is wanted.
-   It reports that the rule moved; regenerating is a deliberate act, taken with the
-   change that caused it — a new module version, or a new toolchain — and never as
-   a way of making a failing test pass.
-
-   Further tests, in `internal/unicodenorm`, cover the other directions, and
-   **they are on demand rather than gated.** One holds the composition exclusions
-   the package derives to a transcribed copy of Full_Composition_Exclusion over
-   the whole of Unicode, in both directions. One is the named regression for the
-   quick-check defect above: the twelve code points it lists MUST normalise to
-   themselves. The others hold the Go statement of the browser's algorithm
-   (Rule 3) equal to `norm.NFC` over every single code point and over every
-   two-code-point sequence `WEB.md § Roadmap Tasks Page` enumerates. All four
-   carry the `heavy` build tag, so a module upgrade that changes how the server
-   normalises, rather than which data it reads, is caught by `make test-heavy`
-   and NOT by the `test` gate (see `Validation Gates`).
-
-   What the `test` gate still catches, at every run, is the guard test of this
-   rule: shipped data that has drifted away from the server's, which is the
-   drift a change of Unicode version produces. The exclusion test catches derived
-   data that has drifted away from Unicode while the client faithfully follows
-   it, and the equality tests catch a shipped algorithm that no longer answers as
-   the server does; both of those are established when `make test-heavy` is run,
-   and at no other moment.
-
+   change to the tasks page's search and to the key comparison of
+   `GRAPH.md § Node Key Uniqueness`, and MUST be treated as one.** So is a build
+   made with a toolchain newer than that floor, which no pin can prevent. Groadmap
+   ships no copy of either rule to the browser, so there is no second copy that a
+   change of Unicode version could leave behind: the server's rule is the only
+   one, and it moves as a whole.
 #### SQLite Driver Rules
 
 1. `modernc.org/sqlite` MUST be pinned to an exact, immutable version in `go.mod`,
@@ -409,6 +292,32 @@ module is the one `go.mod` pins.
    is a clean security scan: a defect the mismatch introduces would surface only
    at runtime, inside the storage engine.
 
+#### Markdown Rendering Rules
+
+1. `github.com/yuin/goldmark`, `github.com/yuin/goldmark-highlighting/v2`, and
+   `github.com/alecthomas/chroma/v2` MUST each be pinned to an exact, immutable
+   version in `go.mod`, not a floating reference, so that every build of a given
+   commit renders the same stored Markdown into the same HTML. `go.sum` MUST record
+   the checksum of each pinned version, and the build MUST fail if a checksum does
+   not match.
+2. **chroma's regular-expression module is an indirect dependency, pinned like the
+   others.** chroma requires `dlclark/regexp2`, under the module path the pinned
+   chroma's own `go.mod` names. Groadmap does not import it, so it is not a row of
+   the table above; `go.mod` pins it to an exact version in its indirect `require`
+   block, and `go.sum` records its checksum.
+3. **All four modules are pure Go and compiled in.** None needs a C toolchain, so
+   the build stays under `CGO_ENABLED=0`, and none loads a lexer, a style, or any
+   other file at runtime or fetches anything from the network: the renderer is
+   part of the binary (see `WEB.md § Self-Contained Deliverable`).
+4. **An upgrade of any of the three direct modules changes rendered output, and is
+   re-validated as such.** The HTML these modules produce is what the web interface
+   inserts without escaping, so an upgrade MUST be re-validated against the
+   Markdown acceptance criteria of `WEB.md § Acceptance Criteria`, including those
+   that prove raw HTML is not emitted and dangerous links are not active. An
+   upgrade of chroma also changes the CSS of the syntax-highlighting
+   stylesheet, which the test gate holds equal to the pinned chroma's output (see
+   `WEB.md § Markdown Rendering`, rule 7).
+
 ## Vendored Web Assets
 
 The `rmp web` command serves a read-only web interface from assets embedded into
@@ -426,11 +335,13 @@ Rules:
    embedded asset categories is:
    - HTML templates;
    - the stylesheet (all CSS, including the vendored Tabler CSS framework — the UI
-     framework — and any further vendored CSS);
+     framework — the syntax-highlighting stylesheet of rendered Markdown, and
+     any further vendored CSS);
    - all client JavaScript, including the Tabler JavaScript and the D3.js
      knowledge-graph visualisation library (and the d3-sankey plugin) and any of
      their dependencies;
-   - web fonts, including the Inter font and the Tabler Icons webfont;
+   - web fonts, including the Inter font, in its upright and its italic face, and
+     the Tabler Icons webfont;
    - icons and images, including the Tabler Icons set;
    - the favicon;
    - any other static asset the interface requires.
@@ -452,7 +363,18 @@ Rules:
    any remote origin. The fonts and icons the Tabler shell depends on are likewise
    vendored: the Inter font and the Tabler Icons webfont are committed font files
    under `internal/web/static/`, embedded with `go:embed`, and served only from
-   `/static/...` (see `WEB.md § UI Framework`). Upgrading or replacing any of these
+   `/static/...` (see `WEB.md § UI Framework`). Inter is committed as two
+   variable-weight faces from the one `@fontsource-variable/inter` source, the
+   upright `inter-latin-wght-normal.woff2` and the italic
+   `inter-latin-wght-italic.woff2`, both under `internal/web/static/vendor/inter/files/`
+   and both declared in `internal/web/static/vendor/inter/inter.css`
+   (`WEB.md § UI Framework`, rule 4). `internal/web/static/vendor/LICENSES.md`
+   records, for every vendored web asset, its location, its upstream project, and
+   its licence; the Inter entry names both faces under the SIL Open Font License
+   1.1. The vendored Tabler CSS and the vendored Tabler JavaScript are always taken
+   from the same Tabler release, and they are upgraded together, in one change; the
+   Tabler Icons webfont and the Inter font are separate projects and are not bound
+   to that release. Upgrading or replacing any of these
    vendored Tabler assets — the framework CSS or JavaScript, the Inter font, or the
    Tabler Icons webfont — is a change to the committed asset and to this section,
    recorded in git.
@@ -1113,28 +1035,6 @@ What the `test` gate may contain is bounded by
 `No Benchmarks and No Performance-Measurement Tests` below: the suite proves
 behaviour, and it measures nothing.
 
-**The `heavy` build tag marks tests no gate compiles.** A test file that declares
-`//go:build heavy` is compiled by nothing in the table above, and by neither
-workflow: the `test` gate does not build it, so it cannot fail, and a green gate
-run is no evidence about it. The tag is reserved for the exhaustive sweeps whose
-cost is minutes rather than seconds — the checks of `WEB.md § Roadmap Tasks Page`
-that hold the browser's copy of the normalisation rule equal to the server's.
-
-**`make test-heavy` is the only way those tests run, and it is not a gate.** The
-target runs `go test -tags heavy -race -timeout=60m ./...`: the whole module, the
-race detector on, and an explicit 60-minute timeout. It carries **no coverage
-profile**, because the sweeps take about an hour under `-race -coverprofile`
-against about a quarter of an hour under `-race` alone, and no gate reads a
-profile of them. `make check` does not run the target, no workflow runs it, and
-adding it to either would make it a seventh gate, which the set above forbids.
-Where it is required instead is `DEPLOY.md § Release Checklist`: a release records
-that it was run on the tree being released and that it passed.
-
-**The linter analyses the tag.** `.golangci.yml` sets `run.build-tags` to `heavy`,
-so the `lint` gate reads the tagged files and does not report the code whose only
-callers are in them as unused. The `lint` gate lints those files; it does not run
-them.
-
 ### Where the Gate Set Is Enforced
 
 The same six gates run in three places, and they mean the same thing in each:
@@ -1377,12 +1277,13 @@ separate published asset, not a fourth entry inside the archive.
 - [ ] No specification file names the version of a Go module dependency, of the Go toolchain, or of `golangci-lint`, `gosec`, or the `golangci-lint` action: those versions are written in `go.mod`, the `Makefile`, and the two workflows (see Go Toolchain, External Dependencies, and Static Analysis)
 - [ ] `go.mod` pins **every** direct dependency the External Dependencies table names — `github.com/FlavioCFOliveira/GoGraph`, `golang.org/x/sys`, `golang.org/x/text`, and `modernc.org/sqlite` — to an exact version, and the first `require` block of `go.mod` requires those four modules and no others, so the table and the block still agree row for row (see External Dependencies)
 - [ ] `go.mod` pins `modernc.org/libc` and `modernc.org/memory` to exact versions, as SQLite Driver Rules, Rule 2 requires. Those versions are not checked against the ones the pinned `modernc.org/sqlite` requires: a later release is the risk Rule 3 accepts, and no gate compares them — neither any gate run by `make check` (format, vet, test, build, `golangci-lint`, `gosec`) nor the E2E suite (see External Dependencies, SQLite Driver Rules 2 to 4)
-- [ ] Any change to the pinned `golang.org/x/text` version, and any raise of the `go` directive in `go.mod` (see Go Toolchain), has been treated as a change to the roadmap tasks board's search: the copy of the search rule the binary ships to the browser was regenerated from the new Unicode character data, and the guard test that holds it equal to the server's own rule passes (see External Dependencies, Unicode Data Rules 5 and 6, and `WEB.md § Roadmap Tasks Page`)
+- [ ] Any change to the pinned `golang.org/x/text` version, and any raise of the `go` directive in `go.mod` (see Go Toolchain), has been treated as a change to the roadmap tasks page's search and to the graph key comparison: the tests of both pass on the new Unicode character data (see External Dependencies, Unicode Data Rules 5, `WEB.md § Roadmap Tasks Page`, and `GRAPH.md § Node Key Uniqueness`)
 - [ ] Archive naming follows convention: `rmp-{version}-{target}.{ext}`
 - [ ] Every published archive holds exactly the three entries Artifact Structure lists, and nothing else. Listing a `.tar.gz` (`tar -tzf`) shows `rmp`, `LICENSE`, and `README.md`; listing a Windows `.zip` (`unzip -l`) shows `rmp.exe`, `LICENSE`, and `README.md`. Every entry is at the archive root, with no leading directory component
 - [ ] The dev pre-release archive holds the same three entries as a release archive. This is checked on a published `dev` asset, not only on a release asset, because both workflows pack archives and only one of them builds release tags
 - [ ] The `.sha256` file for each archive is published as a separate asset and is not an entry inside the archive
 - [ ] Every web asset category (HTML templates, the stylesheet including the vendored Tabler CSS framework, all client JS including the vendored Tabler JavaScript and D3.js with the d3-sankey plugin and their dependencies, web fonts including the Inter font and the Tabler Icons webfont, icons and images, and the favicon) is embedded via `go:embed`; the build uses the Go toolchain only, with no Node.js or `node_modules` step (see Vendored Web Assets)
+- [ ] The vendored Tabler CSS and the vendored Tabler JavaScript come from the same Tabler release: the release named in the licence banner at the head of the committed CSS file equals the release named in the banner at the head of the committed JavaScript file (see Vendored Web Assets)
 - [ ] The web interface is fully self-contained: with networking disabled and with only the `rmp` binary present on disk (no sidecar files and no separate assets directory), `rmp web` serves the full UI — every page and the knowledge-graph visualisation render and function with no network egress (see Vendored Web Assets and `WEB.md § Self-Contained Deliverable`)
 
 ### Architecture Verification

@@ -17,9 +17,11 @@
               parent of the record on display, a relationship the sidebar's flat
               list of views does not express, so it is not the duplicated
               navigation removed elsewhere (SPEC/WEB.md § Shared Page-Header
-              Partial, rule 5).
+              Partial, rule 5). Like the task page's, the column is full width below
+              the sm breakpoint, so it wraps below a long title (SPEC/WEB.md § UI
+              Framework, rule 16).
             */}}
-            <div class="col-auto ms-auto d-print-none">
+            <div class="col-12 col-sm-auto ms-auto d-print-none">
               <a class="btn btn-outline-secondary" href="/roadmaps/{{.Name}}"><i class="ti ti-arrow-left me-1"></i>Back to sprints</a>
             </div>
           </div>
@@ -35,15 +37,13 @@
     </div>
   </div>
 
-  {{/*
-    ONE read-only task detail modal for the whole page: an empty shell filled on
-    demand from the task detail endpoint when the user opens a task, so the
-    document carries no task's modal content at all (SPEC/WEB.md § Task Detail
-    Modal, One modal element, filled on demand).
-  */}}
-{{template "taskModalShell" .}}
-
   <script src="/static/vendor/tabler/tabler.min.js"></script>
-  <script src="/static/task-modal.js"></script>
+  {{/*
+    The member-tasks board's column collapse toggles. The sprint page is the only
+    page that loads this script: the tasks page carries no board and no toggle
+    (SPEC/WEB.md § Sprint Detail Sub-Template, rule 3, Column collapse, This board
+    only; Acceptance Criterion 218).
+  */}}
+  <script src="/static/sprint-board.js"></script>
 </body>
 </html>{{end}}

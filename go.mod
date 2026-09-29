@@ -1,9 +1,12 @@
 module github.com/FlavioCFOliveira/Groadmap
 
-go 1.27.0
+go 1.27.1
 
 require (
 	github.com/FlavioCFOliveira/GoGraph v0.15.0
+	github.com/alecthomas/chroma/v2 v2.27.0
+	github.com/yuin/goldmark v1.8.6
+	github.com/yuin/goldmark-highlighting/v2 v2.0.0-20230729083705-37449abec8cc
 	golang.org/x/sys v0.48.0
 	golang.org/x/text v0.42.0
 	modernc.org/sqlite v1.59.0
@@ -13,6 +16,7 @@ require (
 	github.com/RoaringBitmap/roaring/v2 v2.28.0 // indirect
 	github.com/antlr4-go/antlr/v4 v4.13.1 // indirect
 	github.com/bits-and-blooms/bitset v1.25.0 // indirect
+	github.com/dlclark/regexp2/v2 v2.2.1 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/mattn/go-isatty v0.0.24 // indirect

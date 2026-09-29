@@ -35,6 +35,7 @@ func TestCachePolicy_NoStoreOnDataDerivedResponses(t *testing.T) {
 		"/roadmaps/" + name,            // sprints landing page
 		"/roadmaps/" + name + "/tasks", // tasks page
 		"/roadmaps/" + name + "/sprints/" + sprintID, // sprint page
+		"/roadmaps/" + name + "/tasks/1",             // task page
 		"/roadmaps/" + name + "/graph",               // graph page shell
 		"/roadmaps/" + name + "/graph/data",          // graph data endpoint (JSON)
 	}
@@ -76,6 +77,8 @@ func TestCachePolicy_NoStoreOnDataStateDependentErrors(t *testing.T) {
 		// An existing roadmap but a sprint id that is not one of its sprints
 		// -> 404 (the read decides found/not-found from DB state).
 		{http.MethodGet, "/roadmaps/" + name + "/sprints/999999", http.StatusNotFound},
+		// An existing roadmap but a task id that is not one of its tasks -> 404.
+		{http.MethodGet, "/roadmaps/" + name + "/tasks/999999", http.StatusNotFound},
 		// A non-read method on a known route -> 405.
 		{http.MethodPost, "/roadmaps/" + name, http.StatusMethodNotAllowed},
 	}

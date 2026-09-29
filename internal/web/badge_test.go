@@ -202,15 +202,9 @@ func seedBadgeRoadmap(t *testing.T, name string) (roadmap string, sprintID int) 
 
 // TestTasksPage_RendersSemanticBadgeColours proves the helpers are actually wired
 // into the tasks template and emit the SPEC colour variant in the rendered HTML:
-// a priority 8 / severity 9 task renders bg-red-lt badges on its board card
-// (SPEC/WEB.md § Status, Priority, and Severity Badge Colours, rule 2).
-//
-// The STATUS badge is deliberately not asserted here. The card shows none — the
-// column it sits in already states the status — and the modal that does show one
-// is now filled by /static/task-modal.js from the task detail endpoint, so no
-// status badge is server-rendered on this page at all. The script's own mapping
-// is pinned against these same Go helpers, value by value, in
-// TestTaskModalScript_BadgeMappingMatchesTheServerHelpers.
+// a priority 8 / severity 9 task renders bg-red-lt badges in its list row, and
+// its SPRINT status renders the status variant (SPEC/WEB.md § Status, Priority, and
+// Severity Badge Colours, rule 2; Acceptance Criterion 61).
 func TestTasksPage_RendersSemanticBadgeColours(t *testing.T) {
 	t.Setenv("HOME", shortHome(t))
 	name, _ := seedBadgeRoadmap(t, "badge-colours")
@@ -225,24 +219,23 @@ func TestTasksPage_RendersSemanticBadgeColours(t *testing.T) {
 	}
 	body := rec.Body.String()
 
-	// Priority 8 -> bg-red-lt badge reading P8, on the board card. The prefix names
-	// the field the value belongs to and selects no colour: the variant is the one
-	// the mapping assigns to the integer 8 (SPEC/WEB.md § Status, Priority, and
-	// Severity Badge Colours, rule 2).
+	// Priority 8 -> bg-red-lt badge reading P8, in the list row. The badge
+	// label names the field the value belongs to and selects no colour: the
+	// variant is the one the mapping assigns to the integer 8 (SPEC/WEB.md
+	// § Status, Priority, and Severity Badge Colours, rule 2).
 	if !strings.Contains(body, `<span class="badge bg-red-lt">P8</span>`) {
 		t.Errorf("tasks page missing priority badge with bg-red-lt reading P8 for priority 8")
 	}
-	// Severity 9 -> bg-red-lt badge reading S9, on the board card. Priority and
-	// severity share the variant here, so the prefix is the only thing that tells
-	// the two badges apart — which is the reason the card carries one.
+	// Severity 9 -> bg-red-lt badge reading S9, in the list row. Priority and
+	// severity share the variant here, so the badge label is the only thing that
+	// tells the two badges apart.
 	if !strings.Contains(body, `<span class="badge bg-red-lt">S9</span>`) {
 		t.Errorf("tasks page missing severity badge with bg-red-lt reading S9 for severity 9")
 	}
-	// No status badge is server-rendered on this page: not on the card, and not
-	// in the shell, which carries an empty badge element the script fills.
-	if strings.Contains(body, `>SPRINT</span>`) {
-		t.Errorf("tasks page renders a status badge; the column states the status and the modal " +
-			"is filled by the script")
+	// The row's status badge carries the SPRINT variant (Acceptance Criterion 61).
+	if !strings.Contains(body, `<span class="badge `+taskStatusBadge(models.StatusSprint)+`">SPRINT</span>`) {
+		t.Errorf("tasks page missing the SPRINT status badge with the %s variant",
+			taskStatusBadge(models.StatusSprint))
 	}
 }
 
@@ -256,7 +249,7 @@ func TestTasksPage_RendersSemanticBadgeColours(t *testing.T) {
 // The member task's STATUS badge is asserted ABSENT, which is the half that moved
 // with the board: the card carries no status badge, because the column the card
 // sits in already states the status (SPEC/WEB.md § Sprint Detail Sub-Template,
-// rule 4, The card; Acceptance Criterion 133). The sprint's own status badge is
+// rule 3, The card; Acceptance Criterion 133). The sprint's own status badge is
 // unaffected and is still required above.
 func TestSprintPage_RendersSemanticStatusBadge(t *testing.T) {
 	t.Setenv("HOME", shortHome(t))
@@ -278,9 +271,9 @@ func TestSprintPage_RendersSemanticStatusBadge(t *testing.T) {
 	}
 	// Member task badges on the board card: priority 8 and severity 9 both fall in
 	// the high band, so both take bg-red-lt.
-	// Each badge writes its value behind the one-letter prefix that names it, the
-	// same form the tasks board's card renders (Acceptance Criteria 85 and 133);
-	// the prefix is a label and the variant is still the value's own.
+	// Each badge writes its value behind the badge label that names it, the same
+	// form the tasks board's card renders (Acceptance Criteria 85 and 133); the
+	// badge label is a label and the variant is still the value's own.
 	if !strings.Contains(body, `<span class="badge bg-red-lt">P8</span>`) {
 		t.Errorf("the member-tasks board card is missing the priority badge with bg-red-lt reading P8 for priority 8")
 	}
@@ -296,7 +289,7 @@ func TestSprintPage_RendersSemanticStatusBadge(t *testing.T) {
 	}
 	if strings.Contains(body, ">SPRINT<") {
 		t.Errorf("the sprint page renders the member task's status value; the board states it " +
-			"by the column and the modal is filled by the script")
+			"by the column and the task page shows it")
 	}
 }
 

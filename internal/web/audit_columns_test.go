@@ -21,10 +21,9 @@ import (
 // roadmap through a browser (SPEC/WEB.md § Roadmap Audit Log Page; Acceptance
 // Criterion 10).
 //
-// Where the assertions are scoped, and why. The rendered page carries an em dash
-// in its <title> ("Groadmap — <name> / Audit") and a `text-truncate` on the top
-// navbar's roadmap name, both of them present BEFORE these columns existed. A
-// document-wide `strings.Contains(body, "—")` or `…, "text-truncate"` therefore
+// Where the assertions are scoped, and why. The rendered page carries a
+// `text-truncate` on the top navbar's roadmap name, present BEFORE these columns
+// existed. A document-wide `strings.Contains(body, "text-truncate")` therefore
 // passes against the unfixed page and proves nothing. Every assertion below is
 // made on the audit table's own region, and on exact cell markup rather than on
 // a token that appears elsewhere in the shell.
@@ -253,9 +252,9 @@ func TestHandleAudit_RendersBothNullableColumnsPerEntry(t *testing.T) {
 // TestHandleAudit_NullableColumnsAddNoControlAndNoLink guards the read-only
 // promise at the point the two columns enter the markup. A commit hash is the one
 // value on this page that invites a link to a code-hosting service and a copy
-// button; the modal is forbidden both, and so is the table — Groadmap contacts no
+// button; the task page is forbidden both, and so is the table — Groadmap contacts no
 // repository and holds no repository URL from which such a link could be built
-// (SPEC/WEB.md § Roadmap Audit Log Page; § Task Detail Modal, Fields shown).
+// (SPEC/WEB.md § Roadmap Audit Log Page; § Roadmap Task Page, Details card).
 func TestHandleAudit_NullableColumnsAddNoControlAndNoLink(t *testing.T) {
 	t.Setenv("HOME", shortHome(t))
 	name := seedRoadmapWithNullableAudit(t, "ledger-settlement")
@@ -341,7 +340,7 @@ func TestAuditTemplate_NullableCellsComeFromTheHelpers(t *testing.T) {
 		if got := rows[0][c.column]; got != c.want {
 			t.Errorf("under the probe the %s cell is %q, want %q: neither its text nor its "+
 				"class is produced by the helper, so the template decides the presentation "+
-				"itself and can drift from the modal's", c.name, got, c.want)
+				"itself and can drift from the task page's", c.name, got, c.want)
 		}
 	}
 
@@ -364,8 +363,8 @@ func TestAuditTemplate_NullableCellsComeFromTheHelpers(t *testing.T) {
 }
 
 // TestAuditCell_PresenceRule pins the helpers themselves: what each answers for a
-// present value, for NULL, and — for the hash — for the empty string the modal's
-// own `if (value)` also treats as absent.
+// present value, for NULL, and — for the hash — for the empty string, which is
+// treated as absent too.
 func TestAuditCell_PresenceRule(t *testing.T) {
 	id := 41
 	zero := 0
@@ -408,67 +407,43 @@ func TestAuditCell_PresenceRule(t *testing.T) {
 	}
 }
 
-// TestAuditCell_MirrorsTheTaskModalPresentation is what makes "the audit table
-// follows the presentation the task detail modal already uses" a checked claim
-// rather than a comment.
+// TestAuditCell_MirrorsTheTaskPagePresentation is what makes "the audit table
+// follows the presentation the task page uses for a task's own commit hashes" a
+// checked claim rather than a comment.
 //
-// The modal renders the task's own commit hashes in static/task-modal.js, and its
-// convention is three decisions: the placeholder an absent value takes, the class
-// set a present hash takes, and the class set the placeholder takes. This test
-// reads that file and fails if the Go helpers and the modal ever disagree — in
-// either direction, so a change to the modal is caught as readily as a change
-// here.
-func TestAuditCell_MirrorsTheTaskModalPresentation(t *testing.T) {
-	script := stripJSComments(readEmbeddedAsset(t, "static/task-modal.js"))
+// The convention the two surfaces share is two decisions: the placeholder an
+// absent value takes with its class, and the monospaced face of a present hash.
+// They part on one: the audit table truncates a hash, while the task page's
+// narrow Details column shows it whole and wraps it (Acceptance Criterion 224).
+// This test reads the served task page and fails if either cell stops carrying
+// what the helpers produce.
+func TestAuditCell_MirrorsTheTaskPagePresentation(t *testing.T) {
+	t.Setenv("HOME", shortHome(t))
+	seedTaskPageFixture(t)
 
-	// The modal's absent placeholder is its ABSENT constant.
-	wantConst := `ABSENT = "` + absentPlaceholder + `"`
-	if !strings.Contains(script, wantConst) {
-		t.Errorf("the task detail modal does not declare %s; the audit table's placeholder "+
-			"and the modal's have drifted apart, so one surface now says \"there is nothing "+
-			"here\" differently from the other", wantConst)
-	}
-
-	// commitItem is the modal function the audit Commit column reuses. The scan is
-	// scoped to its body: `datagrid-content text-secondary` also appears in
-	// timestampItem, and a document-wide match would not prove the COMMIT cell
-	// takes it.
-	body := jsFunctionBody(t, script, "commitItem")
-	for _, want := range []struct {
-		classes string
-		when    string
-	}{
-		{auditHashClass, "a present commit hash"},
-		{auditAbsentClass, "an absent commit hash"},
+	details := detailsCardSlice(t, servePage(t, buildMux(), taskPagePath(pageTaskID)))
+	for label, cell := range map[string]auditCell{
+		"Commit open":  taskCommitHashCell(func() *string { h := pageCommitOpen; return &h }()),
+		"Commit close": absentAuditCell(),
 	} {
-		if !strings.Contains(body, `"datagrid-content `+want.classes+`"`) {
-			t.Errorf("the modal's commitItem does not present %s with %q; the audit table "+
-				"applies that class set, so the two surfaces have drifted", want.when, want.classes)
+		want := `<div class="datagrid-content ` + cell.Class + `">` + cell.Text + `</div>`
+		if got := datagridContent(t, details, label); got != want {
+			t.Errorf("the task page's %s cell is %s, want %s; the audit table applies that "+
+				"presentation, so the two surfaces have drifted", label, got, want)
 		}
 	}
-
-	// Falsifiability control: the extraction must have found a real function body.
-	if !strings.Contains(body, "appendChild") {
-		t.Fatalf("the extracted commitItem body carries no appendChild, so the assertions "+
-			"above ran against the wrong text: %q", body)
+	if absentAuditCell().Text != "—" || auditHashClass != "font-monospace text-truncate" || auditAbsentClass != "text-secondary" {
+		t.Errorf("the shared presentation changed: placeholder %q, hash class %q, absent class %q",
+			absentAuditCell().Text, auditHashClass, auditAbsentClass)
 	}
-}
-
-// jsFunctionBody returns the source of the named top-level function in script,
-// from its `function <name>(` up to the closing brace at the same indentation.
-func jsFunctionBody(t *testing.T, script, name string) string {
-	t.Helper()
-	const indent = "  " // every helper in task-modal.js sits one level inside the IIFE
-	start := strings.Index(script, "function "+name+"(")
-	if start < 0 {
-		t.Fatalf("static/task-modal.js declares no function %s", name)
+	// Both faces are monospaced; only the task page's wraps instead of truncating.
+	if !strings.HasPrefix(taskHashClass, "font-monospace ") || strings.Contains(taskHashClass, "truncate") ||
+		!strings.Contains(taskHashClass, "text-break") {
+		t.Errorf("the task page's hash class is %q, want the monospaced face, wrapping, never truncated", taskHashClass)
 	}
-	rest := script[start:]
-	end := strings.Index(rest, "\n"+indent+"}")
-	if end < 0 {
-		t.Fatalf("cannot find the end of function %s in static/task-modal.js", name)
+	if got := taskCommitHashCell(nil); got != absentAuditCell() {
+		t.Errorf("an absent task hash renders %+v, want the shared absent cell", got)
 	}
-	return rest[:end]
 }
 
 // TestAuditTable_ScrollsInsideItsOwnContainer is the mechanism guard for the

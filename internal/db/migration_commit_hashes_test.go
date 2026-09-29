@@ -785,7 +785,7 @@ func TestCommitHashesRoundTripThroughEveryTaskReadPath(t *testing.T) {
 	}
 	assertCarriesHashes("ListTasks", listed)
 
-	all, err := database.ListAllTasks(ctx)
+	all, err := database.ListAllTasks(ctx, nil)
 	if err != nil {
 		t.Fatalf("ListAllTasks: %v", err)
 	}

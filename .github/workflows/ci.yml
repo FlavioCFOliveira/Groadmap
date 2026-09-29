@@ -41,7 +41,7 @@ jobs:
       - name: Run golangci-lint
         uses: golangci/golangci-lint-action@v9.3.0
         with:
-          version: v2.13.1
+          version: v2.14.0
           args: --timeout=5m
 
       - name: Run tests
@@ -60,7 +60,7 @@ jobs:
       # in the release workflow and in a local `make check`. A failure to
       # install fails the job: the gate is never skipped.
       - name: Install gosec
-        run: go install github.com/securego/gosec/v2/cmd/gosec@v2.28.0
+        run: go install github.com/securego/gosec/v2/cmd/gosec@v2.29.0
 
       - name: Run gosec
         run: gosec -exclude-dir=.claude/worktrees ./...
