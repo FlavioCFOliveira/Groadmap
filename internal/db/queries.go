@@ -169,7 +169,7 @@ func (db *DB) GetTasks(ctx context.Context, ids []int) ([]models.Task, error) {
 }
 
 // TaskListFilter holds all optional filter and sort parameters for ListTasks and
-// ListAllTasks.
+// the web tasks page's task listing (ReadTaskListPage).
 //
 // SprintID and NoSprint are the sprint-membership predicates of the web tasks
 // page's read (SPEC/DATABASE.md § Main SQL Queries, "List All"): SprintID admits
@@ -250,12 +250,27 @@ func (db *DB) ListTasks(ctx context.Context, filter *TaskListFilter) ([]models.T
 //
 // The caller is responsible for clamping filter.Limit beforehand.
 func buildListTasksQuery(filter *TaskListFilter) (string, []any) {
-	query := `SELECT t.id, t.title, t.status, t.type, t.functional_requirements, t.technical_requirements, t.acceptance_criteria,
+	return buildTaskListQuery(taskListFullSelect, filter)
+}
+
+// taskListFullSelect is the listing's head for `rmp task list`: the complete
+// Task, with its subtask count and dependency sets.
+const taskListFullSelect = `SELECT t.id, t.title, t.status, t.type, t.functional_requirements, t.technical_requirements, t.acceptance_criteria,
 		        t.created_at, t.started_at, t.tested_at, t.closed_at, t.completion_summary,
 		        t.commit_open, t.commit_close, t.parent_task_id,
 		        t.priority, t.severity,
 		        (SELECT COUNT(*) FROM tasks s WHERE s.parent_task_id = t.id) AS subtask_count` + taskDepsSelect + `
 		      FROM tasks t WHERE 1=1`
+
+// taskListingSelect is the listing's head for the web tasks page's task listing:
+// each task's id and title, and no other column (SPEC/DATABASE.md § Main SQL
+// Queries, "List All", "The web tasks page's two reads", Projection).
+const taskListingSelect = `SELECT t.id, t.title FROM tasks t WHERE 1=1`
+
+// buildTaskListQuery appends the listing's predicates, ordering and optional
+// LIMIT to head, a select list ending in "FROM tasks t WHERE 1=1".
+func buildTaskListQuery(head string, filter *TaskListFilter) (string, []any) {
+	query := head
 	// 6 filters + LIMIT = up to 7 placeholders; +1 to absorb a future
 	// arg without forcing an extra grow.
 	args := make([]any, 0, 8)
@@ -325,7 +340,7 @@ func buildListTasksQuery(filter *TaskListFilter) (string, []any) {
 	// § Main SQL Queries, "List All" states the listing itself carries no LIMIT:
 	// any bound on the row count is imposed by the caller. ListTasks always
 	// clamps its limit to at least 1 before calling, so the CLI listing is
-	// unchanged; ListAllTasks passes 0 to read every row.
+	// unchanged; the web tasks page's listing passes 0 to read every row.
 	if filter.Limit > 0 {
 		query += " LIMIT ?"
 		args = append(args, filter.Limit)
@@ -359,41 +374,193 @@ func appendDistinctIn[T ~string](prefix string, values []T, args []any) (string,
 	return b.String(), args
 }
 
-// ListAllTasks returns every task of the roadmap that the filter admits, with no
-// LIMIT and no OFFSET, in the order priority DESC, created_at ASC, id ASC.
+// TaskRef is one row of the web tasks page's task listing: a task's id and
+// title, the whole searchable text of the page and the key that selects its
+// rows (SPEC/DATABASE.md § Main SQL Queries, "List All", "The web tasks page's
+// two reads"). It is deliberately not a partially populated models.Task.
+type TaskRef struct {
+	Title string
+	ID    int
+}
+
+// TaskRow is one row of the web tasks page's page-rows read: the seven columns a
+// row of the page shows and no other (SPEC/WEB.md § Roadmap Tasks Page, Row
+// content). It is deliberately not a partially populated models.Task: it carries
+// no subtask count, no dependency set, and no requirement text.
+type TaskRow struct {
+	Title     string
+	Type      models.TaskType
+	Status    models.TaskStatus
+	CreatedAt string
+	ID        int
+	Severity  int
+	Priority  int
+}
+
+// queryer is the read surface the web tasks page's two statements run on: a
+// *sql.Tx in production, so both see one snapshot of the roadmap.
+type queryer interface {
+	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
+}
+
+// ReadTaskListPage performs the web tasks page's two reads in ONE read
+// transaction (SPEC/DATABASE.md § Main SQL Queries, "List All", "The web tasks
+// page's two reads"; SPEC/WEB.md § Roadmap Tasks Page, Read cost):
 //
-// It is the read the web interface's tasks page performs (SPEC/DATABASE.md
-// § Main SQL Queries, "List All"; SPEC/WEB.md § Roadmap Tasks Page, Read cost).
-// The page applies its search term in memory after this read, because the term's
-// Unicode normalisation and folding cannot be expressed in SQLite, and selects
-// the requested page after the term. The read is therefore bounded by the
-// filters alone and never by a page: the page states the filtered total as a
-// fact, and a truncated read would publish a wrong total as a true one.
+//  1. the task listing: the id and title of every task the filter admits, with
+//     no LIMIT and no OFFSET, in the order priority DESC, created_at ASC, id ASC;
+//  2. the page-rows read: the seven shown columns of the tasks whose ids
+//     selectPage returned, issued only when it returned at least one id.
+//
+// selectPage receives the listing in its order and returns the ids of the
+// rendered page; the caller applies its search term and page selection there,
+// between the two statements, because the term's Unicode normalisation and
+// folding cannot be expressed in SQLite. The ids must come from the listing, and
+// there are at most the largest page size of them. The returned rows are in the
+// order of the returned ids, not in the id order of the statement. Because both
+// statements see the same snapshot, every returned id has its row.
 //
 // The filter's Status, TaskType, Statuses, TaskTypes, MinPriority, MinSeverity,
-// SprintID and NoSprint fields each append one predicate, every value bound as a
-// parameter. Its Sort
-// and Limit fields are ignored: the ordering is always the total one above, and
-// the display default that sizes `rmp task list` output (models.DefaultTaskLimit)
-// and the per-invocation cap (models.MaxTaskLimit) are deliberately NOT applied.
-// A nil filter admits every task. The caller's struct is never mutated.
-func (db *DB) ListAllTasks(ctx context.Context, filter *TaskListFilter) ([]models.Task, error) {
+// SprintID and NoSprint fields each append one predicate to the listing, every
+// value bound as a parameter. Its Sort and Limit fields are ignored: the ordering
+// is always the total one above, and neither the `rmp task list` display default
+// (models.DefaultTaskLimit) nor its cap (models.MaxTaskLimit) is applied. A nil
+// filter admits every task. The caller's struct is never mutated.
+func (db *DB) ReadTaskListPage(ctx context.Context, filter *TaskListFilter,
+	selectPage func(listing []TaskRef) []int) ([]TaskRow, error) {
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, fmt.Errorf("beginning the task list read: %w", err)
+	}
+	// A no-op once Commit has run; on an error path it releases the snapshot, and
+	// the error that caused it is the one returned.
+	defer func() { _ = tx.Rollback() }()
+
+	rows, err := readTaskListPage(ctx, tx, filter, selectPage)
+	if err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("ending the task list read: %w", err)
+	}
+	return rows, nil
+}
+
+// readTaskListPage is ReadTaskListPage's two statements on a given queryer, so a
+// test can run them on its own connection.
+func readTaskListPage(ctx context.Context, q queryer, filter *TaskListFilter,
+	selectPage func(listing []TaskRef) []int) ([]TaskRow, error) {
+	listing, err := listTaskRefs(ctx, q, filter)
+	if err != nil {
+		return nil, err
+	}
+	ids := selectPage(listing)
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	return taskRowsByID(ctx, q, ids)
+}
+
+// buildTaskListingQuery assembles the web tasks page's task listing: the
+// listing's predicates and its fifth, total ordering, projecting t.id and t.title
+// alone, with no LIMIT. The ordering keys are applied, not projected.
+func buildTaskListingQuery(filter *TaskListFilter) (string, []any) {
 	effective := TaskListFilter{}
 	if filter != nil {
 		effective = *filter
 	}
 	effective.Sort = sortPriorityThenID
 	effective.Limit = 0
+	return buildTaskListQuery(taskListingSelect, &effective)
+}
 
-	query, args := buildListTasksQuery(&effective)
-
-	rows, err := db.QueryContext(ctx, query, args...)
+// listTaskRefs runs the task listing and returns its rows in its order.
+func listTaskRefs(ctx context.Context, q queryer, filter *TaskListFilter) ([]TaskRef, error) {
+	query, args := buildTaskListingQuery(filter)
+	rows, err := q.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("listing every task: %w", err)
 	}
 	defer rows.Close()
 
-	return scanTasksWithDeps(rows)
+	refs := make([]TaskRef, 0, 64)
+	for rows.Next() {
+		var ref TaskRef
+		if err := rows.Scan(&ref.ID, &ref.Title); err != nil {
+			return nil, fmt.Errorf("scanning task listing row: %w", err)
+		}
+		refs = append(refs, ref)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterating task listing rows: %w", err)
+	}
+	return refs, nil
+}
+
+// errPageRowsMismatch reports a page-rows read whose rows are not exactly the
+// selected ids; inside the listing's read transaction it cannot occur.
+var errPageRowsMismatch = errors.New("page-rows read does not match the selected task ids")
+
+// taskRowsSelect is the page-rows read up to its IN list: the seven columns a
+// row of the web tasks page shows, and no other.
+const taskRowsSelect = `SELECT t.id, t.title, t.type, t.status, t.severity, t.priority, t.created_at
+		      FROM tasks t WHERE t.id IN (`
+
+// buildTaskRowsQuery assembles the page-rows read for ids: one bound placeholder
+// per id, in id order. ids must not be empty.
+func buildTaskRowsQuery(ids []int) (string, []any) {
+	var b strings.Builder
+	b.Grow(len(taskRowsSelect) + 3*len(ids) + len(") ORDER BY t.id"))
+	b.WriteString(taskRowsSelect)
+	args := make([]any, len(ids))
+	for i, id := range ids {
+		if i > 0 {
+			b.WriteString(", ")
+		}
+		b.WriteByte('?')
+		args[i] = id
+	}
+	b.WriteString(") ORDER BY t.id")
+	return b.String(), args
+}
+
+// taskRowsByID runs the page-rows read for ids and returns the rows in the order
+// of ids. A missing row is an error: inside the listing's transaction every id
+// the listing supplied has its row.
+func taskRowsByID(ctx context.Context, q queryer, ids []int) ([]TaskRow, error) {
+	query, args := buildTaskRowsQuery(ids)
+	rows, err := q.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("reading the page's task rows: %w", err)
+	}
+	defer rows.Close()
+
+	at := make(map[int]int, len(ids))
+	for i, id := range ids {
+		at[id] = i
+	}
+	out := make([]TaskRow, len(ids))
+	found := 0
+	for rows.Next() {
+		var row TaskRow
+		if err := rows.Scan(&row.ID, &row.Title, &row.Type, &row.Status,
+			&row.Severity, &row.Priority, &row.CreatedAt); err != nil {
+			return nil, fmt.Errorf("scanning page task row: %w", err)
+		}
+		i, ok := at[row.ID]
+		if !ok {
+			return nil, fmt.Errorf("%w: task %d was not requested", errPageRowsMismatch, row.ID)
+		}
+		out[i] = row
+		found++
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterating page task rows: %w", err)
+	}
+	if found != len(ids) {
+		return nil, fmt.Errorf("%w: %d rows for %d task ids", errPageRowsMismatch, found, len(ids))
+	}
+	return out, nil
 }
 
 // Task mutation has no method here on purpose, and neither have the field
@@ -1701,6 +1868,21 @@ func (db *DB) CheckSprintExists(ctx context.Context, id int) error {
 		return fmt.Errorf("querying sprint: %w", err)
 	}
 	return nil
+}
+
+// sprintStartedAt reads one sprint's started_at by its id, failing exactly as
+// GetSprint fails: a missing sprint is utils.ErrNotFound with the message
+// "sprint <id>". It reads no other column and no membership row.
+func (db *DB) sprintStartedAt(ctx context.Context, id int) (sql.NullString, error) {
+	var startedAt sql.NullString
+	err := db.QueryRowContext(ctx, "SELECT started_at FROM sprints WHERE id = ?", id).Scan(&startedAt)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return startedAt, fmt.Errorf("%w: sprint %d", utils.ErrNotFound, id)
+		}
+		return startedAt, fmt.Errorf("querying sprint: %w", err)
+	}
+	return startedAt, nil
 }
 
 // sprintMember is one row of sprint_tasks as the ordering routines read it: a
@@ -3343,8 +3525,10 @@ var (
 // with total_tasks remaining and decrementing by completions per day.
 // Returns an empty slice when no tasks have been completed.
 func (db *DB) GetSprintBurndown(ctx context.Context, sprintID int) ([]models.BurndownEntry, error) {
-	// Get the sprint to determine total task count and start date.
-	sprint, err := db.GetSprint(ctx, sprintID)
+	// The series needs only the sprint's start date, so only started_at is read,
+	// by the sprint's id; a missing sprint fails exactly as GetSprint fails
+	// (SPEC/IMPLEMENTATION.md, Performance Guidelines, item 8).
+	startedAt, err := db.sprintStartedAt(ctx, sprintID)
 	if err != nil {
 		return nil, fmt.Errorf("getting sprint for burndown: %w", err)
 	}
@@ -3390,8 +3574,8 @@ func (db *DB) GetSprintBurndown(ctx context.Context, sprintID int) ([]models.Bur
 	// Build the burndown series.
 	// If sprint has a started_at, use it as the baseline; otherwise start from the first completion date.
 	var startDate string
-	if sprint.StartedAt != nil && *sprint.StartedAt != "" {
-		startDate = (*sprint.StartedAt)[:10] // Extract YYYY-MM-DD
+	if startedAt.Valid && startedAt.String != "" {
+		startDate = startedAt.String[:10] // Extract YYYY-MM-DD
 	} else {
 		startDate = dailyCounts[0].date
 	}

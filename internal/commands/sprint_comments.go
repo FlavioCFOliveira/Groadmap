@@ -34,15 +34,15 @@ import (
 
 // sprintCommentFamily binds the shared subcommand bodies to sprint_comments.
 //
-// parentExists is db.GetSprint: it answers whether the sprint is there, and its
-// verdict is the only thing used — the sprint's status is deliberately not
-// consulted, because a comment is accepted whatever that status is.
+// parentExists is db.CheckSprintExists: it answers whether the sprint is there
+// with SELECT 1 by the sprint's id, and fails exactly as db.GetSprint would — the
+// sprint's status is deliberately not consulted, because a comment is accepted
+// whatever that status is (SPEC/IMPLEMENTATION.md, Performance Guidelines, item 8).
 var sprintCommentFamily = commentFamily{
 	parseType: models.ParseSprintCommentType,
 
 	parentExists: func(ctx context.Context, database *db.DB, sprintID int) error {
-		_, err := database.GetSprint(ctx, sprintID)
-		return err
+		return database.CheckSprintExists(ctx, sprintID)
 	},
 
 	parentOf: func(ctx context.Context, database *db.DB, commentID int) (int, error) {

@@ -10,9 +10,26 @@ import (
 	"github.com/FlavioCFOliveira/Groadmap/internal/models"
 )
 
-// This file is the gate for the web tasks page's read of SPEC/DATABASE.md § Main
-// SQL Queries, "List All" — the predicates, their bound parameters, and the total
-// ordering — and for § List Sprint Titles.
+// This file is the gate for the web tasks page's task listing of SPEC/DATABASE.md
+// § Main SQL Queries, "List All" — the predicates, their bound parameters, and the
+// total ordering — and for § List Sprint Titles.
+
+// listingIDs returns the ids of the web tasks page's task listing for filter, in
+// its order, read through ReadTaskListPage with an empty page selection.
+func listingIDs(t *testing.T, database *DB, filter *TaskListFilter) []int {
+	t.Helper()
+	var ids []int
+	if _, err := database.ReadTaskListPage(testContext(), filter, func(listing []TaskRef) []int {
+		ids = make([]int, len(listing))
+		for i := range listing {
+			ids[i] = listing[i].ID
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("ReadTaskListPage: %v", err)
+	}
+	return ids
+}
 
 // filteredTask is the test's own record of one task it created.
 type filteredTask struct {
@@ -122,12 +139,12 @@ func expectFiltered(tasks []filteredTask, keep func(filteredTask) bool) []int {
 	return ids
 }
 
-// TestListAllTasks_AppliesEachPredicateInTheTotalOrder asserts every predicate of
+// TestTaskListing_AppliesEachPredicateInTheTotalOrder asserts every predicate of
 // the web tasks page's read — status and type equalities, priority and severity
 // thresholds, sprint membership and no-sprint — alone and together, over data
 // holding ties on priority and created_at, returns exactly the admitted tasks in
 // the order priority DESC, created_at ASC, id ASC.
-func TestListAllTasks_AppliesEachPredicateInTheTotalOrder(t *testing.T) {
+func TestTaskListing_AppliesEachPredicateInTheTotalOrder(t *testing.T) {
 	database, cleanup := setupTestDB(t)
 	defer cleanup()
 	tasks, sprintA, sprintB := seedFilteredRoadmap(t, database)
@@ -152,30 +169,26 @@ func TestListAllTasks_AppliesEachPredicateInTheTotalOrder(t *testing.T) {
 		{&TaskListFilter{Sort: "created", Limit: 2}, func(filteredTask) bool { return true }, "sort and limit ignored"},
 	}
 	for _, c := range cases {
-		got, err := database.ListAllTasks(testContext(), c.filter)
-		if err != nil {
-			t.Fatalf("%s: ListAllTasks: %v", c.name, err)
-		}
-		ids := make([]int, len(got))
-		for i := range got {
-			ids[i] = got[i].ID
-		}
+		ids := listingIDs(t, database, c.filter)
 		if want := expectFiltered(tasks, c.keep); !slices.Equal(ids, want) {
-			t.Errorf("%s: ListAllTasks = %v, want %v", c.name, ids, want)
+			t.Errorf("%s: task listing = %v, want %v", c.name, ids, want)
 		}
 	}
 }
 
-// TestListAllTasks_BindsEveryFilterValue is the SQL half of SPEC/WEB.md
+// TestTaskListing_BindsEveryFilterValue is the SQL half of SPEC/WEB.md
 // Acceptance Criterion 117: each accepted value is appended as one predicate whose
 // value is a bound parameter, the SQL text carries no value, and the ordering is
 // the total one with no LIMIT and no OFFSET.
-func TestListAllTasks_BindsEveryFilterValue(t *testing.T) {
+func TestTaskListing_BindsEveryFilterValue(t *testing.T) {
 	doing, bug, prio, sev, sprint := models.StatusDoing, models.TypeBug, 7, 4, 913
 	filter := &TaskListFilter{Status: &doing, TaskType: &bug, MinPriority: &prio, MinSeverity: &sev,
-		SprintID: &sprint, Sort: sortPriorityThenID}
-	query, args := buildListTasksQuery(filter)
+		SprintID: &sprint}
+	query, args := buildTaskListingQuery(filter)
 
+	if !strings.HasPrefix(query, "SELECT t.id, t.title FROM tasks t WHERE 1=1") {
+		t.Errorf("the task listing does not project exactly t.id and t.title: %s", query)
+	}
 	for _, value := range []string{"DOING", "BUG", "913"} {
 		if strings.Contains(query, value) {
 			t.Errorf("the SQL text carries the value %q; every value is bound", value)
@@ -198,11 +211,11 @@ func TestListAllTasks_BindsEveryFilterValue(t *testing.T) {
 		t.Errorf("the SQL text does not end in the total order with no LIMIT and no OFFSET: %s", query)
 	}
 
-	noSprint, noArgs := buildListTasksQuery(&TaskListFilter{NoSprint: true, Sort: sortPriorityThenID})
+	noSprint, noArgs := buildTaskListingQuery(&TaskListFilter{NoSprint: true})
 	if !strings.Contains(noSprint, "AND NOT EXISTS (SELECT 1 FROM sprint_tasks st WHERE st.task_id = t.id)") || len(noArgs) != 0 {
 		t.Errorf("the no-sprint predicate is missing or binds an argument: %s %v", noSprint, noArgs)
 	}
-	bare, bareArgs := buildListTasksQuery(&TaskListFilter{Sort: sortPriorityThenID})
+	bare, bareArgs := buildTaskListingQuery(nil)
 	if strings.Contains(bare, " AND ") || len(bareArgs) != 0 {
 		t.Errorf("a filter with no value appends a predicate: %s %v", bare, bareArgs)
 	}
@@ -243,13 +256,13 @@ func TestListSprintTitles(t *testing.T) {
 	}
 }
 
-// TestListAllTasks_MultiValuePredicatesAreOrWithinAndAcross is the database half
+// TestTaskListing_MultiValuePredicatesAreOrWithinAndAcross is the database half
 // of SPEC/WEB.md Acceptance Criteria 113 and 248: Statuses and TaskTypes each admit
 // a task whose value equals ANY one of theirs (OR within the dimension), the two
 // dimensions and the sprint predicates combine by AND, a one-element list admits
 // what that single value admits, a repeated value changes nothing, and an empty
 // list filters nothing.
-func TestListAllTasks_MultiValuePredicatesAreOrWithinAndAcross(t *testing.T) {
+func TestTaskListing_MultiValuePredicatesAreOrWithinAndAcross(t *testing.T) {
 	database, cleanup := setupTestDB(t)
 	defer cleanup()
 	tasks, sprintA, _ := seedFilteredRoadmap(t, database)
@@ -278,20 +291,13 @@ func TestListAllTasks_MultiValuePredicatesAreOrWithinAndAcross(t *testing.T) {
 	}
 	nonEmpty := 0
 	for _, c := range cases {
-		got, err := database.ListAllTasks(testContext(), c.filter)
-		if err != nil {
-			t.Fatalf("%s: ListAllTasks: %v", c.name, err)
-		}
-		ids := make([]int, len(got))
-		for i := range got {
-			ids[i] = got[i].ID
-		}
+		ids := listingIDs(t, database, c.filter)
 		want := expectFiltered(tasks, c.keep)
 		if len(want) > 0 {
 			nonEmpty++
 		}
 		if !slices.Equal(ids, want) {
-			t.Errorf("%s: ListAllTasks = %v, want %v", c.name, ids, want)
+			t.Errorf("%s: task listing = %v, want %v", c.name, ids, want)
 		}
 	}
 	if nonEmpty != len(cases) {
@@ -299,16 +305,15 @@ func TestListAllTasks_MultiValuePredicatesAreOrWithinAndAcross(t *testing.T) {
 	}
 }
 
-// TestListAllTasks_BindsOnePlaceholderPerDistinctValue is the SQL half of
+// TestTaskListing_BindsOnePlaceholderPerDistinctValue is the SQL half of
 // SPEC/DATABASE.md § List All, Predicates, for the multi-value filters: the status
 // predicate is one IN list with one bound placeholder per DISTINCT value, and the
 // type predicate likewise; the SQL text carries no value, and a one-value list
 // carries a one-element IN.
-func TestListAllTasks_BindsOnePlaceholderPerDistinctValue(t *testing.T) {
-	query, args := buildListTasksQuery(&TaskListFilter{
+func TestTaskListing_BindsOnePlaceholderPerDistinctValue(t *testing.T) {
+	query, args := buildTaskListingQuery(&TaskListFilter{
 		Statuses:  []models.TaskStatus{models.StatusTesting, models.StatusDoing, models.StatusTesting},
 		TaskTypes: []models.TaskType{models.TypeBug},
-		Sort:      sortPriorityThenID,
 	})
 	for _, value := range []string{"TESTING", "DOING", "BUG"} {
 		if strings.Contains(query, value) {

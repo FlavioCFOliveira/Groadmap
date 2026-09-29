@@ -1012,16 +1012,20 @@ ORDER BY t.priority DESC, t.created_at ASC;
 - **`subtask_count`**, the number of direct subtasks, produced by the correlated subquery above. It is not a stored column — `MODELS.md § Task` defines it as computed — and this statement is where its value comes from, so the caller needs no second query and no per-task query to obtain it.
 - **`depends_on_csv`** and **`blocks_csv`**, the task's two dependency sets, each a comma-separated list of task ids in ascending id order (fixed by the inner `ORDER BY`) and the empty string when the set is empty (`COALESCE`). The application parses them into the task's `depends_on` and `blocks` values, which keeps the listing free of one dependency query per task.
 
-**One statement, several shapes.** The listing is assembled rather than fixed. It opens `WHERE 1=1` so that each optional predicate can be appended as a further `AND` — the status filter of `List by Status` below, and the priority, severity, type, and creation-date filters of the same listing — and it carries one of four orderings: `t.priority DESC, t.created_at ASC` (the default, shown above), `t.created_at ASC`, `t.status ASC, t.priority DESC, t.created_at ASC`, or `t.severity DESC, t.priority DESC, t.created_at ASC`. `COMMANDS.md § List Tasks` is canonical for which caller selects which. The web tasks page reads the same statement with sprint-membership predicates of its own and a fifth ordering, both described below. Every filter value is a bound parameter; none is concatenated into the SQL, and a value used in a `LIKE` predicate has its wildcards escaped first.
+**One statement, several shapes.** The listing is assembled rather than fixed. It opens `WHERE 1=1` so that each optional predicate can be appended as a further `AND` — the status filter of `List by Status` below, and the priority, severity, type, and creation-date filters of the same listing — and it carries one of four orderings: `t.priority DESC, t.created_at ASC` (the default, shown above), `t.created_at ASC`, `t.status ASC, t.priority DESC, t.created_at ASC`, or `t.severity DESC, t.priority DESC, t.created_at ASC`. `COMMANDS.md § List Tasks` is canonical for which caller selects which. The web tasks page reads the same statement with a two-column projection, sprint-membership predicates of its own, and a fifth ordering, all described below. Every filter value is a bound parameter; none is concatenated into the SQL, and a value used in a `LIKE` predicate has its wildcards escaped first.
 
 **Result-set size:** The listing itself imposes no bound: it carries no `OFFSET`, and it carries a `LIMIT ?` only when the caller asks for one. Any bound on the number of rows a caller receives is therefore the caller's, not this query's.
 
-**The web tasks page reads this listing filtered, and never paginated.** The
-read-only web interface's task list reads the roadmap's tasks through this statement
-(see `WEB.md § Roadmap Tasks Page`), in this shape:
+**The web tasks page's two reads.** The read-only web interface's task list
+(see `WEB.md § Roadmap Tasks Page`) reads the roadmap's tasks in two statements: a
+lean **task listing** of every task its filters admit, and a **page-rows read** of
+the columns a row shows, for the tasks on the rendered page alone. The two run in one read
+transaction, so the second sees the roadmap exactly as the first saw it.
+
+The task listing, filtered and never paginated:
 
 ```sql
-SELECT ...  -- the select list of List All above, unchanged
+SELECT t.id, t.title
 FROM tasks t WHERE 1=1
   AND t.status IN (?, ...)                          -- only when a status value is active; one ? per distinct value
   AND t.type IN (?, ...)                            -- only when a type value is active; one ? per distinct value
@@ -1032,6 +1036,10 @@ FROM tasks t WHERE 1=1
 ORDER BY t.priority DESC, t.created_at ASC, t.id ASC;
 ```
 
+- **Projection.** `t.id` and `t.title`, and no other column: they are the whole
+  searchable text the page matches its term against, and `t.id` selects the page's
+  rows. The ordering keys are applied by the statement and are not projected. The
+  statement computes no subtask count and no dependency set.
 - **Predicates.** Each predicate is appended only when the page's active filter
   state has a value for its filter, and every value is a bound parameter; no value
   the page receives is concatenated into the SQL, and a value the page ignored
@@ -1052,6 +1060,19 @@ ORDER BY t.priority DESC, t.created_at ASC, t.id ASC;
   `priority` and `created_at` would otherwise be free to fall differently on two
   requests, so the `id` key makes the order total. This ordering is the web page's
   alone; `rmp task list` keeps the four orderings named above.
+- **Indexes.** No index is added for this statement. When it fixes exactly one
+  status value, it is read through `idx_tasks_status_priority` (status, priority
+  DESC, created_at ASC); when it fixes exactly one type value, through
+  `idx_tasks_type` (type, priority DESC, created_at ASC); when it carries no status,
+  no type, and no sprint-id predicate, in the order of
+  `idx_tasks_priority_created`. In each of these cases the index supplies the whole
+  ordering, `id` tie-breaker included (see `Index Design Rationale` below), and the
+  statement needs no sort step. Otherwise — several status values and no single
+  type value, the page's default state among them, or the sprint-id predicate
+  without a single status or type value — the index serves the lookup and the
+  admitted rows are sorted once. `idx_tasks_severity_priority` does not serve this
+  statement, which neither filters nor orders by `severity`. No index carries
+  `title`, so each admitted row is read from the table.
 - **No `LIMIT` and no `OFFSET`.** The page applies its search term in memory, after
   this read, because the term's Unicode normalisation and folding cannot be expressed
   in SQLite, and it selects the requested page after the term. The read therefore
@@ -1061,6 +1082,25 @@ ORDER BY t.priority DESC, t.created_at ASC, t.id ASC;
   `-l, --limit <n>`, default `100` (see `COMMANDS.md § List Tasks`) — MUST NOT be
   applied to this read: a truncated read would publish a wrong total as a true one,
   with nothing on the page to reveal that anything was omitted.
+
+The page-rows read, issued only when the page renders at least one row:
+
+```sql
+SELECT t.id, t.title, t.type, t.status, t.severity, t.priority, t.created_at
+FROM tasks t WHERE t.id IN (?, ...)                 -- one ? per task of the rendered page
+ORDER BY t.id;
+```
+
+- **Ids.** The ids are those of the tasks on the rendered page, taken from the task
+  listing's rows after the term and the page selection, each bound as a parameter.
+  There are at most `size` of them, and never more than the largest page size,
+  `100`, so the read is one statement.
+- **Projection.** The seven columns a row of the page shows (see
+  `WEB.md § Roadmap Tasks Page`, **Row content**), and no other: the statement
+  computes no subtask count and no dependency set, and reads no requirement text.
+- **Order.** The page renders the rows in the order in which the task listing
+  returned their ids, not in the `id` order of this statement.
+- **Index.** Each id is a search of the `tasks` primary key. No index is added.
 
 #### List by Status
 
@@ -1601,7 +1641,7 @@ Returns the number of tasks the roadmap holds, of any status, and nothing else.
 SELECT COUNT(*) FROM tasks;
 ```
 
-**Use case:** the read-only web interface's tasks page issues this statement only when its filtered list is empty and its task read carried at least one filter predicate, to tell a roadmap that holds no task, which shows the `No tasks yet` empty state whatever the filters, from a roadmap whose tasks the filters all exclude (see `WEB.md § Roadmap Tasks Page`, **Empty states** and **Read cost**). It takes no parameter.
+**Use case:** the read-only web interface's tasks page issues this statement only when its filtered list is empty and its task listing carried at least one filter predicate, to tell a roadmap that holds no task, which shows the `No tasks yet` empty state whatever the filters, from a roadmap whose tasks the filters all exclude (see `WEB.md § Roadmap Tasks Page`, **Empty states** and **Read cost**). It takes no parameter.
 
 #### Read the Membership of Many Sprints (Grouped)
 
@@ -2288,7 +2328,7 @@ The bind arguments are required even to plan the statement, so a check passes th
 
 **A hand-written lookalike proves nothing, and this is why the statement is taken from the builder rather than retyped.** SQLite plans a statement from its select list, its predicates, its ordering and its limit; a lookalike differs from the real statement in each of those, so it can be served by a different index — or by none — than the statement it stands in for. A check written that way certifies a query the application never issues, and it keeps passing while the real statement drifts away from its index. Taking the SQL from the builder is what makes that drift fail the check instead of hiding behind it.
 
-This verification is automated, not left to hand-running: `internal/db/index_test.go` plans the production statements of the task listing, the audit listing, the sprint membership lookup, and the comment listings, and asserts the three expectations above for each. The production builders are separated from execution precisely so a check can obtain that SQL.
+This verification is automated, not left to hand-running: `internal/db/index_test.go` plans the production statements of the task listing, the web tasks page's task listing and page-rows read (`List All` above), the audit listing, the sprint membership lookup, and the comment listings, and asserts the three expectations above for each. The production builders are separated from execution precisely so a check can obtain that SQL.
 
 ---
 

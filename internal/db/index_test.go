@@ -459,3 +459,56 @@ func constraintIndexOf(t *testing.T, db *DB, table, origin string) string {
 	}
 	return names[0]
 }
+
+// TestTaskListPage_IndexesServeBothReads is SPEC/DATABASE.md § Verification for
+// the web tasks page's two statements, planned from the production builders: the
+// task listing reads idx_tasks_status_priority for one status value,
+// idx_tasks_type for one type value, and idx_tasks_priority_created with no
+// status, type or sprint predicate, each supplying the whole ordering with no
+// sort step and never scanning tasks in full; with several status values (the
+// page's default) the status index serves the lookup; the page-rows read is a
+// search of the tasks primary key.
+func TestTaskListPage_IndexesServeBothReads(t *testing.T) {
+	database, cleanup := setupTestDB(t)
+	defer cleanup()
+	fixture := seedIndexFixture(t, database)
+
+	backlog, bug := models.StatusBacklog, models.TypeBug
+	defaults := []models.TaskStatus{models.StatusBacklog, models.StatusSprint, models.StatusDoing, models.StatusTesting}
+	cases := []struct {
+		filter    *TaskListFilter
+		name      string
+		wantIndex string
+		sorted    bool
+	}{
+		{&TaskListFilter{Statuses: []models.TaskStatus{backlog}}, "one status value", "idx_tasks_status_priority", false},
+		{&TaskListFilter{TaskTypes: []models.TaskType{bug}}, "one type value", "idx_tasks_type", false},
+		{&TaskListFilter{NoSprint: true}, "no status, type or sprint-id predicate", "idx_tasks_priority_created", false},
+		{nil, "no predicate", "idx_tasks_priority_created", false},
+		{&TaskListFilter{Statuses: defaults}, "the default four status values", "idx_tasks_status_priority", true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			query, args := buildTaskListingQuery(c.filter)
+			plan := queryPlan(t, database, query, args...)
+			if !strings.Contains(plan, c.wantIndex) {
+				t.Errorf("the task listing does not use %s.\nplan: %s\nquery: %s", c.wantIndex, plan, query)
+			}
+			// A scan in an index's order is the plan the no-predicate case names; a
+			// scan of the table itself is never acceptable.
+			if strings.Contains(plan, "SCAN t | ") {
+				t.Errorf("the task listing scans tasks in full.\nplan: %s", plan)
+			}
+			if !c.sorted && strings.Contains(plan, "TEMP B-TREE") {
+				t.Errorf("the index must supply the whole ordering, but the plan sorts.\nplan: %s", plan)
+			}
+		})
+	}
+
+	selected := fixture.commentedTaskIDs
+	rowsSQL, rowsArgs := buildTaskRowsQuery(selected)
+	plan := queryPlan(t, database, rowsSQL, rowsArgs...)
+	if !strings.Contains(plan, "SEARCH t USING INTEGER PRIMARY KEY (rowid=?)") || strings.Contains(plan, "SCAN t") {
+		t.Errorf("the page-rows read is not a search of the tasks primary key.\nplan: %s", plan)
+	}
+}

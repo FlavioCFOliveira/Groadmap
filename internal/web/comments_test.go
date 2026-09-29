@@ -773,10 +773,12 @@ type countingSource struct {
 	sprintListings       int
 	sprintTitles         int
 	taskList             int
+	pageRows             int
 	boundedTaskList      int
 	sprintTasks          int
 	taskCounts           int
 	lastTaskFilter       *db.TaskListFilter
+	lastPageIDs          []int
 }
 
 // CountTasks is the tasks page's third read, the roadmap's task count, which the
@@ -803,13 +805,26 @@ func (c *countingSource) ListSprints(ctx context.Context,
 	return c.DB.ListSprints(ctx, status)
 }
 
-// ListAllTasks is the read the tasks page performs: every task the structured
-// filters admit, never bounded by a page. The filter is recorded so a test can
-// assert which predicates the page asked for.
-func (c *countingSource) ListAllTasks(ctx context.Context, filter *db.TaskListFilter) ([]models.Task, error) {
+// ReadTaskListPage is the tasks page's task listing — every task the structured
+// filters admit, never bounded by a page — and its page-rows read, in one read
+// transaction. The filter is recorded so a test can assert which predicates the
+// page asked for, and the ids the page selected are recorded as lastPageIDs:
+// internal/db issues the page-rows read exactly when they are not empty, binding
+// exactly them (TestReadTaskListPage_PageRowsReadBindsOnlyTheSelectedIDs), so
+// pageRows counts that read.
+func (c *countingSource) ReadTaskListPage(ctx context.Context, filter *db.TaskListFilter,
+	selectPage func([]db.TaskRef) []int) ([]db.TaskRow, error) {
 	c.taskList++
 	c.lastTaskFilter = filter
-	return c.DB.ListAllTasks(ctx, filter)
+	c.lastPageIDs = nil
+	return c.DB.ReadTaskListPage(ctx, filter, func(listing []db.TaskRef) []int {
+		ids := selectPage(listing)
+		c.lastPageIDs = append([]int(nil), ids...)
+		if len(ids) > 0 {
+			c.pageRows++
+		}
+		return ids
+	})
 }
 
 // ListTasks is the CLI's bounded listing, which the tasks page must NOT use: its

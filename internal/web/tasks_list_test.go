@@ -1005,8 +1005,10 @@ func TestTaskList_EmptyStates(t *testing.T) {
 // ==================== READ COST AND BOUND PARAMETERS ====================
 
 // TestTaskList_ReadCost is the gate for Acceptance Criteria 89, 92, and 105 (its
-// read half): two reads — the sprint titles and the task listing — and no
-// sprint-resolution query, plus exactly one task count when, and only when, the
+// read half): the sprint titles, the task listing, and the page-rows read — the
+// last only when the page renders a row, selecting exactly the rendered page's
+// ids and never more than size of them — and no sprint-resolution query, plus
+// exactly one task count when, and only when, the
 // filtered list is empty and the task read carried a sprint, status, or type
 // predicate; the same count for 10 tasks and 300, for every page, page size and
 // number of filters, with a term or without, whether the URL, the cookie, or the
@@ -1061,6 +1063,31 @@ func TestTaskList_ReadCost(t *testing.T) {
 			if (c.wantCount == 1) != (len(data.Rows) == 0) && data.query.hasPredicate() {
 				t.Fatalf("%d tasks %+v: %d rows; the case does not exercise what it claims", len(f.tasks), c.req, len(data.Rows))
 			}
+			assertPageRowsRead(t, src, &data, fmt.Sprintf("%d tasks %+v", len(f.tasks), c.req))
+		}
+	}
+
+	// Every page at every page size: the page-rows read selects the rendered
+	// page's ids, in the rendered order, and never more than size of them.
+	for _, size := range taskPageSizes {
+		for page := 1; ; page++ {
+			src := openCounting(t, large.name)
+			data, err := readTaskList(context.Background(), src, large.name,
+				explicitTasks(url.Values{"size": {itoa(size)}, "page": {itoa(page)}, "status": {"BACKLOG", "SPRINT", "DOING", "TESTING", "COMPLETED"}}))
+			if err != nil {
+				t.Fatalf("size %d page %d: readTaskList: %v", size, page, err)
+			}
+			label := fmt.Sprintf("size %d page %d", size, page)
+			assertPageRowsRead(t, src, &data, label)
+			if len(src.lastPageIDs) > size {
+				t.Errorf("%s: the page-rows read selected %d ids, more than the page size", label, len(src.lastPageIDs))
+			}
+			if data.Page >= data.Pages {
+				if data.Total != len(large.tasks) {
+					t.Fatalf("%s: total %d, want every one of the %d tasks", label, data.Total, len(large.tasks))
+				}
+				break
+			}
 		}
 	}
 
@@ -1080,11 +1107,32 @@ func TestTaskList_ReadCost(t *testing.T) {
 	}
 }
 
+// assertPageRowsRead asserts the page-rows half of Acceptance Criterion 89 on one
+// render: the read is issued exactly when the page renders a row, and the ids it
+// selects are exactly the rendered rows' ids, in the rendered order.
+func assertPageRowsRead(t *testing.T, src *countingSource, data *tasksData, label string) {
+	t.Helper()
+	want := 0
+	if len(data.Rows) > 0 {
+		want = 1
+	}
+	if src.pageRows != want {
+		t.Errorf("%s: %d page-rows reads for %d rendered rows, want %d", label, src.pageRows, len(data.Rows), want)
+	}
+	rendered := make([]int, len(data.Rows))
+	for i := range data.Rows {
+		rendered[i] = data.Rows[i].ID
+	}
+	if !slices.Equal(src.lastPageIDs, rendered) && (len(src.lastPageIDs) != 0 || len(rendered) != 0) {
+		t.Errorf("%s: the page-rows read selected %v, the page rendered %v", label, src.lastPageIDs, rendered)
+	}
+}
+
 // TestTaskList_FilterValuesAreBoundAndHostileValuesReachNothing is the gate for
 // the web half of Acceptance Criteria 113, 117, and 254: an accepted value reaches
 // the task read as a field of the listing's filter — each distinct value once; the
 // listing binds each one as a parameter, which internal/db's
-// TestListAllTasks_BindsEveryFilterValue pins on the SQL text — and a hostile
+// TestTaskListing_BindsEveryFilterValue pins on the SQL text — and a hostile
 // value, from the URL or from the cookie, is ignored and reaches no statement at
 // all; the roadmap's tasks are intact afterwards; q, page and size never reach
 // the read, nor does any priority or severity parameter; and no filter value is
@@ -1930,7 +1978,7 @@ func TestTaskList_PaginationBarAndSizeSelector(t *testing.T) {
 			q := tasksQuery{Size: 10}
 			data := tasksData{
 				Name:      "payments-platform",
-				Rows:      []models.Task{{ID: 1, Title: "Reconcile the payout file", Type: models.TypeTask, Status: models.StatusDoing, CreatedAt: "2026-03-01T09:00:00.000Z"}},
+				Rows:      []db.TaskRow{{ID: 1, Title: "Reconcile the payout file", Type: models.TypeTask, Status: models.StatusDoing, CreatedAt: "2026-03-01T09:00:00.000Z"}},
 				PageItems: taskPageLinks(&q, "payments-platform", current, pages),
 				Total:     pages * 10, First: 1, Last: 1, Page: current, Pages: pages,
 				Filters: taskFilterBar{Size: 10},
