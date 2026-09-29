@@ -125,12 +125,14 @@ The web interface exposes the following kinds of page for each roadmap:
    inline member-tasks board; the full sprint detail block is
    shown only on the single Roadmap Sprint Page (see
    [Shared Sprint-Card Partial](#shared-sprint-card-partial)). It does not render
-   the roadmap's task board.
+   the roadmap's task list.
 3. A roadmap tasks page, served at `/roadmaps/{name}/tasks` and read from that
-   roadmap's `project.db`. It presents every task of the roadmap (any status) as a
-   Kanban board of five fixed columns, one per task status, with each task shown as
-   a card in the column of its status and each card a link to that task's own page.
-   The page renders no task table.
+   roadmap's `project.db`. It presents the roadmap's tasks, of any status, as one
+   paginated list: a single Tabler card holding one table, with one row per task
+   and each row linking to that task's own page. A filter bar in the card's header
+   narrows the list by sprint, status, type, and a search on the title and the
+   `#<id>` reference, and the card's footer paginates it; the filters, the
+   page, and the page size travel in the URL.
 4. A roadmap sprint page that shows the details of a single sprint and the
    sprint's member tasks as a Kanban board of three fixed columns — `WAITING`,
    `DOING`, and `CLOSED` — whose cards follow the planned in-sprint execution
@@ -152,9 +154,9 @@ When a user selects a roadmap on the index page, the user lands on that
 roadmap's sprints page (`/roadmaps/{name}`), with the **Actual** tab — the
 current OPEN sprint or sprints — active by default.
 
-Where a task is shown as a card on these pages, the card is a link to that task's
-own page, which displays all of the task's fields (see
-[Roadmap Task Page](#roadmap-task-page)).
+Where a task is shown on these pages — as a card on the sprint page's board, or
+as a row of the tasks page's list — it links to that task's own page, which
+displays all of the task's fields (see [Roadmap Task Page](#roadmap-task-page)).
 
 ## Functional Requirements
 
@@ -206,32 +208,27 @@ own page, which displays all of the task's fields (see
    first); Actual lists the OPEN sprint or sprints ordered by ascending sprint
    `Order`; Concluídos lists CLOSED sprints ordered by descending sprint
    `Order` (the last/highest-`Order` closed sprint first). Each sprint shown in
-   any tab is a clickable link to that sprint's own page. The sprints page does not render the roadmap's task board (see
+   any tab is a clickable link to that sprint's own page. The sprints page does not render the roadmap's task list (see
    [Roadmap Sprints Page](#roadmap-sprints-page),
    [Roadmap Sprint Page](#roadmap-sprint-page), and
    [Shared Sprint-Card Partial](#shared-sprint-card-partial)).
-7. The roadmap tasks page shows every task of the selected roadmap, of any
-   status, as a **Kanban board**, read from that roadmap's `project.db` and using
-   the fields and relationships already defined in `MODELS.md` and `DATABASE.md`.
-   It is served at `/roadmaps/{name}/tasks`. The board has exactly five fixed
-   columns, one per `TaskStatus` value, in the order `BACKLOG`, `SPRINT`, `DOING`,
-   `TESTING`, `COMPLETED`; every column is always present, even when empty, and
-   each column header carries a badge with that column's task count. Each task is
-   shown as one card in the column of its `status`, so every task appears exactly
-   once and no task is omitted. Each card is a link to that task's own page,
-   `/roadmaps/{name}/tasks/{id}`, which is where the task's full field set is
-   shown. The board is read-only: it offers no drag-and-drop and no other
-   control that moves a task between columns. The page renders no task table. The
-   page header carries a **search input** that narrows the board to the tasks whose
-   title or `#<id>` reference contains the term, and **three filter dropdowns** —
-   task type, minimum priority, and minimum severity — that narrow the board by what
-   a task is. The search term and the three filters combine conjunctively, the
-   column counts follow the narrowed set, and each control travels in its own URL
-   query parameter (`q`, `type`, `priority`, and `severity`), so requesting the page
-   with those parameters renders the identical narrowed board. The board offers
-   **no** status filter, because the columns already are the status (see
-   [Roadmap Tasks Page](#roadmap-tasks-page) and
-   [Roadmap Task Page](#roadmap-task-page)).
+7. The roadmap tasks page shows the tasks of the selected roadmap, of any
+   status, as **one list** — a single Tabler card holding one table, not divided by
+   status — read from that roadmap's `project.db` and using the fields and
+   relationships already defined in `MODELS.md` and `DATABASE.md`. It is served at
+   `/roadmaps/{name}/tasks`. Each row shows the task's `#<id>` badge, its title, its
+   type, its status, the sprint it belongs to, its priority and severity, and its
+   creation date, and ends with a `View` link; the title and the `View` link both
+   lead to the task's own page, `/roadmaps/{name}/tasks/{id}`, which is where the
+   task's full field set is shown. In the card's header, a **filter bar** — a
+   `GET` form of native controls — narrows the list by sprint, status, type, and
+   a search on the title and `#<id>` reference; the criteria combine conjunctively and are applied on the server. The
+   list is **paginated on the server**, with the range text, a rows-per-page
+   selector, and Tabler pagination in the card footer. Every filter, the page, and the page size travel
+   in the URL query string (`q`, `sprint`, `status`, `type`, `page`, and `size`), so a filtered page survives a reload and can be
+   shared, and the page works fully without JavaScript. The page is read-only: the
+   form only narrows what is shown (see [Roadmap Tasks Page](#roadmap-tasks-page)
+   and [Roadmap Task Page](#roadmap-task-page)).
 8. When a user selects a roadmap on the index page, the user lands on that
    roadmap's sprints page (`/roadmaps/{name}`), with the **Actual** tab — the
    current OPEN sprint or sprints — active by default (see
@@ -266,9 +263,9 @@ own page, which displays all of the task's fields (see
    card giving the context of the sprint the task belongs to — the sprint, its
    status, its progress, and the task's position in its planned execution order —
    or stating that the task is in the backlog. It returns HTTP `404 Not Found`
-   when `{id}` is not a valid integer or is not a task of the named roadmap. On
-   both boards — the board cards of the tasks page and the board cards of the
-   sprint page — each card is a link to that page, so the pointer, touch, and the
+   when `{id}` is not a valid integer or is not a task of the named roadmap. Each
+   card of the sprint page's board, and the title and the `View` link of each row
+   of the tasks page's list, is a link to that page, so the pointer, touch, and the
    keyboard all follow it without any added JavaScript, and it can be opened in a
    new tab. The page only displays data: it contains no form, no edit control, and
    no submit action, and it opens no write path. The interface serves no JSON for
@@ -341,8 +338,8 @@ own page, which displays all of the task's fields (see
     the roadmap sprints page, the roadmap tasks page, the roadmap sprint page, the
     roadmap task page, the roadmap audit log page, and the knowledge-graph page —
     and to the interactive components, including the
-    sprint tabs, the tasks page's Kanban board, the sprint page's member-tasks
-    board, and the interactive knowledge-graph
+    sprint tabs, the tasks page's filter bar and task list, the sprint page's
+    member-tasks board, and the interactive knowledge-graph
     visualisation, which MUST all remain usable on touch and small-viewport devices
     (see [Responsive and Mobile-First Design](#responsive-and-mobile-first-design)).
 17. **Tabler admin-shell layout in the dark theme.** The interface presents a
@@ -877,7 +874,7 @@ produced from embedded `html/template` templates. Page routes return HTML
 |-------|--------|---------|----------|
 | `/` | GET, HEAD | Roadmap index | HTML list of roadmaps |
 | `/roadmaps/{name}` | GET, HEAD | Roadmap sprints page (landing; sprint tabs) | HTML |
-| `/roadmaps/{name}/tasks` | GET, HEAD | Roadmap tasks page (Kanban task board; optional `q` search parameter and optional `type`, `priority`, and `severity` filter parameters, see [Roadmap Tasks Page](#roadmap-tasks-page)) | HTML |
+| `/roadmaps/{name}/tasks` | GET, HEAD | Roadmap tasks page (one paginated task list; optional `q`, `sprint`, `status`, and `type` filter parameters and optional `page` and `size` pagination parameters, see [Roadmap Tasks Page](#roadmap-tasks-page)) | HTML |
 | `/roadmaps/{name}/tasks/{id}` | GET, HEAD | Roadmap task page (one task's fields, its comments, and its sprint context; see [Roadmap Task Page](#roadmap-task-page)) | HTML |
 | `/roadmaps/{name}/sprints/{id}` | GET, HEAD | Roadmap sprint page (the sprint's details and its member-tasks board) | HTML |
 | `/roadmaps/{name}/audit` | GET, HEAD | Roadmap audit log page (full audit log, paginated; optional `page` parameter; see [Roadmap Audit Log Page](#roadmap-audit-log-page)) | HTML |
@@ -924,7 +921,8 @@ HTTP status mapping for page and data routes:
 | Task `{id}` not a valid integer, or not a task of the roadmap | 404 |
 | Audit `page` parameter out of range, non-integer, or garbage | 200 (clamped to nearest valid page; see [Roadmap Audit Log Page](#roadmap-audit-log-page)) |
 | Tasks `q` search parameter absent, empty, unmatched, or undecodable | 200 (never an error; see [Roadmap Tasks Page](#roadmap-tasks-page)) |
-| Tasks `type`, `priority`, or `severity` filter parameter absent, unknown, malformed, or undecodable | 200 (never an error; the dimension applies no filter; see [Roadmap Tasks Page](#roadmap-tasks-page)) |
+| Tasks `sprint`, `status`, or `type` filter parameter absent, unknown, malformed, or undecodable; or any parameter the page does not accept, `priority` and `severity` included | 200 (never an error; the parameter is ignored as though absent; see [Roadmap Tasks Page](#roadmap-tasks-page)) |
+| Tasks `page` or `size` pagination parameter absent, non-integer, not an allowed value, or undecodable, or `page` beyond the last page | 200 (never an error; `page` falls back to 1 and `size` to 25, and a `page` beyond the last page renders the last page; see [Roadmap Tasks Page](#roadmap-tasks-page)) |
 | Graph data `limit` not one of the six allowed values | 400 (`kind` `invalid_limit`; the query is not executed; see [Query-Bar Error Handling](#query-bar-error-handling)) |
 | Graph data `q` carries an `EXPLAIN` or `PROFILE` prefix the engine's parser recognises, and `limit` is allowed | 400 (`kind` `plan_prefix`; the statement is not sent, and the answer is the same with no graph server listening; see [Query-Bar Error Handling](#query-bar-error-handling)) |
 | Graph data query fails once running, a query cancelled for exhausting the time budget included | 400 (`kind` `execution`; see [Query-Bar Error Handling](#query-bar-error-handling)) |
@@ -962,7 +960,7 @@ how the `rmp web` process itself terminates.
   index page lands the user here (see [Roadmap Index Page](#roadmap-index-page)).
 - **Content:** A read-only presentation of the named roadmap's sprints, read from
   that roadmap's `project.db`. This page does **not** render the roadmap's tasks;
-  the roadmap's full set of tasks has its own page, the Kanban task board at
+  the roadmap's full set of tasks has its own page, the task list at
   `/roadmaps/{name}/tasks` (see [Roadmap Tasks Page](#roadmap-tasks-page)).
 - **Sprints.** The page presents the roadmap's sprints as three tabs. From left
   to right the tab labels are exactly **Próximos**, **Actual**, and
@@ -1016,9 +1014,9 @@ how the `rmp web` process itself terminates.
   - Every sprint shown in any of the three tabs is a clickable link to that
     sprint's own page at `/roadmaps/{name}/sprints/{id}` (see
     [Roadmap Sprint Page](#roadmap-sprint-page)). The sprints page itself shows no
-    member tasks and links to no task page; a task's card links to its own page on
-    the single Roadmap Sprint Page and on the tasks page's board (see
-    [Roadmap Task Page](#roadmap-task-page)).
+    member tasks and links to no task page; a task links to its own page from its
+    card on the single Roadmap Sprint Page and from its row on the tasks page's
+    list (see [Roadmap Task Page](#roadmap-task-page)).
 
   **Why Concluídos reverses the sequence.** `rmp sprint list` returns a roadmap's
   sprints in a single sequence, `order` ascending — the planned execution order
@@ -1050,1143 +1048,568 @@ how the `rmp web` process itself terminates.
 ### Roadmap Tasks Page
 
 - **Route:** `GET /roadmaps/{name}/tasks`
-- **Content:** A read-only presentation of every task of the named roadmap, of
-  any status, read from that roadmap's `project.db` and laid out as a **Kanban
-  board**: one fixed column per task status, each column holding one card per
-  task in that status. The board is the page's only task presentation; the page
-  renders no task table and offers no alternative table view. Every field a task
-  has remains reachable from this page through the task's own page, to which each
-  card links (see [Roadmap Task Page](#roadmap-task-page)). The Roadmap Sprint Page
-  presents its member tasks as a board too, so both surfaces that show a task card
-  are boards whose card is a link to the task page; the two boards differ in what their
-  columns stand for and in what their cards show below the title. This page has
-  **five** columns, one per task status; the sprint page's board has **three**,
-  grouping the sprint's tasks into waiting, in-progress, and completed work (see
-  [Sprint Detail Sub-Template](#sprint-detail-sub-template)). The cards of
-  both boards open the same way: the task title leads the card, and one badge line
-  below it carries the task's id, severity, priority, and type badges (see **Card
-  content** below). The
-  five-column specification below governs this page alone.
-- **Structural inspiration only.** The board follows the structure of a GitLab
-  issue board — columns that stand for states, cards that stand for work items,
-  and a task count on each column header — and deliberately departs from it in
-  interaction: this board moves nothing and edits nothing (see **Read-only**
-  below).
-- **Columns.** The board has exactly five columns, one for each value of the
-  `TaskStatus` enum (`MODELS.md § Enums`). From left to right the columns follow
-  the order of the task state machine's flow (`STATE_MACHINE.md § Task State
-  Machine`):
-
-  1. `BACKLOG`
-  2. `SPRINT`
-  3. `DOING`
-  4. `TESTING`
-  5. `COMPLETED`
-
-  The columns are fixed: all five are always present, in that order, whatever the
-  roadmap's data contains, and a column holding no task is still rendered.
-  Neither the set of columns nor their order depends on the data. Each column
-  title is the status identifier exactly as the enum spells it, in upper case
-  (`BACKLOG`, `SPRINT`, `DOING`, `TESTING`, `COMPLETED`), and is not translated.
-- **Unbounded read: every task, never a page of them.** The page reads **every**
-  task of the roadmap. The read carries no limit, no page size, and no truncation,
-  and the board has no pagination: whatever the roadmap holds, the board shows.
-
-  The display default that sizes `rmp task list` output — `-l, --limit <n>`,
-  default `100` (see `COMMANDS.md § List Tasks`) — MUST NOT be applied to this
-  read. That default exists to size the output of one command invocation, where the
-  caller who wants more asks for more and can see that the listing was cut. This
-  page offers no such affordance, and it does not merely list: it groups the tasks
-  into five columns and prints a count on each column header as a statement of fact
-  about the roadmap. Under a partial read those counts would be wrong and would
-  still be presented as true, with nothing on the page to reveal that tasks were
-  omitted. Reading every task is therefore what makes the counts in **Count per
-  column** correct by construction, and it is a correctness requirement of this
-  page rather than a performance choice (see `DATABASE.md § Main SQL Queries`,
-  "List All").
-
-  A search term and the header filters narrow what the board **shows**; neither
-  narrows what the page **reads**. The read stays the full task list either way, so
-  criteria applied by the server and the same criteria applied in the browser select
-  from the identical set — which is what makes the two paths equivalent (see
-  **Server and client produce the same board**).
-- **Placement.** Each task of the roadmap appears in exactly one column: the
-  column of that task's own `status`. The board omits no task and duplicates
-  none, so the five column counts sum to the roadmap's total number of tasks. The
-  `tasks.status` column is restricted by a CHECK constraint to exactly these five
-  values (`DATABASE.md § tasks Table`), so no task can carry a status outside
-  them: the board has no sixth column and no "other" column.
-- **Count per column.** Each column header shows the status name together with a
-  Tabler badge carrying the number of tasks in that column, the way a GitLab
-  issue board shows the issue count of each list. A column holding no task shows
-  the count `0`. The count always equals the number of cards that column is
-  actually showing: when the header controls narrow the board, the counts narrow
-  with it (see **Effect on the board** below).
-
-  **The badge carries the colour of its column's status.** A column of this board
-  is exactly one `TaskStatus` value (see **Columns** above), so the badge is a
-  hybrid: its **text** is the count of tasks in the column, and its **colour** is
-  the variant the task status table assigns to that column's status (see
-  [Status, Priority, and Severity Badge Colours](#status-priority-and-severity-badge-colours),
-  rule 2). The colours are the ones that table already holds; this board introduces
-  no new colour and no new band, and it keys on that mapping rather than restating
-  the variants here. The badge's class is produced by the single implementation of
-  that mapping which every status badge on this page already takes its colour from;
-  no colour variant is written into the template beside it, so this header cannot
-  drift from the mapping the rest of the page obeys (Acceptance Criterion 140). The
-  count itself selects no colour, so a column that holds no task shows `0` in the
-  colour of its status, exactly as a tab that holds no sprint does (see
-  [Roadmap Sprints Page](#roadmap-sprints-page)). The colour earns its place
-  because the header is where the reader identifies the column: the mapping
-  already gives each status a colour the reader meets wherever that status is
-  written out, and carrying it here lets the five columns tell themselves apart by
-  the same key rather than by their heading text alone.
-- **Order within a column.** The cards of a column appear in a deterministic
-  order: descending `priority` and, for tasks of equal priority, ascending
-  `created_at`. This is the order in which the page's own read already returns the
-  roadmap's tasks — the default `ListTasks` ordering,
-  `ORDER BY priority DESC, created_at ASC` (see
-  `DATABASE.md § Main SQL Queries`, "List All"). Grouping the tasks into columns
-  preserves that relative order: the tasks of one column appear in the same
-  relative order in which the read returned them, so the board introduces no
-  second sort and no ordering of its own.
-- **Card content.** Each card presents one task, in this order:
-  1. The task **`title`**, leading the card as its first line and presented as the
-     card's prominent main content. A card is read at a glance, and what the reader
-     reads first is the words that say what the task is. The GitLab issue card,
-     whose structure this board follows, leads with its title too.
-  2. The **badge line**, on the line after the title, carrying exactly four Tabler
-     badges on one line, in this order:
-     - the **id badge**, whose text is the task reference `#<id>` — the task's
-       `id` written with its leading `#`. It carries the Tabler classes `bg-black`
-       and `text-white` for every task: a black background (`#000000`) with white
-       text (`#ffffff`), a contrast ratio of 21:1. Both classes are shipped by the
-       vendored `tabler.min.css`, which defines `bg-black` as a background colour
-       mixed from `var(--tblr-black)` and `text-white` as a text colour mixed from
-       `var(--tblr-white)`, each at full opacity, with `--tblr-black` set to `#000`
-       and `--tblr-white` set to `#fff`. The colour is fixed and
-       value-independent: an id identifies a task and carries no meaning a colour
-       could state, so no colour mapping governs this badge (see
-       [Status, Priority, and Severity Badge Colours](#status-priority-and-severity-badge-colours),
-       rule 2);
-     - the **`severity` badge**, whose text is the badge label `S` immediately
-       followed by the task's integer `severity`;
-     - the **`priority` badge**, whose text is the badge label `P` immediately
-       followed by the task's integer `priority`;
-     - the **type badge**, whose text is the task's `type` exactly as the
-       `TaskType` enum spells it (see `MODELS.md § Enums`) — for example
-       `IMPROVEMENT` — and whose colour is the variant the task type table assigns
-       to that value in
-       [Status, Priority, and Severity Badge Colours](#status-priority-and-severity-badge-colours).
-       The card introduces no colour of its own for the type.
-
-     The badge label is one letter, and no colon, no space, and no other separator
-     stands between it and the digits. A task of severity `3` and priority `5`
-     therefore shows `S3` and `P5`, the severity badge before the priority badge. The severity and priority badges
-     are each coloured by the band their value falls in, using exactly the mapping in
-     [Status, Priority, and Severity Badge Colours](#status-priority-and-severity-badge-colours).
-     No new badge colour and no new band is introduced here.
-
-     **This line follows the title on the card of both boards.** The card of the
-     sprint page's member-tasks board carries the same four badges, in the same
-     order, with the same texts and in the same colours, on the line after its
-     title (see [Sprint Detail Sub-Template](#sprint-detail-sub-template), **The
-     card**). The line is stated here once for both cards rather than twice, so
-     that the two cannot drift apart on it: a reader moving between the two boards
-     finds a task's title first and its reference, severity, priority, and type in
-     the same place and in the same form on both. The two boards differ in what
-     their columns stand for and in what else their cards show, and they keep
-     **one** form for this line.
-
-     **The severity and priority badges each name the value they carry with a badge
-     label.** The label stands for the word the card has no room to write out in
-     full. Wherever else this interface shows these two values, the field's name stands
-     beside each of them — the task page writes the field's name beside the
-     value (see [Roadmap Task Page](#roadmap-task-page)) — but without a label the
-     card would put two bare integers side by side and state nowhere which one is
-     the severity and which one is the priority. A reader would have to know the
-     order by heart to tell `3` from `5`. The label is the initial letter of the
-     field's name — `S` for `severity`, `P` for `priority` — which is the fewest
-     characters that tell the two fields apart.
-
-     **The badge label is a label, not a value.** It changes what the badge reads
-     and nothing else. The colour still follows the value alone, through exactly the
-     band mapping named above: `P5` takes the colour that mapping assigns to the
-     priority `5`, and the label selects no colour, introduces no band, and changes
-     no meaning. The card's accessible name is unaffected as well: it is
-     `Open details for task #<id>: <title>` (see **Clickable card** below), it
-     carries neither value, and so it carries no badge label.
-
-     **Only these two badges take a badge label.** A badge label earns its place
-     only where no other text names the value, which is true of the severity and
-     priority badges on a board card and of no other badge in this interface. A
-     status badge is never ambiguous, because its own text is the status name — it
-     reads `COMPLETED`, not a bare integer — so it takes no badge label wherever it
-     is shown; this card shows no status badge at all (see below). The type badge
-     is unambiguous for the same reason — it reads `IMPROVEMENT`, not a bare
-     integer — and takes no badge label. The leading `#` of the id badge is not a
-     badge label in this sense: `#<id>` is the form in which this interface writes a
-     task reference everywhere, in the card's accessible name and in the search's
-     matching as much as here (see **Clickable card** and **What the search
-     matches** below). The priority and severity badges of the task page take no
-     badge label either, for the reason stated there.
-  3. A **metadata footer**, below the badge line, showing only the indicators the
-     task actually has:
-     the sprint the task belongs to, its number of subtasks (`subtask_count`), its
-     number of `depends_on` entries, its number of `blocks` entries, and its number
-     of comments. Each indicator is rendered with the icon or label that identifies
-     what it counts, so the footer is readable without a legend.
-
-     **The sprint indicator.** A task that belongs to a sprint shows that sprint
-     on its card, the way a GitLab issue card shows the issue's milestone. The
-     card identifies the sprint by its `title` together with `Sprint #<id>` (the
-     `Sprint` model's `title` and `id`; see `MODELS.md § Sprint`). Both parts are
-     shown because the `title` alone does not identify a sprint: `MODELS.md § Sprint`
-     requires the `title` to be present and caps its length, but places no
-     uniqueness constraint on it, so two sprints of one roadmap may carry the same
-     title, while the `id` is the primary key and is unique. Showing both is also
-     the identification idiom the rest of the interface already uses for a sprint
-     (see [Shared Sprint-Card Partial](#shared-sprint-card-partial) and
-     [Roadmap Sprint Page](#roadmap-sprint-page)).
-
-     A task belongs to **at most one** sprint, so the indicator names at most one
-     sprint and never a list. This is guaranteed by the schema, not by convention:
-     `sprint_tasks.task_id` carries a `UNIQUE` constraint (see
-     `DATABASE.md § sprint_tasks Table (1:N Relationship)` and
-     `DATABASE.md § Relationships`).
-
-     The sprint indicator is **plain text, not a link**. The whole card is a single
-     link to the task's own page (see **Clickable card** below), and a link cannot
-     be nested inside it: a link's content model admits no interactive descendant,
-     so a nested link would be invalid markup and would put two competing
-     activation targets in one control, leaving pointer, touch, and keyboard
-     activation ambiguous about which target the user meant. The sprint's own page
-     stays one step away through the task page's sprint card, the sidebar, and the
-     sprints page, so nothing becomes unreachable.
-
-  The card shows **no status badge**, because the column the card sits in already
-  states the task's status.
-
-  **Absent metadata renders nothing.** An indicator whose value is absent, empty,
-  or zero is not rendered at all: no dash, no placeholder, no empty slot. A task
-  that belongs to no sprint shows no sprint indicator — not a dash, not "None", not
-  an empty slot; a task with `subtask_count` `0`, with no `depends_on` entry, with
-  no `blocks` entry, or with no comment shows no corresponding indicator. A task
-  with none of the five shows no metadata footer at all.
-
-  The card presents a subset of the task's fields by design. Every field of the
-  `Task` model — including the long free-text fields, the lifecycle timestamps,
-  the parent task link, and the full dependency lists — is shown on the task page
-  the card links to (see [Roadmap Task Page](#roadmap-task-page)). The
-  card does not redefine any field; `MODELS.md` and `DATABASE.md` remain
-  canonical.
-
-  The absent-metadata rule above governs **this** board's card. The card of the
-  sprint page's member-tasks board departs from it deliberately and always renders
-  both of its counters, for the reason stated where that card is defined (see
-  [Sprint Detail Sub-Template](#sprint-detail-sub-template), **The card**).
-- **Clickable card.** Each card is a link to the task's own page,
-  `/roadmaps/{name}/tasks/{id}` (see [Roadmap Task Page](#roadmap-task-page)).
-  Following it is an ordinary navigation to a server-rendered page: the board
-  fetches nothing when a card is followed, adds no query to the page's own read,
-  and carries no per-task cost. It opens no write path.
-
-  The card **is** the link: the whole card is one `<a>` element carrying the
-  Tabler classes `card` and `card-link` and an `href` to the task page, the idiom
-  the sprint card of the Roadmap Sprints Page already uses (see
-  [Shared Sprint-Card Partial](#shared-sprint-card-partial), rule 3). A link with
-  an `href` is natively focusable and natively activatable: a pointer click, a
-  touch tap, and the Enter key all follow it through the browser's own activation
-  behaviour, with no added JavaScript, so the board is fully usable without a
-  pointing device. Because it is a link, the browser's own link behaviours apply
-  to it as well: a middle click, a modified click, and the context menu open the
-  task page in a new tab or window, and the address can be copied. The card
-  carries no `tabindex` and no `role`: both would be redundant on a link, and
-  neither would grant activation to an element that lacked it. A non-interactive
-  element made to look interactive — a `<div>` or a `<tr>` carrying a `role` and
-  `tabindex="0"` — MUST NOT stand in for the link, because `tabindex` grants focus
-  and `role` announces a control, but neither grants activation.
-
-  The card's accessible name is `Open details for task #<id>: <title>`, carried by
-  its `aria-label`, naming the action and identifying the task by `id` and
-  `title`. The name contains the card's own visible title text: a speech-input
-  user says the words they can see, and a control whose accessible name does not
-  contain them cannot be activated that way, which is what WCAG 2.5.3 Label in
-  Name (Level A) forbids; that is why the name carries the `title` and not the
-  `id` alone. The card shows a visible focus indicator whenever it receives
-  keyboard focus (WCAG 2.2 Success Criterion 2.4.7, Focus Visible); where the
-  vendored distribution gives a `card-link` none, the project override stylesheet
-  sets it on the card's `:focus-visible` state. The card keeps the Tabler card
-  presentation specified under **Markup** below; making it a link changes the
-  element, not the appearance.
-- **Header search control.** The page header's actions column carries a **search
-  input** that narrows the board. That input and the three filter dropdowns of
-  **Header filter controls** below are the only controls in that column: the page
-  header presents no link to the knowledge-graph page, because the admin-shell
-  sidebar already lists **Graph** among the roadmap's own links on every page (see
-  [UI Framework](#ui-framework), rule 1), so a header link would be a second route
-  to a destination the page already offers, and removing it costs no access. The
-  actions column keeps the Tabler idiom fixed in [UI Framework](#ui-framework),
-  rule 16.
-
-  The input carries a real, programmatically associated **label** naming what it
-  searches. A `placeholder` MUST NOT stand in for that label: a placeholder is not
-  an accessible name and disappears as soon as the user types. Where the label is
-  visible, the input's accessible name contains the visible label text, as WCAG
-  2.5.3 Label in Name (Level A) requires (see **Clickable card** above). The
-  control is reachable and operable from the keyboard.
-- **What the search matches.** A task matches a term when the term occurs in that
-  task's **searchable text**, which is the concatenation of exactly two things the
-  card itself displays:
-  1. the task `title`;
-  2. the task reference `#<id>`, written with its leading `#`.
-
-  Including the reference is deliberate: the card shows `#<id>` in the id badge of
-  its badge line, so a user reading a card can see it, and typing `42` to reach
-  task 42 is the obvious gesture. Because the reference is matched as the literal string
-  `#42`, both `42` and `#42` find it under the one substring rule below, with no
-  special case for either form.
-
-  Every other task field is deliberately **excluded**. The search answers "which
-  task is this?" from what identifies a task on its card;
-  matching an attribute answers a different question, "which tasks share this
-  property?", which is the job of the type, priority, and severity filters below and
-  would make one control serve two purposes with no way for the user to tell which
-  one produced a hit. Keeping the two apart is what lets them compose (see **Header
-  filter controls** and **How the criteria compose** below).
-- **Matching rule.** Matching is **case-insensitive** and by **substring**: a task
-  matches when its searchable text contains the term. Leading and trailing
-  whitespace is stripped from the term before matching, and a term that is empty
-  or entirely whitespace is **no term at all** — the board shows every task.
-  Whitespace inside the term is significant and is matched literally.
-
-  The paragraph above names two transformations of the term, and each of the two has
-  to be stated exactly rather than only described. **The trim rule** below fixes
-  which code points count as the whitespace that is stripped. Case-insensitivity
-  means one specific transformation, applied to the task's searchable text and to
-  the term before the two are compared, and **The folding rule** below states which
-  transformation it is. Stating each exactly — rather than requiring only that
-  whitespace be removed and that the viewer's locale be ignored — is what keeps the
-  two paths of **Server and client produce the same board** below from disagreeing
-  about a term: a description both paths satisfy while returning different terms
-  fixes nothing.
-- **The trim rule.** Before the term is folded, every code point carrying Unicode's
-  **White_Space** property — the property Unicode's own character database
-  publishes under that name — is removed from the **start** of the term and from its
-  **end**. Removal stops at the first code point that does not carry the property,
-  so a code point carrying it anywhere else in the term survives, is part of the
-  term, and is matched literally (see **Matching rule** above). A term made only of
-  such code points becomes the empty string, which is no term at all and shows every
-  task.
-
-  The set is named by that property, and deliberately **not** by either platform's
-  own trimming function, because the two functions do not implement the same set and
-  a rule stated as "surrounding whitespace is stripped" would therefore fix nothing:
-  both platforms satisfy that description while disagreeing about which term they
-  produce. The difference is observable rather than academic, and this specification
-  fixes both code points on which the two disagree — they disagree in **opposite**
-  directions:
-  - `U+0085` (NEXT LINE) **carries** the White_Space property, so it **IS** removed
-    from the ends of a term, although the JavaScript platform's own trimming keeps
-    it: that platform trims the code points it classes as white space together with
-    its line terminators, and `U+0085` is in neither group.
-  - `U+FEFF` (ZERO WIDTH NO-BREAK SPACE) does **not** carry the White_Space
-    property, so it is **NOT** removed, although the JavaScript platform's own
-    trimming removes it: that platform lists this one format character in its white
-    space explicitly.
-
-  Those two are the whole of the difference at any one Unicode version: swept over
-  every code point of Unicode, no third code point is removed by one trimming and
-  kept by the other. Ordinary terms are therefore untouched by the distinction — the
-  space, the tab, the carriage return, and the line feed a user can type are removed
-  under either.
-
-  **The cost of the choice is stated plainly rather than patched over.** A term
-  pasted with a leading byte-order mark keeps that `U+FEFF`, and so matches nothing
-  on an ordinary roadmap. It does so on **both** paths, which is the property this
-  rule exists to protect: a term whose two paths disagree — a card on one of them
-  and nothing on the other — would break **Server and client produce the same
-  board** below, and that disagreement, not the empty result, is the defect. Nothing
-  is stripped after the trim to compensate, for the reason **The folding rule** below
-  gives for its own post-fold fixups.
-
-  **Trim first, then normalise, then fold.** The term is trimmed, then normalised,
-  then folded, in that order, and **both** paths perform those steps in that same
-  order (see **The normalisation rule** and **The folding rule** below). The trim's
-  place in that sequence is not observable: swept over every code point of Unicode,
-  no code point carrying the White_Space property folds to anything but itself,
-  none outside the property folds into it, and normalisation neither turns a code
-  point carrying the property into one that does not carry it nor the reverse — the
-  two code points normalisation does rewrite, `U+2000` (EN QUAD) to `U+2002` and
-  `U+2001` (EM QUAD) to `U+2003`, carry the property before and after. Trimming
-  therefore commutes with both later steps. Fixing the order is what keeps the
-  contract from resting on that coincidence: were some code point ever to fold or
-  normalise into a whitespace one, the two paths would still perform the same steps
-  in the same order and would still return one term.
-
-  The place of the **normalisation** relative to the fold is a different matter: it
-  is observable, and **The normalisation rule** below states why normalising first
-  is the only order that closes this defect.
-
-  **The task's searchable text is normalised and folded, but never trimmed.** The trim applies to
-  the term alone. A task's own leading or trailing whitespace is part of its text
-  and is matched literally, exactly as whitespace inside a term is; the term is
-  trimmed because a user reaches for the space bar around what they type, which is
-  not a statement about the task.
-- **The normalisation rule.** After the term is trimmed, and before either the term
-  or the task's searchable text is folded, both are normalised to Unicode's
-  **Normalization Form C** — NFC, the canonical composition of the full canonical
-  decomposition, as UAX #15 defines it.
-
-  The rule exists because two different byte sequences can render as the same text.
-  A task whose `title` holds a precomposed `é` (`U+00E9`) and a task whose `title`
-  holds `e` followed by a combining acute (`U+0065 U+0301`) carry the same title to
-  every reader and two different searchable texts to a comparison of bytes, so a
-  term typed in one spelling finds one of them and silently misses the other. Both
-  paths miss it **together**, so this is not the disagreement **Server and client
-  produce the same board** below governs; it is a second and independent way the
-  search fails to find a task that visibly contains the term.
-
-  **Normalisation is for comparison only: never for storage, and never for
-  display.** The bytes `rmp` stores stay exactly the bytes it was given. A task's
-  `title` is not rewritten, `rmp task get` returns what it returned before this rule
-  existed, and the card renders the title the roadmap actually holds. The normalised
-  text is a derived form used to decide a match, exactly as the folded corpus
-  already is.
-
-  **NFC and not NFD.** Both are canonical equivalence, and either would make the two
-  spellings of `é` one text. They differ in what else they do to a **substring**
-  match, which is the comparison this search performs. NFD decomposes every accented
-  letter, so a task titled `Café Lisboa onboarding` would carry the searchable text
-  `cafe` followed by `U+0301` and the rest, and the four ASCII letters of the term
-  `cafe` would occur in it: typing `cafe` would return the task titled `Café`, and
-  typing `ae` would return one titled `Aérea`. NFC leaves a precomposed letter
-  precomposed, so neither term matches and an accented word stays one unit. The
-  rule answers what a term **is**, and it must not quietly answer whether an accent
-  should be ignored, which is a different question and one this specification does
-  not answer.
-
-  **What the rule changes, measured.** Of Unicode's 1,112,064 code points, exactly
-  **1,117** produce a different searchable text under this rule than without it, and
-  **not one of them is ASCII**. Those 1,117 are the canonical singletons and the
-  composition exclusions — `U+0340`, `U+0341`, `U+0343`, `U+0344`, `U+0374`,
-  `U+037E`, `U+0387`, the `U+0958`..`U+095F` Devanagari set, and their kind. An
-  ordinary Latin roadmap is untouched, which is what makes this rule safe to apply
-  to every task rather than only to the ones a user suspects.
-
-  **Two passes, not one.** The pipeline is trim, then NFC, then fold, then **NFC
-  again**. The second pass is not decoration: the fold can produce a sequence that
-  composes where the unfolded one did not. Unicode has no precomposed capital for
-  `H` with a line below, so NFC leaves `H` followed by `U+0331` as two code points;
-  the fold then lowers the `H`, and `h` followed by `U+0331` **does** have a
-  precomposed form, `U+1E96`. Without the second pass a task titled `H̱ydro` would
-  carry a two-code-point searchable text while a term typed as the single character
-  `ẖ` normalised to `U+1E96`, and the term would not occur in the text it plainly
-  spells. `U+1E97`, `U+1E98`, `U+1E99` and `U+01F0` behave the same way. Measured
-  over the 1,440,384 sequences of a folding code point followed by a non-starter,
-  one pass leaves the result outside NFC on **70** of them; two passes leave it in
-  NFC on **all 1,440,384**, so a third pass would change nothing and is not
-  performed.
-
-  **Normalise before folding, not after.** The order is observable: on **0** single
-  code points, but on **74** of those 1,440,384 sequences, over **32** distinct
-  leading code points. Normalising first is chosen because it is the only order that
-  closes this defect for `U+0130` (LATIN CAPITAL LETTER I WITH DOT ABOVE), the code
-  point **The folding rule** below already names. A title written with `U+0130` and a
-  title written as `U+0049` followed by `U+0307` are the same text by Unicode's own
-  definition, and normalising first gives both the same searchable text; folding
-  first would give `U+0069` for one and `U+0069 U+0307` for the other, which are two
-  different searchable texts for one title.
-
-  **The server's normalisation is the module's, and the client's is the same rule
-  over data the server ships.** The server normalises with
-  `golang.org/x/text/unicode/norm`, the Go project's own implementation of UAX #15
-  (see `BUILD.md § External Dependencies`), and takes both halves of the rule from
-  it: the decomposition and the canonical ordering as much as the composition. The
-  client cannot call that module, so it runs UAX #15's algorithm over three tables
-  generated from the module's character data (see **What keeps the shipped rule
-  equal to the server's** below). Two expressions of one rule therefore exist, and
-  what makes them one rule is a proof rather than a construction: the checks below
-  hold the client's expression equal to the server's on every single code point and
-  on every two-code-point sequence in which the second can interact with the first,
-  and both follow UAX #15's algorithm for every longer sequence. A client that
-  answered differently from the server would break **Server and client produce the
-  same board** below, which is the one property none of these rules may cost.
-
-  A term whose bytes are not valid UTF-8 is normalised like any other term, after
-  each invalid byte has been replaced by `U+FFFD` (see **The folding rule** below).
-- **The folding rule.** The task's searchable text and the term are folded — each
-  after it has been normalised (see **The normalisation rule** above) — by
-  Unicode's **simple lowercase mapping**: the single replacement code point that
-  the Unicode Character Database gives a code point, applied to each code point on
-  its own, with a code point that has no such mapping folding to itself. Three
-  properties follow from that definition, and every implementation of the rule MUST
-  have all three:
-  1. **Unconditional.** What a code point folds to never depends on the code points
-     around it. No context — the start or the end of a word, the letters before or
-     after it, the presence of another cased letter — changes the result.
-  2. **One code point in, one code point out.** The fold replaces each code point
-     with exactly one code point. It adds none, removes none, and reorders none, so
-     folding never lengthens or shortens the text.
-  3. **Locale-independent.** The fold consults no locale, so the same term and the
-     same task produce the same verdict wherever the page is rendered and whatever
-     locale the browser reports. A locale-sensitive case conversion MUST NOT be
-     used.
-
-  The rule is deliberately **not** Unicode's Default Case Conversion — the full
-  case conversion, with its conditional rules and its multi-code-point special-case
-  mappings, which is the conversion a programming language's ordinary lower-case
-  function may implement. The difference is observable rather than academic, and
-  this specification fixes both code points on which the two conversions disagree:
-  - `U+0130` (LATIN CAPITAL LETTER I WITH DOT ABOVE) folds to `U+0069` alone, and
-    never to the two code points `U+0069 U+0307` the full conversion produces for
-    it.
-  - `U+03A3` (GREEK CAPITAL LETTER SIGMA) folds to `U+03C3` in **every** position,
-    word-final included, and never to the final form `U+03C2` the full conversion
-    produces where its Final_Sigma condition holds.
-
-  Those two are the whole of the difference at any one Unicode version: swept over
-  every code point of Unicode in a range of neighbouring contexts, no third code
-  point folds differently under the two conversions. Ordinary ASCII and accented
-  Latin text is therefore untouched by the distinction — `A` folds to `a`, `Á` to
-  `á`, letter for letter.
-
-  **Nothing is rewritten after the mapping.** A `U+03C2` the user typed is already a
-  lower-case letter, folds to itself, and MUST NOT be rewritten to `U+03C3`
-  afterwards: a task titled `οδός` carries that `U+03C2` in its folded searchable
-  text, so a term rewritten that way would stop finding it. The same holds for
-  every other post-fold fixup, such as removing a `U+0307` the user typed. The cost
-  of the simple mapping is stated plainly rather than patched over: a task whose
-  title ends in a literal `ς` is not found by typing that word in capitals, because
-  the capital folds to `σ`. Both paths return that same verdict, which is the
-  property the rule exists to protect; whether two differently spelled forms of one
-  word should match each other is a different question from case, and this rule does
-  not answer it.
-
-  A term whose bytes are not valid UTF-8 is not a sequence of code points at all:
-  the server replaces each invalid byte with `U+FFFD` before folding, and the term
-  is then folded and matched like any other — it matches nothing on an ordinary
-  roadmap, and it is neither an error nor an absent term (see **No malformed term
-  is an error** below).
-- **One rule, and only one implementation of it.** A task's searchable text is
-  normalised and folded **once, by the server**. The client normalises and folds
-  only the term, and compares it against text the server already transformed; no
-  client-side code normalises or folds a task's `title` or its reference, and no
-  client-side code trims either. The two paths therefore cannot disagree about a
-  task's text, because only one of them ever transforms it.
-
-  The term is the one value both sides fold, and it is where the two could still
-  drift, because each platform's own lower-case function implements whichever
-  conversion that platform chose. The client therefore **MUST NOT** fold the term
-  with the JavaScript platform's case conversion, locale-sensitive or not. It folds
-  the term with the **server's own mapping**, which the server ships to it together
-  with the script that narrows the board. The client consults no case-conversion
-  table of the browser's, and the fold of a term is the server's answer on both
-  paths by construction, rather than by two implementations happening to agree.
-
-  Shipping the mapping settles a second question with the same move. A browser's
-  case tables are of whatever Unicode version that browser ships, which Groadmap
-  neither chooses nor can detect, so a fold that consulted them would be a fold two
-  browsers could answer differently for the same term. The shipped mapping removes
-  the browser from the answer entirely.
-
-  **The term's trim is the server's by the same construction.** Preparing a term for
-  comparison is three steps, and the client MUST NOT take any of them from the
-  platform: it
-  **MUST NOT** trim the term with the JavaScript platform's trimming function, any
-  more than it may fold it with that platform's case conversion. It removes the
-  term's leading and trailing whitespace by the **server's own whitespace set**,
-  which the server ships to it together with the mapping and the script that narrows
-  the board, so which code points a term loses at its ends is the server's answer on
-  both paths by construction. Leaving that one step to the platform would be enough
-  to break the equivalence on its own, and would break it quietly: the two trimmings
-  agree on every code point but the two **The trim rule** above names, so every
-  ordinary term would go on agreeing and hide the disagreement.
-
-  **The term's normalisation is the server's by that same construction, and the
-  prohibition extends to it.** The client **MUST NOT** call the JavaScript
-  platform's own normalisation — `String.prototype.normalize` — any more than it may
-  call that platform's trimming or its case conversion. It normalises the term from
-  the **tables the server ships to it**, so the normalised form of a term is the
-  server's answer on both paths, which **What keeps the shipped rule equal to the
-  server's** below proves.
-
-  Two reasons make that prohibition stricter here than for the other two steps, and
-  the second is decisive. The first is the one already given for them: a browser's
-  normalisation tables are of whatever Unicode version that browser ships, which
-  Groadmap neither chooses nor can detect. The second is that the platform's
-  normalisation is an implementation no check in the build can run, so nothing
-  could hold it equal to the server's. The shipped tables are data a Go test reads,
-  and the algorithm the client runs over them has a Go statement a Go test runs
-  (`BUILD.md § External Dependencies`, Unicode Data Rules 3), so the client's
-  normalisation is one the build proves rather than one it trusts.
-
-  On the server, the corpus and the term are likewise **one** rule at every step:
-  the server normalises a task's searchable text and normalises a term through the
-  same function, and folds both through the same folding function, not through two implementations of one description, so the two cannot
-  drift apart on that side either.
-- **What keeps the shipped rule equal to the server's.** The binary ships the client
-  the things a term's preparation is made of — the whitespace set, the case mapping,
-  and the normalisation data — and **one** check covers all of them. It is one check
-  and not several beside each other because they are parts of one rule: a check that
-  took only the mapping as its subject would leave the whitespace set and the
-  normalisation data free to drift, and either of those drifting separates the two
-  paths exactly as a drifting mapping would.
-
-  The normalisation data is **three generated tables**, shipped in
-  `static/task-search.js` exactly as `FOLD_TABLE` and `SPACE_TABLE` already are:
-  `DECOMP_TABLE`, the full canonical decompositions, **2,081** entries;
-  `CCC_TABLE`, the canonical combining classes, **403** spans; and `COMPOSE_TABLE`,
-  the primary composites, **961** entries. Together the three are the largest part
-  of the script the binary serves — on the order of 60 KB, well over half of it.
-  They are that small only because Hangul is **not** tabulated: UAX #15 decomposes
-  and composes Hangul arithmetically, so the 11,172
-  Hangul syllables are computed on both sides rather than stored. Tabulating them
-  would take `DECOMP_TABLE` from 2,081 entries to 13,253 and `COMPOSE_TABLE` from
-  961 to 12,133, for data that a few lines of arithmetic already give exactly.
-
-  **That size is an order of magnitude and not a byte count, deliberately.** The
-  three entry counts above are backed: the check described below reads the shipped
-  tables as numbers and requires the count, and every entry, to equal what
-  Groadmap derives from the module's character data, so an entry count stated here cannot drift from
-  the artefact without the `test` gate failing. A byte count has no such backing.
-  It is a property of the generator's layout — the indentation, the line width,
-  and the separator its emitter writes — and the check is blind to all three,
-  because it extracts the numbers and ignores the text around them. Changing any
-  of the three would move a byte count stated here and leave every gate green. A
-  figure a reviewer trusts and no gate checks is worse than no figure at all, so
-  this section states none: whoever needs the exact size measures the artefact,
-  which is its only authority.
-
-  Each part is checked over **the whole of Unicode** — every code point, not a
-  sample — against the function that produces it on the server's side: the
-  server's own fold, the server's own whitespace set, and, for the three
-  normalisation tables, the derivation from the module's character data. It is
-  checked against that function itself, never against a stored copy of its
-  expected results — such a copy can be updated to match a changed fold, a changed
-  whitespace set, or changed normalisation data, and would then prove nothing. The
-  check fails when a single code point folds differently on the two sides; it
-  fails the same way when a single code point is whitespace to one side and not to
-  the other; and it fails the same way when a single code point decomposes,
-  orders, or composes differently between the shipped tables and the derived
-  data. It fails the same way again when a toolchain upgrade or a
-  dependency upgrade changes any of them, so a change of Unicode version cannot move
-  one side of the rule and leave the other behind unnoticed: a server whose rule
-  moved is **caught**, never followed. The check also asserts, as an absence in the
-  script the binary serves, that the narrowing script calls neither a case
-  conversion of the platform, nor a trimming function of the platform, nor the
-  platform's own normalisation. **This check carries no build tag, so the `test`
-  gate compiles and runs it, and every run of that gate re-establishes it.**
-
-  **The shipped normalisation is proven equal to the server's on demand, and not
-  by any gate.** Equal data is not yet an equal rule, because the server does not run the shipped
-  algorithm: it runs the module's own. Three further checks close that gap, and
-  each of them re-establishes it whenever it runs. All three live in
-  `internal/unicodenorm`, beside the Go statement of the client's algorithm that
-  `BUILD.md § External Dependencies`, Unicode Data Rules 3, requires, and the
-  first two run that statement over the derived data, which the check above holds
-  equal to the shipped tables.
-
-  **Where these three run is not where the check above runs.** All four checks
-  `internal/unicodenorm` carries — these three and the regression that holds the
-  twelve code points of `BUILD.md § External Dependencies`, Unicode Data Rules 3,
-  to the composition Unicode gives them — carry the `heavy` build tag. No
-  validation gate and no workflow compiles them, and `make test-heavy` is the only
-  thing that runs them (see `BUILD.md § Validation Gates`). The equality of the
-  shipped data to the server's is therefore established at every run of the `test`
-  gate; the equality of the shipped algorithm to the server's is established when
-  `make test-heavy` is run, and at no other moment.
-
-  1. **Every single code point.** The client's algorithm equals the module's
-     Normalization Form C on **all 1,112,064** code points of Unicode.
-  2. **Every pair that can interact.** It equals the module's Normalization Form C
-     on every sequence of two code points whose first is any code point of Unicode
-     and whose second is one that can interact with a code point before it: a code
-     point whose full canonical decomposition begins with a code point that carries
-     a non-zero canonical combining class, or with one that is the second element
-     of a canonical composition, the Hangul vowel and trailing-consonant jamo
-     included. A code point outside that set begins with a starter that nothing
-     composes with, so no code point before it can change it or be changed by it,
-     and under UAX #15 a pair ending in one normalises to the concatenation of the
-     two single code points the first check covers. The set holds about a thousand
-     code points, so this check compares over a billion pairs, which takes minutes
-     rather than seconds under the race detector `make test-heavy` runs; it MUST
-     therefore divide its sweep across the processors available rather than run it
-     on one.
-  3. **The exclusions.** The composition exclusions the derivation reads equal
-     Full_Composition_Exclusion as the Unicode Character Database publishes it,
-     over the whole of Unicode and in **both** directions — a false positive drops a
-     composite Unicode composes, a false negative admits one Unicode excludes, and a
-     single total would let the two cancel.
-
-  **Sequences of three or more code points are not enumerated, and this is the
-  limit of the proof, stated rather than covered over.** Their number grows without
-  bound, so no sweep reaches them. They are covered because the two
-  implementations follow one algorithm: UAX #15 defines Normalization Form C as
-  full canonical decomposition, then canonical ordering, then canonical
-  composition, each step a function of the input and of data the checks above hold
-  equal, and both the module and the client's algorithm implement those steps. A
-  difference that only a longer sequence could reveal would be a departure of one
-  of the two from UAX #15, not a difference in the data.
-
-  **A count of inputs stood here, and it was withdrawn rather than updated.** It
-  reported that a prototype driven by these tables had been checked against the
-  platform's own normalisation over 69,956,194 inputs with 0 failures, broken into
-  five domains. Three reasons removed it. The prototype no longer exists, so the
-  run cannot be repeated. Four of the five domains are sized by the Unicode
-  version, so the total moved the day the toolchain moved and nothing reported
-  that it had. And re-deriving the domain sizes would have restated a proven
-  result over inputs no measurement ever visited, which is worse than an obsolete
-  figure and not better. This is **That size is an order of magnitude and not a
-  byte count, deliberately**, above, applied to this paragraph: a figure a reviewer
-  trusts and no gate checks is worse than no figure at all. What stands in its
-  place is the stronger claim rather than the smaller one, because the count
-  recorded that the rule had been correct once and the checks above require it to
-  be correct now.
-
-  Every check this section describes is an ordinary Go test. None of them runs
-  JavaScript or requires a JavaScript engine, Node.js, network access, or a module
-  beyond the direct dependencies `BUILD.md § External Dependencies` names, so they
-  hold within the constraints already fixed in that section and in
-  `BUILD.md § Vendored Web Assets`, rule 2. It is the discipline the badge
-  colour mapping already follows wherever a client script carries that mapping too
-  (see
-  [Status, Priority, and Severity Badge Colours](#status-priority-and-severity-badge-colours),
-  rule 2).
-- **Header filter controls.** Beside the search input, the page header's actions
-  column carries **three filter dropdowns** (select controls) that narrow the board
-  by what a task **is**, where the search narrows it by what a task is **called**:
-
-  1. a **type filter**, offering the ten `TaskType` values (`MODELS.md § Enums`);
-  2. a **minimum-priority filter**, offering the thresholds `1` to `9` over the
-     task's `priority` (`MODELS.md § Task`);
-  3. a **minimum-severity filter**, offering the thresholds `1` to `9` over the
-     task's `severity` (`MODELS.md § Task`).
-
-  The ten type values are enumerated in `MODELS.md § Enums` and are not restated
-  here, so the type filter cannot drift from the enum. The thresholds are the
-  `priority` and `severity` range of `MODELS.md § Task` without its `0` floor, for
-  the reason **What each filter matches** below gives.
-
-  These are exactly the three dimensions the CLI already filters `rmp task list` by
-  — `-y, --type`, `-p, --priority`, and `--severity` (see
-  `COMMANDS.md § List Tasks`) — so the page presents no less capability over the
-  board than the command that lists the same data. Each dimension is also
-  visible on the card the filter acts on: the card's badge line shows the task's
-  `severity`, its `priority`, and its `type` (see **Card content** above), so the user filters by values the board already displays, as the
-  search matches text the card already displays.
-
-  Each dropdown offers, as its **first** option, a value meaning *no filter on this
-  dimension* — for example `Any type` — and that option is the selected one whenever
-  the dimension carries no filter. That option is a **value**, not the control's
-  name: each dropdown carries a real, programmatically associated **label** naming
-  the dimension it filters, and neither a first option nor a `placeholder` stands in
-  for that label, by the same rule **Header search control** above applies to the
-  search input. Each control is reachable and operable from the keyboard.
-
-  **Each dimension takes exactly one value.** A dimension carries one filter or it
-  carries none; it never carries a set. `rmp task list` is single-valued on all
-  three flags, a threshold is a single number by construction, and one value per
-  dimension keeps a single filtering model across the three controls instead of a
-  set-valued model for the categorical dimension and a scalar one for the two
-  ordinal dimensions.
-
-  **A filter value is never echoed into the page.** Unlike the term, a filter value
-  is not caller-supplied text rendered back to the user: the options are the fixed
-  sets enumerated above, emitted by the server from the enum and from the range, and
-  all a parameter does is decide which of those options is marked as selected. A
-  value that is not one of them selects the no-filter option (see **No filter value
-  is an error** below), so no caller-supplied string reaches the page through
-  `type`, `priority`, or `severity`, and the question that **Escaping the term**
-  below answers for `q` does not arise for the filters.
-- **What each filter matches.** The three dimensions do not compare the same way,
-  and each keeps the meaning the CLI flag of the same name already carries (see
-  `COMMANDS.md § List Tasks`), so one parameter name means one thing across the two
-  surfaces:
-  - **Type is an equality.** A task matches when its `type` is **equal to** the
-    selected `TaskType` value. The comparison is exact against the value as
-    `MODELS.md § Enums` spells it, in upper case; a differently spelled or
-    differently cased value is not one of the ten and is handled by **No filter
-    value is an error** below.
-  - **Priority and severity are thresholds.** A task matches the priority filter
-    when its `priority` is **greater than or equal to** the selected value, and the
-    severity filter when its `severity` is greater than or equal to the selected
-    value. This is the meaning `rmp task list` already gives `-p, --priority <n>`
-    ("Filter priority >= n") and `--severity <n>` ("Filter severity >= n"), and
-    `priority` and `severity` are ordinal `0`-`9` ranges rather than categories
-    (`MODELS.md § Task`), so "at least" is the comparison that fits them.
-
-    The offered thresholds start at `1` and not at `0` because a threshold of `0`
-    admits every task and is therefore the unfiltered board, which already has its
-    own option and its own URL form — the parameter absent (see **The URL carries
-    the filters** below). Offering `0` would give one board two URLs and two
-    control settings, which is what **An empty term leaves no parameter** exists to
-    prevent for the term.
-- **Why the board offers no status filter.** The board deliberately offers **no**
-  filter over a task's `status`, and the omission follows from the layout rather
-  than from an oversight:
-  1. **The columns already are the status.** The board has exactly five fixed
-     columns, one per `TaskStatus` value, and each task sits in the column of its
-     own status (see **Columns** and **Placement** above). The narrowing a status
-     filter would perform is the narrowing the layout has performed already: a user
-     who wants the `DOING` tasks reads the `DOING` column, which is already
-     separate, already ordered, and already counted.
-  2. **Keeping the columns would make the board state something false.** A status
-     filter that left the five columns in place would leave the excluded columns
-     present, in order, and showing the count `0`, while the roadmap holds tasks in
-     those statuses. A column count is a statement of fact about what that column
-     shows (see **Count per column** above), so the board would state that the
-     roadmap holds no task in a status that in fact holds many.
-  3. **Dropping the columns would contradict the layout.** A status filter that
-     instead dropped or hid the excluded columns would break the rule that all five
-     columns are always present, in order, whatever the data contains (see
-     **Columns** above), and would leave the filter and the layout disagreeing
-     about how many columns a board has.
-  4. **Two controls would state one fact.** With a status filter active, a card's
-     status would be stated twice on one screen — by the column the card sits in
-     and by the control that admitted it — and nothing would keep a reader from
-     taking the two statements for two different facts.
-
-  Status is therefore the one task attribute this page presents **structurally**,
-  and the header controls filter only attributes the layout does not already
-  express.
-- **No filter value is an error.** A filter parameter whose value is not one the
-  dimension accepts applies **no filter on that dimension**, and the board is
-  rendered exactly as though that parameter were absent. This covers every way a
-  value can fail to be accepted: a `type` that is not one of the ten `TaskType`
-  values, including one that differs from a value only in case; a `priority` or
-  `severity` that is not an integer, or is an integer outside `1` to `9` — `0`
-  included, because a threshold of `0` is no filter (see **What each filter
-  matches** above); a value carrying a sign, surrounding spaces, or any other
-  decoration; a parameter present with an empty value; and a parameter the server
-  cannot decode.
-
-  The dimensions are independent under this rule: an unusable `type` leaves an
-  accepted `priority` applied and the search term applying, and narrows nothing of
-  its own. No filter value produces an error page and none changes the route's
-  status codes — **No malformed term is an error** below holds for the filters
-  exactly as it holds for the term, and the page answers HTTP 200 whatever the
-  three parameters carry.
-
-  **One value is read per dimension.** Because each dimension takes exactly one
-  value (see **Header filter controls** above), a URL that repeats a parameter —
-  `?type=BUG&type=EPIC` — is read as its **first** occurrence and the remaining
-  occurrences are ignored, so a hand-written URL has one defined reading rather
-  than an implementation-defined one. A single value that packs several —
-  `?type=BUG,EPIC` — is not a list: it is one string, that string is not one of the
-  ten `TaskType` values, and the rule above therefore ignores it. Neither form is a
-  partly valid filter, so this contract needs no rule for "some values accepted,
-  some not": a dimension is filtered by one accepted value, or it is not filtered.
-- **Effect on the board.** A task that does not satisfy every active criterion is
-  not shown. Everything the board states about itself then refers to the **shown
-  set**, not to the roadmap.
-  This holds continuously: as the user types a term or changes a filter, the counts,
-  the empty states, and the no-match message are updated together with the cards, so
-  the board is never left stating something true of a previous set of controls or of
-  the unnarrowed roadmap:
-  - Each column shows only its matching cards, in the order fixed by **Order within
-    a column**, which the narrowing preserves.
-  - **Each column's count is the number of cards that column is showing.** The
-    counts follow the narrowing. A count that kept reporting the unfiltered total
-    while the column displayed fewer cards would state something false about what
-    the user is looking at, which is exactly what **Count per column** exists to
-    prevent.
-  - **"Shown" means visible to the user, not present in the document.** A card that
-    is present but marked as not visible is not shown: it counts towards nothing the
-    board states, and a column whose every card is in that state displays its empty
-    state exactly as a column with no such card would.
-  - The five columns remain present and in order. Neither searching nor filtering
-    ever drops, hides, or reorders a column. The board offers no status filter, so
-    no control narrows the columns themselves (see **Why the board offers no status
-    filter** above).
-  - A column left with no matching card shows its ordinary in-column empty state.
-  - When **no** task matches, the board says so: it shows a clear message naming
-    that no task matches the controls the board is currently narrowed by, alongside
-    the five empty columns, rather than leaving five silently empty columns for the
-    user to interpret. One message covers the term and the filters together, because
-    the shown set is their conjunction and singling out one control would attribute
-    the empty result to a cause the board cannot know. This is distinct from a
-    roadmap that holds no task at all, which is not the result of any control and is
-    covered by **Empty states**.
-- **The URL carries the term.** The term travels in the URL query parameter **`q`**
-  on `/roadmaps/{name}/tasks`. The name matches the role `q` already has on the
-  graph data endpoint — the text the user typed into a search control (see
-  [Graph Data Endpoint](#graph-data-endpoint)) — and the two are distinct routes,
-  so the shared name carries one meaning per route and no ambiguity.
-  - **Live typing updates the URL in place.** As the user types, the page replaces
-    the current history entry so the address bar always reflects the board on
-    screen. It MUST NOT push a new history entry per keystroke, which would turn
-    the browser Back button into an undo key for typing.
-  - **An empty term leaves no parameter.** When the term is empty or entirely
-    whitespace, `q` is **removed** from the URL rather than left present and empty:
-    the unfiltered board's URL is the bare page URL. "Entirely whitespace" is the
-    trim rule's whitespace and no other (see **The trim rule** above), so the two
-    paths agree on which terms are no term at all: a term of `U+FEFF` alone is not
-    one of them, and `q` keeps it.
-  - **Cold load arrives already narrowed.** When the page is requested with a `q`
-    value, the **server** applies the term, and the document it sends already
-    carries the narrowing in its final state: the narrowed column counts, the
-    in-column empty states, and the no-match message where nothing matches. Nothing
-    on the client applies the term after load. A document that arrived unnarrowed
-    and was narrowed by a script afterwards is forbidden: it would flash the
-    unfiltered board before narrowing it, and where scripting is unavailable it
-    would leave the URL carrying a term while the board ignored it.
-
-    The non-matching cards **may** be present in that document, provided they
-    arrive already marked as not visible and count towards nothing the board
-    states. Their presence is not a concession but the enabling condition for
-    **Live typing** above: clearing or widening the search restores cards, and a
-    card the document never carried could not be restored without going back to the
-    server, which would make the narrowing instantaneous in one direction only. The
-    rule forbids narrowing applied *after* load; it does not forbid cards *present*
-    in the document.
-- **The URL carries the filters.** Each filter travels in its own URL query
-  parameter on `/roadmaps/{name}/tasks` — **`type`**, **`priority`**, and
-  **`severity`** — named after the `rmp task list` flags that carry the same three
-  dimensions (see `COMMANDS.md § List Tasks`). Each obeys the rules that **The URL
-  carries the term** states for `q`, for the same reasons:
-  - **Changing a filter updates the URL in place.** Selecting a value replaces the
-    current history entry rather than pushing a new one, so the browser Back button
-    leaves the board rather than stepping backwards through the control row.
-    Narrowing the board is one kind of act and does not become a different kind of
-    act because the user performed it with a dropdown instead of a keyboard.
-  - **A dimension with no filter leaves no parameter.** While a dropdown sits on its
-    no-filter option, that dimension's parameter is **removed** from the URL rather
-    than left present and empty. Clearing every control — the search input and all
-    three dropdowns — therefore restores the full board with its true counts, and
-    leaves the bare page URL, with no parameter of any kind behind it.
-  - **Cold load arrives already narrowed.** When the page is requested with any
-    combination of `q`, `type`, `priority`, and `severity`, the **server** applies
-    every one of them, and the document it sends already carries the narrowing in
-    its final state: the narrowed column counts, the in-column empty states, the
-    no-match message where nothing matches, and each control already showing the
-    value that produced the board. Nothing on the client applies a filter after
-    load. Non-matching cards **may** be present in that document under exactly the
-    condition that **The URL carries the term** sets — they arrive already marked
-    as not visible and count towards nothing the board states — which is what lets
-    widening or clearing a filter restore them without a request to the server.
-
-  The four parameters are independent of each other and of their position in the
-  query string: the board depends on which values are present, never on the order
-  in which the query string carries them.
-- **Server and client produce the same board (the property that matters).** For any
-  roadmap and any combination of a term and the three filters, the board reached by
-  setting those controls on the page and the board reached by requesting the page
-  URL carrying the same values in `q`, `type`, `priority`, and `severity` are the
-  **same**: the same cards, in the same columns, in the same order, with the same
-  column counts, and the same empty states. The two paths implement one matching
-  rule per criterion and one conjunction over them, and MUST NOT diverge — that
-  equivalence is what makes a narrowed board shareable and reloadable, and it is the
-  property to test. For the term, one rule per criterion means the trim rule and the
-  folding rule above, each with a single implementation of it, shipped from the
-  server to the client (see **The trim rule**, **The folding rule**, and **One rule,
-  and only one implementation of it**); for a filter it means one comparison per
-  dimension (see **What each filter matches**).
-- **No malformed term is an error.** Every string is a valid term. A term that
-  matches nothing renders the empty board described above, with HTTP 200. A term
-  longer than any searchable text simply matches nothing. A `q` the server cannot
-  decode is treated as absent, and the unfiltered board is served. The search never
-  produces an error page and never changes the route's status codes, and neither
-  does any filter value (see **No filter value is an error** above).
-- **How the criteria compose.** The search term is **one** criterion, and each
-  active filter is one more. The shown set is the set of tasks satisfying **every**
-  active criterion, and a board with no active criterion shows every task. The
-  conjunction is total and holds in every direction: `?q=cache&type=BUG&priority=7`
-  shows the `BUG` tasks of priority `7` or above whose title or `#<id>` reference
-  contains `cache`, and no other task. Narrowing a criterion can only shrink the
-  shown set, never grow it, and no criterion ever re-admits a task another criterion
-  excluded.
-
-  The criteria are independent: each dimension decides only its own question, none
-  of them changes how another is compared, and each carries its own URL query
-  parameter under the same rules as `q` — absent when inactive, applied by the
-  server on a cold load, equivalent between the two paths. A further criterion added
-  later composes the same way and requires no change to this contract.
-- **Escaping the term.** The term is the one caller-supplied string this page
-  echoes back — a filter value never is (see **Header filter controls** above) — and
-  it is treated exactly as every other caller-supplied value:
-  - Where the **server** renders it — into the search input's value, and into the
-    no-match message — it is escaped by `html/template`'s contextual auto-escaping
-    (see [Frontend Rules](#frontend-rules), rule 1).
-  - Where the **script** renders it, it is written through `textContent` or an
-    equivalent that cannot interpret markup, never `innerHTML` and never
-    `insertAdjacentHTML` (see
-    [Security and Constraints](#security-and-constraints), rule 7).
-
-  A term containing HTML markup therefore renders as visible characters on both
-  paths and can introduce no element, attribute, or script into the page.
-- **Implementation constraints already in force.** The narrowing script — the one
-  script that applies the term and the three filters alike — is embedded and served
-  from `/static/...` like every other client script (see
-  [Embedded Asset Categories](#embedded-asset-categories) and
-  [Frontend Rules](#frontend-rules), rules 2 and 5). No inline script is
-  introduced and the Content-Security-Policy in [Security Headers](#security-headers)
-  is unchanged. Every class the controls emit resolves in the embedded stylesheets
-  and no template carries a `style` attribute (see [UI Framework](#ui-framework),
-  rules 8 and 10). The filter dropdowns introduce no component the vendored Tabler
-  distribution does not already ship: the select control is the one the
-  knowledge-graph page's layout dropdown already uses (see
-  [Roadmap Knowledge-Graph Page](#roadmap-knowledge-graph-page)).
-- **Read-only.** The page renders data only. The board offers **no
-  drag-and-drop** and no control of any other kind that moves a task between
-  columns, reorders cards, changes a task's status, or creates or edits a task or
-  a column. This is a deliberate and explicit divergence from the GitLab issue
-  board the layout is modelled on: the inspiration is structural — columns per
-  state, cards, per-column counts — and never interactive. The page contains no
-  form, button, or link that submits a change, and the `rmp` CLI remains the sole
-  write path for every task (see
-  [Security and Constraints](#security-and-constraints)).
-
-  Read-only constrains what the page may **change**, not what it may **show**. A
-  control that only alters which of the already-read tasks the user is looking at —
-  the header search of **Header search control** and the three dropdowns of
-  **Header filter controls** above — changes no task, writes nothing, and is
-  therefore not an exception to this rule. The distinction is
-  between altering the data and altering the view of it: the first is forbidden
-  here, the second is not.
-- **Empty states.** A column that holds no task renders its own clear, unobtrusive
-  empty state inside the column, below the column header, in place of the card
-  list; the column, its title, and its `0` count badge stay visible. A roadmap
-  with no task at all renders the board with all five columns present and each
-  one showing that in-column empty state. The page does **not** replace the board
-  with a page-level empty state, and it never drops or hides a column: the five
-  columns are fixed (see **Columns** above), and an empty roadmap is shown as an
-  empty board, not as an absent one.
-
-  A roadmap that holds no task and a narrowing that matches no task are different
-  conditions and read differently. The first is the state of the roadmap and shows
-  the five in-column empty states alone. The second is the result of the controls
-  the user set — a term, a filter, or any combination of them — so the board
-  additionally says that no task matches those controls (see **Effect on the board**
-  above). In both cases the five columns stay.
-- **Layout and scrolling.** The five columns are presented side by side. When
-  they do not fit the viewport, the **board** scrolls horizontally inside its own
-  container; the page itself never scrolls horizontally, so `<body>` produces no
-  horizontal overflow at any viewport width.
-
-  The board is a **full-height page region**: its height is the space the page body
-  leaves once the top navbar and the page header are placed above it, it ends where
-  the page body ends, and that edge lies within the viewport, exactly as
-  [Full-Height Page Regions](#full-height-page-regions) requires. The board gives up
-  no space for a page footer, because the shell renders none (see
-  [UI Framework](#ui-framework), rule 12). That height is the **available height**
-  each column is measured against: a column scrolls vertically and independently of
-  the others when its card list exceeds it, as a GitLab issue board's lists do.
-
-  The board's own horizontal scrollbar is drawn in space reserved for it **beneath**
-  the columns rather than over them, so the last card of a column stays fully
-  visible while the board can still be scrolled sideways.
-
-  On narrow viewports the board stays usable: each column keeps a minimum width at
-  which its cards remain legible, the user reaches the remaining columns by
-  scrolling the board horizontally (a touch-friendly gesture on a touch device),
-  the cards present touch-friendly hit targets, and the task page a card links to
-  is usable on the same viewport (see
-  [Responsive and Mobile-First Design](#responsive-and-mobile-first-design), rules
-  9 and 11, and [Roadmap Task Page](#roadmap-task-page)). On a viewport too short to
-  present a usable board, the board takes the minimum height of
-  [Full-Height Page Regions](#full-height-page-regions), rule 5.
-- **Column width and card density.** How much of a task's own text the board can
-  place on one line is decided by two lengths — how wide a column is, and how much
-  padding the card inside it spends on its own margins — so both are fixed here
-  rather than left to whatever a framework default happens to be.
-
-  Each of the five columns is **19rem** wide and never narrower than **17rem**. All
-  five carry the same width: a column stands for a state, not for a volume of work,
-  so a column holding many tasks is no wider than one holding none and the board's
-  shape does not change with the data. A column does not stretch to fill a viewport
-  wider than the board needs either; the space beyond the five columns is left empty,
-  which keeps the measure of a card's title the same at every viewport width.
-
-  These widths are this board's own. The sprint page's member-tasks board departs
-  from them deliberately: its three columns divide the width of that board equally
-  and grow with the viewport, for the reason stated where that board is defined (see
-  [Sprint Detail Sub-Template](#sprint-detail-sub-template), **Height and
-  scrolling**). The `17rem` minimum, the `0.75rem` gap between columns, and the
-  `0.75rem` card body padding below are carried by both boards; the `19rem` column
-  width is carried by this one alone.
-
-  Inside a column, the card the user reads and activates carries **0.75rem** of
-  padding on all four sides of its body, in place of the `1rem` the vendored Tabler
-  distribution gives a small card's body. The card's body holds running text — the
-  title, the badge line, and the metadata footer — inside a
-  measure the column has already narrowed, so padding taken off the body is width
-  returned to that text and height returned to the card. The hit target is
-  unaffected, because what the user presses is the whole card and not the text
-  inside it (see **Card content** and **Clickable card** above). The rule is an
-  override of a vendored component's own spacing, declared in the project override
-  stylesheet, which is where such an override belongs (see
-  [UI Framework](#ui-framework), rule 10); it changes no class the board emits and
-  no markup.
-
-  Both lengths are expressed in `rem`, so they scale with the reader's own text
-  size: enlarging the browser's font enlarges the column and the card's padding with
-  it, and the relation between the text and the space around it is preserved.
-- **Markup.** The board obeys the markup rules already in force and introduces no
-  exception to them. Templates carry no inline `style` attribute (see
-  [Frontend Rules](#frontend-rules) and [UI Framework](#ui-framework), rule 10).
-  Every class the board emits is defined in the embedded stylesheets — either in
-  the vendored Tabler distribution or in the project override stylesheet
-  `static/style.css` — and no class targets a framework component the vendored
-  distribution does not ship (see [UI Framework](#ui-framework), rules 8 and 10).
-  Where Tabler provides the component that does the work, the board uses Tabler's
-  markup: the cards are Tabler cards, the column headers use Tabler's card-header
-  idiom, the counts and the four badges of the badge line are Tabler badges,
-  and
-  the in-column empty state uses Tabler's empty-state markup. The vendored Tabler
-  distribution ships no board or Kanban component, so the column strip's own
-  layout and scrolling rules live in `static/style.css`, which is the specified
-  home for project styling no Tabler class covers (see
-  [UI Framework](#ui-framework), rule 10). The page keeps the admin shell and the
-  page header that every other page uses, unchanged and still governed by
+- **Content:** A read-only presentation of the named roadmap's tasks, of any
+  status, read from that roadmap's `project.db` and laid out as **one list**: a
+  single Tabler card holding one table, with one row per task. The list is not
+  divided by status or by any other attribute; a task's status is a column of its
+  row. The card's header carries the **filter bar** that narrows the list, and the
+  card's footer **paginates** it. Every field a task has remains reachable from this
+  page through the task's own page, to which each row links (see
+  [Roadmap Task Page](#roadmap-task-page)). The page renders no board, no column
+  per status, and no card per task.
+- **Modelled on three Tabler examples.** The page follows the official Tabler
+  examples, each for one part of the list card (see [UI Framework](#ui-framework),
+  rule 8):
+  - **The card as a whole** follows Tabler's cards example,
+    `https://preview.tabler.io/cards.html`: one `card` made of a `card-header`, the
+    table in place of a `card-body`, and a `card-footer`, the footer laid out as a
+    `row align-items-center` of `col-auto` columns with the last one pushed to the
+    trailing edge by `ms-auto`.
+  - **The card header** follows Tabler's card-actions example,
+    `https://preview.tabler.io/card-actions.html`: a leading block,
+    `<div><h2 class="card-title">…</h2></div>`, holding the card title, and a
+    trailing `<div class="card-actions">` holding the controls, which Tabler aligns
+    to the header's trailing edge.
+  - **The table and its rows** follow Tabler's task-list example,
+    `https://preview.tabler.io/tasks-list.html`: a `table-responsive` container
+    holding a `table table-vcenter card-table`, whose rows carry the task title,
+    badges, a muted date preceded by a calendar icon, and a right-aligned
+    `btn btn-sm` reading `View`.
+
+  The page departs from the task-list example deliberately, and only in these ways:
+  1. **One card, not one card per group.** The example splits its tasks into
+     several cards by group; this page renders exactly one list card for all the
+     tasks the filters admit.
+  2. **No selection.** The table carries no selection checkbox column and no
+     `table-selectable` class, because nothing on the page acts on a set of tasks.
+  3. **No add-task control and no modal.** The card header carries no add-task
+     button, and the page renders no modal: the page is read-only (see
+     **Read-only** below), and a task is shown on its own page, never in a modal.
+  4. **The columns are the roadmap's.** The example's assignee column, with its
+     avatar, has no counterpart, because a task has no assignee; the columns are
+     the ones **Row content** below fixes.
+  5. **A filter bar, pagination, and a rows-per-page selector are added**, the
+     first in the card header's actions container and the other two in the card
+     footer. The example has none of the three; this page needs them because a
+     roadmap can hold more tasks than one screen presents (see **Filter bar** and
+     **Pagination** below).
+- **The card header.** The list card's header is
+  `<div class="card-header flex-wrap gap-2">` and holds, in this order:
+  1. the **title block**, `<div><h2 class="card-title">Task list</h2></div>`. The
+     block carries **no** `card-subtitle`: the number of tasks the filters admit is
+     already stated by the footer's range text (see **Pagination** below), and a
+     second statement of it in the header would be a copy that can disagree with
+     the first;
+  2. the **actions container**, `<div class="card-actions">`, holding the filter
+     bar's form and nothing else.
+
+  Tabler's `card-header` lays its two blocks out on one line, the title block at
+  the leading edge and the actions container at the trailing edge. The vendored
+  `card-header` does not wrap, so the header carries the Tabler utilities
+  `flex-wrap` and `gap-2`: where the viewport is too narrow for the title block and
+  the form on one line, the actions container moves to a line of its own below the
+  title block, still aligned to the trailing edge, and the form's controls wrap
+  within it, rather than the header overflowing the card (see
+  [Responsive and Mobile-First Design](#responsive-and-mobile-first-design),
+  rule 9).
+- **Filter bar.** The filter bar is a **`GET` form** of native Tabler form
+  controls, placed inside the list card header's actions container (see **The card
+  header** above), whose `action` is the page's own path,
+  `/roadmaps/{name}/tasks`. It is the page's only form. The page header's actions
+  column carries nothing on this page (see
+  [Shared Page-Header Partial](#shared-page-header-partial), rule 5). The form
+  carries, in this order:
+  1. a **search input** —
+     `<input type="search" class="form-control form-control-sm" name="q" placeholder="Search">`
+     — labelled `Search`, matching the task title and the `#<id>` reference (see
+     **The text search** below);
+  2. a **sprint select** — `<select class="form-select form-select-sm" name="sprint">`
+     — labelled `Sprint`, whose width is capped (see **Compact controls** below),
+     offering `Any sprint` (value empty), `No sprint` (value `none`), and
+     one option per sprint of the roadmap, whose value is the sprint's `id` and
+     whose text is `Sprint #<id>` followed by a space and the sprint's `title`. The
+     sprint options follow ascending sprint `Order`, the planned execution order
+     `rmp sprint list` returns (see `COMMANDS.md § List Sprints`). Both the `id` and
+     the `title` are shown because the `title` alone does not identify a sprint:
+     `MODELS.md § Sprint` places no uniqueness constraint on it;
+  3. a **status select** — `<select class="form-select form-select-sm" name="status">`
+     — labelled `Status`, offering
+     `Any status` (value empty) and then the five `TaskStatus` values
+     (`MODELS.md § Enums`) in the order of the task state machine's flow
+     (`STATE_MACHINE.md § Task State Machine`): `BACKLOG`, `SPRINT`, `DOING`,
+     `TESTING`, `COMPLETED`, each option's value and text being the value exactly
+     as the enum spells it;
+  4. a **type select** — `<select class="form-select form-select-sm" name="type">` —
+     labelled `Type`, offering `Any type`
+     (value empty) and then the ten `TaskType` values in the order
+     `MODELS.md § Enums` lists them, each option's value and text being the value
+     exactly as the enum spells it;
+  5. an **Apply** control,
+     `<button type="submit" class="btn btn-primary btn-sm">Apply</button>`.
+
+  The bar carries these five controls and no other: it offers no priority filter,
+  no severity filter, and no Reset control, so that the whole bar fits on the card
+  title's line (see **Compact controls** below). A task's priority and severity
+  remain shown in its row (see **Row content** below); they only do not narrow the
+  list. Clearing the filters is done by choosing each select's *any* option and
+  emptying the search input, then applying, or by following the Reset link of the
+  no-match empty state (see **Empty states** below).
+
+  The form **always** carries the active page size in a hidden input named `size`,
+  the default `25` included, so applying the filters keeps the page size, and it
+  carries no `page` field, so applying the filters always returns to page 1. The
+  rule that `size` is carried only when it is not `25` governs the links the page
+  generates, not the form (see **Pagination** below).
+
+  **Compact controls.** The bar sits in the card header beside the card title, so
+  its controls are Tabler's small variants: every input carries `form-control-sm`,
+  every select `form-select-sm`, and Apply `btn-sm`. The sprint
+  select's width is capped at `16rem` by a `max-width: 16rem` declared for a class
+  of the project override stylesheet `static/style.css`, inside a media query that
+  applies from Tabler's `sm` breakpoint (`576px`) up, so that a long sprint `title`
+  does not widen the bar; below that breakpoint the cap does not apply, and the
+  sprint select fills its row like every other control. The option text is not
+  changed, and the full text of every option remains in the served HTML. The small
+  selects, the small search input, and the Apply button have **one rendered
+  height**: where the vendored `form-select-sm` renders taller than
+  `form-control-sm` and `btn-sm`, the project override stylesheet aligns it, so the
+  controls of a line of the bar share one height.
+
+  **Labels are programmatic, not visible.** Every control carries a real
+  `<label>` associated with it by `for` and `id`, naming what the control filters,
+  and every such label carries Tabler's `visually-hidden` class: it is not
+  displayed, and it remains the control's accessible name. What each control is
+  stays visible through its own text: the search input's `placeholder` reads
+  `Search`, the label's own text, and each select shows its first option — `Any
+  sprint`, `Any status`, `Any type` — or the value selected, whose text names the
+  dimension (`Sprint #<id> …`) or is a value of the enum the label names. The first option of a select is a **value**
+  meaning *no filter on this dimension*, not the control's name, and neither it nor
+  the `placeholder` replaces the label: the label is present in every case. The
+  search input's accessible name, `Search`, contains its visible placeholder text,
+  as WCAG 2.5.3 Label in Name (Level A) requires. Because the placeholder is the
+  search input's only visible label, its text has a contrast ratio of at least
+  4.5:1 against the input's background in the dark theme, as WCAG 2.2 Success
+  Criterion 1.4.3, Contrast (Minimum), requires of text; where the vendored
+  placeholder colour falls short, `static/style.css` sets it (see
+  [UI Framework](#ui-framework), rule 10). Every control is reachable and
+  operable from the keyboard.
+
+  **Each control shows the value that produced the list.** On every response the
+  search input's `value` is the `q` the request carried, with each byte that is not
+  part of a valid UTF-8 sequence replaced by `U+FFFD` (REPLACEMENT CHARACTER), and
+  each select marks as
+  `selected` the option equal to its parameter's accepted value, or its first
+  option — the *any* option — when the parameter is absent or was ignored (see
+  **Query parameters** below). The form is laid out on Tabler's grid, as
+  `<form class="row g-2 align-items-end justify-content-end">` with each control and
+  its label in a `col-12 col-sm-auto` column, so the controls are **trailing-aligned**:
+  at a viewport width of `1440px` the whole bar sits on the card title's line,
+  aligned to the header's trailing edge, as the controls of Tabler's card-actions
+  example do. The **trailing edge** is the position Tabler's own `.card-actions`
+  gives its content: the vendored rule's negative inline-end and block margins are
+  kept on the list card's `card-actions`, and neither the project override
+  stylesheet nor a template cancels them there. This constrains the list card's
+  `card-actions` alone; the sprint board's rule for the `card-actions` of a
+  collapsed column (see [Sprint Detail Sub-Template](#sprint-detail-sub-template))
+  is outside it. On a narrower viewport the controls wrap onto further lines, each line
+  still aligned to the trailing edge; on a phone-sized viewport each control takes a
+  line of its own; and the bar never forces page-level horizontal overflow (see
+  [Responsive and Mobile-First Design](#responsive-and-mobile-first-design),
+  rule 9).
+
+  **The page works without JavaScript.** The filter bar is an ordinary HTML form:
+  choosing values and activating Apply, or pressing Enter in the search input,
+  submits it by `GET`, and the server renders the filtered list. No script is
+  needed to filter, to paginate, or to change the page size; the page loads no
+  script of its own, and selecting a value does not submit the form by itself.
+- **Query parameters.** The filters, the page, and the page size travel in the URL
+  query string of `/roadmaps/{name}/tasks`, so a filtered page survives a reload,
+  can be bookmarked and shared, and is restored by the browser's Back navigation.
+  The parameters are exactly these six:
+
+  | Parameter | Accepted value | Effect |
+  |---|---|---|
+  | `q` | any string | The search term (see **The text search** below) |
+  | `sprint` | `none`, or the `id` of a sprint of the roadmap written as a canonical decimal integer | `none`: only tasks that belong to no sprint; an `id`: only the tasks of that sprint |
+  | `status` | one of the five `TaskStatus` values, exactly as the enum spells it | Only tasks whose `status` equals the value |
+  | `type` | one of the ten `TaskType` values, exactly as the enum spells it | Only tasks whose `type` equals the value |
+  | `page` | a canonical decimal integer of at least `1` | The 1-based page of the list to render (see **Pagination** below) |
+  | `size` | `10`, `25`, `50`, or `100` | The number of rows per page (see **Pagination** below) |
+
+  A **canonical decimal integer** is one or more ASCII digits (`0` to `9`), the
+  first of which is not `0`, with no sign, no whitespace, and no other character.
+  The enum values are matched exactly and case-sensitively: `bug` is not `BUG`.
+  Parameters not in this table are ignored. In particular, `priority` and
+  `severity` are **not** parameters of this page: a request carrying either, with
+  any value, lists exactly what it lists without it, and no generated link carries
+  either.
+
+  **Validation: an unacceptable value is ignored, never an error.** Every
+  parameter is validated before it is used, and a value that is not accepted by the
+  table above is handled as follows:
+  1. **A filter parameter** — `sprint`, `status`, or `type` — whose value is not
+     accepted is **ignored**: the list is rendered exactly as though that parameter
+     were absent, and its control shows its *any* option. This covers a value that
+     differs from an accepted one only in case, a value carrying a sign,
+     surrounding spaces, a leading zero, or any other decoration, a `sprint` that is neither `none` nor the `id` of a sprint of **this** roadmap —
+     the `id` of a sprint of another roadmap, or of no sprint, included — and a
+     parameter present with an empty value, which is also the value the *any*
+     options submit.
+  2. **`page`** whose value is not a canonical decimal integer — absent, empty,
+     `0`, negative, fractional, decorated, or not a number — **falls back to `1`**.
+     A canonical `page` greater than the last page, however large, renders **the
+     last page** (see **Pagination** below).
+  3. **`size`** whose value is not one of the four accepted values **falls back to
+     `25`**, the default, and the rows-per-page selector marks `25` as active.
+  4. **`q`** accepts every string, so no `q` is ignored for its content (see
+     **The text search** below).
+  5. **A parameter the server cannot decode** — one whose percent-encoding is
+     malformed — is treated as absent, and the parameters that decode are applied
+     unaffected.
+  6. **One value is read per parameter.** A URL that repeats a parameter —
+     `?type=BUG&type=EPIC` — is read as its **first** occurrence, and the remaining
+     occurrences are ignored. A single value that packs several — `?type=BUG,EPIC`
+     — is one string that is not an accepted value, and rule 1 ignores it.
+  7. **The parameters are independent.** An ignored parameter narrows nothing and
+     leaves every accepted parameter applied, and the list depends on which values
+     are present, never on the order in which the query string carries them.
+
+  No parameter value produces an error page and none changes the route's status
+  codes: the page answers HTTP 200 whatever its six parameters, or any other
+  parameter, carry (see
+  [Routes and Pages](#routes-and-pages)).
+
+  **Values reach SQL only as bound parameters.** The accepted values of `sprint`,
+  `status`, and `type` are passed to the task read as
+  bound parameters of its prepared statement; no parameter value is ever
+  concatenated or interpolated into SQL text, and an ignored value reaches no
+  statement at all (see `DATABASE.md § List All`). `q`, `page`, and `size` never
+  reach SQL: they are applied in memory (see **Read cost** below).
+- **What each filter matches, and how the criteria compose.** Each accepted filter
+  is one criterion, and the search term, when it is not empty, is one more:
+  - **Sprint is membership.** `none` admits a task that has no `sprint_tasks` row;
+    a sprint `id` admits a task whose `sprint_tasks` row names that sprint. A task
+    belongs to at most one sprint (see `DATABASE.md § Relationships`), so the two
+    forms partition the roadmap's tasks between them and the sprints.
+  - **Status and type are equalities**, against the value exactly as
+    `MODELS.md § Enums` spells it.
+
+  The list shows the tasks that satisfy **every** active criterion, and a request
+  with no active criterion shows every task of the roadmap. The conjunction is
+  total: `?q=cache&status=DOING&type=BUG` shows the `DOING` tasks of type `BUG`
+  whose title or `#<id>` reference contains `cache`, and no other task.
+  Adding a criterion can only shrink the list, never grow it, and no criterion
+  re-admits a task another excluded.
+- **The text search.** The search answers "which task is this?" from what
+  identifies a task in its row.
+  - **What it matches.** A task has exactly two **searchable texts**, two things its
+    row displays: the task `title`, and the task reference `#<id>`, written with its
+    leading `#`. A task matches a term when **either** searchable text contains the
+    term: the title contains it, **or** the reference contains it. The two are
+    matched **separately** and are never joined into one string, so a term made of
+    the end of the title followed by the start of the reference is contained in
+    neither and does not match the task. Because the reference is matched as the literal string `#42`, both `42`
+    and `#42` find task 42 under the one substring rule below, with no special case
+    for either form. Every other task field is excluded: a term occurring only in a
+    task's `functional_requirements` does not match it. Every rule below that
+    prepares "a task's searchable text" prepares each of the two on its own.
+  - **Matching rule.** Matching is **case-insensitive** and by **substring**: a
+    task matches when its prepared title, or its prepared reference, contains the
+    prepared term.
+    Preparing the term is three steps, in this order — trim, normalise, fold — and
+    preparing a task's searchable text is two — normalise, fold — because the text
+    is never trimmed: a task's own leading or trailing whitespace is part of its
+    text. Whitespace inside the term is significant and is matched literally. A
+    term that is empty after the trim is **no term at all**, and the search is not a
+    criterion.
+  - **The trim rule.** Every code point carrying Unicode's **White_Space**
+    property is removed from the **start** of the term and from its **end**, and
+    removal stops at the first code point that does not carry the property. The set
+    is named by that property and by no platform's trimming function: `U+0085`
+    (NEXT LINE) carries the property and **is** removed from the ends of a term,
+    and `U+FEFF` (ZERO WIDTH NO-BREAK SPACE) does not carry it and is **not**
+    removed, so a term pasted with a leading byte-order mark keeps it and matches
+    nothing on an ordinary roadmap. The space, the tab, the carriage return, and
+    the line feed a user can type are removed.
+  - **The normalisation rule.** After the trim, the term and the task's searchable
+    text are both normalised to Unicode's **Normalization Form C** — NFC, the
+    canonical composition of the full canonical decomposition, as UAX #15 defines
+    it — so that two byte sequences that render as the same text are one text: a
+    task whose `title` holds a precomposed `é` (`U+00E9`) and a task whose `title`
+    holds `e` followed by a combining acute (`U+0065 U+0301`) are both found by a
+    term typed in either spelling.
+
+    **Normalisation is for comparison only: never for storage, and never for
+    display.** The bytes `rmp` stores stay exactly the bytes it was given, and the
+    row renders the title the roadmap actually holds.
+
+    **NFC and not NFD.** NFD decomposes every accented letter, so under it the
+    term `cafe` would be a substring of a title `Café Lisboa onboarding` and `ae`
+    of `Aérea`. NFC leaves a precomposed letter precomposed, so neither term
+    matches and an accented word stays one unit. The rule answers what a term
+    **is**, and it does not answer whether an accent should be ignored.
+
+    **What the rule changes, measured.** Of Unicode's 1,112,064 code points,
+    exactly **1,117** produce a different searchable text under this rule than
+    without it, and **not one of them is ASCII**: the canonical singletons and the
+    composition exclusions — `U+0340`, `U+0341`, `U+0343`, `U+0344`, `U+0374`,
+    `U+037E`, `U+0387`, the `U+0958`..`U+095F` Devanagari set, and their kind. An
+    ordinary Latin roadmap is untouched.
+
+    **Two passes, not one, and normalise before folding.** The pipeline is trim,
+    then NFC, then fold, then **NFC again**. The fold can produce a sequence that
+    composes where the unfolded one did not: NFC leaves `H` followed by `U+0331` as
+    two code points, the fold lowers the `H`, and `h` followed by `U+0331` composes
+    to `U+1E96`, so without the second pass a task titled `H̱ydro` would not be
+    found by the term `ẖ`. Measured over the 1,440,384 sequences of a folding code
+    point followed by a non-starter, one pass leaves the result outside NFC on
+    **70** of them and two passes leave it in NFC on all of them, so a third pass
+    would change nothing and is not performed. Normalising **before** the fold is
+    the only order that gives a title written with `U+0130` (LATIN CAPITAL LETTER I
+    WITH DOT ABOVE) and a title written as `U+0049` followed by `U+0307` — the same
+    text by Unicode's own definition — one searchable text.
+
+    The server normalises with `golang.org/x/text/unicode/norm`, the Go project's
+    own implementation of UAX #15 (see `BUILD.md § External Dependencies`).
+  - **The folding rule.** The normalised term and the normalised searchable text
+    are folded by Unicode's **simple lowercase mapping**: the single replacement
+    code point the Unicode Character Database gives a code point, applied to each
+    code point on its own, with a code point that has no such mapping folding to
+    itself. The fold is **unconditional** (no context changes what a code point
+    folds to), **one code point in, one code point out** (it never lengthens or
+    shortens the text), and **locale-independent** (a locale-sensitive case
+    conversion MUST NOT be used). It is deliberately not Unicode's full Default Case
+    Conversion, and the two code points on which the two differ are fixed:
+    `U+0130` folds to `U+0069` alone, never to `U+0069 U+0307`; and `U+03A3`
+    (GREEK CAPITAL LETTER SIGMA) folds to `U+03C3` in every position, word-final
+    included, never to the final form `U+03C2`. **Nothing is rewritten after the
+    mapping**: a `U+03C2` the user typed folds to itself and is not rewritten to
+    `U+03C3`.
+  - **One implementation.** The term and every task's searchable text are
+    prepared by the server alone, through one normalisation function and one
+    folding function shared by both, so the two cannot be prepared by two
+    implementations of one description.
+  - **No malformed term is an error.** Every string is a valid term. A term that
+    matches nothing renders the no-match empty state (see **Empty states** below)
+    with HTTP 200, and a term longer than any searchable text simply matches
+    nothing. A term whose bytes are not valid UTF-8 has each invalid byte replaced
+    by `U+FFFD` before it is prepared, and is then matched like any other term; the
+    search input echoes the term with the same replacement (see **Escaping**
+    below).
+- **Order.** The rows appear in one deterministic order over the whole filtered
+  set: descending `priority`, then ascending `created_at` for tasks of equal
+  priority, then ascending `id` for tasks equal on both. The first two keys are the
+  default `ListTasks` ordering (see `DATABASE.md § Main SQL Queries`, "List All");
+  the `id` key makes the order total, so that a task equal to another on the first
+  two keys lands on the same page on every request, and no task appears on two
+  pages or on none. Filtering and searching remove rows from that order and never
+  reorder the rows that remain.
+- **Pagination.** The filtered list is paginated **on the server**.
+  - **Page size.** `size` rows per page, one of `10`, `25`, `50`, and `100`; the
+    default is `25`.
+  - **Page count.** The last page is `ceil(total / size)`, where `total` is the
+    number of tasks satisfying every active criterion, and there is always at least
+    one page. A `page` beyond the last page renders the last page, and an
+    unacceptable `page` renders page 1 (see **Query parameters** above).
+  - **Rows of a page.** Page `p` shows the rows at positions `(p - 1) × size + 1`
+    to `min(p × size, total)` of the order above.
+  - **The card footer.** The footer is
+    `<div class="card-footer">` holding one `<div class="row g-2 align-items-center">`
+    whose three `col-auto` columns carry, in this order, the range text, the
+    rows-per-page selector, and the pagination bar, the last column also carrying
+    `ms-auto` so that the pagination bar sits at the footer's trailing edge. On a
+    narrow viewport the columns wrap onto further lines rather than overflowing
+    the card.
+  - **Range text.** The footer's first column states
+    `Showing <a> to <b> of <total> entries`, where `<a>` and `<b>` are the first
+    and last positions the page shows and `<total>` is the number of tasks
+    satisfying every active criterion — the filtered total, not the roadmap's.
+    The text is rendered as Tabler's table-footer idiom,
+    `<p class="m-0 text-secondary">`, holding each of the three numbers in its own
+    `<span>`.
+  - **Pagination bar.** The footer's third column carries a Tabler
+    numbered pagination bar with the same shape, the same sliding window with
+    ellipsis, the same **Previous** and **Next** chevrons, and the same markup as
+    the audit log page's (see [Roadmap Audit Log Page](#roadmap-audit-log-page),
+    **Pagination controls**, **Sliding window with ellipsis**, and **Pagination
+    markup**), inside a `<nav>` whose `aria-label` is `Task list pages` (see
+    [UI Framework](#ui-framework), rule 15). A list of one page still shows the bar,
+    holding its single page as the active item.
+  - **Rows-per-page selector.** The footer's second column carries the visible
+    text `Rows per page` followed by a Tabler button group, `<div class="btn-group" role="group">` labelled by
+    that text, holding four links, each carrying the Tabler classes `btn` and
+    `btn-sm`, reading `10`, `25`, `50`, and `100` in that order. The link of the
+    active page size also carries `active` and `aria-current="true"`.
+
+    **The active size is not shown by colour alone.** The active link is drawn
+    with a **solid fill** — for example Tabler's primary colour — that the inactive
+    links do not carry, so it differs from them in fill and not in hue alone
+    (WCAG 2.2 Success Criterion 1.4.1, Use of Color). The fill has a contrast ratio
+    of at least 3:1 against the card footer's background and against the fill of
+    an inactive link beside it (Success Criterion 1.4.11, Non-text Contrast), and
+    the active link's text has a contrast ratio of at least 4.5:1 against the fill
+    (Success Criterion 1.4.3, Contrast (Minimum)). The state is also exposed to
+    assistive technology by `aria-current="true"`, as for the pagination bar's
+    active item. Where the vendored `btn.active` styling falls short of these
+    ratios, the project override stylesheet `static/style.css` sets the fill (see
+    [UI Framework](#ui-framework), rule 10).
+  - **Links keep the filters.** Every link the page generates to the page itself —
+    each page number and chevron of the pagination bar, and each rows-per-page
+    link — carries every accepted filter parameter of the current
+    request, with its accepted value, and no ignored one. A pagination link sets
+    `page` and keeps `size`; a rows-per-page link sets `size` and carries no
+    `page`, so changing the page size returns to page 1; submitting the filter bar
+    carries no `page`, so changing a filter returns to page 1. A generated link
+    carries `page` only when it is greater than `1`, `size` only when it is not
+    `25`, and `q` only when the term is not empty after the trim; the `q` a link
+    carries is the term as the search input echoes it, with each byte that is not
+    part of a valid UTF-8 sequence replaced by `U+FFFD`, then percent-encoded; the
+    order of parameters in a generated link carries no meaning. The filter bar's form is not
+    a generated link: it carries `size` on every submission, `25` included (see
+    **Filter bar** above).
+  - **What the total costs.** The total is the size of the filtered set the page
+    already holds in memory, so it costs no query of its own, and it is correct by
+    construction: the task read is bounded by the filters alone and never by a
+    page, and the `rmp task list` display default — `-l, --limit <n>`, default
+    `100` (see `COMMANDS.md § List Tasks`) — MUST NOT be applied to it.
+- **Row content.** The table's header row, inside `<thead>`, names the columns;
+  each row of `<tbody>` presents one task, in these cells and in this order:
+
+  | Column heading | Cell content |
+  |---|---|
+  | `ID` | The **id badge**: a Tabler badge reading `#<id>` and carrying the classes `bg-black` and `text-white`, exactly the id badge of the sprint board's card (see [Sprint Detail Sub-Template](#sprint-detail-sub-template), **The card**). The heading cell carries the Tabler class `w-1`. |
+  | `Title` | The task `title`, as a link to the task's own page (see **Links to the task page** below). A long title wraps within its cell at word boundaries; the cell carries no `text-break` and no other rule that breaks a word, and it has a minimum width of `16rem` (see **Column widths** below). |
+  | `Type` | The **type badge**: a Tabler badge reading the task's `type` exactly as the `TaskType` enum spells it, coloured by the task type mapping. |
+  | `Status` | The **status badge**: a Tabler badge reading the task's `status` exactly as the `TaskStatus` enum spells it, coloured by the task status mapping. |
+  | `Sprint` | The sprint the task belongs to, as plain text: `Sprint #<id>` followed by a space and the sprint's `title`. A task that belongs to no sprint shows an em dash (`—`). The cell has a minimum width of `10rem` (see **Column widths** below). |
+  | `Severity` | The **severity badge**: a Tabler badge reading `S` immediately followed by the task's `severity`, coloured by the severity band mapping. |
+  | `Priority` | The **priority badge**: a Tabler badge reading `P` immediately followed by the task's `priority`, coloured by the priority band mapping. |
+  | `Created` | The task's `created_at`, in the display form of [Date and Time Display](#date-and-time-display), in a `<time>` element, preceded by the Tabler Icons calendar icon `<i class="ti ti-calendar me-1" aria-hidden="true"></i>`; the cell carries the Tabler class `text-secondary`, so the date is muted. |
+  | `Actions` | A link carrying the Tabler classes `btn` and `btn-sm` and reading `View`, to the task's own page (see **Links to the task page** below). The heading cell and the cell carry the Tabler class `text-end`, so the link is right-aligned. |
+
+  Every badge colour is the one the mappings of
+  [Status, Priority, and Severity Badge Colours](#status-priority-and-severity-badge-colours)
+  assign; the list introduces no colour and no band of its own. The `S` and `P`
+  badge labels, and the order in which severity precedes priority, are those of the
+  sprint board's card, so a reader meets a task's reference, severity, priority,
+  and type in one form on both pages (see
+  [Sprint Detail Sub-Template](#sprint-detail-sub-template), **The card**). Both
+  the `id` and the `title` of a sprint are shown because the `title` alone does not
+  identify a sprint. The sprint text is not a link.
+
+  **Column widths.** The table keeps its automatic layout, which shares the
+  available width among the columns by their content. A class that breaks words
+  anywhere, such as Tabler's `text-break`, MUST NOT be applied to the title cell:
+  under the automatic layout it lets the column shrink to the width of a few
+  characters, so that at viewports of `992px` and below a title is squeezed into a
+  column one or two words wide. Instead, the title cell carries a class of the
+  project override stylesheet `static/style.css` declaring `min-width: 16rem`, and
+  the Sprint cell carries a class of that stylesheet declaring `min-width: 10rem`. A title word longer than its cell is
+  not broken: the table grows wider than the card, and it scrolls horizontally
+  inside its `table-responsive` container, never the page (see
+  [Responsive and Mobile-First Design](#responsive-and-mobile-first-design),
+  rule 9).
+
+  The row presents a subset of the task's fields by design. Every field of the
+  `Task` model is shown on the task page the row links to (see
+  [Roadmap Task Page](#roadmap-task-page)). The row does not redefine any field;
+  `MODELS.md` and `DATABASE.md` remain canonical.
+- **Links to the task page.** Each row carries exactly two links, and both lead to
+  the task's own page, `/roadmaps/{name}/tasks/{id}`: the title, and the `View`
+  link. Following either is an ordinary navigation to a server-rendered page; the
+  list fetches nothing when a link is followed and opens no write path. Both are
+  `<a>` elements with an `href`, so a pointer click, a touch tap, and the Enter key
+  follow them through the browser's own activation behaviour with no added
+  JavaScript, and the browser's own link behaviours — opening in a new tab or
+  window, copying the address — apply to them. The `View` link's accessible name is
+  `View task #<id>: <title>`, carried by its `aria-label`, so it identifies the task
+  and still begins with its visible label text, as WCAG 2.5.3 Label in Name
+  (Level A) requires; the title link's accessible name is its visible text. Each
+  link shows a visible focus indicator whenever it receives keyboard focus (WCAG
+  2.2 Success Criterion 2.4.7, Focus Visible).
+
+  **The row itself is not a link.** No `<tr>` carries an `href`, a `role`, a
+  `tabindex`, or an event handler, and no row is made clickable by any other means:
+  a row is not an activatable element, so a row made to look clickable would be a
+  target the keyboard cannot reach.
+- **Empty states.** When no task satisfies the request, the list card keeps its
+  header, filter bar included, so the reader can change the filters in place; the
+  table is not rendered, and a `card-body` holding Tabler's empty-state markup
+  (`<div class="empty">`, with `empty-title` and `empty-subtitle`) takes its place;
+  the card footer — range text, rows-per-page selector, and pagination bar — is not
+  rendered.
+  The page never replaces the card with a page-level empty state. Two conditions
+  read differently:
+  - **A roadmap with no task**, requested with no active criterion, shows the title
+    `No tasks yet` and a subtitle stating that tasks are created with the CLI,
+    `rmp task create`.
+  - **A request with at least one active criterion that no task satisfies** shows
+    the title `No task matches the filters` and a subtitle inviting the reader to
+    change or reset the filters, with a link carrying the Tabler class `btn` and
+    reading `Reset` in the empty state's `empty-action`. Its `href` is the page's
+    path with no filter parameter, no `q`, and no `page`, carrying `size` only when
+    the active page size is not `25`, so following it clears the search and every
+    filter and keeps the page size. One message covers the term and the filters
+    together, because the list is their conjunction and naming one of them would
+    attribute the empty result to a cause the page cannot know.
+- **Escaping.** The term is the one caller-supplied string this page echoes back —
+  into the search input's `value`, with each byte that is not part of a valid UTF-8
+  sequence replaced by `U+FFFD`, so the page never carries an invalid byte — and it
+  is escaped there by `html/template`'s
+  contextual auto-escaping (see [Frontend Rules](#frontend-rules), rule 1), as is
+  every task and sprint value the page renders. A filter value is never echoed as
+  text: it only decides which of the options the server emitted from an enum or
+  from the roadmap's own sprints is marked `selected`, so no caller-supplied
+  string other than the term reaches the page. A term containing HTML markup
+  therefore renders as visible characters and introduces no element, attribute, or
+  script into the page. Generated links percent-encode every parameter value they
+  carry.
+- **Markup.** The page obeys the markup rules already in force and introduces no
+  exception to them. Templates carry no inline `style` attribute, every class the
+  page emits is defined in the vendored Tabler distribution or in the project
+  override stylesheet `static/style.css`, and the page uses Tabler's own components
+  — form controls, the card, the table, badges, the button group, pagination, and
+  the empty state — without hand-rolling any of them (see
+  [UI Framework](#ui-framework), rules 8 and 10). The page introduces no inline
+  script and loads no script of its own, and the Content-Security-Policy in
+  [Security Headers](#security-headers) is unchanged. The page keeps the admin
+  shell and the page header every other page uses, governed by
   [UI Framework](#ui-framework), rules 11 to 18.
-- **Relationships shown.** The page surfaces, in a read-only view, the
-  relationships already modelled in the data, and each one is surfaced in a
-  specific place:
-  - **Task-to-sprint membership** is shown on the card, as the sprint indicator of
-    the metadata footer: the card names the one sprint the task belongs to, and
-    shows nothing when the task belongs to none.
-  - **Task parent/subtask hierarchy** and **task dependency edges** are shown on
-    the card as counts — the subtask count and the `depends_on` and `blocks`
-    counts — and in full on the task page, which lists the parent task and
-    the dependency ids themselves (see
-    [Roadmap Task Page](#roadmap-task-page)).
-
-  The presentation MUST reflect the same relationships defined in
-  `DATABASE.md § Relationships`; it introduces no new relationship.
+- **Read-only.** The page renders data only. It offers no control that creates,
+  edits, deletes, moves, or reorders a task, no selection, and no modal. Its one
+  form submits by `GET` to the page itself and only narrows what the page shows;
+  like every other request to the interface it writes nothing, and the `rmp` CLI
+  remains the sole write path for every task (see
+  [Security and Constraints](#security-and-constraints)). Read-only constrains
+  what the page may **change**, not what it may **show**: filtering and paginating
+  alter the view of the data and never the data.
+- **Relationships shown.** The page surfaces **task-to-sprint membership**, in the
+  `Sprint` column and through the sprint filter, and introduces no other
+  relationship. The parent/subtask hierarchy and the dependency edges are shown on
+  the task page (see [Roadmap Task Page](#roadmap-task-page)). The presentation
+  MUST reflect the relationships defined in `DATABASE.md § Relationships`; it
+  introduces no new relationship.
 - **Read cost.** Rendering the page performs **three** reads and no more:
-  1. the roadmap's full task list, unbounded (see **Unbounded read** above);
-  2. **one** grouped query returning the comment **count** of every task the page
-     renders (see `DATABASE.md § Count Comments for Many Parents (Grouped)`);
-  3. **one** grouped query that resolves the sprint of every task the page
-     renders, over the whole set of rendered task ids at once (see
+  1. **one** read of the roadmap's sprints, for the sprint select's options and
+     for validating the `sprint` parameter (see `DATABASE.md § List Sprint Titles`);
+  2. **one** read of the roadmap's tasks through the task listing, carrying one
+     predicate per accepted `sprint`, `status`, and `type` value, each value a
+     bound parameter, and the ordering of **Order** above (see
+     `DATABASE.md § List All`);
+  3. **one** grouped query that resolves the sprint of every task the page renders,
+     over the ids of the rendered page's rows at once (see
      `DATABASE.md § Resolve the Sprint of Many Tasks (Grouped)`).
 
-  The page reads comment **counts**, not comment bodies. The card displays a
-  number, so reading the text of every comment of every task in order to display it
-  would be work the page throws away; a task's comment text is read only by that
-  task's own page, one task at a time (see
-  [Roadmap Task Page](#roadmap-task-page)). No page reads the comment text of many
-  tasks at once.
-
-  When the roadmap has no task, the page issues the task-list read only: neither
-  the count query nor the sprint query is issued, because both take a set of
-  rendered task ids and that set is empty.
-
-  Grouping the tasks into the five columns, counting each column, and matching each
-  card to its sprint are done in memory over the results already read. The board
-  adds no further query — none per column and none per card — and never issues one
-  query per task. The number of queries the page issues does not grow with the
-  number of tasks, the number of sprints, or the number of columns. Following a card
-  to its task page is a separate request for that one task, made only when the
-  user follows it.
-
-  A search term and the three filters change none of this. Applying them on a cold
-  load selects from the task list the page already reads and issues no additional
-  query: a filter adds no clause to that read, no second read, and no per-dimension
-  query, because it is applied in memory over the rows already in hand exactly as
-  the term is. Narrowing in the browser issues no request at all, because every card
-  is already in the document.
+  The search term, the total, the page selection, and the slicing of the page's
+  rows are computed in memory over the rows the second read returned: the search's
+  normalisation and folding rules cannot be expressed in SQLite, so the term is
+  applied after the read, and the page is selected after the term. When the page
+  renders no row, the third read is not issued. The page reads no comment, because
+  the list shows no comment information. The number of queries the page issues does
+  not grow with the number of tasks, the number of sprints, the page size, or the
+  number of active filters, and no query is issued per row. Following a row's link
+  to its task page is a separate request for that one task, made only when the user
+  follows it.
 - **Path parameters.** `{name}` is validated against the roadmap-name rules
   exactly as on the other roadmap routes (the path-traversal guard in
   [Routes and Pages](#routes-and-pages) and
@@ -2284,9 +1707,10 @@ how the `rmp web` process itself terminates.
 - **Content:** A read-only presentation of a single task of the named roadmap,
   rendered on the server from that roadmap's `project.db`: every field of the task,
   the task's comments, and the context of the sprint the task belongs to. The page
-  is the one place in the interface that shows a task's full field set; the cards
-  of both Kanban boards show a subset of it and link here (see
-  [Roadmap Tasks Page](#roadmap-tasks-page), **Clickable card**, and
+  is the one place in the interface that shows a task's full field set; the rows
+  of the tasks page's list and the cards of the sprint page's board show a subset
+  of it and link here (see [Roadmap Tasks Page](#roadmap-tasks-page), **Links to
+  the task page**, and
   [Sprint Detail Sub-Template](#sprint-detail-sub-template), **The card is a link
   to the task page**). Every task has its page, whatever its status. The page does
   not redefine any field; `MODELS.md § Task`, `MODELS.md § Task Comment`, and
@@ -2310,9 +1734,10 @@ how the `rmp web` process itself terminates.
   `Back to tasks`, in the idiom the Roadmap Sprint Page uses for its own back link
   (see [Roadmap Sprint Page](#roadmap-sprint-page) and
   [UI Framework](#ui-framework), rule 16). The link carries no query parameter, so
-  it opens the board unnarrowed; a reader who reached the page from a narrowed
-  board returns to that board with the browser's own Back navigation, because the
-  board's narrowing travels in its URL (see
+  it opens the list unfiltered, on its first page, at the default page size; a
+  reader who reached the page from a filtered list, or from a later page of it,
+  returns to that exact list with the browser's own Back navigation, because the
+  list's filters, page, and page size travel in its URL (see
   [Roadmap Tasks Page](#roadmap-tasks-page)). The way to the sprint page is the
   sprint link of the **Sprint card** below, not a second link in the actions
   column, so each destination is offered once on the page (see
@@ -2348,8 +1773,9 @@ how the `rmp web` process itself terminates.
        coloured by the sprint status mapping in
        [Status, Priority, and Severity Badge Colours](#status-priority-and-severity-badge-colours).
        Both the `id` and the `title` are shown because the `title` alone does not
-       identify a sprint (see [Roadmap Tasks Page](#roadmap-tasks-page), **The
-       sprint indicator**). A task belongs to at most one sprint (see
+       identify a sprint: `MODELS.md § Sprint` places no uniqueness constraint on
+       the `title`, so two sprints of one roadmap may carry the same title, while
+       the `id` is the primary key and is unique. A task belongs to at most one sprint (see
        `DATABASE.md § sprint_tasks Table (1:N Relationship)`), so the card names
        at most one.
     2. **The task's position** in the sprint's planned execution order, as the
@@ -2404,10 +1830,10 @@ how the `rmp web` process itself terminates.
   | `Commit open` | `commit_open` | The hash as stored, in full, as plain text in a monospaced font |
   | `Commit close` | `commit_close` | As `Commit open` |
 
-  `Severity` precedes `Priority` for the reason the board card's badge line puts
-  `S<n>` before `P<n>`: a reader meets the two values in the same order on the card
-  and on the page (see [Roadmap Tasks Page](#roadmap-tasks-page), **Card
-  content**, item 2).
+  `Severity` precedes `Priority` for the reason the sprint board card's badge line
+  puts `S<n>` before `P<n>`: a reader meets the two values in the same order on the
+  card and on the page (see [Sprint Detail Sub-Template](#sprint-detail-sub-template),
+  **The card**).
 
   An absent value — a null `parent_task_id`, an empty `depends_on` or `blocks`
   list, an unset timestamp, an absent commit hash — is shown as the page's
@@ -2449,9 +1875,11 @@ how the `rmp web` process itself terminates.
   from which such a link could be built.
 
   **No badge label on the priority and severity badges.** The badge labels `P`
-  and `S` that the board card's `priority` and `severity` badges carry (see
-  [Roadmap Tasks Page](#roadmap-tasks-page), **Card content**, item 2) belong to
-  the card and are not rendered here. Those labels exist because a card shows the
+  and `S` that the sprint board card's `priority` and `severity` badges carry (see
+  [Sprint Detail Sub-Template](#sprint-detail-sub-template), **The card**), and
+  that the tasks page's list repeats so that a task reads the same in both places
+  (see [Roadmap Tasks Page](#roadmap-tasks-page), **Row content**), are not
+  rendered here. Those labels exist because a card shows the
   two values with no field name beside either of them; this card names every field
   it displays, so the field's own name already stands beside each of these two
   values, and a badge label would state the same thing twice. The badge colours are
@@ -2834,7 +2262,7 @@ The document `<title>` is a separate element, specified in
 
 4. **The actions column stays with the page.** The partial covers the title column
    only. What a page puts in its actions column is genuinely page-specific markup —
-   a search input, a `<select>`, a link — and folding those into the shared partial
+   a `<select>`, a link — and folding those into the shared partial
    would require it to know every page that uses it. Each page therefore renders
    its own actions column, in the Tabler idiom fixed in
    [UI Framework](#ui-framework), rule 16, and the `page-header`, `container-xl`
@@ -2849,7 +2277,7 @@ The document `<title>` is a separate element, specified in
    |---|---|
    | Roadmap Index | none |
    | Roadmap Sprints | none |
-   | Roadmap Tasks | the search input and the type, priority, and severity filter dropdowns (see [Roadmap Tasks Page](#roadmap-tasks-page), **Header search control** and **Header filter controls**) |
+   | Roadmap Tasks | none; the page's filter bar sits in the header of its task-list card (see [Roadmap Tasks Page](#roadmap-tasks-page), **The card header** and **Filter bar**) |
    | Roadmap Audit Log | none |
    | Roadmap Knowledge-Graph | the layout dropdown (see [Roadmap Knowledge-Graph Page](#roadmap-knowledge-graph-page)) |
    | Roadmap Sprint | a link back to the roadmap's sprints page |
@@ -2954,7 +2382,7 @@ shows sprints as compact cards through the shared sprint-card partial instead (s
    board of three fixed columns, one card per task. The **GitLab issue board** is
    the acknowledged model for this presentation: columns that stand for states of
    the work, cards that stand for work items, a count on each column header, and
-   counters at the trailing edge of a card. As on the tasks page, the model is
+   counters at the trailing edge of a card. The model is
    structural and never acts on the data: the board's one control beyond the
    card, the column collapse toggle, changes only how the board is presented
    (see **Column collapse** and **Read-only** below).
@@ -2998,20 +2426,18 @@ shows sprints as compact cards through the shared sprint-card partial instead (s
      stays on the board, in its place, with its heading and its count badge
      visible; only its cards, or its empty state, are hidden (see
      **Column collapse** below). In the served HTML, a column holding no task
-     renders the in-column empty state in the idiom the tasks board already uses —
-     a clear, unobtrusive empty state inside the column, below the column header, in
-     place of the card list, with the column, its heading, and its `0` count badge
-     still visible (see [Roadmap Tasks Page](#roadmap-tasks-page), **Empty
-     states**). Once the page's scripts have initialised, such a column starts
+     renders a clear, unobtrusive in-column empty state, in Tabler's empty-state
+     markup, inside the column, below the column header, in place of the card list,
+     with the column, its heading, and its `0` count badge still visible. Once the page's scripts have initialised, such a column starts
      collapsed when another column of the sprint holds a task, and its empty state
      is displayed when the reader expands it (see **Column collapse** below). A
      sprint with no member task is therefore shown as an empty board, with all three
      columns expanded and all three empty states displayed, rather than as an absent
      one, and the sub-template puts no page-level empty state in place of the board.
    - **Column header.** Each column header shows the column heading together with a
-     Tabler badge carrying that column's task count, exactly as the tasks board's
-     column header does (see [Roadmap Tasks Page](#roadmap-tasks-page), **Count per
-     column**). The badge is the same hybrid it is there: its **text** is the number
+     Tabler badge carrying that column's task count, the way a GitLab issue board
+     shows the issue count of each list. A column holding no task shows the count
+     `0`. The badge is a hybrid: its **text** is the number
      of member tasks in the column, and its **colour** is the semantic colour of the
      status the column groups, taken from the task status table (see
      [Status, Priority, and Severity Badge Colours](#status-priority-and-severity-badge-colours),
@@ -3109,33 +2535,70 @@ shows sprints as compact cards through the shared sprint-card partial instead (s
         The **badge line** leads: the task's **id badge**, **`severity` badge**,
         **`priority` badge**, and **type badge**, in that order — a task 42 of
         severity `3`, priority `5`, and type `IMPROVEMENT` shows `#42`, `S3`, `P5`,
-        and `IMPROVEMENT`. The line is the tasks board card's own badge
-        line, with the same four badges in the same order, with the same texts and
-        badge labels, and in the same colours, and it is stated once, for the card
-        of both boards, in [Roadmap Tasks Page](#roadmap-tasks-page), **Card
-        content**, item 2; it is not restated here. The badges occupy the place the
-        GitLab card gives its labels. No new badge colour and no new band is
-        introduced here.
+        and `IMPROVEMENT`. The badges occupy the place the GitLab card gives its
+        labels. The four badges are these:
+        - the **id badge**, whose text is the task reference `#<id>` — the task's
+          `id` written with its leading `#`. It carries the Tabler classes
+          `bg-black` and `text-white` for every task: a black background
+          (`#000000`) with white text (`#ffffff`), a contrast ratio of 21:1. Both
+          classes are shipped by the vendored `tabler.min.css`, which defines
+          `bg-black` as a background colour mixed from `var(--tblr-black)` and
+          `text-white` as a text colour mixed from `var(--tblr-white)`, each at full
+          opacity, with `--tblr-black` set to `#000` and `--tblr-white` set to
+          `#fff`. The colour is fixed and value-independent: an id identifies a task
+          and carries no meaning a colour could state, so no colour mapping governs
+          this badge (see
+          [Status, Priority, and Severity Badge Colours](#status-priority-and-severity-badge-colours),
+          rule 2);
+        - the **`severity` badge**, whose text is the badge label `S` immediately
+          followed by the task's integer `severity`;
+        - the **`priority` badge**, whose text is the badge label `P` immediately
+          followed by the task's integer `priority`;
+        - the **type badge**, whose text is the task's `type` exactly as the
+          `TaskType` enum spells it (see `MODELS.md § Enums`) — for example
+          `IMPROVEMENT` — and whose colour is the variant the task type table
+          assigns to that value in
+          [Status, Priority, and Severity Badge Colours](#status-priority-and-severity-badge-colours).
+
+        The badge label is one letter, and no colon, no space, and no other
+        separator stands between it and the digits. A task of severity `3` and
+        priority `5` therefore shows `S3` and `P5`, the severity badge before the
+        priority badge. The severity and priority badges are each coloured by the
+        band their value falls in, using exactly the mapping in
+        [Status, Priority, and Severity Badge Colours](#status-priority-and-severity-badge-colours).
+        No new badge colour and no new band is introduced here.
+
+        **The severity and priority badges each name the value they carry with a
+        badge label.** The label stands for the word the card has no room to write
+        out in full. Without it the card would put two bare integers side by side
+        and state nowhere which one is the severity and which one is the priority.
+        The label is the initial letter of the field's name — `S` for `severity`,
+        `P` for `priority` — which is the fewest characters that tell the two
+        fields apart. **The badge label is a label, not a value.** It changes what
+        the badge reads and nothing else: the colour still follows the value alone,
+        through exactly the band mapping named above, so `P5` takes the colour that
+        mapping assigns to the priority `5`, and the label selects no colour,
+        introduces no band, and changes no meaning. The card's accessible name
+        carries neither value, and so it carries no badge label (see **The card is
+        a link to the task page** below). The type badge takes no badge label,
+        because it reads `IMPROVEMENT`, not a bare integer, and the leading `#` of
+        the id badge is not a badge label in this sense: `#<id>` is the form in
+        which this interface writes a task reference everywhere.
+
+        The same four badges, with the same texts, badge labels, and colours, are
+        the id, priority, severity, and type cells of the tasks page's list (see
+        [Roadmap Tasks Page](#roadmap-tasks-page), **Row content**), so a reader
+        meets a task's reference, severity, priority, and type in one form on both
+        pages.
 
         The **counters** close the same line at its trailing edge, which is where
         the GitLab card puts its counters. They are the task's number of comments
         and its number of subtasks (`subtask_count`), **in that order: the comment
         count first, then the subtask count**. Each is rendered as an icon followed
         by its number — `ti ti-message` for the comment count and `ti ti-subtask`
-        for the subtask count, the same two icons the tasks board's card metadata
-        uses (see [Roadmap Tasks Page](#roadmap-tasks-page)). Both counters are
+        for the subtask count. Both counters are
         always rendered, including when the number they carry is `0` (see **Both
         counters are always rendered** below).
-
-     **The card is laid out the way the tasks board's card is.** This board follows
-     the GitLab issue board in its columns, its column counts, its card led by the
-     title, and the line of badges and counters below the title. The tasks board's
-     card has the same shape: the title first, then the badge line directly below
-     it. The two boards differ in what their columns stand for and in what their
-     cards carry beside and below the badge line, and they share the title and the
-     four badges. A reader who meets the same task on both boards therefore reads
-     its title first on each, and finds its reference, severity, priority, and type
-     directly below the title, in the same order and in the same form on each.
 
      **Why the badges and the counters share a line.** Between them the two groups
      answer one question about the task — what this task **is**, and how much is
@@ -3160,33 +2623,8 @@ shows sprints as compact cards through the shared sprint-card partial instead (s
      project override stylesheet `static/style.css` (see
      [UI Framework](#ui-framework), rules 8 and 10, and **Markup** below).
 
-     **The two cards differ here, and the difference is deliberate.** The tasks
-     board's card keeps its **separate metadata footer** and does not fold it into
-     its badge line (see [Roadmap Tasks Page](#roadmap-tasks-page), **Card
-     content**, item 3). That footer lists five indicators of mixed kinds, one of
-     which — the sprint the task belongs to — is text rather than a count and
-     carries no bounded width, so the list cannot share a line with the badges: it
-     would either push them off the line or wrap beneath them and
-     spend the height the merge exists to save. This card carries exactly two
-     indicators, both counts and both short, so it can. The two cards therefore
-     diverge in this one line and in nothing else: the title leading the card, the
-     four badges of the badge line, their order, their texts and badge labels, the
-     two icons, the badge colours, the absent status badge, and the card as the
-     link to the task page all stay shared. This is a stated divergence, not drift.
-
-     **The counter order differs from the tasks board's too.** On this card the
-     comment count comes first and the subtask count second. The tasks board's
-     metadata footer keeps its own order, in which the subtask count precedes the
-     comment count among the five indicators it lists. The two orders are stated
-     separately because the two groups are separate — a pair read at the trailing
-     edge of a line here, a list of five heterogeneous indicators in a block of its
-     own there — and neither order is derived from the other. Each is fixed in this
-     specification rather than left to the template, so that what a card shows is
-     testable rather than incidental.
-
      The card carries **no status badge**: the column the card sits in already
-     states the task's status, which is the reason the tasks board's card omits one
-     as well.
+     states the task's status.
 
      The card shows those seven data points — the title, the id, the severity, the
      priority, the type, the comment count, and the subtask count — and no
@@ -3202,36 +2640,32 @@ shows sprints as compact cards through the shared sprint-card partial instead (s
      subtask shows the subtask icon followed by `0`, and the trailing edge of the
      second line therefore carries both numbers on every card the board renders.
 
-     This is a deliberate departure from the tasks board's card, which renders an
-     indicator only when it has something to count (see
-     [Roadmap Tasks Page](#roadmap-tasks-page), **Absent metadata renders
-     nothing**). The two cards differ because what they carry differs. This card
-     carries exactly two indicators and both of them are counts, so rendering both
-     always makes every card of the board the same shape and makes each number
-     meaningful: a `0` states that the task has no comment, where an absent counter
-     leaves the reader unable to tell "no comments" from "this card does not show
-     comments". The tasks board's card carries five heterogeneous indicators, one of
-     which — the sprint the task belongs to — is text rather than a count and has no
-     zero to show, so always rendering all five is not even well defined there.
+     The card carries exactly two indicators and both of them are counts, so
+     rendering both always makes every card of the board the same shape and makes
+     each number meaningful: a `0` states that the task has no comment, where an
+     absent counter leaves the reader unable to tell "no comments" from "this card
+     does not show comments".
    - **The card is a link to the task page.** Each card is a link to its task's
      own page, `/roadmaps/{name}/tasks/{id}` (see
      [Roadmap Task Page](#roadmap-task-page)), and the card itself is the link:
      one `<a>` element carrying the Tabler classes `card` and `card-link` and an
-     `href` to that page, exactly as the tasks board's card is (see
-     [Roadmap Tasks Page](#roadmap-tasks-page), **Clickable card**). A pointer
-     click, a touch tap, and Enter therefore all follow it through the browser's
+     `href` to that page, the idiom the sprint card of the Roadmap Sprints Page
+     already uses (see [Shared Sprint-Card Partial](#shared-sprint-card-partial),
+     rule 3). A pointer click, a touch tap, and Enter therefore all follow it through the browser's
      own activation behaviour, with no added JavaScript, and the browser's own link
      behaviours — opening in a new tab or window, copying the address — apply to
      it. The card carries no `tabindex` and no `role`: both would be redundant on
      a link, and a non-interactive element made to announce itself as a control
      MUST NOT stand in for it. The card's accessible name is
-     `Open details for task #<id>: <title>`, carried by its `aria-label`, the same
-     form the tasks board's card uses. The `title` is required in it, not
+     `Open details for task #<id>: <title>`, carried by its `aria-label`, naming the
+     action and identifying the task by `id` and `title`. The `title` is required in it, not
      optional: the card's visible label is the task title, and an accessible name
      that omitted it would leave the link impossible to follow by speech input,
      which is what WCAG 2.5.3 Label in Name (Level A) forbids. The card shows a
      visible focus indicator whenever it receives keyboard focus (WCAG 2.2 Success
-     Criterion 2.4.7, Focus Visible).
+     Criterion 2.4.7, Focus Visible); where the vendored distribution gives a
+     `card-link` none, the project override stylesheet sets it on the card's
+     `:focus-visible` state.
 
      The card can hold that contract whole, which a table row cannot. A row is not
      an activatable element and can hold no single link that wraps it, so a
@@ -3249,13 +2683,13 @@ shows sprints as compact cards through the shared sprint-card partial instead (s
      column scrolls **vertically and independently** inside that height when its
      cards exceed it, as a GitLab issue board's lists do. When the three columns do
      not fit the viewport's width, the **column strip** scrolls horizontally inside
-     its own container, exactly as the tasks board's strip does, and the page itself
+     its own container, and the page itself
      never scrolls horizontally (see
      [Responsive and Mobile-First Design](#responsive-and-mobile-first-design),
      rules 2 and 10).
 
-     The board is deliberately **not** a full-height page region, and that is where
-     it departs from the tasks board. The sprint page is not a single-region page:
+     The board is deliberately **not** a full-height page region. The sprint page
+     is not a single-region page:
      it carries the Sprint details card above the board and the Comments card below
      it, and all three belong to one sprint presentation. A board sized to the space
      the page body leaves would fill the rest of the viewport on its own and push
@@ -3311,32 +2745,21 @@ shows sprints as compact cards through the shared sprint-card partial instead (s
      rules 2 and 10).
 
      The columns are separated by a **0.75rem** gap, and the body of a card carries
-     **0.75rem** of padding on all four sides. Those two lengths, together with the
-     `17rem` minimum above, are the lengths the tasks board's columns and cards
-     already carry (see [Roadmap Tasks Page](#roadmap-tasks-page), **Column width
-     and card density**). What the two boards no longer share is the column width
-     itself.
-
-     **Why the two boards differ here.** The five columns of the tasks board are
-     unchanged by this rule: each is **19rem** wide, never narrower than **17rem**,
-     and does not grow into a viewport wider than that board needs. Dividing a
-     viewport among five columns would leave each one narrow enough to hurt the
-     measure a card's title is read on, which is the length that board's fixed width
-     exists to protect; three columns dividing the same viewport are wide, not
-     narrow. The two boards are also read differently. The tasks board is a view of
-     a whole roadmap, and its column count is fixed by the task status enum rather
-     than by what is on screen, so the board has a natural width of its own and the
-     space beyond it is left empty. This board has three columns and is read as one
-     sprint at a glance, which is what makes filling the width the right shape for
-     it. The lengths that remain shared — the `17rem` minimum, the `0.75rem` gap,
-     and the `0.75rem` card body padding — stay shared, so a reader moving between
-     the tasks page and a sprint page still meets one card measure and one minimum
-     column.
+     **0.75rem** of padding on all four sides, in place of the `1rem` the vendored
+     Tabler distribution gives a small card's body. The card's body holds running
+     text inside a measure the column has already narrowed, so padding taken off
+     the body is width returned to that text and height returned to the card; the
+     hit target is unaffected, because what the user presses is the whole card. The
+     padding is an override of a vendored component's own spacing, declared in the
+     project override stylesheet (see [UI Framework](#ui-framework), rule 10); it
+     changes no class the board emits and no markup. Three columns dividing the
+     viewport are wide rather than narrow, and the board is read as one sprint at a
+     glance, which is what makes filling the width the right shape for it.
 
      Every one of these lengths is expressed in `rem`, so the minimum column and the
      card scale with the reader's own text size.
 
-     On a narrow viewport the board stays usable on the tasks board's terms: each
+     On a narrow viewport the board stays usable: each
      expanded column keeps the minimum width above, at which its cards remain
      legible, the horizontal strip scroll is reachable by a touch gesture, the cards
      and the column collapse toggles present touch-friendly hit targets, and the
@@ -3477,10 +2900,9 @@ shows sprints as compact cards through the shared sprint-card partial instead (s
        empty state visible, and shows no toggle that would do nothing when
        activated.
      - **This board only.** The collapse toggle belongs to this board. The roadmap
-       tasks page's five-column board carries no collapse toggle and no
-       `data-task-count` attribute, and none of the rules above applies to it; the
-       tasks page does not load
-       `static/sprint-board.js` (see [Roadmap Tasks Page](#roadmap-tasks-page)).
+       tasks page carries no board, no collapse toggle, and no `data-task-count`
+       attribute, and it does not load `static/sprint-board.js` (see
+       [Roadmap Tasks Page](#roadmap-tasks-page)).
    - **Read cost: one grouped comment count, and nothing per card.** The card shows
      a comment count, so the page reads one. That count is read with **one grouped
      query** over the whole set of rendered member-task ids (see
@@ -3513,9 +2935,9 @@ shows sprints as compact cards through the shared sprint-card partial instead (s
      Its cards are links to read-only task pages, and it carries one kind of
      button, the column collapse toggle, which changes only the board's
      presentation (see **Column collapse** above); neither submits anything or
-     changes any data. This is the same deliberate divergence from the GitLab
-     issue board the tasks page states: the inspiration is structural — columns
-     per state, cards, per-column counts — and never acts on the data, and the
+     changes any data. This is a deliberate divergence from the GitLab issue board
+     the layout is modelled on: the inspiration is structural — columns per state,
+     cards, per-column counts — and never acts on the data, and the
      `rmp` CLI remains the sole write path for every task (see
      [Security and Constraints](#security-and-constraints)).
    - **Markup.** The board introduces no exception to the markup rules already in
@@ -4581,9 +4003,11 @@ re-presents an earlier, now-stale response in its place.
    `DATABASE.md § Main SQL Queries`. The sprints page reads the roadmap's sprints
    and each sprint's total task count for its card footer, but no member tasks,
    because the page renders every sprint as a card with no member tasks on it; the
-   tasks page reads the roadmap's full task list, which its Kanban board then
-   groups into the five status columns in memory, with no further query — none per
-   column and none per card (see [Roadmap Tasks Page](#roadmap-tasks-page)); the
+   tasks page reads the roadmap's sprints for its sprint filter and the task list
+   narrowed by the page's structured filters, applies the search term and selects
+   the requested page in memory, and resolves the sprint of the rows it renders in
+   one grouped query — a fixed number of queries, with none per row (see
+   [Roadmap Tasks Page](#roadmap-tasks-page), **Read cost**); the
    sprint page reads that sprint and its member tasks in `sprint_tasks` position
    order, which its own board then groups into the three columns and orders in
    memory — the `WAITING` column keeping the position order the read returned, the
@@ -4600,13 +4024,13 @@ re-presents an earlier, now-stale response in its place.
    The web interface adds no new schema, no new table, and no new write query.
    A task's full field set and its comments are read only by that task's own page,
    one task at a time (see [Roadmap Task Page](#roadmap-task-page)). A page that
-   shows task cards therefore reads only what it displays itself:
-   both boards read a comment **count** per rendered task, in one grouped counting
+   shows many tasks therefore reads only what it displays itself: the sprint
+   page's board reads a comment **count** per rendered task, in one grouped counting
    query over the whole set of rendered task ids, because a card shows a count and
    no comment text (see
-   `DATABASE.md § Count Comments for Many Parents (Grouped)`). On the tasks page
-   that grouped count is the page's only comment read. The Roadmap Sprint Page
-   additionally presents the sprint's own comment log, so it reads that sprint's
+   `DATABASE.md § Count Comments for Many Parents (Grouped)`), and the tasks page's
+   list, which shows no comment information, reads no comment at all. The Roadmap
+   Sprint Page additionally presents the sprint's own comment log, so it reads that sprint's
    comments in full in one further query (see `DATABASE.md § Comments`): the sprint
    page therefore issues exactly **two** comment reads — the sprint's own listing
    and the one grouped count over its member tasks — whatever the number of member
@@ -4616,12 +4040,12 @@ re-presents an earlier, now-stale response in its place.
    still issued, because the Comments card is always present. Every one of these is
    a read query issued server-side while the page
    is rendered, and the number of them per page does not grow with the number of
-   tasks shown. The tasks page issues one further grouped query,
-   which resolves the sprint of every task it renders over the whole set of
-   rendered task ids at once, so each board card can name the sprint its task
-   belongs to (see `DATABASE.md § Resolve the Sprint of Many Tasks (Grouped)`).
-   That query is issued once per page, never once per task and never once per
-   board column, and it is skipped entirely when the page renders no task. The
+   tasks shown. The tasks page issues one grouped query that resolves the sprint of
+   every row it renders over the whole set of rendered task ids at once, so each row
+   can name the sprint its task belongs to (see
+   `DATABASE.md § Resolve the Sprint of Many Tasks (Grouped)`). That query is issued
+   once per page, never once per row, and it is skipped entirely when the page
+   renders no row. The
    sprint page issues no sprint-resolution query at all: every card on its board
    belongs to the one sprint the page is showing, so there is nothing to resolve.
 2. The server opens the database for reading only. It MUST NOT modify rows, MUST
@@ -5360,11 +4784,13 @@ timestamp references this section and does not restate it.
      column;
    - on the [Roadmap Task Page](#roadmap-task-page), the `Created`, `Started`,
      `Tested`, and `Closed` fields of the Details card, and the `created_at` and
-     `updated_at` timestamps of each entry of the Comments card.
+     `updated_at` timestamps of each entry of the Comments card;
+   - on the [Roadmap Tasks Page](#roadmap-tasks-page), the `Created` column of the
+     task list.
 
    The Roadmap Index Page, the sprint card of the Roadmap Sprints Page, and the
-   cards of both Kanban boards display no timestamp, and this rule adds none to
-   them. A surface that comes to display a timestamp is governed by this rule.
+   cards of the sprint page's member-tasks board display no timestamp, and this rule
+   adds none to them. A surface that comes to display a timestamp is governed by this rule.
 9. **What this rule does not govern.**
    - **CLI output and every JSON endpoint.** The CLI's output and the graph data
      endpoint's response keep the canonical format of `DATA_FORMATS.md § Dates - ISO 8601 with UTC`. The display form is a
@@ -5593,13 +5019,13 @@ timestamp references this section and does not restate it.
     also how Bootstrap, the framework Tabler is built on (see rule 1), specifies
     that component. The wrapper is what makes assistive technology announce the
     control as a navigation section and tell it apart from the page's other
-    navigation. The audit log
-    page's numbered pagination bar MUST therefore sit inside a
+    navigation. The numbered pagination bar of the audit log page and that of the
+    tasks page MUST therefore each sit inside a
     `<nav aria-label="...">` whose label names what the bar navigates. The
     `ul.pagination` list, its `li.page-item` items, and its `a.page-link` links stay
-    exactly as specified in [Roadmap Audit Log Page](#roadmap-audit-log-page); the
-    wrapper adds the landmark and the accessible name and changes no pagination
-    behaviour.
+    exactly as specified in [Roadmap Audit Log Page](#roadmap-audit-log-page) and
+    [Roadmap Tasks Page](#roadmap-tasks-page); the wrapper adds the landmark and the
+    accessible name and changes no pagination behaviour.
 16. **Page-header actions column.** Tabler's page-header component emits its
     actions column as `<div class="col-auto ms-auto d-print-none">`, its
     `d-print-none` matching the `d-print-none` the `page-header` element itself
@@ -5682,7 +5108,9 @@ timestamp references this section and does not restate it.
     writes is a guarantee of the server, specified in
     [Security and Constraints](#security-and-constraints) and in
     each page's own **Read-only** rule, and it is already evident on every page:
-    no form, no submit control, no edit affordance anywhere. Restating it in the
+    no edit affordance anywhere, and no form that submits a change — the one form
+    the interface renders, the tasks page's filter bar, submits by `GET` and only
+    narrows what the page shows. Restating it in the
     one shell region that can instead identify the page's subject spends that
     region on what the user cannot act on. This mirrors the removal of the
     read-only footer band, whose whole content was the same restatement (rule 12).
@@ -5702,8 +5130,8 @@ timestamp references this section and does not restate it.
     that scrolls and one that does not, is a defect and never an accepted layout
     variation. Below the `lg` breakpoint the sidebar collapses to the off-canvas
     menu (rule 5) and this rule does not apply.
-21. **Keyboard focus is clearly visible on the header actions and the sidebar
-    links.** The back link of a record page's header actions column — `Back to
+21. **Keyboard focus is clearly visible on the header actions, the sidebar
+    links, the tasks list, and the sprint board.** The back link of a record page's header actions column — `Back to
     tasks` on the Roadmap Task Page and the link back to the roadmap's sprints page
     on the Roadmap Sprint Page, both rendered in the page-header idiom of rule 16 —
     and every `nav-link` of the sidebar show a clearly visible focus indicator
@@ -5720,22 +5148,36 @@ timestamp references this section and does not restate it.
     focus that does not match `:focus-visible`, and no template carries a `style`
     attribute for it.
 
+    The same indicator, with the same thickness and the same 3:1 contrast against
+    every colour adjacent to it, is required of every element that can take
+    keyboard focus on the Roadmap Tasks Page and on the Roadmap Sprint Page's
+    member-tasks board: on the tasks page, the filter bar's search input, its three
+    selects, its Apply button, each row's title link and `View`
+    link, every link of the pagination bar, every link of the rows-per-page
+    selector, and the Reset link of the no-match empty state (see [Roadmap Tasks Page](#roadmap-tasks-page)); on the board, every
+    task card and every column toggle (see
+    [Sprint Detail Sub-Template](#sprint-detail-sub-template)). The colours adjacent
+    to an indicator are the background it is drawn on and the element's own
+    background, so an indicator drawn around a filled control — the Apply button,
+    the active rows-per-page link, the active pagination item — reaches 3:1 against
+    that fill as well. The rule is judged in the dark theme the interface serves
+    (rule 2).
+
 ### Full-Height Page Regions
 
-Two pages present a region sized to the **viewport** rather than to its own
+One page presents a region sized to the **viewport** rather than to its own
 content, so that the region's children scroll **inside** it and the page itself
-does not scroll to reach them: the Kanban board of the roadmap tasks page (see
-[Roadmap Tasks Page](#roadmap-tasks-page), **Layout and scrolling**) and the graph
-card of the knowledge-graph page (see
+does not scroll to reach them: the graph card of the knowledge-graph page (see
 [Roadmap Knowledge-Graph Page](#roadmap-knowledge-graph-page), **Graph card
-layout**). Each sits inside the `main.page-body` landmark of the admin shell (see
-[UI Framework](#ui-framework), rule 18). These two are the whole set: this
-subsection introduces no region and no page, and states only how a region of this
-kind is sized.
+layout**). It sits inside the `main.page-body` landmark of the admin shell (see
+[UI Framework](#ui-framework), rule 18). It is the whole set: this subsection
+introduces no region and no page, and states only how a region of this kind is
+sized. The roadmap tasks page is not one of them: its task list is paginated, so
+the list card is sized to the rows of one page and the page scrolls vertically
+like any other (see [Roadmap Tasks Page](#roadmap-tasks-page)).
 
 **The Roadmap Sprint Page's member-tasks board is deliberately not one of them.**
-It is a board with per-column vertical scrolling, like the tasks page's board, but
-its height is bounded by a definite length rather than by the space the page body
+It is a board with per-column vertical scrolling, but its height is bounded by a definite length rather than by the space the page body
 leaves (see [Sprint Detail Sub-Template](#sprint-detail-sub-template), **Height and
 scrolling**). The reason is that the sprint page is not a single-region page: the
 Sprint details card sits above the board and the Comments card below it, and all
@@ -5765,10 +5207,8 @@ NOT be run on it.
    body has, and no more.
 2. **No space is reserved for anything the page does not render.** What the region
    gives up at the top is what the shell and the page actually place above it: the
-   top navbar and the page header on both pages, the query bar as well on the
-   knowledge-graph page (see [Graph Query Bar](#graph-query-bar)), and the no-match
-   message on the roadmap tasks page for as long as the board's controls match no
-   task (see [Roadmap Tasks Page](#roadmap-tasks-page), **Empty states**). Removing
+   top navbar, the page header, and the query bar (see
+   [Graph Query Bar](#graph-query-bar)). Removing
    one of those elements reduces what the region gives up by that element's height,
    and adding one increases it — not as a follow-up correction to a value recorded
    somewhere, but because rule 1 is stated over the page body's edges and the page
@@ -5777,11 +5217,9 @@ NOT be run on it.
    full-height region gives up any space for one.
 3. **A fixed subtraction from the viewport height does not satisfy rule 1.** The
    height of the material above a full-height region is not a constant. The page
-   header's actions column wraps as the viewport narrows — the tasks page header
-   carries a search input and three filter dropdowns (see
-   [Roadmap Tasks Page](#roadmap-tasks-page), **Header search control** and
-   **Header filter controls**) — so the page header occupies more rows on a narrow
-   viewport than on a wide one and the page body begins lower. A height obtained by
+   header's actions column and the query bar wrap as the viewport narrows, so they
+   occupy more rows on a narrow viewport than on a wide one and the region begins
+   lower. A height obtained by
    subtracting a fixed length from the viewport height therefore matches the space
    available at one viewport width at best and misses it at every other: too tall
    where the page header is tall, which pushes the region past the fold, and too
@@ -5804,20 +5242,18 @@ NOT be run on it.
    dynamic unit ships without a feature query. This is the vertical counterpart of
    the fluid-layout requirement in
    [Responsive and Mobile-First Design](#responsive-and-mobile-first-design),
-   rules 2 and 9.
+   rules 2 and 6.
 5. **A floor keeps the region usable on a very short viewport.** Below some
    viewport height the space the page body leaves is too small to present the
-   region at all: a board column would show a fraction of a single card, and the
-   graph canvas would be a strip. Each full-height region therefore carries a
+   region at all: the graph canvas would be a strip. Each full-height region therefore carries a
    **minimum height**, and when the space the page body leaves falls below that
    minimum the region takes the minimum instead. In that case, and only in that
    case, the region's bottom edge may fall below the viewport and the page may
    scroll vertically to reach it: rule 1's second edge yields to the floor, because
    a region compressed past legibility is worse than one the reader scrolls to.
    Rule 1's first edge yields with it wherever the page places an element above the
-   region inside the same container — the knowledge-graph page's query bar always,
-   and the tasks page's no-match message for as long as the board's controls match
-   no task (see rule 2). The page body is held to the same minimum as the region, so
+   region inside the same container — the knowledge-graph page's query bar (see
+   rule 2). The page body is held to the same minimum as the region, so
    below the floor it carries that element and the floored region together, and the
    region's foot passes the page body's foot by the space the element occupies.
    Nothing in the stylesheet closes that gap: closing it would take a page-body
@@ -5829,7 +5265,8 @@ NOT be run on it.
 ### Status, Priority, and Severity Badge Colours
 
 Status, priority, and severity are presented as Tabler badges, and so is the task
-type on the card of each of the two Kanban boards. The badges MUST use
+type on the card of the sprint page's board and in each row of the tasks page's
+list. The badges MUST use
 **semantically meaningful** Tabler colour variants rather than a single fixed
 colour, so the colour carries the meaning of the value at a glance. The mapping is
 deterministic: a given enum value always maps to the same Tabler badge colour
@@ -5912,8 +5349,9 @@ Rules:
 2. **Applied consistently everywhere a badge is shown.** The mapping governs a
    badge's **colour**, and it is keyed on a value: a task status, a sprint status, a
    task type, a `priority`, or a `severity`. The same mapping is applied wherever a
-   badge carries one of those values: the type, priority, and severity badges on the
-   tasks page's board cards (see [Roadmap Tasks Page](#roadmap-tasks-page)), the
+   badge carries one of those values: the type, status, priority, and severity
+   badges in each row of the tasks page's list (see
+   [Roadmap Tasks Page](#roadmap-tasks-page)), the
    type, priority, and severity badges on the cards of the sprint detail
    member-tasks board (see
    [Sprint Detail Sub-Template](#sprint-detail-sub-template)), the Roadmap Task
@@ -5923,8 +5361,7 @@ Rules:
    [Shared Sprint-Card Partial](#shared-sprint-card-partial)), the Roadmap Sprint
    Page header (see [Roadmap Sprint Page](#roadmap-sprint-page)), the sprint
    tabs on the Roadmap Sprints Page (see [Roadmap Sprints Page](#roadmap-sprints-page)),
-   and the per-column count badge of each of the two Kanban boards (see
-   [Roadmap Tasks Page](#roadmap-tasks-page) and
+   and the per-column count badge of the sprint detail member-tasks board (see
    [Sprint Detail Sub-Template](#sprint-detail-sub-template)).
    A badge that carries one of those values uses the variant the relevant table above
    assigns to it, and no such badge uses a single fixed colour across differing
@@ -5934,22 +5371,22 @@ Rules:
    second is a closed list of named cases, not a general licence; the test that
    decides membership of that list is stated below it:
    - **The badge's own text is the value.** Every site listed above except the sprint
-     tabs and the two boards' per-column count badges is this case: the badge reads
+     tabs and the sprint board's per-column count badges is this case: the badge reads
      `COMPLETED`, `OPEN`, `IMPROVEMENT`, `7`, or `2`, and it takes the colour the
-     relevant table assigns to the value it carries. The type badge on the card of
-     either board writes the `TaskType` value exactly as the enum spells it, with no
-     badge label, and takes the variant the task type table assigns to it. On the
-     card of either board the severity and priority badges write that value behind a
-     one-letter badge label — `S2`, `P7` — which names the field the value belongs to,
-     because a card carries no field name that would (see
-     [Roadmap Tasks Page](#roadmap-tasks-page), **Card content**, item 2). The badge
+     relevant table assigns to the value it carries. The type badge on the sprint
+     board's card and in a row of the tasks page's list writes the `TaskType` value
+     exactly as the enum spells it, with no badge label, and takes the variant the
+     task type table assigns to it. On the sprint board's card and in a row of the
+     tasks page's list the severity and priority badges write that value behind a
+     one-letter badge label — `S2`, `P7` — which names the field the value belongs to
+     (see [Sprint Detail Sub-Template](#sprint-detail-sub-template), **The card**,
+     and [Roadmap Tasks Page](#roadmap-tasks-page), **Row content**). The badge
      label is a label and not a value: this mapping keys on the value alone and never
      on the label, so `P7` takes the colour of the priority `7`, `S2` takes
      the colour of the severity `2`, and no band, no colour variant, and no enum
      value changes because of it.
-   - **The badge counts the members of a group with one status to key on.** Three
-     sites are this case: the three sprint tabs on the Roadmap Sprints Page, the
-     per-column count badge of the Roadmap Tasks Page's Kanban board, and the
+   - **The badge counts the members of a group with one status to key on.** Two
+     sites are this case: the three sprint tabs on the Roadmap Sprints Page and the
      per-column count badge of the sprint detail member-tasks board. Each such badge
      is a hybrid: the **colour** is the variant the relevant table above assigns to
      the status the counted group has, directly or through its canonical status,
@@ -5962,10 +5399,6 @@ Rules:
        sprint status even though no sprint status is written on it. Próximos therefore
        carries `bg-secondary-lt`, Actual carries `bg-blue-lt`, and Concluídos carries
        `bg-green-lt`, each showing its own count.
-     - Each column of the **tasks board** is exactly one task status, because that
-       board has one column per `TaskStatus` value (see
-       [Roadmap Tasks Page](#roadmap-tasks-page)), so its count badge takes the
-       variant the task status table above assigns to that column's status.
      - Each column of the **sprint board** groups a set of task statuses rather than a
        single one — `WAITING` groups `BACKLOG` and `SPRINT`, `DOING` groups `DOING`
        and `TESTING`, and `CLOSED` holds `COMPLETED` alone — so its count badge takes
@@ -5977,8 +5410,8 @@ Rules:
 
    **The discriminating test: has the counted group one status to key on?** The
    mapping colours a count badge where the group it counts has one status value to key
-   on — whether the group has that status directly, as a sprint tab and a tasks board
-   column do, or through its canonical status, as a sprint board column does. Where
+   on — whether the group has that status directly, as a sprint tab does, or through
+   its canonical status, as a sprint board column does. Where
    the counted group has no status at all, the badge stays neutral and this mapping
    does not govern it.
 
@@ -6003,10 +5436,6 @@ Rules:
    and Concluídos carries `bg-green-lt`; a rendering that gives all three tabs
    `bg-secondary-lt` conforms on none of them.
 
-   The same trap sits on the tasks board, where `BACKLOG` maps to `bg-secondary-lt`:
-   that column's count badge renders identically whether the mapping colours it or
-   not, so the board's five column badges are read together and never one at a time.
-
    The mapping governs the colour of those four kinds of value only — task and
    sprint status, task type, `priority`, and `severity` — whether the badge writes the
    value that colours it or counts a group that has that value. It governs no other
@@ -6018,23 +5447,25 @@ Rules:
    stays governed by the section that defines it.
 
    **The id badge is outside the mapping.** The id badge that leads the badge line
-   of either board's card reads `#<id>` and carries the fixed Tabler classes
+   of the sprint board's card, and the first cell of each row of the tasks page's
+   list, reads `#<id>` and carries the fixed Tabler classes
    `bg-black` and `text-white` — a black background with white text — for every
    task, whatever the task's type, status, priority, or severity. A task `id` is an
    identifier and not a value any table above knows, so it selects no colour, and no
    table above assigns `bg-black` to any value (see
-   [Roadmap Tasks Page](#roadmap-tasks-page), **Card content**, item 2). The id
+   [Sprint Detail Sub-Template](#sprint-detail-sub-template), **The card**). The id
    badge therefore never shares its colour with the type, severity, or priority
-   badge beside it, whatever their values: a badge of the line that carries
+   badge beside it, whatever their values: a badge that carries
    `bg-black` is the id badge, and a value badge that carried it would be outside
    every table above.
 
-   **The task type is coloured on the two board cards and nowhere else.** The task
-   page shows the task's `type` as plain text among its fields, not as a
-   badge, and the type filter of the Roadmap Tasks Page offers the ten values as
-   plain options of a select control; neither carries a colour, and this mapping
-   does not reach either (see [Roadmap Task Page](#roadmap-task-page) and
-   [Roadmap Tasks Page](#roadmap-tasks-page), **Header filter controls**).
+   **The task type is coloured on the sprint board's card and in the tasks page's
+   list, and nowhere else.** The task page shows the task's `type` as plain text
+   among its fields, not as a badge, and the filter bar of the Roadmap Tasks Page
+   offers the ten values, like every other filter value, as plain options of a
+   select control; neither carries a colour, and this mapping does not reach either
+   (see [Roadmap Task Page](#roadmap-task-page) and
+   [Roadmap Tasks Page](#roadmap-tasks-page), **Filter bar**).
 3. **No new enum value.** The mapping introduces no status, task type, priority, or
    severity value that is not already defined in `MODELS.md` and `STATE_MACHINE.md`. Should a
    new enum value or a revised band be introduced there, this table is updated in the
@@ -6042,6 +5473,35 @@ Rules:
 4. **Faithful to Tabler.** The badge markup follows Tabler's badge example (a
    Tabler `badge` element carrying the `bg-*-lt` colour utility); the templates do
    not hand-roll a badge component (see [UI Framework](#ui-framework), rule 8).
+5. **Every badge is readable: text contrast of at least 4.5:1 (WCAG 2.2 AA).**
+   The text of every badge the interface renders has a contrast ratio of at least
+   **4.5:1** against the badge's background, as WCAG 2.2 Success Criterion 1.4.3,
+   Contrast (Minimum), requires of text. The rule covers every badge variant the
+   interface renders, on every page: every variant the tables above assign to a
+   task status, a sprint status, a task type, a priority band, or a severity band;
+   the neutral `bg-secondary-lt` of the comment-type badge and of the neutral count
+   badges; and the id badge's `bg-black` with `text-white`. It covers each badge
+   kind that carries those variants — the status, type, priority, severity, and id
+   badges, and the count badges of the sprint tabs, of the sprint board's columns,
+   and of the Comments cards — on the tasks page's list and on the sprint board
+   alike.
+   - **The dark theme.** The ratio is judged in the dark theme, the only theme
+     the interface serves (see [UI Framework](#ui-framework), rule 2). The vendored
+     stylesheet selects the dark theme's colours through the CSS `color-scheme`
+     property, which `data-bs-theme="dark"` sets to `dark`, and the `light-dark()`
+     function, which resolves to its second argument under that scheme.
+   - **The badge's background.** A `bg-*-lt` variant paints a translucent fill,
+     so the background its text is read against is that fill composited over the
+     surface beneath the badge. The ratio holds over each surface on which the
+     interface renders badges: the card surface, `--tblr-bg-surface`, and the page
+     background, `--tblr-body-bg`.
+   - **How it is achieved.** Where a vendored variant falls short of the ratio,
+     the project override stylesheet `static/style.css` redeclares that variant
+     class's text colour, its fill, or both (see [UI Framework](#ui-framework), rule 10). Nothing else
+     changes: the mapping of values to variants in the tables above is unchanged,
+     every badge keeps the variant class the tables assign, the vendored Tabler
+     files are unchanged, and no template carries a `style` attribute or an added
+     class for it.
 
 ### Knowledge-Graph Visualisation Library
 
@@ -6121,13 +5581,13 @@ experience is the baseline that larger viewports enhance.
    horizontally at any viewport width — typography stays readable, and navigation
    and other interactive controls present touch-friendly, appropriately sized hit
    targets. A component that deliberately scrolls horizontally **inside its own
-   container**, such as the Kanban board on the roadmap tasks page (rule 9) or the
+   container**, such as the task table on the roadmap tasks page (rule 9) or the
    member-tasks board on the roadmap sprint page (rule 10), is not page-level
    horizontal overflow and is permitted; the prohibition is on the page itself
    scrolling horizontally.
 3. **Applies to every page.** The mobile-first, responsive requirement applies to
    every page: the roadmap index page, the roadmap sprints page (the sprint tabs),
-   the roadmap tasks page (the Kanban task board), the roadmap sprint page, the
+   the roadmap tasks page (the filter bar and the task list), the roadmap sprint page, the
    roadmap task page, the roadmap audit log page (the audit table), and the
    knowledge-graph page.
 4. **Usable tabular data on narrow screens.** The roadmap sprints page, the
@@ -6139,10 +5599,9 @@ experience is the baseline that larger viewports enhance.
    relationships
    defined for those pages (see [Roadmap Sprints Page](#roadmap-sprints-page),
    [Roadmap Sprint Page](#roadmap-sprint-page), and
-   [Roadmap Audit Log Page](#roadmap-audit-log-page)). Neither page presents its
-   tasks as a table: the roadmap tasks page presents them as a Kanban board, which
-   rule 9 governs, and the roadmap sprint page presents its member tasks as a board
-   as well, which rule 10 governs.
+   [Roadmap Audit Log Page](#roadmap-audit-log-page)). The roadmap sprint page
+   presents its member tasks as a board, which rule 10 governs, and the roadmap
+   tasks page presents its tasks as a table, which rule 9 governs.
 5. **Touch- and small-viewport-usable sprint tabs.** The three sprint tabs on the
    roadmap sprints page (Próximos, Actual, Concluídos) MUST remain usable on touch
    input and on small viewports. The tabs offer touch-friendly controls to switch
@@ -6170,24 +5629,21 @@ experience is the baseline that larger viewports enhance.
    section intact; on small viewports the admin-shell navigation sidebar
    collapses to an off-canvas (hamburger) menu so the pages stay usable without
    horizontal overflow on phones.
-9. **Usable Kanban board on narrow screens.** The roadmap tasks page presents its
-   tasks as a board of five fixed columns side by side (see
-   [Roadmap Tasks Page](#roadmap-tasks-page)). When the five columns do not fit the
-   viewport, the board scrolls horizontally inside its own container, and the page
-   itself still does not scroll horizontally (rule 2). Each column scrolls
-   vertically and independently when its card list exceeds the available height,
-   which is the height the board takes as a full-height page region — the space the
-   page body leaves, measured against the viewport the browser is showing at that
-   moment (see [Full-Height Page Regions](#full-height-page-regions)). On
-   narrow viewports the board MUST remain usable: each column keeps a minimum width
-   at which its cards stay legible, the horizontal board scroll is reachable by a
-   touch gesture, and the cards and their badges present touch-friendly hit targets
-   that link to each task's read-only page (see
-   [Roadmap Task Page](#roadmap-task-page)). The page header's search input and its
-   three filter dropdowns are likewise usable on a narrow viewport: they fit the
-   header's actions column without page-level horizontal overflow, wrapping within
-   that column rather than forcing the page to scroll horizontally, and each
-   presents a touch-friendly target.
+9. **Usable task list on narrow screens.** The roadmap tasks page presents its
+   tasks as one table inside Tabler's `table-responsive` container (see
+   [Roadmap Tasks Page](#roadmap-tasks-page)). When the table's columns do not fit
+   the viewport, the table scrolls horizontally inside that container, and the page
+   itself still does not scroll horizontally (rule 2); the horizontal scroll is
+   reachable by a touch gesture. The page scrolls vertically like any other page,
+   because the list is paginated and is not a full-height page region (see
+   [Full-Height Page Regions](#full-height-page-regions)). The filter bar in the list
+   card's header moves below the card title and stacks its controls one per line on
+   a phone-sized viewport, and places several per line as the viewport widens; the
+   card footer's range text, rows-per-page selector, and pagination bar wrap onto
+   further lines likewise. Neither ever forces page-level horizontal overflow. The
+   title link, the `View` link, every filter control, the Apply control, the
+   rows-per-page links, and the pagination links each present a
+   touch-friendly hit target.
 10. **Usable member-tasks board on narrow screens.** The roadmap sprint page
    presents the sprint's member tasks as a board of three fixed columns side by
    side (see [Sprint Detail Sub-Template](#sprint-detail-sub-template)). When the
@@ -6198,7 +5654,7 @@ experience is the baseline that larger viewports enhance.
    leaves, because the sprint page places the Sprint details card above the board
    and the Comments card below it (see
    [Full-Height Page Regions](#full-height-page-regions)). On narrow viewports the
-   board MUST remain usable on the same terms as the tasks page's board: each
+   board MUST remain usable: each
    expanded column keeps a minimum width at which its cards stay legible, the
    horizontal strip scroll is reachable by a touch gesture, and the cards and their
    badges present touch-friendly hit targets that link to each task's read-only
@@ -6207,8 +5663,8 @@ experience is the baseline that larger viewports enhance.
    `3rem` strip (see [Sprint Detail Sub-Template](#sprint-detail-sub-template),
    **Column collapse**). The board's height is `60vh` with a floor read from the
    `--full-height-region-floor` custom property. Its expanded columns divide the
-   board's width equally and grow with the viewport, never falling below the tasks
-   board's own `17rem` minimum and separated by that board's `0.75rem` gap, so every
+   board's width equally and grow with the viewport, never falling below a `17rem`
+   minimum and separated by a `0.75rem` gap, so every
    length is viewport-relative or in `rem` and scales with the screen and with the
    reader's own text size rather than fixing the layout to one device (see
    [Sprint Detail Sub-Template](#sprint-detail-sub-template), **Height and
@@ -6343,7 +5799,7 @@ original meaning and its original scope: a fault the server cannot recover from.
 | any roadmap-scoped route | the roadmap's existence check fails with an I/O error | `ERROR` | 500 |
 | `GET /` | the roadmap list cannot be read | `ERROR` | 500 |
 | `GET /roadmaps/{name}` | the sprints view cannot be loaded | `ERROR` | 500 |
-| `GET /roadmaps/{name}/tasks` | the task board cannot be loaded | `ERROR` | 500 |
+| `GET /roadmaps/{name}/tasks` | the task list cannot be loaded | `ERROR` | 500 |
 | `GET /roadmaps/{name}/audit` | the audit page cannot be loaded | `ERROR` | 500 |
 | `GET /roadmaps/{name}/sprints/{id}` | the sprint cannot be loaded for a reason other than not-found | `ERROR` | 500 |
 | `GET /roadmaps/{name}/tasks/{id}` | the task page cannot be loaded for a reason other than not-found | `ERROR` | 500 |
@@ -6584,9 +6040,9 @@ Rules:
    does not protect the page, so the script MUST write every such value through
    `textContent` or an equivalent that cannot interpret markup, and MUST NOT use
    `innerHTML` or `insertAdjacentHTML`. This applies to every value the graph
-   detail panel renders and to the search term the tasks page's narrowing script
-   writes back into the page (see [Frontend Rules](#frontend-rules), rule 6, and
-   [Roadmap Tasks Page](#roadmap-tasks-page), **Escaping the term**). No script
+   detail panel renders (see [Frontend Rules](#frontend-rules), rule 6). The tasks
+   page's search term is echoed only by the server, through `html/template` (see
+   [Roadmap Tasks Page](#roadmap-tasks-page), **Escaping**). No script
    writes a task's or a sprint's field into a page: those are rendered on the
    server (see [Roadmap Task Page](#roadmap-task-page)). A stored value can
    therefore alter page structure neither on the server-rendered path nor through a
@@ -6670,24 +6126,25 @@ Rules:
    Actual is shown with the same card as the other sprints and is not expanded into
    an inline member-tasks board, using the fields and
    relationships defined in `MODELS.md` and `DATABASE.md`. The page does **not**
-   render the roadmap's task board, and it contains no form, button, or link that
+   render the roadmap's task list, and it contains no form, button, or link that
    submits a change.
 9. `GET /roadmaps/{name}/tasks` for an existing roadmap returns HTTP 200 and an
-   HTML page that renders every task of the roadmap, of any status, as a **Kanban
-   board**, using the fields and relationships defined in `MODELS.md` and
-   `DATABASE.md`. This is a distinct endpoint from the sprints page. The page
-   renders **no** task table and offers no table view of the tasks: the board is
-   the page's only task presentation, and a task's full field set is reached
-   through the task page a card links to. The page contains no form, button,
-   or link that submits a change. `GET /roadmaps/{name}/tasks`
-   for a non-existent roadmap, or a request whose `{name}` violates the
-   roadmap-name rules, returns HTTP 404 without touching the filesystem outside
-   `~/.roadmaps/`. Acceptance Criteria 81 to 92 define the board itself,
-   Acceptance Criterion 93 fixes the card as a link on both boards, Acceptance
-   Criteria 94 to 99 and 221 to 231 fix the task page the card links to,
-   Acceptance Criteria 100 to 107 fix the header search, and
-   Acceptance Criteria 112 to 117 fix the header's type, priority, and severity
-   filters.
+   HTML page that renders the roadmap's tasks, of any status, as **one list** — one
+   Tabler card holding one table, with one row per task — using the fields and
+   relationships defined in `MODELS.md` and `DATABASE.md`. This is a distinct endpoint
+   from the sprints page. The page renders no board, no column per status, and no card
+   per task, and a task's full field set is reached through the task page each row
+   links to. The page's only form is its filter bar, which submits by `GET` and changes
+   nothing; the page contains no form, button, or link that submits a change.
+   `GET /roadmaps/{name}/tasks` for a non-existent roadmap, or a request whose `{name}`
+   violates the roadmap-name rules, returns HTTP 404 without touching the filesystem
+   outside `~/.roadmaps/`. Acceptance Criteria 81, 84 to 88, 90 to 93, 128, 232, 233,
+   and 244 define the list itself; Acceptance Criteria 100 to 107, 112 to 119, 121,
+   122, 129, 152 to 155, 234 to 238, and 243 define the filter bar and the search;
+   Acceptance Criteria 82, 83, 89, 239 to 242, and 245 define the pagination;
+   Acceptance Criteria 246 and 247 fix the contrast of the badges, of the search
+   placeholder, and of the focus indicator; and Acceptance Criteria 94 to 99 and 221 to 231 fix the task page the
+   rows link to.
 10. `GET /roadmaps/{name}` for a non-existent roadmap returns HTTP 404, and a
     request whose `{name}` violates the roadmap-name rules (for example
     `../etc`) returns HTTP 404 without touching the filesystem outside
@@ -6728,18 +6185,18 @@ Rules:
     form, button, or link that submits a change. A request whose `{id}` is not a
     valid integer, or is an integer that is not a sprint of the named roadmap, returns HTTP 404, and a
     request whose `{name}` is invalid or nonexistent returns HTTP 404.
-15. Following a task card anywhere one is shown — the board cards of the tasks
-    page and the board cards of the sprint page — navigates to that task's page at
-    `/roadmaps/{name}/tasks/{id}`, which displays all of that task's fields (`id`,
-    `title`, `status`, `type`, `priority`, `severity`, `functional_requirements`,
-    `technical_requirements`, `acceptance_criteria`, `completion_summary`,
-    `parent_task_id`, `subtask_count`, `depends_on`, `blocks`, `created_at`,
-    `started_at`, `tested_at`, `closed_at`, `commit_open`, `commit_close`) and that
-    task's comments, in the HTML the server sends. The page is read-only: it
-    contains no form, no edit control, and no submit action, and it opens no write
-    path. The card is followed from the pointer, from touch, and from the keyboard
-    on both boards, and the task page and the sprint tabs are usable on touch input
-    and on a small phone-sized viewport (see
+15. Following a task's link anywhere one is shown — the cards of the sprint page's
+    board, and the title and the `View` link of each row of the tasks page's list —
+    navigates to that task's page at `/roadmaps/{name}/tasks/{id}`, which displays all
+    of that task's fields (`id`, `title`, `status`, `type`, `priority`, `severity`,
+    `functional_requirements`, `technical_requirements`, `acceptance_criteria`,
+    `completion_summary`, `parent_task_id`, `subtask_count`, `depends_on`, `blocks`,
+    `created_at`, `started_at`, `tested_at`, `closed_at`, `commit_open`,
+    `commit_close`) and that task's comments, in the HTML the server sends. The page is
+    read-only: it contains no form, no edit control, and no submit action, and it opens
+    no write path. The link is followed from the pointer, from touch, and from the
+    keyboard on both pages, and the task page and the sprint tabs are usable on touch
+    input and on a small phone-sized viewport (see
     [Roadmap Task Page](#roadmap-task-page)).
 16. The admin-shell sidebar's per-roadmap links target the four distinct endpoints:
     the Sprints link points to `/roadmaps/{name}` (the landing page), the Tasks
@@ -6810,9 +6267,9 @@ Rules:
     page each render without page-level horizontal scrolling — `<body>` produces no
     horizontal overflow — with readable typography and
     touch-friendly hit targets, demonstrating the mobile-first base styles. The
-    horizontal scroll the tasks page's Kanban board performs inside its own
+    horizontal scroll the tasks page's table performs inside its `table-responsive`
     container is not page-level overflow and does not violate this criterion (see
-    Acceptance Criterion 88), and neither is the horizontal scroll the sprint page's
+    Acceptance Criterion 128), and neither is the horizontal scroll the sprint page's
     member-tasks board performs inside its own container (see Acceptance
     Criterion 136).
 28. On the roadmap sprints page, the roadmap sprint page, and the roadmap audit
@@ -6820,10 +6277,10 @@ Rules:
     page-level
     horizontal overflow (for example through responsive or stacked tables or an
     equivalent layout) while still showing the fields and relationships defined for
-    those pages. Neither page presents its tasks as a table: the roadmap tasks page
-    presents them as a board, whose narrow-viewport behaviour Acceptance
-    Criterion 88 covers, and the roadmap sprint page presents its member tasks as a
-    board, whose narrow-viewport behaviour Acceptance Criterion 136 covers.
+    those pages. The roadmap sprint page presents its member tasks as a board, whose
+    narrow-viewport behaviour Acceptance Criterion 136 covers, and the roadmap tasks
+    page presents its tasks as a table, whose narrow-viewport behaviour Acceptance
+    Criteria 128 and 129 cover.
 29. Every HTML page the interface serves includes the responsive viewport meta
     tag, and no page loads a CSS framework or reset from a remote origin; the
     Tabler CSS framework in use is vendored and served from `/static/...`.
@@ -7132,13 +6589,14 @@ Rules:
     `bg-secondary-lt`; a severity in `8`-`9` renders `bg-red-lt`, `6`-`7` renders
     `bg-orange-lt`, `3`-`5` renders `bg-yellow-lt`, and `0`-`2` renders
     `bg-secondary-lt`. The same value maps to the same colour everywhere a badge for
-    it is shown — the priority and severity badges on the tasks page's board cards
-    and on the cards of the sprint detail member-tasks board, the task page (its
+    it is shown — the status, priority, and severity badges in the rows of the tasks
+    page's list and the priority and severity badges on the cards of the sprint detail
+    member-tasks board, the task page (its
     header status badge, the priority and severity badges of its Details card, and
     the sprint status badge of its Sprint card), the sprint cards, the Roadmap Sprint Page header, the sprints-page
     tabs, where the colour is the variant of the status
     the tab groups while the badge text is that tab's sprint count (Acceptance
-    Criterion 120), and the per-column count badge of each of the two Kanban boards,
+    Criterion 120), and the per-column count badge of the sprint's member-tasks board,
     where the colour is the variant of the status the column groups while the badge
     text is that column's task count (Acceptance Criterion 140) — and the mapping
     introduces no enum value beyond those defined in `MODELS.md` and
@@ -7195,16 +6653,15 @@ Rules:
 69. The sprint Comments card shows only the sprint's own comments. A comment written
     against a member task appears on that task's own page and nowhere in the
     Comments card, and no aggregate of task comments is presented at sprint level.
-70. Rendering a page that shows N task cards never issues one comment query per
+70. Rendering a page that shows N tasks never issues one comment query per
     task: an instrumented count of comment queries is independent of N on every such
-    page. On the tasks page the count is 1 — a single grouped **counting** query for
-    all N cards, and no comment-listing query at all, because the board shows counts
-    and no comment text (see
-    `DATABASE.md § Count Comments for Many Parents (Grouped)`). On the sprint page it
+    page. On the tasks page the count is 0, because the list shows no comment
+    information. On the sprint page it
     is 2, whatever N is: one listing query for that sprint's **own** comments, which
     the Comments card renders in full as a log (see `DATABASE.md § Comments`), plus
     one grouped **counting** query over the whole set of rendered member-task ids,
-    which is what gives each board card its comment number. The sprint page issues no
+    which is what gives each board card its comment number (see
+    `DATABASE.md § Count Comments for Many Parents (Grouped)`). The sprint page issues no
     comment-listing query for a member task, so it reads the comment **body** of no
     task it renders. A page that renders no task issues no task-comment query of
     either kind: a sprint with no member task skips the grouped count entirely, while
@@ -7274,170 +6731,154 @@ Rules:
     Tabler's built admin shell uses, so each page exposes exactly one `main`
     landmark holding that page's own content. No page renders the page body as a
     `<div>` (see [UI Framework](#ui-framework), rule 18).
-81. The roadmap tasks page's Kanban board renders exactly five columns, one per
-    `TaskStatus` value, ordered left to right `BACKLOG`, `SPRINT`, `DOING`,
-    `TESTING`, `COMPLETED` — the order of the task state machine's flow. Each
-    column title is the status identifier in upper case, untranslated. The five
-    columns are fixed: all of them are rendered on every request, in that order,
-    whatever the roadmap's data contains, and neither the set of columns nor their
-    order varies with the data. The board renders no sixth column and no "other"
-    column, because `tasks.status` is restricted to those five values by a CHECK
-    constraint (see [Roadmap Tasks Page](#roadmap-tasks-page),
-    `MODELS.md § Enums`, `STATE_MACHINE.md § Task State Machine`, and
-    `DATABASE.md § tasks Table`).
-82. Every task of the roadmap appears on the board exactly once, as one card in the
-    column matching that task's `status`. No task is omitted and no task is
-    duplicated: for a roadmap with N tasks, the five column counts sum to exactly N,
-    and a task whose status changes appears only in the column of its new status on
-    the next request. This holds for every N, with no upper bound: the page's task
-    read carries no limit and no pagination, and the `rmp task list` display default
-    of `100` is not applied to it. For a roadmap holding more than 100 tasks the
-    board renders all of them and the column counts still sum to N, so no count the
-    page prints is ever a count of a truncated result (see
-    [Roadmap Tasks Page](#roadmap-tasks-page), **Unbounded read**, and
+81. The roadmap tasks page presents its tasks as **one list and nothing else**: the
+    served HTML carries exactly one list card — a `card` holding one
+    `table-responsive` container whose one table carries the classes `table`,
+    `table-vcenter`, and `card-table` — and one `<tbody>` row per task of the rendered
+    page. The list is not divided by status or by any other attribute: tasks of all five
+    `TaskStatus` values share the one table, and a task's status is a cell of its row.
+    The page carries no board, no column per status, no card per task, no element with
+    a class beginning `task-board`, and no second list card, whatever the roadmap's
+    data contains (see [Roadmap Tasks Page](#roadmap-tasks-page)).
+82. Every task of the roadmap that satisfies the request's accepted criteria
+    appears in the list exactly once across its pages, and no other task appears: for
+    a request whose criteria admit N tasks, the pages of the list at any page size
+    together carry exactly N rows, no task is omitted, no task appears on two pages,
+    and a task whose status or sprint changes is admitted or excluded accordingly on the
+    next request. This holds for every N, with no upper bound: the page's task read is
+    bounded by the filters alone and never by a page, and the `rmp task list` display
+    default of `100` is not applied to it. For a roadmap holding more than 100 tasks,
+    requested with no criterion, the range text states the roadmap's full task count and
+    the pages together carry every task (see
+    [Roadmap Tasks Page](#roadmap-tasks-page), **Pagination**, and
     `DATABASE.md § Main SQL Queries`, "List All").
-83. Each column header shows the status name together with a Tabler badge carrying
-    the number of tasks in that column. A column holding no task shows the count
-    `0`, and the count of each column equals the number of cards rendered in it.
-84. Within every column the cards appear in a deterministic order: descending
-    `priority`, and ascending `created_at` for tasks of equal priority — the default
-    `ListTasks` ordering (`ORDER BY priority DESC, created_at ASC`; see
-    `DATABASE.md § Main SQL Queries`, "List All"). Grouping the tasks into columns
-    preserves that relative order, so the cards of one column follow the same
-    relative order the page's read returned, and the board applies no second sort of
-    its own.
-85. Each card of the roadmap tasks page's Kanban board shows, in order: the task
-    `title` as the card's first line and prominent main content; on the next line,
-    the badge line, carrying exactly four Tabler badges in this order — an id badge
-    reading `#<id>` with the classes `bg-black` and `text-white`, a `severity` badge
-    reading `S` immediately followed by the task's severity, a `priority` badge
-    reading `P` immediately followed by the task's priority, with no colon, no space,
-    and no other separator between the letter and the digits, and a type badge
-    reading the task's `type` exactly as the `TaskType` enum spells it and coloured
-    by the task type mapping (Acceptance Criteria 177 to 179) — so a task of severity
-    `3` and priority `5` shows `S3` and `P5`, and a badge reading `3`, `S 3`,
-    `S:3`, `Sev:3`, or `Sev: 3` (or the corresponding `Pri:` form) does not satisfy
-    this criterion, and no `Sev:` or `Pri:` text appears on the card; the severity
-    and priority badges are each coloured by the mapping in
-    [Status, Priority, and Severity Badge Colours](#status-priority-and-severity-badge-colours)
-    applied to the value alone and not to the labelled text, so the badge label
-    changes no badge colour (Acceptance Criterion 61 continues to hold); and, below
-    the badge line, a metadata footer listing only
-    the indicators the task actually has, among the sprint the task belongs to, its
-    `subtask_count`, its number of `depends_on` entries, its number of `blocks`
-    entries, and its number of comments. The card shows **no status badge**, because
-    the column already states the status. An indicator whose value is absent, empty,
-    or zero renders nothing at all — no dash and no placeholder — and a task with
-    none of the five indicators renders no metadata footer. That absent-metadata rule
-    is this board's own: the card of the sprint's member-tasks board is not governed
-    by it and always renders both of its counters (Acceptance Criterion 134). The
-    badge label belongs to the board card and to nothing else: the same task's
-    `priority` and `severity` on the
-    task page render as the bare integer beside the field name that already
-    names it (Acceptance Criterion 224), and the card's accessible
-    name carries neither value and therefore carries no badge label (Acceptance
-    Criterion 86 continues to hold).
-86. Each board card is a link to its task's page: in the served HTML the card is
-    one `<a>` element carrying the classes `card` and `card-link` and the `href`
-    `/roadmaps/{name}/tasks/{id}` of its own task, and following it displays that
-    task's full field set as specified in Acceptance Criterion 15. Following a card
-    is an ordinary navigation: the board issues no request of its own for it and
-    reaches no write path. A pointer click, a touch tap, and Enter each follow the
-    card, and a middle click opens the task page in a new tab, with no JavaScript
-    added to make any of it work. The card carries no `tabindex` and no `role`, and
-    its accessible name is `Open details for task #<id>: <title>`, so a card can be
-    followed without a pointing device and can be named aloud by a speech-input
-    user from the title it displays. The card shows a visible focus indicator when
-    it receives keyboard focus. The card contains no nested link: its sprint
-    indicator stays plain text (see [Roadmap Tasks Page](#roadmap-tasks-page),
-    **Clickable card**).
-87. The board is read-only. It offers no drag-and-drop, and no control of any other
-    kind that moves a task between columns, reorders cards, changes a task's status,
-    or creates or edits a task or a column. The page contains no form, button, or
-    link that submits a change, and the `rmp` CLI remains the sole write path. This
-    is a deliberate divergence from the GitLab issue board the layout is modelled
-    on: the inspiration is structural (columns per state, cards, per-column counts)
-    and never interactive (see [Roadmap Tasks Page](#roadmap-tasks-page)).
-88. A column holding no task renders a clear, unobtrusive empty state inside the
-    column, in place of the card list, while the column, its title, and its `0`
-    count badge stay visible. A roadmap with no task at all returns HTTP 200 and
-    renders the board with all five columns present, each showing that in-column
-    empty state; the page never replaces the board with a page-level empty state and
-    never hides or drops a column. The five columns are presented side by side, and
-    when they do not fit the viewport the board scrolls horizontally inside its own
-    container while the page itself does not scroll horizontally (Acceptance
-    Criterion 27 continues to hold). Each column scrolls vertically and independently
-    when its card list exceeds the available height, which is the board's own height
-    and is fixed by Acceptance Criterion 124. On a narrow viewport each column
-    keeps a minimum width at which its cards stay legible, the horizontal board
-    scroll is reachable by a touch gesture, and the cards and badges present
-    touch-friendly hit targets (see
-    [Responsive and Mobile-First Design](#responsive-and-mobile-first-design),
-    rule 9).
-89. Rendering the tasks page for a roadmap with at least one task issues exactly
-    three reads: the roadmap's full task list, one grouped query returning the
-    comment **count** of every task rendered, and one grouped query that resolves
-    the sprint of every task rendered. The page reads no comment **body**: an
-    instrumented count of comment-listing queries for the tasks page is 0, and of
-    comment-counting queries is 1, independent of the number of tasks. For a
-    roadmap with no task the page issues the task-list read
-    only, and neither grouped query. Grouping the tasks into the five columns,
-    counting each column, and matching each card to
-    its sprint are performed in memory over the results already
-    read, so the board adds no further query — none per column and none per card —
-    and the query count is independent of the number of tasks, sprints, and columns
-    (see `DATABASE.md § Count Comments for Many Parents (Grouped)` and
+83. The card footer states `Showing <a> to <b> of <total> entries`, where `<total>`
+    is the number of tasks satisfying every accepted criterion of the request — the
+    filtered total, not the roadmap's — and `<a>` and `<b>` are the positions of the
+    first and last rows the page shows. For 60 matching tasks at page size `25`, page 1
+    reads `Showing 1 to 25 of 60 entries` and page 3 reads
+    `Showing 51 to 60 of 60 entries`; applying a filter that admits 7 of them reads
+    `Showing 1 to 7 of 7 entries`. Each of the three numbers is held in its own
+    `<span>` inside a `<p class="m-0 text-secondary">` (see
+    [Roadmap Tasks Page](#roadmap-tasks-page), **Pagination**).
+84. The rows appear in one deterministic order over the whole filtered set:
+    descending `priority`, then ascending `created_at` for tasks of equal priority,
+    then ascending `id` for tasks equal on both — the default `ListTasks` ordering
+    (`ORDER BY priority DESC, created_at ASC`; see `DATABASE.md § Main SQL Queries`,
+    "List All") with `id` as its final key. The check's data MUST include tasks of equal
+    `priority` and equal `created_at`, so that an order lacking the `id` key cannot pass
+    by coincidence, and MUST assert that concatenating the rows of every page in page
+    order yields exactly that order. Filtering and searching remove rows from the order
+    and never reorder the rows that remain.
+85. Each row of the tasks page's list shows, in this order, one cell per column
+    headed `ID`, `Title`, `Type`, `Status`, `Sprint`, `Severity`, `Priority`,
+    `Created`, and `Actions`: the id badge reading `#<id>` with the classes `bg-black`
+    and `text-white`; the task `title` as a link to the task page; the type badge
+    reading the task's `type` exactly as the `TaskType` enum spells it and coloured by
+    the task type mapping; the status badge reading the task's `status` exactly as the
+    `TaskStatus` enum spells it and coloured by the task status mapping; the sprint the
+    task belongs to as the plain text `Sprint #<id>` followed by a space and the
+    sprint's `title`, or an em dash for a task in no sprint; the severity badge reading
+    `S` immediately followed by the task's severity; the priority badge reading `P`
+    immediately followed by the task's priority, with no colon, no space, and no other
+    separator between the letter and the digits; the task's `created_at` in the display
+    form `YYYY-MM-DD HH:mm:ss` inside a `<time>` element whose `datetime` holds the stored
+    value, preceded by `<i class="ti ti-calendar me-1" aria-hidden="true"></i>`, in a cell
+    carrying `text-secondary`; and a `View` link carrying `btn` and `btn-sm` in a cell
+    carrying `text-end`. A badge reading `3`, `S 3`, `S:3`, `Sev:3`, or `Sev: 3` (or the
+    corresponding `Pri:` form) does not satisfy this criterion. The severity and
+    priority badges are coloured by the mapping applied to the value alone, so the badge
+    label changes no badge colour (Acceptance Criterion 61 continues to hold). The row
+    carries no comment count, no subtask count, no dependency count, and no other field
+    (see [Roadmap Tasks Page](#roadmap-tasks-page), **Row content**).
+86. Each row carries exactly two links, and both are `<a>` elements whose `href` is
+    `/roadmaps/{name}/tasks/{id}` of the row's own task: the title, whose accessible
+    name is its visible text, and the `View` link, whose accessible name is
+    `View task #<id>: <title>`, carried by its `aria-label`. An accessible name for the
+    `View` link that does not begin with `View`, or that carries the `id` alone, does
+    not satisfy this criterion. A pointer click, a touch tap, and Enter each follow
+    either link, and a middle click opens the task page in a new tab, with no JavaScript
+    added to make any of it work. Following a link issues no request from the tasks page
+    itself and reaches no write path. Each link shows a visible focus indicator when it
+    receives keyboard focus, measured in a browser as a computed `outline` or
+    `box-shadow` on the focused link that the unfocused link does not carry (see
+    [Roadmap Tasks Page](#roadmap-tasks-page), **Links to the task page**).
+87. The tasks page is read-only. The table carries no selection checkbox, no
+    `table-selectable` class, and no form control of any kind; the list card carries no
+    add-task button; the page renders no element carrying the class `modal` and no
+    element carrying `data-bs-toggle="modal"`. The filter bar's form carries the method
+    `get`, and every other control on the page is a `GET` link, so no request the page
+    can issue changes any data, and the `rmp` CLI remains the sole write path (see
+    [Roadmap Tasks Page](#roadmap-tasks-page), **Read-only**).
+88. When no task satisfies a request, the list card keeps its header and its filter
+    bar, renders no table and no card footer, and shows Tabler's empty-state markup
+    (`<div class="empty">`) in a `card-body`, never a page-level empty state. A roadmap
+    with no task, requested with no active criterion, shows the empty-state title
+    `No tasks yet`; a request carrying at least one accepted criterion that no task
+    satisfies shows the title `No task matches the filters` and, in the empty state's
+    `empty-action`, a link carrying `btn` and reading `Reset`, whose `href` is the
+    page's path with no filter parameter, no `q`, and no `page`, and with `size` only
+    when the active page size is not `25`. This link is the page's only Reset control:
+    the filter bar carries none. Both answer HTTP 200
+    (see [Roadmap Tasks Page](#roadmap-tasks-page), **Empty states**).
+89. Rendering the tasks page issues exactly three reads when the rendered page
+    holds at least one row — one read of the roadmap's sprints, one read of the
+    roadmap's tasks through the task listing, and one grouped query resolving the
+    sprint of the rendered rows — and exactly two when it holds none, the grouped query
+    being skipped. An instrumented count of queries is the same for a roadmap of 10
+    tasks and one of 300, for every page and every page size, and for any number of
+    active filters; no query is issued per row, per page, or per filter, and no
+    comment is read. The search term, the total, and the selection of the page's rows
+    are computed in memory over the rows the task read returned (see
+    [Roadmap Tasks Page](#roadmap-tasks-page), **Read cost**,
+    `DATABASE.md § List Sprint Titles`, `DATABASE.md § List All`, and
     `DATABASE.md § Resolve the Sprint of Many Tasks (Grouped)`).
-90. The board's markup obeys the rules already in force and introduces no exception:
-    no template carries a presentational inline `style` attribute, and every class
-    the board emits is defined either in the vendored Tabler distribution or in the
-    project override stylesheet `static/style.css` (Acceptance Criterion 62 continues
-    to hold). The board reuses Tabler's own components where Tabler provides them —
-    Tabler cards for the task cards, the card-header idiom for the column headers,
-    Tabler badges for the counts and for the priority and severity values, and
-    Tabler's empty-state markup for an empty column — and the column strip's layout
-    and scrolling rules live in `static/style.css`, because the vendored distribution
-    ships no board or Kanban component. The page's admin shell and page header are
-    unchanged (Acceptance Criteria 74 to 76 and 78 to 80 continue to
-    hold; see [UI Framework](#ui-framework), rules 8 and 10).
-91. The card of a task that belongs to a sprint shows that sprint in its metadata
-    footer, identified by the sprint `title` together with `Sprint #<id>`, as plain
-    text and not as a link. It names exactly one sprint and never a list, because
-    `sprint_tasks.task_id` carries a `UNIQUE` constraint and a task therefore
-    belongs to at most one sprint. The card of a task that belongs to no sprint
-    shows no sprint indicator at all: no dash, no "None", and no empty slot. A task
-    with no sprint and none of the other four indicators renders no metadata footer
-    (Acceptance Criterion 85 continues to hold; see
-    [Roadmap Tasks Page](#roadmap-tasks-page), `MODELS.md § Sprint`, and
-    `DATABASE.md § Relationships`).
-92. Resolving the sprint of the rendered tasks issues exactly one query for the
-    whole set of rendered task ids, not one per task and not one per board column:
-    an instrumented count of sprint-resolution queries for a tasks page rendering N
-    tasks is 1, independent of N and of how many distinct sprints those tasks
-    belong to. A tasks page that renders no task issues no sprint-resolution query
-    at all. This is measured the same way Acceptance Criterion 70 measures the
-    comment-query count (see
+90. The tasks page's markup obeys the rules already in force and introduces no
+    exception: no template carries a presentational inline `style` attribute, every
+    class the page emits is defined either in the vendored Tabler distribution or in
+    the project override stylesheet `static/style.css` (Acceptance Criterion 62
+    continues to hold), and the page uses Tabler's own components — form controls, the
+    card, the table, badges, the button group, pagination, and the empty state —
+    without hand-rolling any of them. The page's admin shell and page header are
+    unchanged, and the page header's actions column carries nothing on this page
+    (Acceptance Criteria 74 to 76 and 78 to 80 continue to hold; see
+    [UI Framework](#ui-framework), rules 8 and 10).
+91. The `Sprint` cell of a task that belongs to a sprint reads `Sprint #<id>`
+    followed by a space and that sprint's `title`, as plain text and not as a link. It
+    names exactly one sprint and never a list, because `sprint_tasks.task_id` carries a
+    `UNIQUE` constraint and a task therefore belongs to at most one sprint. The `Sprint`
+    cell of a task that belongs to no sprint reads an em dash (`—`) and nothing else
+    (see [Roadmap Tasks Page](#roadmap-tasks-page), **Row content**,
+    `MODELS.md § Sprint`, and `DATABASE.md § Relationships`).
+92. Resolving the sprint of the rendered rows issues exactly one query for the
+    whole set of the rendered page's task ids, not one per row: an instrumented count of
+    sprint-resolution queries for a tasks page rendering N rows is 1, independent of N,
+    of the page size, and of how many distinct sprints those tasks belong to, and the
+    query's id set holds exactly the ids of the page's rows. A tasks page that renders
+    no row issues no sprint-resolution query at all. This is measured the same way
+    Acceptance Criterion 70 measures the comment-query count (see
     `DATABASE.md § Resolve the Sprint of Many Tasks (Grouped)`).
-93. On both boards — the roadmap tasks page's board and the Roadmap Sprint Page's
-    member-tasks board — every task card in the served HTML is an `<a>` element
-    with an `href` to its own task's page, and no task card is a `<button>`, a
-    `<div>`, or a `<tr>`. No element carrying `role="button"` or `tabindex` stands
-    in for a card, and no `<tr>` in the served HTML links to a task or carries a
-    link to one, on any page. Each card's accessible name is
-    `Open details for task #<id>: <title>`, carrying the task's `id` and its
-    `title`, on both boards. In particular the name contains the task title, which
-    is the card's visible label, so the accessible name contains the visible label
-    text, as WCAG 2.5.3 Label in Name (Level A) requires, and the card can be
-    followed by speech input by speaking the title that is displayed. An accessible
-    name carrying the `id` alone, such as `Open details for task #<id>`, does not
-    satisfy this criterion. When a card receives keyboard focus it shows a visible
-    focus indicator (WCAG 2.2 Success Criterion 2.4.7, Focus Visible), measured in
-    a browser as a computed `outline` or `box-shadow` on the focused card that the
-    unfocused card does not carry. The property holds without any JavaScript being
-    added: the Content-Security-Policy of Acceptance Criterion 33 is unchanged (see
-    [Roadmap Tasks Page](#roadmap-tasks-page), **Clickable card**, and
-    [Sprint Detail Sub-Template](#sprint-detail-sub-template), **The card is a link
-    to the task page**).
+93. Every task card of the Roadmap Sprint Page's member-tasks board is, in the
+    served HTML, an `<a>` element with an `href` to its own task's page, and no task
+    card is a `<button>`, a `<div>`, or a `<tr>`. No element carrying `role="button"`
+    or `tabindex` stands in for a card or for a row of the tasks page's list, and no
+    `<tr>` on any page carries an `href`, a `role`, a `tabindex`, or an event-handler
+    attribute; the tasks page's rows reach the task page only through the two links of
+    Acceptance Criterion 86. Each card's accessible name is
+    `Open details for task #<id>: <title>`, carrying the task's `id` and its `title`.
+    In particular the name contains the task title, which is the card's visible label,
+    so the accessible name contains the visible label text, as WCAG 2.5.3 Label in Name
+    (Level A) requires, and the card can be followed by speech input by speaking the
+    title that is displayed. An accessible name carrying the `id` alone, such as
+    `Open details for task #<id>`, does not satisfy this criterion. When a card receives
+    keyboard focus it shows a visible focus indicator (WCAG 2.2 Success Criterion
+    2.4.7, Focus Visible), measured in a browser as a computed `outline` or `box-shadow`
+    on the focused card that the unfocused card does not carry. The property holds
+    without any JavaScript being added: the Content-Security-Policy of Acceptance
+    Criterion 33 is unchanged (see
+    [Sprint Detail Sub-Template](#sprint-detail-sub-template), **The card is a link to
+    the task page**, and [Roadmap Tasks Page](#roadmap-tasks-page), **Links to the task
+    page**).
 94. `GET /roadmaps/{name}/tasks/{id}` for a task of an existing roadmap returns
     HTTP 200 and an HTML page — for a task of each of the five statuses — whose
     served HTML, before any script runs, already carries every field Acceptance
@@ -7487,95 +6928,81 @@ Rules:
     `ERROR` record naming the underlying error (see
     [What Is Logged](#what-is-logged)). A request for a task that does not exist
     writes no record (see [What Is Not Logged](#what-is-not-logged)).
-100. The roadmap tasks page header carries a search input in its actions column and
-    **no** knowledge-graph link. The graph stays reachable from this page through
-    the admin-shell sidebar's Graph entry, which every page carries (Acceptance
-    Criterion 16 continues to hold), so removing the header link removes a duplicate
-    route to the graph and no access. The input has a programmatically associated
-    accessible label naming what it searches — a `placeholder` does not stand in for
-    that label — and is reachable and operable from the keyboard (see
-    [Roadmap Tasks Page](#roadmap-tasks-page), **Header search control**).
-101. Typing a term narrows the board without a page reload, and every column count
-    equals the number of cards that column is then showing — the cards visible to
-    the user, not the cards present in the document. A task matches when the
-    term occurs, case-insensitively and as a substring, in that task's `title` or in
-    its `#<id>` reference written with the leading `#`; both `42` and `#42` therefore
-    find task 42. No other task field is matched: a term occurring only in a task's
-    `functional_requirements`, and matching nothing in that task's title or
-    reference, does not match it. Leading and trailing whitespace is stripped from
-    the term by the rule Acceptance Criterion 121 fixes, and a term that is empty or entirely
-    whitespace under that rule shows every task. The case-insensitive comparison
-    folds the term and the task's searchable text by the rule Acceptance
-    Criterion 118 fixes, over text each of them normalised by the rule Acceptance
-    Criterion 152 fixes, so the same term and task yield the same verdict regardless
-    of the browser's reported locale, of the browser, and of the Unicode version
-    that browser's case, whitespace, and normalisation tables implement.
-102. A column left with no matching card renders its ordinary in-column empty state,
-    and the five columns stay present and in order — narrowing the board drops,
-    hides, and reorders no column (Acceptance Criterion 81 continues to hold). When
-    no task matches, the board states that no task matches the controls the board is
-    narrowed by — one message covering the term and the filters together — rather
-    than presenting five silently empty columns; that message is distinct from the
-    state of a roadmap that holds no task at all, which shows the in-column empty
-    states alone (Acceptance Criterion 88 continues to hold).
-103. The term travels in the `q` URL query parameter on `/roadmaps/{name}/tasks`. As
-    the user types, the page updates the URL in place, replacing the current history
-    entry rather than pushing one entry per keystroke. Clearing the search restores
-    every card and every unnarrowed count and **removes** `q` from the URL, leaving
-    no empty parameter behind.
-104. For any roadmap and any term, the board produced by typing that term into the
-    search control and the board produced by requesting the page URL carrying that
-    term in `q` are identical — the same cards, in the same columns, in the same
-    order, with the same column counts and the same empty states — asserted by
-    comparing the two. The document served for a cold load with `q` already carries
-    the narrowing in its final state — the narrowed column counts, the in-column
-    empty states, and the no-match message where applicable — and nothing on the
-    client applies the term after load. Non-matching cards **may** be present in
-    that document provided they arrive already marked as not visible and count
-    towards nothing the board states; their presence is what lets clearing the
-    search restore them without a request to the server, as Acceptance Criterion 103
-    requires. What is forbidden is a document that arrives unnarrowed and is
-    narrowed by a script after load. The identity holds for **every** term, the four
-    code points included on which a platform's own normalisation of a term differs
-    from the rules this specification fixes. Two of them are the case conversion's:
-    a term carrying `U+0130`, and a term carrying `U+03A3` where the full
-    conversion's Final_Sigma condition would hold, select the same cards on both
-    paths and in every browser (Acceptance Criteria 118 and 119). Two are the
-    trimming's, and they differ in opposite directions: a term whose first code
-    point is `U+0085` loses it on both paths and finds what the rest of the term
-    matches, and a term whose first code point is `U+FEFF` keeps it on both paths
-    and finds nothing on an ordinary roadmap. None of the four is a term one path
-    narrows by while the other ignores it (Acceptance Criteria 121 and 122). The
-    identity extends to canonical spelling: a title written with `U+0130` and a title
-    written as `U+0049` followed by `U+0307` carry **one** searchable text under
-    Acceptance Criterion 152, so the board a term produces is the same whichever of
-    the two spellings the roadmap happens to store, on both paths (Acceptance
-    Criterion 153).
-105. No `q` value produces an error page: a term matching nothing, a term longer than
-    any searchable text, and a `q` the server cannot decode each return HTTP 200,
-    the last treated as though `q` were absent. Applying a term adds no database
-    query: the page's read remains the full task list specified in Acceptance
-    Criterion 89, and narrowing in the browser issues no request at all. A task's
-    searchable text is normalised and folded once by the server, never by the client,
-    and never trimmed at all, so the two paths cannot disagree about a task's text;
-    the term is the only value both of them transform, and both trim it with the
-    server's own whitespace set, normalise it from the server's own tables, and fold
-    it with the server's own mapping (Acceptance Criteria 119, 122, and 155).
+100. The roadmap tasks page's page header carries **no** actions column content: no
+    search input, no filter control, and no knowledge-graph link. The graph stays
+    reachable from this page through the admin-shell sidebar's Graph entry, which every
+    page carries (Acceptance Criterion 16 continues to hold). The search input is
+    `<input type="search" class="form-control form-control-sm" name="q" placeholder="Search">`,
+    inside the filter bar of the list card's header, with a `<label>` associated with
+    it by `for` and `id`, reading `Search` and carrying `visually-hidden` — the
+    `placeholder` shows what the control is and does not replace that label — and it
+    is reachable and operable from the keyboard (see
+    [Roadmap Tasks Page](#roadmap-tasks-page), **Filter bar**).
+101. A request carrying a term in `q` lists exactly the tasks whose `title` contains
+    the term or whose `#<id>` reference, written with the leading `#`, contains it,
+    case-insensitively and as a substring; both `42` and `#42` therefore find task 42.
+    The title and the reference are matched **separately**, never as one concatenated
+    string: for a task whose title ends in `Lisboa`, a term made of that title's last
+    characters followed by the start of the task's reference, with or without a space
+    between them, does not match that task.
+    No other task field is matched: a term occurring only in a task's
+    `functional_requirements`, or only in its `type`, and matching nothing in that
+    task's title or reference, does not match it. Leading and trailing whitespace is
+    stripped from the term by the rule Acceptance Criterion 121 fixes, and a term that
+    is empty after that trim is no criterion and lists every task. The comparison
+    normalises the term and the task's searchable text by the rule Acceptance
+    Criterion 152 fixes and folds them by the rule Acceptance Criterion 118 fixes, on
+    the server, so the verdict does not depend on the browser, on its reported locale,
+    or on its Unicode version.
+102. A term that matches no task, alone or together with the filters, renders the
+    no-match empty state of Acceptance Criterion 88 — one message covering the term and
+    the filters together — and that state is distinct from the state of a roadmap that
+    holds no task at all, requested with no criterion (see
+    [Roadmap Tasks Page](#roadmap-tasks-page), **Empty states**).
+103. The term travels in the `q` URL query parameter on `/roadmaps/{name}/tasks`.
+    Submitting the filter bar puts the search input's value in `q`, and reloading the
+    resulting URL renders the identical list. The search input of every response shows
+    the `q` the request carried, and every link the page generates to itself carries
+    `q` while the term is not empty after the trim, and carries no `q` otherwise. The
+    `q` a generated link carries is the term as echoed: for a `q` holding an invalid
+    UTF-8 byte, the link carries `U+FFFD` in its place, percent-encoded as `%EF%BF%BD`,
+    and never the invalid byte.
+104. The tasks page filters, searches, and paginates **without JavaScript**. For any
+    roadmap and any combination of the six parameters, the HTML the server sends
+    already carries the final list — the rows, the range text, the pagination bar, the
+    selected option of every select, and the empty state where applicable — and no
+    script changes any of it after load: the page loads no script of its own, and a
+    browser with scripting disabled renders and navigates the same list. The check
+    compares, for the same URL, the list a browser renders with scripting enabled and
+    the one it renders with scripting disabled, and they are identical. Requesting the
+    same URL twice, with the roadmap unchanged, returns the same list.
+105. No `q` value produces an error page: a term matching nothing, a term longer
+    than any searchable text, and a `q` the server cannot decode each return HTTP 200,
+    the last treated as though `q` were absent. A term whose bytes are not valid UTF-8
+    has each invalid byte replaced by `U+FFFD` and is then matched like any other term,
+    and the search input's `value` echoes that term with the same replacement: the
+    served HTML carries no invalid UTF-8 byte, and a `q` holding one invalid byte
+    between two ASCII letters is echoed as those letters with one `U+FFFD` between
+    them.
+    Applying a term adds no database query: the page's reads remain those of
+    Acceptance Criterion 89, and `q` never reaches SQL. A task's searchable text and
+    the term are both prepared by the server alone (see
+    [Roadmap Tasks Page](#roadmap-tasks-page), **The text search**).
 106. A term containing HTML markup renders as visible characters and introduces no
     element, attribute, or script into the page: the server escapes it through
-    `html/template` where it echoes it into the search input and into the no-match
-    message, and the script writes it only as text, never through `innerHTML` or
-    `insertAdjacentHTML`. This is proven by a test that fails if the term is written
-    as markup (rule 7 of [Security and Constraints](#security-and-constraints)
-    governs both paths).
-107. The search introduces no inline script and no Content-Security-Policy change:
-    the narrowing script loads from `/static/` like every other client script, and
-    the policy remains exactly the value fixed in Acceptance Criterion 33
-    (Acceptance Criteria 23 and 98 continue to hold). Every class the control emits
-    resolves in the embedded stylesheets and no template carries a `style` attribute
-    (Acceptance Criterion 62 continues to hold).
+    `html/template` where it echoes it into the search input's `value`, and no script
+    writes it anywhere. Every generated link percent-encodes the parameter values it
+    carries. This is proven by a test that fails if the term is written as markup
+    (rule 7 of [Security and Constraints](#security-and-constraints) governs).
+107. The tasks page introduces no inline script, loads no script of its own, and
+    makes no Content-Security-Policy change: every script it loads is the admin shell's,
+    from `/static/`, and the policy remains exactly the value fixed in Acceptance
+    Criterion 33 (Acceptance Criteria 23 and 98 continue to hold). Every class the
+    filter bar, the table, and the footer emit resolves in the embedded stylesheets and
+    no template carries a `style` attribute (Acceptance Criterion 62 continues to
+    hold).
 108. The top navbar of every roadmap-scoped page — the roadmap's sprints page, a
-    sprint's own page, the tasks board, a task's own page, the audit log page, and
+    sprint's own page, the tasks page, a task's own page, the audit log page, and
     the knowledge-graph page — shows the name of the roadmap in the request path, rendered prominently
     with the vendored Tabler `h3` type utility and with no glyph or other element
     beside it, and a long name is truncated rather than wrapped or overflowing.
@@ -7596,13 +7023,12 @@ Rules:
     contains a badge, and no other page's header carries one.
     No header title contains the roadmap name, which the shell already states in
     the sidebar and in the top navbar. Each page's actions column carries only what
-    [Shared Page-Header Partial](#shared-page-header-partial) fixes: the tasks
-    page's search input and its three filter dropdowns, the knowledge-graph page's
-    layout dropdown, the sprint page's link back to the roadmap's sprints page, and
-    the task page's link back to the roadmap's tasks page.
-    The sprints, audit, and index page headers carry no actions column, and no page
-    header links to the knowledge-graph page — Acceptance Criterion 100 held that
-    for the tasks page and now holds for every page.
+    [Shared Page-Header Partial](#shared-page-header-partial) fixes: the
+    knowledge-graph page's layout dropdown, the sprint page's link back to the
+    roadmap's sprints page, and the task page's link back to the roadmap's tasks
+    page. The sprints, tasks, audit, and index page headers carry no actions column
+    content — the tasks page's filter bar sits in its list card's header — and no
+    page header links to the knowledge-graph page (Acceptance Criterion 100).
 110. `GET /roadmaps/{name}/graph/data` executes the caller's query under a
     5-second deadline derived from the request context. A query that would run for
     longer is cancelled when the budget is exhausted instead of running to
@@ -7661,79 +7087,74 @@ Rules:
     5-second query time budget (see Acceptance Criterion 110 and
     [Graph Query Time Budget](#graph-query-time-budget)).
 
-112. The roadmap tasks page header carries, beside the search input, exactly three
-    filter dropdowns in its actions column: a type filter offering the ten
-    `TaskType` values of `MODELS.md § Enums`, a minimum-priority filter offering the
-    thresholds `1` to `9`, and a minimum-severity filter offering the thresholds `1`
-    to `9`. Each dropdown offers a first option meaning no filter on that dimension,
-    and that option is selected whenever the dimension carries no filter. Each
-    dropdown carries a programmatically associated accessible label naming the
-    dimension it filters — neither that first option nor a `placeholder` stands in
-    for the label — and each is reachable and operable from the keyboard
-    (Acceptance Criterion 100 continues to hold for the search input). The header
-    offers **no** status filter, and no control of any kind narrows, drops, or
-    reorders the five columns; [Roadmap Tasks Page](#roadmap-tasks-page), **Why the
-    board offers no status filter**, records the four reasons for that omission, so
-    the absence is specified rather than merely unimplemented.
-113. Each filter narrows the board by its own dimension and every column count
-    equals the number of cards that column is then showing, as Acceptance Criterion
-    101 requires of the term. A task matches the type filter when its `type` is
-    **equal** to the selected value, compared exactly against the spelling in
-    `MODELS.md § Enums`; it matches the priority filter when its `priority` is
-    **greater than or equal to** the selected threshold, and the severity filter
-    when its `severity` is greater than or equal to the selected threshold. These
-    are the meanings `rmp task list` gives `-y, --type`, `-p, --priority`, and
-    `--severity` (see `COMMANDS.md § List Tasks`), so the same value selects the
-    same tasks on the board and on the command line. Each dimension carries at most
-    one value.
-114. The three filters combine **conjunctively**, with each other and with the
-    search term: the board shows exactly the tasks satisfying every active control,
-    and a board with no active control shows every task. A request
-    for `?q=cache&type=BUG&priority=7` shows the `BUG` tasks of priority `7` or
-    above whose `title` or `#<id>` reference contains `cache`, and no other task.
-    Activating a further control can only shrink the shown set; no control re-admits
-    a task another control excluded.
-115. A `type`, `priority`, or `severity` value the dimension does not accept applies
-    **no filter on that dimension** and returns HTTP 200 with the board rendered as
-    though that parameter were absent — never an error page and never a changed
-    status code. This holds for a `type` outside the ten `TaskType` values or
-    differing from one only in case, a `priority` or `severity` that is not an
-    integer or is an integer outside `1` to `9` (`0` included, a threshold of `0`
-    being no filter), a value carrying a sign or surrounding spaces, a parameter
-    present with an empty value, and a parameter the server cannot decode. The other
-    dimensions are unaffected: with an unusable `type` and an accepted `priority`,
-    the board is narrowed by the priority and by the term alone. A repeated
-    parameter (`?type=BUG&type=EPIC`) is read as its first occurrence; a
-    comma-packed value (`?type=BUG,EPIC`) is one string, matches no `TaskType`
-    value, and is therefore ignored whole — no filter is ever partly applied.
-116. Each active filter travels in its own URL query parameter on
-    `/roadmaps/{name}/tasks` — `type`, `priority`, `severity` — and a dimension on
-    its no-filter option leaves **no** parameter behind. Changing a dropdown updates
-    the URL in place, replacing the current history entry rather than pushing a new
-    one, exactly as Acceptance Criterion 103 requires of typing. For any roadmap and
-    any combination of a term and the three filters, the board produced by setting
-    those controls on the page and the board produced by requesting the URL carrying
-    the same values are identical — the same cards, in the same columns, in the same
-    order, with the same column counts and the same empty states — asserted by
-    comparing the two, and the document served for such a cold load already carries
-    the narrowing in its final state with each control showing the value that
-    produced it (Acceptance Criterion 104 continues to hold, including its treatment
-    of non-matching cards present but marked as not visible). Clearing every control
-    restores the full board with its true unnarrowed counts and leaves the bare page
-    URL, carrying none of the four parameters.
-117. The filters add no database query: the page's read remains the full task list
-    of Acceptance Criterion 89, a filter contributes no clause to it and no read of
-    its own, and narrowing in the browser issues no request at all. No filter value
-    is echoed into the page — the dropdown options are the server's own enumeration
-    of the enum and the range, and an unaccepted value selects the no-filter option
-    — so no caller-supplied string reaches the page through `type`, `priority`, or
-    `severity`. The filters introduce no inline script and no
-    Content-Security-Policy change: they are applied by the same `/static/` script
-    that applies the term, and the policy remains exactly the value fixed in
-    Acceptance Criterion 33 (Acceptance Criteria 23, 98, and 107 continue to hold).
-    Every class the dropdowns emit resolves in the embedded stylesheets, the select
-    control is one the vendored Tabler distribution already ships, and no template
-    carries a `style` attribute (Acceptance Criterion 62 continues to hold).
+112. The filter bar offers **both** a status filter and a sprint filter, beside the
+    type filter and the search input: four controls in the order search, sprint,
+    status, type, followed by the Apply control, and nothing else — no priority
+    filter, no severity filter, and no Reset control. The status select offers
+    `Any status` and then `BACKLOG`, `SPRINT`, `DOING`, `TESTING`, and `COMPLETED`, in
+    that order; the type select offers `Any type` and then the ten `TaskType` values in
+    the order `MODELS.md § Enums` lists them. The form carries no control named
+    `priority` or `severity`. Each select's
+    first option carries an empty value and is the selected one whenever its parameter
+    is absent or ignored. Each control carries a `<label>` associated with it by `for`
+    and `id`, naming the dimension it filters and carrying `visually-hidden` — neither
+    a first option nor a `placeholder` replaces it — and each is reachable and
+    operable from the keyboard (see [Roadmap Tasks Page](#roadmap-tasks-page),
+    **Filter bar**).
+113. Each filter narrows the list by its own dimension. A task matches the status
+    filter when its `status` is **equal** to the selected value, and the type filter
+    when its `type` is **equal** to it, each compared exactly against the spelling in
+    `MODELS.md § Enums`; it matches the sprint filter by membership (Acceptance
+    Criterion 235). The page offers no priority or severity filter: a request carrying
+    `priority` or `severity`, with any value — `7`, `0`, `abc`, or empty — lists exactly
+    the tasks the same request lists without it, answers HTTP 200, and no link the page
+    generates carries either parameter. Each parameter carries at most one value.
+114. The filters combine **conjunctively**, with each other and with the search
+    term: the list holds exactly the tasks satisfying every accepted criterion, and a
+    request with no accepted criterion lists every task of the roadmap. A request for
+    `?q=cache&status=DOING&type=BUG` lists the `DOING` tasks of type `BUG` whose
+    `title` or `#<id>` reference contains `cache`, and no other task. Adding a
+    criterion can only shrink the list; no criterion re-admits a task another
+    excluded, and the order of the parameters in the query string changes nothing.
+115. A filter parameter whose value is not accepted is **ignored**: the response is
+    HTTP 200, the list is exactly the list of the same request without that parameter,
+    and the parameter's control shows its *any* option. This holds, for `status` and
+    `type`, for a value outside the enum or differing from one only in case; for
+    `sprint`, for a value that
+    is neither `none` nor the canonical decimal `id` of a sprint of this roadmap — `NONE`,
+    `007`, `0`, the `id` of a sprint of another roadmap, and the `id` of no sprint among
+    them; and, for every filter parameter, for a value carrying surrounding spaces, for
+    a parameter present with an empty value, and for a parameter the server cannot
+    decode. The other parameters are unaffected: with an ignored `type` and an accepted
+    `status`, the list is narrowed by the status alone. A repeated parameter
+    (`?type=BUG&type=EPIC`) is read as its first occurrence, and a comma-packed value
+    (`?type=BUG,EPIC`) is one string, matches no `TaskType` value, and is ignored whole
+    (see [Roadmap Tasks Page](#roadmap-tasks-page), **Query parameters**).
+116. The filter bar is a `<form method="get">` whose `action` is
+    `/roadmaps/{name}/tasks`. It carries a hidden input named `size` holding the active
+    page size on every response, the default `25` included, and no field named `page`,
+    so submitting it keeps the page size and always renders page 1; submitting it at
+    the default page size requests a URL carrying `size=25`. The rule that `size` is
+    carried only when it is not `25` applies to generated links alone (Acceptance
+    Criterion 241). Its Apply control is `<button type="submit">` carrying `btn`,
+    `btn-primary`, and `btn-sm`, and the form carries no Reset control. Submitting the
+    form, then reloading the resulting URL, then submitting it again with every select
+    on its *any* option and an empty search input, renders in turn the filtered list,
+    the identical filtered list, and the unfiltered list at the same page size (see
+    [Roadmap Tasks Page](#roadmap-tasks-page), **Filter bar**).
+117. Filter values reach SQL only as **bound parameters**. The task read carries one
+    predicate per accepted `sprint`, `status`, and `type` value, each value bound as a
+    parameter of the prepared statement, and no predicate for an ignored value; it
+    carries no `priority` and no `severity` predicate, whatever the request carries. The check captures the SQL text the page issues and asserts
+    that no parameter value appears in it, for accepted values and for hostile ones —
+    `status=DOING' OR '1'='1`, `type=BUG;DROP TABLE tasks`, `sprint=1 OR 1=1` —
+    which are ignored by Acceptance Criterion 115 and reach no statement at all; after
+    such requests the roadmap's tasks are intact. `q`, `page`, and `size` never reach
+    SQL. No filter value is echoed into the page as text: each select's options are the
+    server's own enumeration of an enum or of the roadmap's sprints, and
+    a value only decides which of them is `selected` (see
+    [Roadmap Tasks Page](#roadmap-tasks-page), **Query parameters**, and
+    `DATABASE.md § List All`).
 118. The task's searchable text and the term are folded by Unicode's **simple
     lowercase mapping**, applied to each code point on its own: unconditional, one
     code point in and one code point out, and consulting no locale. It is **not**
@@ -7744,31 +7165,19 @@ Rules:
     after the mapping: a `U+03C2` in a term stays `U+03C2`, so a term of `οδός`
     finds a task titled `οδός`, which a post-fold rewrite of `ς` to `σ` would stop
     finding. ASCII and accented Latin fold letter for letter — `A` to `a`, `Á` to
-    `á` — and a term of `ΟΔΟΣ` finds a task titled `ΟΔΟΣ` on both paths. A term
+    `á` — and a term of `ΟΔΟΣ` finds a task titled `ΟΔΟΣ`. A term
     whose bytes are not valid UTF-8 is folded with each invalid byte replaced by
     `U+FFFD` and is then matched like any other term, being neither an error nor an
     absent term (Acceptance Criterion 105 continues to hold; see
     [Roadmap Tasks Page](#roadmap-tasks-page), **The folding rule**).
-119. The client folds the term with the mapping the server ships to it and calls no
-    case conversion of the JavaScript platform: neither `toLowerCase` nor
-    `toLocaleLowerCase` appears in the narrowing script, asserted as an absence in
-    the script the binary serves. The shipped mapping is compared against the server's own
-    folding function over the whole of Unicode — every code point, not a sample —
-    and against that function itself, never against a stored copy of its expected
-    results; the comparison fails when one code point folds differently on the two
-    sides, including when a toolchain upgrade changes a mapping. The server folds a
-    task's searchable text and folds a term through that one function, not through
-    two implementations of one description. The check is an ordinary Go test: it
-    runs no JavaScript and requires no JavaScript engine, no Node.js, no network
-    access, and no module beyond the direct dependencies
-    `BUILD.md § External Dependencies` names, so that section and
-    `BUILD.md § Vendored Web Assets`, rule 2, continue to hold. Because the client
-    consults no case table of the browser's, the board a term produces does not
-    depend on which Unicode version the browser implements, and two browsers of
-    different Unicode versions produce the same board (see
-    [Roadmap Tasks Page](#roadmap-tasks-page), **One rule, and only one
-    implementation of it**, and **What keeps the shipped rule equal to the
-    server's**).
+119. The server prepares the term and every task's searchable text through **one**
+    normalisation function and **one** folding function, shared by both, and no
+    second implementation of either exists for the search: a check that swaps the
+    folding function for a substitute changes the verdict for the term and for the
+    searchable text alike. No script the binary serves folds, trims, or normalises a
+    term: `GET /static/task-search.js` returns HTTP 404, and no asset under `/static/`
+    carries a case mapping, a whitespace table, or normalisation tables for the search
+    (see [Roadmap Tasks Page](#roadmap-tasks-page), **One implementation**).
 120. Each of the three tabs on the Roadmap Sprints Page carries a Tabler badge whose
     text is the number of sprints in that tab and whose colour is the variant the
     sprint status mapping assigns to the status that tab groups: Próximos carries
@@ -7785,49 +7194,24 @@ Rules:
     [Roadmap Sprints Page](#roadmap-sprints-page) and
     [Status, Priority, and Severity Badge Colours](#status-priority-and-severity-badge-colours),
     rule 2).
-121. Before the term is folded, every code point carrying Unicode's **White_Space**
-    property is removed from the start of the term and from its end, and no other
-    code point is removed from anywhere: a code point carrying that property
-    elsewhere in the term survives and is matched literally, and a term made only of
-    such code points becomes the empty string and shows every task. Whitespace is
-    that property and **not** the set either platform's own trimming function
-    removes, and the two code points where those functions disagree resolve as this
-    criterion states, in opposite directions: `U+0085` (NEXT LINE) carries the
-    property and **IS** removed, although the JavaScript platform's own trimming
-    keeps it; `U+FEFF` (ZERO WIDTH NO-BREAK SPACE) does not carry the property and
-    is **NOT** removed, although that platform's own trimming removes it — so a term
-    pasted with a leading byte-order mark matches nothing on an ordinary roadmap,
-    and does so on **both** paths, which is the property this criterion protects
-    rather than a defect in it. Swept over every code point of Unicode, those two are the
-    whole of the difference: no third code point is removed by one trimming and kept
-    by the other. The term is trimmed, **then** normalised, **then** folded, in that
-    order, on both paths. The task's searchable text is normalised and folded but
-    never trimmed, so a task's own leading or trailing whitespace is part of its text
-    (Acceptance Criteria 101, 104, and 152 continue to hold; see
-    [Roadmap Tasks Page](#roadmap-tasks-page), **The trim rule**).
-122. The client removes the term's leading and trailing whitespace by the whitespace
-    set the server ships to it and calls no trimming function of the JavaScript
-    platform: no call to `trim`, `trimStart`, `trimEnd`, or the legacy aliases
-    `trimLeft` and `trimRight` appears in the narrowing script, asserted as an
-    absence in the script the binary serves, the way Acceptance Criterion 119
-    asserts the platform's case conversions. The shipped set is covered by the
-    **same** check that criterion fixes and not by a second check beside it, and
-    with the same three properties: it is compared against the server's own
-    whitespace function over the whole of Unicode — every code point, not a sample —
-    and against that function itself, never against a stored copy of its expected
-    results; and the comparison fails when a single code point is whitespace to one
-    side and not to the other, including when a toolchain upgrade changes which code
-    points carry the property. The check remains an ordinary Go test: it runs no
-    JavaScript and requires no JavaScript engine, no Node.js, no network access, and
-    no module beyond the direct dependencies
-    `BUILD.md § External Dependencies` names, so that section and
-    `BUILD.md § Vendored Web Assets`, rule 2, continue to hold. Because the client
-    consults no whitespace table of the browser's, the board a term produces does
-    not depend on which Unicode version the browser implements, exactly as
-    Acceptance Criterion 119 requires of the fold (Acceptance Criterion 121; see
-    [Roadmap Tasks Page](#roadmap-tasks-page), **One rule, and only one
-    implementation of it**, and **What keeps the shipped rule equal to the
-    server's**).
+121. Before the term is normalised and folded, every code point carrying Unicode's
+    **White_Space** property is removed from the start of the term and from its end,
+    and no other code point is removed from anywhere: a code point carrying that
+    property elsewhere in the term survives and is matched literally, and a term made
+    only of such code points becomes the empty string and lists every task. `U+0085`
+    (NEXT LINE) carries the property and **is** removed; `U+FEFF` (ZERO WIDTH NO-BREAK
+    SPACE) does not carry it and is **not** removed, so a term pasted with a leading
+    byte-order mark matches nothing on an ordinary roadmap. The term is trimmed,
+    **then** normalised, **then** folded, in that order. The task's searchable text is
+    normalised and folded but never trimmed, so a task's own leading or trailing
+    whitespace is part of its text (Acceptance Criteria 101 and 152 continue to hold;
+    see [Roadmap Tasks Page](#roadmap-tasks-page), **The trim rule**).
+122. The tasks page ships no client copy of the search. The served HTML of the page
+    references no `static/task-search.js`, the embedded asset set holds no such asset,
+    and no script of the page reads the search input, rewrites the URL, or hides a row:
+    filtering, searching, and paginating are performed by the server alone, on each
+    request (Acceptance Criteria 104, 107, and 119 continue to hold; see
+    [Roadmap Tasks Page](#roadmap-tasks-page), **Filter bar**).
 123. Every query-bar failure of `GET /roadmaps/{name}/graph/data` is answered with
     HTTP `400 Bad Request` and a JSON body of exactly two string fields, `error`
     and `kind`, and never with HTTP 200 and never with the
@@ -7860,38 +7244,36 @@ Rules:
     fixed line rule 12 of that section publishes (see
     [Query-Bar Error Handling](#query-bar-error-handling) and
     `DATA_FORMATS.md § Graph View Data`, **Error Shape**).
-124. Each full-height page region — the Kanban board of the roadmap tasks page and
-    the graph card of the knowledge-graph page — satisfies **both** edges of
+124. The graph card of the knowledge-graph page, the one full-height page region,
+    satisfies **both** edges of
     [Full-Height Page Regions](#full-height-page-regions), rule 1, when the page is
     rendered in a browser: the region's bottom edge coincides with the bottom edge
     of that page's `main.page-body` element, and that edge lies within the viewport,
     with the document scrolling vertically no further than the viewport height. The
-    check measures both regions and asserts both edges, because either edge alone
-    passes on a defective layout, and each of the two regions demonstrates one of
-    those failures. A region that stops short of the page body's end leaves an
-    unused band beneath itself while remaining comfortably within the viewport, so a
-    check that asserts only the second edge accepts it. A region that overruns the
-    bottom of the viewport still ends exactly where the page body ends, because its
-    own overrun stretched the page body to that height, so a check that asserts only
-    the first edge accepts it too. A criterion phrased as the region "using the
-    available height", or as its height matching a particular length, establishes
-    neither edge: every height is the available height of some layout, and a length
-    is only ever correct for the page as it stood when the length was chosen.
+    check asserts both edges, because either edge alone
+    passes on a defective layout. A region that stops short of the page body's end
+    leaves an unused band beneath itself while remaining comfortably within the
+    viewport, so a check that asserts only the second edge accepts it. A region that
+    overruns the bottom of the viewport still ends exactly where the page body ends,
+    because its own overrun stretched the page body to that height, so a check that
+    asserts only the first edge accepts it too. A criterion phrased as the region
+    "using the available height", or as its height matching a particular length,
+    establishes neither edge: every height is the available height of some layout, and
+    a length is only ever correct for the page as it stood when the length was chosen.
+    The roadmap tasks page carries no full-height region: its list card is sized to the
+    rows of one page.
 125. Acceptance Criterion 124 is checked at a set of viewport widths chosen so that
-    the roadmap tasks page header renders at more than one height — at a wide
-    viewport its search input and three filter dropdowns share a row with the page
-    title, and as the viewport narrows they wrap onto further rows (see
-    [Roadmap Tasks Page](#roadmap-tasks-page), **Header search control** and
-    **Header filter controls**) — and both edges hold at every one of those widths.
-    Each of those widths is exercised at a viewport tall enough that the floor does
-    not bind: below the floor the region takes its minimum whatever the material
-    above it measures, so a check made there would record the floor instead of the
-    tracking these widths exist to vary, and what holds below the floor is
+    the material above the graph card renders at more than one height — the page
+    header's actions column and the query bar share rows at a wide viewport and wrap
+    onto further rows as the viewport narrows — and both edges hold at every one of
+    those widths. Each of those widths is exercised at a viewport tall enough that the
+    floor does not bind: below the floor the region takes its minimum whatever the
+    material above it measures, so a check made there would record the floor instead of
+    the tracking these widths exist to vary, and what holds below the floor is
     Acceptance Criterion 127's to state. This is what a height obtained by
     subtracting a fixed length from the viewport height cannot pass: such a height
     is correct at whichever width its length was chosen for and wrong at every
-    other, over-reserving where the page header is short and under-reserving where
-    it is tall, so a check made at a single width would accept it and leave the
+    other, so a check made at a single width would accept it and leave the
     defect in place. No full-height region reserves space for a page footer, and no
     page renders a `<footer>` element (Acceptance Criterion 74 continues to hold;
     see [UI Framework](#ui-framework), rule 12, and
@@ -7912,55 +7294,56 @@ Rules:
     asserting which comes second, does not establish it (see
     [Full-Height Page Regions](#full-height-page-regions), rule 4, and
     [Responsive and Mobile-First Design](#responsive-and-mobile-first-design),
-    rule 9).
-127. On a viewport short enough that the space the page body leaves falls below a
+    rule 6).
+127. On a viewport short enough that the space the page body leaves falls below the
     full-height region's minimum height, the region takes that minimum rather than
     shrinking to the space available, and the vertical page scrolling that follows
     is permitted. Below the floor **neither** edge of Acceptance Criterion 124 is
-    guaranteed. The second edge does not hold on either region: the floored region
-    is what the page scrolls vertically to reach. The first edge does not hold
-    either wherever the page renders an element above the region inside the same
-    container, because the page body is held to the same minimum as the region and
-    must then carry that element and the floored region together, so the region's
-    foot passes the page body's foot by the space the element occupies. The
-    knowledge-graph page always renders such an element: its query bar sits between
-    the top of the page body and the graph card (see
-    [Graph Query Bar](#graph-query-bar)). The roadmap tasks page renders one
-    whenever its controls match no task, the no-match message then standing above
-    the board (see [Roadmap Tasks Page](#roadmap-tasks-page), **Empty states**). No
-    stylesheet closes that gap: closing it would take a page-body floor of the
-    region's floor plus the height of the element above it, which is the fixed
-    subtraction [Full-Height Page Regions](#full-height-page-regions), rule 3,
-    forbids, and that height is no constant — the query bar stacks its own controls
-    as the viewport narrows and the no-match message wraps — so a length chosen for
-    one viewport width is wrong at the rest. Above the floor, which is every
-    viewport height at which the region is worth presenting at all, both edges hold
-    on both pages: this exception is the floor case alone and weakens Acceptance
-    Criterion 124 nowhere else. The check exercises both a viewport at which the
-    floor binds and one at which it does not, because a check run only below the
-    floor passes on a region that never tracks the page body at all, while a check
-    run only above it leaves the floor free to be deleted as though it were the
-    defect that Acceptance Criterion 124 describes (see
+    guaranteed. The second edge does not hold: the floored region is what the page
+    scrolls vertically to reach. The first edge does not hold either, because the
+    knowledge-graph page renders its query bar between the top of the page body and the
+    graph card (see [Graph Query Bar](#graph-query-bar)), and the page body, held to
+    the same minimum as the region, must then carry the bar and the floored region
+    together, so the region's foot passes the page body's foot by the space the bar
+    occupies. No stylesheet closes that gap: closing it would take a page-body floor of
+    the region's floor plus the height of the bar, which is the fixed subtraction
+    [Full-Height Page Regions](#full-height-page-regions), rule 3, forbids, and that
+    height is no constant — the query bar stacks its own controls as the viewport
+    narrows — so a length chosen for one viewport width is wrong at the rest. Above the
+    floor, which is every viewport height at which the region is worth presenting at
+    all, both edges hold: this exception is the floor case alone and weakens Acceptance
+    Criterion 124 nowhere else. The check exercises both a viewport at which the floor
+    binds and one at which it does not, because a check run only below the floor
+    passes on a region that never tracks the page body at all, while a check run only
+    above it leaves the floor free to be deleted as though it were the defect that
+    Acceptance Criterion 124 describes (see
     [Full-Height Page Regions](#full-height-page-regions), rule 5).
-128. The Kanban board reserves space beneath its columns for its own horizontal
-    scrollbar: the bottom edge of a column sits above the bottom edge of the board
-    by at least the reserved amount, so the scrollbar is drawn in that space and
-    never over a card, and the last card of a column stays fully visible while the
-    board can still be scrolled sideways. The check fails on a board whose columns
-    extend to its bottom edge, where the scrollbar overlaps the last card (see
-    [Roadmap Tasks Page](#roadmap-tasks-page), **Layout and scrolling**).
-129. Each of the five columns of the Kanban board is `19rem` wide and never narrower
-    than `17rem`, all five carry the same width whatever number of tasks each holds,
-    and none stretches to fill a viewport wider than the board needs. The body of a
-    task card on that board carries `0.75rem` of padding on all four sides, which is
-    strictly less than the padding the vendored Tabler distribution declares for a
-    small card's body, and the project override stylesheet declares it in a rule of
-    at least the specificity of Tabler's own, in the stylesheet the layout links
-    last, so the override wins on the cascade with no `!important`. Both lengths are
-    expressed in `rem`. This is a stylesheet change only: the board emits the same
-    markup and the same classes, carries no inline `style` attribute, and
-    Acceptance Criteria 27, 88, and 124 to 128 continue to hold (see
-    [Roadmap Tasks Page](#roadmap-tasks-page), **Column width and card density**).
+128. The tasks page's table sits inside Tabler's `table-responsive` container: at a
+    viewport too narrow for its columns, the table scrolls horizontally inside that
+    container, the scroll is reachable by a touch gesture, and `<body>` produces no
+    horizontal overflow at any viewport width (Acceptance Criterion 27 continues to
+    hold). A long task title wraps within its cell at word boundaries, under the
+    column widths Acceptance Criterion 244 fixes. The page scrolls vertically like
+    any other page (see [Roadmap Tasks Page](#roadmap-tasks-page) and
+    [Responsive and Mobile-First Design](#responsive-and-mobile-first-design),
+    rule 9).
+129. The list card's header wraps rather than overflowing. It carries the classes
+    `card-header`, `flex-wrap`, and `gap-2`, and the filter bar's form carries
+    `row g-2 align-items-end justify-content-end`, each control in a
+    `col-12 col-sm-auto` column. At a viewport width of `1440px` the title block and the
+    whole filter bar share one line, the filter bar's last control ending at the
+    header's trailing edge; at a viewport too narrow for both, the filter bar's
+    container moves to a line of its own below the title block and its controls wrap
+    onto further lines, every line of controls aligned to the trailing edge; and on a
+    phone-sized viewport each filter control takes a line of its own. The controls
+    measured are the compact controls of Acceptance Criterion 243, whose labels are
+    not displayed. The card footer's three columns wrap onto further lines likewise.
+    At every viewport width measured — at least `375px`, `576px`, `992px`, and `1440px`
+    — no control of the header or of the footer extends beyond the card's edge, and
+    `<body>` produces no horizontal overflow (see
+    [Roadmap Tasks Page](#roadmap-tasks-page), **The card header**, and
+    [Responsive and Mobile-First Design](#responsive-and-mobile-first-design),
+    rule 9).
 130. `GET /roadmaps/{name}/sprints/{id}` renders the sprint's member tasks as a
     Kanban board of exactly three columns, presented left to right with the headings
     `WAITING`, `DOING`, and `CLOSED`, and the served HTML carries no member-tasks
@@ -8015,7 +7398,7 @@ Rules:
 133. Each card of the sprint's member-tasks board shows exactly seven data points, on
     two lines, in this order: the task `title` as the card's first line and
     prominent main content; and one line carrying, at its leading edge, the badge
-    line exactly as the tasks board's card carries it — an id badge reading `#<id>`
+    line — an id badge reading `#<id>`
     with the classes `bg-black` and `text-white`, a `severity` badge reading `S`
     immediately followed by the task's severity, a `priority` badge reading `P`
     immediately followed by the task's priority, with no colon, no space, and no
@@ -8034,12 +7417,8 @@ Rules:
     Tabler distribution or in `static/style.css` (Acceptance Criterion 62 continues
     to hold). A task of severity `3` and priority `5` shows `S3` and `P5`; a badge
     reading `3`, `S 3`, `S:3`, `Sev:3`, or `Sev: 3` (or the corresponding `Pri:`
-    form) does not satisfy this criterion, no `Sev:` or `Pri:` text appears on the
-    card, and this
-    card renders the four badges exactly as the tasks board's card does (Acceptance
-    Criterion 85 continues to hold). The card of the roadmap tasks page's board is unchanged by
-    this criterion: it keeps its separate metadata footer and that footer's own
-    indicator order. The priority and severity badges
+    form) does not satisfy this criterion, and no `Sev:` or `Pri:` text appears on
+    the card. The priority and severity badges
     take the colours the semantic mapping assigns to their values, which the badge
     label does not affect (Acceptance Criterion 61
     continues to hold). The card carries **no** status badge, because the column
@@ -8054,10 +7433,7 @@ Rules:
     numbers sit at the trailing edge of the card's second line, which every card of
     the board renders. The check asserts a card whose two
     counts are both zero, because a card that has something to count renders the same
-    markup whether this criterion holds or not. The card of the roadmap tasks page's
-    board is not governed by this criterion and keeps its own rule, under which an
-    indicator whose value is absent, empty, or zero renders nothing at all
-    (Acceptance Criterion 85 continues to hold).
+    markup whether this criterion holds or not.
 135. Each card of the sprint's member-tasks board is a link to its task's page,
     and the card **is** the link: in the served HTML the card is one `<a>` element
     carrying the classes `card` and `card-link` and the `href`
@@ -8131,14 +7507,7 @@ Rules:
     card's body, and the project override stylesheet declares it in a rule of at
     least the specificity of Tabler's own, in the stylesheet the layout links last,
     so the override wins on the cascade with no `!important`. Every one of these
-    lengths is expressed in `rem`. The five columns of the roadmap tasks page's board
-    are unchanged: each stays `19rem` wide with a `17rem` minimum and still does not
-    grow into a wider viewport (Acceptance Criterion 129 continues to hold). The two
-    boards' column widths are therefore deliberately not one value, and this
-    criterion no longer requires them to agree; what the two boards still share is
-    the `17rem` minimum, the `0.75rem` gap, and the `0.75rem` card body padding, and
-    the check compares those three across the two boards and fails when they diverge.
-    This is a stylesheet change only: the board emits the same markup and the same
+    lengths is expressed in `rem`. This is a stylesheet change only: the board emits the same markup and the same
     classes, carries no inline `style` attribute, and Acceptance Criteria 27, 130,
     and 136
     continue to hold. The criterion is asserted with all three columns expanded,
@@ -8149,53 +7518,38 @@ Rules:
     terms (Acceptance Criterion 214) (see
     [Sprint Detail Sub-Template](#sprint-detail-sub-template), **Height and
     scrolling**).
-140. Each per-column count badge of the two Kanban boards carries the semantic colour
-    of the status its column groups, while its text stays that column's task count
-    (Acceptance Criteria 83 and 131 continue to hold). On the roadmap tasks page's
-    board a column is exactly one task status, so the badge takes that status's
-    variant: `BACKLOG` `bg-secondary-lt`, `SPRINT` `bg-cyan-lt`, `DOING`
-    `bg-blue-lt`, `TESTING` `bg-yellow-lt`, and `COMPLETED` `bg-green-lt`. On the
-    sprint's member-tasks board a column groups a set of statuses — two for `WAITING`
-    and for `DOING`, and `COMPLETED` alone for `CLOSED` — so the badge takes the
-    variant of the group's canonical status: `WAITING` carries `SPRINT`'s
-    `bg-cyan-lt`, `DOING` carries `DOING`'s `bg-blue-lt`, and `CLOSED` carries
-    `COMPLETED`'s `bg-green-lt`. A column holding no task shows the count `0` and
-    keeps the colour of its status, because the colour follows the column and not the
-    cards in it, and a narrowed board keeps each column's colour while its count
-    follows the narrowing (Acceptance Criteria 101 and 113 continue to hold). The
-    check asserts all the columns of a board together, exactly as Acceptance
-    Criterion 120 asserts the three tabs together: `BACKLOG` maps to
-    `bg-secondary-lt`, which is also the neutral colour a badge carries when nothing
-    colours it, so that column alone renders identically whether the mapping was
-    applied or not, and the check fails on a rendering that gives every column of
-    either board `bg-secondary-lt`. Asserting the columns of a board together is
-    necessary but not sufficient, and this criterion puts two further requirements on
-    the check. The first is that each badge's class is produced by the single
+140. Each per-column count badge of the sprint's member-tasks board carries the
+    semantic colour of the status its column groups, while its text stays that column's
+    task count (Acceptance Criterion 131 continues to hold). A column groups a set of
+    statuses — two for `WAITING` and for `DOING`, and `COMPLETED` alone for `CLOSED` —
+    so the badge takes the variant of the group's canonical status: `WAITING` carries
+    `SPRINT`'s `bg-cyan-lt`, `DOING` carries `DOING`'s `bg-blue-lt`, and `CLOSED`
+    carries `COMPLETED`'s `bg-green-lt`. A column holding no task shows the count `0`
+    and keeps the colour of its status, because the colour follows the column and not
+    the cards in it. The check asserts all the columns of the board together, exactly
+    as Acceptance Criterion 120 asserts the three tabs together, and fails on a
+    rendering that gives every column `bg-secondary-lt`. Asserting the columns together
+    is necessary but not sufficient, and this criterion puts two further requirements
+    on the check. The first is that each badge's class is produced by the single
     implementation of this mapping that every status badge already takes its colour
     from, rather than written into the template as a literal or resolved through a
-    second mapping standing beside the first: a literal reads exactly as the
-    mapping's answer on the day it is written and is then free to drift from it,
-    while the mapping stated in rule 2 is the only authoritative one. The check
-    establishes that by rendering both boards a second time with that one
-    implementation replaced by a substitute whose answer names the status it was
-    called with. Under the substitution a class written into the template survives
-    unchanged and fails — on the `BACKLOG` column as well, the one column whose
-    colour a literal would not change — while a template that calls the
-    implementation renders the substitute's answer on every column, and no column
-    header of either board still carries a real `bg-*-lt` variant. The second
-    requirement is that the check pins each column to the status that column groups,
-    which no assertion about the colours alone can make: a check establishing only
-    that the columns' colours differ from one another passes unchanged on a board
-    whose columns carry each other's statuses, where the colours stay as many and as
-    distinct as they were while each sits on the wrong column. The same substitution
-    settles that, because a column headed by one status whose badge names another is
-    visible in the rendering. The check also asserts the two count badges that
-    stay neutral, because the boundary is what keeps this rule a rule rather than a
-    licence to colour any count: the Comments card header count on the Roadmap Sprint
-    Page carries `bg-secondary-lt`, because it counts comments and a comment has no
-    status to key on, and so does any count over a group of mixed status for which no
-    canonical status is defined. The mapping introduces no new colour and no new
-    band (Acceptance Criterion 61 continues to hold; see
+    second mapping standing beside the first: a literal reads exactly as the mapping's
+    answer on the day it is written and is then free to drift from it. The check
+    establishes that by rendering the board a second time with that one implementation
+    replaced by a substitute whose answer names the status it was called with; under
+    the substitution a class written into the template survives unchanged and fails,
+    while a template that calls the implementation renders the substitute's answer on
+    every column. The second requirement is that the check pins each column to the
+    status that column groups, which no assertion about the colours alone can make: a
+    check establishing only that the columns' colours differ from one another passes
+    unchanged on a board whose columns carry each other's statuses. The same
+    substitution settles that, because a column headed by one status whose badge names
+    another is visible in the rendering. The check also asserts the count badges that
+    stay neutral: the Comments card header count on the Roadmap Sprint Page carries
+    `bg-secondary-lt`, because it counts comments and a comment has no status to key
+    on, and so does any count over a group of mixed status for which no canonical
+    status is defined. The mapping introduces no new colour and no new band
+    (Acceptance Criterion 61 continues to hold; see
     [Status, Priority, and Severity Badge Colours](#status-priority-and-severity-badge-colours),
     rule 2).
 
@@ -8293,9 +7647,9 @@ Rules:
     is as much a failure here as `invalid_limit`.
 152. A term and a task's searchable text are normalised to Unicode's **Normalization
     Form C** before they are folded, and the pipeline for a term is trim, then NFC,
-    then fold, then NFC, in that order, on both paths. The normalisation is for
+    then fold, then NFC, in that order. The normalisation is for
     comparison only: the `title` bytes the roadmap stores are unchanged, `rmp task
-    get` returns the same bytes it returned before this rule existed, and the card
+    get` returns the same bytes it returned before this rule existed, and the row
     renders the stored title, so no stored value and no rendered value is normalised
     (Acceptance Criterion 121 fixes the trim, 118 the fold). The second NFC pass is
     required and is proven so: over the 1,440,384 sequences of a folding code point
@@ -8313,15 +7667,10 @@ Rules:
     precomposed are **both** found by a term typed in **either** spelling. All four
     combinations are asserted, not a sample: decomposed title with decomposed term,
     decomposed title with precomposed term, precomposed title with decomposed term,
-    and precomposed title with precomposed term each return the task. The property
-    holds on the server path and on the client path alike, and the board reached by
-    typing the term equals the board reached by requesting the URL carrying it in
-    `q` for every one of the four, so Acceptance Criterion 104's identity survives
-    normalisation rather than being weakened by it. `U+0130` resolves as Acceptance
-    Criteria 104 and 118 already state — a term carrying it selects the same cards
-    on both paths and in every browser, and it folds to `U+0069` and never to
-    `U+0069 U+0307` — and a title spelled `U+0049 U+0307` now carries the same
-    searchable text as one spelled `U+0130`.
+    and precomposed title with precomposed term each return the task. `U+0130`
+    resolves as Acceptance Criterion 118 states — it folds to `U+0069` and never to
+    `U+0069 U+0307` — and a title spelled `U+0049 U+0307` carries the same searchable
+    text as one spelled `U+0130`.
 154. Normalisation changes nothing else. It does not make one word a substring of
     another: a task titled `Café Lisboa onboarding` is **not** returned by the term
     `cafe`, and one titled `Aérea cargo terminal` is **not** returned by the term
@@ -8331,39 +7680,12 @@ Rules:
     this rule than without it, and **none of them is ASCII**, so every ASCII term and
     every ASCII title selects exactly the tasks it selected before. The 1,117 are the
     canonical singletons and the composition exclusions.
-155. The client normalises the term from the tables the server ships to it and calls
-    the JavaScript platform's own normalisation nowhere: no call to `normalize`
-    appears in the narrowing script, asserted as an absence in the script the binary
-    serves, the way Acceptance Criterion 119 asserts the platform's case conversions
-    and 122 its trimming functions. The shipped data is three generated tables —
-    `DECOMP_TABLE` with 2,081 entries, `CCC_TABLE` with 403 spans, and
-    `COMPOSE_TABLE` with 961 entries — and the 11,172 Hangul
-    syllables appear in none of them, being decomposed and composed arithmetically
-    per UAX #15 on both sides. All three are covered by the **same** check that
-    Acceptance Criteria 119 and 122 fix and not by a further check beside it, with
-    the same three properties: each is compared against the derivation from the
-    module's character data over the whole of Unicode — every code point, not a
-    sample — and against that derivation itself, never against a stored copy of its
-    expected results; and the comparison fails when a shipped table holds a
-    different number of entries than the derived data, and when a single code point
-    decomposes, orders, or composes differently on the two sides, including when a
-    toolchain or dependency upgrade changes the Unicode version, so a server whose
-    rule moved is caught rather than followed. The three counts above are the counts that comparison enforces. This
-    criterion fixes no byte size for the tables, because no gate checks one and the
-    sizes move with the generator's layout alone. The server normalises with
-    `golang.org/x/text/unicode/norm` and not through the shipped tables, so equal
-    tables are not yet an equal rule, and the criterion also requires the three
-    checks of **What keeps the shipped rule equal to the server's**: the Go
-    statement of the client's algorithm equals the module's Normalization Form C
-    on all 1,112,064 single code points and on every two-code-point sequence whose
-    second code point can interact with the first, and the derived composition
-    exclusions equal Full_Composition_Exclusion in both directions. Sequences of
-    three or more code points are covered by both implementations following
-    UAX #15's algorithm, and not by enumeration. The checks remain ordinary
-    Go tests, on the terms Acceptance Criteria 119 and 122 already state (see
-    [Roadmap Tasks Page](#roadmap-tasks-page), **One rule, and only one
-    implementation of it**, and **What keeps the shipped rule equal to the
-    server's**).
+155. The server normalises the term and the task's searchable text with
+    `golang.org/x/text/unicode/norm`'s Normalization Form C, through one function shared
+    by both (see `BUILD.md § External Dependencies`), and nothing else normalises them:
+    no script the binary serves normalises a term, and the served HTML of the tasks page
+    references no script that could (Acceptance Criteria 119 and 122 continue to hold;
+    see [Roadmap Tasks Page](#roadmap-tasks-page), **The normalisation rule**).
 156. **A statement that produces no node and no edge is answered HTTP `200` with
     an empty graph, and this is a success rather than a failure.** Against a store
     that holds at least one index and at least one node, each of the following
@@ -8686,50 +8008,50 @@ Rules:
     `payments - Tasks` for `GET /roadmaps/payments/tasks`, and
     `payments - Sprint #7` for `GET /roadmaps/payments/sprints/7`. No title ends
     in a separator.
-177. **Every task type renders its own variant, on both boards.** On the card of the
-    roadmap tasks page's Kanban board and on the card of the sprint's member-tasks
-    board, the type badge's text is the task's `type` exactly as the `TaskType` enum
-    spells it, with no badge label, and its colour is the variant the task type table
-    assigns to that value: `BUG` renders `bg-red-lt`, `USER_STORY` renders
-    `bg-green-lt`, `TASK` renders `bg-blue-lt`, `SUB_TASK` renders `bg-azure-lt`,
-    `EPIC` renders `bg-purple-lt`, `REFACTOR` renders `bg-indigo-lt`, `IMPROVEMENT`
-    renders `bg-teal-lt`, `SPIKE` renders `bg-yellow-lt`, `DESIGN_UX` renders
-    `bg-pink-lt`, and `CHORE` renders `bg-secondary-lt` (see
+177. **Every task type renders its own variant, on both pages.** In the rows of the
+    roadmap tasks page's list and on the cards of the sprint's member-tasks board, the
+    type badge's text is the task's `type` exactly as the `TaskType` enum spells it,
+    with no badge label, and its colour is the variant the task type table assigns to
+    that value: `BUG` renders `bg-red-lt`, `USER_STORY` renders `bg-green-lt`, `TASK`
+    renders `bg-blue-lt`, `SUB_TASK` renders `bg-azure-lt`, `EPIC` renders
+    `bg-purple-lt`, `REFACTOR` renders `bg-indigo-lt`, `IMPROVEMENT` renders
+    `bg-teal-lt`, `SPIKE` renders `bg-yellow-lt`, `DESIGN_UX` renders `bg-pink-lt`, and
+    `CHORE` renders `bg-secondary-lt` (see
     [Status, Priority, and Severity Badge Colours](#status-priority-and-severity-badge-colours)).
-    The check MUST render a task of each of the ten types on each of the two boards
-    and assert all twenty badges, because a mapping that is wrong for one type
-    passes on every other. The mapping reaches no other surface: the task page
-    shows the `type` as plain text and not as a badge, the comment-type badges
-    keep the neutral `bg-secondary-lt` variant (Acceptance Criterion 66 continues to
-    hold), and the type filter of the roadmap tasks page is unchanged.
-178. **The id badge is black with white text and reads `#<id>`.** On the card of
-    both boards, the id badge's text is the task's `id` written with its leading
-    `#` — task 42 reads `#42` — and the badge carries the classes `bg-black` and
-    `text-white` for every task, whatever its type, status, priority, or severity.
-    Both classes are defined in the vendored `tabler.min.css`, and the badge renders
-    a `#000000` background with `#ffffff` text. The check MUST assert, on tasks of
-    different types, severities, and priorities, that the id badge carries
-    `bg-black` and `text-white` and no variant any table of the badge colour mapping
-    assigns, because the id badge's colour MUST NOT vary with any value of the task.
-    The id badge takes no colour from any table of the badge colour mapping.
-179. **The card leads with the title, then one badge line reading id, severity,
-    priority, type, on both boards.** On the card of both boards, the task `title`
-    is the first line of the card; the next line opens with exactly four badges, in
-    this order: the id badge, the severity badge, the priority badge, and the type
-    badge. The severity badge reads `S<n>` and the priority badge reads `P<n>`, a
+    The check MUST render a task of each of the ten types on each of the two pages and
+    assert all twenty badges, because a mapping that is wrong for one type passes on
+    every other. The mapping reaches no other surface: the task page shows the `type`
+    as plain text and not as a badge, the comment-type badges keep the neutral
+    `bg-secondary-lt` variant (Acceptance Criterion 66 continues to hold), and the type
+    select of the tasks page's filter bar offers plain options with no colour.
+178. **The id badge is black with white text and reads `#<id>`.** In the `ID` cell of
+    each row of the tasks page's list and on the card of the sprint's member-tasks
+    board, the id badge's text is the task's `id` written with its leading `#` — task 42
+    reads `#42` — and the badge carries the classes `bg-black` and `text-white` for
+    every task, whatever its type, status, priority, or severity. Both classes are
+    defined in the vendored `tabler.min.css`, and the badge renders a `#000000`
+    background with `#ffffff` text. The check MUST assert, on tasks of different types,
+    severities, and priorities, that the id badge carries `bg-black` and `text-white`
+    and no variant any table of the badge colour mapping assigns, because the id badge's
+    colour MUST NOT vary with any value of the task. The id badge takes no colour from
+    any table of the badge colour mapping.
+179. **The sprint board's card leads with the title, then one badge line reading id,
+    severity, priority, type.** On the card of the sprint's member-tasks board, the task
+    `title` is the first line of the card; the next line opens with exactly four
+    badges, in this order: the id badge, the severity badge, the priority badge, and the
+    type badge. The severity badge reads `S<n>` and the priority badge reads `P<n>`, a
     one-letter badge label immediately followed by the value, and neither reads a
-    `Sev:` or `Pri:` form (Acceptance Criteria 85 and 133). The lines and groups that
-    follow are those Acceptance Criterion 85 fixes
-    for the tasks board's card and Acceptance Criterion 133 fixes for the sprint
-    board's card. The check MUST assert this order on both boards, because a card
-    that shows the right four badges before the title, or the priority badge before
-    the severity badge, or the type badge before the id badge, satisfies Acceptance
-    Criteria 177 and 178 on their own. The card's accessible name is unchanged and
-    remains `Open details for task #<id>: <title>` on both boards (Acceptance
-    Criteria 86 and 135 continue to hold), and the search of the roadmap tasks page
-    still matches a task by its title and its `#<id>` reference and by nothing else,
-    so a term matching only a task's `type` matches no task (Acceptance Criterion 101
-    continues to hold).
+    `Sev:` or `Pri:` form (Acceptance Criterion 133). The check MUST assert this order,
+    because a card that shows the right four badges before the title, or the priority
+    badge before the severity badge, or the type badge before the id badge, satisfies
+    Acceptance Criteria 177 and 178 on their own. The same four badges, with the same
+    texts, labels, and colours, fill the `ID`, `Type`, `Severity`, and `Priority` cells
+    of the tasks page's list, whose columns place severity before priority as the card
+    does (Acceptance Criterion 85). The card's accessible name remains
+    `Open details for task #<id>: <title>` (Acceptance Criterion 135 continues to
+    hold), and the search of the roadmap tasks page still matches a task by its title
+    and its `#<id>` reference and by nothing else, so a term matching only a task's
+    `type` matches no task (Acceptance Criterion 101 continues to hold).
 180. **Every Markdown field renders as Markdown, on every surface that shows it.**
     A field value holding a `**bold**` span, a bulleted list, and two lines
     separated by a single newline renders `<strong>`, `<ul>` with `<li>` items, and
@@ -9140,16 +8462,14 @@ Rules:
     Acceptance Criterion 33 is unchanged. Acceptance Criteria 135 and 138 continue
     to hold (see [Sprint Detail Sub-Template](#sprint-detail-sub-template),
     **Column collapse** and **Read-only**).
-218. **Without JavaScript the board is expanded and usable, and the tasks board is
-    unaffected.** With scripting disabled, the sprint page shows all three columns
-    of its member-tasks board expanded, with every card and every empty state
-    visible, and shows no collapse toggle, because each toggle is served with the
-    `hidden` attribute and only `static/sprint-board.js` removes it. The roadmap
-    tasks page's five-column board carries no element with
-    `data-role="task-board-column-toggle"` and no element with the class
-    `task-board__column--collapsed`, the tasks page does not load
-    `static/sprint-board.js`, and that board's columns, widths, and behaviour are
-    unchanged (Acceptance Criteria 81 to 92 and 129 continue to hold).
+218. **Without JavaScript the board is expanded and usable, and the tasks page has no
+    board.** With scripting disabled, the sprint page shows all three columns of its
+    member-tasks board expanded, with every card and every empty state visible, and
+    shows no collapse toggle, because each toggle is served with the `hidden` attribute
+    and only `static/sprint-board.js` removes it. The roadmap tasks page carries no
+    element with `data-role="task-board-column-toggle"` and no element with the class
+    `task-board__column--collapsed`, and it does not load `static/sprint-board.js`
+    (Acceptance Criterion 81 continues to hold).
 219. **The sidebar-to-content gap is the same on every page.** In a browser at the
     viewport widths `992px` and `1440px`, on the roadmap index page, the roadmap
     sprints page, the roadmap tasks page, the roadmap sprint page, the roadmap task
@@ -9311,6 +8631,248 @@ Rules:
     comments and for a record with none. The element contains no link, no button,
     and no form control (see [Roadmap Task Page](#roadmap-task-page), **Comments
     card**, and [Sprint Detail Sub-Template](#sprint-detail-sub-template), rule 4).
+232. **The list card follows the three Tabler examples it is modelled on.** In the
+    served HTML of the tasks page, for a request that lists at least one task: the list
+    card is a `card` whose first child is
+    `<div class="card-header flex-wrap gap-2">`; that header's first child is a `<div>`
+    holding exactly one `<h2 class="card-title">` reading `Task list` and no
+    `card-subtitle`, and its second child is a `<div class="card-actions">` holding the
+    filter bar's `<form>` and nothing else; the header is followed by a
+    `table-responsive` container holding a `<table>` carrying `table`, `table-vcenter`,
+    and `card-table` and not `table-selectable`, whose `<thead>` row holds the headings
+    `ID`, `Title`, `Type`, `Status`, `Sprint`, `Severity`, `Priority`, `Created`, and
+    `Actions`, in that order, the `ID` heading carrying `w-1` and the `Actions` heading
+    carrying `text-end`; and the card ends with a `card-footer` holding one
+    `<div class="row g-2 align-items-center">` of exactly three `col-auto` columns — the
+    range text, the rows-per-page selector, and the pagination bar, in that order — the
+    third also carrying `ms-auto`. The check asserts this structure element by element,
+    because a list that renders the right rows in a different card structure satisfies
+    every other criterion of the list (see [Roadmap Tasks Page](#roadmap-tasks-page),
+    **Modelled on three Tabler examples** and **The card header**).
+233. **A UX specialist validates the rendered page against the Tabler examples.** A
+    UX specialist renders the tasks page in a browser, in the interface's dark theme,
+    at the viewport widths `375px`, `992px`, and `1440px`, for a roadmap of at least 60
+    tasks spread over every status and several sprints, and compares it with Tabler's
+    examples `https://preview.tabler.io/cards.html` (the card as a whole),
+    `https://preview.tabler.io/card-actions.html` (the card header), and
+    `https://preview.tabler.io/tasks-list.html` (the table and its rows). The page
+    passes when every difference the specialist records is one of the five deviations
+    **Modelled on three Tabler examples** permits — one card rather than one per group,
+    no selection, no add-task control and no modal, the roadmap's own columns, and the
+    added filter bar, pagination, and rows-per-page selector — and when the filter bar
+    in the card header, the rows, and the card footer read as Tabler's own components at
+    each of the three widths. The specialist records the result, with a screenshot at
+    each width, in the task that implements the page; any other difference fails the
+    criterion and is corrected in the page, not in the record (see
+    [Roadmap Tasks Page](#roadmap-tasks-page)).
+234. **The filter bar's controls are fixed.** The filter bar's form carries, in this
+    order: `<input type="search" name="q">` labelled `Search`; `<select name="sprint">`
+    labelled `Sprint`, offering `Any sprint` with an empty value, `No sprint` with the
+    value `none`, and one option per sprint of the roadmap, in ascending sprint `Order`,
+    whose value is the sprint's `id` and whose text is `Sprint #<id>` followed by a space
+    and the sprint's `title`; `<select name="status">` labelled `Status`;
+    `<select name="type">` labelled `Type`; and the Apply button — and no other
+    control, with the options Acceptance Criterion 112 fixes for the status and type
+    selects. On every response each select marks as `selected`
+    exactly one option: the one equal to its parameter's accepted value, or its first
+    option when the parameter is absent or ignored; and the search input's `value` is
+    the `q` the request carried. The check covers a roadmap with no sprint, whose sprint
+    select offers `Any sprint` and `No sprint` only, and a roadmap with two sprints of
+    the same `title`, whose two options differ by their `Sprint #<id>` text (see
+    [Roadmap Tasks Page](#roadmap-tasks-page), **Filter bar**).
+235. **The sprint filter selects by membership.** For a roadmap whose tasks are spread
+    over two sprints and the backlog, `?sprint=none` lists exactly the tasks that belong
+    to no sprint, whatever their status — a `BACKLOG` task that is a member of a sprint
+    excluded; `?sprint=<id>` lists exactly the member tasks of that sprint, whatever
+    their status; and the lists of `none` and of every sprint `id` together hold every
+    task of the roadmap exactly once. `?sprint=<id>&status=DOING` lists exactly that
+    sprint's `DOING` tasks. A `sprint` naming a sprint of another roadmap is ignored, as
+    Acceptance Criterion 115 fixes (see [Roadmap Tasks Page](#roadmap-tasks-page),
+    **What each filter matches, and how the criteria compose**).
+236. **Every parameter is validated, and an ignored one is visible as *any*.** For each
+    of the three filter parameters and for each unacceptable value Acceptance
+    Criterion 115 lists, the response is HTTP 200, carries `Cache-Control: no-store`,
+    lists exactly the tasks the same request lists without that parameter, marks the
+    parameter's *any* option as `selected`, and carries the ignored value in no link the
+    page generates. A request whose query string carries parameters not among the six —
+    `priority` and `severity` among them — lists exactly what it lists without them,
+    and no link the page generates carries them. No parameter value, alone or combined with
+    others, produces an HTTP status other than 200 for an existing roadmap (see
+    [Roadmap Tasks Page](#roadmap-tasks-page), **Query parameters**, and
+    [Routes and Pages](#routes-and-pages)).
+237. **Applying the filters returns to page 1 and keeps the page size.** On page 3 of
+    a list at page size `10`, submitting the filter bar with a new status requests a URL
+    that carries `size=10` and no `page`, and renders page 1 of the newly filtered list
+    at page size `10`. Submitting the form again from that list with every select on
+    its *any* option and an empty search input renders page 1 of the unfiltered list
+    at page size `10`. The check submits the real form — its fields as the served
+    HTML defines them — rather than composing the URL itself, because a form that
+    carried a `page` field, or no `size` field, would fail only when submitted (see
+    [Roadmap Tasks Page](#roadmap-tasks-page), **Filter bar**).
+238. **The filters and the search compose on the server in every combination.** For a
+    roadmap of at least 40 tasks whose values of `sprint` membership, `status`, `type`,
+    and `title` are varied so that each criterion excludes a different subset, the
+    check requests every one of the 16 combinations of the four criteria — sprint,
+    status, type, and search term — being present or absent, each with a fixed accepted value, and asserts
+    that each lists exactly the tasks satisfying every present criterion, in the order
+    of Acceptance Criterion 84, with the range text stating their number. The expected
+    lists are computed by the check from the task data it created, not read back from
+    the page (see [Roadmap Tasks Page](#roadmap-tasks-page), **What each filter
+    matches, and how the criteria compose**).
+239. **The list is paginated on the server at the requested page size.** For 60 tasks
+    matching a request, `size` `10`, `25`, `50`, and `100` give 6, 3, 2, and 1 pages
+    respectively, and each page `p` holds exactly the rows at positions
+    `(p - 1) × size + 1` to `min(p × size, 60)` of the order of Acceptance Criterion 84.
+    A request with no `size` renders 25 rows per page. Only the rows of the requested
+    page are in the served HTML: the rows of other pages are not present, hidden or
+    otherwise (see [Roadmap Tasks Page](#roadmap-tasks-page), **Pagination**).
+240. **An unacceptable `page` or `size` falls back, and a page beyond the last renders
+    the last.** For a list of 3 pages, each of `page=0`, `page=-1`, `page=abc`,
+    `page=1.5`, `page=02`, `page= 2`, and an empty `page` renders page 1, and each of
+    `page=4`, `page=999`, and `page=99999999999999999999999` renders page 3, the range
+    text and the pagination bar's active item agreeing with the page rendered. Each of
+    `size=20`, `size=0`, `size=-10`, `size=abc`, `size=025`, and an empty `size` renders
+    25 rows per page, with the rows-per-page selector marking `25` as active. Every one
+    of these requests answers HTTP 200. A `page` beyond the last page of a filtered list
+    renders the last page of that filtered list, not of the roadmap's (see
+    [Roadmap Tasks Page](#roadmap-tasks-page), **Query parameters** and
+    **Pagination**).
+241. **Every generated link keeps the active filters.** On a filtered list, every
+    link the page generates to itself — each page number and chevron of the pagination
+    bar, and each rows-per-page link — carries each accepted filter parameter of the
+    request with its accepted value, and carries no ignored parameter and no
+    parameter the page does not accept, `priority` and `severity` included. The
+    no-match empty state's Reset link carries no filter parameter and no `q`
+    (Acceptance Criterion 88). A pagination link carries `page` only when its
+    target is greater than `1`, and carries `size` only when the active page size is
+    not `25`; a rows-per-page link carries its own `size` only when it is not `25`, and
+    carries no `page`; no generated link carries `q` when the term is empty after the
+    trim. Following each such link and parsing the resulting page shows the same
+    filters applied and the page and page size the link named (see
+    [Roadmap Tasks Page](#roadmap-tasks-page), **Pagination**, **Links keep the
+    filters**).
+242. **The pagination bar and the rows-per-page selector are Tabler's.** The pagination
+    bar sits inside `<nav aria-label="Task list pages">` in the card footer's third
+    column and follows, for every page count from 1 to 20 and every current page, the
+    sliding window with ellipsis, the chevrons, and the markup of the audit log page's
+    bar (see [Roadmap Audit Log Page](#roadmap-audit-log-page), **Sliding window with
+    ellipsis** and **Pagination markup**): a list of one page shows its single page as
+    the active item. The rows-per-page selector sits in the footer's second column: the
+    visible text `Rows per page`, then a `<div class="btn-group" role="group">` whose
+    accessible name is that text, holding four links carrying `btn` and `btn-sm` and
+    reading `10`, `25`, `50`, and `100` in that order, the link of the active page size
+    alone carrying `active` and `aria-current="true"`. Neither appears when the request
+    lists no task (Acceptance Criterion 88 continues to hold; see
+    [Roadmap Tasks Page](#roadmap-tasks-page), **Pagination**, and
+    [UI Framework](#ui-framework), rule 15).
+243. **The filter bar is compact and trailing-aligned.** In the served HTML of the
+    tasks page, the search input carries `form-control` and `form-control-sm` and the
+    attribute `placeholder="Search"`; each of the three selects carries `form-select`
+    and `form-select-sm`; and the Apply button carries `btn`, `btn-primary`, and
+    `btn-sm`. Each of the four filter controls — the search input and the three
+    selects — has exactly one `<label>` whose `for` equals the control's `id`, and
+    every such label carries `visually-hidden`. The sprint select carries a class for
+    which `static/style.css` declares `max-width: 16rem` inside a media query whose
+    condition is `min-width: 576px`, and declares no `max-width` for it outside one. The form carries
+    `justify-content-end`. The list card's `card-actions` container keeps Tabler's own
+    position: no rule of `static/style.css` that matches it, and no class of the
+    template on it, overrides the vendored `.card-actions` margins. Rules that match
+    only another card's `card-actions` — the sprint board's
+    `.task-board__column--collapsed .card-actions` among them — are outside this
+    check. In a browser, at a viewport width of `1440px`, for a
+    roadmap whose sprint titles include one of at least 60 characters, the card title
+    and every control of the bar lie on one line, the right edge of the bar's last
+    control coincides with the right edge of the `card-actions` container, placed as
+    in Tabler's card-actions example, and no label is displayed; at `992px` and
+    `576px` each line of controls ends at that same trailing edge. At each of `375px`,
+    `576px`, `992px`, and `1440px`, the three selects, the search input, and the Apply
+    button have one computed rendered height, to the pixel; at `1440px` and `576px` the
+    sprint select is no wider than `16rem`, and at `375px` it is as wide as the search
+    input, filling its row (Acceptance Criterion 129
+    continues to hold; see [Roadmap Tasks Page](#roadmap-tasks-page), **Filter bar**,
+    **Compact controls**, and **Labels are programmatic, not visible**).
+244. **The title column is not squeezed.** In the served HTML of the tasks page no
+    cell of the table carries `text-break`; every `Title` cell carries a class for
+    which `static/style.css` declares `min-width: 16rem`, and every `Sprint` cell
+    carries a class for which it declares `min-width: 10rem`. In a browser, for a roadmap holding a task whose title is
+    at least 120 characters of ordinary words and a task whose sprint title is at
+    least 40 characters, at each of the viewport widths `375px`, `576px`, `992px`,
+    and `1440px`: every rendered `Title` cell is at least `16rem` wide; no title is
+    broken inside a word; every rendered `Sprint` cell is at least `10rem` wide; and where the table is wider than the card, it
+    scrolls horizontally inside its `table-responsive` container while `<body>`
+    produces no horizontal overflow (Acceptance Criterion 128 continues to hold; see
+    [Roadmap Tasks Page](#roadmap-tasks-page), **Column widths**).
+245. **The active page size is shown by more than colour, with sufficient
+    contrast.** In the served HTML the link of the active page size alone carries
+    `active` and `aria-current="true"` (Acceptance Criterion 242 continues to hold).
+    In a browser, in the dark theme the interface serves, the active link's
+    computed background colour is opaque and differs from that of every inactive
+    link; that fill has a
+    contrast ratio of at least 3:1 against the card footer's computed background and
+    against an inactive link's; and the active link's text has a contrast ratio of at
+    least 4.5:1 against the fill. The ratios are computed as Acceptance
+    Criterion 246 defines (see [Roadmap Tasks Page](#roadmap-tasks-page),
+    **Pagination**, **The active size is not shown by colour alone**).
+246. **Every badge variant, and the search placeholder, has text contrast of at
+    least 4.5:1 in the dark theme.** A Go test reads the two stylesheets as the
+    server serves them — `/static/vendor/tabler/tabler.min.css`, then
+    `/static/style.css`, the order in which every page loads them — and resolves, in
+    the dark theme, every badge variant the interface renders (Status, Priority, and
+    Severity Badge Colours, rule 5): every variant of the four mapping tables,
+    `bg-secondary-lt`, and `bg-black` with `text-white`. For each variant the test:
+    1. takes, among the declarations of `color` and `background-color` whose
+       selector matches an element carrying that variant's class under
+       `<html data-bs-theme="dark">`, the one that wins by the CSS cascade —
+       importance, then specificity, then order of appearance;
+    2. resolves every `var()` reference against the custom properties declared for
+       the root element in the dark theme, by the same cascade, using the reference's
+       fallback where the property is undeclared, and resolves every `calc()` of an
+       opacity property the badge does not set with that property's default of `1`;
+    3. resolves `light-dark(<light>, <dark>)` to `<dark>`, the `color-scheme` the
+       vendored stylesheet declares for `data-bs-theme="dark"` being `dark`;
+    4. evaluates `color-mix(in oklab, <colour> <p>%, transparent)` as `<colour>` with
+       an alpha of `<p>/100`, and converts every `oklch()`, `oklab()`, `rgb()`, and
+       hexadecimal colour to sRGB by CSS Color Module Level 4;
+    5. composites the fill over each surface of rule 5 — `--tblr-bg-surface` and
+       `--tblr-body-bg`, resolved the same way — and then a translucent text colour
+       over the result, by source-over alpha compositing in sRGB; and
+    6. computes the contrast ratio of the text colour to the composited background
+       by WCAG 2.2's definitions of relative luminance and contrast ratio.
+
+    By the same steps, the test resolves the `color` of the winning `::placeholder`
+    declaration for an element carrying `form-control` and `form-control-sm` — the
+    tasks page's search input — and the `background-color` of that element,
+    composited over `--tblr-bg-surface`, the card surface on which the input sits,
+    and computes their contrast ratio.
+
+    The test fails when any ratio, over either surface, is below 4.5:1, and it
+    fails — rather than skipping the variant — when a value cannot be resolved by
+    these steps. A browser confirms the test: on the tasks page and on a sprint page
+    whose board holds tasks of every status, type, priority band, and severity band,
+    the computed `color` and `background-color` of one badge of every variant,
+    composited as in step 5, meet 4.5:1, and on the tasks page the empty search
+    input's computed `::placeholder` colour meets 4.5:1 against the input's computed
+    background (see also [Roadmap Tasks Page](#roadmap-tasks-page), **Labels are
+    programmatic, not visible**). Every badge still carries the variant class
+    the mapping tables assign (Acceptance Criterion 61 continues to hold; see
+    [Status, Priority, and Severity Badge Colours](#status-priority-and-severity-badge-colours),
+    rule 5).
+247. **The focus indicator reaches 3:1 on the tasks list and the sprint board.** In
+    a browser, in the dark theme the interface serves, moving keyboard focus with
+    Tab onto each kind of focusable element that UI Framework rule 21 names for the
+    tasks page and for the sprint board — the search input, each select, Apply, the
+    no-match empty state's Reset link, a row's title link, a row's `View` link, a pagination link, the active and
+    an inactive rows-per-page link, a board card, and a column toggle — gives the
+    element a computed `outline` whose style is `solid`, whose width is at least
+    `2px`, and whose colour has a contrast ratio of at least 3:1 against the computed
+    background of the element and against that of its container, computed as
+    Acceptance Criterion 246 defines. A Go test confirms, from the served
+    stylesheets resolved by the steps of Acceptance Criterion 246, that the outline
+    colour the winning `:focus-visible` rule declares for each of those elements
+    reaches 3:1 against the backgrounds those rules resolve to. The same element
+    focused by a pointer click that does not match `:focus-visible` carries no such
+    outline, and no template carries a `style` attribute for it (Acceptance
+    Criterion 229 continues to hold; see [UI Framework](#ui-framework), rule 21).
 
 ## See Also
 
@@ -9352,7 +8914,7 @@ Rules:
   page, and the task page → `MODELS.md` and `DATABASE.md`
 - `TaskComment` and `SprintComment` fields, the comment type values, the comment
   read queries and their chronological ordering, and the grouped count that gives
-  each board card its comment number without reading a body →
+  each sprint board card its comment number without reading a body →
   `MODELS.md § Task Comment`,
   `MODELS.md § Sprint Comment`, `MODELS.md § Comment Type`, and
   `DATABASE.md § Comments`
@@ -9364,31 +8926,35 @@ Rules:
   `DATABASE.md § Audit Queries`, and `DATABASE.md § Audit Result Limit`
 - Sprint status enum and lifecycle that classify sprints into the sprints-page tabs
   → `MODELS.md § Enums` and `STATE_MACHINE.md § Sprint State Machine`
-- Task status enum and lifecycle that define the tasks-page board's five fixed
-  columns, their left-to-right order, and the CHECK constraint that admits no sixth
-  status → `MODELS.md § Enums`, `STATE_MACHINE.md § Task State Machine`, and
+- Task status enum and lifecycle that fix the values and the order of the tasks
+  page's status filter, and the CHECK constraint that admits no other status →
+  `MODELS.md § Enums`, `STATE_MACHINE.md § Task State Machine`, and
   `DATABASE.md § tasks Table`
-- Default task ordering that fixes the order of the cards inside each column of the
-  tasks board → `DATABASE.md § Main SQL Queries` ("List All")
+- Default task ordering that the tasks page's list extends with `id` as its final
+  key, and the listing its filters add bound predicates to →
+  `DATABASE.md § Main SQL Queries` ("List All")
+- The sprint read behind the tasks page's sprint filter →
+  `DATABASE.md § List Sprint Titles`
 - Lifecycle timestamps that order the `DOING` and `CLOSED` columns of the sprint
   page's member-tasks board, and the planned order that breaks their ties →
   `MODELS.md § Task`, `STATE_MACHINE.md § Date Tracking Fields`, and
   `DATABASE.md § List Sprint Tasks Ordered by Position`
-- Task type enum and the `priority` and `severity` integer ranges that fix the
-  accepted values of the tasks board's header filters → `MODELS.md § Enums` and
-  `MODELS.md § Task`
-- CLI filters over the same three dimensions, whose meanings the board's header
-  filters reuse — `-y, --type` as an equality, `-p, --priority` and `--severity` as
-  thresholds → `COMMANDS.md § List Tasks`
-- Keyboard operability of a task card: why the card is a link with an `href` on
-  both boards, and why no script may be added to compensate →
+- Task status and task type enums that fix the accepted values of the tasks
+  page's filters → `MODELS.md § Enums`
+- CLI filters whose meanings the tasks page's filters reuse — `-y, --type` as an
+  equality →
+  `COMMANDS.md § List Tasks`
+- Keyboard operability of a task card and of a task row: why the sprint board's
+  card is a link with an `href`, why a row of the tasks page's list is not a link
+  and carries two, and why no script may be added to compensate →
+  [Sprint Detail Sub-Template](#sprint-detail-sub-template),
   [Roadmap Tasks Page](#roadmap-tasks-page), [Security Headers](#security-headers),
   and [Frontend Rules](#frontend-rules)
 - Sprint membership and the `BACKLOG` status, which decide the form of the task
   page's Sprint card, and the density of in-sprint positions its position line
   relies on → `STATE_MACHINE.md § Sprint Membership and the BACKLOG Status` and
   `DATABASE.md § Position Density Within a Sprint`
-- Sprint membership shown on each board card, the `UNIQUE` constraint that limits a
+- Sprint membership shown in each row of the tasks page's list, the `UNIQUE` constraint that limits a
   task to one sprint, and the grouped query that resolves the sprint of every
   rendered task in one round trip → `MODELS.md § Sprint`,
   `DATABASE.md § sprint_tasks Table (1:N Relationship)`,

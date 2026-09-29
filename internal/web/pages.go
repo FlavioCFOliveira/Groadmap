@@ -190,33 +190,24 @@ func handleSprints(w http.ResponseWriter, r *http.Request) {
 	renderHTML(w, r, "sprints.html", data)
 }
 
-// handleTasks renders a roadmap's tasks page: every task, any status, as a
-// Kanban board of five fixed columns — one per task status — with each card a
-// link to that task's own page (SPEC/WEB.md § Roadmap Tasks Page). The page renders no task table; the board is its only task presentation.
-// An optional q parameter narrows the board to the tasks whose title or #id
-// reference contains it, and the optional type, priority and severity parameters
-// narrow it by what a task is; the same values set on the header controls narrow
-// the same board in the browser, and the two must agree.
-// The {name} is validated and confirmed to exist before any data read; an invalid
-// or unknown name yields 404 (handled by resolveRoadmap), an internal read error
-// yields 500.
+// handleTasks renders a roadmap's tasks page: the roadmap's tasks, of any status,
+// as one paginated list in a Tabler card, filtered by the page's query parameters
+// on the server, each row linking to that task's own page (SPEC/WEB.md § Roadmap
+// Tasks Page).
+//
+// No query parameter can change this route's status codes: every value maps to
+// a list, an unacceptable one being ignored as though absent. The {name} is
+// validated and confirmed to exist before any data read; an invalid or unknown
+// name yields 404 (handled by resolveRoadmap), an internal read error yields 500.
 func handleTasks(w http.ResponseWriter, r *http.Request) {
 	name, ok := resolveRoadmap(w, r)
 	if !ok {
 		return
 	}
 
-	// The optional header controls: the search term and the three filters. Parsing
-	// cannot fail. Every string is a valid term, and a filter value the dimension
-	// does not accept applies no filter on that dimension and leaves the other
-	// dimensions untouched, so a board that matches nothing is still HTTP 200 and
-	// no query value can change this route's status codes (SPEC/WEB.md § Roadmap
-	// Tasks Page, No malformed term is an error; No filter value is an error).
-	controls := parseBoardControls(r.URL.Query())
-
-	data, err := loadTasks(r.Context(), name, controls)
+	data, err := loadTasks(r.Context(), name, r.URL.Query())
 	if err != nil {
-		logServerError(r, "tasks board load failed", err, slog.String("roadmap", name))
+		logServerError(r, "task list load failed", err, slog.String("roadmap", name))
 		http.Error(w, "internal server error", http.StatusInternalServerError)
 		return
 	}

@@ -6,73 +6,35 @@ import (
 	"testing"
 )
 
-// The guards in this file cover SPEC/WEB.md § Roadmap Tasks Page, Column width
-// and card density (Acceptance Criterion 129): the two lengths that decide how
-// much of a task's own text a Kanban card can put on one line.
+// The guards in this file cover the density of the sprint page's member-tasks
+// board (SPEC/WEB.md § Sprint Detail Sub-Template, Height and scrolling;
+// Acceptance Criterion 139): the column's minimum width and the card body's
+// padding, the two lengths that decide how much of a task's own text a card can
+// put on one line.
 //
-// What they are written against. The board used to give a column 17rem and let
-// the card inside it keep the 1rem of body padding the vendored Tabler
-// distribution gives a small card. Between the column's own card body (1.25rem
-// of horizontal padding on each side) and the task card's (1rem on each side),
-// a card's running text — its reference line, its title, its two badges and its
-// six metadata indicators — was set on a measure of roughly 196px, so titles
-// broke over several short lines and the metadata footer wrapped one indicator
-// per line.
-//
-// What these guards can and cannot establish. There is no browser in the Go
-// suite and SPEC/BUILD.md rules out a JavaScript toolchain, so nothing here
-// measures a rendered card: the legibility the criterion is written for is
-// judged against a running server. What IS checkable hermetically is the
-// mechanism it depends on, in the exact bytes the binary serves — that the
-// column declares the specified fixed width, that the card's body declares less
-// padding than the framework's own, that the override can actually reach the
-// element it names, and that it wins the cascade without an `!important`. A
-// stylesheet satisfying all of that can still measure badly; one failing any of
-// it cannot measure well.
+// There is no browser in the Go suite, so nothing here measures a rendered card.
+// What IS checkable hermetically is the mechanism, in the exact bytes the binary
+// serves — that the column declares the specified minimum, that the card's body
+// declares less padding than the framework's own, that the override can reach the
+// element it names, and that it wins the cascade without an `!important`.
 
-// TestTaskBoardColumn_CarriesTheSpecifiedFixedWidth asserts a column is the
-// width the specification fixes, never narrower than the floor it fixes, and
-// neither grows nor shrinks away from it.
-//
-// The `flex` half is what makes the two lengths mean anything. A column that
-// grew would be as wide as the viewport divided by five on a wide screen and the
-// measure of a title would change with the window; a column that shrank would
-// give the five columns back the horizontal scroll they are meant to have and
-// narrow every card to fit. `flex: 0 0 auto` is what keeps the declared width the
-// width the browser applies (SPEC/WEB.md § Roadmap Tasks Page, Column width and
-// card density).
-func TestTaskBoardColumn_CarriesTheSpecifiedFixedWidth(t *testing.T) {
+// TestTaskBoardColumn_CarriesTheSpecifiedMinimumWidth asserts a column is never
+// narrower than the 17rem floor, in rem, and carries no fixed width of its own:
+// the three columns divide the board's width (Acceptance Criterion 139, asserted
+// on the bounded override in sprint_board_layout_test.go).
+func TestTaskBoardColumn_CarriesTheSpecifiedMinimumWidth(t *testing.T) {
 	column := soleCSSRule(t, projectStyleSheet(t), ".task-board__column")
 
-	for prop, want := range map[string]string{
-		"width":     "19rem",
-		"min-width": "17rem",
-	} {
-		got := cssDeclarations(column, prop)
-		if len(got) != 1 || got[0] != want {
-			t.Errorf(".task-board__column declares %s: %v, want exactly %q "+
-				"(SPEC/WEB.md § Roadmap Tasks Page, Column width and card density; "+
-				"Acceptance Criterion 129)", prop, got, want)
-		}
+	if got := cssDeclarations(column, "min-width"); len(got) != 1 || got[0] != "17rem" {
+		t.Errorf(".task-board__column declares min-width: %v, want exactly %q "+
+			"(Acceptance Criterion 139)", got, "17rem")
 	}
-
-	// Both lengths follow the reader's own text size, which a px length would
-	// not: the criterion requires them in `rem`.
-	for _, prop := range []string{"width", "min-width"} {
-		for _, value := range cssDeclarations(column, prop) {
-			if !strings.HasSuffix(value, "rem") {
-				t.Errorf(".task-board__column declares %s: %q; the column's lengths are "+
-					"expressed in rem so they scale with the reader's text size, and a "+
-					"length in px does not", prop, value)
-			}
+	for _, prop := range []string{"width", "flex"} {
+		if got := cssDeclarations(column, prop); len(got) != 0 {
+			t.Errorf(".task-board__column declares %s: %v; the column's width is the share "+
+				"the bounded board's override gives it, and a second width on the base rule "+
+				"is a length no board carries", prop, got)
 		}
-	}
-
-	if got := cssDeclarations(column, "flex"); len(got) != 1 || got[0] != "0 0 auto" {
-		t.Errorf(".task-board__column declares flex: %v, want exactly %q; a column that "+
-			"grows makes a card's measure depend on the viewport width and one that "+
-			"shrinks narrows every card instead of letting the board scroll sideways",
-			got, "0 0 auto")
 	}
 }
 
@@ -85,7 +47,7 @@ func TestTaskBoardColumn_CarriesTheSpecifiedFixedWidth(t *testing.T) {
 // board's padding is the tighter of the two — and a Tabler upgrade that changes
 // `.card-sm > .card-body` is caught by this test instead of silently inverting
 // the relation. The project value is pinned as well, because the criterion fixes
-// it (SPEC/WEB.md § Roadmap Tasks Page, Column width and card density).
+// it (Acceptance Criterion 139).
 func TestTaskCardBody_IsTighterThanTheVendoredSmallCard(t *testing.T) {
 	vendored := embeddedSheet(t, "static/vendor/tabler/tabler.min.css")
 	framework := cssUniformRemPadding(t,
@@ -99,11 +61,11 @@ func TestTaskCardBody_IsTighterThanTheVendoredSmallCard(t *testing.T) {
 		t.Errorf(".task-card > .card-body declares padding %grem and the vendored "+
 			".card-sm > .card-body declares %grem; the board's card body must be the "+
 			"TIGHTER of the two, because the padding it does not spend is measure "+
-			"returned to the card's own text (Acceptance Criterion 129)", board, framework)
+			"returned to the card's own text (Acceptance Criterion 139)", board, framework)
 	}
 	if want := 0.75; board != want {
 		t.Errorf(".task-card > .card-body declares padding %grem, want %grem "+
-			"(SPEC/WEB.md § Roadmap Tasks Page, Column width and card density)", board, want)
+			"(Acceptance Criterion 139)", board, want)
 	}
 
 	// The override wins on source order, which only holds while it needs no help:
@@ -128,8 +90,8 @@ func TestTaskCardBody_IsTighterThanTheVendoredSmallCard(t *testing.T) {
 // Tabler's 1rem.
 func TestTaskCard_BodyIsADirectChildOfTheCard(t *testing.T) {
 	t.Setenv("HOME", shortHome(t))
-	name := seedRoadmap(t, "platform-core")
-	page := servePage(t, buildMux(), "/roadmaps/"+name+"/tasks")
+	sprintID := seedSprintWithMembers(t, "settlement-window", 2)
+	page := servePage(t, buildMux(), "/roadmaps/settlement-window/sprints/"+itoa(sprintID))
 
 	chain := ancestorChain(t, page, `class="card-body d-block"`)
 	if len(chain) == 0 {

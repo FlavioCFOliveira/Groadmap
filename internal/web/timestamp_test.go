@@ -2,6 +2,7 @@ package web
 
 import (
 	"database/sql"
+	"io/fs"
 	"regexp"
 	"strings"
 	"testing"
@@ -435,7 +436,11 @@ func TestTaskPage_TimestampsUseTheDisplayFormOnTheServer(t *testing.T) {
 // Display, rule 5: every surface the rule governs is rendered on the server, so
 // no script the interface serves formats a timestamp or builds a <time> element.
 func TestTimestamps_NoScriptFormatsATimestamp(t *testing.T) {
-	for _, path := range []string{"static/task-search.js", "static/sprint-board.js", "static/graph.js"} {
+	scripts, err := fs.Glob(staticFS, "static/*.js")
+	if err != nil || len(scripts) == 0 {
+		t.Fatalf("listing the embedded scripts: %v (found %d)", err, len(scripts))
+	}
+	for _, path := range scripts {
 		script := stripJSComments(readEmbeddedAsset(t, path))
 		for _, bad := range []string{"formatTimestamp", `createElement("time")`, `setAttribute("datetime"`} {
 			if strings.Contains(script, bad) {

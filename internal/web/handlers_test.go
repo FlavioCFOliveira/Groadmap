@@ -106,8 +106,8 @@ func TestHandleSprints_HappyPath(t *testing.T) {
 }
 
 // TestHandleTasks_HappyPath drives handleTasks end-to-end against a populated
-// roadmap: it must render 200 HTML showing the task board with the seeded task
-// title and a card linking to that task's own page. This covers loadTasks'
+// roadmap: it must render 200 HTML showing the task list with the seeded task
+// title and a row linking to that task's own page. This covers loadTasks'
 // read path (the full, unfiltered task list) and renderHTML's success branch
 // (SPEC/WEB.md § Roadmap Tasks Page; Tasks and Sprints from SQLite).
 func TestHandleTasks_HappyPath(t *testing.T) {
@@ -129,18 +129,17 @@ func TestHandleTasks_HappyPath(t *testing.T) {
 	if !contains(body, "Wire read-only web server to SQLite") {
 		t.Errorf("tasks body missing seeded task title")
 	}
-	// The Kanban board is the page's task presentation, and it renders no task
-	// table (SPEC/WEB.md § Roadmap Tasks Page; board_test.go pins the board
-	// itself).
-	if !contains(body, `data-role="task-board"`) {
-		t.Errorf("tasks page missing the Kanban task board")
+	// The list is the page's task presentation, and it renders no board
+	// (SPEC/WEB.md § Roadmap Tasks Page; tasks_list_test.go pins the list itself).
+	if !contains(body, `<table class="table table-vcenter card-table">`) {
+		t.Errorf("tasks page missing the task list table")
 	}
-	if contains(body, "<th>Type</th>") {
-		t.Errorf("tasks page renders a task table; the board replaced it")
+	if contains(body, `data-role="task-board"`) {
+		t.Errorf("tasks page renders a board; the list replaced it")
 	}
-	// The seeded task's card links to the task's own page.
+	// The seeded task's row links to the task's own page.
 	if !contains(body, `href="/roadmaps/`+name+`/tasks/1"`) {
-		t.Errorf("tasks page missing the card link to the seeded task's page")
+		t.Errorf("tasks page missing the row link to the seeded task's page")
 	}
 }
 

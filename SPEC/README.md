@@ -16,8 +16,8 @@ The SPEC is unversioned. Git is the source of truth for its evolution — recove
 | Knowledge graph feature (design, persistence, what is and is not checked) | `GRAPH.md` |
 | Web interface (`rmp web`, server, pages, graph viz) | `WEB.md` |
 | Web roadmap sprints page / landing (`/roadmaps/{name}`, sprint tabs Próximos / Actual / Concluídos) | `WEB.md § Roadmap Sprints Page` |
-| Web roadmap tasks page (`/roadmaps/{name}/tasks`, Kanban task board, header search and type / priority / severity filters) | `WEB.md § Roadmap Tasks Page` |
-| Web board search text rules (trim by White_Space, Unicode NFC normalisation, simple lowercase fold, and the three tables shipped to the browser) | `WEB.md § Roadmap Tasks Page` |
+| Web roadmap tasks page (`/roadmaps/{name}/tasks`, one paginated task list in a Tabler card, the card-header filter bar — search, sprint, status, type, minimum priority, minimum severity — the query parameters and their validation, server-side pagination and rows-per-page selector) | `WEB.md § Roadmap Tasks Page` |
+| Web tasks-page search text rules (trim by White_Space, Unicode NFC normalisation, simple lowercase fold, applied on the server) | `WEB.md § Roadmap Tasks Page` |
 | Web sprint page (`/roadmaps/{name}/sprints/{id}`) | `WEB.md § Roadmap Sprint Page` |
 | Web shared sprint-card partial (header, description, task-count footer; used by all three sprints-page tabs) | `WEB.md § Shared Sprint-Card Partial` |
 | Web sprint detail sub-template (metadata datagrid, member-tasks board; single sprint page only) | `WEB.md § Sprint Detail Sub-Template` |
@@ -35,7 +35,7 @@ The SPEC is unversioned. Git is the source of truth for its evolution — recove
 | Self-contained web binary (offline, no CDN, embedded asset categories) | `WEB.md § Self-Contained Deliverable` |
 | Responsive / mobile-first web design | `WEB.md § Responsive and Mobile-First Design` |
 | Web UI framework (Tabler admin shell, dark theme, Tabler-fidelity rules, card tabs, the record pages' narrow-viewport header actions, constant sidebar-to-content gap, visible keyboard focus on the header back links and sidebar links) | `WEB.md § UI Framework` |
-| Web status / priority / severity / task type badge colours (semantic Tabler `bg-*-lt` mapping, including the type badge on both Kanban boards' cards and the count badges of the sprints-page tabs and of both Kanban boards' columns) | `WEB.md § Status, Priority, and Severity Badge Colours` |
+| Web status / priority / severity / task type badge colours (semantic Tabler `bg-*-lt` mapping, including the type badge on the sprint board's cards and in the tasks page's rows, and the count badges of the sprints-page tabs and of the sprint board's columns) | `WEB.md § Status, Priority, and Severity Badge Colours` |
 | Web HTTP security headers (CSP, X-Frame-Options, etc.) | `WEB.md § Security Headers` |
 | Web HTTP server timeouts (read-header, write, idle) and the graph data endpoint's query time budget | `WEB.md § HTTP Server Timeouts` |
 | Vendored web assets / embedded Tabler framework and D3.js (with d3-sankey) | `BUILD.md § Vendored Web Assets` |
@@ -216,7 +216,7 @@ To prevent drift across SPEC files, the following topics have a single authorita
 | Write counters JSON (the eleven published keys, the rule that omits a zero, and the rule that omits the whole block for a statement that changed nothing) | `DATA_FORMATS.md § Graph Query Counters` |
 | Web graph view-data JSON shape | `DATA_FORMATS.md § Graph View Data` |
 | One realisation of the graph value mapping (which surfaces are bound, what each still owns, why the Path rendering is not shared, and what preserves the byte identity) | `DATA_FORMATS.md § One Realisation of the Mapping` |
-| Board search text preparation (the trim, normalisation, and folding rules; the single implementation of each; the tables shipped to the browser) | `WEB.md § Roadmap Tasks Page` |
+| Tasks-page search text preparation (the trim, normalisation, and folding rules; the single server implementation of each) | `WEB.md § Roadmap Tasks Page` |
 | Web UI framework (Tabler admin shell, dark theme) | `WEB.md § UI Framework` |
 | Markdown rendering of the web interface's long free-text fields (the one renderer, its safety boundary, the only HTML inserted unescaped) | `WEB.md § Markdown Rendering` |
 | Vendored web assets / embedded Tabler framework and D3.js (with d3-sankey) | `BUILD.md § Vendored Web Assets` |

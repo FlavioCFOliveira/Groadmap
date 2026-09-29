@@ -3,15 +3,7 @@
 <head>
 {{template "head" .}}
 </head>
-{{/*
-  full-height-page next to Tabler's layout-fluid: this page presents a full-height
-  region, the Kanban board below, whose height is the space the page body leaves
-  once the navbar and the page header are placed. The class is what static/style.css
-  hangs the one definite height on, at the top of the flex chain Tabler already
-  ships, so the browser computes the board's height instead of the stylesheet
-  subtracting a guess from the viewport (SPEC/WEB.md § Full-Height Page Regions).
-*/}}
-<body class="layout-fluid full-height-page">
+<body class="layout-fluid">
   <div class="page">
 {{template "sidebar" .}}
 {{template "topnavbar" .}}
@@ -20,57 +12,6 @@
         <div class="container-xl">
           <div class="row g-2 align-items-center">
 {{template "pageTitle" .Chrome.Heading}}
-            {{/*
-              The actions column carries the board's four narrowing controls and
-              nothing else: the search box, which narrows by what a task is
-              CALLED, and the type, minimum-priority and minimum-severity
-              dropdowns, which narrow by what a task IS. The knowledge-graph link
-              that stood here was a second route to a destination the admin-shell
-              sidebar already lists on every page, so removing it removed a
-              duplicate and no access.
-
-              Every control carries a real <label>, associated by for/id. A
-              placeholder is not an accessible name and disappears the moment the
-              user types; a dropdown's first option ("Any type") is a VALUE, not
-              the control's name, and neither may stand in for a label
-              (SPEC/WEB.md § Roadmap Tasks Page, Header search control; Header
-              filter controls). All four are native form controls, so the keyboard
-              reaches and operates them with no script of our own.
-
-              Nothing here submits: there is no form. Narrowing happens in the
-              browser and the four values travel in the URL through
-              history.replaceState, so a narrowed board is a shareable URL.
-
-              The option sets are the SERVER's own enumeration of the TaskType
-              enum and of the threshold range; a request's value only decides
-              which option carries `selected`, so no caller-supplied string
-              reaches the page through type, priority or severity (SPEC/WEB.md
-              § Roadmap Tasks Page, A filter value is never echoed into the page).
-
-              There is deliberately NO status filter: the five columns already are
-              the status, and SPEC/WEB.md § Roadmap Tasks Page, Why the board
-              offers no status filter, records the four reasons.
-            */}}
-            <div class="col-auto ms-auto d-print-none">
-              <div class="task-controls">
-                <span class="task-controls__field">
-                  <label class="form-label mb-0" for="task-search">Search tasks</label>
-                  <input class="form-control w-auto" type="search" id="task-search" name="q" value="{{.Search}}" autocomplete="off" spellcheck="false" data-role="task-search">
-                </span>
-                <span class="task-controls__field">
-                  <label class="form-label mb-0" for="task-filter-type">Type</label>
-                  <select class="form-select w-auto" id="task-filter-type" name="type" data-role="task-filter-type">{{range .Filters.Types}}<option value="{{.Value}}"{{if .Selected}} selected{{end}}>{{.Label}}</option>{{end}}</select>
-                </span>
-                <span class="task-controls__field">
-                  <label class="form-label mb-0" for="task-filter-priority">Min priority</label>
-                  <select class="form-select w-auto" id="task-filter-priority" name="priority" data-role="task-filter-priority">{{range .Filters.Priorities}}<option value="{{.Value}}"{{if .Selected}} selected{{end}}>{{.Label}}</option>{{end}}</select>
-                </span>
-                <span class="task-controls__field">
-                  <label class="form-label mb-0" for="task-filter-severity">Min severity</label>
-                  <select class="form-select w-auto" id="task-filter-severity" name="severity" data-role="task-filter-severity">{{range .Filters.Severities}}<option value="{{.Value}}"{{if .Selected}} selected{{end}}>{{.Label}}</option>{{end}}</select>
-                </span>
-              </div>
-            </div>
           </div>
         </div>
       </div>
@@ -78,135 +19,178 @@
         <div class="container-xl">
 
           {{/*
-            The Kanban task board: five fixed columns, one per TaskStatus, in the
-            order of the task state machine's flow. The columns come from the
-            model (web.groupIntoColumns over models.ValidTaskStatuses), never from
-            a literal here, so the set and the order cannot drift from the enum
-            and every column is rendered even when it holds no task.
+            The task list: ONE Tabler card holding one table, one row per task of
+            the rendered page, not divided by status. The card follows Tabler's
+            cards example (header, table in place of a body, footer), its header
+            follows the card-actions example (title block, then the actions
+            container), and its table and rows follow the task-list example
+            (SPEC/WEB.md § Roadmap Tasks Page, Modelled on three Tabler examples).
 
-            The board is READ-ONLY: it has no drag-and-drop and no control that
-            moves a task between columns or edits anything. Each card is a link to
-            that task's own read-only page; following it is an ordinary navigation
-            that adds no query to this page's read (SPEC/WEB.md § Roadmap Tasks
-            Page; Acceptance Criteria 81 to 93).
-
-            Tabler ships no board component, so only the column strip's layout and
-            scrolling live in static/style.css (.task-board*); everything inside a
-            column is Tabler's own markup — cards, the card-header idiom, badges,
-            and the empty state.
+            The page is READ-ONLY. Its one form is the filter bar, which submits by
+            GET to this page and only narrows what the page shows; every other
+            control is a GET link. Filtering, searching, and paginating are done by
+            the server on each request, so the page works without JavaScript and
+            loads no script of its own (SPEC/WEB.md § Roadmap Tasks Page,
+            Read-only; The page works without JavaScript).
           */}}
-          {{/*
-            The board's own answer to controls that matched nothing: a roadmap
-            that holds no task and a board narrowed to no task are different
-            conditions and read differently, so the five in-column empty states
-            alone are not enough to explain this one (SPEC/WEB.md § Roadmap Tasks
-            Page, Effect on the board; Empty states). The element is always in the
-            document and hidden unless it applies, so the server and the script
-            express the same state the same way.
-
-            ONE message covers the term and the three filters together: the shown
-            set is their conjunction, so singling out one control would attribute
-            the empty result to a cause the board cannot know. The term is named
-            only where there IS one — the phrase carrying it is hidden while the
-            search box is empty — and it is written as TEXT on both paths.
-          */}}
-          <div class="empty py-3" data-role="task-search-empty"{{if not .NoMatches}} hidden{{end}}>
-            <p class="empty-title">No task matches these controls</p>
-            <p class="empty-subtitle text-secondary">Nothing in this roadmap matches the search and filters in force<span data-role="task-search-term-phrase"{{if not .SearchActive}} hidden{{end}}> (search: <span data-role="task-search-term">{{.Search}}</span>)</span>. Clear every control to see every task.</p>
-          </div>
-
-          <div class="task-board" data-role="task-board">
-            {{range .Columns}}
-            <div class="card task-board__column" data-role="task-board-column">
-              {{/*
-                The column header: the status name, and a hybrid badge whose TEXT
-                is the number of tasks the column SHOWS — .Count, which follows the
-                header controls — and whose COLOUR is the status's own.
-
-                A column of this board is exactly one TaskStatus, so the status is
-                handed straight to taskStatusBadge, the SAME helper every task
-                status badge takes its colour from. No colour class is written out
-                here: a literal would be a second mapping, free to drift from the
-                first, and it would be undetectable on the BACKLOG column, whose
-                variant is also the neutral one a badge carries when nothing
-                colours it (SPEC/WEB.md § Roadmap Tasks Page, Count per column;
-                § Status, Priority, and Severity Badge Colours, rule 2; Acceptance
-                Criteria 61 and 140).
-              */}}
-              <div class="card-header">
-                <h3 class="card-title">{{.Status}} <span class="badge {{taskStatusBadge .Status}} ms-2">{{.Count}}</span></h3>
+          <div class="card">
+            <div class="card-header flex-wrap gap-2">
+              <div>
+                <h2 class="card-title">Task list</h2>
               </div>
-              <div class="card-body task-board__cards">
-                {{range .Tasks}}
+              <div class="card-actions">
                 {{/*
-                  The card IS the link to the task's own page: one <a> carrying
-                  Tabler's card and card-link classes and an href, the idiom the
-                  sprint card of the sprints page uses. A link with an href is
-                  natively focusable and activatable, so a click, a tap, and Enter
-                  follow it with no script, and a middle click or the context menu
-                  opens the task page in a new tab. role and tabindex are therefore
-                  absent. The accessible name names the task and carries its title,
-                  the same form the sprint page's card uses (SPEC/WEB.md § Roadmap
-                  Tasks Page, Clickable card; Acceptance Criteria 86 and 93).
-
-                  The card carries the three dimensions the header filters act on
-                  — its type, its priority and its severity — in the server's own
-                  spelling, exactly as it carries its already-folded search corpus
-                  in data-search. Neither side ever transforms a task's value: the
-                  server writes it once and the browser compares what it reads,
-                  which is what keeps the two verdicts identical (SPEC/WEB.md
-                  § Roadmap Tasks Page, Server and client produce the same board).
-
-                  The card holds no nested link — a link admits no interactive
-                  descendant — so the sprint indicator below stays plain text.
-                  data-task-id carries the id the narrowing script rebuilds the
-                  card's #<id> reference from.
+                  The filter bar. Its controls are Tabler's small variants, laid out
+                  trailing-aligned on the card title's line, and every control
+                  carries a real <label>, associated by for/id and visually hidden:
+                  the label stays the control's accessible name, and the input's
+                  placeholder or the select's shown option says what it is. A
+                  select's first option is the value meaning "no filter on this
+                  dimension", never the control's name. Each option set is
+                  the server's own enumeration, so a request's value only decides
+                  which option is selected and is never echoed as text; the term is
+                  the one caller-supplied string echoed, into the input's value,
+                  escaped by html/template. The hidden size input keeps the page
+                  size, and the form carries no page field, so applying the filters
+                  returns to page 1. The bar holds search, sprint, status, type, and
+                  Apply, and nothing else: no priority or severity filter and no
+                  Reset control, so the whole bar fits on the card title's line; the
+                  one Reset link is the no-match empty state's (SPEC/WEB.md
+                  § Roadmap Tasks Page, Filter bar;
+                  Compact controls; Labels are programmatic, not visible).
                 */}}
-                <a class="card card-sm card-link text-reset task-card" href="/roadmaps/{{$.Name}}/tasks/{{.ID}}" data-task-id="{{.ID}}" data-search="{{.SearchText}}" data-type="{{.Type}}" data-priority="{{.Priority}}" data-severity="{{.Severity}}" aria-label="Open details for task #{{.ID}}: {{.Title}}"{{if not .Match}} hidden{{end}}>
-                  <span class="card-body d-block">
-                    <span class="d-block fw-bold text-break mb-1" data-role="task-card-title">{{.Title}}</span>
-                    {{- /*
-                      The title leads the card; the badge line follows it — the id,
-                      severity, priority, and type badges, in that order — as the
-                      shared taskCardBadges partial (layout.html), because it
-                      follows the title on the card of BOTH boards and is stated
-                      once for both (SPEC/WEB.md § Roadmap Tasks Page, Card
-                      content, items 1 and 2; Acceptance Criteria 85 and 177 to
-                      179).
-                    */}}
-                    {{template "taskCardBadges" .}}
-                    {{/*
-                      The metadata footer shows ONLY the indicators the task has:
-                      an absent, empty, or zero value renders nothing at all — no
-                      dash and no placeholder — and a task with none of the five
-                      renders no footer (SPEC/WEB.md § Roadmap Tasks Page, absent
-                      metadata renders nothing). The card carries no status badge:
-                      the column it sits in already states the status.
-                    */}}
-                    {{if .HasMeta}}
-                    <span class="d-flex flex-wrap gap-2 mt-2 small text-secondary" data-role="task-card-meta">
-                      {{with .Sprint}}<span data-role="task-card-sprint"><i class="ti ti-flag me-1"></i>{{.Title}} (Sprint #{{.ID}})</span>{{end}}
-                      {{if .SubtaskCount}}<span data-role="task-card-subtasks"><i class="ti ti-subtask me-1"></i>Subtasks: {{.SubtaskCount}}</span>{{end}}
-                      {{if .DependsOn}}<span data-role="task-card-depends-on"><i class="ti ti-link me-1"></i>Depends on: {{len .DependsOn}}</span>{{end}}
-                      {{if .Blocks}}<span data-role="task-card-blocks"><i class="ti ti-lock me-1"></i>Blocks: {{len .Blocks}}</span>{{end}}
-                      {{if .CommentCount}}<span data-role="task-card-comments"><i class="ti ti-message me-1"></i>Comments: {{.CommentCount}}</span>{{end}}
-                    </span>
-                    {{end}}
-                  </span>
-                </a>
-                {{end}}
-                {{/*
-                  The column's own empty state. It is rendered whether or not the
-                  column holds cards and hidden while it shows any, so a search
-                  that empties a column reveals the same empty state the roadmap's
-                  own emptiness does, and the browser toggles exactly what the
-                  server would have sent (SPEC/WEB.md § Roadmap Tasks Page, Empty
-                  states; Effect on the board).
-                */}}
-                <div class="empty" data-role="task-board-column-empty"{{if .Count}} hidden{{end}}>
-                  <p class="empty-title">No tasks</p>
-                  <p class="empty-subtitle text-secondary">No task is in {{.Status}} right now.</p>
+                <form class="row g-2 align-items-end justify-content-end" method="get" action="/roadmaps/{{.Name}}/tasks">
+                  <input type="hidden" name="size" value="{{.Filters.Size}}">
+                  <div class="col-12 col-sm-auto">
+                    <label class="visually-hidden" for="task-filter-q">Search</label>
+                    <input type="search" class="form-control form-control-sm" id="task-filter-q" name="q" placeholder="Search" value="{{.Filters.Search}}">
+                  </div>
+                  <div class="col-12 col-sm-auto">
+                    <label class="visually-hidden" for="task-filter-sprint">Sprint</label>
+                    <select class="form-select form-select-sm task-list__sprint-select" id="task-filter-sprint" name="sprint">{{range .Filters.Sprints}}<option value="{{.Value}}"{{if .Selected}} selected{{end}}>{{.Label}}</option>{{end}}</select>
+                  </div>
+                  <div class="col-12 col-sm-auto">
+                    <label class="visually-hidden" for="task-filter-status">Status</label>
+                    <select class="form-select form-select-sm" id="task-filter-status" name="status">{{range .Filters.Statuses}}<option value="{{.Value}}"{{if .Selected}} selected{{end}}>{{.Label}}</option>{{end}}</select>
+                  </div>
+                  <div class="col-12 col-sm-auto">
+                    <label class="visually-hidden" for="task-filter-type">Type</label>
+                    <select class="form-select form-select-sm" id="task-filter-type" name="type">{{range .Filters.Types}}<option value="{{.Value}}"{{if .Selected}} selected{{end}}>{{.Label}}</option>{{end}}</select>
+                  </div>
+                  <div class="col-12 col-sm-auto">
+                    <button type="submit" class="btn btn-primary btn-sm">Apply</button>
+                  </div>
+                </form>
+              </div>
+            </div>
+            {{if .Rows}}
+            <div class="table-responsive">
+              <table class="table table-vcenter card-table">
+                <thead>
+                  <tr>
+                    <th class="w-1">ID</th>
+                    <th>Title</th>
+                    <th>Type</th>
+                    <th>Status</th>
+                    <th>Sprint</th>
+                    <th>Severity</th>
+                    <th>Priority</th>
+                    <th>Created</th>
+                    <th class="text-end">Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {{range .Rows}}
+                  {{/*
+                    One task. The row itself is not a link: it carries no href,
+                    role, tabindex, or handler. The title and the View link are its
+                    two links, both to the task's own page. The id, severity,
+                    priority, and type badges are those of the sprint board's card,
+                    in its order and colours. The title and Sprint cells carry the
+                    minimum widths of the project stylesheet, and no class that
+                    breaks a word (SPEC/WEB.md § Roadmap Tasks Page, Row content;
+                    Column widths; Links to the task page).
+                  */}}
+                  <tr>
+                    <td><span class="badge bg-black text-white">#{{.ID}}</span></td>
+                    <td class="task-list__title"><a href="/roadmaps/{{$.Name}}/tasks/{{.ID}}">{{.Title}}</a></td>
+                    <td><span class="badge {{taskTypeBadge .Type}}">{{.Type}}</span></td>
+                    <td><span class="badge {{taskStatusBadge .Status}}">{{.Status}}</span></td>
+                    <td class="task-list__sprint">{{with .Sprint}}Sprint #{{.ID}} {{.Title}}{{else}}&mdash;{{end}}</td>
+                    <td><span class="badge {{severityBadge .Severity}}">S{{.Severity}}</span></td>
+                    <td><span class="badge {{priorityBadge .Priority}}">P{{.Priority}}</span></td>
+                    <td class="text-secondary text-nowrap"><i class="ti ti-calendar me-1" aria-hidden="true"></i>{{timestamp .CreatedAt}}</td>
+                    <td class="text-end"><a class="btn btn-sm" href="/roadmaps/{{$.Name}}/tasks/{{.ID}}" aria-label="View task #{{.ID}}: {{.Title}}">View</a></td>
+                  </tr>
+                  {{end}}
+                </tbody>
+              </table>
+            </div>
+            {{/*
+              The footer: range text, rows-per-page selector, and the numbered
+              pagination bar, the last pushed to the trailing edge. Every link keeps
+              the request's accepted filters (SPEC/WEB.md § Roadmap Tasks Page,
+              Pagination).
+            */}}
+            <div class="card-footer">
+              <div class="row g-2 align-items-center">
+                <div class="col-auto">
+                  <p class="m-0 text-secondary">Showing <span>{{.First}}</span> to <span>{{.Last}}</span> of <span>{{.Total}}</span> entries</p>
                 </div>
+                <div class="col-auto">
+                  <span class="text-secondary me-2" id="task-list-size-label">Rows per page</span>
+                  <div class="btn-group" role="group" aria-labelledby="task-list-size-label">{{range .SizeLinks}}<a class="btn btn-sm{{if .Active}} active{{end}}" href="{{.URL}}"{{if .Active}} aria-current="true"{{end}}>{{.Size}}</a>{{end}}</div>
+                </div>
+                <div class="col-auto ms-auto">
+                  <nav aria-label="Task list pages">
+                  <ul class="pagination m-0">
+                    <li class="page-item{{if not .PrevURL}} disabled{{end}}">
+                      {{if .PrevURL}}
+                      <a class="page-link" href="{{.PrevURL}}" aria-label="Previous"><i class="ti ti-chevron-left"></i></a>
+                      {{else}}
+                      <span class="page-link" aria-label="Previous" aria-disabled="true"><i class="ti ti-chevron-left"></i></span>
+                      {{end}}
+                    </li>
+                    {{range .PageItems}}
+                    {{if .IsEllipsis}}
+                    <li class="page-item disabled"><span class="page-link" aria-disabled="true">&hellip;</span></li>
+                    {{else if .IsCurrent}}
+                    <li class="page-item active" aria-current="page"><span class="page-link">{{.Number}}</span></li>
+                    {{else}}
+                    <li class="page-item"><a class="page-link" href="{{.URL}}">{{.Number}}</a></li>
+                    {{end}}
+                    {{end}}
+                    <li class="page-item{{if not .NextURL}} disabled{{end}}">
+                      {{if .NextURL}}
+                      <a class="page-link" href="{{.NextURL}}" aria-label="Next"><i class="ti ti-chevron-right"></i></a>
+                      {{else}}
+                      <span class="page-link" aria-label="Next" aria-disabled="true"><i class="ti ti-chevron-right"></i></span>
+                      {{end}}
+                    </li>
+                  </ul>
+                  </nav>
+                </div>
+              </div>
+            </div>
+            {{else}}
+            {{/*
+              The empty states, inside the card, which keeps its header and filter
+              bar: a roadmap with no task, and a request whose criteria no task
+              satisfies. One message covers the term and the filters together
+              (SPEC/WEB.md § Roadmap Tasks Page, Empty states).
+            */}}
+            <div class="card-body">
+              <div class="empty">
+                {{if .NoMatch}}
+                <p class="empty-title">No task matches the filters</p>
+                <p class="empty-subtitle text-secondary">Change the search or the filters above, or reset them to see every task.</p>
+                <div class="empty-action">
+                  <a class="btn" href="{{.Filters.ResetURL}}">Reset</a>
+                </div>
+                {{else}}
+                <p class="empty-title">No tasks yet</p>
+                <p class="empty-subtitle text-secondary">This roadmap has no tasks. Tasks are created with the CLI, <code>rmp task create</code>.</p>
+                {{end}}
               </div>
             </div>
             {{end}}
@@ -218,6 +202,5 @@
   </div>
 
   <script src="/static/vendor/tabler/tabler.min.js"></script>
-  <script src="/static/task-search.js"></script>
 </body>
 </html>{{end}}

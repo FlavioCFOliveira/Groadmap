@@ -6,23 +6,12 @@ import (
 	"testing"
 )
 
-// The guards in this file cover SPEC/WEB.md § Full-Height Page Regions for BOTH
-// of the regions that section names — the Kanban board of the roadmap tasks page
-// and the graph card of the knowledge-graph page (Acceptance Criteria 124 to
-// 128). The two obey one mechanism, so they are guarded together: a rule that
-// held for one of them alone would be a second mechanism waiting to drift.
-//
-// What they are written against. The board used to size itself with
-// `height: calc(100vh - 14rem)` — the viewport height less a fixed reservation
-// for "the Tabler navbar, page header, and footer". The footer had been removed
-// from every page and the reservation was never reduced, and the page header's
-// height is not a constant either: its search box and three filter dropdowns
-// wrap onto further rows as the viewport narrows. Measured in a browser at a
-// viewport 900px tall, the material above the board occupied 144px at widths of
-// 1600 and 1440, 228px at 1280 and 1100, 284px at 768 and 380px at 500 — so the
-// 224px reservation was correct at NO width: it left 80px of viewport carrying
-// nothing on a desktop and pushed the foot of the board up to 156px below the
-// fold on a phone.
+// The guards in this file cover SPEC/WEB.md § Full-Height Page Regions: the one
+// full-height region, the graph card of the knowledge-graph page (Acceptance
+// Criteria 124 to 127), and the two pages that are deliberately NOT one — the
+// roadmap tasks page, whose list is paginated and whose page scrolls vertically
+// like any other (Acceptance Criteria 124 and 128), and the sprint page, whose
+// board is bounded by a definite length (sprint_board_layout_test.go).
 //
 // The graph card carried the same kind of arithmetic and failed it the other way
 // round. It took `height: calc(100vh - 9rem)`, and the comment beside it said the
@@ -43,7 +32,7 @@ import (
 // rendered page: Acceptance Criteria 124, 125 and 127 are measurements and are
 // checked with a browser against a running server, not from here. What IS
 // checkable hermetically is the MECHANISM those measurements depend on, in the
-// exact bytes the binary serves: that the board declares no viewport arithmetic
+// exact bytes the binary serves: that the region declares no viewport arithmetic
 // of its own, that it grows into the space its parent leaves, that every link of
 // the chain carrying that space down to it is present — in the vendored Tabler
 // distribution as much as in the project sheet — and that the one viewport-derived
@@ -52,52 +41,35 @@ import (
 // principle still measure wrong; a layout that fails any of it cannot measure
 // right, and restoring the fixed subtraction fails the first assertion outright.
 
-// TestTaskBoard_DeclaresNoViewportArithmetic asserts the board computes no height
-// of its own: it neither declares a `height` nor mentions a viewport unit in any
-// other property, and instead grows into what its parent leaves.
-//
-// This is the assertion the defect fails. A board that subtracts a fixed length
-// from the viewport height is right at one viewport width at best — the width its
-// length was chosen for — and reserves space for elements the page may no longer
-// render, which is exactly how the reservation for the removed footer survived it
-// (SPEC/WEB.md § Full-Height Page Regions, rules 1 to 3).
+// TestTaskBoard_DeclaresNoViewportArithmetic asserts the sprint page's board rule
+// computes no height of its own from the viewport: the one height it carries is the
+// bounded modifier's 60vh (sprint_board_layout_test.go), and the base rule keeps
+// the floor, the scrollbar room, and the scrolling the board depends on
+// (SPEC/WEB.md § Sprint Detail Sub-Template, Height and scrolling; Acceptance
+// Criterion 136).
 func TestTaskBoard_DeclaresNoViewportArithmetic(t *testing.T) {
 	sheet := projectStyleSheet(t)
 	board := soleCSSRule(t, sheet, ".task-board")
 
 	if values := cssDeclarations(board, "height"); len(values) != 0 {
-		t.Errorf(".task-board declares height: %v; a full-height region takes the height "+
-			"the page body leaves through the shell chain and computes none of its own "+
-			"(SPEC/WEB.md § Full-Height Page Regions, rule 3)", values)
+		t.Errorf(".task-board declares height: %v; the board's height is the bounded "+
+			"modifier's alone", values)
 	}
 	for _, unit := range []string{"vh", "dvh", "svh", "lvh", "vmin", "vmax"} {
 		if cssMentionsUnit(board, unit) {
-			t.Errorf(".task-board sizes itself against the viewport unit %q; the viewport "+
-				"height enters this layout once, at the top of the shell chain, and the "+
-				"board's height is computed from it rather than recalculated here", unit)
+			t.Errorf(".task-board sizes itself against the viewport unit %q; the board's "+
+				"viewport-relative height is declared once, on .task-board--bounded", unit)
 		}
 	}
 
-	// The positive half: where the height DOES come from. Without a grow factor
-	// the board would collapse to its flex base size and the absences above
-	// would be satisfied by a board with no height at all.
-	if grow := cssFlexGrow(t, board, ".task-board"); grow < 1 {
-		t.Errorf(".task-board has flex-grow %v; it must claim the space its parent "+
-			"leaves (flex: 1)", grow)
-	}
-
-	// The rest of what the board's own rule must keep saying. Each is a
-	// requirement the height change had the opportunity to drop.
 	if len(cssDeclarations(board, "min-height")) == 0 {
 		t.Error(".task-board declares no min-height; the floor is what keeps the board " +
-			"usable on a very short viewport, where it stops following the page body and " +
-			"the page scrolls to reach it (SPEC/WEB.md § Full-Height Page Regions, rule 5, " +
-			"and Acceptance Criterion 127)")
+			"usable on a very short viewport (Acceptance Criterion 136)")
 	}
 	if len(cssDeclarations(board, "padding-bottom")) == 0 {
 		t.Error(".task-board declares no padding-bottom; the board's own horizontal " +
 			"scrollbar is drawn in that reserved space, beneath the columns rather than " +
-			"over the last card (Acceptance Criterion 128)")
+			"over the last card")
 	}
 	for prop, want := range map[string]string{"overflow-x": "auto", "overflow-y": "hidden"} {
 		if got := cssDeclarations(board, prop); len(got) != 1 || got[0] != want {
@@ -224,12 +196,9 @@ func TestFullHeightShell_DeclaresTheOrderedViewportPair(t *testing.T) {
 }
 
 // TestFullHeightShell_ChainFromTheViewportToTheBoardIsComplete asserts every link
-// between the height at the top of the shell and the board is present in the
-// stylesheets the binary serves.
-//
-// The same four links carry the height to the graph card: the two regions sit at
-// the foot of one chain, and the graph page's own chain is asserted element by
-// element in TestGraphPage_CardSitsInTheFullHeightShellChain below.
+// between the height at the top of the shell and the full-height region is present
+// in the stylesheets the binary serves. The graph page's own chain is asserted
+// element by element in TestGraphPage_CardSitsInTheFullHeightShellChain below.
 //
 // Three of the four links are Tabler's own, which is the point: the project sheet
 // supplies the definite height the distribution lacks and re-implements no layout
@@ -281,17 +250,13 @@ func TestFullHeightShell_ChainFromTheViewportToTheBoardIsComplete(t *testing.T) 
 	}
 }
 
-// TestTasksPage_BoardSitsInTheFullHeightShellChain asserts the served markup is
-// the markup those stylesheet rules are written against: the page carries the
-// class the shell rules select on, and the board's ancestors are exactly the
-// elements the chain walks through.
-//
-// The stylesheet half of this file is inert without this one. `.full-height-page
-// .page` selects nothing if the class leaves the template; `.page-body >
-// .container-xl` stops matching the moment a wrapper element is introduced
-// between them, and a chain broken at that link leaves the board sizing itself to
-// its content with no rule having changed.
-func TestTasksPage_BoardSitsInTheFullHeightShellChain(t *testing.T) {
+// TestTasksPage_IsNotAFullHeightRegion asserts the roadmap tasks page carries no
+// full-height region: its list is paginated, so the list card is sized to the rows
+// of one page and the page scrolls vertically like any other. Its <body> therefore
+// does not carry full-height-page, which would cap the page at the viewport, and
+// keeps Tabler's layout-fluid (SPEC/WEB.md § Full-Height Page Regions; Acceptance
+// Criteria 124 and 128).
+func TestTasksPage_IsNotAFullHeightRegion(t *testing.T) {
 	t.Setenv("HOME", shortHome(t))
 	name := seedRoadmap(t, "platform-core")
 	mux := buildMux()
@@ -299,29 +264,19 @@ func TestTasksPage_BoardSitsInTheFullHeightShellChain(t *testing.T) {
 	page := servePage(t, mux, path)
 
 	classes := bodyClasses(t, page, path)
-	if !classes["full-height-page"] {
-		t.Errorf("page %s: its <body> does not carry full-height-page, so every "+
-			"`.full-height-page ...` rule in the served stylesheet selects nothing and "+
-			"the board falls back to sizing itself to its content", path)
+	if classes["full-height-page"] {
+		t.Errorf("page %s: its <body> carries full-height-page, which caps the page at the "+
+			"viewport; the tasks page carries no full-height region", path)
 	}
 	if !classes["layout-fluid"] {
 		t.Errorf("page %s: its <body> lost Tabler's layout-fluid class", path)
 	}
 
-	want := []string{
-		"html",
-		"body.full-height-page.layout-fluid",
-		"div.page",
-		"div.page-wrapper",
-		"main.page-body",
-		"div.container-xl",
-	}
-	got := ancestorChain(t, page, `class="task-board"`)
-	if strings.Join(got, " > ") != strings.Join(want, " > ") {
-		t.Errorf("page %s: the board's ancestor chain is\n  %s\nwant\n  %s\n"+
-			"The shell rules are written against that chain: a link inserted or removed "+
-			"leaves them selecting elements the board no longer descends from",
-			path, strings.Join(got, " > "), strings.Join(want, " > "))
+	// The control: the graph page, the one full-height region, does carry it, so
+	// the absence above is measured by an instrument that sees the class.
+	graphPath := "/roadmaps/" + name + "/graph"
+	if !bodyClasses(t, servePage(t, mux, graphPath), graphPath)["full-height-page"] {
+		t.Fatalf("page %s does not carry full-height-page either; the instrument cannot see the class", graphPath)
 	}
 }
 

@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"html/template"
-	"net/url"
 	"regexp"
 	"sort"
 	"strconv"
@@ -255,403 +254,22 @@ type sprintsData struct {
 	SprintsClosed   []sprintView
 }
 
-// taskView pairs one task with its comment log and, where the surface shows it,
-// with the sprint the task belongs to. It is the context every surface that shows
-// a task as a card consumes: the card of the tasks page's board and the card of
-// the sprint page's member-tasks board, each a link to the task's own page
-// (SPEC/WEB.md § Roadmap Task Page).
+// taskView pairs one task with its comment count. It is the context the card of
+// the sprint page's member-tasks board consumes, each card a link to the task's
+// own page (SPEC/WEB.md § Sprint Detail Sub-Template; § Roadmap Task Page).
 //
 // models.Task is EMBEDDED rather than a named field: html/template resolves
-// promoted fields, so every card expression that reads a task's
-// own fields ({{.ID}}, {{.Title}}, {{.CompletionSummary}}, ...) is unchanged by
-// the addition of the comment log, and the timeline block reads {{.Comments}}.
+// promoted fields, so every card expression that reads a task's own fields
+// ({{.ID}}, {{.Title}}, ...) reads them directly.
 //
 // CommentCount is how many comments the task has, which is all a card shows. The
 // comment TEXT is deliberately absent: it is read only by that task's own page,
-// one task at a time, so a board never
-// reads a comment body in order to display a number (SPEC/WEB.md § Roadmap Tasks
-// Page, read cost; SPEC/DATABASE.md § Count Comments for Many Parents (Grouped)).
-//
-// Match is whether the task satisfies EVERY active board control: the search term
-// and the type, minimum-priority and minimum-severity filters, conjoined. It is
-// true for every task when no control is active. The four controls reach the card
-// through this ONE verdict rather than through a criterion of their own, which is
-// what keeps the board to a single filtering model (SPEC/WEB.md § Roadmap Tasks
-// Page, How the criteria compose). A task that does not match stays in the
-// document — every card is in the page so the browser can narrow without a round
-// trip — but is not SHOWN, and does not count towards its column's badge
-// (SPEC/WEB.md § Roadmap Tasks Page, Effect on the board).
-//
-// Sprint is the sprint the task belongs to, or nil when it belongs to none — a
-// task belongs to at most one, which sprint_tasks.task_id's UNIQUE constraint
-// guarantees. It is populated only by the surface that shows it, the tasks page's
-// board cards; the sprint page leaves it nil, because that page renders one
-// sprint and would gain a query for a value its markup never reads (SPEC/WEB.md
-// § Roadmap Tasks Page, the sprint indicator).
-//
-// Field order places the pointer-bearing fields before the embedded struct to
-// keep the pointer-scan prefix minimal (govet fieldalignment), as in sprintView.
+// one task at a time, so the board never reads a comment body in order to display
+// a number (SPEC/WEB.md § Sprint Detail Sub-Template, Read cost;
+// SPEC/DATABASE.md § Count Comments for Many Parents (Grouped)).
 type taskView struct {
-	Sprint *db.SprintRef
 	models.Task
 	CommentCount int
-	Match        bool
-}
-
-// SearchText is the task's title normalised and folded by the board search's
-// rules, which the card carries so the browser matches against the SAME text the
-// server matched against.
-//
-// Transforming the corpus once, here, is what keeps the two paths equivalent: the
-// script normalises and folds only the term the user typed, never the task text,
-// so nothing about a task's text is ever transformed twice (SPEC/WEB.md § Roadmap
-// Tasks Page, One rule, and only one implementation of it; Server and client
-// produce the same board).
-//
-// The transformation is searchableText, the same function foldSearchTerm prepares
-// a term with, so the corpus and the term are one implementation of one rule
-// rather than two implementations of one description (see fold.go). The title is
-// NOT trimmed: the trim is the term's alone, so a task's own leading or trailing
-// whitespace is part of its text.
-//
-// It is a DERIVED form and nothing else. The bytes rmp stores are untouched, and
-// the card renders v.Title itself, so normalisation reaches the comparison and
-// neither storage nor display (SPEC/WEB.md § Roadmap Tasks Page, The
-// normalisation rule; Acceptance Criterion 152).
-func (v *taskView) SearchText() string {
-	return searchableText(v.Title)
-}
-
-// HasMeta reports whether the card has at least one metadata indicator to show:
-// its sprint, its subtasks, its dependencies, the tasks it blocks, or its
-// comments. A task with none of the five renders no metadata footer at all — not
-// an empty one (SPEC/WEB.md § Roadmap Tasks Page, absent metadata renders
-// nothing; Acceptance Criterion 85).
-//
-// The five conditions are exactly the five the footer's own items are rendered
-// under, so the footer can never be emitted empty and can never swallow an
-// indicator the card should show.
-//
-// It governs the TASKS board's card alone. The sprint page's member-tasks board
-// needs no such predicate: its card carries exactly two indicators, both of them
-// counts, and renders both on every card including when either is 0, so its footer
-// row is unconditional (SPEC/WEB.md § Sprint Detail Sub-Template, rule 3, Both
-// counters are always rendered; Acceptance Criterion 134).
-func (v *taskView) HasMeta() bool {
-	return v.Sprint != nil ||
-		v.SubtaskCount > 0 ||
-		len(v.DependsOn) > 0 ||
-		len(v.Blocks) > 0 ||
-		v.CommentCount > 0
-}
-
-// matchesSearch reports whether the task matches an already-folded term.
-//
-// The searchable text is exactly the two things the card itself displays: the
-// task title, and the task reference written with its leading "#". Matching the
-// reference as the literal string "#42" is what lets both `42` and `#42` find task
-// 42 under the one substring rule, with no special case for either form.
-//
-// Every other task field is deliberately outside the search: a term occurring
-// only in a task's `functional_requirements`, and matching nothing in that task's
-// title or reference, does not match it. The box answers "which task is this?"
-// from what identifies a task on its card, and matching an attribute would answer
-// a different question through the same control (SPEC/WEB.md § Roadmap Tasks
-// Page, What the search matches; Acceptance Criterion 101).
-func (v *taskView) matchesSearch(folded string) bool {
-	if folded == "" {
-		return true
-	}
-	if strings.Contains(v.SearchText(), folded) {
-		return true
-	}
-	return strings.Contains("#"+strconv.Itoa(v.ID), folded)
-}
-
-// The board's minimum-priority and minimum-severity filters offer the thresholds
-// minFilterThreshold to maxFilterThreshold. That is the priority and severity
-// range of SPEC/MODELS.md § Task WITHOUT its 0 floor: a threshold of 0 admits
-// every task and IS the unfiltered board, which already has its own option and
-// its own URL form — the parameter absent — so offering it would give one board
-// two URLs and two control settings (SPEC/WEB.md § Roadmap Tasks Page, What each
-// filter matches).
-//
-// 0 is therefore free to mean "no filter on this dimension", which is exactly
-// what `task.Priority >= 0` computes for every task: the inactive filter needs no
-// branch of its own.
-const (
-	minFilterThreshold = 1
-	maxFilterThreshold = 9
-)
-
-// boardControls is what one request asked the roadmap tasks board to show: the
-// search term and the three header filters, reduced to the values the matching
-// rule compares with.
-//
-// The three filters carry ACCEPTED values only. A value a dimension does not
-// accept never reaches this struct: the parser turns it into the zero value,
-// which is the same state the parameter's absence produces, so "no filter value
-// is an error" is settled once, at the boundary, and every consumer downstream
-// sees one representation of "this dimension is not filtered" (SPEC/WEB.md
-// § Roadmap Tasks Page, No filter value is an error).
-//
-// Search keeps the term exactly as the request carried it, because that string is
-// echoed back into the input and the no-match message; folded is the same term in
-// the form the matching rule uses, computed ONCE per request rather than once per
-// task.
-//
-// Field order places the three string-shaped fields before the two ints, so the
-// pointer-scan prefix stops at the ints (govet fieldalignment).
-type boardControls struct {
-	Search   string
-	folded   string
-	Type     models.TaskType
-	Priority int
-	Severity int
-}
-
-// newBoardControls builds the controls from values already reduced to their
-// accepted forms, folding the term once.
-func newBoardControls(search string, taskType models.TaskType, priority, severity int) boardControls {
-	return boardControls{
-		Search:   search,
-		folded:   foldSearchTerm(search),
-		Type:     taskType,
-		Priority: priority,
-		Severity: severity,
-	}
-}
-
-// parseBoardControls reads the board's four header controls out of a request's
-// query string. It cannot fail: every value a caller can send maps to a control
-// state, so this route's status codes do not depend on what the query carries
-// (SPEC/WEB.md § Roadmap Tasks Page, No malformed term is an error; No filter
-// value is an error).
-//
-// url.Values.Get answers the FIRST value of a repeated parameter, which is the
-// reading the specification fixes for ?type=BUG&type=EPIC, and answers "" for a
-// parameter url.URL.Query could not decode, which is the reading it fixes for an
-// undecodable one. Both rules therefore come from the standard library's own
-// semantics rather than from a special case here.
-func parseBoardControls(query url.Values) boardControls {
-	return newBoardControls(
-		query.Get("q"),
-		parseTypeFilter(query.Get("type")),
-		parseThresholdFilter(query.Get("priority")),
-		parseThresholdFilter(query.Get("severity")),
-	)
-}
-
-// parseTypeFilter reduces a raw type parameter to the TaskType it names, or to
-// the empty TaskType when it names none.
-//
-// The comparison is EXACT against the enum's own spelling, in upper case, and no
-// case folding is applied: `rmp task list -y bug` is rejected by the CLI for the
-// same reason, so one parameter name means one thing across the two surfaces
-// (SPEC/WEB.md § Roadmap Tasks Page, What each filter matches; SPEC/COMMANDS.md
-// § List Tasks). A comma-packed value such as "BUG,EPIC" is one string, is not
-// one of the ten, and is ignored whole — no filter is ever partly applied.
-func parseTypeFilter(raw string) models.TaskType {
-	if models.IsValidTaskType(raw) {
-		return models.TaskType(raw)
-	}
-	return ""
-}
-
-// parseThresholdFilter reduces a raw minimum-priority or minimum-severity
-// parameter to the threshold it names, or to 0 — no filter — when it names none.
-//
-// Accepted is the canonical spelling of an integer in [minFilterThreshold,
-// maxFilterThreshold] and nothing else. strconv.Atoi already rejects a value with
-// surrounding spaces or a non-numeric body; the round-trip through strconv.Itoa
-// rejects the decorated spellings it would otherwise accept — "+5" and "05" parse
-// as 5 but are not how 5 is written — so a decorated value applies no filter
-// rather than silently applying one the URL does not say (SPEC/WEB.md § Roadmap
-// Tasks Page, No filter value is an error).
-//
-// strconv.Itoa allocates nothing for a value below 100: it slices a package-level
-// string of the small integers.
-func parseThresholdFilter(raw string) int {
-	n, err := strconv.Atoi(raw)
-	if err != nil || n < minFilterThreshold || n > maxFilterThreshold {
-		return 0
-	}
-	if raw != strconv.Itoa(n) {
-		return 0
-	}
-	return n
-}
-
-// active reports whether any control is narrowing the board. It is the condition
-// that separates a board narrowed to nothing — which says so — from a roadmap
-// that holds no task at all, which does not (SPEC/WEB.md § Roadmap Tasks Page,
-// Empty states).
-func (c boardControls) active() bool {
-	return c.folded != "" || c.Type != "" || c.Priority > 0 || c.Severity > 0
-}
-
-// matches is the board's ONE verdict on one task: the task is shown when it
-// satisfies EVERY active control, and a board with no active control shows every
-// task (SPEC/WEB.md § Roadmap Tasks Page, How the criteria compose).
-//
-// The conjunction is total and each clause decides only its own dimension, so
-// narrowing a control can only shrink the shown set and no control ever re-admits
-// a task another control excluded.
-//
-// The two ordinal clauses need no "is this filter active" test: an inactive
-// threshold is 0, and every priority and severity is >= 0 by the range
-// SPEC/MODELS.md § Task fixes, so the inactive filter admits everything by
-// arithmetic rather than by a branch.
-//
-// The clauses are ordered cheapest first, which a conjunction of pure predicates
-// leaves free to choose: the two integer comparisons and the string equality are
-// comparisons of values already in hand, while the term clause folds the task's
-// title (taskView.SearchText) and that fold allocates. Rejecting a task on a
-// threshold therefore skips an allocation per task per render. No figure is
-// published for what the ordering saves: this project measures nothing
-// (SPEC/BUILD.md § No Benchmarks and No Performance-Measurement Tests), and what
-// justifies the order is the work the short circuit does not do, which is visible
-// in the code. Evaluation order cannot change the verdict, so the property that
-// server and client agree is untouched.
-func (v *taskView) matches(c boardControls) bool {
-	return v.Priority >= c.Priority &&
-		v.Severity >= c.Severity &&
-		(c.Type == "" || v.Type == c.Type) &&
-		v.matchesSearch(c.folded)
-}
-
-// filterOption is one option of a header filter dropdown: the value the URL
-// parameter carries, the text the option shows, and whether this request's value
-// selected it.
-//
-// Value and Label are the SERVER's own strings — a TaskType from the enum, a
-// threshold from the range, or the empty value of the dimension's no-filter
-// option — never a string the caller supplied. A caller's parameter only decides
-// which of them carries Selected, so no caller-supplied string reaches the page
-// through type, priority, or severity (SPEC/WEB.md § Roadmap Tasks Page, A filter
-// value is never echoed into the page).
-type filterOption struct {
-	Value    string
-	Label    string
-	Selected bool
-}
-
-// boardFilters is the three header dropdowns as the template renders them: one
-// fixed option set per dimension, with exactly one option marked selected.
-type boardFilters struct {
-	Types      []filterOption
-	Priorities []filterOption
-	Severities []filterOption
-}
-
-// newBoardFilters builds the three option sets for one request's controls.
-func newBoardFilters(c boardControls) boardFilters {
-	return boardFilters{
-		Types:      typeFilterOptions(c.Type),
-		Priorities: thresholdFilterOptions("Any priority", c.Priority),
-		Severities: thresholdFilterOptions("Any severity", c.Severity),
-	}
-}
-
-// typeFilterOptions enumerates the type dropdown: the no-filter option, then the
-// ten TaskType values.
-//
-// The values come from models.ValidTaskTypes rather than from a literal here or
-// in the template, so the dropdown cannot drift from the enum: a type added to
-// SPEC/MODELS.md § Enums appears here with no change to this file.
-func typeFilterOptions(selected models.TaskType) []filterOption {
-	options := make([]filterOption, 0, len(models.ValidTaskTypes)+1)
-	options = append(options, filterOption{Label: "Any type", Selected: selected == ""})
-	for _, taskType := range models.ValidTaskTypes {
-		options = append(options, filterOption{
-			Value:    string(taskType),
-			Label:    string(taskType),
-			Selected: taskType == selected,
-		})
-	}
-	return options
-}
-
-// thresholdFilterOptions enumerates one threshold dropdown: the no-filter option,
-// then the thresholds minFilterThreshold to maxFilterThreshold. The range is the
-// one the constants fix, so the offered set and the accepted set are the same set
-// and neither can drift from the other.
-func thresholdFilterOptions(anyLabel string, selected int) []filterOption {
-	options := make([]filterOption, 0, maxFilterThreshold-minFilterThreshold+2)
-	options = append(options, filterOption{Label: anyLabel, Selected: selected == 0})
-	for threshold := minFilterThreshold; threshold <= maxFilterThreshold; threshold++ {
-		value := strconv.Itoa(threshold)
-		options = append(options, filterOption{
-			Value:    value,
-			Label:    value,
-			Selected: threshold == selected,
-		})
-	}
-	return options
-}
-
-// taskColumn is one column of the roadmap tasks page's Kanban board: a task
-// status, the cards of the tasks in that status, and the count its header shows.
-//
-// Tasks holds POINTERS into the page's flat task list rather than copies, so the
-// board's cards and the page's other uses of a task are rendered from one set of
-// values and cannot drift apart. It holds every task of that status, including the ones a
-// search hides: the card stays in the document so the browser can show it again
-// without a round trip.
-//
-// Count is the number of tasks the column SHOWS — those whose Match is true — so
-// the header badge always states what the user is looking at. A count that kept
-// reporting the unnarrowed total while the column displayed fewer cards would
-// state something false, which is exactly what the count exists to prevent
-// (SPEC/WEB.md § Roadmap Tasks Page, Count per column; Effect on the board;
-// Acceptance Criteria 83 and 101).
-//
-// Field order puts the string before the slice so the pointer-scan prefix stops
-// at the slice header rather than spanning the whole struct (govet
-// fieldalignment).
-type taskColumn struct {
-	Status models.TaskStatus
-	Tasks  []*taskView
-	Count  int
-}
-
-// tasksData is the view model handed to the roadmap tasks template. It presents
-// the roadmap's full task set — every task, any status — as a Kanban board of
-// five fixed columns, one per models.TaskStatus, each card a link to that task's
-// own page. It is read-only; nothing here is persisted
-// (SPEC/WEB.md § Roadmap Tasks Page).
-//
-// Tasks is the full, unfiltered task list in the order the read returned it
-// (priority DESC, created_at ASC), each task carrying its own comment log and its
-// sprint. It is the single source of the page's task values: the board's columns
-// point into it.
-//
-// Columns is that same list grouped into the board's five columns, in the order
-// of the task state machine's flow. The grouping is in memory over the values
-// already read: the board issues no query of its own, none per column and none
-// per card (SPEC/WEB.md § Roadmap Tasks Page, read cost).
-// Search is the term exactly as the request carried it, echoed back into the
-// search input and into the no-match message; html/template escapes it in both
-// places. Filters is the three header dropdowns with their fixed option sets and
-// the one option this request selected — the server's own strings throughout, so
-// no filter value is ever echoed into the page.
-//
-// SearchActive says a term is in force (the folded term is non-empty), which is
-// what decides whether the no-match message names the term at all. NoMatches says
-// at least one control is in force and nothing matched it, which is the condition
-// for the board's "no task matches" message — a different condition from a
-// roadmap that holds no task at all. One message covers the term and the three
-// filters together, because the shown set is their conjunction (SPEC/WEB.md
-// § Roadmap Tasks Page, Effect on the board; Empty states).
-type tasksData struct {
-	Name         string
-	Search       string
-	Chrome       chrome
-	Filters      boardFilters
-	Tasks        []taskView
-	Columns      []taskColumn
-	SearchActive bool
-	NoMatches    bool
 }
 
 // auditPageSize is the fixed number of audit entries shown per page on the
@@ -747,8 +365,7 @@ type sprintCard struct {
 // so the board is rendered from the one set of values the page read and cannot
 // drift from it. There is no Count field: the column's
 // badge is len(Tasks), because this board carries no narrowing control and so has
-// no second notion of "how many are shown" to keep in step with a stored number
-// (contrast taskColumn, whose count is what the tasks page's search left visible).
+// no second notion of "how many are shown" to keep in step with a stored number.
 //
 // CanonicalStatus is the status the column's count badge takes its colour from: a
 // column of this board groups a SET of statuses and writes none of them, so the
@@ -939,28 +556,16 @@ type taskCommentCounter interface {
 	CountTaskCommentsByTasks(ctx context.Context, taskIDs []int) (map[int]int, error)
 }
 
-// taskSprintReader is the ONLY sprint read the tasks page is given: the grouped
-// resolution over the whole set of rendered task ids, one statement for every
-// task (SPEC/DATABASE.md § Resolve the Sprint of Many Tasks (Grouped)).
+// taskSprintReader is the grouped sprint resolution over a whole set of task ids,
+// one statement for every task (SPEC/DATABASE.md § Resolve the Sprint of Many
+// Tasks (Grouped)). The tasks page resolves the sprint of every row it renders
+// through it, and the task page the sprint of its one task.
 //
 // The per-task and per-sprint reads (db.GetSprint, db.GetSprintTasks) are
-// deliberately absent from this interface. The board's read path therefore cannot
-// express the pattern SPEC/WEB.md § Roadmap Tasks Page forbids — one query per
-// rendered card or per board column — because the methods that would do it are not
-// reachable through the dependency it is handed. *db.DB satisfies the interface.
+// deliberately absent from this interface, so a page handed only this read cannot
+// express one query per rendered row. *db.DB satisfies the interface.
 type taskSprintReader interface {
 	GetSprintsByTasks(ctx context.Context, taskIDs []int) (map[int]db.SprintRef, error)
-}
-
-// tasksSource is the complete read surface of the roadmap tasks page: the full
-// task list, the grouped comment count for the cards it renders, and the grouped
-// sprint read for the sprint each card names. Naming it separates opening the
-// database (loadTasks) from reading it (readTasks), so the page's queries can be
-// counted against a real database (Acceptance Criteria 70 and 92).
-type tasksSource interface {
-	ListAllTasks(ctx context.Context) ([]models.Task, error)
-	taskCommentCounter
-	taskSprintReader
 }
 
 // sprintTaskSource resolves a sprint's member tasks in the planned in-sprint
@@ -981,8 +586,7 @@ type sprintTaskSource interface {
 // is populated on every sprint it hands back (SPEC/MODELS.md § Sprint;
 // SPEC/COMMANDS.md § List Sprints).
 //
-// The member-task read (db.GetSprintTasksFull) is deliberately absent, exactly
-// as the per-task comment listing is absent from tasksSource: it is the read
+// The member-task read (db.GetSprintTasksFull) is deliberately absent: it is the read
 // that would make the page's cost grow with the number of sprints, and the page
 // renders no member task at all (SPEC/WEB.md § Tasks and Sprints from SQLite).
 // Its absence means the sprints page cannot express that pattern through the
@@ -1003,7 +607,7 @@ type sprintsSource interface {
 // 70 and 137).
 //
 // The per-task listing (db.ListTaskComments) is deliberately absent from this
-// interface, exactly as it is from tasksSource: it is the only read that could
+// interface: it is the only read that could
 // bring a comment BODY onto this path, so its absence carries two guarantees at
 // once — the page cannot express the N+1 pattern SPEC/WEB.md forbids, one query
 // per rendered card, and it cannot read comment text at all. A member task's
@@ -1088,187 +692,9 @@ func readSprints(ctx context.Context, src sprintsSource, name string) (sprintsDa
 	}, nil
 }
 
-// loadTasks reads a roadmap's full task set read-only for the tasks page. It
-// opens the roadmap database, reads every task (no status filter), the comments
-// of every task, and the sprint of every task, and returns them grouped into the
-// board's five columns (SPEC/WEB.md § Roadmap Tasks Page). The database handle is
-// released before the function returns; no row is written and no audit entry is
-// produced (SPEC/WEB.md § Tasks and Sprints from SQLite).
-//
-// The caller is responsible for the {name} validation and existence check
-// (resolveRoadmap); this function trusts name is a validated, existing
-// roadmap.
-func loadTasks(ctx context.Context, name string, controls boardControls) (tasksData, error) {
-	database, err := db.OpenReadOnly(name)
-	if err != nil {
-		return tasksData{}, err
-	}
-	defer database.Close() //nolint:errcheck // read-only handle; close error is non-actionable
-
-	return readTasks(ctx, database, name, controls)
-}
-
-// readTasks is the tasks page's entire read, expressed against the page's read
-// surface rather than a concrete connection. It is THREE reads and no more: the
-// full task list, then the comment COUNT of every task the page renders in ONE
-// grouped query, then the sprint of every task the page renders in ONE grouped
-// query (SPEC/WEB.md § Roadmap Tasks Page, read cost).
-//
-// The page reads comment counts, never comment bodies: the card shows a number,
-// and a task's comment text is read only by that task's own page (SPEC/WEB.md
-// § Roadmap Task Page).
-//
-// A roadmap with no task costs ONE read: both grouped queries take the set of
-// rendered task ids, and that set is empty, so both are skipped outright rather
-// than issued against an empty IN list.
-//
-// Grouping the tasks into the board's five columns is done here, in memory, over
-// the values already read: no query is issued per column and none per card, so
-// the page's query count is independent of the number of tasks, of sprints, and
-// of columns.
-//
-// Separating it from loadTasks is what makes the query count of a page render
-// measurable against a real database: the caller supplies the source, so a test
-// can hand in a counting one (Acceptance Criteria 70 and 92).
-func readTasks(ctx context.Context, src tasksSource, name string, controls boardControls) (tasksData, error) {
-	// EVERY task of the roadmap, any status, with no limit and no pagination.
-	// The board prints a count on each column header as a statement of fact about
-	// the roadmap, so a partial read would publish wrong counts as true ones with
-	// nothing on the page to reveal the omission: reading every row is what makes
-	// those counts correct by construction, which is a correctness requirement
-	// rather than a performance choice (SPEC/WEB.md § Roadmap Tasks Page,
-	// Unbounded read; SPEC/DATABASE.md § Main SQL Queries, "List All").
-	//
-	// Task already carries depends_on, blocks, subtask_count, and parent_task_id.
-	// The order is the read's own — priority DESC, created_at ASC — and the board
-	// preserves it.
-	tasks, err := src.ListAllTasks(ctx)
-	if err != nil {
-		return tasksData{}, err
-	}
-
-	views := newTaskViews(tasks)
-
-	if err := attachCommentCounts(ctx, src, views); err != nil {
-		return tasksData{}, err
-	}
-
-	if err := attachSprints(ctx, src, views); err != nil {
-		return tasksData{}, err
-	}
-
-	// The header controls narrow what the board SHOWS; they narrow neither what
-	// the page reads nor what the document carries. Every card stays in the page,
-	// which is what lets the browser re-narrow with no round trip, and the ONE
-	// verdict recorded here — the conjunction of the term and the three filters —
-	// is the one the browser recomputes when the user types or picks a value.
-	//
-	// A filter adds no clause to the read above, no second read, and no
-	// per-dimension query: it is applied in memory over the rows already in hand,
-	// exactly as the term is, so the page's query count is the same narrowed as
-	// unnarrowed (SPEC/WEB.md § Roadmap Tasks Page, Read cost; Server and client
-	// produce the same board).
-	shown := 0
-	for i := range views {
-		views[i].Match = views[i].matches(controls)
-		if views[i].Match {
-			shown++
-		}
-	}
-
-	return tasksData{
-		Name:         name,
-		Search:       controls.Search,
-		Filters:      newBoardFilters(controls),
-		Tasks:        views,
-		Columns:      groupIntoColumns(views),
-		SearchActive: controls.folded != "",
-		NoMatches:    controls.active() && shown == 0,
-	}, nil
-}
-
-// attachSprints resolves the sprint of EVERY view in one grouped query over the
-// whole set of rendered task ids — never one per card and never one per board
-// column (SPEC/DATABASE.md § Resolve the Sprint of Many Tasks (Grouped);
-// SPEC/WEB.md Acceptance Criterion 92).
-//
-// A page that renders no task issues no sprint query at all: the read is skipped
-// outright rather than called with an empty id set (which db.GetSprintsByTasks
-// would also answer without a statement).
-//
-// A task that belongs to no sprint is ABSENT from the grouped map, so its view
-// keeps a nil Sprint and its card renders no sprint indicator — not a dash and
-// not an empty slot.
-func attachSprints(ctx context.Context, r taskSprintReader, views []taskView) error {
-	if len(views) == 0 {
-		return nil
-	}
-
-	sprints, err := r.GetSprintsByTasks(ctx, taskViewIDs(views))
-	if err != nil {
-		return err
-	}
-
-	for i := range views {
-		if sprint, ok := sprints[views[i].ID]; ok {
-			views[i].Sprint = &sprint
-		}
-	}
-	return nil
-}
-
-// groupIntoColumns groups the page's task views into the board's five fixed
-// columns, one per task status.
-//
-// The columns come from models.ValidTaskStatuses, which is both the set and the
-// order the board needs: the five values of the TaskStatus enum, in the order of
-// the task state machine's flow (BACKLOG, SPRINT, DOING, TESTING, COMPLETED).
-// Taking them from the model rather than from a literal here or in the template
-// is what makes the board's columns fixed — all five are built on every request,
-// whatever the data holds, and an empty column is a built column with no card
-// (SPEC/WEB.md § Roadmap Tasks Page, columns; Acceptance Criterion 81).
-//
-// The grouping is a single ordered pass, so the cards of one column keep the
-// relative order the read returned them in — priority DESC, created_at ASC — and
-// the board applies no sort of its own (Acceptance Criterion 84).
-//
-// Every task lands in exactly one column, because tasks.status is restricted by a
-// CHECK constraint to exactly these five values (SPEC/DATABASE.md § tasks Table),
-// so the board needs no sixth column and no "other" column, and the five counts
-// sum to the roadmap's task count (Acceptance Criterion 82).
-func groupIntoColumns(views []taskView) []taskColumn {
-	columns := make([]taskColumn, len(models.ValidTaskStatuses))
-	byStatus := make(map[models.TaskStatus]int, len(models.ValidTaskStatuses))
-	for i, status := range models.ValidTaskStatuses {
-		columns[i] = taskColumn{Status: status}
-		byStatus[status] = i
-	}
-
-	for i := range views {
-		if column, ok := byStatus[views[i].Status]; ok {
-			columns[column].Tasks = append(columns[column].Tasks, &views[i])
-		}
-	}
-
-	for i := range columns {
-		shown := 0
-		for _, task := range columns[i].Tasks {
-			if task.Match {
-				shown++
-			}
-		}
-		columns[i].Count = shown
-	}
-	return columns
-}
-
-// newTaskViews wraps every task in the view the templates consume. It performs
-// no read: a view carries the task itself, and the two values a surface may add
-// to it — the comment count and the sprint — are attached by the loaders that
-// need them.
-//
-// It is the one place a page turns tasks into task views, so both surfaces that
-// show a clickable task build the same value from the same rule.
+// newTaskViews wraps every task in the view the sprint board's cards consume. It
+// performs no read: a view carries the task itself, and the comment count is
+// attached by attachCommentCounts.
 func newTaskViews(tasks []models.Task) []taskView {
 	views := make([]taskView, len(tasks))
 	for i := range tasks {
@@ -1324,7 +750,7 @@ func taskViewIDs(views []taskView) []int {
 // The comment read is the SINGLE-parent listing, deliberately: the page renders
 // exactly one task, so there is no set of ids to group over. It is the only path
 // on which the web interface reads comment TEXT for a task, which is what keeps
-// both boards free of it. The grouped comment count is absent: the page shows no
+// the sprint board and the tasks page's list free of it. The grouped comment count is absent: the page shows no
 // card of a member task, so it has no count to display. *db.DB satisfies the
 // interface.
 type taskPageSource interface {
@@ -1655,9 +1081,8 @@ func readSprint(ctx context.Context, src sprintSource, name string, id int) (spr
 	views := newTaskViews(orderedTasks)
 
 	// The comment count of every rendered member task, in one grouped query over
-	// the whole set of ids — the same helper and the same statement the tasks
-	// page's board uses, so the two boards read their card counts one way
-	// (SPEC/DATABASE.md § Count Comments for Many Parents (Grouped)).
+	// the whole set of ids (SPEC/DATABASE.md § Count Comments for Many Parents
+	// (Grouped)).
 	if err := attachCommentCounts(ctx, src, views); err != nil {
 		return sprintPageData{}, err
 	}
@@ -1741,9 +1166,7 @@ func readSprint(ctx context.Context, src sprintSource, name string, id int) (spr
 // CHECK constraint to the five values of the closed status enum
 // (SPEC/DATABASE.md § tasks Table), each of which one of the three categories
 // claims. models.CategoryOther is therefore unreachable from stored data; a view
-// carrying it is placed in no column rather than in an invented fourth one, which
-// is the same defensive treatment groupIntoColumns gives an unknown status on the
-// tasks board.
+// carrying it is placed in no column rather than in an invented fourth one.
 func groupIntoSprintBoardColumns(views []taskView) []sprintBoardColumn {
 	columns := make([]sprintBoardColumn, len(sprintBoardColumns))
 	for i := range sprintBoardColumns {

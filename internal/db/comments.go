@@ -471,10 +471,10 @@ func (db *DB) ListSprintComments(ctx context.Context, sprintID int, commentType 
 // reading a single comment body.
 //
 // This is the read a surface that displays a comment COUNT must use. The web
-// interface's Kanban board shows a count on each card and no comment text: a
+// interface's sprint board shows a count on each card and no comment text: a
 // task's comment text is read only by that task's own page, which reads that one
-// task through the single-parent listing above (SPEC/WEB.md § Roadmap Tasks Page,
-// read cost; § Roadmap Task Page). No surface reads the comment text of several tasks at once, so no
+// task through the single-parent listing above (SPEC/WEB.md § Sprint Detail
+// Sub-Template, Read cost; § Roadmap Task Page). No surface reads the comment text of several tasks at once, so no
 // grouped listing exists.
 //
 // A task with no comment is ABSENT from the map: the GROUP BY produces no group

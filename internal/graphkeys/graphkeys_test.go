@@ -185,7 +185,7 @@ func TestAuditIsSilentOnKeysThatDifferUnderNFC(t *testing.T) {
 // `SPEC/GRAPH.md` and `SPEC/graph.md` are two keys for two different files. They
 // are equal under case folding and under lower-casing, and NOT equal under NFC,
 // which is Unicode's canonical equivalence and says nothing about case. Without
-// this test the comparison could be loosened into a fold — the board search folds
+// this test the comparison could be loosened into a fold — the tasks page's search folds
 // as well as normalises, so a fold is one copied line away — and the audit would
 // start reporting violations where the convention is intact.
 func TestAuditDoesNotTreatCaseAsANormalisation(t *testing.T) {

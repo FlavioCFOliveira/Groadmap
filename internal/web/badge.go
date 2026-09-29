@@ -90,9 +90,10 @@ func sprintStatusBadge(s models.SprintStatus) string {
 //	DESIGN_UX   -> bg-pink-lt
 //	CHORE       -> bg-secondary-lt
 //
-// The type badge it colours is shown on the card of the two Kanban boards and
-// nowhere else: the task page shows the type as plain text, and the type
-// filter offers the values as plain options.
+// The type badge it colours is shown on the card of the sprint page's board and
+// in each row of the tasks page's list, and nowhere else: the task page shows the
+// type as plain text, and the tasks page's type filter offers the values as plain
+// options.
 //
 // The function is total: every canonical TaskType is covered, and any value
 // outside the enum (which the data layer never produces, since models.Task

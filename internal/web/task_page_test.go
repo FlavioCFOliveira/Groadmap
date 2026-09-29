@@ -1201,7 +1201,6 @@ func TestRecordPages_ActionsColumnWrapsBelowTheTitle(t *testing.T) {
 	for path, want := range map[string]string{
 		taskPagePath(pageTaskID): `<div class="col-12 col-sm-auto ms-auto d-print-none">`,
 		"/roadmaps/" + pageRoadmap + "/sprints/" + itoa(pageSprintID): `<div class="col-12 col-sm-auto ms-auto d-print-none">`,
-		"/roadmaps/" + pageRoadmap + "/tasks":                         `<div class="col-auto ms-auto d-print-none">`,
 		"/roadmaps/" + pageRoadmap + "/graph":                         `<div class="col-auto ms-auto d-print-none">`,
 	} {
 		header := regionBetween(t, servePage(t, mux, path), `<div class="page-header d-print-none">`, `<main class="page-body">`)

@@ -9,14 +9,14 @@ import (
 	"github.com/FlavioCFOliveira/Groadmap/internal/models"
 )
 
-// The guards in this file cover the layout shared by the card of BOTH Kanban
-// boards: the title leads the card, and the badge line on the next line carries
-// the id badge reading #<id> with the fixed classes bg-black and text-white, the
+// The guards in this file cover the badges a task carries on the card of the
+// sprint page's member-tasks board and in the row of the tasks page's list: the id
+// badge reading #<id> with the fixed classes bg-black and text-white, the
 // severity badge, the priority badge, and the type badge reading the TaskType
-// value in the variant the task type table assigns to it (SPEC/WEB.md § Roadmap
-// Tasks Page, Card content, items 1 and 2; § Sprint Detail Sub-Template, The
-// card; § Status, Priority, and Severity Badge Colours, task type table;
-// Acceptance Criteria 177 to 179).
+// value in the variant the task type table assigns to it, and on the card the
+// title leading and the badge line following it (SPEC/WEB.md § Sprint Detail
+// Sub-Template, The card; § Roadmap Tasks Page, Row content; § Status, Priority,
+// and Severity Badge Colours, task type table; Acceptance Criteria 177 to 179).
 
 // wantTaskTypeVariant is the task type table of SPEC/WEB.md § Status, Priority,
 // and Severity Badge Colours, written out here rather than read from
@@ -85,8 +85,8 @@ type typedTask struct {
 }
 
 // referenceLineFixture is a roadmap holding one OPEN sprint whose ten member
-// tasks carry the ten task types, one each, so every type has a card on BOTH
-// boards. The ten tasks also carry ten different priorities and ten different
+// tasks carry the ten task types, one each, so every type has a card on the
+// sprint board and a row in the tasks page's list. The ten tasks also carry ten different priorities and ten different
 // severities, running in opposite directions, so the badges whose colour must
 // NOT follow a value (the id badge) are asserted across every band of both
 // scales, and the severity and priority badges of one card never read the same
@@ -163,41 +163,58 @@ func seedReferenceLineFixture(t *testing.T, name string) referenceLineFixture {
 	return f
 }
 
-// referenceLineBoards serves both boards and returns each board's region, keyed
-// by a name for messages.
-func referenceLineBoards(t *testing.T, f *referenceLineFixture) map[string]string {
+// referenceLineSurfaces serves the sprint board and the tasks page's list and
+// returns, for each, the badges of every fixture task in the order the surface
+// renders them: the card's badge line (id, severity, priority, type) or the row's
+// badges (id, type, status, severity, priority).
+func referenceLineSurfaces(t *testing.T, f *referenceLineFixture) map[string]map[int][]badge {
 	t.Helper()
 
 	mux := buildMux()
-	return map[string]string{
-		"the tasks board":  boardRegion(t, servePage(t, mux, f.tasksPath())),
-		"the sprint board": memberBoardRegion(t, servePage(t, mux, f.sprintPath())),
+	board := memberBoardRegion(t, servePage(t, mux, f.sprintPath()))
+	list := boardRegion(t, servePage(t, mux, f.tasksPath()))
+
+	surfaces := map[string]map[int][]badge{"the sprint board": {}, "the tasks list": {}}
+	for _, task := range f.tasks {
+		card := cardMarkupOf(t, board, task.id, "the sprint board")
+		surfaces["the sprint board"][task.id] = pageBadges(spanWithRole(t, card, "task-card-badges"))
+		surfaces["the tasks list"][task.id] = pageBadges(rowMarkupOf(t, list, task.id, "the tasks list"))
 	}
+	return surfaces
+}
+
+// typeBadgeOf and idBadgeOf pick a badge by its place on each surface.
+func typeBadgeOf(where string, badges []badge) (badge, bool) {
+	switch {
+	case where == "the sprint board" && len(badges) == 4:
+		return badges[3], true
+	case where == "the tasks list" && len(badges) == 5:
+		return badges[1], true
+	}
+	return badge{}, false
 }
 
 // TestBoardCards_EveryTaskTypeRendersItsVariant is the gate for Acceptance
-// Criterion 177: a task of each of the ten types, on each of the two boards, and
+// Criterion 177: a task of each of the ten types, on each of the two pages, and
 // all twenty type badges asserted — text exactly as the enum spells it, with no
 // badge label, and the variant the SPEC's table assigns — because a mapping that
 // is wrong for one type passes on every other.
 //
-// The badge is read from the card's badge line, and as the FOURTH and last of its
-// badges, so a type badge rendered anywhere else on the card does not satisfy it.
+// The badge is read by its place: the fourth and last badge of the card's badge
+// line, and the second badge of the list row, in its Type cell.
 func TestBoardCards_EveryTaskTypeRendersItsVariant(t *testing.T) {
 	t.Setenv("HOME", shortHome(t))
 	f := seedReferenceLineFixture(t, "merchant-settlement")
 
 	asserted := 0
-	for where, region := range referenceLineBoards(t, &f) {
+	for where, byTask := range referenceLineSurfaces(t, &f) {
 		for _, task := range f.tasks {
-			card := cardMarkupOf(t, region, task.id, where)
-			badges := pageBadges(spanWithRole(t, card, "task-card-badges"))
-			if len(badges) != 4 {
-				t.Errorf("%s: task #%d's badge line carries %d badges, want 4\ncard: %s",
-					where, task.id, len(badges), card)
+			typeBadge, ok := typeBadgeOf(where, byTask[task.id])
+			if !ok {
+				t.Errorf("%s: task #%d carries %d badges, not the surface's full set",
+					where, task.id, len(byTask[task.id]))
 				continue
 			}
-			typeBadge := badges[3]
 			if typeBadge.text != string(task.taskType) {
 				t.Errorf("%s: task #%d's type badge reads %q, want %q exactly as the enum spells it",
 					where, task.id, typeBadge.text, task.taskType)
@@ -210,27 +227,30 @@ func TestBoardCards_EveryTaskTypeRendersItsVariant(t *testing.T) {
 		}
 	}
 	if want := 2 * len(models.ValidTaskTypes); asserted != want {
-		t.Errorf("asserted %d type badges, want %d — every type on both boards", asserted, want)
+		t.Errorf("asserted %d type badges, want %d — every type on both pages", asserted, want)
 	}
 }
 
 // TestBoardCards_TypeMappingReachesNoOtherSurface is the exclusion clause of
-// Acceptance Criterion 177: outside the board cards, no badge on either page reads
-// a task type, so the type filter's options carry no type badge, and the type filter still offers the ten values as plain options.
+// Acceptance Criterion 177: outside the board cards and the list rows, no badge on
+// either page reads a task type, and the type filter offers the ten values as plain
+// options with no colour.
 func TestBoardCards_TypeMappingReachesNoOtherSurface(t *testing.T) {
 	t.Setenv("HOME", shortHome(t))
 	f := seedReferenceLineFixture(t, "merchant-settlement")
 	mux := buildMux()
 
 	for _, path := range []string{f.tasksPath(), f.sprintPath()} {
-		cards, outside := splitBoardCards(t, servePage(t, mux, path))
-		if len(cards) == 0 {
-			t.Fatalf("%s renders no board card", path)
+		cards, outsideCards := splitBoardCards(t, servePage(t, mux, path))
+		rows, outside := splitListRows(t, outsideCards)
+		if len(cards)+len(rows) == 0 {
+			t.Fatalf("%s renders no board card and no list row", path)
 		}
 		for _, b := range pageBadges(outside) {
 			if models.IsValidTaskType(b.text) {
-				t.Errorf("%s: a badge outside a board card reads the task type %q; the type is "+
-					"coloured on the two board cards and nowhere else", path, b.text)
+				t.Errorf("%s: a badge outside a board card and a list row reads the task type %q; "+
+					"the type is coloured on the sprint board's card and in the list's row and "+
+					"nowhere else", path, b.text)
 			}
 		}
 	}
@@ -245,7 +265,8 @@ func TestBoardCards_TypeMappingReachesNoOtherSurface(t *testing.T) {
 }
 
 // TestBoardCards_IDBadgeIsBlackWithWhiteText is the gate for Acceptance
-// Criterion 178: on both boards, the id badge reads #<id> and carries exactly the
+// Criterion 178: on the sprint board and in the list, the id badge reads #<id> and
+// carries exactly the
 // classes bg-black and text-white, whatever the task's type, severity, or
 // priority. The fixture spans all ten types, all ten severities, and all ten
 // priorities, and the test fails if it stops doing so, because an id badge whose
@@ -263,17 +284,15 @@ func TestBoardCards_IDBadgeIsBlackWithWhiteText(t *testing.T) {
 	const wantClasses = "badge bg-black text-white"
 
 	types, severities, priorities := map[models.TaskType]bool{}, map[int]bool{}, map[int]bool{}
-	for where, region := range referenceLineBoards(t, &f) {
+	for where, byTask := range referenceLineSurfaces(t, &f) {
 		for _, task := range f.tasks {
 			types[task.taskType] = true
 			severities[task.severity] = true
 			priorities[task.priority] = true
 
-			card := cardMarkupOf(t, region, task.id, where)
-			badges := pageBadges(spanWithRole(t, card, "task-card-badges"))
+			badges := byTask[task.id]
 			if len(badges) == 0 {
-				t.Errorf("%s: task #%d's card has no badge-line badge\ncard: %s",
-					where, task.id, card)
+				t.Errorf("%s: task #%d carries no badge", where, task.id)
 				continue
 			}
 			idBadge := badges[0]
@@ -321,14 +340,14 @@ func TestBoardCards_IDBadgeIsBlackWithWhiteText(t *testing.T) {
 }
 
 // TestBoardCards_LeadWithTitleThenBadgeLine is the gate for Acceptance Criterion
-// 179: on both boards, the title is the FIRST line of the card body, and the next
+// 179: on the sprint board, the title is the FIRST line of the card body, and the next
 // line opens with exactly four badges, in this order: the id badge, the severity
 // badge, the priority badge, and the type badge; and the card's accessible name is
 // unchanged.
 //
 // "First" and "next" are asserted on the markup between the elements being
-// nothing but whitespace — plus, on the sprint board, the opening tag of the line
-// that also carries the counters — so a card that put the badges before the
+// nothing but whitespace — plus the opening tag of the line that also carries the
+// counters — so a card that put the badges before the
 // title, the priority before the severity, or the type before the id fails here
 // even though it would satisfy Acceptance Criteria 177 and 178.
 func TestBoardCards_LeadWithTitleThenBadgeLine(t *testing.T) {
@@ -343,9 +362,10 @@ func TestBoardCards_LeadWithTitleThenBadgeLine(t *testing.T) {
 			`justify-content-between gap-1" data-role="task-card-summary">`
 	)
 
-	for where, region := range referenceLineBoards(t, &f) {
+	board := memberBoardRegion(t, servePage(t, buildMux(), f.sprintPath()))
+	for _, where := range []string{"the sprint board"} {
 		for _, task := range f.tasks {
-			card := cardMarkupOf(t, region, task.id, where)
+			card := cardMarkupOf(t, board, task.id, where)
 
 			// The accessible name is unchanged (Acceptance Criteria 86 and 135).
 			label := `aria-label="Open details for task #` + itoa(task.id) + `: ` + task.title + `"`
@@ -368,14 +388,12 @@ func TestBoardCards_LeadWithTitleThenBadgeLine(t *testing.T) {
 			}
 
 			next := strings.TrimLeft(afterBody[len(title):], " \t\r\n")
-			if where == "the sprint board" {
-				if !strings.HasPrefix(next, sprintLineOpen) {
-					t.Errorf("%s: task #%d's title is not followed by the line carrying the badges "+
-						"and the counters\ncard: %s", where, task.id, card)
-					continue
-				}
-				next = strings.TrimLeft(next[len(sprintLineOpen):], " \t\r\n")
+			if !strings.HasPrefix(next, sprintLineOpen) {
+				t.Errorf("%s: task #%d's title is not followed by the line carrying the badges "+
+					"and the counters\ncard: %s", where, task.id, card)
+				continue
 			}
+			next = strings.TrimLeft(next[len(sprintLineOpen):], " \t\r\n")
 
 			wantLine := `<span class="d-flex flex-wrap gap-1" data-role="task-card-badges">` +
 				`<span class="badge bg-black text-white">#` + itoa(task.id) + `</span>` +
@@ -390,6 +408,45 @@ func TestBoardCards_LeadWithTitleThenBadgeLine(t *testing.T) {
 					"want exactly the id, severity, priority, and type badges:\n  %s",
 					where, task.id, spanWithRole(t, card, "task-card-badges"), wantLine)
 			}
+		}
+	}
+}
+
+// TestListRows_CarryTheCardsBadgesInTheirCells is the list half of Acceptance
+// Criterion 179: the same four badges the sprint board's card carries — with the
+// same texts, labels, and colours — fill the ID, Type, Severity, and Priority cells
+// of the tasks page's row, and the row's columns place severity before priority as
+// the card does (Acceptance Criterion 85).
+func TestListRows_CarryTheCardsBadgesInTheirCells(t *testing.T) {
+	t.Setenv("HOME", shortHome(t))
+	f := seedReferenceLineFixture(t, "merchant-settlement")
+	surfaces := referenceLineSurfaces(t, &f)
+
+	for _, task := range f.tasks {
+		card := surfaces["the sprint board"][task.id]
+		row := surfaces["the tasks list"][task.id]
+		if len(card) != 4 || len(row) != 5 {
+			t.Fatalf("task #%d: the card carries %d badges and the row %d, want 4 and 5",
+				task.id, len(card), len(row))
+		}
+		// Card order: id, severity, priority, type. Row order: id, type, status,
+		// severity, priority.
+		for _, pair := range []struct {
+			what      string
+			card, row badge
+		}{
+			{"id", card[0], row[0]},
+			{"type", card[3], row[1]},
+			{"severity", card[1], row[3]},
+			{"priority", card[2], row[4]},
+		} {
+			if pair.card.markup != pair.row.markup {
+				t.Errorf("task #%d: the %s badge reads %s on the card and %s in the row; the list "+
+					"repeats the card's badge", task.id, pair.what, pair.card.markup, pair.row.markup)
+			}
+		}
+		if want := `<span class="badge ` + taskStatusBadge(models.StatusSprint) + `">SPRINT</span>`; row[2].markup != want {
+			t.Errorf("task #%d: the row's status badge is %s, want %s", task.id, row[2].markup, want)
 		}
 	}
 }

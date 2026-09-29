@@ -12,25 +12,35 @@ import (
 	"github.com/FlavioCFOliveira/Groadmap/internal/db"
 )
 
-// This file is the gate for the card of both Kanban boards as a link to the
-// task's own page, and for the removal of the task detail modal, its script, and
-// its JSON endpoint (SPEC/WEB.md § Roadmap Tasks Page, Clickable card; § Sprint
-// Detail Sub-Template, The card is a link to the task page; § Routes and Pages,
-// rule 5; Acceptance Criteria 86, 93, 96, and 135).
+// This file is the gate for the ways a task links to its own page — the card of
+// the sprint page's board and the two links of each row of the tasks page's list —
+// and for the removal of the task detail modal, its script, and its JSON endpoint
+// (SPEC/WEB.md § Sprint Detail Sub-Template, The card is a link to the task page;
+// § Roadmap Tasks Page, Links to the task page; § Routes and Pages, rule 5;
+// Acceptance Criteria 86, 93, 96, and 135).
 //
 // A link with an href is natively focusable and natively activatable: a click, a
 // tap, and Enter follow it with no script, and a middle click opens it in a new
-// tab. That is why the card is an <a> and why nothing else — no <button>, no
-// <div> or <tr> carrying a role and a tabindex — stands in for it.
+// tab. That is why the card and the row's two links are <a> elements and why
+// nothing else — no <button>, no <div> or <tr> carrying a role and a tabindex —
+// stands in for them.
 
 // reOpeningTag captures the tag name and the attribute text of every opening tag
 // in a document.
 var reOpeningTag = regexp.MustCompile(`<([a-zA-Z][a-zA-Z0-9]*)\b([^>]*)>`)
 
-// taskCardPaths are the two surfaces that render a task card: the tasks page's
-// Kanban board and the sprint page's member-tasks board. Both must satisfy every
-// property below.
+// taskCardPaths are the surfaces that render a task card: the sprint page's
+// member-tasks board. The tasks page renders rows, not cards, and is covered by the
+// list tests below.
 func taskCardPaths(name string, sprintID int) []string {
+	return []string{
+		"/roadmaps/" + name + "/sprints/" + itoa(sprintID),
+	}
+}
+
+// taskPaths are both pages that show many tasks, each linking every task to its
+// own page: the tasks page's list and the sprint page's board.
+func taskPaths(name string, sprintID int) []string {
 	return []string{
 		"/roadmaps/" + name + "/tasks",
 		"/roadmaps/" + name + "/sprints/" + itoa(sprintID),
@@ -73,8 +83,8 @@ func cardTags(region string) (tags []string, names []string) {
 	return tags, names
 }
 
-// TestTaskCards_AreLinksToTheirTaskPage is the gate for Acceptance Criteria 86,
-// 93, and 135: on both boards every task card is ONE <a> carrying the classes card
+// TestTaskCards_AreLinksToTheirTaskPage is the gate for Acceptance Criteria 93 and
+// 135: on the sprint board every task card is ONE <a> carrying the classes card
 // and card-link and the href /roadmaps/{name}/tasks/{id} of its own task, named
 // `Open details for task #<id>: <title>`, with no tabindex and no role, holding no
 // nested link; no card is a <button>, a <div>, or a <tr>; no element carrying
@@ -179,13 +189,14 @@ func TestTaskCards_FollowTheirHrefToTheTaskPage(t *testing.T) {
 
 // TestTaskCards_ShowAVisibleFocusIndicator is the structural gate for the focus
 // half of Acceptance Criterion 93: the card links carry the task-card class on
-// both boards, and the project stylesheet sets an outline on that class's
+// the sprint board, and the project stylesheet sets an outline on that class's
 // :focus-visible state, which the unfocused card does not carry. The vendored
 // card-link rule gives a focused card no indicator of its own, which the second
-// assertion confirms so the rule is not redundant.
+// assertion confirms so the rule is not redundant. The outline's 3:1 contrast is
+// gated by TestFocusIndicatorContrast (Acceptance Criterion 247).
 func TestTaskCards_ShowAVisibleFocusIndicator(t *testing.T) {
 	css := readEmbeddedAsset(t, "static/style.css")
-	rule := ".task-card:focus-visible { outline: 2px solid var(--tblr-primary, #4299e1); outline-offset: -2px; }"
+	rule := ".task-card:focus-visible { outline: 2px solid #dce1e7; outline-offset: -2px; }"
 	if !strings.Contains(css, rule) {
 		t.Errorf("static/style.css carries no focus-visible outline for the task card; want %q", rule)
 	}
@@ -207,11 +218,12 @@ func TestTaskCards_ShowAVisibleFocusIndicator(t *testing.T) {
 	}
 }
 
-// TestTaskCards_AddNoScriptAndKeepTheContentSecurityPolicy pins that the card
-// link needs no JavaScript: each board page carries exactly the policy of
-// Acceptance Criterion 33, every script it loads comes from /static/, none is
-// inline, and neither page loads a script whose purpose is to show a task
-// (Acceptance Criteria 93, 96, and 135).
+// TestTaskCards_AddNoScriptAndKeepTheContentSecurityPolicy pins that the links to
+// a task need no JavaScript: the tasks page and the sprint page each carry exactly
+// the policy of Acceptance Criterion 33, every script they load comes from
+// /static/, none is inline, and neither loads a script whose purpose is to show a
+// task. The tasks page loads the admin shell's script alone (Acceptance Criteria
+// 93, 96, 107, 122 and 135).
 func TestTaskCards_AddNoScriptAndKeepTheContentSecurityPolicy(t *testing.T) {
 	t.Setenv("HOME", shortHome(t))
 	f := seedSprintFixture(t, "checkout-platform")
@@ -220,7 +232,7 @@ func TestTaskCards_AddNoScriptAndKeepTheContentSecurityPolicy(t *testing.T) {
 	reScript := regexp.MustCompile(`<script\b([^>]*)>`)
 	reSrc := regexp.MustCompile(`src="([^"]*)"`)
 
-	for _, path := range taskCardPaths(f.name, f.openID) {
+	for _, path := range taskPaths(f.name, f.openID) {
 		rec := httptest.NewRecorder()
 		srv.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
 		if rec.Code != http.StatusOK {
@@ -230,13 +242,10 @@ func TestTaskCards_AddNoScriptAndKeepTheContentSecurityPolicy(t *testing.T) {
 			t.Errorf("%s: Content-Security-Policy = %q, want %q", path, got, contentSecurityPolicy)
 		}
 
-		// The vendored framework, plus the tasks page's narrowing script or the
-		// sprint page's column-collapse script. Neither takes part in following a
-		// card.
+		// The vendored framework, plus, on the sprint page alone, the
+		// column-collapse script, which takes no part in following a card.
 		wantScripts := map[string]bool{"/static/vendor/tabler/tabler.min.js": true}
-		if strings.HasSuffix(path, "/tasks") {
-			wantScripts["/static/task-search.js"] = true
-		} else {
+		if !strings.HasSuffix(path, "/tasks") {
 			wantScripts["/static/sprint-board.js"] = true
 		}
 		scripts := reScript.FindAllStringSubmatch(rec.Body.String(), -1)
@@ -263,7 +272,8 @@ func TestTaskCards_AddNoScriptAndKeepTheContentSecurityPolicy(t *testing.T) {
 const hostileTitle = `Reject "quoted" <b>bold</b> & O'Brien &amp; 100% > 50%`
 
 // TestTaskCards_AccessibleNameEscapesAHostileTitle proves the accessible name
-// composed from the task title is safe in the attribute context on BOTH boards:
+// composed from the task title is safe in the attribute context on the sprint
+// board and in the tasks page's list:
 // the attribute stays delimited, no title character reaches the page unescaped,
 // and the value decodes back to exactly the title the user wrote.
 func TestTaskCards_AccessibleNameEscapesAHostileTitle(t *testing.T) {
@@ -275,10 +285,14 @@ func TestTaskCards_AccessibleNameEscapesAHostileTitle(t *testing.T) {
 	taskID := itoa(f.openTaskID)
 	reLabel := regexp.MustCompile(`aria-label="([^"]*)"`)
 
-	for _, path := range taskCardPaths(f.name, f.openID) {
+	for _, path := range taskPaths(f.name, f.openID) {
 		body := servePage(t, mux, path)
-
+		prefix := "Open details for task #"
 		want := wantAccessibleName(taskID, renderedTitleOf(t, f.name, f.openTaskID))
+		if strings.HasSuffix(path, "/tasks") {
+			prefix = "View task #"
+			want = `aria-label="View task #` + taskID + `: ` + renderedTitleOf(t, f.name, f.openTaskID) + `"`
+		}
 		if !strings.Contains(body, want) {
 			t.Errorf("%s: the card of task #%s does not carry the escaped accessible name %s",
 				path, taskID, want)
@@ -294,11 +308,11 @@ func TestTaskCards_AccessibleNameEscapesAHostileTitle(t *testing.T) {
 
 		var found bool
 		for _, m := range reLabel.FindAllStringSubmatch(body, -1) {
-			if !strings.HasPrefix(m[1], "Open details for task #"+taskID+":") {
+			if !strings.HasPrefix(m[1], prefix+taskID+":") {
 				continue
 			}
 			found = true
-			if decoded := html.UnescapeString(m[1]); decoded != "Open details for task #"+taskID+": "+hostileTitle {
+			if decoded := html.UnescapeString(m[1]); decoded != prefix+taskID+": "+hostileTitle {
 				t.Errorf("%s: the accessible name decodes to %q, want the task reference followed "+
 					"by the title exactly as it was written", path, decoded)
 			}
@@ -306,16 +320,16 @@ func TestTaskCards_AccessibleNameEscapesAHostileTitle(t *testing.T) {
 		if !found {
 			t.Errorf("%s: no accessible name for task #%s survived attribute extraction", path, taskID)
 		}
-		// The markup kept its shape: the card link still closes the card.
-		if got, cards := strings.Count(boardRegion(t, body), "</a>"), strings.Count(boardRegion(t, body), cardOpen); got != cards {
-			t.Errorf("%s: %d </a> closers for %d cards; the hostile title broke the markup", path, got, cards)
+		// The markup kept its shape: every link still closes where it opens.
+		if got, opened := strings.Count(boardRegion(t, body), "</a>"), strings.Count(boardRegion(t, body), "<a "); got != opened {
+			t.Errorf("%s: %d </a> closers for %d links; the hostile title broke the markup", path, got, opened)
 		}
 	}
 }
 
 // TestTaskModal_IsGone is the gate for Acceptance Criterion 96: the interface has
-// no task modal, no task detail script, and no task JSON. Neither board page
-// carries an element with the class modal or a data-bs-toggle="modal" control,
+// no task modal, no task detail script, and no task JSON. Neither the tasks page
+// nor the sprint page carries an element with the class modal or a data-bs-toggle="modal" control,
 // GET /static/task-modal.js is 404 because no such asset is embedded, and GET
 // /roadmaps/{name}/tasks/{id}/data — and every other path below the task page —
 // is 404 with no JSON body, as a path no route matches.
@@ -325,7 +339,7 @@ func TestTaskModal_IsGone(t *testing.T) {
 	srv := handler()
 
 	reModalClass := regexp.MustCompile(`class="(?:[^"]* )?modal(?: [^"]*)?"`)
-	for _, path := range taskCardPaths(f.name, f.openID) {
+	for _, path := range taskPaths(f.name, f.openID) {
 		body := servePage(t, buildMux(), path)
 		if reModalClass.MatchString(body) {
 			t.Errorf("%s: the page carries an element with the class modal", path)

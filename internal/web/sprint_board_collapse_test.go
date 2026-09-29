@@ -218,7 +218,7 @@ func TestSprintBoardCollapse_ServedMarkupIsExpandedAndNothingIsPersisted(t *test
 // as the embedded static/sprint-board.js, the sprint page loads it from /static/
 // exactly once and inline script nowhere, the Content-Security-Policy is
 // unchanged, and no other page — the tasks page above all — loads it, carries a
-// toggle, or carries the collapsed modifier.
+// toggle, or carries the collapsed modifier (Acceptance Criterion 218).
 func TestSprintBoardCollapse_ScriptIsServedAndLoadedBySprintPageAlone(t *testing.T) {
 	t.Setenv("HOME", shortHome(t))
 	f := seedSprintBoardFixture(t, "settlement-platform")
@@ -261,8 +261,8 @@ func TestSprintBoardCollapse_ScriptIsServedAndLoadedBySprintPageAlone(t *testing
 		t.Errorf("the member-tasks board carries inline event-handler attributes: %v", handlers)
 	}
 
-	// Every other page: the tasks page, whose five-column board must be
-	// unaffected, and the remaining pages of the interface.
+	// Every other page: the tasks page, which carries no board (Acceptance
+	// Criterion 218), and the remaining pages of the interface.
 	for _, path := range pagePaths(f.name) {
 		body := get(path).Body.String()
 		for _, forbidden := range []string{
@@ -275,10 +275,10 @@ func TestSprintBoardCollapse_ScriptIsServedAndLoadedBySprintPageAlone(t *testing
 			}
 		}
 	}
-	// Falsifiability control: the tasks page does render a board, so the absence
-	// of a toggle above is asserted over a board and not over an empty page.
-	if !strings.Contains(get("/roadmaps/"+f.name+"/tasks").Body.String(), `data-role="task-board-column"`) {
-		t.Fatalf("the tasks page renders no board column, so asserting it carries no toggle is vacuous")
+	// Falsifiability control: the tasks page does render its tasks, so the absence
+	// of a toggle above is asserted over a populated page and not over an empty one.
+	if !strings.Contains(get("/roadmaps/"+f.name+"/tasks").Body.String(), `<table class="table table-vcenter card-table">`) {
+		t.Fatalf("the tasks page renders no task list, so asserting it carries no toggle is vacuous")
 	}
 }
 

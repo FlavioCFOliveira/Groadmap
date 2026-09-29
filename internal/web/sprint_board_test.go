@@ -18,18 +18,15 @@ import (
 // agreement between the column counts and the sprint's member tasks, the
 // card's content, the board's bounded height, and the page's comment read cost
 // (SPEC/WEB.md § Sprint Detail Sub-Template, rule 3; Acceptance Criteria 130 to
-// 140). The COLOUR of each column's count badge is guarded separately, together
-// with the tasks board's, in board_column_badge_test.go.
+// 140). The COLOUR of each column's count badge is guarded separately, in
+// board_column_badge_test.go.
 //
 // It replaces the assertions that pinned the six-column member-tasks table the
 // board supersedes: the page renders no table at all any more, so a test written
 // against that table would fail for the wrong reason — its subject is gone.
 //
-// The markup helpers of the tasks board (boardRegion, columnHeader, cardSlice,
-// spanWithRole, cardOpen, cardMarker, shownEmptyState in board_test.go) are reused
-// verbatim wherever they apply, because the two boards emit the same classes and
-// the same data-role hooks: they are one presentation rendered on two pages, and
-// a helper that worked on only one of them would be evidence they had diverged.
+// The markup helpers (boardRegion, columnHeader, cardSlice, spanWithRole,
+// cardOpen, cardMarker, shownEmptyState) live in board_helpers_test.go.
 // The one helper NOT reused here is metaFooter, and its absence is the point: this
 // board's card carries no metadata footer at all, because its two counters share
 // the badge line (SPEC/WEB.md § Sprint Detail Sub-Template, The two cards differ
@@ -1276,10 +1273,8 @@ func reorderSprintTasks(t *testing.T, roadmap string, sprintID int, taskIDs []in
 //
 // The COUNTER ORDER is asserted explicitly, and the criterion requires that: a
 // card showing the subtask count before the comment count satisfies every other
-// clause, so an order left implicit is an order the template is free to flip. It
-// is also the order the tasks board's footer does NOT use, which is why the two
-// are stated separately (SPEC/WEB.md § Sprint Detail Sub-Template, The counter
-// order differs from the tasks board's too).
+// clause, so an order left implicit is an order the template is free to flip
+// (SPEC/WEB.md § Sprint Detail Sub-Template, The card).
 //
 // The badge classes are taken FROM the semantic mapping (priorityBadge and
 // severityBadge) rather than written out here, so this test states that the card
@@ -1289,9 +1284,8 @@ func reorderSprintTasks(t *testing.T, roadmap string, sprintID int, taskIDs []in
 // for both, or swapped them, fails here.
 //
 // Each value badge writes its value immediately behind the one-letter badge label
-// that names it — S2 and P9 — exactly as the tasks board's card does, because the rule is
-// stated once for the card of both boards (SPEC/WEB.md § Roadmap Tasks Page, Card
-// content, item 2; Acceptance Criteria 85 and 133). The badge label is a label and
+// that names it — S2 and P9 (SPEC/WEB.md § Sprint Detail Sub-Template, The card;
+// Acceptance Criterion 133). The badge label is a label and
 // not a value: the class each badge carries is still the one the mapping assigns
 // to the integer alone, which is why the classes below are still read from the
 // helpers.
@@ -1367,9 +1361,8 @@ func TestSprintBoard_CardShowsSevenDataPointsInOrder(t *testing.T) {
 	} {
 		if strings.Contains(card, wrong) {
 			t.Errorf("the card renders %s; the severity and priority badges name the value they "+
-				"carry with the one-letter badge label immediately followed by the value, "+
-				"exactly as the tasks board's card "+
-				"does (Acceptance Criteria 85 and 133)\ncard: %s", wrong, card)
+				"carry with the one-letter badge label immediately followed by the value "+
+				"(Acceptance Criterion 133)\ncard: %s", wrong, card)
 		}
 	}
 
@@ -1558,11 +1551,6 @@ func TestSprintBoard_BothCountersAlwaysRender(t *testing.T) {
 // counters drop directly below the badges inside the same card. Without
 // `flex-wrap` the two groups would be squeezed onto one line and the card would
 // overflow its column, which Acceptance Criteria 27 and 133 both forbid.
-//
-// The tasks board's card is asserted UNCHANGED in the same test, because "this
-// board has no metadata footer" states nothing unless the other board still has
-// one: a template that had dropped the footer from both cards would satisfy every
-// absence assertion here.
 func TestSprintBoard_CardMergesBadgesAndCountersOntoOneLine(t *testing.T) {
 	t.Setenv("HOME", shortHome(t))
 	f := seedSprintBoardFixture(t, "settlement-platform")
@@ -1627,8 +1615,8 @@ func TestSprintBoard_CardMergesBadgesAndCountersOntoOneLine(t *testing.T) {
 		t.Errorf("the trailing group does not carry both of the card's counters\ncounters: %s", counters)
 	}
 
-	// No card of the board renders a separate footer row: not under the tasks
-	// board's role, not under the row's own trailing-edge alignment, and not with
+	// No card of the board renders a separate footer row: not under a footer
+	// role, not under the row's own trailing-edge alignment, and not with
 	// the top margin that separated it from the badges. A template that merely
 	// renamed the footer, or that kept a second row beside the merged line, keeps
 	// at least one of the three, so all three are asserted absent from EVERY card
@@ -1641,7 +1629,7 @@ func TestSprintBoard_CardMergesBadgesAndCountersOntoOneLine(t *testing.T) {
 		for _, id := range ids {
 			each := cardSlice(t, memberBoardRegion(t, sprintPage), id)
 			for _, gone := range []string{
-				`data-role="task-card-meta"`, // the tasks board's footer, which this card has not
+				`data-role="task-card-meta"`, // a separate metadata footer, which this card has not
 				"justify-content-end",        // that footer's own trailing-edge alignment
 				"mt-2",                       // the gap that separated the footer from the badges
 			} {
@@ -1652,38 +1640,6 @@ func TestSprintBoard_CardMergesBadgesAndCountersOntoOneLine(t *testing.T) {
 				}
 			}
 		}
-	}
-
-	// The control that keeps those absences from being vacuous: the ROADMAP TASKS
-	// page's card is untouched by this criterion. It still renders its metadata
-	// footer, and that footer still lists the subtask count BEFORE the comment
-	// count — the order this board deliberately reverses.
-	tasksPage := servePage(t, mux, "/roadmaps/"+f.name+"/tasks")
-	tasksBoard := boardRegion(t, tasksPage)
-	if !strings.Contains(tasksBoard, `data-role="task-card-meta"`) {
-		t.Fatalf("the roadmap tasks page's board renders no metadata footer at all, so asserting " +
-			"the sprint board has none proves nothing; that card is unchanged by Acceptance " +
-			"Criterion 133")
-	}
-	if strings.Contains(tasksBoard, `data-role="task-card-summary"`) {
-		t.Errorf("the roadmap tasks page's card grew the sprint card's merged line; that card " +
-			"keeps its separate metadata footer (Acceptance Criterion 133)")
-	}
-	// The reconciliation task carries two subtasks and three comments, so its card
-	// on the tasks board renders both indicators; it sits in that board's SPRINT
-	// column, which is its second.
-	tasksFooter := metaFooter(t, cardSlice(t, boardColumns(t, tasksPage)[1], f.reconcile))
-	sub := strings.Index(tasksFooter, `data-role="task-card-subtasks"`)
-	com := strings.Index(tasksFooter, `data-role="task-card-comments"`)
-	if sub < 0 || com < 0 {
-		t.Fatalf("the tasks board's control card does not render both counters (subtasks at %d, "+
-			"comments at %d), so the order comparison below is vacuous\nfooter: %s",
-			sub, com, tasksFooter)
-	}
-	if sub > com {
-		t.Errorf("the tasks board's metadata footer now lists the comment count before the "+
-			"subtask count; that footer keeps its own order, and the sprint card's reversed "+
-			"order is stated separately from it\nfooter: %s", tasksFooter)
 	}
 }
 

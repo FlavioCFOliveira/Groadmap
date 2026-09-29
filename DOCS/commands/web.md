@@ -92,7 +92,7 @@ All routes serve `GET` and `HEAD` only. Any other HTTP method on any route retur
 |-------|---------|----------|
 | `/` | Roadmap index: every roadmap under `~/.roadmaps/`, with links to each roadmap's sprints landing page and graph page (empty-state message when none) | HTML |
 | `/roadmaps/{name}` | Roadmap sprints page and landing page: that roadmap's sprints in three tabs (Próximos / Actual / Concluídos, Actual default), each tab carrying a count badge in the colour of the sprint status it groups; every sprint rendered through the same sprint card and linking to its own page. Selecting a roadmap on the index lands here | HTML |
-| `/roadmaps/{name}/tasks` | Roadmap tasks board: every task of that roadmap, of any status, laid out as a Kanban board of five fixed status columns with a count badge on each; narrowed by the header search and the three header filters through the `q`, `type`, `priority` and `severity` query parameters; each card links to that task's own page. See [The Tasks Board](#the-tasks-board) | HTML |
+| `/roadmaps/{name}/tasks` | Roadmap tasks page: every task of that roadmap, of any status, as one paginated list (ID, title, type, status, sprint, severity, priority, created, View); filtered and paginated on the server through the `q`, `sprint`, `status`, `type`, `page` and `size` query parameters; each row links to that task's own page. See [The Tasks Page](#the-tasks-page) | HTML |
 | `/roadmaps/{name}/sprints/{id}` | Dedicated sprint page: all sprint details, the sprint's member tasks as a three-column board in planned execution order, and the sprint's own Comments card; each task card links to that task's own page. See [The Sprint Board](#the-sprint-board) | HTML |
 | `/roadmaps/{name}/tasks/{id}` | Dedicated task page: every field of the task, a small context of the sprint it belongs to, its four Markdown text fields, and its Comments card. A task id that is not an integer or names no task in that roadmap returns HTTP `404`. No path exists below it, so `/roadmaps/{name}/tasks/{id}/data` also returns `404`. See [The Task Page](#the-task-page) | HTML |
 | `/roadmaps/{name}/audit` | Roadmap audit log page: that roadmap's full audit log, showing every field of an audit entry (columns ID, Operation, Entity Type, Entity ID, Related Entity ID, Commit, Performed At, in that order; the two nullable columns are always present and render an em dash where the entry carries no value), ordered by Performed At descending (most recent first), paginated at 100 entries per page via the `page` query parameter (1-based, default 1; out-of-range or non-numeric values are clamped to the nearest valid page) with Previous/Next controls and a "Page X of Y" indicator | HTML |
@@ -102,105 +102,87 @@ All routes serve `GET` and `HEAD` only. Any other HTTP method on any route retur
 
 `{name}` is validated against the roadmap-name rules (regex `^[a-z0-9_-]+$`, max 50 characters) before it is used to build any filesystem path; a name that fails validation, or a roadmap that does not exist, returns HTTP `404`. A request for a `/static/...` asset that is not embedded returns HTTP `404`. These HTTP statuses are distinct from the process exit codes below.
 
-## The Tasks Board
+## The Tasks Page
 
-`/roadmaps/{name}/tasks` presents every task of the roadmap as a read-only **Kanban board**. The board is the page's only task presentation: the page renders no task table and offers no alternative table view. Its structure follows a GitLab issue board — columns that stand for states, cards that stand for work items, and a task count on each column header — and departs from it in interaction, because this board moves nothing and edits nothing.
+`/roadmaps/{name}/tasks` presents the roadmap's tasks, of any status, as **one list**: a single Tabler card holding one table, with one row per task. The list is not divided by status or by any other attribute; a task's status is a column of its row. The card's header carries the filter bar that narrows the list, and its footer paginates it. The page renders no board, no column per status, and no card per task.
 
-### Columns
+### The list card
 
-The board has exactly five columns, one for each task status, ordered left to right by the flow of the task state machine:
+- **Header.** The card title `Task list` at the leading edge and the filter bar at the trailing edge. Where the viewport is too narrow for both on one line, the filter bar moves to a line of its own below the title, still aligned to the trailing edge, and its controls wrap rather than overflowing the card.
+- **Table.** One row per task, in these columns:
 
-1. `BACKLOG`
-2. `SPRINT`
-3. `DOING`
-4. `TESTING`
-5. `COMPLETED`
+  | Column | Content |
+  |--------|---------|
+  | `ID` | The id badge, `#<id>` in white on black |
+  | `Title` | The task `title`, as a link to the task's own page |
+  | `Type` | The type badge, coloured by task type |
+  | `Status` | The status badge, coloured by task status |
+  | `Sprint` | `Sprint #<id>` followed by the sprint's `title`, as plain text; an em dash (`—`) for a task in no sprint |
+  | `Severity` | The severity badge, `S<n>`, coloured by severity band |
+  | `Priority` | The priority badge, `P<n>`, coloured by priority band |
+  | `Created` | The task's `created_at`, muted, after a calendar icon |
+  | `Actions` | A right-aligned `View` link to the task's own page |
 
-The columns are fixed. All five are always present, in that order, whatever the roadmap's data contains, and a column holding no task is still rendered with its own in-column empty state. Neither the set of columns nor their order depends on the data, and each column title is the status identifier exactly as the enum spells it, in upper case.
+  The badges are the same badges, with the same colours and the same `S` and `P` prefixes, as those of the sprint board's cards. A long title wraps at word boundaries and is never broken mid-word; when the table is wider than the card it scrolls horizontally inside the card, never the page.
+- **Footer.** The range text `Showing <a> to <b> of <n> entries`, where `<n>` is the number of tasks the filters admit; a rows-per-page selector offering `10`, `25`, `50` and `100`, with `25` the default and the active size drawn with a solid fill; and a numbered pagination bar with Previous and Next controls, the same bar the audit log page uses.
 
-Each column header carries a Tabler badge with the number of tasks that column is showing, coloured by the status the column stands for, so the badge states a count in text and a status in colour; a column with no card shows the count `0`. Every task appears in exactly one column, the column of its own `status`, so on an unnarrowed board the five counts sum to the roadmap's total number of tasks.
+Each row carries exactly two links, the title and `View`, and both lead to the task's page, `/roadmaps/{name}/tasks/{id}` (see [The Task Page](#the-task-page)). The row itself is not a link.
 
-Within a column the cards appear in descending `priority` and, for tasks of equal priority, ascending `created_at` — the same order `rmp task list` returns by default. The board introduces no second sort.
+Rows appear in descending `priority`, then ascending `created_at`, then ascending `id`. The first two keys are the default order of `rmp task list`; the third makes the order total, so a task lands on the same page on every request. Filtering removes rows from that order and never reorders the rows that remain.
 
-### Every task, never a page of them
+### Filter bar
 
-The page reads **every** task of the roadmap. The read carries no limit, no page size and no truncation, and the board has no pagination: whatever the roadmap holds, the board shows. There is no page window, no `page` parameter and no page clamping on this route.
+The filter bar is an ordinary HTML form submitted by `GET` to the page itself. It carries five controls, and no others:
 
-The `-l, --limit` default that sizes `rmp task list` output is deliberately not applied here. That default sizes the output of one command invocation, where a caller who wants more asks for more and can see that the listing was cut. The board offers no such affordance and it does not merely list: it counts each column and prints that count as a statement of fact about the roadmap. Under a partial read those counts would be wrong and would still be presented as true. Reading every task is therefore a correctness requirement of this page, not a performance choice.
+| Control | Parameter | Values | Filters by |
+|---------|-----------|--------|------------|
+| Search box | `q` | Any text | The task `title` or its `#<id>` reference contains the text |
+| Sprint | `sprint` | `Any sprint`, `No sprint` (`none`), or one option per sprint of the roadmap, shown as `Sprint #<id> <title>` in the planned sprint order | Membership: tasks in no sprint, or tasks of that sprint |
+| Status | `status` | `Any status`, then `BACKLOG`, `SPRINT`, `DOING`, `TESTING`, `COMPLETED` | The task's `status` equals the value |
+| Type | `type` | `Any type`, then the ten task types | The task's `type` equals the value |
+| Apply | - | - | Submits the form |
 
-(The audit log page, `/roadmaps/{name}/audit`, is a different page and **is** paginated; its own `page` parameter and clamping rules are in the route table above.)
+Choosing values and activating Apply, or pressing Enter in the search box, submits the form and the server renders the filtered list; selecting a value does not submit by itself. Applying the filters always returns to page 1 and keeps the current page size. There is no priority filter, no severity filter and no reset button: priority and severity remain visible in every row, and the filters are cleared by returning each control to its *any* option, or by the `Reset` link shown when nothing matches.
 
-### Cards
+- **The criteria combine conjunctively.** A task is listed when it satisfies every active criterion, and a request with no active criterion lists every task. `?q=cache&status=DOING&type=BUG` lists the `DOING` tasks of type `BUG` whose title or `#<id>` reference contains `cache`, and no other task.
+- **What the search matches.** Only the `title` and the reference written with its leading `#`, so both `42` and `#42` find task 42. Matching is case-insensitive substring matching after trimming surrounding whitespace from the term and applying Unicode normalisation (NFC), so a title typed with a precomposed `é` and one typed with `e` plus a combining accent are found by either spelling. Accents are not ignored: `cafe` does not find `Café`. Every other task field is excluded.
+- **Every control has an accessible name.** Each control carries a programmatic label, and each is reachable and operable from the keyboard.
 
-Each card presents one task, in this order:
+### Query parameters and pagination
 
-1. A **reference line** with the task reference `#<id>` and the task's `type`, both in muted text. The type carries no colour.
-2. The task **`title`**, as the card's prominent main content.
-3. A **`priority` badge** and a **`severity` badge**, each naming the value it carries with a one-letter prefix — `P` for the priority and `S` for the severity, so a task of priority `5` and severity `3` shows `P5` and `S3` — and coloured by the band that value falls in. The prefix is a label, not part of the value: the colour still follows the number alone.
-4. A **metadata footer** showing only the indicators the task actually has: the sprint it belongs to (identified by the sprint's `title` together with `Sprint #<id>`, as plain text rather than a link), its number of subtasks, its number of `depends_on` entries, its number of `blocks` entries, and its number of comments.
+Filtering and pagination are performed **on the server**, and the whole state of the list lives in the URL, so a filtered page survives a reload, can be bookmarked or shared, and is restored by the browser's Back navigation. The page accepts exactly six parameters:
 
-An indicator whose value is absent, empty or zero is not rendered at all: no dash, no placeholder, no empty slot. A task with none of the five shows no metadata footer. The card shows **no status badge**, because the column it sits in already states the task's status.
+| Parameter | Accepted value |
+|-----------|----------------|
+| `q` | Any string |
+| `sprint` | `none`, or the `id` of a sprint of this roadmap |
+| `status` | One of the five task statuses, spelled exactly as the enum spells it |
+| `type` | One of the ten task types, spelled exactly as the enum spells it |
+| `page` | An integer of at least `1` (1-based page number) |
+| `size` | `10`, `25`, `50` or `100` (rows per page; default `25`) |
 
-The whole card is a link to that task's page, `/roadmaps/{name}/tasks/{id}` (see [The Task Page](#the-task-page)): a pointer click, a touch tap, and the Enter key open it, and the browser's own open-in-new-tab gestures work. The card adds no query to the board's own read.
+Every pagination link and rows-per-page link keeps the active filters. Changing the page size returns to page 1.
 
-### Header controls
+**An invalid value is ignored, never an error.** A `sprint`, `status` or `type` value that is not accepted — a wrong case (`bug` for `BUG`), a sign, surrounding spaces, a leading zero, the `id` of another roadmap's sprint, or an empty value — lists exactly what the request would list without that parameter, and the control shows its *any* option. An unusable `page` falls back to `1`, and a `page` beyond the last page renders the last page. An unusable `size` falls back to `25`. A parameter the server cannot decode is treated as absent, a repeated parameter is read from its first occurrence, and any other parameter — `priority` and `severity` included — is ignored. The parameters are independent: an ignored one leaves the others applied. Whatever the parameters carry, the page answers HTTP `200`.
 
-The page header's actions column carries four controls, and no others — a search box and three filter dropdowns:
+The page works without JavaScript: it loads no script of its own, and filtering, paginating and changing the page size all work with scripting disabled.
 
-| Control | Kind | Query parameter | Matching |
-|---------|------|-----------------|----------|
-| Search tasks | text input | `q` | Case-insensitive substring over the task's `title` and its `#<id>` reference |
-| Type | dropdown (`Any type` plus the ten `TaskType` values) | `type` | **Equality**: the task's `type` is equal to the selected value |
-| Min priority | dropdown (`Any priority` plus `1` to `9`) | `priority` | **Threshold**: the task's `priority` is `>= n` |
-| Min severity | dropdown (`Any severity` plus `1` to `9`) | `severity` | **Threshold**: the task's `severity` is `>= n` |
+### Empty states
 
-Each control carries a real, programmatically associated label naming what it acts on, and each is reachable and operable from the keyboard. A dropdown's first option is a value meaning *no filter on this dimension*, not the control's name.
+When no task satisfies the request, the card keeps its header and filter bar, so the filters can be changed in place, and shows an empty state in place of the table and footer:
 
-- **The three filters are the three dimensions `rmp task list` already filters by** — `-y, --type`, `-p, --priority` and `--severity` — and each keeps the meaning the flag of the same name carries, so one parameter name means one thing across the two surfaces. The type comparison is exact against the enum's own upper-case spelling; the thresholds start at `1` and not at `0`, because a threshold of `0` admits every task and is therefore the unfiltered board, which already has its own option and its own URL form.
-- **What the search matches** is only what identifies a task on its card: the `title` and the reference written with its leading `#`, so both `42` and `#42` find task 42. Every other field is excluded, because matching an attribute is the job of the three filters.
-- **The criteria combine conjunctively.** A task is shown when it satisfies *every* active criterion, and a board with no active criterion shows every task. `?q=cache&type=BUG&priority=7` shows the `BUG` tasks of priority `7` or above whose title or `#<id>` reference contains `cache`, and no other task. Narrowing a criterion can only shrink the shown set, never grow it.
-- **There is deliberately no status filter.** The five columns already are the status, so a status filter would perform narrowing the layout has performed already — and it could not do so without either leaving excluded columns present and stating a false count of `0`, or dropping columns and contradicting the rule that all five are always present.
+- A roadmap with no task, requested with no active filter, shows `No tasks yet` and points to `rmp task create`.
+- A request with at least one active filter that no task satisfies shows `No task matches the filters` with a `Reset` link, which clears the search and every filter and keeps the page size.
 
-### A narrowed board is a shareable URL
+### Read-only and read cost
 
-Every control is a URL query parameter, so the address bar always describes the board on screen and that address reproduces it.
+The page is read-only: it offers no control that creates, edits, moves or reorders a task, no selection and no modal. The filter form only narrows what the page shows, and the `rmp` CLI remains the sole write path.
 
-- **Setting a control updates the URL in place.** Typing in the search box or selecting a filter value replaces the current history entry rather than pushing a new one, so the browser Back button leaves the board instead of stepping backwards through the control row.
-- **An inactive control leaves no parameter.** While the search box is empty or a dropdown sits on its no-filter option, that parameter is removed from the URL rather than left present and empty. Clearing every control restores the full board with its true counts and leaves the bare page URL.
-- **A cold load arrives already narrowed.** When the page is requested with any combination of `q`, `type`, `priority` and `severity`, the server applies all of them and the document it sends already carries the narrowing in its final state: the narrowed column counts, the in-column empty states, the no-match message where nothing matches, and each control already showing the value that produced the board. For any roadmap and any combination of values, the board reached by setting the controls on the page and the board reached by opening that URL cold are the same board — the same cards, in the same columns, in the same order, with the same counts.
-- **Order and repetition.** The four parameters are independent of each other and of their position in the query string. A repeated parameter is read as its first occurrence.
-
-### Nothing a control carries is an error
-
-An unknown or malformed value applies **no filter on that dimension** and the board is rendered exactly as though that parameter were absent. This covers a `type` that is not one of the ten values (including one that differs only in case), a `priority` or `severity` that is not an integer or falls outside `1` to `9`, a value carrying a sign or surrounding spaces, a parameter present with an empty value, and a parameter the server cannot decode. The dimensions are independent under this rule: an unusable `type` leaves an accepted `priority` applied.
-
-Every string is likewise a valid search term: a term that matches nothing renders an empty board, and a `q` the server cannot decode is treated as absent. No value of any of the four parameters produces an error page or changes the route's status codes; the page answers HTTP `200` whatever they carry.
-
-### What narrowing does to the board
-
-A task that does not satisfy every active criterion is not shown, and everything the board states then refers to the shown set rather than to the roadmap. As the user types or changes a filter, the cards, the counts, the empty states and the no-match message are updated together:
-
-- Each column shows only its matching cards, in the same order.
-- **Each column's count is the number of cards that column is showing**, so the counts narrow with the board.
-- The five columns remain present and in order. Neither searching nor filtering ever drops, hides or reorders a column.
-- A column left with no matching card shows its ordinary in-column empty state.
-- When no task matches at all, the board says so with a clear message beside the five empty columns, rather than leaving the user to interpret silence. A roadmap that holds no task is a different condition and reads differently: it shows the five in-column empty states alone, because it is the state of the roadmap and not the result of any control.
-
-### Read-only, like every other page
-
-The board offers no drag-and-drop and no control of any other kind that moves a task between columns, reorders cards, changes a task's status, or creates or edits a task or a column. The divergence from the GitLab issue board it is modelled on is deliberate: the inspiration is structural, never interactive. The header search and the three filters change only which of the already-read tasks the user is looking at — they write nothing, and are therefore not an exception to the read-only rule.
-
-### Layout and read cost
-
-The five columns are presented side by side. When they do not fit the viewport the board scrolls horizontally inside its own container, so the page itself never scrolls horizontally, and each column scrolls vertically and independently when its card list exceeds the available height. On narrow viewports each column keeps a minimum width at which its cards stay legible.
-
-Every column is `19rem` wide and never narrower than `17rem`, and no column grows or shrinks away from that width: a column stands for a state and not for a volume of work, so all five are the same width whatever number of tasks each holds, and the space a very wide viewport leaves beyond the board stays empty rather than being shared out among them. Inside a column, a card's body carries `0.75rem` of padding on all four sides instead of the `1rem` the UI framework gives a small card, because that padding is measure taken from the card's own text — its reference line, its title, its badges and its metadata footer — on a width the column has already narrowed. What the user presses is the whole card, so the hit target does not shrink with the padding. Both lengths are expressed in `rem` and therefore follow the reader's own text size.
-
-Rendering the page performs three reads and no more: the unbounded read of every task of the roadmap, one grouped query for the comment count of every rendered task, and one grouped query resolving the sprint of every rendered task. The board issues no query per column and none per card, so the number of queries does not grow with the number of tasks. A search term and the three filters add nothing to this: on a cold load they are applied in memory over the rows already read, and narrowing in the browser issues no request at all, because every card is already in the document.
+Rendering the page performs three reads and no more: one read of the roadmap's sprints (for the sprint options and to validate `sprint`), one read of the roadmap's tasks carrying the accepted `sprint`, `status` and `type` values as bound SQL parameters, and one grouped query resolving the sprint of every row on the rendered page. The search, the total and the page are computed in memory over the rows already read. The `-l, --limit` default of `rmp task list` is not applied, so the total in the footer is the true number of matching tasks. The number of queries does not grow with the number of tasks, the page size, or the number of active filters.
 
 ## The Sprint Board
 
-`/roadmaps/{name}/sprints/{id}` presents the sprint's member tasks as a read-only **three-column board**, placed between the sprint's details card and its Comments card. It follows the same GitLab issue board model as the tasks board, and departs from it in the same way: the board moves nothing and edits nothing. The page renders no task table.
+`/roadmaps/{name}/sprints/{id}` presents the sprint's member tasks as a read-only **three-column board**, placed between the sprint's details card and its Comments card. It follows the GitLab issue board model in structure and departs from it in interaction: the board moves nothing and edits nothing. The page renders no task table.
 
 ### Three columns, grouped by what the work is doing
 
@@ -242,11 +224,11 @@ Each card presents one member task on three lines:
 
 1. The task **`title`**, leading the card.
 2. The task **reference** `#<id>` on its own line, in muted text.
-3. One line carrying both remaining groups: the **`priority` badge** and the **`severity` badge** at the leading edge, prefixed `P` and `S` and coloured by band exactly as on the tasks board, and the two **counters** at the trailing edge — the number of comments first, then the number of subtasks, each an icon followed by its number.
+3. One line carrying both remaining groups: the **`priority` badge** and the **`severity` badge** at the leading edge, prefixed `P` and `S` and coloured by band exactly as in the tasks page's list, and the two **counters** at the trailing edge — the number of comments first, then the number of subtasks, each an icon followed by its number.
 
 The badges and the counters share a line because they hold one kind of information — what the task is, and how much is attached to it — and because height is the scarce dimension in a column that is bounded and scrolls. Where the card is too narrow to hold both groups, the line wraps inside the card rather than overflowing it, so the card, its column and the page never scroll horizontally.
 
-Both counters are always rendered, including when either or both are `0`, so a zero is a statement rather than a silence. This is where the sprint card departs from the tasks board card, which renders only the indicators a task has and keeps them in a footer of their own: the sprint card carries exactly two counters and can put them on the badge line, while the tasks board card carries five indicators of mixed kinds, one of them text with no zero to show, which cannot share that line. The counter order differs for the same reason — comments before subtasks here, subtasks before comments in the tasks board's footer. The card shows no status badge, because the column it sits in already states the status, and it shows no type and no dependency counts: those are on the task page the card links to.
+Both counters are always rendered, including when either or both are `0`, so a zero is a statement rather than a silence. The card shows no status badge, because the column it sits in already states the status, and it shows no type and no dependency counts: those are on the task page the card links to.
 
 The whole card is a link to that task's page, so a pointer click, a touch tap, and the Enter key open it (see [The Task Page](#the-task-page)).
 
@@ -254,15 +236,15 @@ The whole card is a link to that task's page, so a pointer click, a touch tap, a
 
 The board takes a bounded height of `60vh`, never falling below the floor the interface uses for its full-height regions, and each column scrolls vertically and independently within it. It is deliberately not sized to the space the page body leaves: the page carries the sprint's details above the board and its Comments card below, and a board that grew with the sprint's task count would push those comments further away with every task added. When the three columns do not fit the viewport, the column strip scrolls horizontally inside its own container and the page itself never scrolls horizontally.
 
-The three columns divide the width of the board equally and grow with the viewport, down to a floor of `17rem` below which the strip scrolls horizontally. This is where the two boards part: the tasks board's five columns keep a fixed `19rem`, because five columns divided across a viewport would each be narrow enough to hurt the card's measure, and that board is a view of a whole roadmap whose column count the status enum fixes. The minimum column width, the gap between columns and the card's body padding stay shared by both boards.
+The three columns divide the width of the board equally and grow with the viewport, down to a floor of `17rem` below which the strip scrolls horizontally. The columns are separated by a `0.75rem` gap, and a card's body carries `0.75rem` of padding on all four sides instead of the `1rem` the UI framework gives a small card. Both lengths are expressed in `rem` and therefore follow the reader's own text size.
 
 The page performs two comment reads whatever the number of member tasks: the sprint's own comment log, which the Comments card renders in full, and one grouped query for the comment count of every rendered card. Neither grows with the number of member tasks, and the board issues no query per column and none per card. The subtask counter costs no read of its own, because the sprint's member-task read already carries it.
 
 ## The Task Page
 
-`/roadmaps/{name}/tasks/{id}` shows one task on its own read-only page. It is the page every card of the tasks board and of the sprint board links to.
+`/roadmaps/{name}/tasks/{id}` shows one task on its own read-only page. It is the page every row of the tasks page's list and every card of the sprint board links to.
 
-- **Header.** The pretitle carries `Task #<id>` and the task's status badge; the task `title` is the page title. A `Back to tasks` action returns to the roadmap's tasks board. On viewports narrower than 576px the action sits on its own row below the title. The sidebar highlights the Tasks view.
+- **Header.** The pretitle carries `Task #<id>` and the task's status badge; the task `title` is the page title. A `Back to tasks` action returns to the roadmap's tasks page. On viewports narrower than 576px the action sits on its own row below the title. The sidebar highlights the Tasks view.
 - **Browser tab title.** `#<id> <title> - <roadmap> - <hostname>`, so several open task pages can be told apart.
 - **Sprint context.** A small card names the sprint the task belongs to, `Sprint #<id>` and its title, as a link to the sprint page, with the sprint's status badge, the task's place in the sprint's planned execution order (`Position n of m`), and the sprint's progress (`c of m tasks completed`, with a progress bar). A task in no sprint shows `In the backlog: this task belongs to no sprint.` instead.
 - **Details.** Every remaining field of the task, Severity before Priority. The parent, depends-on and blocks references are links to those tasks' pages. Commit hashes are shown in full and wrap rather than being cut off.
@@ -419,7 +401,7 @@ rmp web --host 0.0.0.0 --port 9000
 - **A request touches the store through the graph server and never directly.** This process opens no graph store, so it runs no recovery, takes no advisory lock and folds no snapshot; what a statement changes on disk it changes inside `rmp graph serve`, and a request that runs no write leaves `snapshot/` and `wal` exactly as it found them. The one grant that matters is therefore the one above: reaching the bound address is reaching every graph a server is holding open.
 - **Loopback by default.** The server binds the loopback interface (`127.0.0.1`) by default, so the interface is reachable only from the local machine. Exposing it on the network via `--host 0.0.0.0` (all interfaces, or any other non-loopback address) is the explicit opt-in; doing so prints a network-exposure warning to stderr at startup. Read the graph-endpoint grant above before making that choice.
 - **Path-traversal guard.** Roadmap names from the URL are validated before any filesystem path is built, so a crafted name cannot traverse outside `~/.roadmaps/`.
-- **Tabler dark-theme UI.** The interface is built on the vendored Tabler admin-dashboard framework in its dark theme (navigation sidebar that collapses to a hamburger menu on small viewports, top navbar, page headers, Tabler cards/tables/badges). The top navbar names the roadmap the current page belongs to, so the page's subject is stated at the top of the viewport even where the sidebar has collapsed behind the hamburger menu; the roadmap index page, which belongs to no roadmap, leaves that region empty. Each page header is rendered by one shared template and its title names the view rather than the roadmap - Sprints, Tasks, Audit, Knowledge graph - so the roadmap is stated once in the sidebar and once in the navbar, and never a third time. A sprint's own page is the exception: it shows that sprint's title with its status badge, under the pretitle `Sprint #<id>`. A page header carries an actions control only where one acts on the page (the tasks board's search box and its three filter dropdowns, the graph page's layout dropdown) or returns to the parent record (the sprint page's back link); it never repeats a link the sidebar already lists. Task and sprint status, priority, and severity render as colour-coded Tabler badges (for example completed work in green, in-progress in blue, high priority or critical severity in red), so state is scannable at a glance.
+- **Tabler dark-theme UI.** The interface is built on the vendored Tabler admin-dashboard framework in its dark theme (navigation sidebar that collapses to a hamburger menu on small viewports, top navbar, page headers, Tabler cards/tables/badges). The top navbar names the roadmap the current page belongs to, so the page's subject is stated at the top of the viewport even where the sidebar has collapsed behind the hamburger menu; the roadmap index page, which belongs to no roadmap, leaves that region empty. Each page header is rendered by one shared template and its title names the view rather than the roadmap - Sprints, Tasks, Audit, Knowledge graph - so the roadmap is stated once in the sidebar and once in the navbar, and never a third time. A sprint's own page is the exception: it shows that sprint's title with its status badge, under the pretitle `Sprint #<id>`. A page header carries an actions control only where one acts on the page (the graph page's layout dropdown) or returns to the parent record (the sprint page's back link); it never repeats a link the sidebar already lists. Task and sprint status, priority, and severity render as colour-coded Tabler badges (for example completed work in green, in-progress in blue, high priority or critical severity in red), so state is scannable at a glance. In the dark theme, the text of every badge has a contrast ratio of at least 4.5:1 against its background, and the keyboard focus indicator of every focusable element on the tasks page and the sprint board has a contrast ratio of at least 3:1 against every colour adjacent to it, meeting WCAG 2.2 Level AA.
 - **Self-contained.** Every asset (HTML, CSS, JavaScript, the vendored Tabler framework and D3.js with the d3-sankey plugin, the Tabler Icons webfont, and the Inter font) is served from the binary's embedded set under `/static/`; no page references a CDN, a remote font host, or any other remote origin, and the server makes no outbound request.
 
 ## See Also

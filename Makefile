@@ -1,4 +1,4 @@
-.PHONY: build test test-heavy fmt vet lint security check clean cover cover-full
+.PHONY: build test fmt vet lint security check clean cover cover-full
 
 # Build the binary for the current platform
 build:
@@ -7,13 +7,6 @@ build:
 # Run all unit tests
 test:
 	go test ./...
-
-# Run the on-demand tests: the exhaustive sweeps behind the `heavy` build tag.
-# No validation gate and no workflow compiles them; this target is the only way
-# they run. It carries no coverage profile: the sweeps take about an hour under
-# `-race -coverprofile` and about a quarter of an hour under `-race` alone.
-test-heavy:
-	go test -tags heavy -race -timeout=60m ./...
 
 # Format source code
 fmt:

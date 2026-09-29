@@ -9,6 +9,7 @@ import (
 	"html"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"regexp"
 	"slices"
@@ -614,24 +615,28 @@ func TestSprintPage_CommentsCardHoldsOnlySprintOwnComments(t *testing.T) {
 	}
 }
 
-// TestTasksPage_CoversTasksOutsideAnySprint pins that the board's grouped count
-// read covers EVERY task the page renders, not just those in a sprint: a task
-// that belongs to no sprint shows its comment count on its card and shows its log
-// on its own page, and is absent from the sprint page altogether.
-func TestTasksPage_CoversTasksOutsideAnySprint(t *testing.T) {
+// TestTasksPage_ShowsNoCommentInformation pins that the tasks page's list shows
+// no comment information — no count and no text — for a task in no sprint and for
+// a member task alike, while that task's own page still shows its log, and the
+// sprint page renders only its member tasks (SPEC/WEB.md § Roadmap Tasks Page,
+// Row content; Acceptance Criteria 70 and 85).
+func TestTasksPage_ShowsNoCommentInformation(t *testing.T) {
 	t.Setenv("HOME", shortHome(t))
 	f := seedCommentFixture(t, "settlement-reconciliation")
 	mux := buildMux()
 
-	// The card of the sprint-less task carries its count, which the grouped
-	// counting read supplied.
 	tasksBody := servePage(t, mux, "/roadmaps/"+f.name+"/tasks")
-	card := cardSlice(t, boardColumns(t, tasksBody)[0], f.looseTaskID)
-	if !strings.Contains(card, "Comments: 1") {
-		t.Errorf("the card of the task in no sprint does not show its comment count\ncard: %s", card)
+	list := boardRegion(t, tasksBody)
+	if !strings.Contains(list, cardMarker(f.looseTaskID)) {
+		t.Fatalf("the task in no sprint has no row on the tasks page")
+	}
+	for _, forbidden := range []string{"ti-message", "Comments:", renderedMarkdownText(bodyLoose), renderedMarkdownText(bodyFinding)} {
+		if strings.Contains(list, forbidden) {
+			t.Errorf("the tasks page's list carries comment information %q; the row shows none", forbidden)
+		}
 	}
 
-	// And its log is on its own page.
+	// The task's log is on its own page.
 	loose := taskCommentsCardSlice(t, servePage(t, mux, "/roadmaps/"+f.name+"/tasks/"+itoa(f.looseTaskID)))
 	if got := strings.Count(loose, timelineEvent); got != 1 {
 		t.Fatalf("the page of the task in no sprint carries %d comments, want 1", got)
@@ -767,9 +772,18 @@ type countingSource struct {
 	perTaskComments      int
 	sprintComments       int
 	sprintListings       int
+	sprintTitles         int
 	taskList             int
 	boundedTaskList      int
 	sprintTasks          int
+	lastTaskFilter       *db.TaskListFilter
+}
+
+// ListSprintTitles is the tasks page's sprint read: the id and title of every
+// sprint, for the sprint filter (SPEC/DATABASE.md § List Sprint Titles).
+func (c *countingSource) ListSprintTitles(ctx context.Context) ([]db.SprintRef, error) {
+	c.sprintTitles++
+	return c.DB.ListSprintTitles(ctx)
 }
 
 // ListSprints is the read the sprints page performs: the roadmap's sprints, with
@@ -781,18 +795,20 @@ func (c *countingSource) ListSprints(ctx context.Context,
 	return c.DB.ListSprints(ctx, status)
 }
 
-// ListAllTasks is the read the board performs: unbounded, every task of the
-// roadmap.
-func (c *countingSource) ListAllTasks(ctx context.Context) ([]models.Task, error) {
+// ListAllTasks is the read the tasks page performs: every task the structured
+// filters admit, never bounded by a page. The filter is recorded so a test can
+// assert which predicates the page asked for.
+func (c *countingSource) ListAllTasks(ctx context.Context, filter *db.TaskListFilter) ([]models.Task, error) {
 	c.taskList++
-	return c.DB.ListAllTasks(ctx)
+	c.lastTaskFilter = filter
+	return c.DB.ListAllTasks(ctx, filter)
 }
 
-// ListTasks is the CLI's bounded listing, which the board must NOT use: its limit
-// is capped at models.MaxTaskLimit, so a roadmap with more tasks than that would
-// lose cards while the column headers still presented their counts as facts. It is
-// unreachable through the tasksSource interface; counting it here keeps that seam
-// falsifiable if the interface is ever widened.
+// ListTasks is the CLI's bounded listing, which the tasks page must NOT use: its
+// limit is capped at models.MaxTaskLimit, so a roadmap with more tasks than that
+// would publish a wrong total. It is unreachable through the tasksSource
+// interface; counting it here keeps that seam falsifiable if the interface is ever
+// widened.
 func (c *countingSource) ListTasks(ctx context.Context, filter *db.TaskListFilter) ([]models.Task, error) {
 	c.boundedTaskList++
 	return c.DB.ListTasks(ctx, filter)
@@ -875,105 +891,41 @@ func seedTasksWithComments(t *testing.T, name string, n int) []int {
 	return ids
 }
 
-// TestTasksPage_OneGroupedCommentCountQueryIndependentOfTaskCount is the gate for
-// Acceptance Criterion 70 on the tasks page: rendering a page with N clickable
-// tasks issues exactly ONE comment query for all N tasks — a COUNT over the whole
-// set of rendered task ids, never a listing of their bodies — for every N, and
-// none at all when the page renders no task.
-//
-// The board shows a number on each card. Reading the text of every comment of
-// every task in order to display a number is work the page throws away, so the
-// grouped LISTING must not be issued here at all; a task's comment text is read
-// only by that task's own page (SPEC/DATABASE.md § Count Comments for Many
-// Parents (Grouped)).
-func TestTasksPage_OneGroupedCommentCountQueryIndependentOfTaskCount(t *testing.T) {
+// TestTasksPage_IssuesNoCommentQuery is the gate for Acceptance Criterion 70 on
+// the tasks page: the list shows no comment information, so rendering it issues
+// no comment query of any kind — neither a grouped count nor a per-task listing —
+// for every N, and none when the page renders no task.
+func TestTasksPage_IssuesNoCommentQuery(t *testing.T) {
 	t.Setenv("HOME", shortHome(t))
 
-	// The same parent counts the driver-level statement counter measures for the
-	// grouped read itself, so the two measurements line up.
-	for _, taskCount := range []int{1, 3, 12} {
+	for _, taskCount := range []int{0, 1, 3, 12} {
 		name := "settlement-window-" + itoa(taskCount)
 		ids := seedTasksWithComments(t, name, taskCount)
 		src := openCounting(t, name)
 
-		data, err := readTasks(context.Background(), src, name, boardControls{})
+		data, err := readTaskList(context.Background(), src, name, url.Values{})
 		if err != nil {
-			t.Fatalf("%d tasks: readTasks: %v", taskCount, err)
+			t.Fatalf("%d tasks: readTaskList: %v", taskCount, err)
+		}
+		if len(data.Rows) != taskCount {
+			t.Fatalf("%d tasks: the page renders %d rows, want %d", taskCount, len(data.Rows), taskCount)
+		}
+		if src.groupedCommentCounts != 0 || src.perTaskComments != 0 || src.sprintComments != 0 {
+			t.Errorf("%d tasks: the page issued comment queries (grouped %d, per task %d, sprint %d), want none",
+				taskCount, src.groupedCommentCounts, src.perTaskComments, src.sprintComments)
 		}
 
-		if src.groupedCommentCounts != 1 {
-			t.Errorf("%d tasks: the page issued %d comment-count queries, want exactly 1",
-				taskCount, src.groupedCommentCounts)
-		}
-		if src.perTaskComments != 0 {
-			t.Errorf("%d tasks: the page issued %d per-task comment queries, want 0 (that is the N+1 pattern)",
-				taskCount, src.perTaskComments)
-		}
-		if src.taskList != 1 {
-			t.Errorf("%d tasks: the page issued %d task-list queries, want 1", taskCount, src.taskList)
-		}
-		if src.boundedTaskList != 0 {
-			t.Errorf("%d tasks: the page issued %d BOUNDED task-list queries, want 0: the board "+
-				"reads every task", taskCount, src.boundedTaskList)
-		}
-
-		// The single query covered EVERY rendered task, which is what makes one query
-		// sufficient rather than merely few.
-		if len(src.lastGroupedIDs) != taskCount {
-			t.Errorf("%d tasks: the grouped read was given %d ids, want %d",
-				taskCount, len(src.lastGroupedIDs), taskCount)
-		}
-		for i := range ids {
-			if i < len(src.lastGroupedIDs) && src.lastGroupedIDs[i] != ids[i] {
-				t.Errorf("%d tasks: the grouped read id at %d is #%d, want #%d",
-					taskCount, i, src.lastGroupedIDs[i], ids[i])
-			}
-		}
-
-		// And every rendered task really did receive its count from that one query —
-		// the number its card shows, with no comment body anywhere in the view.
-		if len(data.Tasks) != taskCount {
-			t.Fatalf("%d tasks: the page carries %d tasks, want %d", taskCount, len(data.Tasks), taskCount)
-		}
-		for i := range data.Tasks {
-			if data.Tasks[i].CommentCount != 2 {
-				t.Errorf("%d tasks: task #%d carries the comment count %d, want 2",
-					taskCount, data.Tasks[i].ID, data.Tasks[i].CommentCount)
-			}
-		}
-
-		// The control that makes the assertion above falsifiable: the alternative the
-		// SPEC forbids — one listing per task — measured on the same instrument. An
-		// instrument that always read 1 would pass the assertion for the wrong reason.
+		// The control that makes the zero falsifiable: the instrument does count a
+		// comment read when one is issued.
 		for _, id := range ids {
 			if _, lerr := src.ListTaskComments(context.Background(), id, nil); lerr != nil {
 				t.Fatalf("%d tasks: per-task control read of task #%d: %v", taskCount, id, lerr)
 			}
 		}
 		if src.perTaskComments != taskCount {
-			t.Errorf("%d tasks: the per-task control issued %d reads, want %d; "+
-				"the instrument does not track reads one-for-one",
-				taskCount, src.perTaskComments, taskCount)
+			t.Errorf("%d tasks: the per-task control issued %d reads, want %d; the instrument does "+
+				"not track reads one-for-one", taskCount, src.perTaskComments, taskCount)
 		}
-	}
-
-	// A page that renders no task issues no task-comment query at all.
-	const emptyName = "settlement-window-none"
-	seedTasksWithComments(t, emptyName, 0)
-	emptySrc := openCounting(t, emptyName)
-
-	emptyData, err := readTasks(context.Background(), emptySrc, emptyName, boardControls{})
-	if err != nil {
-		t.Fatalf("empty roadmap: readTasks: %v", err)
-	}
-	if len(emptyData.Tasks) != 0 {
-		t.Fatalf("empty roadmap: the page carries %d tasks, want 0", len(emptyData.Tasks))
-	}
-	if emptySrc.groupedCommentCounts != 0 {
-		t.Errorf("a page with no task issued %d comment-count queries, want 0", emptySrc.groupedCommentCounts)
-	}
-	if emptySrc.perTaskComments != 0 {
-		t.Errorf("a page with no task issued %d per-task comment queries, want 0", emptySrc.perTaskComments)
 	}
 }
 

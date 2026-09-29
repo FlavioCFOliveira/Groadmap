@@ -3,28 +3,27 @@ package web
 import (
 	"bytes"
 	"html/template"
-	"net/url"
 	"strings"
 	"testing"
 
 	"github.com/FlavioCFOliveira/Groadmap/internal/models"
 )
 
-// The guards in this file cover the per-column count badge of the two Kanban
-// boards: its COLOUR is the semantic colour of the status the column groups, while
-// its TEXT stays that column's task count (SPEC/WEB.md § Roadmap Tasks Page, Count
-// per column; § Sprint Detail Sub-Template, rule 3, Column header; § Status,
-// Priority, and Severity Badge Colours, rule 2; Acceptance Criterion 140).
+// The guards in this file cover the per-column count badge of the sprint page's
+// member-tasks board: its COLOUR is the semantic colour of the status the column
+// groups, while its TEXT stays that column's task count (SPEC/WEB.md § Sprint
+// Detail Sub-Template, rule 3, Column header; § Status, Priority, and Severity
+// Badge Colours, rule 2; Acceptance Criterion 140). The roadmap tasks page carries
+// no board and so no column badge (Acceptance Criterion 81).
 //
 // Two things make this rule hard to check one column at a time, and both are why
-// every guard below asserts a board's columns TOGETHER.
+// every guard below asserts the board's columns TOGETHER.
 //
-// The first is the neutral trap. `BACKLOG` maps to bg-secondary-lt, which is also
-// the colour a count badge carries when nothing colours it, so the tasks board's
-// BACKLOG column renders identically whether the mapping was applied or not. A
-// check that looked at that column alone would pass on a board where no column was
-// coloured at all. What separates a conforming rendering from a non-conforming one
-// is the other four columns, and the sprint board's three.
+// The first is the neutral trap. A column whose variant were bg-secondary-lt would
+// render identically whether the mapping was applied or not, so a check that
+// looked at one column alone could pass on a board where no column was coloured
+// at all. What separates a conforming rendering from a non-conforming one is the
+// three columns together.
 //
 // The second is the second-mapping trap. A template that wrote the right colour
 // classes out as literals would satisfy every value assertion here on the day it
@@ -108,46 +107,9 @@ func TestBoardColumnBadges_CarryTheColourOfTheStatusTheyGroup(t *testing.T) {
 	f := seedSprintBoardFixture(t, "settlement-platform")
 	mux := buildMux()
 
-	// The tasks board: a column is exactly one task status, so its badge takes
-	// that status's own variant.
-	tasksColumns := boardColumns(t, servePage(t, mux, "/roadmaps/"+f.name+"/tasks"))
-	if len(tasksColumns) != len(models.ValidTaskStatuses) {
-		t.Fatalf("the tasks board renders %d columns, want %d", len(tasksColumns),
-			len(models.ValidTaskStatuses))
-	}
-	tasksVariants := map[string]bool{}
-	tasksShown := 0
-	for i, status := range models.ValidTaskStatuses {
-		heading, variant, count := columnBadge(t, tasksColumns[i])
-		tasksVariants[variant] = true
-		if heading != string(status) {
-			t.Fatalf("tasks board column %d is headed %q, want %q", i, heading, status)
-		}
-		if want := taskStatusBadge(status); variant != want {
-			t.Errorf("the tasks board's %s column carries the count badge variant %q, want %q — "+
-				"the variant the semantic mapping assigns to that column's own status "+
-				"(Acceptance Criterion 140)", heading, variant, want)
-		}
-		// The text is still the count: the colour is added to the badge, not
-		// substituted for what it says. The number is compared against the cards the
-		// column is actually showing, which is what the count means.
-		if cards := strings.Count(tasksColumns[i], cardOpen); count != cards {
-			t.Errorf("the tasks board's %s column shows the count %d over %d cards; the colour "+
-				"changes the badge's variant and nothing about its text", heading, count, cards)
-		}
-		tasksShown += count
-	}
-	// And the five counts still sum to the roadmap's own task count, read from the
-	// database: colouring the badges moved no task and hid none.
-	if total := countRoadmapTasks(t, f.name); tasksShown != total {
-		t.Errorf("the tasks board's five column counts sum to %d and the roadmap holds %d tasks",
-			tasksShown, total)
-	}
-	if len(tasksVariants) < 2 {
-		t.Errorf("the tasks board's five column badges carry %d distinct variant(s) (%v); "+
-			"BACKLOG's bg-secondary-lt is also the colour a badge carries when nothing colours "+
-			"it, so a board whose columns all share one variant conforms on none of them",
-			len(tasksVariants), sortedKeys(tasksVariants))
+	// The tasks page carries no board, so it carries no column badge at all.
+	if tasksPage := servePage(t, mux, "/roadmaps/"+f.name+"/tasks"); strings.Contains(boardRegion(t, tasksPage), `data-role="task-board-column"`) {
+		t.Errorf("the tasks page renders a board column; the page presents one list (Acceptance Criterion 81)")
 	}
 
 	// The sprint board: a column groups a SET of statuses, so its badge takes the
@@ -179,22 +141,9 @@ func TestBoardColumnBadges_CarryTheColourOfTheStatusTheyGroup(t *testing.T) {
 			sortedKeys(sprintVariants))
 	}
 
-	// The two boards agree where they overlap, because they read one mapping: the
-	// sprint board's DOING column and the tasks board's DOING column are the same
-	// status and must be the same colour.
-	if got, want := taskStatusBadge(models.StatusDoing), taskStatusBadge(models.StatusDoing); got != want {
-		t.Errorf("the DOING variant is not stable: %q then %q", got, want)
-	}
-	_, doingOnSprint, _ := columnBadge(t, sprintColumns[1])
-	_, doingOnTasks, _ := columnBadge(t, tasksColumns[2])
-	if doingOnSprint != doingOnTasks {
-		t.Errorf("the DOING column carries %q on the sprint board and %q on the tasks board; "+
-			"both name the same status and both read the same mapping", doingOnSprint,
-			doingOnTasks)
-	}
 }
 
-// TestBoardColumnBadges_ClassComesFromTheOneHelper proves that each board DECIDES
+// TestBoardColumnBadges_ClassComesFromTheOneHelper proves that the board DECIDES
 // its column badge's class by calling the semantic helper with that column's
 // status, rather than carrying a class that happens to read the same as the
 // helper's answer today.
@@ -211,22 +160,13 @@ func TestBoardColumnBadges_CarryTheColourOfTheStatusTheyGroup(t *testing.T) {
 // bg-secondary-lt is exactly what a non-conforming template still shows, while a
 // conforming one shows probe-BACKLOG.
 //
-// It pins each column to the RIGHT status as well, and the shape of that proof
-// DIFFERS BETWEEN THE TWO BOARDS, because their view models differ. The sprint
-// board keeps the heading and the status it colours by in SEPARATE fields, so a
-// column there can carry the right label and the wrong colour; swapping the
-// canonical status of two of its columns leaves three distinct classes, passes a
-// mere distinctness check, and fails HERE, naming both columns. The tasks board
-// holds ONE field that drives both, which is what the no-second-mapping rule
-// above requires of it, so the same swap moves the label and the colour together
-// and this check cannot see it - it looks for a (heading, sentinel) PAIR anywhere
-// on the page, and a relocated pair is still a pair. What catches a relocated
-// column there is the order-indexed assertion in
-// TestBoardColumnBadges_CarryTheColourOfTheStatusTheyGroup, which reads the
-// columns in order and names the first one out of place. Both halves were proven
-// by running the mutation rather than by argument.
+// It pins each column to the RIGHT status as well. The board keeps the heading
+// and the status it colours by in SEPARATE fields, so a column can carry the right
+// label and the wrong colour; swapping the canonical status of two of its columns
+// leaves three distinct classes, passes a mere distinctness check, and fails
+// HERE, naming both columns.
 //
-// Both view models are built with no task at all, so every column shows 0 — which
+// The view model is built with no task at all, so every column shows 0 — which
 // also proves the colour is chosen with no card to read a status from.
 func TestBoardColumnBadges_ClassComesFromTheOneHelper(t *testing.T) {
 	funcs := templateFuncs()
@@ -244,22 +184,6 @@ func TestBoardColumnBadges_ClassComesFromTheOneHelper(t *testing.T) {
 			t.Fatalf("rendering %s with the probe helper: %v", name, rerr)
 		}
 		return buf.String()
-	}
-
-	// The tasks board: five columns, each headed by its status and badged by the
-	// probe's answer for that same status.
-	tasks := render("tasks.html", tasksData{
-		Name:    "probe",
-		Columns: groupIntoColumns(nil),
-	})
-	for _, status := range models.ValidTaskStatuses {
-		want := columnBadgeMarkup(string(status), "probe-"+string(status), 0)
-		if !strings.Contains(tasks, want) {
-			t.Errorf("the tasks board's %s column does not render %q under the probe helper: its "+
-				"class is not produced by taskStatusBadge(%s) — either the class is written "+
-				"into the template or the column is passing the wrong status", status, want,
-				status)
-		}
 	}
 
 	// The sprint board: three columns, each headed by its own heading and badged
@@ -283,7 +207,6 @@ func TestBoardColumnBadges_ClassComesFromTheOneHelper(t *testing.T) {
 	// excluded by slicing the board region out of the sprint page first: that badge
 	// is SUPPOSED to survive the substitution (see the neutral guard below).
 	for what, board := range map[string]string{
-		"the tasks board":  boardRegion(t, tasks),
 		"the sprint board": memberBoardRegion(t, sprint),
 	} {
 		for _, header := range columnHeaderSlices(board) {
@@ -302,28 +225,12 @@ func TestBoardColumnBadges_ClassComesFromTheOneHelper(t *testing.T) {
 // cards in it: a column holding no task shows the count 0 and keeps the colour of
 // its status.
 //
-// Both boards are checked with nothing in them at all — an empty roadmap and a
-// sprint with no member task — so every column of both is empty and the colour has
-// no card to be read from.
+// The board is checked with nothing in it at all — a sprint with no member task —
+// so every column is empty and the colour has no card to be read from.
 func TestBoardColumnBadges_EmptyColumnKeepsItsStatusColour(t *testing.T) {
 	t.Setenv("HOME", shortHome(t))
-	if err := createEmptyRoadmap("clearing-house-empty"); err != nil {
-		t.Fatalf("creating the empty roadmap: %v", err)
-	}
 	emptySprint := seedSprintWithMembers(t, "clearing-window-empty", 0)
 	mux := buildMux()
-
-	tasksColumns := boardColumns(t, servePage(t, mux, "/roadmaps/clearing-house-empty/tasks"))
-	for i, status := range models.ValidTaskStatuses {
-		heading, variant, count := columnBadge(t, tasksColumns[i])
-		if count != 0 {
-			t.Fatalf("the %s column of an empty roadmap shows the count %d, want 0", heading, count)
-		}
-		if want := taskStatusBadge(status); variant != want {
-			t.Errorf("the empty %s column carries the variant %q, want %q; the colour follows "+
-				"the column and not the cards in it", heading, variant, want)
-		}
-	}
 
 	sprintColumns := memberBoardColumns(t,
 		servePage(t, mux, "/roadmaps/clearing-window-empty/sprints/"+itoa(emptySprint)))
@@ -336,54 +243,6 @@ func TestBoardColumnBadges_EmptyColumnKeepsItsStatusColour(t *testing.T) {
 			t.Errorf("the empty %s column carries the variant %q, want %q; a column holding no "+
 				"task keeps the colour of the status it groups", heading, variant, wantVariant)
 		}
-	}
-}
-
-// TestBoardColumnBadges_NarrowedBoardKeepsItsColours is the gate for the last
-// clause of Acceptance Criterion 140: a narrowed board keeps each column's colour
-// while its count follows the narrowing.
-//
-// The narrowing is real and is proved to be real: the search term selects a strict
-// subset of the roadmap's tasks, so at least one count must fall. A term that
-// matched everything would leave the counts unchanged and make the comparison
-// vacuous, which is why the totals are asserted to differ.
-func TestBoardColumnBadges_NarrowedBoardKeepsItsColours(t *testing.T) {
-	t.Setenv("HOME", shortHome(t))
-	f := seedBoardFixture(t, "payment-platform")
-	mux := buildMux()
-
-	before := boardColumns(t, servePage(t, mux, "/roadmaps/"+f.name+"/tasks"))
-	after := boardColumns(t, servePage(t, mux,
-		"/roadmaps/"+f.name+"/tasks?q="+url.QueryEscape("ledger")))
-
-	wide, narrow := 0, 0
-	for i, status := range models.ValidTaskStatuses {
-		_, wideVariant, wideCount := columnBadge(t, before[i])
-		heading, narrowVariant, narrowCount := columnBadge(t, after[i])
-		wide += wideCount
-		narrow += narrowCount
-
-		if want := taskStatusBadge(status); narrowVariant != want {
-			t.Errorf("the narrowed board's %s column carries the variant %q, want %q; the count "+
-				"follows the narrowing and the colour does not", heading, narrowVariant, want)
-		}
-		if narrowVariant != wideVariant {
-			t.Errorf("the %s column carries %q on the full board and %q on the narrowed one; "+
-				"narrowing changes what a column counts, never what it stands for", heading,
-				wideVariant, narrowVariant)
-		}
-		if narrowCount > wideCount {
-			t.Errorf("the %s column counts %d narrowed and %d unnarrowed; a search can only "+
-				"remove cards", heading, narrowCount, wideCount)
-		}
-	}
-	if narrow >= wide {
-		t.Fatalf("the search left %d of %d tasks showing; it narrowed nothing, so asserting the "+
-			"colours survived a narrowing proves nothing", narrow, wide)
-	}
-	if narrow == 0 {
-		t.Fatalf("the search matched no task at all; the narrowed board must still show cards " +
-			"for the comparison above to be about a narrowed board rather than an empty one")
 	}
 }
 

@@ -167,7 +167,15 @@ func (db *DB) GetTasks(ctx context.Context, ids []int) ([]models.Task, error) {
 	})
 }
 
-// TaskListFilter holds all optional filter and sort parameters for ListTasks.
+// TaskListFilter holds all optional filter and sort parameters for ListTasks and
+// ListAllTasks.
+//
+// SprintID and NoSprint are the sprint-membership predicates of the web tasks
+// page's read (SPEC/DATABASE.md § Main SQL Queries, "List All"): SprintID admits
+// only the member tasks of that sprint, NoSprint only the tasks that belong to no
+// sprint. The page's sprint parameter carries one value, so a caller sets at most
+// one of them; when both are set, both predicates are appended and the conjunction
+// admits no task.
 type TaskListFilter struct {
 	Status       *models.TaskStatus
 	MinPriority  *int
@@ -175,9 +183,20 @@ type TaskListFilter struct {
 	TaskType     *models.TaskType
 	CreatedSince *time.Time // inclusive lower bound on created_at
 	CreatedUntil *time.Time // inclusive upper bound on created_at
+	SprintID     *int       // only the member tasks of this sprint
 	Sort         string     // "priority" (default), "created", "status", "severity"
 	Limit        int
+	NoSprint     bool // only the tasks that belong to no sprint
 }
+
+// sortPriorityThenID is the fifth ordering of the listing: the default ordering
+// with t.id ASC appended as its final key, which makes the order total. It is the
+// web tasks page's alone, because that page paginates the result and a page
+// boundary between two rows equal on priority and created_at must fall the same
+// way on every request (SPEC/DATABASE.md § Main SQL Queries, "List All",
+// Ordering). It is unexported and is not one of the values `rmp task list --sort`
+// accepts, so the CLI keeps its four orderings.
+const sortPriorityThenID = "priority-id"
 
 // ListTasks retrieves tasks with optional filters.
 // Filters: status, minPriority, minSeverity, taskType, createdSince, createdUntil, sort, limit.
@@ -254,6 +273,17 @@ func buildListTasksQuery(filter *TaskListFilter) (string, []any) {
 		query += " AND t.created_at <= ?"
 		args = append(args, filter.CreatedUntil.UTC().Format(time.RFC3339))
 	}
+	// The sprint-membership predicates of the web tasks page. The sprint-id
+	// subquery is a covering search of idx_sprint_tasks_lookup (leading column
+	// sprint_id); the no-sprint correlated subquery is a covering search of an
+	// index on sprint_tasks.task_id. The id is bound; nothing is interpolated.
+	if filter.SprintID != nil {
+		query += " AND t.id IN (SELECT st.task_id FROM sprint_tasks st WHERE st.sprint_id = ?)"
+		args = append(args, *filter.SprintID)
+	}
+	if filter.NoSprint {
+		query += " AND NOT EXISTS (SELECT 1 FROM sprint_tasks st WHERE st.task_id = t.id)"
+	}
 
 	switch filter.Sort {
 	case "created":
@@ -262,6 +292,8 @@ func buildListTasksQuery(filter *TaskListFilter) (string, []any) {
 		query += " ORDER BY t.status ASC, t.priority DESC, t.created_at ASC"
 	case "severity":
 		query += " ORDER BY t.severity DESC, t.priority DESC, t.created_at ASC"
+	case sortPriorityThenID:
+		query += " ORDER BY t.priority DESC, t.created_at ASC, t.id ASC"
 	default: // "priority" or empty — matches existing default behaviour
 		query += " ORDER BY t.priority DESC, t.created_at ASC"
 	}
@@ -278,25 +310,32 @@ func buildListTasksQuery(filter *TaskListFilter) (string, []any) {
 	return query, args
 }
 
-// ListAllTasks returns EVERY task of the roadmap, in the default listing order
-// (priority DESC, created_at ASC), with no LIMIT and no pagination.
+// ListAllTasks returns every task of the roadmap that the filter admits, with no
+// LIMIT and no OFFSET, in the order priority DESC, created_at ASC, id ASC.
 //
-// It is the read the web interface's Kanban task board performs, and reading
-// every row is a correctness requirement of that page rather than a performance
-// choice: the board groups the tasks into five columns and prints a count on each
-// column header as a statement of fact about the roadmap, so a partial read would
-// not merely show fewer cards — it would publish wrong counts as true ones, with
-// nothing on the page to reveal that anything was omitted (SPEC/DATABASE.md
-// § Main SQL Queries, "List All"; SPEC/WEB.md § Roadmap Tasks Page, Unbounded
-// read).
+// It is the read the web interface's tasks page performs (SPEC/DATABASE.md
+// § Main SQL Queries, "List All"; SPEC/WEB.md § Roadmap Tasks Page, Read cost).
+// The page applies its search term in memory after this read, because the term's
+// Unicode normalisation and folding cannot be expressed in SQLite, and selects
+// the requested page after the term. The read is therefore bounded by the
+// filters alone and never by a page: the page states the filtered total as a
+// fact, and a truncated read would publish a wrong total as a true one.
 //
-// The display default that sizes `rmp task list` output (models.DefaultTaskLimit)
-// and the per-invocation cap (models.MaxTaskLimit) are deliberately NOT applied
-// here. They size the output of one command invocation, where a caller who wants
-// more asks for more and can see that the listing was cut; this read has no such
-// affordance. ListTasks keeps both, so the CLI is unaffected.
-func (db *DB) ListAllTasks(ctx context.Context) ([]models.Task, error) {
-	query, args := buildListTasksQuery(&TaskListFilter{})
+// The filter's Status, TaskType, MinPriority, MinSeverity, SprintID and NoSprint
+// fields each append one predicate, every value bound as a parameter. Its Sort
+// and Limit fields are ignored: the ordering is always the total one above, and
+// the display default that sizes `rmp task list` output (models.DefaultTaskLimit)
+// and the per-invocation cap (models.MaxTaskLimit) are deliberately NOT applied.
+// A nil filter admits every task. The caller's struct is never mutated.
+func (db *DB) ListAllTasks(ctx context.Context, filter *TaskListFilter) ([]models.Task, error) {
+	effective := TaskListFilter{}
+	if filter != nil {
+		effective = *filter
+	}
+	effective.Sort = sortPriorityThenID
+	effective.Limit = 0
+
+	query, args := buildListTasksQuery(&effective)
 
 	rows, err := db.QueryContext(ctx, query, args...)
 	if err != nil {
@@ -1366,15 +1405,45 @@ func groupedTaskSprintsQuery(placeholders string) string {
 	)
 }
 
+// ListSprintTitles returns the id and title of every sprint of the roadmap, in
+// the sprints' planned execution order (order_index ascending), and nothing else
+// (SPEC/DATABASE.md § List Sprint Titles).
+//
+// It is the web tasks page's sprint read: the page offers one option per sprint
+// in its sprint filter, labelled by the sprint's id and title, and accepts a
+// sprint parameter only when it names one of these ids. The statement reads
+// sprints alone: it joins nothing and reads no membership. order_index is unique
+// (idx_sprints_order), so the order is total and the index serves it with no sort
+// step. An empty roadmap yields a non-nil empty slice.
+func (db *DB) ListSprintTitles(ctx context.Context) ([]SprintRef, error) {
+	rows, err := db.QueryContext(ctx, `SELECT id, title FROM sprints ORDER BY order_index ASC`)
+	if err != nil {
+		return nil, fmt.Errorf("listing sprint titles: %w", err)
+	}
+	defer rows.Close()
+
+	sprints := []SprintRef{}
+	for rows.Next() {
+		var sprint SprintRef
+		if err := rows.Scan(&sprint.ID, &sprint.Title); err != nil {
+			return nil, fmt.Errorf("scanning sprint title: %w", err)
+		}
+		sprints = append(sprints, sprint)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterating sprint title rows: %w", err)
+	}
+	return sprints, nil
+}
+
 // GetSprintsByTasks returns the sprint each of the given tasks belongs to, keyed
 // by task id, in ONE statement whatever the number of tasks.
 //
-// This is the read the web interface MUST use to name the sprint on every card of
-// its Kanban board: one card per rendered task means the sprint of every rendered
-// task is needed, and resolving them one task — or one board column — at a time
-// would reintroduce the N+1 pattern the project has removed elsewhere
-// (SPEC/WEB.md § Roadmap Tasks Page, read cost; SPEC/DATABASE.md § Resolve the
-// Sprint of Many Tasks (Grouped)).
+// This is the read the web interface MUST use to name the sprint in every row of
+// its tasks page's list: one row per rendered task means the sprint of every
+// rendered task is needed, and resolving them one row at a time would reintroduce
+// the N+1 pattern the project has removed elsewhere (SPEC/WEB.md § Roadmap Tasks
+// Page, Read cost; SPEC/DATABASE.md § Resolve the Sprint of Many Tasks (Grouped)).
 //
 // A task that belongs to no sprint is ABSENT from the map, exactly as in
 // CountTaskCommentsByTasks and CountSubTasksByParents: it has no sprint_tasks row,

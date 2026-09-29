@@ -202,13 +202,9 @@ func seedBadgeRoadmap(t *testing.T, name string) (roadmap string, sprintID int) 
 
 // TestTasksPage_RendersSemanticBadgeColours proves the helpers are actually wired
 // into the tasks template and emit the SPEC colour variant in the rendered HTML:
-// a priority 8 / severity 9 task renders bg-red-lt badges on its board card
-// (SPEC/WEB.md § Status, Priority, and Severity Badge Colours, rule 2).
-//
-// The STATUS badge is deliberately not asserted here. The card shows none — the
-// column it sits in already states the status — and the page that does show one
-// is the task's own page, whose header badge is gated in task_page_test.go, so no
-// status badge is rendered on this page at all.
+// a priority 8 / severity 9 task renders bg-red-lt badges in its list row, and
+// its SPRINT status renders the status variant (SPEC/WEB.md § Status, Priority, and
+// Severity Badge Colours, rule 2; Acceptance Criterion 61).
 func TestTasksPage_RendersSemanticBadgeColours(t *testing.T) {
 	t.Setenv("HOME", shortHome(t))
 	name, _ := seedBadgeRoadmap(t, "badge-colours")
@@ -223,24 +219,23 @@ func TestTasksPage_RendersSemanticBadgeColours(t *testing.T) {
 	}
 	body := rec.Body.String()
 
-	// Priority 8 -> bg-red-lt badge reading P8, on the board card. The badge
+	// Priority 8 -> bg-red-lt badge reading P8, in the list row. The badge
 	// label names the field the value belongs to and selects no colour: the
 	// variant is the one the mapping assigns to the integer 8 (SPEC/WEB.md
 	// § Status, Priority, and Severity Badge Colours, rule 2).
 	if !strings.Contains(body, `<span class="badge bg-red-lt">P8</span>`) {
 		t.Errorf("tasks page missing priority badge with bg-red-lt reading P8 for priority 8")
 	}
-	// Severity 9 -> bg-red-lt badge reading S9, on the board card. Priority and
+	// Severity 9 -> bg-red-lt badge reading S9, in the list row. Priority and
 	// severity share the variant here, so the badge label is the only thing that
-	// tells the two badges apart — which is the reason the card carries one.
+	// tells the two badges apart.
 	if !strings.Contains(body, `<span class="badge bg-red-lt">S9</span>`) {
 		t.Errorf("tasks page missing severity badge with bg-red-lt reading S9 for severity 9")
 	}
-	// No status badge is rendered on this page: the column states the status and
-	// the task's own page shows it.
-	if strings.Contains(body, `>SPRINT</span>`) {
-		t.Errorf("tasks page renders a status badge; the column states the status and the task " +
-			"page shows it")
+	// The row's status badge carries the SPRINT variant (Acceptance Criterion 61).
+	if !strings.Contains(body, `<span class="badge `+taskStatusBadge(models.StatusSprint)+`">SPRINT</span>`) {
+		t.Errorf("tasks page missing the SPRINT status badge with the %s variant",
+			taskStatusBadge(models.StatusSprint))
 	}
 }
 

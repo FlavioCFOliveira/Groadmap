@@ -548,9 +548,8 @@ func TestSprintPage_NotFoundCases(t *testing.T) {
 }
 
 // TestTaskCards_LinkToTheTaskPageAndThePagesStayReadOnly asserts, on every page
-// that shows a task card — the tasks page and the sprint page — that the card of
-// a task links to that task's own page, that no task's long fields travel in the
-// board page, and that the pages are read-only; then that the task page the card
+// that shows many tasks — the tasks page and the sprint page — that a task links
+// to that task's own page, that no task's long fields travel in the page, and that the pages are read-only; then that the task page the card
 // links to carries the long free-text fields, rendered on the server. The sprints
 // landing page is deliberately excluded: it renders every sprint as a compact
 // card and links to no task page (SPEC/WEB.md § Roadmap Task Page, § Shared
@@ -562,7 +561,7 @@ func TestTaskCards_LinkToTheTaskPageAndThePagesStayReadOnly(t *testing.T) {
 
 	href := `href="/roadmaps/` + f.name + `/tasks/` + itoa(f.openTaskID) + `"`
 	for _, path := range []string{
-		"/roadmaps/" + f.name + "/tasks",                     // tasks page (the board)
+		"/roadmaps/" + f.name + "/tasks",                     // tasks page (the list)
 		"/roadmaps/" + f.name + "/sprints/" + itoa(f.openID), // sprint page
 	} {
 		body := servePage(t, mux, path)
@@ -580,18 +579,26 @@ func TestTaskCards_LinkToTheTaskPageAndThePagesStayReadOnly(t *testing.T) {
 			}
 		}
 
-		// Read-only: no form and no submit control on either page. The tasks page
-		// carries exactly one input — its board's search box, which submits nothing
-		// and only changes which of the already-read tasks are shown; the sprint
-		// page's board carries none at all (SPEC/WEB.md § Roadmap Tasks Page,
-		// Read-only; § Sprint Detail Sub-Template, rule 3, Read-only).
+		// Read-only. The sprint page carries no form, no submit control and no
+		// input. The tasks page carries exactly one form — its filter bar, which
+		// submits by GET to the page itself and only narrows what the page shows —
+		// holding exactly two inputs, the search box and the hidden page size
+		// (SPEC/WEB.md § Roadmap Tasks Page, Read-only; § Sprint Detail
+		// Sub-Template, rule 3, Read-only; Acceptance Criterion 87).
 		low := strings.ToLower(body)
-		if strings.Contains(low, "<form") || strings.Contains(low, `type="submit"`) {
-			t.Errorf("page %s must be read-only: no form and no submit control", path)
-		}
-		wantInputs := 0
+		wantForms, wantSubmits, wantInputs := 0, 0, 0
 		if strings.HasSuffix(path, "/tasks") {
-			wantInputs = 1
+			wantForms, wantSubmits, wantInputs = 1, 1, 2
+			form := low[max(strings.Index(low, "<form"), 0):]
+			if !strings.HasPrefix(form, `<form class="row g-2 align-items-end justify-content-end" method="get" action="/roadmaps/`+f.name+`/tasks">`) {
+				t.Errorf("page %s: the one form is not the GET filter bar targeting the page itself: %.120s", path, form)
+			}
+		}
+		if got := strings.Count(low, "<form"); got != wantForms {
+			t.Errorf("page %s carries %d forms, want %d", path, got, wantForms)
+		}
+		if got := strings.Count(low, `type="submit"`); got != wantSubmits {
+			t.Errorf("page %s carries %d submit controls, want %d", path, got, wantSubmits)
 		}
 		if got := strings.Count(low, "<input"); got != wantInputs {
 			t.Errorf("page %s carries %d input elements, want %d", path, got, wantInputs)

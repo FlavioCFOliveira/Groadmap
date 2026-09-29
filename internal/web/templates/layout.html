@@ -298,25 +298,22 @@
             an empty board rather than an absent one, and the sub-template puts no
             page-level empty state in place of it.
 
-            The board is NOT wrapped in an outer card: the columns ARE the cards,
-            exactly as on the tasks page. Everything inside a column is Tabler's
-            own markup — cards, the card-header idiom, badges, the empty state —
-            and the board emits the tasks board's own classes rather than classes
-            of its own, so the lengths the two boards share are literally one
-            measure used twice: the 17rem minimum column, the 0.75rem gap and the
-            0.75rem card body padding (SPEC/WEB.md § Sprint Detail Sub-Template,
-            Height and scrolling; Acceptance Criterion 139).
+            The board is NOT wrapped in an outer card: the columns ARE the cards.
+            Everything inside a column is Tabler's own markup — cards, the
+            card-header idiom, badges, the empty state — and only the column
+            strip's layout lives in static/style.css: the 17rem minimum column,
+            the 0.75rem gap and the 0.75rem card body padding (SPEC/WEB.md
+            § Sprint Detail Sub-Template, Height and scrolling; Acceptance
+            Criterion 139).
 
-            task-board--bounded is what the stylesheet keys BOTH of this board's
-            departures on, and no markup of this board says more than that. Its
-            height is bounded (60vh, floored at --full-height-region-floor) rather
+            task-board--bounded is what the stylesheet keys this board's height
+            and column width on, and no markup of this board says more than
+            that. Its height is bounded (60vh, floored at --full-height-region-floor) rather
             than taken from the space the page body leaves, because the sprint page
             is not a single-region page and a full-height board would push the
             Comments card below the fold for every sprint (SPEC/WEB.md
             § Full-Height Page Regions; Acceptance Criterion 136); and its three
             columns divide the board's width equally and grow with the viewport
-            instead of carrying the tasks board's fixed 19rem, because three
-            columns dividing a viewport are wide where five would be narrow
             (SPEC/WEB.md § Sprint Detail Sub-Template, Height and scrolling, "The
             three columns divide the width of the board"; Acceptance Criterion
             139). Both are declared in static/style.css and neither adds a class
@@ -392,16 +389,12 @@
                   Criterion 135). The card holds no nested link: a link admits no
                   interactive descendant.
 
-                  The card is laid out exactly as the tasks board's card is: the
-                  title leads it, and the shared badge line (taskCardBadges)
+                  The title leads the card, and the badge line (taskCardBadges)
                   carrying the id, severity, priority, and type badges follows it
-                  (SPEC/WEB.md § Sprint Detail Sub-Template, The card is laid out
-                  the way the tasks board's card is; Acceptance Criteria 133 and
-                  179). The two cards differ in one deliberate, specified place:
-                  the badges and the counters share ONE line instead of the
-                  counters getting a footer row of their own, and on that line the
-                  comment count precedes the subtask count (SPEC/WEB.md § Sprint
-                  Detail Sub-Template, The card; Acceptance Criterion 133). The
+                  (SPEC/WEB.md § Sprint Detail Sub-Template, The card; Acceptance
+                  Criteria 133 and 179). The badges and the counters share ONE
+                  line, and on that line the comment count precedes the subtask
+                  count (Acceptance Criterion 133). The
                   card carries no status badge — the column it sits in already
                   states the status — and no dependency counts: a card is read at
                   a glance, and every field of the task is on the page the card
@@ -420,8 +413,7 @@
                       card does not need is a card the reader has to scroll to
                       reach (SPEC/WEB.md § Sprint Detail Sub-Template, Why the
                       badges and the counters share a line; Acceptance Criterion
-                      133). This card therefore renders NO separate counter footer,
-                      which is where it parts company with the tasks board's card.
+                      133). This card therefore renders NO separate counter footer.
 
                       The layout is Bootstrap's own leading/trailing idiom and
                       nothing else: justify-content-between puts the first flex
@@ -441,35 +433,22 @@
                     */}}
                     <span class="d-flex flex-wrap align-items-center justify-content-between gap-1" data-role="task-card-summary">
                       {{/*
-                        The badge line is the shared taskCardBadges partial,
-                        rendered exactly as the tasks board's card renders it: it
-                        is stated once for the card of BOTH boards (SPEC/WEB.md
-                        § Roadmap Tasks Page, Card content, item 2; Acceptance
-                        Criteria 85 and 133), and one partial is what keeps the two
-                        cards from drifting apart on it.
+                        The badge line is the taskCardBadges partial (SPEC/WEB.md
+                        § Sprint Detail Sub-Template, The card; Acceptance
+                        Criteria 133 and 179).
                       */}}
                       {{template "taskCardBadges" .}}
                       {{/*
                         The counters, closing the line at its TRAILING edge, which
                         is where the GitLab card puts its own. The COMMENT count
-                        comes first and the subtask count second — the reverse of
-                        the tasks board's footer order, and stated separately from
-                        it because the two groups are separate: a pair read at the
-                        trailing edge of a line here, a list of six heterogeneous
-                        indicators in a block of its own there.
+                        comes first and the subtask count second.
 
                         BOTH are always rendered, including when the number they
-                        carry is 0, so every card of this board is the same shape.
-                        This is a deliberate departure from the tasks board's card,
-                        which renders an indicator only when it has something to
-                        count. The two cards differ because what they carry differs:
+                        carry is 0, so every card of this board is the same shape:
                         this card carries exactly two indicators and both of them are
                         counts, so a 0 STATES that the task has no comment, where an
                         absent counter leaves the reader unable to tell "no comments"
-                        from "this card does not show comments". The tasks board's
-                        card carries six heterogeneous indicators, two of which are
-                        text rather than counts and have no zero to show, so always
-                        rendering all six is not even well defined there (SPEC/WEB.md
+                        from "this card does not show comments" (SPEC/WEB.md
                         § Sprint Detail Sub-Template, Both counters are always
                         rendered; Acceptance Criterion 134).
                       */}}
@@ -482,13 +461,10 @@
                 </a>
                 {{end}}
                 {{/*
-                  The column's own empty state, in the idiom the tasks board uses:
-                  Tabler's empty-state markup inside the column, below the header,
-                  in place of the card list, with the column, its heading and its 0
-                  badge still visible. It is rendered only when the column holds no
-                  card — unlike the tasks board's, which is always present and
-                  toggled, because this board carries no narrowing control that
-                  could empty a column in the browser.
+                  The column's own empty state: Tabler's empty-state markup inside
+                  the column, below the header, in place of the card list, with the
+                  column, its heading and its 0 badge still visible. It is rendered
+                  only when the column holds no card.
                 */}}
                 {{if not .Tasks}}
                 <div class="empty" data-role="task-board-column-empty">
@@ -531,12 +507,10 @@
           </div>{{end}}
 
 {{/*
-  taskCardBadges is the badge line of the card of BOTH Kanban boards — the tasks
-  page's board (tasks.html) and the sprint page's member-tasks board
-  (sprintDetail, above) — on the line after the card's title. It carries exactly
-  four Tabler badges, in this order (SPEC/WEB.md § Roadmap Tasks Page, Card
-  content, item 2; § Sprint Detail Sub-Template, The card; Acceptance Criteria
-  85, 133, and 177 to 179):
+  taskCardBadges is the badge line of the card of the sprint page's member-tasks
+  board (sprintDetail, above), on the line after the card's title. It carries
+  exactly four Tabler badges, in this order (SPEC/WEB.md § Sprint Detail
+  Sub-Template, The card; Acceptance Criteria 133 and 177 to 179):
 
     1. the id badge, reading #<id> with the fixed classes bg-black and text-white
        for every task;
@@ -547,10 +521,9 @@
     4. the type badge, reading the TaskType value exactly as the enum spells it
        and coloured by taskTypeBadge.
 
-  The line is ONE partial rather than two copies because the SPEC states it once
-  for the card of both boards, so that the two cannot drift apart on it: a reader
-  moving between the boards finds a task's reference, severity, priority, and
-  type in the same place and in the same form on each.
+  The tasks page's list writes the same four badges, with the same texts,
+  labels, and colours, into four cells of its row (SPEC/WEB.md § Roadmap Tasks
+  Page, Row content).
 
   The id badge's classes are written out here, and not taken from a mapping: an
   id identifies a task and is a value no colour table knows, so no mapping

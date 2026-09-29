@@ -533,13 +533,12 @@ func TestTablerFidelity_PageHeaderActionsAreHiddenInPrint(t *testing.T) {
 	seedRoadmapWithAudit(t, name, 3)
 	mux := buildMux()
 
-	// Only the three pages whose header carries a control or a hierarchical link
-	// have an actions column at all: the tasks board's search input, the sprint
-	// page's back link, and the graph page's layout dropdown. The index, sprints
-	// and audit headers carry none, which TestPageHeader_SharedPartialAndActions
-	// asserts (SPEC/WEB.md § Shared Page-Header Partial, rule 5).
+	// Only the pages whose header carries a control or a hierarchical link have an
+	// actions column at all: the sprint page's and the task page's back links, and
+	// the graph page's layout dropdown. The index, sprints, tasks and audit headers
+	// carry none, which TestPageHeader_SharedPartialAndActions asserts
+	// (SPEC/WEB.md § Shared Page-Header Partial, rule 5).
 	for path, column := range map[string]string{
-		"/roadmaps/" + name + "/tasks":     `<div class="col-auto ms-auto d-print-none">`,
 		"/roadmaps/" + name + "/sprints/1": `<div class="col-12 col-sm-auto ms-auto d-print-none">`,
 		"/roadmaps/" + name + "/tasks/1":   `<div class="col-12 col-sm-auto ms-auto d-print-none">`,
 		"/roadmaps/" + name + "/graph":     `<div class="col-auto ms-auto d-print-none">`,
@@ -887,7 +886,6 @@ func TestPageHeader_SharedPartialAndActions(t *testing.T) {
 	// The actions column: a control that acts on the page, or the sprint page's
 	// hierarchical back link. Never navigation the sidebar already carries.
 	withActions := map[string]string{
-		"/roadmaps/" + name + "/tasks":     `data-role="task-search"`,
 		"/roadmaps/" + name + "/graph":     `id="layout-select"`,
 		"/roadmaps/" + name + "/sprints/1": `href="/roadmaps/` + name + `"`,
 		"/roadmaps/" + name + "/tasks/1":   `href="/roadmaps/` + name + `/tasks"><i class="ti ti-arrow-left me-1"></i>Back to tasks</a>`,
@@ -909,9 +907,12 @@ func TestPageHeader_SharedPartialAndActions(t *testing.T) {
 			t.Errorf("page %s: header actions column no longer carries %s", path, want)
 		}
 	}
-	for _, path := range []string{"/", "/roadmaps/" + name, "/roadmaps/" + name + "/audit"} {
+	// The tasks page's header carries no actions column content: its filter bar
+	// sits in the header of its task-list card (Acceptance Criteria 100 and 109).
+	for _, path := range []string{"/", "/roadmaps/" + name, "/roadmaps/" + name + "/tasks", "/roadmaps/" + name + "/audit"} {
 		header := headerRegion(t, path, servePage(t, mux, path))
-		if strings.Contains(header, "col-auto ms-auto") {
+		if strings.Contains(header, "col-auto ms-auto") || strings.Contains(header, "<input") ||
+			strings.Contains(header, "<select") {
 			t.Errorf("page %s: header carries an actions column; it should have none; header=%q", path, header)
 		}
 	}

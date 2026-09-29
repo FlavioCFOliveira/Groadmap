@@ -23,10 +23,11 @@ running HTTP server:
 - Routes and pages: index with discovery + empty state, the read-only
   sprints landing page (GET /roadmaps/{name}: three sprint tabs, Actual
   active by default) and the separate tasks page (GET /roadmaps/{name}/tasks:
-  the Kanban board of five fixed columns, narrowed by the header search input
-  and the type, minimum-priority and minimum-severity filter dropdowns, which
-  compose conjunctively and travel in the q, type, priority and severity query
-  parameters) — both with no edit affordance and no audit-log
+  one paginated task list in a Tabler card, narrowed on the server by the card
+  header's GET filter bar — search, sprint, status, and type, with an Apply
+  button and no Reset — which compose conjunctively and travel, with the page and
+  the page size, in the URL query string; the one Reset link is the no-match
+  empty state's) — both with no edit affordance and no audit-log
   growth, name validation / path-traversal guard, the knowledge-graph page
   and its JSON data endpoint, and the read-only proof that graph reads create
   no snapshot/ directory. Choosing a roadmap on the index lands the user on
@@ -85,19 +86,15 @@ ROADMAP = "platform"
 DEFAULT_WEB_PORT = 8787
 
 # Unicode's White_Space property: the set SPEC/WEB.md Acceptance Criterion 121
-# names as the board search's trim, and the set the server ships to the browser as
-# SPACE_TABLE.
+# names as the tasks page search's trim.
 #
 # It is written out here rather than taken from Python's str.strip(), whose set is
-# Python's own — it also holds U+001C to U+001F — and rather than from the served
-# asset, so that this module states the expectation INDEPENDENTLY. That it still
-# equals what the binary ships is asserted, not assumed:
-# test_tasks_page_search_trims_the_term_with_the_shipped_whitespace compares the
-# two, so a drift on either side is named rather than absorbed.
+# Python's own — it also holds U+001C to U+001F — so that this module states the
+# expectation INDEPENDENTLY; test_tasks_page_search_rules drives a term wrapped in
+# every one of these code points through the server's trim.
 #
-# The two code points the JavaScript platform's own trimming disagrees about are
-# the point of the whole rule: U+0085 is HERE and that platform keeps it, U+FEFF is
-# NOT here and that platform removes it.
+# The two code points a JavaScript platform's own trimming disagrees about are the
+# point of the rule: U+0085 is HERE and is trimmed, U+FEFF is NOT here and is kept.
 WHITE_SPACE = "".join(chr(cp) for cp in (
     0x0009, 0x000A, 0x000B, 0x000C, 0x000D, 0x0020, 0x0085, 0x00A0, 0x1680,
     *range(0x2000, 0x200B), 0x2028, 0x2029, 0x202F, 0x205F, 0x3000,
@@ -1001,21 +998,18 @@ class TestWebInterface:
             "sprints page must not submit any change"
         )
 
-    # The five fixed board columns, in the order of the task state machine's
-    # flow (SPEC/WEB.md § Roadmap Tasks Page, Acceptance Criterion 81).
-    BOARD_COLUMNS = ("BACKLOG", "SPRINT", "DOING", "TESTING", "COMPLETED")
-
     @staticmethod
     def _board_columns(body):
-        """Return the markup of each board column, in the order rendered.
+        """Return the markup of each column of the sprint page's board, in the
+        order rendered.
 
         The board lives inside <main class="page-body">, so slicing main keeps
         the page header and the scripts after it out of every card assertion.
         """
         main = re.search(r'<main class="page-body">(.*?)</main>', body, re.S)
-        assert main, 'the tasks page has no <main class="page-body"> region'
+        assert main, 'the page has no <main class="page-body"> region'
         region = main.group(1)
-        assert 'data-role="task-board"' in region, "the tasks page renders no Kanban board"
+        assert 'data-role="task-board"' in region, "the page renders no Kanban board"
         return region, region.split('data-role="task-board-column"')[1:]
 
     @staticmethod
@@ -1080,187 +1074,622 @@ class TestWebInterface:
         heading, _, count = cls._column_badge(column)
         return heading, count
 
-    def test_tasks_page_renders_the_kanban_board_read_only(self):
-        """The tasks page renders every task of the roadmap as a Kanban board of
-        five fixed columns, each card a link to that task's own page.
+    # ====================================================================
+    # The tasks page: one paginated task list, filtered on the server
+    # (SPEC/WEB.md § Roadmap Tasks Page)
+    # ====================================================================
 
-        It renders no task table, no sprint tabs, and no control that writes
-        (SPEC/WEB.md § Roadmap Tasks Page, Acceptance Criteria 81 to 92)."""
-        proc, port = self._start(["--port", "0"])
-        status, headers, body = self._req(port, f"/roadmaps/{ROADMAP}/tasks")
-        assert status == 200
-        assert headers.get("content-type", "").startswith("text/html")
+    # The TaskStatus values in the order of the task state machine's flow, and
+    # the TaskType values in the order SPEC/MODELS.md § Enums lists them: the
+    # order the status and type selects offer them in.
+    TASK_STATUSES = ("BACKLOG", "SPRINT", "DOING", "TESTING", "COMPLETED")
+    TASK_TYPES = ("USER_STORY", "TASK", "BUG", "SUB_TASK", "EPIC", "REFACTOR",
+                  "CHORE", "SPIKE", "DESIGN_UX", "IMPROVEMENT")
 
-        region, columns = self._board_columns(body)
+    # Realistic title stems the list fixture cycles through; two carry the word
+    # the search cases look for, in two cases.
+    LIST_TITLE_PHRASES = (
+        "Invalidate the settlement cache after a refund",
+        "Rotate the acquirer API credentials",
+        "Reconcile the nightly payout file",
+        "Warm the Cache of merchant fee schedules",
+        "Alert on residual balances after the close",
+        "Export the ledger to the finance warehouse",
+        "Harden webhook signature verification",
+        "Backfill missing dispute evidence records",
+    )
 
-        # Five columns, in the state machine's order, whatever the data holds.
-        assert len(columns) == 5, f"the board renders {len(columns)} columns, want 5"
-        for column, want in zip(columns, self.BOARD_COLUMNS):
-            got, _ = self._column_header(column)
-            assert got == want, f"column titled {got!r}, want {want!r}"
+    def _seed_list_roadmap(self, roadmap, n):
+        """Build a roadmap of n tasks through the CLI and return its record:
+        {"tasks": {id: {...}}, "sprint_a": id, "sprint_b": id}.
 
-        # Every task the CLI reports is on the board exactly once, in the column
-        # of its own status: the web view and the CLI agree on where the work
-        # stands. The counts sum to the roadmap's task count.
-        tasks = json.loads(self._run(["task", "list", "-r", ROADMAP])[1])
-        assert tasks, "the fixture roadmap has no task to place on the board"
-        by_column = dict(zip(self.BOARD_COLUMNS, columns))
-        for task in tasks:
-            marker = f'data-task-id="{task["id"]}"'
-            assert region.count(marker) == 1, (
-                f"task #{task['id']} has {region.count(marker)} cards on the board, want 1"
-            )
-            assert marker in by_column[task["status"]], (
-                f"task #{task['id']} is not in the {task['status']} column, which is its status"
-            )
-        assert sum(self._column_header(c)[1] for c in columns) == len(tasks), (
-            "the column counts do not sum to the roadmap's task count"
-        )
-
-        # Every task, any status — including the PENDING-sprint task that the
-        # sprints page does not show.
-        low = body.lower()
-        for title in (
-            "implement passwordless login",
-            "rate-limit the token endpoint",
-            "add webauthn passkey support",
-            "audit the session-cookie flags",
-        ):
-            assert title in low, f"tasks page must show task {title!r} on the board"
-
-        # A card is a link to its own task's page, and the page carries no modal.
-        t1 = self.open_task_ids[0]
-        assert (f'<a class="card card-sm card-link text-reset task-card" '
-                f'href="/roadmaps/{ROADMAP}/tasks/{t1}"') in region, (
-            "a board card must be a link to its task's page"
-        )
-        assert "task-modal" not in body and 'data-bs-toggle="modal"' not in body, (
-            "the tasks page must carry no task modal"
-        )
-
-        # The card of a task in a sprint names that sprint, by title and id.
-        assert f"Authentication hardening sprint (Sprint #{self.open_sid})" in region, (
-            "the card of a sprinted task must name its sprint"
-        )
-
-        # The board replaced the table: no table, and no sprint tabs.
-        assert "<table" not in region, "the board is the page's only task presentation"
-        assert "<table" not in body, "the tasks page must render no task table anywhere on the page"
-        assert 'id="tab-current"' not in body, "tasks page must not render the sprint tabs"
-
-        # Read-only: no form, no submit, no drag-and-drop. The page carries exactly
-        # one input — the header search box, which submits nothing and only changes
-        # which of the already-read tasks are shown (SPEC/WEB.md § Roadmap Tasks
-        # Page, Read-only).
-        assert "<form" not in low, "tasks page must contain no form"
-        assert 'type="submit"' not in low, "tasks page must contain no submit"
-        assert low.count("<input") == 1, (
-            f"tasks page carries {low.count('<input')} inputs, want exactly the search box"
-        )
-        assert "<input" not in region.lower(), "the board itself must carry no input"
-        assert "draggable" not in region.lower(), "the board must offer no drag-and-drop"
-
-    def test_tasks_page_board_places_each_status_in_its_own_column(self):
-        """Tasks written through the CLI land in the board column of the status
-        the CLI reports, one column per status.
-
-        The shared fixture keeps every task in one status, so this test builds a
-        roadmap of its own whose tasks sit in three DIFFERENT columns: a board
-        that grouped by anything other than the task's status, or that dropped
-        the grouping altogether, could not place all three correctly
-        (SPEC/WEB.md § Roadmap Tasks Page, Acceptance Criterion 82)."""
-        roadmap = "board_placement_demo"
+        Task i carries type TASK_TYPES[i % 10], priority (i*7) % 10, severity
+        (i*3) % 10, and the title stem LIST_TITLE_PHRASES[i % 8]. Every third task
+        joins sprint A (started, so its members move through DOING, TESTING,
+        COMPLETED, and back to BACKLOG while staying members), every third + 1
+        joins sprint B (planned: its members are SPRINT or BACKLOG), and the rest
+        belong to no sprint and stay in BACKLOG. Expectations are computed from
+        this record, never from the page under test.
+        """
         self._run(["roadmap", "create", roadmap])
-        backlog = self.test.create_task(
-            roadmap,
-            "Publish the settlement reconciliation runbook",
-            "Operators need a written procedure for a failed settlement window",
-            "Write the runbook and link it from the on-call handbook",
-            "An operator can follow the runbook without asking the team",
-            priority=3,
-        )
-        sprinted = self.test.create_task(
-            roadmap,
-            "Alert on an unbalanced settlement window",
-            "An unbalanced window must page the on-call engineer",
-            "Emit a metric per window and alert on a non-zero residual",
-            "A seeded imbalance pages within five minutes",
-            priority=7,
-        )
-        doing = self.test.create_task(
-            roadmap,
-            "Reconcile the ledger against the acquirer report",
-            "The ledger and the acquirer report must agree to the cent",
-            "Match both sides by window and report the residual",
-            "A day's windows reconcile with a zero residual",
-            priority=9,
-        )
-        sprint_id = self.test.create_sprint(roadmap, "Settlement reconciliation sprint")
-        self._run(["sprint", "add-tasks", "-r", roadmap, str(sprint_id), f"{sprinted},{doing}"])
-        self._run(["sprint", "start", "-r", roadmap, str(sprint_id)])
-        self._run(["task", "stat", "-r", roadmap, str(doing), "DOING", "--commit-open", "24262f0"])
+        sprint_a = self.test.create_sprint(roadmap, "Close the checkout attack surface",
+                                           title="Checkout hardening")
+        sprint_b = self.test.create_sprint(roadmap, "Reconcile acquirer files nightly",
+                                           title="Settlement reconciliation")
+        tasks = {}
+        order = []
+        for i in range(n):
+            task_type = self.TASK_TYPES[i % 10]
+            title = f"{self.LIST_TITLE_PHRASES[i % 8]} (batch {i + 1})"
+            priority, severity = (i * 7) % 10, (i * 3) % 10
+            _, out, _ = self._run([
+                "task", "create", "-r", roadmap, "-t", title, "-y", task_type,
+                "-p", str(priority), "--severity", str(severity),
+                "-fr", "Operations must reach this work from the tasks page.",
+                "-tr", "Served read-only from the roadmap database.",
+                "-ac", "The tasks page lists the task under every filter admitting it.",
+            ])
+            task_id = json.loads(out)["id"]
+            tasks[task_id] = {"title": title, "type": task_type, "priority": priority,
+                              "severity": severity, "status": "BACKLOG", "sprint": 0}
+            order.append(task_id)
 
+        members_a = order[0::3]
+        members_b = order[1::3]
+        self._run(["sprint", "add-tasks", "-r", roadmap, str(sprint_a), ",".join(map(str, members_a))])
+        self._run(["sprint", "add-tasks", "-r", roadmap, str(sprint_b), ",".join(map(str, members_b))])
+        self._run(["sprint", "start", "-r", roadmap, str(sprint_a)])
+        for task_id in members_a:
+            tasks[task_id].update(sprint=sprint_a, status="SPRINT")
+        for task_id in members_b:
+            tasks[task_id].update(sprint=sprint_b, status="SPRINT")
+
+        def stat(ids, status, *extra):
+            if ids:
+                self._run(["task", "stat", "-r", roadmap, ",".join(map(str, ids)), status, *extra])
+
+        target = {"DOING": [], "TESTING": [], "COMPLETED": [], "BACKLOG": []}
+        for j, task_id in enumerate(members_a):
+            want = ("SPRINT", "DOING", "TESTING", "COMPLETED", "BACKLOG")[j % 5]
+            if want != "SPRINT":
+                target[want].append(task_id)
+            tasks[task_id]["status"] = want
+        for j, task_id in enumerate(members_b):
+            if j % 2:
+                target["BACKLOG"].append(task_id)
+                tasks[task_id]["status"] = "BACKLOG"
+        stat(target["BACKLOG"], "BACKLOG")
+        moving = target["DOING"] + target["TESTING"] + target["COMPLETED"]
+        stat(moving, "DOING", "--commit-open", "5d6a2cd")
+        stat(target["TESTING"] + target["COMPLETED"], "TESTING")
+        stat(target["COMPLETED"], "COMPLETED", "--commit-close", "4999725")
+        return {"tasks": tasks, "sprint_a": sprint_a, "sprint_b": sprint_b}
+
+    @staticmethod
+    def _expect(tasks, keep=lambda task: True):
+        """The ids of the tasks keep admits, in the page's order: priority
+        descending, then creation — which the CLI performs in id order — then id."""
+        return [task_id for task_id, _ in sorted(
+            ((task_id, task) for task_id, task in tasks.items() if keep(task)),
+            key=lambda item: (-item[1]["priority"], item[0]))]
+
+    @staticmethod
+    def _parse_list(body):
+        """Read what a served tasks page states, from its HTML alone."""
+        parsed = {
+            "ids": [int(m) for m in re.findall(
+                r'<tr>\s*<td><span class="badge bg-black text-white">#(\d+)</span></td>', body)],
+            "range": None, "selects": {}, "search": None, "size": None, "reset": None,
+            "empty": None, "items": [], "prev": None, "next": None, "sizes": [],
+        }
+        m = re.search(r'<p class="m-0 text-secondary">Showing <span>(\d+)</span> to <span>(\d+)</span> '
+                      r'of <span>(\d+)</span> entries</p>', body)
+        if m:
+            parsed["range"] = tuple(int(g) for g in m.groups())
+        for name, options in re.findall(
+                r'<select class="form-select form-select-sm(?: task-list__sprint-select)?" id="task-filter-[a-z]+" name="([a-z]+)">(.*?)</select>', body, re.S):
+            parsed["selects"][name] = [
+                (html_lib.unescape(value), html_lib.unescape(label), bool(selected))
+                for value, selected, label in re.findall(
+                    r'<option value="([^"]*)"( selected)?>([^<]*)</option>', options)]
+        m = re.search(r'<input type="search" class="form-control form-control-sm" id="task-filter-q" name="q" placeholder="Search" value="([^"]*)">', body)
+        assert m, "the tasks page carries no search input of the specified shape"
+        parsed["search"] = html_lib.unescape(m.group(1))
+        m = re.search(r'<input type="hidden" name="size" value="([^"]*)">', body)
+        parsed["size"] = m.group(1) if m else None
+        m = re.search(r'<a class="btn" href="([^"]*)">Reset</a>', body)
+        parsed["reset"] = html_lib.unescape(m.group(1)) if m else None
+        m = re.search(r'<p class="empty-title">([^<]*)</p>', body)
+        parsed["empty"] = m.group(1) if m else None
+        nav = re.search(r'<nav aria-label="Task list pages">(.*?)</nav>', body, re.S)
+        if nav:
+            items = re.findall(
+                r'<li class="page-item( active| disabled)?"(?: aria-current="page")?>\s*'
+                r'(?:<a class="page-link" href="([^"]*)"[^>]*>(.*?)</a>|<span class="page-link"[^>]*>(.*?)</span>)\s*</li>',
+                nav.group(1), re.S)
+            for index, (state, href, link_text, span_text) in enumerate(items):
+                href = html_lib.unescape(href)
+                if index == 0:
+                    parsed["prev"] = href or None
+                elif index == len(items) - 1:
+                    parsed["next"] = href or None
+                else:
+                    parsed["items"].append({"text": (link_text or span_text).strip(), "href": href or None,
+                                            "current": state == " active"})
+        parsed["sizes"] = [
+            {"active": bool(active), "href": html_lib.unescape(href), "current": bool(current), "text": text}
+            for active, href, current, text in re.findall(
+                r'<a class="btn btn-sm( active)?" href="([^"]*)"( aria-current="true")?>(\d+)</a>', body)]
+        return parsed
+
+    @staticmethod
+    def _selected(parsed, name):
+        """The value of the one selected option of a select; exactly one must be."""
+        chosen = [value for value, _, selected in parsed["selects"][name] if selected]
+        assert len(chosen) == 1, f"the {name} select marks {len(chosen)} options selected: {chosen}"
+        return chosen[0]
+
+    @staticmethod
+    def _current_page(parsed):
+        current = [item["text"] for item in parsed["items"] if item["current"]]
+        assert len(current) == 1, f"the pagination bar has {len(current)} active items"
+        return int(current[0])
+
+    def _list(self, port, path):
+        """Serve one tasks page and return (headers, body, parsed); it must answer 200."""
+        status, headers, body = self._req(port, path)
+        assert status == 200, f"GET {path}: status {status}, want 200"
+        return headers, body, self._parse_list(body)
+
+    def _list_all_pages(self, port, roadmap, query, size):
+        """Follow the page numbers from 1 and return every page's rows in order,
+        checking each page's range text against its rows."""
+        ids = []
+        page = 1
+        while True:
+            sep = "&" if query else ""
+            _, _, parsed = self._list(port, f"/roadmaps/{roadmap}/tasks?{query}{sep}size={size}&page={page}")
+            if parsed["range"] is None:
+                return ids
+            first, last, total = parsed["range"]
+            assert self._current_page(parsed) == page, f"page {page} renders page {self._current_page(parsed)}"
+            assert (first, last) == ((page - 1) * size + 1, min(page * size, total)), (
+                f"page {page} at size {size}: range {first} to {last} of {total}")
+            assert len(parsed["ids"]) == last - first + 1, f"page {page}: {len(parsed['ids'])} rows for {first}-{last}"
+            ids.extend(parsed["ids"])
+            if last == total:
+                return ids
+            page += 1
+
+    @staticmethod
+    def _list_row(body, task_id):
+        """The <tr> of one task in the tasks page's list."""
+        m = re.search(
+            rf'<tr>\s*<td><span class="badge bg-black text-white">#{task_id}</span></td>.*?</tr>', body, re.S)
+        assert m, f"task #{task_id} has no row in the tasks page's list"
+        return m.group(0)
+
+    def test_tasks_page_renders_one_paginated_list(self):
+        """AC9, AC81, AC83, AC85, AC86, AC87, AC91, AC107, AC232: the tasks page
+        is ONE Tabler card — a header holding the "Task list" title block and a
+        card-actions GET filter bar, a table-responsive table with one row per
+        task of the page in nine columns, and a footer with the range text, the
+        rows-per-page selector and the pagination bar — with no board, no card
+        per task, no modal, no selection, and no script of its own. Each row
+        carries the id, type, status, severity and priority badges, the sprint as
+        `Sprint #<id> <title>` or an em dash, the created date, and exactly two
+        links to the task's page, the View link named "View task #<id>: <title>".
+        """
+        record = self._seed_list_roadmap("payments_catalogue", 60)
+        tasks = record["tasks"]
         proc, port = self._start(["--port", "0"])
-        _, _, body = self._req(port, f"/roadmaps/{roadmap}/tasks")
-        region, columns = self._board_columns(body)
-        by_column = dict(zip(self.BOARD_COLUMNS, columns))
+        headers, body, parsed = self._list(port, "/roadmaps/payments_catalogue/tasks")
 
-        for task_id, want in ((backlog, "BACKLOG"), (sprinted, "SPRINT"), (doing, "DOING")):
-            marker = f'data-task-id="{task_id}"'
-            assert region.count(marker) == 1, (
-                f"task #{task_id} has {region.count(marker)} cards on the board, want 1"
-            )
-            assert marker in by_column[want], f"task #{task_id} is not in the {want} column"
+        assert headers.get("cache-control") == "no-store", headers.get("cache-control")
+        main = re.search(r'<main class="page-body">(.*?)</main>', body, re.S).group(1)
+        assert main.count('<div class="card">') == 1, "the page renders more than one card"
+        assert main.count("<table") == 1 and '<table class="table table-vcenter card-table">' in main
+        for forbidden in ("task-board", "card-sm card-link", "table-selectable", 'type="checkbox"',
+                          'class="modal', 'data-bs-toggle="modal"', "task-search.js", "style="):
+            assert forbidden not in body, f"the tasks page carries {forbidden!r}"
+        assert re.search(
+            r'<div class="card-header flex-wrap gap-2">\s*<div>\s*<h2 class="card-title">Task list</h2>\s*</div>\s*'
+            r'<div class="card-actions">\s*(?:\{\{.*?\}\}\s*)?<form class="row g-2 align-items-end justify-content-end" method="get" '
+            r'action="/roadmaps/payments_catalogue/tasks">', main, re.S), "the card header is not the Tabler title block and card-actions form"
+        assert "card-subtitle" not in main
+        headings = re.findall(r"<th(?: class=\"[^\"]*\")?>([^<]*)</th>", main)
+        assert headings == ["ID", "Title", "Type", "Status", "Sprint", "Severity", "Priority", "Created", "Actions"], headings
+        assert '<th class="w-1">ID</th>' in main and '<th class="text-end">Actions</th>' in main
+        scripts = re.findall(r"<script\b([^>]*)>", body)
+        assert scripts == [' src="/static/vendor/tabler/tabler.min.js"'], scripts
 
-        # The counts follow the placement, and the two untouched columns are empty.
-        for status, want in (("BACKLOG", 1), ("SPRINT", 1), ("DOING", 1),
-                             ("TESTING", 0), ("COMPLETED", 0)):
-            _, count = self._column_header(by_column[status])
-            assert count == want, f"column {status} shows the count {count}, want {want}"
+        # The first page: the first 25 tasks of the order, and the range text.
+        want = self._expect(tasks)
+        assert parsed["ids"] == want[:25], f"page 1 lists {parsed['ids']}, want {want[:25]}"
+        assert parsed["range"] == (1, 25, 60), parsed["range"]
+        assert '<p class="m-0 text-secondary">Showing <span>1</span> to <span>25</span> of <span>60</span> entries</p>' in body
+        assert re.search(r'<div class="card-footer">\s*<div class="row g-2 align-items-center">\s*'
+                         r'<div class="col-auto">.*?</div>\s*<div class="col-auto">.*?</div>\s*</div>\s*'
+                         r'<div class="col-auto ms-auto">\s*<nav aria-label="Task list pages">', main, re.S), (
+            "the card footer is not three col-auto columns with the pagination bar at the trailing edge")
 
-        # The sprinted tasks name their sprint; the BACKLOG task names none.
-        assert f"Settlement reconciliation sprint (Sprint #{sprint_id})" in region, (
-            "a card of a sprinted task must name its sprint"
+        # Row content, for a sprint member and a task in no sprint.
+        statuses = {task["status"] for task in tasks.values()}
+        assert statuses == set(self.TASK_STATUSES), f"the fixture spans only {statuses}"
+        member = next(i for i in want[:25] if tasks[i]["sprint"] == record["sprint_a"])
+        loose = next(i for i in want[:25] if tasks[i]["sprint"] == 0)
+        for task_id, sprint_text in ((member, f"Sprint #{record['sprint_a']} Checkout hardening"), (loose, "&mdash;")):
+            task = tasks[task_id]
+            row = re.sub(r">\s+<", "><", self._list_row(body, task_id))
+            href = f"/roadmaps/payments_catalogue/tasks/{task_id}"
+            title = self._go_escaped(task["title"])
+            for piece in (
+                f'<td><span class="badge bg-black text-white">#{task_id}</span></td>',
+                f'<td class="task-list__title"><a href="{href}">{title}</a></td>',
+                f'<span class="badge {self.TASK_TYPE_BADGE[task["type"]]}">{task["type"]}</span>',
+                f'<span class="badge {self.TASK_STATUS_BADGE[task["status"]]}">{task["status"]}</span>',
+                f'<td class="task-list__sprint">{sprint_text}</td>',
+                f'>S{task["severity"]}</span>', f'>P{task["priority"]}</span>',
+                '<td class="text-secondary text-nowrap"><i class="ti ti-calendar me-1" aria-hidden="true"></i><time datetime="',
+                f'<td class="text-end"><a class="btn btn-sm" href="{href}" aria-label="View task #{task_id}: {title}">View</a></td>',
+            ):
+                assert piece in row, f"task #{task_id}'s row lacks {piece!r}: {row}"
+            assert row.count("<a ") == 2 and row.count(f'href="{href}"') == 2, row
+            assert row.index(f">S{task['severity']}<") < row.index(f">P{task['priority']}<"), "severity must precede priority"
+            for forbidden in ("ti-message", "ti-subtask", "Comments", "role=", "tabindex"):
+                assert forbidden not in row, f"task #{task_id}'s row carries {forbidden!r}"
+            status, page = self._task_page(port, "payments_catalogue", task_id)
+            assert status == 200 and f'<div class="page-pretitle">Task #{task_id} ' in page
+
+        # An unknown roadmap and an invalid name answer 404 whatever the query.
+        for path in ("/roadmaps/no_such_roadmap/tasks?status=DOING", "/roadmaps/..%2Fetc/tasks?page=2"):
+            status, _, _ = self._req(port, path)
+            assert status == 404, f"GET {path}: {status}, want 404"
+
+    def test_tasks_page_each_filter_narrows_the_list(self):
+        """AC112, AC113, AC234, AC235, AC243, AC244: the filter bar offers search,
+        sprint, status, and type, each a compact control with one visually
+        hidden label, with its fixed option set, then Apply, and no priority or
+        severity filter and no Reset control; status and type are equalities,
+        sprint is membership — `none` the tasks of no sprint whatever their
+        status — priority and severity are not parameters of the page, and each
+        select shows the value that produced the list."""
+        record = self._seed_list_roadmap("payments_catalogue", 45)
+        tasks, sprint_a, sprint_b = record["tasks"], record["sprint_a"], record["sprint_b"]
+        proc, port = self._start(["--port", "0"])
+        base = "/roadmaps/payments_catalogue/tasks"
+        _, body, parsed = self._list(port, base)
+
+        for name, label in (("q", "Search"), ("sprint", "Sprint"), ("status", "Status"), ("type", "Type")):
+            assert body.count(f'for="task-filter-{name}"') == 1, label
+            assert f'<label class="visually-hidden" for="task-filter-{name}">{label}</label>' in body, label
+        assert [v for v, _, _ in parsed["selects"]["sprint"]] == ["", "none", str(sprint_a), str(sprint_b)]
+        assert [label for _, label, _ in parsed["selects"]["sprint"]] == [
+            "Any sprint", "No sprint", f"Sprint #{sprint_a} Checkout hardening",
+            f"Sprint #{sprint_b} Settlement reconciliation"]
+        assert [v for v, _, _ in parsed["selects"]["status"]] == ["", *self.TASK_STATUSES]
+        assert [v for v, _, _ in parsed["selects"]["type"]] == ["", *self.TASK_TYPES]
+        assert sorted(parsed["selects"]) == ["sprint", "status", "type"], sorted(parsed["selects"])
+        assert '<button type="submit" class="btn btn-primary btn-sm">Apply</button>' in body
+        form = body[body.index("<form"):body.index("</form>")]
+        for forbidden in ('name="priority"', 'name="severity"', "Reset", "<a "):
+            assert forbidden not in form, f"the filter bar carries {forbidden!r}"
+        assert form.count("<label") == 4 and form.count('class="col-12 col-sm-auto"') == 5
+        assert 'placeholder="Search"' in body and "text-break" not in body.split("<table", 1)[1].split("</table>", 1)[0]
+        assert parsed["reset"] is None and parsed["size"] == "25"
+
+        def check(query, keep, select=None, value=None):
+            got = self._list_all_pages(port, "payments_catalogue", query, 100)
+            want = self._expect(tasks, keep)
+            assert got == want, f"?{query} lists {got}, want {want}"
+            if select:
+                _, _, shown = self._list(port, f"{base}?{query}")
+                assert self._selected(shown, select) == value, f"?{query}: the {select} select shows another value"
+            return got
+
+        for status in self.TASK_STATUSES:
+            check(f"status={status}", lambda t, s=status: t["status"] == s, "status", status)
+        for task_type in ("BUG", "IMPROVEMENT", "USER_STORY"):
+            check(f"type={task_type}", lambda t, y=task_type: t["type"] == y, "type", task_type)
+        # priority and severity are not parameters of the page: any value lists
+        # what the request lists without it, and no generated link carries it.
+        for param in ("priority", "severity"):
+            for value in ("7", "0", "abc", ""):
+                check(f"{param}={value}", lambda t: True)
+                check(f"{param}={value}&status=DOING", lambda t: t["status"] == "DOING")
+                _, _, shown = self._list(port, f"{base}?{param}={value}&size=10")
+                for link in [i["href"] for i in shown["items"] if i["href"]] + [x["href"] for x in shown["sizes"]]:
+                    assert param not in urllib.parse.parse_qs(urllib.parse.urlsplit(link).query), link
+        assert any(t["status"] == "BACKLOG" and t["sprint"] for t in tasks.values()), "no BACKLOG sprint member"
+        none = check("sprint=none", lambda t: t["sprint"] == 0, "sprint", "none")
+        in_a = check(f"sprint={sprint_a}", lambda t: t["sprint"] == sprint_a, "sprint", str(sprint_a))
+        in_b = check(f"sprint={sprint_b}", lambda t: t["sprint"] == sprint_b, "sprint", str(sprint_b))
+        assert sorted(none + in_a + in_b) == sorted(tasks), "none and every sprint do not partition the tasks"
+        check(f"sprint={sprint_a}&status=DOING", lambda t: t["sprint"] == sprint_a and t["status"] == "DOING")
+
+    def test_tasks_page_filters_and_search_compose_in_every_combination(self):
+        """AC114, AC238: each of the 16 combinations of the four criteria lists
+        exactly the tasks satisfying every present criterion, in the page's
+        order, with the range text stating their number; the order of the
+        parameters in the query string changes nothing."""
+        record = self._seed_list_roadmap("payments_catalogue", 48)
+        tasks, sprint_a = record["tasks"], record["sprint_a"]
+        proc, port = self._start(["--port", "0"])
+        criteria = (
+            ("q=cache", lambda t: "cache" in t["title"].lower()),
+            (f"sprint={sprint_a}", lambda t: t["sprint"] == sprint_a),
+            ("status=SPRINT", lambda t: t["status"] == "SPRINT"),
+            ("type=TASK", lambda t: t["type"] == "TASK"),
         )
-        backlog_card = by_column["BACKLOG"]
-        assert "Sprint #" not in backlog_card, (
-            "the card of a task in no sprint must name no sprint"
-        )
+        non_empty = 0
+        for mask in range(16):
+            present = [c for i, c in enumerate(criteria) if mask & (1 << i)]
+            query = "&".join(param for param, _ in present)
+            want = self._expect(tasks, lambda t: all(keep(t) for _, keep in present))
+            got = self._list_all_pages(port, "payments_catalogue", query, 100)
+            assert got == want, f"mask {mask:04b} ?{query} lists {got}, want {want}"
+            if want:
+                non_empty += 1
+                _, _, parsed = self._list(port, f"/roadmaps/payments_catalogue/tasks?{query}")
+                assert parsed["range"][2] == len(want), f"?{query}: range states {parsed['range']}"
+        assert non_empty >= 8, f"only {non_empty} combinations list any task"
+        _, _, forward = self._list(port, "/roadmaps/payments_catalogue/tasks?status=SPRINT&type=TASK&q=cache")
+        _, _, backward = self._list(port, "/roadmaps/payments_catalogue/tasks?q=cache&type=TASK&status=SPRINT")
+        assert forward["ids"] == backward["ids"]
 
-    def test_tasks_page_board_empty_states(self):
-        """An empty column, and a roadmap with no task at all, each render the
-        in-column empty state while keeping all five columns and their 0 counts
-        (SPEC/WEB.md § Roadmap Tasks Page, Acceptance Criterion 88)."""
-        self._run(["roadmap", "create", "board_empty_demo"])
+    def test_tasks_page_ignores_unacceptable_values(self):
+        """AC115, AC236, AC105, AC117: an unacceptable filter value — wrong
+        case, out of range, decorated, packed, of another roadmap's sprint,
+        empty, undecodable, or hostile — is ignored: HTTP 200 with
+        Cache-Control no-store, exactly the list without it, the select on its
+        any option, the value in no generated link and nowhere in the page, the
+        other parameters still applied; a repeated parameter reads its first
+        value, and unknown parameters are ignored. The roadmap is intact after."""
+        record = self._seed_list_roadmap("payments_catalogue", 30)
+        tasks = record["tasks"]
+        # A roadmap whose third sprint id is not a sprint of the catalogue.
+        self._run(["roadmap", "create", "treasury_ops"])
+        for title in ("Treasury close", "Liquidity report", "Cash sweep"):
+            foreign = self.test.create_sprint("treasury_ops", f"{title} planning", title=title)
+        assert foreign not in (record["sprint_a"], record["sprint_b"])
+        proc, port = self._start(["--port", "0"])
+        base = "/roadmaps/payments_catalogue/tasks"
+
+        def served(query):
+            status, headers, body = self._req(port, f"{base}?{query}")
+            assert status == 200, f"?{query}: status {status}, want 200"
+            assert headers.get("cache-control") == "no-store"
+            return body, self._parse_list(body)
+
+        keep = {"status": ("type", "TASK"), "type": ("status", "SPRINT"), "sprint": ("status", "SPRINT")}
+        bad = {
+            "status": ["doing", "Doing", "BLOCKED", "%20DOING", "", "DOING,SPRINT", "%zz",
+                       urllib.parse.quote("DOING' OR '1'='1")],
+            "type": ["bug", "FEATURE", "BUG,EPIC", "", "%zz", urllib.parse.quote("BUG;DROP TABLE tasks")],
+            "sprint": ["NONE", "007", "0", str(foreign), "999", "", urllib.parse.quote("1 OR 1=1")],
+        }
+        for param, values in bad.items():
+            kept, kept_value = keep[param]
+            _, baseline = served(f"{kept}={kept_value}&size=100")
+            for value in values:
+                body, parsed = served(f"{param}={value}&{kept}={kept_value}&size=100")
+                assert parsed["ids"] == baseline["ids"], f"{param}={value!r} changed the list"
+                assert self._selected(parsed, param) == "", f"{param}={value!r}: the select left its any option"
+                assert self._selected(parsed, kept) == kept_value, f"{param}={value!r}: the {kept} filter was lost"
+                links = [i["href"] for i in parsed["items"] if i["href"]] + [s["href"] for s in parsed["sizes"]]
+                for link in links + ([parsed["reset"]] if parsed["reset"] else []):
+                    assert param not in urllib.parse.parse_qs(urllib.parse.urlsplit(link).query), (
+                        f"{param}={value!r}: the link {link} carries the ignored parameter")
+                decoded = urllib.parse.unquote(value)
+                if any(mark in decoded for mark in ("'", ";", " OR ")):
+                    assert decoded not in html_lib.unescape(body), f"{param}={value!r} is echoed into the page"
+        _, unfiltered = served("size=100")
+        for param in ("priority", "severity"):
+            for value in ("5", "0", "10", "-1", "abc", "", urllib.parse.quote("1; DELETE FROM tasks")):
+                _, parsed = served(f"{param}={value}&size=100")
+                assert parsed["ids"] == unfiltered["ids"], f"{param}={value!r} changed the list"
+        _, repeated = served("type=BUG&type=EPIC&size=100")
+        assert repeated["ids"] == self._expect(tasks, lambda t: t["type"] == "BUG")
+        _, unknown = served("assignee=alice&sort=title&limit=5&size=100")
+        assert unknown["ids"] == unfiltered["ids"]
+        listed = self.test.list_tasks("payments_catalogue", limit=100)
+        assert len(listed) == len(tasks), "the roadmap lost tasks after the hostile requests"
+
+    def test_tasks_page_paginates_on_the_server(self):
+        """AC82, AC84, AC116, AC237, AC239, AC240, AC241, AC242: the list is
+        paginated on the server at 10, 25, 50 or 100 rows, the pages together
+        carrying every task once in order; an unacceptable page falls back to 1,
+        a page beyond the last renders the last, an unacceptable size falls back
+        to 25; every generated link keeps the accepted filters and following it
+        shows them applied; submitting the form keeps the size and returns to
+        page 1, and submitting it cleared lists every task at the same size;
+        the no-match Reset link clears the filters and keeps the size."""
+        record = self._seed_list_roadmap("payments_catalogue", 60)
+        tasks = record["tasks"]
+        proc, port = self._start(["--port", "0"])
+        base = "/roadmaps/payments_catalogue/tasks"
+        want = self._expect(tasks)
+
+        for size, pages in ((10, 6), (25, 3), (50, 2), (100, 1)):
+            assert self._list_all_pages(port, "payments_catalogue", "", size) == want, f"size {size}"
+            _, _, last = self._list(port, f"{base}?size={size}&page={pages}")
+            assert self._current_page(last) == pages and last["range"][1] == 60
+            texts = [s["text"] for s in last["sizes"]]
+            assert texts == ["10", "25", "50", "100"], texts
+            assert [s["text"] for s in last["sizes"] if s["active"] and s["current"]] == [str(size)]
+        _, body, page2 = self._list(port, f"{base}?page=2")
+        assert page2["ids"] == want[25:50]
+        for task_id in want[:25] + want[50:]:
+            assert f"/tasks/{task_id}\"" not in body, f"page 2 carries task #{task_id} of another page"
+
+        for value in ("0", "-1", "abc", "1.5", "02", "%202", ""):
+            _, _, parsed = self._list(port, f"{base}?page={value}")
+            assert self._current_page(parsed) == 1 and parsed["ids"] == want[:25], f"page={value!r}"
+        for value in ("4", "999", "99999999999999999999999"):
+            _, _, parsed = self._list(port, f"{base}?page={value}")
+            assert self._current_page(parsed) == 3 and parsed["ids"] == want[50:], f"page={value!r}"
+        for value in ("20", "0", "-10", "abc", "025", ""):
+            _, _, parsed = self._list(port, f"{base}?size={value}")
+            assert len(parsed["ids"]) == 25, f"size={value!r}"
+            assert [s["text"] for s in parsed["sizes"] if s["active"]] == ["25"], f"size={value!r}"
+        doing = self._expect(tasks, lambda t: t["status"] == "DOING")
+        _, _, beyond = self._list(port, f"{base}?status=DOING&size=10&page=50")
+        assert beyond["ids"] == doing[(len(doing) - 1) // 10 * 10:], "beyond the last page of a filtered list"
+
+        # Every generated link keeps the accepted filters, and following it shows
+        # them applied at the page and size it names.
+        admitted = self._expect(tasks, lambda t: "the" in t["title"].lower() and t["sprint"] == 0)
+        _, _, start = self._list(port, f"{base}?q=the&sprint=none&severity=1&priority=0&type=bogus&size=10&page=2")
+        links = [i["href"] for i in start["items"] if i["href"]] + [s["href"] for s in start["sizes"]]
+        links += [start["prev"], start["next"]]
+        assert len(links) >= 6, links
+        for link in filter(None, links):
+            query = urllib.parse.parse_qs(urllib.parse.urlsplit(link).query)
+            assert query.get("q") == ["the"] and query.get("sprint") == ["none"], f"{link} lost a filter"
+            for ignored in ("type", "priority", "severity"):
+                assert ignored not in query, f"{link} carries {ignored}"
+            assert query.get("page") != ["1"] and query.get("size") != ["25"], link
+            page = int(query.get("page", ["1"])[0])
+            size = int(query.get("size", ["25"])[0])
+            _, _, followed = self._list(port, link)
+            assert self._current_page(followed) == page
+            assert followed["ids"] == admitted[(page - 1) * size:page * size], f"following {link}"
+        assert start["reset"] is None, "a list with rows carries a Reset link; the bar has none"
+        _, _, no_match = self._list(port, f"{base}?q=no+task+is+titled+like+this&status=DOING&size=10&page=2")
+        assert no_match["reset"] == f"{base}?size=10", no_match["reset"]
+        _, _, reset = self._list(port, no_match["reset"])
+        assert self._current_page(reset) == 1 and reset["ids"] == want[:10] and self._selected(reset, "status") == ""
+
+        # Submitting the real form: its fields as the served HTML defines them,
+        # with the status select changed.
+        def submit(body, parsed, changes):
+            form = body[body.index("<form"):body.index("</form>")]
+            action = html_lib.unescape(re.search(r'action="([^"]*)"', form).group(1))
+            fields = {name: html_lib.unescape(value) for name, value in re.findall(
+                r'<input type="(?:hidden|search)"[^>]* name="([a-z]+)"(?: placeholder="[^"]*")? value="([^"]*)">', form)}
+            for name in ("sprint", "status", "type"):
+                fields[name] = self._selected(parsed, name)
+            assert sorted(fields) == ["q", "size", "sprint", "status", "type"], fields
+            fields.update(changes)
+            return f"{action}?{urllib.parse.urlencode(fields)}"
+
+        _, body, parsed = self._list(port, f"{base}?q=the&size=10&page=3")
+        assert self._current_page(parsed) == 3
+        submitted = submit(body, parsed, {"status": "DOING"})
+        assert "page=" not in submitted and "size=10" in submitted, submitted
+        filtered_body = self._req(port, submitted)[2]
+        filtered = self._parse_list(filtered_body)
+        doing_the = self._expect(tasks, lambda t: t["status"] == "DOING" and "the" in t["title"].lower())
+        assert self._current_page(filtered) == 1 and filtered["ids"] == doing_the[:10]
+        _, _, reloaded = self._list(port, submitted)
+        assert reloaded["ids"] == filtered["ids"]
+        cleared_url = submit(filtered_body, filtered, {"q": "", "sprint": "", "status": "", "type": ""})
+        _, _, cleared = self._list(port, cleared_url)
+        assert self._current_page(cleared) == 1 and cleared["ids"] == want[:10] and self._selected(cleared, "status") == ""
+        _, body, parsed = self._list(port, base)
+        assert "size=25" in submit(body, parsed, {}), "at the default size the form does not submit size=25"
+
+    def test_tasks_page_empty_states(self):
+        """AC88, AC102: with no task to show the card keeps its header and filter
+        bar and shows Tabler's empty state instead of the table and the footer —
+        "No tasks yet" for a roadmap with no task, "No task matches the filters"
+        with a Reset link for a request no task satisfies — both HTTP 200."""
+        self._run(["roadmap", "create", "clearing_house"])
+        record = self._seed_list_roadmap("payments_catalogue", 12)
+        proc, port = self._start(["--port", "0"])
+        for path, title in (
+            ("/roadmaps/clearing_house/tasks", "No tasks yet"),
+            ("/roadmaps/payments_catalogue/tasks?q=no+task+is+titled+like+this", "No task matches the filters"),
+            ("/roadmaps/payments_catalogue/tasks?status=COMPLETED&sprint=none", "No task matches the filters"),
+        ):
+            _, body, parsed = self._list(port, path)
+            main = re.search(r'<main class="page-body">(.*?)</main>', body, re.S).group(1)
+            assert parsed["empty"] == title, f"{path}: empty state {parsed['empty']!r}, want {title!r}"
+            for gone in ("<table", '<div class="card-footer">', "Rows per page", "Task list pages"):
+                assert gone not in main, f"{path}: the empty list still carries {gone!r}"
+            for kept in ('<div class="card-header flex-wrap gap-2">', "<form", '<div class="empty">'):
+                assert kept in main, f"{path}: the empty list lost {kept!r}"
+            if title == "No tasks yet":
+                assert "rmp task create" in main and "empty-action" not in main
+            else:
+                assert re.search(r'<div class="empty-action">\s*<a class="btn" href="/roadmaps/payments_catalogue/tasks">Reset</a>', main)
+                assert main.count(">Reset</a>") == 1, "the empty state's Reset link is not the page's only one"
+
+    def test_tasks_page_search_rules(self):
+        """AC101, AC103, AC105, AC106, AC118, AC121, AC152, AC153: the search
+        matches the title and the #<id> reference alone, case-insensitively and
+        as a substring; the term is trimmed by White_Space (U+0085 removed,
+        U+FEFF kept), normalised to NFC and folded by the simple lowercase
+        mapping on the server, so either stored spelling of café is found by
+        either typed spelling and οδός finds οδός; an invalid byte becomes
+        U+FFFD; an undecodable q is absent; a markup term is echoed escaped."""
+        roadmap = "search_rules_demo"
+        self._run(["roadmap", "create", roadmap])
+        titles = (
+            "Invalidate the settlement CACHE after a refund",
+            "Café Lisboa onboarding",
+            "Cafe\u0301 Porto onboarding",
+            "Survey the οδός network",
+            "Survey the ΟΔΟΣ network",
+            "Decode the acquirer file \ufffd marker",
+            'Render the "<b>bold</b> & more" banner',
+        )
+        ids = []
+        for title in titles:
+            _, out, _ = self._run([
+                "task", "create", "-r", roadmap, "-t", title,
+                "-fr", "Only this requirement mentions the zeppelin freight carrier.",
+                "-tr", "Served read-only from the roadmap database.",
+                "-ac", "The search finds the task by its title or reference.",
+            ])
+            ids.append(json.loads(out)["id"])
         proc, port = self._start(["--port", "0"])
 
-        # A roadmap with no task: five columns, five empty states, no card, and
-        # the board itself still rendered.
-        _, _, body = self._req(port, "/roadmaps/board_empty_demo/tasks")
-        region, columns = self._board_columns(body)
-        assert len(columns) == 5, "an empty roadmap must still render all five columns"
-        for column, want in zip(columns, self.BOARD_COLUMNS):
-            got, count = self._column_header(column)
-            assert got == want, f"column titled {got!r}, want {want!r}"
-            assert count == 0, f"the empty column {got} shows the count {count}, want 0"
-            assert self._shows_empty_state(column), (
-                f"the empty column {got} renders no empty state"
-            )
-        assert 'class="card card-sm task-card' not in region, (
-            "an empty roadmap must render no card"
-        )
+        def search(raw_query):
+            _, _, parsed = self._list(port, f"/roadmaps/{roadmap}/tasks?size=100&{raw_query}")
+            return sorted(parsed["ids"])
 
-        # A populated board keeps the empty state in the columns that hold no
-        # task: the fixture roadmap has no task in DOING.
-        _, _, populated = self._req(port, f"/roadmaps/{ROADMAP}/tasks")
-        _, columns = self._board_columns(populated)
-        for column in columns:
-            status, count = self._column_header(column)
-            empty = self._shows_empty_state(column)
-            assert empty == (count == 0), (
-                f"column {status} shows the count {count} and "
-                f"{'an' if empty else 'no'} empty state"
-            )
+        def q(term):
+            return "q=" + urllib.parse.quote(term)
+
+        assert search(q("cache")) == [ids[0]] == search(q("CaChE"))
+        assert search(q("zeppelin")) == [], "a word only in the requirements matched"
+        assert search(q("TASK")) == [], "a word only in the type matched"
+        assert ids[1] in search(q(str(ids[1]))) and search(q(f"#{ids[1]}")) == [ids[1]]
+        for term in ("café", "cafe\u0301", "CAFÉ", "CAFE\u0301"):
+            assert search(q(term)) == sorted(ids[1:3]), f"{term!r} does not find both spellings"
+        assert search(q("cafe")) == [], "NFC: cafe must not find café"
+        assert search(q("οδός")) == [ids[3]]
+        assert search(q("ΟΔΟΣ")) == [ids[4]]
+        assert search(q("\u0085settlement cache\u0085")) == [ids[0]], "U+0085 is White_Space and is trimmed"
+        assert search(q(WHITE_SPACE + "settlement cache" + WHITE_SPACE)) == [ids[0]], (
+            "every White_Space code point is trimmed from the ends of a term")
+        assert search(q("\ufeffsettlement")) == [], "U+FEFF is not White_Space and is kept"
+        assert search(q(" \t ")) == sorted(ids), "a whitespace-only term is no criterion"
+        assert search("q=%FF") == [ids[5]], "an invalid byte must be U+FFFD"
+        assert search("q=%zz") == sorted(ids), "an undecodable q must be absent"
+        assert search(q("refund " * 60)) == [], "a term longer than any title"
+
+        term = '<b>bold</b> & more'
+        _, body, parsed = self._list(port, f"/roadmaps/{roadmap}/tasks?size=10&{q(term)}")
+        assert parsed["ids"] == [ids[6]] and parsed["search"] == term
+        assert term not in body and "<b>bold</b>" not in body, "the term reached the page as markup"
+        encoded = urllib.parse.quote_plus(term)
+        assert all(f"q={encoded}" in s["href"] for s in parsed["sizes"]), "a link does not carry the encoded term"
+        _, body, _ = self._list(port, f"/roadmaps/{roadmap}/tasks?" + q('"><script>alert(1)</script>'))
+        assert "<script>alert" not in body
+
+        # Normalisation is for comparison only: the CLI returns the stored bytes.
+        stored = json.loads(self._run(["task", "get", "-r", roadmap, str(ids[2])])[1])
+        stored = stored[0] if isinstance(stored, list) else stored
+        assert stored["title"] == titles[2], "the stored decomposed title changed"
+
+    TASK_TYPE_BADGE = {
+        "BUG": "bg-red-lt", "USER_STORY": "bg-green-lt", "TASK": "bg-blue-lt",
+        "SUB_TASK": "bg-azure-lt", "EPIC": "bg-purple-lt", "REFACTOR": "bg-indigo-lt",
+        "IMPROVEMENT": "bg-teal-lt", "SPIKE": "bg-yellow-lt", "DESIGN_UX": "bg-pink-lt",
+        "CHORE": "bg-secondary-lt",
+    }
 
     @staticmethod
     def _go_escaped(text):
@@ -1305,17 +1734,17 @@ class TestWebInterface:
         return re.findall(r"<([a-zA-Z][a-zA-Z0-9]*)\b([^>]*)>", body)
 
     def test_every_task_card_is_a_link_to_its_task_page(self):
-        """On both boards every task card is ONE <a> carrying Tabler's card and
-        card-link classes and the href of its own task's page, named
+        """On the sprint board every task card is ONE <a> carrying Tabler's card
+        and card-link classes and the href of its own task's page, named
         `Open details for task #<id>: <title>`, with no tabindex and no role, and
         nothing that cannot be activated pretends to be a control. Following the
         href serves that task's page. No script was added for it (SPEC/WEB.md
-        § Roadmap Tasks Page, Clickable card; § Sprint Detail Sub-Template, The
-        card is a link to the task page; Acceptance Criteria 86, 93, and 135)."""
+        § Sprint Detail Sub-Template, The card is a link to the task page;
+        Acceptance Criteria 93 and 135). The tasks page renders rows, not cards:
+        test_tasks_page_renders_one_paginated_list covers its two links (AC86)."""
         proc, port = self._start(["--port", "0"])
 
         for path in (
-            f"/roadmaps/{ROADMAP}/tasks",
             f"/roadmaps/{ROADMAP}/sprints/{self.open_sid}",
         ):
             _, _, body = self._req(port, path)
@@ -1357,8 +1786,7 @@ class TestWebInterface:
             # script, all from /static/, under the unchanged policy.
             scripts = re.findall(r"<script\b([^>]*)>", body)
             srcs = {re.search(r'src="([^"]*)"', s).group(1) for s in scripts}
-            want_srcs = {"/static/vendor/tabler/tabler.min.js"}
-            want_srcs.add("/static/task-search.js" if path.endswith("/tasks") else "/static/sprint-board.js")
+            want_srcs = {"/static/vendor/tabler/tabler.min.js", "/static/sprint-board.js"}
             assert srcs == want_srcs and len(scripts) == len(want_srcs), (
                 f"{path}: unexpected scripts {srcs!r}"
             )
@@ -1369,7 +1797,7 @@ class TestWebInterface:
 
     def test_task_modal_script_and_task_json_are_gone(self):
         """The interface has no task modal, no task detail script, and no task
-        JSON: neither board page carries a modal element or a modal toggle, the
+        JSON: neither the tasks page nor the sprint page carries a modal element or a modal toggle, the
         modal script is not served, and every path below a task page answers 404
         with no JSON body (SPEC/WEB.md § Routes and Pages, rule 5; Acceptance
         Criterion 96)."""
@@ -1421,1093 +1849,6 @@ class TestWebInterface:
         )
         assert "<table" not in body, "the sprint page must render no member-tasks table"
         assert "task-row" not in body, "no row-based markup may remain"
-
-    # ====================================================================
-    # Header search: narrowing the board, the URL, and the two paths agreeing
-    # (SPEC/WEB.md § Roadmap Tasks Page, Header search control)
-    # ====================================================================
-
-    @staticmethod
-    def _board_cards(region):
-        """Return every card of a board region as (id, corpus, shown)."""
-        cards = []
-        for tag in re.findall(
-            r'<a class="card card-sm card-link text-reset task-card"[^>]*>', region
-        ):
-            task_id = re.search(r'data-task-id="(\d+)"', tag)
-            corpus = re.search(r'data-search="([^"]*)"', tag)
-            assert task_id and corpus, f"a board card carries no id or corpus: {tag}"
-            cards.append(
-                (int(task_id.group(1)), html_lib.unescape(corpus.group(1)), " hidden" not in tag)
-            )
-        return cards
-
-    def _board_snapshot(self, port, roadmap, query=""):
-        """Return what a served board shows: per column, the ids shown and the
-        count, plus the no-match message state."""
-        _, _, body = self._req(port, f"/roadmaps/{roadmap}/tasks{query}")
-        region, columns = self._board_columns(body)
-        snapshot = {"columns": [], "message": False, "body": body, "region": region}
-        for column in columns:
-            status, count = self._column_header(column)
-            cards = self._board_cards(column)
-            snapshot["columns"].append({
-                "status": status,
-                "count": count,
-                "shown": [c[0] for c in cards if c[2]],
-                "cards": cards,
-                "empty": self._shows_empty_state(column),
-            })
-        m = re.search(r'<div class="empty py-3" data-role="task-search-empty"([^>]*)>', region)
-        assert m, "the board carries no no-match message element"
-        snapshot["message"] = "hidden" not in m.group(1)
-        return snapshot
-
-    def test_tasks_page_header_has_search_and_no_graph_button(self):
-        """The page header carries a labelled search input and no knowledge-graph
-        button; the sidebar still reaches the graph (Acceptance Criterion 100)."""
-        proc, port = self._start(["--port", "0"])
-        _, _, body = self._req(port, f"/roadmaps/{ROADMAP}/tasks")
-
-        header = body[body.index('<div class="page-header d-print-none">'):body.index('<main class="page-body">')]
-        assert 'data-role="task-search"' in header, "the page header carries no search input"
-        assert 'type="search"' in header and 'id="task-search"' in header, header
-        assert '<label class="form-label mb-0" for="task-search">Search tasks</label>' in header, (
-            "the search input has no associated label"
-        )
-        assert "placeholder" not in header, "a placeholder must not stand in for the label"
-        assert "/graph" not in header, "the page header still links to the knowledge graph"
-        assert "<form" not in header, "the search control must submit nothing"
-
-        # The graph stays reachable from this page, through the sidebar.
-        assert f'href="/roadmaps/{ROADMAP}/graph"' in body, (
-            "the sidebar must still reach the graph from the tasks page"
-        )
-
-    def test_tasks_page_search_narrows_the_board_and_its_counts(self):
-        """A q term narrows the shown cards and the counts follow, matching the
-        title and the #id reference only (Acceptance Criteria 101, 102)."""
-        proc, port = self._start(["--port", "0"])
-
-        full = self._board_snapshot(port, ROADMAP)
-        total = sum(c["count"] for c in full["columns"])
-        assert total > 0, "the fixture roadmap shows no card"
-
-        # A word from one title narrows to the tasks carrying it.
-        narrowed = self._board_snapshot(port, ROADMAP, "?q=passkey")
-        shown = [i for c in narrowed["columns"] for i in c["shown"]]
-        assert shown == [self.pending_task_id], (
-            f"the term 'passkey' shows {shown}, want just the passkey task"
-        )
-        for column in narrowed["columns"]:
-            assert column["count"] == len(column["shown"]), (
-                f"column {column['status']} counts {column['count']} and shows {len(column['shown'])}"
-            )
-            assert column["empty"] == (column["count"] == 0), (
-                f"column {column['status']} empty-state disagrees with its count"
-            )
-        # Every card stays in the document, so the browser can widen with no round trip.
-        assert sum(len(c["cards"]) for c in narrowed["columns"]) == total
-
-        # Case-insensitive, and the same tasks for the upper-case term.
-        upper = self._board_snapshot(port, ROADMAP, "?q=PASSKEY")
-        assert [i for c in upper["columns"] for i in c["shown"]] == shown
-
-        # The id and the #id reference both find the task.
-        t1 = self.open_task_ids[0]
-        for query in (f"?q={t1}", f"?q=%23{t1}"):
-            by_ref = self._board_snapshot(port, ROADMAP, query)
-            found = [i for c in by_ref["columns"] for i in c["shown"]]
-            assert t1 in found, f"{query} does not find task #{t1}: {found}"
-
-        # A term matching nothing empties the board AND says so.
-        none = self._board_snapshot(port, ROADMAP, "?q=zzz-nothing-matches")
-        assert all(c["count"] == 0 and c["empty"] for c in none["columns"])
-        assert none["message"], "a search that matched nothing renders no message"
-        assert len(none["columns"]) == 5, "searching dropped a column"
-
-        # An empty term is no term: every card shows, and no message.
-        blank = self._board_snapshot(port, ROADMAP, "?q=%20%20")
-        assert sum(c["count"] for c in blank["columns"]) == total
-        assert not blank["message"]
-
-    def test_tasks_page_search_server_and_client_agree(self):
-        """The board the server renders for a term and the board the browser
-        produces by narrowing the unnarrowed page are the same (Acceptance
-        Criterion 104).
-
-        The browser's rule is re-expressed here from the served script's own
-        contract: strip the term's ends by the trim rule's whitespace, fold what
-        is left, then match it against the corpus the server folded into
-        data-search, or against '#<id>'. The strip is NOT Python's str.strip():
-        that removes Python's own set, which also holds U+001C-U+001F, so a
-        harness using it would be re-expressing Python's rule rather than the one
-        under test. The script is asserted to be this rule in
-        test_tasks_page_search_script_is_text_only_and_locale_independent, and
-        the whitespace set spelled out below is checked against the one the
-        server actually ships in
-        test_tasks_page_search_trims_the_term_with_the_shipped_whitespace."""
-        proc, port = self._start(["--port", "0"])
-        full = self._board_snapshot(port, ROADMAP)
-
-        for term, query in (
-            ("", ""),
-            ("passkey", "?q=passkey"),
-            ("PASSKEY", "?q=PASSKEY"),
-            ("  passkey  ", "?q=%20%20passkey%20%20"),
-            ("token endpoint", "?q=token%20endpoint"),
-            ("#" + str(self.open_task_ids[0]), f"?q=%23{self.open_task_ids[0]}"),
-            ("e", "?q=e"),
-            ("zzz", "?q=zzz"),
-            ("<b>x</b>", "?q=%3Cb%3Ex%3C%2Fb%3E"),
-        ):
-            server = self._board_snapshot(port, ROADMAP, query)
-            folded = term.strip(WHITE_SPACE).lower()
-
-            for column in full["columns"]:
-                want = [
-                    task_id for task_id, corpus, _ in column["cards"]
-                    if folded == "" or folded in corpus or folded in f"#{task_id}"
-                ]
-                got = next(c for c in server["columns"] if c["status"] == column["status"])
-                assert got["shown"] == want, (
-                    f"term {term!r}: column {column['status']} shows {got['shown']} on the "
-                    f"server and {want} in the browser"
-                )
-                assert got["count"] == len(want), (
-                    f"term {term!r}: column {column['status']} counts {got['count']}, want {len(want)}"
-                )
-                assert got["empty"] == (len(want) == 0), (
-                    f"term {term!r}: column {column['status']} empty-state disagrees"
-                )
-
-            shown_total = sum(len(c["shown"]) for c in server["columns"])
-            assert server["message"] == (folded != "" and shown_total == 0), (
-                f"term {term!r}: the no-match message disagrees with the shown set"
-            )
-
-    def test_tasks_page_search_term_is_escaped(self):
-        """A term carrying markup is echoed as text into the input and the
-        message, and introduces no element or script (Acceptance Criterion 106)."""
-        hostile = '"><script>alert(1)</script>'
-        proc, port = self._start(["--port", "0"])
-        _, _, body = self._req(
-            port, f"/roadmaps/{ROADMAP}/tasks?q=%22%3E%3Cscript%3Ealert(1)%3C%2Fscript%3E"
-        )
-
-        assert hostile not in body, "the raw term reached the page"
-        assert "<script>alert(1)</script>" not in body, "the term became a script element"
-        assert body.count("<script") == 2, (
-            f"the page has {body.count('<script')} script elements, want 2"
-        )
-        assert body.count("</script>") == 2
-
-        # The input echoes it as an attribute value that decodes back exactly.
-        m = re.search(r'<input[^>]*data-role="task-search"[^>]*>', body)
-        assert m, "the page renders no search input"
-        value = re.search(r'value="([^"]*)"', m.group(0))
-        assert value, f"the search input carries no value: {m.group(0)}"
-        assert html_lib.unescape(value.group(1)) == hostile, (
-            f"the input value decodes to {html_lib.unescape(value.group(1))!r}"
-        )
-
-        # And the no-match message names it as text.
-        term = re.search(r'data-role="task-search-term">([^<]*)<', body)
-        assert term and html_lib.unescape(term.group(1)) == hostile, (
-            "the no-match message does not echo the term as text"
-        )
-
-    def test_tasks_page_search_script_is_text_only_and_locale_independent(self):
-        """The narrowing script loads from /static/, writes the term only as
-        text, folds it without a locale, and updates the URL in place
-        (Acceptance Criteria 103, 106, 107)."""
-        proc, port = self._start(["--port", "0"])
-        status, headers, script = self._req(port, "/static/task-search.js")
-        assert status == 200, f"the narrowing script is not served: {status}"
-
-        code = re.sub(r"/\*.*?\*/", "", script, flags=re.S)
-        code = re.sub(r"^\s*//.*$", "", code, flags=re.M)
-
-        for sink in ("innerHTML", "outerHTML", "insertAdjacentHTML", "document.write", "eval("):
-            assert sink not in code, f"the search script uses the markup sink {sink!r}"
-        assert "textContent" in code, "the search script must write the term as text"
-
-        # The client folds the term with the mapping the SERVER ships it, and
-        # calls no case conversion of the JavaScript platform at all: the
-        # platform's is Unicode's Default Case Conversion rather than the folding
-        # rule, and its tables are of whatever Unicode version the browser ships
-        # (Acceptance Criteria 118 and 119).
-        for conversion in ("toLowerCase", "toLocaleLowerCase"):
-            assert conversion not in script, (
-                f"the served script names {conversion}; the same term would then select "
-                "different tasks on the two paths, and different tasks in two browsers "
-                "of different Unicode versions"
-            )
-        assert "var FOLD_TABLE = [" in code, "the script ships no folding table"
-        assert "codePointAt" in code and "fromCodePoint" in code, (
-            "the script must fold the term by code point, not by UTF-16 code unit"
-        )
-
-        # And the same for the other half of the term's normalisation: the client
-        # strips the term's ends with the whitespace set the SERVER ships, and
-        # calls none of the platform's trimming functions — that platform's set
-        # keeps U+0085 and removes U+FEFF, which the trim rule does the other way
-        # round on both counts (Acceptance Criteria 121 and 122).
-        for trimming in (".trim(", ".trimStart(", ".trimEnd(", ".trimLeft(", ".trimRight(",
-                         '["trim"]', "['trim']"):
-            assert trimming not in script, (
-                f"the served script calls the platform's {trimming}; the same term would then "
-                "lose different code points on the two paths"
-            )
-        assert "var SPACE_TABLE = [" in code, "the script ships no whitespace set"
-        assert "function trimTerm(" in code and "function isSpaceCodePoint(" in code, (
-            "the script must strip the term's ends through the shipped whitespace set"
-        )
-        # It matches the corpus the server folded, and the #id reference.
-        assert 'getAttribute("data-search")' in code
-        assert 'data-task-id' in code
-
-        # The URL is updated in place, never stacked, and q is removed when empty.
-        assert "replaceState" in code, "the script does not update the URL in place"
-        assert "pushState" not in code, "the script stacks a history entry per keystroke"
-        assert 'searchParams.delete("q")' in code, "the script leaves an empty q behind"
-
-        # Narrowing reaches neither the network nor a navigation.
-        for forbidden in ("fetch(", "XMLHttpRequest", "location.assign", "location.replace"):
-            assert forbidden not in code, f"the search script does {forbidden!r}"
-
-        # The policy that keeps every script out of the document is unchanged.
-        _, page_headers, page = self._req(port, f"/roadmaps/{ROADMAP}/tasks")
-        csp = page_headers.get("content-security-policy", "")
-        assert "script-src 'self'" in csp, csp
-        srcs = {re.search(r'src="([^"]*)"', s).group(1)
-                for s in re.findall(r"<script\b([^>]*)>", page)}
-        assert srcs == {
-            "/static/vendor/tabler/tabler.min.js",
-            "/static/task-search.js",
-        }, srcs
-
-    # A second roadmap, whose titles carry the code points on which the
-    # JavaScript platform's own case conversion differs from the folding rule
-    # SPEC/WEB.md Acceptance Criterion 118 fixes, plus an ASCII control so a term
-    # that narrows nothing at all cannot pass unnoticed. It is separate from the
-    # fixture roadmap so no other scenario's totals move.
-    FOLD_ROADMAP = "multilingual-settlement"
-    FOLD_TITLES = (
-        # A WORD-FINAL capital sigma: the rule folds it to U+03C3 in every
-        # position, the full conversion would give U+03C2 here.
-        ("greek_upper", "\u039f\u0394\u039f\u03a3 \u03a0\u039b\u0397\u03a1\u03a9\u039c\u03a9\u039d: "
-                        "\u03b5\u03c0\u03b1\u03bd\u03b1\u03c3\u03c7\u03b5\u03b4\u03b9\u03b1\u03c3\u03bc"
-                        "\u03cc\u03c2 \u03b4\u03c1\u03bf\u03bc\u03bf\u03bb\u03cc\u03b3\u03b7\u03c3\u03b7\u03c2"),
-        # A LITERAL U+03C2 the author typed: already lower case, folds to itself,
-        # and a post-fold rewrite of it would lose this card.
-        ("greek_final", "\u03a7\u03b1\u03c1\u03c4\u03bf\u03b3\u03c1\u03ac\u03c6\u03b7\u03c3\u03b7 "
-                        "\u03bf\u03b4\u03cc\u03c2 \u03c0\u03bb\u03b7\u03c1\u03c9\u03bc\u03ce\u03bd "
-                        "\u03b1\u03bd\u03ac \u03c0\u03ac\u03c1\u03bf\u03c7\u03bf"),
-        # U+0130, which the rule folds to U+0069 ALONE.
-        ("dotted", "\u0130STANBUL nightly settlement reconciliation"),
-        ("plain", "Istanbul acquirer report parser"),
-        # Astral code points, which only a code-point walk folds.
-        ("deseret", "\U00010400\U00010401 Deseret glossary pilot"),
-        ("control", "Rotate the payment gateway signing keys"),
-    )
-
-    def _seed_fold_roadmap(self):
-        """Create the divergence roadmap through the real CLI and return its
-        task ids by key."""
-        self._run(["roadmap", "create", self.FOLD_ROADMAP])
-        ids = {}
-        for key, title in self.FOLD_TITLES:
-            ids[key] = self.test.create_task(
-                self.FOLD_ROADMAP,
-                title,
-                "Operators must find this task by typing its title into the board search.",
-                "The title is folded once by the server into the card's search corpus.",
-                "The term selects the same cards typed as it does carried in the URL.",
-            )
-        return ids
-
-    @staticmethod
-    def _shipped_fold(script):
-        """Return (runs, fold) built from the FOLD_TABLE the server ships in the
-        narrowing script.
-
-        fold is the MAPPING alone, with no trimming in it: normalising a term is
-        two steps, the server ships one table for each, and composing them is the
-        caller's job so that neither step can be taken from Python by accident.
-
-        The client's rule is NOT re-expressed here: the table is the one the
-        browser would run, and the binary search over it is the one the script
-        performs. Python iterates a string by code point, which is the walk the
-        script does with codePointAt."""
-        m = re.search(r"var FOLD_TABLE = \[(.*?)\];", script, re.S)
-        assert m, "the narrowing script ships no FOLD_TABLE"
-        numbers = [int(n) for n in re.findall(r"-?\d+", m.group(1))]
-        assert numbers, "the shipped FOLD_TABLE is empty"
-        assert len(numbers) % 3 == 0, (
-            f"the shipped FOLD_TABLE holds {len(numbers)} numbers, which is not whole "
-            "triples of start, length, delta"
-        )
-        runs = [tuple(numbers[i:i + 3]) for i in range(0, len(numbers), 3)]
-        for i in range(1, len(runs)):
-            assert runs[i - 1][0] + runs[i - 1][1] <= runs[i][0], (
-                f"the shipped runs {runs[i - 1]} and {runs[i]} overlap or are out of order"
-            )
-
-        def fold(raw):
-            out = []
-            for char in raw:
-                cp = ord(char)
-                lo, hi = 0, len(runs) - 1
-                while lo <= hi:
-                    mid = (lo + hi) // 2
-                    start, length, delta = runs[mid]
-                    if cp < start:
-                        hi = mid - 1
-                    elif cp >= start + length:
-                        lo = mid + 1
-                    else:
-                        cp += delta
-                        break
-                out.append(chr(cp))
-            return "".join(out)
-
-        return runs, fold
-
-    @staticmethod
-    def _shipped_trim(script):
-        """Return (spans, trim) built from the SPACE_TABLE the server ships in the
-        narrowing script.
-
-        The trim rule's whitespace is NOT re-expressed here either: the spans are
-        the ones the browser would binary search, expanded into the set they
-        stand for, and the stripping is the ends-only removal the script does.
-        Python's own str.strip() is deliberately not what does the work — its set
-        is Python's, not the server's."""
-        m = re.search(r"var SPACE_TABLE = \[(.*?)\];", script, re.S)
-        assert m, "the narrowing script ships no SPACE_TABLE"
-        numbers = [int(n) for n in re.findall(r"-?\d+", m.group(1))]
-        assert numbers, "the shipped SPACE_TABLE is empty; the client would trim nothing"
-        assert len(numbers) % 2 == 0, (
-            f"the shipped SPACE_TABLE holds {len(numbers)} numbers, which is not whole "
-            "pairs of start, length"
-        )
-        spans = [tuple(numbers[i:i + 2]) for i in range(0, len(numbers), 2)]
-        for i in range(1, len(spans)):
-            assert spans[i - 1][0] + spans[i - 1][1] <= spans[i][0], (
-                f"the shipped spans {spans[i - 1]} and {spans[i]} overlap or are out of order"
-            )
-        shipped = "".join(
-            chr(cp) for start, length in spans for cp in range(start, start + length)
-        )
-
-        def trim(raw):
-            return raw.strip(shipped)
-
-        return spans, trim
-
-    def test_tasks_page_search_folds_the_term_with_the_shipped_mapping(self):
-        """Typing a term and opening the URL that carries it select the same cards
-        for every term, the two code points included on which the JavaScript
-        platform's own case conversion differs from the folding rule (Acceptance
-        Criteria 104, 118 and 119).
-
-        This is the defect the criterion exists to forbid: with the client folding
-        through the platform's conversion, a term of U+039F U+0394 U+039F U+03A3
-        found nothing while the same term carried in q found the card, because the
-        platform gives the word-final sigma U+03C2 and the server gives U+03C3.
-
-        The browser's rule is not re-expressed here. The term is folded through the
-        FOLD_TABLE the server ships inside the narrowing script — the very table
-        the script binary searches — so what is compared are the two real
-        paths."""
-        ids = self._seed_fold_roadmap()
-        proc, port = self._start(["--port", "0"])
-
-        status, _, script = self._req(port, "/static/task-search.js")
-        assert status == 200, f"the narrowing script is not served: {status}"
-        for conversion in ("toLowerCase", "toLocaleLowerCase"):
-            assert conversion not in script, (
-                f"the served script names {conversion}; it must fold the term with the "
-                "server's shipped mapping and consult no case table of the browser's"
-            )
-        assert "codePointAt" in script and "fromCodePoint" in script, (
-            "the script must fold the term by code point, so a surrogate pair is folded "
-            "as the one character it is"
-        )
-
-        _, fold = self._shipped_fold(script)
-
-        # The shipped mapping IS the rule Acceptance Criterion 118 fixes.
-        assert fold("\u0130") == "\u0069", (
-            "U+0130 must fold to U+0069 alone, never to U+0069 U+0307"
-        )
-        assert fold("\u03a3") == "\u03c3", (
-            "U+03A3 must fold to U+03C3 in every position, word-final included"
-        )
-        assert fold("\u03c2") == "\u03c2", (
-            "a literal U+03C2 is already lower case and must not be rewritten"
-        )
-        assert fold("A") == "a" and fold("\u00c1") == "\u00e1", (
-            "ASCII and accented Latin must fold letter for letter"
-        )
-
-        full = self._board_snapshot(port, self.FOLD_ROADMAP)
-        assert sum(c["count"] for c in full["columns"]) == len(self.FOLD_TITLES), (
-            "the divergence roadmap did not render every seeded task"
-        )
-
-        for term, want in (
-            # The defect, both ways round.
-            ("\u039f\u0394\u039f\u03a3", [ids["greek_upper"]]),
-            ("\u03bf\u03b4\u03bf\u03c3", [ids["greek_upper"]]),
-            # And the regression a post-fold rewrite of U+03C2 would cause.
-            ("\u03bf\u03b4\u03cc\u03c2", [ids["greek_final"]]),
-            ("\u039f\u0394\u039f\u03a3 \u03a0\u039b\u0397\u03a1\u03a9\u039c\u03a9\u039d",
-             [ids["greek_upper"]]),
-            ("\u0130STANBUL", [ids["dotted"], ids["plain"]]),
-            ("istanbul", [ids["dotted"], ids["plain"]]),
-            ("\U00010400\U00010401", [ids["deseret"]]),
-            ("SIGNING", [ids["control"]]),
-        ):
-            query = "?q=" + urllib.parse.quote(term, safe="")
-            server = self._board_snapshot(port, self.FOLD_ROADMAP, query)
-            shown = sorted(i for c in server["columns"] for i in c["shown"])
-
-            folded = fold(term)
-            client = sorted(
-                task_id
-                for column in full["columns"]
-                for task_id, corpus, _ in column["cards"]
-                if folded in corpus or folded in f"#{task_id}"
-            )
-
-            assert shown == sorted(want), (
-                f"the SERVER shows {shown} for {term!r}, want {sorted(want)}"
-            )
-            assert client == sorted(want), (
-                f"the BROWSER shows {client} for {term!r}, want {sorted(want)}"
-            )
-            assert shown == client, (
-                f"the two paths disagree on {term!r}: the server shows {shown}, "
-                f"the browser {client}"
-            )
-            assert server["message"] == (len(shown) == 0), (
-                f"term {term!r}: the no-match message disagrees with the shown set"
-            )
-
-    def test_tasks_page_search_trims_the_term_with_the_shipped_whitespace(self):
-        """Typing a term and opening the URL that carries it select the same cards
-        for every term, the two code points included on which the JavaScript
-        platform's own trimming differs from the trim rule (Acceptance Criteria
-        104, 121 and 122).
-
-        The two differ in OPPOSITE directions, which is why both are exercised:
-
-          - U+0085 (NEXT LINE) carries Unicode's White_Space property, so it IS
-            stripped from a term's ends. That platform's trimming keeps it, and
-            with the client using that trimming a term of U+0085 + a word found
-            nothing while the same term carried in q found the card.
-          - U+FEFF (ZERO WIDTH NO-BREAK SPACE) does not carry the property, so it
-            is NOT stripped and a term pasted with a byte-order mark matches
-            nothing. That platform's trimming removes it, and with the client
-            using that trimming the same term found the card while q found
-            nothing. The empty result is not the defect; the disagreement was.
-
-        The browser's rule is not re-expressed here. The term is stripped by the
-        SPACE_TABLE and folded by the FOLD_TABLE the server ships inside the
-        narrowing script — the very tables the script binary searches — so what
-        is compared are the two real paths."""
-        proc, port = self._start(["--port", "0"])
-
-        status, _, script = self._req(port, "/static/task-search.js")
-        assert status == 200, f"the narrowing script is not served: {status}"
-
-        # The absence Acceptance Criterion 122 requires: the client calls none of
-        # the platform's five trimming functions, the legacy aliases included.
-        for trimming in (".trim(", ".trimStart(", ".trimEnd(", ".trimLeft(", ".trimRight(",
-                         '["trim"]', "['trim']"):
-            assert trimming not in script, (
-                f"the served script calls the platform's {trimming}; it must strip the term's "
-                "ends with the server's shipped whitespace set, so U+0085 and U+FEFF resolve "
-                "the same way on both paths"
-            )
-
-        spans, trim = self._shipped_trim(script)
-        _, fold = self._shipped_fold(script)
-        shipped = {cp for start, length in spans for cp in range(start, start + length)}
-
-        # The shipped set IS the property this module states, so the model used by
-        # test_tasks_page_search_server_and_client_agree cannot rot unnoticed.
-        assert shipped == set(map(ord, WHITE_SPACE)), (
-            "the shipped SPACE_TABLE is not Unicode's White_Space property: "
-            f"extra {sorted(shipped - set(map(ord, WHITE_SPACE)))}, "
-            f"missing {sorted(set(map(ord, WHITE_SPACE)) - shipped)}"
-        )
-        assert 0x0085 in shipped, (
-            "U+0085 carries White_Space and MUST be in the shipped set, though the platform's "
-            "own trimming keeps it"
-        )
-        assert 0xFEFF not in shipped, (
-            "U+FEFF does not carry White_Space and MUST NOT be in the shipped set, though the "
-            "platform's own trimming removes it"
-        )
-
-        full = self._board_snapshot(port, ROADMAP)
-        every = sorted(task_id for c in full["columns"] for task_id, _, _ in c["cards"])
-        passkey = [self.pending_task_id]
-
-        for term, want in (
-            # The trim, first direction: U+0085 goes, and the word finds the card.
-            ("\u0085passkey", passkey),
-            ("passkey\u0085", passkey),
-            ("\u0085PASSKEY\u0085", passkey),
-            # The other direction: U+FEFF stays, and the term finds nothing.
-            ("\ufeffpasskey", []),
-            ("passkey\ufeff", []),
-            # The ends only: whitespace inside a term is matched literally.
-            ("pass\u0085key", []),
-            # A term of the property alone is no term at all; one of U+FEFF is.
-            ("\u0085", every),
-            ("\ufeff", []),
-            # And the code points both sides always agreed on still work, so the
-            # two above are a difference rather than the whole rule.
-            (" \t\r\n\u00a0\u2003PASSKEY\u3000\v\f ", passkey),
-        ):
-            query = "?q=" + urllib.parse.quote(term, safe="")
-            server = self._board_snapshot(port, ROADMAP, query)
-            shown = sorted(i for c in server["columns"] for i in c["shown"])
-
-            folded = fold(trim(term))
-            client = sorted(
-                task_id
-                for column in full["columns"]
-                for task_id, corpus, _ in column["cards"]
-                if folded == "" or folded in corpus or folded in f"#{task_id}"
-            )
-
-            assert shown == sorted(want), (
-                f"the SERVER shows {shown} for {term!r}, want {sorted(want)}"
-            )
-            assert client == sorted(want), (
-                f"the BROWSER shows {client} for {term!r}, want {sorted(want)}"
-            )
-            assert shown == client, (
-                f"the two paths disagree on {term!r}: the server shows {shown}, "
-                f"the browser {client}"
-            )
-            assert server["message"] == (folded != "" and len(shown) == 0), (
-                f"term {term!r}: the no-match message disagrees with the shown set"
-            )
-
-    def test_tasks_page_search_never_errors(self):
-        """No q value produces an error page, and an undecodable one is treated as
-        absent (Acceptance Criterion 105)."""
-        proc, port = self._start(["--port", "0"])
-        full = self._board_snapshot(port, ROADMAP)
-        total = sum(c["count"] for c in full["columns"])
-
-        for query in ("?q=", "?q=%20", "?q=zzz", "?q=%zz", "?q=%", "?q=" + "x" * 3000,
-                      "?q=%00", "?q=one&q=two"):
-            status, _, body = self._req(port, f"/roadmaps/{ROADMAP}/tasks{query}")
-            assert status == 200, f"{query} answered {status}, want 200"
-            assert 'data-role="task-board"' in body, f"{query} rendered no board"
-
-        # The undecodable one is treated as absent: the board is unnarrowed.
-        undecodable = self._board_snapshot(port, ROADMAP, "?q=%zz")
-        assert sum(c["count"] for c in undecodable["columns"]) == total, (
-            "an undecodable q narrowed the board; it must be treated as absent"
-        )
-
-    # ---- tasks board header filters (AC112-AC117) -----------------------
-
-    # The filter fixture, seeded on demand by _seed_filter_tasks. Every task
-    # carries a distinct (type, priority, severity) triple, the ten TaskType
-    # values are all present, and both ends of the threshold range are populated,
-    # so no filter assertion below can pass by accident. The "cache" family is
-    # built so that the specification's worked example
-    # ?q=cache&type=BUG&priority=7 has a task excluded by EACH of its three
-    # criteria and by no other, which makes dropping any one of them observable.
-    FILTER_SEED = [
-        ("Cache the acquirer settlement report", "BUG", 8, 7),
-        ("Cache invalidation drops the refund receipt", "BUG", 7, 3),
-        ("Cache warmup exceeds the deployment window", "BUG", 6, 9),
-        ("Cache the merchant catalogue in the edge tier", "EPIC", 9, 2),
-        ("Cache the currency conversion table", "TASK", 7, 7),
-        ("Retire the legacy settlement cache", "BUG", 2, 9),
-        ("Duplicate payout on a retried webhook", "BUG", 9, 5),
-        ("Rotate the acquirer signing keys", "CHORE", 9, 8),
-        ("Publish the acquirer onboarding runbook", "CHORE", 0, 0),
-        ("Draft the payout reconciliation story", "USER_STORY", 5, 1),
-        ("Split the ledger writer into its own package", "REFACTOR", 4, 0),
-        ("Investigate the settlement latency spike", "SPIKE", 3, 6),
-        ("Redesign the refund confirmation screen", "DESIGN_UX", 2, 2),
-        ("Backfill the dispute evidence index", "SUB_TASK", 1, 5),
-        ("Improve the payout scheduling heuristics", "IMPROVEMENT", 7, 4),
-    ]
-
-    def _seed_filter_tasks(self):
-        """Create the filter fixture and return {id: (title, type, priority,
-        severity)} for the tasks it created."""
-        seeded = {}
-        for title, task_type, priority, severity in self.FILTER_SEED:
-            _, out, _ = self._run([
-                "task", "create", "-r", ROADMAP,
-                "-t", title,
-                "-y", task_type,
-                "-p", str(priority),
-                "--severity", str(severity),
-                "-fr", "Operators must be able to narrow the board to this work.",
-                "-tr", "Read-only on the web side, over the roadmap database.",
-                "-ac", "The board shows the task under every control that admits it.",
-            ])
-            seeded[json.loads(out)["id"]] = (title, task_type, priority, severity)
-        return seeded
-
-    @staticmethod
-    def _card_dimensions(region):
-        """Return {id: (type, priority, severity)} for every card in a region."""
-        dimensions = {}
-        for tag in re.findall(
-            r'<a class="card card-sm card-link text-reset task-card"[^>]*>', region
-        ):
-            task_id = re.search(r'data-task-id="(\d+)"', tag)
-            task_type = re.search(r'data-type="([^"]*)"', tag)
-            priority = re.search(r'data-priority="([^"]*)"', tag)
-            severity = re.search(r'data-severity="([^"]*)"', tag)
-            assert task_id and task_type and priority and severity, (
-                f"a board card carries no type, priority or severity: {tag}"
-            )
-            dimensions[int(task_id.group(1))] = (
-                task_type.group(1), int(priority.group(1)), int(severity.group(1))
-            )
-        return dimensions
-
-    @staticmethod
-    def _read_select(body, control_id):
-        """Return [(value, label, selected)] for the <select> carrying an id."""
-        block = re.search(
-            r'<select[^>]*\bid="' + re.escape(control_id) + r'"[^>]*>(.*?)</select>',
-            body, re.S,
-        )
-        assert block, f"the page renders no <select id={control_id!r}>"
-        return [
-            (m.group(1), m.group(3), "selected" in m.group(2))
-            for m in re.finditer(
-                r'<option value="([^"]*)"([^>]*)>([^<]*)</option>', block.group(1)
-            )
-        ]
-
-    @staticmethod
-    def _selected(options, control_id):
-        chosen = [value for value, _, is_selected in options if is_selected]
-        assert len(chosen) == 1, (
-            f"{control_id} has {len(chosen)} selected options ({chosen}), want exactly 1"
-        )
-        return chosen[0]
-
-    def _shown_ids(self, snapshot):
-        return {task_id for column in snapshot["columns"] for task_id in column["shown"]}
-
-    @staticmethod
-    def _keeps(term, task_type, priority, severity, task_id, seeded):
-        """The conjunction, written from the specification and computed over the
-        seeded values: substring over title or '#<id>', equality on type, '>=' on
-        the two thresholds, and a control left empty contributing no criterion."""
-        title, seed_type, seed_priority, seed_severity = seeded[task_id]
-        folded = term.strip().lower()
-        if folded and folded not in title.lower() and folded not in f"#{task_id}":
-            return False
-        if task_type and seed_type != task_type:
-            return False
-        if priority and seed_priority < int(priority):
-            return False
-        if severity and seed_severity < int(severity):
-            return False
-        return True
-
-    FILTER_CONTROL_IDS = (
-        ("task-filter-type", "type"),
-        ("task-filter-priority", "priority"),
-        ("task-filter-severity", "severity"),
-    )
-
-    def test_tasks_page_header_carries_the_three_filter_dropdowns(self):
-        """The actions column carries exactly three labelled filter dropdowns
-        beside the search input, offering the ten TaskType values and the
-        thresholds 1-9, with a no-filter first option and no status filter
-        (Acceptance Criterion 112)."""
-        proc, port = self._start(["--port", "0"])
-        _, _, body = self._req(port, f"/roadmaps/{ROADMAP}/tasks")
-
-        assert len(re.findall(r"<select\b", body)) == 3, (
-            "the tasks page must carry exactly three <select> controls"
-        )
-        assert 'data-role="task-search"' in body, "the search input the filters sit beside is gone"
-
-        # Every control names its dimension through a real, associated label.
-        for control_id in ("task-search", "task-filter-type",
-                           "task-filter-priority", "task-filter-severity"):
-            label = re.search(
-                r'<label[^>]*\bfor="' + re.escape(control_id) + r'"[^>]*>([^<]+)</label>', body
-            )
-            assert label and label.group(1).strip(), (
-                f"{control_id} carries no non-empty <label for=...>; a placeholder or a "
-                f"first option may not stand in for one"
-            )
-
-        types = self._read_select(body, "task-filter-type")
-        assert [value for value, _, _ in types] == [
-            "", "USER_STORY", "TASK", "BUG", "SUB_TASK", "EPIC",
-            "REFACTOR", "CHORE", "SPIKE", "DESIGN_UX", "IMPROVEMENT",
-        ], f"the type filter offers {[v for v, _, _ in types]}"
-        assert types[0][2], "the no-filter option is not selected on an unfiltered board"
-
-        for control_id in ("task-filter-priority", "task-filter-severity"):
-            options = self._read_select(body, control_id)
-            assert [value for value, _, _ in options] == [""] + [str(n) for n in range(1, 10)], (
-                f"{control_id} offers {[v for v, _, _ in options]}, want the no-filter option and 1-9"
-            )
-            assert options[0][2], f"{control_id} does not start on its no-filter option"
-
-        # No status filter: the columns already are the status.
-        for status in ("BACKLOG", "SPRINT", "DOING", "TESTING", "COMPLETED"):
-            assert f'<option value="{status}"' not in body, (
-                f"the header offers {status} as a filter value; the board offers no status filter"
-            )
-        assert 'id="task-filter-status"' not in body
-        assert 'name="status"' not in body
-
-    def test_tasks_page_filters_narrow_the_board_and_its_counts(self):
-        """Each filter narrows by its own dimension, the type filter is an
-        equality and the two thresholds are '>=', and every column count follows
-        the narrowed set (Acceptance Criterion 113)."""
-        seeded = self._seed_filter_tasks()
-        proc, port = self._start(["--port", "0"])
-
-        full = self._board_snapshot(port, ROADMAP)
-        dimensions = self._card_dimensions(full["region"])
-        assert set(seeded) <= set(dimensions), "the board dropped a seeded task"
-
-        for task_id, (_, task_type, priority, severity) in seeded.items():
-            assert dimensions[task_id] == (task_type, priority, severity), (
-                f"task #{task_id} carries {dimensions[task_id]} on its card, "
-                f"want {(task_type, priority, severity)}"
-            )
-
-        for task_type in ("USER_STORY", "TASK", "BUG", "SUB_TASK", "EPIC",
-                          "REFACTOR", "CHORE", "SPIKE", "DESIGN_UX", "IMPROVEMENT"):
-            snapshot = self._board_snapshot(port, ROADMAP, f"?type={task_type}")
-            want = {tid for tid, dim in dimensions.items() if dim[0] == task_type}
-            assert self._shown_ids(snapshot) == want, (
-                f"?type={task_type} shows {self._shown_ids(snapshot)}, want {want}"
-            )
-            for column in snapshot["columns"]:
-                assert column["count"] == len(column["shown"]), (
-                    f"?type={task_type}: column {column['status']} counts "
-                    f"{column['count']} while showing {len(column['shown'])} cards"
-                )
-                assert column["empty"] == (not column["shown"])
-            assert len(snapshot["columns"]) == 5, "a filter dropped a column"
-
-        for threshold in range(1, 10):
-            for name, index in (("priority", 1), ("severity", 2)):
-                snapshot = self._board_snapshot(port, ROADMAP, f"?{name}={threshold}")
-                want = {tid for tid, dim in dimensions.items() if dim[index] >= threshold}
-                assert self._shown_ids(snapshot) == want, (
-                    f"?{name}={threshold} shows {self._shown_ids(snapshot)}, want {want}"
-                )
-                for column in snapshot["columns"]:
-                    assert column["count"] == len(column["shown"])
-
-        # The threshold is "at least", not "exactly": tasks ABOVE it are shown.
-        above = {tid for tid, dim in dimensions.items() if dim[1] > 8}
-        assert above, "the fixture holds no task above priority 8; the assertion would be vacuous"
-        assert above <= self._shown_ids(self._board_snapshot(port, ROADMAP, "?priority=8"))
-
-    def test_tasks_page_filters_compose_conjunctively_with_the_search(self):
-        """The shown set is the conjunction of every active control, including
-        the specification's worked example (Acceptance Criterion 114)."""
-        seeded = self._seed_filter_tasks()
-        proc, port = self._start(["--port", "0"])
-        full = self._board_snapshot(port, ROADMAP)
-        every = set(self._card_dimensions(full["region"]))
-
-        worked = self._board_snapshot(port, ROADMAP, "?q=cache&type=BUG&priority=7")
-        want = {tid for tid in every
-                if tid in seeded and self._keeps("cache", "BUG", "7", "", tid, seeded)}
-        assert len(want) == 2, f"the fixture makes the worked example select {len(want)} tasks, want 2"
-        assert self._shown_ids(worked) == want, (
-            f"?q=cache&type=BUG&priority=7 shows {self._shown_ids(worked)}, want {want}"
-        )
-
-        # Each of the three criteria is doing work: dropping any one widens the
-        # board, so the assertion above cannot be satisfied by ignoring one.
-        for query in ("?type=BUG&priority=7", "?q=cache&priority=7", "?q=cache&type=BUG"):
-            wider = self._shown_ids(self._board_snapshot(port, ROADMAP, query))
-            assert len(wider) > len(want), (
-                f"{query} shows {len(wider)} cards, not more than the {len(want)} of the full "
-                f"conjunction: that criterion selects nothing of its own"
-            )
-
-        for term, task_type, priority, severity in (
-            ("", "", "", ""),
-            ("cache", "", "", ""),
-            ("", "BUG", "", ""),
-            ("", "", "7", ""),
-            ("", "", "", "6"),
-            ("cache", "BUG", "", ""),
-            ("cache", "", "7", ""),
-            ("", "BUG", "7", ""),
-            ("", "CHORE", "", "8"),
-            ("", "", "5", "5"),
-            ("cache", "BUG", "7", ""),
-            ("cache", "BUG", "", "9"),
-            ("the", "TASK", "6", "3"),
-            ("settlement", "SPIKE", "1", "1"),
-            ("", "DESIGN_UX", "9", ""),
-            ("zzz-nothing-matches", "BUG", "3", "3"),
-        ):
-            query = "&".join(
-                f"{name}={urllib.parse.quote(value)}"
-                for name, value in (("q", term), ("type", task_type),
-                                    ("priority", priority), ("severity", severity))
-                if value
-            )
-            snapshot = self._board_snapshot(port, ROADMAP, f"?{query}" if query else "")
-            # The expectation is computed over EVERY card the unnarrowed board
-            # carries - the four tasks _populate created as well as the seeded
-            # ones - from the card's own dimensions and the conjunction as the
-            # specification states it, never from the narrowed page under test.
-            want = set()
-            dimensions = self._card_dimensions(full["region"])
-            titles = self._board_titles(full["region"])
-            assert set(dimensions) == every, "the card sweep lost a card"
-            for tid, (card_type, card_priority, card_severity) in dimensions.items():
-                folded = term.strip().lower()
-                if folded and folded not in titles[tid].lower() and folded not in f"#{tid}":
-                    continue
-                if task_type and card_type != task_type:
-                    continue
-                if priority and card_priority < int(priority):
-                    continue
-                if severity and card_severity < int(severity):
-                    continue
-                want.add(tid)
-            assert self._shown_ids(snapshot) == want, (
-                f"?{query} shows {self._shown_ids(snapshot)}, want {want}"
-            )
-            for column in snapshot["columns"]:
-                assert column["count"] == len(column["shown"]), (
-                    f"?{query}: column {column['status']} miscounts"
-                )
-            assert snapshot["message"] == (
-                bool(query) and not self._shown_ids(snapshot)
-            ), f"?{query}: the no-match message disagrees with the shown set"
-
-    @staticmethod
-    def _board_titles(region):
-        """Return {id: title} for every card in a board region, from the folded
-        corpus the server wrote into the card."""
-        titles = {}
-        for tag in re.findall(
-            r'<a class="card card-sm card-link text-reset task-card"[^>]*>', region
-        ):
-            task_id = int(re.search(r'data-task-id="(\d+)"', tag).group(1))
-            titles[task_id] = html_lib.unescape(
-                re.search(r'data-search="([^"]*)"', tag).group(1)
-            )
-        return titles
-
-    def test_tasks_page_filters_never_error_and_are_independent(self):
-        """A value a dimension does not accept applies no filter on that
-        dimension, answers 200, and leaves the other dimensions applied
-        (Acceptance Criterion 115)."""
-        seeded = self._seed_filter_tasks()
-        proc, port = self._start(["--port", "0"])
-        full = self._board_snapshot(port, ROADMAP)
-        total = sum(c["count"] for c in full["columns"])
-
-        for query in (
-            "type=NOT_A_TYPE", "type=bug", "type=Bug", "type=BUG,EPIC",
-            "type=BUG%20EPIC", "type=%20BUG%20", "type=", "type=%zz",
-            "priority=0", "priority=10", "priority=-1", "priority=%2B7",
-            "priority=07", "priority=%207", "priority=high", "priority=7.0",
-            "priority=", "priority=%zz",
-            "severity=0", "severity=10", "severity=critical", "severity=", "severity=%zz",
-            "status=DOING",
-        ):
-            status, _, body = self._req(port, f"/roadmaps/{ROADMAP}/tasks?{query}")
-            assert status == 200, f"?{query} answered {status}, want 200"
-            assert 'data-role="task-board"' in body, f"?{query} rendered no board"
-
-            snapshot = self._board_snapshot(port, ROADMAP, f"?{query}")
-            assert sum(c["count"] for c in snapshot["columns"]) == total, (
-                f"?{query} narrowed the board; an unaccepted value applies no filter"
-            )
-            assert not snapshot["message"], (
-                f"?{query}: the board says nothing matches while no control is in force"
-            )
-            for control_id, _ in self.FILTER_CONTROL_IDS:
-                chosen = self._selected(self._read_select(body, control_id), control_id)
-                assert chosen == "", (
-                    f"?{query}: {control_id} is on {chosen!r}, want the no-filter option"
-                )
-
-        # The dimensions are independent: an unusable type leaves the accepted
-        # priority and the term applying.
-        mixed = self._board_snapshot(port, ROADMAP, "?q=cache&type=nope&priority=7")
-        priced = self._board_snapshot(port, ROADMAP, "?q=cache&priority=7")
-        assert self._shown_ids(mixed) == self._shown_ids(priced), (
-            "an unusable type changed what the accepted priority and the term select"
-        )
-        assert self._shown_ids(mixed), "the independence assertion is vacuous: nothing is shown"
-
-        # A repeated parameter is read as its FIRST occurrence.
-        repeated = self._board_snapshot(port, ROADMAP, "?type=BUG&type=EPIC")
-        bug = self._board_snapshot(port, ROADMAP, "?type=BUG")
-        epic = self._board_snapshot(port, ROADMAP, "?type=EPIC")
-        assert self._shown_ids(repeated) == self._shown_ids(bug), (
-            "?type=BUG&type=EPIC is not the BUG board"
-        )
-        assert self._shown_ids(bug) != self._shown_ids(epic), (
-            "the fixture makes BUG and EPIC select the same tasks; the assertion is vacuous"
-        )
-
-        # A comma-packed value is one string, names no TaskType, and is ignored.
-        packed = self._board_snapshot(port, ROADMAP, "?type=BUG,EPIC")
-        assert sum(c["count"] for c in packed["columns"]) == total, (
-            "?type=BUG,EPIC narrowed the board; it must be ignored whole"
-        )
-
-        # The parameters do not depend on their order in the query string.
-        forward = self._board_snapshot(port, ROADMAP, "?q=cache&type=BUG&priority=7")
-        reverse = self._board_snapshot(port, ROADMAP, "?priority=7&type=BUG&q=cache")
-        assert self._shown_ids(forward) == self._shown_ids(reverse), (
-            "the board depends on the order of the query parameters"
-        )
-        assert seeded, "the fixture seeded nothing"
-
-    def test_tasks_page_filters_round_trip_through_the_url(self):
-        """A cold load of a URL carrying any combination renders that board with
-        every control already showing the value that produced it, and clearing
-        every control restores the full board and the bare URL (Acceptance
-        Criterion 116)."""
-        self._seed_filter_tasks()
-        proc, port = self._start(["--port", "0"])
-        full = self._board_snapshot(port, ROADMAP)
-        total = sum(c["count"] for c in full["columns"])
-
-        for term, task_type, priority, severity in (
-            ("cache", "BUG", "7", ""),
-            ("", "CHORE", "", "8"),
-            ("the", "", "5", "5"),
-            ("cache", "", "", ""),
-            ("", "EPIC", "9", "1"),
-        ):
-            query = "&".join(
-                f"{name}={urllib.parse.quote(value)}"
-                for name, value in (("q", term), ("type", task_type),
-                                    ("priority", priority), ("severity", severity))
-                if value
-            )
-            _, _, body = self._req(port, f"/roadmaps/{ROADMAP}/tasks?{query}")
-            value = re.search(r'value="([^"]*)"', re.search(
-                r'<input[^>]*data-role="task-search"[^>]*>', body).group(0))
-            assert html_lib.unescape(value.group(1)) == term, (
-                f"?{query}: the search input shows {value.group(1)!r}, want {term!r}"
-            )
-            for (control_id, _), want in zip(self.FILTER_CONTROL_IDS,
-                                             (task_type, priority, severity)):
-                chosen = self._selected(self._read_select(body, control_id), control_id)
-                assert chosen == want, (
-                    f"?{query}: {control_id} shows {chosen!r}, want {want!r}"
-                )
-
-        # Clearing every control restores the full board with its TRUE counts.
-        bare = self._board_snapshot(port, ROADMAP)
-        assert sum(c["count"] for c in bare["columns"]) == total
-        assert not bare["message"]
-        for control_id, _ in self.FILTER_CONTROL_IDS:
-            assert self._selected(self._read_select(bare["body"], control_id), control_id) == ""
-
-    def test_tasks_page_filter_script_applies_the_same_conjunction(self):
-        """The dropdowns are applied by the SAME /static/ script that applies the
-        term, as one conjunction, with the URL kept in place and no inline script
-        or policy change (Acceptance Criteria 116 and 117)."""
-        proc, port = self._start(["--port", "0"])
-        status, _, script = self._req(port, "/static/task-search.js")
-        assert status == 200, f"the narrowing script is not served: {status}"
-
-        code = re.sub(r"/\*.*?\*/", "", script, flags=re.S)
-        code = re.sub(r"^\s*//.*$", "", code, flags=re.M)
-
-        for fragment in (
-            'data-role="task-filter-type"',
-            'data-role="task-filter-priority"',
-            'data-role="task-filter-severity"',
-            'attribute: "data-type"',
-            'attribute: "data-priority"',
-            'attribute: "data-severity"',
-            'param: "type"', 'param: "priority"', 'param: "severity"',
-        ):
-            assert fragment in code, f"the narrowing script does not carry {fragment!r}"
-
-        assert "return cardValue === filterValue" in code, "the type filter is not an equality"
-        assert "return Number(cardValue) >= Number(filterValue)" in code, (
-            "the threshold filters are not '>='"
-        )
-        assert "Number(cardValue) > Number(filterValue)" not in code
-
-        # One conjunction, and one entry point for all four controls.
-        assert 'addEventListener("change", narrow)' in code, (
-            "the dropdowns are not wired to the same narrowing entry point as the search input"
-        )
-        assert 'input.addEventListener("input", narrow)' in code
-
-        # The URL is kept in step in place, and a control on its no-filter option
-        # removes its parameter.
-        assert "replaceState" in code and "pushState" not in code
-        assert "url.searchParams.delete(filters[i].param)" in code
-        assert "url.searchParams.set(filters[i].param, state.filters[i])" in code
-
-        for forbidden in ("fetch(", "XMLHttpRequest", "location.assign", "location.replace",
-                          "innerHTML", "insertAdjacentHTML", "document.write", "eval("):
-            assert forbidden not in code, f"the narrowing script does {forbidden!r}"
-
-        # No new script and no policy change came in with the dropdowns.
-        _, headers, page = self._req(port, f"/roadmaps/{ROADMAP}/tasks?type=BUG&priority=7")
-        assert "script-src 'self'" in headers.get("content-security-policy", "")
-        srcs = {re.search(r'src="([^"]*)"', s).group(1)
-                for s in re.findall(r"<script\b([^>]*)>", page)}
-        assert srcs == {
-            "/static/vendor/tabler/tabler.min.js",
-            "/static/task-search.js",
-        }, srcs
-        assert "style=" not in page, "the filters introduced an inline style attribute"
-
-    def test_tasks_page_filter_values_are_never_echoed_into_the_page(self):
-        """A filter value never reaches the document: the options are the
-        server's own enumeration and an unaccepted value selects the no-filter
-        option (Acceptance Criterion 117)."""
-        proc, port = self._start(["--port", "0"])
-        hostile = '"><script>alert(1)</script>'
-        encoded = urllib.parse.quote(hostile, safe="")
-        status, _, body = self._req(
-            port,
-            f"/roadmaps/{ROADMAP}/tasks?type={encoded}&priority={encoded}&severity={encoded}",
-        )
-
-        assert status == 200, f"a hostile filter value answered {status}, want 200"
-        assert hostile not in body, "a raw filter value reached the page"
-        assert "alert(1)" not in body, "a filter value became script content"
-        assert body.count("<script") == 2, (
-            f"the page has {body.count('<script')} script elements, want 2"
-        )
-        for control_id, _ in self.FILTER_CONTROL_IDS:
-            assert self._selected(self._read_select(body, control_id), control_id) == "", (
-                f"{control_id} did not fall back to its no-filter option"
-            )
 
     def test_no_page_carries_a_footer_or_the_read_only_notice(self):
         """No page ends with a footer band.
@@ -3702,15 +3043,16 @@ class TestWebInterface:
             )
 
     def test_board_cards_lead_with_title_then_one_badge_line(self):
-        """AC85/AC133/AC178/AC179: on the card of BOTH boards the task title is
-        the first line, and the next line opens with exactly four badges in
+        """AC85/AC133/AC178/AC179: on the card of the sprint board the task title
+        is the first line, and the next line opens with exactly four badges in
         this order: the id badge `#<id>` with `bg-black text-white`, the
         severity badge `S<n>`, the priority badge `P<n>`, and the type badge in
-        its type variant. The two boards render that line byte for byte alike,
-        the id badge keeps its fixed classes whatever the task's values, and
-        the rejected forms (`S <n>`, `S:<n>`, `Sev:<n>`, `Sev: <n>`, their
-        priority counterparts, any `Sev:` or `Pri:` text, and the separate
-        reference line) are absent.
+        its type variant; the tasks page's row carries the same four badges,
+        byte for byte, in its ID, Type, Severity and Priority cells, severity
+        before priority; the id badge keeps its fixed classes whatever the
+        task's values, and the rejected forms (`S <n>`, `S:<n>`, `Sev:<n>`,
+        `Sev: <n>`, their priority counterparts, any `Sev:` or `Pri:` text, and
+        the separate reference line) are absent.
 
         Two tasks of different types, severities, and priorities are asserted,
         with each task's severity and priority different from each other, so a
@@ -3747,40 +3089,48 @@ class TestWebInterface:
         proc, port = self._start(["--port", "0"])
         _, _, tasks_body = self._req(port, f"/roadmaps/{roadmap}/tasks")
         _, _, sprint_body = self._req(port, f"/roadmaps/{roadmap}/sprints/{sprint_id}")
-        tasks_region, _ = self._board_columns(tasks_body)
         sprint_region, _ = self._sprint_board_columns(sprint_body)
 
         for task_id, task_type, priority, severity in seeded:
-            title = self._rendered_task_title(tasks_body, task_id)
-            want_line = (
-                '<span class="d-flex flex-wrap gap-1" data-role="task-card-badges">'
-                f'<span class="badge bg-black text-white">#{task_id}</span>'
-                f'<span class="badge {severity_variant[severity]}">S{severity}</span>'
-                f'<span class="badge {priority_variant[priority]}">P{priority}</span>'
-                f'<span class="badge {type_variant[task_type]}">{task_type}</span>'
-                '</span>'
+            badges = (
+                f'<span class="badge bg-black text-white">#{task_id}</span>',
+                f'<span class="badge {severity_variant[severity]}">S{severity}</span>',
+                f'<span class="badge {priority_variant[priority]}">P{priority}</span>',
+                f'<span class="badge {type_variant[task_type]}">{task_type}</span>',
             )
-            lines = {}
-            for where, region, between in (
-                ("the tasks board", tasks_region, r'\s*'),
-                ("the sprint board", sprint_region,
-                 r'\s*<span class="d-flex flex-wrap align-items-center '
-                 r'justify-content-between gap-1" data-role="task-card-summary">\s*'),
-            ):
-                card = self._sprint_board_card_html(region, task_id)
-                pattern = (
-                    r'<span class="card-body d-block">\s*'
-                    r'<span class="d-block fw-bold text-break mb-1" '
-                    rf'data-role="task-card-title">{re.escape(title)}</span>'
-                    + between + re.escape(want_line)
-                )
-                assert re.search(pattern, card, re.S), (
-                    f"AC179: on {where}, task #{task_id}'s card must open with its "
-                    f"title and then the badge line {want_line}: {card}"
-                )
-                assert 'data-role="task-card-ref"' not in card, (
-                    f"{where}: task #{task_id}'s card still renders the separate "
-                    f"reference line: {card}"
+            want_line = ('<span class="d-flex flex-wrap gap-1" data-role="task-card-badges">'
+                         + "".join(badges) + '</span>')
+            card = self._sprint_board_card_html(sprint_region, task_id)
+            title = re.search(r'data-role="task-card-title">(.*?)</span>', card, re.S).group(1)
+            pattern = (
+                r'<span class="card-body d-block">\s*'
+                r'<span class="d-block fw-bold text-break mb-1" '
+                rf'data-role="task-card-title">{re.escape(title)}</span>'
+                r'\s*<span class="d-flex flex-wrap align-items-center '
+                r'justify-content-between gap-1" data-role="task-card-summary">\s*'
+                + re.escape(want_line)
+            )
+            assert re.search(pattern, card, re.S), (
+                f"AC179: task #{task_id}'s card must open with its title and then "
+                f"the badge line {want_line}: {card}"
+            )
+            assert f'aria-label="Open details for task #{task_id}: {title}"' in card, (
+                f"AC179: task #{task_id}'s accessible name changed: {card}"
+            )
+
+            # The list row: the same four badges, in the ID, Type, Severity and
+            # Priority cells, severity before priority.
+            row = self._list_row(tasks_body, task_id)
+            row_badges = re.findall(r'<span class="badge [^"]*">[^<]*</span>', row)
+            assert len(row_badges) == 5, f"task #{task_id}'s row carries {len(row_badges)} badges: {row}"
+            assert (row_badges[0], row_badges[1], row_badges[3], row_badges[4]) == (
+                badges[0], badges[3], badges[1], badges[2]), (
+                f"AC179/AC85: task #{task_id}'s row does not repeat the card's badges "
+                f"(id, type, severity, priority): {row_badges}"
+            )
+            for where, markup in (("the sprint board", card), ("the tasks list", row)):
+                assert 'data-role="task-card-ref"' not in markup, (
+                    f"{where}: task #{task_id} still renders the separate reference line"
                 )
                 for retired in (f">S {severity}<", f">P {priority}<",
                                 f">S:{severity}<", f">P:{priority}<",
@@ -3788,19 +3138,10 @@ class TestWebInterface:
                                 f">Sev: {severity}<", f">Pri: {priority}<",
                                 "Sev:", "Pri:",
                                 f'bg-secondary-lt">#{task_id}<'):
-                    assert retired not in card, (
+                    assert retired not in markup, (
                         f"AC85/AC178: {where} renders the retired form {retired!r} "
-                        f"on task #{task_id}'s card: {card}"
+                        f"for task #{task_id}: {markup}"
                     )
-                assert (f'aria-label="Open details for task #{task_id}: {title}"'
-                        in card), (
-                    f"AC179: {where}: task #{task_id}'s accessible name changed: {card}"
-                )
-                lines[where] = self._span_with_role(card, "task-card-badges")
-            assert lines["the tasks board"] == lines["the sprint board"], (
-                f"task #{task_id}'s badge line differs between the two boards: "
-                f"{lines}"
-            )
 
     def test_sprint_board_card_merges_badges_and_counters_onto_one_line(self):
         """AC133: the badges and the counters share ONE line — the badges at its
@@ -3817,11 +3158,6 @@ class TestWebInterface:
         rather than an overflow — a wrapped flex line holding one item resolves
         space-between to flex-start, so the counters drop directly below the
         badges inside the same card.
-
-        The roadmap tasks page's card is asserted UNCHANGED in the same test,
-        because "this board renders no metadata footer" states nothing unless
-        the other board still renders one: a template that had dropped the
-        footer from both cards would satisfy every absence assertion here.
         """
         roadmap = "settlement_layout_demo"
         self._run(["roadmap", "create", roadmap])
@@ -3906,8 +3242,8 @@ class TestWebInterface:
             f"leads the pair on this board: {counters}"
         )
 
-        # No card of this board renders a separate footer row: not under the
-        # tasks board's role, not with that row's trailing-edge alignment, and
+        # No card of this board renders a separate footer row: not under a
+        # footer role, not with a trailing-edge alignment, and
         # not with the top margin that separated it from the badges. The board is
         # scanned CARD BY CARD so the guard cannot fail for something a column
         # header emits, and cannot pass because the one card examined is clean.
@@ -3930,37 +3266,6 @@ class TestWebInterface:
             f"the member-tasks board carries an inline style attribute: {region}"
         )
 
-        # The control: the roadmap tasks page's card is untouched. It still
-        # renders its metadata footer, and that footer still lists the subtask
-        # count BEFORE the comment count — the order this board reverses.
-        _, _, tasks_body = self._req(port, f"/roadmaps/{roadmap}/tasks")
-        tasks_region, _ = self._board_columns(tasks_body)
-        assert 'data-role="task-card-meta"' in tasks_region, (
-            "the roadmap tasks page's board renders no metadata footer at all, "
-            "so asserting the sprint board has none proves nothing"
-        )
-        assert 'data-role="task-card-summary"' not in tasks_region, (
-            "the roadmap tasks page's card grew the sprint card's merged line; "
-            "that card keeps its separate metadata footer"
-        )
-        # The same member task, on the tasks board: one subtask and one comment,
-        # so its footer renders both indicators and the order comparison below
-        # has two positions to compare.
-        tasks_card = self._sprint_board_card_html(tasks_region, member)
-        footer = self._span_with_role(tasks_card, "task-card-meta")
-        assert footer, f"the tasks board's control card renders no footer: {tasks_card}"
-        for role in ("task-card-subtasks", "task-card-comments"):
-            assert f'data-role="{role}"' in footer, (
-                f"the tasks board's control card renders no {role!r}, so the "
-                f"order comparison below is vacuous: {footer}"
-            )
-        assert (footer.index('data-role="task-card-subtasks"')
-                < footer.index('data-role="task-card-comments"')), (
-            f"the tasks board's metadata footer now lists the comment count "
-            f"before the subtask count; that footer keeps its own order, and "
-            f"the sprint card's reversed order is stated separately from it: "
-            f"{footer}"
-        )
 
     def test_sprint_board_card_always_renders_both_counters(self):
         """AC134: both counters are present on EVERY card of the member-tasks
@@ -4072,24 +3377,17 @@ class TestWebInterface:
             )
 
     def test_board_column_count_badges_carry_the_colour_of_their_status(self):
-        """AC140: every per-column count badge of the TWO Kanban boards carries
-        the semantic colour of the status its column groups, while its text
-        stays that column's task count.
+        """AC140 and AC61: every per-column count badge of the sprint's
+        member-tasks board carries the semantic colour of the status its column
+        groups — SPRINT's for WAITING, DOING's for DOING, COMPLETED's for CLOSED
+        — while its text stays that column's task count; and in the tasks
+        page's list each row's status badge carries its own status's variant.
 
-        On the roadmap tasks page a column is exactly one task status, so its
-        badge takes that status's own variant. On the sprint's member-tasks
-        board a column groups a SET of statuses, so its badge takes the variant
-        of the group's canonical status: SPRINT's for WAITING, DOING's for
-        DOING, COMPLETED's for CLOSED.
-
-        Both boards are asserted COLUMN BY COLUMN AND AS A WHOLE, exactly as
-        AC120 asserts the three sprint tabs together. BACKLOG maps to
-        bg-secondary-lt, which is also the neutral colour a badge carries when
-        nothing colours it, so that one column renders identically whether the
-        mapping was applied or not: what separates a conforming rendering from a
-        non-conforming one is the other columns, and a rendering that gave every
-        column of either board bg-secondary-lt must fail. The distinct-variant
-        assertions below are that control.
+        Both are asserted AS A WHOLE, exactly as AC120 asserts the three sprint
+        tabs together: BACKLOG maps to bg-secondary-lt, the neutral colour a
+        badge carries when nothing colours it, so a rendering that gave every
+        badge bg-secondary-lt must fail, and the distinct-variant assertions
+        below are that control.
         """
         roadmap = "settlement_recon_demo"
         self._run(["roadmap", "create", roadmap])
@@ -4126,36 +3424,17 @@ class TestWebInterface:
 
         proc, port = self._start(["--port", "0"])
 
-        # ---- the tasks board: one status per column ----
+        # ---- the tasks page's list: each row's status badge ----
         status_code, _, tasks_body = self._req(port, f"/roadmaps/{roadmap}/tasks")
         assert status_code == 200
-        _, tasks_columns = self._board_columns(tasks_body)
-        assert len(tasks_columns) == 5
-
-        tasks_variants = set()
-        for column, want_status in zip(tasks_columns, self.BOARD_COLUMNS):
-            heading, variant, count = self._column_badge(column)
-            tasks_variants.add(variant)
-            assert heading == want_status, (
-                f"the tasks board's column reads {heading!r}, want {want_status!r}"
-            )
-            want = self.TASK_STATUS_BADGE[want_status]
-            assert variant == want, (
-                f"the tasks board's {heading} column carries the count badge "
-                f"variant {variant!r}, want {want!r} — the variant the semantic "
-                f"mapping assigns to that column's own status (AC140)"
-            )
-            assert count == 1, (
-                f"the {heading} column shows the count {count}, want 1; the "
-                f"colour changes the badge's variant and nothing about its text"
-            )
-        assert len(tasks_variants) == 5, (
-            f"the tasks board's five column badges carry {len(tasks_variants)} "
-            f"distinct variant(s) ({sorted(tasks_variants)}); the five statuses "
-            f"map to five different colours, so fewer means the mapping was not "
-            f"applied — and a board that gave every column bg-secondary-lt "
-            f"conforms on none of them"
-        )
+        assert 'data-role="task-board' not in tasks_body, "the tasks page renders a board"
+        row_variants = set()
+        for task_id, want_status in zip(all_ids, ("BACKLOG", "SPRINT", "DOING", "TESTING", "COMPLETED")):
+            row = self._list_row(tasks_body, task_id)
+            want = f'<span class="badge {self.TASK_STATUS_BADGE[want_status]}">{want_status}</span>'
+            assert want in row, f"task #{task_id}'s row does not carry the status badge {want}: {row}"
+            row_variants.add(self.TASK_STATUS_BADGE[want_status])
+        assert len(row_variants) == 5, f"the five statuses carry {len(row_variants)} variants"
 
         # ---- the sprint board: a set of statuses per column ----
         status_code, _, sprint_body = self._req(
@@ -4185,44 +3464,19 @@ class TestWebInterface:
             f"are three different statuses"
         )
 
-        # The two boards agree where they overlap: the DOING column names the
-        # same status on both, so it must carry the same colour on both.
-        _, doing_on_tasks, _ = self._column_badge(tasks_columns[2])
+        # The list and the board read one mapping: the DOING row's status badge
+        # and the DOING column's count badge carry one variant.
         _, doing_on_sprint, _ = self._column_badge(sprint_columns[1])
-        assert doing_on_tasks == doing_on_sprint, (
-            f"the DOING column carries {doing_on_tasks!r} on the tasks board "
-            f"and {doing_on_sprint!r} on the sprint board; both name one status "
-            f"and both read one mapping"
-        )
-
-        # A narrowed board keeps every column's colour while its counts follow
-        # the narrowing (AC101 and AC113 continue to hold).
-        _, _, narrowed_body = self._req(
-            port, f"/roadmaps/{roadmap}/tasks?q=settlement")
-        _, narrowed_columns = self._board_columns(narrowed_body)
-        narrowed_total = 0
-        for column, want_status in zip(narrowed_columns, self.BOARD_COLUMNS):
-            heading, variant, count = self._column_badge(column)
-            narrowed_total += count
-            assert variant == self.TASK_STATUS_BADGE[want_status], (
-                f"the narrowed board's {heading} column carries {variant!r}, "
-                f"want {self.TASK_STATUS_BADGE[want_status]!r}; narrowing "
-                f"changes what a column counts, never what it stands for"
-            )
-        assert 0 < narrowed_total < 5, (
-            f"the search left {narrowed_total} of 5 tasks showing; it must "
-            f"narrow the board without emptying it for the assertion above to "
-            f"be about a narrowed board at all"
+        assert f'<span class="badge {doing_on_sprint}">DOING</span>' in self._list_row(tasks_body, t_doing), (
+            f"the DOING row's badge and the DOING column's badge ({doing_on_sprint!r}) differ"
         )
 
     def test_board_column_count_badge_keeps_its_colour_when_the_column_is_empty(self):
         """AC140: a column holding no task shows the count 0 and keeps the
         colour of its status, because the colour follows the COLUMN and not the
-        cards in it.
-
-        Both boards are checked with nothing in them at all — a roadmap with no
-        task and a sprint with no member task — so every column of both is empty
-        and there is no card anywhere for a colour to be read from.
+        cards in it. The board is checked with nothing in it at all — a sprint
+        with no member task — so there is no card for a colour to be read from.
+        The tasks page of that roadmap renders no board at all (AC81).
         """
         roadmap = "clearing_house_empty_demo"
         self._run(["roadmap", "create", roadmap])
@@ -4231,17 +3485,7 @@ class TestWebInterface:
         proc, port = self._start(["--port", "0"])
 
         _, _, tasks_body = self._req(port, f"/roadmaps/{roadmap}/tasks")
-        _, tasks_columns = self._board_columns(tasks_body)
-        for column, want_status in zip(tasks_columns, self.BOARD_COLUMNS):
-            heading, variant, count = self._column_badge(column)
-            assert count == 0, (
-                f"the {heading} column of an empty roadmap shows {count}, want 0"
-            )
-            assert variant == self.TASK_STATUS_BADGE[want_status], (
-                f"the empty {heading} column carries {variant!r}, want "
-                f"{self.TASK_STATUS_BADGE[want_status]!r}; the colour follows "
-                f"the column and not the cards in it"
-            )
+        assert 'data-role="task-board' not in tasks_body, "the tasks page renders a board"
 
         _, _, sprint_body = self._req(
             port, f"/roadmaps/{roadmap}/sprints/{sprint_id}")
@@ -4711,10 +3955,12 @@ class TestWebInterface:
     # ====================================================================
 
     def test_task_page_wiring_and_content(self):
-        """Following a card on either board navigates to the task's own page,
-        which carries every field of the task in the HTML the server sends and
-        contains no form, no edit control, and no submit (Acceptance Criteria 15
-        and 94). The board pages carry none of a task's long text."""
+        """Following a task's link — a card of the sprint board, or the title and
+        the View link of a row of the tasks page's list — navigates to the task's
+        own page, which carries every field of the task in the HTML the server
+        sends and contains no form, no edit control, and no submit (Acceptance
+        Criteria 15 and 94). Neither page carries a task's long text; the tasks
+        page's one form is its GET filter bar (AC87)."""
         proc, port = self._start(["--port", "0"])
         t1 = self.open_task_ids[0]
         href = f'href="/roadmaps/{ROADMAP}/tasks/{t1}"'
@@ -4728,11 +3974,16 @@ class TestWebInterface:
                            "end users must authenticate without a stored password"):
                 assert absent.lower() not in body.lower(), f"{path}: carries the task text {absent!r}"
             low = body.lower()
-            assert "<form" not in low and 'type="submit"' not in low, f"{path}: a form or a submit"
-            want_inputs = 1 if path.endswith("/tasks") else 0
-            assert low.count("<input") == want_inputs, (
-                f"{path}: carries {low.count('<input')} inputs, want {want_inputs}"
-            )
+            if path.endswith("/tasks"):
+                assert low.count("<form") == 1 and 'method="get"' in low, f"{path}: the filter bar is not one GET form"
+                submits, inputs = low.count('type="submit"'), low.count("<input")
+                assert submits == 1 and inputs == 2, (
+                    f"{path}: the filter bar carries {submits} submits and {inputs} inputs, want 1 and 2"
+                )
+                assert body.count(href) == 2, f"{path}: task #{t1}'s row carries {body.count(href)} links, want 2"
+            else:
+                assert "<form" not in low and 'type="submit"' not in low, f"{path}: a form or a submit"
+                assert low.count("<input") == 0, f"{path}: carries an input"
 
         status, headers, page = self._req(port, f"/roadmaps/{ROADMAP}/tasks/{t1}")
         assert status == 200 and headers.get("content-type", "").startswith("text/html")
@@ -4855,8 +4106,10 @@ class TestWebInterface:
         # AC230: the sprint page's actions column wraps like the task page's.
         _, _, sprint_page = self._req(port, f"/roadmaps/{roadmap}/sprints/{sprint}")
         assert '<div class="col-12 col-sm-auto ms-auto d-print-none">' in sprint_page
+        # The tasks page's header carries no actions column: its filter bar
+        # sits in the header of its task-list card (AC100, AC109).
         _, _, board = self._req(port, f"/roadmaps/{roadmap}/tasks")
-        assert '<div class="col-auto ms-auto d-print-none">' in board
+        assert "ms-auto d-print-none" not in board
 
         # AC231: both Comments cards state their order, with or without comments.
         for record in (page, sprint_page):
@@ -6798,10 +6051,15 @@ class TestWebInterface:
                 f"page {path}: header still shows the retired \"Tasks & sprints\" label"
             )
 
-        # Only three headers carry an actions column, and each holds what it
-        # should: a control, or the sprint page's hierarchical back link.
+        # The headers that carry an actions column hold what they should: a
+        # control, or a record page's hierarchical back link. The tasks page's
+        # header carries none: its filter bar sits in its list card's header
+        # (AC100, AC109).
         _, _, tasks_body = self._req(port, f"/roadmaps/{ROADMAP}/tasks")
-        assert 'data-role="task-search"' in self._page_header(f"/roadmaps/{ROADMAP}/tasks", tasks_body)
+        tasks_header = self._page_header(f"/roadmaps/{ROADMAP}/tasks", tasks_body)
+        assert "ms-auto" not in tasks_header and "<input" not in tasks_header and "<select" not in tasks_header, (
+            f"the tasks page's header carries an actions column: {tasks_header!r}"
+        )
         _, _, graph_body = self._req(port, f"/roadmaps/{ROADMAP}/graph")
         assert 'id="layout-select"' in self._page_header(f"/roadmaps/{ROADMAP}/graph", graph_body)
 
@@ -6811,11 +6069,11 @@ class TestWebInterface:
         for path in (f"/roadmaps/{ROADMAP}/sprints/{self.open_sid}", f"/roadmaps/{ROADMAP}/tasks/{self.open_task_ids[0]}"):
             _, _, body = self._req(port, path)
             assert '<div class="col-12 col-sm-auto ms-auto d-print-none">' in self._page_header(path, body), path
-        for path in (f"/roadmaps/{ROADMAP}/tasks", f"/roadmaps/{ROADMAP}/graph"):
+        for path in (f"/roadmaps/{ROADMAP}/graph",):
             _, _, body = self._req(port, path)
             assert '<div class="col-auto ms-auto d-print-none">' in self._page_header(path, body), path
 
-        for path in ("/", f"/roadmaps/{ROADMAP}", f"/roadmaps/{ROADMAP}/audit"):
+        for path in ("/", f"/roadmaps/{ROADMAP}", f"/roadmaps/{ROADMAP}/tasks", f"/roadmaps/{ROADMAP}/audit"):
             _, _, body = self._req(port, path)
             header = self._page_header(path, body)
             assert "ms-auto" not in header, (
@@ -6956,7 +6214,7 @@ class TestWebInterface:
     def test_tasks_text_is_html_escaped(self):
         # Output escaping (SPEC Security): roadmap-derived text cannot inject markup.
         # The task is in BACKLOG (no sprint), so it surfaces on the tasks page,
-        # as a card in the board's BACKLOG column (SPEC/WEB.md § Roadmap Tasks Page).
+        # as a row of its list (SPEC/WEB.md § Roadmap Tasks Page).
         self._run(["roadmap", "create", "escaping_demo"])
         self.test.create_task(
             "escaping_demo",
@@ -6996,19 +6254,24 @@ class TestWebInterface:
             # back to exactly what the user wrote. The extraction is bounded by
             # the quote characters, so a label that had swallowed a stray quote
             # would come back truncated and fail to decode.
+            # The sprint card is named "Open details for task #<id>: <title>" and
+            # the list row's View link "View task #<id>: <title>" (AC86, AC93).
+            prefix = "View task" if path.endswith("/tasks") else "Open details for task"
             labels = [
                 m for m in re.findall(r'aria-label="([^"]*)"', body)
-                if m.startswith(f"Open details for task #{task_id}:")
+                if m.startswith(f"{prefix} #{task_id}:")
             ]
             assert labels, f"{path}: no accessible name for task #{task_id} survived extraction"
             for label in labels:
-                assert html_lib.unescape(label) == f"Open details for task #{task_id}: {hostile}", (
+                assert html_lib.unescape(label) == f"{prefix} #{task_id}: {hostile}", (
                     f"{path}: the accessible name decodes to {html_lib.unescape(label)!r}"
                 )
 
-            # And the markup kept its shape: the task's card link is one element
-            # carrying its href once, not fragments produced by a broken attribute.
-            assert body.count(f'href="/roadmaps/escaping_demo/tasks/{task_id}"') == 1, (
+            # And the markup kept its shape: the card carries the task's href
+            # once, the list row twice (its title and its View link), not
+            # fragments produced by a broken attribute.
+            want_links = 2 if path.endswith("/tasks") else 1
+            assert body.count(f'href="/roadmaps/escaping_demo/tasks/{task_id}"') == want_links, (
                 f"{path}: the hostile title broke the markup"
             )
 

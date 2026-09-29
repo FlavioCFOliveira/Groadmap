@@ -5,12 +5,12 @@ import (
 	"testing"
 )
 
-// The guards in this file cover the leading edge of a board card on both Kanban
-// boards — the roadmap tasks page's and the sprint page's member-tasks board.
+// The guards in this file cover the leading edge of a card on the sprint page's
+// member-tasks board, the one Kanban board the interface renders.
 //
 // What they are written against. A board card is an <a> carrying Tabler's card
-// and card-link classes (SPEC/WEB.md § Roadmap Tasks Page, Clickable card;
-// § Sprint Detail Sub-Template, The card is a link to the task page), and the
+// and card-link classes (SPEC/WEB.md § Sprint Detail Sub-Template, The card is a
+// link to the task page), and the
 // vendored distribution carries `.card-link+.card-link { margin-inline-start:
 // var(--tblr-card-spacer-x) }`, spacing meant for inline text links inside one
 // card. A column's cards are adjacent siblings, so without an override every
@@ -58,8 +58,8 @@ func TestTaskCard_VendoredSiblingLinkMarginIsNeutralised(t *testing.T) {
 	if got := cssDeclarations(project, "margin-inline-start"); len(got) != 1 || got[0] != "0" {
 		t.Errorf("%s declares margin-inline-start: %v, want exactly %q; without it every "+
 			"board card after the first in a column is indented by the vendored "+
-			".card-link+.card-link margin (SPEC/WEB.md § Roadmap Tasks Page, Clickable "+
-			"card; § Sprint Detail Sub-Template, The card is a link to the task page)",
+			".card-link+.card-link margin (SPEC/WEB.md § Sprint Detail Sub-Template, "+
+			"The card is a link to the task page)",
 			boardCardSiblingSelector, got, "0")
 	}
 
@@ -71,9 +71,10 @@ func TestTaskCard_VendoredSiblingLinkMarginIsNeutralised(t *testing.T) {
 	}
 }
 
-// TestTaskCard_IsADirectChildOfTheBoardCardList asserts, on both boards, that a
-// card's parent element is the column's card list, which is what the override's
-// child combinator requires.
+// TestTaskCard_IsADirectChildOfTheBoardCardList asserts, on the sprint page's
+// board, that a card's parent element is the column's card list, which is what the
+// override's child combinator requires. The tasks page renders no board card at
+// all, which is asserted too, so the guard covers every page that could carry one.
 //
 // This is the half a stylesheet-only assertion cannot make: wrapping each card in
 // one more element would leave the override matching nothing while the test above
@@ -81,13 +82,14 @@ func TestTaskCard_VendoredSiblingLinkMarginIsNeutralised(t *testing.T) {
 // so drop the vendored margin, but nothing would then pin that it stays dropped.)
 func TestTaskCard_IsADirectChildOfTheBoardCardList(t *testing.T) {
 	t.Setenv("HOME", shortHome(t))
-	roadmap := seedRoadmap(t, "platform-core")
 	sprintID := seedSprintWithMembers(t, "settlement-window", 2)
 	mux := buildMux()
 
 	const cardMarker = `class="card card-sm card-link text-reset task-card"`
+	if strings.Contains(servePage(t, mux, "/roadmaps/settlement-window/tasks"), cardMarker) {
+		t.Errorf("the roadmap tasks page renders a board card; it presents one list (Acceptance Criterion 81)")
+	}
 	for _, page := range []struct{ name, path string }{
-		{"the roadmap tasks page", "/roadmaps/" + roadmap + "/tasks"},
 		{"the sprint page", "/roadmaps/settlement-window/sprints/" + itoa(sprintID)},
 	} {
 		body := servePage(t, mux, page.path)

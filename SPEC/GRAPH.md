@@ -891,7 +891,7 @@ bytes the caller supplied. Groadmap does not normalise a key on the way in, does
 not store a normalised form beside it, and does not normalise it on the way out;
 what `rmp` stores and renders is the caller's own text. NFC decides only whether
 two keys count as the same key when the convention is being judged. This is the
-same rule the board search already applies to task text
+same rule the web tasks page's search already applies to task text
 (`WEB.md § Roadmap Tasks Page`), and it is stated the same way here so that the
 product does not hold two answers to one question.
 

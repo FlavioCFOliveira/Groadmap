@@ -2,7 +2,6 @@ package web
 
 import (
 	"strings"
-	"testing"
 )
 
 // This file holds the helpers the package's tests use to read the embedded
@@ -14,22 +13,6 @@ func derefString(s *string) string {
 		return ""
 	}
 	return *s
-}
-
-// scriptBlock returns the text between the delimiters of a named declaration.
-func scriptBlock(t *testing.T, script, name, open, close string) string {
-	t.Helper()
-
-	at := strings.Index(script, "var "+name+" = "+open)
-	if at < 0 {
-		t.Fatalf("the script declares no %s table", name)
-	}
-	rest := script[at:]
-	end := strings.Index(rest, close)
-	if end < 0 {
-		t.Fatalf("the script's %s table is not closed", name)
-	}
-	return rest[:end]
 }
 
 // stripJSComments removes // and /* */ comments from JavaScript source, leaving
