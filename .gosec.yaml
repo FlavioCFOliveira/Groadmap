@@ -50,23 +50,23 @@
 #
 # TWO COUNTS, BOTH TRUE, MEASURING DIFFERENT THINGS.
 #
-#   59  RULES suppressed in the module, the number this register accounts for
+#   60  RULES suppressed in the module, the number this register accounts for
 #       and the number the gate sweeps. It counts rules, not directives: a
 #       directive naming two rules counts once under each, and the module has
 #       exactly one such directive — the `#nosec G302 G703` on
 #       internal/graphstore/graphstore.go's checkpoint chmod, which is both a
 #       directory-permission finding and a taint-analysis one. So the module
-#       carries 58 directives suppressing 59 rules. The gate reads comment
+#       carries 59 directives suppressing 60 rules. The gate reads comment
 #       groups the way gosec does, so the tag counts only where the scanner
 #       honours it.
-#   45  rules suppressed outside _test.go, across 44 directives. gosec does not
-#       scan _test.go files unless -tests is passed, and 14 of the 59 are in
-#       test files: 59 - 14 = 45. That the scanner does not read those 14 is an
+#   46  rules suppressed outside _test.go, across 45 directives. gosec does not
+#       scan _test.go files unless -tests is passed, and 14 of the 60 are in
+#       test files: 60 - 14 = 46. That the scanner does not read those 14 is an
 #       accepted gap, measured and reasoned in SPEC/BUILD.md § Security Scan;
 #       the register accounts for them anyway, so they stay reviewed even where
 #       the scanner is silent.
 #
-#       gosec's own summary prints `Nosec: 44`, and the difference is the
+#       gosec's own summary prints `Nosec: 45`, and the difference is the
 #       two-rule directive: gosec counts DIRECTIVES it honoured, this register
 #       counts RULES accepted. The two figures agreed while every directive
 #       named one rule, and the release notes quoted that agreement; they no
@@ -100,7 +100,7 @@
 # chmod, which is both a directory-permission finding and a taint-analysis one —
 # so the totals below are the number of directives plus one.
 #
-# totals: 59 suppressions, 45 outside _test.go
+# totals: 60 suppressions, 46 outside _test.go
 #
 # G104 Audit errors not checked (CWE-703)  [11]
 #   internal/db/connection.go                          6
@@ -131,6 +131,23 @@
 #     non-fatal behaviour rather than assuming it. It would stop being acceptable
 #     if the roadmap home were ever created wider than 0700, which is the
 #     invariant this reason rests on.
+#
+# G124 Insecure HTTP cookie configuration missing Secure, HttpOnly, or SameSite attributes (CWE-614)  [1]
+#   internal/web/tasks.go                              1
+#   Reason: filterCookie builds the rmp_tasks_filters cookie that persists the
+#     tasks page's filters, and it deliberately carries no Secure attribute.
+#     SPEC/WEB.md § Roadmap Tasks Page, Filter persistence fixes its attributes
+#     as exactly Path=/, Max-Age one year, HttpOnly and SameSite=Lax, with no
+#     Secure, because rmp web serves plain HTTP on every bind address, the
+#     loopback default included, and a user agent returns a Secure cookie only
+#     over a secure channel (RFC 6265, Section 4.1.2.5): the attribute would stop
+#     the cookie from ever being sent back, and the feature would not work. The
+#     two attributes the rule also checks are set: HttpOnly keeps the value out
+#     of page script, and SameSite=Lax keeps it off cross-site subrequests. The
+#     value carries no credential or session identifier, only the filter state
+#     the page shows. It would stop being acceptable if rmp web ever served
+#     HTTPS, where the cookie must then carry Secure, or if the cookie ever
+#     carried anything other than filter state.
 #
 # G201 SQL query construction using format string (CWE-89)  [21]
 #   internal/commands/sprint_crud.go                   1
@@ -302,8 +319,8 @@
 # TWO OBSERVATIONS THIS REGISTER MAKES DELIBERATELY, because a reviewer who
 # trusts the list should also know what the list does not mean.
 #
-# A suppression is not evidence that gosec had a finding. Of the 45 rules
-# suppressed outside test files, 30 suppress a reported finding and 15 currently
+# A suppression is not evidence that gosec had a finding. Of the 46 rules
+# suppressed outside test files, 31 suppress a reported finding and 15 currently
 # suppress nothing: gosec's G201 does not follow fmt.Sprintf through a query
 # issued on the embedded *sql.DB or through a function that only returns the
 # assembled string, G104 does not report an error discarded by an explicit
@@ -316,7 +333,7 @@
 #
 # The split is MEASURED rather than counted by hand, and it is reproducible:
 # `gosec -nosec=true -exclude-dir=.claude/worktrees ./...` disables suppression
-# handling and reports 30 issues where the ordinary run reports 0.
+# handling and reports 31 issues where the ordinary run reports 0.
 #
 # A #nosec is a permanent blindfold over one node. Every G201 line above means
 # that if the statement at that site is ever edited to interpolate a value

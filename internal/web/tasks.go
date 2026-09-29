@@ -436,7 +436,7 @@ func filterCookie(value string) *http.Cookie {
 	if len(value) > maxTasksFilterCookieLen {
 		return nil
 	}
-	return &http.Cookie{
+	return &http.Cookie{ // #nosec G124 -- Secure is deliberately unset: rmp web serves plain HTTP only, and a user agent returns a Secure cookie only over a secure channel (RFC 6265 § 4.1.2.5), so it would never be sent back; HttpOnly and SameSite=Lax are set (SPEC/WEB.md § Roadmap Tasks Page, Filter persistence)
 		Name:     tasksFilterCookie,
 		Value:    value,
 		Path:     "/",
