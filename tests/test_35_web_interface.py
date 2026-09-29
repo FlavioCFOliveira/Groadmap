@@ -198,13 +198,21 @@ SLOW_READER_RCVBUF = 2048
 # writes something else entirely.
 ANNOUNCEMENT_MAX_CHARS = 512
 
-# How many roadmaps are cloned into a throwaway HOME to widen the startup
-# migration sweep, and the floor the widened window must clear for the
-# pre-announcement case to be driving anything. Step 2 of the lifecycle opens and
-# migrates every roadmap under ~/.roadmaps/ before the listener is bound and long
-# before the URL is printed, at a few milliseconds each: one roadmap reaches the
-# announcement in about 20 ms, two hundred take over a second.
-STARTUP_SWEEP_ROADMAPS = 200
+# The estate cloned into a throwaway HOME to widen the startup migration sweep,
+# and the floor the widened window must clear for the pre-announcement case to
+# be driving anything. Step 2 of the lifecycle opens and migrates every roadmap
+# under ~/.roadmaps/ before the listener is bound and long before the URL is
+# printed, so the window grows with the number of roadmaps. The cost per roadmap
+# is a property of the binary, not of this suite, and it shrinks whenever the
+# sweep is made faster, so no fixed count stays wide enough: the estate starts at
+# STARTUP_SWEEP_INITIAL_ROADMAPS and doubles, in the same HOME, until the
+# measured window clears STARTUP_SWEEP_MIN_WINDOW_SECONDS. It never grows past
+# STARTUP_SWEEP_MAX_ROADMAPS; an estate of that size that still starts inside
+# the floor fails the precondition rather than letting the case race the
+# announcement. The bound also caps the disk the clones take, at roughly 130 KB
+# per roadmap.
+STARTUP_SWEEP_INITIAL_ROADMAPS = 200
+STARTUP_SWEEP_MAX_ROADMAPS = 3200
 STARTUP_SWEEP_MIN_WINDOW_SECONDS = 0.5
 
 # The service estate those roadmaps model. A roadmap per service is how an
@@ -6900,10 +6908,17 @@ class TestWebInterface:
 
         Step 2 of the lifecycle migrates every roadmap under ~/.roadmaps/ before
         the listener is bound and long before the URL is printed. One roadmap
-        reaches the announcement in about 20 ms, which is far too narrow to
-        place a signal inside deliberately; a few hundred widen it past a
-        second, and the signal then lands within steps 1 to 4 by construction
-        rather than by luck.
+        reaches the announcement in milliseconds, which is far too narrow to
+        place a signal inside deliberately; a large enough estate widens it past
+        STARTUP_SWEEP_MIN_WINDOW_SECONDS, and the signal then lands within steps
+        1 to 4 by construction rather than by luck.
+
+        How large is enough depends on how fast the sweep is, so the estate is
+        grown rather than fixed: it starts at STARTUP_SWEEP_INITIAL_ROADMAPS and
+        doubles in the same HOME, each round cloning only the roadmaps it adds,
+        until a launch measures a window at or above the floor or the estate
+        reaches STARTUP_SWEEP_MAX_ROADMAPS. The caller asserts the floor, so an
+        estate that reaches the bound without clearing it fails loudly there.
 
         The roadmaps are real. A roadmap IS a directory under ~/.roadmaps/
         holding a project.db, and nothing inside the database records its own
@@ -6911,27 +6926,49 @@ class TestWebInterface:
         created produces roadmaps the sweep cannot tell from separately created
         ones.
 
-        Returns (home, window) where window is the measured time from launch to
-        the URL, taken on that very HOME.
+        Returns (home, window, size) where window is the measured time from
+        launch to the URL, taken on that very HOME, and size is the number of
+        roadmaps it holds.
         """
         home = self._fresh_home()
         self._run(["roadmap", "create", "identity-service-01"], home=home)
         seed = Path(home) / ".roadmaps" / "identity-service-01" / "project.db"
 
-        made = 0
+        size = STARTUP_SWEEP_INITIAL_ROADMAPS
+        while True:
+            self._grow_service_estate(home, seed, size)
+            window = self._measure_startup_window(home)
+            if window >= STARTUP_SWEEP_MIN_WINDOW_SECONDS:
+                return home, window, size
+            if size >= STARTUP_SWEEP_MAX_ROADMAPS:
+                return home, window, size
+            size = min(size * 2, STARTUP_SWEEP_MAX_ROADMAPS)
+
+    @staticmethod
+    def _grow_service_estate(home, seed, size):
+        """Clone seed until HOME holds size roadmaps, spread over SERVICE_FAMILIES.
+
+        Roadmaps already present are kept, so a larger size only adds the
+        difference. The count is asserted from the directory itself, which is
+        what the startup sweep walks.
+        """
+        roadmaps = Path(home) / ".roadmaps"
+        per_family = -(-size // len(SERVICE_FAMILIES))
         for family in SERVICE_FAMILIES:
-            for index in range(1, STARTUP_SWEEP_ROADMAPS // len(SERVICE_FAMILIES) + 1):
-                name = f"{family}-service-{index:02d}"
-                directory = Path(home) / ".roadmaps" / name
+            for index in range(1, per_family + 1):
+                directory = roadmaps / f"{family}-service-{index:02d}"
                 if directory.exists():
                     continue
                 directory.mkdir(mode=0o700)
                 shutil.copy2(seed, directory / "project.db")
-                made += 1
-        assert made >= STARTUP_SWEEP_ROADMAPS - 1, (
-            f"only {made} roadmaps were cloned, too few to widen the startup sweep"
+        present = sum(1 for entry in roadmaps.iterdir() if entry.is_dir())
+        assert present >= size, (
+            f"only {present} roadmaps are present, fewer than the {size} cloned to "
+            f"widen the startup sweep"
         )
 
+    def _measure_startup_window(self, home):
+        """Time one launch on HOME from start to the URL, then stop it cleanly."""
         launched = time.time()
         proc, _ = self._start(["--port", "0"], home=home)
         window = time.time() - launched
@@ -6939,7 +6976,7 @@ class TestWebInterface:
         proc.send_signal(signal.SIGTERM)
         code, _ = self._await_exit(proc, signal.SIGTERM, started)
         assert code == 0, f"the run that measured the startup window exited {code}"
-        return home, window
+        return window
 
     def _boundary_case(self, sig):
         """Signal before the URL: an interruption, not a graceful shutdown.
@@ -6950,12 +6987,13 @@ class TestWebInterface:
         nothing, so it is an interruption and the process exits 130.
         """
         label = f"{sig.name} before the URL"
-        home, window = self._widened_startup_home()
+        home, window, size = self._widened_startup_home()
         assert window >= STARTUP_SWEEP_MIN_WINDOW_SECONDS, (
-            f"{label}: the startup sweep over {STARTUP_SWEEP_ROADMAPS} roadmaps took "
-            f"only {window:.3f}s, under the {STARTUP_SWEEP_MIN_WINDOW_SECONDS:.1f}s this "
-            f"case needs to place a signal inside steps 1 to 4. The widening no longer "
-            f"widens anything and this case would be racing the announcement"
+            f"{label}: the startup sweep over {size} roadmaps, the most the estate "
+            f"may grow to (STARTUP_SWEEP_MAX_ROADMAPS), took only {window:.3f}s, under "
+            f"the {STARTUP_SWEEP_MIN_WINDOW_SECONDS:.1f}s this case needs to place a "
+            f"signal inside steps 1 to 4. The widening no longer widens enough and "
+            f"this case would be racing the announcement"
         )
 
         proc, _ = self._start(["--port", "0"], home=home, expect_ok=False)
