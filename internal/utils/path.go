@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"unicode/utf8"
 )
 
 const (
@@ -168,22 +169,30 @@ const HelpRoadmapName = "help"
 // ValidateRoadmapName checks if a roadmap name is valid.
 // Names must:
 //   - Not be empty
-//   - Not exceed 50 characters
+//   - Not exceed 50 characters, counted as code points
 //   - Not start with '-' (to prevent flag confusion)
-//   - Contain only lowercase letters, numbers, underscores, and hyphens
 //   - Not be a Windows reserved name (CON, PRN, AUX, NUL, COM1-9, LPT1-9)
 //   - Not be HelpRoadmapName, in that exact spelling
+//   - Contain only lowercase letters, numbers, underscores, and hyphens
+//
+// The rules are applied in that order, and the first one the name breaks
+// decides the refusal.
 func ValidateRoadmapName(name string) error {
 	if name == "" {
 		// SPEC/COMMANDS.md mandates this verbatim message (finding #60).
 		return ValidationMessage("Roadmap name is required", ErrRoadmapNameEmpty)
 	}
 
-	// Check maximum length
-	if len(name) > MaxRoadmapNameLength {
+	// Check maximum length. The rule counts characters (code points), never
+	// bytes, and a byte that is not part of a valid UTF-8 sequence counts as one
+	// character, which is exactly what utf8.RuneCountInString counts
+	// (SPEC/COMMANDS.md § Roadmap Name Validation, "The length rule counts
+	// characters"). The rules run in the order that section fixes: empty,
+	// length, leading hyphen, reserved, character set.
+	if n := utf8.RuneCountInString(name); n > MaxRoadmapNameLength {
 		// SPEC/COMMANDS.md + SPEC/ARCHITECTURE.md mandate this verbatim message.
 		return &MessageError{
-			Msg:       fmt.Sprintf("Roadmap name must not exceed %d characters (got %d)", MaxRoadmapNameLength, len(name)),
+			Msg:       fmt.Sprintf("Roadmap name must not exceed %d characters (got %d)", MaxRoadmapNameLength, n),
 			Sentinels: []error{ErrValidation, ErrRoadmapNameTooLong},
 		}
 	}
@@ -293,9 +302,54 @@ func EnsureRoadmapDir(name string) error {
 	return nil
 }
 
+// RoadmapHomeOccupied reports whether ~/.roadmaps/<name> is occupied by an
+// entry that is neither a directory nor a symbolic link, such as a regular
+// file, and returns the absolute path of that entry.
+//
+// Such an entry is not a roadmap: a roadmap exists only when its home is a
+// directory that holds project.db, and an entry of any other kind at that path
+// is a roadmap that does not exist, refused with exit code 4 by every command
+// that selects it and removed by none (SPEC/COMMANDS.md § Roadmap Selection
+// (Always Required), shape 3). `roadmap create` cannot create the home there
+// either, and refuses with an I/O line naming the path. A symbolic link is
+// outside this rule: it is refused where the home is secured
+// (SPEC/ARCHITECTURE.md § Directory Structure), so it is reported as not
+// occupied here. Nothing at the path, or a directory, is not occupied.
+func RoadmapHomeOccupied(name string) (string, bool, error) {
+	dir, err := GetRoadmapDir(name)
+	if err != nil {
+		return "", false, err
+	}
+	info, err := os.Lstat(dir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return dir, false, nil
+		}
+		return dir, false, fmt.Errorf("checking roadmap directory: %w", err)
+	}
+	mode := info.Mode()
+	return dir, !mode.IsDir() && mode&os.ModeSymlink == 0, nil
+}
+
 // RoadmapExists checks whether a roadmap exists under the current layout,
 // i.e. whether ~/.roadmaps/<name>/project.db is present as a regular file.
+//
+// It is the one existence check of the application, and the CLI and the web
+// interface both resolve a roadmap through it. A home occupied by an entry that
+// is neither a directory nor a symbolic link, such as a regular file, is a
+// roadmap that does not exist, never a failure of the check
+// (SPEC/COMMANDS.md § Roadmap Selection (Always Required), shape 3; SPEC/WEB.md
+// § Routes and Pages, path-parameter rule 2). Only a failure of the filesystem
+// to answer — a home the process may not search, for instance — is an error.
 func RoadmapExists(name string) (bool, error) {
+	_, occupied, err := RoadmapHomeOccupied(name)
+	if err != nil {
+		return false, err
+	}
+	if occupied {
+		return false, nil
+	}
+
 	path, err := GetRoadmapPath(name)
 	if err != nil {
 		return false, err

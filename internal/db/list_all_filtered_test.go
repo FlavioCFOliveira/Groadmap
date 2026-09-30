@@ -72,7 +72,10 @@ func seedFilteredRoadmap(t *testing.T, database *DB) ([]filteredTask, int, int) 
 		}
 		id, terr := seedTask(database, &models.Task{
 			Title: "Reconcile settlement window " + strconv.Itoa(i+1), Type: task.taskType,
-			Status: task.status, Priority: task.priority, Severity: task.severity,
+			// Every task is seeded in BACKLOG so that `sprint add-tasks` accepts it
+			// (a COMPLETED task cannot join a sprint); the loop after the
+			// additions writes each task's own status back.
+			Status: models.StatusBacklog, Priority: task.priority, Severity: task.severity,
 			FunctionalRequirements: "Every window must balance against the acquirer report.",
 			TechnicalRequirements:  "Match both sides by window and report the residual.",
 			AcceptanceCriteria:     "A day's windows reconcile with a zero residual.",
@@ -98,7 +101,7 @@ func seedFilteredRoadmap(t *testing.T, database *DB) ([]filteredTask, int, int) 
 	if err := database.AddTasksToSprint(testContext(), sprintB, inB); err != nil {
 		t.Fatalf("adding to sprint B: %v", err)
 	}
-	// Membership may rewrite a status; put every task back to its own.
+	// Membership rewrites a BACKLOG status to SPRINT; put every task back to its own.
 	for _, task := range tasks {
 		if _, err := database.Exec(`UPDATE tasks SET status = ? WHERE id = ?`, task.status, task.id); err != nil {
 			t.Fatalf("restoring the status of task %d: %v", task.id, err)

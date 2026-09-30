@@ -3,6 +3,8 @@ package commands
 import (
 	"strings"
 	"testing"
+
+	"github.com/FlavioCFOliveira/Groadmap/internal/utils"
 )
 
 // ==================== HandleAudit Tests ====================
@@ -129,13 +131,11 @@ func TestAuditList_InvalidLimit(t *testing.T) {
 	_, cleanup := setupTestTaskRoadmap(t, testName)
 	defer cleanup()
 
+	// The published line of SPEC/COMMANDS.md § List Audit Log, exit code 2: the
+	// flag named, the value echoed, and the range, never a parser's text.
 	err := HandleAudit([]string{"list", "-r", testName, "-l", "notanumber"})
-	if err == nil {
-		t.Error("auditList with invalid limit expected error, got nil")
-	}
-	if !strings.Contains(err.Error(), "invalid limit") {
-		t.Errorf("expected 'invalid limit' error, got: %v", err)
-	}
+	assertPublishedRefusal(t, "audit list -l notanumber", err, utils.ErrInvalidInput, 2,
+		`invalid input: invalid value for --limit: "notanumber" is not an integer in 1-500`)
 }
 
 func TestAuditList_InvalidSinceDate(t *testing.T) {

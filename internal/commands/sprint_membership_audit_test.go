@@ -28,12 +28,14 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
 
 	"github.com/FlavioCFOliveira/Groadmap/internal/db"
 	"github.com/FlavioCFOliveira/Groadmap/internal/models"
+	"github.com/FlavioCFOliveira/Groadmap/internal/utils"
 )
 
 // ---------------------------------------------------------------------------
@@ -408,8 +410,7 @@ func TestSprintMembership_TheTwoEntriesOfAChangeAreMirrors(t *testing.T) {
 // TestSprintRemoveTasks_WritesTheSymmetricPair pins the removal side row by row.
 // The task entry is what makes `audit history TASK <id>` able to say which
 // sprint the task left, and it is written for every task named on the command
-// line — including one already in BACKLOG status while still a sprint member,
-// which is the case a count taken from the status transition alone would miss
+// line whatever its status in the sprint was — SPRINT or DOING here
 // (SPEC/COMMANDS.md § Task Assignment).
 func TestSprintRemoveTasks_WritesTheSymmetricPair(t *testing.T) {
 	f := setupMembershipRoadmap(t, "membership-audit-remove")
@@ -419,12 +420,11 @@ func TestSprintRemoveTasks_WritesTheSymmetricPair(t *testing.T) {
 		return sprintAddTasks([]string{"-r", f.roadmap, itoa(f.source), csv(members...)})
 	})
 
-	// One member is driven back to BACKLOG while staying in the sprint, so the
-	// removal below has no status change to make for it and must write its
-	// entry all the same.
-	alreadyBacklog := members[2]
+	// One member is started, so the removal takes a DOING task and a SPRINT
+	// task out of the sprint, and must write one task entry for each.
+	started := members[2]
 	run(t, func() error {
-		return taskSetStatus([]string{"-r", f.roadmap, itoa(alreadyBacklog), "BACKLOG"})
+		return taskSetStatus([]string{"-r", f.roadmap, itoa(started), "DOING", "--commit-open", "5f93b51"})
 	})
 
 	removed := members
@@ -448,9 +448,9 @@ func TestSprintRemoveTasks_WritesTheSymmetricPair(t *testing.T) {
 		}
 	}
 
-	// The task side. The removal's rows are the ones naming a sprint; the one
-	// `task stat` wrote above names nothing, and both operations are
-	// TASK_STATUS_BACKLOG, so the column is what tells them apart.
+	// The task side: one TASK_STATUS_BACKLOG row per task, each naming the
+	// sprint the task left, and none naming nothing — `task stat` cannot write
+	// this operation any more, because it refuses every sprint member.
 	backlogRows := rowsFor(t, f.database, models.OpTaskStatusBacklog)
 	named := make(map[int]int, len(removed))
 	unnamed := 0
@@ -465,10 +465,9 @@ func TestSprintRemoveTasks_WritesTheSymmetricPair(t *testing.T) {
 		}
 		named[r.entityID]++
 	}
-	if unnamed != 1 {
-		t.Errorf("%d %s rows name no counterpart, want 1 (the one `task stat` wrote); the same operation "+
-			"is written by two commands and only one of them has a sprint to name",
-			unnamed, models.OpTaskStatusBacklog)
+	if unnamed != 0 {
+		t.Errorf("%d %s rows name no counterpart, want 0: every one of them was written by "+
+			"`sprint remove-tasks`, which names the sprint the task left", unnamed, models.OpTaskStatusBacklog)
 	}
 	for _, id := range removed {
 		if named[id] != 1 {
@@ -484,10 +483,10 @@ func TestSprintRemoveTasks_WritesTheSymmetricPair(t *testing.T) {
 
 // TestSprintMoveTasks_WritesOneEntryPerSprintAndNoTaskStatusEntry pins the whole
 // record of a move: one row against the source sprint and one against the
-// destination, both naming the task, and nothing against the task itself —
-// because the move preserves the task's status, so nothing happened to the
-// task's lifecycle for a status row to record (SPEC/COMMANDS.md § Task
-// Assignment, rule 4).
+// destination, both naming the task, and one TASK_SPRINT_CHANGE row against the
+// task naming the destination — and no TASK_STATUS_* row, because the move
+// preserves the task's status (SPEC/COMMANDS.md § Task Assignment, Audit,
+// rule 4, and acceptance criterion 5).
 //
 // The absence is asserted over every TASK_STATUS_* operation rather than the one
 // a reader would expect, so a move that wrote any of them fails here.
@@ -533,14 +532,33 @@ func TestSprintMoveTasks_WritesOneEntryPerSprintAndNoTaskStatusEntry(t *testing.
 		}
 	}
 
-	// The two rows of one move share a performed_at, as every pair does.
+	// The task side: one TASK_SPRINT_CHANGE row per task, against the task,
+	// naming the sprint it entered.
+	changes := rowsFor(t, f.database, models.OpTaskSprintChange)
+	if len(changes) != len(moved) {
+		t.Fatalf("the move wrote %d %s rows for %d tasks, want one per task",
+			len(changes), models.OpTaskSprintChange, len(moved))
+	}
+	for i, r := range changes {
+		if r.entityType != string(models.EntityTask) || r.entityID != moved[i] {
+			t.Errorf("%s row %d is recorded against %s #%d, want TASK #%d",
+				models.OpTaskSprintChange, i, r.entityType, r.entityID, moved[i])
+		}
+		if r.related != f.dest {
+			t.Errorf("%s row %d names sprint #%d, want the destination #%d",
+				models.OpTaskSprintChange, i, r.related, f.dest)
+		}
+	}
+
+	// The three rows of one move share a performed_at.
 	if n := countRows(t, f.database,
-		`SELECT COUNT(DISTINCT performed_at) FROM audit WHERE operation IN (?, ?)`,
-		string(models.OpSprintMoveTaskOut), string(models.OpSprintMoveTaskIn)); n != 1 {
+		`SELECT COUNT(DISTINCT performed_at) FROM audit WHERE operation IN (?, ?, ?)`,
+		string(models.OpSprintMoveTaskOut), string(models.OpSprintMoveTaskIn),
+		string(models.OpTaskSprintChange)); n != 1 {
 		t.Errorf("the move's rows carry %d distinct performed_at values, want 1", n)
 	}
 
-	// Nothing against the task.
+	// No status row against the task.
 	for op, before := range statusBefore {
 		if after := countRows(t, f.database,
 			`SELECT COUNT(*) FROM audit WHERE operation = ?`, string(op)); after != before {
@@ -552,9 +570,9 @@ func TestSprintMoveTasks_WritesOneEntryPerSprintAndNoTaskStatusEntry(t *testing.
 		if n := countRows(t, f.database,
 			`SELECT COUNT(*) FROM audit WHERE entity_type = ? AND entity_id = ? AND performed_at = `+
 				`(SELECT performed_at FROM audit WHERE operation = ? LIMIT 1)`,
-			string(models.EntityTask), id, string(models.OpSprintMoveTaskIn)); n != 0 {
-			t.Errorf("the move wrote %d rows against task #%d; it writes no entry with "+
-				"entity_type = TASK at all", n, id)
+			string(models.EntityTask), id, string(models.OpSprintMoveTaskIn)); n != 1 {
+			t.Errorf("the move wrote %d rows against task #%d; it writes exactly one entry with "+
+				"entity_type = TASK, the TASK_SPRINT_CHANGE row", n, id)
 		}
 	}
 }
@@ -726,69 +744,49 @@ func TestSprintMoveTask_LegacyOperationIsNeverWrittenButStaysFilterable(t *testi
 // 7. The column means the counterpart, not "the sprint"
 // ---------------------------------------------------------------------------
 
-// TestTaskStatBacklog_NamesNoCounterpart is the worked contrast SPEC/DATABASE.md
-// § The Two Entities of a Relational Operation draws in full: one operation,
-// TASK_STATUS_BACKLOG, two producing commands, and one rule.
+// TestTaskStatBacklog_RefusedForAMemberWritesNoEntry settles acceptance
+// criterion 4 of SPEC/COMMANDS.md § Task Assignment: `task stat <a> BACKLOG`,
+// where <a> is a sprint member, is refused with exit code 6 and writes no entry,
+// so every TASK_STATUS_BACKLOG entry written under the membership invariant is
+// one `sprint remove-tasks` wrote and names a sprint.
 //
-// `sprint remove-tasks` names the sprint the task left because the sprint is
-// party to that operation; `task stat <id> BACKLOG` names nothing because no
-// second entity is. A reader never has to know which command wrote a row: NULL
-// says "this operation had no counterpart", never "it had one and it was not
-// recorded".
-//
-// The two rows are produced against the SAME task, in one test, so an
-// implementation that read the column as "the sprint this task is in" — which
-// would name a sprint on both, the task still being a member when `task stat`
-// runs — fails here rather than passing two separate tests.
-func TestTaskStatBacklog_NamesNoCounterpart(t *testing.T) {
+// Both commands are driven against the SAME task, so the contrast holds on one
+// row set: the refused `task stat` leaves the audit table and the membership as
+// they were, and the removal then writes the one row, naming the sprint.
+func TestTaskStatBacklog_RefusedForAMemberWritesNoEntry(t *testing.T) {
 	f := setupMembershipRoadmap(t, "membership-audit-stat-backlog")
 
 	id := f.taskIDs[0]
 	run(t, func() error {
 		return sprintAddTasks([]string{"-r", f.roadmap, itoa(f.source), itoa(id)})
 	})
+	entriesBefore := countRows(t, f.database, `SELECT COUNT(*) FROM audit`)
 
-	// `task stat <id> BACKLOG` leaves the task a member of the sprint
-	// (SPEC/STATE_MACHINE.md § Sprint Membership and the BACKLOG Status), so a
-	// sprint is available to name and must still not be named.
-	run(t, func() error {
-		return taskSetStatus([]string{"-r", f.roadmap, itoa(id), "BACKLOG"})
-	})
-
-	rows := rowsFor(t, f.database, models.OpTaskStatusBacklog)
-	if len(rows) != 1 {
-		t.Fatalf("`task stat %d BACKLOG` produced %d %s rows, want 1", id, len(rows), models.OpTaskStatusBacklog)
+	err := taskSetStatus([]string{"-r", f.roadmap, itoa(id), "BACKLOG"})
+	want := fmt.Sprintf("validation error: invalid status transition from SPRINT to BACKLOG for task %d: "+
+		"a task leaves its sprint only through 'rmp sprint remove-tasks'", id)
+	if err == nil || !errors.Is(err, utils.ErrValidation) || err.Error() != want {
+		t.Fatalf("`task stat %d BACKLOG` on a sprint member = %v, want %q (exit code 6)", id, err, want)
 	}
-	if rows[0].entityType != string(models.EntityTask) || rows[0].entityID != id {
-		t.Errorf("the row is recorded against %s #%d, want TASK #%d",
-			rows[0].entityType, rows[0].entityID, id)
+	if n := countRows(t, f.database, `SELECT COUNT(*) FROM audit`); n != entriesBefore {
+		t.Errorf("the refused `task stat` wrote %d audit entries, want none", n-entriesBefore)
 	}
-	if rows[0].related != noCounterpart {
-		t.Errorf("the row names counterpart #%d, want NULL: `task stat` has no second entity party to "+
-			"the operation, and the task's sprint membership is not one — the column means the "+
-			"counterpart of the operation, not the sprint the task happens to be in", rows[0].related)
-	}
-
-	// Still a member, so the sprint the row declined to name really was there.
 	if n := countRows(t, f.database,
 		`SELECT COUNT(*) FROM sprint_tasks WHERE sprint_id = ? AND task_id = ?`, f.source, id); n != 1 {
-		t.Fatalf("task #%d is no longer a member of sprint #%d, so the assertion above is vacuous: "+
-			"there was no sprint to name either way", id, f.source)
+		t.Fatalf("the refused `task stat` took task #%d out of sprint #%d", id, f.source)
 	}
 
-	// The other producing command, on the same task, does name it.
+	// The removal writes the one TASK_STATUS_BACKLOG row, and it names the sprint.
 	run(t, func() error {
 		return sprintRemoveTasks([]string{"-r", f.roadmap, itoa(f.source), itoa(id)})
 	})
-	rows = rowsFor(t, f.database, models.OpTaskStatusBacklog)
-	if len(rows) != 2 {
-		t.Fatalf("the removal produced %d %s rows in total, want 2", len(rows), models.OpTaskStatusBacklog)
+	rows := rowsFor(t, f.database, models.OpTaskStatusBacklog)
+	if len(rows) != 1 {
+		t.Fatalf("the removal produced %d %s rows in total, want 1", len(rows), models.OpTaskStatusBacklog)
 	}
-	if rows[1].related != f.source {
-		t.Errorf("the %s row written by `sprint remove-tasks` names counterpart #%d, want sprint #%d; "+
-			"the same operation carries a counterpart from one command and not the other, which is the "+
-			"governing rule applied consistently and not a per-command exception",
-			models.OpTaskStatusBacklog, rows[1].related, f.source)
+	if rows[0].entityType != string(models.EntityTask) || rows[0].entityID != id || rows[0].related != f.source {
+		t.Errorf("the %s row is %s #%d naming #%d, want TASK #%d naming sprint #%d",
+			models.OpTaskStatusBacklog, rows[0].entityType, rows[0].entityID, rows[0].related, id, f.source)
 	}
 }
 

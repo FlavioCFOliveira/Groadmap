@@ -89,7 +89,8 @@ On success, `rmp stats` writes a single JSON object to stdout:
 | 0 | Success |
 | 2 | Unrecognised flag, or a positional argument (this command takes none) |
 | 3 | No roadmap specified (`-r` / `--roadmap` missing) |
-| 4 | Roadmap not found |
+| 4 | Roadmap not found, including a `~/.roadmaps/<name>` that is a regular file or a directory without `project.db` |
+| 6 | The roadmap name given to `-r` / `--roadmap` breaks a roadmap name rule |
 
 ## See Also
 

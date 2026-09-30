@@ -23,6 +23,7 @@ The SPEC is unversioned. Git is the source of truth for its evolution — recove
 | Web sprint detail sub-template (metadata datagrid, member-tasks board; single sprint page only) | `WEB.md § Sprint Detail Sub-Template` |
 | Web task page (`/roadmaps/{name}/tasks/{id}`, every task field, the comments timeline, the sprint context card with position and progress, the way back to the tasks page) | `WEB.md § Roadmap Task Page` |
 | Web Markdown rendering of the long free-text fields (task requirements, acceptance criteria, completion summary, task and sprint comment bodies, sprint description): the one server-side goldmark renderer, extensions, line breaks, demoted headings, chroma highlighting through the generated, lazily built lexer registry, and its dark stylesheet, link and image rules, raw-HTML omission, the sprint card's non-interactive form, the typography of rendered Markdown (body line height and base block spacing, list markers, heading scale, link colours, the real Inter italic face, the sprint page's 80-character line length, which the task page does not carry) | `WEB.md § Markdown Rendering` |
+| Date-range filter values (`--created-since`/`--created-until`, `--since`/`--until`): the two accepted forms, the 1970-01-01 through 9999-12-31 range, and the refusal | `DATA_FORMATS.md § Date Filter Values` |
 | Web date and time display (the `YYYY-MM-DD HH:mm:ss` form every page shows, in UTC as stored, truncated to the second; the one Go formatter; the `<time datetime>` value; the surfaces it governs and the JSON it leaves in ISO 8601) | `WEB.md § Date and Time Display` |
 | Web graph labels sidebar (node-label / edge-type inventory, counts, section totals, highlight, collapse/expand) | `WEB.md § Graph Labels Sidebar` |
 | Web graph query bar (editable Cypher query box, Search button, node-limit dropdown) | `WEB.md § Graph Query Bar` |
@@ -100,7 +101,9 @@ The SPEC is unversioned. Git is the source of truth for its evolution — recove
 | Memory layout / struct ordering | `MODELS.md § Memory Layout Optimization` |
 | State transitions (Task) | `STATE_MACHINE.md § Task State Machine` |
 | State transitions (Sprint) | `STATE_MACHINE.md § Sprint State Machine` |
-| Sprint membership versus task status (a `BACKLOG` task that is still a sprint member) | `STATE_MACHINE.md § Sprint Membership and the BACKLOG Status` |
+| Sprint membership versus task status (the membership invariant: a sprint member is never in `BACKLOG`; a `COMPLETED` task stays in its sprint) | `STATE_MACHINE.md § Sprint Membership and the BACKLOG Status` |
+| Enforcement of the sprint membership invariant (the one application guard, the write paths that call it, the report of a violation, the repair of existing rows) | `DATABASE.md § Sprint Membership Invariant Enforcement` |
+| Business rules are enforced by application code; the schema uses no triggers | `DATABASE.md § Business Rules Are Enforced by Application Code` |
 | System design / modules | `ARCHITECTURE.md` |
 | Data directory layout | `ARCHITECTURE.md § Directory Structure` |
 | File and directory permissions (`0700`, `0600`, enforcement, failure mode) | `ARCHITECTURE.md § Open-Time Permission Enforcement` |
@@ -172,6 +175,7 @@ To prevent drift across SPEC files, the following topics have a single authorita
 |-------|------------------|
 | Exit codes (numeric values and sentinel names) | `ARCHITECTURE.md § Exit Codes` |
 | Timestamp format, and the scope of the UTC rule (which output it binds, including a log record whose message came from a dependency, and the requirement that one realisation of the format serve every surface) | `DATA_FORMATS.md § Dates - ISO 8601 with UTC` |
+| Date-range filter values (the two accepted forms, the range, the one acceptance rule for all six filter flags) | `DATA_FORMATS.md § Date Filter Values` |
 | Sentinel errors and wrapping rules | `ARCHITECTURE.md § Error Handling` |
 | Error output shape (stderr parts and their order, which error classes append help, stdout silence on failure) | `HELP.md § Error message format` |
 | Help tokens, token positions, and the flag values that never ask for help | `HELP.md § Help tokens` |
@@ -194,7 +198,9 @@ To prevent drift across SPEC files, the following topics have a single authorita
 | Free-text field encoding (only valid UTF-8 accepted and stored, on the flag path and the standard-input path alike) | `MODELS.md § Task` (Free-Text UTF-8 Encoding Constraint) |
 | Task commit tracking field rules (when `commit_open` and `commit_close` are written, preserved, and cleared) | `STATE_MACHINE.md § Commit Tracking Fields` |
 | Sprint state transitions | `STATE_MACHINE.md § Sprint State Machine` |
-| Sprint membership versus task status | `STATE_MACHINE.md § Sprint Membership and the BACKLOG Status` |
+| Sprint membership versus task status (the membership invariant) | `STATE_MACHINE.md § Sprint Membership and the BACKLOG Status` |
+| Enforcement of the sprint membership invariant | `DATABASE.md § Sprint Membership Invariant Enforcement` |
+| No database triggers; business rules enforced by application code | `DATABASE.md § Business Rules Are Enforced by Application Code` |
 | Audit operations catalogue | `DATABASE.md § audit Table` |
 | Audit operation description text, on the catalogue and on the `rmp --ai-help` contract alike | `DATABASE.md § audit Table` (the entry itself), with the coupling and its cost stated in `DATABASE.md § The Catalogue Entry Is Also the Published Contract Description` |
 | Audit operation entity-type classification and LEGACY marking (the single declaration both published help surfaces render from) | `HELP.md § Audit operation entity-type classification` |
@@ -245,6 +251,7 @@ To prevent drift across SPEC files, the following topics have a single authorita
 - Format example: `2026-05-12T14:30:00.000Z` — three digits of milliseconds and an explicit `Z`.
 - This applies to: database columns, JSON output, audit log entries, version metadata, and the `time` attribute of every log record the two long-lived servers write to stderr.
 - Canonical source, including the boundary against knowledge-graph temporal values: `DATA_FORMATS.md § Dates - ISO 8601 with UTC`.
+- A date-range filter flag accepts a timestamp with a `Z` or `±hh:mm` zone designator, or a bare `YYYY-MM-DD`, denoting an instant from 1970-01-01 through 9999-12-31: `DATA_FORMATS.md § Date Filter Values`.
 - The web interface displays a stored timestamp to a reader as `YYYY-MM-DD HH:mm:ss`, in UTC as stored; that display form is presentation only, and every JSON the interface serves stays in the format above: `WEB.md § Date and Time Display`.
 
 ### Process Output

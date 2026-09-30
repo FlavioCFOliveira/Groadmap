@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/FlavioCFOliveira/Groadmap/internal/models"
 	"github.com/FlavioCFOliveira/Groadmap/internal/utils"
 )
 
@@ -160,7 +161,29 @@ type FlagDef struct {
 	Type        string          // "string", "int", "bool"
 	Default     string          // Default value (as string)
 	DisplayName string          // Human-readable name for parse error messages (e.g., "entity ID")
-	Required    bool            // Whether the flag is required
+	// IntRange is, for an "int" flag with a published range, that range as the
+	// refusal of a value that is not an integer names it (e.g. "0-9"). It takes
+	// precedence over DisplayName, so the refusal never carries a parser's text
+	// (SPEC/COMMANDS.md § Create Task, "Every bounded integer flag is refused in
+	// the same shape").
+	IntRange string
+	Required bool // Whether the flag is required
+}
+
+// intRange renders a flag's published range as its not-an-integer refusal
+// names it: the two bounds joined by a hyphen.
+func intRange(minimum, maximum int) string {
+	return strconv.Itoa(minimum) + "-" + strconv.Itoa(maximum)
+}
+
+// errNotAnInteger words the refusal of a value written to a bounded integer
+// flag, or to a bounded integer positional argument, that cannot be read as an
+// integer — including one too large for the platform's integer type. subject
+// is "value for --priority" for a flag and "priority" for a positional
+// argument; the value is echoed inside the quotes as supplied, and the line
+// exits 2 (SPEC/COMMANDS.md § Create Task, § Change Priority (prio)).
+func errNotAnInteger(subject, value, rng string) error {
+	return fmt.Errorf("%w: invalid %s: %q is not an integer in %s", utils.ErrInvalidInput, subject, value, rng)
 }
 
 // ParseResult holds the result of flag parsing.
@@ -189,7 +212,8 @@ func (fp *FlagParser) Parse(args []string) (*ParseResult, error) {
 	}
 
 	// Initialize with defaults
-	for _, def := range fp.defs {
+	for i := range fp.defs {
+		def := &fp.defs[i]
 		if def.Default != "" {
 			val, err := fp.parseValue(def.Default, def.Type)
 			if err != nil {
@@ -271,6 +295,9 @@ func (fp *FlagParser) Parse(args []string) (*ParseResult, error) {
 		// Parse and validate value
 		parsed, err := fp.parseValue(value, def.Type)
 		if err != nil {
+			if def.IntRange != "" {
+				return nil, errNotAnInteger("value for "+def.Name, value, def.IntRange)
+			}
 			if def.DisplayName != "" {
 				return nil, fmt.Errorf("%w: invalid %s: %s", utils.ErrInvalidInput, def.DisplayName, value)
 			}
@@ -288,7 +315,8 @@ func (fp *FlagParser) Parse(args []string) (*ParseResult, error) {
 	}
 
 	// Check required flags
-	for _, def := range fp.defs {
+	for i := range fp.defs {
+		def := &fp.defs[i]
 		if def.Required {
 			if _, ok := result.Flags[def.Field]; !ok {
 				return nil, fmt.Errorf("%w: missing required flag: %s", utils.ErrRequired, def.Name)
@@ -388,8 +416,8 @@ var (
 		{Name: "--technical-requirements", Short: "-tr", Field: "TechnicalRequirements", Type: "string"},
 		{Name: "--acceptance-criteria", Short: "-ac", Field: "AcceptanceCriteria", Type: "string"},
 		{Name: "--type", Short: "-y", Field: "Type", Type: "string"},
-		{Name: "--priority", Short: "-p", Field: "Priority", Type: "int"},
-		{Name: "--severity", Field: "Severity", Type: "int"},
+		{Name: "--priority", Short: "-p", Field: "Priority", Type: "int", IntRange: intRange(models.MinPriority, models.MaxPriority)},
+		{Name: "--severity", Field: "Severity", Type: "int", IntRange: intRange(models.MinSeverity, models.MaxSeverity)},
 		{Name: "--parent", Field: "ParentID", Type: "int", DisplayName: "parent task ID"},
 	}
 
@@ -400,16 +428,16 @@ var (
 		{Name: "--technical-requirements", Short: "-tr", Field: "TechnicalRequirements", Type: "string"},
 		{Name: "--acceptance-criteria", Short: "-ac", Field: "AcceptanceCriteria", Type: "string"},
 		{Name: "--type", Short: "-y", Field: "Type", Type: "string"},
-		{Name: "--priority", Short: "-p", Field: "Priority", Type: "int"},
-		{Name: "--severity", Field: "Severity", Type: "int"},
+		{Name: "--priority", Short: "-p", Field: "Priority", Type: "int", IntRange: intRange(models.MinPriority, models.MaxPriority)},
+		{Name: "--severity", Field: "Severity", Type: "int", IntRange: intRange(models.MinSeverity, models.MaxSeverity)},
 	}
 
 	// TaskListFlags defines flags for task listing.
 	TaskListFlags = []FlagDef{
 		{Name: "--status", Short: "-s", Field: "Status", Type: "string"},
-		{Name: "--priority", Short: "-p", Field: "Priority", Type: "int"},
-		{Name: "--severity", Field: "Severity", Type: "int"},
-		{Name: "--limit", Short: "-l", Field: "Limit", Type: "int"},
+		{Name: "--priority", Short: "-p", Field: "Priority", Type: "int", IntRange: intRange(models.MinPriority, models.MaxPriority)},
+		{Name: "--severity", Field: "Severity", Type: "int", IntRange: intRange(models.MinSeverity, models.MaxSeverity)},
+		{Name: "--limit", Short: "-l", Field: "Limit", Type: "int", IntRange: intRange(models.MinListLimit, models.MaxTaskLimit)},
 		{Name: "--type", Short: "-y", Field: "Type", Type: "string"},
 		{Name: "--created-since", Field: "CreatedSince", Type: "string"},
 		{Name: "--created-until", Field: "CreatedUntil", Type: "string"},
@@ -420,7 +448,7 @@ var (
 	SprintCreateFlags = []FlagDef{
 		{Name: "--title", Short: "-t", Field: "Title", Type: "string"},
 		{Name: "--description", Short: "-d", Field: "Description", Type: "string"},
-		{Name: "--max-tasks", Field: "MaxTasks", Type: "int"},
+		{Name: "--max-tasks", Field: "MaxTasks", Type: "int", IntRange: intRange(models.MinSprintMaxTasks, models.MaxSprintMaxTasks)},
 		// --order is parsed as a string so the handler can enforce the
 		// non-integer / non-positive cases as exit code 6 (ErrValidation) with the
 		// SPEC-mandated messages, rather than the generic int-parse exit code 2.
@@ -445,7 +473,7 @@ var (
 		{Name: "--entity-id", Field: "EntityID", Type: "int", DisplayName: "entity ID", Validator: validateAuditEntityID},
 		{Name: "--since", Field: "Since", Type: "string"},
 		{Name: "--until", Field: "Until", Type: "string"},
-		{Name: "--limit", Short: "-l", Field: "Limit", Type: "int", DisplayName: "limit"},
+		{Name: "--limit", Short: "-l", Field: "Limit", Type: "int", IntRange: intRange(models.MinListLimit, models.MaxAuditLimit)},
 	}
 
 	// AuditStatsFlags defines flags for audit statistics.

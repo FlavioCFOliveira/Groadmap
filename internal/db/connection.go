@@ -414,7 +414,10 @@ func openRoadmap(roadmapName string, chmod chmodFunc) (*DB, error) {
 }
 
 // OpenExisting opens an existing roadmap database.
-// Returns an error if the database doesn't exist.
+// Returns an error if the database doesn't exist. A roadmap home that is a
+// regular file, or any other entry that is neither a directory nor a symbolic
+// link, is a roadmap that does not exist (SPEC/COMMANDS.md § Roadmap Selection
+// (Always Required)).
 func OpenExisting(roadmapName string) (*DB, error) {
 	exists, err := utils.RoadmapExists(roadmapName)
 	if err != nil {

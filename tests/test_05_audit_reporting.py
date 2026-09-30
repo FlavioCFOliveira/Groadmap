@@ -428,7 +428,10 @@ class TestAuditReporting:
         self.test.run_cmd(["sprint", "add-tasks", "-r", roadmap, str(stat_sprint), str(stat_task)])
 
         def walk_the_lifecycle():
-            for status in ("DOING", "TESTING", "COMPLETED", "BACKLOG"):
+            # BACKLOG is no longer a `task stat` destination for a sprint member
+            # (SPEC/STATE_MACHINE.md § Valid Transitions), so the walk stops at
+            # COMPLETED: the three operations `task stat` writes.
+            for status in ("DOING", "TESTING", "COMPLETED"):
                 self.test.run_cmd(
                     ["task", "stat", "-r", roadmap, str(stat_task), status]
                     + commit_flags_for(status)

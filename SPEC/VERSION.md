@@ -175,7 +175,7 @@ The `_metadata` table records the active schema version. Migration steps and the
 
 ### Current Schema Version
 
-`SchemaVersion = "1.15.0"` (defined in `internal/db/schema.go`).
+`SchemaVersion = "1.16.0"` (defined in `internal/db/schema.go`).
 
 ### Migration Commands
 
@@ -989,6 +989,122 @@ definition.
 6. Running the migration set twice against the same database produces the same result as running it once, and raises no error.
 7. If any step fails, `_metadata.schema_version` remains `1.14.0` and the index set is the one the database held before the migration.
 8. After the migration, `SELECT value FROM _metadata WHERE key = 'schema_version'` returns `1.15.0`.
+
+### Migration 1.15.0 → 1.16.0
+
+Brings existing rows under the sprint membership invariant
+(`STATE_MACHINE.md § Sprint Membership and the BACKLOG Status`), which application
+code enforces from this version on (`DATABASE.md § Sprint Membership Invariant
+Enforcement`).
+The invariant has two halves: a sprint member is never in `BACKLOG`, and a task in
+`SPRINT`, `DOING` or `TESTING` belongs to a sprint. Before 1.16.0 neither was
+enforced, and three commands produced a member in `BACKLOG` status:
+`task stat <ids> BACKLOG` from `SPRINT`, `task stat <ids> BACKLOG` from `COMPLETED`,
+and `task reopen` from `COMPLETED`. No command produces an active task outside every
+sprint, but data written outside these rules may hold one. The migration repairs both.
+It adds no table, column, index or trigger: the schema uses no triggers
+(`DATABASE.md § Business Rules Are Enforced by Application Code`).
+
+**Repair A: an active task outside every sprint returns to `BACKLOG`.** Every task in
+`SPRINT`, `DOING` or `TESTING` status that has no `sprint_tasks` row is set to
+`BACKLOG`, and the fields removal from a sprint clears are cleared: `started_at`,
+`tested_at`, `closed_at`, `completion_summary` and `commit_close` become NULL, and
+`commit_open` and every other column are kept. Each such task receives exactly one
+audit entry, the operation removal from a sprint writes:
+
+| Column | Value |
+|--------|-------|
+| `operation` | `TASK_STATUS_BACKLOG` |
+| `entity_type` / `entity_id` | `TASK` / the repaired task |
+| `related_entity_id` | NULL: no sprint is party to the repair, because the task belongs to none |
+| `commit_hash` | NULL |
+| `performed_at` | The migration's one timestamp (below) |
+
+**Repair B: a sprint member in `BACKLOG` becomes `SPRINT`.** Every sprint member found in `BACKLOG` status is set to `SPRINT`. It
+keeps its `sprint_tasks` row, its sprint and its `position`, and every other column
+of the task is left as it is. Each repaired task receives exactly one audit entry,
+written before the status is changed, so that the statement that selects the members
+to record reads rows the repair has not yet rewritten:
+
+| Column | Value |
+|--------|-------|
+| `operation` | `TASK_STATUS_SPRINT`, the operation that records a task entering `SPRINT` in a sprint |
+| `entity_type` / `entity_id` | `TASK` / the repaired task |
+| `related_entity_id` | The sprint the task belongs to |
+| `commit_hash` | NULL |
+| `performed_at` | One timestamp for the whole migration, the moment it runs, in the format of `DATA_FORMATS.md § Dates - ISO 8601 with UTC` |
+
+The entries are the record of a status change the database really underwent, which
+is why this migration writes audit entries while the migration to 1.12.0 writes none
+of its own: that one reclassified entries and changed no task. A roadmap that holds no
+such member receives no entry.
+
+The two repairs touch disjoint sets of tasks — repair A only tasks with no
+`sprint_tasks` row, repair B only tasks with one — and neither can create a violation
+the other would have to repair: repair A writes `BACKLOG` on non-members only, and
+repair B writes `SPRINT` on members only. Both invariants therefore hold once both
+have run. Every audit entry is written
+before the status change it records, so each selecting statement reads rows the
+repair has not yet rewritten.
+
+```sql
+-- A1. Record repair A: one TASK_STATUS_BACKLOG entry per active task outside every
+--     sprint, with no counterpart sprint.
+INSERT INTO audit (operation, entity_type, entity_id, related_entity_id, commit_hash, performed_at)
+SELECT 'TASK_STATUS_BACKLOG', 'TASK', t.id, NULL, NULL, ?
+FROM tasks t
+WHERE t.status IN ('SPRINT', 'DOING', 'TESTING')
+  AND NOT EXISTS (SELECT 1 FROM sprint_tasks st WHERE st.task_id = t.id)
+ORDER BY t.id ASC;
+
+-- A2. Repair A: return those tasks to BACKLOG, clearing what removal from a sprint
+--     clears and keeping commit_open.
+UPDATE tasks
+SET status = 'BACKLOG', started_at = NULL, tested_at = NULL, closed_at = NULL,
+    completion_summary = NULL, commit_close = NULL
+WHERE status IN ('SPRINT', 'DOING', 'TESTING')
+  AND id NOT IN (SELECT task_id FROM sprint_tasks);
+
+-- 1. Record repair B: one TASK_STATUS_SPRINT entry per sprint member in BACKLOG,
+--    naming its sprint, before the repair rewrites the rows this reads.
+INSERT INTO audit (operation, entity_type, entity_id, related_entity_id, commit_hash, performed_at)
+SELECT 'TASK_STATUS_SPRINT', 'TASK', st.task_id, st.sprint_id, NULL, ?
+FROM sprint_tasks st
+JOIN tasks t ON t.id = st.task_id
+WHERE t.status = 'BACKLOG'
+ORDER BY st.task_id ASC;
+
+-- 2. Repair B: every sprint member in BACKLOG becomes SPRINT; membership, position
+--    and every other column are kept.
+UPDATE tasks SET status = 'SPRINT'
+WHERE status = 'BACKLOG' AND id IN (SELECT task_id FROM sprint_tasks);
+
+-- 3. Verify: the sprint membership guard is applied to every task of the roadmap;
+--    a violation it finds fails the migration.
+--    See DATABASE.md § Sprint Membership Invariant Enforcement
+
+-- Update schema version
+UPDATE _metadata SET value = '1.16.0' WHERE key = 'schema_version';
+```
+
+The steps run in this order inside the migration's one transaction, and the
+verification runs last, over every task, so the migration commits only a roadmap
+that satisfies both halves. A failure rolls every step back, the audit entries included, and leaves
+`_metadata.schema_version` at `1.15.0`. Re-applying the migration is a no-op in
+effect: after the repairs no member is in `BACKLOG` and no active task is outside
+every sprint, so steps A1, A2, 1 and 2 select nothing,
+and the verification finds nothing.
+
+#### Acceptance criteria
+
+1. On a database holding sprint members in `BACKLOG` status, or tasks in `SPRINT`, `DOING` or `TESTING` status that belong to no sprint, after the migration neither remains: `SELECT COUNT(*) FROM tasks WHERE status IN ('SPRINT', 'DOING', 'TESTING') AND id NOT IN (SELECT task_id FROM sprint_tasks)` returns `0`, and `SELECT COUNT(*) FROM sprint_tasks st JOIN tasks t ON t.id = st.task_id WHERE t.status = 'BACKLOG'` returns `0`.
+2. Every repaired task is in `SPRINT` status, belongs to the sprint it belonged to, holds the `position` it held, and has every other column unchanged.
+3. The migration writes exactly one `TASK_STATUS_SPRINT` entry per task repair B repairs, with `entity_type = TASK`, `entity_id` the task, `related_entity_id` its sprint, NULL `commit_hash`, and one `performed_at` shared by all of them, and writes no audit entry other than these and the `TASK_STATUS_BACKLOG` entries of criterion 4.
+4. A task in `BACKLOG` status that belongs to no sprint is unchanged, and receives no entry. A task in `SPRINT`, `DOING` or `TESTING` status that belonged to no sprint is in `BACKLOG` after the migration, with `started_at`, `tested_at`, `closed_at`, `completion_summary` and `commit_close` NULL and `commit_open` unchanged, and has exactly one new `TASK_STATUS_BACKLOG` entry with NULL `related_entity_id`, NULL `commit_hash`, and the shared `performed_at`. A `COMPLETED` task that belongs to no sprint is unchanged.
+5. After the migration, `SELECT COUNT(*) FROM sqlite_master WHERE type = 'trigger'` returns `0`: the migration installs no trigger.
+6. Running the migration set twice against the same database produces the same result as running it once, writes no second set of entries, and raises no error.
+7. If any step fails, `_metadata.schema_version` remains `1.15.0`, and the `tasks` and `audit` tables are the ones the database held before the migration.
+8. After the migration, `SELECT value FROM _metadata WHERE key = 'schema_version'` returns `1.16.0`.
 
 ## Release Process
 

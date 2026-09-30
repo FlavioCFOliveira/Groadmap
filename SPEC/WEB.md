@@ -245,7 +245,7 @@ displays all of the task's fields (see [Roadmap Task Page](#roadmap-task-page)).
    [Roadmap Sprints Page](#roadmap-sprints-page)).
 9. The roadmap sprint page shows the details of a single sprint, the sprint's
    member tasks as a Kanban board of three fixed columns — `WAITING` holding the
-   sprint's `BACKLOG` and `SPRINT` tasks, `DOING` its `DOING` and `TESTING` tasks,
+   sprint's `SPRINT` tasks, `DOING` its `DOING` and `TESTING` tasks,
    and `CLOSED` its `COMPLETED` tasks — whose cards are ordered by what each column
    is about, the `WAITING` column by the planned in-sprint execution order and the
    `DOING` and `CLOSED` columns by recency (`started_at` and `closed_at`
@@ -931,7 +931,19 @@ Path-parameter rules:
    interface's path-traversal guard for roadmap names (see
    [Security and Constraints](#security-and-constraints)).
 2. A syntactically valid `{name}` that does not correspond to an existing roadmap
-   under `~/.roadmaps/` is answered with HTTP `404 Not Found`.
+   under `~/.roadmaps/` is answered with HTTP `404 Not Found`. Whether a roadmap
+   exists is decided exactly as the CLI decides it
+   (`COMMANDS.md § Roadmap Selection (Always Required)`): `~/.roadmaps/{name}/` is a
+   directory that holds `project.db`. A name with no entry under `~/.roadmaps/`, a
+   directory without `project.db`, and an entry that is neither a directory nor a
+   symbolic link, such as a regular file, are each a roadmap that does not exist.
+   Every route under `/roadmaps/{name}` answers each of them with the same `404` and
+   the same body as a name under which nothing exists, writes no log record
+   ([What Is Not Logged](#what-is-not-logged), item 1), and reads nothing further;
+   and the roadmap index lists none of them. Only a failure of the check itself —
+   the filesystem refusing to say whether `project.db` is there, as it does for a
+   roadmap home the server may not search — is the I/O failure the logging table
+   answers with `500` and an `ERROR` record.
 3. `{id}`, on the sprint route `/roadmaps/{name}/sprints/{id}`, is a sprint
    identifier. It MUST be a valid integer. A non-integer `{id}`, or an integer
    `{id}` that is not the `id` of a sprint belonging to the named roadmap, is
@@ -1953,7 +1965,7 @@ how the `rmp web` process itself terminates.
   of three fixed columns — `WAITING`, `DOING`, and `CLOSED` — holding one card per
   task, placed between the sprint details above it and the sprint's comments below
   it. The columns group the tasks by one fixed categorisation of the task status —
-  `WAITING` holds `BACKLOG` and `SPRINT`, `DOING` holds `DOING` and `TESTING`, and
+  `WAITING` holds `SPRINT`, `DOING` holds `DOING` and `TESTING`, and
   `CLOSED` holds `COMPLETED` — so the three column counts sum to the sprint's total
   number of member tasks, and each column orders its own cards: the `WAITING`
   column keeps the planned in-sprint execution order, which is the `sprint_tasks`
@@ -2058,9 +2070,8 @@ how the `rmp web` process itself terminates.
   title `Sprint`. It gives the context of the sprint the task belongs to and
   nothing more: it is context, not a sprint view, so it shows no sprint
   description, no sprint timestamp, no member task, and no sprint comment.
-  Membership, not status, decides which of its two forms it takes: a task whose
-  status is `BACKLOG` and that is still a member of a sprint shows the sprint form
-  (see `STATE_MACHINE.md § Sprint Membership and the BACKLOG Status`).
+  Membership decides which of its two forms it takes (see
+  `STATE_MACHINE.md § Sprint Membership and the BACKLOG Status`).
   - **When the task belongs to a sprint**, the card body shows, in this order:
     1. **The sprint**, as one link to the sprint's own page at
        `/roadmaps/{name}/sprints/{id}` whose text is `Sprint #<id>` followed by the
@@ -2698,13 +2709,16 @@ shows sprints as compact cards through the shared sprint-card partial instead (s
      completed = `COMPLETED` (its `Summary.Completed` counter). The board defines no
      new categorisation; it reuses that one, so every presentation of one sprint's
      task progress agrees about which tasks are waiting, which are being worked on,
-     and which are done.
+     and which are done. The `BACKLOG` half of the pending group is always empty on
+     this board: a sprint member is never in `BACKLOG` status
+     (`STATE_MACHINE.md § Sprint Membership and the BACKLOG Status`), so `WAITING`
+     holds exactly the sprint's `SPRINT` tasks.
 
      Each column heading is written exactly as spelled above, in upper case, and is
      not translated.
    - **The column counts partition the sprint.** Because the grouping is that one,
      the `WAITING` column's count is the number of the sprint's member tasks in
-     `BACKLOG` or `SPRINT` (`Summary.Pending`), the `DOING` column's count is the
+     `SPRINT` (`Summary.Pending`), the `DOING` column's count is the
      number in `DOING` or `TESTING` (`Summary.InProgress`), the `CLOSED` column's
      count is the number in `COMPLETED` (`Summary.Completed`), and the three counts
      sum to the sprint's total number of member tasks (`Summary.TotalTasks`). Only
@@ -2741,15 +2755,15 @@ shows sprints as compact cards through the shared sprint-card partial instead (s
      toggle (see **Column collapse** below).
 
      A column of this board groups a **set** of statuses rather than a single one:
-     `WAITING` groups `BACKLOG` and `SPRINT`, `DOING` groups `DOING` and `TESTING`,
+     `WAITING` groups the pending statuses, `DOING` groups `DOING` and `TESTING`,
      and `CLOSED` holds `COMPLETED` alone (see the table above). The colour is
      therefore the one the mapping assigns to the **canonical status of the group** —
-     the status a task is normally in at that stage of the sprint. `WAITING` takes
-     the colour of `SPRINT`, `DOING` takes the colour of `DOING`, and `CLOSED` takes
-     the colour of `COMPLETED`. A task waiting in a sprint is normally a `SPRINT`
-     task: a `BACKLOG` task inside a sprint is the exceptional case, the case of a
-     task returned to the backlog without leaving the sprint, so `SPRINT` is the
-     status the `WAITING` column stands for. The column named `DOING` taking the
+     the status a task is in at that stage of the sprint. `WAITING` takes the colour
+     of `SPRINT`, `DOING` takes the colour of `DOING`, and `CLOSED` takes the colour
+     of `COMPLETED`. A task waiting in a sprint is a `SPRINT` task: a sprint member
+     is never in `BACKLOG` status (`STATE_MACHINE.md § Sprint Membership and the
+     BACKLOG Status`), so `SPRINT` is the only status the `WAITING` column holds and
+     the status it stands for. The column named `DOING` taking the
      colour of the status named `DOING` is the reading a user will expect, and any
      other choice would leave the board's own heading disagreeing with its colour.
      `CLOSED` calls for no such choice, because it holds one status and that status
@@ -5772,10 +5786,11 @@ Rules:
        carries `bg-secondary-lt`, Actual carries `bg-blue-lt`, and Concluídos carries
        `bg-green-lt`, each showing its own count.
      - Each column of the **sprint board** groups a set of task statuses rather than a
-       single one — `WAITING` groups `BACKLOG` and `SPRINT`, `DOING` groups `DOING`
-       and `TESTING`, and `CLOSED` holds `COMPLETED` alone — so its count badge takes
-       the variant assigned to the **canonical status of the group**, the status a
-       task is normally in at that stage of the sprint: `SPRINT` for `WAITING`,
+       single one — `WAITING` groups the pending statuses, of which a sprint member
+       can hold only `SPRINT`, `DOING` groups `DOING` and `TESTING`, and `CLOSED`
+       holds `COMPLETED` alone — so its count badge takes the variant assigned to the
+       **canonical status of the group**, the status a task is in at that stage of
+       the sprint: `SPRINT` for `WAITING`,
        `DOING` for `DOING`, and `COMPLETED` for `CLOSED`. Why each group's canonical
        status is the one named here is stated where that board is defined (see
        [Sprint Detail Sub-Template](#sprint-detail-sub-template), **Column header**).
@@ -6204,9 +6219,13 @@ These are deliberate exclusions, not omissions.
    path, or a non-read method on a known path is an ordinary outcome of
    navigation, not a failure of the server. Logging them would bury the genuine
    failures under every mistyped URL and every browser probe for an asset the
-   server does not serve. The single exception is already covered above: when a
-   roadmap's existence check fails with an I/O error the response is 500, not
-   404, and it is logged.
+   server does not serve. A roadmap home that is a regular file, or any other entry
+   that is neither a directory nor a symbolic link, is an unknown roadmap under this
+   item, not an I/O failure: it is a `404` and it is not logged. The single
+   exception is already covered above: when a roadmap's existence check fails with
+   an I/O error the response is 500, not 404, and it is logged — for example, a
+   roadmap home whose permissions deny the server the search of it, so that the
+   check cannot learn whether `project.db` is there.
 2. **There is no access log.** A successful request writes no record. The log
    exists to make failures visible, not to trace traffic.
 3. **The client address is not logged.** The server binds loopback by default and
@@ -8011,8 +8030,8 @@ Rules:
     Kanban board of exactly three columns, presented left to right with the headings
     `WAITING`, `DOING`, and `CLOSED`, and the served HTML carries no member-tasks
     table and no task table of any kind on this page. Each column holds exactly the
-    sprint's tasks in the statuses assigned to it — `WAITING` the `BACKLOG` and
-    `SPRINT` tasks, `DOING` the `DOING` and `TESTING` tasks, and `CLOSED` the
+    sprint's tasks in the statuses assigned to it — `WAITING` the `SPRINT` tasks,
+    `DOING` the `DOING` and `TESTING` tasks, and `CLOSED` the
     `COMPLETED` tasks — so every member task appears on the board exactly once and
     none is omitted or duplicated. All three columns are rendered whatever the sprint
     holds: a column with no task keeps its heading and its `0` count badge and shows
@@ -8023,7 +8042,7 @@ Rules:
     (see [Sprint Detail Sub-Template](#sprint-detail-sub-template)).
 131. Each column count of the sprint's member-tasks board is the number of the
     sprint's member tasks in the statuses the column groups: the `WAITING` column's
-    badge equals the number in `BACKLOG` or `SPRINT`, the `DOING` column's badge the
+    badge equals the number in `SPRINT`, the `DOING` column's badge the
     number in `DOING` or `TESTING`, and the `CLOSED` column's badge the number in
     `COMPLETED` — the `Summary.Pending`, `Summary.InProgress`, and
     `Summary.Completed` counters of `models.CalculateSprintShowResult` for that
@@ -8032,7 +8051,7 @@ Rules:
     member tasks and their statuses, and asserts each badge against its own
     expected count, because a board that grouped the statuses differently could
     still show three counts whose sum is right. For a sprint of 55 member tasks of
-    which 8 are in `BACKLOG` or `SPRINT`, 29 in `DOING` or `TESTING`, and 18 in
+    which 8 are in `SPRINT`, 29 in `DOING` or `TESTING`, and 18 in
     `COMPLETED`, the three column badges read `8`, `29`, and `18`, and the board
     shows 55 cards in total.
 132. Each column of the sprint's member-tasks board orders its cards by its own
@@ -9181,8 +9200,7 @@ Rules:
     classes `progress` and `progress-sm`, the `value` `4`, the `max` `11`, and
     `aria-label="Sprint progress"`, with no `style` attribute. The first member
     task in position order reads `Position 1 of 11`, and the last reads
-    `Position 11 of 11`. A member task whose status is `BACKLOG` shows the same
-    sprint form, not the backlog text, and a task of a sprint with no `COMPLETED`
+    `Position 11 of 11`. A task of a sprint with no `COMPLETED`
     member reads `0 of <m> tasks completed` with a `value` of `0`. The card shows
     no sprint description, no sprint timestamp, no member task, and no sprint
     comment (see [Roadmap Task Page](#roadmap-task-page), **Sprint card**).
@@ -9355,8 +9373,7 @@ Rules:
     [Roadmap Tasks Page](#roadmap-tasks-page), **Filter bar**).
 235. **The sprint filter selects by membership.** For a roadmap whose tasks are spread
     over two sprints and the backlog, `?sprint=none` lists exactly the tasks that belong
-    to no sprint, whatever their status — a `BACKLOG` task that is a member of a sprint
-    excluded; `?sprint=<id>` lists exactly the member tasks of that sprint, whatever
+    to no sprint, whatever their status; `?sprint=<id>` lists exactly the member tasks of that sprint, whatever
     their status; and the lists of `none` and of every sprint `id` together hold every
     task of the roadmap exactly once. `?sprint=<id>&status=DOING` lists exactly that
     sprint's `DOING` tasks. A `sprint` naming a sprint of another roadmap is ignored, as
@@ -9740,6 +9757,16 @@ Rules:
     silent server; each writes exactly one `WARN` record and no `INFO` record (see
     [Requests Abandoned by the Client](#requests-abandoned-by-the-client), rule 5,
     and Acceptance Criterion 110).
+264. **A roadmap home that is a regular file is a roadmap that does not exist.**
+    With a regular file at `~/.roadmaps/<name>`, `GET /roadmaps/<name>`,
+    `GET /roadmaps/<name>/tasks` and `GET /roadmaps/<name>/graph/data` each return
+    HTTP `404` with the body a name under which nothing exists returns, the server
+    writes no log record for any of them, the roadmap index does not list `<name>`,
+    and the file is left exactly as it was found. With a roadmap home whose mode
+    denies the server the search of it (mode `0000` on `~/.roadmaps/<name>/`, which
+    holds a `project.db`), the same requests return HTTP `500` and each writes one
+    `ERROR` record for the failed existence check (see Path-parameter rules, rule 2,
+    and [What Is Not Logged](#what-is-not-logged), item 1).
 
 ## See Also
 
@@ -9819,8 +9846,7 @@ Rules:
   [Sprint Detail Sub-Template](#sprint-detail-sub-template),
   [Roadmap Tasks Page](#roadmap-tasks-page), [Security Headers](#security-headers),
   and [Frontend Rules](#frontend-rules)
-- Sprint membership and the `BACKLOG` status, which decide the form of the task
-  page's Sprint card, and the density of in-sprint positions its position line
+- Sprint membership, which decides the form of the task page's Sprint card, and the density of in-sprint positions its position line
   relies on → `STATE_MACHINE.md § Sprint Membership and the BACKLOG Status` and
   `DATABASE.md § Position Density Within a Sprint`
 - Sprint membership, by which the tasks page's sprint filter narrows its list and

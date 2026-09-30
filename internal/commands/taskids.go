@@ -30,6 +30,26 @@ func taskStateIDsOf(states []db.TaskState) []int {
 	return ids
 }
 
+// taskSprintStateIDsOf returns the id of each task sprint state, in the order
+// the read returned them.
+func taskSprintStateIDsOf(states []db.TaskSprintState) []int {
+	ids := make([]int, len(states))
+	for i := range states {
+		ids[i] = states[i].ID
+	}
+	return ids
+}
+
+// taskSprintStatesByID indexes the task sprint states by task id, so a caller
+// can walk the ids in the order the command line supplied them.
+func taskSprintStatesByID(states []db.TaskSprintState) map[int]db.TaskSprintState {
+	byID := make(map[int]db.TaskSprintState, len(states))
+	for _, st := range states {
+		byID[st.ID] = st
+	}
+	return byID
+}
+
 // tasksOfStates renders the member read of a sprint as the task values the
 // sprint report calculators take (models.CalculateSprintStats,
 // models.CalculateSprintShowResult and models.CalculateSprintBurndown). Those

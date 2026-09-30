@@ -332,23 +332,17 @@ func TestHandleIndex_ListError(t *testing.T) {
 
 // TestResolveRoadmap_ExistsError covers resolveRoadmap's 500 branch
 // (routes.go: RoadmapExists I/O error). The {name} passes validation, but the
-// existence check stats ~/.roadmaps/<name>/project.db where <name> is itself a
-// regular FILE, so the stat returns a "not a directory" error (not
-// IsNotExist). That is an internal read error, not a not-found, so the handler
-// must respond 500.
+// existence check cannot learn whether project.db is there, which is an
+// internal read error, not a not-found, so the handler must respond 500.
 func TestResolveRoadmap_ExistsError(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 
-	roadmapsDir := filepath.Join(home, ".roadmaps")
-	if err := os.MkdirAll(roadmapsDir, 0o700); err != nil {
-		t.Fatalf("creating ~/.roadmaps: %v", err)
-	}
-	// "data-pipeline" is a valid roadmap name, but here it is a file, so
-	// stat("~/.roadmaps/data-pipeline/project.db") yields ENOTDIR.
-	if err := os.WriteFile(filepath.Join(roadmapsDir, "data-pipeline"), []byte("x"), 0o600); err != nil {
-		t.Fatalf("seeding roadmap name as a file: %v", err)
-	}
+	// "data-pipeline" is a valid roadmap name whose existence check fails with
+	// an I/O error (see plantUnsearchableRoadmapHome). A regular file there
+	// would not do: it is a roadmap that does not exist, a 404 (SPEC/WEB.md
+	// Acceptance Criterion 264).
+	plantUnsearchableRoadmapHome(t, home, "data-pipeline")
 
 	mux := buildMux()
 	req := httptest.NewRequest(http.MethodGet, "/roadmaps/data-pipeline", nil)

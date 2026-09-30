@@ -326,11 +326,10 @@ class Workspace:
             cls._rmp(["task", "stat", "-r", r, task, "DOING", "--commit-open", OPEN_HASH], home)
             cls._rmp(["task", "stat", "-r", r, task, "TESTING"], home)
 
-        # Task 7 back to BACKLOG so `task remove 7` succeeds as published. The
-        # BACKLOG transition keeps the sprint_tasks row, so 7 stays a member of
-        # sprint 5 for the ordering examples (SPEC/STATE_MACHINE.md § Sprint
-        # Membership and the BACKLOG Status).
-        cls._rmp(["task", "stat", "-r", r, "7", "BACKLOG"], home)
+        # Task 7 stays a SPRINT member of sprint 5 for the ordering examples. A
+        # sprint member is never in BACKLOG (SPEC/STATE_MACHINE.md § Sprint
+        # Membership and the BACKLOG Status), so `task remove 7` is prepared on
+        # its own copy by taking 7 out of the sprint (EXAMPLE_PREPARATIONS).
 
         # Sprint 3 CLOSED: `sprint add-tasks 3 42,43` publishes the CLOSED
         # refusal. Closing it leaves no sprint OPEN, which is what the
@@ -806,6 +805,9 @@ EXAMPLE_PREPARATIONS = {
     },
     ("task stat", "Complete with summary"): {
         "rmp": [["sprint", "add-tasks", "-r", FIXTURE_ROADMAP, "5", "7"]] + _to_testing("7"),
+    },
+    ("task remove", "Remove one task"): {
+        "rmp": [["sprint", "remove-tasks", "-r", FIXTURE_ROADMAP, "5", "7"]],
     },
     ("task remove-dep", "Remove dep"): {
         "rmp": [["task", "add-dep", "-r", FIXTURE_ROADMAP, "10", "7"]],
@@ -1610,6 +1612,7 @@ PROBE_STATES = {
     "task next": [["sprint", "start", "-r", FIXTURE_ROADMAP, "5"]],
     "task stat": [],
     "task remove-dep": [["task", "add-dep", "-r", FIXTURE_ROADMAP, "4", "5"]],
+    "task remove": [["sprint", "remove-tasks", "-r", FIXTURE_ROADMAP, "5", "7"]],
     "sprint close": [["sprint", "start", "-r", FIXTURE_ROADMAP, "1"]],
     "sprint reopen": [
         ["sprint", "start", "-r", FIXTURE_ROADMAP, "1"],
@@ -1700,6 +1703,27 @@ def _driver_graph_client_oversized(home):
         return proc2.returncode
     finally:
         stop_server(proc)
+
+
+def _driver_occupied_roadmap_home(home):
+    """Exit 1 of `roadmap create`: ~/.roadmaps/<name> is a regular file, an
+    entry that is neither a directory nor a symbolic link (SPEC/COMMANDS.md
+    § Create Roadmap). The planted file must survive the refusal untouched."""
+    name = "field-ops"
+    roadmaps = os.path.join(home, ".roadmaps")
+    os.makedirs(roadmaps, mode=0o700, exist_ok=True)
+    planted = os.path.join(roadmaps, name)
+    with open(planted, "wb") as fh:
+        fh.write(b"quarterly field operations notes")
+    code, out, err = Workspace._rmp(["roadmap", "create", name], home, check=False)
+    want = (f'Error: I/O error: cannot create roadmap "{name}": {planted} '
+            f"is occupied and is not a directory")
+    assert first_line(err) == want, f"stderr {first_line(err)!r}; want {want!r}"
+    assert out == "", f"stdout {out[:80]!r}; want nothing"
+    assert os.path.isfile(planted), "the refusal removed or replaced the planted file"
+    with open(planted, "rb") as fh:
+        assert fh.read() == b"quarterly field operations notes", "the planted file was changed"
+    return code
 
 
 RESIDUE_DRIVERS = {
@@ -1805,10 +1829,18 @@ RESIDUE_DRIVERS = {
         ["backlog", "show-next", "-r", FIXTURE_ROADMAP, "5", "surplus"]),
     ("audit history", 2): _driver_plain(["audit", "history", "-r", FIXTURE_ROADMAP]),
     ("stats", 2): _driver_plain(["stats", "-r", FIXTURE_ROADMAP, "--zzz-unknown"]),
+    # The one cause of exit 6 on these four subcommands: a roadmap name that
+    # breaks a rule of SPEC/COMMANDS.md § Roadmap Name Validation, judged where
+    # the roadmap is resolved (rmp task 493).
+    ("stats", 6): _driver_plain(["stats", "-r", "con"]),
+    ("graph serve", 6): _driver_plain(["graph", "serve", "-r", "con"]),
+    ("task comment-remove", 6): _driver_plain(["task", "comment-remove", "-r", "con", "1"]),
+    ("sprint comment-remove", 6): _driver_plain(["sprint", "comment-remove", "-r", "con", "1"]),
     ("graph serve", 2): _driver_plain(["graph", "serve", "-r", FIXTURE_ROADMAP, "--zzz"]),
     ("web", 2): _driver_plain(["web", "--zzz-unknown"]),
     ("web", 6): _driver_plain(["web", "--port", "70000"]),
     ("ai-help", 2): _driver_plain(["ai-help", "stray"]),
+    ("roadmap create", 1): _driver_occupied_roadmap_home,
     ("roadmap create", 6): _driver_plain(["roadmap", "create", "My Project!"]),
     ("roadmap remove", 6): _driver_plain(["roadmap", "remove", "My Project!"]),
     ("sprint create", 6): _driver_plain(

@@ -8,7 +8,7 @@ import (
 )
 
 // SchemaVersion is the current database schema version.
-const SchemaVersion = "1.15.0"
+const SchemaVersion = "1.16.0"
 
 // CreateSchema creates all database tables and indexes, and the three
 // _metadata rows, in ONE transaction. This implements the DDL from

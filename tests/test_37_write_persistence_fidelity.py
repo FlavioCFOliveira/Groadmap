@@ -169,10 +169,14 @@ class TestWritePersistenceFidelity:
             self.test.run_cmd(["task", "stat", "-r", r, str(tid), st] + commit_flags_for(st))
         self.test.run_cmd(["task", "reopen", "-r", r, str(tid)])
         t = self._get(r, tid)
-        assert t["status"] == "BACKLOG", t["status"]
+        # A reopening returns the task to SPRINT in its sprint
+        # (SPEC/COMMANDS.md § Reopen Task).
+        assert t["status"] == "SPRINT", t["status"]
         assert t["started_at"] is None and t["tested_at"] is None, t
         assert t["closed_at"] is None and t["completion_summary"] is None, t
-        print("✓ reopen clears status and all lifecycle timestamps")
+        members = [x["id"] for x in self.test.run_cmd_json(["sprint", "tasks", "-r", r, str(s)])]
+        assert members == [tid], f"a reopened task stays in its sprint; members = {members}"
+        print("✓ reopen returns the task to SPRINT in its sprint and clears all lifecycle timestamps")
 
     # ---- bulk priority / severity -----------------------------------------
 

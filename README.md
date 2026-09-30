@@ -25,7 +25,7 @@ Before extracting anything, the script verifies the downloaded archive against t
 - **Sprint Reporting**: Comprehensive sprint reports with progress and distribution metrics
 - **Task Ordering**: Reorder, move-to-position, swap, top, and bottom commands for sprint task management
 - **Backlog and Statistics**: Backlog planning views and roadmap-wide statistics with velocity
-- **Audit Trail**: Automatic, append-only logging of every change to a task or a sprint, across a catalogue of 43 operations. Each entry names the operation, the entity it belongs to and when it happened, and, where the operation has one, the counterpart entity involved and the git commit that bracketed the work
+- **Audit Trail**: Automatic, append-only logging of every change to a task or a sprint, across a catalogue of 44 operations. Each entry names the operation, the entity it belongs to and when it happened, and, where the operation has one, the counterpart entity involved and the git commit that bracketed the work
 - **State Machine**: Validated task and sprint status transitions with automatic date tracking
 - **Bulk Operations**: Support for multiple task IDs in single commands
 - **Knowledge Graph**: Per-roadmap queryable graph (nodes, edges, Cypher) for capturing project elements and their relationships, held open by a dedicated server (`rmp graph serve`) that answers Cypher over a Unix domain socket and reached with `rmp graph client`
@@ -296,7 +296,10 @@ rmp task edit -r <name> <id> -t "New title" --priority 9 --type BUG
 rmp task remove -r <name> <id>
 rmp task rm -r <name> 1,2,3              # Bulk delete (tasks must be in BACKLOG)
 ```
-- A task must be in `BACKLOG` status and have no sub-tasks.
+- A task must be in `BACKLOG` status and have no sub-tasks. A task in a sprint is
+  first taken out of it with `rmp sprint remove-tasks`, which returns it to
+  `BACKLOG`; a `COMPLETED` task stays in its sprint, so it is first returned to
+  `SPRINT` with `rmp task reopen`.
 
 ---
 
@@ -362,8 +365,27 @@ rmp sprint upd -r <name> <id> -t "Storage refactor" -d "Refactor persistence ont
 ```bash
 rmp sprint add-tasks -r <name> 1 5,8,12,15
 ```
-- Tasks move from `BACKLOG` to `SPRINT` automatically.
-- Rejected if the sprint is at `max_tasks` capacity.
+- A `BACKLOG` task joins the sprint and becomes `SPRINT` automatically.
+- A `SPRINT`, `DOING` or `TESTING` task that belongs to another sprint is moved
+  into this one and keeps its status.
+- A `COMPLETED` task is refused (exit 6): it stays in the sprint it was completed in.
+- Rejected if the tasks that would become active in the sprint take it past its
+  `max_tasks` cap. The cap counts `SPRINT`, `DOING` and `TESTING` members only, and
+  a named task that is already a member is not counted again.
+
+**How do sprint membership and task status relate?**
+- A task in `BACKLOG` belongs to no sprint, and a sprint member is never in
+  `BACKLOG`. A task in `SPRINT`, `DOING` or `TESTING` always belongs to a sprint.
+- A task leaves the backlog only by joining a sprint (`sprint add-tasks`), and
+  returns to it only by leaving one (`sprint remove-tasks`, or `sprint remove`).
+  `rmp task stat <id> BACKLOG` is refused for every sprint member.
+- A `COMPLETED` task stays in the sprint it was completed in: `sprint add-tasks`,
+  `sprint move-tasks` and `sprint remove-tasks` refuse it, and `sprint remove`
+  refuses a sprint that holds one. `rmp task reopen` returns it to `SPRINT` in the
+  same sprint.
+- Application code enforces these rules on every write; the database uses no
+  triggers. Upgrading to schema 1.16.0 repairs a roadmap written before them, and
+  records each repair in the audit log.
 
 **How do I define the execution order of tasks within a sprint?**
 ```bash
@@ -384,17 +406,29 @@ rmp sprint start -r <name> <id>
 ```bash
 rmp sprint move-tasks -r <name> 1 2 5,6,7   # Move tasks 5, 6, 7 from sprint 1 to sprint 2
 ```
+- Each task keeps its status: a `DOING` task is still `DOING` in sprint 2.
+- A `COMPLETED` task is refused, and so is a `CLOSED` source or destination sprint.
 
 **How do I remove tasks from a sprint?**
 ```bash
 rmp sprint remove-tasks -r <name> 1 5,6     # Tasks return to BACKLOG
 ```
+- A `COMPLETED` task is refused (exit 6): it stays in its sprint.
 
 **How do I close a sprint?**
 ```bash
 rmp sprint close -r <name> <id>
 rmp sprint close -r <name> <id> --force     # Bypass the active-task check
 ```
+
+**How do I carry unfinished work over from a closed sprint?**
+```bash
+rmp sprint add-tasks -r <name> 2 5,6        # Re-parent tasks 5 and 6 into sprint 2
+```
+- `close --force` leaves the sprint's `SPRINT`, `DOING` and `TESTING` tasks in it.
+  `add-tasks` moves them to another sprint and keeps their status. `move-tasks`
+  cannot, because it refuses a `CLOSED` source sprint. `COMPLETED` tasks stay in
+  the closed sprint.
 
 **How do I reopen a closed sprint?**
 ```bash
@@ -409,8 +443,10 @@ rmp sprint rm -r <name> <id>
 - A sprint is removable in **any** status. `PENDING`, `OPEN` and `CLOSED` are all
   accepted, so removing does not first require closing, and an `OPEN` sprint is not
   protected from it.
-- Every member task returns to `BACKLOG`, whatever status it held - `COMPLETED`
-  included - and the sprint record is deleted.
+- Every `SPRINT`, `DOING` or `TESTING` member task returns to `BACKLOG`, and the
+  sprint record is deleted.
+- A sprint that holds a `COMPLETED` task is not removed (exit 6), and nothing
+  changes: a completed task stays in the sprint it was completed in.
 
 **Can I have multiple open sprints?**
 No. Only one sprint can be `OPEN` at a time. Close the current sprint before starting another.
@@ -472,9 +508,13 @@ rmp task stat -r <name> 1,2,3 DOING --commit-open 5f93b51   # one hash, every ta
 
 **How do I reopen a completed task?**
 ```bash
-rmp task reopen -r <name> <id>              # Returns to BACKLOG, clears the lifecycle timestamps
+rmp task reopen -r <name> <id>              # Returns to SPRINT in its sprint, clears the lifecycle timestamps
 rmp task reopen -r <name> 1,2,3             # Bulk reopen
 ```
+- `task reopen` returns a `DOING`, `TESTING` or `COMPLETED` task to `SPRINT` and
+  keeps it in its sprint, at the same position.
+- It is refused (exit 6) while that sprint is `CLOSED`: run `rmp sprint reopen`
+  first.
 - Reopening clears `started_at`, `tested_at`, `closed_at`, `completion_summary`
   and `commit_close` — but **preserves `commit_open`**. Reopening withdraws the
   claim that the task was concluded at a given commit; it does not make the work
@@ -911,7 +951,8 @@ rmp <command> -r <name> ...    # Pass -r explicitly; there is no default roadmap
 - `started_at` — set when a task moves to `DOING`
 - `tested_at` — set when a task moves to `TESTING`
 - `closed_at` — set when a task moves to `COMPLETED`
-- All three are cleared when a task is reopened to `BACKLOG`
+- All three are cleared when a task is reopened to `SPRINT`, and when it leaves
+  its sprint and returns to `BACKLOG`
 
 **How are commit hashes tracked?**
 - `commit_open` — the commit the work starts from, supplied with `--commit-open`
@@ -919,9 +960,8 @@ rmp <command> -r <name> ...    # Pass -r explicitly; there is no default roadmap
 - `commit_close` — the commit the work is concluded at, supplied with
   `--commit-close` on the transition into `COMPLETED`
 - Neither is derived: `rmp` runs no git command and reads no repository
-- Returning to `BACKLOG` — by `task stat BACKLOG`, `task reopen`,
-  `sprint remove-tasks` or `sprint remove` — clears `commit_close` and preserves
-  `commit_open`. This is deliberately asymmetric with the timestamps above,
+- Reopening (`task reopen`) and returning to `BACKLOG` (`sprint remove-tasks` or
+  `sprint remove`) clear `commit_close` and preserve `commit_open`. This is deliberately asymmetric with the timestamps above,
   which are all cleared.
 
 ## License

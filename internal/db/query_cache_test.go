@@ -168,7 +168,7 @@ func TestQueryCacheTemplatesMatchProductionQueries(t *testing.T) {
 			        t.priority, t.severity,
 			        (SELECT COUNT(*) FROM tasks s WHERE s.parent_task_id = t.id) AS subtask_count`+taskDepsSelect+`
 			 FROM tasks t WHERE t.id IN (%s) ORDER BY t.id`, ph),
-		OpAddTasksToSprint: fmt.Sprintf("UPDATE tasks SET status = ? WHERE id IN (%s)", ph),
+		OpAddTasksToSprint: fmt.Sprintf("UPDATE tasks SET status = ? WHERE id IN (%s) AND status = 'BACKLOG'", ph),
 	}
 	for op, want := range wants {
 		if got := qc.GetQuery(op, size); got != want {

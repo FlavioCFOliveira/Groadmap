@@ -215,21 +215,24 @@ class TestSprintLifecycle:
 
         print("\u2713 sprint remove accepts PENDING, OPEN and CLOSED alike")
 
-    def test_remove_sprint_reverts_a_completed_member(self):
-        """Regression: a COMPLETED member returns to BACKLOG on sprint remove.
+    def test_remove_sprint_refuses_a_completed_member(self):
+        """A sprint holding a COMPLETED task is not removed.
 
-        The README documents that returning to BACKLOG clears `commit_close` and
-        preserves `commit_open`. `sprint remove` is one of the four routes back to
-        BACKLOG, and it applies to a COMPLETED member too -- the member is not
-        exempt from the revert because its work finished.
+        A completed task stays in the sprint it was completed in, so
+        `sprint remove` refuses such a sprint with exit code 6, names every
+        COMPLETED member, and changes nothing: the sprint, the membership and the
+        task's closing commit all survive (SPEC/COMMANDS.md § Remove Sprint).
+        Once the task is reopened, the sprint holds no COMPLETED task and is
+        removed, the member returning to BACKLOG with commit_close cleared and
+        commit_open preserved.
         """
         roadmap = self.test.create_roadmap()
         task = self.test.create_task(
             roadmap,
-            "Verify the removal path clears the closing commit",
-            "A removed sprint must not leave a member claiming it was concluded.",
-            "Drive the task to COMPLETED, then remove the sprint that holds it.",
-            "The task is BACKLOG, commit_close is null and commit_open survives.",
+            "Verify the removal path keeps a completed member in its sprint",
+            "A removed sprint must not strip a completed task of the sprint it was completed in.",
+            "Drive the task to COMPLETED, then try to remove the sprint that holds it.",
+            "The removal is refused and the task is still COMPLETED in its sprint.",
         )
         sprint = self.test.create_sprint(
             roadmap, "Confirm what sprint remove does to a completed member"
@@ -245,20 +248,29 @@ class TestSprintLifecycle:
         )
         self.test.assert_task_status(roadmap, task, "COMPLETED")
 
+        code, out, err = self.test.run_cmd(["sprint", "remove", "-r", roadmap, str(sprint)], check=False)
+        assert code == 6, f"sprint remove with a COMPLETED member must exit 6, got {code}: {err!r}"
+        want = (f"Error: validation error: cannot remove sprint #{sprint}: completed tasks stay in "
+                f"their sprint: #{task}")
+        assert err.splitlines()[0] == want, f"got {err.splitlines()[0]!r}, want {want!r}"
+        assert out == "", f"a refused removal wrote to stdout: {out!r}"
+
+        kept = self.test.run_cmd_json(["task", "get", "-r", roadmap, str(task)])[0]
+        assert kept["status"] == "COMPLETED" and kept.get("commit_close") == "2578d18", (
+            f"the refused removal changed the task: {kept}"
+        )
+        members = [t["id"] for t in self.test.run_cmd_json(["sprint", "tasks", "-r", roadmap, str(sprint)])]
+        assert members == [task], f"the refused removal changed the sprint's members: {members}"
+
+        # Reopened, the task is SPRINT again, and the sprint can be removed.
+        self.test.run_cmd(["task", "reopen", "-r", roadmap, str(task)])
         self.test.run_cmd(["sprint", "remove", "-r", roadmap, str(sprint)])
-
         after = self.test.run_cmd_json(["task", "get", "-r", roadmap, str(task)])[0]
-        assert after["status"] == "BACKLOG", (
-            f"a COMPLETED member must revert to BACKLOG, got {after['status']}"
-        )
-        assert after.get("commit_close") in (None, ""), (
-            f"sprint remove must clear commit_close, got {after.get('commit_close')}"
-        )
-        assert after.get("commit_open") == "5f93b51", (
-            f"sprint remove must preserve commit_open, got {after.get('commit_open')}"
-        )
+        assert after["status"] == "BACKLOG", f"a removed sprint's member must be BACKLOG, got {after['status']}"
+        assert after.get("commit_close") in (None, ""), f"commit_close must be cleared, got {after.get('commit_close')}"
+        assert after.get("commit_open") == "5f93b51", f"commit_open must survive, got {after.get('commit_open')}"
 
-        print("\u2713 sprint remove reverts a COMPLETED member and clears only commit_close")
+        print("\u2713 sprint remove refuses a sprint holding a COMPLETED member and changes nothing")
 
     def test_sprint_with_tasks_lifecycle(self):
         """Test sprint lifecycle with tasks."""

@@ -307,6 +307,7 @@ the following statements MUST hold:
 - **Foreign Key Enforcement**: `PRAGMA foreign_keys = ON;` must be enabled on every database connection to ensure referential integrity and trigger cascading deletes. Because it is connection-scoped, it is carried in the DSN rather than executed against an already-open connection, so it cannot depend on which pooled connection services a query; see `IMPLEMENTATION.md § Database Connections`.
 - **Inert Database Paths**: The DSN is a `file:` URI with the database path percent-encoded, so no character in the path can redirect the open to another file or introduce a connection parameter. The roadmap name is validated, but the home directory the path is rooted in is not; see `IMPLEMENTATION.md § DSN Construction`.
 - **Bulk Operation Limits**: Commands handling bulk task IDs (e.g., `rmp task get`) must batch operations into sets of 500 or fewer to stay safely within SQLite's `SQLITE_LIMIT_VARIABLE_NUMBER`.
+- **Business Rules in Application Code, No Database Triggers**: Business rules are enforced by application code; the schema uses no triggers. This is permanent and admits no exception: a rule that relates rows, tables, or states is checked by the Go code of `internal/db` inside the transaction of the write that could break it, and refused before commit. `DATABASE.md § Business Rules Are Enforced by Application Code` is canonical for the rule, and `DATABASE.md § Sprint Membership Invariant Enforcement` for its first application.
 - **Transactional Integrity**: All database modifications (CREATE, UPDATE, DELETE, status change) MUST be wrapped in an explicit SQL transaction. **Every** audit log entry the operation owes MUST be written within the same transaction to ensure atomicity and consistency. Several operations owe more than one entry — one per entity touched, or one per field changed — and the requirement covers all of them together: an operation that commits its change while writing only some of its entries, or that writes an entry for a change that was rolled back, violates this guarantee. `DATABASE.md § Transactional Atomicity Guarantees` enumerates the multi-entry operations and what each must contain.
 - **Audit Immutability**: The `audit` table is append-only. No command updates an audit row and no command deletes one, so the record of an operation survives every later change to the entity it concerned — including `task reopen`, which clears a task's `commit_close` while leaving the audit entry that recorded the commit intact. The only statement that removes audit rows is the maintenance delete-by-age statement in `DATABASE.md § Clear Audit (Maintenance)`, which no CLI command issues. A migration may rewrite an entry's `operation` to a more precise value, and may do nothing else to it: it may not delete an entry, renumber one, or alter its `entity_type`, `entity_id`, or `performed_at` (see `VERSION.md § Migrations`).
 - **XSS Prevention — Escaping at Render Time, Not Sanitizing at Input Time**: Roadmap text is stored exactly as the user entered it. `rmp` strips no HTML tag, removes no attribute, and rewrites no character on the way in. The defence is contextual escaping at the point of rendering: every page the web interface serves is produced by Go's `html/template`, which escapes each value according to the context it lands in (HTML text, attribute, script, URL), and data delivered to the browser as JSON is encoded as JSON rather than interpolated into markup. This is the correct defence, and the specified one. Escaping at render time protects each output context with the rules of that context and leaves the stored record faithful to what the user wrote, whereas sanitizing at input time would corrupt the record — a task description or a comment body that legitimately contains `<`, `>`, or an HTML fragment is data, not markup — while still not making any single output context safe. The one value the web interface inserts as markup rather than escaping is a Markdown field, and only as the HTML of its single Markdown renderer, which omits raw HTML from the source, emits no author-controlled attribute, and renders no active link to a dangerous URL; the stored text is still never altered (see `WEB.md § Markdown Rendering`). The rendering rules are specified in `WEB.md § Security and Constraints` (output escaping) and `WEB.md § Frontend Rules`.
@@ -408,6 +409,7 @@ Each package implements:
 - **connection.go**: Connection management, safe open/close
 - **schema.go**: Structure creation/updates
 - **queries.go**: Parameterized SQL, injection prevention
+- **The sprint membership guard**: the one function every write that changes a task's status or sprint membership calls inside its transaction (`DATABASE.md § Sprint Membership Invariant Enforcement`)
 
 ### 4. internal/models/
 - Go struct definitions
@@ -1045,6 +1047,7 @@ These two subcommands are the whole of the `graph` command, so this section is t
 | `2` | `utils.ErrRequired` | `--socket` was supplied with an empty value. |
 | `3` | `utils.ErrNoRoadmap` | No roadmap selected and none provided via `-r`. |
 | `4` | `utils.ErrNotFound` | The selected roadmap does not exist. |
+| `6` | `utils.ErrValidation` | The roadmap name given to `-r` / `--roadmap` breaks a rule of `COMMANDS.md § Roadmap Name Validation`. |
 
 `rmp graph client`:
 
@@ -1057,6 +1060,7 @@ These two subcommands are the whole of the `graph` command, so this section is t
 | `2` | `utils.ErrInvalidInput` | An unknown flag, or a positional argument: the subcommand accepts none. |
 | `3` | `utils.ErrNoRoadmap` | No roadmap selected and none provided via `-r`. |
 | `4` | `utils.ErrNotFound` | The selected roadmap does not exist. |
+| `6` | `utils.ErrValidation` | The roadmap name given to `-r` / `--roadmap` breaks a rule of `COMMANDS.md § Roadmap Name Validation`. |
 | `6` | `utils.ErrValidation` | The statement is longer than the maximum query length. |
 
 Two remarks, because each is a place a reader could reasonably expect a different code:

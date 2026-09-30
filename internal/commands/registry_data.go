@@ -27,7 +27,7 @@ func AppRegistry() *Registry {
 // new command family is one extra entry here plus the corresponding
 // build* function.
 func buildRegistry() *Registry {
-	return &Registry{
+	return withRoadmapNameCondition(&Registry{
 		Globals: buildGlobalFlags(),
 		Commands: []Command{
 			buildRoadmapCommand(),
@@ -40,7 +40,7 @@ func buildRegistry() *Registry {
 			buildWebCommand(),
 			buildAIHelpCommand(),
 		},
-	}
+	})
 }
 
 // buildGlobalFlags lists every flag the binary recognises at the top
@@ -168,6 +168,7 @@ func buildRoadmapCommand() Command {
 				},
 				ExitCodes: []ExitCodeEntry{
 					ec(0, "The roadmap home directory and its database were created, and the roadmap name was written to stdout."),
+					ec(1, "~/.roadmaps/<name> is occupied by an entry that is neither a directory nor a symbolic link, such as a regular file."),
 					ec(2,
 						condUnknownFlag,
 						"The roadmap name was omitted.",
@@ -288,7 +289,7 @@ func buildBacklogCommand() Command {
 	return Command{
 		Name:          "backlog",
 		Aliases:       []string{"bl"},
-		Summary:       "Query BACKLOG-status tasks. Both subcommands filter on the status alone, so a BACKLOG task that is still a member of a sprint is listed too.",
+		Summary:       "Query BACKLOG-status tasks. Both subcommands filter on the status alone, and a BACKLOG task belongs to no sprint.",
 		Description:   "Dedicated commands for managing and querying tasks with status BACKLOG.",
 		HelpPrinter:   printBacklogHelp,
 		HasSubcommand: true,

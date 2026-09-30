@@ -1169,7 +1169,15 @@ class TestWebInterface:
             if j % 2:
                 target["BACKLOG"].append(task_id)
                 tasks[task_id]["status"] = "BACKLOG"
-        stat(target["BACKLOG"], "BACKLOG")
+        # A sprint member is never in BACKLOG (SPEC/STATE_MACHINE.md § Sprint
+        # Membership and the BACKLOG Status): the tasks meant to read BACKLOG
+        # leave their sprint through `sprint remove-tasks`, the one route back.
+        for sprint_id in (sprint_a, sprint_b):
+            leaving = [i for i in target["BACKLOG"] if tasks[i]["sprint"] == sprint_id]
+            if leaving:
+                self._run(["sprint", "remove-tasks", "-r", roadmap, str(sprint_id), ",".join(map(str, leaving))])
+        for task_id in target["BACKLOG"]:
+            tasks[task_id]["sprint"] = 0
         moving = target["DOING"] + target["TESTING"] + target["COMPLETED"]
         stat(moving, "DOING", "--commit-open", "5d6a2cd")
         stat(target["TESTING"] + target["COMPLETED"], "TESTING")
@@ -1454,7 +1462,8 @@ class TestWebInterface:
                 _, _, shown = self._list(port, f"{base}?{param}={value}&size=10")
                 for link in [i["href"] for i in shown["items"] if i["href"]] + [x["href"] for x in shown["sizes"]]:
                     assert param not in urllib.parse.parse_qs(urllib.parse.urlsplit(link).query), link
-        assert any(t["status"] == "BACKLOG" and t["sprint"] for t in tasks.values()), "no BACKLOG sprint member"
+        assert not any(t["status"] == "BACKLOG" and t["sprint"] for t in tasks.values()), "a BACKLOG sprint member"
+        assert any(t["sprint"] == 0 and t["status"] == "BACKLOG" for t in tasks.values()), "no task outside every sprint"
         none = check("sprint=none", lambda t: t["sprint"] == 0, "sprint", "none")
         in_a = check(f"sprint={sprint_a}", lambda t: t["sprint"] == sprint_a, "sprint", str(sprint_a))
         in_b = check(f"sprint={sprint_b}", lambda t: t["sprint"] == sprint_b, "sprint", str(sprint_b))
@@ -2462,16 +2471,18 @@ class TestWebInterface:
         self._run(["sprint", "close", "-r", roadmap, str(closed_sid), "--force"])
 
         # Actual: a 5-task OPEN sprint (only one sprint may be OPEN at a
-        # time, so this is started last). One member is then walked back to
-        # BACKLOG, staying a sprint member throughout.
+        # time, so this is started last). One member is then started, so its
+        # STATUS changes while its membership does not. (A sprint member is
+        # never in BACKLOG, so a status other than SPRINT is how a status change
+        # of a member is shown.)
         open_tasks = [
             task(f"Gate merge on checklist item #{n}", 5 + n) for n in range(5)
         ]
         open_sid = self.test.create_sprint(roadmap, "Merge-gate rollout sprint")
         self._run(["sprint", "add-tasks", "-r", roadmap, str(open_sid), ",".join(str(i) for i in open_tasks)])
         self._run(["sprint", "start", "-r", roadmap, str(open_sid)])
-        self._run(["task", "stat", "-r", roadmap, str(open_tasks[0]), "BACKLOG"])
-        self.test.assert_task_status(roadmap, open_tasks[0], "BACKLOG")
+        self._run(["task", "stat", "-r", roadmap, str(open_tasks[0]), "DOING", "--commit-open", "5f93b51"])
+        self.test.assert_task_status(roadmap, open_tasks[0], "DOING")
 
         expected = {
             upcoming_sid: 3,
@@ -2517,11 +2528,11 @@ class TestWebInterface:
             "the empty sprint must still render its own card under Próximos"
         )
 
-        # The BACKLOG member is still counted: the OPEN sprint's footer stays
-        # 5, not 4, after one member's STATUS (not membership) changed.
+        # The started member is still counted: the OPEN sprint's footer stays
+        # 5 after one member's STATUS (not membership) changed.
         still_open_count = self._card_task_count(current_pane, roadmap, open_sid)
         assert still_open_count == 5, (
-            "a member task returned to BACKLOG status must still be counted "
+            "a member task whose status changed must still be counted "
             f"in its sprint's footer; got {still_open_count}, want 5"
         )
 
@@ -2814,11 +2825,12 @@ class TestWebInterface:
         sprint's own tasks of the statuses assigned to it, and each column's
         badge equals the number of the sprint's member tasks in those statuses.
 
-        The fixture seeds one member task per TaskStatus value (BACKLOG,
-        SPRINT, DOING, TESTING, COMPLETED) so the two-statuses-per-column
-        grouping is actually exercised rather than merely assumed: a board that
-        miscategorised even one status would print a count that disagrees with
-        the member tasks' own statuses.
+        The fixture seeds two SPRINT members and one member in each of DOING,
+        TESTING and COMPLETED, so the grouping is actually exercised rather than
+        merely assumed: a board that miscategorised even one status would print
+        a count that disagrees with the member tasks' own statuses. No member is
+        in BACKLOG: a sprint member never is (SPEC/STATE_MACHINE.md § Sprint
+        Membership and the BACKLOG Status).
 
         AC131 derives the expected counts from the sprint's member tasks and
         their statuses, read here with `rmp sprint tasks` rather than from the
@@ -2840,22 +2852,19 @@ class TestWebInterface:
                 priority=priority, severity=severity,
             )
 
-        t_backlog = task("Design the dead-letter queue schema", 3, 2)
+        t_waiting = task("Design the dead-letter queue schema", 3, 2)
         t_sprint = task("Add exponential backoff to the retry worker", 5, 3)
         t_doing = task("Instrument delivery latency per subscriber", 6, 4)
         t_testing = task("Load-test the retry worker at ten times volume", 7, 5)
         t_completed = task("Cap the retry count at eight attempts", 4, 2)
-        all_ids = [t_backlog, t_sprint, t_doing, t_testing, t_completed]
+        all_ids = [t_waiting, t_sprint, t_doing, t_testing, t_completed]
 
         sprint_id = self.test.create_sprint(roadmap, "Webhook reliability sprint")
         self._run(["sprint", "add-tasks", "-r", roadmap, str(sprint_id), ",".join(str(i) for i in all_ids)])
         self._run(["sprint", "start", "-r", roadmap, str(sprint_id)])
 
-        # BACKLOG: a completed pipeline run reopened straight back to BACKLOG,
-        # remaining a member of the sprint throughout (SPEC/STATE_MACHINE.md
-        # § Manual Transitions, task stat BACKLOG is accepted from SPRINT).
-        self._run(["task", "stat", "-r", roadmap, str(t_backlog), "BACKLOG"])
-        # t_sprint is left untouched: SPRINT is its status by construction.
+        # t_waiting and t_sprint are left untouched: SPRINT is their status by
+        # construction, and both belong in WAITING.
         self._run(["task", "stat", "-r", roadmap, str(t_doing), "DOING", "--commit-open", "6c8064a"])
         self._run(["task", "stat", "-r", roadmap, str(t_testing), "DOING", "--commit-open", "021fa2f"])
         self._run(["task", "stat", "-r", roadmap, str(t_testing), "TESTING"])
@@ -2902,7 +2911,7 @@ class TestWebInterface:
         # Every member task appears on the board exactly once, in the column of
         # the bucket its OWN status maps to — never dropped, never duplicated.
         placement = {
-            t_backlog: waiting, t_sprint: waiting,
+            t_waiting: waiting, t_sprint: waiting,
             t_doing: doing, t_testing: doing,
             t_completed: closed,
         }
@@ -2917,7 +2926,7 @@ class TestWebInterface:
             )
 
         # The concrete numbers this fixture was built to produce: two WAITING
-        # (BACKLOG + SPRINT), two DOING (DOING + TESTING), one CLOSED.
+        # (both SPRINT), two DOING (DOING + TESTING), one CLOSED.
         assert (waiting_count, doing_count, closed_count) == (2, 2, 1), (
             f"got ({waiting_count}, {doing_count}, {closed_count}), want (2, 2, 1)"
         )
@@ -3643,7 +3652,10 @@ class TestWebInterface:
         self._run(["sprint", "add-tasks", "-r", roadmap, str(sprint_id), ",".join(str(i) for i in all_ids)])
         self._run(["sprint", "start", "-r", roadmap, str(sprint_id)])
 
-        self._run(["task", "stat", "-r", roadmap, str(t_backlog), "BACKLOG"])
+        # t_backlog leaves the sprint, the one route back to BACKLOG: a sprint
+        # member is never in BACKLOG (SPEC/STATE_MACHINE.md § Sprint Membership
+        # and the BACKLOG Status).
+        self._run(["sprint", "remove-tasks", "-r", roadmap, str(sprint_id), str(t_backlog)])
         self._run(["task", "stat", "-r", roadmap, str(t_doing), "DOING", "--commit-open", "5d6a2cd"])
         self._run(["task", "stat", "-r", roadmap, str(t_testing), "DOING", "--commit-open", "5f93b51"])
         self._run(["task", "stat", "-r", roadmap, str(t_testing), "TESTING"])

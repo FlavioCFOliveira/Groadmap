@@ -126,7 +126,7 @@ var enumDescriptions = map[string]map[string]string{
 	// infer from the operation name. The names carry less than they look
 	// like they do: SPRINT_TASK_MOVE_POSITION and SPRINT_REORDER_TASKS
 	// are indistinguishable by name alone, TASK_REOPEN does not say which
-	// source states also drop the sprint_tasks row, and the six comment
+	// status it returns a task to, and the six comment
 	// operations do not say that they are recorded against the parent
 	// entity. See auditOperationDescriptions.
 	"AuditOperation": auditOperationEnumDescriptions(),
@@ -209,13 +209,16 @@ var auditOperationDescriptions = map[models.AuditOperation]string{
 
 	// Task status. Five operations, one per destination state, each
 	// transcribed from the catalogue entry that describes it.
-	models.OpTaskStatusBacklog: "Task entered `BACKLOG`. Written by `task stat <ids> BACKLOG` and by " +
-		"`sprint remove-tasks`, one row per task in either case. From `sprint remove-tasks` the row names " +
-		"the sprint the task left in `related_entity_id`; from `task stat` no sprint is party to the " +
-		"operation and `related_entity_id` is NULL.",
-	models.OpTaskStatusSprint: "Task entered `SPRINT`. Written by `sprint add-tasks` only, one row per " +
-		"task, naming the sprint the task entered in `related_entity_id`; `task stat` cannot set `SPRINT`, " +
-		"so no other command writes this operation and every row of it names a sprint.",
+	models.OpTaskStatusBacklog: "Task entered `BACKLOG`. Written by `sprint remove-tasks`, one row per task, " +
+		"naming the sprint the task left in `related_entity_id`. `task stat <ids> BACKLOG` wrote it too, with a " +
+		"NULL `related_entity_id`, before the membership invariant (`STATE_MACHINE.md § Sprint Membership and " +
+		"the BACKLOG Status`) made that command refuse every sprint member; such rows remain in existing roadmaps.",
+	models.OpTaskStatusSprint: "Task entered `SPRINT` on joining a sprint. Written by `sprint add-tasks`, one " +
+		"row per task the addition set from `BACKLOG` to `SPRINT`, naming the sprint the task entered in " +
+		"`related_entity_id`; a task that changes sprint and keeps its status gets no such row. The schema " +
+		"migration to 1.16.0 also writes it, one row per sprint member it repairs from `BACKLOG` to `SPRINT`, " +
+		"naming that member's sprint (`VERSION.md § Migration 1.15.0 → 1.16.0`). `task stat` cannot set " +
+		"`SPRINT`, and `task reopen` writes `TASK_REOPEN` instead, so every row of this operation names a sprint.",
 	models.OpTaskStatusDoing: "Task entered `DOING` via `task stat`, one row per task. The row carries " +
 		"the `commit_hash` supplied as `--commit-open`.",
 	models.OpTaskStatusTesting: "Task entered `TESTING` via `task stat`, one row per task.",
@@ -236,10 +239,14 @@ var auditOperationDescriptions = map[models.AuditOperation]string{
 
 	models.OpTaskPriorityChange: "Priority change (0-9) via `task prio` or via `task edit`.",
 	models.OpTaskSeverityChange: "Severity change (0-9) via `task sev` or via `task edit`.",
-	models.OpTaskReopen: "Task returned to BACKLOG via `task reopen`; lifecycle timestamps, completion_summary, " +
-		"and commit_close cleared, commit_open preserved. The sprint_tasks row is removed only when the source " +
-		"state is SPRINT, DOING, or TESTING; from COMPLETED the row is kept. `task reopen` writes this operation " +
-		"alone and writes no `TASK_STATUS_BACKLOG` row.",
+	models.OpTaskReopen: "Task returned to `SPRINT` inside its sprint via `task reopen`, from `DOING`, " +
+		"`TESTING` or `COMPLETED`; lifecycle timestamps, completion_summary, and commit_close cleared, " +
+		"commit_open preserved, the sprint_tasks row kept. `task reopen` writes this operation alone and writes " +
+		"no `TASK_STATUS_*` row. Rows written before the membership invariant record a return to `BACKLOG` instead.",
+	models.OpTaskSprintChange: "Task changed sprint and kept its status, via `sprint move-tasks` or via " +
+		"`sprint add-tasks` taking it from another sprint; one row per task, against the task, naming the sprint " +
+		"the task entered in `related_entity_id`. The sprint it left is named by the `SPRINT_MOVE_TASK_OUT` row " +
+		"written against that sprint in the same transaction, with the same `performed_at`.",
 
 	// Sprint lifecycle.
 	models.OpSprintCreate: "New sprint created.",
@@ -265,8 +272,9 @@ var auditOperationDescriptions = map[models.AuditOperation]string{
 	models.OpSprintMoveTask: "LEGACY. The single move operation `SPRINT_MOVE_TASK_OUT` and `SPRINT_MOVE_TASK_IN` " +
 		"replace. The migration reclassifies no row carrying it, because such a row names neither the task that " +
 		"moved nor the sprint it came from.",
-	models.OpSprintMoveTaskOut: "Task moved out of the source sprint via `sprint move-tasks`; one row per " +
-		"task, against the source sprint, naming the task in `related_entity_id`.",
+	models.OpSprintMoveTaskOut: "Task moved out of the source sprint via `sprint move-tasks`, or taken from it " +
+		"by `sprint add-tasks` into another sprint; one row per task, against the sprint the task left, naming " +
+		"the task in `related_entity_id`.",
 	models.OpSprintMoveTaskIn: "Task moved into the destination sprint via `sprint move-tasks`; one row " +
 		"per task, against the destination sprint, naming the task in `related_entity_id`.",
 

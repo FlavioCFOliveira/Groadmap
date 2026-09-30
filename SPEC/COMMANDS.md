@@ -294,11 +294,18 @@ A `type` value outside the set the entity accepts is rejected with exit code 6 a
 The comment `body` is supplied either through the `--body` flag or on standard input. This is the same input mechanism `graph client` uses for `--query` (see `GRAPH.md § Cypher Input Source and Precedence`); there is no `--body-file` flag and no path argument, so the commands open no file. The rules are:
 
 1. When `--body` is present and its value is neither empty nor whitespace only, that value is the body and standard input is **not** read.
-2. When `--body` is absent **and no other change was requested**, the body is read from standard input. The read is bounded and is not a read to EOF: see **Bounded standard-input read** below. On `comment-add` no other change is ever possible, so an absent `--body` always means "read standard input". On `comment-edit` the body is read from standard input only when `--type` is also absent; when `--type` is present and `--body` is absent, only the type changes and standard input is not read, so a type-only edit never blocks waiting for input.
+2. When `--body` is absent **and no other change was requested**, the body is read from standard input. The read is bounded and is not a read to EOF: see **Bounded standard-input read** below. On `comment-add` no other change is ever possible, so an absent `--body` always means "read standard input". On `comment-edit` the body is read from standard input only when `--type` is also absent; when `--type` is present and `--body` is absent, only the type changes and standard input is never taken as the body. Rule 7 states what such a type-only edit does with standard input instead: a terminal is not read, and never makes the command wait, and a standard input that carries data is refused rather than ignored.
 3. When the body must come from standard input and standard input is empty, whitespace only, or not connected, the command fails with exit code 2. The message differs by subcommand, because the two subcommands are missing different things: on `comment-add` a body is mandatory and the message is "Error: required parameter missing: no comment body supplied"; on `comment-edit` the absent body means no change was requested at all, and the message is "Error: required parameter missing: at least one of --type or --body is required".
 4. When `--body` is present but its value is empty, whitespace only, or missing (no following token, or the following token is itself a flag), the command fails with exit code 2 and the message "Error: required parameter missing: no comment body supplied", in both subcommands. The command does not silently fall back to standard input in this case.
 5. Leading and trailing whitespace is trimmed before validation and before storage. Interior line breaks are preserved: a comment body is expected to be multi-line.
 6. When the body is to come from standard input and the read of the stream itself fails, the command fails with exit code 1 and the message "Error: I/O error: reading the comment body from standard input: <detail>", identically in all four subcommands. The part `rmp` fixes is everything up to and including `reading the comment body from standard input: `; `<detail>` is the operating system's own text and is not specified here. This is a failure of the stream and not of the body: a stream that carries nothing is refused by rule 3 with exit code 2, and one that carries too much by the bounded read below with exit code 6, and neither of those reaches this rule. Nothing about the process's standard input is a database, so the line does not name one; `ARCHITECTURE.md § Sentinel Error Catalogue` is canonical for the class, and `graph client` reports the same failure of the same stream in its own wording (`§ Client Error Cases`).
+7. When `comment-edit` carries `--type` and no `--body`, the data on standard input is never the new body, and the command refuses it rather than discard it. What happens depends on what standard input is:
+   - **A terminal**, meaning an interactive character device, is not read at all. The type-only edit proceeds, and the command never waits for input typed at a terminal.
+   - **Any other standard input** is read only far enough to learn whether it carries anything: up to its first byte, or to its end if it has none. A standard input that is at its end before any byte arrives — one that is closed, or connected to a source that carries nothing, such as `/dev/null` — carries no data, and the type-only edit proceeds.
+   - **A standard input that carries at least one byte**, a whitespace character or a line break included, is refused: the command fails with exit code 2 and the message "Error: invalid input: standard input carries data, but it is not read when --type is given; supply the new body with --body", and changes nothing. The byte read is discarded, the rest of the stream is not read, and the data is never stored.
+   - **A failure of the read itself** is rule 6's failure, with rule 6's line and exit code 1.
+
+   A caller that pipes a body into a `comment-edit` that also carries `--type` means to change both, and an edit that changed the type alone and reported success would report an edit it did not make; the refusal names the remedy, which is to pass the body with `--body`. Reading a non-terminal standard input is a read like any other: a producer that holds the stream open and writes nothing holds the command until it writes or closes the stream. A caller that means a type-only edit and has nothing to send leaves standard input connected to a terminal, or connects it to `/dev/null`. The check runs where the body is resolved — after `--type` has been validated and before the comment is looked up — so a refused invocation never reaches the database. It is the same on `task comment-edit` and `sprint comment-edit`, and `comment-add` never reaches it, because on `comment-add` an absent `--body` always means that standard input is the body (rule 2).
 
 **Bounded standard-input read.** When the body comes from standard input, the command does NOT read the stream to EOF. It reads only until the outcome is already decided, and it never retains more than the 4096-character cap while doing so:
 
@@ -340,7 +347,7 @@ A declared maximum of one is what `§ Positional Arity by Command` publishes for
 | `sprint comment-add`, `sprint comment-list` | `<sprint-id>` is an integer outside `1`-`2147483647` | 2 | `Error: invalid input: sprint_id must be between 1 and 2147483647, got N` |
 | `task comment-edit`, `task comment-remove`, `sprint comment-edit`, `sprint comment-remove` | `<comment-id>` is an integer outside `1`-`2147483647` | 2 | `Error: invalid input: comment_id must be between 1 and 2147483647, got N` |
 
-   A token that is not an integer at all is the format rule and keeps the wording each subcommand's own block publishes for it, also with exit code 2. A value too large for the platform's integer type is refused by the range rule with the token echoed in place of a parsed value, because there is no parsed value to echo.
+   A token that is not an integer at all is the format rule and keeps the wording each subcommand's own block publishes for it, also with exit code 2. What is and is not an integer is decided by `§ Entity Identifier Range (All Positional Ids and --entity-id)`: a token written in the id position is read as the id even when it begins with `-`, so `-1` there is an integer outside the range and takes the range line above, while a lone `-` is a sign with no digits, is not an integer, and takes the format line — `invalid task ID`, `invalid sprint ID` or `invalid comment ID`, with `X` = `-` — never the range line. Rule 2 governs a `-`-prefixed token left over after the id, not the id itself. A value too large for the platform's integer type is refused by the range rule with the token echoed in place of a parsed value, because there is no parsed value to echo.
 
 What the general rule already settles for these subcommands, and what this section therefore does not restate: only the first extra token is named; the position of the extra token on the command line does not matter; and nothing happens before the refusal — standard input is not read, the roadmap database is not opened, no comment is added, changed, deleted, or listed, and stdout stays empty.
 
@@ -485,6 +492,16 @@ surface, different exit codes.
 |------|-----------|-----------|---------------|
 | Format | The token is not an integer | 2 | `Error: invalid input: invalid <entity> ID: "X" (must be a positive integer)` |
 | Range | The integer is `< 1` or `> 2147483647` | 6, or 2 on the eight comment subcommands | `Error: <sentinel>: <field> must be between 1 and 2147483647, got N` |
+
+**What an integer is, for this rule.** Once surrounding whitespace is removed, a
+token is an integer when it is one or more decimal digits, optionally preceded by
+a single minus sign, and nothing else. Every other token is not an integer and
+breaks the format rule, with exit code 2 on every surface: an empty token, a sign
+with no digit after it (`-` on its own), a plus sign, a decimal point, and any
+letter. A sign with no digits is not a number of any value, so it never reaches
+the range rule and is never echoed after `got`. A token that is an integer by
+this definition but is too large for the platform's integer type breaks the range
+rule, with the token echoed in place of a parsed value.
 
 `<entity>` is `task`, `sprint`, `comment`, `dependency task`, or `entity`, and
 `<field>` is that same word with `_id` appended and any space written as an
@@ -775,6 +792,7 @@ input exists that both checks could answer for.
 | Free-text value carries a forbidden control character | 6 | "Error: validation error: <field>: control characters are not allowed" |
 | Comment body not supplied | 2 | "Error: required parameter missing: no comment body supplied" |
 | Comment edit requests no change (no `--type`, no `--body`, no body on stdin) | 2 | "Error: required parameter missing: at least one of --type or --body is required" |
+| Comment edit carries `--type` and no `--body`, and standard input is not a terminal and carries data | 2 | "Error: invalid input: standard input carries data, but it is not read when --type is given; supply the new body with --body" |
 | Comment type missing | 2 | "Error: required parameter missing: --type" |
 | Comment type invalid on a task | 6 | "Error: validation error: invalid comment type \"X\" for a task comment; valid types: FINDING, HYPOTHESIS, TEST, DECISION, PROGRESS, UPDATE, NOTE" |
 | Comment type invalid on a sprint | 6 | "Error: validation error: invalid comment type \"X\" for a sprint comment; valid types: FINDING, DECISION, PROGRESS, UPDATE" |
@@ -788,9 +806,21 @@ All roadmap names must conform to the following validation rules:
 | Rule | Value | Description |
 |------|-------|-------------|
 | Regex | `^[a-z0-9_-]+$` | Only lowercase letters, numbers, underscores, and hyphens |
-| Maximum length | 50 characters | Ensures filesystem compatibility |
+| Maximum length | 50 characters | Ensures filesystem compatibility. Counted in characters, not bytes |
 | Minimum length | 1 character | Name cannot be empty |
 | Reserved names | The device names the operating systems reserve, such as `con` and `nul`, and `help` | A reserved name is refused wherever a roadmap name is validated, the `-r` / `--roadmap` selector included; `§ Roadmap Name Validation` gives the reason for `help` |
+
+**The length rule counts characters.** A name's length is the number of Unicode characters (code points) it holds, never the number of bytes that encode it; a byte that is not part of a valid UTF-8 sequence counts as one character. `N` in the length message is that count. A name of 50 characters is within the maximum whatever its byte length, and a name of 51 characters exceeds it.
+
+**The rules are applied in a fixed order, and the first rule a name breaks decides the refusal.** A name that breaks several rules is refused with the line of the earliest of them, and with no other:
+
+1. The name is empty.
+2. The name exceeds 50 characters.
+3. The name starts with a hyphen.
+4. The name is a reserved name.
+5. The name holds a character outside `^[a-z0-9_-]+$`.
+
+A name that breaks both the character rule and the length rule is therefore refused with the length line: a 51-character name that holds a space prints `Error: Roadmap name must not exceed 50 characters (got N)` with `N` = `51`. A name of 50 characters that holds a character outside the set, such as an accented letter, is within the length rule and is refused with the character line, whatever its byte length.
 
 **Validation Error Messages:**
 
@@ -803,6 +833,8 @@ All roadmap names must conform to the following validation rules:
 | Name is a reserved system name | 6 | "Error: validation error: \"X\": roadmap name is a reserved system name" |
 
 Three of these five messages carry no sentinel between the `Error: ` prefix and the text: the roadmap-name checks that predate the sentinel catalogue construct their message directly, and the binary prints it as shown. The other two carry `validation error: `. All five exit 6.
+
+**A name given to `-r` / `--roadmap` is judged by these rules on every subcommand that takes the selector, and the refusal is exit code 6 on every one of them.** Those subcommands are every subcommand of `task`, `sprint`, `backlog`, `audit` and `graph`, and `stats`. The name is judged at the step at which the subcommand resolves its roadmap, which is the step at which a roadmap that does not exist is refused with exit code 4: every check a subcommand places before that step — a missing selector (exit code 3), a malformed or excess argument and an unrecognised flag (exit code 2), and a value validated before the roadmap is opened (exit code 6) — keeps its place, and a name that breaks a rule is refused with that rule's line instead of the not-found line, whether or not an entry of that name exists under `~/.roadmaps/`. The condition is therefore one of the conditions of exit code 6 for each of those subcommands, including a subcommand that has no other cause of exit code 6, and a subcommand's contract that enumerates its exit codes lists it (`DATA_FORMATS.md § Field reference: per-subcommand exit code entry`, rule 5). `roadmap create` and `roadmap remove` judge their positional `<name>` by the same rules, with the same lines and the same exit code.
 
 **`help` is reserved because no command could act on a roadmap of that name.** The name a roadmap is created or removed with is a positional argument, and a positional argument stands in a token position, where the word `help` is always a help token (`HELP.md § Help tokens`): `rmp roadmap create help` and `rmp roadmap remove help` write the help of their subcommand, exit `0`, and create or remove nothing. The name is reserved in that spelling alone; any other letter case is already refused by the character rule, with that rule's line. Like every reserved name, it is refused wherever a roadmap name is validated, the `-r` / `--roadmap` selector included, and every command refuses it with the same line: `rmp task list -r help` exits `6` with `Error: validation error: "help": roadmap name is a reserved system name`, the line `rmp task list -r con` writes for `con`. A roadmap directory named `help` made outside the CLI is therefore listed by `rmp roadmap list` and reachable by no command, exactly as one named `con` is: every command that selects it with `-r` refuses it with that line, and no command removes it.
 
@@ -965,6 +997,14 @@ rmp stats -r myproject
 
 The `-r` / `--roadmap` flag may appear anywhere among the arguments after the subcommand; the parser extracts it before processing the remaining flags.
 
+**When a selected roadmap exists.** A roadmap named `<name>` exists when `~/.roadmaps/<name>/` is a directory that holds `project.db`, which is the definition `§ List Roadmaps` applies. Every subcommand that takes `-r`, and `roadmap remove`, refuses a roadmap that does not exist with exit code `4` and the roadmap-not-found line its own table publishes, at the step at which it resolves the roadmap. Three shapes of `~/.roadmaps/<name>` are a roadmap that does not exist, and each is refused in that one way:
+
+1. No entry of that name.
+2. A directory that holds no `project.db`.
+3. An entry that is neither a directory nor a symbolic link, such as a regular file. This is not a filesystem failure: the command refuses it with the same line, the same exit code and at the same point as a name under which nothing exists, creates nothing in its place, and changes nothing.
+
+A symbolic link at that path is outside this rule and is refused as `ARCHITECTURE.md § Directory Structure` requires. `GRAPH.md § Error Handling and Exit Codes`, rule 10, applies the same definition to the two graph subcommands.
+
 ---
 
 ## Roadmap Management
@@ -1015,9 +1055,11 @@ rmp road new <name>
 | Rule | Value | Description |
 |------|-------|-------------|
 | Regex | `^[a-z0-9_-]+$` | Only lowercase letters, numbers, underscores, and hyphens |
-| Maximum length | 50 characters | Ensures filesystem compatibility |
+| Maximum length | 50 characters | Ensures filesystem compatibility. Counted in characters, not bytes |
 | Minimum length | 1 character | Name cannot be empty |
 | Reserved names | The device names the operating systems reserve, such as `con` and `nul`, and `help` | A reserved name is refused wherever a roadmap name is validated, the `-r` / `--roadmap` selector included; `§ Roadmap Name Validation` gives the reason for `help` |
+
+The order in which these rules are applied, and so which line a name that breaks several of them receives, is the order `§ Roadmap Name Validation` fixes.
 
 **Error Cases:**
 
@@ -1029,7 +1071,10 @@ rmp road new <name>
 | Name starts with a hyphen | 6 | "Error: validation error: roadmap name cannot start with '-'" |
 | Name is a reserved system name | 6 | "Error: validation error: \"X\": roadmap name is a reserved system name" |
 | Roadmap already exists | 5 | "Error: resource already exists: roadmap \"X\" already exists" |
+| `~/.roadmaps/<name>` is occupied by an entry that is neither a directory nor a symbolic link, such as a regular file | 1 | "Error: I/O error: cannot create roadmap \"X\": <path> is occupied and is not a directory" |
 | Unrecognised flag written after `<name>` | 2 | "Error: invalid input: unknown flag: --foo" |
+
+An entry at `~/.roadmaps/<name>` that is not a directory is not a roadmap (`§ Roadmap Selection (Always Required)`), so it is not refused as one that already exists; the command cannot create the roadmap home there either, and it refuses with the I/O line above, exit code `1`, `<path>` being the absolute path of that entry. Nothing is created, changed, or removed: the entry is left exactly as it was found, and no `project.db` is written anywhere. A symbolic link at that path is refused as `ARCHITECTURE.md § Directory Structure` requires.
 
 No row publishes the reserved-name refusal for `help`, because it cannot be reached here: `rmp roadmap create help` writes the `roadmap create` help and creates nothing, `help` being a help token in that position (`§ Roadmap Name Validation`).
 
@@ -1044,7 +1089,7 @@ rmp road rm <name>
 
 **Description:** Removes a roadmap by deleting its entire home directory `~/.roadmaps/<name>/` recursively. This removes the `project.db` database, its SQLite sidecars (`project.db-wal`, `project.db-shm`), and any other per-roadmap files the directory contains.
 
-An unrecognised flag written after `<name>` is refused with exit code `2` and `Error: invalid input: unknown flag: --foo`, before the command checks whether the roadmap exists and before anything is removed (`§ Positional Arguments`). `rmp roadmap remove help` writes the `roadmap remove` help and removes nothing, `help` being a help token in that position (`§ Roadmap Name Validation`).
+An unrecognised flag written after `<name>` is refused with exit code `2` and `Error: invalid input: unknown flag: --foo`, before the command checks whether the roadmap exists and before anything is removed (`§ Positional Arguments`). A `<name>` under which no roadmap exists, in any of the three shapes `§ Roadmap Selection (Always Required)` lists — a regular file at `~/.roadmaps/<name>` among them — is refused with exit code `4` and `Error: resource not found: roadmap "X" not found`, and nothing is removed: a file at that path is not a roadmap, and `roadmap remove` removes only a roadmap. `rmp roadmap remove help` writes the `roadmap remove` help and removes nothing, `help` being a help token in that position (`§ Roadmap Name Validation`).
 
 **Output (success):** No output, exit code 0.
 
@@ -1063,6 +1108,8 @@ Six task commands take a comma-separated list of task ids as a positional argume
 **The test is on the set, never on a count.** An invocation is refused when, and only when, at least one distinct id in the list names no task in the roadmap. Comparing how many rows the database returned against how many ids the caller supplied is not that test and MUST NOT be used as one: the two numbers differ whenever an id is repeated, so a count comparison refuses a valid invocation and states a cause that did not occur.
 
 **A repeated id is honoured once.** `task get` returns one JSON object per distinct id, so its array never carries two elements with the same `id`. Each mutating command applies its change to each distinct task once, and writes one audit entry per distinct task, exactly as it would had the caller named the id once. What an invocation does therefore depends on the set of ids alone, and never on how many times the caller spelled one of them.
+
+**Each token of the list is an id and is judged as one.** The list is split at every comma, and each token, an empty one between two commas included, is subject to the format rule and the range rule of `§ Entity Identifier Range (All Positional Ids and --entity-id)`, whose definition of an integer is canonical. A token that is not an integer — a lone `-`, as in `-` or `1,-`, among them — is refused with that section's format line and exit code 2, `X` being the token with its surrounding whitespace removed; it is never refused with the range line.
 
 **Fail-fast.** Every id is validated before anything is written. An invocation that names an id which cannot be resolved performs nothing at all: no task is changed or removed, and no audit entry is written. That is what makes a refusal safe to reissue with a corrected list.
 
@@ -1096,8 +1143,8 @@ rmp task ls -r <name> [OPTIONS]
 - `--severity <n>` - Filter severity >= n (0-9)
 - `-l, --limit <n>` - Limit number of results (default: 100)
 - `-y, --type <TYPE>` - Filter by task type. See `MODELS.md` — Task Type for the canonical list of 10 valid values.
-- `--created-since <date>` - Return tasks created on or after this date (RFC3339 or YYYY-MM-DD)
-- `--created-until <date>` - Return tasks created on or before this date (RFC3339 or YYYY-MM-DD)
+- `--created-since <date>` - Return tasks created on or after this date: a timestamp or a bare calendar date `YYYY-MM-DD`, from 1970-01-01 through 9999-12-31 (`DATA_FORMATS.md § Date Filter Values`)
+- `--created-until <date>` - Return tasks created on or before this date, in the same forms and range as `--created-since`
 - `--sort <field>` - Sort order: `priority` (default), `created`, `status`, `severity`
 
 **Default Ordering:** Tasks are returned ordered by `priority DESC, created_at ASC`. Higher-priority tasks appear first; equal-priority tasks are ordered by creation date (oldest first).
@@ -1114,10 +1161,15 @@ rmp task ls -r <name> [OPTIONS]
 | Input | Exit Code | stderr |
 |-------|-----------|--------|
 | `--limit` `< 1` or `> 100` | 6 | `Error: validation error: limit must be between 1 and 100, got N` |
+| `-l, --limit` is not an integer | 2 | `Error: invalid input: invalid value for --limit: "X" is not an integer in 1-100` |
+| `-p, --priority` is not an integer | 2 | `Error: invalid input: invalid value for --priority: "X" is not an integer in 0-9` |
+| `--severity` is not an integer | 2 | `Error: invalid input: invalid value for --severity: "X" is not an integer in 0-9` |
+| `-p, --priority` is an integer outside 0-9 | 6 | `Error: validation error: priority must be between 0 and 9, got N` |
+| `--severity` is an integer outside 0-9 | 6 | `Error: validation error: severity must be between 0 and 9, got N` |
 | Invalid `--type` value | 6 | `Error: validation error: invalid task type: "X"` |
 | Invalid `--sort` value | 6 | `Error: validation error: --sort must be one of: priority, created, status, severity` |
-| Invalid `--created-since` format | 6 | `Error: validation error: --created-since: invalid date format: expected RFC3339 (2026-01-01T00:00:00Z) or date-only (2026-01-01): "X"` |
-| Invalid `--created-until` format | 6 | `Error: validation error: --created-until: invalid date format: expected RFC3339 (2026-01-01T00:00:00Z) or date-only (2026-01-01): "X"` |
+| `--created-since` is not in a form `DATA_FORMATS.md § Date Filter Values` accepts, or denotes an instant outside 1970-01-01 through 9999-12-31 | 6 | `Error: validation error: --created-since: invalid date format: expected RFC3339 (2026-01-01T00:00:00Z) or date-only (2026-01-01): "X"` |
+| `--created-until` is not in a form `DATA_FORMATS.md § Date Filter Values` accepts, or denotes an instant outside 1970-01-01 through 9999-12-31 | 6 | `Error: validation error: --created-until: invalid date format: expected RFC3339 (2026-01-01T00:00:00Z) or date-only (2026-01-01): "X"` |
 | Unrecognised flag | 2 | `Error: invalid input: unknown flag: --foo` |
 | Roadmap not found | 4 | `Error: resource not found: roadmap "X"` |
 
@@ -1168,10 +1220,14 @@ Each required free-text field fails in three distinct ways, and the binary print
 | `acceptance_criteria` | Exceeds 4096 characters | 6 | "Error: field exceeds maximum size: acceptance_criteria exceeds maximum length of 4096 characters" |
 | `type` | Not one of the 10 valid values | 6 | "Error: validation error: invalid task type: \"X\"" |
 | `priority` | Outside 0-9 | 6 | "Error: validation error: priority must be between 0 and 9, got N" |
+| `priority` | Not an integer | 2 | "Error: invalid input: invalid value for --priority: \"X\" is not an integer in 0-9" |
 | `severity` | Outside 0-9 | 6 | "Error: validation error: severity must be between 0 and 9, got N" |
+| `severity` | Not an integer | 2 | "Error: invalid input: invalid value for --severity: \"X\" is not an integer in 0-9" |
 | `parent_task_id` | `--parent` names a task that does not exist | 4 | "Error: resource not found: parent task N not found" |
 
 The two range refusals above have one wording each, whichever command applied the rule. `task create`, `task edit`, `task prio` and `task sev` all print the line shown here, with the offending value after `got`: the wording states the rule that was broken, and the rule belongs to the field rather than to the command that happened to check it. `Change Priority (prio)`, `Change Severity (sev)` and `Edit Task` below publish this same line, not one of their own.
+
+**A priority or severity that is not an integer has one refusal too, and it never carries a parser's text.** A value written to `-p, --priority` or to `--severity` that the command cannot read as an integer is misuse, not a validation failure: it exits `2` and prints `Error: invalid input: invalid value for --priority: "X" is not an integer in 0-9`, or the same line naming `--severity`, with the value echoed inside the quotes exactly as supplied. The flag is named in its long spelling whichever spelling was written, so `-p abc` and `--priority abc` print the same line. The line is the same on every command that takes the flag: `task create`, `task edit` and `task list` for both flags, and `backlog list` for `-p, --priority`, the one of the two it takes. A value too large for the platform's integer type takes this line too, because it cannot be read as an integer either; an integer the command can read but that falls outside 0-9 takes the range line above, on the commands that check the range. No refusal of either flag reproduces the text of the library routine that failed to read the value. The listing filters check the range as well: `-p, --priority` and `--severity` on `task list`, and `-p, --priority` on `backlog list`, refuse an integer outside 0-9 with exit code `6` and the range line above, before the roadmap database is opened, exactly as `task create` does. **Every bounded integer flag is refused in the same shape.** A value that cannot be read as an integer, or that is too large for the platform's integer type, is refused with exit code `2` and the line of the priority refusal above with two parts changed: the flag it names, and the range after `is not an integer in`, which is the flag's own published range: `--max-tasks` on `sprint create` and `sprint update` (`1-10000`), `-l, --limit` on `task list` and `backlog list` (`1-100`), and `-l, --limit` on `audit list` (`1-500`). Each command's own table publishes its line in full. The positional `<priority>` and `<severity>` of `task prio` and `task sev` follow the same rule with a line of their own, published in `Change Priority (prio)` and `Change Severity (sev)` below.
 
 **Empty and whitespace-only values.** `--title`, `--functional-requirements`,
 `--technical-requirements`, and `--acceptance-criteria` are required parameters, and
@@ -1424,7 +1480,9 @@ All batch operations validate ALL IDs and status transitions before applying any
 | An ID is an integer outside `1`-`2147483647` | 6 | **No changes made** | "Error: validation error: task_id must be between 1 and 2147483647, got N" |
 | Target state is not a recognised status | 6 | **No changes made** | "Error: validation error: invalid task status: \"X\"" |
 | Invalid status transition | 6 | **No changes made** | "Error: validation error: invalid status transition from X to Y for task N" |
-| Target state is `SPRINT` | 6 | **No changes made** | "Error: validation error: status SPRINT can only be set automatically via 'sprint add-tasks'" |
+| Target state is `BACKLOG` and a task is `SPRINT`, `DOING` or `TESTING` | 6 | **No changes made** | "Error: validation error: invalid status transition from X to BACKLOG for task N: a task leaves its sprint only through 'rmp sprint remove-tasks'" |
+| Target state is `BACKLOG` and a task is `COMPLETED` | 6 | **No changes made** | "Error: validation error: invalid status transition from COMPLETED to BACKLOG for task N: a completed task is reopened with 'rmp task reopen'" |
+| Target state is `SPRINT` | 6 | **No changes made** | "Error: validation error: status SPRINT cannot be set by 'task stat'; it is set by 'sprint add-tasks' and 'task reopen'" |
 | `--summary` used with non-COMPLETED state | 6 | **No changes made** | "Error: validation error: --summary is only valid when transitioning to COMPLETED" |
 | `--summary` exceeds 4096 characters | 6 | **No changes made** | "Error: field exceeds maximum size: completion_summary exceeds maximum length of 4096 characters" |
 | `--summary` value is not valid UTF-8 | 6 | **No changes made** | "Error: validation error: completion_summary: the value is not valid UTF-8" |
@@ -1469,7 +1527,7 @@ task, including the other tasks of a multi-ID invocation whose IDs were valid.
 - When transitioning to BACKLOG, `completion_summary` is cleared to NULL
 - `--summary` has no effect on non-COMPLETED transitions and is rejected with an error
 
-**Transitioning to BACKLOG:** The target state `BACKLOG` is accepted from `SPRINT` and from `COMPLETED`, and rejected with exit code 6 from `DOING` and `TESTING`. The transition clears `started_at`, `tested_at`, `closed_at`, `completion_summary`, and `commit_close` to NULL, and **preserves `commit_open`**. The asymmetry is deliberate: the commit the work was started from remains a true historical fact after the task returns to the backlog, whereas the commit it was concluded at is invalidated by the reopening. The transition does not touch the `sprint_tasks` table: a task that was a member of a sprint stays a member, at the same `position`, while its status reads `BACKLOG`. Use `task reopen` to return a `DOING` or `TESTING` task to `BACKLOG`, and `sprint remove-tasks` to detach a task from its sprint. See `STATE_MACHINE.md § Valid Transitions`, `STATE_MACHINE.md § Commit Tracking Fields`, and `STATE_MACHINE.md § Sprint Membership and the BACKLOG Status`.
+**Transitioning to BACKLOG:** The target state `BACKLOG` is refused, with exit code 6 and no change, for every task that is a member of a sprint, because a sprint member is never in `BACKLOG` status (`STATE_MACHINE.md § Sprint Membership and the BACKLOG Status`) and `task stat` never changes membership. The refusal is decided at step 6 of the order above, per task, and names the command that fits the task's status: from `SPRINT`, `DOING` or `TESTING` the line of the first row above, naming `sprint remove-tasks`, which takes the task out of its sprint and so returns it to `BACKLOG`; from `COMPLETED` the line of the second, naming `task reopen`, because a completed task stays in its sprint and is returned to `SPRINT` instead. `X` is the task's current status and `N` the first refused task in the order the command line supplied them. See `STATE_MACHINE.md § Valid Transitions` and `STATE_MACHINE.md § Commit Tracking Fields`.
 
 **Output (success):** No output, exit code 0.
 
@@ -1524,8 +1582,11 @@ Validates all IDs before updating any priorities. Follows same validation order 
 | Two or more IDs do not exist | 4 | "Error: resource not found: tasks <ids> not found" |
 | An ID is not an integer | 2 | "Error: invalid input: invalid task ID: \"X\" (must be a positive integer)" |
 | Priority out of range (0-9) | 6 | "Error: validation error: priority must be between 0 and 9, got N" |
+| `<priority>` is not an integer | 2 | "Error: invalid input: invalid priority: \"X\" is not an integer in 0-9" |
 | An unrecognised flag is written after `<priority>` | 2 | "Error: invalid input: unknown flag: --foo" |
 | An unrecognised flag is written between `<ids>` and `<priority>` | 2 | "Error: invalid input: unknown flag: --foo" |
+
+**A `<priority>` that is not an integer is misuse, and is refused as the flag's value is.** The value is echoed inside the quotes exactly as supplied, the line exits `2`, and its tail is the tail of the `-p, --priority` refusal (`Create Task`); the line names the argument rather than a flag because the value is a positional argument. A value too large for the platform's integer type takes this line too, and an integer outside 0-9 takes the range line. The check keeps its place in the order: after every id has passed the format and range rules, and before the roadmap is opened, so `rmp task prio -r <name> 999 abc` exits `2` whether or not task 999 or the roadmap exists. `Change Severity (sev)` below applies the same rule to `<severity>`.
 
 **Output (success):** No output, exit code 0.
 
@@ -1553,8 +1614,11 @@ Validates all IDs before updating any severities. Follows same validation order 
 | Two or more IDs do not exist | 4 | "Error: resource not found: tasks <ids> not found" |
 | An ID is not an integer | 2 | "Error: invalid input: invalid task ID: \"X\" (must be a positive integer)" |
 | Severity out of range (0-9) | 6 | "Error: validation error: severity must be between 0 and 9, got N" |
+| `<severity>` is not an integer | 2 | "Error: invalid input: invalid severity: \"X\" is not an integer in 0-9" |
 | An unrecognised flag is written after `<severity>` | 2 | "Error: invalid input: unknown flag: --foo" |
 | An unrecognised flag is written between `<ids>` and `<severity>` | 2 | "Error: invalid input: unknown flag: --foo" |
+
+A `<severity>` that is not an integer is refused on the rule `Change Priority (prio)` above states for `<priority>`, with the line this table publishes, at the same place in the order.
 
 **Output (success):** No output, exit code 0.
 
@@ -1602,9 +1666,9 @@ is the kebab-case name listed under **Options** above.
 | `acceptance_criteria` | Empty, or empty once trimmed | "Error: validation error: acceptance_criteria cannot be empty" | 6 |
 | `acceptance_criteria` | Exceeds 4096 characters | "Error: field exceeds maximum size: acceptance_criteria exceeds maximum length of 4096 characters" | 6 |
 | `priority` | Integer outside 0-9 | "Error: validation error: priority must be between 0 and 9, got N" | 6 |
-| `priority` | Not an integer | "Error: invalid input: invalid value for --priority: strconv.Atoi: parsing \"X\": invalid syntax" | 2 |
+| `priority` | Not an integer | "Error: invalid input: invalid value for --priority: \"X\" is not an integer in 0-9" | 2 |
 | `severity` | Integer outside 0-9 | "Error: validation error: severity must be between 0 and 9, got N" | 6 |
-| `severity` | Not an integer | "Error: invalid input: invalid value for --severity: strconv.Atoi: parsing \"X\": invalid syntax" | 2 |
+| `severity` | Not an integer | "Error: invalid input: invalid value for --severity: \"X\" is not an integer in 0-9" | 2 |
 | `type` | Not one of the 10 valid values | "Error: validation error: invalid task type: \"X\"" | 6 |
 
 **Argument Errors:**
@@ -1907,11 +1971,11 @@ rmp task blocking -r <name> <id>
 rmp task reopen -r <name> <ids>
 ```
 
-**Description:** Returns one or more tasks to `BACKLOG` status, clearing all lifecycle timestamps (`started_at`, `tested_at`, `closed_at`), the `completion_summary`, and `commit_close`. It **preserves `commit_open`**, which records where the work originally started and stays true after the task returns to the backlog. Accepts comma-separated IDs for bulk operations.
+**Description:** Returns one or more tasks to `SPRINT` status inside the sprint each belongs to, clearing all lifecycle timestamps (`started_at`, `tested_at`, `closed_at`), the `completion_summary`, and `commit_close`. It **preserves `commit_open`**, which records where the work originally started and stays true after the reopening. Accepts comma-separated IDs for bulk operations.
 
-**Valid source states:** `SPRINT`, `DOING`, `TESTING`, `COMPLETED` — any non-BACKLOG state.
+**Valid source states:** `DOING`, `TESTING`, `COMPLETED`, in a sprint that is not `CLOSED`.
 
-**Effect on sprint membership:** The command removes the task's `sprint_tasks` row only when the source state is `SPRINT`, `DOING`, or `TESTING`. From the `COMPLETED` source state it leaves the row in place, so the task keeps its sprint membership and its `position` while its status reads `BACKLOG`. See `STATE_MACHINE.md § Sprint Membership and the BACKLOG Status`.
+**Effect on sprint membership:** None. The command never touches the `sprint_tasks` table: the task keeps its sprint and its `position`. A task leaves its sprint only through `sprint remove-tasks` or `sprint remove` (`STATE_MACHINE.md § Sprint Membership and the BACKLOG Status`). A `COMPLETED` task that belongs to no sprint, which only data written before the membership invariant can hold, is returned to `BACKLOG` instead, the one status a task outside every sprint may hold, with the same fields cleared.
 
 **Batch Operation Behavior (Fail-Fast):**
 
@@ -1919,15 +1983,17 @@ All IDs are validated before any transitions are applied. If any ID is invalid, 
 
 | Scenario | Exit Code | Behavior | Output |
 |----------|-----------|----------|--------|
-| Task transitions to BACKLOG from `SPRINT`, `DOING`, or `TESTING` | 0 | Timestamps, `completion_summary`, and `commit_close` cleared; `commit_open` preserved; `sprint_tasks` row removed | No stdout |
-| Task transitions to BACKLOG from `COMPLETED` | 0 | Timestamps, `completion_summary`, and `commit_close` cleared; `commit_open` preserved; `sprint_tasks` row kept | No stdout |
-| Task already in BACKLOG | 0 | No change; any `sprint_tasks` row is kept | Informational message to stderr |
+| Task transitions to SPRINT from `DOING`, `TESTING`, or `COMPLETED` | 0 | Timestamps, `completion_summary`, and `commit_close` cleared; `commit_open` preserved; `sprint_tasks` row and `position` kept | No stdout |
+| Task already in SPRINT or BACKLOG | 0 | No change | Informational message to stderr |
 | All IDs valid and at least one is repeated | 0 | Each distinct task reopened once | No stdout |
 | Exactly one ID does not exist | 4 | **No tasks modified** | "Error: resource not found: task N not found" |
 | Two or more IDs do not exist | 4 | **No tasks modified** | "Error: resource not found: tasks <ids> not found" |
 | An ID is not an integer | 2 | **No tasks modified** | "Error: invalid input: invalid task ID: \"X\" (must be a positive integer)" |
 | An ID is an integer outside `1`-`2147483647` | 6 | **No tasks modified** | "Error: validation error: task_id must be between 1 and 2147483647, got N" |
 | An unrecognised flag is written after the IDs | 2 | **No tasks modified** | "Error: invalid input: unknown flag: --foo" |
+| A named task in `DOING`, `TESTING` or `COMPLETED` belongs to a CLOSED sprint | 6 | **No tasks modified** | "Error: validation error: cannot reopen task N: sprint #M is CLOSED; reopen the sprint first with 'rmp sprint reopen'" |
+
+**A task in a CLOSED sprint is not reopened.** Reopening returns the task to `SPRINT` in its sprint, and a CLOSED sprint takes no work back: the refusal names `sprint reopen`, after which the task can be reopened. `N` is the first such task in the order the command line supplied them and `M` its sprint. The check runs once every id has been resolved, before anything is written, so a batch with one such task changes nothing.
 
 **Output (success):** No output to stdout, exit code 0.
 
@@ -1935,23 +2001,22 @@ All IDs are validated before any transitions are applied. If any ID is invalid, 
 `related_entity_id` and NULL `commit_hash`. Three rules apply:
 
 1. **`task reopen` writes `TASK_REOPEN` and nothing else.** It writes no
-   `TASK_STATUS_BACKLOG` entry, even though the task ends in `BACKLOG`. The two
-   operations are distinct because the commands are: `task stat <ids> BACKLOG`
-   changes the status, while `task reopen` additionally clears the lifecycle
-   timestamps, the completion summary, and `commit_close`.
+   `TASK_STATUS_SPRINT` entry, even though the task ends in `SPRINT`: that
+   operation records a task joining a sprint, and a reopened task joins none. The
+   reopening is a return to the start of the lifecycle, which `TASK_REOPEN` names.
 2. **No audit entry is altered.** Clearing `commit_close` on the task MUST NOT
    change, blank, or delete any existing audit entry. The `TASK_STATUS_COMPLETED`
    entry written when the task was completed keeps its `commit_hash`, so the record
    of the commit that concluded the task survives the reopening even though the task
    no longer carries it (see `DATABASE.md § The Commit Hash of an Audit Entry`).
-3. **A task already in `BACKLOG` is a no-op** (exit 0 with an informational message
-   on stderr) and writes no entry.
+3. **A task already in `SPRINT` or in `BACKLOG` is a no-op** (exit 0 with an
+   informational message on stderr) and writes no entry.
 
 **Acceptance criteria:**
 
-1. `rmp task reopen -r <name> <id>` on a `COMPLETED` task writes exactly one entry, with operation `TASK_REOPEN`, and writes no `TASK_STATUS_BACKLOG` entry.
+1. `rmp task reopen -r <name> <id>` on a `COMPLETED` task writes exactly one entry, with operation `TASK_REOPEN`, writes no `TASK_STATUS_*` entry, and leaves the task in `SPRINT` status in the same sprint at the same `position`.
 2. After the reopening, the task's earlier `TASK_STATUS_COMPLETED` entry still exists with the same `id` and the same `commit_hash`, while `tasks.commit_close` is NULL.
-3. `rmp task reopen` on a task already in `BACKLOG` leaves the audit entry count unchanged.
+3. `rmp task reopen` on a task already in `SPRINT` or in `BACKLOG` leaves the audit entry count unchanged.
 
 ---
 
@@ -2093,7 +2158,7 @@ rmp task comment-edit -r <name> <comment-id> < revised.txt
 **Options:**
 - `-r, --roadmap <name>` - REQUIRED. Target roadmap.
 - `-y, --type <TYPE>` - New comment type. One of the seven task values.
-- `-b, --body <text>` - New comment text, maximum 4096 characters. When `--body` is absent and `--type` is also absent, the new body is read from standard input under the bounded read; when `--type` is present and `--body` is absent, the body is left unchanged and standard input is not read (see `Comment Body Input Source and Precedence` above).
+- `-b, --body <text>` - New comment text, maximum 4096 characters. When `--body` is absent and `--type` is also absent, the new body is read from standard input under the bounded read. When `--type` is present and `--body` is absent, the body is left unchanged: a terminal on standard input is not read, an empty standard input is accepted, and a standard input that carries data is refused with exit code 2 (see `Comment Body Input Source and Precedence` above, rule 7).
 
 **Replacement semantics:** The edit replaces the stored body in place and stamps `updated_at` with the edit's timestamp, so the JSON output of a later listing shows that the comment was altered. The previous text is not retained anywhere and cannot be recovered. This is a deliberate trade-off: the audit log records that an edit happened, not what it replaced.
 
@@ -2103,6 +2168,7 @@ rmp task comment-edit -r <name> <comment-id> < revised.txt
 |-------|------------|------------------------|-----------|
 | `comment-id` | Integer in `1`-`2147483647` (see `Comment Positional Argument Contract`) | "Error: invalid input: invalid comment ID: \"X\" (must be a positive integer)" | 2 |
 | change | At least one change requested: a `--type` value, a `--body` value, or a body on standard input | "Error: required parameter missing: at least one of --type or --body is required" | 2 |
+| stdin | With `--type` present and `--body` absent, standard input is a terminal or carries no data | "Error: invalid input: standard input carries data, but it is not read when --type is given; supply the new body with --body" | 2 |
 | `type` | One of the seven task values | "Error: validation error: invalid comment type \"X\" for a task comment; valid types: FINDING, HYPOTHESIS, TEST, DECISION, PROGRESS, UPDATE, NOTE" | 6 |
 | `body` | `--body` present but empty or whitespace only | "Error: required parameter missing: no comment body supplied" | 2 |
 | `body` | Max 4096 chars | "Error: field exceeds maximum size: body exceeds maximum length of 4096 characters" | 6 |
@@ -2114,14 +2180,14 @@ rmp task comment-edit -r <name> <comment-id> < revised.txt
 2. Parse the positional `comment-id`; a non-integer or non-positive value fails with exit code 2.
 3. Consume the subcommand's flags and their values; an unrecognised flag fails with exit code 2, and so does any positional argument left over after the `comment-id` (see `Comment Positional Argument Contract` above).
 4. Validate the `--type` value when the flag is present; an invalid value fails with exit code 6, before standard input is considered.
-5. Resolve the new body when one is being set, from `--body` or from standard input; when neither `--type` nor a body is supplied, the command fails with exit code 2.
+5. Resolve the new body when one is being set, from `--body` or from standard input; when neither `--type` nor a body is supplied, the command fails with exit code 2. When `--type` is present and `--body` is absent, apply rule 7 of `Comment Body Input Source and Precedence` above instead: a terminal is not read, and a standard input that carries data fails with exit code 2.
 6. Verify the comment exists in `task_comments`; a missing comment fails with exit code 4.
 7. Validate the body's length, then its encoding, then its control characters; a violation fails with exit code 6.
 8. Apply the update, stamp `updated_at`, and write the audit entry in one transaction.
 
 Step 3 precedes step 5 for the same reason step 4 does: a malformed argument list is reported at once, instead of leaving the command waiting on standard input for a body it is going to reject anyway.
 
-**No-op is not accepted.** Unlike `task edit`, which succeeds with exit code 0 when no field is given and the task it names exists, `comment-edit` requires at least one change and fails with exit code 2 when none is requested. A change is requested by a `--type` value, by a `--body` value, or by a body arriving on standard input, so the flagless form `comment-edit <comment-id> < revised.txt` is a valid edit and not a no-op: the body on standard input is the change. Only the case where `--type` is absent, `--body` is absent, and standard input is empty, whitespace only, or not connected requests no change at all, and that is the case that fails with exit code 2 and the message "at least one of --type or --body is required". `task edit` can distinguish "no flags" from "flags to apply" without ambiguity; `comment-edit` cannot on the flags alone, because an absent `--body` with an absent `--type` is precisely the form that means "read the new body from standard input", so the decision is made after standard input has been resolved.
+**No-op is not accepted.** Unlike `task edit`, which succeeds with exit code 0 when no field is given and the task it names exists, `comment-edit` requires at least one change and fails with exit code 2 when none is requested. A change is requested by a `--type` value, by a `--body` value, or by a body arriving on standard input, so the flagless form `comment-edit <comment-id> < revised.txt` is a valid edit and not a no-op: the body on standard input is the change. Only the case where `--type` is absent, `--body` is absent, and standard input is empty, whitespace only, or not connected requests no change at all, and that is the case that fails with exit code 2 and the message "at least one of --type or --body is required". `task edit` can distinguish "no flags" from "flags to apply" without ambiguity; `comment-edit` cannot on the flags alone, because an absent `--body` with an absent `--type` is precisely the form that means "read the new body from standard input", so the decision is made after standard input has been resolved. The converse form — `--type` present, `--body` absent, and a body arriving on standard input — is not a type change with the body ignored: it is refused with exit code 2 under rule 7 of `Comment Body Input Source and Precedence` above.
 
 **Output (success):** No output, exit code 0. This follows the convention for mutating commands (`task edit`, `sprint update`).
 
@@ -2134,6 +2200,7 @@ Step 3 precedes step 5 for the same reason step 4 does: a malformed argument lis
 | Invalid comment ID format | 2 | `Error: invalid input: invalid comment ID: "X" (must be a positive integer)` |
 | Missing comment ID | 2 | `Error: required parameter missing: comment ID required` |
 | Extra positional argument | 2 | `Error: invalid input: unexpected argument "X"` |
+| `--type` given without `--body`, and standard input is not a terminal and carries data | 2 | `Error: invalid input: standard input carries data, but it is not read when --type is given; supply the new body with --body` |
 | Body read from standard input, and the read of the stream failed | 1 | `Error: I/O error: reading the comment body from standard input: <detail>` |
 | Database failure | 1 | `Error: database error: <detail>` |
 
@@ -2172,6 +2239,7 @@ rmp task c-rm -r <name> <comment-id>
 | Invalid comment ID format | 2 | `Error: invalid input: invalid comment ID: "X" (must be a positive integer)` |
 | Missing comment ID | 2 | `Error: required parameter missing: comment ID required` |
 | Extra positional argument | 2 | `Error: invalid input: unexpected argument "X"` |
+| The roadmap name breaks a rule of `§ Roadmap Name Validation` | 6 | The line that section publishes for the first rule the name breaks |
 | Database failure | 1 | `Error: database error: <detail>` |
 
 **Audit:** Logged as `TASK_COMMENT_DELETE` against the parent task (`entity_type = TASK`, `entity_id` = the id of the task the comment belonged to), in the same transaction as the delete.
@@ -2340,7 +2408,7 @@ accepted and stored trimmed.
 | Scenario | Exit Code | stderr Output |
 |----------|-----------|---------------|
 | `--max-tasks` `< 1` or `> 10000` | 6 | "Error: validation error: max_tasks must be between 1 and 10000, got N" |
-| `--max-tasks` non-integer | 2 | "Error: invalid input: invalid value for --max-tasks: strconv.Atoi: parsing \"X\": invalid syntax" |
+| `--max-tasks` non-integer | 2 | "Error: invalid input: invalid value for --max-tasks: \"X\" is not an integer in 1-10000" |
 | `--order` `<= 0` | 6 | "Error: validation error: --order must be a positive integer greater than zero (got N)" |
 | `--order` non-integer | 6 | "Error: validation error: --order must be a positive integer greater than zero" |
 | `--order` already used by another sprint | 5 | "Error: resource already exists: sprint order N is already in use" |
@@ -2563,7 +2631,7 @@ rmp sprint show -r <name> <id>
 | `status` | string | Sprint status (OPEN, CLOSED) |
 | `max_tasks` | integer or null | Sprint capacity cap (maximum number of tasks the sprint may hold), or null when no cap is set |
 | `capacity_pct` | float or null | Percentage of capacity used, computed from `current_load` against `max_tasks`. null when no cap is set |
-| `current_load` | integer | Number of non-COMPLETED tasks counting against the sprint capacity |
+| `current_load` | integer | Number of the sprint's member tasks whose status is `SPRINT`, `DOING` or `TESTING`: the tasks that count against the sprint capacity. A member in `BACKLOG` or `COMPLETED` status is not counted |
 | `task_order` | array of integers | Task IDs in sprint position order (first to last) |
 | `summary.total_tasks` | integer | Total number of tasks in sprint |
 | `summary.pending` | integer | Tasks with status BACKLOG or SPRINT |
@@ -2674,6 +2742,8 @@ All sprint task operations validate ALL IDs before making any changes.
 | The destination sprint is CLOSED, on `move-tasks` | 6 | **No changes made** | "Error: validation error: cannot move tasks to sprint #N: sprint is CLOSED" |
 | The sprint is CLOSED, on `add-tasks` | 6 | **No changes made** | "Error: validation error: cannot add tasks to sprint #N: sprint is CLOSED" |
 | The addition would take the sprint past the cap its `--max-tasks` sets, on `add-tasks` | 6 | **No changes made** | "Error: validation error: adding N task(s) would exceed sprint #M capacity (<load>/<cap> tasks active)" |
+| A named task is `COMPLETED`, on any of the three | 6 | **No changes made** | "Error: validation error: task N is COMPLETED in sprint #M; a completed task stays in the sprint it was completed in" |
+| A named task is `COMPLETED` and belongs to no sprint, on `add-tasks` | 6 | **No changes made** | "Error: validation error: task N is COMPLETED and belongs to no sprint; a completed task cannot join a sprint" |
 | A task ID is not a positive integer | 2 | **No changes made** | "Error: invalid input: invalid task ID: \"X\" (must be a positive integer)" |
 | A sprint ID is not a positive integer | 2 | **No changes made** | "Error: invalid input: invalid sprint ID: \"X\" (must be a positive integer)" |
 | An unrecognised flag is written after `<task-ids>` | 2 | **No changes made** | "Error: invalid input: unknown flag: --foo" |
@@ -2704,11 +2774,33 @@ checked before the destination is looked up, so a CLOSED source is refused even
 when the destination does not exist (Validation Order, step 4).
 
 `add-tasks` refuses a CLOSED sprint with a line of its own, and it is the only one
-of the three that checks capacity (Validation Order, steps 5 and 7). In the
-capacity line `N` is the number of distinct task ids the invocation names, `M` is
-the sprint's id, and `<load>` and `<cap>` are the figures the placeholder table
-declares. The line is the same whichever of the two capacity checks refuses the
-addition: the read before the transaction, or the enforcement inside it.
+of the three that checks capacity (Validation Order, steps 5 and 7).
+
+**The capacity check counts the tasks that become active in the sprint.** A
+sprint's load, `<load>`, is the number of its member tasks whose status is
+`SPRINT`, `DOING` or `TESTING`; a `COMPLETED` member does not count against its cap,
+and no member is in `BACKLOG` (`STATE_MACHINE.md § Sprint Membership and the BACKLOG
+Status`). The check counts the distinct named tasks that are not already members of
+this sprint, and refuses the invocation when `<load>` plus that number exceeds
+`<cap>`. Every such task becomes active in the sprint: a `BACKLOG` task joins it as
+`SPRINT`, and a `SPRINT`, `DOING` or `TESTING` task from another sprint joins it
+with its status. A named task that is already a member is not counted, because it
+is already part of `<load>`, and a `COMPLETED` task never reaches the count,
+because the command refuses it first (Validation Order, step 6). An invocation
+that counts no task never raises the load, and the capacity check never refuses
+it, even when the sprint already holds more active tasks than its cap, as it does
+once `sprint update --max-tasks` has lowered the cap below `<load>`.
+
+In the capacity line `N` is that number — the distinct named tasks that become
+active in the sprint, never the number of ids the command line carries — `M` is the
+sprint's id, and `<load>` and `<cap>` are the figures the placeholder table
+declares. With a cap of 5 and four active members, naming two of those members and
+one task from outside the sprint counts one task, which fits; naming two tasks from
+outside it counts two and prints
+`adding 2 task(s) would exceed sprint #M capacity (4/5 tasks active)` after the
+sentinel. The line is the same whichever of the two capacity checks refuses the
+addition: the read before the transaction, or the enforcement inside it, and both
+count the same way.
 
 **Validation Order:**
 
@@ -2724,9 +2816,9 @@ not performed by the others at all.
 3. Open the roadmap, which refuses a roadmap that does not exist before any sprint or task is resolved (all three)
 4. Verify the sprint exists: `<sprint-id>` for `add-tasks` and `remove-tasks`; `move-tasks` resolves its two sprints one at a time, source before destination, each lookup immediately followed by the CLOSED check below (all three)
 5. Reject a CLOSED sprint: `add-tasks` refuses a CLOSED `<sprint-id>`, and `move-tasks` refuses a CLOSED `<from-id>` or `<to-id>`. `remove-tasks` deliberately does not, because taking tasks out of a closed sprint is the carry-over workflow (`add-tasks`, `move-tasks`)
-6. Verify all task IDs exist in the roadmap (`add-tasks` only). The other two run no existence check of their own: the membership step below refuses an id the sprint does not hold, and an id that names no task cannot be held by one
-7. Verify that the batch does not exceed the sprint's `max_tasks` capacity, when the sprint sets one (`add-tasks` only). This read is a fast-feedback path; the authoritative, race-free enforcement runs inside the transaction of the execution step (see `DATABASE.md § Transactional Atomicity Guarantees`)
-8. Verify that every task is currently a member of the sprint it is being taken out of: `<sprint-id>` for `remove-tasks`, `<from-id>` for `move-tasks` (`remove-tasks`, `move-tasks`)
+6. Verify all task IDs exist in the roadmap, and then that none of the named tasks is `COMPLETED` (`add-tasks` only). The other two run no existence check of their own: the membership step below refuses an id the sprint does not hold, and an id that names no task cannot be held by one
+7. Verify that the named tasks the addition makes count against the sprint's capacity — as the capacity paragraph above counts them — do not take it past its `max_tasks` capacity, when the sprint sets one (`add-tasks` only). This read is a fast-feedback path; the authoritative, race-free enforcement runs inside the transaction of the execution step (see `DATABASE.md § Transactional Atomicity Guarantees`)
+8. Verify that every task is currently a member of the sprint it is being taken out of: `<sprint-id>` for `remove-tasks`, `<from-id>` for `move-tasks`; and then that none of them is `COMPLETED` (`remove-tasks`, `move-tasks`)
 9. For `add-tasks`: nothing is verified about the sprint a task already belongs to (see Re-parenting on `add-tasks` below). This item has no failure mode; it records a check the command does not perform
 10. Only after full validation succeeds, execute the operation
 11. If any validation fails, exit immediately without making changes
@@ -2748,18 +2840,24 @@ receive in the same transaction, are specified in
 
 | Command | Task Status Change | Description |
 |---------|-------------------|-------------|
-| `add-tasks` | BACKLOG → SPRINT | Tasks automatically change to SPRINT status when added to sprint |
-| `remove-tasks` | SPRINT, DOING, TESTING, or COMPLETED → BACKLOG | Tasks automatically return to BACKLOG when removed from sprint, whatever their status. The command also clears `started_at`, `tested_at`, `closed_at`, `completion_summary`, and `commit_close`, and preserves `commit_open` |
-| `move-tasks` | (No change) | Status is preserved when moving between sprints |
+| `add-tasks` | BACKLOG → SPRINT; otherwise no change | A `BACKLOG` task joining the sprint becomes `SPRINT`. A `SPRINT`, `DOING` or `TESTING` task, from another sprint or already in this one, keeps its status and every tracking field |
+| `remove-tasks` | SPRINT, DOING, or TESTING → BACKLOG | Tasks leave the sprint and return to BACKLOG. The command also clears `started_at`, `tested_at`, `closed_at`, `completion_summary`, and `commit_close`, and preserves `commit_open`. A `COMPLETED` task is refused, and stays |
+| `move-tasks` | (No change) | Status is preserved when moving between sprints. A `COMPLETED` task is refused, and stays |
+
+**A `COMPLETED` task is bound to the sprint it was completed in.** All three commands refuse to name one, with exit code 6, the line the table above publishes, and no change: `add-tasks` to any sprint, its own included, `move-tasks` out of its sprint, and `remove-tasks` out of it. `N` is the first `COMPLETED` task in the order the command line supplied them and `M` the sprint it belongs to. `task reopen` returns such a task to `SPRINT` in its sprint, after which the three accept it. `STATE_MACHINE.md § Sprint Membership and the BACKLOG Status` is canonical for the rule, and for the one line of `add-tasks` that names no sprint, which only data written before the rule can reach.
+
+**Carrying unfinished work over from a closed sprint.** `sprint close --force` leaves the sprint's `SPRINT`, `DOING` and `TESTING` tasks in it. They are carried over to another sprint with `add-tasks`, which re-parents them and keeps their status: a task in `DOING` is still in `DOING` in the new sprint, with its `started_at` and `commit_open`. `move-tasks` cannot carry them, because it refuses a CLOSED source sprint (Validation Order, step 5). The sprint's `COMPLETED` tasks stay in it.
 
 **Audit:** Every one of these three commands writes one entry per **entity** it
 touches, never one entry per invocation:
 
 | Command | Entries per task | Detail |
 |---------|------------------|--------|
-| `add-tasks` | 2 | `SPRINT_ADD_TASK` against the sprint with `related_entity_id` = the task id, plus `TASK_STATUS_SPRINT` against the task with `related_entity_id` = the sprint id |
+| `add-tasks`, a `BACKLOG` task | 2 | `SPRINT_ADD_TASK` against the sprint with `related_entity_id` = the task id, plus `TASK_STATUS_SPRINT` against the task with `related_entity_id` = the sprint id |
+| `add-tasks`, a task from another sprint | 3 | `SPRINT_ADD_TASK` against the sprint with `related_entity_id` = the task id, `SPRINT_MOVE_TASK_OUT` against the sprint the task left with `related_entity_id` = the task id, and `TASK_SPRINT_CHANGE` against the task with `related_entity_id` = the sprint it entered |
+| `add-tasks`, a task already in this sprint | 1 | `SPRINT_ADD_TASK` against the sprint with `related_entity_id` = the task id |
 | `remove-tasks` | 2 | `SPRINT_REMOVE_TASK` against the sprint with `related_entity_id` = the task id, plus `TASK_STATUS_BACKLOG` against the task with `related_entity_id` = the sprint id |
-| `move-tasks` | 2 | `SPRINT_MOVE_TASK_OUT` against the source sprint and `SPRINT_MOVE_TASK_IN` against the destination sprint, both with `related_entity_id` = the task id |
+| `move-tasks` | 3 | `SPRINT_MOVE_TASK_OUT` against the source sprint and `SPRINT_MOVE_TASK_IN` against the destination sprint, both with `related_entity_id` = the task id, and `TASK_SPRINT_CHANGE` against the task with `related_entity_id` = the destination sprint |
 
 Four rules govern these entries:
 
@@ -2778,18 +2876,25 @@ Four rules govern these entries:
    follows the governing rule that `related_entity_id` names the counterpart entity
    of the operation that produced the entry
    (`DATABASE.md § The Two Entities of a Relational Operation`); it is not a
-   command-specific exception. The same `TASK_STATUS_BACKLOG` operation written by
-   `task stat <ids> BACKLOG` carries NULL, because that invocation has no second
-   entity to name.
-4. **`move-tasks` writes no `TASK_STATUS_*` entry,** because it changes no task's
-   status (see Automatic Status Updates above). The two sprint entries are the whole
-   record of the move.
+   command-specific exception.
+4. **A task that changes sprint and keeps its status gets `TASK_SPRINT_CHANGE`,
+   never a `TASK_STATUS_*` entry,** because its status does not change (see Automatic
+   Status Updates above). The audit row carries one counterpart, so the entry names
+   the sprint the task **entered** in `related_entity_id`; the sprint it **left** is
+   named by the `SPRINT_MOVE_TASK_OUT` entry written against that sprint in the same
+   transaction, with the same `performed_at` and the task in its
+   `related_entity_id`. `move-tasks` writes that entry as it always has, and
+   `add-tasks` writes it for every task it takes from another sprint, so the sprint
+   the task left records the departure on both commands. `audit history TASK <id>`
+   therefore shows every change of sprint, and each end of it is one lookup away.
 
-`remove-tasks` writes its `TASK_STATUS_BACKLOG` entry for every task removed,
-including a task that was already in `BACKLOG` status while remaining a sprint member
-(see `STATE_MACHINE.md § Sprint Membership and the BACKLOG Status`): the entry records
-the command's effect on the task, and the entry count is therefore always exactly one
-per task named on the command line.
+`remove-tasks` writes its `TASK_STATUS_BACKLOG` entry for every task removed, so the
+entry count is always exactly one per distinct task named on the command line.
+`add-tasks` writes its `TASK_STATUS_SPRINT` entry only for a task whose status it set
+from `BACKLOG` to `SPRINT`, and its `TASK_SPRINT_CHANGE` entry only for a task it took
+from another sprint (rule 4); a task named again while already a member of this
+sprint changes neither its status nor its sprint, and receives the `SPRINT_ADD_TASK`
+entry against the sprint alone.
 
 All entries of one invocation share one `performed_at` value and are written in the
 same transaction as the membership and status changes (see
@@ -2798,15 +2903,15 @@ entry at all.
 
 **Acceptance criteria:**
 
-1. `rmp sprint add-tasks -r <name> <s> <a>,<b>` writes exactly four entries: two `SPRINT_ADD_TASK` against `<s>` with `related_entity_id` `<a>` and `<b>`, and two `TASK_STATUS_SPRINT`, one against `<a>` and one against `<b>`, each with `related_entity_id = <s>`.
+1. `rmp sprint add-tasks -r <name> <s> <a>,<b>`, where `<a>` and `<b>` are `BACKLOG` tasks, writes exactly four entries: two `SPRINT_ADD_TASK` against `<s>` with `related_entity_id` `<a>` and `<b>`, and two `TASK_STATUS_SPRINT`, one against `<a>` and one against `<b>`, each with `related_entity_id = <s>`.
 2. `rmp sprint remove-tasks -r <name> <s> <a>` writes exactly two entries: `SPRINT_REMOVE_TASK` against `<s>` with `related_entity_id = <a>`, and `TASK_STATUS_BACKLOG` against `<a>` with `related_entity_id = <s>`.
 3. The entries of criteria 1 and 2 are mirrored: within one invocation, the sprint entry's `entity_id` equals the task entry's `related_entity_id`, the sprint entry's `related_entity_id` equals the task entry's `entity_id`, and both carry the same `performed_at`.
-4. `rmp task stat -r <name> <a> BACKLOG` writes one `TASK_STATUS_BACKLOG` entry with `related_entity_id IS NULL`, so the same operation is distinguishable by that column from the one `sprint remove-tasks` writes.
-5. `rmp sprint move-tasks -r <name> <from> <to> <a>` writes exactly two entries: `SPRINT_MOVE_TASK_OUT` against `<from>` and `SPRINT_MOVE_TASK_IN` against `<to>`, both with `related_entity_id = <a>`, and writes no entry with `entity_type = TASK`.
+4. `rmp task stat -r <name> <a> BACKLOG`, where `<a>` is a sprint member, is refused with exit code 6 and writes no entry, so every `TASK_STATUS_BACKLOG` entry written under the membership invariant is one `sprint remove-tasks` wrote and names a sprint.
+5. `rmp sprint move-tasks -r <name> <from> <to> <a>` writes exactly three entries: `SPRINT_MOVE_TASK_OUT` against `<from>` and `SPRINT_MOVE_TASK_IN` against `<to>`, both with `related_entity_id = <a>`, and `TASK_SPRINT_CHANGE` against `<a>` with `related_entity_id = <to>`, all three sharing one `performed_at`; it writes no `TASK_STATUS_*` entry.
 6. No invocation of any of the three commands writes `SPRINT_MOVE_TASK`.
 7. A command rejected at any validation step writes zero entries.
 
-**Note:** The status SPRINT is automatically managed by sprint operations. Users MUST NOT manually set status to SPRINT using `task stat`; attempts to do so are rejected with exit code 6 and the error message `"Error: validation error: status SPRINT can only be set automatically via 'sprint add-tasks'"`. Manual status transitions follow: BACKLOG → SPRINT (automatic) → DOING → TESTING → COMPLETED. `task stat <ids> BACKLOG` is also accepted from `SPRINT` and from `COMPLETED`, and it does not remove the task from its sprint: the task keeps its `sprint_tasks` row while its status reads `BACKLOG`. See `STATE_MACHINE.md § Valid Transitions` for the full set and `STATE_MACHINE.md § Sprint Membership and the BACKLOG Status` for the membership rule.
+**Note:** The status SPRINT is automatically managed by sprint operations. Users MUST NOT manually set status to SPRINT using `task stat`; attempts to do so are rejected with exit code 6 and the error message `"Error: validation error: status SPRINT cannot be set by 'task stat'; it is set by 'sprint add-tasks' and 'task reopen'"`. Manual status transitions follow: BACKLOG → SPRINT (automatic) → DOING → TESTING → COMPLETED. `task stat <ids> BACKLOG` is refused for every sprint member, and `task reopen` returns a `DOING`, `TESTING` or `COMPLETED` task to `SPRINT` in its sprint. See `STATE_MACHINE.md § Valid Transitions` for the full set and `STATE_MACHINE.md § Sprint Membership and the BACKLOG Status` for the membership rule.
 
 **Output (success):** No output, exit code 0.
 
@@ -2818,11 +2923,11 @@ Commands for managing sprint task order within a sprint. Tasks are ordered by po
 
 **There is consequently no "position already in use" error in this section, and none of these commands repairs a collision.** A collision cannot be requested, so there is nothing for a command to reject or to repair. Should one ever reach the database it means a defect in a write path, not bad input, and it surfaces as a database failure (exit code `1`) rather than as a validation error — see `ARCHITECTURE.md § Exit Codes`. The error tables below are complete as they stand.
 
-**The five commands share five of their error lines, and the tables below publish nine distinct strings between them.** Three of the five are refused before the roadmap is opened. Two of those three are lexical: every one of the five reads a sprint id and at least one task id from the command line, and all five publish the same line when the sprint id is not a positive integer, and the same line again when a task id is not. The third is the unrecognised-flag line, which all five publish for a flag written between two of their positional arguments or after the last of them. The other two are resolved against the database: all five publish the same line when no sprint holds the given id, and all five then verify that every task named on the command line is a member of that sprint and publish the same line when one is not. The remaining four strings each belong to a single command: two to `reorder` (a duplicate id in the list, and a list that does not name every member), one to `move-to` (a position outside the accepted range), and one to `swap` (the same task named twice). There is no per-command variant of any of the five shared lines: a reader who finds one of them in five tables is reading one string published five times, not five strings that happen to agree.
+**The five commands share six of their error lines, and the tables below publish ten distinct strings between them.** Four of the six are refused before the roadmap is opened. The first is the missing-selector line: all five are roadmap-scoped, and an invocation that carries neither `-r` nor `--roadmap` exits `3` with `Error: no roadmap selected: use -r <name> or --roadmap <name>` before any id on the command line is validated and before an unrecognised flag is reported, so `rmp sprint top 1 x` and `rmp sprint top 1 2 --foo` both exit `3`. Two of the other three are lexical: every one of the five reads a sprint id and at least one task id from the command line, and all five publish the same line when the sprint id is not a positive integer, and the same line again when a task id is not. The fourth is the unrecognised-flag line, which all five publish for a flag written between two of their positional arguments or after the last of them. The other two are resolved against the database: all five publish the same line when no sprint holds the given id, and all five then verify that every task named on the command line is a member of that sprint and publish the same line when one is not. The remaining four strings each belong to a single command: two to `reorder` (a duplicate id in the list, and a list that does not name every member), one to `move-to` (a position outside the accepted range), and one to `swap` (the same task named twice). There is no per-command variant of any of the six shared lines: a reader who finds one of them in five tables is reading one string published five times, not five strings that happen to agree.
 
 **The two lexical lines are also how an unrecognised flag written in an id position is refused on these five commands.** A `-`-prefixed token that stands in the slot of a sprint id or a task id, written before the first positional argument or with no positional argument after it, is read as that id and refused as a malformed one, with its dashes echoed inside the quotes. Written between two positional arguments or after the last of them, where the positional arguments themselves fill every slot, the same token is refused with the unrecognised-flag line, which every table below publishes in two rows. `§ Positional Arguments` states both rules once for the whole CLI.
 
-**The membership line of these five commands is not the membership line of the batch assignment commands.** These five publish `Error: validation error: task N does not belong to sprint M`. The commands that add, remove and move sprint members publish `Error: validation error: task N is not in sprint #M` for the condition their own table names (`§ Task Assignment`). The two wordings are both exact, because the binary prints a different sentence on each of the two paths; neither table is paraphrasing the other, and neither is to be edited into agreement with the other here.
+**The membership line of these five commands is the membership line of the batch assignment commands.** A task that is not a member of the sprint is one condition wherever it is tested, so it has one sentence: all five publish `Error: validation error: task N is not in sprint #M`, the singular line `§ Task Assignment` publishes for `remove-tasks` and `move-tasks`. `N` is the task id and `M` the sprint's id. These five name one task only: when more than one of the task ids on the command line is not a member, `N` is the first of them in the order the command line supplied them, and none of the five prints the plural line of `§ Task Assignment`. On `reorder` the membership test runs only once the list has passed the count test, so a list that names a task from outside the sprint in place of a member is refused with this line, and a list of the wrong length with the count line.
 
 #### Reorder Tasks (Set Exact Order)
 
@@ -2847,12 +2952,12 @@ rmp sprint order -r <name> <sprint-id> <task-ids>
 - Task at index 1 gets position 1 (second)
 - And so on...
 
-**JSON Output (success):** A JSON success object is written to stdout, exit code 0:
+**JSON Output (success):** A JSON success object is written to stdout, exit code 0. It carries exactly three keys, in this order: `sprint_id`, `success`, `task_order`. `sprint_id` is the sprint's id, `success` is always `true`, and `task_order` is the task ids in the order the command set, first to last:
 
 ```json
 {
-  "success": true,
   "sprint_id": 1,
+  "success": true,
   "task_order": [5, 3, 1, 4, 2]
 }
 ```
@@ -2861,8 +2966,9 @@ rmp sprint order -r <name> <sprint-id> <task-ids>
 
 | Scenario | Exit Code | stderr Output |
 |----------|-----------|---------------|
+| Roadmap not specified | 3 | "Error: no roadmap selected: use -r <name> or --roadmap <name>" |
 | Sprint not found | 4 | "Error: resource not found: sprint N" |
-| A task ID is not a member of the sprint | 6 | "Error: validation error: task N does not belong to sprint M" |
+| A task ID is not a member of the sprint | 6 | "Error: validation error: task N is not in sprint #M" |
 | Duplicate task IDs | 6 | "Error: validation error: duplicate task ID N" |
 | Missing task IDs | 6 | "Error: validation error: expected N task IDs, got M (must include all sprint tasks)" |
 | Invalid sprint ID format | 2 | "Error: invalid input: invalid sprint ID: \"X\" (must be a positive integer)" |
@@ -2890,14 +2996,14 @@ rmp sprint mvto -r <name> <sprint-id> <task-id> <position>
 - Moving to same position: No-op
 - Moving to position >= task count: Task is placed at the end
 
-**JSON Output (success):** A JSON success object is written to stdout, exit code 0. The `position` field reflects the requested position:
+**JSON Output (success):** A JSON success object is written to stdout, exit code 0. It carries exactly four keys, in this order: `position`, `sprint_id`, `success`, `task_id`. `success` is always `true`, and the `position` field reflects the requested position:
 
 ```json
 {
-  "success": true,
+  "position": 3,
   "sprint_id": 1,
-  "task_id": 5,
-  "position": 3
+  "success": true,
+  "task_id": 5
 }
 ```
 
@@ -2905,8 +3011,9 @@ rmp sprint mvto -r <name> <sprint-id> <task-id> <position>
 
 | Scenario | Exit Code | stderr Output |
 |----------|-----------|---------------|
+| Roadmap not specified | 3 | "Error: no roadmap selected: use -r <name> or --roadmap <name>" |
 | Sprint not found | 4 | "Error: resource not found: sprint N" |
-| Task is not a member of the sprint | 6 | "Error: validation error: task N does not belong to sprint M" |
+| Task is not a member of the sprint | 6 | "Error: validation error: task N is not in sprint #M" |
 | Invalid position | 6 | "Error: validation error: position must be an integer between 0 and 2147483647" |
 | Invalid sprint ID format | 2 | "Error: invalid input: invalid sprint ID: \"X\" (must be a positive integer)" |
 | Invalid task ID format | 2 | "Error: invalid input: invalid task ID: \"X\" (must be a positive integer)" |
@@ -2931,12 +3038,12 @@ rmp sprint swap -r <name> <sprint-id> <task-id-1> <task-id-2>
 - Positions are exchanged between the two tasks
 - No changes to other tasks
 
-**JSON Output (success):** A JSON success object is written to stdout, exit code 0:
+**JSON Output (success):** A JSON success object is written to stdout, exit code 0. It carries exactly four keys, in this order: `sprint_id`, `success`, `task_id_1`, `task_id_2`. `success` is always `true`, and the two task ids are `<task-id-1>` and `<task-id-2>` as the command line supplied them:
 
 ```json
 {
-  "success": true,
   "sprint_id": 1,
+  "success": true,
   "task_id_1": 5,
   "task_id_2": 3
 }
@@ -2946,8 +3053,9 @@ rmp sprint swap -r <name> <sprint-id> <task-id-1> <task-id-2>
 
 | Scenario | Exit Code | stderr Output |
 |----------|-----------|---------------|
+| Roadmap not specified | 3 | "Error: no roadmap selected: use -r <name> or --roadmap <name>" |
 | Sprint not found | 4 | "Error: resource not found: sprint N" |
-| Task is not a member of the sprint | 6 | "Error: validation error: task N does not belong to sprint M" |
+| Task is not a member of the sprint | 6 | "Error: validation error: task N is not in sprint #M" |
 | Same task ID given twice | 6 | "Error: validation error: cannot swap a task with itself" |
 | Invalid sprint ID format | 2 | "Error: invalid input: invalid sprint ID: \"X\" (must be a positive integer)" |
 | Invalid task ID format | 2 | "Error: invalid input: invalid task ID: \"X\" (must be a positive integer)" |
@@ -2971,14 +3079,14 @@ rmp sprint bottom -r <name> <sprint-id> <task-id>
 - `top`: Equivalent to `move-to <task-id> 0`
 - `bottom`: Equivalent to `move-to <task-id> <task_count>`
 
-**JSON Output (success):** A JSON success object is written to stdout, exit code 0. The `position` field is the position the task holds once the command has run: `0` for `top`, and the sprint's last position, one less than its member count, for `bottom`. It is therefore not the `<task_count>` the equivalence above names, and a task that already holds the target position is reported at that position all the same:
+**JSON Output (success):** A JSON success object is written to stdout, exit code 0. It carries exactly four keys, in this order, the same keys in the same order as the `move-to` object: `position`, `sprint_id`, `success`, `task_id`. `success` is always `true`. The `position` field is the position the task holds once the command has run: `0` for `top`, and the sprint's last position, one less than its member count, for `bottom`. It is therefore not the `<task_count>` the equivalence above names, and a task that already holds the target position is reported at that position all the same:
 
 ```json
 {
-  "success": true,
+  "position": 0,
   "sprint_id": 1,
-  "task_id": 5,
-  "position": 0
+  "success": true,
+  "task_id": 5
 }
 ```
 
@@ -2986,19 +3094,22 @@ The same object for `bottom`, on a sprint of five members:
 
 ```json
 {
-  "success": true,
+  "position": 4,
   "sprint_id": 1,
-  "task_id": 5,
-  "position": 4
+  "success": true,
+  "task_id": 5
 }
 ```
+
+**The key order is part of the contract.** Each of the four objects above is written with its keys in the order its paragraph names, which is ascending byte order of the key names, and a key appears once. No object of these five commands carries a key the paragraph does not name.
 
 **Error Output:**
 
 | Scenario | Exit Code | stderr Output |
 |----------|-----------|---------------|
+| Roadmap not specified | 3 | "Error: no roadmap selected: use -r <name> or --roadmap <name>" |
 | Sprint not found | 4 | "Error: resource not found: sprint N" |
-| Task is not a member of the sprint | 6 | "Error: validation error: task N does not belong to sprint M" |
+| Task is not a member of the sprint | 6 | "Error: validation error: task N is not in sprint #M" |
 | Invalid sprint ID format | 2 | "Error: invalid input: invalid sprint ID: \"X\" (must be a positive integer)" |
 | Invalid task ID format | 2 | "Error: invalid input: invalid task ID: \"X\" (must be a positive integer)" |
 | An unrecognised flag is written after `<task-id>` | 2 | "Error: invalid input: unknown flag: --foo" |
@@ -3106,7 +3217,7 @@ above.
 | Scenario | Exit Code | stderr Output |
 |----------|-----------|---------------|
 | `--max-tasks` `< 1` or `> 10000` | 6 | "Error: validation error: max_tasks must be between 1 and 10000, got N" |
-| `--max-tasks` non-integer | 2 | "Error: invalid input: invalid value for --max-tasks: strconv.Atoi: parsing \"X\": invalid syntax" |
+| `--max-tasks` non-integer | 2 | "Error: invalid input: invalid value for --max-tasks: \"X\" is not an integer in 1-10000" |
 | `--order` `<= 0` | 6 | "Error: validation error: --order must be a positive integer greater than zero (got N)" |
 | `--order` non-integer | 6 | "Error: validation error: --order must be a positive integer greater than zero" |
 | `--order` on a CLOSED sprint | 6 | "Error: validation error: sprint #N order cannot be changed — sprint is CLOSED" |
@@ -3160,27 +3271,27 @@ rmp sprint rm -r <name> <id>
 
 **Task Behavior on Sprint Removal:**
 
-When a sprint is removed, all tasks currently associated with it are automatically returned to the backlog:
+A sprint that holds at least one `COMPLETED` task is not removed: the command fails with exit code 6 and changes nothing, because a completed task stays in the sprint it was completed in (`STATE_MACHINE.md § Sprint Membership and the BACKLOG Status`). `<id-list>` in the refusal names every `COMPLETED` member. Otherwise, all tasks currently associated with the sprint leave it and return to the backlog:
 
 | Current Task Status | New Status | Sprint membership |
 |---------------------|------------|-------------------|
-| BACKLOG | BACKLOG | `sprint_tasks` row deleted |
 | SPRINT | BACKLOG | `sprint_tasks` row deleted |
 | DOING | BACKLOG | `sprint_tasks` row deleted |
 | TESTING | BACKLOG | `sprint_tasks` row deleted |
-| COMPLETED | BACKLOG | `sprint_tasks` row deleted |
-
-A member task can already be in `BACKLOG` status before the sprint is removed (see `STATE_MACHINE.md § Sprint Membership and the BACKLOG Status`); for such a task the status write is a no-op and only the membership row goes away.
+| COMPLETED | — (the sprint is not removed) | — |
 
 **Process:**
 1. Validate sprint ID exists
-2. For each task in the sprint:
-   - Set status to BACKLOG (regardless of current status)
+2. Refuse the removal, writing nothing, when a member task is `COMPLETED`
+3. Delete sprint_tasks junction table entries
+4. For each former member task:
+   - Set status to BACKLOG
    - Clear `started_at`, `tested_at`, `closed_at`, `completion_summary`, and `commit_close` to NULL
    - Preserve all other fields (title, requirements, priority, severity, `commit_open`, etc.)
-3. Delete sprint_tasks junction table entries
-4. Delete sprint from sprints table
-5. Log the `SPRINT_DELETE` operation in the audit log
+5. Delete sprint from sprints table
+6. Log the `SPRINT_DELETE` operation in the audit log
+
+Steps 3 and 4 run in one transaction, and the sprint membership guard checks the result before commit (`DATABASE.md § Sprint Membership Invariant Enforcement`).
 
 **Rationale:**
 - Prevents data loss by preserving task content
@@ -3203,6 +3314,7 @@ keeps the record that the sprint existed and was deleted.
 | Scenario | Exit Code | stderr Output |
 |----------|-----------|---------------|
 | Sprint not found | 4 | "Error: resource not found: sprint N not found" |
+| The sprint holds at least one `COMPLETED` task | 6 | "Error: validation error: cannot remove sprint #N: completed tasks stay in their sprint: <id-list>" |
 | Roadmap not specified | 3 | "Error: no roadmap selected: use -r <name> or --roadmap <name>" |
 | `<id>` is not a positive integer | 2 | "Error: invalid input: invalid sprint ID: \"X\" (must be a positive integer)" |
 | An unrecognised flag is written after `<id>` | 2 | "Error: invalid input: unknown flag: --foo" |
@@ -3338,7 +3450,7 @@ rmp sprint comment-edit -r <name> <comment-id> < revised.txt
 **Options:**
 - `-r, --roadmap <name>` - REQUIRED. Target roadmap.
 - `-y, --type <TYPE>` - New comment type. One of the four sprint values.
-- `-b, --body <text>` - New comment text, maximum 4096 characters. The standard-input rules are those of `task comment-edit`: standard input is read only when `--type` is also absent.
+- `-b, --body <text>` - New comment text, maximum 4096 characters. The standard-input rules are those of `task comment-edit`: standard input is the new body only when `--type` is also absent, and a type-only edit refuses a standard input that carries data (`Comment Body Input Source and Precedence` above, rule 7).
 
 **Replacement semantics:** identical to `task comment-edit`. The edit replaces the stored body in place and stamps `updated_at`; the previous text is not recoverable.
 
@@ -3348,6 +3460,7 @@ rmp sprint comment-edit -r <name> <comment-id> < revised.txt
 |-------|------------|------------------------|-----------|
 | `comment-id` | Integer in `1`-`2147483647` (see `Comment Positional Argument Contract`) | "Error: invalid input: invalid comment ID: \"X\" (must be a positive integer)" | 2 |
 | change | At least one change requested: a `--type` value, a `--body` value, or a body on standard input | "Error: required parameter missing: at least one of --type or --body is required" | 2 |
+| stdin | With `--type` present and `--body` absent, standard input is a terminal or carries no data | "Error: invalid input: standard input carries data, but it is not read when --type is given; supply the new body with --body" | 2 |
 | `type` | One of the four sprint values | "Error: validation error: invalid comment type \"X\" for a sprint comment; valid types: FINDING, DECISION, PROGRESS, UPDATE" | 6 |
 | `body` | `--body` present but empty or whitespace only | "Error: required parameter missing: no comment body supplied" | 2 |
 | `body` | Max 4096 chars | "Error: field exceeds maximum size: body exceeds maximum length of 4096 characters" | 6 |
@@ -3367,6 +3480,7 @@ rmp sprint comment-edit -r <name> <comment-id> < revised.txt
 | Invalid comment ID format | 2 | `Error: invalid input: invalid comment ID: "X" (must be a positive integer)` |
 | Missing comment ID | 2 | `Error: required parameter missing: comment ID required` |
 | Extra positional argument | 2 | `Error: invalid input: unexpected argument "X"` |
+| `--type` given without `--body`, and standard input is not a terminal and carries data | 2 | `Error: invalid input: standard input carries data, but it is not read when --type is given; supply the new body with --body` |
 | Body read from standard input, and the read of the stream failed | 1 | `Error: I/O error: reading the comment body from standard input: <detail>` |
 | Database failure | 1 | `Error: database error: <detail>` |
 
@@ -3403,6 +3517,7 @@ rmp sprint c-rm -r <name> <comment-id>
 | Invalid comment ID format | 2 | `Error: invalid input: invalid comment ID: "X" (must be a positive integer)` |
 | Missing comment ID | 2 | `Error: required parameter missing: comment ID required` |
 | Extra positional argument | 2 | `Error: invalid input: unexpected argument "X"` |
+| The roadmap name breaks a rule of `§ Roadmap Name Validation` | 6 | The line that section publishes for the first rule the name breaks |
 | Database failure | 1 | `Error: database error: <detail>` |
 
 **Audit:** Logged as `SPRINT_COMMENT_DELETE` against the parent sprint (`entity_type = SPRINT`, `entity_id` = the id of the sprint the comment belonged to), in the same transaction as the delete.
@@ -3442,15 +3557,17 @@ rmp audit ls -r <name>
   the range `1`-`2147483647` (`MaxInt32`). A value `< 1` or `> 2147483647` is
   rejected with exit code 6; a non-integer value is rejected with exit code 2.
 - `--since <date>` - Inclusive lower bound on `performed_at`. The value takes one
-  of two forms: a full RFC3339 timestamp, including its offset and sub-second
-  variants (`2026-01-01T00:00:00Z`, `2026-01-01T00:00:00.000Z`,
-  `2026-01-01T00:00:00+00:00`), or a bare calendar date `YYYY-MM-DD`
-  (`2026-01-01`), which denotes the **first instant of that day in UTC**. These
-  are the same two forms `task list --created-since` and
+  of two forms: a timestamp, with an optional fraction of a second and a `Z` or
+  `+hh:mm` / `-hh:mm` zone designator (`2026-01-01T00:00:00Z`,
+  `2026-01-01T00:00:00.000Z`, `2026-01-01T00:00:00+00:00`), or a bare calendar
+  date `YYYY-MM-DD` (`2026-01-01`), which denotes the **first instant of that day
+  in UTC**; in either form it MUST denote an instant from 1970-01-01 through
+  9999-12-31. These are the same two forms `task list --created-since` and
   `task list --created-until` accept (see `§ List Tasks`): one acceptance rule
   governs every date-range filter the CLI publishes, so no date-range filter
-  accepts a value another one refuses. A value in neither form is rejected with
-  exit code 6.
+  accepts a value another one refuses, and `DATA_FORMATS.md § Date Filter Values`
+  is canonical for it. A value in neither form, or outside that range, is
+  rejected with exit code 6.
 - `--until <date>` - Inclusive upper bound on `performed_at`, in the same two
   forms and under the same acceptance rule as `--since`. A bare calendar date on
   this bound denotes the first instant of that day in UTC, not the last instant:
@@ -3468,13 +3585,13 @@ rmp audit ls -r <name>
 |----------|-----------|---------------|
 | Unrecognised flag | 2 | "Error: invalid input: unknown flag: --foo" |
 | `--limit` `< 1` or `> 500` | 6 | "Error: validation error: limit must be between 1 and 500, got N" |
-| `--limit` non-integer | 2 | "Error: invalid input: invalid limit: X" |
+| `--limit` non-integer | 2 | "Error: invalid input: invalid value for --limit: \"X\" is not an integer in 1-500" |
 | `--entity-id` `< 1` or `> 2147483647` | 6 | "Error: validation error: entity_id must be between 1 and 2147483647, got N" |
 | `--entity-id` non-integer | 2 | "Error: invalid input: invalid entity ID: X" |
 | `-o, --operation` not one of the catalogue operations | 6 | "Error: validation error: invalid audit operation: \"X\"" |
 | `-e, --entity-type` not `TASK` or `SPRINT` | 6 | "Error: validation error: invalid entity type: \"X\"" |
-| Invalid `--since` date format | 6 | "Error: validation error: --since: invalid date format: expected RFC3339 (2026-01-01T00:00:00Z) or date-only (2026-01-01): \"X\"" |
-| Invalid `--until` date format | 6 | "Error: validation error: --until: invalid date format: expected RFC3339 (2026-01-01T00:00:00Z) or date-only (2026-01-01): \"X\"" |
+| `--since` is not in a form `DATA_FORMATS.md § Date Filter Values` accepts, or denotes an instant outside 1970-01-01 through 9999-12-31 | 6 | "Error: validation error: --since: invalid date format: expected RFC3339 (2026-01-01T00:00:00Z) or date-only (2026-01-01): \"X\"" |
+| `--until` is not in a form `DATA_FORMATS.md § Date Filter Values` accepts, or denotes an instant outside 1970-01-01 through 9999-12-31 | 6 | "Error: validation error: --until: invalid date format: expected RFC3339 (2026-01-01T00:00:00Z) or date-only (2026-01-01): \"X\"" |
 
 A value out of range and a value that is not an integer at all are two conditions, not one: the first reaches the range check and is a validation failure (exit 6), while the second fails to parse and is malformed input (exit 2). The two messages differ accordingly.
 
@@ -3566,14 +3683,18 @@ rmp audit stats -r <name> [--since <date>] [--until <date>]
 
 **Options:**
 - `--since <date>` - Inclusive lower bound on `performed_at`, in either of the two
-  forms every date-range filter the CLI accepts: a full RFC3339 timestamp,
-  including its offset and sub-second variants (`2026-01-01T00:00:00Z`,
-  `2026-01-01T00:00:00.000Z`, `2026-01-01T00:00:00+00:00`), or a bare calendar
-  date `YYYY-MM-DD` (`2026-01-01`), which denotes the **first instant of that day
-  in UTC**. These are the same two forms `audit list --since/--until` and
+  forms every date-range filter the CLI accepts: a timestamp, with an optional
+  fraction of a second and a `Z` or `+hh:mm` / `-hh:mm` zone designator
+  (`2026-01-01T00:00:00Z`, `2026-01-01T00:00:00.000Z`,
+  `2026-01-01T00:00:00+00:00`), or a bare calendar date `YYYY-MM-DD`
+  (`2026-01-01`), which denotes the **first instant of that day in UTC**; in
+  either form it MUST denote an instant from 1970-01-01 through 9999-12-31. These
+  are the same two forms `audit list --since/--until` and
   `task list --created-since/--created-until` accept: one acceptance rule governs
-  every date-range filter the CLI publishes. A value in neither form is rejected
-  with exit code 6. If omitted, includes all entries from the beginning.
+  every date-range filter the CLI publishes, and
+  `DATA_FORMATS.md § Date Filter Values` is canonical for it. A value in neither
+  form, or outside that range, is rejected with exit code 6. If omitted, includes
+  all entries from the beginning.
 - `--until <date>` - Inclusive upper bound on `performed_at`, in the same two
   forms and under the same acceptance rule. A bare calendar date on this bound
   denotes the first instant of that day in UTC, not the last instant, so
@@ -3586,8 +3707,8 @@ rmp audit stats -r <name> [--since <date>] [--until <date>]
 |----------|-----------|---------------|
 | Roadmap not specified | 3 | "Error: no roadmap selected: use -r <name> or --roadmap <name>" |
 | Unrecognised flag | 2 | "Error: invalid input: unknown flag: --foo" |
-| Invalid `--since` date format | 6 | "Error: validation error: --since: invalid date format: expected RFC3339 (2026-01-01T00:00:00Z) or date-only (2026-01-01): \"X\"" |
-| Invalid `--until` date format | 6 | "Error: validation error: --until: invalid date format: expected RFC3339 (2026-01-01T00:00:00Z) or date-only (2026-01-01): \"X\"" |
+| `--since` is not in a form `DATA_FORMATS.md § Date Filter Values` accepts, or denotes an instant outside 1970-01-01 through 9999-12-31 | 6 | "Error: validation error: --since: invalid date format: expected RFC3339 (2026-01-01T00:00:00Z) or date-only (2026-01-01): \"X\"" |
+| `--until` is not in a form `DATA_FORMATS.md § Date Filter Values` accepts, or denotes an instant outside 1970-01-01 through 9999-12-31 | 6 | "Error: validation error: --until: invalid date format: expected RFC3339 (2026-01-01T00:00:00Z) or date-only (2026-01-01): \"X\"" |
 | Roadmap not found | 4 | "Error: resource not found: roadmap \"X\"" |
 
 The command checks these conditions in the order the table lists them: a missing
@@ -3668,11 +3789,14 @@ rmp backlog ls -r <name> [OPTIONS]
 | Scenario | Exit Code | stderr Output |
 |----------|-----------|---------------|
 | `--limit` `< 1` or `> 100` | 6 | `Error: validation error: limit must be between 1 and 100, got N` |
+| `-l, --limit` is not an integer | 2 | `Error: invalid input: invalid value for --limit: "X" is not an integer in 1-100` |
+| `-p, --priority` is not an integer | 2 | `Error: invalid input: invalid value for --priority: "X" is not an integer in 0-9` |
+| `-p, --priority` is an integer outside 0-9 | 6 | `Error: validation error: priority must be between 0 and 9, got N` |
 | Invalid `--type` value | 6 | `Error: validation error: invalid task type: "X"` |
 | Unrecognised flag | 2 | `Error: invalid input: unknown flag: --foo` |
 | Roadmap not found | 4 | `Error: resource not found: roadmap "X"` |
 
-`backlog list` declares no positional argument, so an unrecognised flag is refused as a flag and never read as a value (`§ Positional Arguments`, rule 5). The roadmap-not-found line is the one every roadmap-scoped listing prints, and it is reached last: a missing `-r` exits `3` before any flag is parsed, and both rows above it are reached before the roadmap database is opened.
+`backlog list` declares no positional argument, so an unrecognised flag is refused as a flag and never read as a value (`§ Positional Arguments`, rule 5). The roadmap-not-found line is the one every roadmap-scoped listing prints, and it is reached last: a missing `-r` exits `3` before any flag is parsed, and every row above it is reached before the roadmap database is opened.
 
 An invalid `--type` value is a validation error and MUST exit with code 6,
 consistent with `rmp task list` (see List Tasks above). This is the canonical,
@@ -3797,6 +3921,7 @@ rmp stats -r <name>
 | Unrecognised flag | 2 | "Error: invalid input: unknown flag: --foo" |
 | A positional argument is supplied | 2 | "Error: invalid input: unexpected argument \"X\"" |
 | Roadmap not found | 4 | "Error: resource not found: roadmap \"X\"" |
+| The roadmap name breaks a rule of `§ Roadmap Name Validation` | 6 | The line that section publishes for the first rule the name breaks |
 
 `stats` takes `-r` and nothing else: it declares a maximum of zero positional
 arguments and defines no flag of its own beyond the roadmap selector. A token
@@ -3807,10 +3932,11 @@ for any other — and this command has no positional id for such a token to be r
 as, so the unknown-flag line is the only one of the two exit-`2` lines a
 `-`-prefixed token can produce here.
 
-The four conditions are checked in the order every other roadmap-scoped command
+The five conditions are checked in the order every other roadmap-scoped command
 checks them, which is not the order the table lists them in: an excess positional
 argument first, then a missing `-r`, then an unrecognised flag, and the roadmap is
-opened last. `rmp stats extra` therefore exits `2` although it names no roadmap;
+resolved last, where a name that breaks `§ Roadmap Name Validation` is refused
+with exit code 6 and a roadmap that does not exist with exit code 4. `rmp stats extra` therefore exits `2` although it names no roadmap;
 `rmp stats --nosuchflag` exits `3`, because the selector is looked for before the
 remaining flags are resolved; and `rmp stats -r <a roadmap that does not exist>
 --nosuchflag` exits `2`, not `4`. The same three comparisons hold on `task list`,
@@ -4108,6 +4234,7 @@ client sends fails or succeeds inside a session and never changes them.
 | 2 | Unknown flag, or an unexpected positional argument (`utils.ErrInvalidInput`); or `--socket` supplied with an empty value (`utils.ErrRequired`). |
 | 3 | No roadmap selected and none provided via `-r` (`utils.ErrNoRoadmap`). |
 | 4 | Selected roadmap does not exist (`utils.ErrNotFound`). |
+| 6 | The roadmap name given to `-r` / `--roadmap` breaks a rule of `§ Roadmap Name Validation` (`utils.ErrValidation`). |
 
 The canonical exit-code catalogue is in `ARCHITECTURE.md § Exit Codes`, and
 `ARCHITECTURE.md § Exit Codes of the Graph Server and Client` states why a
@@ -4147,6 +4274,7 @@ several servers, one per roadmap, each on its own socket.
 |----------|-----------|---------------|
 | Roadmap not specified | 3 | "Error: no roadmap selected: use -r <name> or --roadmap <name>" |
 | Roadmap not found | 4 | "Error: resource not found: roadmap \"X\" not found" |
+| The roadmap name breaks a rule of `§ Roadmap Name Validation` | 6 | The line that section publishes for the first rule the name breaks |
 | Unknown flag | 2 | "Error: invalid input: unknown flag: --foo" |
 | Unexpected positional argument | 2 | "Error: invalid input: unexpected argument \"X\"" |
 | `--socket` supplied with an empty value | 2 | "Error: required parameter missing: --<flag>" |
@@ -4235,6 +4363,7 @@ This section does not restate them.
 | 2 | A positional argument was supplied. `graph client` accepts none: a bare Cypher statement on the command line, or any other token that is neither a flag nor a flag's value, is refused (`utils.ErrInvalidInput`). See `GRAPH.md § No Positional Query: A Stray Token Is Refused`. |
 | 3 | No roadmap selected and none provided via `-r` (`utils.ErrNoRoadmap`). |
 | 4 | Selected roadmap does not exist (`utils.ErrNotFound`). |
+| 6 | The roadmap name given to `-r` / `--roadmap` breaks a rule of `§ Roadmap Name Validation` (`utils.ErrValidation`). |
 | 6 | The statement is longer than the maximum query length of 1 MiB (1048576 bytes), whether it arrived through `--query` or through standard input (`utils.ErrValidation`). |
 
 The canonical exit-code catalogue is in `ARCHITECTURE.md § Exit Codes`, and
@@ -4289,6 +4418,7 @@ why they differ.
 |----------|-----------|---------------|
 | Roadmap not specified | 3 | "Error: no roadmap selected: use -r <name> or --roadmap <name>" |
 | Roadmap not found | 4 | "Error: resource not found: roadmap \"X\" not found" |
+| The roadmap name breaks a rule of `§ Roadmap Name Validation` | 6 | The line that section publishes for the first rule the name breaks |
 | No statement supplied | 2 | "Error: required parameter missing: no query supplied" |
 | The statement was to come from standard input and the read of it failed | 1 | "Error: I/O error: reading query from stdin: <detail>" |
 | `--socket` supplied with an empty value | 2 | "Error: required parameter missing: --<flag>" |

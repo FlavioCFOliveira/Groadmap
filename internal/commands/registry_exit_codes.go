@@ -54,7 +54,66 @@ const (
 	// condRoadmapNotFound is one of exit code 4's conditions on every
 	// subcommand that takes -r.
 	condRoadmapNotFound = "The roadmap named by -r/--roadmap does not exist."
+	// condInvalidRoadmapName is one of exit code 6's conditions on every
+	// subcommand that takes -r: the name is judged by the roadmap name rules
+	// at the step at which the subcommand resolves its roadmap, and a name
+	// that breaks one is refused with that rule's line instead of the
+	// not-found line (SPEC/COMMANDS.md § Roadmap Name Validation).
+	condInvalidRoadmapName = "The name given to -r/--roadmap breaks a roadmap name rule; the line of the first rule it breaks is printed."
 )
+
+// withRoadmapNameCondition adds condInvalidRoadmapName to exit code 6 of every
+// subcommand that takes -r, which is every subcommand whose exit code 3 carries
+// condNoRoadmap. It is applied once, to the whole registry, because the
+// condition is produced by the shared roadmap-resolution step and is the same
+// on every one of them, including a subcommand that has no other cause of exit
+// code 6 (SPEC/COMMANDS.md § Roadmap Name Validation). An exit code 6 entry is
+// created in its ascending place when the subcommand declares none.
+func withRoadmapNameCondition(reg *Registry) *Registry {
+	for i := range reg.Commands {
+		for j := range reg.Commands[i].Subcommands {
+			sub := &reg.Commands[i].Subcommands[j]
+			if !declaresCondition(sub.ExitCodes, 3, condNoRoadmap) {
+				continue
+			}
+			sub.ExitCodes = addExitCondition(sub.ExitCodes, 6, condInvalidRoadmapName)
+		}
+	}
+	return reg
+}
+
+// declaresCondition reports whether codes carries condition under code.
+func declaresCondition(codes []ExitCodeEntry, code int, condition string) bool {
+	for _, entry := range codes {
+		if entry.Code != code {
+			continue
+		}
+		for _, c := range entry.Conditions {
+			if c == condition {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// addExitCondition returns codes with condition appended to the entry for code,
+// inserting that entry in ascending order when codes declares none.
+func addExitCondition(codes []ExitCodeEntry, code int, condition string) []ExitCodeEntry {
+	for i := range codes {
+		if codes[i].Code == code {
+			codes[i].Conditions = append(codes[i].Conditions, condition)
+			return codes
+		}
+		if codes[i].Code > code {
+			out := make([]ExitCodeEntry, 0, len(codes)+1)
+			out = append(out, codes[:i]...)
+			out = append(out, ec(code, condition))
+			return append(out, codes[i:]...)
+		}
+	}
+	return append(codes, ec(code, condition))
+}
 
 // The conditions of exit code 2 that are the same condition wherever they
 // occur, for the same reason the two above are: each is produced by a step

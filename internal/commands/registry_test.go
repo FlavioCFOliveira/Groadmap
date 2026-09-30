@@ -426,11 +426,13 @@ func TestRegistry_CommentSubcommandsDeclareTheirContract(t *testing.T) {
 		{"task", "comment-add", "task-id", []int{0, 1, 2, 3, 4, 6}, true},
 		{"task", "comment-list", "task-id", []int{0, 2, 3, 4, 6}, false},
 		{"task", "comment-edit", "comment-id", []int{0, 1, 2, 3, 4, 6}, true},
-		{"task", "comment-remove", "comment-id", []int{0, 1, 2, 3, 4}, false},
+		// Exit code 6 on comment-remove is the roadmap-name refusal alone
+		// (SPEC/COMMANDS.md § Remove Task Comment, error table).
+		{"task", "comment-remove", "comment-id", []int{0, 1, 2, 3, 4, 6}, false},
 		{"sprint", "comment-add", "sprint-id", []int{0, 1, 2, 3, 4, 6}, true},
 		{"sprint", "comment-list", "sprint-id", []int{0, 2, 3, 4, 6}, false},
 		{"sprint", "comment-edit", "comment-id", []int{0, 1, 2, 3, 4, 6}, true},
-		{"sprint", "comment-remove", "comment-id", []int{0, 1, 2, 3, 4}, false},
+		{"sprint", "comment-remove", "comment-id", []int{0, 1, 2, 3, 4, 6}, false},
 	}
 
 	reg := AppRegistry()

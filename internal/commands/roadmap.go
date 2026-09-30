@@ -172,6 +172,18 @@ func roadmapCreate(args []string) error {
 		return err
 	}
 
+	// An entry at the roadmap home that is neither a directory nor a symbolic
+	// link is not a roadmap, so it is not refused as one that already exists;
+	// the home cannot be created there either, and the entry is left exactly as
+	// it was found (SPEC/COMMANDS.md § Create Roadmap).
+	home, occupied, err := utils.RoadmapHomeOccupied(name)
+	if err != nil {
+		return err
+	}
+	if occupied {
+		return fmt.Errorf("%w: cannot create roadmap %q: %s is occupied and is not a directory", utils.ErrIO, name, home)
+	}
+
 	// Check if exists
 	exists, err := utils.RoadmapExists(name)
 	if err != nil {
@@ -212,7 +224,9 @@ func roadmapRemove(args []string) error {
 		return err
 	}
 
-	// Check if exists
+	// Check if exists. A regular file at the roadmap home is not a roadmap, so
+	// it is refused as one that does not exist and nothing is removed
+	// (SPEC/COMMANDS.md § Remove Roadmap).
 	exists, err := utils.RoadmapExists(name)
 	if err != nil {
 		return err

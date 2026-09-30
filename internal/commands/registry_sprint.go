@@ -223,7 +223,7 @@ func buildSprintCommand() Command {
 			{
 				Name: "remove", Aliases: []string{"rm"},
 				Summary:     "Delete sprint (member tasks revert to BACKLOG).",
-				Description: "Deletes the sprint; member tasks revert to BACKLOG (not deleted).",
+				Description: "Deletes the sprint; member tasks revert to BACKLOG (not deleted). A sprint that holds a COMPLETED task is refused and nothing is changed, because a completed task stays in the sprint it was completed in.",
 				Usage:       "rmp sprint remove -r <roadmap> <sprint-id>",
 				HelpPrinter: printSprintRemoveHelp,
 				Handler:     sprintRemove,
@@ -232,7 +232,7 @@ func buildSprintCommand() Command {
 				},
 				Flags:       []Flag{sharedRoadmapFlag(), helpFlag()},
 				Output:      SuccessOutput{Kind: "empty"},
-				SideEffects: SideEffects{Database: "DELETE sprint + UPDATE tasks + audit log; one transaction.", Filesystem: "None.", Network: "None."},
+				SideEffects: SideEffects{Database: "DELETE sprint_tasks, then UPDATE the former members to BACKLOG, then DELETE sprint + audit log; one transaction, checked by the sprint membership guard before commit.", Filesystem: "None.", Network: "None."},
 				Idempotent:  false,
 				Prerequisites: []string{
 					"The sprint named on the command line exists.",
@@ -252,6 +252,7 @@ func buildSprintCommand() Command {
 					),
 					ec(6,
 						"The sprint id falls outside 1-2147483647.",
+						"The sprint holds at least one COMPLETED task; nothing is changed.",
 					),
 				},
 				Examples: []Example{
@@ -524,8 +525,8 @@ func buildSprintCommand() Command {
 			},
 			{
 				Name: "add-tasks", Aliases: []string{"add"},
-				Summary:     "Atomically add BACKLOG tasks -> SPRINT.",
-				Description: "Atomically moves listed tasks into <sprint-id> and flips status BACKLOG -> SPRINT.",
+				Summary:     "Atomically add tasks to a sprint (BACKLOG -> SPRINT).",
+				Description: "Atomically moves listed tasks into <sprint-id>. A BACKLOG task joins as SPRINT; a SPRINT, DOING or TESTING task taken from another sprint keeps its status. A COMPLETED task is refused.",
 				Usage:       "rmp sprint add-tasks -r <roadmap> <sprint-id> <task-ids>",
 				HelpPrinter: printSprintAddTasksHelp,
 				Handler:     sprintAddTasks,
@@ -535,15 +536,15 @@ func buildSprintCommand() Command {
 				},
 				Flags:       []Flag{sharedRoadmapFlag(), helpFlag()},
 				Output:      SuccessOutput{Kind: "empty"},
-				SideEffects: SideEffects{Database: "INSERT sprint_tasks + UPDATE tasks plus two mirrored audit entries per task, all sharing one performed_at; one transaction. A task that already belonged to a sprint keeps its single membership row and has it re-parented onto this one, so it LEAVES the other sprint; that sprint is renumbered in the same transaction, changing position values and never the order, so the members it keeps hold a gapless run from zero again. SPRINT_ADD_TASK is written against the sprint and names the task in related_entity_id; TASK_STATUS_SPRINT is written against the task and names the sprint.", Filesystem: "None.", Network: "None."},
+				SideEffects: SideEffects{Database: "UPDATE tasks (BACKLOG -> SPRINT only) + INSERT sprint_tasks plus audit entries, all sharing one performed_at; one transaction, checked by the sprint membership guard before commit. A task that already belonged to a sprint keeps its single membership row and has it re-parented onto this one, so it LEAVES the other sprint with its status; that sprint is renumbered in the same transaction, changing position values and never the order, so the members it keeps hold a gapless run from zero again. SPRINT_ADD_TASK is written against the sprint for every task and names the task in related_entity_id. A task that joined from BACKLOG also gets TASK_STATUS_SPRINT against the task, naming the sprint; a task taken from another sprint gets SPRINT_MOVE_TASK_OUT against the sprint it left, naming the task, and TASK_SPRINT_CHANGE against the task, naming this sprint.", Filesystem: "None.", Network: "None."},
 				Idempotent:  false,
 				Prerequisites: []string{
 					"The sprint named on the command line exists and is not CLOSED.",
-					"Every task named on the command line exists.",
-					"The sprint's capacity cap, when it has one, leaves room for the tasks being added.",
+					"Every task named on the command line exists, and none of them is COMPLETED.",
+					"The sprint's capacity cap, when it has one, leaves room for the named tasks that are not already its members.",
 				},
 				ExitCodes: []ExitCodeEntry{
-					ec(0, "Every named task is a member of the sprint and carries SPRINT status; stdout is empty."),
+					ec(0, "Every named task is a member of the sprint; a task that was in BACKLOG carries SPRINT status and every other keeps its status; stdout is empty."),
 					ec(2,
 						condUnknownFlag,
 						condMalformedPositionalID,
@@ -560,7 +561,8 @@ func buildSprintCommand() Command {
 						"The sprint id falls outside 1-2147483647.",
 						"An id in the task list falls outside 1-2147483647.",
 						"The sprint is CLOSED, and a CLOSED sprint takes no new member.",
-						"The addition would take the sprint past the capacity cap its --max-tasks sets.",
+						"A named task is COMPLETED; a completed task stays in the sprint it was completed in.",
+						"The named tasks that are not already members would take the sprint's active load past the capacity cap its --max-tasks sets.",
 					),
 				},
 				Examples: []Example{
@@ -581,11 +583,11 @@ func buildSprintCommand() Command {
 				},
 				Flags:       []Flag{sharedRoadmapFlag(), helpFlag()},
 				Output:      SuccessOutput{Kind: "empty"},
-				SideEffects: SideEffects{Database: "DELETE sprint_tasks + UPDATE tasks plus two mirrored audit entries per task, all sharing one performed_at; one transaction. SPRINT_REMOVE_TASK is written against the sprint and names the task in related_entity_id; TASK_STATUS_BACKLOG is written against the task and names the sprint it left, which is what distinguishes it from the counterpart-less TASK_STATUS_BACKLOG that `task stat` writes.", Filesystem: "None.", Network: "None."},
+				SideEffects: SideEffects{Database: "DELETE sprint_tasks + UPDATE tasks plus two mirrored audit entries per task, all sharing one performed_at; one transaction, checked by the sprint membership guard before commit. The return to BACKLOG clears started_at, tested_at, closed_at, completion_summary and commit_close and preserves commit_open. SPRINT_REMOVE_TASK is written against the sprint and names the task in related_entity_id; TASK_STATUS_BACKLOG is written against the task and names the sprint it left.", Filesystem: "None.", Network: "None."},
 				Idempotent:  false,
 				Prerequisites: []string{
 					"The sprint named on the command line exists.",
-					"Every task named on the command line is a member of that sprint.",
+					"Every task named on the command line is a member of that sprint, and none of them is COMPLETED.",
 				},
 				ExitCodes: []ExitCodeEntry{
 					ec(0, "Every named task left the sprint and returned to BACKLOG; stdout is empty."),
@@ -604,6 +606,7 @@ func buildSprintCommand() Command {
 						"The sprint id falls outside 1-2147483647.",
 						"An id in the task list falls outside 1-2147483647.",
 						"At least one named task is not a member of the sprint; nothing is changed.",
+						"A named task is COMPLETED; a completed task stays in the sprint it was completed in.",
 					),
 				},
 				Examples: []Example{
@@ -625,11 +628,11 @@ func buildSprintCommand() Command {
 				},
 				Flags:       []Flag{sharedRoadmapFlag(), helpFlag()},
 				Output:      SuccessOutput{Kind: "empty"},
-				SideEffects: SideEffects{Database: "UPDATE sprint_tasks plus two audit entries per task, all sharing one performed_at; one transaction. The moved rows are re-parented onto the destination and appended after its current highest position, and the SOURCE sprint is renumbered in the same transaction so the members it keeps hold a gapless run from zero again; the renumbering changes position values and never the order. SPRINT_MOVE_TASK_OUT is written against the source sprint and SPRINT_MOVE_TASK_IN against the destination, both naming the task in related_entity_id. No TASK_STATUS_* entry accompanies them because the move preserves each task status, and nothing writes the LEGACY SPRINT_MOVE_TASK.", Filesystem: "None.", Network: "None."},
+				SideEffects: SideEffects{Database: "UPDATE sprint_tasks plus three audit entries per task, all sharing one performed_at; one transaction, checked by the sprint membership guard before commit. The moved rows are re-parented onto the destination and appended after its current highest position, and the SOURCE sprint is renumbered in the same transaction so the members it keeps hold a gapless run from zero again; the renumbering changes position values and never the order. SPRINT_MOVE_TASK_OUT is written against the source sprint and SPRINT_MOVE_TASK_IN against the destination, both naming the task in related_entity_id, and TASK_SPRINT_CHANGE against the task, naming the destination. No TASK_STATUS_* entry accompanies them because the move preserves each task status, and nothing writes the LEGACY SPRINT_MOVE_TASK.", Filesystem: "None.", Network: "None."},
 				Idempotent:  false,
 				Prerequisites: []string{
 					"Both the source sprint and the destination sprint exist.",
-					"Every task named on the command line is a member of the source sprint.",
+					"Every task named on the command line is a member of the source sprint, and none of them is COMPLETED.",
 				},
 				ExitCodes: []ExitCodeEntry{
 					ec(0, "Every named task now belongs to the destination sprint, appended after its current members, with its task status unchanged; stdout is empty."),
@@ -651,6 +654,7 @@ func buildSprintCommand() Command {
 						"The source sprint is CLOSED, and a CLOSED sprint gives up no member.",
 						"The destination sprint is CLOSED, and a CLOSED sprint takes no new member.",
 						"At least one named task is not a member of the source sprint; nothing is changed.",
+						"A named task is COMPLETED; a completed task stays in the sprint it was completed in.",
 					),
 				},
 				Examples: []Example{
@@ -680,8 +684,8 @@ func buildSprintCommand() Command {
 				// canonical for the body).
 				Output: SuccessOutput{
 					Kind:    "object",
-					Schema:  "A success object naming the sprint and the order its members now hold.",
-					Example: `{"success":true,"sprint_id":1,"task_order":[5,3,1,4,2]}`,
+					Schema:  "{sprint_id, success, task_order}: a success object naming the sprint and the order its members now hold, with its keys in this order.",
+					Example: `{"sprint_id":1,"success":true,"task_order":[5,3,1,4,2]}`,
 				},
 				SideEffects: SideEffects{Database: "UPDATE sprint_tasks positions + audit log.", Filesystem: "None.", Network: "None."},
 				Idempotent:  true,
@@ -735,8 +739,8 @@ func buildSprintCommand() Command {
 				// (tests/test_70_published_contract_execution.py).
 				Output: SuccessOutput{
 					Kind:    "object",
-					Schema:  "A success object naming the sprint, the task, and the position it now holds.",
-					Example: `{"success":true,"sprint_id":1,"task_id":5,"position":3}`,
+					Schema:  "{position, sprint_id, success, task_id}: a success object naming the position the task now holds, the sprint, and the task, with its keys in this order.",
+					Example: `{"position":3,"sprint_id":1,"success":true,"task_id":5}`,
 				},
 				SideEffects: SideEffects{Database: "UPDATE sprint_tasks positions + audit log.", Filesystem: "None.", Network: "None."},
 				Idempotent:  true,
@@ -788,8 +792,8 @@ func buildSprintCommand() Command {
 				// (tests/test_70_published_contract_execution.py).
 				Output: SuccessOutput{
 					Kind:    "object",
-					Schema:  "A success object naming the sprint and the two tasks that exchanged positions.",
-					Example: `{"success":true,"sprint_id":1,"task_id_1":5,"task_id_2":3}`,
+					Schema:  "{sprint_id, success, task_id_1, task_id_2}: a success object naming the sprint and the two tasks that exchanged positions, with its keys in this order.",
+					Example: `{"sprint_id":1,"success":true,"task_id_1":5,"task_id_2":3}`,
 				},
 				SideEffects: SideEffects{Database: "UPDATE sprint_tasks positions + audit log.", Filesystem: "None.", Network: "None."},
 				Idempotent:  true,
@@ -840,8 +844,8 @@ func buildSprintCommand() Command {
 				// (tests/test_70_published_contract_execution.py).
 				Output: SuccessOutput{
 					Kind:    "object",
-					Schema:  "A success object naming the sprint, the task, and the position it now holds.",
-					Example: `{"success":true,"sprint_id":1,"task_id":5,"position":0}`,
+					Schema:  "{position, sprint_id, success, task_id}: a success object naming the position the task now holds, the sprint, and the task, with its keys in this order.",
+					Example: `{"position":0,"sprint_id":1,"success":true,"task_id":5}`,
 				},
 				SideEffects: SideEffects{Database: "UPDATE sprint_tasks positions + audit log.", Filesystem: "None.", Network: "None."},
 				Idempotent:  true,
@@ -891,8 +895,8 @@ func buildSprintCommand() Command {
 				// (tests/test_70_published_contract_execution.py).
 				Output: SuccessOutput{
 					Kind:    "object",
-					Schema:  "A success object naming the sprint, the task, and the position it now holds.",
-					Example: `{"success":true,"sprint_id":1,"task_id":5,"position":4}`,
+					Schema:  "{position, sprint_id, success, task_id}: a success object naming the position the task now holds, the sprint, and the task, with its keys in this order.",
+					Example: `{"position":4,"sprint_id":1,"success":true,"task_id":5}`,
 				},
 				SideEffects: SideEffects{Database: "UPDATE sprint_tasks positions + audit log.", Filesystem: "None.", Network: "None."},
 				Idempotent:  true,
@@ -1084,7 +1088,7 @@ func sprintCommentEditSubcommand() Subcommand {
 		Flags: []Flag{
 			sharedRoadmapFlag(),
 			commentTypeFlag("SprintCommentType", "New comment type. "+sprintCommentTypeDescription, false),
-			commentBodyFlag("New comment text, max 4096 characters. When --body is absent AND --type is absent, the new body is read from standard input under a bounded read; when --type is present and --body is absent, the body is left unchanged and standard input is not read, so a type-only edit never waits for input."),
+			commentBodyFlag("New comment text, max 4096 characters. When --body is absent AND --type is absent, the new body is read from standard input under a bounded read; when --type is present and --body is absent, the body is left unchanged: a terminal on standard input is not read, so a type-only edit typed at a terminal never waits for input, and a standard input that carries data is refused with exit code 2 rather than ignored."),
 			helpFlag(),
 		},
 		Output:      SuccessOutput{Kind: "empty"},
@@ -1096,11 +1100,12 @@ func sprintCommentEditSubcommand() Subcommand {
 		ExitCodes: []ExitCodeEntry{
 			ec(0, "The requested change was written to the comment and updated_at was stamped; stdout is empty."),
 			ec(1,
-				"The new body was to be read from standard input and the read of the stream failed.",
+				"Standard input was read, for the new body or to learn whether a type-only edit's standard input carries data, and the read of the stream failed.",
 				"The roadmap database could not be read or written.",
 			),
 			ec(2,
 				"No change was requested: --type is absent, --body is absent, and standard input carried no body.",
+				"--type was given without --body, and standard input is not a terminal and carries data; supply the new body with --body.",
 				"--body was supplied empty or whitespace only.",
 				"The comment id was omitted, is not an integer, or falls outside 1-2147483647.",
 				"A second positional argument was supplied, or an unrecognised flag was supplied.",

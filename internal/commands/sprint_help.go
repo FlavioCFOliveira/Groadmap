@@ -200,15 +200,16 @@ Output: empty (exit 0 on success).
 func printSprintRemoveHelp() {
 	fmt.Fprint(helpDst(), `Usage: rmp sprint remove -r <roadmap> <sprint-id>
 
-Deletes the sprint. All member tasks — regardless of their current
-status (SPRINT, DOING, TESTING, or even COMPLETED) — are reverted to
-BACKLOG and their sprint association is cleared. The tasks themselves
-are NOT deleted; their requirements, priority, severity, etc. are
-preserved.
+Deletes the sprint. Its member tasks (SPRINT, DOING or TESTING) leave
+it and are reverted to BACKLOG, clearing started_at, tested_at,
+closed_at, completion_summary and commit_close and preserving
+commit_open. The tasks themselves are NOT deleted; their requirements,
+priority, severity, etc. are preserved.
 
-Removing a CLOSED sprint is allowed and follows the same cascade:
-COMPLETED tasks in it are pulled back to BACKLOG. If that is not what
-you want, leave the sprint CLOSED and create a new sprint instead.
+A sprint that holds at least one COMPLETED task is NOT removed (exit 6)
+and nothing is changed: a completed task stays in the sprint it was
+completed in. The refusal names every COMPLETED member. Leave such a
+sprint CLOSED and create a new sprint instead.
 
 Aliases: rm.
 
@@ -398,9 +399,13 @@ Notes for callers:
 func printSprintAddTasksHelp() {
 	fmt.Fprint(helpDst(), `Usage: rmp sprint add-tasks -r <roadmap> <sprint-id> <task-ids>
 
-Atomically moves the listed tasks into <sprint-id> AND flips their
-status from BACKLOG to SPRINT. This is the ONLY path to SPRINT status:
-manual 'task stat <id> SPRINT' is rejected.
+Atomically moves the listed tasks into <sprint-id>. A BACKLOG task joins
+as SPRINT; a SPRINT, DOING or TESTING task taken from another sprint keeps
+its status and every tracking field, so unfinished work is carried over
+from a closed sprint this way. A COMPLETED task is rejected (exit 6): it
+stays in the sprint it was completed in. Manual 'task stat <id> SPRINT' is
+rejected. The capacity cap counts the named tasks that are not already
+members of the sprint.
 
 Aliases: add.
 
@@ -409,7 +414,10 @@ Required:
   <sprint-id>                     Integer sprint id (must not be CLOSED)
   <task-ids>                      Comma-separated integer task ids (no spaces, e.g. "1,3,5")
 
-Output: empty (exit 0). Audits SPRINT_ADD_TASK once per added task.
+Output: empty (exit 0). Audits SPRINT_ADD_TASK once per added task, plus
+TASK_STATUS_SPRINT for a task that joined from BACKLOG, or
+SPRINT_MOVE_TASK_OUT and TASK_SPRINT_CHANGE for one taken from another
+sprint.
 
 `+exitCodesBlock("sprint", "add-tasks")+`Examples:
   rmp sprint add-tasks -r myproject 5 1
@@ -422,7 +430,11 @@ func printSprintRemoveTasksHelp() {
 	fmt.Fprint(helpDst(), `Usage: rmp sprint remove-tasks -r <roadmap> <sprint-id> <task-ids>
 
 Removes the listed tasks from <sprint-id> and flips their status back
-to BACKLOG. The tasks themselves are NOT deleted.
+to BACKLOG. The tasks themselves are NOT deleted. The return to BACKLOG
+clears started_at, tested_at, closed_at, completion_summary and
+commit_close, and PRESERVES commit_open — the commit the work started from
+stays true after the task leaves its sprint. A COMPLETED task is rejected
+(exit 6): it stays in the sprint it was completed in.
 
 Aliases: rm-tasks.
 
@@ -444,7 +456,9 @@ func printSprintMoveTasksHelp() {
 	fmt.Fprint(helpDst(), `Usage: rmp sprint move-tasks -r <roadmap> <from-id> <to-id> <task-ids>
 
 Moves tasks from one sprint to another in a single transaction. Task
-statuses are preserved across the move (a DOING task stays DOING).
+statuses are preserved across the move (a DOING task stays DOING). A
+COMPLETED task is rejected (exit 6): it stays in the sprint it was
+completed in.
 
 Aliases: mv-tasks.
 
@@ -723,10 +737,14 @@ Optional:
                                   --body is absent AND --type is absent, the
                                   new body is read from standard input,
                                   so 'comment-edit <comment-id> < revised.txt'
-                                  is a valid edit. When --type is present and
-                                  --body is absent, the body is left unchanged
-                                  and standard input is NOT read, so a
-                                  type-only edit never waits for input.
+                                  is a valid edit. Standard input is the new
+                                  body only when --type is absent as well. When
+                                  --type is present and --body is absent, the
+                                  body is left unchanged: a terminal on standard
+                                  input is not read, so a type-only edit typed
+                                  at a terminal never waits for input, and a
+                                  standard input that carries data is refused
+                                  (exit 2) rather than ignored.
 
 Output (stdout JSON):
   Empty (exit 0 on success), as for 'sprint update'.

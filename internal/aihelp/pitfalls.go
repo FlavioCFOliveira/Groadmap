@@ -43,18 +43,19 @@ func staticPitfalls() []Pitfall {
 				"status is owned by sprint operations and is set atomically when a task is added to a sprint.",
 			WrongExample:   "rmp task stat -r myproject 42 SPRINT",
 			WrongExit:      6,
-			WrongStderr:    "Error: validation error: status SPRINT can only be set automatically via 'sprint add-tasks'",
+			WrongStderr:    "Error: validation error: status SPRINT cannot be set by 'task stat'; it is set by 'sprint add-tasks' and 'task reopen'",
 			CorrectExample: "rmp sprint add-tasks -r myproject 7 42",
 			Reference:      "sprint add-tasks; enums.TaskStatus SPRINT value; SPEC/STATE_MACHINE.md rejection rule.",
 		},
 		{
 			ID: "delete_non_backlog_task",
 			Description: "Calling `task remove` on a task that is not in BACKLOG. Removal tests the status " +
-				"alone, so a non-BACKLOG task must first be returned to BACKLOG by one of three routes: " +
-				"`task stat <ids> BACKLOG` from SPRINT or COMPLETED; `task reopen` from SPRINT, DOING, " +
-				"TESTING or COMPLETED; `sprint remove-tasks` from SPRINT, DOING, TESTING or COMPLETED. " +
-				"A task returned by `task stat <ids> BACKLOG` stays a member of its sprint, and is " +
-				"removable all the same.",
+				"alone, and a task returns to BACKLOG only by leaving its sprint, because a sprint member is " +
+				"never in BACKLOG: `sprint remove-tasks` from SPRINT, DOING or TESTING takes the task out of " +
+				"its sprint and returns it to BACKLOG. A COMPLETED task stays in its sprint and is first " +
+				"returned to SPRINT; `task reopen` from DOING, TESTING or COMPLETED does that, keeping the " +
+				"task in its sprint. `task stat <ids> BACKLOG` from no state: it is refused for every " +
+				"sprint member.",
 			WrongExample:   "rmp task remove -r myproject 42",
 			WrongExit:      6,
 			WrongStderr:    "Error: validation error: task #42 cannot be deleted — status is SPRINT, must be BACKLOG",

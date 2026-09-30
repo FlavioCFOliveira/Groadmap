@@ -276,8 +276,18 @@ func resolveGraphDir(roadmapName string) (string, error) {
 		return "", fmt.Errorf("%w: %w", utils.ErrValidation, valErr)
 	}
 
+	// A roadmap home that is a regular file, or any other entry that is
+	// neither a directory nor a symbolic link, is a roadmap that does not
+	// exist, refused here with the same line and at the same point as a name
+	// under which nothing exists (SPEC/GRAPH.md § Error Handling and Exit
+	// Codes, rule 10), so neither subcommand creates or probes anything
+	// beneath it.
+	_, occupied, occErr := utils.RoadmapHomeOccupied(roadmapName)
+	if occErr != nil {
+		return "", occErr
+	}
 	dbPath := filepath.Join(roadmapDir, utils.DBFileName)
-	if _, statErr := os.Stat(dbPath); os.IsNotExist(statErr) {
+	if _, statErr := os.Stat(dbPath); occupied || os.IsNotExist(statErr) {
 		return "", fmt.Errorf("%w: roadmap %q not found", utils.ErrNotFound, roadmapName)
 	}
 

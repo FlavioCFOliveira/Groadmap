@@ -640,10 +640,16 @@ class TestTaskNext:
         assert task1 not in returned_ids, "COMPLETED task should not appear"
         assert task2 in returned_ids, "SPRINT task should still appear"
 
-        # Return task1 to BACKLOG
-        self.test.run_cmd(["task", "stat", "-r", roadmap, str(task1), "BACKLOG"])
+        # Reopen task1: it returns to SPRINT in its sprint and is next again.
+        self.test.run_cmd(["task", "reopen", "-r", roadmap, str(task1)])
+        result = self.test.run_cmd_json(["task", "next", "-r", roadmap, "10"])
+        returned_ids = {task["id"] for task in result}
+        assert task1 in returned_ids, "a reopened task is SPRINT in its sprint and should appear"
 
-        # task1 should still NOT appear (not in sprint)
+        # Take task1 out of the sprint, the route back to BACKLOG.
+        self.test.run_cmd(["sprint", "remove-tasks", "-r", roadmap, str(sprint_id), str(task1)])
+
+        # task1 should NOT appear (not in sprint)
         result = self.test.run_cmd_json(["task", "next", "-r", roadmap, "10"])
         returned_ids = {task["id"] for task in result}
         assert task1 not in returned_ids, "BACKLOG task should not appear"

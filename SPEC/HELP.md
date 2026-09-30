@@ -421,12 +421,15 @@ machine-readable AI Agent Contract (`rmp --ai-help`) MUST document them:
    assumption is that a tool storing a commit hash can discover it; the contract's
    `pitfalls` array carries the same warning (see
    `DATA_FORMATS.md § pitfalls array entry`).
-5. **What a return to `BACKLOG` does to each field.** The `task stat` and
-   `task reopen` helps both describe the clearing behaviour of a return to
-   `BACKLOG`. Both MUST name `commit_close` among the cleared fields and MUST state
-   that `commit_open` is preserved, because the asymmetry contradicts the pattern
-   every other tracking field follows and a reader who assumes symmetry would be
-   wrong. `STATE_MACHINE.md § Commit Tracking Fields` is canonical for the rule.
+5. **What a reopening and a return to `BACKLOG` do to each field.** The
+   `task reopen` help describes the clearing behaviour of a reopening, which returns
+   the task to `SPRINT` in its sprint, and the `sprint remove-tasks` help that of a
+   return to `BACKLOG`. Both MUST name `commit_close` among the cleared fields and
+   MUST state that `commit_open` is preserved. The `task stat` help MUST state that
+   the target `BACKLOG` is refused for every sprint member, and MUST NOT describe
+   `task stat` as a way back to `BACKLOG`. The commit fields are named because their
+   asymmetry contradicts the pattern every other tracking field follows, and a reader
+   who assumes symmetry would be wrong. `STATE_MACHINE.md § Commit Tracking Fields` is canonical for the rule.
 
 6. **Where the hash is recorded.** The help MUST state that the supplied hash is
    written both to the task and to the audit entry for the transition, and that the
@@ -767,9 +770,13 @@ explicit, because a reader cannot infer them from the generic template:
 2. **Body input.** State, on `comment-add` and `comment-edit`, that the comment
    body comes from `-b, --body` or, when that flag is absent, from standard
    input, and that supplying neither is an error (exit code 2). On
-   `comment-edit`, state additionally that standard input is read only when
-   `--type` is absent as well, so a type-only edit does not wait for input. See
-   `COMMANDS.md § Comment Body Input Source and Precedence`.
+   `comment-edit`, state additionally that standard input is the new body only
+   when `--type` is absent as well; that on a type-only edit a terminal on
+   standard input is not read, so a type-only edit typed at a terminal does not
+   wait for input; and that a type-only edit whose standard input carries data
+   is refused (exit code 2) rather than applied with the data ignored. The help
+   MUST NOT state that standard input is never read when `--type` is present.
+   See `COMMANDS.md § Comment Body Input Source and Precedence`, rule 7.
 3. **Which id the command takes.** State, on `comment-edit` and
    `comment-remove`, that the positional argument is the comment's own id and not
    the id of the task or sprint it belongs to, and that task comment ids and

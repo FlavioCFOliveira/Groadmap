@@ -13,14 +13,16 @@
 //     compares it field by field afterwards — asserting the error alone would
 //     pass against an implementation that rejects *after* writing.
 //
-//  2. **The clearing on a return to BACKLOG is asymmetric.** All four routes
-//     back to BACKLOG — `task stat <ids> BACKLOG`, `task reopen`,
-//     `sprint remove-tasks` and `sprint remove` — clear `commit_close` and
-//     *preserve* `commit_open`, which is exactly where the lifecycle timestamps
-//     and this pair part company (SPEC/STATE_MACHINE.md § Commit Tracking
-//     Fields, rules 4 and 5). Each of the four is asserted on both fields at
-//     once: an implementation that cleared both, or neither, would satisfy half
-//     of any weaker assertion.
+//  2. **The clearing on a return to BACKLOG and on a reopening is
+//     asymmetric.** All three routes — `task reopen`, which returns a task to
+//     SPRINT in its sprint, and `sprint remove-tasks` and `sprint remove`, which
+//     return it to BACKLOG — clear `commit_close` and *preserve* `commit_open`,
+//     which is exactly where the lifecycle timestamps and this pair part
+//     company (SPEC/STATE_MACHINE.md § Commit Tracking Fields, rules 4 and 5).
+//     Each of the three is asserted on both fields at once: an implementation
+//     that cleared both, or neither, would satisfy half of any weaker
+//     assertion. `task stat <ids> BACKLOG` is no route at all: it is refused for
+//     every sprint member and clears nothing.
 //
 //  3. **What lands in the column is the normalised value.** The caller may type
 //     the hash in any case; the stored form is lowercase.
@@ -33,6 +35,7 @@ package commands
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -720,20 +723,21 @@ func countOperation(ops []string, want string) int {
 }
 
 // ---------------------------------------------------------------------------
-// The asymmetric clearing: all four routes back to BACKLOG
+// The asymmetric clearing: the three routes that clear the lifecycle
 // ---------------------------------------------------------------------------
 
-// assertClearedAsymmetrically is the shared assertion of the four route tests
+// assertClearedAsymmetrically is the shared assertion of the three route tests
 // below. Both fields are checked in one place so that neither half can be
 // forgotten: clearing both columns, or clearing neither, is exactly the mistake
-// this rule invites.
-func assertClearedAsymmetrically(t *testing.T, f *commitTrackingFixture, id int, route string) {
+// this rule invites. status is the one the route lands the task in: SPRINT for
+// a reopening, BACKLOG for a departure from the sprint.
+func assertClearedAsymmetrically(t *testing.T, f *commitTrackingFixture, id int, status models.TaskStatus, route string) {
 	t.Helper()
 
 	snap := f.snapshot(t, id)[id]
 
-	if snap.Status != string(models.StatusBacklog) {
-		t.Fatalf("%s: status = %s, want BACKLOG; the route did not run", route, snap.Status)
+	if snap.Status != string(status) {
+		t.Fatalf("%s: status = %s, want %s; the route did not run", route, snap.Status, status)
 	}
 	if snap.CommitClose != "<NULL>" {
 		t.Errorf("%s: commit_close = %s, want NULL; every return to BACKLOG clears it "+
@@ -759,20 +763,29 @@ func assertClearedAsymmetrically(t *testing.T, f *commitTrackingFixture, id int,
 	}
 }
 
-// TestTaskStatBacklog_ClearsCommitCloseAndPreservesCommitOpen is route 1 of 4.
-func TestTaskStatBacklog_ClearsCommitCloseAndPreservesCommitOpen(t *testing.T) {
+// TestTaskStatBacklog_IsRefusedAndClearsNothing pins the route that is no longer
+// one: `task stat <id> BACKLOG` on a COMPLETED sprint member is refused with the
+// line that names `task reopen`, and the task keeps every field, commit_close
+// included (SPEC/STATE_MACHINE.md § Valid Transitions).
+func TestTaskStatBacklog_IsRefusedAndClearsNothing(t *testing.T) {
 	f := setupCommitTrackingRoadmap(t, "commit-backlog-route")
 
 	id := f.taskIDs[0]
 	f.walkToCompleted(t, id)
-	f.stat(t, itoa(id), "BACKLOG")
+	before := f.snapshot(t, id)
 
-	assertClearedAsymmetrically(t, f, id, "task stat <id> BACKLOG")
+	err := f.statErr(t, itoa(id), "BACKLOG")
+	want := fmt.Sprintf("validation error: invalid status transition from COMPLETED to BACKLOG for task %d: "+
+		"a completed task is reopened with 'rmp task reopen'", id)
+	if !errors.Is(err, utils.ErrValidation) || err.Error() != want {
+		t.Errorf("task stat %d BACKLOG = %v, want %q (exit code 6)", id, err, want)
+	}
+	assertUnchanged(t, before, f.snapshot(t, id), "task stat <id> BACKLOG")
 }
 
-// TestTaskReopen_ClearsCommitCloseAndPreservesCommitOpen is route 2 of 4. Two
+// TestTaskReopen_ClearsCommitCloseAndPreservesCommitOpen is route 1 of 3. Two
 // source states are covered: COMPLETED, where commit_close holds a value, and
-// DOING, which only `task reopen` can return to BACKLOG at all.
+// DOING. Both return to SPRINT in their sprint.
 func TestTaskReopen_ClearsCommitCloseAndPreservesCommitOpen(t *testing.T) {
 	f := setupCommitTrackingRoadmap(t, "commit-reopen-route")
 
@@ -786,11 +799,14 @@ func TestTaskReopen_ClearsCommitCloseAndPreservesCommitOpen(t *testing.T) {
 		}
 	})
 
-	assertClearedAsymmetrically(t, f, completed, "task reopen (from COMPLETED)")
-	assertClearedAsymmetrically(t, f, doing, "task reopen (from DOING)")
+	assertClearedAsymmetrically(t, f, completed, models.StatusSprint, "task reopen (from COMPLETED)")
+	assertClearedAsymmetrically(t, f, doing, models.StatusSprint, "task reopen (from DOING)")
 }
 
-// TestSprintRemoveTasks_ClearsCommitCloseAndPreservesCommitOpen is route 3 of 4.
+// TestSprintRemoveTasks_ClearsCommitCloseAndPreservesCommitOpen is route 2 of 3.
+// A COMPLETED task is refused by the command, so the COMPLETED source is covered
+// through the route SPEC/STATE_MACHINE.md prescribes for it: `task reopen`
+// first, which already clears commit_close, and then `sprint remove-tasks`.
 func TestSprintRemoveTasks_ClearsCommitCloseAndPreservesCommitOpen(t *testing.T) {
 	f := setupCommitTrackingRoadmap(t, "commit-remove-tasks-route")
 
@@ -800,6 +816,9 @@ func TestSprintRemoveTasks_ClearsCommitCloseAndPreservesCommitOpen(t *testing.T)
 	f.stat(t, itoa(testing), "TESTING")
 
 	_ = captureStdout(t, func() {
+		if err := taskReopen([]string{"-r", f.roadmap, itoa(completed)}); err != nil {
+			t.Fatalf("task reopen: %v", err)
+		}
 		if err := sprintRemoveTasks([]string{
 			"-r", f.roadmap, itoa(f.sprintID), f.idCSV(completed, testing),
 		}); err != nil {
@@ -807,18 +826,18 @@ func TestSprintRemoveTasks_ClearsCommitCloseAndPreservesCommitOpen(t *testing.T)
 		}
 	})
 
-	assertClearedAsymmetrically(t, f, completed, "sprint remove-tasks (from COMPLETED)")
-	assertClearedAsymmetrically(t, f, testing, "sprint remove-tasks (from TESTING)")
+	assertClearedAsymmetrically(t, f, completed, models.StatusBacklog, "sprint remove-tasks (reopened from COMPLETED)")
+	assertClearedAsymmetrically(t, f, testing, models.StatusBacklog, "sprint remove-tasks (from TESTING)")
 }
 
-// TestSprintRemove_ClearsCommitCloseAndPreservesCommitOpen is route 4 of 4. The
-// sprint cascade resets every member task at once, so it is asserted on three
-// tasks in three different source states.
+// TestSprintRemove_ClearsCommitCloseAndPreservesCommitOpen is route 3 of 3. The
+// sprint cascade resets every member task at once, so it is asserted on tasks
+// in two different source states. A sprint holding a COMPLETED task is refused
+// by the command, so none is a member here.
 func TestSprintRemove_ClearsCommitCloseAndPreservesCommitOpen(t *testing.T) {
 	f := setupCommitTrackingRoadmap(t, "commit-sprint-remove-route")
 
-	completed, testing, doing := f.taskIDs[0], f.taskIDs[1], f.taskIDs[2]
-	f.walkToCompleted(t, completed)
+	testing, doing := f.taskIDs[1], f.taskIDs[2]
 	f.stat(t, itoa(testing), "DOING", "--commit-open", commitWorkStarted)
 	f.stat(t, itoa(testing), "TESTING")
 	f.stat(t, itoa(doing), "DOING", "--commit-open", commitWorkStarted)
@@ -829,9 +848,8 @@ func TestSprintRemove_ClearsCommitCloseAndPreservesCommitOpen(t *testing.T) {
 		}
 	})
 
-	assertClearedAsymmetrically(t, f, completed, "sprint remove (from COMPLETED)")
-	assertClearedAsymmetrically(t, f, testing, "sprint remove (from TESTING)")
-	assertClearedAsymmetrically(t, f, doing, "sprint remove (from DOING)")
+	assertClearedAsymmetrically(t, f, testing, models.StatusBacklog, "sprint remove (from TESTING)")
+	assertClearedAsymmetrically(t, f, doing, models.StatusBacklog, "sprint remove (from DOING)")
 }
 
 // ---------------------------------------------------------------------------
@@ -852,10 +870,10 @@ func TestTaskStat_BatchRejectionLeavesEveryTaskUntouched(t *testing.T) {
 	f := setupCommitTrackingRoadmap(t, "commit-batch-atomicity")
 
 	// Three tasks that can all move to DOING, plus one that cannot: the fourth
-	// is sent back to BACKLOG, from where DOING is refused.
+	// is walked to COMPLETED, from where DOING is refused.
 	eligible := []int{f.taskIDs[0], f.taskIDs[1], f.taskIDs[2]}
 	ineligible := f.taskIDs[3]
-	f.stat(t, itoa(ineligible), "BACKLOG")
+	f.walkToCompleted(t, ineligible)
 
 	for _, tc := range []struct {
 		name  string

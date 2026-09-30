@@ -241,21 +241,27 @@ class TestEdgeCasesErrors:
         print("✓ Edit nonexistent task test passed")
 
     def test_invalid_priority_values(self):
-        """Test invalid priority values are rejected with exit 6 and a 'priority' message."""
+        """Test invalid priority values are rejected with a 'priority' message.
+
+        An integer outside 0-9 is a range refusal (exit 6); a value that is not an
+        integer at all is misuse (exit 2), with the line SPEC/COMMANDS.md § Change
+        Priority (prio) publishes.
+        """
         roadmap = self.test.create_roadmap()
         task_id = self.test.create_task(roadmap, "Task", "Functional", "Technical", "Criteria")
 
-        for bad in ["-1", "10", "high"]:
+        for bad, code in [("-1", 6), ("10", 6), ("high", 2)]:
             exit_code, _, stderr = self.test.run_cmd(
                 ["task", "prio", "-r", roadmap, str(task_id), bad],
                 check=False,
             )
-            assert exit_code == 6, f"priority={bad!r} must exit 6; got {exit_code}, stderr={stderr}"
+            assert exit_code == code, f"priority={bad!r} must exit {code}; got {exit_code}, stderr={stderr}"
             assert "priority" in stderr.lower(), (
                 f"stderr must mention 'priority' for value {bad!r}; got {stderr!r}"
             )
+        assert stderr.splitlines()[0] == 'Error: invalid input: invalid priority: "high" is not an integer in 0-9', stderr
 
-        print("✓ Invalid priority values rejected with exit 6 + 'priority' message")
+        print("✓ Invalid priority values rejected (exit 6 out of range, exit 2 non-integer) + 'priority' message")
 
     def test_invalid_severity_values(self):
         """Test invalid severity values are rejected with exit 6 and a 'severity' message."""

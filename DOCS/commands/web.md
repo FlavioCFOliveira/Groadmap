@@ -74,7 +74,7 @@ A `403` refusal is decided before any route is matched, so it carries no `roadma
 
 ### What is not recorded
 
-- **`404` and `405` are not logged.** An unknown roadmap, a non-integer id, an id that belongs to no record, an unmapped path, or a non-read method on a known path is ordinary navigation, not a failure. Logging them would bury the real failures under every mistyped URL and every browser probe for an asset the server does not serve. The one exception: a roadmap whose existence check fails with an I/O error is answered `500`, not `404`, and is logged. A `403` refusal is not ordinary navigation and is logged, as above.
+- **`404` and `405` are not logged.** An unknown roadmap, a non-integer id, an id that belongs to no record, an unmapped path, or a non-read method on a known path is ordinary navigation, not a failure. Logging them would bury the real failures under every mistyped URL and every browser probe for an asset the server does not serve. A roadmap home that is a regular file, or any other entry that is neither a directory nor a symbolic link, is an unknown roadmap: `404`, not logged. The one exception: a roadmap whose existence check fails with an I/O error — for example a roadmap home whose permissions deny the server the search of it — is answered `500`, not `404`, and is logged. A `403` refusal is not ordinary navigation and is logged, as above.
 - **There is no access log.** A successful request writes nothing.
 - **The client address is not recorded.** It would add a personal datum to the console without adding diagnostic value.
 - **Nothing is redacted.** An error text may name a path under `~/.roadmaps/`. That is the diagnostic value of the record; it stays on your console and never reaches the HTTP response.
@@ -116,7 +116,7 @@ All routes serve `GET` and `HEAD` only. Any other HTTP method on any route retur
 | `/roadmaps/{name}/graph/data` | The graph's nodes and edges for the visualisation, produced by sending the Cypher statement in the `q` parameter (the full-graph default query when absent) to the roadmap's running graph server, under the 5-second statement time budget that server enforces. The statement is executed as written and may write. An invalid limit or a failed statement answers HTTP `400` with an `error`/`kind` JSON body; a roadmap no server is serving is answered HTTP `503`; a roadmap whose derived socket path is longer than the platform allows is answered HTTP `500` before anything is probed | JSON |
 | `/static/...` | Embedded static assets (CSS, JS, vendored Tabler framework and D3.js + d3-sankey, fonts) | static file |
 
-`{name}` is validated against the roadmap-name rules (regex `^[a-z0-9_-]+$`, max 50 characters) before it is used to build any filesystem path; a name that fails validation, or a roadmap that does not exist, returns HTTP `404`. A request for a `/static/...` asset that is not embedded returns HTTP `404`. These HTTP statuses are distinct from the process exit codes below.
+`{name}` is validated against the roadmap-name rules (regex `^[a-z0-9_-]+$`, max 50 characters) before it is used to build any filesystem path; a name that fails validation, or a roadmap that does not exist, returns HTTP `404`. A roadmap exists exactly when the CLI says it does: `~/.roadmaps/{name}/` is a directory that holds `project.db`. No entry of that name, a directory without `project.db`, and a regular file at that path each return the same `404`, and the roadmap index lists none of them. A request for a `/static/...` asset that is not embedded returns HTTP `404`. These HTTP statuses are distinct from the process exit codes below.
 
 ## The Tasks Page
 
@@ -220,9 +220,9 @@ The board has exactly three columns, presented left to right:
 
 This is the same grouping the sprint status summary line at the top of the page already uses — pending, open, completed — rather than a second categorisation invented for the board. That is what makes the two agree by construction: the `WAITING` count is the summary line's `P`, the `DOING` count is its `A`, the `CLOSED` count is its `C`, and the three sum to its `T`. A task status enum with five closed values and three columns claiming all five means no member task can fall outside the board, so there is no fourth column and no "other" column.
 
-A `BACKLOG` task can be a sprint member — `rmp task stat <id> BACKLOG` returns a task to the backlog without removing it from the sprint — which is why `WAITING` groups `BACKLOG` with `SPRINT` rather than showing `SPRINT` alone.
+A sprint member is never in `BACKLOG` status: a task returns to `BACKLOG` only by leaving its sprint, and `rmp task stat <id> BACKLOG` is refused for every sprint member. In practice `WAITING` therefore holds `SPRINT` tasks. The column still claims `BACKLOG`, so that the three columns claim all five statuses and no member task can fall outside the board.
 
-Each column header carries a Tabler badge with that column's task count, coloured by the canonical status of the group it holds: `WAITING` takes the colour of `SPRINT`, `DOING` that of `DOING`, and `CLOSED` that of `COMPLETED`. The canonical status is the one a task is normally in at that stage — a task waiting in a sprint is normally `SPRINT`, and `BACKLOG` there is the exceptional case.
+Each column header carries a Tabler badge with that column's task count, coloured by the canonical status of the group it holds: `WAITING` takes the colour of `SPRINT`, `DOING` that of `DOING`, and `CLOSED` that of `COMPLETED`. The canonical status is the one a task is in at that stage — a task waiting in a sprint is `SPRINT`.
 
 All three columns are always present, in that order, whatever the sprint holds. A column with no task keeps its heading and its `0` count badge and shows its own in-column empty state, so a sprint with no member tasks renders an empty board rather than no board.
 

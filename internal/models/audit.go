@@ -39,10 +39,15 @@ const (
 	// alone and never has to correlate the row with the task's current status
 	// (SPEC/DATABASE.md § One Row per Thing That Happened, rule 1).
 	//
-	// `task stat` writes four of them: it rejects the SPRINT target, so
-	// TASK_STATUS_SPRINT has the single writer `sprint add-tasks`.
-	// TASK_STATUS_BACKLOG has two, `task stat <ids> BACKLOG` and
-	// `sprint remove-tasks`, and only the second names a counterpart sprint.
+	// `task stat` writes three of them: it rejects the SPRINT target, and it
+	// refuses the BACKLOG target for every sprint member, so under the sprint
+	// membership invariant it writes neither of those two.
+	// TASK_STATUS_SPRINT is written by `sprint add-tasks` for a task that joins
+	// from BACKLOG, and by the migration to schema 1.16.0 for each member it
+	// repairs; both name the sprint. TASK_STATUS_BACKLOG is written by
+	// `sprint remove-tasks`, naming the sprint the task left; the NULL-counterpart
+	// rows of it that exist were written by `task stat <ids> BACKLOG` before the
+	// invariant, or by that migration for an active task outside every sprint.
 	//
 	// TASK_STATUS_DOING and TASK_STATUS_COMPLETED are the only two operations
 	// in the whole catalogue that carry a commit hash; see
@@ -75,6 +80,17 @@ const (
 	OpTaskPriorityChange AuditOperation = "TASK_PRIORITY_CHANGE"
 	OpTaskSeverityChange AuditOperation = "TASK_SEVERITY_CHANGE"
 	OpTaskReopen         AuditOperation = "TASK_REOPEN"
+
+	// OpTaskSprintChange records a task that changed sprint and kept its
+	// status: `sprint move-tasks`, and `sprint add-tasks` taking the task from
+	// another sprint. It is written against the task and names the sprint the
+	// task ENTERED in related_entity_id; the sprint it left is named by the
+	// SPRINT_MOVE_TASK_OUT row written against that sprint in the same
+	// transaction, with the same performed_at. Because the status did not
+	// change, no TASK_STATUS_* operation can record the event, and without this
+	// one the task's own history would say nothing about it (SPEC/COMMANDS.md
+	// § Task Assignment, Audit, rule 4).
+	OpTaskSprintChange AuditOperation = "TASK_SPRINT_CHANGE"
 
 	// Sprint operations
 	OpSprintCreate AuditOperation = "SPRINT_CREATE"
@@ -166,27 +182,27 @@ func OperationCarriesCommitHash(op AuditOperation) bool {
 	return op == OpTaskStatusDoing || op == OpTaskStatusCompleted
 }
 
-// OperationCarriesRelatedEntity reports whether op is one of the eight
+// OperationCarriesRelatedEntity reports whether op is one of the nine
 // operations of SPEC/DATABASE.md § The Two Entities of a Relational Operation,
 // the only ones whose row may name a counterpart entity in related_entity_id.
 //
 // It answers MAY, not MUST, and the difference is the whole reason the question
 // is asked per operation rather than per row. TASK_STATUS_BACKLOG has two
-// producing commands: from `sprint remove-tasks` the row names the sprint the
-// task left, and from `task stat <ids> BACKLOG` there is no second entity party
-// to the operation, so the column is NULL. Only the call site knows which of the
-// two wrote the row; what the operation alone decides is whether a counterpart
-// is admissible at all.
+// producers: from `sprint remove-tasks` the row names the sprint the task left,
+// and from the migration to schema 1.16.0, repairing an active task outside
+// every sprint, there is no second entity party to the operation, so the column
+// is NULL. Only the call site knows which of the two wrote the row; what the
+// operation alone decides is whether a counterpart is admissible at all.
 //
 // That is exactly the invariant the catalogue states over the stored table — no
-// non-NULL related_entity_id outside these eight operations — so stating it once
+// non-NULL related_entity_id outside these nine operations — so stating it once
 // here lets the single audit writer enforce it at the point of the INSERT,
 // rather than leaving it to the discipline of every call site.
 func OperationCarriesRelatedEntity(op AuditOperation) bool {
 	switch op {
 	case OpSprintAddTask, OpTaskStatusSprint,
 		OpSprintRemoveTask, OpTaskStatusBacklog,
-		OpSprintMoveTaskOut, OpSprintMoveTaskIn,
+		OpSprintMoveTaskOut, OpSprintMoveTaskIn, OpTaskSprintChange,
 		OpTaskAddDep, OpTaskRemoveDep:
 		return true
 	default:
@@ -213,6 +229,7 @@ var ValidAuditOperations = []AuditOperation{
 	OpTaskPriorityChange,
 	OpTaskSeverityChange,
 	OpTaskReopen,
+	OpTaskSprintChange,
 	OpSprintCreate,
 	OpSprintDelete,
 	OpSprintStart,
@@ -288,9 +305,9 @@ type AuditOperationClass struct {
 // is the gate that keeps it total.
 //
 // Rule 4 requires each entry to state what the writer writes, established by
-// observing a row rather than by reading the name. For the 39 operations a
+// observing a row rather than by reading the name. For the 40 operations a
 // command still writes, the observation is a live one: driving every mutating
-// subcommand and reading back the audit table yields exactly these 39 pairs.
+// subcommand and reading back the audit table yields exactly these 40 pairs.
 // The four LEGACY operations have no writer left to observe, so each rests on
 // recorded evidence instead:
 //
@@ -322,6 +339,7 @@ var auditOperationClasses = map[AuditOperation]AuditOperationClass{
 	OpTaskPriorityChange:               {EntityType: EntityTask},
 	OpTaskSeverityChange:               {EntityType: EntityTask},
 	OpTaskReopen:                       {EntityType: EntityTask},
+	OpTaskSprintChange:                 {EntityType: EntityTask},
 	OpTaskAddDep:                       {EntityType: EntityTask},
 	OpTaskRemoveDep:                    {EntityType: EntityTask},
 	OpTaskCommentCreate:                {EntityType: EntityTask},

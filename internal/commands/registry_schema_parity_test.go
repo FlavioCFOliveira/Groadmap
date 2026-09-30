@@ -334,6 +334,13 @@ func registrySchemaCases() []schemaCase {
 		{"sprint", "show", "flat object", models.SprintShowResult{}, bracedNameList},
 		{"audit", "list", "audit entry", models.AuditEntry{}, bracedNameList},
 		{"audit", "stats", "stats object", models.AuditStats{}, bracedNameList},
+		// The five sprint ordering commands, whose success objects are the
+		// structs of sprint_order.go (SPEC/COMMANDS.md § Task Ordering).
+		{"sprint", "reorder", "success object", sprintReorderResult{}, bracedNameList},
+		{"sprint", "move-to", "success object", sprintPositionResult{}, bracedNameList},
+		{"sprint", "swap", "success object", sprintSwapResult{}, bracedNameList},
+		{"sprint", "top", "success object", sprintPositionResult{}, bracedNameList},
+		{"sprint", "bottom", "success object", sprintPositionResult{}, bracedNameList},
 
 		// --- bare names in parentheses -----------------------------------------
 		{"task", "comment-list", "comment object", models.TaskComment{}, parenNameList},
@@ -418,20 +425,6 @@ func unguardedRegistrySchemas(t *testing.T) map[string]string {
 		{
 			reason:  "states that stdout carries no payload, so there is no shape to enumerate",
 			entries: []string{"roadmap remove"},
-		},
-		{
-			reason: "a success envelope emitted from a bare map literal in " +
-				"sprint_order.go / sprint_position.go; no struct backs it, so there " +
-				"is no object for a key list to be held in parity WITH. The five " +
-				"entries declared `empty` until the gate over the published examples " +
-				"measured them writing a body (rmp task 417), and they name the " +
-				"object they return rather than enumerating it, because a key list " +
-				"nothing checks is the second copy this file exists to prevent. " +
-				"SPEC/COMMANDS.md § Task Ordering publishes the keys",
-			entries: []string{
-				"sprint reorder", "sprint move-to", "sprint swap",
-				"sprint top", "sprint bottom",
-			},
 		},
 		{
 			reason: "points at DATA_FORMATS.md for a document whose shape is specified " +

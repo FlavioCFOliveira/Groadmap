@@ -2525,7 +2525,8 @@ graph subcommand can reach would be incomplete without it.
 | Condition | Sentinel | Exit code |
 |-----------|----------|-----------|
 | No roadmap selected and none provided via `-r` | `utils.ErrNoRoadmap` | 3 |
-| Selected roadmap does not exist | `utils.ErrNotFound` | 4 |
+| Selected roadmap does not exist, which includes a roadmap home path that is not a directory (see rule 10 below) | `utils.ErrNotFound` | 4 |
+| The roadmap name given to `-r` / `--roadmap` breaks a rule of `COMMANDS.md § Roadmap Name Validation` | `utils.ErrValidation` | 6 |
 | No query supplied: `--query` absent and standard input empty, whitespace only, or a terminal; or `--query` present with an empty, whitespace-only, or absent value (see [Cypher Input Source and Precedence](#cypher-input-source-and-precedence)) | `utils.ErrRequired` | 2 |
 | `graph client` receives a positional argument, a bare Cypher query included; it accepts none (see [No Positional Query: A Stray Token Is Refused](#no-positional-query-a-stray-token-is-refused)) | `utils.ErrInvalidInput` | 2 |
 | Query longer than the maximum query length of 1 MiB, from either source (see [Maximum Query Length](#maximum-query-length)) | `utils.ErrValidation` | 6 |
@@ -2548,10 +2549,15 @@ graph subcommand can reach would be incomplete without it.
 Rules:
 
 1. **The maximum query length is the only condition on which Groadmap refuses a
-   statement's content, and it is the only cause of exit code 6 in this file.**
+   statement's content, and it is the only cause of exit code 6 a statement can produce.**
    Exit code 6 remains the CLI's validation class and is reached from other
    commands for their own reasons (see `ARCHITECTURE.md § Exit Codes`); within the
-   graph feature the over-long query is its single cause. The three refusals that
+   graph feature the over-long query is its single cause on a statement. The one
+   other cause of exit code 6 on the two graph subcommands is not about a
+   statement at all: a roadmap name that breaks a rule of
+   `COMMANDS.md § Roadmap Name Validation` is refused with exit code 6 by both,
+   exactly as by every subcommand that takes `-r`, and that section is canonical
+   for it. The three refusals that
    precede the engine are all decided by `graph client` before it resolves the
    roadmap or reaches any server: the
    stray-positional refusal (exit code 2), the missing-query refusal (exit
@@ -2666,6 +2672,24 @@ Rules:
    rolled back whole, or left the graph as it found it, the statement is subject
    to this rule. A caller that needs certainty reads the node pair back after any
    failure of a statement that creates a relationship.
+10. **A roadmap exists, for both graph subcommands, only when its home is a
+    directory that holds `project.db`.** `rmp graph serve` and `rmp graph client`
+    each refuse a roadmap that does not exist, at the step at which they resolve
+    the roadmap, with `utils.ErrNotFound`, exit code 4, and the not-found line
+    `COMMANDS.md § Graph Management` publishes for it.
+    Three shapes of `~/.roadmaps/<name>` are a roadmap that does not exist: no
+    entry of that name; a directory that holds no `project.db`; and an entry that
+    is neither a directory nor a symbolic link, such as a regular file. The third
+    is not a failure of the filesystem and not a server that cannot be reached: a
+    regular file where a roadmap home would be is refused with the same line, the
+    same exit code and at the same point as a name under which nothing exists.
+    `rmp graph serve` therefore creates no directory in its place and reaches none
+    of the later steps of [Server Startup](#server-startup), and `rmp graph client`
+    probes no socket beneath it. A symbolic link at that path is not covered by
+    this rule: it is refused as `ARCHITECTURE.md § Directory Structure` requires
+    for a roadmap home that is a symbolic link. The definition is the CLI-wide one
+    of `COMMANDS.md § Roadmap Selection (Always Required)`, which every other
+    roadmap-scoped subcommand applies in the same way.
 
 ## The Dedicated Graph Server
 
@@ -2994,7 +3018,10 @@ each step is what makes a later one safe.
 1. **Resolve the roadmap and the socket path, check the path's length, bring the
    data directory and the roadmap home to `0700`, and then create the roadmap's
    graph directory if it has none.** A roadmap that does not exist fails here,
-   before anything is opened, created, or removed. So does a resolved socket path
+   before anything is opened, created, or removed; a roadmap home path that is a
+   regular file, or any other entry that is neither a directory nor a symbolic
+   link, is a roadmap that does not exist
+   ([Error Handling and Exit Codes](#error-handling-and-exit-codes), rule 10). So does a resolved socket path
    longer than the platform's bound, whether it was derived from the roadmap or
    supplied through `--socket` (see [Socket Path Length](#socket-path-length)).
    Both refusals precede the lock, the probe, the unlink and the bind, so **a

@@ -975,8 +975,10 @@ func TestSprintCommentList_WritesNoAuditEntry(t *testing.T) {
 
 // TestSprintCommentEdit_TypeOnly verifies a type-only edit: the type changes, the
 // body and created_at do not, updated_at is stamped, the audit entry is written
-// against the parent sprint — and standard input is NOT read, so a type-only edit
-// never waits for input (SPEC precedence rule 2).
+// against the parent sprint. Standard input is empty, which a type-only edit
+// accepts (SPEC/COMMANDS.md § Comment Body Input Source and Precedence, rule 7);
+// a standard input that carries data is refused, which
+// comment_edit_type_only_stdin_test.go pins.
 func TestSprintCommentEdit_TypeOnly(t *testing.T) {
 	const roadmap = "sprint-comment-edit-type-only"
 	database := setupSprintCommentRoadmap(t, roadmap)
@@ -984,16 +986,15 @@ func TestSprintCommentEdit_TypeOnly(t *testing.T) {
 	addSprintComment(t, roadmap, 2, "PROGRESS", "Two of five tasks closed; the migration is still blocked.")
 	before := listSprintComments(t, database, 2)[0]
 
-	const untouched = "A BODY ON STANDARD INPUT THAT A TYPE-ONLY EDIT MUST NOT READ"
 	var err error
-	leftover := withStdin(t, untouched, func() {
+	leftover := withStdin(t, "", func() {
 		err = sprintCommentEdit([]string{"-r", roadmap, itoa(before.ID), "--type", "UPDATE"})
 	})
 	if err != nil {
 		t.Fatalf("comment-edit --type: %v", err)
 	}
-	if leftover != untouched {
-		t.Errorf("standard input was read although --type was present; leftover = %q", leftover)
+	if leftover != "" {
+		t.Errorf("an empty standard input left %q behind", leftover)
 	}
 
 	after := getSprintComment(t, database, before.ID)

@@ -55,6 +55,9 @@ var fuzzReservedRoadmapNames = func() map[string]bool {
 //     published rule: no valid name is refused.
 //  3. A rejection names exactly one rule, through its sentinel, and prints that
 //     rule's published line.
+//  4. The rule named is the FIRST the name breaks in the published order: empty,
+//     length (counted in characters, an invalid byte counting as one), leading
+//     hyphen, reserved, character set.
 func FuzzValidateRoadmapName(f *testing.F) {
 	for _, seed := range []string{
 		"", "a", "myroadmap", "roadmap123", "my-roadmap", "my_roadmap", "my-roadmap_123",
@@ -111,6 +114,9 @@ func FuzzValidateRoadmapName(f *testing.F) {
 			holds    bool   // the rule the sentinel names is broken by this input
 			message  string // the published line, without the "Error: " prefix
 		}
+		// In the published order of SPEC/COMMANDS.md § Roadmap Name Validation.
+		// The reserved row's holds is only a floor, because the SPEC names the
+		// device names with "such as"; the order check below reads it that way.
 		rows := []row{
 			{ErrRoadmapNameEmpty, name == "", "Roadmap name is required"},
 			{ErrRoadmapNameTooLong, length > fuzzRoadmapNameMax,
@@ -120,11 +126,24 @@ func FuzzValidateRoadmapName(f *testing.F) {
 			{ErrInvalidRoadmapName, !charsOK, "Roadmap name must only contain lowercase letters, numbers, underscores, and hyphens"},
 		}
 		named := 0
-		for _, r := range rows {
+		for i, r := range rows {
 			if !errors.Is(err, r.sentinel) {
 				continue
 			}
 			named++
+			// Invariant 4: no rule earlier in the order is broken. The reserved
+			// row is judged by its floor set, so an earlier reserved name the
+			// floor misses cannot make this check refuse a correct answer.
+			for _, earlier := range rows[:i] {
+				broken := earlier.holds
+				if earlier.sentinel == ErrRoadmapNameReserved {
+					broken = reserved
+				}
+				if broken {
+					t.Fatalf("ValidateRoadmapName(%q) was refused as %q, but it breaks the earlier rule %q, "+
+						"which decides the refusal", name, r.sentinel, earlier.sentinel)
+				}
+			}
 			if !r.holds {
 				t.Fatalf("ValidateRoadmapName(%q) was refused as %q, a rule this input does not break",
 					name, r.sentinel)
@@ -142,13 +161,10 @@ func FuzzValidateRoadmapName(f *testing.F) {
 }
 
 // fuzzIntegerToken is what SPEC/COMMANDS.md § Entity Identifier Range calls "an
-// integer" when it is written without a sign or with a minus sign. A token that
-// carries a leading plus sign is left unjudged by the format rule: the SPEC does
-// not say whether "+5" is an integer.
+// integer": one or more decimal digits, optionally preceded by a single minus
+// sign, and nothing else. A plus sign, a sign with no digit after it, and an
+// empty token are not integers and take the format rule.
 var fuzzIntegerToken = regexp.MustCompile(`^-?[0-9]+$`)
-
-// fuzzPlusSignedToken is the one integer spelling the oracle leaves open.
-var fuzzPlusSignedToken = regexp.MustCompile(`^\+[0-9]+$`)
 
 // FuzzParseCommaSeparatedIDs drives the task id list parser, and the set
 // reduction every batch command applies to its result, with arbitrary lists.
@@ -193,15 +209,7 @@ func FuzzParseCommaSeparatedIDs(f *testing.F) {
 		tokens := strings.Split(list, ",")
 		for _, raw := range tokens {
 			token := strings.TrimSpace(raw)
-			switch {
-			case fuzzPlusSignedToken.MatchString(token):
-				// The SPEC leaves the class of a plus-signed token open; only an
-				// ACCEPTED one is judged, below.
-				if err != nil {
-					return
-				}
-				continue
-			case !fuzzIntegerToken.MatchString(token):
+			if !fuzzIntegerToken.MatchString(token) {
 				want := fmt.Sprintf("invalid input: invalid task ID: %q (must be a positive integer)", token)
 				if err == nil || !errors.Is(err, ErrInvalidInput) || errors.Is(err, ErrValidation) || err.Error() != want {
 					t.Fatalf("ParseCommaSeparatedIDs(%q): token %q is not an integer, so the format rule "+
@@ -235,7 +243,7 @@ func FuzzParseCommaSeparatedIDs(f *testing.F) {
 			if !IDInRange(id) {
 				t.Fatalf("ParseCommaSeparatedIDs(%q) accepted id %d outside 1..2147483647", list, id)
 			}
-			value, _ := new(big.Int).SetString(strings.TrimPrefix(strings.TrimSpace(tokens[i]), "+"), 10)
+			value, _ := new(big.Int).SetString(strings.TrimSpace(tokens[i]), 10)
 			if value == nil || value.Cmp(big.NewInt(int64(id))) != 0 {
 				t.Fatalf("ParseCommaSeparatedIDs(%q): id %d at position %d does not equal token %q",
 					list, id, i, tokens[i])

@@ -144,21 +144,31 @@ class TestFiveStatusTransitionsWriteTheirOwnOperation:
     # -- BACKLOG ---------------------------------------------------------
 
     def test_backlog_via_task_stat_writes_task_status_backlog_with_no_counterpart(self):
+        """Under the sprint membership invariant `task stat <id> BACKLOG` is
+        refused for a sprint member and writes no entry; the one command that
+        writes TASK_STATUS_BACKLOG is `sprint remove-tasks`, and its entry names
+        the sprint the task left (SPEC/COMMANDS.md § Task Assignment, acceptance
+        criterion 4; SPEC/DATABASE.md § The Two Entities of a Relational
+        Operation, criterion 3)."""
         task_id = self._new_task("Validate consignment weight against the carrier manifest")
         self.test.run_cmd(["sprint", "add-tasks", "-r", self.roadmap, str(self.sprint_id), str(task_id)])
 
-        self.test.run_cmd(["task", "stat", "-r", self.roadmap, str(task_id), "BACKLOG"])
+        before = len(self.test.run_cmd_json(["audit", "history", "-r", self.roadmap, "TASK", str(task_id)]))
+        code, _, _ = self.test.run_cmd(["task", "stat", "-r", self.roadmap, str(task_id), "BACKLOG"], check=False)
+        assert code == 6, f"task stat BACKLOG on a sprint member must exit 6, got {code}"
+        after = len(self.test.run_cmd_json(["audit", "history", "-r", self.roadmap, "TASK", str(task_id)]))
+        assert after == before, "the refused task stat wrote an audit entry"
 
+        self.test.run_cmd(["sprint", "remove-tasks", "-r", self.roadmap, str(self.sprint_id), str(task_id)])
         entry = self._newest_row(task_id)
-        assert_entry_shape(entry, "BACKLOG via task stat")
+        assert_entry_shape(entry, "BACKLOG via sprint remove-tasks")
         assert entry["operation"] == "TASK_STATUS_BACKLOG", entry
-        assert entry["related_entity_id"] is None, (
-            "task stat has no sprint counterpart, so related_entity_id must be null "
-            "(SPEC/DATABASE.md § The Two Entities of a Relational Operation, rule "
-            "'One operation value, two producing commands, one rule')"
+        assert entry["related_entity_id"] == self.sprint_id, (
+            "the removal names the sprint the task left in related_entity_id"
         )
         assert entry["commit_hash"] is None
-        print("✓ task stat <id> BACKLOG writes TASK_STATUS_BACKLOG with a null counterpart")
+        print("✓ task stat <id> BACKLOG is refused and writes nothing; sprint remove-tasks writes "
+              "TASK_STATUS_BACKLOG naming the sprint")
 
     # -- SPRINT ------------------------------------------------------------
 
@@ -400,21 +410,24 @@ class TestRelationalOperationsNameBothEntities:
         for entry in added:
             assert_entry_shape(entry, "move-tasks pair")
         by_op = {e["operation"]: e for e in added}
-        assert set(by_op) == {"SPRINT_MOVE_TASK_OUT", "SPRINT_MOVE_TASK_IN"}, (
-            f"sprint move-tasks must write exactly the OUT/IN pair and NO TASK_STATUS_* row "
-            f"(SPEC/DATABASE.md § `audit` Table, 'sprint move-tasks writes no TASK_STATUS_* row at "
-            f"all'); got {sorted(by_op)}"
+        assert set(by_op) == {"SPRINT_MOVE_TASK_OUT", "SPRINT_MOVE_TASK_IN", "TASK_SPRINT_CHANGE"}, (
+            f"sprint move-tasks must write exactly the OUT/IN pair and one TASK_SPRINT_CHANGE row, and "
+            f"NO TASK_STATUS_* row (SPEC/COMMANDS.md § Task Assignment, acceptance criterion 5); "
+            f"got {sorted(by_op)}"
         )
         out_row, in_row = by_op["SPRINT_MOVE_TASK_OUT"], by_op["SPRINT_MOVE_TASK_IN"]
+        change_row = by_op["TASK_SPRINT_CHANGE"]
         assert out_row["entity_type"] == "SPRINT" and out_row["entity_id"] == source
         assert out_row["related_entity_id"] == task_id
         assert in_row["entity_type"] == "SPRINT" and in_row["entity_id"] == destination
         assert in_row["related_entity_id"] == task_id
-        assert out_row["performed_at"] == in_row["performed_at"]
+        assert change_row["entity_type"] == "TASK" and change_row["entity_id"] == task_id
+        assert change_row["related_entity_id"] == destination
+        assert out_row["performed_at"] == in_row["performed_at"] == change_row["performed_at"]
 
         task = self.test.run_cmd_json(["task", "get", "-r", self.roadmap, str(task_id)])[0]
         assert task["status"] == "SPRINT", "move-tasks must preserve the task's status"
-        print("✓ sprint move-tasks writes the SPRINT_MOVE_TASK_OUT / SPRINT_MOVE_TASK_IN pair only")
+        print("✓ sprint move-tasks writes the OUT/IN pair and TASK_SPRINT_CHANGE, and no status row")
 
     # -- dependency pair, both directions -------------------------------
 

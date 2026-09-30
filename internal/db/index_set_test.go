@@ -200,6 +200,14 @@ func buildRoadmapAtSchema1140(t *testing.T) *DB {
 		Status:      models.SprintPending,
 		CreatedAt:   created,
 	})
+	// A COMPLETED task cannot join a sprint, so the members seeded COMPLETED
+	// are returned to BACKLOG first; the addition then sets all six to SPRINT,
+	// which is the state this fixture has always carried.
+	for _, id := range ids[:6] {
+		if _, err := database.Exec(`UPDATE tasks SET status = 'BACKLOG' WHERE id = ?`, id); err != nil {
+			t.Fatalf("returning task %d to BACKLOG: %v", id, err)
+		}
+	}
 	if err := database.AddTasksToSprint(testContext(), sprintID, ids[:6]); err != nil {
 		t.Fatalf("adding tasks to the sprint: %v", err)
 	}
@@ -339,8 +347,9 @@ func TestMigrateV1_14_0_toV1_15_0(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reading the schema version: %v", err)
 	}
-	if version != "1.15.0" {
-		t.Fatalf("schema_version = %q after the migration, want 1.15.0", version)
+	// The migration set runs through 1.15.0 and on to the current version.
+	if version != "1.16.0" {
+		t.Fatalf("schema_version = %q after the migration, want 1.16.0", version)
 	}
 
 	// Criterion 1: the same index set, columns and directions as a fresh database.
@@ -368,7 +377,7 @@ func TestMigrateV1_14_0_toV1_15_0(t *testing.T) {
 
 	// Criterion 3: no row changed, apart from the version the migration records.
 	rowsAfter := tableContents(t, database)
-	if strings.Replace(rowsBefore, "1.14.0", "1.15.0", 1) != rowsAfter {
+	if strings.Replace(rowsBefore, "1.14.0", "1.16.0", 1) != rowsAfter {
 		t.Errorf("the migration changed rows other than schema_version.\nbefore:\n%s\nafter:\n%s", rowsBefore, rowsAfter)
 	}
 

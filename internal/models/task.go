@@ -172,16 +172,22 @@ func (ts TaskStatus) CanTransitionTo(newStatus TaskStatus) bool {
 		return false
 	}
 
-	// Define valid transitions. DOING's only valid target is TESTING:
-	// STATE_MACHINE.md forbids DOING -> SPRINT (the SPRINT status is set
-	// exclusively by `sprint add-tasks`, and the rejection rule blocks manual
-	// transitions to SPRINT from any source). Finding #55.
+	// Define valid transitions. These are the transitions a status change
+	// that does not change sprint membership may make, plus the automatic
+	// BACKLOG -> SPRINT of `sprint add-tasks`. No target is BACKLOG: a task
+	// returns to BACKLOG only when it leaves its sprint (`sprint remove-tasks`,
+	// `sprint remove`), because a sprint member is never in BACKLOG, and
+	// COMPLETED therefore has no target here at all — `task reopen` returns it
+	// to SPRINT through its own path (SPEC/STATE_MACHINE.md § Valid
+	// Transitions, § Sprint Membership and the BACKLOG Status). DOING's only
+	// valid target is TESTING: `task stat` cannot set SPRINT from any source.
+	// Finding #55.
 	transitions := map[TaskStatus][]TaskStatus{
 		StatusBacklog:   {StatusSprint},
-		StatusSprint:    {StatusBacklog, StatusDoing},
+		StatusSprint:    {StatusDoing},
 		StatusDoing:     {StatusTesting},
 		StatusTesting:   {StatusDoing, StatusCompleted},
-		StatusCompleted: {StatusBacklog},
+		StatusCompleted: {},
 	}
 
 	validTargets, ok := transitions[ts]
@@ -222,14 +228,14 @@ func ValidateStatusTransition(currentStatus, newStatus string) error {
 
 // GetValidTransitions returns the list of valid next statuses for a given status.
 func GetValidTransitions(status TaskStatus) []TaskStatus {
-	// DOING -> SPRINT is intentionally absent: STATE_MACHINE.md forbids it
-	// (SPRINT is set only by `sprint add-tasks`). Finding #55.
+	// The same set CanTransitionTo accepts: no BACKLOG target, and none from
+	// COMPLETED (SPEC/STATE_MACHINE.md § Valid Transitions). Finding #55.
 	transitions := map[TaskStatus][]TaskStatus{
 		StatusBacklog:   {StatusSprint},
-		StatusSprint:    {StatusBacklog, StatusDoing},
+		StatusSprint:    {StatusDoing},
 		StatusDoing:     {StatusTesting},
 		StatusTesting:   {StatusDoing, StatusCompleted},
-		StatusCompleted: {StatusBacklog},
+		StatusCompleted: {},
 	}
 
 	if valid, ok := transitions[status]; ok {

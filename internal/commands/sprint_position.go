@@ -75,7 +75,7 @@ func sprintBottom(args []string) error {
 	// Verify sprint exists first, mirroring sprintMoveToPosition (used by
 	// `top`/`move-to`). Without this, a non-existent sprint yields an empty
 	// task set from GetSprintTasks and the membership check below would
-	// report a misleading "task does not belong to sprint" (exit 6) instead
+	// report a misleading "task is not in sprint" (exit 6) instead
 	// of the correct "sprint not found" (exit 4). Keeping the check here
 	// makes `top` and `bottom` behave identically for a missing sprint.
 	if err := database.CheckSprintExists(ctx, sprintID); err != nil {
@@ -97,7 +97,7 @@ func sprintBottom(args []string) error {
 		}
 	}
 	if !found {
-		return fmt.Errorf("%w: task %d does not belong to sprint %d", utils.ErrValidation, taskID, sprintID)
+		return utils.TasksNotInSprintError([]int{taskID}, sprintID)
 	}
 
 	// Move to bottom (position = count - 1, or use a large number)
@@ -110,12 +110,7 @@ func sprintBottom(args []string) error {
 		return err
 	}
 
-	return utils.PrintJSON(map[string]any{
-		"success":   true,
-		"sprint_id": sprintID,
-		"task_id":   taskID,
-		"position":  bottomPosition,
-	})
+	return utils.PrintJSON(sprintPositionResult{Position: bottomPosition, SprintID: sprintID, Success: true, TaskID: taskID})
 }
 
 // sprintMoveToPosition is a helper that moves a task to a specific position.
@@ -174,7 +169,7 @@ func sprintMoveToPosition(args []string, position int) error {
 		}
 	}
 	if !found {
-		return fmt.Errorf("%w: task %d does not belong to sprint %d", utils.ErrValidation, taskID, sprintID)
+		return utils.TasksNotInSprintError([]int{taskID}, sprintID)
 	}
 
 	// Move task to position
@@ -182,10 +177,5 @@ func sprintMoveToPosition(args []string, position int) error {
 		return err
 	}
 
-	return utils.PrintJSON(map[string]any{
-		"success":   true,
-		"sprint_id": sprintID,
-		"task_id":   taskID,
-		"position":  position,
-	})
+	return utils.PrintJSON(sprintPositionResult{Position: position, SprintID: sprintID, Success: true, TaskID: taskID})
 }

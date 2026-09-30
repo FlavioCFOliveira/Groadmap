@@ -171,30 +171,18 @@ func TestLogRecordCannotBeForged(t *testing.T) {
 // that cannot be resolved is a 500 rather than a 404: the existence check
 // itself fails with an I/O error.
 //
-// The error is produced by the filesystem's structure rather than by its
-// permissions, so the test runs on every filesystem and under every user,
-// root included: the roadmap's home is a regular FILE, so the stat of
-// <home>/project.db fails with ENOTDIR, which is not a not-exist error and so
-// cannot be read as an absent roadmap.
+// A roadmap home that is a regular file is NOT this case: it is a roadmap that
+// does not exist, a silent 404 (SPEC/WEB.md § What Is Not Logged, item 1). The
+// trigger is the one criterion 264 names, a roadmap home at mode 0000 holding
+// project.db, or, under the superuser, the root-proof trigger
+// plantUnsearchableRoadmapHome documents; the helper confirms the check really
+// fails, so the test cannot pass vacuously.
 func TestResolveRoadmapIOFailureIsLogged(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 
 	const name = "unreadable-roadmap"
-	dataDir := filepath.Join(home, ".roadmaps")
-	if err := os.MkdirAll(dataDir, 0o700); err != nil {
-		t.Fatalf("creating the data directory: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(dataDir, name), []byte("a file where a directory belongs"), 0o600); err != nil {
-		t.Fatalf("planting a file as the roadmap home: %v", err)
-	}
-
-	// Confirm the environment really produces an I/O error rather than a plain
-	// not-found; if it did not, the test would pass vacuously.
-	if _, err := utils.RoadmapExists(name); err == nil {
-		t.Fatal("RoadmapExists reported no error for a roadmap home that is a regular file; " +
-			"the 500 path this test covers would not be reached")
-	}
+	plantUnsearchableRoadmapHome(t, home, name)
 
 	buf := captureLog(t)
 	rec := httptest.NewRecorder()

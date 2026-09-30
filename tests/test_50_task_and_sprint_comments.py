@@ -223,9 +223,15 @@ class TestTaskAndSprintComments:
             out = result.stdout.decode("utf-8", "replace")
             err = result.stderr.decode("utf-8", "replace")
         else:
+            # Standard input is always under this module's control: the given
+            # text, or an empty one. Inheriting the runner's would make a
+            # type-only comment-edit, which reads a non-terminal standard input
+            # to learn whether it carries data (SPEC/COMMANDS.md § Comment Body
+            # Input Source and Precedence, rule 7), depend on whatever the
+            # environment running the suite connected there.
             result = subprocess.run(
                 [self.cli] + args, capture_output=True, text=True, env=env,
-                input=stdin_text,
+                input=stdin_text if stdin_text is not None else "",
             )
             code, out, err = result.returncode, result.stdout, result.stderr
         if expect is not None:
@@ -731,24 +737,60 @@ class TestTaskAndSprintComments:
         print("✓ a bad --type is refused without reading standard input")
 
     def test_type_only_edit_does_not_wait_on_standard_input(self):
-        """`comment-edit --type X` must not read standard input at all."""
+        """`comment-edit --type X` with a terminal on standard input does not read
+        it, so it never waits for input typed at a terminal; an empty standard
+        input is accepted; a standard input that carries data is refused
+        (SPEC/COMMANDS.md § Comment Body Input Source and Precedence, rule 7).
+
+        The terminal is a pseudo-terminal that nobody ever types into: an
+        implementation that read it could not return, which is what the
+        timeout below reports. A non-terminal held open with no data is no
+        longer this test's subject: the SPEC lets the command read such a
+        stream until it closes."""
         cid = self.add_task_comment("FINDING")
-        fd = self.open_blocking_fifo()
 
-        proc = self.popen_with_stdin(
-            ["task", "comment-edit", "-r", ROADMAP, str(cid), "--type", "DECISION"], fd
-        )
+        master, slave = os.openpty()
         try:
-            _, err = proc.communicate(timeout=15)
-        except subprocess.TimeoutExpired:
-            proc.kill()
-            raise AssertionError("a type-only edit blocked waiting for a body")
+            proc = self.popen_with_stdin(
+                ["task", "comment-edit", "-r", ROADMAP, str(cid), "--type", "DECISION"], slave
+            )
+            try:
+                _, err = proc.communicate(timeout=15)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                raise AssertionError("a type-only edit with a terminal on standard input blocked waiting for a body")
+        finally:
+            os.close(slave)
+            os.close(master)
         assert proc.returncode == EXIT_OK, f"exit={proc.returncode} stderr={err!r}"
-
         stored = self.task_comments()[0]
         assert stored["type"] == "DECISION"
         assert stored["body"] == BODY["FINDING"], "the body must be left unchanged"
-        print("✓ a type-only edit never waits on standard input")
+
+        # An empty standard input carries no data: the type-only edit proceeds.
+        with open(os.devnull, "rb") as devnull:
+            proc = self.popen_with_stdin(
+                ["task", "comment-edit", "-r", ROADMAP, str(cid), "--type", "NOTE"], devnull
+            )
+            _, err = proc.communicate(timeout=15)
+        assert proc.returncode == EXIT_OK, f"exit={proc.returncode} stderr={err!r}"
+        assert self.task_comments()[0]["type"] == "NOTE"
+
+        # Data on standard input is refused rather than ignored, and nothing changes.
+        env = os.environ.copy()
+        env["HOME"] = str(self.test.home_dir)
+        result = subprocess.run(
+            [self.cli, "task", "comment-edit", "-r", ROADMAP, str(cid), "--type", "PROGRESS"],
+            input="A revised body the caller meant to store.\n", capture_output=True, text=True, env=env,
+        )
+        assert result.returncode == 2, f"exit={result.returncode} stderr={result.stderr!r}"
+        assert result.stderr.splitlines()[0] == (
+            "Error: invalid input: standard input carries data, but it is not read when --type is given; "
+            "supply the new body with --body"
+        ), result.stderr
+        stored = self.task_comments()[0]
+        assert stored["type"] == "NOTE" and stored["body"] == BODY["FINDING"], stored
+        print("✓ a type-only edit never waits on a terminal, accepts an empty stdin and refuses data")
 
     # ==================================================================
     # C. the per-entity type enum
@@ -1583,7 +1625,9 @@ class TestTaskAndSprintComments:
         reopened = reopened[0] if isinstance(reopened, list) else reopened
         for field in ("started_at", "tested_at", "closed_at", "completion_summary"):
             assert reopened[field] is None, f"reopen must clear {field}"
-        assert reopened["status"] == "BACKLOG", reopened["status"]
+        # A reopening returns the task to SPRINT in its sprint (SPEC/COMMANDS.md
+        # § Reopen Task).
+        assert reopened["status"] == "SPRINT", reopened["status"]
 
         after = self.task_comments()
         assert after == before, (

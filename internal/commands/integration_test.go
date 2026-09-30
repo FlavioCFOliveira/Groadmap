@@ -232,10 +232,16 @@ func TestIntegration_TaskLifecycle(t *testing.T) {
 		t.Errorf("failed to set task priority: %v", err)
 	}
 
-	// Step 7: Reopen task back to BACKLOG so it can be removed
-	err = HandleTask([]string{"reopen", "-r", testRoadmap, string(rune('0' + taskID))})
+	// Step 7: Take the task out of its sprint, which returns it to BACKLOG so
+	// it can be removed (SPEC/STATE_MACHINE.md § Task Deletion Precondition).
+	err = HandleSprint([]string{
+		"remove-tasks",
+		"-r", testRoadmap,
+		string(rune('0' + sprintID)),
+		string(rune('0' + taskID)),
+	})
 	if err != nil {
-		t.Errorf("failed to reopen task: %v", err)
+		t.Errorf("failed to take the task out of its sprint: %v", err)
 	}
 
 	// Step 8: Remove task (only allowed from BACKLOG)
