@@ -205,11 +205,25 @@ func runGraphServe(args []string) error {
 	// and the same as the one every other surface applies: the bound is a
 	// property of the path, and where the path came from is not asked
 	// (§ Socket Path Length, rules 5 and 6).
-	if err := refuseOverLongSocket(socketPath); err != nil {
+	if err := refuseOverLongServeSocket(socketPath); err != nil {
 		return err
 	}
 
-	// Both refusals are behind us, so the graph may be brought into being.
+	// Both refusals are behind us. The data directory and the roadmap home are
+	// brought to 0700 and verified first, through the same code every command
+	// that opens a roadmap runs, so the server holds the outer fence exactly as
+	// the CLI does: the roadmap home holds the default socket, the graph store
+	// and project.db, and a server that left it wider would leave all three
+	// guarded by their own modes alone for as long as it serves. A directory that
+	// cannot be brought to 0700 fails the start with utils.ErrIO, which the
+	// function classifies itself, before the graph directory is created
+	// (SPEC/GRAPH.md § Server Startup, step 1; § Socket Path and Permissions,
+	// rule 4).
+	if err := utils.EnsureRoadmapDir(roadmapName); err != nil {
+		return err
+	}
+
+	// Only then may the graph be brought into being.
 	if err := createGraphDir(graphDir); err != nil {
 		return err
 	}

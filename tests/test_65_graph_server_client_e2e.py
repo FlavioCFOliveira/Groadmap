@@ -487,6 +487,37 @@ class TestSocketPathAndPermissions(GraphServerTestBase):
             os.umask(old_umask)
 
 
+    def test_serve_brings_the_roadmap_home_and_the_data_directory_to_0700(self):
+        """SPEC/GRAPH.md acceptance criterion 80 ("Server Startup", step 1;
+        "Socket Path and Permissions", rule 4): `rmp graph serve` re-applies
+        0700 to ~/.roadmaps/ and to ~/.roadmaps/<name>/ before it binds,
+        whatever mode either had, exactly as every command that opens a roadmap
+        does. The roadmap home is asserted and not only the data directory,
+        because an implementation that narrows the data directory and leaves
+        the home wide passes a check on the data directory alone.
+        """
+        roadmap = self.seeded_roadmap(
+            "ledger-reconciliation",
+            "CREATE (:Component {key:'settlement-worker', language:'go'})",
+        )
+        data_dir = self.test.home_dir / ".roadmaps"
+        roadmap_home = data_dir / roadmap
+        os.chmod(data_dir, 0o755)
+        os.chmod(roadmap_home, 0o755)
+        assert os.stat(roadmap_home).st_mode & 0o777 == 0o755, "the precondition did not take"
+
+        server = self.start_server(roadmap)
+        for label, path in (("the roadmap home", roadmap_home), ("the data directory", data_dir)):
+            mode = os.stat(path).st_mode & 0o777
+            assert mode == 0o700, (
+                f"{label} {path} is {oct(mode)} while the server serves, want 0o700: the "
+                f"server must re-establish the outer fence before it binds"
+            )
+
+        rc = server.stop(signal.SIGINT)
+        assert rc == EXIT_OK, f"clean stop must exit 0; got {rc}, stderr={server.stderr_text()!r}"
+
+
 class TestServeLifecycleAndSignals(GraphServerTestBase):
     """SPEC/GRAPH.md "Server Startup" and "Server Shutdown and the Drain":
     the startup announcement, the two expected engine warnings, both

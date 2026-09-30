@@ -85,9 +85,26 @@ func assertNotSymlink(path string) error {
 		return fmt.Errorf("%w: %s is a symbolic link; refusing to use it as a roadmap directory", ErrDatabase, path)
 	}
 	if err != nil && !os.IsNotExist(err) {
-		return err
+		return dirIOError(err)
 	}
 	return nil
+}
+
+// dirIOError classifies a failure to create, bring to 0700, or verify the data
+// directory or a roadmap home directory as utils.ErrIO, which is the class
+// SPEC/ARCHITECTURE.md § Error Reuse Policy (Mandatory) assigns to a directory the
+// CLI writes that is not a roadmap's database.
+//
+// The classification is added WITHOUT changing the text: Error returns err's own
+// message, exactly as before, and err stays in the chain beside the sentinel, so
+// every caller that already matched a sentinel inside it — ErrPermissionsMismatch
+// among them — still does. That is what lets the classification live here, with
+// the owner of the failure, rather than be restated by each caller: every
+// command that opens a roadmap, `rmp web` and `rmp graph serve` all reach these
+// two functions (SPEC/GRAPH.md § Server Startup, step 1), and the first two print
+// the line and return the exit code they did before the classification existed.
+func dirIOError(err error) error {
+	return &MessageError{Msg: err.Error(), Sentinels: []error{ErrIO, err}}
 }
 
 // EnsureDataDir creates the data directory if it doesn't exist.
@@ -108,17 +125,17 @@ func EnsureDataDir() error {
 
 	// Create directory with restricted permissions
 	if err := os.MkdirAll(dataDir, DataDirPerm); err != nil {
-		return fmt.Errorf("creating data directory %s: %w", dataDir, err)
+		return dirIOError(fmt.Errorf("creating data directory %s: %w", dataDir, err))
 	}
 
 	// Ensure permissions are set correctly (umask may have affected creation)
 	if err := os.Chmod(dataDir, DataDirPerm); err != nil {
-		return fmt.Errorf("setting permissions on data directory: %w", err)
+		return dirIOError(fmt.Errorf("setting permissions on data directory: %w", err))
 	}
 
 	// Verify permissions were set correctly
 	if err := VerifyPermissions(dataDir, DataDirPerm); err != nil {
-		return fmt.Errorf("verifying data directory permissions: %w", err)
+		return dirIOError(fmt.Errorf("verifying data directory permissions: %w", err))
 	}
 
 	return nil
@@ -260,17 +277,17 @@ func EnsureRoadmapDir(name string) error {
 	}
 
 	if err := os.MkdirAll(dir, DataDirPerm); err != nil {
-		return fmt.Errorf("creating roadmap directory %s: %w", dir, err)
+		return dirIOError(fmt.Errorf("creating roadmap directory %s: %w", dir, err))
 	}
 
 	// Ensure permissions are set correctly (umask may have affected creation).
 	if err := os.Chmod(dir, DataDirPerm); err != nil {
-		return fmt.Errorf("setting permissions on roadmap directory: %w", err)
+		return dirIOError(fmt.Errorf("setting permissions on roadmap directory: %w", err))
 	}
 
 	// Verify permissions were set correctly.
 	if err := VerifyPermissions(dir, DataDirPerm); err != nil {
-		return fmt.Errorf("verifying roadmap directory permissions: %w", err)
+		return dirIOError(fmt.Errorf("verifying roadmap directory permissions: %w", err))
 	}
 
 	return nil

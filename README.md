@@ -710,11 +710,12 @@ The two bounds fail differently, and that is the part worth knowing:
   contract, tells this failure apart from any other.
 - **Short enough to commit and too long to fold** — a property value between 1 GiB and
   4 GiB — and the write succeeds and exits 0, and then **every checkpoint of that graph
-  fails from that moment on**. Unlike every other checkpoint failure this one cannot
+  fails from that moment on**, at every due instant of the server's cadence and at
+  shutdown. Unlike every other checkpoint failure this one cannot
   heal, because the offending field is committed graph state: the write-ahead log is
   never folded again and never reclaimed, so it grows and every open replays more of it.
-  The report is on the server's stderr, and it persists until a statement shortens or
-  removes the field.
+  The report is on the server's stderr, repeated at every attempt, until a statement
+  shortens or removes the field.
 
 See [DOCS/commands/graph.md](DOCS/commands/graph.md#how-long-a-field-may-be).
 
@@ -732,13 +733,13 @@ rmp graph client -r myproject --query "MATCH (n:Spec) RETURN n.key"
 
 Starting a server is also what **creates** a roadmap's graph: against a roadmap that has never had one, `serve` creates `~/.roadmaps/<name>/graph/` and serves it empty. A `serve` that is refused creates nothing.
 
-**One server per roadmap.** The store's lock is the interlock: a second `rmp graph serve` for the same roadmap cannot take it, exits 1, and leaves the first server's socket untouched. Stopping a server with `Ctrl+C` drains the work in flight, checkpoints if the log has grown, releases the lock and removes the socket, and exits 0.
+**One server per roadmap.** The store's lock is the interlock: a second `rmp graph serve` for the same roadmap cannot take it, exits 1, and leaves the first server's socket untouched. Stopping a server with `Ctrl+C` drains the work in flight, checkpoints if the log has grown, releases the lock and removes the socket, and exits 0. While it runs, the server folds the write-ahead log on a cadence, but only when the log has grown since the last fold, so an idle server writes nothing to the store; a log tail left by a killed server is folded at the first due instant. A failed fold fails no write: it is reported on the server's stderr and retried at the next due instant.
 
-**Access control is the filesystem and nothing else.** The socket is mode `0600` inside a roadmap home that is `0700`, there is no authentication and no transport security (the server prints a warning for each at startup), and any caller that can open the socket can read, write, delete and change the schema of that roadmap's graph.
+**Access control is the filesystem and nothing else.** The socket is mode `0600` inside a roadmap home that is `0700`, and `serve` re-establishes `0700` on `~/.roadmaps/` and the roadmap home each time it starts (a directory it cannot fix fails the start with exit code 1). On Linux, macOS, FreeBSD and OpenBSD the socket is never connectable under a wider mode at any instant, whatever the umask: it is bound in a private staging directory and then linked into place. On Windows the mode only toggles read-only, and access is the directory's access-control list. There is no authentication and no transport security (the server prints a warning for each at startup), and any caller that can open the socket can read, write, delete and change the schema of that roadmap's graph.
 
 **`--socket` is accepted by both subcommands** and both default it to `~/.roadmaps/<name>/graph.sock`. It names *which socket is bound and which socket is connected to*, and nothing else — there is nothing else for it to select. Write it on `client` when the server was started with the same flag.
 
-**The socket path has a length limit, and the default path can cross it.** The operating system bounds how long a Unix domain socket path may be — 107 bytes on Linux and Windows, 103 on macOS, FreeBSD and OpenBSD, counted in bytes rather than characters. A resolved path over that bound names a socket no process can create, so `serve` and `client` both refuse the invocation with exit code 1 and the web interface's graph data endpoint answers HTTP 500. This is not only a `--socket` concern: `~/.roadmaps/<name>/graph.sock` crosses the bound on its own under a deep enough home directory, with no unusual roadmap name. On the command line the way back is `--socket` naming a path inside the bound, given to both ends of the pair: the server binds it and the client reaches it, and that roadmap works normally. The web page has no such flag, so its only remedy is a shorter home directory or a shorter roadmap name. See [DOCS/commands/graph.md](DOCS/commands/graph.md#the-socket-path-has-a-length-limit).
+**The socket path has a length limit, and the default path can cross it.** The operating system bounds how long a Unix domain socket path may be — 107 bytes on Linux and Windows, 103 on macOS, FreeBSD and OpenBSD, counted in bytes rather than characters. A resolved path over that bound names a socket no process can create, so `serve` and `client` both refuse the invocation with exit code 1 and the web interface's graph data endpoint answers HTTP 500. This is not only a `--socket` concern: `~/.roadmaps/<name>/graph.sock` crosses the bound on its own under a deep enough home directory, with no unusual roadmap name. For `serve` on Linux, macOS, FreeBSD and OpenBSD the limit is 8 bytes lower for the default `graph.sock`, because the server first binds at a slightly longer transient path; the refusal line reports the limit in force. On the command line the way back is `--socket` naming a path within the reported limit, given to both ends of the pair: the server binds it and the client reaches it, and that roadmap works normally. The web page has no such flag, so its only remedy is a shorter home directory or a shorter roadmap name. See [DOCS/commands/graph.md](DOCS/commands/graph.md#the-socket-path-has-a-length-limit).
 
 **One caution.** `--socket` moves the socket off the default path, and the web interface cannot follow it: it is an HTTP handler with no command line, and no request parameter carries a socket path, so a server started with `--socket` leaves that roadmap's graph page unavailable — HTTP 503, the same answer it gives for a roadmap nobody is serving — for as long as it runs. Start a server without the flag whenever the same roadmap is also browsed. See [DOCS/commands/graph.md](DOCS/commands/graph.md#running-a-graph-server).
 

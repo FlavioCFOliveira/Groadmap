@@ -83,22 +83,22 @@ func CheckpointRefusedFieldTooLong(err error) bool {
 // for an over-long committed field, for the surface that names its own
 // checkpoint.
 //
-// checkpoint is the subject of the sentence — "the graph checkpoint", "the graph
-// server's shutdown checkpoint" — and it is a parameter rather than a fixed
-// phrase because the surfaces that report this do not share one name for the
-// thing that failed, and one of them shares a stderr stream with a DIFFERENT
-// checkpoint whose report must stay distinguishable from this one
-// (internal/graphserve's in-flight watch). What they do share is everything after
-// the subject, which is what this function exists to keep single.
+// checkpoint is the subject of the sentence — "the graph server's shutdown
+// checkpoint", "an in-flight graph checkpoint" — and it is a parameter rather
+// than a fixed phrase because the graph server reports this from both of its
+// checkpoints on one stderr stream, and a reader must be able to tell which of
+// the two was refused. What the two share is everything after the subject, which
+// is what this function exists to keep single.
 //
 // # The four things it must say, and why each
 //
 // SPEC/GRAPH.md § Field Length Limits, rule 9, fixes the content and deliberately
-// publishes no literal for it: this diagnostic accompanies a SUCCESSFUL
-// invocation — exit code 0 on the short-lived surfaces, a log record on the
-// server — so it is not an error line and does not belong in the tables
-// SPEC/COMMANDS.md § Published Error Strings Are Exact governs. What is fixed is
-// the content, and it is these four:
+// publishes no literal for it: this diagnostic is a log record on the graph
+// server's own stderr, and the write whose commit made the fold owed has already
+// been acknowledged to its client with its normal result and exit code 0, so it
+// is not an error line and does not belong in the tables SPEC/COMMANDS.md
+// § Published Error Strings Are Exact governs. What is fixed is the content, and
+// it is these four:
 //
 //  1. That every acknowledged commit is still durable and recovery still restores
 //     it. It goes FIRST because that is the question a durability diagnostic

@@ -3961,7 +3961,11 @@ two byte counts the path-length line carries; the placeholder table under
   `N` is the resolved path's length in bytes and `M` is the limit the platform
   yields, so the published line carries no figure of its own and is one line on
   every target: the limit is 107 on Linux and Windows and 103 on macOS, FreeBSD
-  and OpenBSD, and the binary interpolates the one in force. Everything outside
+  and OpenBSD, and the binary interpolates the one in force. On a platform with
+  POSIX file modes, `graph serve` also refuses a path whose transient bind path
+  would exceed that limit, and there `M` is the limit less the bytes by which the
+  transient path exceeds the resolved one — 8 for the default final component
+  `graph.sock` (`GRAPH.md § Socket Path Length`, rule 9). Everything outside
   the three placeholders is `rmp`'s own text, and the line is compared in full.
   Both subcommands that publish `--socket` write it, for a path the caller
   supplied and for the derived default path alike; the web graph data endpoint,

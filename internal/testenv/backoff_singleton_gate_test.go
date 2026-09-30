@@ -91,14 +91,16 @@ var blockingTimeFuncs = map[string]bool{
 // hole left open in a gate that is meant to be closed, and it would silently
 // admit the next delay somebody wrote at the same path.
 var exemptWaits = map[string]string{
-	"internal/graphserve/checkpointwatch.go: time.NewTicker": "the in-flight checkpoint watch's poll " +
-		"period. It is a SAMPLER and not a retry: it has no attempt count, no delay ladder and no " +
-		"terminal failure — it takes one reading of checkpoint.Stats() per tick for the whole life " +
-		"of the server, and its period is DERIVED from the checkpointer's own cadence (half of it, " +
-		"because the level it samples persists for exactly one attempt cycle) rather than chosen. " +
-		"internal/backoff owns how many times and how long to wait before giving up, and neither " +
-		"quantity exists here: routing this through it would mean asking a bounded retry ladder to " +
-		"express an unbounded fixed-period poll",
+	"internal/graphserve/checkpointwatch.go: time.NewTicker": "the in-flight checkpoint's cadence. " +
+		"It is a CADENCE and not a retry: it has no attempt count, no delay ladder and no terminal " +
+		"failure — it ticks at the checkpoint interval for the whole life of the server, and at each " +
+		"tick on which a fold is due it consults the gate once. A fold that fails is not retried by " +
+		"it either: the next attempt waits for the next due instant of the same fixed cadence, which " +
+		"is the engine's own checkpoint timing reproduced by Groadmap so that the gate can withhold " +
+		"a fold that would fold nothing (SPEC/GRAPH.md § Durability and Checkpointing in a " +
+		"Long-Lived Process, rules 9 and 10). internal/backoff owns how many times and how long to " +
+		"wait before giving up, and neither quantity exists here: routing this through it would " +
+		"mean asking a bounded retry ladder to express an unbounded fixed-period cadence",
 
 	"internal/testenv/graphserver/graphserver.go: time.Sleep": "the readiness poll that waits for " +
 		"a child `rmp graph serve` to announce the socket it bound. It is an OBSERVATION of a state " +
