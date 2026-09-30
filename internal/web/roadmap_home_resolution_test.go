@@ -102,7 +102,7 @@ func TestCriterion264_ARegularFileHomeIsARoadmapThatDoesNotExist(t *testing.T) {
 		t.Errorf("the roadmap index lists %q, which is a regular file and not a roadmap", name)
 	}
 
-	got, err := os.ReadFile(occupant) // #nosec G304 -- this test's own file under its own HOME
+	got, err := os.ReadFile(filepath.Clean(occupant))
 	if err != nil || !bytes.Equal(got, content) {
 		t.Errorf("the regular file was changed: %q (%v)", got, err)
 	}

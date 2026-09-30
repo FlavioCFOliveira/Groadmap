@@ -139,9 +139,10 @@ The SPEC is unversioned. Git is the source of truth for its evolution — recove
 | Schema migrations | `VERSION.md § Migrations` |
 | Build / CI / lint | `BUILD.md` |
 | Validation gates (the six gates, and their enforcement locally, in CI, and at release) | `BUILD.md § Validation Gates` |
+| The end-to-end suite as a required CI and release job outside the gate set (the binary it builds, its timeout, its Python version, how a failure names the module) | `BUILD.md § The End-to-End Suite Is a Required Pipeline Job` |
 | The ban on benchmarks and performance-measurement tests, and the observables a specified time-bounded behaviour is proven by instead | `BUILD.md § No Benchmarks and No Performance-Measurement Tests` |
 | Security scan (`gosec`, accepted findings, scope exclusion) | `BUILD.md § Security Scan: gosec` |
-| How `make lint` and `make security` find the pinned `golangci-lint` and `gosec`, the version check, and the lines a mismatch writes | `BUILD.md § Local Tool Resolution` |
+| How `make lint` and `make security` find the pinned `golangci-lint` and `gosec` (the `go install` copy first, then `PATH`), the version check, and the report a mismatch writes | `BUILD.md § Local Tool Resolution` |
 | Installation / release | `DEPLOY.md` |
 | How `install.sh` reads the installed version, compares it with the latest release, and the messages it writes when the two are equal or differ | `DEPLOY.md § Installed Version Detection` |
 
@@ -233,8 +234,9 @@ To prevent drift across SPEC files, the following topics have a single authorita
 | Cypher engine constructor (`cypher.NewEngineWithStoreAndRecovery` on the one path, run only by `rmp graph serve`, carrying the recovered schema) | `GRAPH.md § Engine Constructor by Path` |
 | Minimum Go version rules (the version itself is the `go` directive of `go.mod`) and external dependencies | `BUILD.md § Go Toolchain` |
 | Validation gate set and where it is enforced (local, CI, release) | `BUILD.md § Validation Gates` |
+| End-to-end suite as a required pipeline job, outside the gate set | `BUILD.md § The End-to-End Suite Is a Required Pipeline Job` |
 | No benchmarks and no performance-measurement tests, and how a specified time-bounded behaviour is proven without a clock | `BUILD.md § No Benchmarks and No Performance-Measurement Tests` |
-| Local resolution of the pinned lint and security tools, the version check, and its failure lines | `BUILD.md § Local Tool Resolution` |
+| Local resolution of the pinned lint and security tools (prefer the `go install` copy, then `PATH`), the version check, and its failure report | `BUILD.md § Local Tool Resolution` |
 | Help text canonical | code in `internal/commands/*.go` (structure in `HELP.md`) |
 | AI agent contract JSON schema | `DATA_FORMATS.md § AI Agent Contract` |
 | AI agent contract generation rules | `ARCHITECTURE.md § AI Agent Contract Generation` |

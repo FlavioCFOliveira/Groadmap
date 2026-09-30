@@ -190,7 +190,7 @@ func TestRoadmapSelector_ARegularFileHomeIsARoadmapThatDoesNotExist(t *testing.T
 		if err != nil || !info.Mode().IsRegular() || info.Mode().Perm() != 0o600 {
 			t.Fatalf("%s: the regular file at %s was changed (%v, %v)", label, occupant, info, err)
 		}
-		got, err := os.ReadFile(occupant) // #nosec G304 -- this test's own file under its own HOME
+		got, err := os.ReadFile(filepath.Clean(occupant))
 		if err != nil || !bytes.Equal(got, content) {
 			t.Fatalf("%s: the file's content changed: %q (%v)", label, got, err)
 		}

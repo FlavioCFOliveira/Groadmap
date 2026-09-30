@@ -156,7 +156,7 @@ func TestCommentEditTypeOnly_ReadFailureIsAnIOFailure(t *testing.T) {
 			if err := os.WriteFile(path, []byte("unread"), 0o600); err != nil {
 				t.Fatalf("writing the stdin fixture: %v", err)
 			}
-			closed, err := os.Open(path) // #nosec G304 -- path is this test's own TempDir file
+			closed, err := os.Open(filepath.Clean(path))
 			if err != nil {
 				t.Fatalf("opening the stdin fixture: %v", err)
 			}

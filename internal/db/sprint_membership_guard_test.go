@@ -341,7 +341,7 @@ func TestNoTriggerAnywhere(t *testing.T) {
 	root := moduleRoot(t)
 	createTrigger := regexp.MustCompile(`(?i)create\s+(temp(orary)?\s+)?trigger`)
 	for _, file := range productionGoFiles(t, root) {
-		content, err := os.ReadFile(file) // #nosec G304 -- a module source file the walk found
+		content, err := os.ReadFile(filepath.Clean(file))
 		if err != nil {
 			t.Fatalf("reading %s: %v", file, err)
 		}
