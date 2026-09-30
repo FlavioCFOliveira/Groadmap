@@ -165,30 +165,35 @@ func flagValue(name, inlineVal string, hasInline bool, args []string, i int) (va
 // (SPEC/HELP.md § Agreement with the contract). The text follows the
 // skeleton in SPEC/HELP.md § Web command help specifics and makes explicit
 // the three behaviours an agent cannot infer from the generic template:
-// no -r/--roadmap flag, read-only and loopback-only by default (with
-// --host 0.0.0.0 as the explicit network-exposure opt-in), and the long-lived
-// process that runs until interrupted.
+// no -r/--roadmap flag; read-only pages with the knowledge-graph query bar as
+// the exception that runs the Cypher typed, writes included, and a loopback
+// bind by default, so no other machine can connect (with --host 0.0.0.0 as the
+// explicit network-exposure opt-in); and the long-lived process that runs until
+// interrupted.
 func HelpText(exitCodes string) string {
 	return `Usage: rmp web [options]
 
-Start a read-only web interface for the roadmaps under ~/.roadmaps/.
-The browser lists every roadmap and lets you view its tasks, sprints,
-and knowledge graph. The web interface never writes; the rmp CLI
-remains the sole write path. rmp web does not take -r/--roadmap: it
-lists all roadmaps and you select one in the browser.
+Start a web interface for the roadmaps under ~/.roadmaps/. The browser
+lists every roadmap and lets you view its tasks, sprints, and knowledge
+graph. Every page is read-only and no roadmap database is ever written.
+The knowledge-graph query bar is the exception: it runs the Cypher you
+type, including statements that write or delete, and it is not
+authenticated. rmp web does not take -r/--roadmap: it lists all roadmaps
+and you select one in the browser.
 
-The interface binds loopback (127.0.0.1) by default, so it is reachable
-only from the local machine; to expose it on the network pass the
-explicit opt-in --host 0.0.0.0 (all interfaces), which also prints a
-network-exposure warning to stderr. --host overrides the bind host; --port
-overrides the port. Unlike every other command, rmp web starts a server that
-keeps running until interrupted (Ctrl+C / SIGINT or SIGTERM); on startup it
-prints the served URL and, unless --no-open is given, opens your default
-browser at it.
+The interface binds loopback (127.0.0.1) by default, so no other machine
+can connect to it; to expose it on the network pass the explicit opt-in
+--host 0.0.0.0 (all interfaces), which also prints a network-exposure
+warning to stderr. --host overrides the bind host; --port overrides the
+port. Unlike every other command, rmp web starts a server that keeps
+running until interrupted (Ctrl+C / SIGINT or SIGTERM); on startup it prints
+the served URL and, unless --no-open is given, opens your default browser at
+it.
 
 Options:
-  --host <address>   Bind host. Default 127.0.0.1 (loopback, local machine
-                     only). Use --host 0.0.0.0 to expose on the network.
+  --host <address>   Bind host. Default 127.0.0.1 (loopback: no other
+                     machine can connect). Use --host 0.0.0.0 to expose
+                     on the network.
   --port <number>    Bind port 0-65535. Default 8787; falls back to an
                      ephemeral port if 8787 is in use and --port is not set.
   --no-open          Do not launch a browser; just print the served URL.

@@ -403,8 +403,11 @@ class TestWebInterface:
         deadlock. Polling a file for the pretty-printed {"url": ...} object
         is deterministic and EOF-independent.
 
-        The default bind host is 127.0.0.1 (loopback), reachable only from the
-        local machine (SPEC/WEB.md § Bind Address and Port Selection). These
+        The default bind host is 127.0.0.1 (loopback), so no other machine can
+        connect to it (SPEC/WEB.md § Bind Address and Port Selection); which
+        requests it serves is decided by SPEC/WEB.md § Security and
+        Constraints, rules 13 and 14, and every request here names the
+        listener's own host. These
         route/lifecycle scenarios only need a reachable server, so unless the
         caller already pins --host we pin the loopback default explicitly; this
         also avoids the network-exposure warning that a non-loopback bind would
@@ -7144,6 +7147,261 @@ class TestWebInterface:
             f"while this module asserts against {SHUTDOWN_GRACE_SECONDS}s. One of the two "
             f"has moved and the drift must be named, not absorbed"
         )
+
+    # ====================================================================
+    # AC258-AC261: requests naming a foreign host or made on behalf of
+    # another site are refused before any handler (SPEC/WEB.md § Security
+    # and Constraints, rules 13 to 15)
+    # ====================================================================
+
+    @staticmethod
+    def _req_as(port, path, host, method="GET", extra=None, timeout=5):
+        """Request a raw path over a loopback connection while naming `host`
+        in the Host field (None sends no Host field), with extra header fields
+        given as (name, value) pairs so a field can be repeated. Returns
+        (status, header list, body)."""
+        conn = http.client.HTTPConnection("127.0.0.1", port, timeout=timeout)
+        try:
+            conn.putrequest(method, path, skip_host=True, skip_accept_encoding=True)
+            if host is not None:
+                conn.putheader("Host", host)
+            for name, value in extra or ():
+                conn.putheader(name, value)
+            conn.endheaders()
+            resp = conn.getresponse()
+            body = resp.read().decode("utf-8", "replace")
+            return resp.status, [(k.lower(), v) for k, v in resp.getheaders()], body
+        finally:
+            conn.close()
+
+    @staticmethod
+    def _http10_without_host(port, path):
+        """Send an HTTP/1.0 request carrying no Host field and return
+        (status, body). http.client always speaks HTTP/1.1, so the request is
+        written by hand."""
+        with socket.create_connection(("127.0.0.1", port), timeout=5) as sock:
+            sock.sendall(f"GET {path} HTTP/1.0\r\n\r\n".encode("ascii"))
+            data = b""
+            while True:
+                chunk = sock.recv(65536)
+                if not chunk:
+                    break
+                data += chunk
+        head, _, body = data.partition(b"\r\n\r\n")
+        status = int(head.split(b" ", 2)[1])
+        return status, body.decode("utf-8", "replace")
+
+    def _intrusions(self):
+        """Count the nodes a refused write would have created, read through a
+        separate `rmp graph client` process."""
+        return self._graph("MATCH (n:Intrusion) RETURN count(n)")["rows"][0][0]
+
+    def test_foreign_hosts_are_refused_on_a_loopback_bind(self):
+        """AC258: against `rmp web --host 127.0.0.1 --port 0`, the loopback
+        names with the port the startup URL reports are served, and every other
+        host -- the DNS-rebinding name, another port, no port, a trailing dot,
+        a subdomain of localhost, and an HTTP/1.0 request with no Host -- is
+        answered 403 on the index and on a WRITING graph data request, and the
+        refused writes leave the graph unchanged."""
+        proc, port = self._start(["--port", "0"])
+        for host in (f"127.0.0.1:{port}", f"localhost:{port}", f"LOCALHOST:{port}", f"[::1]:{port}"):
+            status, _, body = self._req_as(port, "/", host)
+            assert status == 200, f"host {host!r} must be served, got {status} {body[:200]!r}"
+
+        write = self._graph_data(port, q="CREATE (:Intrusion {via:'host'})")
+        refused = (
+            f"attacker.example:{port}", f"127.0.0.1:{port + 1 if port < 65535 else port - 1}",
+            "127.0.0.1", f"localhost.:{port}", f"sub.localhost:{port}",
+        )
+        for host in refused:
+            for path in ("/", write):
+                status, _, body = self._req_as(port, path, host)
+                assert (status, body) == (403, "host not allowed\n"), (
+                    f"GET {path} with host {host!r} must be refused; got {status} {body!r}")
+        for path in ("/", write):
+            status, body = self._http10_without_host(port, path)
+            assert (status, body) == (403, "host not allowed\n"), (
+                f"an HTTP/1.0 GET {path} with no Host must be refused; got {status} {body!r}")
+
+        assert self._intrusions() == 0, "a refused request wrote into the knowledge graph"
+
+        # The control: the same write naming the listener's own host lands, so
+        # the unchanged graph above is an observation, not an unobservable.
+        status, _, body = self._req_as(port, write, f"127.0.0.1:{port}")
+        assert status == 200, f"the control write must be served; got {status} {body!r}"
+        assert self._intrusions() == 1, "the control write did not land"
+
+    def test_non_loopback_bind_serves_ip_literals_and_refuses_names(self):
+        """AC259: against a server bound to 0.0.0.0, localhost and any IP
+        literal with the bound port are served, and any other name -- the
+        machine's own hostname included -- is answered 403, as is a host with
+        no port."""
+        proc, port = self._start(["--host", "0.0.0.0", "--port", "0"])
+        for host in (f"localhost:{port}", f"127.0.0.1:{port}", f"0.0.0.0:{port}",
+                     f"192.0.2.10:{port}", f"[::1]:{port}"):
+            status, _, _ = self._req_as(port, "/", host)
+            assert status == 200, f"host {host!r} must be served on a 0.0.0.0 bind, got {status}"
+        names = ["workstation.lan", "attacker.example"]
+        hostname = socket.gethostname()
+        if hostname:
+            names.append(hostname)
+        for name in names:
+            status, _, body = self._req_as(port, "/", f"{name}:{port}")
+            assert (status, body) == (403, "host not allowed\n"), (
+                f"name {name!r} must be refused on a 0.0.0.0 bind; got {status} {body!r}")
+        status, _, _ = self._req_as(port, "/", "127.0.0.1")
+        assert status == 403, f"a host without a port must be refused on port {port}, got {status}"
+
+    def test_cross_site_requests_are_refused_and_write_nothing(self):
+        """AC260: with an allowed host, a request whose Sec-Fetch-Site is
+        cross-site, same-site or undefined, or whose Origin is null or names
+        another scheme, host or port, or which repeats either field, is
+        answered 403 -- for GET and HEAD as for any other method -- while
+        same-origin, none, the request's own Origin and neither field are
+        served. A cross-site GET of a writing statement leaves the graph
+        unchanged, and the graph page's own fetch is served."""
+        proc, port = self._start(["--port", "0"])
+        own = f"127.0.0.1:{port}"
+        refused = (
+            [("Sec-Fetch-Site", "cross-site")],
+            [("Sec-Fetch-Site", "same-site")],
+            [("Sec-Fetch-Site", "same-origin, none")],
+            [("Sec-Fetch-Site", "same-origin"), ("Sec-Fetch-Site", "same-origin")],
+            [("Origin", "null")],
+            [("Origin", f"https://{own}")],
+            [("Origin", f"http://attacker.example:{port}")],
+            [("Origin", f"http://localhost:{port + 1 if port < 65535 else port - 1}")],
+            [("Origin", f"http://{own}"), ("Origin", f"http://{own}")],
+        )
+        for fields in refused:
+            for method in ("GET", "HEAD", "POST"):
+                status, _, body = self._req_as(port, "/", own, method=method, extra=fields)
+                assert status == 403, f"{method} with {fields!r} must be refused, got {status}"
+                if method == "GET":
+                    assert body == "origin not allowed\n", f"{fields!r}: body {body!r}"
+        served = (
+            [("Sec-Fetch-Site", "same-origin")],
+            [("Sec-Fetch-Site", "none")],
+            [("Origin", f"http://{own}")],
+            [],
+        )
+        for fields in served:
+            for method in ("GET", "HEAD"):
+                status, _, _ = self._req_as(port, "/", own, method=method, extra=fields)
+                assert status == 200, f"{method} with {fields!r} must be served, got {status}"
+
+        write = self._graph_data(port, q="CREATE (:Intrusion {via:'cross-site'})")
+        for method in ("GET", "HEAD"):
+            status, _, _ = self._req_as(port, write, own, method=method, extra=[
+                ("Sec-Fetch-Site", "cross-site"), ("Origin", "https://attacker.example")])
+            assert status == 403, f"a cross-site {method} of a writing statement must be refused, got {status}"
+        assert self._intrusions() == 0, "a cross-site request wrote into the knowledge graph"
+
+        # What the graph page's own fetch sends: same-origin and no Origin.
+        status, _, body = self._req_as(port, write, own, extra=[("Sec-Fetch-Site", "same-origin")])
+        assert status == 200, f"the graph page's own fetch must be served; got {status} {body!r}"
+        assert self._intrusions() == 1, "the same-origin write did not land"
+
+    def test_refusal_is_a_403_with_its_line_and_one_warn_record(self):
+        """AC261: a refusal is a 403 with Content-Type text/plain; charset=utf-8
+        and its one-line body (the host line when both checks fail), no body on
+        HEAD, the security headers and Cache-Control: no-store on every path --
+        /static/... included -- no Vary on the tasks route, and exactly one WARN
+        record per refusal carrying the published attributes and no roadmap."""
+        proc, port = self._start(["--port", "0"])
+        own = f"127.0.0.1:{port}"
+        foreign = f"attacker.example:{port}"
+        cross = [("Sec-Fetch-Site", "cross-site"), ("Origin", "null")]
+        cases = [
+            ("GET", f"/roadmaps/{ROADMAP}/tasks", foreign, [], "host not allowed"),
+            ("GET", "/static/style.css", foreign, [], "host not allowed"),
+            ("GET", f"/roadmaps/{ROADMAP}/tasks", own, cross, "origin not allowed"),
+            ("GET", "/static/style.css", own, cross, "origin not allowed"),
+            ("HEAD", "/", own, cross, "origin not allowed"),
+            ("GET", "/", foreign, cross, "host not allowed"),
+        ]
+        for method, path, host, fields, line in cases:
+            status, headers, body = self._req_as(port, path, host, method=method, extra=fields)
+            label = f"{method} {path} host={host!r} fields={fields!r}"
+            assert status == 403, f"{label}: status {status}"
+            want_body = "" if method == "HEAD" else line + "\n"
+            assert body == want_body, f"{label}: body {body!r}, want {want_body!r}"
+            values = {}
+            for name, value in headers:
+                values.setdefault(name, []).append(value)
+            assert values.get("content-type") == ["text/plain; charset=utf-8"], f"{label}: {values}"
+            assert values.get("cache-control") == ["no-store"], f"{label}: {values}"
+            assert values.get("x-content-type-options") == ["nosniff"], f"{label}: {values}"
+            assert values.get("x-frame-options") == ["DENY"], f"{label}: {values}"
+            assert values.get("referrer-policy") == ["same-origin"], f"{label}: {values}"
+            assert "content-security-policy" in values, f"{label}: {values}"
+            assert "vary" not in values and "set-cookie" not in values, f"{label}: {values}"
+
+        records = self._log_records(self._drain(proc.err_file))
+        assert len(records) == len(cases), (
+            f"exactly one record per refusal expected; got {[r['raw'] for r in records]}")
+        for record, (method, path, host, fields, line) in zip(records, cases):
+            assert record["level"] == "WARN", record["raw"]
+            assert record["msg"] == f"request refused: {line}", record["raw"]
+            for fragment in (f"method={method}", f"path={path}", f"host={host}",
+                             " status=403 ", f'err="{line}"'):
+                assert fragment in record["raw"], f"record missing {fragment!r}: {record['raw']!r}"
+            if fields:
+                assert 'origin=null sec_fetch_site=cross-site' in record["raw"], record["raw"]
+            else:
+                assert 'origin="" sec_fetch_site=""' in record["raw"], record["raw"]
+            assert "roadmap=" not in record["raw"], record["raw"]
+            self._assert_canonical_utc(record)
+
+    # ====================================================================
+    # AC262: a request its client abandoned is answered 499 and recorded
+    # once at INFO, and its statement is stopped (SPEC/WEB.md § Requests
+    # Abandoned by the Client; § Graph Query Time Budget, rule 2)
+    # ====================================================================
+
+    def test_abandoned_graph_statement_is_stopped_and_recorded_at_info(self):
+        """AC262 and rmp task #563: a client that disconnects while its
+        statement runs stops the statement -- nothing it would have written is
+        committed -- and the server records the request once at INFO with
+        status 499, with no WARN and no ERROR record.
+
+        The control is the same statement writing another label, sent after the
+        abandoned one with its client connected: it commits, and it started
+        later and did the same work, so the abandoned one would have committed
+        by then had it kept running.
+        """
+        # A three-way product over 300 nodes keeps the statement running well
+        # past the moment its client leaves; no node limit bounds it.
+        self._graph("UNWIND range(1,298) AS i CREATE (:Bulk {i:i})")
+        proc, port = self._start(["--port", "0"])
+
+        def slow_write(label):
+            return self._graph_data(
+                port, q=f"MATCH (a),(b),(c) WITH count(*) AS n CREATE (w:{label} {{n:n}}) RETURN w")
+
+        with socket.create_connection(("127.0.0.1", port), timeout=5) as sock:
+            sock.sendall(
+                f"GET {slow_write('AbandonedWrite')} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n\r\n"
+                .encode("ascii"))
+            time.sleep(0.3)
+        # The socket is closed: the client has gone while the statement runs.
+
+        status, _, body = self._req(port, slow_write("ControlWrite"), timeout=60)
+        assert status == 200, f"the control statement must be served; got {status} {body[:200]!r}"
+        assert self._graph("MATCH (w:ControlWrite) RETURN count(w)")["rows"][0][0] == 1
+        assert self._graph("MATCH (w:AbandonedWrite) RETURN count(w)")["rows"][0][0] == 0, (
+            "the statement whose client disconnected was committed: the disconnect must "
+            "cancel the statement, not only the wait for its answer")
+
+        records = self._log_records(self._drain(proc.err_file))
+        assert [r["level"] for r in records] == ["INFO"], (
+            f"exactly one INFO record and nothing else expected; got {[r['raw'] for r in records]}")
+        record = records[0]
+        assert record["msg"] == "request abandoned by client", record["raw"]
+        for fragment in ("method=GET", f"roadmap={ROADMAP}", " status=499 ", "err="):
+            assert fragment in record["raw"], f"record missing {fragment!r}: {record['raw']!r}"
+        assert "kind=" not in record["raw"], record["raw"]
+        self._assert_canonical_utc(record)
 
     # ====================================================================
     # AC141-AC146: server logging on the console (SPEC/WEB.md § Server Logging)

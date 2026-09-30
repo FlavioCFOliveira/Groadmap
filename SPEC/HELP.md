@@ -936,9 +936,11 @@ or user cannot infer from the generic template:
    server never writes to a roadmap's `project.db`; that the graph page's query
    bar is the exception, because the statement it submits is executed as written
    and may create, change, or delete graph data, with no authentication; and that
-   the server binds loopback (`127.0.0.1`) by default, so it is reachable only
-   from the local machine. State that
-   `--host 0.0.0.0` is the explicit opt-in to expose it on all interfaces
+   the server binds loopback (`127.0.0.1`) by default, so no other machine can
+   connect to it. The help states that connection fact and nothing more: the
+   bind does not decide which requests are served, and the help does not restate
+   the rules that do (`WEB.md § Security and Constraints`, rules 13 and 14).
+   State that `--host 0.0.0.0` is the explicit opt-in to expose it on all interfaces
    (network-reachable); and that `--host`/`--port` override the bind address,
    with the default-port ephemeral fallback. See `WEB.md`.
 3. **Long-lived process.** State that the command starts a server that keeps
@@ -961,8 +963,9 @@ type, including statements that write or delete, and it is not
 authenticated. rmp web does not take -r/--roadmap.
 
 Options:
-  --host <address>   Bind host. Default 127.0.0.1 (loopback, local machine
-                     only). Use --host 0.0.0.0 to expose on the network.
+  --host <address>   Bind host. Default 127.0.0.1 (loopback: no other
+                     machine can connect). Use --host 0.0.0.0 to expose
+                     on the network.
   --port <number>    Bind port 0-65535. Default 8787; falls back to an
                      ephemeral port if 8787 is in use and --port is not set.
   --no-open          Do not launch a browser; just print the served URL.

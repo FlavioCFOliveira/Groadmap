@@ -263,7 +263,11 @@ func FuzzWebQueryParameters(f *testing.F) {
 		f.Add(uint8(fuzzRouteGraphData), seed)
 	}
 
-	h := handler()
+	// The request below names the host localhost with no port, so the handler is
+	// the one of a loopback listener on port 80: the one bound port under which
+	// a host without a port is served (SPEC/WEB.md § Security and Constraints,
+	// rule 13). The guard admits every input, and the fuzzing reaches the routes.
+	h := newHandler(newHostPolicy("localhost", httpDefaultPort))
 
 	f.Fuzz(func(t *testing.T, route uint8, rawQuery string) {
 		path := "/roadmaps/" + fuzzWebRoadmap

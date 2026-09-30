@@ -4391,8 +4391,12 @@ rmp web --no-open
 
 ### Options
 
-- `--host <address>` - Bind host. Default `127.0.0.1` (loopback only), so the
-  interface is reachable only from the local machine. Exposing the
+- `--host <address>` - Bind host. Default `127.0.0.1` (loopback only), so no
+  other machine can open a connection to the interface. The bind limits which
+  connections reach the server, not which requests it serves: a browser on the
+  local machine connects on behalf of any page it loads, and which of those
+  requests are served is decided by `WEB.md § Security and Constraints`,
+  rules 13 and 14. Exposing the
   interface on the network is the explicit opt-in `--host 0.0.0.0` (binds all
   interfaces), or any other non-loopback address. When a non-loopback host is
   bound, the server prints a warning to stderr that the interface is reachable

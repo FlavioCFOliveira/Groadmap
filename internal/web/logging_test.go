@@ -169,27 +169,31 @@ func TestLogRecordCannotBeForged(t *testing.T) {
 
 // TestResolveRoadmapIOFailureIsLogged covers the one path on which a roadmap
 // that cannot be resolved is a 500 rather than a 404: the existence check
-// itself fails with an I/O error. The roadmap home is made unreadable so the
-// stat of its database returns a permission error instead of not-exist.
+// itself fails with an I/O error.
+//
+// The error is produced by the filesystem's structure rather than by its
+// permissions, so the test runs on every filesystem and under every user,
+// root included: the roadmap's home is a regular FILE, so the stat of
+// <home>/project.db fails with ENOTDIR, which is not a not-exist error and so
+// cannot be read as an absent roadmap.
 func TestResolveRoadmapIOFailureIsLogged(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 
 	const name = "unreadable-roadmap"
-	roadmapHome := filepath.Join(home, ".roadmaps", name)
-	if err := os.MkdirAll(roadmapHome, 0o700); err != nil {
-		t.Fatalf("creating roadmap home: %v", err)
+	dataDir := filepath.Join(home, ".roadmaps")
+	if err := os.MkdirAll(dataDir, 0o700); err != nil {
+		t.Fatalf("creating the data directory: %v", err)
 	}
-	if err := os.Chmod(roadmapHome, 0o000); err != nil {
-		t.Fatalf("sealing roadmap home: %v", err)
+	if err := os.WriteFile(filepath.Join(dataDir, name), []byte("a file where a directory belongs"), 0o600); err != nil {
+		t.Fatalf("planting a file as the roadmap home: %v", err)
 	}
-	// Restore the mode so the temporary directory can be removed.
-	t.Cleanup(func() { _ = os.Chmod(roadmapHome, 0o700) })
 
 	// Confirm the environment really produces an I/O error rather than a plain
 	// not-found; if it did not, the test would pass vacuously.
 	if _, err := utils.RoadmapExists(name); err == nil {
-		t.Skip("filesystem does not enforce directory permissions here; the 500 path is unreachable")
+		t.Fatal("RoadmapExists reported no error for a roadmap home that is a regular file; " +
+			"the 500 path this test covers would not be reached")
 	}
 
 	buf := captureLog(t)
@@ -516,17 +520,18 @@ func TestStartupMigrationUnreadableDataDirIsWarnLogged(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 
-	dataDir := filepath.Join(home, ".roadmaps")
-	if err := os.MkdirAll(dataDir, 0o700); err != nil {
-		t.Fatalf("creating data directory: %v", err)
+	// The data directory is a regular FILE, so reading it as a directory fails
+	// with ENOTDIR, which is not a not-exist error and so cannot be read as an
+	// empty data directory. The failure comes from the filesystem's structure
+	// rather than its permissions, so it is reached on every filesystem and under
+	// every user, root included.
+	if err := os.WriteFile(filepath.Join(home, ".roadmaps"), []byte("a file where a directory belongs"), 0o600); err != nil {
+		t.Fatalf("planting a file as the data directory: %v", err)
 	}
-	if err := os.Chmod(dataDir, 0o000); err != nil {
-		t.Fatalf("sealing data directory: %v", err)
-	}
-	t.Cleanup(func() { _ = os.Chmod(dataDir, 0o700) })
 
 	if _, err := utils.ListRoadmaps(); err == nil {
-		t.Skip("filesystem does not enforce directory permissions here; the branch is unreachable")
+		t.Fatal("ListRoadmaps reported no error for a data directory that is a regular file; " +
+			"the branch this test covers would not be reached")
 	}
 
 	buf := captureLog(t)

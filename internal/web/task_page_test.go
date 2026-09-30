@@ -236,7 +236,7 @@ func TestTaskPage_ServesEveryFieldInTheHTML(t *testing.T) {
 	t.Setenv("HOME", shortHome(t))
 	seedTaskPageFixture(t)
 	srv := handler()
-	live := httptest.NewServer(srv)
+	live := liveServer(t)
 	defer live.Close()
 
 	for _, c := range []struct {

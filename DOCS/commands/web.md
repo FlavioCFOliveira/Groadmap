@@ -10,7 +10,7 @@ The deliverable is fully self-contained: every asset required to render and oper
 
 `rmp web` operates across all roadmaps: it lists every roadmap found under `~/.roadmaps/` and you drill into one from the browser. It is the one command that is exempt from the always-required-roadmap rule, so it does **not** accept the `-r` / `--roadmap` flag. It has no subcommands.
 
-By default the server binds the loopback interface (`127.0.0.1`), so the read-only interface is reachable only from the local machine. Exposing it on the network is the explicit opt-in `--host 0.0.0.0` (all interfaces), which also writes a network-exposure warning to stderr at startup (see [Console Log](#console-log)).
+By default the server binds the loopback interface (`127.0.0.1`), so no other machine can connect to it. The bind limits which connections reach the server, not which requests it serves: a browser on the local machine connects on behalf of any page it loads, so which requests are served is decided by the host allowlist and the cross-site refusal (see [Security](#read-only-pages-one-writable-endpoint-and-security)). Exposing the interface on the network is the explicit opt-in `--host 0.0.0.0` (all interfaces), which also writes a network-exposure warning to stderr at startup (see [Console Log](#console-log)).
 
 **The browser launch is the only child process `rmp web` creates.** Unless `--no-open` is given, startup hands the served URL to the platform's conventional launcher — `xdg-open`, `open`, or `rundll32 url.dll,FileProtocolHandler` — as a single argument, started detached and never through a shell, and a failure to launch is ignored because the URL has already been printed. Nothing else spawns a process: serving a page does not, and neither does reaching a roadmap's graph, which is a socket connection made inside this process rather than a call out to the CLI.
 
@@ -26,7 +26,7 @@ rmp web [options]
 
 | Short Flag | Long Flag | Type | Default | Description |
 |------------|-----------|------|---------|-------------|
-| - | `--host` | string | `127.0.0.1` | Bind host. The default binds loopback only, so the read-only interface is reachable only from the local machine. Exposing it on the network is the explicit opt-in `--host 0.0.0.0` (all interfaces), which also prints a network-exposure warning to stderr |
+| - | `--host` | string | `127.0.0.1` | Bind host. The default binds loopback only, so no other machine can connect; which requests are served is decided by the host allowlist and the cross-site refusal (see [Security](#read-only-pages-one-writable-endpoint-and-security)). The bind host also sets which host names the allowlist admits. Exposing the interface on the network is the explicit opt-in `--host 0.0.0.0` (all interfaces), which also prints a network-exposure warning to stderr |
 | - | `--port` | integer | `8787` | Bind port (0-65535). When `--port` is omitted and `8787` is in use, the server falls back to an OS-chosen ephemeral port so it still starts. With an explicit `--port` there is no fallback. `--port 0` requests an ephemeral port |
 | - | `--no-open` | bool | false | Do not launch a browser; still start the server and print the served URL |
 | `-h` | `--help` | bool | false | Show command help |
@@ -63,18 +63,34 @@ Stdout is untouched by the log: it carries only the startup URL object, so a scr
 | Level | Meaning |
 |-------|---------|
 | `ERROR` | The server failed. The request was answered `500` and the fault is the server's or the environment's — a roadmap database that cannot be read, a template that will not execute, a response body that will not encode, or a roadmap whose derived graph socket path no process could ever bind |
-| `WARN` | The server did not fail, but you need to know what happened — a query-bar query rejected or failed (`400`), a graph server that is not running so the graph could not be reached (`503`), a roadmap skipped by the startup schema migration, or the interface bound to a non-loopback address |
+| `WARN` | The server did not fail, but you need to know what happened — a query-bar query rejected or failed (`400`), a request refused for the host it names or for the site it comes from (`403`), a graph server that is not running so the graph could not be reached (`503`), a roadmap skipped by the startup schema migration, or the interface bound to a non-loopback address |
+| `INFO` | Nothing failed and nothing calls for action, but the record states how a request ended — a request abandoned by its client before the server answered it (`499`; see [Requests abandoned by the client](#requests-abandoned-by-the-client)). A successful request and a successful startup write no record |
 
 ### What is recorded
 
 Every record carries `time`, `level`, and `msg`. `msg` is a fixed phrase naming the condition, never an interpolated string, so all records of one condition group together. A per-request record adds `method`, `path`, `status`, and `err` — the underlying error text, which is exactly what the HTTP response withholds — plus `roadmap` once the roadmap is known, and the route's own subject where there is one (`task`, `sprint`, `page`, `template`, or the query-bar `kind`).
 
+A `403` refusal is decided before any route is matched, so it carries no `roadmap` and no route subject. Its `msg` is `request refused: host not allowed` or `request refused: origin not allowed`, its `err` is the body line the response carries, and it adds the three values the checks examined as received: `host`, `origin` and `sec_fetch_site`, each empty when the field is absent.
+
 ### What is not recorded
 
-- **`404` and `405` are not logged.** An unknown roadmap, an unknown id, an unmapped path, or a write method on a read-only route is ordinary navigation, not a failure. Logging them would bury the real failures under every mistyped URL and every browser probe for an asset the server does not serve.
+- **`404` and `405` are not logged.** An unknown roadmap, a non-integer id, an id that belongs to no record, an unmapped path, or a non-read method on a known path is ordinary navigation, not a failure. Logging them would bury the real failures under every mistyped URL and every browser probe for an asset the server does not serve. The one exception: a roadmap whose existence check fails with an I/O error is answered `500`, not `404`, and is logged. A `403` refusal is not ordinary navigation and is logged, as above.
 - **There is no access log.** A successful request writes nothing.
-- **The client address is not recorded.**
+- **The client address is not recorded.** It would add a personal datum to the console without adding diagnostic value.
 - **Nothing is redacted.** An error text may name a path under `~/.roadmaps/`. That is the diagnostic value of the record; it stays on your console and never reaches the HTTP response.
+
+### Requests abandoned by the client
+
+A client can go away before the server has answered: a browser tab is closed, the user navigates elsewhere while a page is loading, or a command-line client is interrupted. The work the request started then fails because of that cancellation, and none of it is a fault of the server, of a graph server, or of the statement. The server decides by the request's own context, not by the failure's text:
+
+- **It is answered `499`, with no body.** The status is the one nginx uses for "client closed request"; a client that does read it treats it as a `400`. It normally reaches no one, because the client has gone.
+- **It is recorded once, at `INFO`, and never as an error.** The record's `msg` is `request abandoned by client`; it carries `method`, `path`, `status=499`, `roadmap` and the route's subject where known, and `err` naming the failure the cancellation produced. It carries no `kind`. No `ERROR` and no `WARN` record is written for it.
+- **It is never a `503` or an `execution` failure.** A graph data request abandoned before a graph server was resolved is not answered `503`, even when no server is listening, and one abandoned while its statement ran is not answered `400` with `kind` `execution`.
+- **A browser disconnect stops a running graph statement.** A statement cancelled before its transaction committed writes nothing. One that committed before the disconnect arrived stays committed, and the `INFO` record states that the request was abandoned, not whether its statement committed.
+- **A cancellation the server makes itself keeps its classification.** The 5-second query time budget and the endpoint's backstop deadline are both answered `400` with `kind` `execution` and recorded at `WARN` (see [Query time budget: 5 seconds](#query-time-budget-5-seconds)).
+- **A request the server already answered is not re-examined**, whether or not its client was still there to read the answer.
+
+`SPEC/WEB.md § Requests Abandoned by the Client` is canonical for the rule.
 
 ### Timestamps and integrity
 
@@ -86,7 +102,7 @@ The log has no configuration: there is no logging flag, no environment variable,
 
 ## Routes and Pages
 
-All routes serve `GET` and `HEAD` only. Any other HTTP method on any route returns HTTP `405`.
+All routes serve `GET` and `HEAD` only. Any other HTTP method on any route returns HTTP `405`. Before any route is matched, every request passes the host allowlist and the cross-site refusal, and one that fails either is answered `403` (see [Security](#read-only-pages-one-writable-endpoint-and-security)).
 
 | Route | Purpose | Response |
 |-------|---------|----------|
@@ -268,7 +284,7 @@ The knowledge-graph page renders its visualisation from a single editable Cypher
 
 Searching re-fetches `GET /roadmaps/{name}/graph/data` with the query box text as `q` and the dropdown value as `limit`, then re-renders the graph in the currently selected layout.
 
-**The statement is executed as written, and it may write.** The endpoint does not examine the statement and refuses nothing for what it does, so a `CREATE`, a `SET`, a `DETACH DELETE` or a schema `CREATE INDEX` typed into the query box is sent to the roadmap's graph server and committed there, exactly as the same statement would be under `rmp graph client`. The page shows no confirmation and asks for no credential before running one, and **nothing authenticates the request**: the only access control is the address the server is bound to. See [Security](#read-only-pages-one-writable-endpoint-and-security).
+**The statement is executed as written, and it may write.** The endpoint does not examine the statement and refuses nothing for what it does, so a `CREATE`, a `SET`, a `DETACH DELETE` or a schema `CREATE INDEX` typed into the query box is sent to the roadmap's graph server and committed there, exactly as the same statement would be under `rmp graph client`. The page shows no confirmation and asks for no credential before running one, and **nothing authenticates the request**: the only access controls are the bind address, the host allowlist and the cross-site refusal. See [Security](#read-only-pages-one-writable-endpoint-and-security).
 
 A statement that returns no node and no edge — one that matched nothing, one that returned a number, a `SHOW INDEXES` that returned tabular rows, and a `CREATE` that returned no columns at all — is answered HTTP `200` with `{"nodes": [], "edges": []}`. The four are indistinguishable in the response, because none of them failed: each ran, and none produced an element the response shape can carry. A schema listing is read from `rmp graph client`, which returns the rows; this endpoint's document has nowhere to put them.
 
@@ -302,7 +318,7 @@ This web server's own connection timeouts bound the connection, not the work a h
 
 - **The statement runs under a budget of 5 seconds, and the graph server is the end that enforces it.** That server takes the value as its maximum statement timeout and sets no default beside it: the maximum is clamped onto a client that asks for longer and applied unconditionally to one that asks for nothing, so a statement submitted here can neither raise its own nor escape the budget by naming none, and one that would run for longer is cancelled there. It is the same budget the CLI's statements run under, read from one declaration, so the two surfaces can never report different figures for it.
 - **The request keeps a later deadline of its own**, the wait budget of 7.5 seconds rather than the statement budget itself, purely as a backstop against a server that answers nothing. It is deliberately later than the budget so that a statement which committed just before the budget expired is never reported as one that wrote nothing.
-- **The request's own context still cancels**, so the two sources compose: a client that disconnects cancels the statement immediately, and the failure then names the cancellation rather than the budget, so the budget is never blamed for a caller that gave up.
+- **The request's own context still cancels**, so the two sources compose: a client that disconnects cancels the statement immediately. That request is not a query-bar failure and is not blamed on the budget: it is answered `499` and recorded at `INFO` (see [Requests abandoned by the client](#requests-abandoned-by-the-client)).
 - **The budget bounds the work; the node limit bounds only the result.** These are two different bounds, and neither substitutes for the other. The injected `LIMIT` clause bounds how many rows the query returns, and therefore how large the response is — it does not bound the work the engine performs to produce those rows. A query that aggregates over a Cartesian product, for instance, scans the whole product before any limit applies: its cost grows with the size of the store while its response stays a few bytes long. The time budget is the only bound on that work.
 - **Exhausting the budget is a query execution failure**, surfaced with the page's existing "query failed to execute" message, in place. The page does not crash, the failure triggers no write and no navigation, the graph already shown is left as it is, and the user can edit the query, lower the node limit and search again.
 - **No new status and no new error class.** A request whose query exceeded the budget is answered exactly as any other execution failure — HTTP `400` with `kind` `execution`. Exhausting the budget never terminates the process; the server keeps serving.
@@ -331,7 +347,7 @@ There are exactly three, and there is nothing else the endpoint can refuse:
 |--------|-------------|-----------------|
 | `invalid_limit` | The `limit` parameter is not one of the six allowed values. The endpoint rejects it rather than clamping it to the nearest allowed value, and the statement is not executed | The rejected value |
 | `plan_prefix` | The statement carries an `EXPLAIN` or `PROFILE` prefix, as the engine's own parser recognises one — in any mixture of case, and after whitespace or a comment. The response carries nodes and edges and has no place for a query plan, so the statement is refused and never sent: it writes nothing, and the answer is the same with no graph server running. A statement in which the word appears other than as its prefix, and text the parser cannot parse, are not refused here. To see the plan, remove the prefix here or run the statement with `rmp graph client` | Always the same line, naming neither the prefix nor the statement: `query not run: the query bar cannot show a query plan; remove the EXPLAIN or PROFILE prefix, or run the statement with rmp graph client` |
-| `execution` | The statement failed once it was running — invalid Cypher syntax, for example, or a schema statement the engine refuses; or it was cancelled for exhausting the 5-second budget, or because the client disconnected; or every attempt of the retry policy lost a serialisation conflict against another writer; or the connection to the server was lost, or went unanswered, after the statement had been sent | The engine's own diagnostic text, so the user reads the same diagnostic the CLI prints for that statement. Three cases carry `rmp`'s own words instead, because the engine's would not tell the user what to do: a cancelled statement names the cancellation rather than the budget, so the budget is never blamed for a caller that gave up; an exhausted retry names the contention, states that nothing was written and asks for the same statement again; and a lost or unanswered connection says plainly that the statement's outcome is unknown |
+| `execution` | The statement failed once it was running — invalid Cypher syntax, for example, or a schema statement the engine refuses; or it was cancelled for exhausting the 5-second budget; or every attempt of the retry policy lost a serialisation conflict against another writer; or the connection to the server was lost, or went unanswered, after the statement had been sent | The engine's own diagnostic text, so the user reads the same diagnostic the CLI prints for that statement. Two cases carry `rmp`'s own words instead, because the engine's would not tell the user what to do: an exhausted retry names the contention, states that nothing was written and asks for the same statement again; and a lost or unanswered connection says plainly that the statement's outcome is unknown |
 
 Three further values — `not_read_only`, `schema_introspection` and `relationship_read_direction` — were published while the endpoint still classified a statement by what it does before running it. It classifies nothing about what a statement does now, so there is no verdict left for them to carry, and the four-deep precedence rule between them went with them. The `plan_prefix` refusal is not such a verdict: it is decided by the answer a statement asks for, and the same statement without its prefix is sent like any other.
 
@@ -384,7 +400,7 @@ These are the exit codes of the `rmp web` **process** (distinct from the per-req
 ## Examples
 
 ```bash
-# Start on the default host (loopback, local machine only) and port (opens the browser)
+# Start on the default host (loopback: no other machine can connect) and port (opens the browser)
 rmp web
 
 # Start without launching a browser; just print the served URL
@@ -393,21 +409,32 @@ rmp web --no-open
 # Start on a specific port
 rmp web --port 9000
 
-# Expose the read-only interface on the network (all interfaces; prints a warning)
+# Expose the interface on the network (all interfaces; prints a warning; the graph query bar can write)
 rmp web --host 0.0.0.0 --port 9000
 ```
 
 ## Read-Only Pages, One Writable Endpoint, and Security
 
-- **The pages are read-only.** The server accepts only `GET` and `HEAD`; every other method returns HTTP `405`. It exposes no route that creates, edits, or deletes a roadmap, task, sprint, comment or audit entry, serving a page writes no rows and no audit-log entry, and the CLI remains the sole write path for all of them.
+- **The pages are read-only.** The server accepts only `GET` and `HEAD`; every other method that passes the host and site checks below returns HTTP `405`. It exposes no route that creates, edits, or deletes a roadmap, task, sprint, comment or audit entry, serving a page writes no rows and no audit-log entry, and the CLI remains the sole write path for all of them.
 - **The graph data endpoint is the exception, and it is a write grant.** `GET /roadmaps/{name}/graph/data` sends the Cypher statement its `q` parameter carries to the roadmap's graph server, as written. It does not classify the statement and refuses nothing for what the statement does, so:
   - a `GET` of that endpoint can create, change and delete nodes, relationships, properties and labels, and can create and drop indexes and constraints. `?q=MATCH (n) DETACH DELETE n` empties the roadmap's knowledge graph and commits it, in the graph server that runs it;
   - **no authentication stands in the way.** The server has no login, no token, no session and no per-route authorisation. Any client that can open the bound address can issue that request;
-  - **the only access control is the bind address.** On the default loopback bind the reachable set is the local machine's own processes. `--host 0.0.0.0`, or any other non-loopback address, extends that set to everything that can route to the host, and it is a **write** grant over every roadmap's knowledge graph, not a read grant;
+  - **the only access controls are the bind address, the host allowlist and the cross-site refusal.** On the default loopback bind no other machine can connect, but the local browser connects on behalf of any page it loads; the two checks below refuse the requests such a page causes. They do not refuse a local process that sends neither `Origin` nor `Sec-Fetch-Site` and names an allowed host, as `curl` does. `--host 0.0.0.0`, or any other non-loopback address, extends the reachable set to everything that can route to the host, and it is a **write** grant over every roadmap's knowledge graph, not a read grant;
   - a `GET` with side effects departs from RFC 9110 § 9.2.1, which defines `GET` as a safe method, so an intermediary, a browser prefetch, a crawler or a repeated history entry may re-execute a destructive statement without the user asking again. The endpoint stays `GET`-only because the query bar's contract is a URL, and the departure is recorded rather than left to be discovered;
   - there is no undo. The graph store has no per-statement history to roll back to, and `rmp` offers no graph restore command.
 - **A request touches the store through the graph server and never directly.** This process opens no graph store, so it runs no recovery, takes no advisory lock and folds no snapshot; what a statement changes on disk it changes inside `rmp graph serve`, and a request that runs no write leaves `snapshot/` and `wal` exactly as it found them. The one grant that matters is therefore the one above: reaching the bound address is reaching every graph a server is holding open.
-- **Loopback by default.** The server binds the loopback interface (`127.0.0.1`) by default, so the interface is reachable only from the local machine. Exposing it on the network via `--host 0.0.0.0` (all interfaces, or any other non-loopback address) is the explicit opt-in; doing so prints a network-exposure warning to stderr at startup. Read the graph-endpoint grant above before making that choice.
+- **Loopback by default.** The server binds the loopback interface (`127.0.0.1`) by default, so no other machine can connect to it. The bind limits which connections reach the server, not which requests it serves: which requests are served is decided by the two checks below. Exposing the interface on the network via `--host 0.0.0.0` (all interfaces, or any other non-loopback address) is the explicit opt-in; doing so prints a network-exposure warning to stderr at startup. Read the graph-endpoint grant above before making that choice.
+- **Host allowlist.** Every request, `/static/...` included, must name an allowed host in its `Host` field (or its absolute-form target) before any route is matched. The port must be the port the listener is bound to — the one the startup URL reports — and a host with no port is accepted only when that port is `80`. The allowed host parts depend on the bind host:
+
+  | Bind host | Allowed host parts |
+  |-----------|--------------------|
+  | Loopback (`localhost`, or any loopback address, the default `127.0.0.1` and `::1` included) | `127.0.0.1`, `localhost`, `[::1]`, and the bind host itself |
+  | Unspecified (`0.0.0.0`, `::`, or an empty host) | `localhost`, and any IP literal |
+  | Any other address or name | The bind host itself |
+
+  Names are compared ignoring ASCII case, and a name is admitted only when the server was told it, which is what defeats DNS rebinding. Under an unspecified bind the interface is therefore reachable by an IP address or `localhost` and by no other name; to reach it by a name, bind that name with `--host`.
+- **Cross-site refusal.** A request carrying `Sec-Fetch-Site` is served only when the field occurs once with the value `same-origin` or `none`; every other value, `same-site` and `cross-site` included, is refused. A request carrying `Origin` is served only when the field occurs once and names this interface's own origin for that request; a foreign origin and `null` are refused. No method is exempt: `GET` and `HEAD` are refused like every other method, because the graph data endpoint writes on a `GET`. A link to the interface from another site, a web mail message, or another local tool is therefore refused as well; reach the interface through the URL `rmp web` prints, a typed address, or a bookmark. A command-line client that sends neither field is served.
+- **A refused request is answered `403`.** The response is `text/plain; charset=utf-8` with the single line `host not allowed` or `origin not allowed` (the host check runs first), carries `Cache-Control: no-store`, runs no handler, and writes one `WARN` record (see [Console Log](#console-log)). `SPEC/WEB.md § Security and Constraints`, rules 13 to 15, is canonical for both checks.
 - **Path-traversal guard.** Roadmap names from the URL are validated before any filesystem path is built, so a crafted name cannot traverse outside `~/.roadmaps/`.
 - **Tabler dark-theme UI.** The interface is built on the vendored Tabler admin-dashboard framework in its dark theme (navigation sidebar that collapses to a hamburger menu on small viewports, top navbar, page headers, Tabler cards/tables/badges). The top navbar names the roadmap the current page belongs to, so the page's subject is stated at the top of the viewport even where the sidebar has collapsed behind the hamburger menu; the roadmap index page, which belongs to no roadmap, leaves that region empty. Each page header is rendered by one shared template and its title names the view rather than the roadmap - Sprints, Tasks, Audit, Knowledge graph - so the roadmap is stated once in the sidebar and once in the navbar, and never a third time. A sprint's own page is the exception: it shows that sprint's title with its status badge, under the pretitle `Sprint #<id>`. A page header carries an actions control only where one acts on the page (the graph page's layout dropdown) or returns to the parent record (the sprint page's back link); it never repeats a link the sidebar already lists. Task and sprint status, priority, and severity render as colour-coded Tabler badges (for example completed work in green, in-progress in blue, high priority or critical severity in red), so state is scannable at a glance. In the dark theme, the text of every badge has a contrast ratio of at least 4.5:1 against its background, and the keyboard focus indicator of every focusable element on the tasks page and the sprint board has a contrast ratio of at least 3:1 against every colour adjacent to it, meeting WCAG 2.2 Level AA.
 - **Self-contained.** Every asset (HTML, CSS, JavaScript, the vendored Tabler framework and D3.js with the d3-sankey plugin, the Tabler Icons webfont, and the Inter font) is served from the binary's embedded set under `/static/`; no page references a CDN, a remote font host, or any other remote origin, and the server makes no outbound request.

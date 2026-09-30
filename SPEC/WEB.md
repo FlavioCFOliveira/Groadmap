@@ -48,6 +48,7 @@
   - [Levels](#levels)
   - [What Is Logged](#what-is-logged)
   - [What Is Not Logged](#what-is-not-logged)
+  - [Requests Abandoned by the Client](#requests-abandoned-by-the-client)
   - [Record Content](#record-content)
   - [Log Integrity](#log-integrity)
 - [Error Handling and Exit Codes](#error-handling-and-exit-codes)
@@ -166,8 +167,11 @@ displays all of the task's fields (see [Roadmap Task Page](#roadmap-task-page)).
    server is stopped (see [Server Lifecycle](#server-lifecycle)).
 2. The server binds to a host and a port chosen as specified in
    [Bind Address and Port Selection](#bind-address-and-port-selection). By default
-   the server binds the loopback interface (`127.0.0.1`), so the read-only
-   interface is reachable only from the local machine. The bind host and port are
+   the server binds the loopback interface (`127.0.0.1`), so no other machine can
+   open a connection to the interface. The bind limits which connections reach
+   the server; which requests it serves is limited by
+   [Security and Constraints](#security-and-constraints), rules 13 and 14. The
+   bind host and port are
    overridable by flag; exposing the interface on the network is the explicit
    opt-in `--host 0.0.0.0` (or any other non-loopback address). When a non-loopback
    host is bound, the server prints a warning to stderr that the interface is
@@ -556,8 +560,11 @@ schema migrates to it automatically, without user input.
 ## Bind Address and Port Selection
 
 1. **Default host.** The server binds the loopback interface (`127.0.0.1`) by
-   default. With the default host the read-only interface is reachable only from
-   the local machine, not from any other network point.
+   default. With the default host no other machine can open a connection to the
+   interface. The bind limits which connections reach the server, not which
+   requests it serves: a browser on the local machine connects on behalf of any
+   page it loads, and [Security and Constraints](#security-and-constraints),
+   rules 13 and 14, decide which of those requests are served.
 2. **Host override.** `--host <address>` overrides the bind host. A user who wants
    to expose the interface on the network passes the explicit opt-in
    `--host 0.0.0.0` (all interfaces), or any other non-loopback address. Exposing
@@ -862,6 +869,9 @@ showing a state that no longer matches the data.
    in the binary (see [Embedded Asset Categories](#embedded-asset-categories)).
    They are explicitly EXCLUDED from the `no-store` rule and remain cacheable by
    the client. The `no-store` requirement targets data-derived responses only.
+   A `403` that refuses a request under `/static/...` is not an asset, and it
+   carries `no-store` (see [Security and Constraints](#security-and-constraints),
+   rule 15).
 4. **Observable counterpart of the read-only data flow.** This policy is
    consistent with, and the observable counterpart of, the existing read-only
    data-flow guarantee: each request opens the data, reads the current state, and
@@ -878,7 +888,10 @@ showing a state that no longer matches the data.
    of the route's `GET` and `HEAD` handling carries it — to an explicit request, to
    a bare request, and a `404` alike — whether or not it sets the cookie. A `405`
    answered by the method fallback to any other method carries no `Vary`, because
-   it does not depend on the cookie. The route emits no `ETag` and no
+   it does not depend on the cookie, and neither does a `403` that refuses the
+   request before any handler runs
+   ([Security and Constraints](#security-and-constraints), rule 15). The route
+   emits no `ETag` and no
    `Last-Modified` header, evaluates no conditional request header
    (`If-None-Match`, `If-Modified-Since`), and never answers `304 Not Modified`:
    every request is answered with the full response for its own URL and its own
@@ -942,6 +955,7 @@ HTTP status mapping for page and data routes:
 | Condition | HTTP status |
 |-----------|-------------|
 | Page or data served successfully | 200 |
+| Request whose host is not allowed, or which a browser made on behalf of another site, on any route, `/static/...` included | 403 (decided before the route is matched; see [Security and Constraints](#security-and-constraints), rules 13 to 15) |
 | Roadmap name invalid, or roadmap not found | 404 |
 | Sprint `{id}` not a valid integer, or not a sprint of the roadmap | 404 |
 | Task `{id}` not a valid integer, or not a task of the roadmap | 404 |
@@ -956,6 +970,7 @@ HTTP status mapping for page and data routes:
 | Graph data request for a roadmap with no graph server listening, or one whose server cannot be reached through a socket that answered | 503 (the graph is unavailable until a server is started; the response carries no `kind`; see [Knowledge Graph from the GoGraph Store](#knowledge-graph-from-the-gograph-store)) |
 | Graph data request for a roadmap whose derived socket path is longer than the platform's bound | 500 (no server can **ever** exist there, so the condition is permanent rather than transitory; the response carries no `kind`; see [Knowledge Graph from the GoGraph Store](#knowledge-graph-from-the-gograph-store)) |
 | Non-read HTTP method on any route | 405 |
+| Request abandoned by its client before the server answered it, where the server would otherwise answer 400, 500, or 503 | 499 (not a registered status, and it normally reaches no one; see [Requests Abandoned by the Client](#requests-abandoned-by-the-client)) |
 | Unhandled internal error reading data (I/O, corrupt roadmap database) | 500 |
 
 The HTTP status codes above describe the running server's HTTP responses and are
@@ -3667,7 +3682,8 @@ of an internal read error, and what the body carries.
    [Routes and Pages](#routes-and-pages) and
    [Knowledge Graph from the GoGraph Store](#knowledge-graph-from-the-gograph-store),
    rule 5). What separates that `500` from the `400` of case 2 is the moment the
-   failure surfaces: a failure to reach a graph server at all is answered with a
+   failure surfaces: for a request its client has not abandoned (rule 8), a
+   failure to reach a graph server at all is answered with a
    5xx and never with this `400` — `503` when no server is listening or none can
    be reached through a socket that answered, and `500` when the roadmap's socket
    path is over the platform's bound and no server can ever listen there (see
@@ -3707,18 +3723,20 @@ of an internal read error, and what the body carries.
    diagnostic to carry. The `500` of an internal read error does not carry
    this shape: it is answered as every other route's internal read error is.
 
-8. **A request the caller abandoned is answered, but nobody reads the answer.** A
-   client that disconnects mid-statement cancels it immediately (see
-   [Graph Query Time Budget](#graph-query-time-budget), rule 2). The endpoint
-   treats that cancellation as an execution failure like any other and answers it
-   with the same `400` and the same `execution` kind, with an `error` naming the
-   cancellation rather than the budget, because the two have different causes and
-   the budget must not be blamed for a caller that gave up. That answer reaches no
-   one: the client that would have read it is gone. It is specified here because it
-   is a further reason the `execution` kind arises beyond the two case 2 names,
-   and a contract naming only those two would be incomplete on the day it is
-   written. Rule 10 names the fourth and rule 11 the fifth. It is not an outcome
-   a connected client can observe, so no client-side test can assert it.
+8. **A request the caller abandoned is not a query-bar failure, and it carries no
+   `kind`.** A client that disconnects mid-statement cancels it immediately (see
+   [Graph Query Time Budget](#graph-query-time-budget), rule 2), and a client that
+   disconnects before the statement was sent stops the resolution probe or the
+   connection. Neither is classified. The endpoint does not answer `400` with
+   `kind` `execution`, because the statement did not fail: the caller gave up, and
+   neither the budget nor the statement may be blamed for it. It does not answer
+   `503` either, even for a roadmap with no graph server listening, because a
+   probe the request's own cancellation stopped is no evidence about the server.
+   The request is answered `499` and recorded by one `INFO` record, as every
+   abandoned request is ([Requests Abandoned by the Client](#requests-abandoned-by-the-client),
+   which is canonical for the rule and for the record). A cancellation the server
+   makes itself — the time budget, or the endpoint's backstop deadline — is not
+   an abandoned request and keeps the classification rules 2 and 10 give it.
 
    **A cancelled statement may already have committed.** The graph server runs the
    caller's statement on the transactional path, and a commit is durable before the
@@ -3728,7 +3746,8 @@ of an internal read error, and what the body carries.
    (`GRAPH.md § Durability and Checkpointing in a Long-Lived Process`). A disconnect
    that arrives before the commit leaves the transaction uncommitted and the graph
    unchanged. Which of the two happened is not reported to anyone, because the
-   caller is gone.
+   caller is gone, and the `INFO` record states that the request was abandoned,
+   not whether its statement committed.
 
 9. **A statement that returns no node and no edge is a success, not a failure.**
    The endpoint answers it HTTP `200` with `{"nodes": [], "edges": []}`. This is
@@ -3748,15 +3767,17 @@ of an internal read error, and what the body carries.
     sent, and a server that is still connected but has not answered within the
     endpoint's backstop deadline, which is what a statement the budget cut
     mid-write looks like from outside (`GRAPH.md § Server Resolution`, rule 7).
-    Each leaves the endpoint unable to say whether the statement committed,
+    A connection that the request's own cancellation closed belongs to neither: it
+    is rule 8's abandoned request. Each of the two leaves the endpoint unable to
+    say whether the statement committed,
     because a commit is made durable before it is acknowledged. The endpoint
     answers `400` with `kind` `execution`, and its `error` names the lost or silent
     connection rather than the budget or an engine diagnostic, because the cause is
     neither. It MUST NOT re-send the statement and MUST NOT reach the store: the
     statement may already have taken effect, and this process has no way to open a
-    store in any case. This is the fourth reason the `execution` kind
-    arises, after an engine failure, a budget exhaustion, and rule 8's abandoned
-    request, and it changes neither the status nor the kind set rule 4 enumerates.
+    store in any case. This is the third reason the `execution` kind
+    arises, after an engine failure and a budget exhaustion, and it changes
+    neither the status nor the kind set rule 4 enumerates.
 
 11. **An exhausted serialisation retry is an execution failure, and its `error`
     names the contention rather than the engine.** Two writers whose statements
@@ -3776,7 +3797,7 @@ of an internal read error, and what the body carries.
     decision the CLI's user faces: run the statement again, or correct it. The
     endpoint MUST NOT re-send the statement outside the retry policy and has no
     store to run it against in any case (`GRAPH.md § Server Resolution`, rule 3).
-    This is the fifth reason the `execution`
+    This is the fourth reason the `execution`
     kind arises, and it changes neither the status nor the kind set rule 4
     enumerates.
 
@@ -6105,8 +6126,8 @@ states explicitly.
 | Level | Meaning | Examples |
 |-------|---------|----------|
 | `ERROR` | The server failed. The condition is answered with HTTP 500 and is a fault of the server or of the environment it cannot recover from. | A roadmap's database cannot be read; a page template fails to execute; a response body fails to encode; a roadmap's derived socket path is over the platform's bound, so no graph server can ever listen there. |
-| `WARN` | The server did not fail, but an operator needs to know what happened. The condition is caused by the client or by the environment and leaves the server serving. | A query-bar request refused for an invalid limit or for an `EXPLAIN` or `PROFILE` prefix, or whose statement failed in the engine (HTTP 400); **a graph data request for a roadmap with no graph server running (HTTP 503)**; a roadmap skipped by the startup schema migration; the interface bound to a non-loopback address. |
-| `INFO` | Enabled, but unused in this version: a successful request and a successful startup write no record. | — |
+| `WARN` | The server did not fail, but an operator needs to know what happened. The condition is caused by the client or by the environment and leaves the server serving. | A query-bar request refused for an invalid limit or for an `EXPLAIN` or `PROFILE` prefix, or whose statement failed in the engine (HTTP 400); a request refused for the host it names or for the site it comes from (HTTP 403); **a graph data request for a roadmap with no graph server running (HTTP 503)**; a roadmap skipped by the startup schema migration; the interface bound to a non-loopback address. |
+| `INFO` | Nothing failed and nothing calls for action, but the record states how a request ended. A successful request and a successful startup write no record. | A request abandoned by its client before the server answered it (HTTP 499; see [Requests Abandoned by the Client](#requests-abandoned-by-the-client)). |
 
 ### What Is Logged
 
@@ -6130,7 +6151,13 @@ A startup record has no request behind it, so it carries no `method`, `path`, or
 
 **Per request.** Every response the server produces with HTTP status 500 MUST be
 accompanied by exactly one `ERROR` record naming the underlying error, and every
-HTTP 400 the graph data endpoint produces by exactly one `WARN` record.
+HTTP 400 the graph data endpoint produces by exactly one `WARN` record. Every
+HTTP 403 refusal MUST be accompanied by exactly one `WARN` record, and every
+HTTP 499 by exactly one `INFO` record. The rows of the table below that answer 400,
+500, or 503 apply to a request its client has not abandoned; an abandoned request
+is answered and recorded as
+[Requests Abandoned by the Client](#requests-abandoned-by-the-client) states, and
+produces no `ERROR` record and no `WARN` record.
 
 **An HTTP 503 is recorded too, and at `WARN` rather than `ERROR`.** Every response
 the graph data endpoint produces with HTTP status 503 MUST be accompanied by
@@ -6147,6 +6174,9 @@ original meaning and its original scope: a fault the server cannot recover from.
 
 | Route or helper | Condition | Level | Status |
 |-----------------|-----------|-------|--------|
+| every request, before the route is matched | the request's host is not allowed ([Security and Constraints](#security-and-constraints), rule 13) | `WARN` | 403 |
+| every request, before the route is matched | the request was made on behalf of another site ([Security and Constraints](#security-and-constraints), rule 14) | `WARN` | 403 |
+| any route, and the helpers | the request was abandoned by its client before the server answered it ([Requests Abandoned by the Client](#requests-abandoned-by-the-client)) | `INFO` | 499 |
 | any roadmap-scoped route | the roadmap's existence check fails with an I/O error | `ERROR` | 500 |
 | `GET /` | the roadmap list cannot be read | `ERROR` | 500 |
 | `GET /roadmaps/{name}` | the sprints view cannot be loaded | `ERROR` | 500 |
@@ -6186,6 +6216,85 @@ These are deliberate exclusions, not omissions.
    `~/.roadmaps/`. That path is the diagnostic value of the record; it is written
    to the operator's own console and it never reaches the HTTP response.
 
+### Requests Abandoned by the Client
+
+A client can go away before the server has answered its request: a browser tab is
+closed, the user navigates elsewhere while a page is loading, or a command-line
+client is interrupted. `net/http` signals it by cancelling the request's context
+when it detects that the client closed the connection. The work the request
+started then fails because of the cancellation — a database read reports
+`context canceled`, the graph server probe stops before it could connect, and a
+statement already sent is cancelled (see
+[Graph Query Time Budget](#graph-query-time-budget), rule 2). None of those
+failures is a fault of the server, of a graph server, or of the statement, and
+reporting it as one would put a false record on the console: an `ERROR` for a read
+that nothing prevented, a `503` for a graph server that may have been listening
+throughout, or an `execution` failure for a statement nobody wrote wrongly.
+
+1. **The request's context decides, not the failure's text.** A request is
+   abandoned when its handler, or a helper the handler calls, has a failure to
+   answer that it would otherwise answer `400`, `500`, or `503`, and the request's
+   own context is already done at that moment. The server sets no deadline on a
+   request's context and does not cancel it at shutdown, so a done context means
+   that the client went away. The decision does not depend on what the failure
+   says, because a failure caused by the cancellation does not always say so: a
+   probe or a connection it stopped reads like a graph server that could not be
+   reached, and a statement it cut after sending reads like a connection to the
+   graph server that was lost.
+2. **It is answered `499`, with no body.** The status is not registered with IANA;
+   it is the code nginx uses for the same condition, "client closed request".
+   RFC 9110, Section 15, requires a recipient to treat an unrecognised status as
+   the `x00` status of its class, so a client that does read the answer reads a
+   client-side `400`. Each registered alternative asserts something false: `500`
+   that the server failed, `503` that the graph is unavailable, and `400` with
+   `kind` `execution` that the statement failed. Writing nothing is not an
+   alternative either, because `net/http` then completes the response as a `200`
+   with an empty body. The response carries the headers every response of the
+   route carries. It normally reaches no one, because the client has gone; a
+   client that closed only its sending half of the connection can still read it.
+3. **It is recorded by exactly one `INFO` record, and by no `ERROR` or `WARN`
+   record.** The record's `msg` is `request abandoned by client`. It carries
+   `method`, `path`, `roadmap` when the roadmap name is known, and the
+   route-specific subject attribute of [Record Content](#record-content), rule 5,
+   when the route has one; `status` is `499`, the status the server wrote; and
+   `err` is the text of the failure the cancellation produced, so the record
+   still names it. It carries no `kind`, because the request is not a query-bar
+   failure (see [Query-Bar Error Handling](#query-bar-error-handling), rule 8).
+   `INFO` rather than `WARN`: nothing failed and an operator has nothing to do,
+   and a `WARN` on every page a user leaves before it loads would dilute the
+   level exactly as an `ERROR` for every missing graph server would dilute that
+   one (see [What Is Logged](#what-is-logged)).
+4. **It is never classified as a 5xx or as an `execution` failure.** On the graph
+   data endpoint this holds at every step: a request abandoned before a graph
+   server was resolved is not answered `503`, even when no server is listening,
+   because a probe the request's own cancellation stopped is no evidence about the
+   server; and a request abandoned while its statement ran is not answered `400`
+   with `kind` `execution`.
+5. **A cancellation the server itself makes keeps its classification.** Two
+   deadlines end a graph statement from the server's side while the request's
+   context is still live, and rule 1 does not apply to either. The 5-second query
+   time budget, which the graph server enforces, is answered `400` with `kind`
+   `execution` and the budget line
+   ([Graph Query Time Budget](#graph-query-time-budget), rules 4 and 5). The
+   endpoint's own backstop deadline, which abandons the answer of a graph server
+   that answers nothing (`GRAPH.md § Server Resolution`, rule 7), is answered
+   `400` with `kind` `execution` and the line naming the silent server
+   ([Query-Bar Error Handling](#query-bar-error-handling), rule 10). Both are
+   recorded at `WARN`, as every `400` of the endpoint is.
+6. **A request the server answered is not re-examined.** A request whose
+   response was produced — a `200` included — writes the record it would have
+   written anyway, and a successful request writes none, whether or not its client
+   was still there to read the answer. A statement that committed before its
+   client left is therefore not recorded as abandoned;
+   [Query-Bar Error Handling](#query-bar-error-handling), rule 8, states what
+   remains unknown in that case.
+7. **One race is accepted.** A failure unrelated to the cancellation — an I/O
+   error, or a derived socket path over the platform's bound — that the server
+   happens to answer after the client has gone is recorded as an abandoned request
+   rather than at the level its own kind of failure carries. The record's `err`
+   still states it, and a condition that persists is recorded at its own level by
+   the next request that meets it with its client still connected.
+
 ### Record Content
 
 1. Every record carries the fixed attributes `time`, `level`, and `msg`.
@@ -6198,13 +6307,26 @@ These are deliberate exclusions, not omissions.
    - `path` — the request path;
    - `status` — the HTTP status the server returned;
    - `err` — the text of the underlying error, which is precisely the value the
-     HTTP response withholds.
+     HTTP response withholds. A `403` refusal has no underlying error and
+     withholds nothing: its `err` is the body line the response carries
+     ([Security and Constraints](#security-and-constraints), rule 15).
 4. `roadmap` is carried by every record for which the roadmap name is known.
 5. Route-specific attributes name the record's subject where one exists: `task`
    and `sprint` for the id-bearing routes, `page` for the audit page, `template`
    for a template failure, and `kind` for the classification of a query-bar
    failure (the same classification the response body carries; see
    [Query-Bar Error Handling](#query-bar-error-handling)).
+
+   A `403` refusal is decided before the route is matched, so it carries no
+   roadmap and no route subject. Its `msg` is `request refused: host not allowed`
+   for a refusal by rule 13 of [Security and Constraints](#security-and-constraints)
+   and `request refused: origin not allowed` for a refusal by rule 14, and it
+   carries the three request values the checks examined: `host`, the request's
+   host; `origin`, the `Origin` field; and `sec_fetch_site`, the `Sec-Fetch-Site`
+   field. Each is the value as received, and the empty string when it is absent;
+   a field present more than once is recorded by its occurrences joined with
+   `, `. Each is a value the client chose, so each is subject to
+   [Log Integrity](#log-integrity).
 6. This section changes no response. A 500 still returns the opaque
    `internal server error` text and a 400 from the graph data endpoint still
    returns its structured JSON error with the same `error` and `kind` fields.
@@ -6268,7 +6390,7 @@ Rules:
    bind failure; the process binds an ephemeral port instead and starts normally.
 4. Once the server is serving, per-request failures (roadmap not found, a graph
    that cannot be reached, read error) are handled inside the running server as HTTP status
-   responses (400, 404, 405, 500, 503) and do **not** terminate the process. The process
+   responses (400, 403, 404, 405, 499, 500, 503) and do **not** terminate the process. The process
    exit code is determined by how the server itself is started and stopped. The
    detail of such a failure is withheld from the response and written to the
    console instead, under the rules in [Server Logging](#server-logging).
@@ -6281,15 +6403,27 @@ Rules:
 ## Security and Constraints
 
 1. **Loopback by default; network exposure is opt-in.** The server binds the
-   loopback interface (`127.0.0.1`) by default, so the interface is reachable only
-   from the local machine. Exposing the interface on the network is the explicit
+   loopback interface (`127.0.0.1`) by default, so no other machine can open a
+   connection to it. Exposing the interface on the network is the explicit
    opt-in `--host 0.0.0.0` (all interfaces), or any other non-loopback address.
    When a non-loopback host is bound, the server prints a warning to stderr that
    the interface is reachable from the network (see
    [Bind Address and Port Selection](#bind-address-and-port-selection)). What is
    exposed by that choice is not read access alone; rule 3 states what else it is.
+
+   **The bind address limits which connections reach the server, not which pages
+   can make requests to it.** A browser running on the local machine opens a
+   loopback connection on behalf of any page it loads, whatever that page's origin:
+   a cross-site link, form, image, or script from a remote site produces a request
+   that arrives on the loopback interface like any other, and a page whose own host
+   name an attacker re-points at a loopback address (DNS rebinding) is served as
+   though it were this interface's own origin. The loopback bind therefore does not
+   confine the interface to the local machine's own processes. Rules 13 to 15
+   close that gap: every request is checked for the host it names and for the site
+   it comes from before any handler runs.
 2. **Pages are read-only; one endpoint is not.** The server accepts only `GET` and
-   `HEAD`; every other method returns HTTP `405`. It exposes no route that creates,
+   `HEAD`; every other method returns HTTP `405`, once the request has passed the
+   checks of rules 13 and 14. It exposes no route that creates,
    edits, or deletes a roadmap, a task, a sprint, or an audit entry, and it writes
    no row and no audit entry to any `project.db` outside the startup migration.
    **The graph data endpoint is outside this rule**: it sends the statement the
@@ -6318,11 +6452,18 @@ Rules:
    - **No authentication stands in the way.** The server has no login, no token, no
      session, and no per-route authorisation. Any client that can open the bound
      address can issue that request.
-   - **The only access control is the bind address.** On the default loopback bind,
-     the reachable set is the local machine's own processes. `--host 0.0.0.0`, or
-     any other non-loopback address, extends that set to everything that can route
-     to the host, and it is a **write** grant over every roadmap's knowledge graph,
-     not a read grant. A user binding a non-loopback address is making that choice.
+   - **The only access controls are the bind address and the request checks of
+     rules 13 and 14.** On the default loopback bind, the reachable set is the
+     local machine's own processes, and the browser of the local user on behalf
+     of any page it loads. Rules 13 and 14 remove the second half for a browser:
+     a request a foreign page causes either names a host the server refuses or
+     states another site as its origin, and it reaches no handler. They do
+     not remove the first half: a local process that sends no `Origin` and no
+     `Sec-Fetch-Site` field and names an allowed host is served, as `curl` is.
+     `--host 0.0.0.0`, or any other non-loopback address, extends the reachable
+     set to everything that can route to the host, and it is a **write** grant
+     over every roadmap's knowledge graph, not a read grant. A user binding a
+     non-loopback address is making that choice.
    - **A `GET` with side effects departs from RFC 9110, Section 9.2.1**, which
      defines `GET` as a safe method. An intermediary, a browser prefetch, a crawler,
      or a repeated history entry may therefore re-execute a destructive statement
@@ -6337,8 +6478,9 @@ Rules:
      [Knowledge Graph from the GoGraph Store](#knowledge-graph-from-the-gograph-store),
      rule 1). That server authenticates nobody either, and the socket's `0600`
      mode protects nothing against `rmp web`, which runs as the same user that
-     owns it. The reachable set is still whatever the bind address admits, and
-     what it is granted is still write access to the knowledge graph.
+     owns it. The reachable set is still whatever the bind address and rules 13
+     and 14 admit, and what it is granted is still write access to the knowledge
+     graph.
 4. **Filesystem permission model is unchanged.** The web interface reads through
    the existing locations and respects the existing permission model: `0700` for
    `~/.roadmaps/` and each roadmap home directory, `0600` for `project.db`, and
@@ -6446,6 +6588,124 @@ Rules:
    graph server `rmp graph client` sends to, which writes into the one GoGraph
    store, so the store stays the one place a graph lives (see
    [Security and Constraints](#security-and-constraints), rule 3).
+13. **Every request names an allowed host, or it is refused before any handler.**
+   The request's host is the value of its `Host` header field, or the authority
+   of an absolute-form request target, which takes precedence over that field
+   (RFC 9112, Section 3.2.2). It consists of a host part and an optional port. The
+   check runs on every request, `/static/...` included, before the route is
+   matched, before the method is examined, and before any roadmap name is
+   validated or any filesystem path, database, or socket is touched. An HTTP/1.1
+   request with no `Host` field, or with more than one, never reaches it: `net/http`
+   answers such a request `400` itself, as RFC 9112, Section 3.2, requires. An
+   HTTP/1.0 request with no `Host` field names no host and is refused.
+
+   **The port.** The port MUST be the port the listener is bound to: the one the
+   startup URL reports, which differs from the requested one under the ephemeral
+   fallback and under `--port 0`. A host with no port is accepted only when the
+   bound port is `80`. The normal form of an `http` URI omits the port when it is
+   the scheme's default (RFC 9110, Section 4.2.3), and that default is `80`
+   (RFC 9110, Section 4.2.1), so a browser sends a host without a port for port
+   `80` and for no other. On any other bound port a host without a port is
+   refused.
+
+   **The host part.** An IP literal — a dotted-quad IPv4 address, or an IPv6
+   address in square brackets — matches another IP literal when both denote the
+   same address. A name matches another name when the two are equal ignoring ASCII
+   case (RFC 3986, Section 3.2.2); a name with a trailing dot is a different name.
+   Which host parts are allowed depends on the bind host, classified exactly as the
+   network-exposure warning classifies it
+   ([Bind Address and Port Selection](#bind-address-and-port-selection), item 3):
+
+   | Bind host | Allowed host parts |
+   |-----------|--------------------|
+   | Loopback: `localhost`, or any loopback address, the default `127.0.0.1` and `::1` included | `127.0.0.1`, `localhost`, `[::1]`, and the bind host itself |
+   | Unspecified: `0.0.0.0`, `::`, or an empty host, each of which binds every interface | `localhost`, and any IP literal |
+   | Any other address or name | The bind host itself |
+
+   "The bind host itself" is the value given to `--host`, so `--host 127.0.0.2`
+   admits the `127.0.0.2` the startup URL names.
+
+   **Names are the boundary, and that is why the unspecified bind admits every IP
+   literal.** A DNS-rebinding page reaches the server under the attacker's own host
+   name, and the browser sends that name as the host. The allowlist therefore
+   admits a name only when the server was told it: `localhost`, or the name given
+   to `--host`. An IP literal is safe to admit, because a browser sends an IP
+   literal as the host only for a page whose own origin is that literal, and a page
+   at that origin and port is this server's own. The server cannot reliably
+   enumerate the addresses an unspecified bind listens on, and this rule does not
+   need it to.
+
+   **One consequence is accepted.** Under an unspecified bind the interface is
+   reachable by an IP address or by `localhost` and by no other name: the
+   machine's hostname, an mDNS name, and any DNS name that resolves to the machine
+   are refused. A user who wants to reach the interface by a name binds that name
+   with `--host`, and it is then the one name admitted. No flag adds further names.
+14. **A request a browser makes on behalf of another site is refused before any
+   handler.** Browsers state where a request comes from in two request fields,
+   and either one refuses it. The check runs after rule 13's and, like it, before
+   anything else:
+   - **`Sec-Fetch-Site`** (W3C Fetch Metadata Request Headers). A request carrying
+     the field is served only when the field occurs once and its value is exactly
+     `same-origin` — a request one of this interface's own pages made — or `none`
+     — a request the user made directly: a typed address, a bookmark, or the
+     browser launch of [Server Lifecycle](#server-lifecycle), step 6. Every other
+     value is refused: `cross-site`, `same-site`, and any value that specification
+     does not define.
+   - **`same-site` is refused.** A site ignores the port, and for an IP address or
+     `localhost` the site is the host itself. Every page served from another port
+     of the same host — another local development server, another local tool, or
+     a page on another port of the LAN address this interface is bound to — is
+     therefore same-site to this interface while being a different origin. Such a
+     page is as foreign to this interface as a remote one, and a request it causes
+     writes to the knowledge graph as easily.
+   - **`Origin`** (RFC 6454, Section 7). A request carrying the field is served
+     only when the field occurs once and names this interface's own origin for
+     that request: the scheme `http`, a host part equal to the request's host part
+     as rule 13 compares them, and a port equal to the request's port, an absent
+     port counting as `80` on either side. Every other value is refused, `null`
+     included: that is the opaque origin a sandboxed frame, a `file:` or `data:`
+     document, or a request redirected across origins sends.
+   - **A request carrying neither field is served.** A current browser does not
+     make such a request for a page, and refusing it would refuse `curl`, the
+     end-to-end suite, and every other command-line client. A client that omits
+     both fields can equally send any host it likes, so no check on these fields
+     could stop it; rule 3 states what such a client is granted.
+
+   **No method is exempt.** `GET` and `HEAD` are refused like every other method,
+   because the graph data endpoint writes on a `GET` (rule 3). This is where the
+   rule departs from the Go standard library's `net/http.CrossOriginProtection`,
+   which examines the same two fields but always admits `GET`, `HEAD`, and
+   `OPTIONS` as safe methods; that type does not satisfy this rule on its own.
+
+   **One consequence is accepted.** A link to this interface on another site, in a
+   web mail message, or on a page of another local tool opens nothing: the
+   navigation is cross-site or same-site, and it is refused. The user reaches the
+   interface through the URL `rmp web` prints, a typed address, or a bookmark.
+15. **A refused request is answered `403` with a fixed line, and recorded.** A
+   request refused by rule 13 or rule 14 is answered HTTP `403 Forbidden`, the
+   status RFC 9110, Section 15.5.4, defines for a request the server understood
+   and refuses to fulfil. The response carries
+   `Content-Type: text/plain; charset=utf-8` and a body of exactly one line,
+   followed by a single line feed:
+
+   | Refused by | Body line |
+   |------------|-----------|
+   | Rule 13, the host | `host not allowed` |
+   | Rule 14, the site | `origin not allowed` |
+
+   A request that fails both checks is refused by rule 13, which runs first. A
+   `HEAD` request receives the same status and headers and no body. The response
+   carries the headers of [Security Headers](#security-headers), and it carries
+   `Cache-Control: no-store` whatever its path, `/static/...` included, because it
+   depends on request fields no cache keys on. The body names the check that
+   failed and not the value that failed it, and no handler has run, so it
+   discloses nothing about any roadmap.
+
+   Every refusal is recorded by exactly one `WARN` record (see
+   [What Is Logged](#what-is-logged)). A refusal is not an ordinary outcome of
+   navigation, as a `404` is: it is a request this interface was not meant to
+   receive, and an operator who reaches the interface by a name rule 13 does not
+   admit learns why from the console.
 
 ## Acceptance Criteria
 
@@ -9408,6 +9668,78 @@ Rules:
     test gate until `go generate` is run again. The committed generated files carry
     chroma's copyright and permission notice (see
     [Markdown Rendering](#markdown-rendering), rule 6).
+258. **On a loopback bind, only the loopback names with the bound port are
+    served.** Against `rmp web --host 127.0.0.1 --port 0`, a `GET /` whose host is
+    `127.0.0.1:<port>`, `localhost:<port>`, `LOCALHOST:<port>`, or `[::1]:<port>`
+    is answered `200`, `<port>` being the port the startup URL reports. A request
+    whose host is a name the server was not told — `attacker.example:<port>`, the
+    DNS-rebinding case — is answered `403`, and so is one whose host is
+    `127.0.0.1:<another port>`, `127.0.0.1` with no port, `localhost.:<port>`, or
+    `sub.localhost:<port>`, and an HTTP/1.0 request with no `Host` field. The
+    criterion MUST drive the refused hosts against `/roadmaps/{name}/graph/data`
+    with a writing `q` as well as against `/`, and MUST assert that the refused
+    request wrote nothing, reached no graph server, and read no roadmap: the check
+    runs before any handler (see
+    [Security and Constraints](#security-and-constraints), rule 13).
+259. **The non-loopback binds follow their own rows.** Against a server bound to
+    a specific non-loopback address, a request naming that address with the bound
+    port is served, and one naming `localhost`, `127.0.0.1`, or any other name or
+    address is answered `403`. Against a server bound to `0.0.0.0`, a request
+    naming `localhost`, `127.0.0.1`, `0.0.0.0`, or any other IP literal with the
+    bound port is served, and one naming any other name — the machine's own
+    hostname included — is answered `403`. On every bind, a host without a port
+    is refused unless the bound port is `80` (see
+    [Security and Constraints](#security-and-constraints), rule 13).
+260. **A request a browser makes on behalf of another site is refused, and a
+    request that carries no such marker is served.** With an allowed host, a
+    request is answered `403` when its `Sec-Fetch-Site` is `cross-site`,
+    `same-site`, or a value the Fetch Metadata specification does not define, or
+    when it carries an `Origin` that is `null`, names another scheme, another
+    host, or another port — `http://localhost:<another port>` included — or when
+    either field occurs twice. It is served when `Sec-Fetch-Site` is `same-origin`
+    or `none`, when `Origin` is `http://` followed by the request's own host, and
+    when it carries neither field. The criterion MUST assert the refusal for `GET`
+    and `HEAD`, not only for the other methods, and MUST prove that a cross-site
+    `GET /roadmaps/{name}/graph/data?q=...` carrying a writing statement leaves
+    the graph unchanged (see [Security and Constraints](#security-and-constraints),
+    rule 14). A graph data request carrying `Sec-Fetch-Site: same-origin` and no
+    `Origin`, which is what the graph page's own fetch sends, is served.
+261. **A refusal is a `403` with its fixed line, and one `WARN` record.** A
+    request refused for its host is answered `403` with
+    `Content-Type: text/plain; charset=utf-8` and the body `host not allowed`
+    followed by one line feed; a request refused for its site is answered the
+    same way with the body `origin not allowed`; a request that fails both
+    receives the host line. A `HEAD` refusal carries no body. Every refusal
+    carries the headers of [Security Headers](#security-headers) and
+    `Cache-Control: no-store`, `/static/...` included, and a refusal of
+    `/roadmaps/{name}/tasks` carries no `Vary`. Each refusal writes exactly one
+    `WARN` record carrying `msg` `request refused: host not allowed` or
+    `request refused: origin not allowed`, `method`, `path`, `status` `403`, `err`
+    equal to the body line, and the `host`, `origin`, and `sec_fetch_site` values
+    received, and no `roadmap` (see [Security and Constraints](#security-and-constraints),
+    rule 15, and [Record Content](#record-content), rule 5).
+262. **A request its client abandoned is recorded once at `INFO` with status
+    `499`, and never as a 5xx or an `execution` failure.** Each case is driven
+    with a request whose context is cancelled before its handler answers, and the
+    complete log is compared: a roadmap page whose read the cancellation fails, a
+    graph data request for a roadmap with **no** graph server listening, and a
+    graph data request whose statement is running on a graph server when the
+    context is cancelled. Each writes exactly one `INFO` record with `msg`
+    `request abandoned by client`, `status` `499`, and the failure's text under
+    `err`, with no `kind`, and **zero** `ERROR` and **zero** `WARN` records; each
+    response has status `499` and no body. The second case is the one the old
+    classification got wrong twice over: it MUST NOT be answered `503` and MUST NOT
+    be answered `400` with `kind` `execution`. The criterion counts records by
+    level rather than searching for one, as Acceptance Criterion 165 does (see
+    [Requests Abandoned by the Client](#requests-abandoned-by-the-client)).
+263. **A cancellation the server makes keeps its classification.** With the
+    client still connected, a statement cut by the 5-second query time budget is
+    answered `400` with `kind` `execution` and the budget line, and a graph server
+    that accepts the statement and answers nothing inside the endpoint's backstop
+    deadline is answered `400` with `kind` `execution` and the line naming the
+    silent server; each writes exactly one `WARN` record and no `INFO` record (see
+    [Requests Abandoned by the Client](#requests-abandoned-by-the-client), rule 5,
+    and Acceptance Criterion 110).
 
 ## See Also
 

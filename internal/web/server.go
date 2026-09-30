@@ -107,8 +107,10 @@ func serve(opts options) error {
 	}
 
 	// 6. Serve and wait for a termination signal, then shut down
-	//    gracefully.
-	return runServer(ln, sigCh)
+	//    gracefully. The request guard admits hosts by the port actually
+	//    bound, the one the URL above reports, and not the one requested
+	//    (SPEC/WEB.md § Security and Constraints, rule 13).
+	return runServer(ln, sigCh, newHostPolicy(opts.host, actualPort))
 }
 
 // migrateRoadmapsAtStartup brings every existing roadmap's SQLite schema up to
@@ -194,14 +196,14 @@ func isLoopbackHost(host string) bool {
 }
 
 // newServer builds the configured http.Server: the security-hardened handler
-// plus the three mandatory timeouts that protect the read-only server from
+// for a listener bound as policy describes, plus the three mandatory timeouts that protect the read-only server from
 // resource exhaustion by slow or idle connections (SPEC/WEB.md § HTTP Server
 // Timeouts). ReadHeaderTimeout bounds slow-header (Slowloris) connections,
 // WriteTimeout bounds a slow-reading client stalling the response, and
 // IdleTimeout bounds idle keep-alive connections.
-func newServer() *http.Server {
+func newServer(policy hostPolicy) *http.Server {
 	return &http.Server{
-		Handler:           handler(),
+		Handler:           newHandler(policy),
 		ReadHeaderTimeout: 10 * time.Second,
 		WriteTimeout:      30 * time.Second,
 		IdleTimeout:       120 * time.Second,
@@ -213,6 +215,9 @@ func newServer() *http.Server {
 // ErrDatabase when Serve fails for any reason other than the expected
 // http.ErrServerClosed.
 //
+// policy describes the bound listener to the request guard: the --host value
+// and the port actually bound.
+//
 // sigCh is the channel [serve] took the signals over on, one step before the
 // URL was printed. cmd/rmp/main.go's default action for SIGINT and SIGTERM is
 // os.Exit(130), which for `rmp web` would skip the graceful shutdown and report
@@ -223,8 +228,8 @@ func newServer() *http.Server {
 // the take-over has to precede the announcement, which happens in [serve]. It
 // used to be registered here with signal.Reset followed by signal.Notify, and
 // that pair is the defect rmp task #388 fixed: see internal/signals.
-func runServer(ln net.Listener, sigCh <-chan os.Signal) error {
-	srv := newServer()
+func runServer(ln net.Listener, sigCh <-chan os.Signal, policy hostPolicy) error {
+	srv := newServer(policy)
 
 	serveErr := make(chan error, 1)
 	go func() {

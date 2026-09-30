@@ -792,7 +792,7 @@ func TestSecurityHeaders(t *testing.T) {
 // has no dynamic HTTP probe and is verified here by inspecting the struct the
 // server builds.
 func TestServerTimeouts(t *testing.T) {
-	srv := newServer()
+	srv := newServer(newHostPolicy(defaultHost, defaultPort))
 	if srv.ReadHeaderTimeout != 10*time.Second {
 		t.Errorf("ReadHeaderTimeout = %v, want 10s", srv.ReadHeaderTimeout)
 	}

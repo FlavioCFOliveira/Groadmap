@@ -1,8 +1,10 @@
-// Package web implements the read-only `rmp web` command: an HTTP server,
+// Package web implements the `rmp web` command: an HTTP server,
 // embedded into the rmp binary, that presents the roadmaps under
 // ~/.roadmaps/ as server-rendered HTML and an interactive knowledge-graph
-// visualisation. The interface never writes; the rmp CLI remains the sole
-// write path. See SPEC/WEB.md for the full behaviour and SPEC/COMMANDS.md
+// visualisation. Every page is read-only and no roadmap database is written;
+// the knowledge-graph query bar is the exception, because it sends the Cypher
+// statement it is given, which may write, to the roadmap's graph server. See
+// SPEC/WEB.md for the full behaviour and SPEC/COMMANDS.md
 // § Web Interface for the command-line contract.
 package web
 

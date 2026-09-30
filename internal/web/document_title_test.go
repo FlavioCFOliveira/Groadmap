@@ -88,6 +88,20 @@ func setServerHostname(t *testing.T, hostname string) {
 	serverHostname = hostname
 }
 
+// titleHandler is the production handler chain of a listener bound to every
+// interface on port 7171. The title tests name hosts on that port, and an
+// unspecified bind is the one that admits a host naming ANY IP literal, so the
+// title can be asserted against a host other than the one the server was told
+// while the request still passes the request guard (SPEC/WEB.md § Security and
+// Constraints, rule 13).
+func titleHandler() http.Handler {
+	return newHandler(newHostPolicy("0.0.0.0", 7171))
+}
+
+// titleForeignHost is a host the title tests' listener admits and that is not
+// the host they otherwise name: a different address on the same port.
+const titleForeignHost = "192.0.2.77:7171"
+
 // pageTitle requests path through the full handler chain with the given Host
 // header, requires HTTP 200, and returns the text of the page's single <title>
 // element, failing the test when the page carries zero or several.
@@ -144,7 +158,7 @@ func TestDocumentTitle_EveryPage(t *testing.T) {
 	seedTitleFixture(t)
 	setServerHostname(t, "thinkpad")
 
-	h := handler()
+	h := titleHandler()
 	for _, tc := range titleCases("thinkpad") {
 		got, body := pageTitle(t, h, tc.path, "127.0.0.1:7171")
 		if got != tc.want {
@@ -168,15 +182,15 @@ func TestDocumentTitle_IgnoresHostHeader(t *testing.T) {
 	seedTitleFixture(t)
 	setServerHostname(t, "thinkpad")
 
-	h := handler()
+	h := titleHandler()
 	for _, tc := range titleCases("thinkpad") {
 		served, _ := pageTitle(t, h, tc.path, "127.0.0.1:7171")
-		foreign, _ := pageTitle(t, h, tc.path, "example.org")
+		foreign, _ := pageTitle(t, h, tc.path, titleForeignHost)
 		if foreign != served {
-			t.Errorf("GET %s with Host: example.org: <title> = %q, want %q", tc.path, foreign, served)
+			t.Errorf("GET %s with Host: %s: <title> = %q, want %q", tc.path, titleForeignHost, foreign, served)
 		}
 		if foreign != tc.want {
-			t.Errorf("GET %s with Host: example.org: <title> = %q, want %q", tc.path, foreign, tc.want)
+			t.Errorf("GET %s with Host: %s: <title> = %q, want %q", tc.path, titleForeignHost, foreign, tc.want)
 		}
 	}
 }
@@ -190,7 +204,7 @@ func TestDocumentTitle_UnavailableHostnameDropsSegment(t *testing.T) {
 	seedTitleFixture(t)
 	setServerHostname(t, "")
 
-	h := handler()
+	h := titleHandler()
 	for _, tc := range titleCases("") {
 		got, _ := pageTitle(t, h, tc.path, "127.0.0.1:7171")
 		if got != tc.want {
@@ -209,7 +223,7 @@ func TestDocumentTitle_HostnameIsEscaped(t *testing.T) {
 	t.Setenv("HOME", shortHome(t))
 	setServerHostname(t, `lab<b>&"rack"`)
 
-	got, _ := pageTitle(t, handler(), "/", "127.0.0.1:7171")
+	got, _ := pageTitle(t, titleHandler(), "/", "127.0.0.1:7171")
 	want := "Roadmaps - lab&lt;b&gt;&amp;&#34;rack&#34;"
 	if got != want {
 		t.Errorf("<title> = %q, want %q", got, want)
