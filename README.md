@@ -14,6 +14,14 @@ This will detect your OS and architecture, download the latest release from GitH
 
 Before extracting anything, the script verifies the downloaded archive against the SHA-256 checksum published beside it in the same release, and refuses to install if the two differ, if the checksum is missing, or if the host has no SHA-256 tool. This detects a corrupted or truncated download and an archive replaced without its checksum; it is not a signature, so it cannot detect a release replaced at its source. `SPEC/DEPLOY.md` states the boundary in full.
 
+### Agent Skills
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/FlavioCFOliveira/Groadmap/main/install-skills.sh | bash
+```
+
+This installs the two Claude Code skills that drive `rmp` for AI agents: `roadmap-manager` (tasks, sprints and their comment logs) and `knowledge-authority` (the knowledge graph, through `rmp graph serve` and `rmp graph client`). They are installed for the current user, for every project, into `$CLAUDE_CONFIG_DIR/skills` when that variable is set and `~/.claude/skills` otherwise; no `sudo` is used. The script downloads the skills archive of the latest release and verifies it against its published SHA-256 checksum before installing. Every run replaces both skills entirely with that release's version, so no file of a previous install remains; other skills in the directory are not touched. `SPEC/SKILLS.md` states the full behaviour.
+
 ## Features
 
 - **Roadmap Management**: Create, list, and remove roadmaps
