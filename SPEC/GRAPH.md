@@ -598,10 +598,33 @@ process that opens the store
 ([Engine Constructor by Path](#engine-constructor-by-path)); when it runs one, and
 how often, is stated in
 [Durability and Checkpointing in a Long-Lived Process](#durability-and-checkpointing-in-a-long-lived-process),
-which applies this section's condition rather than declaring a second one. A
-checkpoint is synchronous with respect to the sequence that owes it: it runs on
-the engine's own commit serialiser or inside the shutdown sequence, never as a
-background goroutine racing either.
+which applies this section's condition rather than declaring a second one.
+
+**A checkpoint is synchronous with respect to the party that requests it, not
+with respect to the writers.** Two parties request one: the in-flight fold, at a
+due instant of the cadence, and the shutdown sequence, after the drain. Each hands
+the fold to the engine's checkpoint routine, which runs it on a goroutine of its
+own, and waits until the fold has finished and returned its outcome. No fold is
+requested and then left unobserved, which is why the server holds the error of
+every fold it takes (see the failure policy below). What orders a fold against
+everything else is fixed as follows:
+
+- **The capture is a transaction boundary.** The fold captures the graph through
+  the engine's commit serialiser, which excludes writers while the capture is
+  taken, so no transaction is in the capture in part.
+- **The truncation excludes writers too.** Removing the folded prefix of the
+  write-ahead log, after the snapshot is durable, runs through the same
+  serialiser, and it removes the log only up to the captured boundary.
+- **Writing the snapshot does not exclude writers.** Between the capture and the
+  truncation, while the snapshot is serialised and written, writers keep
+  committing. What they append lies beyond the captured boundary, survives the
+  truncation, and is left to a later fold (see
+  [Durability and Checkpointing in a Long-Lived Process](#durability-and-checkpointing-in-a-long-lived-process),
+  rule 10).
+- **Two folds never overlap.** The in-flight fold and the shutdown fold pass
+  through one gate that admits a single fold at a time, and the shutdown stops
+  the in-flight fold, waiting for one in progress to finish, before it takes its
+  own.
 
 **What decides whether a checkpoint is owed is the write-ahead log, not the
 statement.** Groadmap does not examine a statement to learn whether it writes, so
@@ -3849,8 +3872,10 @@ something.
    a fold is due; the condition decides whether it runs.** The engine's own
    checkpoint loop folds unconditionally: it serialises the whole graph and
    rewrites the whole snapshot at every fold it takes, whether or not anything was
-   appended since the last one. The server therefore does not leave the in-flight
-   fold to that loop. At each instant the cadence of rule 6 makes a fold due, the
+   appended since the last one. The server therefore does not leave the decision
+   to fold to that loop: the loop is given no cadence of its own and folds only
+   when the server asks it to (see
+   [Synchronous Checkpoint on Write](#synchronous-checkpoint-on-write)). At each instant the cadence of rule 6 makes a fold due, the
    server observes the write-ahead log's **durable offset** — the length of the
    log that its last synchronisation to disk covers — and folds when, and only
    when, that offset shows the log has grown since the last fold. That
