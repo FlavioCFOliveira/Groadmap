@@ -261,6 +261,49 @@ jobs:
       - name: List downloaded artifacts
         run: ls -la dist/
 
+      # SPEC/SKILLS.md § Packaging: the agent skills ship as one archive and its
+      # checksum, built here from this job's checkout of the tag, before the
+      # release is created. The archive's top-level entries are exactly
+      # roadmap-manager/ and knowledge-authority/, with no leading ./; it holds
+      # each skill's file set (every regular file, recursively, except paths
+      # with a component beginning with '.') and the directories that contain
+      # it, and nothing else. The checksum is sha256sum's own output, run from
+      # inside dist/ exactly as for a binary archive, so the next step attaches
+      # both files by the same dist/*.tar.gz and dist/*.sha256 rule.
+      - name: Package agent skills
+        run: |
+          set -euo pipefail
+          version="${{ steps.get_version.outputs.VERSION }}"
+          archive="rmp-skills-${version}.tar.gz"
+
+          for skill in roadmap-manager knowledge-authority; do
+            if [ -L "skills/${skill}" ] || [ ! -d "skills/${skill}" ]; then
+              echo "skills/${skill} is missing, so the release cannot publish the agent skills." >&2
+              exit 1
+            fi
+          done
+
+          # A link, a device or any other entry that is neither a directory nor
+          # a regular file is never shipped; one in a skill fails the job rather
+          # than being dropped silently.
+          unsupported=$(cd skills && find roadmap-manager knowledge-authority \
+            -name '.*' -prune -o ! -type d ! -type f -print)
+          if [ -n "${unsupported}" ]; then
+            echo "skills/ holds entries that are neither directories nor regular files:" >&2
+            echo "${unsupported}" >&2
+            exit 1
+          fi
+
+          entries="$(mktemp)"
+          (cd skills && find roadmap-manager knowledge-authority \
+            -name '.*' -prune -o \( -type d -o -type f \) -print | LC_ALL=C sort) > "${entries}"
+          tar --no-recursion -czf "dist/${archive}" -C skills -T "${entries}"
+          rm -f "${entries}"
+
+          (cd dist && sha256sum "${archive}" > "${archive}.sha256")
+          tar -tzf "dist/${archive}"
+          (cd dist && sha256sum -c "${archive}.sha256")
+
       - name: Create GitHub Release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
