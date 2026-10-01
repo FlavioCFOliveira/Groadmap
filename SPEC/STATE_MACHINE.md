@@ -31,11 +31,11 @@ Tasks can be in one of the following states:
 
 | State | Description |
 |-------|-------------|
-| `BACKLOG` | Task is in the backlog. A `BACKLOG` task usually belongs to no sprint, but it can still be a member of one; see Section "Sprint Membership and the BACKLOG Status" |
-| `SPRINT` | Task is assigned to an active sprint (set automatically when added to sprint) |
+| `BACKLOG` | Task is in the backlog. A `BACKLOG` task belongs to no sprint; see Section "Sprint Membership and the BACKLOG Status" |
+| `SPRINT` | Task is a member of a sprint and work on it has not started (set automatically when a `BACKLOG` task joins a sprint, and by `task reopen`) |
 | `DOING` | Task is currently being worked on |
 | `TESTING` | Task is in testing/QA phase |
-| `COMPLETED` | Task has been completed |
+| `COMPLETED` | Task has been completed. It stays in the sprint it was completed in |
 
 ### State Diagram
 
@@ -43,102 +43,166 @@ Tasks can be in one of the following states:
                 +-----------+
                 |  BACKLOG  |<--------------------------+
                 +-----+-----+                           |
-                      |                                 |
-        sprint add-   |  (automatic)                    | task stat BACKLOG
-        tasks         v                                 | (or task reopen)
-                +-----------+   sprint remove-tasks     |
-                |  SPRINT   |---------------------------+
-                +-----+-----+   or task stat BACKLOG    |
-                      |                                 |
-       task stat      |                                 |
-       DOING          v                                 |
+                      |                                 | sprint remove-tasks
+        sprint add-   |  (automatic)                    | or sprint remove
+        tasks         v                                 | (automatic)
                 +-----------+                           |
-              +>|   DOING   |                           |
-              | +-----+-----+                           |
-              |       |                                 |
-              |       |  task stat TESTING              |
-   task stat  |       v                                 |
-   DOING      | +-----------+                           |
-              +-+  TESTING  |                           |
-                +-----+-----+                           |
-                      |                                 |
-                      |  task stat COMPLETED            |
-                      v                                 |
-                +-----------+                           |
-                | COMPLETED |---------------------------+
-                +-----------+   task stat BACKLOG
-                                (or task reopen)
+           +--->|  SPRINT   |---------------------------+
+           |    +-----+-----+
+           |          |
+           |          |  task stat DOING
+           |          v
+           |    +-----------+
+           |    |   DOING   |<---------+
+           |    +-----+-----+          |
+           |          |                |
+           |          |  task stat     |  task stat
+           |          |  TESTING       |  DOING
+           |          v                |
+           |    +-----------+          |
+           |    |  TESTING  |----------+
+           |    +-----+-----+
+           |          |
+           |          |  task stat COMPLETED
+           |          v
+           |    +-----------+
+           +----| COMPLETED |
+    task reopen +-----------+
 ```
 
-Legend: arrows labelled with the command that triggers the transition. Transitions marked `(automatic)` are not user-callable via `task stat`; see Section "Valid Transitions" for the full rule set. The right-hand return-to-BACKLOG edge is reachable via `task stat <id> BACKLOG` only from `SPRINT` and `COMPLETED`; from `DOING` and `TESTING`, `task stat <id> BACKLOG` is rejected (exit code 6), and the only command that returns those states to `BACKLOG` is `task reopen`. For readability the diagram omits two sets of edges: the `task reopen` edges from `DOING` and `TESTING` (`task reopen` returns a task to `BACKLOG` from any non-BACKLOG state), and the `sprint remove-tasks` and `sprint remove` edges from `DOING`, `TESTING`, and `COMPLETED` (both sprint operations return every member task to `BACKLOG`, whatever its status).
+Legend: arrows labelled with the command that triggers the transition. Transitions marked `(automatic)` are side effects of a sprint command and are not user-callable via `task stat`; see Section "Valid Transitions" for the full rule set. For readability the diagram omits two sets of edges: the `task reopen` edges from `DOING` and `TESTING` to `SPRINT` (`task reopen` returns a task to `SPRINT` in its sprint from `DOING`, `TESTING` and `COMPLETED`), and the `sprint remove-tasks` and `sprint remove` edges from `DOING` and `TESTING` to `BACKLOG` (both sprint operations take a `SPRINT`, `DOING` or `TESTING` member out of its sprint and set it to `BACKLOG`). No edge leads from `COMPLETED` to `BACKLOG`: a `COMPLETED` task stays in its sprint, and no command sets its status to `BACKLOG`.
 
 The diagram labels each edge with the command alone and omits the flags that command requires. Two edges into `DOING` (`task stat DOING`, from `SPRINT` and from `TESTING`) require `--commit-open`, and the edge into `COMPLETED` requires `--commit-close`; see Section "Commit Tracking Fields".
 
-The diagram shows status changes only. It does not show sprint membership, which the `sprint_tasks` table records separately: a task that reaches `BACKLOG` through `task stat <id> BACKLOG` stays a member of its sprint. See Section "Sprint Membership and the BACKLOG Status".
+The diagram shows status changes. Sprint membership, which the `sprint_tasks` table records separately, follows the status by the invariant of Section "Sprint Membership and the BACKLOG Status": every status but `BACKLOG` is the status of a sprint member, and `BACKLOG` is the status of a task that belongs to no sprint.
 
 ### Valid Transitions
 
 | From State | Valid To States | How |
 |------------|-----------------|-----|
-| `BACKLOG` | `SPRINT` | Automatic only (via `sprint add-tasks`) |
-| `SPRINT` | `BACKLOG`, `DOING` | `BACKLOG` is automatic (via `sprint remove-tasks` or `sprint remove`) or manual (via `task stat <ids> BACKLOG` or `task reopen`); `DOING` is manual (via `task stat`, which requires `--commit-open`) |
-| `DOING` | `TESTING`, `BACKLOG` | `TESTING` is manual (via `task stat`); `BACKLOG` is manual (via `task reopen`) |
-| `TESTING` | `DOING`, `COMPLETED`, `BACKLOG` | `DOING` and `COMPLETED` are manual (via `task stat`; `DOING` requires `--commit-open`, `COMPLETED` requires `--commit-close` and accepts optional `--summary`); `BACKLOG` is manual (via `task reopen`) |
-| `COMPLETED` | `BACKLOG` | Manual (via `task stat` or `task reopen`); clears `completion_summary` and `commit_close`, preserves `commit_open` |
+| `BACKLOG` | `SPRINT` | Automatic only: `sprint add-tasks`, when the task joins a sprint |
+| `SPRINT` | `DOING`, `BACKLOG` | `DOING` is manual (via `task stat`, which requires `--commit-open`); `BACKLOG` is automatic only, when the task leaves its sprint (via `sprint remove-tasks` or `sprint remove`) |
+| `DOING` | `TESTING`, `SPRINT`, `BACKLOG` | `TESTING` is manual (via `task stat`); `SPRINT` is manual (via `task reopen`), and the task stays in its sprint; `BACKLOG` is automatic only, when the task leaves its sprint (via `sprint remove-tasks` or `sprint remove`) |
+| `TESTING` | `DOING`, `COMPLETED`, `SPRINT`, `BACKLOG` | `DOING` and `COMPLETED` are manual (via `task stat`; `DOING` requires `--commit-open`, `COMPLETED` requires `--commit-close` and accepts optional `--summary`); `SPRINT` is manual (via `task reopen`), and the task stays in its sprint; `BACKLOG` is automatic only, when the task leaves its sprint (via `sprint remove-tasks` or `sprint remove`) |
+| `COMPLETED` | `SPRINT` | Manual only (via `task reopen`); the task stays in the sprint it was completed in. Clears `started_at`, `tested_at`, `closed_at`, `completion_summary` and `commit_close`, and preserves `commit_open` |
 
-**Rejection rule:** Manual `task stat <ids> SPRINT` is rejected with exit code 6 from any source state. The SPRINT status is set exclusively by `sprint add-tasks`, which atomically links the task to a sprint via the `sprint_tasks` table. In particular, the `DOING → SPRINT` transition is invalid: returning a task to its sprint after starting work is not supported via `task stat`.
+**Changing sprint keeps the status.** `sprint add-tasks` naming a task that belongs to another sprint, and `sprint move-tasks`, move a `SPRINT`, `DOING` or `TESTING` task to another sprint and leave its status as it was. The only status a sprint command sets on a task that joins a sprint is `SPRINT`, and only on a task that was in `BACKLOG`, which is the one status a task that belongs to no sprint holds.
 
-**`task stat` BACKLOG target rule:** `task stat <ids> BACKLOG` is accepted only from the `SPRINT` and `COMPLETED` source states. From `DOING` and `TESTING`, `task stat <ids> BACKLOG` is rejected with exit code 6. The only command that returns a task to `BACKLOG` from `DOING` or `TESTING` is `task reopen` (see below). `task stat <ids> BACKLOG` never touches the `sprint_tasks` table: a task that belonged to a sprint before the transition still belongs to it afterwards. See Section "Sprint Membership and the BACKLOG Status".
+**Rejection rule:** Manual `task stat <ids> SPRINT` is rejected with exit code 6 from any source state. The `SPRINT` status is set only by `sprint add-tasks`, when a `BACKLOG` task joins a sprint, and by `task reopen`, which returns a task to the start of the lifecycle inside its sprint. In particular, `task stat` cannot perform the `DOING → SPRINT` transition; `task reopen` performs it.
 
-**`task reopen`:** The `task reopen` command is a manual transition distinct from `task stat` and from the automatic `SPRINT → BACKLOG` side effect of sprint operations. It transitions a task from any non-BACKLOG state (`SPRINT`, `DOING`, `TESTING`, or `COMPLETED`) back to `BACKLOG`. It clears all lifecycle timestamps (`started_at`, `tested_at`, `closed_at`), `completion_summary`, and `commit_close` to NULL, and preserves `commit_open` (see Section "Commit Tracking Fields"). It removes the task's `sprint_tasks` association only when the source state is `SPRINT`, `DOING`, or `TESTING`; from the `COMPLETED` source state the association survives, and the task stays a member of its sprint. Running `task reopen` on a task that is already in `BACKLOG` changes nothing: the command reports the task on stderr, exits 0, and leaves any `sprint_tasks` association in place. See `COMMANDS.md § Reopen Task`.
+**`task stat` BACKLOG target rule:** `task stat <ids> BACKLOG` is rejected with exit code 6 for every task that is a member of a sprint, because a sprint member is never in `BACKLOG` status and `task stat` never changes membership. The refusal names the command that fits the source state:
+
+| Source state | stderr Output |
+|--------------|---------------|
+| `SPRINT`, `DOING` or `TESTING` | `Error: validation error: invalid status transition from X to BACKLOG for task N: a task leaves its sprint only through 'rmp sprint remove-tasks'` |
+| `COMPLETED` | `Error: validation error: invalid status transition from COMPLETED to BACKLOG for task N: a completed task is reopened with 'rmp task reopen'` |
+
+`X` is the task's current status. `COMPLETED` has a line of its own because a completed task cannot be removed from its sprint (Section "Sprint Membership and the BACKLOG Status", rule 4); `task reopen` returns it to `SPRINT`, after which `sprint remove-tasks` can take it out.
+
+**`task reopen`:** The `task reopen` command is a manual transition distinct from `task stat` and from the automatic transitions of the sprint commands. It returns a task from `DOING`, `TESTING` or `COMPLETED` to `SPRINT`, and the task stays in its sprint at the `position` it holds. It clears all lifecycle timestamps (`started_at`, `tested_at`, `closed_at`), `completion_summary`, and `commit_close` to NULL, and preserves `commit_open` (see Section "Commit Tracking Fields"). It never touches the `sprint_tasks` table. It is refused, with exit code 6 and no change, while the task's sprint is `CLOSED`, because a closed sprint takes no work back: `Error: validation error: cannot reopen task N: sprint #M is CLOSED; reopen the sprint first with 'rmp sprint reopen'`, where `N` is the first such task in the order the command line supplied them and `M` its sprint; `sprint reopen` reopens the sprint first. It is also refused, with exit code 6 and no change, when returning `COMPLETED` tasks to `SPRINT` would take their sprint's active load past the cap its `max_tasks` sets, because a `COMPLETED` member does not count against that cap and a `SPRINT` member does (Section "Sprint Membership and the BACKLOG Status"); `COMMANDS.md § Reopen Task` publishes the count and the line. Running `task reopen` on a task that is already in `SPRINT`, or in `BACKLOG`, changes nothing: the command reports the task on stderr, exits 0, and writes no audit entry. See `COMMANDS.md § Reopen Task`.
 
 ### Sprint Membership and the BACKLOG Status
 
-Sprint membership and task status are two independent facts. Membership is a row
-in the `sprint_tasks` junction table (see `DATABASE.md § sprint_tasks Table (1:N Relationship)`);
-status is the `tasks.status` column. No column on the `tasks` table records the
-sprint a task belongs to.
+Sprint membership and task status are two facts stored in two places. Membership
+is a row in the `sprint_tasks` junction table (see
+`DATABASE.md § sprint_tasks Table (1:N Relationship)`); status is the
+`tasks.status` column. No column on the `tasks` table records the sprint a task
+belongs to. The two are nevertheless bound by one invariant, and this section is
+canonical for it.
 
-1. **A `BACKLOG` task can be a member of a sprint.** The manual transition
-   `task stat <ids> BACKLOG` from the `SPRINT` source state changes only
-   `tasks.status`. The task's `sprint_tasks` row survives, so the task remains a
-   member of its sprint while its status reads `BACKLOG`. The same state is
-   reached by `task reopen` from the `COMPLETED` source state, which likewise
-   leaves the `sprint_tasks` row in place.
-2. **The `position` of a member task is preserved.** `task stat <ids> BACKLOG`
-   does not change the `position` column of the task's `sprint_tasks` row and
-   does not renumber the positions of the other member tasks. The task keeps its
-   place in the sprint's planned execution order.
-3. **Commands that read sprint membership still see the task.** `sprint tasks`
-   returns it, `sprint get` and `sprint list` both list it in `tasks` and count it
-   in `task_count`, and `sprint show` lists it in `task_order` and counts it in
-   `summary.total_tasks` and `summary.pending`. Commands that select only the non-terminal in-sprint
-   statuses do not see it: `sprint open-tasks` and the `max_tasks` capacity check
-   both restrict themselves to the `SPRINT`, `DOING`, and `TESTING` statuses, so
-   the task is neither returned by the first nor charged against the sprint's
-   capacity by the second.
-4. **Commands that list the backlog also list the task.** The `backlog`
-   subcommands filter on `status == BACKLOG` alone, so they return the task even
-   though it belongs to a sprint.
-5. **Outgoing transitions are the ordinary `BACKLOG` ones.** Membership grants the
-   task no extra transition. `task stat <ids> DOING` is rejected with exit code 6
-   from `BACKLOG`, and `task stat <ids> SPRINT` is rejected from every source
-   state. To resume work on the task, the caller runs `sprint add-tasks` again,
-   which restores the `SPRINT` status and moves the task to the end of the
-   sprint's position order.
-6. **Detaching the task requires a sprint command.** `sprint remove-tasks` removes
-   the `sprint_tasks` row of a `BACKLOG` member and `sprint remove` removes it with
-   the sprint. `task reopen` does not detach a task that is already in `BACKLOG`.
+**The membership invariant** has two halves, and no committed state of a roadmap
+database breaks either:
 
-The web sprint board depends on this state: its `WAITING` column presents the
-sprint's `BACKLOG` and `SPRINT` member tasks together (see
-`WEB.md § Sprint Detail Sub-Template`).
+1. **A sprint member is never in `BACKLOG`.** A member's status is always
+   `SPRINT`, `DOING`, `TESTING` or `COMPLETED`, so a task in `BACKLOG` status
+   belongs to no sprint. No `sprint_tasks` row names a task in `BACKLOG` status.
+2. **An active task belongs to a sprint.** A task in `SPRINT`, `DOING` or
+   `TESTING` status is a member of a sprint. No task in one of those three statuses
+   is without a `sprint_tasks` row.
+
+`COMPLETED` is the one status the two halves leave open: a completed task stays in
+its sprint, and one without a sprint exists only in data written before these rules
+(see below).
+
+Every write path respects it:
+
+1. **`task create`** creates a task in `BACKLOG` status and never with a sprint.
+2. **`sprint add-tasks`** sets a named `BACKLOG` task to `SPRINT` as it joins the
+   sprint, in the same transaction. A named `SPRINT`, `DOING` or `TESTING` task,
+   whether it belongs to another sprint or already to this one, keeps its status.
+3. **`sprint move-tasks`** changes the sprint of each named task and keeps its
+   status. It never sets `BACKLOG`.
+4. **A `COMPLETED` task is bound to the sprint it was completed in.**
+   `sprint add-tasks` naming it, to any sprint including its own, `sprint move-tasks`
+   naming it, and `sprint remove-tasks` naming it are each refused with exit code 6
+   and one line, the same on all three commands:
+   `Error: validation error: task N is COMPLETED in sprint #M; a completed task stays in the sprint it was completed in`.
+   `N` is the task and `M` the sprint it belongs to; when several named tasks are
+   `COMPLETED`, `N` is the first of them in the order the command line supplied
+   them. Nothing is changed. `task reopen` returns such a task to `SPRINT` in the
+   same sprint, after which the sprint commands accept it.
+5. **`sprint remove-tasks`** takes each named task out of the sprint and sets it to
+   `BACKLOG`, in one transaction. It is the only command that takes a single task
+   out of its sprint and the only command, with `sprint remove`, that sets
+   `BACKLOG`.
+6. **`sprint remove`** takes every member out of the sprint and sets each to
+   `BACKLOG` before the sprint row is deleted, in one transaction. It is refused
+   with exit code 6, and changes nothing, when the sprint holds at least one
+   `COMPLETED` task (`COMMANDS.md § Remove Sprint` publishes the line).
+7. **`task reopen`** returns a `DOING`, `TESTING` or `COMPLETED` task to `SPRINT`
+   and leaves it in its sprint. It is refused while that sprint is `CLOSED`.
+8. **`task stat <ids> BACKLOG`** is refused for every sprint member (Section
+   "Valid Transitions").
+
+**Application code enforces both halves.** Every write path above goes through one
+guard in `internal/db`, inside its transaction, which checks the resulting status
+and membership of every task the write changed and refuses a violation of either
+half before commit. The schema uses no trigger, for this or any other rule.
+`DATABASE.md § Sprint Membership Invariant Enforcement` is canonical for the guard,
+the write paths that call it, and how a violation is reported: it can only be
+reached by a defect in a write path, never by bad input, and fails the command as a
+database failure (exit code 1).
+
+**A roadmap created before the invariant was enforced** may break either half:
+members in `BACKLOG` status, or active tasks that belong to no sprint. The migration
+that introduces the enforcement repairs both: a member in
+`BACKLOG` becomes `SPRINT` in its sprint, and an active task outside every sprint
+returns to `BACKLOG`, as removal from a sprint would return it
+(`VERSION.md § Migration 1.15.0 → 1.16.0`).
+
+**A `COMPLETED` task that belongs to no sprint** cannot be produced by any
+command under these rules, because a task reaches `COMPLETED` only from `TESTING`,
+and only a sprint member is in `TESTING`. Such a task can exist only in data
+written before these rules. `sprint add-tasks` refuses it with exit code 6 and
+`Error: validation error: task N is COMPLETED and belongs to no sprint; a completed task cannot join a sprint`,
+and `task reopen` returns it to `BACKLOG`, the one status a task outside every
+sprint may hold, clearing what it clears on every reopening.
+
+**What the invariant makes of the readers.**
+
+1. **Commands that read sprint membership and commands that read status agree.**
+   `sprint tasks`, `sprint get`, `sprint list` and `sprint show` list a sprint's
+   members, and none of them is in `BACKLOG` status. The `backlog` subcommands
+   filter on `status == BACKLOG` alone, and every task they return belongs to no
+   sprint.
+2. **The capacity of a sprint counts `SPRINT`, `DOING` and `TESTING` members.**
+   `sprint open-tasks` and the `max_tasks` capacity check both restrict themselves
+   to those three statuses, so a `COMPLETED` member is neither returned by the first
+   nor charged against the sprint's capacity by the second. A `task reopen` that
+   returns a `COMPLETED` member to `SPRINT` therefore charges it again, and is
+   refused when that would take the sprint past its cap.
+3. **A task outside every sprint is in `BACKLOG`.** Joining a sprint is the only
+   way out of `BACKLOG`, and leaving a sprint is the only way into it.
+
+The web sprint board presents a sprint's members by status (see
+`WEB.md § Sprint Detail Sub-Template`); under the invariant, no member it
+presents is in `BACKLOG` status.
 
 ### Task Deletion Precondition
 
-A task may be removed (`task remove` / `task rm`) only while it is in `BACKLOG` status. Attempts to delete a task in any other status (`SPRINT`, `DOING`, `TESTING`, `COMPLETED`) are rejected with exit code 6 and the message `"Error: validation error: task #N cannot be deleted — status is X, must be BACKLOG"`. To delete a non-BACKLOG task, the caller MUST first transition the task back to `BACKLOG`: via `sprint remove-tasks` or `sprint remove` from any of the four states, via `task stat <id> BACKLOG` from `SPRINT` or `COMPLETED`, or via `task reopen` from any of the four states.
+A task may be removed (`task remove` / `task rm`) only while it is in `BACKLOG` status. Attempts to delete a task in any other status (`SPRINT`, `DOING`, `TESTING`, `COMPLETED`) are rejected with exit code 6 and the message `"Error: validation error: task #N cannot be deleted — status is X, must be BACKLOG"`. To delete a non-BACKLOG task, the caller MUST first take it out of its sprint, which returns it to `BACKLOG`: via `sprint remove-tasks` or `sprint remove` from `SPRINT`, `DOING` or `TESTING`. A `COMPLETED` task is first returned to `SPRINT` with `task reopen`, because no sprint command takes a `COMPLETED` task out of its sprint.
 
-The precondition tests the status alone. A task in `BACKLOG` status that is still a member of a sprint can be deleted, and the deletion removes its `sprint_tasks` row through the `ON DELETE CASCADE` on that table.
+The precondition tests the status alone. Under the membership invariant (Section "Sprint Membership and the BACKLOG Status") a `BACKLOG` task belongs to no sprint, so a deletion never removes a `sprint_tasks` row.
 
 A task with active subtasks cannot be removed either; the subtasks must be removed first.
 
@@ -150,20 +214,21 @@ This rule preserves the audit trail of work that progressed past `BACKLOG`. The 
 
 | Transition Type | How Triggered | Command |
 |-----------------|---------------|---------|
-| **Automatic** | Status changed as side effect of sprint operations | `sprint add-tasks`, `sprint remove-tasks`, `sprint remove` |
+| **Automatic** | Status changed as side effect of sprint operations | `sprint add-tasks` (a `BACKLOG` task joining a sprint), `sprint remove-tasks`, `sprint remove` |
 | **Manual** | Status changed explicitly via task command | `task stat`, `task reopen` |
 
 #### Automatic Transitions
 
 | Transition | Trigger | Tracking Field Behavior |
 |------------|---------|----------------------|
-| **BACKLOG → SPRINT** | Task added to sprint via `sprint add-tasks` | No tracking field changes |
+| **BACKLOG → SPRINT** | A `BACKLOG` task joins a sprint via `sprint add-tasks` | No tracking field changes |
 | **SPRINT → BACKLOG** | Task removed from sprint via `sprint remove-tasks` OR sprint deleted via `sprint remove` | Clear `started_at`, `tested_at`, `closed_at`, `completion_summary`, `commit_close` to NULL; preserve `commit_open`. On this source state all five cleared fields are already NULL, so only `commit_open` can hold a value here, and it is untouched |
 | **DOING → BACKLOG** | Task removed from sprint via `sprint remove-tasks` OR sprint deleted via `sprint remove` | Clear `started_at`, `tested_at`, `closed_at`, `completion_summary`, `commit_close` to NULL; preserve `commit_open` |
 | **TESTING → BACKLOG** | Task removed from sprint via `sprint remove-tasks` OR sprint deleted via `sprint remove` | Clear `started_at`, `tested_at`, `closed_at`, `completion_summary`, `commit_close` to NULL; preserve `commit_open` |
-| **COMPLETED → BACKLOG** | Task removed from sprint via `sprint remove-tasks` OR sprint deleted via `sprint remove` | Clear `started_at`, `tested_at`, `closed_at`, `completion_summary`, `commit_close` to NULL; preserve `commit_open` |
 
-Both sprint operations reset every member task they touch, whatever its status, and both remove the task's `sprint_tasks` row in the same transaction. Neither operation checks the task's status first, so a `COMPLETED` task returns to `BACKLOG` and loses its `completion_summary` and its `commit_close` along with the other member tasks. Neither operation clears `commit_open`: a task detached from its sprint keeps the record of where its work started.
+Both sprint operations remove the task's `sprint_tasks` row and set `BACKLOG` in the same transaction, and the sprint membership guard checks the result before commit (`DATABASE.md § Sprint Membership Invariant Enforcement`). Neither operation reaches a `COMPLETED` task: `sprint remove-tasks` refuses one it names, and `sprint remove` refuses a sprint that holds one (Section "Sprint Membership and the BACKLOG Status", rules 4 and 6). Neither operation clears `commit_open`: a task detached from its sprint keeps the record of where its work started.
+
+A task that changes sprint through `sprint add-tasks` or `sprint move-tasks` keeps its status and every tracking field; no automatic transition applies to it.
 
 #### Manual Transitions
 
@@ -173,11 +238,9 @@ Both sprint operations reset every member task they touch, whatever its status, 
 | **DOING → TESTING** | Task is ready for testing | Set `tested_at` to current timestamp; no commit field changes |
 | **TESTING → DOING** | Testing failed, return to development | No date changes; set `commit_open` to the mandatory `--commit-open` value, replacing the value stored on the previous entry into `DOING` |
 | **TESTING → COMPLETED** | Testing passed, task is complete | Set `closed_at` to current timestamp; set `commit_close` to the mandatory `--commit-close` value; optionally set `completion_summary` |
-| **SPRINT → BACKLOG** (via `task stat`) | Task is returned to the backlog without starting work, while staying in its sprint | Clear `started_at`, `tested_at`, `closed_at`, `completion_summary`, `commit_close` to NULL (all five are already NULL on this source state); preserve `commit_open`; keep the `sprint_tasks` association and its `position` |
-| **COMPLETED → BACKLOG** | Task is reopened for rework (via `task stat` or `task reopen`) | Clear `started_at`, `tested_at`, `closed_at`, `completion_summary`, `commit_close` to NULL; preserve `commit_open`; keep the `sprint_tasks` association and its `position` |
-| **SPRINT → BACKLOG** (via `task reopen`) | Task is reopened from a sprint without starting work, and leaves the sprint | Clear `started_at`, `tested_at`, `closed_at`, `completion_summary`, `commit_close` to NULL; preserve `commit_open`; remove `sprint_tasks` association |
-| **DOING → BACKLOG** (via `task reopen`) | In-progress task is reopened | Clear `started_at`, `tested_at`, `closed_at`, `completion_summary`, `commit_close` to NULL; preserve `commit_open`; remove `sprint_tasks` association |
-| **TESTING → BACKLOG** (via `task reopen`) | In-testing task is reopened | Clear `started_at`, `tested_at`, `closed_at`, `completion_summary`, `commit_close` to NULL; preserve `commit_open`; remove `sprint_tasks` association |
+| **COMPLETED → SPRINT** (via `task reopen`) | Task is reopened for rework inside the sprint it was completed in | Clear `started_at`, `tested_at`, `closed_at`, `completion_summary`, `commit_close` to NULL; preserve `commit_open`; keep the `sprint_tasks` association and its `position` |
+| **DOING → SPRINT** (via `task reopen`) | In-progress task is reopened inside its sprint | Clear `started_at`, `tested_at`, `closed_at`, `completion_summary`, `commit_close` to NULL; preserve `commit_open`; keep the `sprint_tasks` association and its `position` |
+| **TESTING → SPRINT** (via `task reopen`) | In-testing task is reopened inside its sprint | Clear `started_at`, `tested_at`, `closed_at`, `completion_summary`, `commit_close` to NULL; preserve `commit_open`; keep the `sprint_tasks` association and its `position` |
 
 #### Mandatory Values on Entry into DOING and COMPLETED
 
@@ -232,33 +295,31 @@ The following fields track the task lifecycle and are managed automatically by t
 #### Rules
 
 1. **created_at**: Set once on task creation, never changes
-2. **started_at**: Set on first transition to DOING, cleared on every return to BACKLOG
-3. **tested_at**: Set on first transition to TESTING, cleared on every return to BACKLOG
-4. **closed_at**: Set on transition to COMPLETED, cleared on every return to BACKLOG
-5. **completion_summary**: Optionally set on TESTING → COMPLETED transition via `--summary` flag; cleared on every return to BACKLOG; cannot be set on any other transition
+2. **started_at**: Set on first transition to DOING, cleared on every return to BACKLOG and on every reopening
+3. **tested_at**: Set on first transition to TESTING, cleared on every return to BACKLOG and on every reopening
+4. **closed_at**: Set on transition to COMPLETED, cleared on every return to BACKLOG and on every reopening
+5. **completion_summary**: Optionally set on TESTING → COMPLETED transition via `--summary` flag; cleared on every return to BACKLOG and on every reopening; cannot be set on any other transition
 
-"Every return to BACKLOG" covers all four routes: `task stat <ids> BACKLOG`, `task reopen`, `sprint remove-tasks`, and `sprint remove`. Each of them writes NULL to the three timestamps and to `completion_summary`, whatever the source state. The same four routes also clear `commit_close` and preserve `commit_open`; see Section "Commit Tracking Fields".
+"Every return to BACKLOG" covers the two routes that take a task out of its sprint: `sprint remove-tasks` and `sprint remove`. "Every reopening" is `task reopen`, which returns the task to `SPRINT` in its sprint. Each of the three writes NULL to the three timestamps and to `completion_summary`, whatever the source state. The same three also clear `commit_close` and preserve `commit_open`; see Section "Commit Tracking Fields". A change of sprint through `sprint add-tasks` or `sprint move-tasks` is neither, and clears nothing.
 
 #### Reopening Behavior
 
-A task is reopened to `BACKLOG` in one of two ways:
-- `task stat <ids> BACKLOG`, valid only from `SPRINT` and `COMPLETED`. From `DOING` or `TESTING` this command is rejected with exit code 6.
-- `task reopen <ids>`, valid from any non-BACKLOG state (`SPRINT`, `DOING`, `TESTING`, or `COMPLETED`). This is the only command that returns a `DOING` or `TESTING` task to `BACKLOG`.
+A task is reopened by `task reopen <ids>`, and by no other command. The command is
+valid from `DOING`, `TESTING` and `COMPLETED`, and returns the task to `SPRINT`
+inside the sprint it belongs to:
 
-In both cases:
 - All lifecycle dates (`started_at`, `tested_at`, `closed_at`) are reset to NULL
 - `completion_summary` is reset to NULL
 - `commit_close` is reset to NULL
 - `commit_open` is preserved
 - `created_at` is preserved (original creation time)
-- This allows the task to go through the full lifecycle again
+- The `sprint_tasks` association and its `position` are kept
+- This allows the task to go through the full lifecycle again, in the same sprint
 
-The two commands differ in what they do to sprint membership:
-
-- `task stat <ids> BACKLOG` never touches the `sprint_tasks` table. A task that was a sprint member stays one, keeping its `position`.
-- `task reopen` removes the `sprint_tasks` association when the source state is `SPRINT`, `DOING`, or `TESTING`, detaching the task from its sprint. From the `COMPLETED` source state it leaves the association in place, so the task stays a member.
-
-Section "Sprint Membership and the BACKLOG Status" describes the resulting state.
+On a task already in `SPRINT`, and on a task in `BACKLOG`, the command changes
+nothing. `task stat <ids> BACKLOG` reopens nothing: it is refused for every sprint
+member (Section "Valid Transitions"). A task leaves its sprint, and so returns to
+`BACKLOG`, only through `sprint remove-tasks` or `sprint remove`.
 
 #### Date Format
 
@@ -290,11 +351,11 @@ the repository's history* it began or ended.
 3. **`commit_close`**: mandatory on the transition into `COMPLETED`. A transition
    into `COMPLETED` without `--commit-close` is rejected with exit code 6 and
    changes nothing.
-4. **`commit_close` is cleared on every return to BACKLOG**, by all four routes:
-   `task stat <ids> BACKLOG`, `task reopen`, `sprint remove-tasks`, and
-   `sprint remove`.
-5. **`commit_open` is preserved on every return to BACKLOG**, by all four of those
-   routes. No command clears it, and no command other than a transition into
+4. **`commit_close` is cleared on every return to BACKLOG and on every
+   reopening**, by all three routes: `sprint remove-tasks`, `sprint remove`, and
+   `task reopen`.
+5. **`commit_open` is preserved on every return to BACKLOG and on every
+   reopening**, by all three of those routes. No command clears it, and no command other than a transition into
    `DOING` writes it.
 6. **Neither field can be set by any other command.** `task create` accepts neither
    value, because a task is created in `BACKLOG`. `task edit` cannot change either
@@ -304,7 +365,7 @@ the repository's history* it began or ended.
 
 Rules 4 and 5 are deliberately asymmetric, and this is the one place where the
 commit fields diverge from the lifecycle timestamps and `completion_summary`, all
-of which a return to `BACKLOG` clears without exception.
+of which a return to `BACKLOG` and a reopening clear without exception.
 
 - The commit a task's work was **started from** is a fact about history. Reopening
   the task does not make that commit a different commit, and it does not make the
@@ -324,14 +385,14 @@ non-NULL only while the task is `COMPLETED`.
 | `commit_open` | `commit_close` | When |
 |---------------|----------------|------|
 | NULL | NULL | The task has not entered `DOING` since the columns were introduced. This covers every newly created task, and every task that was in `BACKLOG`, `SPRINT`, or `COMPLETED` when the columns were introduced |
-| set | NULL | The task has entered `DOING` at least once since the columns were introduced, and is not currently `COMPLETED`. This is the state in `DOING`, in `TESTING`, and in `BACKLOG` or `SPRINT` after a reopening |
+| set | NULL | The task has entered `DOING` at least once since the columns were introduced, and is not currently `COMPLETED`. This is the state in `DOING`, in `TESTING`, in `SPRINT` after a reopening, and in `BACKLOG` after the task left its sprint |
 | set | set | The task is `COMPLETED` and entered `DOING` at least once since the columns were introduced. Every task completed under the current rules is in this combination |
 | NULL | set | The task is `COMPLETED`, and it was in `DOING` or in `TESTING` when the columns were introduced. It reached `COMPLETED` from `TESTING` without re-entering `DOING`, so it acquired a `commit_close` while its `commit_open` stayed NULL |
 
 The last row is the reason neither field may be used as a proxy for the other. It
 is the only combination the current rules cannot produce for a task that starts
 its lifecycle under them, and it is one a task leaves permanently: as soon as such
-a task returns to `BACKLOG`, its `commit_close` is cleared and it becomes a
+a task is reopened, its `commit_close` is cleared and it becomes a
 NULL/NULL task, and it can never return to the combination, because any later
 completion must pass through `DOING` and so must supply a `commit_open`.
 
@@ -349,6 +410,20 @@ The state machine is implemented in `internal/models/task.go`:
 - `ValidateStatusTransition(current, new string) error`: Validates transition with detailed error
 - `GetValidTransitions(status TaskStatus) []TaskStatus`: Returns valid next states
 
+The table these functions read holds the transitions of `Valid Transitions` above
+that change no sprint membership and do not go through `task reopen`: every
+transition that table lists except those to `BACKLOG`, which only leaving a sprint
+performs, and those to `SPRINT` that `task reopen` performs. It is
+`BACKLOG → SPRINT`, `SPRINT → DOING`, `DOING → TESTING`, `TESTING → DOING` and
+`TESTING → COMPLETED`, and `COMPLETED` has no target in it.
+
+That table is declared once, in `internal/models/task.go`, and `CanTransitionTo`
+and `GetValidTransitions` both read that one declaration; neither declares a table
+of its own. The two therefore agree by construction: for every pair of statuses
+`s` and `t`, `s.CanTransitionTo(t)` returns `true` exactly when `t` is a member of
+`GetValidTransitions(s)`. A change to the transitions is made in the one
+declaration and reaches both functions.
+
 ### Error Handling
 
 When an invalid transition is attempted, the system returns an error:
@@ -365,7 +440,7 @@ The state machine is designed to:
 
 1. **Prevent invalid workflows**: Tasks must follow a logical progression
 2. **Support agile practices**: Tasks can move back (e.g., from TESTING to DOING)
-3. **Enable reopening**: Tasks in any non-BACKLOG state can be reopened to BACKLOG via `task reopen`; tasks in `SPRINT` and `COMPLETED` can also be returned to BACKLOG via `task stat`, which keeps them in their sprint
+3. **Enable reopening**: Tasks in `DOING`, `TESTING` and `COMPLETED` can be reopened to `SPRINT` via `task reopen`, and stay in their sprint; only leaving a sprint returns a task to `BACKLOG`, so a sprint member is never in `BACKLOG`
 4. **Maintain clarity**: Each state has a clear meaning and purpose
 5. **Tie the lifecycle to version control**: The transitions that open and close the work require the caller to name the commit at which each happened, so a task's record states not only when the work ran but where in the repository's history it began and ended. Requiring the value at the transition, rather than offering an optional field to fill in later, is what makes the record complete for every task from this point on
 

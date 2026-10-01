@@ -50,23 +50,23 @@
 #
 # TWO COUNTS, BOTH TRUE, MEASURING DIFFERENT THINGS.
 #
-#   63  RULES suppressed in the module, the number this register accounts for
+#   76  RULES suppressed in the module, the number this register accounts for
 #       and the number the gate sweeps. It counts rules, not directives: a
 #       directive naming two rules counts once under each, and the module has
 #       exactly one such directive — the `#nosec G302 G703` on
 #       internal/graphstore/graphstore.go's checkpoint chmod, which is both a
 #       directory-permission finding and a taint-analysis one. So the module
-#       carries 62 directives suppressing 63 rules. The gate reads comment
+#       carries 75 directives suppressing 76 rules. The gate reads comment
 #       groups the way gosec does, so the tag counts only where the scanner
 #       honours it.
-#   48  rules suppressed outside _test.go, across 47 directives. gosec does not
-#       scan _test.go files unless -tests is passed, and 15 of the 63 are in
-#       test files: 63 - 15 = 48. That the scanner does not read those 15 is an
+#   59  rules suppressed outside _test.go, across 58 directives. gosec does not
+#       scan _test.go files unless -tests is passed, and 17 of the 76 are in
+#       test files: 76 - 17 = 59. That the scanner does not read those 16 is an
 #       accepted gap, measured and reasoned in SPEC/BUILD.md § Security Scan;
 #       the register accounts for them anyway, so they stay reviewed even where
 #       the scanner is silent.
 #
-#       gosec's own summary prints `Nosec: 47`, and the difference is the
+#       gosec's own summary prints `Nosec: 58`, and the difference is the
 #       two-rule directive: gosec counts DIRECTIVES it honoured, this register
 #       counts RULES accepted. The two figures agreed while every directive
 #       named one rule, and the release notes quoted that agreement; they no
@@ -100,7 +100,7 @@
 # chmod, which is both a directory-permission finding and a taint-analysis one —
 # so the totals below are the number of directives plus one.
 #
-# totals: 63 suppressions, 48 outside _test.go
+# totals: 76 suppressions, 59 outside _test.go
 #
 # G101 Look for hard coded credentials (CWE-798)  [1]
 #   internal/highlight/generated_caddyfile.go          1
@@ -119,8 +119,8 @@
 #     declaration, or if chroma ever assigned that variable anything but a
 #     pattern.
 #
-# G104 Audit errors not checked (CWE-703)  [11]
-#   internal/db/connection.go                          6
+# G104 Audit errors not checked (CWE-703)  [18]
+#   internal/db/connection.go                          13
 #   internal/db/connection_test.go                     1
 #   internal/db/queries.go                             1
 #   internal/web/routes.go                             2
@@ -136,7 +136,24 @@
 #     opened only to run the web server's startup migration, whose result is
 #     already logged; and a test's pre-run os.RemoveAll of the roadmap directory
 #     it is about to create.
-#     One of the six in connection.go is not cleanup and is accepted on a
+#     Seven of the thirteen in connection.go are the same cleanup on the paths
+#     the open-time file checks and atomic roadmap creation added
+#     (SPEC/DATABASE.md § Opening a Roadmap Database File, SPEC/COMMANDS.md
+#     § Create Roadmap): the sqlDB.Close() after checkSchemaVersion refuses a
+#     database in Open and in OpenReadOnly, and the two db.Close() after a failed
+#     configure or schema creation in buildDatabase, each returning the error
+#     that decided the outcome; the tmp.Close() after the temporary database's
+#     chmod fails, where the chmod failure is the one returned; the os.Remove in
+#     removeNewSidecars, which removes the companions a refused open created and
+#     runs only on a refusal whose line and exit code are already fixed, so a
+#     companion that cannot be removed has nothing to change; and the os.Remove
+#     in removeTempDatabase, deferred by CreateRoadmapDatabase to remove the
+#     temporary name and its companions on every path, where an absent
+#     companion is the expected case and a failure surfacing after os.Link has
+#     published project.db would turn a created roadmap into a reported
+#     failure. Handling any of these errors would replace the error the caller
+#     must see, or fail a command that has succeeded, so each stays discarded.
+#     One of the thirteen in connection.go is not cleanup and is accepted on a
 #     different ground: restrictSidecars discards the chmod that narrows the
 #     SQLite -wal/-shm sidecars to 0600, which IS a security step. It is accepted
 #     because the sidecars never leave the roadmap home directory, which the open
@@ -166,13 +183,15 @@
 #     HTTPS, where the cookie must then carry Secure, or if the cookie ever
 #     carried anything other than filter state.
 #
-# G201 SQL query construction using format string (CWE-89)  [22]
-#   internal/commands/sprint_crud.go                   1
+# G201 SQL query construction using format string (CWE-89)  [26]
+#   internal/commands/sprint_crud.go                   2
 #   internal/commands/sprint_membership_audit_test.go  1
 #   internal/commands/task_edit.go                     1
-#   internal/commands/task_mutate.go                   8
+#   internal/commands/task_mutate.go                   6
+#   internal/db/migration_chain_test.go                1
 #   internal/db/migrations.go                          1
-#   internal/db/queries.go                             10
+#   internal/db/queries.go                             13
+#   internal/db/sprint_membership_guard.go             1
 #   Reason: No user value is ever interpolated; every one travels as a bound ?
 #     parameter. What fmt.Sprintf assembles is one of four things. (a) A
 #     placeholder list from db.Placeholders / QueryCache.GetPlaceholders, whose
@@ -197,12 +216,38 @@
 #     that stopped. The refusal is held in place by
 #     TestColumnExistsRefusesUnsafeTableIdentifier, which fails on all four
 #     shapes when the guard is removed, and the column being looked for is bound.
-#     (d) A column name in one test helper, literal at both call sites.
-#     Two of the ten in internal/db/queries.go are the grouped reads of
+#     (d) A column name in one test helper, literal at both call sites. (e) A
+#     table name in snapshotDatabase, the test helper of
+#     internal/db/migration_chain_test.go that renders every row of every table
+#     so the chain test can prove a migration kept the fixture's data. The name
+#     is read from sqlite_master of a fixture database the test itself copied
+#     from internal/db/testdata/migration_chain, never from a flag or a caller,
+#     and SQLite does not accept a bound parameter as a table name; %q renders
+#     it as a double-quoted identifier. Test-only; no production path builds a
+#     statement this way.
+#     Two of the thirteen in internal/db/queries.go are the grouped reads of
 #     SPEC/DATABASE.md § Read the Membership of Many Sprints (Grouped) and
 #     § Resolve the Sprint of Many Tasks (Grouped), groupedSprintMembershipQuery
 #     and groupedTaskSprintsQuery; each is kind (a), a placeholder list from
 #     db.Placeholders, and each id is bound.
+#     The sprint membership invariant (SPEC/DATABASE.md § Sprint Membership
+#     Invariant Enforcement) brought five more, every one of kind (a): in
+#     queries.go, taskSprintStatesQuery, the chunked read of taskPlacementsTx,
+#     and the COMPLETED check of MoveTasksBetweenSprints; in
+#     db/sprint_membership_guard.go, sprintMembershipGuardQuery; and in
+#     sprint_crud.go, the chunked reset, in sprintRemove, of the former members
+#     of a removed sprint. In each, the one interpolated operand is a placeholder
+#     list from generatePlaceholders, db.Placeholders or
+#     QueryCache.GetPlaceholders over a chunk's length, and every task id
+#     travels as a bound parameter. The only other text two of them concatenate
+#     is fixed by the package and never by a caller: the status literal
+#     models.StatusCompleted in MoveTasksBetweenSprints, and in the guard
+#     models.StatusBacklog and sqlActiveTaskStatuses, the list the package
+#     builds at initialisation from the models status constants. task_mutate.go
+#     went from eight to six in the same change: task set-status no longer
+#     builds a BACKLOG reset, a target it now refuses for every sprint member,
+#     and task reopen replaced its reset and its sprint_tasks DELETE with one
+#     reset per status group, itself of kind (a).
 #
 # G202 SQL query construction using string concatenation (CWE-89)  [1]
 #   internal/db/index_set_test.go                      1
@@ -264,10 +309,11 @@
 #     variables the child reads. See that package for why the child is a process
 #     and why it is this binary rather than ./bin/rmp.
 #
-# G302 Poor file permissions used when creating file or using chmod (CWE-276)  [3]
+# G302 Poor file permissions used when creating file or using chmod (CWE-276)  [4]
 #   internal/commands/graph.go                         1
 #   internal/graphstore/graphstore.go                  1
 #   internal/testenv/graphserver/graphserver.go        1
+#   internal/web/roadmap_home_resolution_test.go       1
 #   Reason: The 0700 is applied to DIRECTORIES — the graph store and its snapshot
 #     directory — where owner-only access requires the execute bit, and 0700 on
 #     the ~/.roadmaps tree is what CLAUDE.md § 10 and SPEC/ARCHITECTURE.md
@@ -279,17 +325,22 @@
 #     internal/testenv/graphserver one performs the same two steps the CLI
 #     performs, on a test's store directory, so a store a test serves carries the
 #     permissions a real one carries rather than the permissions the process
-#     umask happens to leave.
+#     umask happens to leave. The internal/web one is test-only and restores a
+#     roadmap home the test took to mode 0000, to prove the web server's 500
+#     path, back to 0700 in a t.Cleanup, so that t.TempDir can remove the tree;
+#     without the search permission the removal fails. It is the mode the
+#     directory was created with, the one CLAUDE.md § 10 mandates for a roadmap
+#     home.
 #     There were three. Two of them were the SAME chmod, in the two copies of the
 #     checkpoint that internal/commands and internal/web each carried, and they
 #     went with the copies when rmp task #375 moved the store's lifecycle into
 #     internal/graphstore. A register entry disappearing because the duplication
 #     behind it disappeared is the healthy direction for this list to move.
 #
-# G304 File path provided as taint input (CWE-22)  [13]
+# G304 File path provided as taint input (CWE-22)  [14]
 #   internal/commands/comments_test.go                 1
 #   internal/commands/help_output_test.go              1
-#   internal/db/connection.go                          1
+#   internal/db/connection.go                          2
 #   internal/db/permissions_test.go                    1
 #   internal/graphlock/graphlock.go                    1
 #   internal/testenv/pty_linux.go                      1
@@ -299,9 +350,13 @@
 #     roadmap name already validated against ^[a-z0-9_-]+$ by utils, which admits
 #     no separator and no "..", with a fixed basename: project.db, pre-created
 #     O_EXCL at 0600 so the descriptor never exists at a umask-derived mode
-#     (db/connection.go), and the graph store's write.lock, opened only inside a
-#     graph directory the caller has already resolved through GetRoadmapDir
-#     (graphlock.go). pty_linux.go opens /dev/pts/<n> where n came from a TIOCGPTN
+#     (db/connection.go), and then opened read-only by classifyDBFile to read
+#     its first sixteen bytes and decide whether it is empty, a SQLite database,
+#     or a file to refuse (SPEC/DATABASE.md § Opening a Roadmap Database File),
+#     after refuseSymlinkedDBFiles has refused a project.db that is a symbolic
+#     link, so the open cannot be redirected outside the roadmap home; and the
+#     graph store's write.lock, opened only inside a graph directory the caller
+#     has already resolved through GetRoadmapDir (graphlock.go). pty_linux.go opens /dev/pts/<n> where n came from a TIOCGPTN
 #     ioctl on a descriptor the same function opened, so no name crosses a
 #     boundary. The test paths are fixtures each test wrote under its own
 #     t.TempDir(), a digest read of a database the test created there, and two
@@ -350,21 +405,21 @@
 # TWO OBSERVATIONS THIS REGISTER MAKES DELIBERATELY, because a reviewer who
 # trusts the list should also know what the list does not mean.
 #
-# A suppression is not evidence that gosec had a finding. Of the 48 rules
-# suppressed outside test files, 32 suppress a reported finding and 16 currently
+# A suppression is not evidence that gosec had a finding. Of the 59 rules
+# suppressed outside test files, 37 suppress a reported finding and 22 currently
 # suppress nothing: gosec's G201 does not follow fmt.Sprintf through a query
 # issued on the embedded *sql.DB or through a function that only returns the
 # assembled string, G104 does not report an error discarded by an explicit
 # `_ =` or returned by a deferred call, and the G703 half of the two-rule
 # directive on internal/graphstore/graphstore.go's checkpoint chmod has no
-# finding at that node. Those 16 are documentation at the site rather than an
+# finding at that node. Those 22 are documentation at the site rather than an
 # accepted finding.
 # They are kept and listed because they are still standing scope-limited
 # suppressions: if the rule starts reporting at that node, they will silence it.
 #
 # The split is MEASURED rather than counted by hand, and it is reproducible:
 # `gosec -nosec=true -exclude-dir=.claude/worktrees ./...` disables suppression
-# handling and reports 32 issues where the ordinary run reports 0.
+# handling and reports 37 issues where the ordinary run reports 0.
 #
 # A #nosec is a permanent blindfold over one node. Every G201 line above means
 # that if the statement at that site is ever edited to interpolate a value

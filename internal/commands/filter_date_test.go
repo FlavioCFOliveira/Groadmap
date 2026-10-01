@@ -352,10 +352,11 @@ const dateFilterEntryPointFile = "filter_date.go"
 // parsed some other way fails here, and so does a flag routed through
 // ParseDateFilter that the contract does not publish as a date.
 //
-// And the parser underneath is a singleton: utils.ParseISO8601 is called from
-// one file in this package. That call is the RFC3339 half of the acceptance
-// rule, and a second caller elsewhere in the package would be a second rule —
-// which is precisely the shape defect #324 had, since `audit` reached for
+// And the grammar underneath is a singleton: dateFilterInstant, the one function
+// that reads the two forms of SPEC/DATA_FORMATS.md § Date Filter Values, is
+// called from one place, in filter_date.go, and nothing in this package reaches
+// for utils.ParseISO8601, whose wider grammar would be a second acceptance rule
+// — which is precisely the shape defect #324 had, since `audit` reached for
 // utils.ParseISO8601 directly while `task list` did not.
 //
 // internal/aihelp's README value gate depends on this too: its `date` check runs
@@ -367,6 +368,7 @@ func TestDateFilters_ParsedThroughOneEntryPoint(t *testing.T) {
 
 	routed := make(map[string][]string, 8) // flag name -> call sites
 	iso := make([]string, 0, 2)            // utils.ParseISO8601 call sites
+	grammar := make([]string, 0, 1)        // dateFilterInstant call sites
 	calls := 0
 
 	for i := range files {
@@ -380,6 +382,10 @@ func TestDateFilters_ParsedThroughOneEntryPoint(t *testing.T) {
 
 			switch fn := call.Fun.(type) {
 			case *ast.Ident:
+				if fn.Name == "dateFilterInstant" {
+					grammar = append(grammar, where)
+					return true
+				}
 				if fn.Name != "ParseDateFilter" {
 					return true
 				}
@@ -403,19 +409,16 @@ func TestDateFilters_ParsedThroughOneEntryPoint(t *testing.T) {
 		})
 	}
 
-	// The parser underneath must be reached from one place only.
-	if len(iso) == 0 {
-		t.Fatalf("no call to utils.ParseISO8601 was found in package `commands`; this gate reads the "+
-			"acceptance rule through that call, so finding none means it is now blind. Expected exactly "+
-			"one, in %s", dateFilterEntryPointFile)
+	// The grammar underneath must be reached from one place only.
+	if len(grammar) != 1 || !strings.HasPrefix(grammar[0], dateFilterEntryPointFile+":") {
+		t.Errorf("dateFilterInstant is called from %v; want exactly one call, in %s. A second caller "+
+			"is a second acceptance rule, which is exactly how `audit` came to refuse a form "+
+			"`task list` accepted (#324).", grammar, dateFilterEntryPointFile)
 	}
 	for _, where := range iso {
-		if !strings.HasPrefix(where, dateFilterEntryPointFile+":") {
-			t.Errorf("utils.ParseISO8601 is called from %s; the only file in this package allowed to "+
-				"decide what a date is is %s. A second caller is a second acceptance rule, which is "+
-				"exactly how `audit` came to refuse a form `task list` accepted (#324).",
-				where, dateFilterEntryPointFile)
-		}
+		t.Errorf("utils.ParseISO8601 is called from %s; its grammar is wider than the one "+
+			"SPEC/DATA_FORMATS.md § Date Filter Values publishes, so a call in this package is a "+
+			"second acceptance rule", where)
 	}
 
 	// And the flags routed through it must be exactly the contract's date flags.
@@ -446,8 +449,8 @@ func TestDateFilters_ParsedThroughOneEntryPoint(t *testing.T) {
 	}
 
 	t.Logf("%d ParseDateFilter call site(s) cover the %d date-typed flag(s) the registry publishes "+
-		"(%s); utils.ParseISO8601 is reached only from %s",
-		calls, len(declared), strings.Join(sortedKeys(declared), ", "), strings.Join(iso, ", "))
+		"(%s); dateFilterInstant is reached only from %s",
+		calls, len(declared), strings.Join(sortedKeys(declared), ", "), strings.Join(grammar, ", "))
 }
 
 // parsedSourceFile is one non-test Go file of this package, parsed.

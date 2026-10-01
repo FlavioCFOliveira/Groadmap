@@ -85,10 +85,11 @@ func buildTemplate(operation, placeholders string) string {
 			placeholders,
 		)
 	case OpAddTasksToSprint:
-		// AddTasksToSprint: status as a bound parameter (SPRINT), matching the
-		// production builder.
+		// AddTasksToSprint: status as a bound parameter (SPRINT), set only on
+		// the named tasks that join from BACKLOG (SPEC/DATABASE.md § Add Task
+		// to Sprint with Position).
 		return fmt.Sprintf(
-			"UPDATE tasks SET status = ? WHERE id IN (%s)",
+			"UPDATE tasks SET status = ? WHERE id IN (%s) AND status = 'BACKLOG'",
 			placeholders,
 		)
 	default:

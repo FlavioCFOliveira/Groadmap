@@ -14,6 +14,7 @@
 package graphlock
 
 import (
+	"errors"
 	"os"
 	"syscall"
 )
@@ -31,3 +32,17 @@ func lockExclusiveNB(f *os.File) error {
 func unlockFile(f *os.File) error {
 	return syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
 }
+
+// isContention reports whether err, returned by lockExclusiveNB, means another
+// open file description holds the lock: flock(2) with LOCK_NB fails with
+// EWOULDBLOCK, which is EAGAIN on every Unix this builds for.
+func isContention(err error) bool {
+	return errors.Is(err, syscall.EWOULDBLOCK) || errors.Is(err, syscall.EAGAIN)
+}
+
+// LockFileRemovableWhileHeld reports whether the lock file can be unlinked while
+// this process holds the lock on it. On Unix it can: flock(2) belongs to the
+// open file description, not to the name, so `rmp roadmap remove` deletes the
+// whole roadmap home directory, lock file included, while it still holds the
+// lock.
+const LockFileRemovableWhileHeld = true

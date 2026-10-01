@@ -577,7 +577,8 @@ func CalculateSprintShowResult(sprint *Sprint, tasks []Task) SprintShowResult {
 			// Not counted in any summary bucket (defensive; enum is closed).
 		}
 
-		// current_load: all incomplete tasks assigned to the sprint
+		// current_load: the members in SPRINT, DOING or TESTING status, the
+		// tasks that count against max_tasks; a COMPLETED member does not.
 		if tasks[i].Status == StatusSprint || tasks[i].Status == StatusDoing || tasks[i].Status == StatusTesting {
 			result.CurrentLoad++
 		}

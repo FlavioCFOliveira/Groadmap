@@ -212,7 +212,14 @@ func taskCreate(args []string) error {
 		}
 		taskID = id
 
-		return db.LogAuditTx(tx, models.OpTaskCreate, models.EntityTask, taskID, now)
+		if err := db.LogAuditTx(tx, models.OpTaskCreate, models.EntityTask, taskID, now); err != nil {
+			return err
+		}
+
+		// The sprint membership guard checks the result before commit: the task
+		// is created in BACKLOG with no membership (SPEC/DATABASE.md § Sprint
+		// Membership Invariant Enforcement).
+		return db.CheckSprintMembershipTx(tx, []int{taskID})
 	})
 
 	if err != nil {

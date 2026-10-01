@@ -501,7 +501,7 @@ func TestServedGraphError_TheBudgetLineIsTheDirectPathsOwn(t *testing.T) {
 	served := servedGraphError(ctx, "/tmp/graph.sock", &graphclient.SendError{
 		Kind: graphclient.FailureBudget, Diagnostic: "context deadline exceeded",
 	})
-	direct := graphExecutionError(ctx, graphlock.StatementBudget, context.DeadlineExceeded)
+	direct := graphExecutionError(graphlock.StatementBudget, context.DeadlineExceeded)
 
 	servedErr, ok := asGraphQueryError(served)
 	if !ok {

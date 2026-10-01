@@ -31,6 +31,7 @@
 - [Field Length Validation](#field-length-validation)
 - [Commit Hash Format Constraint](#commit-hash-format-constraint)
 - [SQLite Validation](#sqlite-validation)
+- [Opening a Roadmap Database File](#opening-a-roadmap-database-file)
 - [Migration Idempotency (ALTER TABLE ADD COLUMN)](#migration-idempotency-alter-table-add-column)
 - [Migration Idempotency (ALTER TABLE DROP COLUMN)](#migration-idempotency-alter-table-drop-column)
 - [Introducing a Uniqueness Constraint over Existing Rows](#introducing-a-uniqueness-constraint-over-existing-rows)
@@ -137,15 +138,35 @@ Each roadmap is stored in an individual SQLite database. The schema is designed 
 
 ## DDL - Table Creation
 
+**Every DDL block below is canonical.** Each table section opens with one fenced
+`sql` block: the first fenced block after the section's `###` heading. The text
+between that block's fences is byte-identical to the Go raw string literal of
+`internal/db/schema.go` that `CreateSchema` executes for the table, without the
+newline that opens that literal, and a test enforces the identity for every table.
+A change to a table's DDL is made in its block first and copied into the literal
+unchanged. Each block holds only the `CREATE TABLE` and `CREATE INDEX` statements
+of its table, with their comments; no block holds a statement the code issues with
+bound values.
+
+| Section heading | Literal in `internal/db/schema.go` |
+|-----------------|------------------------------------|
+| `` ### `tasks` Table `` | `tasksDDL` |
+| `` ### `sprints` Table `` | `sprintsDDL` |
+| `` ### `sprint_tasks` Table (1:N Relationship) `` | `sprintTasksDDL` |
+| `` ### `audit` Table `` | `auditDDL` |
+| `` ### `task_dependencies` Table `` | `taskDependenciesDDL` |
+| `` ### `task_comments` Table `` | `taskCommentsDDL` |
+| `` ### `sprint_comments` Table `` | `sprintCommentsDDL` |
+| `` ### `_metadata` Table `` | `metadataDDL` |
+
 ### `tasks` Table
 
 ```sql
 CREATE TABLE IF NOT EXISTS tasks (
-    -- Primary key
     id INTEGER PRIMARY KEY AUTOINCREMENT,
 
     -- Group 1: Content fields (TEXT) - frequently accessed together
-    -- Length constraints enforced by application (255 chars for title, 4096 for requirements/criteria)
+    -- Length limits are validated by the application first and enforced by the CHECK constraints
     title TEXT NOT NULL CHECK(length(title) <= 255),                    -- Task title/summary, max 255 chars
     status TEXT NOT NULL DEFAULT 'BACKLOG' CHECK(status IN ('BACKLOG', 'SPRINT', 'DOING', 'TESTING', 'COMPLETED')),
     type TEXT NOT NULL DEFAULT 'TASK' CHECK(type IN ('USER_STORY', 'TASK', 'BUG', 'SUB_TASK', 'EPIC', 'REFACTOR', 'CHORE', 'SPIKE', 'DESIGN_UX', 'IMPROVEMENT')),
@@ -174,7 +195,9 @@ CREATE TABLE IF NOT EXISTS tasks (
 CREATE INDEX IF NOT EXISTS idx_tasks_created_at ON tasks(created_at);
 
 -- Composite indexes, each supplying one ordering of the task listing in full,
--- tie-breaker included, so the listing needs no sort step (see Index Design Rationale)
+-- tie-breaker included, so the listing needs no sort step. No single-column index
+-- on status or priority: each would be a leading prefix of one of these
+-- (see DATABASE.md § Index Design Rationale).
 -- Covers: the status filter in the default ordering, and the status ordering
 CREATE INDEX IF NOT EXISTS idx_tasks_status_priority ON tasks(status, priority DESC, created_at ASC);
 -- Covers: the type filter in the default ordering
@@ -183,7 +206,8 @@ CREATE INDEX IF NOT EXISTS idx_tasks_type ON tasks(type, priority DESC, created_
 CREATE INDEX IF NOT EXISTS idx_tasks_priority_created ON tasks(priority DESC, created_at ASC);
 -- Covers: the severity ordering
 CREATE INDEX IF NOT EXISTS idx_tasks_severity_priority ON tasks(severity DESC, priority DESC, created_at ASC);
--- Covers: sub-task hierarchy lookups (GetSubTasks)
+
+-- Covers: sub-task hierarchy lookups
 CREATE INDEX IF NOT EXISTS idx_tasks_parent_task_id ON tasks(parent_task_id);
 ```
 
@@ -209,7 +233,12 @@ CREATE TABLE IF NOT EXISTS sprints (
 
 -- Indexes
 CREATE INDEX IF NOT EXISTS idx_sprints_status ON sprints(status);
-CREATE INDEX IF NOT EXISTS idx_sprints_created_at ON sprints(created_at);
+
+-- At most one sprint is OPEN at a time. The commands that open a sprint refuse
+-- when another is already OPEN, but that check runs before their write
+-- transaction; this partial unique index rejects the second OPEN row when two
+-- concurrent processes pass the check together.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_one_open_sprint ON sprints(status) WHERE status = 'OPEN';
 
 -- Uniqueness of the sprint execution order across the roadmap.
 -- Enforces that no two sprints share the same order_index value; an attempt to
@@ -233,10 +262,16 @@ CREATE TABLE IF NOT EXISTS sprint_tasks (
     FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE CASCADE
 );
 
+-- The implicit indexes of the PRIMARY KEY (sprint_id, task_id) and of UNIQUE(task_id)
+-- are the lookup indexes: no index is declared over either column set, because it
+-- would duplicate one of them exactly.
+
 -- Unique composite index for sprint task ordering (TASK-ORDER-001)
--- Covers: Sprint task listing ordered by position
+-- Covers: sprint task listing ordered by position.
 -- Enforces: no two member tasks of one sprint hold the same position, which is what
--- makes the planned execution order total (see Position Uniqueness Within a Sprint below)
+-- makes the planned execution order total. One index serves both the ordering reads
+-- and the constraint, so the invariant costs no second B-tree
+-- (see DATABASE.md § Position Uniqueness Within a Sprint).
 CREATE UNIQUE INDEX IF NOT EXISTS idx_sprint_tasks_order ON sprint_tasks(sprint_id, position ASC);
 ```
 
@@ -410,20 +445,18 @@ each runs once.
 | `sprint swap` | Exchanges the two values the two named tasks already hold (`Swap Tasks` below) | **Preserves.** It opens no gap and closes none |
 | `sprint remove-tasks` | Deletes the named membership rows, then compacts (`Remove from Sprint` below) | **Repairs** |
 | `sprint remove` | Deletes every membership row of the sprint, then the sprint itself (`Clear All Tasks from Sprint` below) | **Trivially satisfied**: neither member nor sprint remains |
-| `task reopen`, from `SPRINT`, `DOING` or `TESTING` | Deletes the task's membership row (`STATE_MACHINE.md § Valid Transitions`) | **Leaves a gap.** The sprint MUST be compacted in the same transaction |
-| `task reopen`, from `COMPLETED` | Keeps the membership row and the position it holds | **Preserves** |
-| `task remove`, on a `BACKLOG` task that is still a sprint member | Deletes the task row; `ON DELETE CASCADE` on `task_id` takes the membership row with it | **Leaves a gap.** The sprint MUST be compacted in the same transaction |
-| `task stat <ids> BACKLOG` | Does not touch the `sprint_tasks` table (`STATE_MACHINE.md § Sprint Membership and the BACKLOG Status`) | **Preserves** |
+| `task reopen` | Keeps the membership row and the position it holds (`STATE_MACHINE.md § Valid Transitions`) | **Preserves** |
+| `task remove` | Deletes a `BACKLOG` task, which belongs to no sprint (`STATE_MACHINE.md § Sprint Membership and the BACKLOG Status`), so no membership row is touched | **Preserves** |
 
 **Every path that can leave a gap is a removal, and every removal owes the same
-repair.** Four entries above take a row out of a sprint's run: the re-parenting form
-of `sprint add-tasks`, the source side of `sprint move-tasks`, `task reopen` from the
-three sprint-associated states, and the cascade behind `task remove`. Each MUST
-compact the sprint it took the row out of, inside the same transaction as the removal,
-so that no committed state holds a gap and no reader ever observes one. The obligation
-follows the row, not the command: only the source side of `sprint move-tasks` names the
-sprint it must repair. The other three repair a sprint the caller's arguments do not
-mention at all, so each of them must first read which sprint the row it is removing
+repair.** Two entries above, besides the removals that compact by construction, take
+a row out of a sprint's run: the re-parenting form of `sprint add-tasks`, and the
+source side of `sprint move-tasks`. Each MUST compact the sprint it took the row out
+of, inside the same transaction as the removal, so that no committed state holds a gap
+and no reader ever observes one. The obligation follows the row, not the command: only
+the source side of `sprint move-tasks` names the sprint it must repair. The
+re-parenting form of `sprint add-tasks` repairs a sprint the caller's arguments do not
+mention at all, so it must first read which sprint each row it is removing
 belonged to. That read is one set-based statement over the whole set of task ids,
 never one statement per task, and it is chunked like every other `IN` list:
 
@@ -501,14 +534,15 @@ CREATE TABLE IF NOT EXISTS audit (
     performed_at TEXT NOT NULL  -- ISO 8601 UTC
 );
 
--- Indexes for efficient lookup. Each carries performed_at DESC after its equality
--- columns, so the read it serves is returned in the audit order with no sort step.
+-- Each carries performed_at DESC after its equality columns, so the read it serves
+-- is returned in the audit order with no sort step.
 -- Covers: the entity history (entity_type and entity_id)
 CREATE INDEX IF NOT EXISTS idx_audit_entity ON audit(entity_type, entity_id, performed_at DESC);
 -- Covers: the operation filter, alone or combined with the entity-type filter
 CREATE INDEX IF NOT EXISTS idx_audit_operation ON audit(operation, performed_at DESC, entity_type);
 
--- Covers: the unfiltered log and GetAuditEntries with date range filters
+-- Covers: the unfiltered log and the date range filters. One index on performed_at,
+-- not two: SQLite reads an index in either direction.
 CREATE INDEX IF NOT EXISTS idx_audit_date ON audit(performed_at DESC);
 ```
 
@@ -536,12 +570,13 @@ every audited operation and buy nothing.
 **Tasks:**
 - `TASK_CREATE` - New task created via `task create`
 - `TASK_DELETE` - Task deleted via `task remove` (only allowed while in BACKLOG; see Delete Task precondition)
-- `TASK_STATUS_BACKLOG` - Task entered `BACKLOG`. Written by `task stat <ids> BACKLOG` and by `sprint remove-tasks`, one row per task in either case. From `sprint remove-tasks` the row names the sprint the task left in `related_entity_id`; from `task stat` no sprint is party to the operation and `related_entity_id` is NULL
-- `TASK_STATUS_SPRINT` - Task entered `SPRINT`. Written by `sprint add-tasks` only, one row per task, naming the sprint the task entered in `related_entity_id`; `task stat` cannot set `SPRINT`, so no other command writes this operation and every row of it names a sprint
+- `TASK_STATUS_BACKLOG` - Task entered `BACKLOG`. Written by `sprint remove-tasks`, one row per task, naming the sprint the task left in `related_entity_id`. `task stat <ids> BACKLOG` wrote it too, with a NULL `related_entity_id`, before the membership invariant (`STATE_MACHINE.md § Sprint Membership and the BACKLOG Status`) made that command refuse every sprint member; such rows remain in existing roadmaps
+- `TASK_STATUS_SPRINT` - Task entered `SPRINT` on joining a sprint. Written by `sprint add-tasks`, one row per task the addition set from `BACKLOG` to `SPRINT`, naming the sprint the task entered in `related_entity_id`; a task that changes sprint and keeps its status gets no such row. The schema migration to 1.16.0 also writes it, one row per sprint member it repairs from `BACKLOG` to `SPRINT`, naming that member's sprint (`VERSION.md § Migration 1.15.0 → 1.16.0`). `task stat` cannot set `SPRINT`, and `task reopen` writes `TASK_REOPEN` instead, so every row of this operation names a sprint
 - `TASK_STATUS_DOING` - Task entered `DOING` via `task stat`, one row per task. The row carries the `commit_hash` supplied as `--commit-open`
 - `TASK_STATUS_TESTING` - Task entered `TESTING` via `task stat`, one row per task
 - `TASK_STATUS_COMPLETED` - Task entered `COMPLETED` via `task stat`, one row per task. The row carries the `commit_hash` supplied as `--commit-close`
-- `TASK_REOPEN` - Task returned to BACKLOG via `task reopen`; lifecycle timestamps, completion_summary, and commit_close cleared, commit_open preserved. The sprint_tasks row is removed only when the source state is SPRINT, DOING, or TESTING; from COMPLETED the row is kept. `task reopen` writes this operation alone and writes no `TASK_STATUS_BACKLOG` row
+- `TASK_REOPEN` - Task returned to `SPRINT` inside its sprint via `task reopen`, from `DOING`, `TESTING` or `COMPLETED`; lifecycle timestamps, completion_summary, and commit_close cleared, commit_open preserved, the sprint_tasks row kept. `task reopen` writes this operation alone and writes no `TASK_STATUS_*` row. Rows written before the membership invariant record a return to `BACKLOG` instead
+- `TASK_SPRINT_CHANGE` - Task changed sprint and kept its status, via `sprint move-tasks` or via `sprint add-tasks` taking it from another sprint; one row per task, against the task, naming the sprint the task entered in `related_entity_id`. The sprint it left is named by the `SPRINT_MOVE_TASK_OUT` row written against that sprint in the same transaction, with the same `performed_at`
 - `TASK_TITLE_CHANGE` - `title` supplied to `task edit`
 - `TASK_TYPE_CHANGE` - `type` supplied to `task edit`
 - `TASK_FUNCTIONAL_REQUIREMENTS_CHANGE` - `functional_requirements` supplied to `task edit`
@@ -567,7 +602,7 @@ every audited operation and buy nothing.
 - `SPRINT_ORDER_CHANGE` - `order_index` supplied to `sprint update`
 - `SPRINT_ADD_TASK` - Task added to a sprint via `sprint add-tasks`; one row per task, against the sprint, naming the task in `related_entity_id`
 - `SPRINT_REMOVE_TASK` - Task removed from a sprint via `sprint remove-tasks`; one row per task, against the sprint, naming the task in `related_entity_id`
-- `SPRINT_MOVE_TASK_OUT` - Task moved out of the source sprint via `sprint move-tasks`; one row per task, against the source sprint, naming the task in `related_entity_id`
+- `SPRINT_MOVE_TASK_OUT` - Task moved out of the source sprint via `sprint move-tasks`, or taken from it by `sprint add-tasks` into another sprint; one row per task, against the sprint the task left, naming the task in `related_entity_id`
 - `SPRINT_MOVE_TASK_IN` - Task moved into the destination sprint via `sprint move-tasks`; one row per task, against the destination sprint, naming the task in `related_entity_id`
 - `SPRINT_REORDER_TASKS` - Sprint tasks reordered (set exact order)
 - `SPRINT_TASK_MOVE_POSITION` - Single task moved to specific position
@@ -679,16 +714,17 @@ later the two coincide, because every stored row is the record of such a write; 
 migrated database can also hold rows that predate the column, which no such write
 produced, and the block below states what a NULL in such a row can mean. For every
 write at schema `1.12.0` or later, `related_entity_id` is non-NULL exactly in the
-eight cases below, and NULL for every other combination of operation and producing
+cases below, and NULL for every other combination of operation and producing
 command in the catalogue:
 
 | Operation | Written by | `entity_type` / `entity_id` | `related_entity_id` |
 |---|---|---|---|
 | `SPRINT_ADD_TASK` | `sprint add-tasks` | `SPRINT` / the sprint the task was added to | the task added |
-| `TASK_STATUS_SPRINT` | `sprint add-tasks` | `TASK` / the task added | the sprint the task entered |
+| `TASK_STATUS_SPRINT` | `sprint add-tasks`, for a task it set from `BACKLOG` to `SPRINT`; the migration to schema 1.16.0, for a member it repairs | `TASK` / the task | the sprint the task entered, or, for a repaired member, the sprint it belongs to |
 | `SPRINT_REMOVE_TASK` | `sprint remove-tasks` | `SPRINT` / the sprint the task was removed from | the task removed |
 | `TASK_STATUS_BACKLOG` | `sprint remove-tasks` | `TASK` / the task removed | the sprint the task left |
-| `SPRINT_MOVE_TASK_OUT` | `sprint move-tasks` | `SPRINT` / the source sprint | the task moved |
+| `SPRINT_MOVE_TASK_OUT` | `sprint move-tasks`; `sprint add-tasks`, for a task taken from another sprint | `SPRINT` / the sprint the task left | the task moved |
+| `TASK_SPRINT_CHANGE` | `sprint move-tasks`; `sprint add-tasks`, for a task taken from another sprint | `TASK` / the task moved | the sprint the task entered |
 | `SPRINT_MOVE_TASK_IN` | `sprint move-tasks` | `SPRINT` / the destination sprint | the task moved |
 | `TASK_ADD_DEP` | `task add-dep` | `TASK` / one task of the pair | the other task of the pair |
 | `TASK_REMOVE_DEP` | `task remove-dep` | `TASK` / one task of the pair | the other task of the pair |
@@ -703,8 +739,12 @@ consult the other entity's history to learn the counterpart. `sprint remove-task
 writes the same mirrored pair with `SPRINT_REMOVE_TASK` and `TASK_STATUS_BACKLOG`.
 
 **One operation value, two producing commands, one rule.**
-`TASK_STATUS_BACKLOG` is written by `task stat <ids> BACKLOG` and by
+`TASK_STATUS_BACKLOG` was written by `task stat <ids> BACKLOG` and is written by
 `sprint remove-tasks`, and it carries a `related_entity_id` only from the second.
+Since the sprint membership invariant, `task stat <ids> BACKLOG` refuses every sprint
+member and writes nothing (`STATE_MACHINE.md § Sprint Membership and the BACKLOG
+Status`), so its NULL rows exist only in roadmaps that predate the invariant; the
+rule below still decides what they mean.
 This is the governing rule applied consistently, not a per-command exception: a
 removal from a sprint has the sprint as its counterpart, while `task stat` changes a
 task's status with no second entity party to the operation, so there is no
@@ -778,12 +818,12 @@ every other operation outside the table above does.
 
 1. After `rmp sprint add-tasks -r <name> <sprint-id> <a>,<b>`, the audit table holds two `SPRINT_ADD_TASK` rows against `<sprint-id>` whose `related_entity_id` values are `<a>` and `<b>`, and two `TASK_STATUS_SPRINT` rows, one against `<a>` and one against `<b>`, **both with `related_entity_id = <sprint-id>`**.
 2. After `rmp sprint remove-tasks -r <name> <sprint-id> <a>`, the audit table holds one `SPRINT_REMOVE_TASK` row against `<sprint-id>` with `related_entity_id = <a>`, and one `TASK_STATUS_BACKLOG` row against `<a>` with `related_entity_id = <sprint-id>`.
-3. After `rmp task stat -r <name> <a> BACKLOG`, the audit table holds one `TASK_STATUS_BACKLOG` row against `<a>` with `related_entity_id IS NULL`, because no sprint is party to that operation.
+3. A `TASK_STATUS_BACKLOG` row with `related_entity_id IS NULL` is one that no sprint was party to: one `task stat <ids> BACKLOG` wrote before the sprint membership invariant, or one the migration to schema 1.16.0 wrote for an active task it found outside every sprint (`VERSION.md § Migration 1.15.0 → 1.16.0`). `sprint remove-tasks` never writes one.
 4. Every row written by a membership change has a mirror: for each `SPRINT_ADD_TASK` row there is a `TASK_STATUS_SPRINT` row with the two ids transposed and the same `performed_at`, and for each `SPRINT_REMOVE_TASK` row there is a `TASK_STATUS_BACKLOG` row with the two ids transposed and the same `performed_at`.
-5. After `rmp sprint move-tasks -r <name> <from> <to> <a>`, the audit table holds one `SPRINT_MOVE_TASK_OUT` row against `<from>` and one `SPRINT_MOVE_TASK_IN` row against `<to>`, both with `related_entity_id = <a>`, and no `TASK_STATUS_*` row for `<a>`.
+5. After `rmp sprint move-tasks -r <name> <from> <to> <a>`, the audit table holds one `SPRINT_MOVE_TASK_OUT` row against `<from>` and one `SPRINT_MOVE_TASK_IN` row against `<to>`, both with `related_entity_id = <a>`, one `TASK_SPRINT_CHANGE` row against `<a>` with `related_entity_id = <to>`, and no `TASK_STATUS_*` row for `<a>`.
 6. After `rmp task add-dep -r <name> <a> <b>`, `rmp audit history TASK <a>` shows a `TASK_ADD_DEP` row with `related_entity_id = <b>`, and `rmp audit history TASK <b>` shows a `TASK_ADD_DEP` row with `related_entity_id = <a>`.
-7. `SELECT COUNT(*) FROM audit WHERE related_entity_id IS NOT NULL AND operation NOT IN ('SPRINT_ADD_TASK', 'TASK_STATUS_SPRINT', 'SPRINT_REMOVE_TASK', 'TASK_STATUS_BACKLOG', 'SPRINT_MOVE_TASK_OUT', 'SPRINT_MOVE_TASK_IN', 'TASK_ADD_DEP', 'TASK_REMOVE_DEP')` returns 0 on a database written only at schema 1.12.0 or later.
-8. `SELECT COUNT(*) FROM audit WHERE operation = 'TASK_STATUS_SPRINT' AND related_entity_id IS NULL` returns 0 on **any** database, migrated or fresh, because `sprint add-tasks` is the operation's only writer and the migration never produces it.
+7. `SELECT COUNT(*) FROM audit WHERE related_entity_id IS NOT NULL AND operation NOT IN ('SPRINT_ADD_TASK', 'TASK_STATUS_SPRINT', 'SPRINT_REMOVE_TASK', 'TASK_STATUS_BACKLOG', 'SPRINT_MOVE_TASK_OUT', 'SPRINT_MOVE_TASK_IN', 'TASK_SPRINT_CHANGE', 'TASK_ADD_DEP', 'TASK_REMOVE_DEP')` returns 0 on a database written only at schema 1.12.0 or later.
+8. `SELECT COUNT(*) FROM audit WHERE operation = 'TASK_STATUS_SPRINT' AND related_entity_id IS NULL` returns 0 on **any** database, migrated or fresh, because both of the operation's writers — `sprint add-tasks` and the migration to schema 1.16.0 — name a sprint in every row they write, and no other migration produces it.
 9. An `INSERT` with `related_entity_id = 0` or a negative `related_entity_id` fails the `related_entity_id` `CHECK`; `related_entity_id IS NULL` is accepted.
 
 #### The Commit Hash of an Audit Entry
@@ -879,6 +919,7 @@ CREATE TABLE IF NOT EXISTS task_dependencies (
     FOREIGN KEY (depends_on_task_id) REFERENCES tasks(id) ON DELETE CASCADE
 );
 
+-- No index on task_id alone: it is the leading column of the primary key.
 CREATE INDEX IF NOT EXISTS idx_task_deps_depends_on ON task_dependencies(depends_on_task_id);
 ```
 
@@ -955,20 +996,27 @@ CREATE TABLE IF NOT EXISTS _metadata (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL
 );
+```
 
--- Insert metadata on creation. The two values that vary are supplied by the
--- application, in the placeholder notation used throughout Main SQL Queries below.
-INSERT INTO _metadata (key, value) VALUES
-    ('schema_version', ?),
-    ('created_at', ?),
-    ('application', 'Groadmap');
+**The three rows are inserted with bound values, not by the DDL.** In the same
+transaction as the DDL (`Transactional Atomicity Guarantees`, item 10), the
+application issues the statement below once for each of the keys
+`schema_version`, `created_at`, and `application`, binding the key and its value as
+parameters, in the placeholder notation used throughout `Main SQL Queries` below.
+The value of each key is stated in the next paragraph.
+
+```sql
+INSERT OR REPLACE INTO _metadata (key, value) VALUES (?, ?)
 ```
 
 **The stored `schema_version` is the `SchemaVersion` constant**, which is defined in
 `internal/db/schema.go` and named in `VERSION.md § Current Schema Version`. No literal
 version is written here, because a literal would be falsified by the next migration: a
 database records the schema version of the binary that created it, and every migration
-applied afterwards advances the stored value (`VERSION.md § Migrations`). `created_at`
+applied afterwards advances the stored value (`VERSION.md § Migrations`). A stored
+value newer than the binary's `SchemaVersion` is never lowered and never migrated:
+the database is refused on open, for every command, as
+`VERSION.md § Database Schema Newer Than the Binary` specifies. `created_at`
 receives the creation instant in ISO 8601 UTC, and `application` is always the literal
 `Groadmap`.
 
@@ -1275,18 +1323,22 @@ UPDATE tasks
 SET status = 'COMPLETED', closed_at = ?, completion_summary = ?, commit_close = ?
 WHERE id = ?;
 
--- Returning a task to BACKLOG: clear the tracking dates, the completion summary,
--- and commit_close, and PRESERVE commit_open. The same statement serves
--- `task stat <ids> BACKLOG` (accepted from SPRINT and COMPLETED only) and
--- `task reopen` (accepted from any non-BACKLOG state). commit_open is deliberately
--- absent from the SET list: the commit the work started from stays a true
--- historical fact, while the commit it was concluded at is invalidated by the
--- reopening. Neither command writes to sprint_tasks; see
+-- Reopening a task (`task reopen`, from DOING, TESTING or COMPLETED): return it to
+-- SPRINT inside its sprint, clear the tracking dates, the completion summary and
+-- commit_close, and PRESERVE commit_open. commit_open is deliberately absent from
+-- the SET list: the commit the work started from stays a true historical fact,
+-- while the commit it was concluded at is invalidated by the reopening. The
+-- statement does not touch sprint_tasks; see
 -- STATE_MACHINE.md § Sprint Membership and the BACKLOG Status.
 UPDATE tasks
-SET status = 'BACKLOG', started_at = NULL, tested_at = NULL, closed_at = NULL,
+SET status = 'SPRINT', started_at = NULL, tested_at = NULL, closed_at = NULL,
     completion_summary = NULL, commit_close = NULL
 WHERE id = ?;
+
+-- No statement of this section sets BACKLOG. A task returns to BACKLOG only when it
+-- leaves its sprint: Remove from Sprint and Clear All Tasks from Sprint below, each
+-- after the membership row is gone. `task stat <ids> BACKLOG` is refused for every
+-- sprint member and writes nothing.
 
 -- Generic status update without date tracking changes
 UPDATE tasks
@@ -1306,8 +1358,10 @@ UPDATE tasks SET priority = ? WHERE id IN (?, ?, ...);
 -- Remove from junction table, scoped to the named sprint
 DELETE FROM sprint_tasks WHERE sprint_id = ? AND task_id = ?;
 
--- Reset the task, whatever its status was inside the sprint. commit_close is
--- cleared with the tracking dates; commit_open is preserved (see Update Status above).
+-- Then reset the task, which is SPRINT, DOING or TESTING (remove-tasks refuses a
+-- COMPLETED task). commit_close is cleared with the tracking dates; commit_open is
+-- preserved (see Update Status above). The sprint membership guard checks the
+-- result before commit (Sprint Membership Invariant Enforcement below).
 UPDATE tasks
 SET status = 'BACKLOG', started_at = NULL, tested_at = NULL, closed_at = NULL,
     completion_summary = NULL, commit_close = NULL
@@ -1325,21 +1379,25 @@ Density Within a Sprint` above). The compaction runs in the same transaction as 
 
 #### Clear All Tasks from Sprint
 
-The status reset MUST run before the membership rows are deleted; once the
-`sprint_tasks` rows are gone the subquery selects nothing.
+The member ids are read first, in the same transaction, so that the reset can name
+them explicitly once the membership rows are gone; the sprint membership guard checks
+the result before commit (`Sprint Membership Invariant Enforcement` below). The sprint
+holds no `COMPLETED` member when this runs: `sprint remove` refuses such a sprint
+before it writes anything.
 
 ```sql
--- Reset every member task, whatever its status was inside the sprint. commit_close
--- is cleared with the tracking dates; commit_open is preserved (see Update Status above).
+-- Read the member ids while the rows still exist
+SELECT task_id FROM sprint_tasks WHERE sprint_id = ?;
+
+-- Remove all sprint relationships
+DELETE FROM sprint_tasks WHERE sprint_id = ?;
+
+-- Reset every former member. commit_close is cleared with the tracking dates;
+-- commit_open is preserved (see Update Status above).
 UPDATE tasks
 SET status = 'BACKLOG', started_at = NULL, tested_at = NULL, closed_at = NULL,
     completion_summary = NULL, commit_close = NULL
-WHERE id IN (
-    SELECT task_id FROM sprint_tasks WHERE sprint_id = ?
-);
-
--- Then remove all sprint relationships
-DELETE FROM sprint_tasks WHERE sprint_id = ?;
+WHERE id IN (?, ?, ...);
 ```
 
 #### Get Max Position in Sprint
@@ -1571,6 +1629,12 @@ adding *n* tasks costs one round trip rather than *n*.
 -- Get max position for the sprint
 SELECT COALESCE(MAX(position), -1) AS max_position FROM sprint_tasks WHERE sprint_id = ?;
 
+-- Set SPRINT on the named tasks that are joining from BACKLOG, and on no other.
+-- A SPRINT, DOING or TESTING task keeps its status; a COMPLETED task never reaches
+-- this statement (sprint add-tasks refuses it). The sprint membership guard checks
+-- the result before commit (Sprint Membership Invariant Enforcement below).
+UPDATE tasks SET status = 'SPRINT' WHERE id IN (?, ?, ...) AND status = 'BACKLOG';
+
 -- Insert into junction table with incremental positions, one row group per task
 INSERT INTO sprint_tasks (sprint_id, task_id, added_at, position)
 VALUES (?, ?, ?, ?), (?, ?, ?, ?), ...
@@ -1578,9 +1642,6 @@ ON CONFLICT(task_id) DO UPDATE SET
     sprint_id = excluded.sprint_id,
     added_at  = excluded.added_at,
     position  = excluded.position;
-
--- Update task status
-UPDATE tasks SET status = 'SPRINT' WHERE id IN (?, ?, ...);
 ```
 
 **Note:** Tasks are added with positions starting from max_position + 1, ensuring they appear at the end of the sprint task list. An empty sprint yields -1, so its first task takes position 0.
@@ -1617,18 +1678,19 @@ UPDATE sprints SET status = 'CLOSED', closed_at = ? WHERE id = ?;
 -- Remove sprint (and relationships in sprint_tasks)
 DELETE FROM sprints WHERE id = ?;
 
--- Reset every member task, whatever its status was inside the sprint. commit_close
--- is cleared with the tracking dates; commit_open is preserved (see Update Status above).
--- Note: in implementation, do this before deleting sprint
+-- In implementation: refuse the deletion, writing nothing, when a member is
+-- COMPLETED; then read the member ids, remove the relationships, reset the former
+-- members, and only then delete the sprint (Clear All Tasks from Sprint above).
+SELECT task_id FROM sprint_tasks WHERE sprint_id = ?;
+
+DELETE FROM sprint_tasks WHERE sprint_id = ?;
+
+-- Reset every former member. commit_close is cleared with the tracking dates;
+-- commit_open is preserved (see Update Status above).
 UPDATE tasks
 SET status = 'BACKLOG', started_at = NULL, tested_at = NULL, closed_at = NULL,
     completion_summary = NULL, commit_close = NULL
-WHERE id IN (
-    SELECT task_id FROM sprint_tasks WHERE sprint_id = ?
-);
-
--- Then remove relationships
-DELETE FROM sprint_tasks WHERE sprint_id = ?;
+WHERE id IN (?, ?, ...);
 
 -- Finally remove sprint
 DELETE FROM sprints WHERE id = ?;
@@ -1679,7 +1741,7 @@ ORDER BY sprint_id ASC, task_id ASC;
 
 **Reads no task row.** The statement reads `sprint_tasks` alone and joins nothing. The answer is a set of ids per sprint, so no `tasks` row is fetched to produce it, exactly as in the ids-alone read of `List by Sprint` above.
 
-**Membership is not status.** The statement applies no predicate on task status, because membership is a `sprint_tasks` row and status is a `tasks` column. A member task in `BACKLOG` status is therefore included, and both computed fields count it (see `STATE_MACHINE.md § Sprint Membership and the BACKLOG Status`).
+**Membership is not status.** The statement applies no predicate on task status, because membership is a `sprint_tasks` row and status is a `tasks` column: every member is included and both computed fields count it, a `COMPLETED` member included. Under the membership invariant no member is in `BACKLOG` status (see `STATE_MACHINE.md § Sprint Membership and the BACKLOG Status`).
 
 **Empty id set.** When the id set is empty, the application skips the query entirely instead of issuing a statement with an empty `IN` list, as every grouped read that takes a set of ids does.
 
@@ -2051,9 +2113,10 @@ The following multi-statement operations MUST run inside a single SQL transactio
 so that the database never reaches a state where `tasks.status` and the
 `sprint_tasks` membership diverge:
 
-1. **Sprint deletion (`DeleteSprint`).** Resetting the member tasks' status to
-   `BACKLOG`, deleting the `sprint_tasks` rows, deleting the `sprints` row, and
-   writing the `SPRINT_DELETE` audit entry MUST all occur in the same transaction.
+1. **Sprint deletion (`DeleteSprint`).** Deleting the `sprint_tasks` rows,
+   resetting the former members' status to `BACKLOG`, deleting the `sprints` row,
+   and writing the `SPRINT_DELETE` audit entry MUST all occur in the same
+   transaction, in that order.
    Either every step commits or none does. A partial commit that left tasks marked
    `SPRINT` while their sprint or their `sprint_tasks` rows were gone is forbidden.
 2. **Removing tasks from a sprint (`RemoveTasksFromSprint`).** Deleting the
@@ -2062,28 +2125,45 @@ so that the database never reaches a state where `tasks.status` and the
    sprint and the `TASK_STATUS_BACKLOG` entry against the task — MUST occur in the
    same transaction. No committed state
    shows a task still marked `SPRINT`, `DOING`, or `TESTING` after its
-   `sprint_tasks` row is gone. The converse combination is legitimate and is not a
-   partial commit: a task in `BACKLOG` status can hold a live `sprint_tasks` row,
-   because `task stat <ids> BACKLOG` changes the status without touching
-   membership (see `STATE_MACHINE.md § Sprint Membership and the BACKLOG Status`).
+   `sprint_tasks` row is gone. The converse combination is forbidden too, and the
+   sprint membership guard refuses it: no committed state shows a task in `BACKLOG` status that
+   holds a `sprint_tasks` row (`STATE_MACHINE.md § Sprint Membership and the
+   BACKLOG Status`, and `Sprint Membership Invariant Enforcement` below).
 3. **Sprint capacity enforcement (`max_tasks`).** When `max_tasks` is set, the
-   capacity check (current member count against `max_tasks`) and the insertion of
+   capacity check (the active load plus the tasks the addition makes active,
+   against `max_tasks`; `COMMANDS.md § Task Assignment` states the count) and the insertion of
    the new `sprint_tasks` rows MUST occur **inside the same transaction** as a
    single atomic operation. The check and the insert MUST NOT be separated by a
    time-of-check-to-time-of-use (TOCTOU) window in which a concurrent writer could
    add tasks between the count and the insert and thereby exceed the cap. The
-   capacity is enforced atomically within the insert transaction, so the committed
-   member count can never exceed `max_tasks`.
-4. **Adding tasks to a sprint (`AddTasksToSprint`).** Inserting the
-   `sprint_tasks` rows, updating those tasks' status to `SPRINT`, and writing both
-   audit entries per task — the `SPRINT_ADD_TASK` entry against the sprint and the
-   `TASK_STATUS_SPRINT` entry against the task — MUST all occur in the same
-   transaction. A committed membership change can never exist without its audit
-   record, and neither of the two entries can exist without the other.
+   capacity is enforced atomically within the insert transaction, and the
+   invariant it keeps is this: **an addition never raises a sprint's active load
+   above `max_tasks`**. The active load is the number of member tasks in `SPRINT`,
+   `DOING` or `TESTING` status. The invariant is not that the load can never exceed
+   the cap: `sprint update --max-tasks` may set a cap below the load a sprint
+   already carries, and such a sprint stays above its cap until members leave or
+   complete. What the addition guarantees is that it does not add to that excess,
+   and that it takes no sprint from at or below its cap to above it.
+   **`task reopen` is bound by the same check, in the same way.** Reopening a
+   `COMPLETED` member returns it to `SPRINT` and so raises the active load; the
+   capacity check and the status update MUST occur in the same transaction, with
+   no TOCTOU window between them, and the reopening never raises a sprint's active
+   load above `max_tasks` (`COMMANDS.md § Reopen Task` states the count and the
+   refusal).
+4. **Adding tasks to a sprint (`AddTasksToSprint`).** Setting `SPRINT` on the
+   named tasks that join from `BACKLOG`, inserting or re-parenting the
+   `sprint_tasks` rows, and writing the audit entries — the `SPRINT_ADD_TASK` entry
+   against the sprint for every task, the `TASK_STATUS_SPRINT` entry against each
+   task whose status the addition set to `SPRINT`, and, for each task taken from
+   another sprint, the `SPRINT_MOVE_TASK_OUT` entry against the sprint it left and the
+   `TASK_SPRINT_CHANGE` entry against the task — MUST all occur in the same
+   transaction, the status first. A committed membership change can never exist
+   without its audit record, and a `TASK_STATUS_SPRINT` entry never exists without
+   the `SPRINT_ADD_TASK` entry it mirrors.
 5. **Moving tasks between sprints (`MoveTasksBetweenSprints`).** The source-sprint
    membership check, the re-parenting of the `sprint_tasks` rows, and writing the
-   `SPRINT_MOVE_TASK_OUT` and `SPRINT_MOVE_TASK_IN` audit entries (one pair per
-   task) MUST all occur in the same transaction. A committed move can never exist
+   `SPRINT_MOVE_TASK_OUT`, `SPRINT_MOVE_TASK_IN` and `TASK_SPRINT_CHANGE` audit
+   entries (three per task) MUST all occur in the same transaction. A committed move can never exist
    without its audit record, and the database never shows the source sprint's entry
    without the destination sprint's.
 6. **Creating a sprint with an auto-assigned order (`CreateSprint`).** When the
@@ -2184,6 +2264,84 @@ Fields are organized to match the optimized Go struct layout (Content, Tracking,
 
 **Note:** the positions of one sprint are also dense — a sprint with `N` members holds exactly `0` to `N-1` — so a member's stored `position` is its rank in the sprint's planned order. No column constraint states this and none can; the write paths uphold it and tests prove it. See `DATABASE.md § Position Density Within a Sprint`.
 
+### Business Rules Are Enforced by Application Code
+
+**Business rules are enforced by application code; the schema uses no triggers.**
+This is a project-wide rule, permanent and without exception. No `CREATE TRIGGER`
+statement appears in `internal/db/schema.go`, in any migration, or in this
+specification, and none may be added, for any rule. A rule that relates rows, that
+relates two tables, or that constrains a transition is enforced by the Go code of
+`internal/db` inside the transaction of the write that could break it, and is
+refused there before commit. The schema keeps the declarative constraints SQLite
+evaluates on a single row or key — `NOT NULL`, `CHECK`, `UNIQUE`, `PRIMARY KEY`,
+and `FOREIGN KEY` with its `ON DELETE CASCADE` — which express the shape of the data
+rather than a business rule. `ARCHITECTURE.md § Security Guarantees` restates the
+rule among the robustness guarantees.
+
+### Sprint Membership Invariant Enforcement
+
+`STATE_MACHINE.md § Sprint Membership and the BACKLOG Status` is canonical for the
+invariant and its two halves: a sprint member is never in `BACKLOG` status, and a
+task in `SPRINT`, `DOING` or `TESTING` status belongs to a sprint. Both halves are
+enforced by application code, under the rule of
+`Business Rules Are Enforced by Application Code` above.
+
+**One owner: the sprint membership guard.** `internal/db` holds exactly one function
+that checks the invariant, the sprint membership guard. It runs inside the
+transaction of the write, after the write's last statement that changes a status or
+a membership and before the commit. It is given the set of task ids the write
+changed, reads the resulting status and membership of each of those tasks through
+the transaction, and fails the transaction when any of them breaks either half. The
+command then rolls the transaction back, so no row of the write is committed. The
+read is one set-based statement per chunk of ids, like every other `IN` list.
+Because the guard judges the state the transaction has reached rather than each
+statement on its own, a write path may issue its statements in any order that
+reaches a valid state.
+
+**Every write that changes a task's status or its sprint membership goes through
+the guard:**
+
+| Write path | What it changes |
+|------------|-----------------|
+| `task create` | Creates a task in `BACKLOG` with no membership |
+| `task stat` | The status of each named task |
+| `task reopen` | The status of each named task |
+| `sprint add-tasks` | The membership of each named task, and the status of each that joins from `BACKLOG` |
+| `sprint move-tasks` | The membership of each named task |
+| `sprint remove-tasks` | The membership and the status of each named task |
+| `sprint remove` | The membership and the status of every member of the sprint |
+| The migration to schema 1.16.0 | The status of every task it repairs; the guard is applied to every task of the roadmap before the migration commits (`VERSION.md § Migration 1.15.0 → 1.16.0`) |
+
+**No other code writes `tasks.status`, inserts or deletes a `sprint_tasks` row, or
+changes a `sprint_tasks` row's `sprint_id` or `task_id`.** The ordering commands
+(`sprint reorder`, `move-to`, `swap`, `top`, `bottom`) write `sprint_tasks.position`
+alone, which changes neither status nor membership, and so do not call the guard.
+`task remove` deletes a `BACKLOG` task, which belongs to no sprint, so its cascade
+removes no membership row and it does not call the guard either. A new write path
+that changes status or membership is added to the table above and calls the guard.
+
+**A violation that reaches the guard is a defect, never bad input.** Every command
+refuses every request that would break the invariant itself, with the lines
+`COMMANDS.md` publishes, before it writes anything. A violation the guard finds
+therefore means a write path wrote the wrong state. The guard reports it with
+`utils.ErrDatabase` — the class `ARCHITECTURE.md § Sentinel Error Catalogue`
+assigns to a failure of a roadmap database's content — so the command exits 1 with
+the line `Error: database error: sprint membership invariant violated: <detail>`,
+where `<detail>` names the first task at fault and the state it would have been
+left in. No new sentinel and no new exit code are introduced for it.
+
+**Rows that already violate the invariant.** A roadmap written before the invariant
+was enforced may hold rows that break either half, and the guard judges only the
+tasks a write changes. The migration to schema 1.16.0 therefore repairs every such
+row, in its one transaction: every sprint member found in `BACKLOG` status is set
+to `SPRINT`, keeps its membership row and its `position`, and receives one
+`TASK_STATUS_SPRINT` audit entry naming its sprint; and every task in `SPRINT`,
+`DOING` or `TESTING` status that belongs to no sprint returns to `BACKLOG`,
+clearing what removal from a sprint clears, and receives one `TASK_STATUS_BACKLOG`
+audit entry with no sprint named. `VERSION.md § Migration 1.15.0 → 1.16.0` is
+canonical for the repair, its statements and its audit entries; this paragraph is
+the one place in this file that states it.
+
 ### Audit Constraints
 
 | Column | Type | Constraints |
@@ -2199,7 +2357,7 @@ Fields are organized to match the optimized Go struct layout (Content, Tracking,
 **Valid values (validated by application):**
 - `operation`: See the canonical catalogue in the `audit` Table section above (Tasks + Sprints + Legacy).
 - `entity_type`: TASK, SPRINT
-- `related_entity_id`: See `The Two Entities of a Relational Operation` in the `audit` Table section above for the eight operation-and-command combinations that write it.
+- `related_entity_id`: See `The Two Entities of a Relational Operation` in the `audit` Table section above for the operation-and-command combinations that write it.
 - `commit_hash`: See `The Commit Hash of an Audit Entry` in the `audit` Table section above for the two operations that write it.
 
 ### Task_Comments
@@ -2305,6 +2463,17 @@ the longer index does not serve, and it costs write time on every row change. Th
 schema therefore declares no index on `tasks(status)`, `tasks(priority)`,
 `sprint_tasks(task_id)`, `sprint_tasks(sprint_id, task_id)`,
 `task_dependencies(task_id)`, or a second index on `audit(performed_at)`.
+
+**No index is declared on `sprints(created_at)`.** No statement the application
+issues against `sprints` filters on `created_at` or orders by it: a sprint is read
+by its primary key, by `status` (through `idx_sprints_status`, or through
+`idx_one_open_sprint` when the status is `OPEN`), or in its planned order (through
+`idx_sprints_order`). An index on `created_at` would serve no read and would cost
+write time on every sprint inserted or removed. The one statement that ever read
+`sprints` in `created_at` order is the `order_index` backfill of
+`VERSION.md § Migration 1.7.0 → 1.8.0`, which runs only on a database below 1.8.0
+and therefore always before `VERSION.md § Migration 1.16.0 → 1.17.0` drops the
+index such a database still holds.
 
 **Grouped sprint resolution needs no new index.** The grouped query that resolves the sprint of many tasks at once (see `Resolve the Sprint of Many Tasks (Grouped)` above) filters with `WHERE sprint_tasks.task_id IN (...)` and joins `sprints` by primary key. The `task_id` lookup is served by the implicit unique index SQLite creates for the `UNIQUE` constraint on that column. No index is added for this query, and the index of the primary key (leading column `sprint_id`) is not the index that serves it.
 
@@ -2487,6 +2656,85 @@ SELECT name FROM sqlite_master WHERE type='table' AND name='_metadata';
 ```
 
 Or check magic bytes: SQLite files start with `"SQLite format 3\x00"`
+
+---
+
+## Opening a Roadmap Database File
+
+Every command that opens a roadmap's `project.db` decides what the file is before
+it runs any statement against it. The decision follows the symbolic-link refusal
+of `ARCHITECTURE.md § Directory Structure`, location rule 10, and the mode repair of
+`ARCHITECTURE.md § Open-Time Permission Enforcement`, and it precedes everything
+else the open does: configuring the connection, reading the schema version,
+running a migration, and creating the schema. A file is in exactly one of three
+shapes, and each has one outcome:
+
+| Shape of `project.db` | Outcome |
+|-----------------------|---------|
+| Zero bytes long | An uninitialised database. The schema is created and the command proceeds normally. |
+| Not empty, and not a SQLite database | Refused, with the line below and exit code `1`. |
+| A SQLite database | Opened. The schema version is checked, and a database newer than the binary is refused with the second line below and exit code `1` (`VERSION.md § Database Schema Newer Than the Binary`); otherwise the pending migrations are applied (`VERSION.md § Migration Chain Guarantee`). |
+
+**A zero-byte file is an uninitialised database, not a damaged one.** A file of
+zero bytes holds nothing to lose and nothing to misread: SQLite itself treats an
+empty file as an empty database. The command creates the whole schema in it,
+exactly as `roadmap create` does — every table and index of
+`DDL - Table Creation` and the three `_metadata` rows, in one transaction
+(`Transactional Atomicity Guarantees`, item 10) — and then performs the work it was
+invoked for, against an empty roadmap, with the output and the exit code it has on
+any empty roadmap. No error line and no warning is written for the
+initialisation. A zero-byte `project.db` is a roadmap that exists, under the
+definition of `COMMANDS.md § Roadmap Selection (Always Required)`, so it is never
+refused as one that does not.
+
+Two invocations that find the same zero-byte file at the same time both succeed:
+one creates the schema, and the other proceeds against the schema the first
+created. The schema is created once, `_metadata` holds one row per key, and
+neither invocation receives a constraint violation or any other text of the SQLite
+driver (`ARCHITECTURE.md § Classification of Database Driver Failures`).
+
+**A non-empty file that is not a SQLite database is refused, and left as it
+is.** The file is not a SQLite database when its first 16 bytes are not the
+SQLite header string `SQLite format 3` followed by a zero byte, or when the engine
+refuses to read it as a database. The command fails with `utils.ErrDatabase`,
+exit code `1`, and this line, `<path>` being the absolute path of the file:
+
+```
+Error: database error: <path> is not a valid roadmap database
+```
+
+The line names the file and the condition, and carries no text of the SQLite
+driver: no `file is not a database`, no result code such as `(26)`, and no
+description of the connection setting that happened to meet the file first. On
+the refusal the command has written nothing: the file's contents are byte for byte
+what they were, no connection setting has been written into it, no schema has been
+created and no migration applied, no sidecar has been created by the invocation,
+and nothing is written to stdout. The only change the open may already have made
+is the mode repair of `ARCHITECTURE.md § Open-Time Permission Enforcement`, which
+precedes this decision. A file that is a SQLite database but whose content is
+corrupt beyond its header is outside this rule: a failure the engine reports while
+reading it is a database failure of the kind
+`ARCHITECTURE.md § Classification of Database Driver Failures`, rule 3, describes.
+
+**A SQLite database whose schema is newer than the binary is refused.**
+`VERSION.md § Database Schema Newer Than the Binary` is canonical for the rule and
+for what the refusal must not have written. The command fails with
+`utils.ErrDatabase`, exit code `1`, and this line, `<path>` being the absolute path
+of the file and the two versions being the ones the placeholder table of
+`COMMANDS.md § Published Error Strings Are Exact` declares:
+
+```
+Error: database error: <path> has schema version <db-version>, newer than schema version <supported-version> supported by this rmp; upgrade rmp to open it
+```
+
+**The read-only open path creates nothing.** The web interface opens a roadmap
+database read-only for its requests
+(`ARCHITECTURE.md § Open-Time Permission Enforcement`, step **E**), and a read-only open creates no schema. The writable
+open its startup schema migration performs initialises a zero-byte file as above
+(`WEB.md § Startup Schema Migration`); a file that is still of zero bytes, or that
+is not a SQLite database, when a request reads it is a read failure on the
+affected route, answered as `WEB.md § Routes and Pages` answers any other read
+failure.
 
 ---
 

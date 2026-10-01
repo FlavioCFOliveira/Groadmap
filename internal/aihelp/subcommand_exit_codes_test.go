@@ -272,6 +272,9 @@ func TestGenerate_ExitCodeConditionsAreNotOneGenericSentence(t *testing.T) {
 		"Neither -r nor --roadmap was supplied.": "the shared roadmap-resolution step, run before " +
 			"the subcommand's own work",
 		"The roadmap named by -r/--roadmap does not exist.": "the same shared step, one stage later",
+		"The name given to -r/--roadmap breaks a roadmap name rule; the line of the first rule it breaks is printed.": "the same " +
+			"shared step, at the same stage: the name is judged by the roadmap name rules where the roadmap is " +
+			"resolved (SPEC/COMMANDS.md § Roadmap Name Validation)",
 		"A token beginning with - names none of this subcommand's flags.": "the one flag parser " +
 			"(internal/commands/flags.go), which words this refusal once for the whole CLI",
 		"A value-taking flag was written with nothing after it to be its value.":                                                                       "the same parser",
@@ -282,6 +285,9 @@ func TestGenerate_ExitCodeConditionsAreNotOneGenericSentence(t *testing.T) {
 		"More positional arguments were supplied than this subcommand accepts.": "the one arity " +
 			"enforcement point (internal/commands/positional_arity.go), on the only path that reaches " +
 			"a handler",
+		"A flag was supplied more than once; no flag is repeatable, and every spelling of one flag counts as that flag.": "the CLI-wide " +
+			"rule that no flag is repeatable (SPEC/COMMANDS.md § Repeated Flags), refused by the flag-reading step " +
+			"every subcommand with a flag other than --help shares",
 	}
 
 	counts := map[string]int{}

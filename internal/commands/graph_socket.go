@@ -31,6 +31,7 @@ import (
 	"github.com/FlavioCFOliveira/Groadmap/internal/graphclient"
 	"github.com/FlavioCFOliveira/Groadmap/internal/graphjson"
 	"github.com/FlavioCFOliveira/Groadmap/internal/graphlock"
+	"github.com/FlavioCFOliveira/Groadmap/internal/graphserve"
 	"github.com/FlavioCFOliveira/Groadmap/internal/utils"
 )
 
@@ -72,6 +73,11 @@ func extractSocketFlag(args []string) (string, []string, error) {
 	rest := make([]string, 0, len(args))
 
 	for i := 0; i < len(args); i++ {
+		// A second occurrence of the flag, in either form, is refused before
+		// its value is read (SPEC/COMMANDS.md § Repeated Flags).
+		if found && (args[i] == socketFlagLong || strings.HasPrefix(args[i], socketFlagLong+"=")) {
+			return "", nil, utils.RepeatedFlagError(args[i])
+		}
 		if joined, ok := strings.CutPrefix(args[i], socketFlagLong+"="); ok {
 			value = joined
 			found = true
@@ -150,9 +156,18 @@ func graphSocketInForce(roadmapName, socketFlag string) (string, error) {
 // unqualified bind failure already carried (SPEC/GRAPH.md § Socket Path Length,
 // rules 4 and 7).
 func graphSocketTooLong(socket string) error {
+	return graphSocketTooLongFor(socket, graphclient.MaxSocketPathLen)
+}
+
+// graphSocketTooLongFor is the same line with the limit it reports supplied by
+// the caller: M is the platform's bound for `graph client`, and for
+// `graph serve` the bound less what its transient bind path adds
+// (SPEC/COMMANDS.md § Graph Server Socket Error Lines; SPEC/GRAPH.md § Socket
+// Path Length, rule 9). The wording is one, so both refusals print one line.
+func graphSocketTooLongFor(socket string, limit int) error {
 	return fmt.Errorf("%w: socket path is too long: %s is %d bytes and this platform "+
 		"allows at most %d. Use --socket to name a shorter path.",
-		utils.ErrGraphServer, socket, len(socket), graphclient.MaxSocketPathLen)
+		utils.ErrGraphServer, socket, len(socket), limit)
 }
 
 // refuseOverLongSocket returns that line when socket is over the platform's
@@ -187,6 +202,20 @@ func graphSocketTooLong(socket string) error {
 func refuseOverLongSocket(socket string) error {
 	if graphclient.SocketPathTooLong(socket) {
 		return graphSocketTooLong(socket)
+	}
+	return nil
+}
+
+// refuseOverLongServeSocket is [refuseOverLongSocket] for `graph serve`, which
+// also binds a transient path beside the socket on a platform with POSIX file
+// modes, and must refuse a target whose transient path would exceed the bound
+// (SPEC/GRAPH.md § Socket Path Length, rule 9). The limit is graphserve's,
+// because the transient path is graphserve's to define; it is never above the
+// platform's bound, so this refuses everything refuseOverLongSocket refuses,
+// with the same line.
+func refuseOverLongServeSocket(socket string) error {
+	if limit := graphserve.ServeSocketPathLimit(socket); len(socket) > limit {
+		return graphSocketTooLongFor(socket, limit)
 	}
 	return nil
 }

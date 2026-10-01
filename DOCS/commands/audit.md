@@ -33,14 +33,41 @@ Lists audit log entries with optional filters.
 | `-o` | `--operation` | string | - | Filter by operation type (see Operation Types below) |
 | `-e` | `--entity-type` | string | - | Filter by entity type: TASK, SPRINT |
 | N/A | `--entity-id` | int | - | Filter by specific entity numeric id (positive integer, range 1-2147483647). A non-integer value is rejected by the flag parser as misuse (exit code 2); an out-of-range value fails validation (exit code 6) |
-| N/A | `--since` | string | - | Lower bound on `performed_at`, inclusive (ISO 8601 UTC; RFC 3339 variants and the date-only `YYYY-MM-DD` form accepted) |
-| N/A | `--until` | string | - | Upper bound on `performed_at`, inclusive (ISO 8601 UTC; RFC 3339 variants and the date-only `YYYY-MM-DD` form accepted) |
+| N/A | `--since` | string | - | Lower bound on `performed_at`, inclusive. A timestamp or a bare `YYYY-MM-DD`, from 1970-01-01 through 9999-12-31 (see Date Filter Values below) |
+| N/A | `--until` | string | - | Upper bound on `performed_at`, inclusive, in the same forms and range as `--since` |
 | `-l` | `--limit` | int | 100 | Maximum rows returned (range 1-500). A non-integer value is rejected as misuse (exit code 2); an out-of-range value fails validation (exit code 6) |
+
+**Date Filter Values:** `--since` and `--until`, here and on `stats`, accept
+exactly the values `task list --created-since` and `--created-until` accept; one
+rule governs all six date filters:
+
+- **A timestamp**: `YYYY-MM-DDTHH:mm:ss`, optionally followed by a fraction of a
+  second (a full stop and one or more digits), then a zone designator: the
+  upper-case `Z`, or `+hh:mm` / `-hh:mm`. Examples: `2026-01-01T00:00:00Z`,
+  `2026-01-01T00:00:00.000Z`, `2026-01-01T01:00:00+01:00`. This is the RFC 3339
+  date-time with the `T` and the `Z` upper case and without a leap second.
+- **A calendar date**: `YYYY-MM-DD`, which denotes the first instant of that day in
+  UTC, on `--since` and on `--until` alike. `--until 2026-01-31` therefore stops at
+  the start of 31 January.
+
+The value MUST denote an instant from 1970-01-01 through 9999-12-31 in UTC, judged
+after the zone designator is applied. Everything else is refused with exit code 6
+and one line that names the flag and echoes the value, whether the value is
+malformed or merely out of range, before the roadmap database is opened:
+
+```
+Error: validation error: --since: invalid date format: expected RFC3339 (2026-01-01T00:00:00Z) or date-only (2026-01-01): "1969-12-31"
+```
+
+Among the values refused are a lower-case `t` or `z`, a space in place of the `T`,
+a one-digit hour, minute or second, a missing seconds field, an offset without its
+colon (`+0000`), a date that does not exist (`2026-02-30`), leading or trailing
+whitespace, and an empty value.
 
 **Operation Types:**
 
-The canonical catalogue is `SPEC/DATABASE.md` § `audit` Table, and it holds 43
-values: 39 that a command writes today, and 4 marked LEGACY that no command writes
+The canonical catalogue is `SPEC/DATABASE.md` § `audit` Table, and it holds 44
+values: 40 that a command writes today, and 4 marked LEGACY that no command writes
 any more but that `--operation` still accepts so that historical entries stay
 reachable by name (see Legacy Operations below). Each operation names what
 happened, so a reader learns the outcome from the operation alone.
@@ -56,12 +83,13 @@ them; Audit Entry Fields, further down, says what the values mean.
 **Task Status Operations:** the five destination states, plus the reopen
 transition. One entry per task named in the command, so a transition applied to
 three tasks writes three entries. Written by `task stat` unless noted.
-- `TASK_STATUS_BACKLOG` - Task entered BACKLOG. Written by `task stat <ids> BACKLOG` and by `sprint remove-tasks`; only the second names a sprint in `related_entity_id`
-- `TASK_STATUS_SPRINT` - Task entered SPRINT. Written by `sprint add-tasks` alone, because `task stat` rejects the SPRINT target, so every entry names its sprint in `related_entity_id`
+- `TASK_STATUS_BACKLOG` - Task entered BACKLOG. Written by `sprint remove-tasks`, naming the sprint the task left in `related_entity_id`. `task stat <ids> BACKLOG` wrote it too, with a null `related_entity_id`, before that command began refusing every sprint member; such entries remain in existing roadmaps. The migration to schema 1.16.0 also writes it, with a null `related_entity_id`, for each active task it finds outside every sprint (see Schema Migration 1.15.0 to 1.16.0 below)
+- `TASK_STATUS_SPRINT` - Task entered SPRINT on joining a sprint. Written by `sprint add-tasks` for each task it sets from BACKLOG to SPRINT, and by the migration to schema 1.16.0 for each sprint member it repairs from BACKLOG to SPRINT. `task stat` rejects the SPRINT target and `task reopen` writes `TASK_REOPEN` instead, so every entry names its sprint in `related_entity_id`
 - `TASK_STATUS_DOING` - Task entered DOING. The entry records the mandatory `--commit-open` hash in `commit_hash`
 - `TASK_STATUS_TESTING` - Task entered TESTING
 - `TASK_STATUS_COMPLETED` - Task entered COMPLETED. The entry records the mandatory `--commit-close` hash in `commit_hash`
-- `TASK_REOPEN` - Task returned to BACKLOG via `task reopen`. This is the only entry that command writes; it writes no `TASK_STATUS_BACKLOG` entry
+- `TASK_REOPEN` - Task returned to SPRINT inside its sprint via `task reopen`, from DOING, TESTING or COMPLETED. This is the only entry that command writes; it writes no `TASK_STATUS_*` entry. Entries written before the sprint membership invariant record a return to BACKLOG instead
+- `TASK_SPRINT_CHANGE` - Task changed sprint and kept its status, via `sprint move-tasks` or via `sprint add-tasks` taking it from another sprint. Written against the task, naming the sprint it entered in `related_entity_id`; the sprint it left is named by the `SPRINT_MOVE_TASK_OUT` entry of the same instant
 
 **Task Field Operations:** one entry per field the invocation supplies, so an edit
 that supplies three fields writes three entries. The entry records that the field
@@ -104,11 +132,13 @@ same rule as the task field operations above.
 - `SPRINT_ORDER_CHANGE` - `order_index` supplied to `sprint update`
 
 **Sprint Membership Operations:** one entry per task, against the sprint, naming
-the task in `related_entity_id`. Adding and removing also write a mirrored entry
-against the task itself; moving does not, because a move changes no task's status.
-- `SPRINT_ADD_TASK` - Task added to a sprint via `sprint add-tasks`; mirrored by `TASK_STATUS_SPRINT`
+the task in `related_entity_id`. Each command also writes an entry against the task
+itself: `TASK_STATUS_SPRINT` for a BACKLOG task that joins a sprint,
+`TASK_STATUS_BACKLOG` for a task that leaves one, and `TASK_SPRINT_CHANGE` for a
+task that changes sprint and keeps its status.
+- `SPRINT_ADD_TASK` - Task added to a sprint via `sprint add-tasks`; mirrored by `TASK_STATUS_SPRINT` when the task came from BACKLOG
 - `SPRINT_REMOVE_TASK` - Task removed from a sprint via `sprint remove-tasks`; mirrored by `TASK_STATUS_BACKLOG`
-- `SPRINT_MOVE_TASK_OUT` - Task left a sprint in a `sprint move-tasks`; written against the source sprint
+- `SPRINT_MOVE_TASK_OUT` - Task left a sprint in a `sprint move-tasks`, or was taken from it by `sprint add-tasks` into another sprint; written against the sprint the task left
 - `SPRINT_MOVE_TASK_IN` - Task entered a sprint in a `sprint move-tasks`; written against the destination sprint
 
 **Sprint Task Ordering Operations:** written against the sprint, with both
@@ -191,8 +221,8 @@ Shows audit statistics including operation counts and trends.
 | Short Flag | Long Flag | Type | Default | Description |
 |------------|------------|------|--------|-------------|
 | `-r` | `--roadmap` | string | - | Roadmap name (required) |
-| N/A | `--since` | string | - | Aggregation window start (ISO 8601 UTC; RFC 3339 variants and the date-only `YYYY-MM-DD` form accepted) |
-| N/A | `--until` | string | - | Aggregation window end (ISO 8601 UTC; RFC 3339 variants and the date-only `YYYY-MM-DD` form accepted) |
+| N/A | `--since` | string | - | Aggregation window start, inclusive; the forms and range of `list --since` (see Date Filter Values above) |
+| N/A | `--until` | string | - | Aggregation window end, inclusive; the forms and range of `list --until` |
 
 **Output:** A single `AuditStats` JSON object with keys `total_entries`, `first_entry_at`, `last_entry_at`, `by_operation` (map of operation to count), and `by_entity_type` (map of entity type to count). On an empty result set (no matching entries), `first_entry_at` and `last_entry_at` are `null`.
 
@@ -216,7 +246,7 @@ operation.
 | Key | Type | Description |
 |-----|------|-------------|
 | `id` | int | Monotonically increasing entry id. Never reused and never renumbered |
-| `operation` | string | One of the 43 operation values above |
+| `operation` | string | One of the 44 operation values above |
 | `entity_type` | string | `TASK` or `SPRINT`: the type of the entity whose history this entry belongs to |
 | `entity_id` | int | The id of that entity. It may name an entity that has since been deleted |
 | `performed_at` | string | ISO 8601 UTC timestamp, millisecond precision |
@@ -226,7 +256,7 @@ operation.
 ### commit_hash
 
 `commit_hash` records the git commit that brackets a task's development work. It
-is written on exactly two operations, and is `null` on the other 41:
+is written on exactly two operations, and is `null` on the other 42:
 
 | Operation | Value recorded |
 |-----------|----------------|
@@ -260,20 +290,21 @@ Without it, two entries of the same operation would be indistinguishable: every
 `SPRINT_ADD_TASK` entry of a sprint would read identically and none would say
 which task was added.
 
-The field is non-null in exactly these eight cases, and null everywhere else:
+The field is non-null in exactly these nine cases, and null everywhere else:
 
 | Operation | Written by | `entity_type` / `entity_id` | `related_entity_id` names |
 |-----------|------------|-----------------------------|---------------------------|
 | `SPRINT_ADD_TASK` | `sprint add-tasks` | `SPRINT` / the sprint the task joined | the task added |
-| `TASK_STATUS_SPRINT` | `sprint add-tasks` | `TASK` / the task added | the sprint it entered |
+| `TASK_STATUS_SPRINT` | `sprint add-tasks`, for a task it set from BACKLOG to SPRINT; the migration to schema 1.16.0, for a member it repaired | `TASK` / the task | the sprint it entered, or the sprint a repaired member belongs to |
 | `SPRINT_REMOVE_TASK` | `sprint remove-tasks` | `SPRINT` / the sprint the task left | the task removed |
 | `TASK_STATUS_BACKLOG` | `sprint remove-tasks` | `TASK` / the task removed | the sprint it left |
-| `SPRINT_MOVE_TASK_OUT` | `sprint move-tasks` | `SPRINT` / the source sprint | the task moved |
+| `SPRINT_MOVE_TASK_OUT` | `sprint move-tasks`; `sprint add-tasks`, for a task taken from another sprint | `SPRINT` / the sprint the task left | the task moved |
 | `SPRINT_MOVE_TASK_IN` | `sprint move-tasks` | `SPRINT` / the destination sprint | the task moved |
+| `TASK_SPRINT_CHANGE` | `sprint move-tasks`; `sprint add-tasks`, for a task taken from another sprint | `TASK` / the task moved | the sprint it entered |
 | `TASK_ADD_DEP` | `task add-dep` | `TASK` / one task of the pair | the other task of the pair |
 | `TASK_REMOVE_DEP` | `task remove-dep` | `TASK` / one task of the pair | the other task of the pair |
 
-**The counterpart is usually of the other entity type.** In the first six rows the
+**The counterpart is usually of the other entity type.** In the first seven rows the
 subject is a sprint and the counterpart a task, or the reverse. Only the two
 dependency operations name a counterpart of the same type, because a dependency
 relates two tasks.
@@ -287,23 +318,35 @@ which sprint it joined, with neither reader consulting the other entity's histor
 `sprint remove-tasks` writes the same mirrored pair as `SPRINT_REMOVE_TASK` and
 `TASK_STATUS_BACKLOG`.
 
-**One operation, two writing commands, one rule.** `TASK_STATUS_BACKLOG` is
-written both by `sprint remove-tasks` and by `task stat <ids> BACKLOG`, and it
-carries a counterpart only from the first. This is the rule applied consistently
-rather than an exception: a removal from a sprint has that sprint as its
-counterpart, whereas `task stat` changes a task's status with no second entity
-party to the operation. A `null` therefore always means "this operation had no
-counterpart", never "it had one that was not recorded".
+**One operation, several writers, one rule.** `TASK_STATUS_BACKLOG` is written by
+`sprint remove-tasks`, which names the sprint the task left. A `TASK_STATUS_BACKLOG`
+entry with a `null` counterpart is one no sprint was party to: one that
+`task stat <ids> BACKLOG` wrote before that command began refusing every sprint
+member, or one the migration to schema 1.16.0 wrote for an active task it found
+outside every sprint. This is the rule applied consistently rather than an
+exception: a removal from a sprint has that sprint as its counterpart, whereas
+those writes changed a task's status with no second entity party to the operation.
+A `null` therefore always means "this operation had no counterpart", never "it had
+one that was not recorded".
 
-`TASK_STATUS_SPRINT` has only one writing command, so every entry carrying it
-names a sprint.
+Both writers of `TASK_STATUS_SPRINT` — `sprint add-tasks` and the migration to
+schema 1.16.0 — name a sprint, so every entry carrying it names one.
 
-**`sprint move-tasks` writes no `TASK_STATUS_*` entry at all,** because moving a
-task between sprints preserves its status. The two sprint entries are the whole
-record of the move.
+**A task that changes sprint and keeps its status gets `TASK_SPRINT_CHANGE`, never
+a `TASK_STATUS_*` entry,** because its status does not change. The entry names the
+sprint the task entered; the sprint it left is named by the `SPRINT_MOVE_TASK_OUT`
+entry written against that sprint with the same `performed_at`. `sprint move-tasks`
+therefore writes three entries per task: `SPRINT_MOVE_TASK_OUT` against the source,
+`SPRINT_MOVE_TASK_IN` against the destination, and `TASK_SPRINT_CHANGE` against the
+task. `sprint add-tasks` naming a task that belongs to another sprint also writes
+three: `SPRINT_ADD_TASK` against the destination, `SPRINT_MOVE_TASK_OUT` against
+the sprint the task left, and `TASK_SPRINT_CHANGE` against the task. A task named
+again while already a member of the sprint receives the `SPRINT_ADD_TASK` entry
+alone. `audit history TASK <id>` therefore shows every change of sprint.
 
 **`sprint remove` writes one `SPRINT_DELETE` entry and no per-task entry,** even
-though the member tasks revert to BACKLOG. The membership rows go away with the
+though the member tasks revert to BACKLOG. A sprint that holds a COMPLETED task is
+not removed at all, and writes nothing. The membership rows go away with the
 sprint, and the sprint a per-task entry would have named no longer exists once the
 deletion commits.
 
@@ -391,6 +434,28 @@ task it names has since been deleted and took its timestamps with it.
 The consequence is that all four legacy values survive in a migrated roadmap,
 which is why the catalogue keeps them.
 
+## Schema Migration 1.15.0 to 1.16.0
+
+This migration brings existing rows under the sprint membership invariant: a
+sprint member is never in BACKLOG, and a task in SPRINT, DOING or TESTING belongs to
+a sprint. Earlier versions let `task stat <ids> BACKLOG` and `task reopen` leave a
+member in BACKLOG. The migration runs automatically the next time `rmp` opens the
+roadmap, inside one transaction, and is safe to run repeatedly. `SPEC/VERSION.md`
+§ Migration 1.15.0 → 1.16.0 is the normative description.
+
+Unlike the 1.12.0 migration, it writes audit entries, because it changes task
+status. All of them share one `performed_at`, the moment the migration runs, and
+carry a `null` `commit_hash`:
+
+| Repair | Entry written per repaired task |
+|--------|---------------------------------|
+| A sprint member in BACKLOG becomes SPRINT, keeping its sprint, its position and every other column | `TASK_STATUS_SPRINT`, naming the task's sprint in `related_entity_id` |
+| A task in SPRINT, DOING or TESTING that belongs to no sprint returns to BACKLOG, with `started_at`, `tested_at`, `closed_at`, `completion_summary` and `commit_close` cleared and `commit_open` kept | `TASK_STATUS_BACKLOG`, with a `null` `related_entity_id` |
+
+A roadmap that holds no such task receives no entry. A COMPLETED task that belongs
+to no sprint is left unchanged. The migration installs no database trigger: the
+invariant is enforced by application code on every write from this version on.
+
 ## Aliases
 
 | Command | Alias |
@@ -420,6 +485,6 @@ All commands follow these conventions:
 | 1 | General error (database failure) |
 | 2 | Misuse: non-integer `--limit` or `--entity-id` on `list`, or a non-integer positional `<entity-id>` on `history` (rejected by the parser) |
 | 3 | No roadmap selected (`-r` missing/required) |
-| 4 | Roadmap not found |
-| 6 | Validation error: invalid operation, entity-type, or date format; `--limit` out of range 1-500; `--entity-id` out of range 1-2147483647 |
+| 4 | Roadmap not found, including a `~/.roadmaps/<name>` that is a regular file or a directory without `project.db` |
+| 6 | Validation error: invalid operation or entity-type; a date filter value that is malformed or outside 1970-01-01 through 9999-12-31; `--limit` out of range 1-500; `--entity-id` out of range 1-2147483647; a `-r`/`--roadmap` name that breaks a roadmap name rule |
 | 127 | Unknown subcommand |

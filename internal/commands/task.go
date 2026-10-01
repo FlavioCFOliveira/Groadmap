@@ -51,9 +51,12 @@ Status workflow (per SPEC/STATE_MACHINE.md):
   BACKLOG --[sprint add-tasks]--> SPRINT --[task stat DOING -co <hash>]--> DOING
         DOING --[task stat TESTING]--> TESTING
         TESTING --[task stat COMPLETED -cc <hash>]--> COMPLETED
-        COMPLETED --[task reopen / stat BACKLOG]--> BACKLOG
+        DOING, TESTING, COMPLETED --[task reopen]--> SPRINT (same sprint)
+        SPRINT, DOING, TESTING --[sprint remove-tasks]--> BACKLOG
   Rules enforced:
     - 'task stat <id> SPRINT' is rejected (exit 6). Use 'sprint add-tasks' instead.
+    - 'task stat <id> BACKLOG' is rejected (exit 6) for every sprint member: a sprint
+      member is never in BACKLOG, and a COMPLETED task stays in its sprint.
     - 'task remove' is only allowed while a task is in BACKLOG.
     - Marking COMPLETED is rejected (exit 6) if any subtask or dependency is not yet COMPLETED.
     - Every transition into DOING requires --commit-open / -co, and the transition into
@@ -62,8 +65,8 @@ Status workflow (per SPEC/STATE_MACHINE.md):
     - A commit hash is 7 to 64 hexadecimal characters, any letter case, stored lowercase.
       You supply it: rmp runs no git command and reads no repository.
     - On COMPLETED transition you may attach a free-form summary with --summary / -s (max 4096 chars).
-    - 'task reopen' (or 'stat BACKLOG' from COMPLETED) clears started_at, tested_at, closed_at,
-      completion_summary and commit_close; commit_open is preserved.
+    - 'task reopen' clears started_at, tested_at, closed_at, completion_summary and
+      commit_close; commit_open is preserved.
 
 Commands:
   list, ls [OPTIONS]                          List tasks (any status; filter with --status)
@@ -73,7 +76,7 @@ Commands:
   edit <task-id> [OPTIONS]                    Edit fields of a task (status NOT editable here)
   remove, rm <task-ids>                       Remove task(s) — BACKLOG only, no active subtasks
   stat, set-status <task-ids> <new-status>    Set task status (DOING/COMPLETED require a commit hash)
-  reopen <task-ids>                           Reopen task(s) to BACKLOG, clearing all but commit_open
+  reopen <task-ids>                           Reopen task(s) to SPRINT in their sprint, clearing all but commit_open
   prio, set-priority <task-ids> <priority>    Set task priority (0-9) for one or many tasks
   sev, set-severity <task-ids> <severity>     Set task severity (0-9) for one or many tasks
   subtasks <task-id>                          List direct subtasks (one level; no grand-children)
@@ -130,9 +133,12 @@ Options (comment-add / comment-list / comment-edit):
   -b, --body <text>                 Comment text (max 4096 chars). On comment-add and
                                     comment-edit the body may instead arrive on standard
                                     input, under a bounded read, when absent —
-                                    on comment-edit only if --type is absent too, so a
-                                    type-only edit never waits for input. Supplying
-                                    neither source is an error (exit 2).
+                                    on comment-edit only if --type is absent too. A
+                                    type-only comment-edit does not read a terminal,
+                                    so it never waits for input typed at one, and
+                                    refuses a standard input that carries data
+                                    (exit 2). Supplying neither source is an error
+                                    (exit 2).
 
 Comment rules (per SPEC/COMMANDS.md § Task Comments):
   - Comments are accepted in every status, including COMPLETED, and no comment

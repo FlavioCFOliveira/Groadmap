@@ -212,7 +212,9 @@ func TestBatchCommandsPrepareTheAuditInsertOnce(t *testing.T) {
 		rows int
 	}{
 		{"sprint add-tasks", func() error { return database.AddTasksToSprint(ctx, from, ids) }, 2 * n},
-		{"sprint move-tasks", func() error { return database.MoveTasksBetweenSprints(ctx, from, to, ids) }, 2 * n},
+		// Three rows per task: OUT against the source, IN against the destination
+		// and TASK_SPRINT_CHANGE against the task (SPEC/COMMANDS.md § Task Assignment).
+		{"sprint move-tasks", func() error { return database.MoveTasksBetweenSprints(ctx, from, to, ids) }, 3 * n},
 		{"task add-dep", func() error { return database.AddTaskDependencyWithAudit(ctx, ids[0], ids[1]) }, 2},
 		{"task remove-dep", func() error { return database.RemoveTaskDependencyWithAudit(ctx, ids[0], ids[1]) }, 2},
 		{"field edit", func() error {

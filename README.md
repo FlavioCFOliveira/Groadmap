@@ -25,7 +25,7 @@ Before extracting anything, the script verifies the downloaded archive against t
 - **Sprint Reporting**: Comprehensive sprint reports with progress and distribution metrics
 - **Task Ordering**: Reorder, move-to-position, swap, top, and bottom commands for sprint task management
 - **Backlog and Statistics**: Backlog planning views and roadmap-wide statistics with velocity
-- **Audit Trail**: Automatic, append-only logging of every change to a task or a sprint, across a catalogue of 43 operations. Each entry names the operation, the entity it belongs to and when it happened, and, where the operation has one, the counterpart entity involved and the git commit that bracketed the work
+- **Audit Trail**: Automatic, append-only logging of every change to a task or a sprint, across a catalogue of 44 operations. Each entry names the operation, the entity it belongs to and when it happened, and, where the operation has one, the counterpart entity involved and the git commit that bracketed the work
 - **State Machine**: Validated task and sprint status transitions with automatic date tracking
 - **Bulk Operations**: Support for multiple task IDs in single commands
 - **Knowledge Graph**: Per-roadmap queryable graph (nodes, edges, Cypher) for capturing project elements and their relationships, held open by a dedicated server (`rmp graph serve`) that answers Cypher over a Unix domain socket and reached with `rmp graph client`
@@ -296,7 +296,10 @@ rmp task edit -r <name> <id> -t "New title" --priority 9 --type BUG
 rmp task remove -r <name> <id>
 rmp task rm -r <name> 1,2,3              # Bulk delete (tasks must be in BACKLOG)
 ```
-- A task must be in `BACKLOG` status and have no sub-tasks.
+- A task must be in `BACKLOG` status and have no sub-tasks. A task in a sprint is
+  first taken out of it with `rmp sprint remove-tasks`, which returns it to
+  `BACKLOG`; a `COMPLETED` task stays in its sprint, so it is first returned to
+  `SPRINT` with `rmp task reopen`.
 
 ---
 
@@ -362,8 +365,27 @@ rmp sprint upd -r <name> <id> -t "Storage refactor" -d "Refactor persistence ont
 ```bash
 rmp sprint add-tasks -r <name> 1 5,8,12,15
 ```
-- Tasks move from `BACKLOG` to `SPRINT` automatically.
-- Rejected if the sprint is at `max_tasks` capacity.
+- A `BACKLOG` task joins the sprint and becomes `SPRINT` automatically.
+- A `SPRINT`, `DOING` or `TESTING` task that belongs to another sprint is moved
+  into this one and keeps its status.
+- A `COMPLETED` task is refused (exit 6): it stays in the sprint it was completed in.
+- Rejected if the tasks that would become active in the sprint take it past its
+  `max_tasks` cap. The cap counts `SPRINT`, `DOING` and `TESTING` members only, and
+  a named task that is already a member is not counted again.
+
+**How do sprint membership and task status relate?**
+- A task in `BACKLOG` belongs to no sprint, and a sprint member is never in
+  `BACKLOG`. A task in `SPRINT`, `DOING` or `TESTING` always belongs to a sprint.
+- A task leaves the backlog only by joining a sprint (`sprint add-tasks`), and
+  returns to it only by leaving one (`sprint remove-tasks`, or `sprint remove`).
+  `rmp task stat <id> BACKLOG` is refused for every sprint member.
+- A `COMPLETED` task stays in the sprint it was completed in: `sprint add-tasks`,
+  `sprint move-tasks` and `sprint remove-tasks` refuse it, and `sprint remove`
+  refuses a sprint that holds one. `rmp task reopen` returns it to `SPRINT` in the
+  same sprint.
+- Application code enforces these rules on every write; the database uses no
+  triggers. Upgrading to schema 1.16.0 repairs a roadmap written before them, and
+  records each repair in the audit log.
 
 **How do I define the execution order of tasks within a sprint?**
 ```bash
@@ -384,17 +406,29 @@ rmp sprint start -r <name> <id>
 ```bash
 rmp sprint move-tasks -r <name> 1 2 5,6,7   # Move tasks 5, 6, 7 from sprint 1 to sprint 2
 ```
+- Each task keeps its status: a `DOING` task is still `DOING` in sprint 2.
+- A `COMPLETED` task is refused, and so is a `CLOSED` source or destination sprint.
 
 **How do I remove tasks from a sprint?**
 ```bash
 rmp sprint remove-tasks -r <name> 1 5,6     # Tasks return to BACKLOG
 ```
+- A `COMPLETED` task is refused (exit 6): it stays in its sprint.
 
 **How do I close a sprint?**
 ```bash
 rmp sprint close -r <name> <id>
 rmp sprint close -r <name> <id> --force     # Bypass the active-task check
 ```
+
+**How do I carry unfinished work over from a closed sprint?**
+```bash
+rmp sprint add-tasks -r <name> 2 5,6        # Re-parent tasks 5 and 6 into sprint 2
+```
+- `close --force` leaves the sprint's `SPRINT`, `DOING` and `TESTING` tasks in it.
+  `add-tasks` moves them to another sprint and keeps their status. `move-tasks`
+  cannot, because it refuses a `CLOSED` source sprint. `COMPLETED` tasks stay in
+  the closed sprint.
 
 **How do I reopen a closed sprint?**
 ```bash
@@ -409,8 +443,10 @@ rmp sprint rm -r <name> <id>
 - A sprint is removable in **any** status. `PENDING`, `OPEN` and `CLOSED` are all
   accepted, so removing does not first require closing, and an `OPEN` sprint is not
   protected from it.
-- Every member task returns to `BACKLOG`, whatever status it held - `COMPLETED`
-  included - and the sprint record is deleted.
+- Every `SPRINT`, `DOING` or `TESTING` member task returns to `BACKLOG`, and the
+  sprint record is deleted.
+- A sprint that holds a `COMPLETED` task is not removed (exit 6), and nothing
+  changes: a completed task stays in the sprint it was completed in.
 
 **Can I have multiple open sprints?**
 No. Only one sprint can be `OPEN` at a time. Close the current sprint before starting another.
@@ -472,9 +508,13 @@ rmp task stat -r <name> 1,2,3 DOING --commit-open 5f93b51   # one hash, every ta
 
 **How do I reopen a completed task?**
 ```bash
-rmp task reopen -r <name> <id>              # Returns to BACKLOG, clears the lifecycle timestamps
+rmp task reopen -r <name> <id>              # Returns to SPRINT in its sprint, clears the lifecycle timestamps
 rmp task reopen -r <name> 1,2,3             # Bulk reopen
 ```
+- `task reopen` returns a `DOING`, `TESTING` or `COMPLETED` task to `SPRINT` and
+  keeps it in its sprint, at the same position.
+- It is refused (exit 6) while that sprint is `CLOSED`: run `rmp sprint reopen`
+  first.
 - Reopening clears `started_at`, `tested_at`, `closed_at`, `completion_summary`
   and `commit_close` — but **preserves `commit_open`**. Reopening withdraws the
   claim that the task was concluded at a given commit; it does not make the work
@@ -710,11 +750,12 @@ The two bounds fail differently, and that is the part worth knowing:
   contract, tells this failure apart from any other.
 - **Short enough to commit and too long to fold** — a property value between 1 GiB and
   4 GiB — and the write succeeds and exits 0, and then **every checkpoint of that graph
-  fails from that moment on**. Unlike every other checkpoint failure this one cannot
+  fails from that moment on**, at every due instant of the server's cadence and at
+  shutdown. Unlike every other checkpoint failure this one cannot
   heal, because the offending field is committed graph state: the write-ahead log is
   never folded again and never reclaimed, so it grows and every open replays more of it.
-  The report is on the server's stderr, and it persists until a statement shortens or
-  removes the field.
+  The report is on the server's stderr, repeated at every attempt, until a statement
+  shortens or removes the field.
 
 See [DOCS/commands/graph.md](DOCS/commands/graph.md#how-long-a-field-may-be).
 
@@ -732,13 +773,13 @@ rmp graph client -r myproject --query "MATCH (n:Spec) RETURN n.key"
 
 Starting a server is also what **creates** a roadmap's graph: against a roadmap that has never had one, `serve` creates `~/.roadmaps/<name>/graph/` and serves it empty. A `serve` that is refused creates nothing.
 
-**One server per roadmap.** The store's lock is the interlock: a second `rmp graph serve` for the same roadmap cannot take it, exits 1, and leaves the first server's socket untouched. Stopping a server with `Ctrl+C` drains the work in flight, checkpoints if the log has grown, releases the lock and removes the socket, and exits 0.
+**One server per roadmap.** The store's lock is the interlock: a second `rmp graph serve` for the same roadmap cannot take it, exits 1, and leaves the first server's socket untouched. Stopping a server with `Ctrl+C` drains the work in flight, checkpoints if the log has grown, releases the lock and removes the socket, and exits 0. While it runs, the server folds the write-ahead log on a cadence, but only when the log has grown since the last fold, so an idle server writes nothing to the store; a log tail left by a killed server is folded at the first due instant. A failed fold fails no write: it is reported on the server's stderr and retried at the next due instant.
 
-**Access control is the filesystem and nothing else.** The socket is mode `0600` inside a roadmap home that is `0700`, there is no authentication and no transport security (the server prints a warning for each at startup), and any caller that can open the socket can read, write, delete and change the schema of that roadmap's graph.
+**Access control is the filesystem and nothing else.** The socket is mode `0600` inside a roadmap home that is `0700`, and `serve` re-establishes `0700` on `~/.roadmaps/` and the roadmap home each time it starts (a directory it cannot fix fails the start with exit code 1). On Linux, macOS, FreeBSD and OpenBSD the socket is never connectable under a wider mode at any instant, whatever the umask: it is bound in a private staging directory and then linked into place. On Windows the mode only toggles read-only, and access is the directory's access-control list. There is no authentication and no transport security (the server prints a warning for each at startup), and any caller that can open the socket can read, write, delete and change the schema of that roadmap's graph.
 
 **`--socket` is accepted by both subcommands** and both default it to `~/.roadmaps/<name>/graph.sock`. It names *which socket is bound and which socket is connected to*, and nothing else — there is nothing else for it to select. Write it on `client` when the server was started with the same flag.
 
-**The socket path has a length limit, and the default path can cross it.** The operating system bounds how long a Unix domain socket path may be — 107 bytes on Linux and Windows, 103 on macOS, FreeBSD and OpenBSD, counted in bytes rather than characters. A resolved path over that bound names a socket no process can create, so `serve` and `client` both refuse the invocation with exit code 1 and the web interface's graph data endpoint answers HTTP 500. This is not only a `--socket` concern: `~/.roadmaps/<name>/graph.sock` crosses the bound on its own under a deep enough home directory, with no unusual roadmap name. On the command line the way back is `--socket` naming a path inside the bound, given to both ends of the pair: the server binds it and the client reaches it, and that roadmap works normally. The web page has no such flag, so its only remedy is a shorter home directory or a shorter roadmap name. See [DOCS/commands/graph.md](DOCS/commands/graph.md#the-socket-path-has-a-length-limit).
+**The socket path has a length limit, and the default path can cross it.** The operating system bounds how long a Unix domain socket path may be — 107 bytes on Linux and Windows, 103 on macOS, FreeBSD and OpenBSD, counted in bytes rather than characters. A resolved path over that bound names a socket no process can create, so `serve` and `client` both refuse the invocation with exit code 1 and the web interface's graph data endpoint answers HTTP 500. This is not only a `--socket` concern: `~/.roadmaps/<name>/graph.sock` crosses the bound on its own under a deep enough home directory, with no unusual roadmap name. For `serve` on Linux, macOS, FreeBSD and OpenBSD the limit is 8 bytes lower for the default `graph.sock`, because the server first binds at a slightly longer transient path; the refusal line reports the limit in force. On the command line the way back is `--socket` naming a path within the reported limit, given to both ends of the pair: the server binds it and the client reaches it, and that roadmap works normally. The web page has no such flag, so its only remedy is a shorter home directory or a shorter roadmap name. See [DOCS/commands/graph.md](DOCS/commands/graph.md#the-socket-path-has-a-length-limit).
 
 **One caution.** `--socket` moves the socket off the default path, and the web interface cannot follow it: it is an HTTP handler with no command line, and no request parameter carries a socket path, so a server started with `--socket` leaves that roadmap's graph page unavailable — HTTP 503, the same answer it gives for a roadmap nobody is serving — for as long as it runs. Start a server without the flag whenever the same roadmap is also browsed. See [DOCS/commands/graph.md](DOCS/commands/graph.md#running-a-graph-server).
 
@@ -782,13 +823,13 @@ On startup the served URL is printed as JSON (`{"url": "http://127.0.0.1:8787"}`
 - **Read-only, with one exception.** No route creates, edits or deletes a roadmap, task, sprint, comment or audit entry, and serving a page writes no rows and no audit-log entry. Only `GET`/`HEAD` are accepted (any other method returns HTTP 405). The exception is the graph data endpoint: it sends the statement the query bar gives it to the roadmap's graph server, so a statement that writes is committed there. The endpoint opens no store and takes no lock of its own, and a page load that runs no write leaves the graph store byte for byte as it found it.
 - **No `-r` flag.** It is the one command exempt from the always-required-roadmap rule; it lists all roadmaps and you pick one in the browser.
 - **Long-lived.** It keeps serving until interrupted; `Ctrl+C` (`SIGINT`) or `SIGTERM` shuts it down gracefully (exit 0).
-- **It tells you what went wrong.** Because a per-request failure never stops the server, the browser is given a deliberately opaque `internal server error` and the detail goes to the console instead: one structured `log/slog` line on stderr per failure, naming the request, the status, and the underlying error, with UTC timestamps. A rejected query-bar query is a `WARN`, and so is a graph server that is not running — the page reports HTTP 503 for it, because starting the server clears the condition and nothing in this server is at fault. A server failure is an `ERROR`. Successful requests, 404s and 405s stay silent, and stdout still carries only the URL object. See [DOCS/commands/web.md](DOCS/commands/web.md#console-log).
+- **It tells you what went wrong.** Because a per-request failure never stops the server, the browser is given a deliberately opaque `internal server error` and the detail goes to the console instead: one structured `log/slog` line on stderr per failure, naming the request, the status, and the underlying error, with UTC timestamps. A rejected query-bar query is a `WARN`, and so is a request refused with HTTP 403 by the host or site checks, and a graph server that is not running — the page reports HTTP 503 for it, because starting the server clears the condition and nothing in this server is at fault. A server failure is an `ERROR`. A request abandoned by its client before it was answered is answered HTTP 499 and recorded once at `INFO` as `request abandoned by client`, never as an error; a browser disconnect stops a running graph statement, which then writes nothing unless it had already committed. Successful requests, 404s and 405s stay silent, and stdout still carries only the URL object. See [DOCS/commands/web.md](DOCS/commands/web.md#console-log).
 - **A tasks list.** The Tasks page lists the roadmap's tasks, of any status, in one table: ID, title, type, status, severity, priority and created date, with the title linking to that task's own page. Its footer states `Showing a to b of n entries`, offers 10, 25, 50 or 100 rows per page (25 by default), and paginates the list.
 - **Server-side filters in the URL, remembered in a cookie.** The list card's header carries a filter bar: a search box matching the task title and the `#id` reference, a dropdown for sprint (including "no sprint"), and multi-select dropdowns of checkboxes for status and type, applied with an Apply button. Several statuses, or several types, combine by OR; the criteria of different dimensions combine by AND. Filtering and pagination are carried by the query parameters `q`, `sprint`, `status`, `type`, `page` and `size` (`status` and `type` repeatable), so a filtered page is a link you can bookmark or share. The filter state (never the page) is also stored in the server-set cookie `rmp_tasks_filters`, shared by every roadmap: a request with none of those parameters, such as the sidebar's Tasks link, restores it, and with no cookie the page shows every status except `COMPLETED`. The status and type dropdowns open through the vendored Tabler script; the page loads no script of its own. An invalid value is ignored rather than reported as an error.
 - **A graph query bar with a time budget.** The knowledge-graph page is driven by an editable Cypher statement with a node-limit dropdown. The statement is executed as written — the endpoint does not examine it, so a `CREATE`, a `SET` or a `DETACH DELETE` typed into the box is executed and committed against the roadmap's knowledge graph. Each statement runs under a 5-second budget: the budget bounds the **work** the statement causes, while the node limit bounds only the **result** it returns, so a query that scans a Cartesian product is stopped even though its response would be tiny. A cancelled or failed statement is reported in place and the page keeps working. The statement is sent to the roadmap's graph server, on the socket path derived from the roadmap name; with no server running there the page reports HTTP 503, which starting one clears. A server started with `--socket` cannot be reached from here at all, because the endpoint has no way to receive a path, and it leaves the page unavailable for as long as it runs.
 - **Tabler dark-theme UI.** The interface is built on the vendored Tabler admin-dashboard framework in its dark theme: a navigation sidebar (which collapses to a hamburger menu on small viewports), a top navbar naming the selected roadmap, page headers whose title names the view you are on (Sprints, Tasks, Audit, Knowledge graph), and Tabler cards, tables, and badges. In the dark theme, badge text and the keyboard focus outline meet WCAG 2.2 AA contrast. On the Sprints page each of the three tabs carries a count badge in the colour of the sprint status that tab groups.
 - **Self-contained and offline.** Every asset (HTML, CSS, JavaScript, the vendored Tabler framework and D3.js graph library with the d3-sankey plugin, the Tabler Icons webfont, and the Inter font) is embedded in the binary via `go:embed` and served only from `/static/`; no page references a CDN, a remote font host, or any other remote origin, and the server makes no outbound request.
-- **Loopback by default, and that bind is the only access control.** It binds the loopback interface (`127.0.0.1`), so the interface is reachable only from the local machine. Exposing it on the network is the explicit opt-in via `--host 0.0.0.0` (or any other non-loopback address), which also prints a network-exposure warning to stderr. Because the graph data endpoint executes the statement it is given, that opt-in is a **write** grant over every roadmap's knowledge graph and not a read grant: the server has no login, no token and no session. Roadmap names from the URL are validated before any filesystem path is built (path-traversal guard).
+- **Loopback by default, with a host allowlist and a cross-site refusal.** It binds the loopback interface (`127.0.0.1`), so no other machine can connect to it. The bind does not decide which requests are served, because a local browser connects on behalf of any page it loads: every request must name an allowed host on the bound port (which defeats DNS rebinding), and a request whose `Sec-Fetch-Site` is other than `same-origin` or `none`, or whose `Origin` is foreign or `null`, is refused on every method, links from other sites included. A refusal is HTTP 403 with the plain-text line `host not allowed` or `origin not allowed`. A command-line client that sends neither header, such as `curl`, is served. Exposing it on the network is the explicit opt-in via `--host 0.0.0.0` (or any other non-loopback address), which also prints a network-exposure warning to stderr. Because the graph data endpoint executes the statement it is given, that opt-in is a **write** grant over every roadmap's knowledge graph and not a read grant: the server has no login, no token and no session. Roadmap names from the URL are validated before any filesystem path is built (path-traversal guard).
 - **Responsive, mobile-first.** Every page, including the graph visualisation, adapts to small touch viewports.
 - **A page per task.** Each task has its own read-only page at `/roadmaps/{name}/tasks/{id}`, with every task field, a small context of the sprint it belongs to (its position in the sprint and the sprint's progress), and links to its parent, dependencies and the tasks it blocks.
 - **Comments are visible.** A task's page carries a Comments card with the task's comments as a chronological timeline, and a sprint's own page carries a Comments card with the sprint's log. Both are oldest first and read-only: comments are displayed, never written, from the browser.
@@ -910,7 +951,8 @@ rmp <command> -r <name> ...    # Pass -r explicitly; there is no default roadmap
 - `started_at` — set when a task moves to `DOING`
 - `tested_at` — set when a task moves to `TESTING`
 - `closed_at` — set when a task moves to `COMPLETED`
-- All three are cleared when a task is reopened to `BACKLOG`
+- All three are cleared when a task is reopened to `SPRINT`, and when it leaves
+  its sprint and returns to `BACKLOG`
 
 **How are commit hashes tracked?**
 - `commit_open` — the commit the work starts from, supplied with `--commit-open`
@@ -918,9 +960,8 @@ rmp <command> -r <name> ...    # Pass -r explicitly; there is no default roadmap
 - `commit_close` — the commit the work is concluded at, supplied with
   `--commit-close` on the transition into `COMPLETED`
 - Neither is derived: `rmp` runs no git command and reads no repository
-- Returning to `BACKLOG` — by `task stat BACKLOG`, `task reopen`,
-  `sprint remove-tasks` or `sprint remove` — clears `commit_close` and preserves
-  `commit_open`. This is deliberately asymmetric with the timestamps above,
+- Reopening (`task reopen`) and returning to `BACKLOG` (`sprint remove-tasks` or
+  `sprint remove`) clear `commit_close` and preserve `commit_open`. This is deliberately asymmetric with the timestamps above,
   which are all cleared.
 
 ## License

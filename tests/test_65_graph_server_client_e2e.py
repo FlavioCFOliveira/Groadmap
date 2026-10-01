@@ -487,6 +487,37 @@ class TestSocketPathAndPermissions(GraphServerTestBase):
             os.umask(old_umask)
 
 
+    def test_serve_brings_the_roadmap_home_and_the_data_directory_to_0700(self):
+        """SPEC/GRAPH.md acceptance criterion 80 ("Server Startup", step 1;
+        "Socket Path and Permissions", rule 4): `rmp graph serve` re-applies
+        0700 to ~/.roadmaps/ and to ~/.roadmaps/<name>/ before it binds,
+        whatever mode either had, exactly as every command that opens a roadmap
+        does. The roadmap home is asserted and not only the data directory,
+        because an implementation that narrows the data directory and leaves
+        the home wide passes a check on the data directory alone.
+        """
+        roadmap = self.seeded_roadmap(
+            "ledger-reconciliation",
+            "CREATE (:Component {key:'settlement-worker', language:'go'})",
+        )
+        data_dir = self.test.home_dir / ".roadmaps"
+        roadmap_home = data_dir / roadmap
+        os.chmod(data_dir, 0o755)
+        os.chmod(roadmap_home, 0o755)
+        assert os.stat(roadmap_home).st_mode & 0o777 == 0o755, "the precondition did not take"
+
+        server = self.start_server(roadmap)
+        for label, path in (("the roadmap home", roadmap_home), ("the data directory", data_dir)):
+            mode = os.stat(path).st_mode & 0o777
+            assert mode == 0o700, (
+                f"{label} {path} is {oct(mode)} while the server serves, want 0o700: the "
+                f"server must re-establish the outer fence before it binds"
+            )
+
+        rc = server.stop(signal.SIGINT)
+        assert rc == EXIT_OK, f"clean stop must exit 0; got {rc}, stderr={server.stderr_text()!r}"
+
+
 class TestServeLifecycleAndSignals(GraphServerTestBase):
     """SPEC/GRAPH.md "Server Startup" and "Server Shutdown and the Drain":
     the startup announcement, the two expected engine warnings, both
@@ -1577,7 +1608,9 @@ class TestHotNodeContention(GraphServerTestBase):
     own varying completion times. Measured here, at this exact load: the fixed
     ladder exhausts on 2.81%-3.44% of invocations, in every repetition, where
     the same load measured in-process exhausted on 0.18%-0.43%. Full jitter
-    exhausted on none of 7,040.
+    exhausts far less often, but not never: measured under synthetic CPU load
+    (one busy loop per core), the published cap of forty attempts exhausted on
+    1 of 28,800 invocations, and the rejected cap of twenty on 3 of 19,200.
 
     Why every exit code is asserted rather than a sample. The criterion says
     so, and the reason is arithmetic: the failure is a few percent of
@@ -1589,8 +1622,9 @@ class TestHotNodeContention(GraphServerTestBase):
     failure rate, sixteen statements go green about six times in ten under the
     very shape the criterion exists to reject. Sixteen clients each driving
     twenty sequential invocations puts the ladder's expected failure count at
-    about ten, so reverting the shape fails this test with near-certainty --
-    and it costs under a second under the shape that passes.
+    about ten, so reverting the shape fails this test in most runs (8 of 10
+    measured under synthetic CPU load) -- and it costs under a second under
+    the shape that passes.
     """
 
     WRITERS = 16

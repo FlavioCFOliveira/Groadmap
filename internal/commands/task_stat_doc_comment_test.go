@@ -180,7 +180,7 @@ func observedStatTransitions(t *testing.T, f *backlogRouteFixture) map[models.Ta
 				}
 				accepted[source] = append(accepted[source], target)
 
-			case strings.Contains(err.Error(), "can only be set automatically"):
+			case strings.Contains(err.Error(), "cannot be set by 'task stat'"):
 				if target != models.StatusSprint {
 					t.Fatalf("task stat %s → %s was refused as an automatic-only target: %v",
 						source, target, err)

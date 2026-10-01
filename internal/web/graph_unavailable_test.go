@@ -307,10 +307,10 @@ func TestHandleGraphData_TheTwo5xxAreRecordedAtDifferentLevels(t *testing.T) {
 // no-server line, because a check that merely looked for "a record" would pass
 // against the defect — the defect emitted one.
 //
-// The classification it lands on instead is the one graphExecutionError already
-// gives the same pair of causes one layer down: an execution failure, 400, no new
-// kind and no new status. Nothing reads that body, because the caller has gone;
-// what the classification decides is the record.
+// It is answered as the abandoned request it is: 499, recorded by one INFO
+// record and by no WARN or ERROR record (SPEC/WEB.md § Requests Abandoned by the
+// Client; Acceptance Criterion 262). Nothing reads that answer, because the
+// caller has gone; what the classification decides is the record.
 func TestHandleGraphData_ACancelledRequestIsNotReportedAsAnUnreachableServer(t *testing.T) {
 	t.Setenv("HOME", shortHome(t))
 	name := servedRoadmap(t, "backend-platform", `CREATE (s:Spec {key:'user-authentication'})`)
@@ -342,7 +342,17 @@ func TestHandleGraphData_ACancelledRequestIsNotReportedAsAnUnreachableServer(t *
 			"endpoint reserves for a graph server that cannot be reached. One was running; the " +
 			"caller went away (SPEC/WEB.md § Knowledge Graph from the GoGraph Store, rule 1)")
 	}
+	if rec.Code != statusClientClosedRequest {
+		t.Errorf("a cancelled request answered %d, want 499: it is an abandoned request "+
+			"(SPEC/WEB.md § Requests Abandoned by the Client, rule 2)", rec.Code)
+	}
+	if infos := levelCount(logLines(buf), "INFO"); infos != 1 {
+		t.Errorf("a cancelled request produced %d INFO record(s), want exactly 1:\n%s", infos, buf.String())
+	}
 
+	if n := levelCount(logLines(buf), "WARN"); n != 0 {
+		t.Errorf("a cancelled request produced %d WARN record(s), want none:\n%s", n, buf.String())
+	}
 	var warns, errs []string
 	for _, line := range logLines(buf) {
 		switch {

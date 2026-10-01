@@ -1649,26 +1649,22 @@ func resolveGraphServerForRequest(ctx context.Context, name string) (string, err
 		return socket, nil
 	}
 	// **A probe the REQUEST's own cancellation stopped is not evidence about the
-	// server**, and reporting it as one is the defect this branch closes.
+	// server.** The probe runs under the request's context, so a client that
+	// disconnects before it completes fails the dial — and every failed dial
+	// otherwise means "nothing is listening". The two are opposite conditions: one
+	// is a dependency the operator starts, the other is a caller that went away,
+	// and a server may well be listening throughout the second.
 	//
-	// The probe runs under the request's context, so a client that disconnects
-	// before it completes fails the dial — and every failed dial otherwise means
-	// "nothing is listening". The two are opposite conditions with opposite
-	// remedies: one is a dependency the operator starts, the other is a caller
-	// that went away, and a server may well be listening throughout the second.
-	// Left undistinguished, an ordinary disconnect produced a WARN record reading
-	// "graph server unavailable" and naming a socket that was in fact being
-	// served, which is the one record an operator is meant to act on
-	// (SPEC/WEB.md Acceptance Criteria 164 and 165).
-	//
-	// The parent is consulted rather than the probe's own error, which is the same
-	// disambiguation graphExecutionError performs one layer down for the same pair
-	// of causes, and it is classified the same way it is there: an execution
-	// failure, HTTP 400, no new kind and no new status. Nothing reads that body —
-	// the caller has gone — so what the classification decides is the record.
-	if ctx.Err() != nil {
-		return "", newGraphQueryError(graphErrExecution,
-			"query failed to execute: the request was cancelled before the graph server could be reached")
+	// This branch does not classify the request; handleGraphData does, from the
+	// request's context, before it looks at this error at all (SPEC/WEB.md
+	// § Requests Abandoned by the Client, rule 1). What it decides is the TEXT the
+	// abandoned request's record carries: that the probe was stopped, rather than
+	// a no-server line naming a socket that may have been served throughout.
+	// The probe's own failure, when it has one, is kept beside the cancellation,
+	// so the record still states what the cancellation produced (rule 3).
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return "", fmt.Errorf("the graph server probe was stopped by the request's cancellation: %w",
+			errors.Join(ctxErr, probeErr))
 	}
 	if state.NotServed() {
 		return "", newGraphUnavailable(graphNoServerListening(socket))
@@ -1765,6 +1761,16 @@ func servedGraphView(ctx context.Context, socket, query string) (graphView, erro
 // before it is acknowledged — and this process has no store to re-run it against
 // in any case (SPEC/GRAPH.md § Server Resolution, rules 4 and 7).
 func servedGraphError(ctx context.Context, socket string, err error) error {
+	// A failure the request's own cancellation produced is not classified: it
+	// is neither a failed statement nor a missing server, and handleGraphData
+	// answers it as an abandoned request from the request's context. It is handed
+	// back as the client reported it, so the record names the cancellation rather
+	// than a lost connection (SPEC/WEB.md § Query-Bar Error Handling, rule 8;
+	// § Requests Abandoned by the Client, rule 3).
+	if ctx.Err() != nil {
+		return err
+	}
+
 	var sendErr *graphclient.SendError
 	if !errors.As(err, &sendErr) {
 		return fmt.Errorf("%w: graph store unavailable: %v", utils.ErrGraphStore, err)
@@ -1818,14 +1824,14 @@ func servedGraphError(ctx context.Context, socket string, err error) error {
 	case graphclient.FailureBudget:
 		// The budget line, produced by the one function that owns it, so the two
 		// paths report an exhausted budget in the same words.
-		return graphExecutionError(ctx, graphlock.StatementBudget, context.DeadlineExceeded)
+		return graphExecutionError(graphlock.StatementBudget, context.DeadlineExceeded)
 	default:
 		return newGraphQueryError(graphErrExecution, "query failed to execute: "+sendErr.Diagnostic)
 	}
 }
 
 // graphExecutionError words a statement the time budget cut as the single
-// execution-failure kind, truthfully about which cancellation source fired.
+// execution-failure kind.
 //
 // The budget is enforced by the graph server, which takes the value as its
 // MAXIMUM statement timeout and sets no default beside it (SPEC/GRAPH.md § Server
@@ -1839,36 +1845,23 @@ func servedGraphError(ctx context.Context, socket string, err error) error {
 // new kind, no new sentinel, no new status (§ Graph Query Time Budget, rules 4
 // and 5).
 //
-// Only the reason differs, and it must not lie about which of the two composed
-// cancellation sources fired. The request's own context still cancels the
-// statement when the client disconnects, and that cancellation and the server's
-// budget are two independent ends of the same statement:
+// The request's own context still cancels the statement when the client
+// disconnects, and that cancellation and the server's budget are two independent
+// ends of the same statement. The cancellation never reaches this function as a
+// classification: handleGraphData answers a request whose context is done as
+// abandoned, 499 at INFO, before it examines the failure at all, so the budget is
+// never blamed for a caller that gave up and a caller that gave up is never
+// reported as a failed statement (SPEC/WEB.md § Requests Abandoned by the Client,
+// rules 1 and 5).
 //
-//   - A budget exhaustion is reported as context.DeadlineExceeded and a client
-//     disconnect as context.Canceled, both matchable with errors.Is.
-//   - DeadlineExceeded alone is not proof of the budget: it is also what a
-//     parent context with its own earlier deadline reports through a derived
-//     one. parent is therefore consulted — it is the REQUEST's context, without
-//     the budget layered on — and only a live parent attributes the failure to
-//     the budget.
-//
-// The page renders whichever reason it is given verbatim in place, so all three
-// read as the same "query failed to execute" message the user already knows
-// (graph.js showQueryError).
-func graphExecutionError(parent context.Context, budget time.Duration, err error) *graphQueryError {
-	switch {
-	case errors.Is(err, context.DeadlineExceeded) && parent.Err() == nil:
-		// The request is still live, so the deadline that fired is ours.
+// The page renders the reason verbatim in place, so it reads as the same "query
+// failed to execute" message the user already knows (graph.js showQueryError).
+func graphExecutionError(budget time.Duration, err error) *graphQueryError {
+	if errors.Is(err, context.DeadlineExceeded) {
 		return newGraphQueryError(graphErrExecution,
 			"query failed to execute: exceeded the "+budget.String()+" query time budget")
-	case errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded):
-		// The request's own context died first: the client disconnected, or the
-		// caller gave up. Not the budget.
-		return newGraphQueryError(graphErrExecution,
-			"query failed to execute: the request was cancelled before the query finished")
-	default:
-		return newGraphQueryError(graphErrExecution, "query failed to execute: "+err.Error())
 	}
+	return newGraphQueryError(graphErrExecution, "query failed to execute: "+err.Error())
 }
 
 // graphCollector accumulates the deduplicated nodes and relationships found by

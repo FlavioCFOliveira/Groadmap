@@ -156,6 +156,7 @@ After generation:
 1. Verify all links in README.md point to existing files
 2. Verify valid markdown formatting
 3. Confirm directory structure is correct
+4. When a table gains or loses a row, re-read the sentence above it
 
 ## Output Format
 

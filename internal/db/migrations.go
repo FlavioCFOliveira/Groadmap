@@ -7,6 +7,8 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+
+	"github.com/FlavioCFOliveira/Groadmap/internal/utils"
 )
 
 // MigrationFunc is a function that performs a schema migration.
@@ -97,6 +99,16 @@ var migrations = []Migration{
 		Version: "1.15.0",
 		Name:    "Replace the task, sprint_tasks, audit and task_dependencies index set with one free of duplicates that serves each listing order with no sort step",
 		Apply:   migrateV1_14_0_toV1_15_0,
+	},
+	{
+		Version: "1.16.0",
+		Name:    "Repair the rows that break the sprint membership invariant, then verify the whole roadmap with the sprint membership guard",
+		Apply:   migrateV1_15_0_toV1_16_0,
+	},
+	{
+		Version: "1.17.0",
+		Name:    "Drop idx_sprints_created_at, the index on sprints(created_at) that serves no statement",
+		Apply:   migrateV1_16_0_toV1_17_0,
 	},
 }
 
@@ -252,20 +264,25 @@ func columnExists(tx *sql.Tx, table, column string) (bool, error) {
 // migrateV1_0_0_toV1_1_0 adds the position column to sprint_tasks table.
 // It initializes existing tasks with sequential positions based on their order.
 //
-// Idempotent: the ADD COLUMN is guarded by columnExists, so re-applying the
-// migration on a database that already has the column is a no-op (not an error).
+// Idempotent: the ADD COLUMN is guarded by columnExists, and the positions are
+// initialised only in the same application that adds the column, so
+// re-applying the migration on a database that already has the column changes
+// nothing (SPEC/VERSION.md § Migration Chain Guarantee, item 3). It used to
+// re-initialise the positions on every application, which replaced a sprint's
+// planned order with the order its tasks were added in.
 func migrateV1_0_0_toV1_1_0(tx *sql.Tx) error {
 	// Add position column with DEFAULT 0 only when it does not already exist.
 	exists, err := columnExists(tx, "sprint_tasks", "position")
 	if err != nil {
 		return err
 	}
-	if !exists {
-		if _, err := tx.Exec(
-			`ALTER TABLE sprint_tasks ADD COLUMN position INTEGER NOT NULL DEFAULT 0`,
-		); err != nil {
-			return fmt.Errorf("adding position column: %w", err)
-		}
+	if exists {
+		return nil
+	}
+	if _, err := tx.Exec(
+		`ALTER TABLE sprint_tasks ADD COLUMN position INTEGER NOT NULL DEFAULT 0`,
+	); err != nil {
+		return fmt.Errorf("adding position column: %w", err)
 	}
 
 	// Add index for sprint task ordering
@@ -766,6 +783,24 @@ func migrateV1_11_0_toV1_12_0(tx *sql.Tx) error {
 // that is already dense and distinct, and the index step is DROP … IF EXISTS
 // followed by CREATE … IF NOT EXISTS. Re-applying the migration is a no-op.
 func migrateV1_12_0_toV1_13_0(tx *sql.Tx) error {
+	// Step 0 — complete a schema the release recorded wrongly. The v1.0.0
+	// release created new databases recording schema version 1.2.0 with neither
+	// the sprint_tasks.position column of 1.1.0 nor the idx_one_open_sprint
+	// index of 1.2.0, so the two migrations that add them never ran on such a
+	// database, and this one — the first whose statements read position —
+	// failed with "no such column: position". Both are applied here first. Each
+	// is idempotent and changes nothing on a database that already carries its
+	// effects, which is every database that did not come from that release; on
+	// one that did, the positions are initialised by the order the tasks were
+	// added in, which is the only order such a database ever had
+	// (SPEC/VERSION.md § Migration Chain Guarantee).
+	if err := migrateV1_0_0_toV1_1_0(tx); err != nil {
+		return err
+	}
+	if err := migrateV1_1_0_toV1_2_0(tx); err != nil {
+		return err
+	}
+
 	// Step 1 — repair. Renumber every sprint's positions to a dense 0..N-1 run.
 	//
 	// The ranking is computed in a SUBQUERY that is evaluated as a unit and
@@ -1080,4 +1115,122 @@ WHERE operation = 'TASK_STATUS_CHANGE'
         AND (t.tested_at IS NULL OR t.tested_at <> audit.performed_at)
   )`,
 	},
+}
+
+// migrateV1_15_0_toV1_16_0 brings the existing rows under the sprint membership
+// invariant, which application code enforces from this version on
+// (SPEC/VERSION.md § Migration 1.15.0 → 1.16.0; SPEC/DATABASE.md § Sprint
+// Membership Invariant Enforcement).
+//
+// Before 1.16.0 neither half of the invariant was enforced. Three commands left
+// a sprint member in BACKLOG status — `task stat <ids> BACKLOG` from SPRINT and
+// from COMPLETED, and `task reopen` from COMPLETED — and data written outside
+// the rules may hold an active task outside every sprint. The two repairs undo
+// both, each writing one audit entry per task it repairs BEFORE the status
+// change it records, so the statement that selects the tasks to record reads
+// rows the repair has not yet rewritten:
+//
+//   - Repair A returns every SPRINT, DOING or TESTING task that has no
+//     sprint_tasks row to BACKLOG, clearing what removal from a sprint clears
+//     and keeping commit_open, with one TASK_STATUS_BACKLOG entry naming no
+//     sprint.
+//   - Repair B sets every sprint member found in BACKLOG to SPRINT, keeping its
+//     membership row and position, with one TASK_STATUS_SPRINT entry naming its
+//     sprint.
+//
+// The two touch disjoint sets — A only non-members, B only members — so
+// neither creates a violation the other must repair. The sprint membership
+// guard is then applied to every task of the roadmap, and a violation it finds
+// fails the migration, which rolls every step back, the audit entries included.
+//
+// The migration adds no table, column, index or trigger: business rules are
+// enforced by application code (SPEC/DATABASE.md § Business Rules Are Enforced
+// by Application Code). The statements are transcribed from the SPEC, as every
+// migration's are.
+//
+// Idempotent: once both repairs have run, no statement selects anything, so a
+// second application writes no row and no audit entry, and the guard finds
+// nothing.
+func migrateV1_15_0_toV1_16_0(tx *sql.Tx) error {
+	// One timestamp for the whole migration, the moment it runs.
+	now := utils.NowISO8601()
+	for _, step := range membershipRepair1160Steps {
+		var err error
+		if step.stamped {
+			_, err = tx.Exec(step.statement, now)
+		} else {
+			_, err = tx.Exec(step.statement)
+		}
+		if err != nil {
+			return fmt.Errorf("repairing the sprint membership invariant (%s): %w", step.name, err)
+		}
+	}
+
+	// Step 3: the guard over every task of the roadmap.
+	ids, err := allTaskIDsTx(tx)
+	if err != nil {
+		return fmt.Errorf("reading the tasks to verify: %w", err)
+	}
+	return CheckSprintMembershipTx(tx, ids)
+}
+
+// membershipRepair1160Steps are the statements of migration 1.15.0 → 1.16.0, in
+// the order SPEC/VERSION.md gives them. A stamped step binds the migration's one
+// performed_at timestamp.
+var membershipRepair1160Steps = []struct {
+	name      string
+	statement string
+	stamped   bool
+}{
+	{
+		name:    "A1, record the active tasks outside every sprint",
+		stamped: true,
+		statement: `INSERT INTO audit (operation, entity_type, entity_id, related_entity_id, commit_hash, performed_at)
+SELECT 'TASK_STATUS_BACKLOG', 'TASK', t.id, NULL, NULL, ?
+FROM tasks t
+WHERE t.status IN ('SPRINT', 'DOING', 'TESTING')
+  AND NOT EXISTS (SELECT 1 FROM sprint_tasks st WHERE st.task_id = t.id)
+ORDER BY t.id ASC`,
+	},
+	{
+		name: "A2, return the active tasks outside every sprint to BACKLOG",
+		statement: `UPDATE tasks
+SET status = 'BACKLOG', started_at = NULL, tested_at = NULL, closed_at = NULL,
+    completion_summary = NULL, commit_close = NULL
+WHERE status IN ('SPRINT', 'DOING', 'TESTING')
+  AND id NOT IN (SELECT task_id FROM sprint_tasks)`,
+	},
+	{
+		name:    "1, record the sprint members in BACKLOG",
+		stamped: true,
+		statement: `INSERT INTO audit (operation, entity_type, entity_id, related_entity_id, commit_hash, performed_at)
+SELECT 'TASK_STATUS_SPRINT', 'TASK', st.task_id, st.sprint_id, NULL, ?
+FROM sprint_tasks st
+JOIN tasks t ON t.id = st.task_id
+WHERE t.status = 'BACKLOG'
+ORDER BY st.task_id ASC`,
+	},
+	{
+		name: "2, set the sprint members in BACKLOG to SPRINT",
+		statement: `UPDATE tasks SET status = 'SPRINT'
+WHERE status = 'BACKLOG' AND id IN (SELECT task_id FROM sprint_tasks)`,
+	},
+}
+
+// migrateV1_16_0_toV1_17_0 drops idx_sprints_created_at, the index on
+// sprints(created_at), which serves no statement the application issues
+// (SPEC/VERSION.md § Migration 1.16.0 → 1.17.0; SPEC/DATABASE.md § Index Design
+// Rationale). A database created at 1.17.0 never holds it, so the drop brings
+// every existing database to the index set a fresh one is created with.
+//
+// The migration drops one index and does nothing else: it adds no table,
+// column, index or trigger, rebuilds no table and changes no row.
+//
+// Idempotent: the drop is guarded by IF EXISTS, so a second application finds
+// nothing to drop and raises no error.
+func migrateV1_16_0_toV1_17_0(tx *sql.Tx) error {
+	if _, err := tx.Exec(`DROP INDEX IF EXISTS idx_sprints_created_at`); err != nil {
+		return fmt.Errorf("dropping idx_sprints_created_at: %w", err)
+	}
+	return nil
 }

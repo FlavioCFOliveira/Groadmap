@@ -170,7 +170,7 @@ func TestUnknownFlagBesidePositionals_WhereTheRefusalFalls(t *testing.T) {
 		{"before the first positional: the slot's refusal", "task", []string{"prio", "-r", r, "--foo", id, "3"},
 			utils.ErrInvalidInput, `Error: invalid input: invalid task ID: "--foo" (must be a positive integer)`},
 		{"no positional after it: the slot's refusal", "task", []string{"prio", "-r", r, id, "--foo"},
-			utils.ErrValidation, ""},
+			utils.ErrInvalidInput, `Error: invalid input: invalid priority: "--foo" is not an integer in 0-9`},
 		{"task get with the token in its only slot", "task", []string{"get", "-r", r, "--foo"},
 			utils.ErrInvalidInput, `Error: invalid input: invalid task ID: "--foo" (must be a positive integer)`},
 		{"task next with the token in its only slot", "task", []string{"next", "-r", r, "--foo"},

@@ -66,8 +66,12 @@ ROADMAP_SCOPED_SUBCOMMANDS = [
     ("task", "get", ["7"], None, False),
     ("task", "next", ["1"], "open_payment_sprint", False),
     ("task", "remove", ["7"], None, True),
-    ("task", "stat", ["1", "BACKLOG"], None, True),
-    ("task", "reopen", ["1"], None, True),
+    # Task 1 is started first, so a flagless transition (DOING -> TESTING) and a
+    # reopening that changes something (DOING -> SPRINT) both succeed: under the
+    # sprint membership invariant `task stat 1 BACKLOG` is refused for a sprint
+    # member, and `task reopen` of a SPRINT task changes nothing.
+    ("task", "stat", ["1", "TESTING"], "doing_capture_task", True),
+    ("task", "reopen", ["1"], "doing_capture_task", True),
     ("task", "prio", ["7", "5"], None, True),
     ("task", "sev", ["7", "5"], None, True),
     ("task", "subtasks", ["4"], None, False),
@@ -180,6 +184,8 @@ class StrayFlagBase:
         elif preparation == "closed_refund_sprint":
             self.must(["sprint", "start", "-r", name, "2"])
             self.must(["sprint", "close", "-r", name, "2"])
+        elif preparation == "doing_capture_task":
+            self.must(["task", "stat", "-r", name, "1", "DOING", "--commit-open", "5f93b51"])
         return name
 
     def read(self, args):
@@ -334,7 +340,10 @@ class TestWhereTheRefusalFalls(StrayFlagBase):
         self.expect(["task", "next", "-r", r, "--foo"], 6)
         self.expect(["task", "prio", "-r", r, "--foo", "7", "3"], 2,
                     'Error: invalid input: invalid task ID: "--foo" (must be a positive integer)')
-        self.expect(["task", "prio", "-r", r, "7", "--foo"], 6)
+        # A "-"-prefixed token in the <priority> slot is read as the priority,
+        # which is not an integer: exit 2 (rmp task 503).
+        self.expect(["task", "prio", "-r", r, "7", "--foo"], 2,
+                    'Error: invalid input: invalid priority: "--foo" is not an integer in 0-9')
         self.expect(["sprint", "add-tasks", "-r", r, "2", "--foo"], 2,
                     'Error: invalid input: invalid task ID: "--foo" (must be a positive integer)')
         self.expect(["audit", "history", "-r", r, "--foo"], 2, not_line=UNKNOWN_FLAG_LINE)

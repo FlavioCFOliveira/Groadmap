@@ -223,13 +223,23 @@ Examples:
 // server's store, so a directory created here would be an empty second store
 // beside a graph that is already open.
 //
-// The mode is set twice on purpose. MkdirAll applies the process umask to the
+// The mode is set twice on purpose. Mkdir applies the process umask to the
 // permission bits it is given, so a umask of 022 would leave 0755 behind; the
 // explicit Chmod is what makes the 0700 CLAUDE.md § 10 fixes for the
 // ~/.roadmaps tree a property of the directory rather than of the environment
 // that created it.
-func createGraphDir(graphDir string) error {
-	if mkErr := os.MkdirAll(graphDir, 0700); mkErr != nil {
+//
+// It creates graph/ and nothing above it. The server never creates the roadmap
+// home directory, so a startup that loses a race to `rmp roadmap remove` —
+// whose home is gone by the time this runs — fails here as the roadmap that
+// does not exist rather than recreating the home the removal has just deleted
+// (SPEC/GRAPH.md § Concurrency and Recovery, obligation 2). roadmapName names
+// the roadmap in that refusal.
+func createGraphDir(roadmapName, graphDir string) error {
+	if mkErr := os.Mkdir(graphDir, 0700); mkErr != nil && !os.IsExist(mkErr) {
+		if os.IsNotExist(mkErr) {
+			return fmt.Errorf("%w: roadmap %q not found", utils.ErrNotFound, roadmapName)
+		}
 		return fmt.Errorf("%w: creating graph directory: %v", utils.ErrGraphStore, mkErr)
 	}
 	if chErr := os.Chmod(graphDir, 0700); chErr != nil { // #nosec G302 -- 0700 on a DIRECTORY is mandated by SPEC (CLAUDE.md §10: 0700 for the ~/.roadmaps tree); gosec G302 false-positives on directory permissions
@@ -267,7 +277,10 @@ func resolveGraphDir(roadmapName string) (string, error) {
 		// the classification for the exit code, the specific rule for a caller
 		// that must discriminate — which is the property task #290 established
 		// here and which this must not undo.
-		if errors.Is(valErr, utils.ErrValidation) {
+		if errors.Is(valErr, utils.ErrValidation) || errors.Is(valErr, utils.ErrDatabase) {
+			// ErrDatabase is the refusal of a home directory that is not an
+			// absolute path, already classified by its owner
+			// (SPEC/ARCHITECTURE.md § Directory Structure, location rule 1).
 			return "", valErr
 		}
 		// The other way GetRoadmapDir fails is an unresolvable home directory,
@@ -276,8 +289,18 @@ func resolveGraphDir(roadmapName string) (string, error) {
 		return "", fmt.Errorf("%w: %w", utils.ErrValidation, valErr)
 	}
 
+	// A roadmap home that is a regular file, or any other entry that is
+	// neither a directory nor a symbolic link, is a roadmap that does not
+	// exist, refused here with the same line and at the same point as a name
+	// under which nothing exists (SPEC/GRAPH.md § Error Handling and Exit
+	// Codes, rule 10), so neither subcommand creates or probes anything
+	// beneath it.
+	_, occupied, occErr := utils.RoadmapHomeOccupied(roadmapName)
+	if occErr != nil {
+		return "", occErr
+	}
 	dbPath := filepath.Join(roadmapDir, utils.DBFileName)
-	if _, statErr := os.Stat(dbPath); os.IsNotExist(statErr) {
+	if _, statErr := os.Stat(dbPath); occupied || os.IsNotExist(statErr) {
 		return "", fmt.Errorf("%w: roadmap %q not found", utils.ErrNotFound, roadmapName)
 	}
 
@@ -305,6 +328,12 @@ func isFlagLike(tok string) bool {
 		return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
 	}
 	return false
+}
+
+// isJoinedQuery reports whether tok is the joined form of the query flag.
+func isJoinedQuery(tok string) bool {
+	_, ok := joinedQueryValue(tok)
+	return ok
 }
 
 // joinedQueryValue reports whether tok is the joined form of the query flag,
@@ -336,6 +365,13 @@ func readQuery(args []string) (string, error) {
 		// included, and no following token is read (SPEC/GRAPH.md § Cypher Input
 		// Source and Precedence, rule 4). An empty or whitespace-only value is the
 		// absent value, refused by the trim below.
+		//
+		// Every spelling of the flag is one flag, and a second occurrence of it
+		// is refused before its value is read (SPEC/COMMANDS.md § Repeated
+		// Flags).
+		if queryFound && (args[i] == "--query" || args[i] == "-q" || isJoinedQuery(args[i])) {
+			return "", utils.RepeatedFlagError(args[i])
+		}
 		if joined, ok := joinedQueryValue(args[i]); ok {
 			queryVal = joined
 			queryFound = true

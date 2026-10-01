@@ -11,10 +11,10 @@ import (
 
 // BacklogListFlags defines flags for backlog list.
 var BacklogListFlags = []FlagDef{
-	{Name: "--priority", Short: "-p", Field: "Priority", Type: "int"},
+	{Name: "--priority", Short: "-p", Field: "Priority", Type: "int", IntRange: intRange(models.MinPriority, models.MaxPriority)},
 	{Name: "--type", Short: "-y", Field: "Type", Type: "string"},
 	{Name: "--sort", Field: "Sort", Type: "string"},
-	{Name: "--limit", Short: "-l", Field: "Limit", Type: "int"},
+	{Name: "--limit", Short: "-l", Field: "Limit", Type: "int", IntRange: intRange(models.MinListLimit, models.MaxTaskLimit)},
 }
 
 // printBacklogListHelp — `rmp backlog list`.
@@ -101,7 +101,12 @@ func backlogList(args []string) error {
 		Limit:  models.DefaultTaskLimit,
 	}
 
+	// The filter checks the field's range as `task create` does, before the
+	// roadmap database is opened (SPEC/COMMANDS.md § List Backlog Tasks).
 	if p, ok := result.Flags["Priority"].(int); ok {
+		if err := models.ValidatePriority(p); err != nil {
+			return err
+		}
 		filter.MinPriority = &p
 	}
 	if l, ok := result.Flags["Limit"].(int); ok {

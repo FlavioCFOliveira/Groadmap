@@ -47,6 +47,7 @@
   - [What a Statement That Writes Nothing Changes on Disk](#what-a-statement-that-writes-nothing-changes-on-disk)
   - [Statement Time Budget](#statement-time-budget)
   - [Peak Resident Memory](#peak-resident-memory)
+  - [Statement-Scoped Memory Release](#statement-scoped-memory-release)
   - [Lock Contention](#lock-contention)
 - [Constraints](#constraints)
 - [Acceptance Criteria](#acceptance-criteria)
@@ -142,7 +143,8 @@ rule 3). Neither examines what a statement does.
    [Durability and Checkpointing in a Long-Lived Process](#durability-and-checkpointing-in-a-long-lived-process)).
 6. The server MUST fold the write-ahead log into a self-sufficient on-disk
    snapshot and truncate the log, on a cadence while it runs and again at
-   shutdown when the log has grown since it was last folded. This checkpoint
+   shutdown, each time when, and only when, the log has grown since it was last
+   folded. This checkpoint
    bounds write-ahead-log growth and keeps recovery cost proportional to the live
    graph size rather than to the total history of writes. The condition under
    which a fold is owed is stated in
@@ -471,16 +473,13 @@ writer, the transactional store, the engine over them, and the checkpoint — an
 the server is on this path by calling it. A second construction anywhere in the
 product is a second path, whatever constructor it names.
 
-**The single row is what the withdrawal of the direct path leaves, and the rule it
-carries is stronger than the one it replaces.** The table once carried a row for
-`graph execute` and a row for the web graph data endpoint, because each opened the
-store for itself. Neither does now: `rmp graph client` and the web graph data
-endpoint reach the graph through the Bolt client alone
-([Server Resolution](#server-resolution)), and a client constructs no engine. So
-the requirement that every surface construct the same engine has become the
-narrower and more easily checked requirement that **exactly one** construction
-exists in the whole of production source, on one path, in one package. What differs
-inside the server is how long the sequence is held open and when the checkpoint
+**The single row is the whole table, and the rule it carries is checkable in
+production source.** `rmp graph client` and the web graph data endpoint open no
+store: they reach the graph through the Bolt client alone
+([Server Resolution](#server-resolution)), and a client constructs no engine. The
+requirement is therefore that **exactly one** construction exists in the whole of
+production source, on one path, in one package. What the server decides around
+that construction is how long the sequence is held open and when the checkpoint
 runs, not what is constructed (see
 [Durability and Checkpointing in a Long-Lived Process](#durability-and-checkpointing-in-a-long-lived-process)).
 
@@ -599,10 +598,33 @@ process that opens the store
 ([Engine Constructor by Path](#engine-constructor-by-path)); when it runs one, and
 how often, is stated in
 [Durability and Checkpointing in a Long-Lived Process](#durability-and-checkpointing-in-a-long-lived-process),
-which applies this section's condition rather than declaring a second one. A
-checkpoint is synchronous with respect to the sequence that owes it: it runs on
-the engine's own commit serialiser or inside the shutdown sequence, never as a
-background goroutine racing either.
+which applies this section's condition rather than declaring a second one.
+
+**A checkpoint is synchronous with respect to the party that requests it, not
+with respect to the writers.** Two parties request one: the in-flight fold, at a
+due instant of the cadence, and the shutdown sequence, after the drain. Each hands
+the fold to the engine's checkpoint routine, which runs it on a goroutine of its
+own, and waits until the fold has finished and returned its outcome. No fold is
+requested and then left unobserved, which is why the server holds the error of
+every fold it takes (see the failure policy below). What orders a fold against
+everything else is fixed as follows:
+
+- **The capture is a transaction boundary.** The fold captures the graph through
+  the engine's commit serialiser, which excludes writers while the capture is
+  taken, so no transaction is in the capture in part.
+- **The truncation excludes writers too.** Removing the folded prefix of the
+  write-ahead log, after the snapshot is durable, runs through the same
+  serialiser, and it removes the log only up to the captured boundary.
+- **Writing the snapshot does not exclude writers.** Between the capture and the
+  truncation, while the snapshot is serialised and written, writers keep
+  committing. What they append lies beyond the captured boundary, survives the
+  truncation, and is left to a later fold (see
+  [Durability and Checkpointing in a Long-Lived Process](#durability-and-checkpointing-in-a-long-lived-process),
+  rule 10).
+- **Two folds never overlap.** The in-flight fold and the shutdown fold pass
+  through one gate that admits a single fold at a time, and the shutdown stops
+  the in-flight fold, waiting for one in progress to finish, before it takes its
+  own.
 
 **What decides whether a checkpoint is owed is the write-ahead log, not the
 statement.** Groadmap does not examine a statement to learn whether it writes, so
@@ -621,8 +643,11 @@ Sequence and durability boundary:
    transaction has committed durably, the user's change is persisted in the
    write-ahead log and is guaranteed to survive recovery, independent of whether
    the checkpoint that follows succeeds.
-2. After a successful commit, and before closing the store, the implementation
-   writes a full snapshot of the committed graph state. The snapshot MUST be
+2. When a fold is owed, the server writes a full snapshot of the committed graph
+   state as of one transaction boundary, at the moments
+   [Durability and Checkpointing in a Long-Lived Process](#durability-and-checkpointing-in-a-long-lived-process)
+   fixes: at a due instant of its cadence while it runs, and at shutdown before
+   it closes the store. The snapshot MUST be
    self-sufficient: it carries the node-identifier-to-key mapping needed to
    interpret the graph on its own, it captures the set of deleted (tombstoned)
    nodes, and it captures the **registered schema** — the definitions of every
@@ -649,8 +674,8 @@ Sequence and durability boundary:
    [Schema Management](#schema-management)).
 
    **The schema the snapshot carries is the one the engine holds registered at
-   the moment of the checkpoint**, obtained from the engine that just executed
-   the statement. It MUST NOT be a set Groadmap accumulates, remembers, or
+   the moment of the checkpoint**, obtained from the engine that executes the
+   server's statements. It MUST NOT be a set Groadmap accumulates, remembers, or
    reconstructs on its own: the engine is the only party that knows what is
    registered after a statement has run, and a second record kept beside it would
    be a copy free to disagree with it. The checkpoint therefore runs with access
@@ -662,27 +687,32 @@ Sequence and durability boundary:
 
 Failure policy:
 
-1. A checkpoint failure that occurs **after** the transaction has already
-   committed durably MUST NOT fail the user-visible write. The write has already
-   succeeded.
-2. In that case the caller still receives its normal success result (the
-   `RETURN`-mirroring shape or `{"ok": true}`) and exit code 0. A failed
-   checkpoint after a durable commit is a degraded-but-correct state: the
-   write-ahead log is intact, so recovery still restores the committed state, and
-   the next successful checkpoint reconciles the snapshot. **One
-   cause of checkpoint failure does not reconcile, and is a condition of its
-   own**: a field the snapshot format cannot carry is committed graph state, so
-   every later checkpoint refuses for the same reason until that field is removed
-   (see [Field Length Limits](#field-length-limits), rules 6 to 9).
+1. **A checkpoint is never part of a statement's result.** The server folds at a
+   due instant of its cadence or at shutdown, never inside the statement whose
+   commit made the fold owed, and every write it folds was acknowledged when its
+   transaction committed durably. A checkpoint failure therefore fails no write:
+   the client that sent the write has already received its normal success result
+   (the `RETURN`-mirroring shape or `{"ok": true}`) and exit code 0, and nothing
+   the fold does afterwards changes either.
+2. A failed checkpoint is a degraded-but-correct state: the write-ahead log is
+   intact, so recovery still restores the committed state, and the next
+   successful checkpoint reconciles the snapshot. The server goes on serving, and
+   a failed in-flight fold leaves the log grown, so the next due instant attempts
+   the fold again. **One cause of checkpoint failure does not reconcile, and is a
+   condition of its own**: a field the snapshot format cannot carry is committed
+   graph state, so every later checkpoint refuses for the same reason until that
+   field is removed (see [Field Length Limits](#field-length-limits), rules 6 to
+   9).
 3. The checkpoint failure is surfaced on the server's own stderr, as a record of
    the kind [Server Diagnostics on Stderr](#server-diagnostics-on-stderr)
-   governs, **without** changing the result the caller reads or the exit code it
-   returns. The caller that ran the statement is not told: its write succeeded,
-   and the condition is the operator's to act on. This is the one place where a
-   diagnostic accompanies an acknowledged success.
+   governs. No client is told: no statement is waiting on the fold, and the
+   condition is the operator's to act on. A shutdown checkpoint that fails is
+   reported the same way, and the server still exits with the code
+   [Server Shutdown and the Drain](#server-shutdown-and-the-drain) fixes for a
+   graceful stop.
 4. A failure that occurs **before or during** the commit (the transaction does
    not commit durably) is a normal write failure, not a checkpoint failure: the
-   write did not succeed, no checkpoint is attempted, and the caller fails with
+   write did not succeed, it makes no fold owed, and the caller fails with
    `utils.ErrGraphEngine` (exit code 1) per
    [Error Handling and Exit Codes](#error-handling-and-exit-codes).
 
@@ -785,7 +815,9 @@ Rules:
    does not name is not thereby forbidden.
 6. Removing a roadmap (`rmp roadmap remove <name>`) deletes the entire roadmap
    home directory recursively, which includes `graph/`. No separate graph-removal
-   command is required (see `COMMANDS.md § Remove Roadmap`).
+   command is required (see `COMMANDS.md § Remove Roadmap`). The removal is
+   refused, and deletes nothing, while a graph server holds the store's lock
+   (see [Concurrency and Recovery](#concurrency-and-recovery)).
 7. The roadmap home directory layout, including the graph subdirectory, is
    described in `ARCHITECTURE.md § Directory Structure`. This file is the
    canonical source for the `graph/` subdirectory.
@@ -1408,14 +1440,11 @@ argument at all**: it declares a maximum of zero, which is what
 written bare on the command line is therefore not a third source. It is an excess
 positional argument, and the subcommand refuses it.
 
-`graph client` declares the same maximum of zero and refuses a positional
-argument the same way, with the same line, for the same reason: it takes its
-statement from the same two sources and from no third one. `graph serve` declares
-a maximum of zero as well, and refuses an excess positional argument under the
-CLI-wide wording of `COMMANDS.md § Positional Arguments`, rule 1, rather than the
-line below, because it takes no Cypher statement at all and the hint names two
-sources it does not have. Everything the rules below say of `graph client` holds
-of `graph client` word for word.
+`graph serve` declares a maximum of zero as well, but refuses an excess
+positional argument under the CLI-wide wording of
+`COMMANDS.md § Positional Arguments`, rule 1, rather than the line below, because
+it takes no Cypher statement at all and the hint names two sources it does not
+have.
 
 The rules are:
 
@@ -1458,8 +1487,9 @@ The rules are:
    first, so an invocation that names no roadmap and has none selected fails with
    `utils.ErrNoRoadmap` (exit code 3) even when it also carries a stray token.
    Everything else runs after the refusal. The stray token is refused:
-   - **before the graph store is opened**, so an invocation naming a roadmap that
-     does not exist exits 2 and not the 4 that roadmap would otherwise draw;
+   - **before the roadmap is resolved and before any server is reached**, so an
+     invocation naming a roadmap that does not exist exits 2 and not the 4 that
+     roadmap would otherwise draw, and no statement is sent;
    - **before standard input is read**, so a subcommand that was given no
      `--query` never blocks on, and never consumes, a stream a producer is still
      writing to;
@@ -1467,7 +1497,7 @@ The rules are:
      a stray token exits 2 and not the 6 of
      [Maximum Query Length](#maximum-query-length).
 
-   A refused invocation therefore does nothing: it opens no store, creates,
+   A refused invocation therefore does nothing: it connects to no server, creates,
    changes and deletes nothing, leaves the snapshot directory and the
    write-ahead log untouched on disk, and writes zero bytes to stdout. An excess
    positional argument is not a dispatch failure, so no help follows it: stderr
@@ -2127,9 +2157,11 @@ Behaviour:
    same two reasons (see
    [Query Notifications as Diagnostics](#query-notifications-as-diagnostics) and
    [Query Plans: The EXPLAIN and PROFILE Prefixes](#query-plans-the-explain-and-profile-prefixes)).
-2. **Both surfaces publish them, and publish the same object.** `rmp graph
-   execute` reads them from the engine it opened, or from the server it resolved;
-   `rmp graph client` reads them from the server it was pointed at. The identity
+2. **`rmp graph client` publishes them as the graph server reported them.** The
+   server that ran the statement returns them with its result, and `rmp graph
+   client` publishes them beside that result. The web graph data endpoint does not
+   publish them: its document carries nodes and edges only
+   (`DATA_FORMATS.md § Graph View Data`). The identity
    `DATA_FORMATS.md § Graph Client Result` requires binds them with no exception:
    they describe the statement and the graph, not the duration of the run, which
    is the one thing that section exempts.
@@ -2350,20 +2382,19 @@ Behaviour:
    is a real and unbounded cost, and it is the reason the condition must be
    reported rather than absorbed — but it is not a durability failure, and a
    diagnostic that read as one would be worse than none.
-8. **Every surface that holds the checkpoint error MUST classify it; the one that
-   does not hold it MUST NOT pretend to.** The synchronous checkpoint of a
-   short-lived invocation and the graph server's shutdown checkpoint both return
-   an error to Groadmap, so both MUST recognise
-   `store/snapshot.ErrFieldTooLong` with `errors.Is` and report this condition
-   rather than the general one. The graph server's in-flight checkpoint does not:
-   it runs on the engine's own cadence loop
+8. **The checkpoint that returns its error MUST classify it; a failure observed
+   without its error MUST NOT pretend to.** Both of the graph server's checkpoints
+   return an error to Groadmap: the shutdown checkpoint, and the in-flight fold,
+   which Groadmap requests itself
    ([Durability and Checkpointing in a Long-Lived Process](#durability-and-checkpointing-in-a-long-lived-process),
-   rules 5 and 9), and what Groadmap can observe of it is a statistics value
-   carrying the last failure as a **rendered string**, not as an error. On that
-   path `errors.Is` has nothing to match, and matching the string is what rule 3
-   forbids, so the in-flight report stays the general one — with the engine's own
-   text inside it, which is where an operator reads the kind. This is a limit of
-   what the engine exposes; it is stated as one rather than closed by a text
+   rules 5 and 9). Each MUST recognise `store/snapshot.ErrFieldTooLong` with
+   `errors.Is` and report this condition rather than the general one. A failure
+   Groadmap can observe only through the engine's statistics value, which carries
+   the last failure as a **rendered string** and not as an error, gives
+   `errors.Is` nothing to match, and matching the string is what rule 3 forbids;
+   a report built from that value alone stays the general one — with the engine's
+   own text inside it, which is where an operator reads the kind. This is a limit
+   of what the engine exposes; it is stated as one rather than closed by a text
    match, and it is the boundary an implementation MUST observe rather than work
    around.
 9. **The report says what is safe, what did not happen, that it will not happen
@@ -2376,20 +2407,23 @@ Behaviour:
    statement. The last two are what make this report different from every other
    checkpoint diagnostic, all of which describe a condition the operator waits
    out or repairs in the environment. They are also what makes the report worth
-   emitting more than once: on the short-lived surfaces the diagnostic
-   accompanies **every subsequent write**, because every subsequent write
-   checkpoints and every checkpoint refuses, and a line that recurred on every
-   write saying only that a checkpoint had failed would train an operator to
-   ignore the one message that names an unbounded, permanent cost. **No literal
-   for these diagnostics is published in this specification or in `COMMANDS.md`.**
-   They accompany a successful invocation — exit code 0 for the short-lived
-   surfaces
+   emitting more than once: the log still holds the unfolded bytes after a
+   refused fold, so the server attempts the fold again at **every due instant**
+   of its cadence and at shutdown, every attempt refuses, and the diagnostic
+   recurs with each
+   ([Durability and Checkpointing in a Long-Lived Process](#durability-and-checkpointing-in-a-long-lived-process),
+   rules 4 and 9). A record that recurred at every attempt saying only that a
+   checkpoint had failed would train an operator to ignore the one message that
+   names an unbounded, permanent cost. **No literal for these diagnostics is
+   published in this specification or in `COMMANDS.md`.** Each is a log record
+   on the server's own stderr
+   ([Server Diagnostics on Stderr](#server-diagnostics-on-stderr)) and not a line
+   any invocation returns: the write whose commit made the fold owed has already
+   been acknowledged to its client with its normal result and exit code 0
    ([Synchronous Checkpoint on Write](#synchronous-checkpoint-on-write), failure
-   policy, rule 2) and a log record for the server
-   ([Server Diagnostics on Stderr](#server-diagnostics-on-stderr)) — so neither
-   is an error line and neither belongs in the error tables that
-   `COMMANDS.md § Published Error Strings Are Exact` governs. What is fixed is
-   the content above, not the wording.
+   policy), so no report is an error line and none belongs in the error tables
+   that `COMMANDS.md § Published Error Strings Are Exact` governs. What is fixed
+   is the content above, not the wording.
 10. **Two neighbouring refusals are outside this class, and an implementation
     MUST NOT fold them in.** A node key longer than the write-ahead log's
     unsigned 32-bit prefix is refused by the engine's node-key codec, which does
@@ -2517,7 +2551,8 @@ graph subcommand can reach would be incomplete without it.
 | Condition | Sentinel | Exit code |
 |-----------|----------|-----------|
 | No roadmap selected and none provided via `-r` | `utils.ErrNoRoadmap` | 3 |
-| Selected roadmap does not exist | `utils.ErrNotFound` | 4 |
+| Selected roadmap does not exist, which includes a roadmap home path that is not a directory (see rule 10 below) | `utils.ErrNotFound` | 4 |
+| The roadmap name given to `-r` / `--roadmap` breaks a rule of `COMMANDS.md § Roadmap Name Validation` | `utils.ErrValidation` | 6 |
 | No query supplied: `--query` absent and standard input empty, whitespace only, or a terminal; or `--query` present with an empty, whitespace-only, or absent value (see [Cypher Input Source and Precedence](#cypher-input-source-and-precedence)) | `utils.ErrRequired` | 2 |
 | `graph client` receives a positional argument, a bare Cypher query included; it accepts none (see [No Positional Query: A Stray Token Is Refused](#no-positional-query-a-stray-token-is-refused)) | `utils.ErrInvalidInput` | 2 |
 | Query longer than the maximum query length of 1 MiB, from either source (see [Maximum Query Length](#maximum-query-length)) | `utils.ErrValidation` | 6 |
@@ -2527,6 +2562,7 @@ graph subcommand can reach would be incomplete without it.
 | The statement exhausts the statement time budget and is cancelled (see [Statement Time Budget](#statement-time-budget)) | `utils.ErrGraphEngine` | 1 |
 | Every attempt of the client's retry policy loses a serialisation conflict against a graph server (see [Concurrency Inside the Server](#concurrency-inside-the-server), rule 9) | `utils.ErrGraphEngine` | 1 |
 | `graph serve` cannot open, recover, read, or write the graph store, or cannot create its directory (I/O or corruption) | `utils.ErrGraphStore` | 1 |
+| `graph serve` cannot bring the data directory `~/.roadmaps/` or the roadmap home directory `~/.roadmaps/<name>/` to `0700`, or cannot verify it (see [Server Startup](#server-startup), step 1) | `utils.ErrIO` | 1 |
 | `graph serve` finds the graph store's exclusive lock still held when the bounded wait is exhausted, so another server is likely already running for the roadmap (see [Lock Contention](#lock-contention), rule 3) | `utils.ErrGraphStore` | 1 |
 | The roadmap's socket answers but no server can be reached through it, or the connection fails for a reason other than the socket being absent or refusing (see [Server Resolution](#server-resolution)) | `utils.ErrGraphServer` | 1 |
 | The connection to a server is lost after the statement has been sent (see [Server Resolution](#server-resolution), rule 4) | `utils.ErrGraphServer` | 1 |
@@ -2539,11 +2575,17 @@ graph subcommand can reach would be incomplete without it.
 Rules:
 
 1. **The maximum query length is the only condition on which Groadmap refuses a
-   statement's content, and it is the only cause of exit code 6 in this file.**
+   statement's content, and it is the only cause of exit code 6 a statement can produce.**
    Exit code 6 remains the CLI's validation class and is reached from other
    commands for their own reasons (see `ARCHITECTURE.md § Exit Codes`); within the
-   graph feature the over-long query is its single cause. The three refusals that
-   precede the engine are all decided before the graph store is opened: the
+   graph feature the over-long query is its single cause on a statement. The one
+   other cause of exit code 6 on the two graph subcommands is not about a
+   statement at all: a roadmap name that breaks a rule of
+   `COMMANDS.md § Roadmap Name Validation` is refused with exit code 6 by both,
+   exactly as by every subcommand that takes `-r`, and that section is canonical
+   for it. The three refusals that
+   precede the engine are all decided by `graph client` before it resolves the
+   roadmap or reaches any server: the
    stray-positional refusal (exit code 2), the missing-query refusal (exit
    code 2) and the maximum-length refusal (exit code 6), all three stated in
    [Cypher Input Source and Precedence](#cypher-input-source-and-precedence). A
@@ -2656,6 +2698,24 @@ Rules:
    rolled back whole, or left the graph as it found it, the statement is subject
    to this rule. A caller that needs certainty reads the node pair back after any
    failure of a statement that creates a relationship.
+10. **A roadmap exists, for both graph subcommands, only when its home is a
+    directory that holds `project.db`.** `rmp graph serve` and `rmp graph client`
+    each refuse a roadmap that does not exist, at the step at which they resolve
+    the roadmap, with `utils.ErrNotFound`, exit code 4, and the not-found line
+    `COMMANDS.md § Graph Management` publishes for it.
+    Three shapes of `~/.roadmaps/<name>` are a roadmap that does not exist: no
+    entry of that name; a directory that holds no `project.db`; and an entry that
+    is neither a directory nor a symbolic link, such as a regular file. The third
+    is not a failure of the filesystem and not a server that cannot be reached: a
+    regular file where a roadmap home would be is refused with the same line, the
+    same exit code and at the same point as a name under which nothing exists.
+    `rmp graph serve` therefore creates no directory in its place and reaches none
+    of the later steps of [Server Startup](#server-startup), and `rmp graph client`
+    probes no socket beneath it. A symbolic link at that path is not covered by
+    this rule: it is refused as `ARCHITECTURE.md § Directory Structure` requires
+    for a roadmap home that is a symbolic link. The definition is the CLI-wide one
+    of `COMMANDS.md § Roadmap Selection (Always Required)`, which every other
+    roadmap-scoped subcommand applies in the same way.
 
 ## The Dedicated Graph Server
 
@@ -2682,8 +2742,9 @@ there is (see [Socket Path and Permissions](#socket-path-and-permissions)).
 
 **The server is the only process that opens the store, and that is what the lock
 now means.** A server holds the store's exclusive advisory lock for its whole
-process lifetime, which is a hold no finite wait can be sized against. Nothing else
-takes that lock: `rmp graph client` and the web graph data endpoint reach the graph
+process lifetime, which is a hold no finite wait can be sized against. No surface
+that reaches the graph takes that lock: `rmp graph client` and the web graph data
+endpoint reach the graph
 by resolving the roadmap's socket and sending the statement to the server, and
 neither has a second way in. With no server listening, each reports that the graph
 is unavailable rather than opening the store. That rule is stated once, in
@@ -2731,19 +2792,45 @@ and not inside `graph/`: the contents of that directory belong to GoGraph, and
    `COMMANDS.md § Graph Server Socket Error Lines`, which publishes the line). No
    flag selects between a server and anything else, because there is nothing
    else.
-3. **The socket carries mode `0600`, set explicitly.** It MUST NOT be left at
-   whatever the process umask happens to yield. Connecting to a Unix domain
-   socket requires **write** permission on the socket file, so a permissive umask
-   leaves the socket connectable by the user's group, or by every account on the
-   machine, and connecting to it is reaching the graph. Setting the mode
-   explicitly removes the dependency on the umask altogether, and it is set before
-   the server answers its first connection.
+3. **The socket carries mode `0600`, and it is never connectable under a wider
+   mode at any instant.** It MUST NOT be left at whatever the process umask
+   happens to yield. Connecting to a Unix domain socket requires **write**
+   permission on the socket file, so a permissive umask leaves the socket
+   connectable by the user's group, or by every account on the machine, and
+   connecting to it is reaching the graph.
+
+   **The invariant is about every instant of the socket's existence, not about
+   its final state.** From the moment the socket file exists at the path until
+   the moment it is removed, no process whose access the mode `0600` would deny
+   can establish a connection to it. A connection is established when the kernel
+   accepts it into the listener's queue, which it does from the moment the socket
+   listens and before the server answers anything; a connection established in
+   that interval is not revoked by a mode applied afterwards, and it reaches the
+   graph as soon as the server serves. Narrowing the mode after the socket already
+   listens therefore does not satisfy this rule, however short the interval, and
+   neither does narrowing it before the server answers its first connection. The
+   rule holds under every umask, and with the socket anywhere `--socket` may put
+   it. Rule 8 fixes how the server meets it on a platform with POSIX file modes.
+
+   **The at-every-instant invariant applies on platforms with POSIX file modes.**
+   Windows has no process umask, and it does not use a file's mode to decide who
+   may connect to a socket: setting the mode there changes only the file's
+   read-only attribute, which grants and refuses no account anything. Access to
+   the socket on Windows is governed by the access-control list the socket file
+   inherits from the directory that holds it — the roadmap home
+   `~/.roadmaps/<name>/` at the default path, or whatever directory `--socket`
+   names. The server there binds the listener and then sets the mode to `0600`,
+   so the file reports the published mode, and that order is not a breach of this
+   rule: no mode exists on that platform for the order to widen.
 4. **The filesystem is the access control, and the roadmap home is the outer
    fence.** The roadmap home directory is `0700` (see
-   `ARCHITECTURE.md § Directory Structure`), so a socket at the default path is
-   already unreachable by another user whatever its own mode says. Rule 3 is the
-   inner fence, and it is the one that still holds when `--socket` puts the socket
-   somewhere else.
+   `ARCHITECTURE.md § Directory Structure`), and `rmp graph serve` establishes
+   that mode before it binds (see [Server Startup](#server-startup), step 1), so
+   a socket at the default path is already unreachable by another user whatever
+   its own mode says. Rule 3 is the inner fence, and it is the one that still
+   holds when `--socket` puts the socket somewhere else, including a directory
+   other accounts can traverse and write: there, rule 3 is the whole of the
+   access control from the socket's first instant.
 5. **The server authenticates nobody, and says so rather than omitting it.** The
    Bolt authentication handler admits every connection. It is set explicitly,
    because the engine refuses to construct a server with no handler at all, so
@@ -2769,6 +2856,43 @@ and not inside `graph/`: the contents of that directory belong to GoGraph, and
    is a **stale** socket: nothing is listening on it, the next server replaces it,
    and every resolver reads it as evidence that the roadmap is not served (see
    [Server Resolution](#server-resolution)).
+8. **On a platform with POSIX file modes, the server binds inside a transient
+   staging directory, and the name of that directory is reserved.** To meet rule 3,
+   the server creates a private directory, mode `0700` or narrower, in the
+   directory that holds the socket; binds and listens there at mode `0600`; gives
+   the socket its published path; and then removes the name inside the staging
+   directory and the staging directory itself. The names are fixed:
+   - **The staging directory's name** is the reserved prefix `.rmp-bind-`
+     followed by exactly six characters, each a lower-case ASCII letter or an
+     ASCII digit, chosen at random. A name already taken is replaced by another
+     random one of the same form.
+   - **The socket's name inside it** is the single character `s`.
+
+   The staging directory exists only while the server binds, and a server that
+   starts normally leaves none behind. A server killed while it binds can leave
+   one, empty or holding the one socket it had bound there; that is **staging
+   residue**, and it is stale for the same reason a socket left at the published
+   path is.
+9. **The next server removes staging residue, and nothing else that carries the
+   prefix.** On a platform with POSIX file modes, when `rmp graph serve` replaces
+   a stale socket ([Server Startup](#server-startup), step 4), it also examines
+   every entry of the directory that holds the socket whose name begins with
+   `.rmp-bind-`, and removes an entry, together with its content, when, and only
+   when, all of the following hold:
+   - it is a directory, and not a symbolic link to one;
+   - it is owned by the user running the server;
+   - it is empty, or it holds exactly one entry, and that entry is a socket on
+     which no connection is accepted.
+
+   Every other entry that carries the prefix — a file, a symbolic link, a
+   directory owned by another user, a directory with other content, or one whose
+   socket accepts a connection — is **left untouched**. It does not refuse the
+   start, it is not reported, and the server goes on to bind. The prefix is a
+   convention Groadmap uses for its own residue, not a claim on every name that
+   carries it, so an entry Groadmap cannot recognise as its own is never removed.
+   A socket that accepts a connection belongs to another `rmp graph serve` that is
+   binding in the same directory at that moment, which is why it is left alone.
+   On Windows no staging directory is created and none is examined (rule 3).
 
 ### Socket Path Length
 
@@ -2859,9 +2983,9 @@ Behaviour:
    installation and not a hypothetical: rule 8 records the bound being reached in
    practice on a three-character roadmap name. On the command line the refusal is
    recoverable without moving the roadmap, and the published line's remedy is
-   truthful for both subcommands: `--socket` naming a path inside the bound is
-   checked and passes, so a server can be started there and a client can be pointed
-   at it. The web graph data endpoint has no such flag and no way to receive one,
+   truthful for both subcommands: `--socket` naming a path no longer than the `M`
+   the line reports is checked and passes, so a server can be started there and a
+   client can be pointed at it (rule 9 fixes `M` for `graph serve`). The web graph data endpoint has no such flag and no way to receive one,
    so for that surface the only remedy is a shorter derived path: a shorter home
    directory, or a shorter roadmap name. That asymmetry between the command line
    and the web interface is the same boundary, drawn for the same reason, that
@@ -2884,21 +3008,72 @@ Behaviour:
    a deep home directory, at 139 bytes — 32 over the limit in force there. The
    bound is a live constraint on ordinary installations, and not a limit only a
    deliberately long `--socket` can find.
+9. **On a platform with POSIX file modes, `rmp graph serve` also measures the
+   transient path it binds, and refuses a target whose transient path exceeds
+   the bound.** The server binds first at a path inside its staging directory
+   ([Socket Path and Permissions](#socket-path-and-permissions), rule 8), and the
+   bound applies to that path exactly as to the published one. The transient path
+   is the directory that holds the socket, a separator, the 16-byte staging name
+   (`.rmp-bind-` and six characters), a separator, and `s`, so its length in bytes
+   is **the target's length, less the length of the target's final path
+   component, plus 18**. For the default final component `graph.sock` (10 bytes)
+   the transient path is 8 bytes longer than the target; for a final component of
+   18 bytes or more it is no longer than the target, and this rule refuses nothing
+   the check of rules 1 to 5 would not.
+
+   The check runs where rule 3 places the other one — while the path is resolved,
+   before the lock, the probe, the removal of a stale file, and any bind — and it
+   is the same refusal: exit code 1, `utils.ErrGraphServer`, and the path-length
+   line of `COMMANDS.md § Graph Server Socket Error Lines`, with its wording
+   unchanged. In that line `<socket>` and `N` are the target path and the
+   target's length, because the target is the path the operator chose and can
+   change; `M` is the most bytes a target with that final component may occupy on
+   this platform for `graph serve` — the platform's bound, less the difference by
+   which the transient path exceeds the target. The line therefore stays true as
+   written: `N` is greater than `M` whenever it is printed, and a `--socket` whose
+   length is at most `M` is accepted. The figures of rule 8 are thresholds for the
+   target, which is what `graph client` and the web graph data endpoint check;
+   for `graph serve` over the default path each is 8 bytes lower. `graph client`
+   and the web graph data endpoint bind nothing and check only the target, and on
+   Windows `graph serve` binds no transient path and checks only the target.
 
 ### Server Startup
 
 `rmp graph serve` performs this sequence in this order. The order is load-bearing:
 each step is what makes a later one safe.
 
-1. **Resolve the roadmap and the socket path, check the path's length, and then
-   create the roadmap's graph directory if it has none.** A roadmap that does not
-   exist fails here, before anything is opened, created, or removed. So does a
-   resolved socket path longer than the platform's bound, whether it was derived
-   from the roadmap or supplied through `--socket` (see
-   [Socket Path Length](#socket-path-length)). Both refusals precede the lock, the
-   probe, the unlink and the bind, so **a server that cannot start touches
-   nothing**: the directory is created only once both refusals have been passed,
-   which is why it is the last action of this step and not the first.
+1. **Resolve the roadmap and the socket path, check the path's length, bring the
+   data directory and the roadmap home to `0700`, and then create the roadmap's
+   graph directory if it has none.** A roadmap that does not exist fails here,
+   before anything is opened, created, or removed; a roadmap home path that is a
+   regular file, or any other entry that is neither a directory nor a symbolic
+   link, is a roadmap that does not exist
+   ([Error Handling and Exit Codes](#error-handling-and-exit-codes), rule 10). So does a resolved socket path
+   longer than the platform's bound, whether it was derived from the roadmap or
+   supplied through `--socket` (see [Socket Path Length](#socket-path-length)).
+   Both refusals precede the lock, the probe, the unlink and the bind, so **a
+   server that cannot start touches nothing**: the permissions are applied and
+   the directory is created only once both refusals have been passed, which is
+   why they are the last actions of this step and not the first.
+
+   **The roadmap home is held to `0700` by the server exactly as by every other
+   entry point.** Once both refusals have been passed, `rmp graph serve`
+   re-applies `0700` to the data directory `~/.roadmaps/` and to the roadmap home
+   directory `~/.roadmaps/<name>/`, and verifies both, whatever mode either had
+   before; a directory that cannot be brought to `0700` fails the start with
+   `utils.ErrIO` (exit code 1), before the graph directory is created and before
+   anything else in the sequence runs. The failure is classified as a directory
+   the CLI writes that is not a roadmap's database
+   (`ARCHITECTURE.md § Error Reuse Policy (Mandatory)`), and no exact line is
+   published for it, as none is for the same failure on any other entry point.
+   This is step **A** of
+   `ARCHITECTURE.md § Open-Time Permission Enforcement`, which is canonical for
+   it, applied by the server as every command that opens a roadmap applies it.
+   It is the outer fence of rule 4 of
+   [Socket Path and Permissions](#socket-path-and-permissions): the roadmap home
+   holds the default socket, the graph store and `project.db`, and a server that
+   left it at a wider mode would leave all three guarded by their own modes alone,
+   with the outer fence down, for as long as it serves.
 
    **This is where a roadmap's graph comes into being, and `rmp graph serve` is the
    only thing that creates one.** The directory is `~/.roadmaps/<name>/graph/`,
@@ -2931,10 +3106,21 @@ each step is what makes a later one safe.
    incumbent's socket being touched. What the probe catches is the case the lock
    cannot: a `--socket` path some other roadmap's server owns. The two interlocks
    are different, and neither is relied on to do the other's work.
-4. **Replace a stale socket file.** Once step 3 has established that nothing
-   answers there, any file at the path is removed. This is what lets a relaunch
-   after a kill succeed instead of failing on a name that is already taken.
-5. **Bind the listener and set the socket's mode to `0600`.**
+4. **Replace a stale socket file, and remove staging residue.** Once step 3 has
+   established that nothing answers there, any file at the path is removed. This
+   is what lets a relaunch after a kill succeed instead of failing on a name that
+   is already taken. On a platform with POSIX file modes, the staging residue a
+   server killed while binding left in the same directory is removed in the same
+   step, under the conditions rule 9 of
+   [Socket Path and Permissions](#socket-path-and-permissions) fixes; anything
+   else carrying the reserved prefix is left untouched and does not stop the
+   start.
+5. **Bind the listener, with the socket at mode `0600` from its first
+   instant.** The socket is never connectable under a wider mode, as rule 3 of
+   [Socket Path and Permissions](#socket-path-and-permissions) requires; on a
+   platform with POSIX file modes, a listener bound under the process umask and
+   narrowed afterwards does not meet this step. On Windows the listener is bound
+   and the mode set afterwards, as that rule states.
 6. **Open the store and construct the engine**, through the one lifecycle
    `internal/graphstore` owns, so the server is on the same single path as the
    other two surfaces (see
@@ -3477,9 +3663,26 @@ records survive, because an operator reading a log after the fact needs the
 outcome of an incident, and its beginning is usually the same flood repeated.
 
 **The loss is declared rather than silent.** Once the destination accepts writes
-again, the sink writes one record stating how many records were dropped since it
+again, the sink writes a record stating how many records were dropped since it
 last said so, so a gap in the stream is an announced gap rather than an
-unexplained one. Two consequences follow and neither is a defect. A destination
+unexplained one. The accounting is what is guaranteed, and it has three parts:
+
+- **Every dropped record is counted in exactly one report.** No drop goes
+  uncounted, and none is counted twice.
+- **The counts of the reports sum to the number of records dropped**, so every
+  record written to the sink is either delivered or counted: once the destination
+  has accepted everything queued, the delivered records plus the reported counts
+  equal the records written.
+- **Each report precedes the first delivered record that follows the records it
+  counts**, so it sits in the stream where its gap is.
+
+**The number of reports is not guaranteed.** One stall of the destination can be
+announced by more than one report — records can be dropped again after a report
+has been prepared and before the destination accepts it — and each such report
+counts only the drops since the one before it. A reader that needs the total adds
+the counts; it MUST NOT assume one report per stall, and no promise is made about
+how the drops of one stall are divided among its reports. Two further
+consequences follow and neither is a defect. A destination
 that never recovers receives no report either — but it has received nothing at
 all, so a missing report is not a further loss on top of the missing records. And
 a record is dropped whole: the handler renders a record complete and writes it
@@ -3589,30 +3792,42 @@ something.
    constructor that avoids this is fixed by
    [Engine Constructor by Path](#engine-constructor-by-path), and the server is on
    that one path like every other surface.
-3. **The server checkpoints; it does not checkpoint per write.** The rule for a
-   short-lived invocation — checkpoint synchronously after any transaction that
-   appended to the log (see
-   [Synchronous Checkpoint on Write](#synchronous-checkpoint-on-write)) — exists
-   because such an invocation has no later opportunity: it is about to exit. A
-   server has later opportunities, and a full snapshot after every committed write
-   would make every write cost the whole live graph while its neighbours waited
-   for the quiesce that capture takes.
+3. **The server checkpoints; it does not checkpoint per write.**
+   [Synchronous Checkpoint on Write](#synchronous-checkpoint-on-write) fixes when
+   a checkpoint is owed, not that one follows every write. A full snapshot after
+   every committed write would make every write cost the whole live graph while
+   its neighbours waited for the quiesce that capture takes, so the server folds
+   at the moments rules 4 and 5 fix.
 4. **The server MUST checkpoint at shutdown when, and only when, the write-ahead
    log has grown since it was last folded**, after the drain and before it
    releases the lock, so that the log the next open replays is short and the
-   snapshot on disk is current. The condition is the same one
-   [Synchronous Checkpoint on Write](#synchronous-checkpoint-on-write) applies to
-   a short-lived invocation, and it MUST be the same realisation of that condition
-   rather than a second one beside it: one comparison and one mark, so that the
-   two cannot drift. A shutdown that owes no fold writes nothing at all —
+   snapshot on disk is current. The condition is the one
+   [Synchronous Checkpoint on Write](#synchronous-checkpoint-on-write) fixes, and
+   the server MUST apply the single realisation of it that the store lifecycle
+   owns rather than a second one beside it: one comparison and one mark, so that
+   no copy can drift from it. A shutdown that owes no fold writes nothing at all —
    `snapshot/` and `wal` are left byte for byte as the server found them — which
    is what makes the guarantee in rule 8 below hold at the surface a long-lived
    process exposes.
-5. **The server MUST also checkpoint while it runs**, because the write-ahead log
+
+   **"Grown since it was last folded" counts every byte of the log that no fold
+   has covered, including the bytes it already held when the server opened the
+   store.** A server that was killed leaves a log tail that no snapshot covers;
+   the next server replays it at open, and that replay does not fold it. That
+   tail therefore counts as grown from the moment the store is opened: the mark of
+   what has been folded starts at the beginning of the log, not at its length at
+   open. A server that opens a store with such a tail folds it at the first due
+   instant of its cadence (rule 9) even if it receives no write, or at shutdown if
+   it stops first. A shutdown that finds the log empty, or wholly covered by a
+   fold this server took, still owes nothing and writes nothing.
+5. **The server MUST also checkpoint while it runs, and only when the
+   write-ahead log has grown since it was last folded**, because the log
    otherwise grows for the whole process lifetime and the cost of recovering from
    a kill grows with it. That checkpoint MUST be driven through the engine's
    commit serialiser, so what it captures is a real transaction boundary and not a
-   graph caught mid-commit.
+   graph caught mid-commit. Its condition is rule 4's condition, applied through
+   the same single realisation and the same mark, and rules 9 and 10 fix how the
+   cadence consults it.
 6. **The cadence of that checkpoint is an operational choice, and no value for it
    is fixed here.** Its cost is proportional to the live graph size (see
    [Lock Contention](#lock-contention)) and its benefit is proportional to how
@@ -3628,7 +3843,7 @@ something.
    [Synchronous Checkpoint on Write](#synchronous-checkpoint-on-write)). The
    reconciliation is what an over-long field does not get: it is committed state,
    so it refuses every later checkpoint too, and the server reports it as its own
-   condition on the one checkpoint path whose error it holds (see
+   condition on both checkpoint paths, because it holds the error of each (see
    [Field Length Limits](#field-length-limits), rules 6 to 9).
 8. **An unconditional checkpoint is not merely a wasted write; it publishes a
    permanent residue, and that is why rule 4's condition is a requirement rather
@@ -3647,17 +3862,63 @@ something.
    control isolates it to the write path: one cut **read** over the same store
    leaves the store byte-identical. Rule 4's
    condition is what keeps the residue off the disk: a cut statement commits
-   nothing, so it appends nothing to the write-ahead log, so no fold is owed and
-   the shutdown writes nothing at all
-   ([Synchronous Checkpoint on Write](#synchronous-checkpoint-on-write)).
-9. **The in-flight checkpoint of rule 5 is not conditioned, and the residue of
-   rule 8 is still reachable through it.** It folds on the cadence rule 6 fixes,
-   driven by the engine's own loop rather than by Groadmap, so a server that
-   outlives its first fold can publish that residue without ever being shut down.
-   Conditioning it would mean Groadmap driving that fold itself, which is new
-   behaviour inside the server process rather than a value, and this version does
-   not specify it. What rule 4 closes is the shutdown window; what bounds the
-   remaining one is the cadence, and nothing else does.
+   nothing, so it appends nothing to the write-ahead log, so no fold is owed, and
+   neither the shutdown nor any in-flight fold writes anything on its account
+   ([Synchronous Checkpoint on Write](#synchronous-checkpoint-on-write)). The
+   residue reaches the disk only inside a fold that a genuine write made owed,
+   and that fold would have captured the same graph with or without the cut
+   statement before it.
+9. **Groadmap drives the in-flight fold itself, and the cadence decides only when
+   a fold is due; the condition decides whether it runs.** The engine's own
+   checkpoint loop folds unconditionally: it serialises the whole graph and
+   rewrites the whole snapshot at every fold it takes, whether or not anything was
+   appended since the last one. The server therefore does not leave the decision
+   to fold to that loop: the loop is given no cadence of its own and folds only
+   when the server asks it to (see
+   [Synchronous Checkpoint on Write](#synchronous-checkpoint-on-write)). At each instant the cadence of rule 6 makes a fold due, the
+   server observes the write-ahead log's **durable offset** — the length of the
+   log that its last synchronisation to disk covers — and folds when, and only
+   when, that offset shows the log has grown since the last fold. That
+   observation is the whole of the gate: it is taken at the instants the cadence
+   makes a fold due and at no other time, it reads one value, and it costs nothing
+   that grows with the graph. A due fold the gate withholds is not a fold: the
+   cadence stays due, and the gate is consulted again at the cadence's next check,
+   so a write that arrives after any idle interval is folded no later than the
+   cadence would have folded it on a server that had never been idle. Because the
+   server requests each in-flight fold, it holds that fold's error as it holds the
+   shutdown checkpoint's.
+10. **What the gate changes, and what it leaves exactly as it was:**
+    - **An idle server writes nothing once nothing is left to fold.** A server
+      that receives no write — whether no client connects or every statement it is
+      sent appends nothing — and whose log held no unfolded tail when it opened the
+      store leaves `snapshot/` and `wal` byte for byte as it found them for as long
+      as it runs, at every due instant of the cadence, as the shutdown of rule 4
+      already leaves them. A server that opened the store with such a tail folds it
+      once, at the first due instant, and from then on writes nothing while it
+      stays idle (rule 4).
+    - **A server that receives one write folds it.** The first due instant of the
+      cadence after that write is durable finds the log grown and folds, whether
+      or not any further write follows; a server stopped before that instant folds
+      it at shutdown under rule 4. The gate never withholds a fold that would fold
+      something.
+    - **A write that becomes durable while a fold runs is not covered by that
+      fold, and it is folded by a later one.** A fold captures the graph at one
+      transaction boundary and covers the log up to that boundary; writers keep
+      committing while it writes the snapshot, and what they append lies beyond it
+      and survives its truncation. Those bytes MUST count as grown since the last
+      fold, so the next due instant, or the shutdown, folds them. What a fold
+      covered is therefore the point it captured, never the offset read after it
+      returns: taking the offset after the fold as the new mark would record the
+      unfolded bytes as folded, and a server that then received no further write
+      would neither fold them in flight nor at shutdown.
+    - **The in-flight fold and the shutdown checkpoint never run at the same time**,
+      and they share one mark, so each sees what the other folded.
+    - **The cadence is unchanged.** When a fold becomes due, and how often the
+      cadence checks, are exactly what rule 6 leaves them; the gate decides only
+      whether a due fold writes. Choosing a different cadence is not part of this
+      rule.
+    - **The shutdown checkpoint is unchanged.** Rule 4 governs it exactly as
+      before; the gate adds nothing to it and removes nothing from it.
 
 ### Server Resolution
 
@@ -3938,10 +4199,30 @@ Groadmap does not depend on the engine to serialise access to the store between
 processes. It serialises it itself, at the process level, through a single advisory
 lock file that Groadmap maintains in the roadmap's graph directory, `write.lock`
 (see [Persistence Layout](#persistence-layout)). **`rmp graph serve` is the only
-process that takes it.** It takes the lock **exclusively** before it opens the
-store and holds it until the process stops, so the lock's whole remaining purpose
-is to admit one server per roadmap. No caller takes it, because no caller opens a
-store (see [Server Resolution](#server-resolution)).
+process that holds it for its lifetime.** It takes the lock **exclusively** before
+it opens the store and holds it until the process stops, so the lock's purpose is
+to admit one server per roadmap and to make a running server observable. No caller
+takes it, because no caller opens a store (see
+[Server Resolution](#server-resolution)).
+
+**`rmp roadmap remove` is the one other process that takes it, and only to
+decide whether a server is running.** It takes the lock exclusively and without
+waiting before it deletes anything, refuses the removal when another process
+holds it, and otherwise holds it until the roadmap home directory is gone, so no
+server can start against a store that is being deleted.
+`COMMANDS.md § Remove Roadmap` is canonical for the decision and the refusal.
+Two obligations fall on the server so that the guarantee holds when its startup
+overlaps a removal:
+
+1. Once it holds the lock, the server confirms that the roadmap still exists, as
+   `COMMANDS.md § Roadmap Selection (Always Required)` defines existence, before it
+   opens the store. A roadmap removed between the resolution of step 1 of
+   [Server Startup](#server-startup) and the lock is refused as a roadmap that
+   does not exist, with the roadmap-not-found line and exit code `4`, and the
+   server opens, creates, and binds nothing further.
+2. The server never creates the roadmap home directory. It creates `graph/` only
+   inside a home directory that exists, so a startup that loses the race to a
+   removal fails rather than recreating a home the removal has just deleted.
 
 **There is one lock mode, because there is one holder.** A mode that distinguished
 readers from writers would have to be taken per statement by a party that knows
@@ -4249,12 +4530,15 @@ statement to the server and reads the answer back. The whole of this cost falls 
 long-lived. Three consequences follow, and all three are properties rather than
 figures:
 
-1. **A long-lived process does not return the memory promptly.** A short-lived
-   invocation returns it to the operating system by exiting; a server has no exit
-   to return it at. It releases some of it to the runtime in time and then settles
-   at a floor far above the baseline it started from, where it stays for as long
-   as the process is otherwise idle, because an idle runtime triggers no
-   collection.
+1. **A long-lived process has no exit at which to return the memory, so it MUST
+   return it when the statement ends.** A short-lived invocation returns the
+   memory to the operating system by exiting; a server has no exit to return it
+   at, and left to its runtime it releases some of it in time and then settles at
+   a floor far above the baseline it started from, where it stays for as long as
+   the process is otherwise idle, because an idle runtime triggers no collection.
+   That retention is a defect, and
+   [Statement-Scoped Memory Release](#statement-scoped-memory-release) below is the
+   requirement that removes it.
 2. **The store on disk is unchanged whichever surface paid.** On the server that
    is a requirement rather than an accident: an unconditional shutdown checkpoint
    would leave a residue on disk instead, which is why
@@ -4324,8 +4608,10 @@ declining each is a decision rather than an oversight.**
 **What that leaves, stated as the finding it is.** No configuration available to
 Groadmap both preserves throughput and bounds peak resident memory. One statement
 can still cost gigabytes at the budget in force, and far more given time; the cost
-falls on the graph server, and a long-lived process does not return it promptly.
-The bound has to come from the engine, exactly as the bound on the hold does (see
+falls on the graph server, which MUST return it to the operating system when the
+statement ends ([Statement-Scoped Memory Release](#statement-scoped-memory-release)).
+That requirement bounds how long the cost is held, not how large it grows. The
+bound on the size has to come from the engine, exactly as the bound on the hold does (see
 [Statement Time Budget](#statement-time-budget)), and it has to be a bound on the
 **work** a statement performs rather than on the result it returns. The engine's
 byte budgets are its only memory-shaped guard and they account for the
@@ -4335,15 +4621,62 @@ to cut a returning read outright does not cut the equivalent write at all, which
 runs to its deadline. Groadmap does not bound this from its own side, and this
 specification does not claim it can.
 
+### Statement-Scoped Memory Release
+
+**A graph server retains no memory a statement owned once that statement has
+ended.** This is a resource-hygiene requirement on `rmp graph serve`, and it holds
+however the statement ended: committed, rolled back, refused by the engine, lost to
+a serialisation conflict, or cut by the statement time budget
+([Statement Time Budget](#statement-time-budget)). A cut statement is the case the
+requirement exists for, because it is the one that accumulates the most before it
+ends ([Peak Resident Memory](#peak-resident-memory)).
+
+1. **Statement-scoped memory is everything the statement accumulated.** It is the
+   four accumulators [Peak Resident Memory](#peak-resident-memory) names — the
+   write-ahead-log operation buffer and the applied in-memory state of a write
+   that did not commit, the undo log, and the engine's index buffer — together with
+   the rows the statement materialised and the response it built. It excludes the
+   committed graph itself, which the server holds for as long as it serves, and
+   the server's fixed working state.
+2. **When the statement ends, the server keeps no reference to any of it.** No
+   cache, pool, buffer, or connection state carries a structure the statement
+   built past the moment its outcome has been written to the client, whatever the
+   outcome was. A rolled-back or cut write leaves no trace of its applied state in
+   memory, as it leaves none on disk.
+3. **The memory is returned to the operating system when the statement ends, not
+   at some later collection.** Releasing the references is not enough on its own:
+   a runtime that has freed memory may keep it mapped and resident until a later
+   collection that an idle server never triggers. The server MUST therefore
+   return the freed memory to the operating system as part of finishing the
+   statement, so that an idle server does not stay resident at the high-water mark
+   of the heaviest statement it has run. When other statements are still in flight,
+   only the memory of the statements that have ended is owed back; the memory of
+   the ones still running is theirs.
+4. **No figure is published.** The requirement is that the release happens, at
+   the end of every statement; it states no resident-memory threshold, because
+   this project keeps no performance-measurement tests and nothing would re-derive
+   such a figure (`BUILD.md § No Benchmarks and No Performance-Measurement Tests`).
+   It is verified by the property, not by a measurement: that the statement's
+   structures are unreachable once it has ended, and that the server returns freed
+   memory to the operating system on that path, on every outcome listed above.
+5. **What it does not bound.** The requirement bounds how long a statement's memory
+   is held, not how much a statement may use while it runs. The peak cost of one
+   statement, and the decision not to bound it from Groadmap's side, are unchanged
+   ([Peak Resident Memory](#peak-resident-memory)).
+
 ### Lock Contention
 
-**One process takes this lock, so one thing can contend for it: another server.**
-`rmp graph serve` takes the graph store's exclusive advisory lock before it opens
-the store and holds it until the process stops
+**One process holds this lock for its lifetime, so one thing can contend for it
+for long: another server.** `rmp graph serve` takes the graph store's exclusive
+advisory lock before it opens the store and holds it until the process stops
 ([Server Startup](#server-startup), step 2). No caller takes it, because no caller
-opens a store ([Server Resolution](#server-resolution)). The whole of the
-contention this section governs is therefore between two `rmp graph serve`
-processes for the same roadmap.
+opens a store ([Server Resolution](#server-resolution)). The one other process that
+takes it is `rmp roadmap remove`, which holds it only while it deletes the roadmap
+home directory and never waits for it
+([Concurrency and Recovery](#concurrency-and-recovery)). The contention this
+section governs is therefore between two `rmp graph serve` processes for the same
+roadmap, or between a starting server and a removal of its roadmap that holds the
+lock for the length of a directory deletion.
 
 1. A server that finds the exclusive lock held **waits**, under the bounded
    exponential-backoff policy specified in
@@ -4359,9 +4692,10 @@ processes for the same roadmap.
    the lock, because nothing records one.** The lock is advisory and carries no
    owner, and the server that failed to take it cannot find out who has it. It
    names the likely holder and does not assert it: another `rmp graph serve` is
-   now the only thing that can be holding this lock, so the line says that one
-   **may** already be running for the roadmap, which is a cause the reader can act
-   on without being told a fact the product does not have.
+   the only process that holds this lock for longer than a directory deletion, so
+   the line says that one **may** already be running for the roadmap, which is a
+   cause the reader can act on without being told a fact the product does not
+   have.
    `COMMANDS.md § Graph Server Socket Error Lines` publishes the exact line.
 
 **Waiting rather than failing fast is the policy because a restart is the ordinary
@@ -4579,17 +4913,28 @@ what is compared is a store no process holds open.
 15. After a statement that wrote and its checkpoint, a subsequent read in a
     **separate** invocation returns the written data, proving recovery from the
     snapshot plus any log tail works across process exits.
-16. When the checkpoint fails after the transaction has already committed
-    durably, the invocation still returns its normal success output (the
-    `RETURN`-mirroring shape or `{"ok": true}`) and exit code 0, and the checkpoint
-    failure is reported as a diagnostic on stderr without changing the exit code
-    (see [Synchronous Checkpoint on Write](#synchronous-checkpoint-on-write)).
+16. When the checkpoint that folds a write fails, the `rmp graph client`
+    invocation that sent the write has returned its normal success output (the
+    `RETURN`-mirroring shape or `{"ok": true}`) and exit code 0, the failure is
+    reported as a record on the server's own stderr, the server goes on serving,
+    and a graceful stop still exits 0 (see
+    [Synchronous Checkpoint on Write](#synchronous-checkpoint-on-write), failure
+    policy).
 17. **A statement that writes nothing leaves the store's data untouched, and the
     criterion MUST be run against a store whose write-ahead log is not empty.**
     After `rmp graph client -r <roadmap> --query "MATCH (n) RETURN count(n)"`, the
     `wal` file is byte for byte identical to what it was before, and every file
     under `snapshot/` is unchanged, proving that a transaction which appended
-    nothing neither checkpointed nor truncated the log. An implementation that
+    nothing neither checkpointed nor truncated the log. The comparison is made
+    while the server that ran the statement is still running and before its
+    cadence has first made a fold due, which is the one exception to the rule
+    above that a store is inspected only once its server has stopped: a log that
+    is not empty when the server opens the store is an unfolded tail, and the
+    server folds it at its first due instant or at shutdown whatever statements it
+    receives (see
+    [Durability and Checkpointing in a Long-Lived Process](#durability-and-checkpointing-in-a-long-lived-process),
+    rule 4), so a comparison made after either would observe that fold and not the
+    statement. An implementation that
     checkpointed unconditionally fails this criterion, and it fails it in the way
     that matters: it would rewrite a full snapshot on every statement (see
     [What a Statement That Writes Nothing Changes on Disk](#what-a-statement-that-writes-nothing-changes-on-disk)).
@@ -4989,7 +5334,8 @@ what is compared is a store no process holds open.
     stdout. No store is opened, no socket is created or removed, and the roadmap's
     `graph/` directory is byte-identical before and after.
 53. **A cut write served by a server leaves the store byte-identical, and the
-    criterion MUST compare content rather than size.** A server serves exactly one
+    criterion MUST compare content rather than size.** Over a store whose
+    write-ahead log holds no unfolded tail, a server serves exactly one
     statement that the deadline cuts while it is writing, and is then stopped. Every
     file under the roadmap's `graph/` directory is compared by name, by length and
     by content digest against a fingerprint taken before that statement ran: the
@@ -5313,6 +5659,91 @@ what is compared is a store no process holds open.
     `DATA_FORMATS.md § Graph View Data`). A criterion that compared the bodies
     would fail on a correct implementation, and one that checked only that each
     answered would pass on two independent engines.
+79. **The socket is never connectable under a mode wider than `0600`, and the
+    criterion MUST observe its whole startup rather than its final mode.** On a
+    platform with POSIX file modes (see
+    [Socket Path and Permissions](#socket-path-and-permissions), rule 3, for
+    Windows), `rmp graph serve` is started under a umask of `0000` with `--socket` naming a
+    path in a directory every account can traverse and write. From before the
+    server is started until it announces the socket, a second account attempts to
+    connect to that path repeatedly, and the socket file's mode is observed from
+    the instant the file first appears. No attempt by the second account ever
+    succeeds, and no observation of the file finds a mode other than `0600`. A
+    check that reads the mode only after the announcement passes an
+    implementation that binds under the umask and narrows the mode afterwards,
+    which is the implementation this criterion exists to fail (see
+    [Socket Path and Permissions](#socket-path-and-permissions), rule 3, and
+    [Server Startup](#server-startup), step 5).
+80. **`rmp graph serve` brings an existing roadmap home to `0700`.** Given an
+    existing roadmap whose home directory `~/.roadmaps/<roadmap>/` and data
+    directory `~/.roadmaps/` are both at mode `0755`, `rmp graph serve -r
+    <roadmap>` starts and announces its socket, and, while it serves, both
+    directories are at `0700`. The criterion MUST assert the roadmap home and not
+    only the data directory or `graph/`, because an implementation that narrows
+    those two and leaves the home wide passes a check on either of them (see
+    [Server Startup](#server-startup), step 1).
+81. **An idle server writes nothing to the store, however many due instants of
+    its cadence pass.** A server is started over a roadmap whose graph holds
+    committed nodes and whose write-ahead log was folded by the previous server's
+    shutdown. With no client connected and no statement sent, the contents of
+    every file under `snapshot/` and of `wal` are compared before the server
+    starts and after at least two due instants of its cadence have passed, and
+    they are identical, as are the files' modification times. A server that folds
+    unconditionally rewrites the snapshot at the first due instant and fails this
+    criterion (see
+    [Durability and Checkpointing in a Long-Lived Process](#durability-and-checkpointing-in-a-long-lived-process),
+    rules 9 and 10).
+82. **A server that receives one write folds it while it runs, and the criterion
+    MUST assert it without stopping the server.** Against a running server, one
+    `rmp graph client -r <roadmap> --query "CREATE (s:Spec {key:'k'})"` is sent
+    and nothing else. After the next due instant of the cadence has passed, and
+    while the server is still running, `snapshot/` has been rewritten and the
+    write-ahead log no longer holds the frames of that write. A criterion that
+    stopped the server first would observe the shutdown checkpoint of rule 4 and
+    pass an implementation whose gate withheld every in-flight fold (see
+    [Durability and Checkpointing in a Long-Lived Process](#durability-and-checkpointing-in-a-long-lived-process),
+    rule 10).
+83. **A log tail left by a killed server is folded by the next server while it is
+    idle.** A server receives a write that it acknowledges, and is killed outright
+    before any fold covers it, so `wal` is not empty. A new server started over
+    that store replays the tail at open, receives no statement and no connection,
+    and, after its first due instant of the cadence has passed and while it is
+    still running, has rewritten `snapshot/` and emptied `wal`; a statement then
+    sent through `rmp graph client` still finds the acknowledged write. The
+    criterion MUST assert the fold while the second server is still running and
+    idle: a criterion that stopped it first would observe only the shutdown fold,
+    and one that sent a write first would observe a fold that write made owed, so
+    each would pass an implementation that took the log's length at open as
+    already folded (see
+    [Durability and Checkpointing in a Long-Lived Process](#durability-and-checkpointing-in-a-long-lived-process),
+    rule 4).
+84. **The next server removes staging residue and nothing else that carries the
+    prefix, and the criterion MUST assert both halves.** On a platform with POSIX
+    file modes, before `rmp graph serve` is started, the directory that holds the
+    socket is given: an empty directory named `.rmp-bind-` plus six random
+    characters, owned by the invoking user; a second such directory holding one
+    socket on which nothing listens, named `s`; a third holding a regular file;
+    a regular file whose name carries the prefix; and a symbolic link whose name
+    carries the prefix, pointing at a directory. The server starts, announces its
+    socket, and answers a statement. Afterwards the first two directories are
+    gone, and the other three entries are present, unchanged in name, type and
+    content. A criterion that asserted only the removals passes an implementation
+    that removes everything carrying the prefix, and one that asserted only the
+    survivors passes an implementation that removes nothing (see
+    [Socket Path and Permissions](#socket-path-and-permissions), rules 8 and 9,
+    and [Server Startup](#server-startup), step 4).
+85. **`graph serve` refuses a target whose transient bind path exceeds the bound,
+    before any bind, with the published length line.** On a platform with POSIX
+    file modes, `rmp graph serve --socket <path>` with a final component
+    `graph.sock` and a total length of `M` + 1 bytes, where `M` is the platform's
+    bound less 8, exits 1, writes the path-length line of
+    `COMMANDS.md § Graph Server Socket Error Lines` with `N` equal to that length
+    and `M` equal to the bound less 8, writes nothing to stdout, and leaves no
+    file and no directory at or beside the path. The same invocation with a path
+    of exactly `M` bytes starts and answers a statement. `rmp graph client
+    --socket` with the first path is not refused for its length, because the
+    target itself is inside the bound (see
+    [Socket Path Length](#socket-path-length), rule 9).
 
 
 ## See Also

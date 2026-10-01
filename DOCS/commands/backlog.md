@@ -2,7 +2,7 @@
 
 ## Description
 
-Inspect the tasks waiting in a roadmap's backlog. The `backlog` command groups the read-only planning views over tasks whose status is `BACKLOG`: `list` returns the full backlog (with optional filtering, sorting, and paging) and `show-next` returns the top-priority candidates to pull into the next sprint. Both subcommands require a target roadmap; there is no default or active roadmap, so `-r` / `--roadmap` must always be supplied.
+Inspect the tasks waiting in a roadmap's backlog. The `backlog` command groups the read-only planning views over tasks whose status is `BACKLOG`, which are exactly the tasks that belong to no sprint: `list` returns the full backlog (with optional filtering, sorting, and paging) and `show-next` returns the top-priority candidates to pull into the next sprint. Both subcommands require a target roadmap; there is no default or active roadmap, so `-r` / `--roadmap` must always be supplied.
 
 ## Synopsis
 
@@ -31,11 +31,23 @@ This subcommand takes no positional arguments.
 | Short Flag | Long Flag | Type | Default | Description |
 |------------|-----------|------|---------|-------------|
 | `-r` | `--roadmap` | string | - | **Required.** Target roadmap |
-| `-p` | `--priority` | integer | - | Keep only tasks with priority `>= <min>`. This is a lower-bound filter, **not** a validated `0-9` value: out-of-range numbers (negative, or above 9) are accepted and simply match accordingly |
+| `-p` | `--priority` | integer | - | Keep only tasks with priority `>= <min>`. The value must be an integer in 0-9: a non-integer value fails with exit code 2, and an integer outside 0-9 with exit code 6 |
 | `-y` | `--type` | string | - | Filter by task type. One of: `USER_STORY`, `TASK`, `BUG`, `SUB_TASK`, `EPIC`, `REFACTOR`, `CHORE`, `SPIKE`, `DESIGN_UX`, `IMPROVEMENT`. An invalid value fails with exit code 6 |
 | - | `--sort` | string | `priority` | Sort order. One of: `priority`, `created`, `status`, `severity` |
-| `-l` | `--limit` | integer | `100` | Maximum number of tasks returned (range 1-100). A non-integer value is rejected by the flag parser as misuse (exit code 2); an out-of-range value fails validation (exit code 6) |
+| `-l` | `--limit` | integer | `100` | Maximum number of tasks returned (range 1-100). A non-integer value is rejected as misuse (exit code 2); an out-of-range value fails validation (exit code 6) |
 | `-h` | `--help` | bool | false | Show command help |
+
+#### Errors
+
+Every condition below is checked before the roadmap database is opened.
+
+| Condition | Exit Code | stderr |
+|-----------|-----------|--------|
+| `-l, --limit` is not an integer | 2 | `Error: invalid input: invalid value for --limit: "X" is not an integer in 1-100` |
+| `-p, --priority` is not an integer | 2 | `Error: invalid input: invalid value for --priority: "X" is not an integer in 0-9` |
+| `--limit` is outside 1-100 | 6 | `Error: validation error: limit must be between 1 and 100, got N` |
+| `-p, --priority` is an integer outside 0-9 | 6 | `Error: validation error: priority must be between 0 and 9, got N` |
+| `--type` is not a valid task type | 6 | `Error: validation error: invalid task type: "X"` |
 
 #### Examples
 
@@ -101,10 +113,10 @@ There is no alias for `backlog show-next`.
 
 ## Notes
 
-- Both subcommands operate exclusively on tasks whose status is `BACKLOG`.
+- Both subcommands operate exclusively on tasks whose status is `BACKLOG`. A sprint member is never in `BACKLOG`, so every task they return belongs to no sprint; a task leaves the backlog only by joining a sprint (`sprint add-tasks`) and returns to it only by leaving one (`sprint remove-tasks` or `sprint remove`).
 - `-r` / `--roadmap` is mandatory on every subcommand. There is no default or active roadmap and no command to set one, so omitting `-r` is always an error (exit code 3).
 - `list` applies its `--limit` after filtering and sorting; `show-next` has its own positional `count` and takes no notice of `--limit`. The two are not interchangeable: `--limit` written **before** the count is read as the count itself, and refused with `count must be a positive integer` (exit code 6). It is ignored only when a valid count precedes it, as in `show-next 5 --limit 2`, which returns five.
-- `--priority` on `list` is a `>=` lower-bound filter and is not validated against the `0-9` range; the `0-9` validation that `task create`/`edit` apply does not apply here.
+- `--priority` on `list` is a `>=` lower-bound filter, and its value is validated against the `0-9` range exactly as `task create` validates it.
 
 ## Output Format
 
@@ -115,10 +127,10 @@ Both subcommands write a JSON array of task objects to stdout. Every returned ta
 | Exit Code | Meaning |
 |-----------|---------|
 | 0 | Success |
-| 2 | Misuse: non-integer `--limit` on `list` (rejected by the flag parser) |
+| 2 | Misuse: non-integer `--limit` or `--priority` on `list` |
 | 3 | No roadmap specified (`-r` / `--roadmap` missing) |
-| 4 | The named roadmap does not exist |
-| 6 | Validation error: bad `--type` or `--sort` value; out-of-range `--limit`; non-positive or non-numeric `count` on `show-next` |
+| 4 | The named roadmap does not exist, including a `~/.roadmaps/<name>` that is a regular file or a directory without `project.db` |
+| 6 | Validation error: bad `--type` or `--sort` value; out-of-range `--limit` or `--priority`; non-positive or non-numeric `count` on `show-next`; a `-r`/`--roadmap` name that breaks a roadmap name rule |
 | 127 | Unknown subcommand |
 
 ## See Also

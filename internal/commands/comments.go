@@ -35,11 +35,13 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 
 	"github.com/FlavioCFOliveira/Groadmap/internal/db"
 	"github.com/FlavioCFOliveira/Groadmap/internal/models"
+	"github.com/FlavioCFOliveira/Groadmap/internal/terminal"
 	"github.com/FlavioCFOliveira/Groadmap/internal/utils"
 )
 
@@ -143,14 +145,21 @@ func requireCommentPositionalID(args []string, field utils.RangedField) (int, []
 //
 // The inline forms `--body=<text>` and `-b=<text>` are accepted, matching the
 // GNU-style splitting the shared flag parser applies to every other flag. A
-// repeated flag follows the parser's rule too: the last occurrence wins, in full,
-// so a valueless earlier occurrence does not poison a later valid one.
-func extractCommentBody(args []string) ([]string, commentBody) {
+// repeated flag follows the parser's rule too: no flag is repeatable, so a
+// second occurrence, in any of the four spellings, is refused with exit code 2
+// before its value is read (SPEC/COMMANDS.md § Repeated Flags).
+func extractCommentBody(args []string) ([]string, commentBody, error) {
 	rest := make([]string, 0, len(args))
 	var body commentBody
 
 	for i := 0; i < len(args); i++ {
 		arg := args[i]
+
+		isBody := arg == commentBodyLong || arg == commentBodyShort ||
+			strings.HasPrefix(arg, commentBodyLong+"=") || strings.HasPrefix(arg, commentBodyShort+"=")
+		if isBody && body.present {
+			return nil, commentBody{}, utils.RepeatedFlagError(arg)
+		}
 
 		switch {
 		case arg == commentBodyLong || arg == commentBodyShort:
@@ -171,7 +180,7 @@ func extractCommentBody(args []string) ([]string, commentBody) {
 		}
 	}
 
-	return rest, body
+	return rest, body, nil
 }
 
 // resolveCommentBody decides the body text a comment subcommand was given. It
@@ -180,8 +189,8 @@ func extractCommentBody(args []string) ([]string, commentBody) {
 //
 // The flag wins over standard input (precedence rule 1). Standard input is read
 // only when the flag is absent AND stdinFallback is true — false on
-// `comment-edit` when `--type` is present, which is what stops a type-only edit
-// from blocking on a terminal (rule 2).
+// `comment-edit` when `--type` is present, where standard input is never the
+// body and rule 7 decides what happens to it instead (rule 2).
 //
 // A flag present but unusable — no value token, or a value that is empty or
 // whitespace only — is an error in both subcommands and never a silent fallback
@@ -249,6 +258,46 @@ func resolveCommentBody(body commentBody, stdinFallback bool) (string, bool, err
 // to exit code 1 exactly as the graph subcommands' stdin read does.
 func readCommentBodyStdin() (string, error) {
 	return models.ReadCommentBody(os.Stdin)
+}
+
+// errTypeOnlyEditStdinData is the refusal of a type-only `comment-edit` whose
+// standard input carries data: a caller that pipes a body into an edit that
+// also carries --type means to change both, and an edit that changed the type
+// alone and reported success would report an edit it did not make.
+func errTypeOnlyEditStdinData() error {
+	return fmt.Errorf("%w: standard input carries data, but it is not read when --type is given; supply the new body with --body",
+		utils.ErrInvalidInput)
+}
+
+// refuseTypeOnlyEditStdinData applies rule 7 of SPEC/COMMANDS.md § Comment Body
+// Input Source and Precedence to src, the standard input of a `comment-edit`
+// that carries --type and no --body:
+//
+//   - a terminal is not read at all, so the edit never waits for input typed at
+//     one, and it proceeds;
+//   - any other source is read only far enough to learn whether it carries
+//     anything: up to its first byte, or to its end if it has none. A source at
+//     its end before any byte arrives carries no data, and the edit proceeds;
+//   - a source that carries at least one byte, whitespace included, is refused
+//     with exit code 2, the byte read discarded and the rest never read;
+//   - a failure of the read itself is rule 6's I/O failure, exit code 1.
+func refuseTypeOnlyEditStdinData(src *os.File) error {
+	if terminal.IsTerminal(src) {
+		return nil
+	}
+	var probe [1]byte
+	for {
+		n, err := src.Read(probe[:])
+		if n > 0 {
+			return errTypeOnlyEditStdinData()
+		}
+		if err != nil {
+			if errors.Is(err, io.EOF) {
+				return nil
+			}
+			return fmt.Errorf("%w: reading the comment body from standard input: %v", utils.ErrIO, err)
+		}
+	}
 }
 
 // parseCommentArgs runs the shared flag parser over what is left of a comment
@@ -452,7 +501,10 @@ func commentAdd(f *commentFamily, args []string) error {
 	}
 
 	// Lexical only: the body is resolved at step 5, after the type verdict.
-	rest, body := extractCommentBody(rest)
+	rest, body, err := extractCommentBody(rest)
+	if err != nil {
+		return err
+	}
 
 	typeRaw, typePresent, err := parseCommentTypeFlag(rest)
 	if err != nil {
@@ -587,8 +639,10 @@ func commentList(f *commentFamily, args []string) error {
 // succeed as a no-op. A change is requested by a `--type` value, by a `--body`
 // value, or by a body arriving on standard input — which is why the flagless form
 // `comment-edit <comment-id> < revised.txt` is a valid edit and the decision is
-// made only after standard input has been resolved. Standard input is read ONLY
-// when `--type` is absent as well, so a type-only edit never waits for input.
+// made only after standard input has been resolved. Standard input is the new
+// body ONLY when `--type` is absent as well. On a type-only edit a terminal is
+// not read, so such an edit never waits for input typed at one, and a standard
+// input that carries data is refused rather than ignored (rule 7).
 //
 // The edit replaces the body in place and stamps updated_at; the previous text is
 // not retained anywhere. Produces no output on success.
@@ -603,7 +657,10 @@ func commentEdit(f *commentFamily, args []string) error {
 		return err
 	}
 
-	rest, body := extractCommentBody(rest)
+	rest, body, err := extractCommentBody(rest)
+	if err != nil {
+		return err
+	}
 
 	typeRaw, typePresent, err := parseCommentTypeFlag(rest)
 	if err != nil {
@@ -626,6 +683,14 @@ func commentEdit(f *commentFamily, args []string) error {
 	}
 	if !supplied && newType == nil {
 		return errNoCommentChange()
+	}
+	// A type-only edit never takes standard input as the body, and refuses a
+	// standard input that carries data rather than discard it
+	// (SPEC/COMMANDS.md § Comment Body Input Source and Precedence, rule 7).
+	if typePresent && !body.present {
+		if err := refuseTypeOnlyEditStdinData(os.Stdin); err != nil {
+			return err
+		}
 	}
 
 	database, err := db.OpenExisting(roadmapName)

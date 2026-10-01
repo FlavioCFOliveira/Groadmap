@@ -140,8 +140,7 @@ type graphPageView struct {
 func handleIndex(w http.ResponseWriter, r *http.Request) {
 	names, err := loadRoadmapNames()
 	if err != nil {
-		logServerError(r, "roadmap list read failed", err)
-		http.Error(w, "internal server error", http.StatusInternalServerError)
+		failServer(w, r, "roadmap list read failed", err)
 		return
 	}
 	renderHTML(w, r, "index.html", indexView{
@@ -176,8 +175,7 @@ func handleSprints(w http.ResponseWriter, r *http.Request) {
 
 	data, err := loadSprints(r.Context(), name)
 	if err != nil {
-		logServerError(r, "sprints page load failed", err, slog.String("roadmap", name))
-		http.Error(w, "internal server error", http.StatusInternalServerError)
+		failServer(w, r, "sprints page load failed", err, slog.String("roadmap", name))
 		return
 	}
 	data.Chrome = chrome{
@@ -220,8 +218,7 @@ func handleTasks(w http.ResponseWriter, r *http.Request) {
 	req := newTasksRequest(r)
 	data, err := loadTasks(r.Context(), name, &req)
 	if err != nil {
-		logServerError(r, "task list load failed", err, slog.String("roadmap", name))
-		http.Error(w, "internal server error", http.StatusInternalServerError)
+		failServer(w, r, "task list load failed", err, slog.String("roadmap", name))
 		return
 	}
 	data.Chrome = chrome{
@@ -272,9 +269,8 @@ func handleTask(w http.ResponseWriter, r *http.Request) {
 			http.NotFound(w, r)
 			return
 		}
-		logServerError(r, "task page load failed", err,
+		failServer(w, r, "task page load failed", err,
 			slog.String("roadmap", name), slog.Int("task", id))
-		http.Error(w, "internal server error", http.StatusInternalServerError)
 		return
 	}
 
@@ -329,9 +325,8 @@ func handleAudit(w http.ResponseWriter, r *http.Request) {
 
 	data, err := loadAudit(r.Context(), name, requestedPage)
 	if err != nil {
-		logServerError(r, "audit page load failed", err,
+		failServer(w, r, "audit page load failed", err,
 			slog.String("roadmap", name), slog.Int("page", requestedPage))
-		http.Error(w, "internal server error", http.StatusInternalServerError)
 		return
 	}
 	data.Chrome = chrome{
@@ -375,9 +370,8 @@ func handleSprint(w http.ResponseWriter, r *http.Request) {
 			http.NotFound(w, r)
 			return
 		}
-		logServerError(r, "sprint page load failed", err,
+		failServer(w, r, "sprint page load failed", err,
 			slog.String("roadmap", name), slog.Int("sprint", id))
-		http.Error(w, "internal server error", http.StatusInternalServerError)
 		return
 	}
 
@@ -436,8 +430,12 @@ func handleGraphPage(w http.ResponseWriter, r *http.Request) {
 // refused before any graph server is resolved (SPEC/WEB.md § Query-Bar Error
 // Handling, rule 12).
 //
-// # Three answers to a failure, and the two 5xx are deliberately not one
+// # Four answers to a failure, and the two 5xx are deliberately not one
 //
+//   - **A request its client abandoned is HTTP 499 at INFO**, decided before
+//     any of the three below and by the request's context alone, so a caller
+//     that left is never reported as a failed statement or a missing server
+//     (SPEC/WEB.md § Requests Abandoned by the Client).
 //   - **A classified query-bar failure is HTTP 400 at WARN.** It is a
 //     client-visible, non-fatal condition returned as a structured JSON error so
 //     the page can show the distinct in-place message. It is the caller's request
@@ -470,6 +468,15 @@ func handleGraphData(w http.ResponseWriter, r *http.Request) {
 
 	view, err := loadGraphView(r.Context(), name, r.URL.Query().Get("q"), r.URL.Query().Get("limit"))
 	if err != nil {
+		// Abandonment is decided first and by the request's context alone: a
+		// probe the cancellation stopped would otherwise read as a missing graph
+		// server (503), and a statement it cut as a lost connection (400
+		// execution). Neither is true of a caller that simply left
+		// (SPEC/WEB.md § Requests Abandoned by the Client, rules 1 and 4;
+		// § Query-Bar Error Handling, rule 8).
+		if answerIfAbandoned(w, r, err, slog.String("roadmap", name)) {
+			return
+		}
 		if qe, isQE := asGraphQueryError(err); isQE {
 			logClientWarn(r, "graph query bar request failed", http.StatusBadRequest, qe,
 				slog.String("roadmap", name), slog.String("kind", qe.Kind))
@@ -486,8 +493,7 @@ func handleGraphData(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "internal server error", http.StatusServiceUnavailable)
 			return
 		}
-		logServerError(r, "graph view load failed", err, slog.String("roadmap", name))
-		http.Error(w, "internal server error", http.StatusInternalServerError)
+		failServer(w, r, "graph view load failed", err, slog.String("roadmap", name))
 		return
 	}
 	renderJSON(w, r, view)
@@ -505,12 +511,13 @@ func renderHTML(w http.ResponseWriter, r *http.Request, name string, data any) {
 		// names its own subject: the template that would not execute
 		// (SPEC/WEB.md § What Is Logged). The handler that called us has
 		// nothing further to log on the way out.
-		logServerError(r, "page template execution failed", err, slog.String("template", name))
-		// A 500 sets no cookie, so a Set-Cookie the handler staged for the
-		// 200 it expected is withdrawn (SPEC/WEB.md § Roadmap Tasks Page,
-		// Filter persistence, Which responses set it).
+		//
+		// A 500 sets no cookie, and neither does the 499 of an abandoned
+		// request, so a Set-Cookie the handler staged for the 200 it expected
+		// is withdrawn before either is written (SPEC/WEB.md § Roadmap Tasks
+		// Page, Filter persistence, Which responses set it).
 		w.Header().Del("Set-Cookie")
-		http.Error(w, "internal server error", http.StatusInternalServerError)
+		failServer(w, r, "page template execution failed", err, slog.String("template", name))
 		return
 	}
 	w.Header().Set("Content-Type", contentTypeHTML)
@@ -547,8 +554,7 @@ func renderJSONStatus(w http.ResponseWriter, r *http.Request, status int, v any)
 		// caller intended is recorded alongside the 500 actually sent, because
 		// an encode failure on a 400 body and one on a 200 body are different
 		// defects (SPEC/WEB.md § What Is Logged).
-		logServerError(r, "response body encoding failed", err, slog.Int("intended_status", status))
-		http.Error(w, "internal server error", http.StatusInternalServerError)
+		failServer(w, r, "response body encoding failed", err, slog.Int("intended_status", status))
 		return
 	}
 	w.Header().Set("Content-Type", contentTypeJSON)

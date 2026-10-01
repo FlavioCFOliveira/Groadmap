@@ -81,6 +81,62 @@ func logClientWarn(r *http.Request, msg string, status int, err error, attrs ...
 	logRequest(slog.LevelWarn, r, msg, status, err, attrs...)
 }
 
+// statusClientClosedRequest is the status a request its client abandoned is
+// answered with: 499, "client closed request", the code nginx uses for the same
+// condition. It is not registered with IANA, and RFC 9110, Section 15, has a
+// recipient read an unrecognised status as the x00 of its class, so a client that
+// does read it reads a client-side 400. Every registered alternative asserts
+// something false about a request nobody failed: 500 that this server failed,
+// 503 that the graph is unavailable, 400 with kind execution that the statement
+// failed (SPEC/WEB.md § Requests Abandoned by the Client, rule 2).
+const statusClientClosedRequest = 499
+
+// answerIfAbandoned is the ONE point that decides whether a failure a handler or
+// a helper is about to answer 400, 500, or 503 belongs to a request its client
+// abandoned, and answers it when it does. It reports whether it answered.
+//
+// **The request's context decides, not the failure's text.** The server sets no
+// deadline on a request's context and does not cancel it at shutdown, so a done
+// context means the client went away. A failure the cancellation caused does not
+// always say so: a stopped probe reads like a graph server that could not be
+// reached, and a statement cut after it was sent reads like a lost connection
+// (SPEC/WEB.md § Requests Abandoned by the Client, rule 1).
+//
+// An abandoned request is answered 499 with no body — writing nothing would let
+// net/http complete the response as a 200 — and recorded by exactly one INFO
+// record carrying the caller's roadmap and subject attributes, the status written,
+// and the failure's text under err, with no kind: it is not a query-bar failure,
+// and nothing failed that an operator has to act on (rules 2 and 3). The
+// response keeps every header the route had already set.
+//
+// One race is accepted rather than closed: a failure unrelated to the
+// cancellation that the server happens to meet after the client left is recorded
+// here rather than at its own level. Its err still states it, and a condition
+// that persists is recorded at its own level by the next request that meets it
+// with its client connected (rule 7).
+func answerIfAbandoned(w http.ResponseWriter, r *http.Request, err error, attrs ...slog.Attr) bool {
+	if r.Context().Err() == nil {
+		return false
+	}
+	logRequest(slog.LevelInfo, r, "request abandoned by client", statusClientClosedRequest, err, attrs...)
+	w.WriteHeader(statusClientClosedRequest)
+	return true
+}
+
+// failServer answers a failure that is the server's own with the opaque HTTP 500
+// and records the one ERROR that accompanies it — unless the request's client
+// has already gone, in which case answerIfAbandoned answers and records it
+// instead. Every 500 of every route goes through here, so no route can answer an
+// abandoned request as a server failure (SPEC/WEB.md § Requests Abandoned by the
+// Client, rule 4).
+func failServer(w http.ResponseWriter, r *http.Request, msg string, err error, attrs ...slog.Attr) {
+	if answerIfAbandoned(w, r, err, attrs...) {
+		return
+	}
+	logServerError(r, msg, err, attrs...)
+	http.Error(w, "internal server error", http.StatusInternalServerError)
+}
+
 // logRequest emits one request-scoped record. The attribute order is the order
 // an operator reads the record in: which request (method, path), about what
 // (the caller's roadmap and subject attributes), what the client got (status),

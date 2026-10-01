@@ -49,10 +49,18 @@ func taskList(args []string) error {
 		}
 		filter.Status = &s
 	}
+	// The filters check the field's range as `task create` does, before the
+	// roadmap database is opened (SPEC/COMMANDS.md § List Tasks).
 	if p, ok := result.Flags["Priority"].(int); ok {
+		if err := models.ValidatePriority(p); err != nil {
+			return err
+		}
 		filter.MinPriority = &p
 	}
 	if s, ok := result.Flags["Severity"].(int); ok {
+		if err := models.ValidateSeverity(s); err != nil {
+			return err
+		}
 		filter.MinSeverity = &s
 	}
 	if l, ok := result.Flags["Limit"].(int); ok {

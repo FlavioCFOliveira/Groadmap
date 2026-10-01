@@ -340,7 +340,8 @@ class TestCompletionSummaryValidation:
 # ---------------------------------------------------------------------------
 
 class TestCompletionSummaryClearOnReopen:
-    """Acceptance criteria 7, 8, 9 — BACKLOG transition and task reopen clear the field."""
+    """Acceptance criteria 7, 8, 9 — task reopen clears the field; `task stat
+    BACKLOG`, refused for every sprint member, clears nothing."""
 
     def setup_method(self):
         self.test = GroadmapTestBase()
@@ -350,7 +351,9 @@ class TestCompletionSummaryClearOnReopen:
         self.test.teardown()
 
     def test_stat_backlog_clears_completion_summary(self):
-        """task stat BACKLOG (COMPLETED → BACKLOG) sets completion_summary to null."""
+        """task stat BACKLOG on a COMPLETED sprint member is refused and keeps the
+        completion_summary; the reopening is `task reopen`'s
+        (SPEC/STATE_MACHINE.md § Valid Transitions)."""
         roadmap = self.test.create_roadmap()
         task_id = _create_feature_task(self.test, roadmap)
         original_summary = "Integration tests passed in staging; approved for production rollout."
@@ -361,22 +364,20 @@ class TestCompletionSummaryClearOnReopen:
         task = _get_task(self.test, roadmap, task_id)
         assert task.get("completion_summary") == original_summary
 
-        # Reopen via task stat BACKLOG
-        self.test.run_cmd(["task", "stat", "-r", roadmap, str(task_id), "BACKLOG"])
+        # task stat BACKLOG is refused for a sprint member, and changes nothing.
+        code, _, err = self.test.run_cmd(["task", "stat", "-r", roadmap, str(task_id), "BACKLOG"], check=False)
+        assert code == 6, f"task stat BACKLOG on a COMPLETED member must exit 6, got {code}: {err!r}"
 
         task = _get_task(self.test, roadmap, task_id)
-        assert task.get("status") == "BACKLOG", (
-            f"Expected BACKLOG after reopen, got {task.get('status')}"
+        assert task.get("status") == "COMPLETED", (
+            f"Expected COMPLETED after the refusal, got {task.get('status')}"
         )
-        assert task.get("completion_summary") is None, (
-            f"completion_summary must be null after BACKLOG transition, got {task.get('completion_summary')!r}"
+        assert task.get("completion_summary") == original_summary, (
+            f"the refusal must keep completion_summary, got {task.get('completion_summary')!r}"
         )
-        # Lifecycle timestamps must also be cleared
-        assert task.get("started_at") is None, "started_at must be cleared on reopen"
-        assert task.get("tested_at") is None, "tested_at must be cleared on reopen"
-        assert task.get("closed_at") is None, "closed_at must be cleared on reopen"
+        assert task.get("closed_at") is not None, "the refusal must keep closed_at"
 
-        print("✓ task stat BACKLOG clears completion_summary and all lifecycle timestamps")
+        print("✓ task stat BACKLOG is refused for a COMPLETED member and keeps completion_summary")
 
     def test_task_reopen_clears_completion_summary(self):
         """task reopen clears completion_summary alongside lifecycle timestamps."""
@@ -394,8 +395,8 @@ class TestCompletionSummaryClearOnReopen:
         self.test.run_cmd(["task", "reopen", "-r", roadmap, str(task_id)])
 
         task = _get_task(self.test, roadmap, task_id)
-        assert task.get("status") == "BACKLOG", (
-            f"Expected BACKLOG after reopen, got {task.get('status')}"
+        assert task.get("status") == "SPRINT", (
+            f"Expected SPRINT after reopen, got {task.get('status')}"
         )
         assert task.get("completion_summary") is None, (
             f"completion_summary must be null after task reopen, got {task.get('completion_summary')!r}"
@@ -453,7 +454,7 @@ class TestCompletionSummaryClearOnReopen:
         print("✓ New completion_summary can be set after reopen (second cycle)")
 
     def test_bulk_reopen_clears_completion_summary_for_all(self):
-        """Bulk task stat BACKLOG clears completion_summary for every task."""
+        """Bulk task reopen clears completion_summary for every task."""
         roadmap = self.test.create_roadmap()
 
         task_ids = []
@@ -463,16 +464,16 @@ class TestCompletionSummaryClearOnReopen:
             task_ids.append(tid)
 
         bulk_arg = ",".join(str(i) for i in task_ids)
-        self.test.run_cmd(["task", "stat", "-r", roadmap, bulk_arg, "BACKLOG"])
+        self.test.run_cmd(["task", "reopen", "-r", roadmap, bulk_arg])
 
         for tid in task_ids:
             task = _get_task(self.test, roadmap, tid)
-            assert task.get("status") == "BACKLOG", f"Task {tid} not BACKLOG"
+            assert task.get("status") == "SPRINT", f"Task {tid} not SPRINT"
             assert task.get("completion_summary") is None, (
                 f"Task {tid} completion_summary not cleared: {task.get('completion_summary')!r}"
             )
 
-        print("✓ Bulk BACKLOG transition clears completion_summary for all tasks")
+        print("✓ Bulk reopen clears completion_summary for all tasks")
 
 
 # ---------------------------------------------------------------------------

@@ -141,15 +141,15 @@ func countRows(t *testing.T, database *db.DB, query string, args ...any) int {
 // through every transition `task stat` can perform and requires each one to add
 // exactly one entry carrying the operation of the state entered.
 //
-// The walk is one task rather than four, on purpose: the four entries land in
+// The walk is one task rather than three, on purpose: the three entries land in
 // one history, in order, so an implementation that wrote the right number of
 // entries with the wrong operations, or the right operations in the wrong
 // order, fails on the sequence rather than on a count.
 //
-// The fifth destination operation, TASK_STATUS_SPRINT, is not reachable from
-// this command at all and is asserted absent below: `task stat` rejects the
-// SPRINT target, and SPEC/DATABASE.md gives that operation the single writer
-// `sprint add-tasks`.
+// The other two destination operations are not reachable from this command at
+// all and are asserted absent below: `task stat` rejects the SPRINT target, and
+// refuses the BACKLOG target for every sprint member (SPEC/COMMANDS.md § Change
+// Status (stat)).
 func TestTaskStat_EveryTransitionWritesItsOwnDestinationOperation(t *testing.T) {
 	f := setupCommitTrackingRoadmap(t, "status-audit-destination")
 
@@ -157,28 +157,29 @@ func TestTaskStat_EveryTransitionWritesItsOwnDestinationOperation(t *testing.T) 
 	before := len(auditRecordsFor(t, f.database, id))
 
 	forbiddenBefore := map[models.AuditOperation]int{}
-	for _, op := range []models.AuditOperation{models.OpTaskStatusChange, models.OpTaskStatusSprint} {
+	forbidden := []models.AuditOperation{models.OpTaskStatusChange, models.OpTaskStatusSprint, models.OpTaskStatusBacklog}
+	for _, op := range forbidden {
 		forbiddenBefore[op] = countRows(t, f.database,
 			`SELECT COUNT(*) FROM audit WHERE operation = ?`, string(op))
 	}
 
-	// SPRINT → DOING → TESTING → COMPLETED → BACKLOG: every transition the
-	// state machine allows from a sprint member, in one pass.
+	// SPRINT → DOING → TESTING → COMPLETED: every transition `task stat`
+	// performs from a sprint member, in one pass. The BACKLOG target is then
+	// attempted and refused, and must add nothing.
 	f.stat(t, itoa(id), "DOING", "--commit-open", commitWorkStarted)
 	f.stat(t, itoa(id), "TESTING")
 	f.stat(t, itoa(id), "COMPLETED", "--commit-close", commitWorkConcluded)
-	f.stat(t, itoa(id), "BACKLOG")
+	_ = f.statErr(t, itoa(id), "BACKLOG")
 
 	want := []string{
 		string(models.OpTaskStatusDoing),
 		string(models.OpTaskStatusTesting),
 		string(models.OpTaskStatusCompleted),
-		string(models.OpTaskStatusBacklog),
 	}
 
 	records := auditRecordsFor(t, f.database, id)
 	if len(records) != before+len(want) {
-		t.Fatalf("the four transitions wrote %d entries, want %d; history: %v",
+		t.Fatalf("the three transitions wrote %d entries, want %d; history: %v",
 			len(records)-before, len(want), operationsOf(records))
 	}
 
@@ -191,41 +192,36 @@ func TestTaskStat_EveryTransitionWritesItsOwnDestinationOperation(t *testing.T) 
 		}
 	}
 
-	// Neither the retired operation nor the one this command cannot produce.
+	// Neither the retired operation nor the two this command cannot produce.
 	// The count is taken over the whole table rather than over this task's
 	// history, because a stray entry against any entity is the defect; the
 	// TASK_STATUS_SPRINT baseline is not zero, since the fixture's
 	// `sprint add-tasks` legitimately wrote one entry per seeded task, so what
-	// is asserted is that the four transitions added none.
-	for _, forbidden := range []models.AuditOperation{models.OpTaskStatusChange, models.OpTaskStatusSprint} {
+	// is asserted is that the transitions added none.
+	for _, forbidden := range forbidden {
 		if n := countRows(t, f.database,
 			`SELECT COUNT(*) FROM audit WHERE operation = ?`, string(forbidden)); n != forbiddenBefore[forbidden] {
-			t.Errorf("`task stat` wrote %d %s entries; it writes neither (SPEC/COMMANDS.md § Change "+
-				"Status (stat), acceptance criterion 4)", n-forbiddenBefore[forbidden], forbidden)
+			t.Errorf("`task stat` wrote %d %s entries; it writes none of these (SPEC/COMMANDS.md § Change "+
+				"Status (stat))", n-forbiddenBefore[forbidden], forbidden)
 		}
 	}
 }
 
 // TestTaskStat_EveryEntryNamesItsOwnTaskAndNoCounterpart pins the other two
 // columns of a `task stat` entry: it is recorded against the task itself, and it
-// names no second entity.
-//
-// The NULL is not an omission. `sprint remove-tasks` writes the very same
-// TASK_STATUS_BACKLOG operation and does name the sprint the task left, so a
-// reader has to be able to tell "this operation had no counterpart" from "it had
-// one and it went unrecorded" (SPEC/DATABASE.md § The Two Entities of a
-// Relational Operation, acceptance criterion 3).
+// names no second entity, because no sprint is party to a status change
+// (SPEC/DATABASE.md § The Two Entities of a Relational Operation).
 func TestTaskStat_EveryEntryNamesItsOwnTaskAndNoCounterpart(t *testing.T) {
 	f := setupCommitTrackingRoadmap(t, "status-audit-subject")
 
 	id := f.taskIDs[0]
 	before := len(auditRecordsFor(t, f.database, id))
 
-	f.stat(t, itoa(id), "BACKLOG")
+	f.stat(t, itoa(id), "DOING", "--commit-open", commitWorkStarted)
 
 	records := auditRecordsFor(t, f.database, id)
 	if len(records) != before+1 {
-		t.Fatalf("`task stat BACKLOG` wrote %d entries, want 1", len(records)-before)
+		t.Fatalf("`task stat DOING` wrote %d entries, want 1", len(records)-before)
 	}
 
 	entry := records[before]
@@ -542,8 +538,8 @@ func TestTaskReopen_LeavesEveryStoredEntryUntouched(t *testing.T) {
 		}
 	}
 
-	// It wrote TASK_REOPEN, and no TASK_STATUS_BACKLOG entry, even though the
-	// task ends in BACKLOG (SPEC/COMMANDS.md § Reopen Task, rule 1).
+	// It wrote TASK_REOPEN, and no TASK_STATUS_* entry, even though the task
+	// ends in SPRINT (SPEC/COMMANDS.md § Reopen Task, rule 1).
 	newest := after[len(after)-1]
 	if newest.operation != string(models.OpTaskReopen) {
 		t.Errorf("the reopening wrote %s, want %s", newest.operation, models.OpTaskReopen)
@@ -572,13 +568,8 @@ func TestTaskStat_RecompletingAddsASecondEntryRatherThanReplacingTheFirst(t *tes
 	run(t, func() error { return taskReopen([]string{"-r", f.roadmap, itoa(id)}) })
 
 	// A second cycle, concluded at a different commit. The reopening left the
-	// task in BACKLOG with its sprint membership intact, and BACKLOG's only
-	// valid target is SPRINT, which nothing but `sprint add-tasks` may set — so
-	// the membership is cycled to put the task back in a state it can be
-	// started from.
+	// task in SPRINT in its sprint, from where it can be started again.
 	const secondConclusion = "b7b8d7b"
-	run(t, func() error { return sprintRemoveTasks([]string{"-r", f.roadmap, itoa(f.sprintID), itoa(id)}) })
-	run(t, func() error { return sprintAddTasks([]string{"-r", f.roadmap, itoa(f.sprintID), itoa(id)}) })
 	f.stat(t, itoa(id), "DOING", "--commit-open", commitWorkResumed)
 	f.stat(t, itoa(id), "TESTING")
 	f.stat(t, itoa(id), "COMPLETED", "--commit-close", secondConclusion)

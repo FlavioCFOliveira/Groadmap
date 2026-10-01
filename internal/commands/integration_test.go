@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -149,7 +150,7 @@ func TestIntegration_TaskLifecycle(t *testing.T) {
 
 	// Step 2: Get task
 	output = captureOutput(t, func() {
-		err := HandleTask([]string{"get", "-r", testRoadmap, string(rune('0' + taskID))})
+		err := HandleTask([]string{"get", "-r", testRoadmap, strconv.Itoa(taskID)})
 		if err != nil {
 			t.Errorf("failed to get task: %v", err)
 		}
@@ -186,7 +187,7 @@ func TestIntegration_TaskLifecycle(t *testing.T) {
 	err = HandleTask([]string{
 		"edit",
 		"-r", testRoadmap,
-		string(rune('0' + taskID)),
+		strconv.Itoa(taskID),
 		"-t", "Updated integration test task",
 	})
 	if err != nil {
@@ -214,8 +215,8 @@ func TestIntegration_TaskLifecycle(t *testing.T) {
 	err = HandleSprint([]string{
 		"add-tasks",
 		"-r", testRoadmap,
-		string(rune('0' + sprintID)),
-		string(rune('0' + taskID)),
+		strconv.Itoa(sprintID),
+		strconv.Itoa(taskID),
 	})
 	if err != nil {
 		t.Errorf("failed to add task to sprint: %v", err)
@@ -225,21 +226,27 @@ func TestIntegration_TaskLifecycle(t *testing.T) {
 	err = HandleTask([]string{
 		"prio",
 		"-r", testRoadmap,
-		string(rune('0' + taskID)),
+		strconv.Itoa(taskID),
 		"8",
 	})
 	if err != nil {
 		t.Errorf("failed to set task priority: %v", err)
 	}
 
-	// Step 7: Reopen task back to BACKLOG so it can be removed
-	err = HandleTask([]string{"reopen", "-r", testRoadmap, string(rune('0' + taskID))})
+	// Step 7: Take the task out of its sprint, which returns it to BACKLOG so
+	// it can be removed (SPEC/STATE_MACHINE.md § Task Deletion Precondition).
+	err = HandleSprint([]string{
+		"remove-tasks",
+		"-r", testRoadmap,
+		strconv.Itoa(sprintID),
+		strconv.Itoa(taskID),
+	})
 	if err != nil {
-		t.Errorf("failed to reopen task: %v", err)
+		t.Errorf("failed to take the task out of its sprint: %v", err)
 	}
 
 	// Step 8: Remove task (only allowed from BACKLOG)
-	err = HandleTask([]string{"remove", "-r", testRoadmap, string(rune('0' + taskID))})
+	err = HandleTask([]string{"remove", "-r", testRoadmap, strconv.Itoa(taskID)})
 	if err != nil {
 		t.Errorf("failed to remove task: %v", err)
 	}
@@ -283,7 +290,7 @@ func TestIntegration_SprintLifecycle(t *testing.T) {
 
 	// Step 2: Get sprint
 	output = captureOutput(t, func() {
-		err := HandleSprint([]string{"get", "-r", testRoadmap, string(rune('0' + sprintID))})
+		err := HandleSprint([]string{"get", "-r", testRoadmap, strconv.Itoa(sprintID)})
 		if err != nil {
 			t.Errorf("failed to get sprint: %v", err)
 		}
@@ -316,19 +323,19 @@ func TestIntegration_SprintLifecycle(t *testing.T) {
 	}
 
 	// Step 4: Start sprint
-	err = HandleSprint([]string{"start", "-r", testRoadmap, string(rune('0' + sprintID))})
+	err = HandleSprint([]string{"start", "-r", testRoadmap, strconv.Itoa(sprintID)})
 	if err != nil {
 		t.Errorf("failed to start sprint: %v", err)
 	}
 
 	// Step 5: Close sprint
-	err = HandleSprint([]string{"close", "-r", testRoadmap, string(rune('0' + sprintID))})
+	err = HandleSprint([]string{"close", "-r", testRoadmap, strconv.Itoa(sprintID)})
 	if err != nil {
 		t.Errorf("failed to close sprint: %v", err)
 	}
 
 	// Step 6: Remove sprint
-	err = HandleSprint([]string{"remove", "-r", testRoadmap, string(rune('0' + sprintID))})
+	err = HandleSprint([]string{"remove", "-r", testRoadmap, strconv.Itoa(sprintID)})
 	if err != nil {
 		t.Errorf("failed to remove sprint: %v", err)
 	}

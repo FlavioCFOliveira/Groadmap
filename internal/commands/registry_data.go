@@ -27,7 +27,7 @@ func AppRegistry() *Registry {
 // new command family is one extra entry here plus the corresponding
 // build* function.
 func buildRegistry() *Registry {
-	return &Registry{
+	return withRepeatedFlagCondition(withRoadmapNameCondition(&Registry{
 		Globals: buildGlobalFlags(),
 		Commands: []Command{
 			buildRoadmapCommand(),
@@ -40,7 +40,7 @@ func buildRegistry() *Registry {
 			buildWebCommand(),
 			buildAIHelpCommand(),
 		},
-	}
+	}))
 }
 
 // buildGlobalFlags lists every flag the binary recognises at the top
@@ -118,7 +118,7 @@ func buildRoadmapCommand() Command {
 				Name:        "list",
 				Aliases:     []string{"ls"},
 				Summary:     "List all roadmaps.",
-				Description: "Lists every roadmap under ~/.roadmaps/. Each roadmap is the immediate subdirectory of ~/.roadmaps/ that contains a project.db database.",
+				Description: "Lists every roadmap under ~/.roadmaps/. Each roadmap is the immediate subdirectory of ~/.roadmaps/ whose name satisfies every roadmap name rule and that contains a project.db database; any other entry is skipped silently.",
 				Usage:       "rmp roadmap list",
 				HelpPrinter: printRoadmapListHelp,
 				Handler:     roadmapList,
@@ -168,12 +168,16 @@ func buildRoadmapCommand() Command {
 				},
 				ExitCodes: []ExitCodeEntry{
 					ec(0, "The roadmap home directory and its database were created, and the roadmap name was written to stdout."),
+					ec(1,
+						"~/.roadmaps/<name> is occupied by an entry that is neither a directory nor a symbolic link, such as a regular file.",
+						"~/.roadmaps/<name>/project.db is a symbolic link.",
+					),
 					ec(2,
 						condUnknownFlag,
 						"The roadmap name was omitted.",
 						"A second positional argument was supplied; this subcommand takes exactly one.",
 					),
-					ec(5, "A roadmap of that name already exists under ~/.roadmaps/."),
+					ec(5, "A roadmap of that name already exists under ~/.roadmaps/, including one a concurrent invocation of this subcommand created first."),
 					ec(6,
 						"The name carries a character outside ^[a-z0-9_-]+$.",
 						"The name is longer than 50 characters.",
@@ -213,6 +217,7 @@ func buildRoadmapCommand() Command {
 				},
 				ExitCodes: []ExitCodeEntry{
 					ec(0, "The roadmap home directory was removed recursively; stdout is empty."),
+					ec(1, "The roadmap's graph store lock could not be taken for a reason other than another process holding it; nothing is removed."),
 					ec(2,
 						condUnknownFlag,
 						"The roadmap name was omitted.",
@@ -223,6 +228,7 @@ func buildRoadmapCommand() Command {
 						"The name carries a character outside ^[a-z0-9_-]+$, or is longer than 50 characters.",
 						"The name is empty once trimmed, or begins with a hyphen.",
 						"The name is one of the reserved system names.",
+						"A graph server holds the roadmap's graph store lock; nothing is removed.",
 					),
 				},
 				Examples: []Example{
@@ -288,7 +294,7 @@ func buildBacklogCommand() Command {
 	return Command{
 		Name:          "backlog",
 		Aliases:       []string{"bl"},
-		Summary:       "Query BACKLOG-status tasks. Both subcommands filter on the status alone, so a BACKLOG task that is still a member of a sprint is listed too.",
+		Summary:       "Query BACKLOG-status tasks. Both subcommands filter on the status alone, and a BACKLOG task belongs to no sprint.",
 		Description:   "Dedicated commands for managing and querying tasks with status BACKLOG.",
 		HelpPrinter:   printBacklogHelp,
 		HasSubcommand: true,

@@ -501,7 +501,9 @@ func TestCanTransitionTo(t *testing.T) {
 		{"BACKLOG to COMPLETED", StatusBacklog, StatusCompleted, false},
 
 		// SPRINT transitions
-		{"SPRINT to BACKLOG", StatusSprint, StatusBacklog, true},
+		// No target is BACKLOG: a sprint member is never in BACKLOG, and a task
+		// returns to it only by leaving its sprint (SPEC/STATE_MACHINE.md).
+		{"SPRINT to BACKLOG", StatusSprint, StatusBacklog, false},
 		{"SPRINT to DOING", StatusSprint, StatusDoing, true},
 		{"SPRINT to TESTING", StatusSprint, StatusTesting, false},
 
@@ -517,7 +519,7 @@ func TestCanTransitionTo(t *testing.T) {
 		{"TESTING to BACKLOG", StatusTesting, StatusBacklog, false},
 
 		// COMPLETED transitions
-		{"COMPLETED to BACKLOG", StatusCompleted, StatusBacklog, true},
+		{"COMPLETED to BACKLOG", StatusCompleted, StatusBacklog, false},
 		{"COMPLETED to SPRINT", StatusCompleted, StatusSprint, false},
 		{"COMPLETED to DOING", StatusCompleted, StatusDoing, false},
 
@@ -676,9 +678,9 @@ func TestValidateStatusTransition(t *testing.T) {
 		{"SPRINT to DOING", "SPRINT", "DOING", false, ""},
 		{"DOING to TESTING", "DOING", "TESTING", false, ""},
 		{"TESTING to COMPLETED", "TESTING", "COMPLETED", false, ""},
-		{"COMPLETED to BACKLOG", "COMPLETED", "BACKLOG", false, ""},
 
 		// Invalid transitions
+		{"COMPLETED to BACKLOG (invalid)", "COMPLETED", "BACKLOG", true, "cannot transition"},
 		{"BACKLOG to DOING (invalid)", "BACKLOG", "DOING", true, "cannot transition"},
 		{"BACKLOG to COMPLETED (invalid)", "BACKLOG", "COMPLETED", true, "cannot transition"},
 		{"COMPLETED to SPRINT (invalid)", "COMPLETED", "SPRINT", true, "cannot transition"},
@@ -715,10 +717,10 @@ func TestGetValidTransitions(t *testing.T) {
 		expected []TaskStatus
 	}{
 		{"BACKLOG", StatusBacklog, []TaskStatus{StatusSprint}},
-		{"SPRINT", StatusSprint, []TaskStatus{StatusBacklog, StatusDoing}},
+		{"SPRINT", StatusSprint, []TaskStatus{StatusDoing}},
 		{"DOING", StatusDoing, []TaskStatus{StatusTesting}}, // finding #55: no DOING -> SPRINT
 		{"TESTING", StatusTesting, []TaskStatus{StatusDoing, StatusCompleted}},
-		{"COMPLETED", StatusCompleted, []TaskStatus{StatusBacklog}},
+		{"COMPLETED", StatusCompleted, []TaskStatus{}},
 		{"invalid status", TaskStatus("INVALID"), nil},
 	}
 

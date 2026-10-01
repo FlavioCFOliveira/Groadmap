@@ -36,6 +36,7 @@ package commands
 import (
 	"fmt"
 
+	"github.com/FlavioCFOliveira/Groadmap/internal/db"
 	"github.com/FlavioCFOliveira/Groadmap/internal/utils"
 )
 
@@ -344,7 +345,7 @@ func (c *Command) DispatchFamily(args []string) error {
 		if err := checkPositionalArity(&c.Subcommands[0], args); err != nil {
 			return err
 		}
-		return c.Subcommands[0].Handler(args)
+		return db.ClassifyDriverError(c.Subcommands[0].Handler(args))
 	}
 
 	if len(args) == 0 {
@@ -396,7 +397,11 @@ func (c *Command) DispatchFamily(args []string) error {
 		return err
 	}
 
-	return sub.Handler(args[1:])
+	// A failure of the SQLite driver that no layer classified is given its
+	// class here, on the one path every handler returns through
+	// (SPEC/ARCHITECTURE.md § Classification of Database Driver Failures,
+	// rule 3).
+	return db.ClassifyDriverError(sub.Handler(args[1:]))
 }
 
 // isHelpToken reports whether arg is one of the recognised help

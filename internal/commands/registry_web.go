@@ -52,14 +52,14 @@ func runWeb(args []string) error {
 func buildWebCommand() Command {
 	return Command{
 		Name:          "web",
-		Summary:       "Start a read-only web interface for the roadmaps under ~/.roadmaps/.",
-		Description:   "Starts a long-lived HTTP server embedded in the rmp binary that presents every roadmap under ~/.roadmaps/ as read-only HTML and an interactive knowledge-graph visualisation. It binds loopback 127.0.0.1 by default, so it is reachable only from the local machine; pass --host 0.0.0.0 to expose it on the network (which prints a network-exposure warning to stderr). It serves GET/HEAD only, prints the served URL, opens a browser unless --no-open is given, and runs until interrupted (Ctrl+C / SIGINT / SIGTERM). It does not take -r/--roadmap and never writes; the CLI remains the sole write path.",
+		Summary:       "Start a web interface for the roadmaps under ~/.roadmaps/.",
+		Description:   "Starts a long-lived HTTP server embedded in the rmp binary that presents every roadmap under ~/.roadmaps/ as server-rendered HTML and an interactive knowledge-graph visualisation. Every page is read-only and no roadmap database is written; the knowledge-graph query bar is the exception: it runs the Cypher typed, including statements that write or delete, with no authentication. It binds loopback 127.0.0.1 by default, so no other machine can connect to it; pass --host 0.0.0.0 to expose it on the network (which prints a network-exposure warning to stderr). It serves only requests that name a host the bind allows and that a browser did not make on behalf of another site (WEB.md § Security and Constraints, rules 13 and 14), answering any other with 403. It serves GET/HEAD only, prints the served URL, opens a browser unless --no-open is given, and runs until interrupted (Ctrl+C / SIGINT / SIGTERM). It does not take -r/--roadmap.",
 		HelpPrinter:   printWebHelp,
 		HasSubcommand: false,
 		Subcommands: []Subcommand{
 			{
 				Name:        "",
-				Summary:     "Start the read-only web interface.",
+				Summary:     "Start the web interface.",
 				Description: "Resolves the bind host/port (default 127.0.0.1:8787, with an ephemeral-port fallback when 8787 is busy and --port was not given), serves the read-only routes, prints the served URL as a JSON object, and runs until SIGINT/SIGTERM.",
 				Usage:       "rmp web [--host <address>] [--port <number>] [--no-open]",
 				HelpPrinter: printWebHelp,
@@ -70,7 +70,7 @@ func buildWebCommand() Command {
 				// enforcement point defers so that wording survives.
 				PublishesOwnArityRefusal: true,
 				Flags: []Flag{
-					{Long: "--host", Type: "string", Default: "127.0.0.1", Description: "Bind host. Default 127.0.0.1 (loopback only), reachable solely from the local machine. Use --host 0.0.0.0 to bind all interfaces and expose the read-only interface on the network (which prints a network-exposure warning to stderr)."},
+					{Long: "--host", Type: "string", Default: "127.0.0.1", Description: "Bind host. Default 127.0.0.1 (loopback only), so no other machine can connect to it. Use --host 0.0.0.0 to bind all interfaces and expose the interface on the network (which prints a network-exposure warning to stderr)."},
 					{Long: "--port", Type: "integer", HasRange: true, RangeMin: 0, RangeMax: 65535, Default: "8787", Description: "Bind port 0-65535. Default 8787; falls back to an ephemeral port if 8787 is in use and --port is not set."},
 					{Long: "--no-open", Type: "boolean", Description: "Do not launch a browser; just print the served URL."},
 					helpFlag(),

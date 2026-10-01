@@ -185,8 +185,8 @@ func sprintStats(args []string) error {
 //   - -r, --roadmap: Roadmap name (uses current if not specified)
 //
 // Preconditions:
-//   - Sprint must exist
-//   - Tasks must exist and be in BACKLOG status
+//   - Sprint must exist and not be CLOSED
+//   - Tasks must exist and none may be COMPLETED
 //
 // Error conditions:
 //   - Returns utils.ErrRequired if sprint ID or task IDs missing
@@ -200,9 +200,10 @@ func sprintStats(args []string) error {
 //   - Re-parents the membership row of a task that already belonged to another
 //     sprint, and compacts that sprint's remaining positions in the same
 //     transaction (SPEC/DATABASE.md § Position Density Within a Sprint)
-//   - Updates task status from BACKLOG to SPRINT
-//   - Logs TASK_ADDED_TO_SPRINT audit entries for each task
-//   - Outputs added task IDs as JSON to stdout
+//   - Updates task status from BACKLOG to SPRINT; a SPRINT, DOING or TESTING
+//     task keeps its status
+//   - Logs the audit entries SPEC/COMMANDS.md § Task Assignment publishes for
+//     each task
 //
 // Complexity: O(n) where n is the number of tasks being added
 //
@@ -264,36 +265,59 @@ func sprintAddTasks(args []string) error {
 	// Fail-fast: confirm every task exists before any mutation. Without this,
 	// the SQLite FOREIGN KEY constraint surfaces a generic DB error (exit 1)
 	// instead of the documented utils.ErrNotFound (exit 4).
-	existing, err := database.GetTaskStates(ctx, taskIDs)
+	existing, err := database.GetTaskSprintStates(ctx, taskIDs)
 	if err != nil {
 		return err
 	}
-	if err := utils.TasksNotFoundError(utils.MissingIDs(taskIDs, taskStateIDsOf(existing))); err != nil {
+	if err := utils.TasksNotFoundError(utils.MissingIDs(taskIDs, taskSprintStateIDsOf(existing))); err != nil {
 		return err
+	}
+	byID := taskSprintStatesByID(existing)
+
+	// Then none of them may be COMPLETED: a completed task stays in the sprint
+	// it was completed in, this one included (Validation Order, step 6).
+	for _, id := range taskIDs {
+		st := byID[id]
+		if st.Status != models.StatusCompleted {
+			continue
+		}
+		if st.SprintID != 0 {
+			return utils.CompletedTaskInSprintError(id, st.SprintID)
+		}
+		return utils.CompletedTaskWithoutSprintError(id)
 	}
 
 	// Friendly capacity pre-check when max_tasks is set. This is a fast
 	// feedback path only: the authoritative, race-free enforcement lives inside
 	// AddTasksToSprint's transaction (SPEC/DATABASE.md § Transactional Atomicity
 	// Guarantees #3, finding #67), which closes the TOCTOU window that this
-	// standalone read cannot. The error contract here matches the transactional
-	// one so the message is identical regardless of which check trips first.
+	// standalone read cannot. Both count the same thing — the distinct named
+	// tasks that are not already members of this sprint, each of which becomes
+	// active in it — and build the same line (SPEC/COMMANDS.md § Task
+	// Assignment). An addition that counts no task never raises the load and
+	// is never refused.
 	if sprint.MaxTasks != nil {
-		activeCount, activeErr := database.CountActiveSprintTasks(ctx, sprintID)
-		if activeErr != nil {
-			return fmt.Errorf("checking sprint capacity: %w", activeErr)
+		joining := 0
+		for _, id := range taskIDs {
+			if byID[id].SprintID != sprintID {
+				joining++
+			}
 		}
-		if activeCount+len(taskIDs) > *sprint.MaxTasks {
-			return fmt.Errorf("%w: adding %d task(s) would exceed sprint #%d capacity (%d/%d tasks active)",
-				utils.ErrValidation, len(taskIDs), sprintID, activeCount, *sprint.MaxTasks)
+		if joining > 0 {
+			activeCount, activeErr := database.CountActiveSprintTasks(ctx, sprintID)
+			if activeErr != nil {
+				return fmt.Errorf("checking sprint capacity: %w", activeErr)
+			}
+			if activeCount+joining > *sprint.MaxTasks {
+				return utils.SprintCapacityError(joining, sprintID, activeCount, *sprint.MaxTasks)
+			}
 		}
 	}
 
-	// AddTasksToSprint writes the membership change AND the mirrored pair of
-	// audit entries it produces — SPRINT_ADD_TASK against the sprint naming the
-	// task, TASK_STATUS_SPRINT against the task naming the sprint — inside one
-	// transaction, so the audit can never be lost after a committed insert
-	// (SPEC/DATABASE.md § Transactional Atomicity Guarantees #4).
+	// AddTasksToSprint writes the status and membership change AND every audit
+	// entry it owes inside one transaction, so the audit can never be lost
+	// after a committed insert (SPEC/DATABASE.md § Transactional Atomicity
+	// Guarantees #4).
 	return database.AddTasksToSprint(ctx, sprintID, taskIDs)
 }
 
@@ -366,6 +390,23 @@ func sprintRemoveTasks(args []string) error {
 		return err
 	}
 
+	// Then none of them may be COMPLETED: a completed task stays in the sprint
+	// it was completed in (Validation Order, step 8). Every named task is a
+	// member of this sprint by now, so the refusal names this sprint.
+	states, err := database.GetTaskStates(ctx, taskIDs)
+	if err != nil {
+		return err
+	}
+	status := make(map[int]models.TaskStatus, len(states))
+	for i := range states {
+		status[states[i].ID] = states[i].Status
+	}
+	for _, id := range taskIDs {
+		if status[id] == models.StatusCompleted {
+			return utils.CompletedTaskInSprintError(id, sprintID)
+		}
+	}
+
 	// Capture timestamp once for the entire operation
 	now := utils.NowISO8601()
 
@@ -384,13 +425,14 @@ func sprintRemoveTasks(args []string) error {
 
 			// Reset the task to BACKLOG, clearing ALL lifecycle timestamps, the
 			// completion summary and commit_close. A task may have progressed to
-			// DOING/TESTING/COMPLETED while in the sprint, so leaving those
-			// fields populated on a BACKLOG task violates the state machine's
-			// reopening invariant (SPEC/STATE_MACHINE.md Reopening Behavior;
-			// finding #49). For an unstarted SPRINT task these are already NULL,
-			// so the clear is a harmless no-op. commit_open is deliberately NOT
-			// cleared: a task detached from its sprint keeps the record of where
-			// its work started (SPEC/STATE_MACHINE.md § Commit Tracking Fields).
+			// DOING or TESTING while in the sprint (a COMPLETED one is refused
+			// above), so leaving those fields populated on a BACKLOG task
+			// violates the state machine's reopening invariant
+			// (SPEC/STATE_MACHINE.md Reopening Behavior; finding #49). For an
+			// unstarted SPRINT task these are already NULL, so the clear is a
+			// harmless no-op. commit_open is deliberately NOT cleared: a task
+			// detached from its sprint keeps the record of where its work
+			// started (SPEC/STATE_MACHINE.md § Commit Tracking Fields).
 			if _, err := tx.Exec(
 				`UPDATE tasks SET status = 'BACKLOG', started_at = NULL, tested_at = NULL,
 				        closed_at = NULL, completion_summary = NULL, commit_close = NULL WHERE id = ?`,
@@ -408,13 +450,9 @@ func sprintRemoveTasks(args []string) error {
 			// above, so every entry of this invocation shares a performed_at
 			// (SPEC/DATABASE.md § The Two Entities of a Relational Operation).
 			//
-			// The task entry is written for every task named on the command
-			// line, including one already in BACKLOG status while remaining a
-			// sprint member: the entry records the command's effect on the task,
-			// so the count is always exactly one per task (SPEC/COMMANDS.md §
-			// Task Assignment). The same operation written by
-			// `task stat <ids> BACKLOG` names no counterpart, because no sprint
-			// is party to that invocation.
+			// The task entry is written for every distinct task named on the
+			// command line, so the count is always exactly one per task
+			// (SPEC/COMMANDS.md § Task Assignment).
 			if err := audit.Log(models.OpSprintRemoveTask, models.EntitySprint, sprintID, now,
 				db.WithRelatedEntity(taskID)); err != nil {
 				return err
@@ -427,7 +465,13 @@ func sprintRemoveTasks(args []string) error {
 
 		// Compact the remaining positions to a contiguous 0..N-1 sequence so
 		// later sprint move-to operations order correctly (finding #50).
-		return db.CompactSprintPositionsTx(tx, sprintID)
+		if err := db.CompactSprintPositionsTx(tx, sprintID); err != nil {
+			return err
+		}
+
+		// The sprint membership guard checks the result before commit
+		// (SPEC/DATABASE.md § Sprint Membership Invariant Enforcement).
+		return db.CheckSprintMembershipTx(tx, taskIDs)
 	})
 }
 
@@ -531,13 +575,12 @@ func sprintMoveTasks(args []string) error {
 		return err
 	}
 	// Move (re-parent) the tasks from the source sprint to the destination,
-	// preserving each task's status. Unlike AddTasksToSprint, this neither
-	// forces status to SPRINT nor applies the destination's max-tasks cap;
-	// it also validates that every task is currently in the source sprint.
-	// MoveTasksBetweenSprints writes the re-parenting AND the two audit entries
-	// it produces — SPRINT_MOVE_TASK_OUT against the source sprint and
-	// SPRINT_MOVE_TASK_IN against the destination, both naming the task —
-	// inside one transaction, so the audit can never be lost after a committed
-	// move (SPEC/DATABASE.md § Transactional Atomicity Guarantees #5).
+	// preserving each task's status. Unlike AddTasksToSprint, this does not
+	// apply the destination's max-tasks cap; it validates that every task is
+	// currently in the source sprint and that none of them is COMPLETED.
+	// MoveTasksBetweenSprints writes the re-parenting AND the three audit
+	// entries per task it produces inside one transaction, so the audit can
+	// never be lost after a committed move (SPEC/DATABASE.md § Transactional
+	// Atomicity Guarantees #5).
 	return database.MoveTasksBetweenSprints(ctx, fromID, toID, taskIDs)
 }

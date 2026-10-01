@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/FlavioCFOliveira/Groadmap/internal/models"
 	"github.com/FlavioCFOliveira/Groadmap/internal/utils"
 )
 
@@ -153,14 +154,42 @@ func rejectUnknownFlags(args []string) error {
 
 // FlagDef defines a command-line flag.
 type FlagDef struct {
-	Validator   func(any) error // Optional validation function
-	Name        string          // Long name (e.g., "--description")
-	Short       string          // Short name (e.g., "-d")
-	Field       string          // Struct field name to populate
-	Type        string          // "string", "int", "bool"
-	Default     string          // Default value (as string)
-	DisplayName string          // Human-readable name for parse error messages (e.g., "entity ID")
-	Required    bool            // Whether the flag is required
+	Validator func(any) error // Optional validation function
+	// ParseString, when set, reads the flag's value in place of the parser of
+	// its Type and owns every refusal of it. `--entity-id` uses it so that the
+	// flag and the `<entity-id>` positional of `audit history` refuse the same
+	// value with the same line (SPEC/COMMANDS.md § Entity Identifier Range
+	// (All Positional Ids and --entity-id), rule 4).
+	ParseString func(string) (any, error)
+	Name        string // Long name (e.g., "--description")
+	Short       string // Short name (e.g., "-d")
+	Field       string // Struct field name to populate
+	Type        string // "string", "int", "bool"
+	Default     string // Default value (as string)
+	DisplayName string // Human-readable name for parse error messages (e.g., "entity ID")
+	// IntRange is, for an "int" flag with a published range, that range as the
+	// refusal of a value that is not an integer names it (e.g. "0-9"). It takes
+	// precedence over DisplayName, so the refusal never carries a parser's text
+	// (SPEC/COMMANDS.md § Create Task, "Every bounded integer flag is refused in
+	// the same shape").
+	IntRange string
+	Required bool // Whether the flag is required
+}
+
+// intRange renders a flag's published range as its not-an-integer refusal
+// names it: the two bounds joined by a hyphen.
+func intRange(minimum, maximum int) string {
+	return strconv.Itoa(minimum) + "-" + strconv.Itoa(maximum)
+}
+
+// errNotAnInteger words the refusal of a value written to a bounded integer
+// flag, or to a bounded integer positional argument, that cannot be read as an
+// integer — including one too large for the platform's integer type. subject
+// is "value for --priority" for a flag and "priority" for a positional
+// argument; the value is echoed inside the quotes as supplied, and the line
+// exits 2 (SPEC/COMMANDS.md § Create Task, § Change Priority (prio)).
+func errNotAnInteger(subject, value, rng string) error {
+	return fmt.Errorf("%w: invalid %s: %q is not an integer in %s", utils.ErrInvalidInput, subject, value, rng)
 }
 
 // ParseResult holds the result of flag parsing.
@@ -189,7 +218,8 @@ func (fp *FlagParser) Parse(args []string) (*ParseResult, error) {
 	}
 
 	// Initialize with defaults
-	for _, def := range fp.defs {
+	for i := range fp.defs {
+		def := &fp.defs[i]
 		if def.Default != "" {
 			val, err := fp.parseValue(def.Default, def.Type)
 			if err != nil {
@@ -197,6 +227,13 @@ func (fp *FlagParser) Parse(args []string) (*ParseResult, error) {
 			}
 			result.Flags[def.Field] = val
 		}
+	}
+
+	// No flag is repeatable, and no value of a repeated flag is validated
+	// (SPEC/COMMANDS.md § Repeated Flags): the repetition is found before any
+	// value is parsed.
+	if err := fp.refuseRepeats(args); err != nil {
+		return nil, err
 	}
 
 	// Parse arguments
@@ -268,9 +305,22 @@ func (fp *FlagParser) Parse(args []string) (*ParseResult, error) {
 			i++
 		}
 
+		// A flag that owns its parse refuses its own values.
+		if def.ParseString != nil {
+			parsed, err := def.ParseString(value)
+			if err != nil {
+				return nil, err
+			}
+			result.Flags[def.Field] = parsed
+			continue
+		}
+
 		// Parse and validate value
 		parsed, err := fp.parseValue(value, def.Type)
 		if err != nil {
+			if def.IntRange != "" {
+				return nil, errNotAnInteger("value for "+def.Name, value, def.IntRange)
+			}
 			if def.DisplayName != "" {
 				return nil, fmt.Errorf("%w: invalid %s: %s", utils.ErrInvalidInput, def.DisplayName, value)
 			}
@@ -288,7 +338,8 @@ func (fp *FlagParser) Parse(args []string) (*ParseResult, error) {
 	}
 
 	// Check required flags
-	for _, def := range fp.defs {
+	for i := range fp.defs {
+		def := &fp.defs[i]
 		if def.Required {
 			if _, ok := result.Flags[def.Field]; !ok {
 				return nil, fmt.Errorf("%w: missing required flag: %s", utils.ErrRequired, def.Name)
@@ -297,6 +348,51 @@ func (fp *FlagParser) Parse(args []string) (*ParseResult, error) {
 	}
 
 	return result, nil
+}
+
+// refuseRepeats reads args left to right exactly as Parse does — the selector
+// and every declared flag, skipping the token that is a flag's value — and
+// refuses the second occurrence of any flag, in any spelling, with the
+// repeated-flag line. It examines no value, so a repeated flag is refused
+// whatever its occurrences carry. It stops, refusing nothing, at the first
+// token Parse itself refuses — an unrecognised flag, or a value-taking flag
+// with no value — because that token is the one Parse reaches first, reading
+// left to right, and its own line is the one the invocation gets.
+func (fp *FlagParser) refuseRepeats(args []string) error {
+	var seen utils.FlagOccurrences
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		if arg == "-r" || arg == "--roadmap" {
+			if err := seen.Note(roadmapFlagLong, arg); err != nil {
+				return err
+			}
+			i++
+			continue
+		}
+		if !strings.HasPrefix(arg, "-") {
+			continue
+		}
+		flagName, _, hasInline := strings.Cut(arg, "=")
+		def := fp.findDef(flagName)
+		if def == nil {
+			return nil
+		}
+		if err := seen.Note(def.Name, arg); err != nil {
+			return err
+		}
+		if def.Type == "bool" || hasInline {
+			continue
+		}
+		if i+1 >= len(args) {
+			return nil
+		}
+		acceptNegInt := isNegativeInteger(args[i+1]) && (def.Type == "int" || def.Field == "Order")
+		if strings.HasPrefix(args[i+1], "-") && !acceptNegInt {
+			return nil
+		}
+		i++
+	}
+	return nil
 }
 
 // findDef finds a flag definition by name or short name.
@@ -388,8 +484,8 @@ var (
 		{Name: "--technical-requirements", Short: "-tr", Field: "TechnicalRequirements", Type: "string"},
 		{Name: "--acceptance-criteria", Short: "-ac", Field: "AcceptanceCriteria", Type: "string"},
 		{Name: "--type", Short: "-y", Field: "Type", Type: "string"},
-		{Name: "--priority", Short: "-p", Field: "Priority", Type: "int"},
-		{Name: "--severity", Field: "Severity", Type: "int"},
+		{Name: "--priority", Short: "-p", Field: "Priority", Type: "int", IntRange: intRange(models.MinPriority, models.MaxPriority)},
+		{Name: "--severity", Field: "Severity", Type: "int", IntRange: intRange(models.MinSeverity, models.MaxSeverity)},
 		{Name: "--parent", Field: "ParentID", Type: "int", DisplayName: "parent task ID"},
 	}
 
@@ -400,16 +496,16 @@ var (
 		{Name: "--technical-requirements", Short: "-tr", Field: "TechnicalRequirements", Type: "string"},
 		{Name: "--acceptance-criteria", Short: "-ac", Field: "AcceptanceCriteria", Type: "string"},
 		{Name: "--type", Short: "-y", Field: "Type", Type: "string"},
-		{Name: "--priority", Short: "-p", Field: "Priority", Type: "int"},
-		{Name: "--severity", Field: "Severity", Type: "int"},
+		{Name: "--priority", Short: "-p", Field: "Priority", Type: "int", IntRange: intRange(models.MinPriority, models.MaxPriority)},
+		{Name: "--severity", Field: "Severity", Type: "int", IntRange: intRange(models.MinSeverity, models.MaxSeverity)},
 	}
 
 	// TaskListFlags defines flags for task listing.
 	TaskListFlags = []FlagDef{
 		{Name: "--status", Short: "-s", Field: "Status", Type: "string"},
-		{Name: "--priority", Short: "-p", Field: "Priority", Type: "int"},
-		{Name: "--severity", Field: "Severity", Type: "int"},
-		{Name: "--limit", Short: "-l", Field: "Limit", Type: "int"},
+		{Name: "--priority", Short: "-p", Field: "Priority", Type: "int", IntRange: intRange(models.MinPriority, models.MaxPriority)},
+		{Name: "--severity", Field: "Severity", Type: "int", IntRange: intRange(models.MinSeverity, models.MaxSeverity)},
+		{Name: "--limit", Short: "-l", Field: "Limit", Type: "int", IntRange: intRange(models.MinListLimit, models.MaxTaskLimit)},
 		{Name: "--type", Short: "-y", Field: "Type", Type: "string"},
 		{Name: "--created-since", Field: "CreatedSince", Type: "string"},
 		{Name: "--created-until", Field: "CreatedUntil", Type: "string"},
@@ -420,7 +516,7 @@ var (
 	SprintCreateFlags = []FlagDef{
 		{Name: "--title", Short: "-t", Field: "Title", Type: "string"},
 		{Name: "--description", Short: "-d", Field: "Description", Type: "string"},
-		{Name: "--max-tasks", Field: "MaxTasks", Type: "int"},
+		{Name: "--max-tasks", Field: "MaxTasks", Type: "int", IntRange: intRange(models.MinSprintMaxTasks, models.MaxSprintMaxTasks)},
 		// --order is parsed as a string so the handler can enforce the
 		// non-integer / non-positive cases as exit code 6 (ErrValidation) with the
 		// SPEC-mandated messages, rather than the generic int-parse exit code 2.
@@ -442,10 +538,10 @@ var (
 	AuditListFlags = []FlagDef{
 		{Name: "--operation", Short: "-o", Field: "Operation", Type: "string"},
 		{Name: "--entity-type", Short: "-e", Field: "EntityType", Type: "string"},
-		{Name: "--entity-id", Field: "EntityID", Type: "int", DisplayName: "entity ID", Validator: validateAuditEntityID},
+		{Name: "--entity-id", Field: "EntityID", Type: "int", ParseString: parseAuditEntityID},
 		{Name: "--since", Field: "Since", Type: "string"},
 		{Name: "--until", Field: "Until", Type: "string"},
-		{Name: "--limit", Short: "-l", Field: "Limit", Type: "int", DisplayName: "limit"},
+		{Name: "--limit", Short: "-l", Field: "Limit", Type: "int", IntRange: intRange(models.MinListLimit, models.MaxAuditLimit)},
 	}
 
 	// AuditStatsFlags defines flags for audit statistics.
@@ -470,23 +566,20 @@ func isNegativeInteger(s string) bool {
 	return true
 }
 
-// validateAuditEntityID bounds the audit --entity-id flag to the range every
-// entity id must lie in (SPEC/COMMANDS.md § List Audit Log). An out-of-range
-// value is rejected with exit code 6 (ErrValidation).
-//
-// It performs no comparison and words no message of its own. This flag and the
-// second positional of `audit history` address the identical field — the SPEC
-// defines the second command as the first with this filter applied — so they now
-// reach one implementation and print one sentence. They did not: this site
-// compared the bounds itself and announced the verdict as
-// `--entity-id must be between 1 and 2147483647 (got 0)`, naming the FLAG rather
-// than the field and parenthesising the offending value, while the positional
-// announced the same verdict as `invalid entity ID: 0 (must be positive)`
-// (rmp task 330).
-func validateAuditEntityID(parsed any) error {
-	id, ok := parsed.(int)
-	if !ok {
-		return nil
+// parseAuditEntityID reads the audit --entity-id flag. The flag and the second
+// positional of `audit history` address the identical field — the SPEC defines
+// the second command as the first with this filter applied — so both reach
+// utils.ValidateIDString and refuse one value with one line: a token that is
+// not an integer with the format line, `invalid entity ID: "X" (must be a
+// positive integer)`, exit code 2, and an integer outside 1-2147483647 with the
+// range line, exit code 6 (SPEC/COMMANDS.md § Entity Identifier Range (All
+// Positional Ids and --entity-id), rule 4; § List Audit Log). The flag used to
+// carry a display name of its own and printed the format verdict as
+// `invalid entity ID: X`, unquoted and without the suffix.
+func parseAuditEntityID(value string) (any, error) {
+	id, err := utils.ValidateIDString(value, utils.FieldEntityID)
+	if err != nil {
+		return nil, err
 	}
-	return utils.ValidateID(id, utils.FieldEntityID)
+	return id, nil
 }

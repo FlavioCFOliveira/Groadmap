@@ -478,7 +478,7 @@ func TestTasksFilterState_VaryAndNoCache(t *testing.T) {
 		}
 	}
 
-	server := httptest.NewServer(srv)
+	server := liveServer(t)
 	defer server.Close()
 	client := server.Client()
 	type served struct {

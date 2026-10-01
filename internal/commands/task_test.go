@@ -162,10 +162,12 @@ func TestTaskList_InvalidPriority(t *testing.T) {
 	_, cleanup := setupTestTaskRoadmap(t, testName)
 	defer cleanup()
 
+	// The published line of SPEC/COMMANDS.md § List Tasks, exit code 2: the flag
+	// in its long spelling whichever spelling was written, the value echoed, the
+	// range, and never the text of the routine that failed to read it.
 	err := HandleTask([]string{"list", "-r", testName, "-p", "notanumber"})
-	if err == nil {
-		t.Error("taskList with invalid priority expected error, got nil")
-	}
+	assertPublishedRefusal(t, "task list -p notanumber", err, utils.ErrInvalidInput, 2,
+		`invalid input: invalid value for --priority: "notanumber" is not an integer in 0-9`)
 }
 
 // ==================== taskCreate Tests ====================
@@ -240,9 +242,8 @@ func TestTaskCreate_InvalidPriority(t *testing.T) {
 	defer cleanup()
 
 	err := HandleTask([]string{"create", "-r", testName, "-t", "title", "-fr", "functional", "-tr", "technical", "-ac", "criteria", "-p", "invalid"})
-	if err == nil {
-		t.Error("taskCreate with invalid priority expected error, got nil")
-	}
+	assertPublishedRefusal(t, "task create -p invalid", err, utils.ErrInvalidInput, 2,
+		`invalid input: invalid value for --priority: "invalid" is not an integer in 0-9`)
 }
 
 func TestTaskCreate_InvalidSeverity(t *testing.T) {
@@ -251,9 +252,8 @@ func TestTaskCreate_InvalidSeverity(t *testing.T) {
 	defer cleanup()
 
 	err := HandleTask([]string{"create", "-r", testName, "-t", "title", "-fr", "functional", "-tr", "technical", "-ac", "criteria", "--severity", "invalid"})
-	if err == nil {
-		t.Error("taskCreate with invalid severity expected error, got nil")
-	}
+	assertPublishedRefusal(t, "task create --severity invalid", err, utils.ErrInvalidInput, 2,
+		`invalid input: invalid value for --severity: "invalid" is not an integer in 0-9`)
 }
 
 func TestTaskCreate_Success(t *testing.T) {
@@ -561,7 +561,7 @@ func TestTaskEdit_InvalidPriority(t *testing.T) {
 
 	err := HandleTask([]string{"edit", "-r", testName, "1", "-p", "invalid"})
 	assertPublishedRefusal(t, "task edit -p invalid", err, utils.ErrInvalidInput, 2,
-		`invalid input: invalid value for --priority: strconv.Atoi: parsing "invalid": invalid syntax`)
+		`invalid input: invalid value for --priority: "invalid" is not an integer in 0-9`)
 }
 
 // TestTaskEdit_OutOfRangePriority is a regression gate for finding #46: an
@@ -783,10 +783,11 @@ func TestTaskSetPriority_InvalidPriority(t *testing.T) {
 	_, cleanup := setupTestTaskRoadmap(t, testName)
 	defer cleanup()
 
+	// A <priority> that is not an integer is misuse, exit code 2, with the line
+	// SPEC/COMMANDS.md § Change Priority (prio) publishes.
 	err := HandleTask([]string{"prio", "-r", testName, "1", "invalid"})
-	if err == nil {
-		t.Error("taskSetPriority with invalid priority expected error, got nil")
-	}
+	assertPublishedRefusal(t, "task prio 1 invalid", err, utils.ErrInvalidInput, 2,
+		`invalid input: invalid priority: "invalid" is not an integer in 0-9`)
 }
 
 func TestTaskSetPriority_OutOfRange(t *testing.T) {
@@ -830,9 +831,8 @@ func TestTaskSetSeverity_InvalidSeverity(t *testing.T) {
 	defer cleanup()
 
 	err := HandleTask([]string{"sev", "-r", testName, "1", "invalid"})
-	if err == nil {
-		t.Error("taskSetSeverity with invalid severity expected error, got nil")
-	}
+	assertPublishedRefusal(t, "task sev 1 invalid", err, utils.ErrInvalidInput, 2,
+		`invalid input: invalid severity: "invalid" is not an integer in 0-9`)
 }
 
 func TestTaskSetSeverity_OutOfRange(t *testing.T) {

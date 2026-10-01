@@ -343,11 +343,17 @@ class GroadmapTestBase:
         env = os.environ.copy()
         env["HOME"] = str(self.home_dir)
 
+        # Standard input is empty, never the runner's own: a type-only
+        # `comment-edit` reads a non-terminal standard input to learn whether it
+        # carries data (SPEC/COMMANDS.md § Comment Body Input Source and
+        # Precedence, rule 7), so an inherited one would make the outcome depend
+        # on the environment running the suite.
         result = subprocess.run(
             [self.cli_path] + args,
             capture_output=True,
             text=True,
-            env=env
+            env=env,
+            stdin=subprocess.DEVNULL,
         )
 
         if check and result.returncode != 0:

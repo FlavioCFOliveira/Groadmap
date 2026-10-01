@@ -326,11 +326,10 @@ class Workspace:
             cls._rmp(["task", "stat", "-r", r, task, "DOING", "--commit-open", OPEN_HASH], home)
             cls._rmp(["task", "stat", "-r", r, task, "TESTING"], home)
 
-        # Task 7 back to BACKLOG so `task remove 7` succeeds as published. The
-        # BACKLOG transition keeps the sprint_tasks row, so 7 stays a member of
-        # sprint 5 for the ordering examples (SPEC/STATE_MACHINE.md § Sprint
-        # Membership and the BACKLOG Status).
-        cls._rmp(["task", "stat", "-r", r, "7", "BACKLOG"], home)
+        # Task 7 stays a SPRINT member of sprint 5 for the ordering examples. A
+        # sprint member is never in BACKLOG (SPEC/STATE_MACHINE.md § Sprint
+        # Membership and the BACKLOG Status), so `task remove 7` is prepared on
+        # its own copy by taking 7 out of the sprint (EXAMPLE_PREPARATIONS).
 
         # Sprint 3 CLOSED: `sprint add-tasks 3 42,43` publishes the CLOSED
         # refusal. Closing it leaves no sprint OPEN, which is what the
@@ -591,6 +590,14 @@ def start_server(line, home, key, timeout=SERVER_START_TIMEOUT):
     Complete lines are accumulated and parsed as they arrive; `buffered` also
     carries the unterminated tail, so a failed start reports everything it read.
 
+    Stderr is drained in the same select() loop while the wait lasts. Left
+    unread, a process that writes more than the pipe's capacity to stderr
+    before its startup line blocks on that write and never announces itself,
+    and the start fails on its timeout for a reason that is the gate's, not the
+    process's (rmp task 483). What was read is kept, decoded, on the returned
+    process as `startup_stderr`, so a caller's diagnostics can report it; the
+    remainder is collected by stop_server() as before.
+
     A process that does not announce itself -- or that is still being read when
     an exception arrives -- is stopped here, before returning, so a caller's
     assertion on the startup line cannot leave it running.
@@ -598,9 +605,12 @@ def start_server(line, home, key, timeout=SERVER_START_TIMEOUT):
     env = _env_for(home)
     proc = _spawn(line, home, env, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     fd = proc.stdout.fileno()
+    err_fd = proc.stderr.fileno()
+    open_fds = [fd, err_fd]  # the descriptors not yet at end of file
     deadline = time.monotonic() + timeout
     complete = ""  # every newline-terminated line read so far, decoded
     pending = b""  # the bytes read after the last newline
+    err_read = b""  # every byte read from stderr so far
     started = None
     try:
         while started is None:
@@ -609,15 +619,25 @@ def start_server(line, home, key, timeout=SERVER_START_TIMEOUT):
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 break
+            if not open_fds:
+                # Both streams are at end of file with the process still
+                # alive: nothing more can arrive, and the deadline still
+                # bounds the wait for its exit.
+                time.sleep(0.02)
+                continue
             # A short slice, so an exit is noticed while nothing is written.
-            readable, _, _ = select.select([fd], [], [], min(remaining, 0.05))
-            if not readable:
+            readable, _, _ = select.select(open_fds, [], [], min(remaining, 0.05))
+            if err_fd in readable:
+                chunk = os.read(err_fd, 65536)
+                if chunk:
+                    err_read += chunk
+                else:
+                    open_fds.remove(err_fd)
+            if fd not in readable:
                 continue
             chunk = os.read(fd, 65536)
             if not chunk:
-                # End of file with the process still alive: nothing more can
-                # arrive, and the deadline still bounds the wait for its exit.
-                time.sleep(0.02)
+                open_fds.remove(fd)
                 continue
             pending += chunk
             while started is None and b"\n" in pending:
@@ -631,6 +651,7 @@ def start_server(line, home, key, timeout=SERVER_START_TIMEOUT):
                     started = obj
     finally:
         buffered = complete + pending.decode("utf-8", errors="replace")
+        proc.startup_stderr = err_read.decode("utf-8", errors="replace")
         if started is None:
             stop_server(proc)
     return started, buffered, proc
@@ -806,6 +827,9 @@ EXAMPLE_PREPARATIONS = {
     },
     ("task stat", "Complete with summary"): {
         "rmp": [["sprint", "add-tasks", "-r", FIXTURE_ROADMAP, "5", "7"]] + _to_testing("7"),
+    },
+    ("task remove", "Remove one task"): {
+        "rmp": [["sprint", "remove-tasks", "-r", FIXTURE_ROADMAP, "5", "7"]],
     },
     ("task remove-dep", "Remove dep"): {
         "rmp": [["task", "add-dep", "-r", FIXTURE_ROADMAP, "10", "7"]],
@@ -1187,6 +1211,44 @@ class TestPublishedExamplesAreExecuted:
                 f"the failed start left its process group running or registered: "
                 f"survivors={leftover!r}, registered={proc.pid in _LIVE_GROUPS}")
         finally:
+            shutil.rmtree(home, ignore_errors=True)
+
+    def test_a_server_that_fills_stderr_first_still_starts(self):
+        """rmp task 483: start_server drains stderr while it waits.
+
+        The process writes 128 KiB to stderr -- twice the default Linux pipe
+        capacity -- and only then prints its startup line. With stderr left
+        undrained the write blocks once the pipe is full, the startup line is
+        never written, and the start fails on its timeout. Draining stderr in
+        the same select() loop that reads stdout lets the write complete, so
+        the start must succeed, and every byte read from stderr must be kept
+        for diagnostics.
+
+        The outcome is read off `started`, not off a clock (SPEC/BUILD.md "No
+        Benchmarks and No Performance-Measurement Tests"): a blocked writer
+        never prints the line at all, so the start either sees it or does not.
+        """
+        size = 128 * 1024
+        home = Workspace.fresh()
+        proc = None
+        try:
+            started, buffered, proc = start_server(
+                f"head -c {size} /dev/zero | tr '\\0' e >&2; "
+                "printf '{\"socket\": \"/tmp/drain.sock\"}\\n'; sleep 30",
+                home, "socket", timeout=5.0)
+            stderr_read = proc.startup_stderr
+            assert started == {"socket": "/tmp/drain.sock"}, (
+                f"a process that wrote {size} bytes to stderr before its startup "
+                f"line was not seen to start: started={started!r}, stdout read "
+                f"{buffered[:200]!r}, stderr read {len(stderr_read)} bytes. A "
+                f"writer blocked on a full stderr pipe never reaches the line "
+                f"(rmp task 483)")
+            assert stderr_read == "e" * size, (
+                f"the start did not keep the stderr it read: {len(stderr_read)} "
+                f"bytes kept, {size} written")
+        finally:
+            if proc is not None:
+                stop_server(proc)
             shutil.rmtree(home, ignore_errors=True)
 
     def test_a_backgrounded_server_is_seen_and_stopped(self):
@@ -1610,6 +1672,7 @@ PROBE_STATES = {
     "task next": [["sprint", "start", "-r", FIXTURE_ROADMAP, "5"]],
     "task stat": [],
     "task remove-dep": [["task", "add-dep", "-r", FIXTURE_ROADMAP, "4", "5"]],
+    "task remove": [["sprint", "remove-tasks", "-r", FIXTURE_ROADMAP, "5", "7"]],
     "sprint close": [["sprint", "start", "-r", FIXTURE_ROADMAP, "1"]],
     "sprint reopen": [
         ["sprint", "start", "-r", FIXTURE_ROADMAP, "1"],
@@ -1700,6 +1763,43 @@ def _driver_graph_client_oversized(home):
         return proc2.returncode
     finally:
         stop_server(proc)
+
+
+def _driver_occupied_roadmap_home(home):
+    """Exit 1 of `roadmap create`: ~/.roadmaps/<name> is a regular file, an
+    entry that is neither a directory nor a symbolic link (SPEC/COMMANDS.md
+    § Create Roadmap). The planted file must survive the refusal untouched."""
+    name = "field-ops"
+    roadmaps = os.path.join(home, ".roadmaps")
+    os.makedirs(roadmaps, mode=0o700, exist_ok=True)
+    planted = os.path.join(roadmaps, name)
+    with open(planted, "wb") as fh:
+        fh.write(b"quarterly field operations notes")
+    code, out, err = Workspace._rmp(["roadmap", "create", name], home, check=False)
+    want = (f'Error: I/O error: cannot create roadmap "{name}": {planted} '
+            f"is occupied and is not a directory")
+    assert first_line(err) == want, f"stderr {first_line(err)!r}; want {want!r}"
+    assert out == "", f"stdout {out[:80]!r}; want nothing"
+    assert os.path.isfile(planted), "the refusal removed or replaced the planted file"
+    with open(planted, "rb") as fh:
+        assert fh.read() == b"quarterly field operations notes", "the planted file was changed"
+    return code
+
+
+def _driver_unopenable_graph_lock(home):
+    """Exit 1 of `roadmap remove`: the roadmap's graph store lock cannot be
+    taken for a reason other than another process holding it -- a directory
+    stands where graph/write.lock belongs -- so the removal fails with a graph
+    store error and removes nothing (SPEC/COMMANDS.md § Remove Roadmap, rule 4)."""
+    name = "field-graph"
+    Workspace._rmp(["roadmap", "create", name], home)
+    roadmap_home = os.path.join(home, ".roadmaps", name)
+    os.makedirs(os.path.join(roadmap_home, "graph", "write.lock"), mode=0o700)
+    code, out, err = Workspace._rmp(["roadmap", "remove", name], home, check=False)
+    assert first_line(err).startswith("Error: graph store error: "), f"stderr {first_line(err)!r}"
+    assert out == "", f"stdout {out[:80]!r}; want nothing"
+    assert os.path.isfile(os.path.join(roadmap_home, "project.db")), "the failed removal deleted project.db"
+    return code
 
 
 RESIDUE_DRIVERS = {
@@ -1805,10 +1905,19 @@ RESIDUE_DRIVERS = {
         ["backlog", "show-next", "-r", FIXTURE_ROADMAP, "5", "surplus"]),
     ("audit history", 2): _driver_plain(["audit", "history", "-r", FIXTURE_ROADMAP]),
     ("stats", 2): _driver_plain(["stats", "-r", FIXTURE_ROADMAP, "--zzz-unknown"]),
+    # The one cause of exit 6 on these four subcommands: a roadmap name that
+    # breaks a rule of SPEC/COMMANDS.md § Roadmap Name Validation, judged where
+    # the roadmap is resolved (rmp task 493).
+    ("stats", 6): _driver_plain(["stats", "-r", "con"]),
+    ("graph serve", 6): _driver_plain(["graph", "serve", "-r", "con"]),
+    ("task comment-remove", 6): _driver_plain(["task", "comment-remove", "-r", "con", "1"]),
+    ("sprint comment-remove", 6): _driver_plain(["sprint", "comment-remove", "-r", "con", "1"]),
     ("graph serve", 2): _driver_plain(["graph", "serve", "-r", FIXTURE_ROADMAP, "--zzz"]),
     ("web", 2): _driver_plain(["web", "--zzz-unknown"]),
     ("web", 6): _driver_plain(["web", "--port", "70000"]),
     ("ai-help", 2): _driver_plain(["ai-help", "stray"]),
+    ("roadmap create", 1): _driver_occupied_roadmap_home,
+    ("roadmap remove", 1): _driver_unopenable_graph_lock,
     ("roadmap create", 6): _driver_plain(["roadmap", "create", "My Project!"]),
     ("roadmap remove", 6): _driver_plain(["roadmap", "remove", "My Project!"]),
     ("sprint create", 6): _driver_plain(

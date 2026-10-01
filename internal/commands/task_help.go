@@ -133,8 +133,8 @@ Compared to:
   - 'task blockers <task-id>': the dependencies of one task that are not yet
     COMPLETED -- the readiness question this command does not answer.
   - 'sprint open-tasks <id>': scope is "this sprint", any priority.
-  - 'backlog show-next [count]': BACKLOG status only; sprint membership is
-    not consulted, so a BACKLOG sprint member is returned.
+  - 'backlog show-next [count]': BACKLOG status only; a BACKLOG task
+    belongs to no sprint.
   - 'task list --status SPRINT': any sprint, no implicit priority order.
 
 Required:
@@ -194,8 +194,11 @@ func printTaskRemoveHelp() {
 	fmt.Fprint(helpDst(), `Usage: rmp task remove -r <roadmap> <task-ids>
 
 Deletes one or more tasks. ALL listed tasks must currently be in BACKLOG;
-the batch fails-fast (exit 6) if any is in a later status. Tasks with
-active subtasks cannot be deleted either — remove the subtasks first.
+the batch fails-fast (exit 6) if any is in a later status. A BACKLOG task
+belongs to no sprint, so a sprint member is first taken out with
+'sprint remove-tasks' (a COMPLETED one first returned to SPRINT with
+'task reopen'). Tasks with active subtasks cannot be deleted either —
+remove the subtasks first.
 
 Aliases: rm.
 
@@ -218,13 +221,20 @@ func printTaskStatHelp() {
 Changes the status of one or more tasks. The status machine is strict:
 
   Allowed manual transitions:
-    SPRINT      -> DOING | BACKLOG
+    SPRINT      -> DOING
     DOING       -> TESTING
     TESTING     -> DOING | COMPLETED
-    COMPLETED   -> BACKLOG  (equivalent to 'task reopen')
 
   Forbidden:
-    'task stat <id> SPRINT'   (exit 6) — use 'sprint add-tasks' instead.
+    'task stat <id> SPRINT'   (exit 6) — SPRINT is set by 'sprint add-tasks'
+                              and by 'task reopen'.
+    'task stat <id> BACKLOG'  (exit 6) — refused for every sprint member,
+                              because a sprint member is never in BACKLOG
+                              and this command never changes membership.
+                              A SPRINT, DOING or TESTING task leaves its
+                              sprint through 'sprint remove-tasks'; a
+                              COMPLETED task stays in its sprint and is
+                              returned to SPRINT with 'task reopen'.
 
   COMPLETED guards (both checked before mutation):
     - Every subtask must already be COMPLETED.
@@ -253,17 +263,14 @@ Changes the status of one or more tasks. The status machine is strict:
     TESTING     sets tested_at to now
     COMPLETED   sets closed_at to now and commit_close to --commit-close
                 (and stores --summary if provided)
-    BACKLOG     clears started_at, tested_at, closed_at, completion_summary
-                and commit_close, and PRESERVES commit_open — the commit the
-                work started from stays true after a return to the backlog,
-                unlike every other field above
 
 Aliases: set-status.
 
 Required:
   -r, --roadmap <name>            Target roadmap
   <task-ids>                      Comma-separated integer ids (no spaces, e.g. "1,3,5")
-  <new-status>                    One of: BACKLOG, DOING, TESTING, COMPLETED
+  <new-status>                    One of: DOING, TESTING, COMPLETED (BACKLOG
+                                  and SPRINT are refused, as above)
 
 Optional:
   -co, --commit-open <hash>       Git commit the work starts from, 7 to 64
@@ -284,7 +291,6 @@ Output: empty (exit 0 on success).
   rmp task stat -r myproject 1 DOING --commit-open 5f93b51
   rmp task stat -r myproject 3,7 TESTING
   rmp task stat -r myproject 7 COMPLETED -cc 2578d18 --summary "Shipped behind feature flag"
-  rmp task stat -r myproject 9 BACKLOG    # reopen (equivalent to 'task reopen')
 `)
 }
 
@@ -292,18 +298,20 @@ Output: empty (exit 0 on success).
 func printTaskReopenHelp() {
 	fmt.Fprint(helpDst(), `Usage: rmp task reopen -r <roadmap> <task-ids>
 
-Resets a task to BACKLOG from any non-BACKLOG status
-(SPRINT/DOING/TESTING/COMPLETED), clearing started_at/tested_at/closed_at/
-completion_summary. Unlike 'task stat <ids> BACKLOG' (accepted only from
-SPRINT or COMPLETED), reopen works from DOING and TESTING too. It is also
-slightly more permissive: ids already in BACKLOG are skipped with a stderr
-note rather than rejected.
+Returns a DOING, TESTING or COMPLETED task to SPRINT inside the sprint it
+belongs to, clearing started_at/tested_at/closed_at/completion_summary. The
+task keeps its sprint and its position: reopen never changes sprint
+membership. Ids already in SPRINT or in BACKLOG are skipped with a stderr
+note rather than rejected. A task whose sprint is CLOSED is refused (exit 6)
+and nothing is changed: reopen the sprint first with 'sprint reopen'. A
+COMPLETED task that belongs to no sprint, which only data written before the
+sprint membership rules can hold, returns to BACKLOG instead.
 
 Commit tracking:
   commit_close is cleared with the fields above — reopening withdraws the
   claim that the task was concluded at that commit.
   commit_open is PRESERVED. The commit the work was started from remains a
-  true historical fact after the task returns to the backlog, so reopen is
+  true historical fact after the task is reopened, so reopen is
   deliberately asymmetric here and no command ever clears commit_open. A
   later 'task stat <ids> DOING --commit-open <hash>' replaces it.
 
@@ -614,10 +622,14 @@ Optional:
                                   --body is absent AND --type is absent, the
                                   new body is read from standard input,
                                   so 'comment-edit <comment-id> < revised.txt'
-                                  is a valid edit. When --type is present and
-                                  --body is absent, the body is left unchanged
-                                  and standard input is NOT read, so a
-                                  type-only edit never waits for input.
+                                  is a valid edit. Standard input is the new
+                                  body only when --type is absent as well. When
+                                  --type is present and --body is absent, the
+                                  body is left unchanged: a terminal on standard
+                                  input is not read, so a type-only edit typed
+                                  at a terminal never waits for input, and a
+                                  standard input that carries data is refused
+                                  (exit 2) rather than ignored.
 
 Output (stdout JSON):
   Empty (exit 0 on success), as for 'task edit' and 'sprint update'.

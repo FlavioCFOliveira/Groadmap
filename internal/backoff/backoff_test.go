@@ -491,7 +491,7 @@ func TestRetryWithinKeepsTheThreeOutcomes(t *testing.T) {
 // TestFullJitterShapeMatchesTheSpecification pins the figures
 // SPEC/IMPLEMENTATION.md § Retry Logic states for the jittered shape: a ceiling
 // of 5 ms before the first retry, doubling before each subsequent one — 5, 10,
-// 20, 40, 80, 160 ms — and then held at 250 ms; a maximum of 20 attempts; and
+// 20, 40, 80, 160 ms — and then held at 250 ms; a maximum of 40 attempts; and
 // the same 2500 ms maximum total wait the fixed ladder spends.
 //
 // The ceiling is checked element by element for the reason the fixed ladder is:
@@ -521,11 +521,11 @@ func TestFullJitterShapeMatchesTheSpecification(t *testing.T) {
 			"doubling from 5ms, then held at 250ms)", got, want)
 	}
 
-	// Twenty, not nineteen: "Maximum attempts: 20 — one initial attempt plus at
-	// most nineteen retries". Reading the cap as a retry count is #294's mistake
-	// in the other direction.
-	if got, want := JitterAttempts, 20; got != want {
-		t.Errorf("JitterAttempts = %d, want %d (one initial attempt plus nineteen retries)", got, want)
+	// Forty, not thirty-nine: "Maximum attempts: 40 — one initial attempt plus
+	// at most thirty-nine retries". Reading the cap as a retry count is #294's
+	// mistake in the other direction.
+	if got, want := JitterAttempts, 40; got != want {
+		t.Errorf("JitterAttempts = %d, want %d (one initial attempt plus thirty-nine retries)", got, want)
 	}
 
 	// The two shapes share the total. The specification says so in as many words
@@ -623,7 +623,7 @@ func TestDrawUpToCoversTheClosedInterval(t *testing.T) {
 //
 // What this test pins is the MECHANISM, and deliberately not the figure: it
 // compares against jitterMaxRetries, so it says nothing about whether that
-// constant is 19. TestFullJitterShapeMatchesTheSpecification pins the figure
+// constant is 39. TestFullJitterShapeMatchesTheSpecification pins the figure
 // against the specification, and the two together are what a change to either
 // has to get past.
 func TestJitterWalkIsBoundedByTheATTEMPTCapAndByTheBUDGET(t *testing.T) {

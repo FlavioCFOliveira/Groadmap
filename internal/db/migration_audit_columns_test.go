@@ -228,6 +228,20 @@ func buildRoadmapAtSchema1110(t *testing.T, roadmapName string) auditFixture {
 	setLifecycleTimestamps(t, database, testingID,
 		models.StatusTesting, auditTSTestStart, auditTSTestReady, "")
 
+	// The DOING and the TESTING task are members of the fixture sprint, as every
+	// task in an active status is under the sprint membership invariant. The
+	// migration set runs on through 1.16.0, which would otherwise repair them
+	// back to BACKLOG and write an audit entry for each, and this fixture is
+	// about the 1.12.0 reclassification alone.
+	for position, id := range []int{doingID, testingID} {
+		if _, err := database.Exec(
+			"INSERT INTO sprint_tasks (sprint_id, task_id, added_at, position) VALUES (?, ?, ?, ?)",
+			sprintID, id, auditTSCreated, position,
+		); err != nil {
+			t.Fatalf("making task %d a member of the fixture sprint: %v", id, err)
+		}
+	}
+
 	// A task that has since been removed. Its audit entry outlives it, and the
 	// timestamps that would have decided the entry went with it.
 	deletedID := newTask(
@@ -382,6 +396,7 @@ func buildRoadmapAtSchema1110(t *testing.T, roadmapName string) auditFixture {
 		t.Fatalf("removing the deleted-task fixture %d: %v", deletedID, err)
 	}
 
+	restoreSprintsCreatedAtIndex(t, database)
 	if _, err := database.Exec(
 		"UPDATE _metadata SET value = '1.11.0' WHERE key = 'schema_version'"); err != nil {
 		t.Fatalf("setting schema_version to 1.11.0: %v", err)
@@ -562,8 +577,8 @@ func TestMigrateV1_11_0_toV1_12_0_OnNextOpen(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reading schema version after open: %v", err)
 	}
-	if version != "1.15.0" {
-		t.Fatalf("schema_version after open = %q, want 1.15.0 (SPEC/VERSION.md § Current Schema Version)", version)
+	if version != "1.17.0" {
+		t.Fatalf("schema_version after open = %q, want 1.17.0 (SPEC/VERSION.md § Current Schema Version)", version)
 	}
 	if version != SchemaVersion {
 		t.Errorf("schema_version after open = %q but the SchemaVersion constant is %q; a migrated "+

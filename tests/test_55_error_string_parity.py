@@ -140,7 +140,8 @@ import uuid
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from tests.base_test import (GroadmapTestBase, REPO_ROOT, COMMIT_OPEN_HASH,
-                             COMMIT_CLOSE_HASH, measure_socket_path_bound)
+                             COMMIT_CLOSE_HASH, commit_flags_for,
+                             measure_socket_path_bound)
 # The socket-path bound is MEASURED, never written down: it is 107 bytes on
 # Linux and Windows and 103 on macOS, FreeBSD and OpenBSD, so a literal here
 # would agree with a hard-coded implementation on one host and confirm the
@@ -150,6 +151,14 @@ from tests.base_test import (GroadmapTestBase, REPO_ROOT, COMMIT_OPEN_HASH,
 
 
 SPEC_PATH = REPO_ROOT / "SPEC" / "COMMANDS.md"
+
+# The schema version the binary supports, the <supported-version> of the
+# newer-schema refusal. It is read from its one declaration rather than
+# restated, so a schema bump cannot leave this module asserting the old one.
+SCHEMA_VERSION = re.search(
+    r'const SchemaVersion = "([0-9.]+)"',
+    (REPO_ROOT / "internal" / "db" / "schema.go").read_text(encoding="utf-8"),
+).group(1)
 
 # SPEC/STATE_MACHINE.md publishes four error strings (rmp task #456). Two of
 # them -- the completion guards -- are published nowhere else; the other two
@@ -1010,6 +1019,16 @@ EXEMPT_KEYS = {
         "for a HOME of /home/user; it is unreachable for the same reason, and its path "
         "is not one a hermetic invocation owns."
     ),
+    "Error: database error: sprint membership invariant violated: <detail>": (
+        "SPEC/DATABASE.md § Sprint Membership Invariant Enforcement: the line of "
+        "the sprint membership guard, which the section states can only be reached "
+        "by a defect in a write path, never by bad input -- every command refuses "
+        "every request that would break the invariant with its own published line "
+        "before it writes anything. No invocation of a correct binary can produce "
+        "it. The guard itself, its two halves, its exact line and its exit code are "
+        "driven in process by internal/db/sprint_membership_guard_test.go, which "
+        "hands it states no command can produce."
+    ),
     "Error: <detail>": (
         "SPEC/HELP.md § Error message format publishes the SHAPE every failing "
         "invocation's line takes, with <detail> standing for the whole message after "
@@ -1178,7 +1197,7 @@ class TestErrorStringParity:
     # Invocation helpers
     # ------------------------------------------------------------------
 
-    def run_stdin(self, args, input_text=None, stdin_fd=None, timeout=None):
+    def run_stdin(self, args, input_text=None, stdin_fd=None, timeout=None, home=None):
         """Run the CLI with `input_text` (or a closed/empty stdin when None)
         piped in, returning (exit_code, stdout, stderr).
 
@@ -1187,7 +1206,7 @@ class TestErrorStringParity:
         the descriptor rather than of the bytes on it -- a directory, whose
         read(2) is EISDIR. It and `input_text` are mutually exclusive."""
         env = os.environ.copy()
-        env["HOME"] = str(self.test.home_dir)
+        env["HOME"] = str(self.test.home_dir) if home is None else home
         if stdin_fd is not None:
             assert input_text is None, "stdin_fd and input_text are mutually exclusive"
             result = subprocess.run(
@@ -1209,7 +1228,7 @@ class TestErrorStringParity:
         )
         return result.returncode, result.stdout, result.stderr
 
-    def check(self, key, args, exit_code, subs=None, stdin=None, note="", timeout=None):
+    def check(self, key, args, exit_code, subs=None, stdin=None, note="", timeout=None, home=None):
         """The gate's core assertion: run `args` with stdin ALWAYS under this
         module's explicit control (empty by default -- never the inherited
         stdin of the process running the suite, which would make the result
@@ -1221,7 +1240,7 @@ class TestErrorStringParity:
             f"SPEC/COMMANDS.md: {key!r} ({note})"
         )
         expected = subst(key, subs or {})
-        rc, out, err = self.run_stdin(args, stdin, timeout=timeout)
+        rc, out, err = self.run_stdin(args, stdin, timeout=timeout, home=home)
         actual_line = err.splitlines()[0] if err else ""
         assert rc == exit_code, (
             f"[{note or key}] exit code: expected {exit_code}, got {rc}\n"
@@ -1640,15 +1659,15 @@ class TestErrorStringParity:
             6, subs={"<field>": "functional_requirements"}, note="control char in fr",
         )
 
-        # #60: --priority is not an integer.
+        # #60: --priority is not an integer (rmp task 503: no parser's text).
         self.check(
-            'Error: invalid input: invalid value for --priority: strconv.Atoi: parsing "X": invalid syntax',
+            'Error: invalid input: invalid value for --priority: "X" is not an integer in 0-9',
             ["task", "edit", "-r", r, str(task_id), "-p", "urgent"], 2,
             subs={"X": "urgent"}, note="task edit non-integer priority",
         )
         # #61: --severity is not an integer.
         self.check(
-            'Error: invalid input: invalid value for --severity: strconv.Atoi: parsing "X": invalid syntax',
+            'Error: invalid input: invalid value for --severity: "X" is not an integer in 0-9',
             ["task", "edit", "-r", r, str(task_id), "--severity", "urgent"], 2,
             subs={"X": "urgent"}, note="task edit non-integer severity",
         )
@@ -1775,7 +1794,7 @@ class TestErrorStringParity:
         )
         # #49: SPRINT may only be set via `sprint add-tasks`.
         self.check(
-            "Error: validation error: status SPRINT can only be set automatically via 'sprint add-tasks'",
+            "Error: validation error: status SPRINT cannot be set by 'task stat'; it is set by 'sprint add-tasks' and 'task reopen'",
             ["task", "stat", "-r", r, str(backlog_id), "SPRINT"], 6,
             note="task stat manual SPRINT",
         )
@@ -1866,6 +1885,200 @@ class TestErrorStringParity:
     # ------------------------------------------------------------------
     # `task prio` / `task sev`
     # ------------------------------------------------------------------
+
+    # ------------------------------------------------------------------
+    # The sprint membership invariant and the bounded integer refusals
+    # (rmp tasks 575, 490, 503, 401, 574)
+    # ------------------------------------------------------------------
+
+    def _walk_to(self, task_id, sprint_id, status):
+        """Drive a BACKLOG task into `status` inside `sprint_id` through the
+        commands that own each step."""
+        r = self.roadmap
+        self.test.run_cmd(["sprint", "add-tasks", "-r", r, str(sprint_id), str(task_id)])
+        if status == "SPRINT":
+            return
+        self.test.run_cmd(["task", "stat", "-r", r, str(task_id), "DOING", "--commit-open", COMMIT_OPEN_HASH])
+        if status == "DOING":
+            return
+        self.test.run_cmd(["task", "stat", "-r", r, str(task_id), "TESTING"])
+        if status == "TESTING":
+            return
+        self.test.run_cmd(["task", "stat", "-r", r, str(task_id), "COMPLETED", "--commit-close", COMMIT_CLOSE_HASH])
+
+    def test_sprint_membership_invariant_errors(self):
+        r = self.roadmap
+        sprint_id = self.mk_sprint(
+            "Chargeback automation",
+            "Answer every card scheme chargeback within its deadline, with the "
+            "evidence attached, without an analyst in the loop.",
+        )
+        other_id = self.mk_sprint(
+            "Dispute evidence archive",
+            "Keep the evidence of every answered chargeback for the scheme's "
+            "retention period, retrievable by dispute id.",
+        )
+        tasks = {}
+        for status, title in (
+            ("SPRINT", "Fetch the scheme's chargeback notifications hourly"),
+            ("DOING", "Attach the delivery proof to every chargeback answer"),
+            ("TESTING", "Submit chargeback answers through the scheme API"),
+            ("COMPLETED", "Classify chargebacks by reason code"),
+        ):
+            tasks[status] = self.mk_task(title, self.FR, self.TR, self.AC)
+            self._walk_to(tasks[status], sprint_id, status)
+
+        # task stat BACKLOG, refused for every sprint member with the line that
+        # names the command fitting its status.
+        for status in ("SPRINT", "DOING", "TESTING"):
+            self.check(
+                "Error: validation error: invalid status transition from X to BACKLOG for task N: "
+                "a task leaves its sprint only through 'rmp sprint remove-tasks'",
+                ["task", "stat", "-r", r, str(tasks[status]), "BACKLOG"], 6,
+                subs={"X": status, "N": str(tasks[status])},
+                note=f"task stat BACKLOG from {status}",
+            )
+        self.check(
+            "Error: validation error: invalid status transition from COMPLETED to BACKLOG for task N: "
+            "a completed task is reopened with 'rmp task reopen'",
+            ["task", "stat", "-r", r, str(tasks["COMPLETED"]), "BACKLOG"], 6,
+            subs={"N": str(tasks["COMPLETED"])}, note="task stat BACKLOG from COMPLETED",
+        )
+
+        # A COMPLETED task stays in its sprint, on all three assignment commands.
+        stays = ("Error: validation error: task N is COMPLETED in sprint #M; a completed task stays "
+                 "in the sprint it was completed in")
+        done = str(tasks["COMPLETED"])
+        subs = {"N": done, "M": str(sprint_id)}
+        self.check(stays, ["sprint", "add-tasks", "-r", r, str(other_id), done], 6, subs=subs,
+                   note="add-tasks of a COMPLETED task")
+        self.check(stays, ["sprint", "move-tasks", "-r", r, str(sprint_id), str(other_id), done], 6,
+                   subs=subs, note="move-tasks of a COMPLETED task")
+        self.check(stays, ["sprint", "remove-tasks", "-r", r, str(sprint_id), done], 6, subs=subs,
+                   note="remove-tasks of a COMPLETED task")
+
+        # sprint remove refuses a sprint holding a COMPLETED task, naming every one.
+        self.check(
+            "Error: validation error: cannot remove sprint #N: completed tasks stay in their sprint: <id-list>",
+            ["sprint", "remove", "-r", r, str(sprint_id)], 6,
+            subs={"N": str(sprint_id), "<id-list>": f"#{done}"}, note="sprint remove with a COMPLETED member",
+        )
+
+        # task reopen is refused while the task's sprint is CLOSED.
+        self.test.run_cmd(["sprint", "start", "-r", r, str(sprint_id)])
+        self.test.run_cmd(["sprint", "close", "-r", r, str(sprint_id), "--force"])
+        self.check(
+            "Error: validation error: cannot reopen task N: sprint #M is CLOSED; reopen the sprint first "
+            "with 'rmp sprint reopen'",
+            ["task", "reopen", "-r", r, f"{tasks['DOING']},{done}"], 6,
+            subs={"N": str(tasks["DOING"]), "M": str(sprint_id)}, note="task reopen in a CLOSED sprint",
+        )
+
+        # Legacy data: a COMPLETED task that belongs to no sprint cannot join
+        # one. Only data written before the invariant holds this state, so the
+        # membership row is removed from this module's own throwaway database.
+        db_path = self.test.roadmaps_dir / r / "project.db"
+        con = sqlite3.connect(str(db_path))
+        try:
+            con.execute("DELETE FROM sprint_tasks WHERE task_id = ?", (int(done),))
+            con.commit()
+        finally:
+            con.close()
+        self.check(
+            "Error: validation error: task N is COMPLETED and belongs to no sprint; a completed task "
+            "cannot join a sprint",
+            ["sprint", "add-tasks", "-r", r, str(other_id), done], 6,
+            subs={"N": done}, note="add-tasks of a sprintless COMPLETED task",
+        )
+
+    def test_bounded_integer_refusals(self):
+        r = self.roadmap
+        task_id = self.mk_task(
+            "Cap the settlement retry ladder at five attempts",
+            self.FR, self.TR, self.AC,
+        )
+        self.check(
+            'Error: invalid input: invalid priority: "X" is not an integer in 0-9',
+            ["task", "prio", "-r", r, str(task_id), "urgent"], 2,
+            subs={"X": "urgent"}, note="task prio non-integer",
+        )
+        self.check(
+            'Error: invalid input: invalid severity: "X" is not an integer in 0-9',
+            ["task", "sev", "-r", r, str(task_id), "99999999999999999999"], 2,
+            subs={"X": "99999999999999999999"}, note="task sev too large for an integer",
+        )
+        for family, sub in (("task", "list"), ("backlog", "list")):
+            self.check(
+                'Error: invalid input: invalid value for --limit: "X" is not an integer in 1-100',
+                [family, sub, "-r", r, "-l", "all"], 2, subs={"X": "all"},
+                note=f"{family} {sub} --limit non-integer",
+            )
+            self.check(
+                'Error: invalid input: invalid value for --priority: "X" is not an integer in 0-9',
+                [family, sub, "-r", r, "-p", "high"], 2, subs={"X": "high"},
+                note=f"{family} {sub} --priority non-integer",
+            )
+            self.check(
+                "Error: validation error: priority must be between 0 and 9, got N",
+                [family, sub, "-r", r, "-p", "12"], 6, subs={"N": "12"},
+                note=f"{family} {sub} --priority out of range",
+            )
+        self.check(
+            'Error: invalid input: invalid value for --severity: "X" is not an integer in 0-9',
+            ["task", "list", "-r", r, "--severity", "grave"], 2, subs={"X": "grave"},
+            note="task list --severity non-integer",
+        )
+        self.check(
+            "Error: validation error: severity must be between 0 and 9, got N",
+            ["task", "list", "-r", r, "--severity", "-1"], 6, subs={"N": "-1"},
+            note="task list --severity out of range",
+        )
+        sprint_id = self.mk_sprint(
+            "Payout limits",
+            "Enforce the daily payout limit per merchant before the batch leaves.",
+        )
+        self.check(
+            'Error: invalid input: invalid value for --max-tasks: "X" is not an integer in 1-10000',
+            ["sprint", "update", "-r", r, str(sprint_id), "--max-tasks", "many"], 2,
+            subs={"X": "many"}, note="sprint update --max-tasks non-integer",
+        )
+
+    def test_type_only_comment_edit_refuses_stdin_data(self):
+        r = self.roadmap
+        task_id = self.mk_task(
+            "Record the chargeback reason code on the dispute",
+            self.FR, self.TR, self.AC,
+        )
+        sprint_id = self.mk_sprint(
+            "Dispute tooling",
+            "Give analysts one screen per dispute with its evidence and deadline.",
+        )
+        task_comment = self.test.run_cmd_json(
+            ["task", "comment-add", "-r", r, str(task_id), "--type", "FINDING",
+             "--body", "The reason code is missing on one dispute in forty."])["id"]
+        sprint_comment = self.test.run_cmd_json(
+            ["sprint", "comment-add", "-r", r, str(sprint_id), "--type", "PROGRESS",
+             "--body", "The evidence panel is done; the deadline banner is not."])["id"]
+        line = ("Error: invalid input: standard input carries data, but it is not read when --type "
+                "is given; supply the new body with --body")
+        self.check(line, ["task", "comment-edit", "-r", r, str(task_comment), "--type", "DECISION"], 2,
+                   stdin="Decided to backfill the reason code from the scheme report.\n",
+                   note="task comment-edit --type with data on stdin")
+        self.check(line, ["sprint", "comment-edit", "-r", r, str(sprint_comment), "--type", "UPDATE"], 2,
+                   stdin="\n", note="sprint comment-edit --type with a line break on stdin")
+
+    def test_roadmap_home_occupied_by_a_regular_file(self):
+        name = "settlement-exports"
+        occupant = self.test.roadmaps_dir / name
+        occupant.write_text("A settlement export saved in the wrong place.\n")
+        self.check(
+            'Error: I/O error: cannot create roadmap "X": <path> is occupied and is not a directory',
+            ["roadmap", "create", name], 1,
+            subs={"X": name, "<path>": str(occupant)}, note="roadmap create over a regular file",
+        )
+        assert occupant.read_text() == "A settlement export saved in the wrong place.\n", (
+            "roadmap create changed the regular file it refused to replace"
+        )
 
     def test_task_prio_sev_errors(self):
         r = self.roadmap
@@ -2414,9 +2627,9 @@ class TestErrorStringParity:
              "--max-tasks", "10001"], 6, subs={"N": "10001"},
             note="sprint create max-tasks out of range",
         )
-        # #84: --max-tasks non-integer.
+        # #84: --max-tasks non-integer (rmp task 503).
         self.check(
-            'Error: invalid input: invalid value for --max-tasks: strconv.Atoi: parsing "X": invalid syntax',
+            'Error: invalid input: invalid value for --max-tasks: "X" is not an integer in 1-10000',
             ["sprint", "create", "-r", r, "-t", "Observability hardening", "-d", self.SPRINT_DESC,
              "--max-tasks", "plenty"], 2, subs={"X": "plenty"},
             note="sprint create max-tasks non-integer",
@@ -2762,13 +2975,13 @@ class TestErrorStringParity:
             )
 
         # Shared line 2: a task named on the command line is not a member.
-        # This is the line the section warns is NOT the batch-assignment
-        # commands' `task N is not in sprint #M`; both are driven in this
-        # module, from their own commands, so the divergence the section
-        # documents stays a documented divergence rather than a drift.
+        # It is the singular line of the batch assignment commands, `task N is
+        # not in sprint #M` (rmp task 420): one condition, one sentence, driven
+        # here from all five ordering commands and in § Task Assignment's own
+        # driver from `remove-tasks` and `move-tasks`.
         for command in commands:
             self.check(
-                "Error: validation error: task N does not belong to sprint M",
+                "Error: validation error: task N is not in sprint #M",
                 ordering_argv(command, str(sprint_id), str(outsider)), 6,
                 subs={"N": str(outsider), "M": str(sprint_id)},
                 note=f"sprint {command}: task is not a member",
@@ -2778,7 +2991,7 @@ class TestErrorStringParity:
         # positional is driven as well: a divergence in the second would
         # otherwise hide behind the first.
         self.check(
-            "Error: validation error: task N does not belong to sprint M",
+            "Error: validation error: task N is not in sprint #M",
             ["sprint", "swap", "-r", r, str(sprint_id), str(first), str(outsider)], 6,
             subs={"N": str(outsider), "M": str(sprint_id)},
             note="sprint swap: second task argument is not a member",
@@ -3073,9 +3286,10 @@ class TestErrorStringParity:
             ["audit", "list", "-r", r, "--limit", "0"], 6, subs={"N": "0"},
             note="audit list limit below floor",
         )
-        # #97: --limit non-integer.
+        # #97: --limit non-integer: the flag named, the value echoed and the
+        # published range, never a parser's text (rmp task 503).
         self.check(
-            "Error: invalid input: invalid limit: X",
+            'Error: invalid input: invalid value for --limit: "X" is not an integer in 1-500',
             ["audit", "list", "-r", r, "--limit", "plenty"], 2, subs={"X": "plenty"},
             note="audit list limit non-integer",
         )
@@ -3085,9 +3299,12 @@ class TestErrorStringParity:
             ["audit", "list", "-r", r, "--entity-id", "0"], 6, subs={"N": "0"},
             note="audit list entity-id out of range",
         )
-        # #99: --entity-id non-integer.
+        # #99: --entity-id non-integer. The flag prints the format line of
+        # § Entity Identifier Range, rule 4, identical to the one `audit
+        # history` prints for the same token in its <entity-id> position (#101
+        # below drives that key through the positional).
         self.check(
-            "Error: invalid input: invalid entity ID: X",
+            'Error: invalid input: invalid entity ID: "X" (must be a positive integer)',
             ["audit", "list", "-r", r, "--entity-id", "abc"], 2, subs={"X": "abc"},
             note="audit list entity-id non-integer",
         )
@@ -3160,6 +3377,21 @@ class TestErrorStringParity:
             '(2026-01-01T00:00:00Z) or date-only (2026-01-01): "X"',
             ["audit", "list", "-r", r, "--until", "next-friday"], 6,
             subs={"X": "next-friday"}, note="audit list invalid until",
+        )
+        # A well-formed value outside 1970-01-01 through 9999-12-31, judged on
+        # the UTC instant, takes the same line (rmp tasks 569 and 570;
+        # SPEC/DATA_FORMATS.md § Date Filter Values), on both commands.
+        self.check(
+            'Error: validation error: --since: invalid date format: expected RFC3339 '
+            '(2026-01-01T00:00:00Z) or date-only (2026-01-01): "X"',
+            ["audit", "stats", "-r", r, "--since", "1970-01-01T00:30:00+01:00"], 6,
+            subs={"X": "1970-01-01T00:30:00+01:00"}, note="audit stats since before 1970 in UTC",
+        )
+        self.check(
+            'Error: validation error: --until: invalid date format: expected RFC3339 '
+            '(2026-01-01T00:00:00Z) or date-only (2026-01-01): "X"',
+            ["audit", "stats", "-r", r, "--until", "9999-12-31T23:00:00-02:00"], 6,
+            subs={"X": "9999-12-31T23:00:00-02:00"}, note="audit stats until past 9999 in UTC",
         )
 
     # ------------------------------------------------------------------
@@ -4200,6 +4432,126 @@ class TestErrorStringParity:
         assert waited >= 7.0, (
             f"the client gave up after {waited:.2f}s, before its 7.5s backstop: whatever "
             f"ended the wait, it was not the backstop")
+
+    # ------------------------------------------------------------------
+    # The lines rmp tasks #577-#588 published: the home directory, the
+    # database file's shape and links, the newer schema, repeated flags, the
+    # sprint lifecycle refusals, the removal under a running graph server and
+    # the reopening past a sprint's capacity.
+    # ------------------------------------------------------------------
+
+    def test_home_and_database_file_lines(self):
+        r = self.roadmap
+        # A relative home is refused before anything is located under it. The
+        # working directory of the child is this module's, so nothing may
+        # appear relative to it either; the value is unique to make that
+        # observable.
+        relative = f"relative-home-{uuid.uuid4().hex[:8]}"
+        self.check(
+            'Error: database error: home directory "X" is not an absolute path; '
+            'refusing to locate the data directory under it',
+            ["task", "list", "-r", r], 1, subs={"X": relative}, home=relative,
+            note="relative HOME")
+        assert not os.path.exists(relative), "a refused relative home created a directory"
+
+        db_path = str(self.test.home_dir / ".roadmaps" / r / "project.db")
+
+        # A companion that is a symbolic link, dangling, is refused by name.
+        shm = db_path + "-shm"
+        if os.path.exists(shm):
+            os.remove(shm)
+        os.symlink(str(self.test.home_dir / "elsewhere-shm"), shm)
+        try:
+            self.check(
+                "Error: database error: <path> is a symbolic link; refusing to use it as a roadmap database file",
+                ["task", "list", "-r", r], 1, subs={"<path>": shm}, note="symlinked -shm")
+            assert not os.path.exists(str(self.test.home_dir / "elsewhere-shm")), "the link target was created"
+        finally:
+            os.remove(shm)
+
+        # A file that is not a SQLite database, in a roadmap of its own.
+        foreign = self._another_roadmap("foreign")
+        foreign_db = str(self.test.home_dir / ".roadmaps" / foreign / "project.db")
+        content = b"%PDF-1.7\n% settlement report for September\n"
+        with open(foreign_db, "wb") as fh:
+            fh.write(content)
+        self.check("Error: database error: <path> is not a valid roadmap database",
+                   ["task", "list", "-r", foreign], 1, subs={"<path>": foreign_db},
+                   note="a PDF where project.db belongs")
+        with open(foreign_db, "rb") as fh:
+            assert fh.read() == content, "the refused file changed"
+
+        # A database newer than the binary.
+        future = self._another_roadmap("future")
+        future_db = str(self.test.home_dir / ".roadmaps" / future / "project.db")
+        conn = sqlite3.connect(future_db)
+        try:
+            conn.execute("UPDATE _metadata SET value = '1.99.0' WHERE key = 'schema_version'")
+            conn.commit()
+        finally:
+            conn.close()
+        supported = SCHEMA_VERSION
+        self.check(
+            "Error: database error: <path> has schema version <db-version>, newer than schema version "
+            "<supported-version> supported by this rmp; upgrade rmp to open it",
+            ["task", "list", "-r", future], 1,
+            subs={"<path>": future_db, "<db-version>": "1.99.0", "<supported-version>": supported},
+            note="schema newer than the binary")
+
+    def test_repeated_flag_line(self):
+        r = self.roadmap
+        self.check("Error: invalid input: repeated flag: --title",
+                   ["task", "create", "-r", r, "-t", "First", "--title", "Second",
+                    "-fr", self.FR, "-tr", self.TR, "-ac", self.AC], 2,
+                   note="a repeated --title")
+
+    def test_sprint_state_refusals(self):
+        r = self.roadmap
+        pending = self.mk_sprint("Refund retries", self.SPRINT_DESC)
+        opened = self.mk_sprint("Chargeback automation", self.SPRINT_DESC)
+        closed = self.mk_sprint("Settlement reconciliation", self.SPRINT_DESC)
+        self.test.run_cmd(["sprint", "start", "-r", r, str(closed)])
+        self.test.run_cmd(["sprint", "close", "-r", r, str(closed)])
+        self.test.run_cmd(["sprint", "start", "-r", r, str(opened)])
+
+        self.check("Error: validation error: cannot start sprint with status X",
+                   ["sprint", "start", "-r", r, str(closed)], 6, subs={"X": "CLOSED"},
+                   note="start a CLOSED sprint")
+        self.check("Error: validation error: cannot close sprint with status X",
+                   ["sprint", "close", "-r", r, str(pending)], 6, subs={"X": "PENDING"},
+                   note="close a PENDING sprint")
+        self.check("Error: validation error: cannot reopen sprint with status X",
+                   ["sprint", "reopen", "-r", r, str(opened)], 6, subs={"X": "OPEN"},
+                   note="reopen an OPEN sprint")
+        self.check("Error: validation error: sprint #N is already open — close it first",
+                   ["sprint", "start", "-r", r, str(pending)], 6, subs={"N": str(opened)},
+                   note="start while another sprint is OPEN")
+
+    def test_reopen_capacity_line(self):
+        r = self.roadmap
+        sprint = self.mk_sprint("Capacity-bounded refund work", self.SPRINT_DESC, extra=["--max-tasks", "2"])
+        done = self.mk_task("Add idempotency keys to the refund endpoint", self.FR, self.TR, self.AC)
+        planned = self.mk_task("Retry provider webhooks with exponential backoff", self.FR, self.TR, self.AC)
+        doing = self.mk_task("Reconcile settlement totals against the daily report", self.FR, self.TR, self.AC)
+        self.test.run_cmd(["sprint", "add-tasks", "-r", r, str(sprint), str(done)])
+        for status in ("DOING", "TESTING", "COMPLETED"):
+            self.test.run_cmd(["task", "stat", "-r", r, str(done), status] + commit_flags_for(status))
+        self.test.run_cmd(["sprint", "add-tasks", "-r", r, str(sprint), f"{planned},{doing}"])
+        self.test.run_cmd(["task", "stat", "-r", r, str(doing), "DOING"] + commit_flags_for("DOING"))
+        self.check(
+            "Error: validation error: reopening N task(s) would exceed sprint #M capacity (<load>/<cap> tasks active)",
+            ["task", "reopen", "-r", r, str(done)], 6,
+            subs={"N": "1", "M": str(sprint), "<load>": "2", "<cap>": "2"},
+            note="reopen past the capacity cap")
+
+    def test_remove_while_graph_server_runs(self):
+        r = self.roadmap
+        self.test.start_graph_server(r)
+        self.check('Error: validation error: cannot remove roadmap "X": a graph server is running for it; '
+                   'stop the server first',
+                   ["roadmap", "remove", r], 6, subs={"X": r}, note="remove under a running server",
+                   timeout=60)
+        assert (self.test.home_dir / ".roadmaps" / r / "project.db").exists(), "the refusal removed project.db"
 
     # ------------------------------------------------------------------
     # SPEC/DATABASE.md § The failure surface: a migration that fails

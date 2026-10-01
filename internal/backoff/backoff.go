@@ -146,8 +146,11 @@ const (
 	// total wait bounds the retry count on its own, because every rung is at
 	// least initialDelay; under full jitter a draw may be near zero, so a walk
 	// bounded only by its total could turn indefinitely against a server that
-	// fails instantly.
-	jitterMaxRetries = 19
+	// fails instantly. It is also sized so that, under contention, the total
+	// wait and not the cap is what ends a walk: twenty attempts were measured
+	// to end every exhausted walk before the budget was spent.
+	// SPEC/IMPLEMENTATION.md § Retry Logic is canonical for that derivation.
+	jitterMaxRetries = 39
 )
 
 // Attempts is the number of times a retried operation is tried in the worst
@@ -161,7 +164,7 @@ const Attempts = 1 + maxRetries
 
 // JitterAttempts is the most attempts RetryJitteredWithin can make: one initial
 // attempt plus jitterMaxRetries retries. SPEC/IMPLEMENTATION.md § Retry Logic
-// states 20 and states why the cap exists at all.
+// states 40 and states why the cap exists at all.
 //
 // It is a MAXIMUM and not a count, which is where it differs from Attempts. The
 // fixed ladder's attempt count and its total wait determine one another, so a

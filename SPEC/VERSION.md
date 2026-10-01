@@ -175,7 +175,98 @@ The `_metadata` table records the active schema version. Migration steps and the
 
 ### Current Schema Version
 
-`SchemaVersion = "1.15.0"` (defined in `internal/db/schema.go`).
+`SchemaVersion = "1.17.0"` (defined in `internal/db/schema.go`).
+
+### Database Schema Newer Than the Binary
+
+A binary supports exactly the schema versions up to its own `SchemaVersion`. It
+knows every migration up to that version and nothing after it, so it cannot know
+what a later migration changed: which columns exist, which rules the data obeys,
+which values an enum may hold. Reading such a database could misreport it, and
+writing to it could break an invariant the newer binary relies on. A database whose
+stored schema version is newer than the binary's is therefore refused.
+
+**The rule.** On every open of a roadmap database, before any table other than
+`_metadata` is read and before anything is written, `rmp` reads
+`_metadata.schema_version` and compares it with its own `SchemaVersion`, numerically
+and component by component, so that `1.10.0` is newer than `1.9.0`. When the stored
+version is newer, the open is refused:
+
+- **For every command.** The refusal applies to every command that opens a roadmap
+  database, those that only read it and those that write it alike. No command reads
+  such a database in a degraded mode.
+- **The line.** The command fails with `utils.ErrDatabase` and exit code `1`, and
+  writes the line `DATABASE.md § Opening a Roadmap Database File` publishes for
+  this condition. The line names the database file, states both versions — the one
+  the database records and the one the binary supports — and the remedy, upgrading
+  `rmp`, and carries no text of the SQLite driver.
+- **Nothing is written.** The database file's contents are byte for byte what they
+  were: no connection setting is written into the file, no migration runs, no schema
+  is created, no row is read beyond `_metadata` and none is changed, no audit entry
+  is written, and `_metadata.schema_version` is never lowered. Nothing is written to
+  stdout. The only change the open may already have made is the mode repair of
+  `ARCHITECTURE.md § Open-Time Permission Enforcement`, which precedes this check.
+- **The web interface.** Its startup schema migration meets the refusal like any
+  other open and treats it as a roadmap that could not be migrated, which is
+  non-fatal (`WEB.md § Startup Schema Migration`, rule 6). Its read-only open path
+  applies the same check, and a request that reads such a database is a read
+  failure on the affected route, answered as `WEB.md § Routes and Pages` answers
+  any other read failure.
+
+A stored version equal to `SchemaVersion` is opened as it is, and an older one is
+migrated forward as `Migration Chain Guarantee` below specifies.
+
+### Migration Chain Guarantee
+
+**The binary migrates a database created at any earlier schema version to the
+current one.** The guarantee covers every schema version from the first, `1.0.0`,
+which is the schema the binary created before any migration existed, to the
+version immediately before `SchemaVersion`, whether or not a release published that
+version. Opening such a database applies the pending migrations of
+`internal/db/migrations.go`, and the result satisfies all of the following:
+
+1. **Every intermediate migration is applied, in strict sequence.** The migrations
+   whose target version is newer than the stored version are applied in ascending
+   order of target version, compared numerically. None is skipped, none is
+   reordered, and none is applied twice. A database at `1.0.0` passes through every
+   migration up to `SchemaVersion`, one at a time.
+2. **Each migration runs in its own transaction.** The migration's statements and
+   the update of `_metadata.schema_version` to its target version commit together,
+   or not at all. A migration that fails rolls back its own statements, leaves the
+   database at the version the previous migration reached, and fails the invocation
+   as `DATABASE.md § The failure surface` specifies; the migrations already
+   committed stay committed, and the next open resumes from there.
+3. **Each migration is idempotent.** Applying a migration to a database that
+   already carries its effects changes nothing and raises no error, and opening a
+   database already at `SchemaVersion` applies no migration at all.
+4. **All data is preserved.** Every row of every table survives the chain with
+   every value it held, except where the section of a migration below states a
+   change that migration makes — a repair, a reclassification, or a backfill — and
+   then exactly that change.
+5. **The chain ends correct.** After the last migration,
+   `SELECT value FROM _metadata WHERE key = 'schema_version'` returns
+   `SchemaVersion`, `PRAGMA integrity_check` returns the single row `ok`, and
+   `PRAGMA foreign_key_check` returns no row.
+
+**The test suite verifies the chain from every released schema version.** It keeps
+one fixture database for each released schema version, starting with the first,
+`1.0.0`. A schema version is released when a published release of `rmp` creates new
+databases at it. `1.0.0` has a fixture whether or not a release published it,
+because it is the first version of the chain. Each fixture:
+
+1. is a database at exactly that schema version, created by the schema of that
+   version and populated with realistic data that exercises every table the version
+   has;
+2. is immutable once added: a later change to the schema adds a fixture for its own
+   version when it is released, and never edits an existing one;
+3. is migrated by the current binary on a copy, never in place, and the test
+   asserts every item of the guarantee above for that copy: the final version is
+   `SchemaVersion`, the integrity and foreign-key checks are clean, every row the
+   fixture held is present with its values except for the changes the migrations
+   below state, and a second open applies nothing.
+
+A release that introduces a new schema version adds the fixture for that version in
+the same release.
 
 ### Migration Commands
 
@@ -989,6 +1080,157 @@ definition.
 6. Running the migration set twice against the same database produces the same result as running it once, and raises no error.
 7. If any step fails, `_metadata.schema_version` remains `1.14.0` and the index set is the one the database held before the migration.
 8. After the migration, `SELECT value FROM _metadata WHERE key = 'schema_version'` returns `1.15.0`.
+
+### Migration 1.15.0 → 1.16.0
+
+Brings existing rows under the sprint membership invariant
+(`STATE_MACHINE.md § Sprint Membership and the BACKLOG Status`), which application
+code enforces from this version on (`DATABASE.md § Sprint Membership Invariant
+Enforcement`).
+The invariant has two halves: a sprint member is never in `BACKLOG`, and a task in
+`SPRINT`, `DOING` or `TESTING` belongs to a sprint. Before 1.16.0 neither was
+enforced, and three commands produced a member in `BACKLOG` status:
+`task stat <ids> BACKLOG` from `SPRINT`, `task stat <ids> BACKLOG` from `COMPLETED`,
+and `task reopen` from `COMPLETED`. No command produces an active task outside every
+sprint, but data written outside these rules may hold one. The migration repairs both.
+It adds no table, column, index or trigger: the schema uses no triggers
+(`DATABASE.md § Business Rules Are Enforced by Application Code`).
+
+**Repair A: an active task outside every sprint returns to `BACKLOG`.** Every task in
+`SPRINT`, `DOING` or `TESTING` status that has no `sprint_tasks` row is set to
+`BACKLOG`, and the fields removal from a sprint clears are cleared: `started_at`,
+`tested_at`, `closed_at`, `completion_summary` and `commit_close` become NULL, and
+`commit_open` and every other column are kept. Each such task receives exactly one
+audit entry, the operation removal from a sprint writes:
+
+| Column | Value |
+|--------|-------|
+| `operation` | `TASK_STATUS_BACKLOG` |
+| `entity_type` / `entity_id` | `TASK` / the repaired task |
+| `related_entity_id` | NULL: no sprint is party to the repair, because the task belongs to none |
+| `commit_hash` | NULL |
+| `performed_at` | The migration's one timestamp (below) |
+
+**Repair B: a sprint member in `BACKLOG` becomes `SPRINT`.** Every sprint member found in `BACKLOG` status is set to `SPRINT`. It
+keeps its `sprint_tasks` row, its sprint and its `position`, and every other column
+of the task is left as it is. Each repaired task receives exactly one audit entry,
+written before the status is changed, so that the statement that selects the members
+to record reads rows the repair has not yet rewritten:
+
+| Column | Value |
+|--------|-------|
+| `operation` | `TASK_STATUS_SPRINT`, the operation that records a task entering `SPRINT` in a sprint |
+| `entity_type` / `entity_id` | `TASK` / the repaired task |
+| `related_entity_id` | The sprint the task belongs to |
+| `commit_hash` | NULL |
+| `performed_at` | One timestamp for the whole migration, the moment it runs, in the format of `DATA_FORMATS.md § Dates - ISO 8601 with UTC` |
+
+The entries are the record of a status change the database really underwent, which
+is why this migration writes audit entries while the migration to 1.12.0 writes none
+of its own: that one reclassified entries and changed no task. A roadmap that holds no
+such member receives no entry.
+
+The two repairs touch disjoint sets of tasks — repair A only tasks with no
+`sprint_tasks` row, repair B only tasks with one — and neither can create a violation
+the other would have to repair: repair A writes `BACKLOG` on non-members only, and
+repair B writes `SPRINT` on members only. Both invariants therefore hold once both
+have run. Every audit entry is written
+before the status change it records, so each selecting statement reads rows the
+repair has not yet rewritten.
+
+```sql
+-- A1. Record repair A: one TASK_STATUS_BACKLOG entry per active task outside every
+--     sprint, with no counterpart sprint.
+INSERT INTO audit (operation, entity_type, entity_id, related_entity_id, commit_hash, performed_at)
+SELECT 'TASK_STATUS_BACKLOG', 'TASK', t.id, NULL, NULL, ?
+FROM tasks t
+WHERE t.status IN ('SPRINT', 'DOING', 'TESTING')
+  AND NOT EXISTS (SELECT 1 FROM sprint_tasks st WHERE st.task_id = t.id)
+ORDER BY t.id ASC;
+
+-- A2. Repair A: return those tasks to BACKLOG, clearing what removal from a sprint
+--     clears and keeping commit_open.
+UPDATE tasks
+SET status = 'BACKLOG', started_at = NULL, tested_at = NULL, closed_at = NULL,
+    completion_summary = NULL, commit_close = NULL
+WHERE status IN ('SPRINT', 'DOING', 'TESTING')
+  AND id NOT IN (SELECT task_id FROM sprint_tasks);
+
+-- 1. Record repair B: one TASK_STATUS_SPRINT entry per sprint member in BACKLOG,
+--    naming its sprint, before the repair rewrites the rows this reads.
+INSERT INTO audit (operation, entity_type, entity_id, related_entity_id, commit_hash, performed_at)
+SELECT 'TASK_STATUS_SPRINT', 'TASK', st.task_id, st.sprint_id, NULL, ?
+FROM sprint_tasks st
+JOIN tasks t ON t.id = st.task_id
+WHERE t.status = 'BACKLOG'
+ORDER BY st.task_id ASC;
+
+-- 2. Repair B: every sprint member in BACKLOG becomes SPRINT; membership, position
+--    and every other column are kept.
+UPDATE tasks SET status = 'SPRINT'
+WHERE status = 'BACKLOG' AND id IN (SELECT task_id FROM sprint_tasks);
+
+-- 3. Verify: the sprint membership guard is applied to every task of the roadmap;
+--    a violation it finds fails the migration.
+--    See DATABASE.md § Sprint Membership Invariant Enforcement
+
+-- Update schema version
+UPDATE _metadata SET value = '1.16.0' WHERE key = 'schema_version';
+```
+
+The steps run in this order inside the migration's one transaction, and the
+verification runs last, over every task, so the migration commits only a roadmap
+that satisfies both halves. A failure rolls every step back, the audit entries included, and leaves
+`_metadata.schema_version` at `1.15.0`. Re-applying the migration is a no-op in
+effect: after the repairs no member is in `BACKLOG` and no active task is outside
+every sprint, so steps A1, A2, 1 and 2 select nothing,
+and the verification finds nothing.
+
+#### Acceptance criteria
+
+1. On a database holding sprint members in `BACKLOG` status, or tasks in `SPRINT`, `DOING` or `TESTING` status that belong to no sprint, after the migration neither remains: `SELECT COUNT(*) FROM tasks WHERE status IN ('SPRINT', 'DOING', 'TESTING') AND id NOT IN (SELECT task_id FROM sprint_tasks)` returns `0`, and `SELECT COUNT(*) FROM sprint_tasks st JOIN tasks t ON t.id = st.task_id WHERE t.status = 'BACKLOG'` returns `0`.
+2. Every repaired task is in `SPRINT` status, belongs to the sprint it belonged to, holds the `position` it held, and has every other column unchanged.
+3. The migration writes exactly one `TASK_STATUS_SPRINT` entry per task repair B repairs, with `entity_type = TASK`, `entity_id` the task, `related_entity_id` its sprint, NULL `commit_hash`, and one `performed_at` shared by all of them, and writes no audit entry other than these and the `TASK_STATUS_BACKLOG` entries of criterion 4.
+4. A task in `BACKLOG` status that belongs to no sprint is unchanged, and receives no entry. A task in `SPRINT`, `DOING` or `TESTING` status that belonged to no sprint is in `BACKLOG` after the migration, with `started_at`, `tested_at`, `closed_at`, `completion_summary` and `commit_close` NULL and `commit_open` unchanged, and has exactly one new `TASK_STATUS_BACKLOG` entry with NULL `related_entity_id`, NULL `commit_hash`, and the shared `performed_at`. A `COMPLETED` task that belongs to no sprint is unchanged.
+5. After the migration, `SELECT COUNT(*) FROM sqlite_master WHERE type = 'trigger'` returns `0`: the migration installs no trigger.
+6. Running the migration set twice against the same database produces the same result as running it once, writes no second set of entries, and raises no error.
+7. If any step fails, `_metadata.schema_version` remains `1.15.0`, and the `tasks` and `audit` tables are the ones the database held before the migration.
+8. After the migration, `SELECT value FROM _metadata WHERE key = 'schema_version'` returns `1.16.0`.
+
+### Migration 1.16.0 → 1.17.0
+
+Drops `idx_sprints_created_at`, the index on `sprints(created_at)`, which serves no
+statement the application issues (`DATABASE.md § Index Design Rationale`). A fresh
+database created at 1.17.0 never holds it, because
+`DATABASE.md § DDL - Table Creation` does not declare it; the migration brings every
+existing database to the same index set.
+
+The migration drops one index and does nothing else. It adds no table, column,
+index or trigger, rebuilds no table, and changes no row: no read returns different
+rows or a different order after it. The schema uses no triggers
+(`DATABASE.md § Business Rules Are Enforced by Application Code`).
+
+```sql
+-- 1. Drop the index that serves no statement.
+DROP INDEX IF EXISTS idx_sprints_created_at;
+
+-- Update schema version
+UPDATE _metadata SET value = '1.17.0' WHERE key = 'schema_version';
+```
+
+The migration runs in one transaction, like every migration: a failure rolls every
+step back and leaves `_metadata.schema_version` at `1.16.0`. Re-applying it is a
+no-op, because the drop is guarded by `IF EXISTS`.
+
+#### Acceptance criteria
+
+1. A database created at any earlier schema version, once migrated, and a fresh database created at 1.17.0 both report `1.17.0` from `SELECT value FROM _metadata WHERE key = 'schema_version'`.
+2. For every table, `PRAGMA index_list` on the migrated database reports exactly the set of indexes it reports on the fresh database, and `PRAGMA index_xinfo` reports the same columns, order and direction for each of them.
+3. After the migration, `SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND name = 'idx_sprints_created_at'` returns `0`.
+4. The migration leaves the row count of every table unchanged, and leaves every row unchanged.
+5. After the migration, `SELECT COUNT(*) FROM sqlite_master WHERE type = 'trigger'` returns `0`: the migration installs no trigger.
+6. Opening the migrated database a second time applies no migration step, changes no row and no index, and raises no error.
+7. If any step fails, `_metadata.schema_version` remains `1.16.0` and the index set is the one the database held before the migration.
 
 ## Release Process
 

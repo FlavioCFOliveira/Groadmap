@@ -133,12 +133,12 @@ func TestLogAuditTxRejectsACounterpartOnAnOperationThatHasNone(t *testing.T) {
 		  WHERE related_entity_id IS NOT NULL
 		    AND operation NOT IN ('SPRINT_ADD_TASK', 'TASK_STATUS_SPRINT', 'SPRINT_REMOVE_TASK',
 		                          'TASK_STATUS_BACKLOG', 'SPRINT_MOVE_TASK_OUT', 'SPRINT_MOVE_TASK_IN',
-		                          'TASK_ADD_DEP', 'TASK_REMOVE_DEP')`,
+		                          'TASK_SPRINT_CHANGE', 'TASK_ADD_DEP', 'TASK_REMOVE_DEP')`,
 	).Scan(&stored); err != nil {
 		t.Fatalf("checking the table-wide invariant: %v", err)
 	}
 	if stored != 0 {
-		t.Errorf("%d rows carry a counterpart on an operation outside the eight; the invariant of "+
+		t.Errorf("%d rows carry a counterpart on an operation outside the nine; the invariant of "+
 			"SPEC/DATABASE.md § The Two Entities of a Relational Operation, acceptance criterion 7, does "+
 			"not hold", stored)
 	}

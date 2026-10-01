@@ -142,8 +142,8 @@ The rule fixes, among others, these outcomes:
 - `rmp roadmap create help` and `rmp roadmap remove help` write the help of their
   subcommand and create or remove nothing: a positional argument stands in a token
   position, so the word `help` cannot be supplied as a roadmap name there. A
-  roadmap named `help` made outside the CLI is listed by `rmp roadmap list` and
-  reachable by no command, exactly as one named `con` is.
+  roadmap named `help` made outside the CLI is reachable by no command and is not
+  listed by `rmp roadmap list`, exactly as one named `con` is.
 
 **A token that carries a value after an `=` is refused, never served.**
 `--help=<value>` and `-h=<value>`, whatever the value and including the empty
@@ -421,12 +421,24 @@ machine-readable AI Agent Contract (`rmp --ai-help`) MUST document them:
    assumption is that a tool storing a commit hash can discover it; the contract's
    `pitfalls` array carries the same warning (see
    `DATA_FORMATS.md § pitfalls array entry`).
-5. **What a return to `BACKLOG` does to each field.** The `task stat` and
-   `task reopen` helps both describe the clearing behaviour of a return to
-   `BACKLOG`. Both MUST name `commit_close` among the cleared fields and MUST state
-   that `commit_open` is preserved, because the asymmetry contradicts the pattern
-   every other tracking field follows and a reader who assumes symmetry would be
-   wrong. `STATE_MACHINE.md § Commit Tracking Fields` is canonical for the rule.
+5. **What a reopening and a return to `BACKLOG` do to each field.** The
+   `task reopen` help describes the clearing behaviour of a reopening, which returns
+   the task to `SPRINT` in its sprint, and the `sprint remove-tasks` help that of a
+   return to `BACKLOG`. Both MUST name `commit_close` among the cleared fields and
+   MUST state that `commit_open` is preserved. The `task stat` help MUST state that
+   the target `BACKLOG` is refused for every sprint member, and MUST NOT describe
+   `task stat` as a way back to `BACKLOG`. The commit fields are named because their
+   asymmetry contradicts the pattern every other tracking field follows, and a reader
+   who assumes symmetry would be wrong. `STATE_MACHINE.md § Commit Tracking Fields` is canonical for the rule.
+   Every surface that summarises `task reopen` in one line names the same
+   destination: the `reopen` entry of the `task` family help's `Commands:` list,
+   the subcommand help's description, and the subcommand's summary in the AI Agent
+   Contract each state that the task returns to `SPRINT` in its sprint, and none
+   of them names `BACKLOG` as the destination of a reopening. The one exception a
+   surface may state is the legacy case of a `COMPLETED` task that belongs to no
+   sprint, which `task reopen` returns to `BACKLOG`, and it is stated as that
+   exception, never as the general destination.
+   `STATE_MACHINE.md § Reopening Behavior` is canonical for the destination.
 
 6. **Where the hash is recorded.** The help MUST state that the supplied hash is
    written both to the task and to the audit entry for the transition, and that the
@@ -767,9 +779,13 @@ explicit, because a reader cannot infer them from the generic template:
 2. **Body input.** State, on `comment-add` and `comment-edit`, that the comment
    body comes from `-b, --body` or, when that flag is absent, from standard
    input, and that supplying neither is an error (exit code 2). On
-   `comment-edit`, state additionally that standard input is read only when
-   `--type` is absent as well, so a type-only edit does not wait for input. See
-   `COMMANDS.md § Comment Body Input Source and Precedence`.
+   `comment-edit`, state additionally that standard input is the new body only
+   when `--type` is absent as well; that on a type-only edit a terminal on
+   standard input is not read, so a type-only edit typed at a terminal does not
+   wait for input; and that a type-only edit whose standard input carries data
+   is refused (exit code 2) rather than applied with the data ignored. The help
+   MUST NOT state that standard input is never read when `--type` is present.
+   See `COMMANDS.md § Comment Body Input Source and Precedence`, rule 7.
 3. **Which id the command takes.** State, on `comment-edit` and
    `comment-remove`, that the positional argument is the comment's own id and not
    the id of the task or sprint it belongs to, and that task comment ids and
@@ -936,9 +952,11 @@ or user cannot infer from the generic template:
    server never writes to a roadmap's `project.db`; that the graph page's query
    bar is the exception, because the statement it submits is executed as written
    and may create, change, or delete graph data, with no authentication; and that
-   the server binds loopback (`127.0.0.1`) by default, so it is reachable only
-   from the local machine. State that
-   `--host 0.0.0.0` is the explicit opt-in to expose it on all interfaces
+   the server binds loopback (`127.0.0.1`) by default, so no other machine can
+   connect to it. The help states that connection fact and nothing more: the
+   bind does not decide which requests are served, and the help does not restate
+   the rules that do (`WEB.md § Security and Constraints`, rules 13 and 14).
+   State that `--host 0.0.0.0` is the explicit opt-in to expose it on all interfaces
    (network-reachable); and that `--host`/`--port` override the bind address,
    with the default-port ephemeral fallback. See `WEB.md`.
 3. **Long-lived process.** State that the command starts a server that keeps
@@ -961,8 +979,9 @@ type, including statements that write or delete, and it is not
 authenticated. rmp web does not take -r/--roadmap.
 
 Options:
-  --host <address>   Bind host. Default 127.0.0.1 (loopback, local machine
-                     only). Use --host 0.0.0.0 to expose on the network.
+  --host <address>   Bind host. Default 127.0.0.1 (loopback: no other
+                     machine can connect). Use --host 0.0.0.0 to expose
+                     on the network.
   --port <number>    Bind port 0-65535. Default 8787; falls back to an
                      ephemeral port if 8787 is in use and --port is not set.
   --no-open          Do not launch a browser; just print the served URL.

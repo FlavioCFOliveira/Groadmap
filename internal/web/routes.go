@@ -73,11 +73,19 @@ func securityHeaders(next http.Handler) http.Handler {
 	})
 }
 
-// handler builds the fully wired read-only HTTP handler: the route mux wrapped
-// by the security-header middleware, which is the outermost layer so every
-// response carries the hardening headers.
-func handler() http.Handler {
-	return securityHeaders(buildMux())
+// newHandler builds the fully wired HTTP handler for a listener bound as policy
+// describes: the route mux behind the request guard, both wrapped by the
+// security-header middleware.
+//
+// The security-header middleware is the outermost layer, so every response —
+// a refusal included — carries the hardening headers. The request guard sits
+// directly inside it and ahead of the mux, so a request with a host this
+// listener does not serve, or one a browser made on behalf of another site, is
+// refused before any route is matched, any method examined, or any roadmap,
+// database, or socket touched (SPEC/WEB.md § Security and Constraints, rules 13
+// to 15).
+func newHandler(policy hostPolicy) http.Handler {
+	return securityHeaders(guardRequests(policy, buildMux()))
 }
 
 // buildMux wires the read-only routes onto an http.ServeMux. Go 1.22+
@@ -192,8 +200,7 @@ func resolveRoadmap(w http.ResponseWriter, r *http.Request) (string, bool) {
 		// roadmap that cannot be resolved is logged: the 404 branches below are
 		// ordinary navigation outcomes and stay silent
 		// (SPEC/WEB.md § What Is Not Logged, rule 1).
-		logServerError(r, "roadmap existence check failed", err, slog.String("roadmap", name))
-		http.Error(w, "internal server error", http.StatusInternalServerError)
+		failServer(w, r, "roadmap existence check failed", err, slog.String("roadmap", name))
 		return "", false
 	}
 	if !exists {

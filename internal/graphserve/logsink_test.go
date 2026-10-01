@@ -373,17 +373,33 @@ func TestDropSink_DropsTheOldestAndKeepsTheNewest(t *testing.T) {
 // count that reaches somebody. A sink that loses records silently trades a noisy
 // failure mode for a quiet one, which is the whole objection to dropping at all.
 //
-// # What is asserted, and why not the literal number
+// # What is asserted: the accounting, over EVERY report
 //
-// The count is checked against the INVARIANT rather than against a constant:
-// every record written either arrived or was counted as dropped, so survivors
-// plus reported drops must equal what was written. The literal number cannot be
-// asserted, because at most one record may have left the ring before it filled
-// (see [TestDropSink_DropsTheOldestAndKeepsTheNewest]) and the drop count is 39
-// or 40 depending on whether the drain goroutine was scheduled — a distinction
-// with no meaning. The invariant is both scheduling-independent and stronger:
-// it fails on a count that is short, on a count that is inflated, and on a
-// record that vanished without being counted at all.
+// SPEC/GRAPH.md § Server Diagnostics on Stderr publishes three guarantees and
+// withholds a fourth, and this test asserts exactly the three:
+//
+//   - every dropped record is counted in exactly one report;
+//   - the counts of the reports sum to the records dropped, so survivors plus
+//     the summed counts equal what was written;
+//   - each report precedes the delivered records that follow the records it
+//     counts, so it sits in the stream where its gap is.
+//
+// The NUMBER of reports is not guaranteed, and an earlier version of this test
+// asserted exactly one, which failed 6 to 10 times in 300 at -test.cpu=16 (rmp
+// task #571). The product was right and the assertion was not. Instrumented, the
+// failures all had two reports whose counts summed to the drops — 35 and 4, 16
+// and 23, each summing to 39 with 257 survivors of 296 written — and the
+// mechanism is the one the specification describes: the drain goroutine is
+// started by the first write but may not run until the ring has already
+// overflowed; its first take hands the count accumulated so far to a report and
+// resets it under the lock; the report then blocks on the stalled destination
+// while the writer, still writing, drops more; and the next take reports those.
+// One stall announced by two reports, each counting only the drops since the one
+// before it.
+//
+// The sum is both scheduling-independent and stronger than any per-report
+// figure: it fails on a count that is short, on one that is inflated, on a drop
+// counted twice, and on a record that vanished without being counted at all.
 func TestDropSink_ReportsWhatItDropped(t *testing.T) {
 	destination := newBlockingWriter()
 	sink := newDropSink(destination)
@@ -398,13 +414,39 @@ func TestDropSink_ReportsWhatItDropped(t *testing.T) {
 	waitFor(t, func() bool { return len(destination.records()) >= logQueueDepth })
 
 	var reports []string
-	survivors := 0
+	survivors, dropped := 0, 0
 	for _, record := range destination.records() {
 		line := strings.TrimSpace(string(record))
 		switch {
 		case strings.Contains(line, "graph server diagnostics were dropped"):
 			reports = append(reports, line)
+			match := reportedDrops.FindStringSubmatch(line)
+			if match == nil {
+				t.Fatalf("a report carries no dropped= count, so the operator is told records were "+
+					"lost but not how many.\nreport: %s", line)
+			}
+			count, err := strconv.Atoi(match[1])
+			if err != nil {
+				t.Fatalf("the dropped= count %q is not a number\nreport: %s", match[1], line)
+			}
+			if count <= 0 {
+				t.Errorf("a report counts %d dropped records; a report is written only for drops, "+
+					"so a zero or negative count is a report of nothing.\nreport: %s", count, line)
+			}
+			dropped += count
 		case strings.HasPrefix(line, "record-"):
+			seq, err := strconv.Atoi(strings.TrimPrefix(line, "record-"))
+			if err != nil {
+				t.Fatalf("a delivered record %q carries no sequence number", line)
+			}
+			// Every record written before this one and not delivered was
+			// dropped, and each such drop must already have been counted by a
+			// report that precedes this record in the stream.
+			if missing := seq - survivors; dropped < missing {
+				t.Errorf("record %q was delivered after %d earlier records were dropped, but the "+
+					"reports before it count only %d: a gap is announced after the record that "+
+					"follows it, not where it is", line, missing, dropped)
+			}
 			survivors++
 		}
 	}
@@ -413,35 +455,23 @@ func TestDropSink_ReportsWhatItDropped(t *testing.T) {
 		t.Fatalf("records were dropped and nothing on the stream said so. The count must reach the " +
 			"operator where the gap is, or the sink has traded a loud failure for a silent one")
 	}
-	if len(reports) != 1 {
-		t.Errorf("got %d dropped-records reports, want exactly 1: nothing was written after the "+
-			"destination reopened, so a second report means a count was carried forward and "+
-			"announced twice.\nreports: %v", len(reports), reports)
-	}
-
-	match := reportedDrops.FindStringSubmatch(reports[0])
-	if match == nil {
-		t.Fatalf("the report carries no dropped= count, so the operator is told records were lost "+
-			"but not how many.\nreport: %s", reports[0])
-	}
-	dropped, err := strconv.Atoi(match[1])
-	if err != nil {
-		t.Fatalf("the dropped= count %q is not a number\nreport: %s", match[1], reports[0])
-	}
 
 	if survivors+dropped != written {
-		t.Errorf("%d records survived and %d were reported dropped, which accounts for %d of the %d "+
-			"written. Every record must be either delivered or counted: a shortfall means records "+
-			"vanished unannounced, and a surplus means the count is wrong",
-			survivors, dropped, survivors+dropped, written)
+		t.Errorf("%d records survived and %d were reported dropped across %d report(s), which "+
+			"accounts for %d of the %d written. Every record must be either delivered or counted "+
+			"in exactly one report: a shortfall means records vanished unannounced, and a surplus "+
+			"means a drop was counted twice.\nreports: %v",
+			survivors, dropped, len(reports), survivors+dropped, written, reports)
 	}
 
-	// The report is a record like any other: same handler, same shape, same
+	// Every report is a record like any other: same handler, same shape, same
 	// canonical timestamp. A hand-assembled line would drift from the rest and
 	// would meet a reader, or a parser, as something it does not recognise.
-	if !strings.HasPrefix(reports[0], "time=") || !strings.Contains(reports[0], "level=WARN") {
-		t.Errorf("the report is not in the shape of the other records on this stream.\nreport: %s",
-			reports[0])
+	for _, report := range reports {
+		if !strings.HasPrefix(report, "time=") || !strings.Contains(report, "level=WARN") {
+			t.Errorf("a report is not in the shape of the other records on this stream.\nreport: %s",
+				report)
+		}
 	}
 }
 

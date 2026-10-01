@@ -19,8 +19,8 @@
 //     PARSED OUT OF THE SPEC TABLE rather than transcribed here, so a path added
 //     to the published table with no case fails this file, and a case naming a
 //     path the table does not publish fails it too.
-//  2. TestPositionDensity_RemovingFromTheMiddleLeavesNoGap attacks the four
-//     paths the table marks "Leaves a gap" — and that set of four is likewise
+//  2. TestPositionDensity_RemovingFromTheMiddleLeavesNoGap attacks the
+//     paths the table marks "Leaves a gap" — and that set is likewise
 //     derived from the table, not typed out. Each removes a member from the
 //     MIDDLE of a sprint, because removing the LAST member proves nothing: a
 //     dense run minus its last element is dense whether or not anything
@@ -28,10 +28,11 @@
 //  3. TestMoveTaskToPosition_OverADenseRun covers the five moves the section
 //     enumerates for `Move Task to Position`.
 //
-// The defect these gates close: four removals took a row out of a sprint's run
-// and none of them compacted. Three of the four repair a sprint the caller's
-// arguments never name, which is why they went unnoticed for so long — the
-// damage lands somewhere the invocation does not mention. The measured instance
+// The defect these gates close: the removals that took a row out of a sprint's
+// run did not compact it. Some of them damage a sprint the caller's arguments
+// never name — the re-parenting form of `sprint add-tasks` still does — which
+// is why they went unnoticed for so long: the damage lands somewhere the
+// invocation does not mention. The measured instance
 // was a sprint left holding 39 members at positions 0..36, 53 and 57 by the
 // source side of `sprint move-tasks`.
 package commands
@@ -63,15 +64,26 @@ const (
 )
 
 // Floors below which the parse is treated as evidence that the scan stopped
-// matching, rather than as evidence about the specification. The table holds 13
-// rows naming 12 distinct write paths today, four of which leave a gap; the
-// floors sit under those numbers so a legitimate removal does not trip them and
-// far enough above zero that a gate measuring nothing cannot report success.
+// matching, rather than as evidence about the specification. The table holds 11
+// rows naming 11 distinct write paths today, two of which leave a gap; the
+// floors sit under or at those numbers so a legitimate removal of a path that
+// does not leave a gap does not trip them, and far enough above zero that a
+// gate measuring nothing cannot report success.
 const (
 	minDensityRows     = 10
 	minDensityPaths    = 8
-	minGapLeavingPaths = 4
+	minGapLeavingPaths = 2
 )
+
+// densityUntouchedPhrases are the phrases with which the published table's
+// second cell says a write path leaves sprint_tasks as it found it: `task
+// reopen` keeps the membership row, and `task remove` deletes a BACKLOG task,
+// which belongs to no sprint, so no membership row is touched.
+var densityUntouchedPhrases = []string{
+	"Does not touch",
+	"Keeps the membership row",
+	"no membership row is touched",
+}
 
 // densityCommandInCell matches a backticked token in the table's first cell and
 // keeps only the ones that name a command: a lowercase family word followed by
@@ -87,8 +99,8 @@ type densityWritePath struct {
 	// leavesGap is true when at least one of the path's rows says the operation
 	// takes a row out of a sprint's run.
 	leavesGap bool
-	// touchesTable is false only for a path whose rows all say it does not
-	// write sprint_tasks at all.
+	// touchesTable is false only for a path whose rows all say, in one of the
+	// densityUntouchedPhrases, that it leaves sprint_tasks as it found it.
 	touchesTable bool
 }
 
@@ -144,7 +156,12 @@ func parseDensityWritePaths(t *testing.T) ([]densityWritePath, int) {
 
 		rows++
 		leavesGap := strings.Contains(cells[2], "Leaves a gap")
-		touches := !strings.Contains(cells[1], "Does not touch")
+		touches := true
+		for _, phrase := range densityUntouchedPhrases {
+			if strings.Contains(cells[1], phrase) {
+				touches = false
+			}
+		}
 
 		matches := densityCommandInCell.FindAllStringSubmatch(cells[0], -1)
 		if len(matches) == 0 {
@@ -238,7 +255,7 @@ func TestPositionDensity_SpecTableParses(t *testing.T) {
 	}
 	if touching == len(paths) {
 		t.Errorf("every parsed write path is marked as touching sprint_tasks; the published table " +
-			"holds one that does not (`task stat <ids> BACKLOG`), so the \"Does not touch\" branch " +
+			"holds two that do not (`task reopen` and `task remove`), so the untouched branch " +
 			"of the parse is never taken and its assertion is vacuous")
 	}
 }
@@ -455,9 +472,9 @@ func (f *densityFixture) snapshot(t *testing.T) []membership {
 }
 
 // assertDense is the invariant itself, checked over EVERY sprint in the
-// roadmap rather than over the one an operation named. Three of the four
-// gap-opening paths damage a sprint the invocation does not mention, so a check
-// scoped to the named sprint would look right and see nothing.
+// roadmap rather than over the one an operation named. A gap-opening path can
+// damage a sprint the invocation does not mention, so a check scoped to the
+// named sprint would look right and see nothing.
 func (f *densityFixture) assertDense(t *testing.T, label string) {
 	t.Helper()
 
@@ -687,19 +704,17 @@ func densityCases() []densityCase {
 		{
 			command: "task reopen",
 			exercise: func(t *testing.T, f *densityFixture) {
-				// Both forms the table distinguishes: from a sprint-associated
-				// state, which deletes the membership row and leaves a gap, and
-				// from COMPLETED, which keeps it.
+				// From DOING and from COMPLETED: a reopening returns the task
+				// to SPRINT in its sprint and keeps its row and its position.
 				members := f.order(t, f.running)
 				f.walkToDoing(t, members[2])
 				run(t, func() error {
 					return taskReopen([]string{"-r", f.roadmap, itoa(members[2])})
 				})
 
-				survivors := f.order(t, f.running)
-				f.walkToCompleted(t, survivors[1])
+				f.walkToCompleted(t, members[1])
 				run(t, func() error {
-					return taskReopen([]string{"-r", f.roadmap, itoa(survivors[1])})
+					return taskReopen([]string{"-r", f.roadmap, itoa(members[1])})
 				})
 			},
 		},
@@ -707,23 +722,9 @@ func densityCases() []densityCase {
 			command: "task remove",
 			exercise: func(t *testing.T, f *densityFixture) {
 				// `task remove` refuses anything but BACKLOG, and a BACKLOG task
-				// can still be a sprint member: `task stat <ids> BACKLOG` is the
-				// route into exactly that state.
-				middle := f.order(t, f.running)[2]
+				// belongs to no sprint, so the removal reaches no membership row.
 				run(t, func() error {
-					return taskSetStatus([]string{"-r", f.roadmap, itoa(middle), string(models.StatusBacklog)})
-				})
-				run(t, func() error {
-					return taskRemove([]string{"-r", f.roadmap, itoa(middle)})
-				})
-			},
-		},
-		{
-			command: "task stat <ids> BACKLOG",
-			exercise: func(t *testing.T, f *densityFixture) {
-				middle := f.order(t, f.running)[2]
-				run(t, func() error {
-					return taskSetStatus([]string{"-r", f.roadmap, itoa(middle), string(models.StatusBacklog)})
+					return taskRemove([]string{"-r", f.roadmap, itoa(f.newTask(t))})
 				})
 			},
 		},
@@ -800,7 +801,7 @@ func TestPositionDensity_EveryPublishedWritePathLeavesADenseRun(t *testing.T) {
 // Gate 2: removing from the MIDDLE of a sprint
 // ---------------------------------------------------------------------------
 
-// middleRemoval is one of the four paths that take a row out of a sprint's run.
+// middleRemoval is one of the paths that take a row out of a sprint's run.
 // Each removes the member at index 2 of a five-member sprint, so two members
 // sit on each side of the hole it opens.
 type middleRemoval struct {
@@ -815,8 +816,8 @@ type middleRemoval struct {
 }
 
 // middleRemovals holds one entry per path the published table marks "Leaves a
-// gap". The set is checked against the parse, so the four cannot quietly become
-// three or five.
+// gap". The set is checked against the parse, so the two cannot quietly become
+// one or three.
 func middleRemovals() []middleRemoval {
 	return []middleRemoval{
 		{
@@ -835,26 +836,6 @@ func middleRemovals() []middleRemoval {
 				run(t, func() error {
 					return sprintMoveTasks([]string{"-r", f.roadmap,
 						itoa(sprintID), itoa(f.planned), itoa(taskID)})
-				})
-			},
-		},
-		{
-			command: "task reopen",
-			remove: func(t *testing.T, f *densityFixture, _, taskID int) {
-				f.walkToDoing(t, taskID)
-				run(t, func() error {
-					return taskReopen([]string{"-r", f.roadmap, itoa(taskID)})
-				})
-			},
-		},
-		{
-			command: "task remove",
-			remove: func(t *testing.T, f *densityFixture, _, taskID int) {
-				run(t, func() error {
-					return taskSetStatus([]string{"-r", f.roadmap, itoa(taskID), string(models.StatusBacklog)})
-				})
-				run(t, func() error {
-					return taskRemove([]string{"-r", f.roadmap, itoa(taskID)})
 				})
 			},
 		},
