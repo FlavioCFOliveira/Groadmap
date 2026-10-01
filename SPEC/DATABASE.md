@@ -138,15 +138,35 @@ Each roadmap is stored in an individual SQLite database. The schema is designed 
 
 ## DDL - Table Creation
 
+**Every DDL block below is canonical.** Each table section opens with one fenced
+`sql` block: the first fenced block after the section's `###` heading. The text
+between that block's fences is byte-identical to the Go raw string literal of
+`internal/db/schema.go` that `CreateSchema` executes for the table, without the
+newline that opens that literal, and a test enforces the identity for every table.
+A change to a table's DDL is made in its block first and copied into the literal
+unchanged. Each block holds only the `CREATE TABLE` and `CREATE INDEX` statements
+of its table, with their comments; no block holds a statement the code issues with
+bound values.
+
+| Section heading | Literal in `internal/db/schema.go` |
+|-----------------|------------------------------------|
+| `` ### `tasks` Table `` | `tasksDDL` |
+| `` ### `sprints` Table `` | `sprintsDDL` |
+| `` ### `sprint_tasks` Table (1:N Relationship) `` | `sprintTasksDDL` |
+| `` ### `audit` Table `` | `auditDDL` |
+| `` ### `task_dependencies` Table `` | `taskDependenciesDDL` |
+| `` ### `task_comments` Table `` | `taskCommentsDDL` |
+| `` ### `sprint_comments` Table `` | `sprintCommentsDDL` |
+| `` ### `_metadata` Table `` | `metadataDDL` |
+
 ### `tasks` Table
 
 ```sql
 CREATE TABLE IF NOT EXISTS tasks (
-    -- Primary key
     id INTEGER PRIMARY KEY AUTOINCREMENT,
 
     -- Group 1: Content fields (TEXT) - frequently accessed together
-    -- Length constraints enforced by application (255 chars for title, 4096 for requirements/criteria)
+    -- Length limits are validated by the application first and enforced by the CHECK constraints
     title TEXT NOT NULL CHECK(length(title) <= 255),                    -- Task title/summary, max 255 chars
     status TEXT NOT NULL DEFAULT 'BACKLOG' CHECK(status IN ('BACKLOG', 'SPRINT', 'DOING', 'TESTING', 'COMPLETED')),
     type TEXT NOT NULL DEFAULT 'TASK' CHECK(type IN ('USER_STORY', 'TASK', 'BUG', 'SUB_TASK', 'EPIC', 'REFACTOR', 'CHORE', 'SPIKE', 'DESIGN_UX', 'IMPROVEMENT')),
@@ -175,7 +195,9 @@ CREATE TABLE IF NOT EXISTS tasks (
 CREATE INDEX IF NOT EXISTS idx_tasks_created_at ON tasks(created_at);
 
 -- Composite indexes, each supplying one ordering of the task listing in full,
--- tie-breaker included, so the listing needs no sort step (see Index Design Rationale)
+-- tie-breaker included, so the listing needs no sort step. No single-column index
+-- on status or priority: each would be a leading prefix of one of these
+-- (see DATABASE.md § Index Design Rationale).
 -- Covers: the status filter in the default ordering, and the status ordering
 CREATE INDEX IF NOT EXISTS idx_tasks_status_priority ON tasks(status, priority DESC, created_at ASC);
 -- Covers: the type filter in the default ordering
@@ -184,7 +206,8 @@ CREATE INDEX IF NOT EXISTS idx_tasks_type ON tasks(type, priority DESC, created_
 CREATE INDEX IF NOT EXISTS idx_tasks_priority_created ON tasks(priority DESC, created_at ASC);
 -- Covers: the severity ordering
 CREATE INDEX IF NOT EXISTS idx_tasks_severity_priority ON tasks(severity DESC, priority DESC, created_at ASC);
--- Covers: sub-task hierarchy lookups (GetSubTasks)
+
+-- Covers: sub-task hierarchy lookups
 CREATE INDEX IF NOT EXISTS idx_tasks_parent_task_id ON tasks(parent_task_id);
 ```
 
@@ -224,11 +247,6 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_one_open_sprint ON sprints(status) WHERE s
 CREATE UNIQUE INDEX IF NOT EXISTS idx_sprints_order ON sprints(order_index);
 ```
 
-**This block is canonical.** The text between its fences is byte-identical to the
-`sprintsDDL` string in `internal/db/schema.go`, without the newline that opens that
-Go raw string literal, and a test enforces the identity. A change to the `sprints`
-DDL is made in this block first and copied into `sprintsDDL` unchanged.
-
 ### `sprint_tasks` Table (1:N Relationship)
 
 Junction table linking sprints to their tasks. The relationship is one-sprint-to-many-tasks: a sprint contains many tasks, but each task belongs to at most one sprint at any given time. This 1:N constraint is enforced at the schema level by the `UNIQUE` constraint on `task_id`. The table also stores the sprint's planned execution order in `position`, and that order is total: no two member tasks of one sprint may hold the same `position`, and the schema enforces it (see `Position Uniqueness Within a Sprint` below). The order is also dense: the members of a sprint hold exactly the values `0` to `N-1`, so a member's stored `position` is its rank in that order. The schema cannot enforce density and the write paths uphold it instead (see `Position Density Within a Sprint` below).
@@ -244,10 +262,16 @@ CREATE TABLE IF NOT EXISTS sprint_tasks (
     FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE CASCADE
 );
 
+-- The implicit indexes of the PRIMARY KEY (sprint_id, task_id) and of UNIQUE(task_id)
+-- are the lookup indexes: no index is declared over either column set, because it
+-- would duplicate one of them exactly.
+
 -- Unique composite index for sprint task ordering (TASK-ORDER-001)
--- Covers: Sprint task listing ordered by position
+-- Covers: sprint task listing ordered by position.
 -- Enforces: no two member tasks of one sprint hold the same position, which is what
--- makes the planned execution order total (see Position Uniqueness Within a Sprint below)
+-- makes the planned execution order total. One index serves both the ordering reads
+-- and the constraint, so the invariant costs no second B-tree
+-- (see DATABASE.md § Position Uniqueness Within a Sprint).
 CREATE UNIQUE INDEX IF NOT EXISTS idx_sprint_tasks_order ON sprint_tasks(sprint_id, position ASC);
 ```
 
@@ -510,14 +534,15 @@ CREATE TABLE IF NOT EXISTS audit (
     performed_at TEXT NOT NULL  -- ISO 8601 UTC
 );
 
--- Indexes for efficient lookup. Each carries performed_at DESC after its equality
--- columns, so the read it serves is returned in the audit order with no sort step.
+-- Each carries performed_at DESC after its equality columns, so the read it serves
+-- is returned in the audit order with no sort step.
 -- Covers: the entity history (entity_type and entity_id)
 CREATE INDEX IF NOT EXISTS idx_audit_entity ON audit(entity_type, entity_id, performed_at DESC);
 -- Covers: the operation filter, alone or combined with the entity-type filter
 CREATE INDEX IF NOT EXISTS idx_audit_operation ON audit(operation, performed_at DESC, entity_type);
 
--- Covers: the unfiltered log and GetAuditEntries with date range filters
+-- Covers: the unfiltered log and the date range filters. One index on performed_at,
+-- not two: SQLite reads an index in either direction.
 CREATE INDEX IF NOT EXISTS idx_audit_date ON audit(performed_at DESC);
 ```
 
@@ -894,6 +919,7 @@ CREATE TABLE IF NOT EXISTS task_dependencies (
     FOREIGN KEY (depends_on_task_id) REFERENCES tasks(id) ON DELETE CASCADE
 );
 
+-- No index on task_id alone: it is the leading column of the primary key.
 CREATE INDEX IF NOT EXISTS idx_task_deps_depends_on ON task_dependencies(depends_on_task_id);
 ```
 
@@ -970,13 +996,17 @@ CREATE TABLE IF NOT EXISTS _metadata (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL
 );
+```
 
--- Insert metadata on creation. The two values that vary are supplied by the
--- application, in the placeholder notation used throughout Main SQL Queries below.
-INSERT INTO _metadata (key, value) VALUES
-    ('schema_version', ?),
-    ('created_at', ?),
-    ('application', 'Groadmap');
+**The three rows are inserted with bound values, not by the DDL.** In the same
+transaction as the DDL (`Transactional Atomicity Guarantees`, item 10), the
+application issues the statement below once for each of the keys
+`schema_version`, `created_at`, and `application`, binding the key and its value as
+parameters, in the placeholder notation used throughout `Main SQL Queries` below.
+The value of each key is stated in the next paragraph.
+
+```sql
+INSERT OR REPLACE INTO _metadata (key, value) VALUES (?, ?)
 ```
 
 **The stored `schema_version` is the `SchemaVersion` constant**, which is defined in

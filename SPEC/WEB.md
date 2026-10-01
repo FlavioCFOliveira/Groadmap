@@ -7874,7 +7874,31 @@ Rules:
     the neutral colour a badge carries when nothing colours it, so the Próximos badge
     renders identically whether the mapping colours it or not, and a check that
     asserts Próximos alone passes without exercising the rule. The check fails on a
-    rendering that gives all three tabs `bg-secondary-lt` (see
+    rendering that gives all three tabs `bg-secondary-lt`. Asserting the three tabs
+    together is necessary but not sufficient, and this criterion puts two further
+    requirements on the check. The first is that each badge's class is produced by
+    the single implementation of the sprint status mapping (`sprintStatusBadge`) that
+    every sprint status badge already takes its colour from, rather than written into
+    the template as a literal or resolved through a second mapping standing beside
+    the first: a literal reads exactly as the mapping's answer on the day it is
+    written and is then free to drift from it. The check establishes that by
+    rendering the page a second time with that one implementation replaced by a
+    substitute whose answer names the status it was called with. Under the
+    substitution a class written into the template survives unchanged and fails — on
+    Próximos as well, the one tab whose colour a literal would not change — while a
+    template that calls the implementation renders the substitute's answer on every
+    tab, and no tab badge still carries a real `bg-*-lt` variant. An assertion of
+    the three tabs together against the real mapping alone does not meet this
+    requirement: it passes unchanged on a template that writes the three correct
+    variants as literals. The second requirement is that the check pins each tab to
+    the status that tab groups. The template names each tab's status beside that
+    tab's label, and the view model carries no status for a tab, so the statuses of
+    two tabs can be exchanged in the template while every label stays in place; the
+    colours then stay three and distinct while two of them sit on the wrong tabs. The
+    same substitution settles that, because a tab labelled for one status whose badge
+    names another is visible in the rendering. The check also pins the sprints each
+    tab holds to the status that tab is coloured by, so that no tab's colour states
+    a status the tab does not group (see
     [Roadmap Sprints Page](#roadmap-sprints-page) and
     [Status, Priority, and Severity Badge Colours](#status-priority-and-severity-badge-colours),
     rule 2).

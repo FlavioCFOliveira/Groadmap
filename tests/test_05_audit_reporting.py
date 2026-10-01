@@ -28,7 +28,7 @@ class TestAuditReporting:
 
         # Create a task
         task_id = self.test.create_task(
-            roadmap, "Test task", "Functional", "Technical", "Criteria"
+            roadmap, "Test task", "Auditors can trace every change made to a task", "Write one audit row per field change, in the same transaction", "Criteria"
         )
 
         # Check audit log
@@ -53,7 +53,7 @@ class TestAuditReporting:
         roadmap = self.test.create_roadmap()
 
         # Create and modify task
-        task_id = self.test.create_task(roadmap, "Task", "Functional", "Technical", "Criteria")
+        task_id = self.test.create_task(roadmap, "Record invoice approval history", "Auditors can trace every change made to a task", "Write one audit row per field change, in the same transaction", "Criteria")
 
         self.test.run_cmd([
             "task", "edit", "-r", roadmap, str(task_id),
@@ -86,7 +86,7 @@ class TestAuditReporting:
         """Test that audit log tracks task status changes."""
         roadmap = self.test.create_roadmap()
 
-        task_id = self.test.create_task(roadmap, "Task", "Functional", "Technical", "Criteria")
+        task_id = self.test.create_task(roadmap, "Record invoice approval history", "Auditors can trace every change made to a task", "Write one audit row per field change, in the same transaction", "Criteria")
         sprint_id = self.test.create_sprint(roadmap, "Sprint 1")
 
         # Add to sprint (changes status to SPRINT)
@@ -143,8 +143,8 @@ class TestAuditReporting:
         roadmap = self.test.create_roadmap()
 
         # Create multiple entities
-        task1 = self.test.create_task(roadmap, "Task 1", "Functional", "Technical", "Criteria")
-        task2 = self.test.create_task(roadmap, "Task 2", "Functional", "Technical", "Criteria")
+        task1 = self.test.create_task(roadmap, "Task 1", "Auditors can trace every change made to a task", "Write one audit row per field change, in the same transaction", "Criteria")
+        task2 = self.test.create_task(roadmap, "Task 2", "Auditors can trace every change made to a task", "Write one audit row per field change, in the same transaction", "Criteria")
         sprint_id = self.test.create_sprint(roadmap, "Sprint")
 
         # Filter by operation
@@ -175,7 +175,7 @@ class TestAuditReporting:
         roadmap = self.test.create_roadmap()
 
         # Create and modify task
-        task_id = self.test.create_task(roadmap, "Task", "Functional", "Technical", "Criteria")
+        task_id = self.test.create_task(roadmap, "Record invoice approval history", "Auditors can trace every change made to a task", "Write one audit row per field change, in the same transaction", "Criteria")
         self.test.run_cmd(["task", "prio", "-r", roadmap, str(task_id), "5"])
         self.test.run_cmd(["task", "sev", "-r", roadmap, str(task_id), "3"])
 
@@ -202,7 +202,7 @@ class TestAuditReporting:
         roadmap = self.test.create_roadmap()
 
         # Create some activity
-        task_id = self.test.create_task(roadmap, "Task", "Functional", "Technical", "Criteria")
+        task_id = self.test.create_task(roadmap, "Record invoice approval history", "Auditors can trace every change made to a task", "Write one audit row per field change, in the same transaction", "Criteria")
         self.test.run_cmd(["task", "prio", "-r", roadmap, str(task_id), "5"])
         sprint_id = self.test.create_sprint(roadmap, "Sprint")
 
@@ -250,7 +250,7 @@ class TestAuditReporting:
         roadmap = self.test.create_roadmap()
 
         # Create task
-        task_id = self.test.create_task(roadmap, "Task", "Functional", "Technical", "Criteria")
+        task_id = self.test.create_task(roadmap, "Record invoice approval history", "Auditors can trace every change made to a task", "Write one audit row per field change, in the same transaction", "Criteria")
 
         # Get current time in ISO format
         now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
@@ -276,7 +276,7 @@ class TestAuditReporting:
         roadmap = self.test.create_roadmap()
 
         task_id = self.test.create_task(
-            roadmap, "Task", "Functional", "Technical", "Criteria", priority=0, severity=0
+            roadmap, "Record invoice approval history", "Auditors can trace every change made to a task", "Write one audit row per field change, in the same transaction", "Criteria", priority=0, severity=0
         )
 
         # Change priority
@@ -302,10 +302,10 @@ class TestAuditReporting:
         roadmap = self.test.create_roadmap()
 
         # Create tasks with different priorities
-        low = self.test.create_task(roadmap, "Low", "Action", "Technical", "Result", priority=2)
-        medium = self.test.create_task(roadmap, "Medium", "Action", "Technical", "Result", priority=5)
-        high = self.test.create_task(roadmap, "High", "Action", "Technical", "Result", priority=8)
-        critical = self.test.create_task(roadmap, "Critical", "Action", "Technical", "Result", priority=9)
+        low = self.test.create_task(roadmap, "Low", "Action", "Write one audit row per field change, in the same transaction", "Result", priority=2)
+        medium = self.test.create_task(roadmap, "Medium", "Action", "Write one audit row per field change, in the same transaction", "Result", priority=5)
+        high = self.test.create_task(roadmap, "High", "Action", "Write one audit row per field change, in the same transaction", "Result", priority=8)
+        critical = self.test.create_task(roadmap, "Critical", "Action", "Write one audit row per field change, in the same transaction", "Result", priority=9)
 
         # Filter by priority
         result = self.test.list_tasks(roadmap, priority=5)
@@ -329,10 +329,10 @@ class TestAuditReporting:
         roadmap = self.test.create_roadmap()
 
         # Create tasks with different severities
-        low = self.test.create_task(roadmap, "Low", "Action", "Technical", "Result", severity=1)
-        medium = self.test.create_task(roadmap, "Medium", "Action", "Technical", "Result", severity=4)
-        high = self.test.create_task(roadmap, "High", "Action", "Technical", "Result", severity=7)
-        critical = self.test.create_task(roadmap, "Critical", "Action", "Technical", "Result", severity=9)
+        low = self.test.create_task(roadmap, "Low", "Action", "Write one audit row per field change, in the same transaction", "Result", severity=1)
+        medium = self.test.create_task(roadmap, "Medium", "Action", "Write one audit row per field change, in the same transaction", "Result", severity=4)
+        high = self.test.create_task(roadmap, "High", "Action", "Write one audit row per field change, in the same transaction", "Result", severity=7)
+        critical = self.test.create_task(roadmap, "Critical", "Action", "Write one audit row per field change, in the same transaction", "Result", severity=9)
 
         # Filter by severity
         result = self.test.list_tasks(roadmap, severity=4)

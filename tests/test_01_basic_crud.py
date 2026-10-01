@@ -242,15 +242,15 @@ class TestBasicCRUD:
 
         # Create tasks with different properties
         task1 = self.test.create_task(
-            roadmap, "High priority task", "Functional", "Technical", "Criteria",
+            roadmap, "High priority task", "Release managers can see which tasks block the next release", "Order the task list by priority descending, then by creation date", "Criteria",
             priority=8, severity=3
         )
         task2 = self.test.create_task(
-            roadmap, "Medium priority task", "Functional", "Technical", "Criteria",
+            roadmap, "Medium priority task", "Release managers can see which tasks block the next release", "Order the task list by priority descending, then by creation date", "Criteria",
             priority=5, severity=5
         )
         task3 = self.test.create_task(
-            roadmap, "Low priority task", "Functional", "Technical", "Criteria",
+            roadmap, "Low priority task", "Release managers can see which tasks block the next release", "Order the task list by priority descending, then by creation date", "Criteria",
             priority=2, severity=7
         )
 

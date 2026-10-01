@@ -33,7 +33,7 @@ class TestAuditDateFilters:
         before = datetime.now(timezone.utc).isoformat()
 
         # Create first task (this will have audit entry)
-        task1_id = self.test.create_task(roadmap, "Task before filter", "Functional", "Technical", "Criteria")
+        task1_id = self.test.create_task(roadmap, "Task before filter", "Compliance officers can export audit entries for a date range", "Filter audit rows on performed_at with inclusive bounds", "Criteria")
 
         # Wait briefly to ensure time separation
         time.sleep(0.1)
@@ -41,7 +41,7 @@ class TestAuditDateFilters:
         time.sleep(0.1)
 
         # Create second task
-        task2_id = self.test.create_task(roadmap, "Task after filter", "Functional", "Technical", "Criteria")
+        task2_id = self.test.create_task(roadmap, "Task after filter", "Compliance officers can export audit entries for a date range", "Filter audit rows on performed_at with inclusive bounds", "Criteria")
 
         after = datetime.now(timezone.utc).isoformat()
 
@@ -66,14 +66,14 @@ class TestAuditDateFilters:
         time.sleep(0.1)
 
         # Create first task
-        task1_id = self.test.create_task(roadmap, "Task before cutoff", "Functional", "Technical", "Criteria")
+        task1_id = self.test.create_task(roadmap, "Task before cutoff", "Compliance officers can export audit entries for a date range", "Filter audit rows on performed_at with inclusive bounds", "Criteria")
 
         time.sleep(0.1)
         cutoff_time = datetime.now(timezone.utc).isoformat()
         time.sleep(0.1)
 
         # Create second task
-        task2_id = self.test.create_task(roadmap, "Task after cutoff", "Functional", "Technical", "Criteria")
+        task2_id = self.test.create_task(roadmap, "Task after cutoff", "Compliance officers can export audit entries for a date range", "Filter audit rows on performed_at with inclusive bounds", "Criteria")
 
         # Test --until filter (should only show entries before cutoff_time)
         result = self.test.run_cmd_json(["audit", "list", "-r", roadmap, "--until", cutoff_time])
@@ -96,21 +96,21 @@ class TestAuditDateFilters:
         time.sleep(0.1)
 
         # Create first task (before range)
-        task1_id = self.test.create_task(roadmap, "Task before range", "Functional", "Technical", "Criteria")
+        task1_id = self.test.create_task(roadmap, "Task before range", "Compliance officers can export audit entries for a date range", "Filter audit rows on performed_at with inclusive bounds", "Criteria")
 
         time.sleep(0.1)
         range_start = datetime.now(timezone.utc).isoformat()
         time.sleep(0.1)
 
         # Create second task (within range)
-        task2_id = self.test.create_task(roadmap, "Task in range", "Functional", "Technical", "Criteria")
+        task2_id = self.test.create_task(roadmap, "Task in range", "Compliance officers can export audit entries for a date range", "Filter audit rows on performed_at with inclusive bounds", "Criteria")
 
         time.sleep(0.1)
         range_end = datetime.now(timezone.utc).isoformat()
         time.sleep(0.1)
 
         # Create third task (after range)
-        task3_id = self.test.create_task(roadmap, "Task after range", "Functional", "Technical", "Criteria")
+        task3_id = self.test.create_task(roadmap, "Task after range", "Compliance officers can export audit entries for a date range", "Filter audit rows on performed_at with inclusive bounds", "Criteria")
 
         # Test combined filters
         result = self.test.run_cmd_json([
@@ -136,7 +136,7 @@ class TestAuditDateFilters:
         time.sleep(0.1)
 
         # Create task
-        task_id = self.test.create_task(roadmap, "Test task", "Functional", "Technical", "Criteria")
+        task_id = self.test.create_task(roadmap, "Test task", "Compliance officers can export audit entries for a date range", "Filter audit rows on performed_at with inclusive bounds", "Criteria")
 
         time.sleep(0.1)
         mid_time = datetime.now(timezone.utc).isoformat()

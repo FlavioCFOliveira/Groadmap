@@ -44,7 +44,7 @@ class TestTaskStateMachine:
         """Test SPRINT -> DOING transition."""
         roadmap = self.test.create_roadmap()
 
-        task_id = self.test.create_task(roadmap, "Test task", "Functional", "Technical", "Criteria")
+        task_id = self.test.create_task(roadmap, "Test task", "Engineers can move a task through its workflow states", "Validate each transition against the state machine before the update", "Criteria")
         sprint_id = self.test.create_sprint(roadmap, "Sprint 1")
 
         self.test.run_cmd([
@@ -61,7 +61,7 @@ class TestTaskStateMachine:
         """Test DOING -> TESTING transition."""
         roadmap = self.test.create_roadmap()
 
-        task_id = self.test.create_task(roadmap, "Test task", "Functional", "Technical", "Criteria")
+        task_id = self.test.create_task(roadmap, "Test task", "Engineers can move a task through its workflow states", "Validate each transition against the state machine before the update", "Criteria")
         sprint_id = self.test.create_sprint(roadmap, "Sprint 1")
 
         self.test.run_cmd([
@@ -79,7 +79,7 @@ class TestTaskStateMachine:
         """Test TESTING -> COMPLETED transition."""
         roadmap = self.test.create_roadmap()
 
-        task_id = self.test.create_task(roadmap, "Test task", "Functional", "Technical", "Criteria")
+        task_id = self.test.create_task(roadmap, "Test task", "Engineers can move a task through its workflow states", "Validate each transition against the state machine before the update", "Criteria")
         sprint_id = self.test.create_sprint(roadmap, "Sprint 1")
 
         self.test.run_cmd([
@@ -110,7 +110,7 @@ class TestTaskStateMachine:
         """
         roadmap = self.test.create_roadmap()
 
-        task_id = self.test.create_task(roadmap, "Test task", "Functional", "Technical", "Criteria")
+        task_id = self.test.create_task(roadmap, "Test task", "Engineers can move a task through its workflow states", "Validate each transition against the state machine before the update", "Criteria")
         sprint_id = self.test.create_sprint(roadmap, "Sprint 1")
 
         # Complete the task through every state, attaching a real summary.
@@ -164,7 +164,7 @@ class TestTaskStateMachine:
         """
         roadmap = self.test.create_roadmap()
 
-        task_id = self.test.create_task(roadmap, "Test task", "Functional", "Technical", "Criteria")
+        task_id = self.test.create_task(roadmap, "Test task", "Engineers can move a task through its workflow states", "Validate each transition against the state machine before the update", "Criteria")
         sprint_id = self.test.create_sprint(roadmap, "Sprint 1")
 
         self.test.run_cmd([
@@ -189,7 +189,7 @@ class TestTaskStateMachine:
         """Test TESTING -> DOING transition (failed test)."""
         roadmap = self.test.create_roadmap()
 
-        task_id = self.test.create_task(roadmap, "Test task", "Functional", "Technical", "Criteria")
+        task_id = self.test.create_task(roadmap, "Test task", "Engineers can move a task through its workflow states", "Validate each transition against the state machine before the update", "Criteria")
         sprint_id = self.test.create_sprint(roadmap, "Sprint 1")
 
         self.test.run_cmd([
@@ -208,7 +208,7 @@ class TestTaskStateMachine:
         """Test SPRINT -> BACKLOG transition (remove from sprint)."""
         roadmap = self.test.create_roadmap()
 
-        task_id = self.test.create_task(roadmap, "Test task", "Functional", "Technical", "Criteria")
+        task_id = self.test.create_task(roadmap, "Test task", "Engineers can move a task through its workflow states", "Validate each transition against the state machine before the update", "Criteria")
         sprint_id = self.test.create_sprint(roadmap, "Sprint 1")
 
         self.test.run_cmd([
@@ -227,7 +227,7 @@ class TestTaskStateMachine:
         """Test invalid state transitions are rejected."""
         roadmap = self.test.create_roadmap()
 
-        task_id = self.test.create_task(roadmap, "Test task", "Functional", "Technical", "Criteria")
+        task_id = self.test.create_task(roadmap, "Test task", "Engineers can move a task through its workflow states", "Validate each transition against the state machine before the update", "Criteria")
 
         # BACKLOG cannot go directly to DOING
         exit_code, _, _ = self.test.run_cmd(

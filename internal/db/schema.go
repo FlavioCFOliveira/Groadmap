@@ -10,12 +10,65 @@ import (
 // SchemaVersion is the current database schema version.
 const SchemaVersion = "1.17.0"
 
-// sprintsDDL is the DDL of the sprints table and its indexes. Without the
-// newline that opens the raw string, it is byte-identical to the block of
-// SPEC/DATABASE.md § DDL - Table Creation, `sprints` Table, and a test enforces
-// the identity: a change to it is made in that block first and copied here
-// unchanged.
-const sprintsDDL = `
+// The DDL of each table and its indexes, one raw string literal per table.
+// Without the newline that opens it, each literal is byte-identical to the block
+// of its table in SPEC/DATABASE.md § DDL - Table Creation, and a test enforces
+// the identity for every table: a change to a table's DDL is made in its block
+// first and copied here unchanged.
+const (
+	// Tasks table - aligned with SPEC/DATABASE.md v1.0.0
+	tasksDDL = `
+CREATE TABLE IF NOT EXISTS tasks (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+
+    -- Group 1: Content fields (TEXT) - frequently accessed together
+    -- Length limits are validated by the application first and enforced by the CHECK constraints
+    title TEXT NOT NULL CHECK(length(title) <= 255),                    -- Task title/summary, max 255 chars
+    status TEXT NOT NULL DEFAULT 'BACKLOG' CHECK(status IN ('BACKLOG', 'SPRINT', 'DOING', 'TESTING', 'COMPLETED')),
+    type TEXT NOT NULL DEFAULT 'TASK' CHECK(type IN ('USER_STORY', 'TASK', 'BUG', 'SUB_TASK', 'EPIC', 'REFACTOR', 'CHORE', 'SPIKE', 'DESIGN_UX', 'IMPROVEMENT')),
+    functional_requirements TEXT NOT NULL CHECK(length(functional_requirements) <= 4096),    -- Why: functional requirements, max 4096 chars
+    technical_requirements TEXT NOT NULL CHECK(length(technical_requirements) <= 4096),   -- How: technical description, max 4096 chars
+    acceptance_criteria TEXT NOT NULL CHECK(length(acceptance_criteria) <= 4096),      -- How to verify: completion criteria, max 4096 chars
+    created_at TEXT NOT NULL,               -- ISO 8601 UTC, set on task creation
+
+    -- Group 2: Nullable tracking fields - lifecycle timestamps
+    started_at TEXT,                        -- ISO 8601 UTC, set when task moves to DOING
+    tested_at TEXT,                         -- ISO 8601 UTC, set when task moves to TESTING
+    closed_at TEXT,                         -- ISO 8601 UTC, set when task moves to COMPLETED
+    completion_summary TEXT CHECK(completion_summary IS NULL OR length(completion_summary) <= 4096),  -- Optional summary of work done, set only on TESTING → COMPLETED
+    -- Git commit hashes bracketing the work. Stored lowercase; the CHECK rejects any other case
+    -- because GLOB is case-sensitive in SQLite, so it backs the application's lowercase normalisation.
+    commit_open TEXT CHECK(commit_open IS NULL OR (length(commit_open) BETWEEN 7 AND 64 AND commit_open NOT GLOB '*[^0-9a-f]*')),    -- Commit the task was started from, set on every transition into DOING
+    commit_close TEXT CHECK(commit_close IS NULL OR (length(commit_close) BETWEEN 7 AND 64 AND commit_close NOT GLOB '*[^0-9a-f]*')),  -- Commit the task was concluded at, set on every transition into COMPLETED
+    parent_task_id INTEGER REFERENCES tasks(id),  -- NULL for top-level tasks; non-NULL links to parent task (sub-task hierarchy)
+
+    -- Group 3: Numeric metadata fields
+    priority INTEGER NOT NULL DEFAULT 0 CHECK(priority >= 0 AND priority <= 9),
+    severity INTEGER NOT NULL DEFAULT 0 CHECK(severity >= 0 AND severity <= 9)
+);
+
+-- Covers: the creation-date ordering of the task listing
+CREATE INDEX IF NOT EXISTS idx_tasks_created_at ON tasks(created_at);
+
+-- Composite indexes, each supplying one ordering of the task listing in full,
+-- tie-breaker included, so the listing needs no sort step. No single-column index
+-- on status or priority: each would be a leading prefix of one of these
+-- (see DATABASE.md § Index Design Rationale).
+-- Covers: the status filter in the default ordering, and the status ordering
+CREATE INDEX IF NOT EXISTS idx_tasks_status_priority ON tasks(status, priority DESC, created_at ASC);
+-- Covers: the type filter in the default ordering
+CREATE INDEX IF NOT EXISTS idx_tasks_type ON tasks(type, priority DESC, created_at ASC);
+-- Covers: the default ordering (matches ListTasks ORDER BY)
+CREATE INDEX IF NOT EXISTS idx_tasks_priority_created ON tasks(priority DESC, created_at ASC);
+-- Covers: the severity ordering
+CREATE INDEX IF NOT EXISTS idx_tasks_severity_priority ON tasks(severity DESC, priority DESC, created_at ASC);
+
+-- Covers: sub-task hierarchy lookups
+CREATE INDEX IF NOT EXISTS idx_tasks_parent_task_id ON tasks(parent_task_id);
+`
+
+	// sprintsDDL is the DDL of the sprints table and its indexes.
+	sprintsDDL = `
 CREATE TABLE IF NOT EXISTS sprints (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     status TEXT NOT NULL DEFAULT 'PENDING' CHECK(status IN ('PENDING', 'OPEN', 'CLOSED')),
@@ -44,78 +97,12 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_one_open_sprint ON sprints(status) WHERE s
 CREATE UNIQUE INDEX IF NOT EXISTS idx_sprints_order ON sprints(order_index);
 `
 
-// CreateSchema creates all database tables and indexes, and the three
-// _metadata rows, in ONE transaction. This implements the DDL from
-// SPEC/DATABASE.md.
-//
-// Either the whole schema and its metadata commit, or none of them does: a
-// failure leaves no table, no index and no _metadata row behind, so no database
-// can hold a partial schema or a schema without a schema_version
-// (SPEC/DATABASE.md § Transactional Atomicity Guarantees, item 10). One
-// transaction is also one commit, where executing each statement on its own
-// committed, and synced, once per statement.
-func (db *DB) CreateSchema() error {
-	return db.createSchema(schemaDDL())
-}
-
-// schemaDDL returns the DDL statements of the current schema, in the order they
-// must run.
-func schemaDDL() []string {
-	// Tasks table - aligned with SPEC/DATABASE.md v1.0.0
-	tasksDDL := `
-CREATE TABLE IF NOT EXISTS tasks (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-
-    -- Group 1: Content fields (TEXT) - frequently accessed together
-    title TEXT NOT NULL CHECK(length(title) <= 255),
-    status TEXT NOT NULL DEFAULT 'BACKLOG' CHECK(status IN ('BACKLOG', 'SPRINT', 'DOING', 'TESTING', 'COMPLETED')),
-    type TEXT NOT NULL DEFAULT 'TASK' CHECK(type IN ('USER_STORY', 'TASK', 'BUG', 'SUB_TASK', 'EPIC', 'REFACTOR', 'CHORE', 'SPIKE', 'DESIGN_UX', 'IMPROVEMENT')),
-    functional_requirements TEXT NOT NULL CHECK(length(functional_requirements) <= 4096),
-    technical_requirements TEXT NOT NULL CHECK(length(technical_requirements) <= 4096),
-    acceptance_criteria TEXT NOT NULL CHECK(length(acceptance_criteria) <= 4096),
-    created_at TEXT NOT NULL,
-
-    -- Group 2: Nullable tracking fields - lifecycle timestamps
-    started_at TEXT,
-    tested_at TEXT,
-    closed_at TEXT,
-    completion_summary TEXT CHECK(completion_summary IS NULL OR length(completion_summary) <= 4096),
-    -- Git commit hashes bracketing the work. Stored lowercase; the CHECK rejects any other case
-    -- because GLOB is case-sensitive in SQLite, so it backs the application's lowercase normalisation.
-    commit_open TEXT CHECK(commit_open IS NULL OR (length(commit_open) BETWEEN 7 AND 64 AND commit_open NOT GLOB '*[^0-9a-f]*')),
-    commit_close TEXT CHECK(commit_close IS NULL OR (length(commit_close) BETWEEN 7 AND 64 AND commit_close NOT GLOB '*[^0-9a-f]*')),
-    parent_task_id INTEGER REFERENCES tasks(id),
-
-    -- Group 3: Numeric metadata fields
-    priority INTEGER NOT NULL DEFAULT 0 CHECK(priority >= 0 AND priority <= 9),
-    severity INTEGER NOT NULL DEFAULT 0 CHECK(severity >= 0 AND severity <= 9)
-);
-
--- Covers: the creation-date ordering of the task listing
-CREATE INDEX IF NOT EXISTS idx_tasks_created_at ON tasks(created_at);
-
--- Composite indexes, each supplying one ordering of the task listing in full,
--- tie-breaker included, so the listing needs no sort step. No single-column index
--- on status or priority: each would be a leading prefix of one of these.
--- Covers: the status filter in the default ordering, and the status ordering
-CREATE INDEX IF NOT EXISTS idx_tasks_status_priority ON tasks(status, priority DESC, created_at ASC);
--- Covers: the type filter in the default ordering
-CREATE INDEX IF NOT EXISTS idx_tasks_type ON tasks(type, priority DESC, created_at ASC);
--- Covers: the default ordering (matches ListTasks ORDER BY)
-CREATE INDEX IF NOT EXISTS idx_tasks_priority_created ON tasks(priority DESC, created_at ASC);
--- Covers: the severity ordering
-CREATE INDEX IF NOT EXISTS idx_tasks_severity_priority ON tasks(severity DESC, priority DESC, created_at ASC);
-
--- Index for sub-task hierarchy lookups
-CREATE INDEX IF NOT EXISTS idx_tasks_parent_task_id ON tasks(parent_task_id);
-`
-
 	// Sprint tasks junction table
-	sprintTasksDDL := `
+	sprintTasksDDL = `
 CREATE TABLE IF NOT EXISTS sprint_tasks (
     sprint_id INTEGER NOT NULL,
     task_id INTEGER NOT NULL UNIQUE,
-    added_at TEXT NOT NULL,
+    added_at TEXT NOT NULL,  -- ISO 8601 UTC
     position INTEGER NOT NULL DEFAULT 0,  -- 0-based position in sprint task order; unique within one sprint (idx_sprint_tasks_order)
     PRIMARY KEY (sprint_id, task_id),
     FOREIGN KEY (sprint_id) REFERENCES sprints(id) ON DELETE CASCADE,
@@ -131,12 +118,12 @@ CREATE TABLE IF NOT EXISTS sprint_tasks (
 -- Enforces: no two member tasks of one sprint hold the same position, which is what
 -- makes the planned execution order total. One index serves both the ordering reads
 -- and the constraint, so the invariant costs no second B-tree
--- (SPEC/DATABASE.md § Position Uniqueness Within a Sprint).
+-- (see DATABASE.md § Position Uniqueness Within a Sprint).
 CREATE UNIQUE INDEX IF NOT EXISTS idx_sprint_tasks_order ON sprint_tasks(sprint_id, position ASC);
 `
 
 	// Audit table
-	auditDDL := `
+	auditDDL = `
 CREATE TABLE IF NOT EXISTS audit (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     operation TEXT NOT NULL,
@@ -144,7 +131,7 @@ CREATE TABLE IF NOT EXISTS audit (
     entity_id INTEGER NOT NULL,
     related_entity_id INTEGER CHECK(related_entity_id IS NULL OR related_entity_id > 0),   -- Counterpart entity of the operation that produced the row; NULL when it has no counterpart
     commit_hash TEXT CHECK(commit_hash IS NULL OR (length(commit_hash) BETWEEN 7 AND 64 AND commit_hash NOT GLOB '*[^0-9a-f]*')),   -- Git commit bracketing the work; NULL on every operation but two
-    performed_at TEXT NOT NULL
+    performed_at TEXT NOT NULL  -- ISO 8601 UTC
 );
 
 -- Each carries performed_at DESC after its equality columns, so the read it serves
@@ -159,8 +146,9 @@ CREATE INDEX IF NOT EXISTS idx_audit_operation ON audit(operation, performed_at 
 CREATE INDEX IF NOT EXISTS idx_audit_date ON audit(performed_at DESC);
 `
 
-	// Metadata table
-	metadataDDL := `
+	// Metadata table. Its rows are inserted with bound values by
+	// insertMetadataTx, not by this DDL.
+	metadataDDL = `
 CREATE TABLE IF NOT EXISTS _metadata (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL
@@ -168,10 +156,10 @@ CREATE TABLE IF NOT EXISTS _metadata (
 `
 
 	// Task dependencies table
-	taskDependenciesDDL := `
+	taskDependenciesDDL = `
 CREATE TABLE IF NOT EXISTS task_dependencies (
-    task_id INTEGER NOT NULL,
-    depends_on_task_id INTEGER NOT NULL,
+    task_id INTEGER NOT NULL,               -- The dependent task
+    depends_on_task_id INTEGER NOT NULL,    -- The task it depends on (the blocker)
     PRIMARY KEY (task_id, depends_on_task_id),
     FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE CASCADE,
     FOREIGN KEY (depends_on_task_id) REFERENCES tasks(id) ON DELETE CASCADE
@@ -183,7 +171,7 @@ CREATE INDEX IF NOT EXISTS idx_task_deps_depends_on ON task_dependencies(depends
 
 	// Task comments table - the durable, typed record of the work carried out
 	// within the scope of a task (SPEC/DATABASE.md § task_comments Table).
-	taskCommentsDDL := `
+	taskCommentsDDL = `
 CREATE TABLE IF NOT EXISTS task_comments (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     task_id INTEGER NOT NULL,               -- Owning task
@@ -202,7 +190,7 @@ CREATE INDEX IF NOT EXISTS idx_task_comments_task_created ON task_comments(task_
 	// Sprint comments table - the progression record of a sprint. The type CHECK
 	// enumerates four values, not seven: HYPOTHESIS, TEST and NOTE are task-only
 	// (SPEC/DATABASE.md § sprint_comments Table).
-	sprintCommentsDDL := `
+	sprintCommentsDDL = `
 CREATE TABLE IF NOT EXISTS sprint_comments (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     sprint_id INTEGER NOT NULL,             -- Owning sprint
@@ -217,7 +205,25 @@ CREATE TABLE IF NOT EXISTS sprint_comments (
 -- Covers: the parent lookup and the chronological listing order in one index
 CREATE INDEX IF NOT EXISTS idx_sprint_comments_sprint_created ON sprint_comments(sprint_id, created_at ASC);
 `
+)
 
+// CreateSchema creates all database tables and indexes, and the three
+// _metadata rows, in ONE transaction. This implements the DDL from
+// SPEC/DATABASE.md.
+//
+// Either the whole schema and its metadata commit, or none of them does: a
+// failure leaves no table, no index and no _metadata row behind, so no database
+// can hold a partial schema or a schema without a schema_version
+// (SPEC/DATABASE.md § Transactional Atomicity Guarantees, item 10). One
+// transaction is also one commit, where executing each statement on its own
+// committed, and synced, once per statement.
+func (db *DB) CreateSchema() error {
+	return db.createSchema(schemaDDL())
+}
+
+// schemaDDL returns the DDL statements of the current schema, in the order they
+// must run.
+func schemaDDL() []string {
 	// The comment tables come last: each carries a foreign key onto a table
 	// declared above it.
 	return []string{

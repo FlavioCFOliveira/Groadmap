@@ -558,10 +558,10 @@ class TestSprintShow:
 
         # Create tasks with boundary severities
         task_min = self.test.create_task(
-            roadmap, "Minimum Severity Task", "Functional", "Technical", "Criteria", severity=0
+            roadmap, "Minimum Severity Task", "Sprint reviews list tasks ordered by severity", "Sort the sprint task view by severity, then by position", "Criteria", severity=0
         )
         task_max = self.test.create_task(
-            roadmap, "Maximum Severity Task", "Functional", "Technical", "Criteria", severity=9
+            roadmap, "Maximum Severity Task", "Sprint reviews list tasks ordered by severity", "Sort the sprint task view by severity, then by position", "Criteria", severity=9
         )
 
         self.test.run_cmd([
