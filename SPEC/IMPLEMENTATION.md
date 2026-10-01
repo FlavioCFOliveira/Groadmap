@@ -495,11 +495,14 @@ for the reasoning that separates them.
 Groadmap does not depend on the engine to serialise access to the store between
 processes. It serialises it itself, at the process level, on a lock file that
 Groadmap maintains in the roadmap's graph directory (`write.lock`).
-**`rmp graph serve` is the only process that takes it**: it takes the lock
-**exclusively** before it opens the store and holds it for its process lifetime.
-No caller takes it, because no caller opens a store
-(`GRAPH.md § Server Resolution`). There is one mode, because there is one holder,
-and the lock's remaining purpose is to admit one server per roadmap. The operating
+**`rmp graph serve` is the only process that holds it for its lifetime**: it
+takes the lock **exclusively** before it opens the store and holds it for its
+process lifetime. No caller takes it, because no caller opens a store
+(`GRAPH.md § Server Resolution`). The one other process that takes it is
+`rmp roadmap remove`, without waiting and only while it deletes the roadmap, to
+refuse a removal while a server runs (`GRAPH.md § Concurrency and Recovery`).
+There is one mode, because there is one holder that opens the store, and the
+lock's purpose is to admit one server per roadmap. The operating
 system releases the lock when the holding process exits, so a crashed server does
 not strand it. This is the lock referred to throughout
 [Write Contention and Recovery](#write-contention-and-recovery); the contract it

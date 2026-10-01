@@ -99,7 +99,7 @@ The diagram shows status changes. Sprint membership, which the `sprint_tasks` ta
 
 `X` is the task's current status. `COMPLETED` has a line of its own because a completed task cannot be removed from its sprint (Section "Sprint Membership and the BACKLOG Status", rule 4); `task reopen` returns it to `SPRINT`, after which `sprint remove-tasks` can take it out.
 
-**`task reopen`:** The `task reopen` command is a manual transition distinct from `task stat` and from the automatic transitions of the sprint commands. It returns a task from `DOING`, `TESTING` or `COMPLETED` to `SPRINT`, and the task stays in its sprint at the `position` it holds. It clears all lifecycle timestamps (`started_at`, `tested_at`, `closed_at`), `completion_summary`, and `commit_close` to NULL, and preserves `commit_open` (see Section "Commit Tracking Fields"). It never touches the `sprint_tasks` table. It is refused, with exit code 6 and no change, while the task's sprint is `CLOSED`, because a closed sprint takes no work back: `Error: validation error: cannot reopen task N: sprint #M is CLOSED; reopen the sprint first with 'rmp sprint reopen'`, where `N` is the first such task in the order the command line supplied them and `M` its sprint; `sprint reopen` reopens the sprint first. Running `task reopen` on a task that is already in `SPRINT`, or in `BACKLOG`, changes nothing: the command reports the task on stderr, exits 0, and writes no audit entry. See `COMMANDS.md § Reopen Task`.
+**`task reopen`:** The `task reopen` command is a manual transition distinct from `task stat` and from the automatic transitions of the sprint commands. It returns a task from `DOING`, `TESTING` or `COMPLETED` to `SPRINT`, and the task stays in its sprint at the `position` it holds. It clears all lifecycle timestamps (`started_at`, `tested_at`, `closed_at`), `completion_summary`, and `commit_close` to NULL, and preserves `commit_open` (see Section "Commit Tracking Fields"). It never touches the `sprint_tasks` table. It is refused, with exit code 6 and no change, while the task's sprint is `CLOSED`, because a closed sprint takes no work back: `Error: validation error: cannot reopen task N: sprint #M is CLOSED; reopen the sprint first with 'rmp sprint reopen'`, where `N` is the first such task in the order the command line supplied them and `M` its sprint; `sprint reopen` reopens the sprint first. It is also refused, with exit code 6 and no change, when returning `COMPLETED` tasks to `SPRINT` would take their sprint's active load past the cap its `max_tasks` sets, because a `COMPLETED` member does not count against that cap and a `SPRINT` member does (Section "Sprint Membership and the BACKLOG Status"); `COMMANDS.md § Reopen Task` publishes the count and the line. Running `task reopen` on a task that is already in `SPRINT`, or in `BACKLOG`, changes nothing: the command reports the task on stderr, exits 0, and writes no audit entry. See `COMMANDS.md § Reopen Task`.
 
 ### Sprint Membership and the BACKLOG Status
 
@@ -188,7 +188,9 @@ sprint may hold, clearing what it clears on every reopening.
 2. **The capacity of a sprint counts `SPRINT`, `DOING` and `TESTING` members.**
    `sprint open-tasks` and the `max_tasks` capacity check both restrict themselves
    to those three statuses, so a `COMPLETED` member is neither returned by the first
-   nor charged against the sprint's capacity by the second.
+   nor charged against the sprint's capacity by the second. A `task reopen` that
+   returns a `COMPLETED` member to `SPRINT` therefore charges it again, and is
+   refused when that would take the sprint past its cap.
 3. **A task outside every sprint is in `BACKLOG`.** Joining a sprint is the only
    way out of `BACKLOG`, and leaving a sprint is the only way into it.
 

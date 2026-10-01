@@ -68,11 +68,12 @@ Three consequences follow, and they hold for every table and every code block in
 | `<socket>` | The filesystem path of a graph server's Unix domain socket, as the invocation resolved it: the default derived from the roadmap, or the value of `--socket`. Resolved by `GRAPH.md § Socket Path and Permissions`. |
 | `<path>` | The absolute path at which `rmp` addresses the file a message names. The section that publishes the line names the file. |
 | `<version>` | The target schema version of the migration a message names, in its dotted form, such as `1.13.0`. |
+| `<db-version>`, `<supported-version>` | The two schema versions of the one message that refuses a database newer than the binary: `<db-version>` is the `schema_version` the database records in `_metadata`, and `<supported-version>` is the schema version the running binary supports, its `SchemaVersion`. Both are written in their dotted form, such as `1.17.0`. `DATABASE.md § Opening a Roadmap Database File` publishes the message, and `VERSION.md § Database Schema Newer Than the Binary` is canonical for the rule. |
 | `<step>` | The step of a migration that failed, in the words that migration gives the step, such as `creating unique idx_sprint_tasks_order`. |
 | `<ids>` | Two or more ids, separated by a comma and a space, in the order the user supplied them, with a repeated id named once. A message that names exactly one id carries `N` instead, in that message's own singular wording. `§ Task ID Lists (Batch Commands)` is canonical for how the list is built. |
 | `<id-list>` | One or more ids, each prefixed with `#`, separated by a comma and a space, in ascending id order. The list is produced by the system and not echoed from the command line, and the message's wording is the same whether it names one id or several — unlike `<ids>` above, which requires a singular wording for a single id. |
 | `<id-status-list>` | One or more tasks, each written as its id prefixed with `#`, a space, and the task's status in parentheses — `#7 (DOING)` — separated by a comma and a space, in the order the tasks hold in the sprint, first to last. The list is produced by the system and not echoed from the command line, and the message's wording is the same whether it names one task or several. `<id-list>` above does not fit such a list, because each element carries a status beside the id and the order is the sprint's rather than the ids'. |
-| `<load>`, `<cap>` | The two capacity figures of a sprint, in the one message that reports them: `<load>` is the number of the sprint's tasks that count against its capacity before the refused addition, the figure `§ Show Sprint Status Report` publishes as `current_load`, and `<cap>` is the cap its `--max-tasks` sets, the figure that section publishes as `max_tasks`. |
+| `<load>`, `<cap>` | The two capacity figures of a sprint, in the two messages that report them, the capacity refusal of `sprint add-tasks` and that of `task reopen`: `<load>` is the number of the sprint's tasks that count against its capacity before the refused addition or reopening, the figure `§ Show Sprint Status Report` publishes as `current_load`, and `<cap>` is the cap its `--max-tasks` sets, the figure that section publishes as `max_tasks`. |
 | `<absolute path of ~/.roadmaps>` | The resolved data-directory path. |
 
 **Angle brackets are not always a placeholder.** Two messages print angle brackets literally, because the binary's own text contains them: `Error: no roadmap selected: use -r <name> or --roadmap <name>` and `Error: resource not found: no sprint is currently open. Use 'rmp sprint start <id>' to open a sprint first`. In those two lines `<name>` and `<id>` are characters the user sees, not values to substitute. Only the bracketed forms listed in the table above are placeholders.
@@ -115,6 +116,31 @@ The commands that dispatch subcommands, and for which the second class can arise
 A dispatch failure is the **only** error class after which help is written. Every other error class — a missing required parameter, an unknown flag, an invalid enum value, an out-of-range value, a rejected state transition, a resource that does not exist, a name conflict, and a database failure — produces the error line and the AI-agent hint alone, with no help. The reader recovers from those by running `--help` explicitly, because the error line already names the offending flag or value.
 
 `HELP.md § Error message format` is the canonical specification of the error output: the parts of stderr, their order, the exact error wording, and the suppression of the AI-agent banner inside the help written on an error path.
+
+### Repeated Flags
+
+**No flag of any command is repeatable.** Every flag the CLI publishes takes at most one occurrence per invocation, and an invocation that supplies the same flag more than once is a usage error. The rule is CLI-wide and has no exception: an audit of every flag this file publishes finds none whose description gives a second occurrence a meaning, and no command accumulates values across occurrences. A flag that accepts several values accepts them inside one occurrence, as a comma-separated list, never as repeated occurrences.
+
+The rule covers every flag, with no distinction by kind:
+
+1. **A flag that takes a value**, whether or not the two occurrences carry the same value: `rmp task create -r <name> -t "First" -t "Second" ...` is refused, and so is `-t "First" -t "First"`.
+2. **A boolean flag**: `rmp sprint close -r <name> 5 --force --force` is refused.
+3. **The roadmap selector**: `rmp task list -r alpha -r beta` is refused, and so is `-r alpha --roadmap alpha`.
+4. **Every spelling of one flag counts as that flag.** The short form, the long form, the separate form `--flag value` and the joined form `--flag=value` are occurrences of the same flag, so `-t "First" --title="Second"` repeats `--title`.
+
+**The refusal.** The invocation exits with code `2`, carries `utils.ErrInvalidInput`, writes nothing to stdout, and performs nothing: no roadmap is opened for a write and no row, file, or audit entry is changed. The line names the occurrence that is refused, which is the second occurrence of the flag reading the command line from left to right, spelled as the command line spells it and without any `=` and the text after it, exactly as the unrecognised-flag refusal names its flag (`§ Positional Arguments`):
+
+| Command line | Exit Code | stderr Output |
+|--------------|-----------|---------------|
+| `rmp task create -r <name> -t "First" --title "Second" ...` | 2 | `Error: invalid input: repeated flag: --title` |
+
+**Where the refusal sits in the order of checks.** A repeated flag is refused from the command line alone, at the step at which the command reads that flag, and every check a command places before that step keeps its place. Three consequences follow:
+
+- A help token is served before any flag is refused (`HELP.md § Help tokens`), so an invocation that carries a help token writes the help and exits `0` even when it also repeats a flag.
+- No value of a repeated flag is validated: the refusal takes precedence over every refusal of the values the occurrences carry, so `rmp task list -r <name> -p 12 -p 3` exits `2` with the repeated-flag line, not `6` with the range line of `--priority`.
+- An invocation that carries both a repeated flag and an unrecognised flag is refused with exit code `2` either way, with the line of whichever of the two the command reaches first reading the command line from left to right.
+
+The help tokens `--help` and `-h` are not flags in the sense of this rule, and repeating one is not refused.
 
 ---
 
@@ -532,6 +558,7 @@ the only difference between the two: the sentence is the same on both sides.
    the exit code.
 2. No refusal states one bound of the range without the other.
 3. The format refusal and the range refusal name the same argument.
+4. Every surface that refuses a token that is not an integer prints the format line of the table above, with the offending token in double quotes and followed by `(must be a positive integer)`, differing only in the entity word. No surface prints the token unquoted or without that suffix: `audit list --entity-id abc` and `audit history TASK abc` print the same line.
 
 ### Control-Character Constraint (All Free-Text Fields)
 
@@ -836,7 +863,7 @@ Three of these five messages carry no sentinel between the `Error: ` prefix and 
 
 **A name given to `-r` / `--roadmap` is judged by these rules on every subcommand that takes the selector, and the refusal is exit code 6 on every one of them.** Those subcommands are every subcommand of `task`, `sprint`, `backlog`, `audit` and `graph`, and `stats`. The name is judged at the step at which the subcommand resolves its roadmap, which is the step at which a roadmap that does not exist is refused with exit code 4: every check a subcommand places before that step — a missing selector (exit code 3), a malformed or excess argument and an unrecognised flag (exit code 2), and a value validated before the roadmap is opened (exit code 6) — keeps its place, and a name that breaks a rule is refused with that rule's line instead of the not-found line, whether or not an entry of that name exists under `~/.roadmaps/`. The condition is therefore one of the conditions of exit code 6 for each of those subcommands, including a subcommand that has no other cause of exit code 6, and a subcommand's contract that enumerates its exit codes lists it (`DATA_FORMATS.md § Field reference: per-subcommand exit code entry`, rule 5). `roadmap create` and `roadmap remove` judge their positional `<name>` by the same rules, with the same lines and the same exit code.
 
-**`help` is reserved because no command could act on a roadmap of that name.** The name a roadmap is created or removed with is a positional argument, and a positional argument stands in a token position, where the word `help` is always a help token (`HELP.md § Help tokens`): `rmp roadmap create help` and `rmp roadmap remove help` write the help of their subcommand, exit `0`, and create or remove nothing. The name is reserved in that spelling alone; any other letter case is already refused by the character rule, with that rule's line. Like every reserved name, it is refused wherever a roadmap name is validated, the `-r` / `--roadmap` selector included, and every command refuses it with the same line: `rmp task list -r help` exits `6` with `Error: validation error: "help": roadmap name is a reserved system name`, the line `rmp task list -r con` writes for `con`. A roadmap directory named `help` made outside the CLI is therefore listed by `rmp roadmap list` and reachable by no command, exactly as one named `con` is: every command that selects it with `-r` refuses it with that line, and no command removes it.
+**`help` is reserved because no command could act on a roadmap of that name.** The name a roadmap is created or removed with is a positional argument, and a positional argument stands in a token position, where the word `help` is always a help token (`HELP.md § Help tokens`): `rmp roadmap create help` and `rmp roadmap remove help` write the help of their subcommand, exit `0`, and create or remove nothing. The name is reserved in that spelling alone; any other letter case is already refused by the character rule, with that rule's line. Like every reserved name, it is refused wherever a roadmap name is validated, the `-r` / `--roadmap` selector included, and every command refuses it with the same line: `rmp task list -r help` exits `6` with `Error: validation error: "help": roadmap name is a reserved system name`, the line `rmp task list -r con` writes for `con`. A roadmap directory named `help` made outside the CLI is therefore reachable by no command, exactly as one named `con` is: every command that selects it with `-r` refuses it with that line, no command removes it, and `rmp roadmap list` does not list it (`§ List Roadmaps`).
 
 ---
 
@@ -1022,6 +1049,8 @@ rmp road ls
 
 **Description:** Lists all existing roadmaps. Each roadmap is the immediate subdirectory of `~/.roadmaps/` that contains a `project.db` database.
 
+**Only a valid roadmap name is listed.** An immediate subdirectory of `~/.roadmaps/` is listed only when its name satisfies every rule of `§ Roadmap Name Validation` — the character rule, the length rule, the leading-hyphen rule, and the reserved-name rule — because a roadmap no command can select is not a roadmap the listing can offer. Every other entry is skipped silently: a subdirectory whose name breaks any of those rules, whether or not it holds a `project.db`, produces no element of the array, no line on stderr, and no change to the exit code, and the command neither reads, changes, nor removes it. The rule is `ARCHITECTURE.md § Directory Structure`, location rule 9, and `rmp web` applies the same rule to its roadmap index (`WEB.md § Roadmap Index Page`).
+
 **JSON Output:** Array of objects, each with `name` (the roadmap home directory name), `path` (the absolute path to the roadmap's `project.db`), and `size` (the size of `project.db` in bytes).
 ```json
 [
@@ -1076,6 +1105,16 @@ The order in which these rules are applied, and so which line a name that breaks
 
 An entry at `~/.roadmaps/<name>` that is not a directory is not a roadmap (`§ Roadmap Selection (Always Required)`), so it is not refused as one that already exists; the command cannot create the roadmap home there either, and it refuses with the I/O line above, exit code `1`, `<path>` being the absolute path of that entry. Nothing is created, changed, or removed: the entry is left exactly as it was found, and no `project.db` is written anywhere. A symbolic link at that path is refused as `ARCHITECTURE.md § Directory Structure` requires.
 
+**Creation is atomic against concurrent creators.** Any number of `roadmap create` invocations may race on the same `<name>`, and the outcome is the one the same invocations would produce run one after another:
+
+1. **Exactly one succeeds**, when no roadmap existed under `<name>` before the race began; when one did, none succeeds. The one that succeeds prints `{"name": "X"}` and exits `0`, and the roadmap it created is complete: `project.db` holds the whole schema and its `_metadata` rows (`DATABASE.md § Transactional Atomicity Guarantees`, item 10).
+2. **Every other one fails with the already-exists refusal**, exit code `5`, `Error: resource already exists: roadmap "X" already exists` — the line the table above publishes for a roadmap that existed before the invocation began. No loser receives another line, and none receives the text of the operating system or of the SQLite driver.
+3. **The claim on the name is exclusive.** Which invocation wins is decided by one operation that fails when `~/.roadmaps/<name>/project.db` already exists, never by a check for the file followed by a separate creation of it: a check-then-create sequence is the window in which two creators both find the name free.
+4. **`project.db` appears under its name only when it is complete.** No invocation, of `roadmap create` or of any other command, can observe `~/.roadmaps/<name>/project.db` holding a partial schema, and the publication of the file under that name never replaces a file already there. A file `roadmap create` uses while it builds the database is created with mode `0600` from the outset, lives inside the roadmap home directory, and is removed by the invocation that created it, whether that invocation wins or loses.
+5. **A loser leaves nothing behind.** After a loser exits, the roadmap home directory holds exactly what the winner left in it: no temporary file, no second database, no sidecar of its own, and no change to the winner's `project.db`. A loser never removes or alters the roadmap home directory, which the winner owns from the moment it claims the name.
+
+A `project.db` at `~/.roadmaps/<name>/` that is a symbolic link is neither a roadmap that already exists nor a name the command may claim. The command refuses it with exit code `1` and the symbolic-link line of `ARCHITECTURE.md § Directory Structure`, location rule 10, and creates, changes and removes nothing.
+
 No row publishes the reserved-name refusal for `help`, because it cannot be reached here: `rmp roadmap create help` writes the `roadmap create` help and creates nothing, `help` being a help token in that position (`§ Roadmap Name Validation`).
 
 **Output (success):** `{"name": "project1"}`, exit code 0.
@@ -1090,6 +1129,23 @@ rmp road rm <name>
 **Description:** Removes a roadmap by deleting its entire home directory `~/.roadmaps/<name>/` recursively. This removes the `project.db` database, its SQLite sidecars (`project.db-wal`, `project.db-shm`), and any other per-roadmap files the directory contains.
 
 An unrecognised flag written after `<name>` is refused with exit code `2` and `Error: invalid input: unknown flag: --foo`, before the command checks whether the roadmap exists and before anything is removed (`§ Positional Arguments`). A `<name>` under which no roadmap exists, in any of the three shapes `§ Roadmap Selection (Always Required)` lists — a regular file at `~/.roadmaps/<name>` among them — is refused with exit code `4` and `Error: resource not found: roadmap "X" not found`, and nothing is removed: a file at that path is not a roadmap, and `roadmap remove` removes only a roadmap. `rmp roadmap remove help` writes the `roadmap remove` help and removes nothing, `help` being a help token in that position (`§ Roadmap Name Validation`).
+
+**A roadmap whose graph server is running is not removed.** While an `rmp graph serve` process runs for the roadmap, it holds the exclusive advisory lock on the roadmap's graph store, `~/.roadmaps/<name>/graph/write.lock` (`GRAPH.md § Concurrency and Recovery`). Deleting the home directory under that server would delete the store it has open and the socket it answers on, and leave a process acknowledging writes to files that no longer exist. `roadmap remove` therefore decides, before it deletes anything, whether that lock is held, and refuses the removal when it is:
+
+| Scenario | Exit Code | stderr Output |
+|----------|-----------|---------------|
+| A graph server holds the roadmap's graph store lock | 6 | "Error: validation error: cannot remove roadmap \"X\": a graph server is running for it; stop the server first" |
+
+The refusal is a state conflict and carries `utils.ErrValidation`, with exit code `6`, exactly as `sprint remove` refuses a sprint that holds a completed task and `task remove` refuses a task that is not in `BACKLOG`: the arguments are well formed, and what the command refuses is the state of the thing it was asked to remove. The remedy is to stop the server — `SIGINT` or `SIGTERM` to the `rmp graph serve` process — and run the removal again. Nothing is removed on the refusal: the home directory, `project.db` and its sidecars, the `graph/` directory, the socket, and every other entry are left exactly as they were found, and nothing is written to stdout.
+
+The decision is made on the lock and on nothing else, and it is made so that no server can start in the middle of the removal:
+
+1. When the roadmap has no `graph/` directory, no server is running for it: a running server has created that directory before it takes its lock (`GRAPH.md § Server Startup`, steps 1 and 2). The removal proceeds, and `roadmap remove` creates nothing to find this out.
+2. When the `graph/` directory exists, `roadmap remove` takes the lock on `graph/write.lock` exclusively and without waiting, creating the lock file when it is absent, inside a directory the removal is about to delete. When the attempt fails because another process holds the lock, the command refuses with the line above.
+3. When the attempt succeeds, `roadmap remove` holds the lock until the deletion of the home directory has completed. A server started for the roadmap during that interval cannot take the lock, and a server that takes it only after the deletion finds that the roadmap no longer exists; in both cases it fails its startup as `GRAPH.md § Concurrency and Recovery` specifies, and serves nothing.
+4. When the attempt fails for any reason other than a lock held by another process, the command carries `utils.ErrGraphStore`, exits `1`, and removes nothing.
+
+A socket file `graph.sock` left by a server that is no longer running holds no lock and does not block the removal; it is deleted with the rest of the home directory. The read-only `rmp web` server takes no lock and opens no graph store, so a running `rmp web` does not block the removal.
 
 **Output (success):** No output, exit code 0.
 
@@ -1992,8 +2048,13 @@ All IDs are validated before any transitions are applied. If any ID is invalid, 
 | An ID is an integer outside `1`-`2147483647` | 6 | **No tasks modified** | "Error: validation error: task_id must be between 1 and 2147483647, got N" |
 | An unrecognised flag is written after the IDs | 2 | **No tasks modified** | "Error: invalid input: unknown flag: --foo" |
 | A named task in `DOING`, `TESTING` or `COMPLETED` belongs to a CLOSED sprint | 6 | **No tasks modified** | "Error: validation error: cannot reopen task N: sprint #M is CLOSED; reopen the sprint first with 'rmp sprint reopen'" |
+| The reopening would take a sprint past the cap its `--max-tasks` sets | 6 | **No tasks modified** | "Error: validation error: reopening N task(s) would exceed sprint #M capacity (<load>/<cap> tasks active)" |
 
 **A task in a CLOSED sprint is not reopened.** Reopening returns the task to `SPRINT` in its sprint, and a CLOSED sprint takes no work back: the refusal names `sprint reopen`, after which the task can be reopened. `N` is the first such task in the order the command line supplied them and `M` its sprint. The check runs once every id has been resolved, before anything is written, so a batch with one such task changes nothing.
+
+**A reopening respects the sprint's capacity.** A sprint's load is the number of its member tasks in `SPRINT`, `DOING` or `TESTING` status, and the cap is the `max_tasks` its `--max-tasks` sets (`§ Task Assignment`). Reopening a `DOING` or `TESTING` task moves it to `SPRINT`, which counts against the cap as its old status did, so it leaves the load unchanged. Reopening a `COMPLETED` task returns to the load a task that did not count against it, so it raises the load by one. The command therefore counts, for each sprint that sets a cap, the distinct named `COMPLETED` tasks that belong to it, and refuses the whole invocation when, for any such sprint, `<load>` plus that number exceeds `<cap>`. The rule is the one `sprint add-tasks` applies, with the same invariant: **a reopening never raises a sprint's active load above its cap**, and it is not that the load can never exceed the cap. A sprint that already carries more active tasks than its cap, as it does once `sprint update --max-tasks` has lowered the cap below the load, is never pushed further above it, and an invocation that raises no sprint's load — one that names only `DOING` and `TESTING` tasks — is never refused by this check.
+
+The refusal is fail-fast: no task is reopened, no field is cleared, and no audit entry is written, whatever the other named tasks are. In the line `N` is the number of distinct named `COMPLETED` tasks in the refused sprint, `M` is that sprint's id, and `<load>` and `<cap>` are its figures before the refused reopening, as the placeholder table declares them. When more than one sprint would be taken past its cap, the line names the sprint of the first such task in the order the command line supplied them. The line keeps the same wording when it names a single task. The check runs after the CLOSED-sprint check above, once every id has been resolved and before anything is written, and it is repeated inside the transaction that reopens the tasks, against the state that transaction reads, so that two concurrent invocations cannot both pass it and together exceed the cap (`DATABASE.md § Transactional Atomicity Guarantees`, item 3).
 
 **Output (success):** No output to stdout, exit code 0.
 
@@ -2017,6 +2078,7 @@ All IDs are validated before any transitions are applied. If any ID is invalid, 
 1. `rmp task reopen -r <name> <id>` on a `COMPLETED` task writes exactly one entry, with operation `TASK_REOPEN`, writes no `TASK_STATUS_*` entry, and leaves the task in `SPRINT` status in the same sprint at the same `position`.
 2. After the reopening, the task's earlier `TASK_STATUS_COMPLETED` entry still exists with the same `id` and the same `commit_hash`, while `tasks.commit_close` is NULL.
 3. `rmp task reopen` on a task already in `SPRINT` or in `BACKLOG` leaves the audit entry count unchanged.
+4. Given a sprint with `max_tasks` 2, two members in `SPRINT` or `DOING`, and one `COMPLETED` member, `rmp task reopen -r <name> <id>` naming the `COMPLETED` member exits 6 with the capacity line of the table above, `N` being `1`, `<load>` `2` and `<cap>` `2`, leaves that task `COMPLETED` with every field unchanged, and writes no audit entry; the same invocation naming one of the `DOING` members succeeds.
 
 ---
 
@@ -2704,6 +2766,24 @@ rmp sprint reopen -r <name> <id>
 
 The three commands share every row of this table: each takes one sprint id and nothing else, and each resolves it the same way. The `<id>` row is also how an unrecognised flag written in that position is refused, for the reason `Get Sprint` above gives, and the unrecognised-flag row is how one written after `<id>` is refused. What distinguishes the three is the status they demand of the sprint they resolved; a transition the sprint's current status does not permit is refused with exit code `6`, and `STATE_MACHINE.md § Sprint State Machine` is canonical for which transitions those are. `sprint close` adds the active-task check published in the table above, also exit code `6`.
 
+**State refusals:**
+
+| Scenario | Exit Code | stderr Output |
+|----------|-----------|---------------|
+| `sprint start` on a sprint that is not `PENDING` | 6 | "Error: validation error: cannot start sprint with status X" |
+| `sprint close` on a sprint that is not `OPEN` | 6 | "Error: validation error: cannot close sprint with status X" |
+| `sprint reopen` on a sprint that is not `CLOSED` | 6 | "Error: validation error: cannot reopen sprint with status X" |
+| `sprint start` or `sprint reopen` while another sprint is `OPEN` | 6 | "Error: validation error: sprint #N is already open — close it first" |
+
+`X` is the status the sprint holds, and `N` is the id of the sprint that is `OPEN`. The status check runs first, so a `sprint start` naming the sprint that is already `OPEN` receives the first line, not the last. At most one sprint is `OPEN` at a time (`DATABASE.md § sprints Table`, `idx_one_open_sprint`), and the last line is how both commands that open a sprint refuse to open a second one.
+
+**Concurrent invocations receive the refusals of the sequential case.** When two or more invocations that open a sprint race — `sprint start` against `sprint start`, against `sprint reopen`, on the same sprint or on different sprints — the outcome is the one the same invocations would produce run one after another, in the order in which their writes commit:
+
+1. At most one of them opens a sprint, and it exits `0`.
+2. Every other one exits `6` with the line this table publishes for the state the winner left: `cannot start sprint with status OPEN` (or the `reopen` form) when it named the sprint the winner opened, and `sprint #N is already open — close it first`, `N` being the winner's sprint, when it named another.
+3. No loser receives a line the sequential case cannot print. In particular, no loser receives the SQLite driver's text for the violation of `idx_one_open_sprint` — no `constraint failed`, no extended result code such as `(2067)` — and no loser exits `1`. The index is the backstop that keeps the database correct; the refusal the caller reads is decided against the committed state, as `ARCHITECTURE.md § Classification of Database Driver Failures` requires of every write that loses a race.
+4. A loser changes nothing and writes no audit entry.
+
 **Output (success):** No output, exit code 0.
 
 **Audit:** One entry per invocation, against the sprint, with NULL
@@ -2789,7 +2869,10 @@ is already part of `<load>`, and a `COMPLETED` task never reaches the count,
 because the command refuses it first (Validation Order, step 6). An invocation
 that counts no task never raises the load, and the capacity check never refuses
 it, even when the sprint already holds more active tasks than its cap, as it does
-once `sprint update --max-tasks` has lowered the cap below `<load>`.
+once `sprint update --max-tasks` has lowered the cap below `<load>`. `task reopen`
+is the other command that can raise a sprint's load, by returning a `COMPLETED`
+member to `SPRINT`, and it applies the same check with the same invariant
+(`§ Reopen Task`).
 
 In the capacity line `N` is that number — the distinct named tasks that become
 active in the sprint, never the number of ids the command line carries — `M` is the
@@ -3587,13 +3670,13 @@ rmp audit ls -r <name>
 | `--limit` `< 1` or `> 500` | 6 | "Error: validation error: limit must be between 1 and 500, got N" |
 | `--limit` non-integer | 2 | "Error: invalid input: invalid value for --limit: \"X\" is not an integer in 1-500" |
 | `--entity-id` `< 1` or `> 2147483647` | 6 | "Error: validation error: entity_id must be between 1 and 2147483647, got N" |
-| `--entity-id` non-integer | 2 | "Error: invalid input: invalid entity ID: X" |
+| `--entity-id` non-integer | 2 | "Error: invalid input: invalid entity ID: \"X\" (must be a positive integer)" |
 | `-o, --operation` not one of the catalogue operations | 6 | "Error: validation error: invalid audit operation: \"X\"" |
 | `-e, --entity-type` not `TASK` or `SPRINT` | 6 | "Error: validation error: invalid entity type: \"X\"" |
 | `--since` is not in a form `DATA_FORMATS.md § Date Filter Values` accepts, or denotes an instant outside 1970-01-01 through 9999-12-31 | 6 | "Error: validation error: --since: invalid date format: expected RFC3339 (2026-01-01T00:00:00Z) or date-only (2026-01-01): \"X\"" |
 | `--until` is not in a form `DATA_FORMATS.md § Date Filter Values` accepts, or denotes an instant outside 1970-01-01 through 9999-12-31 | 6 | "Error: validation error: --until: invalid date format: expected RFC3339 (2026-01-01T00:00:00Z) or date-only (2026-01-01): \"X\"" |
 
-A value out of range and a value that is not an integer at all are two conditions, not one: the first reaches the range check and is a validation failure (exit 6), while the second fails to parse and is malformed input (exit 2). The two messages differ accordingly.
+A value out of range and a value that is not an integer at all are two conditions, not one: the first reaches the range check and is a validation failure (exit 6), while the second fails to parse and is malformed input (exit 2). The two messages differ accordingly. Each is the line `§ Entity Identifier Range (All Positional Ids and --entity-id)` publishes for its rule, and each is identical to the line `audit history` prints for the same value in its `<entity-id>` position.
 
 **Roadmap Resolution:**
 
@@ -4113,8 +4196,10 @@ two byte counts the path-length line carries; the placeholder table under
   lock records no holder, so the invocation reports the likely cause and does not
   assert it (`GRAPH.md § Server Startup`, step 2). It is the only published line
   for an exhausted wait on this lock, and the only one there can be: no caller
-  takes the lock, so a second `rmp graph serve` is the only thing that can meet it
-  held (`GRAPH.md § Lock Contention`, rules 2 and 3).
+  takes the lock, and the one other process that takes it, `rmp roadmap remove`,
+  holds it only while it deletes the roadmap, so a second `rmp graph serve` is the
+  only thing that can hold it for the length of the wait
+  (`GRAPH.md § Lock Contention`, rules 2 and 3).
 - **`graph client` found no server listening.** The line is
   `Error: graph server error: no graph server is listening on <socket>`. It covers
   both the socket that does not exist and the socket file a killed server left

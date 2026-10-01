@@ -175,11 +175,17 @@ func taskSetStatus(args []string) error {
 	// Extract --summary / -s, --commit-open / -co and --commit-close / -cc
 	// before positional arg parsing.
 	// Fail-fast: all validation happens before any database operation.
+	// No flag is repeatable (SPEC/COMMANDS.md § Repeated Flags): a second
+	// occurrence is refused when the loop reaches it, before its value is read.
 	var completionSummary, commitOpen, commitClose *string
+	var seen utils.FlagOccurrences
 	filtered := make([]string, 0, len(remaining))
 	for i := 0; i < len(remaining); i++ {
 		switch remaining[i] {
 		case "--summary", "-s":
+			if err := seen.Note("--summary", remaining[i]); err != nil {
+				return err
+			}
 			if i+1 >= len(remaining) {
 				return fmt.Errorf("%w: --summary requires a value", utils.ErrRequired)
 			}
@@ -196,6 +202,9 @@ func taskSetStatus(args []string) error {
 			completionSummary = &s
 			i++ // consume the value
 		case "--commit-open", "-co":
+			if err := seen.Note("--commit-open", remaining[i]); err != nil {
+				return err
+			}
 			value, valErr := commitFlagValue("--commit-open", remaining, i)
 			if valErr != nil {
 				return valErr
@@ -203,6 +212,9 @@ func taskSetStatus(args []string) error {
 			commitOpen = &value
 			i++ // consume the value
 		case "--commit-close", "-cc":
+			if err := seen.Note("--commit-close", remaining[i]); err != nil {
+				return err
+			}
 			value, valErr := commitFlagValue("--commit-close", remaining, i)
 			if valErr != nil {
 				return valErr
@@ -646,9 +658,29 @@ func taskReopen(args []string) error {
 		return nil
 	}
 
+	// The capacity check counts, per capped sprint, the named members that are
+	// COMPLETED: they are the reopenings that raise the sprint's load. The
+	// candidates keep the command line's order, which decides the sprint a
+	// refusal names (SPEC/COMMANDS.md § Reopen Task).
+	candidates := make([]db.ReopenCandidate, 0, len(toSprint))
+	for _, id := range ids {
+		if st := byID[id]; st.SprintID != 0 && st.Status == models.StatusCompleted {
+			candidates = append(candidates, db.ReopenCandidate{TaskID: id, SprintID: st.SprintID})
+		}
+	}
+
 	now := utils.NowISO8601()
 
 	return database.WithTransaction(func(tx *sql.Tx) error {
+		// Fail-fast and atomic: the capacity check runs inside the transaction
+		// that reopens the tasks, before anything is written, against the
+		// state the transaction reads, so no task is reopened, no field
+		// cleared and no audit entry written when it refuses, and two
+		// concurrent invocations cannot both pass it.
+		if err := db.CheckReopenCapacityTx(tx, candidates); err != nil {
+			return err
+		}
+
 		// commit_close is cleared with the lifecycle timestamps and the
 		// completion summary; commit_open is preserved, which is why it is
 		// absent from the SET list (SPEC/STATE_MACHINE.md § Commit Tracking

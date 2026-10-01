@@ -373,6 +373,7 @@ func buildTaskCommand() Command {
 					ec(6,
 						"An id in the list falls outside 1-2147483647.",
 						"A named DOING, TESTING or COMPLETED task belongs to a CLOSED sprint; nothing is changed.",
+						"Returning the named COMPLETED tasks to SPRINT would take their sprint past the cap its --max-tasks sets; nothing is changed.",
 					),
 				},
 				Examples: []Example{

@@ -192,3 +192,33 @@ func IsGraphServer(err error) bool {
 func IsIO(err error) bool {
 	return errors.Is(err, ErrIO)
 }
+
+// classes are the sentinels that map an error to an exit code
+// (SPEC/ARCHITECTURE.md § Sentinel Error Catalogue). An error that carries none
+// of them is unclassified and reaches exit code 1 by the fallback of the error
+// path rather than by a stated class.
+var classes = [...]error{
+	ErrNotFound, ErrAlreadyExists, ErrInvalidInput, ErrRequired, ErrUnknownCommand,
+	ErrNoRoadmap, ErrDatabase, ErrGraphEngine, ErrGraphStore, ErrGraphServer, ErrIO,
+	ErrValidation, ErrFieldTooLarge, ErrInvalidUpdate,
+}
+
+// IsClassified reports whether err carries one of the sentinels of the
+// catalogue, and therefore already states its class.
+func IsClassified(err error) bool {
+	for _, class := range classes {
+		if errors.Is(err, class) {
+			return true
+		}
+	}
+	return false
+}
+
+// RoadmapAlreadyExistsError is the refusal of `roadmap create` for a name under
+// which a roadmap already exists, and the line every loser of a concurrent
+// creation receives (SPEC/COMMANDS.md § Create Roadmap):
+//
+//	Error: resource already exists: roadmap "X" already exists
+func RoadmapAlreadyExistsError(name string) error {
+	return fmt.Errorf("%w: roadmap %q already exists", ErrAlreadyExists, name)
+}

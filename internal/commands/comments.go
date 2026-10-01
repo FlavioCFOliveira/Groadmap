@@ -145,14 +145,21 @@ func requireCommentPositionalID(args []string, field utils.RangedField) (int, []
 //
 // The inline forms `--body=<text>` and `-b=<text>` are accepted, matching the
 // GNU-style splitting the shared flag parser applies to every other flag. A
-// repeated flag follows the parser's rule too: the last occurrence wins, in full,
-// so a valueless earlier occurrence does not poison a later valid one.
-func extractCommentBody(args []string) ([]string, commentBody) {
+// repeated flag follows the parser's rule too: no flag is repeatable, so a
+// second occurrence, in any of the four spellings, is refused with exit code 2
+// before its value is read (SPEC/COMMANDS.md § Repeated Flags).
+func extractCommentBody(args []string) ([]string, commentBody, error) {
 	rest := make([]string, 0, len(args))
 	var body commentBody
 
 	for i := 0; i < len(args); i++ {
 		arg := args[i]
+
+		isBody := arg == commentBodyLong || arg == commentBodyShort ||
+			strings.HasPrefix(arg, commentBodyLong+"=") || strings.HasPrefix(arg, commentBodyShort+"=")
+		if isBody && body.present {
+			return nil, commentBody{}, utils.RepeatedFlagError(arg)
+		}
 
 		switch {
 		case arg == commentBodyLong || arg == commentBodyShort:
@@ -173,7 +180,7 @@ func extractCommentBody(args []string) ([]string, commentBody) {
 		}
 	}
 
-	return rest, body
+	return rest, body, nil
 }
 
 // resolveCommentBody decides the body text a comment subcommand was given. It
@@ -494,7 +501,10 @@ func commentAdd(f *commentFamily, args []string) error {
 	}
 
 	// Lexical only: the body is resolved at step 5, after the type verdict.
-	rest, body := extractCommentBody(rest)
+	rest, body, err := extractCommentBody(rest)
+	if err != nil {
+		return err
+	}
 
 	typeRaw, typePresent, err := parseCommentTypeFlag(rest)
 	if err != nil {
@@ -647,7 +657,10 @@ func commentEdit(f *commentFamily, args []string) error {
 		return err
 	}
 
-	rest, body := extractCommentBody(rest)
+	rest, body, err := extractCommentBody(rest)
+	if err != nil {
+		return err
+	}
 
 	typeRaw, typePresent, err := parseCommentTypeFlag(rest)
 	if err != nil {

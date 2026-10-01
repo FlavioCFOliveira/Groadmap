@@ -501,6 +501,16 @@ type Options struct {
 	// serialises nothing (SPEC/ARCHITECTURE.md module 10).
 	Announce func(socket string) error
 
+	// ConfirmRoadmap is called once the store lock is held, before anything
+	// else is probed, removed, bound or opened, and a non-nil result stops the
+	// startup with that error. `rmp graph serve` passes the check that the
+	// roadmap still exists: `rmp roadmap remove` takes the same lock while it
+	// deletes the roadmap, so a server that takes it after such a removal must
+	// find the roadmap gone and serve nothing (SPEC/GRAPH.md § Concurrency and
+	// Recovery, obligation 1). It is a callback because resolving a roadmap is
+	// the CLI's half of the work; nil skips the check.
+	ConfirmRoadmap func() error
+
 	// RoadmapName is the roadmap whose graph is served. It appears in the lock
 	// failure's published line, which names the roadmap rather than the
 	// directory.
@@ -566,6 +576,19 @@ func Run(opts Options) error {
 		return lockRefusal(opts.RoadmapName, err)
 	}
 
+	// The lock is also what `rmp roadmap remove` takes while it deletes the
+	// roadmap, so a server that takes it only after such a removal must find
+	// the roadmap gone and serve nothing. Existence is therefore confirmed
+	// again here, once the lock is held and before anything is probed,
+	// removed, bound or opened (SPEC/GRAPH.md § Concurrency and Recovery,
+	// obligation 1).
+	if opts.ConfirmRoadmap != nil {
+		if err := opts.ConfirmRoadmap(); err != nil {
+			hold.Release()
+			return err
+		}
+	}
+
 	// Step 3. Refuse to start when a live server already answers there, and leave
 	// its socket exactly as it was found.
 	if state, _ := graphclient.Resolve(context.Background(), opts.SocketPath); state.Served() {
@@ -602,7 +625,7 @@ func Run(opts Options) error {
 		return err
 	}
 
-	closer, srv, err := build(st, opts.GraphDir, productionCadence(), logger)
+	closer, srv, err := build(st, opts.GraphDir, productionCadence(), logger, ln.releaser.statementEnded)
 	if err != nil {
 		_ = closer.Close() //nolint:errcheck // tearing down a server that never served; the close error cannot be acted on
 		_ = st.Close()     //nolint:errcheck // idem: the lock is released by this call whatever it returns
@@ -759,7 +782,11 @@ func removeStaleSocket(path string) {
 // The cadence is a PARAMETER rather than a constant read from here, for the
 // reason [checkpointCadence] gives. Production passes [productionCadence]; a
 // disabled cadence starts no in-flight fold at all.
-func build(st *graphstore.Store, graphDir string, cadence checkpointCadence, log *slog.Logger) (*shutdownCloser, *server.Server, error) {
+//
+// afterFold, which may be nil, runs after every fold that ran: the server
+// passes its memory releaser's, so the memory a fold used is returned to the
+// operating system when the fold ends (see [foldGate.foldIfOwed]).
+func build(st *graphstore.Store, graphDir string, cadence checkpointCadence, log *slog.Logger, afterFold func()) (*shutdownCloser, *server.Server, error) {
 	txnStore := st.Txn()
 	engine := st.Engine()
 
@@ -787,7 +814,7 @@ func build(st *graphstore.Store, graphDir string, cadence checkpointCadence, log
 		store.WithCheckpointer(cp),
 		store.WithQuiesce(txnStore.RunUnderCommitLock))
 
-	gate := &foldGate{st: st, cp: cp}
+	gate := &foldGate{st: st, cp: cp, afterFold: afterFold}
 	closer := &shutdownCloser{db: db, gate: gate}
 
 	if cadence.maxAge > 0 {
@@ -853,7 +880,10 @@ func build(st *graphstore.Store, graphDir string, cadence checkpointCadence, log
 type foldGate struct {
 	st *graphstore.Store
 	cp *checkpoint.Checkpointer[string, float64]
-	mu sync.Mutex
+	// afterFold, when set, runs after every fold that ran; see foldIfOwed.
+	// It is fixed at construction, before any fold can run.
+	afterFold func()
+	mu        sync.Mutex
 }
 
 // foldIfOwed folds the write-ahead log into the snapshot when, and only when, the
@@ -864,7 +894,24 @@ type foldGate struct {
 // that is quiescing behind an undo replay rather than shorten it. The in-flight
 // fold inherits the same property, which is why stopping the in-flight fold waits
 // for one in progress rather than abandoning it.
+//
+// A fold that ran serialised the whole graph, and the memory that took is
+// garbage once it returns. It is handed back to the operating system through
+// afterFold, outside the gate's mutex, for the reason [memoryReleaser] gives:
+// an idle server triggers no collection of its own, and the runtime's
+// background scavenger returns such memory over minutes. Measured on rmp task
+// #589: an in-flight fold after a cut write took an idle server from 0.38 GB
+// to 1.1 GB, where it stayed for more than two minutes without this release.
 func (g *foldGate) foldIfOwed() (bool, error) {
+	ran, err := g.fold()
+	if ran && g.afterFold != nil {
+		g.afterFold()
+	}
+	return ran, err
+}
+
+// fold is foldIfOwed's fold, under the gate's mutex.
+func (g *foldGate) fold() (bool, error) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	return g.st.CheckpointIfAppended(func() (int64, error) {
@@ -1429,6 +1476,10 @@ type serverListener struct {
 	// together, which is what govet's field alignment asks for.
 	conns map[*drainConn]uint64
 
+	// releaser returns a statement's memory to the operating system when one
+	// of this listener's connections ends a statement (see memrelease.go).
+	releaser *memoryReleaser
+
 	// live counts connections accepted and not yet closed. It is what the drain
 	// waits on; see drain for why nothing finer is observable from out here.
 	live atomic.Int64
@@ -1449,6 +1500,7 @@ func newServerListener(ln net.Listener) *serverListener {
 		released: make(chan struct{}),
 		stopped:  make(chan struct{}),
 		conns:    make(map[*drainConn]uint64),
+		releaser: newMemoryReleaser(),
 	}
 }
 
@@ -1469,7 +1521,7 @@ func (l *serverListener) Accept() (net.Conn, error) {
 		return nil, err
 	}
 	l.live.Add(1)
-	wrapped := &drainConn{Conn: conn, owner: l}
+	wrapped := &drainConn{Conn: conn, owner: l, summaries: newSummaryScanner()}
 	l.connsMu.Lock()
 	// Zero is the mark of a connection markWrites has never seen, and zero is
 	// even, so a connection accepted after the mark is never a candidate for the
@@ -1593,6 +1645,7 @@ func (l *serverListener) cutBlockedWrites() int {
 // Serve closes this listener from its own close goroutine and Shutdown closes it
 // again, and Groadmap has closed it once already by the time either runs.
 func (l *serverListener) Close() error {
+	l.releaser.stop()
 	l.stopAccepting()
 	l.releaseOnce.Do(func() { close(l.released) })
 	return nil
@@ -1660,6 +1713,12 @@ type drainConn struct {
 	net.Conn
 	owner *serverListener
 
+	// summaries finds, in the bytes this connection writes, the summaries
+	// that end a statement, so the statement's memory is returned to the
+	// operating system as the statement ends (see memrelease.go). Like
+	// writeSeq it is touched only by the connection's single writer.
+	summaries *summaryScanner
+
 	// writeSeq is an even/odd sequence counter over this connection's writes: it
 	// is incremented on entry to Write and again on return, so an ODD value means
 	// a write is outstanding and the value itself identifies WHICH write. One
@@ -1678,10 +1737,20 @@ type drainConn struct {
 // See [serverListener.cutBlockedWrites] for what reads the counter and why the
 // increment cannot be folded into a boolean: the shutdown has to tell one write
 // from the next, not merely writing from not writing.
+//
+// Once the write has returned — so the client already holds what was written,
+// and the write is no longer outstanding for the shutdown's selector — a write
+// that completed a statement's summary returns that statement's memory to the
+// operating system (SPEC/GRAPH.md § Statement-Scoped Memory Release).
 func (c *drainConn) Write(b []byte) (int, error) {
 	c.writeSeq.Add(1)
 	n, err := c.Conn.Write(b)
 	c.writeSeq.Add(1)
+	// The whole buffer is scanned, written or not: a statement whose summary
+	// could not be delivered — its client has gone — has ended all the same.
+	if c.summaries.feed(b) > 0 {
+		c.owner.releaser.statementEnded()
+	}
 	return n, err
 }
 
@@ -1690,6 +1759,9 @@ func (c *drainConn) Write(b []byte) (int, error) {
 func (c *drainConn) Close() error {
 	err := c.Conn.Close()
 	c.closeOnce.Do(func() {
+		// A connection that closes ends whatever statement it was serving,
+		// whether or not a summary was written for it.
+		defer c.owner.releaser.statementEnded()
 		// The registry is left BEFORE the count is decremented, so that a drain
 		// which observes live == 0 can never then find this connection still
 		// registered. See [serverListener.cutBlockedWrites] for what that

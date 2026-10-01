@@ -76,7 +76,7 @@ Commands:
   edit <task-id> [OPTIONS]                    Edit fields of a task (status NOT editable here)
   remove, rm <task-ids>                       Remove task(s) — BACKLOG only, no active subtasks
   stat, set-status <task-ids> <new-status>    Set task status (DOING/COMPLETED require a commit hash)
-  reopen <task-ids>                           Reopen task(s) to BACKLOG, clearing all but commit_open
+  reopen <task-ids>                           Reopen task(s) to SPRINT in their sprint, clearing all but commit_open
   prio, set-priority <task-ids> <priority>    Set task priority (0-9) for one or many tasks
   sev, set-severity <task-ids> <severity>     Set task severity (0-9) for one or many tasks
   subtasks <task-id>                          List direct subtasks (one level; no grand-children)

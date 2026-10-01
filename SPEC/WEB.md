@@ -509,7 +509,8 @@ schema migrates to it automatically, without user input.
    [Server Lifecycle](#server-lifecycle)). It does not run per request.
 2. **Migrates every existing roadmap.** The server discovers every roadmap under
    `~/.roadmaps/`, using the same discovery rule the index page uses (each
-   immediate subdirectory of `~/.roadmaps/` that contains a `project.db`; see
+   immediate subdirectory of `~/.roadmaps/` that contains a `project.db` and whose
+   name satisfies `COMMANDS.md § Roadmap Name Validation`; see
    [Roadmap Index Page](#roadmap-index-page) and
    `ARCHITECTURE.md § Directory Structure`, location rule 9). For each discovered
    roadmap, the server opens that roadmap's `project.db` through the **normal
@@ -995,9 +996,10 @@ how the `rmp web` process itself terminates.
 - **Route:** `GET /`
 - **Content:** A list of every roadmap discovered under `~/.roadmaps/`, using the
   same discovery rule the CLI uses for `rmp roadmap list`: each immediate
-  subdirectory of `~/.roadmaps/` that contains a `project.db` is one roadmap (see
-  `COMMANDS.md § List Roadmaps` and `ARCHITECTURE.md § Directory Structure`,
-  location rule 9). For each roadmap the page links to its sprints page (the
+  subdirectory of `~/.roadmaps/` that contains a `project.db` and whose name
+  satisfies every rule of `COMMANDS.md § Roadmap Name Validation` is one roadmap,
+  and every other entry is skipped silently (see `COMMANDS.md § List Roadmaps`
+  and `ARCHITECTURE.md § Directory Structure`, location rule 9). For each roadmap the page links to its sprints page (the
   landing page, `/roadmaps/{name}`) and its knowledge-graph page
   (`/roadmaps/{name}/graph`). Selecting a roadmap lands the user on that
   roadmap's sprints page.

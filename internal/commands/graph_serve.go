@@ -219,19 +219,41 @@ func runGraphServe(args []string) error {
 	// function classifies itself, before the graph directory is created
 	// (SPEC/GRAPH.md § Server Startup, step 1; § Socket Path and Permissions,
 	// rule 4).
-	if err := utils.EnsureRoadmapDir(roadmapName); err != nil {
+	//
+	// The home is secured and NOT created: the server never creates the roadmap
+	// home directory, so a roadmap removed since the resolution above is
+	// refused as one that does not exist (SPEC/GRAPH.md § Concurrency and
+	// Recovery, obligation 2).
+	if err := utils.SecureExistingRoadmapDir(roadmapName); err != nil {
 		return err
 	}
 
 	// Only then may the graph be brought into being.
-	if err := createGraphDir(graphDir); err != nil {
+	if err := createGraphDir(roadmapName, graphDir); err != nil {
 		return err
 	}
 
 	return graphserve.Run(graphserve.Options{
-		Announce:    announceServeSocket,
-		RoadmapName: roadmapName,
-		GraphDir:    graphDir,
-		SocketPath:  socketPath,
+		Announce:       announceServeSocket,
+		RoadmapName:    roadmapName,
+		GraphDir:       graphDir,
+		SocketPath:     socketPath,
+		ConfirmRoadmap: func() error { return confirmRoadmapExists(roadmapName) },
 	})
+}
+
+// confirmRoadmapExists refuses a roadmap that no longer exists, as
+// SPEC/COMMANDS.md § Roadmap Selection (Always Required) defines existence,
+// with the roadmap-not-found line and exit code 4. `graph serve` runs it once
+// it holds the store lock (SPEC/GRAPH.md § Concurrency and Recovery,
+// obligation 1).
+func confirmRoadmapExists(name string) error {
+	exists, err := utils.RoadmapExists(name)
+	if err != nil {
+		return err
+	}
+	if !exists {
+		return fmt.Errorf("%w: roadmap %q not found", utils.ErrNotFound, name)
+	}
+	return nil
 }

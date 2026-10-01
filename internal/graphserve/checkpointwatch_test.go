@@ -664,7 +664,7 @@ func buildOverAFreshStore(t *testing.T, cadence checkpointCadence) *shutdownClos
 		_ = st.Close() //nolint:errcheck // releases the advisory hold whatever the log reports
 	})
 
-	closer, _, err := build(st, graphDir, cadence, logger)
+	closer, _, err := build(st, graphDir, cadence, logger, nil)
 	t.Cleanup(func() {
 		_ = closer.Close() //nolint:errcheck // this test's assertions are about the in-flight fold, not the teardown
 	})

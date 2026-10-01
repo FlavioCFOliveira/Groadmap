@@ -1959,6 +1959,71 @@ func (db *DB) GetActiveSprintTaskStates(ctx context.Context, sprintID int) ([]Ta
 	return scanTaskStates(rows)
 }
 
+// ReopenCandidate is one task `task reopen` names that belongs to a sprint, in
+// the order the command line supplied it.
+type ReopenCandidate struct {
+	TaskID   int
+	SprintID int
+}
+
+// CheckReopenCapacityTx refuses, inside the transaction that reopens the
+// tasks, a `task reopen` that would take a sprint past the cap its max_tasks
+// sets (SPEC/COMMANDS.md § Reopen Task; SPEC/DATABASE.md § Transactional
+// Atomicity Guarantees, item 3).
+//
+// Reopening a COMPLETED member returns to the sprint's active load a task that
+// did not count against it; reopening a DOING or TESTING one leaves the load
+// unchanged. So, for each sprint that sets a cap, the candidates that are
+// COMPLETED in the state tx reads — not in a read made before it — are counted,
+// once each, and the invocation is refused when the sprint's load plus that
+// count exceeds the cap. Reading the statuses here is what keeps two
+// concurrent invocations from both passing the check and together exceeding
+// the cap. When more than one sprint would be taken past its cap, the refusal
+// names the sprint of the first such candidate in command-line order.
+func CheckReopenCapacityTx(tx *sql.Tx, candidates []ReopenCandidate) error {
+	order := make([]int, 0, len(candidates))
+	completed := make(map[int]int, len(candidates))
+	counted := make(map[int]bool, len(candidates))
+	for _, c := range candidates {
+		if counted[c.TaskID] {
+			continue
+		}
+		counted[c.TaskID] = true
+		var status string
+		if err := tx.QueryRow("SELECT status FROM tasks WHERE id = ?", c.TaskID).Scan(&status); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				continue
+			}
+			return fmt.Errorf("reading task status: %w", err)
+		}
+		if models.TaskStatus(status) != models.StatusCompleted {
+			continue
+		}
+		if _, seen := completed[c.SprintID]; !seen {
+			order = append(order, c.SprintID)
+		}
+		completed[c.SprintID]++
+	}
+
+	for _, sprintID := range order {
+		var maxTasks sql.NullInt64
+		if err := tx.QueryRow("SELECT max_tasks FROM sprints WHERE id = ?", sprintID).Scan(&maxTasks); err != nil {
+			return fmt.Errorf("querying sprint capacity: %w", err)
+		}
+		if !maxTasks.Valid {
+			continue
+		}
+		var load int
+		if err := tx.QueryRow(countActiveSprintTasksQuery, sprintID).Scan(&load); err != nil {
+			return fmt.Errorf("counting active sprint tasks: %w", err)
+		}
+		if load+completed[sprintID] > int(maxTasks.Int64) {
+			return utils.ReopenCapacityError(completed[sprintID], sprintID, load, int(maxTasks.Int64))
+		}
+	}
+	return nil
+}
+
 // CountActiveSprintTasks returns how many tasks of a sprint are SPRINT, DOING or
 // TESTING: the member count the sprint's max_tasks capacity applies to.
 func (db *DB) CountActiveSprintTasks(ctx context.Context, sprintID int) (int, error) {

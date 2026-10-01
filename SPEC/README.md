@@ -87,8 +87,9 @@ The SPEC is unversioned. Git is the source of truth for its evolution — recove
 | Query plans on `rmp graph client` (the `EXPLAIN` and `PROFILE` prefixes, which statements each admits, and the rules under which a figure is omitted rather than published as zero) | `GRAPH.md § Query Plans: The EXPLAIN and PROFILE Prefixes`, with the JSON in `DATA_FORMATS.md § Graph Plan Node` |
 | Write counters on `rmp graph client` (what a statement changed, when the block is present at all, why a zero is omitted, and why the two property counters are published as one figure) | `GRAPH.md § Write Counters: What a Statement Changed`, with the JSON in `DATA_FORMATS.md § Graph Query Counters` |
 | Graph store concurrency / recovery | `IMPLEMENTATION.md § Graph Store Concurrency` |
-| Graph store access lock (taken only by `rmp graph serve`, held for its process lifetime), and what happens when a second server meets it | `GRAPH.md § Concurrency and Recovery` and `GRAPH.md § Lock Contention` |
+| Graph store access lock (held by `rmp graph serve` for its process lifetime, and taken without waiting by `rmp roadmap remove` to refuse removing a roadmap whose server runs), and what happens when a second server meets it | `GRAPH.md § Concurrency and Recovery` and `GRAPH.md § Lock Contention` |
 | Statement time budget (that the server enforces it, what a cut statement leaves on disk, and the exit code the caller reports) | `GRAPH.md § Statement Time Budget`, with the value in `WEB.md § Graph Query Time Budget` |
+| That a graph server returns a statement's memory to the operating system when the statement ends, on every outcome including a cut | `GRAPH.md § Statement-Scoped Memory Release` |
 | What one graph statement costs in resident memory, what that memory is made of, what happens when the cost cannot be served, and why no setting bounds it | `GRAPH.md § Peak Resident Memory` |
 | What a statement that writes nothing does and does not change on disk (the recovery repair performed on open) | `GRAPH.md § What a Statement That Writes Nothing Changes on Disk` |
 | Go toolchain / external dependencies | `BUILD.md § Go Toolchain` |
@@ -110,6 +111,8 @@ The SPEC is unversioned. Git is the source of truth for its evolution — recove
 | Filesystem safety (no symlink following, CWE-59) | `ARCHITECTURE.md § Security Guarantees` |
 | Filesystem layout migration (per-roadmap directories) | `ARCHITECTURE.md § Filesystem Layout Migration` |
 | Error handling / sentinel errors | `ARCHITECTURE.md § Error Handling` |
+| Which SQLite driver failures the CLI classifies, the line each prints instead of the driver's text, and how a write that loses a race is refused | `ARCHITECTURE.md § Classification of Database Driver Failures` |
+| A flag supplied more than once in one invocation (exit code `2`, the published line, no flag is repeatable) | `COMMANDS.md § Repeated Flags` |
 | Exit codes | `ARCHITECTURE.md § Exit Codes` |
 | Error output shape (the parts of stderr and the order they appear in) | `HELP.md § Error message format` |
 | Dispatch failure (an unresolved command or subcommand name): exit code `127`, the help written after the error, the excluded `--ai-help` scope case | `HELP.md § Error message format` and `COMMANDS.md § Dispatch Failures (Unresolved Command or Subcommand Names)` |
@@ -137,6 +140,9 @@ The SPEC is unversioned. Git is the source of truth for its evolution — recove
 | Application version | `VERSION.md` |
 | Build identification (the commit and the `modified` marker the version line reports, its three shapes, and how a released binary carries its commit) | `VERSION.md § Build Identification`, `COMMANDS.md § Version`, and `DEPLOY.md § How a Released Binary Carries Its Commit` |
 | Schema migrations | `VERSION.md § Migrations` |
+| Migrating a database from any earlier schema version (sequence, transactions, idempotency, data preservation, end-state checks, and the per-version fixture databases) | `VERSION.md § Migration Chain Guarantee` |
+| A database whose schema version is newer than the binary (refused on open for every command, nothing written) | `VERSION.md § Database Schema Newer Than the Binary` |
+| What a `project.db` is on open: a zero-byte file initialised, a non-SQLite file refused, the published lines | `DATABASE.md § Opening a Roadmap Database File` |
 | Build / CI / lint | `BUILD.md` |
 | Validation gates (the six gates, and their enforcement locally, in CI, and at release) | `BUILD.md § Validation Gates` |
 | The end-to-end suite as a required CI and release job outside the gate set (the binary it builds, its timeout, its Python version, how a failure names the module) | `BUILD.md § The End-to-End Suite Is a Required Pipeline Job` |
@@ -178,6 +184,8 @@ To prevent drift across SPEC files, the following topics have a single authorita
 | Timestamp format, and the scope of the UTC rule (which output it binds, including a log record whose message came from a dependency, and the requirement that one realisation of the format serve every surface) | `DATA_FORMATS.md § Dates - ISO 8601 with UTC` |
 | Date-range filter values (the two accepted forms, the range, the one acceptance rule for all six filter flags) | `DATA_FORMATS.md § Date Filter Values` |
 | Sentinel errors and wrapping rules | `ARCHITECTURE.md § Error Handling` |
+| Classification of SQLite driver failures (the classified conditions, their lines, the resolution of a lost race, and what stays `database error: <detail>`) | `ARCHITECTURE.md § Classification of Database Driver Failures` |
+| Repeated flags (no flag is repeatable; the refusal, its line, and its place in the order of checks) | `COMMANDS.md § Repeated Flags` |
 | Error output shape (stderr parts and their order, which error classes append help, stdout silence on failure) | `HELP.md § Error message format` |
 | Help tokens, token positions, and the flag values that never ask for help | `HELP.md § Help tokens` |
 | The exit codes a subcommand help lists, their agreement with the subcommand's contract entry, and the gate that holds it | `HELP.md § Agreement with the contract` |
@@ -210,6 +218,10 @@ To prevent drift across SPEC files, the following topics have a single authorita
 | In-sprint position density, and the compaction every removal owes | `DATABASE.md § Position Density Within a Sprint` and `DATABASE.md § Compact Sprint Positions` |
 | Introducing a uniqueness constraint over rows that already exist | `DATABASE.md § Introducing a Uniqueness Constraint over Existing Rows` |
 | Schema migrations | `VERSION.md § Migrations` |
+| The migration chain guarantee and its fixture databases | `VERSION.md § Migration Chain Guarantee` |
+| Refusal of a database newer than the binary | `VERSION.md § Database Schema Newer Than the Binary` (the published line is in `DATABASE.md § Opening a Roadmap Database File`) |
+| Classification of `project.db` on open (zero-byte initialisation, non-SQLite refusal) | `DATABASE.md § Opening a Roadmap Database File` |
+| Statement-scoped memory release by the graph server | `GRAPH.md § Statement-Scoped Memory Release` |
 | Build identification (which build settings the binary reads, the short commit, and the three displays of the version line) | `VERSION.md § Build Identification` |
 | The conditions under which a released binary carries its commit, and the stamp check that fails a workflow build job before it uploads an unstamped binary | `DEPLOY.md § How a Released Binary Carries Its Commit` |
 | Installed-version detection by `install.sh` (the reading rule, the comparison with the latest release, and the three outcomes with their messages) | `DEPLOY.md § Installed Version Detection` |
@@ -268,7 +280,7 @@ To prevent drift across SPEC files, the following topics have a single authorita
 - Roadmap data directory: `~/.roadmaps/` with permissions `0700`.
 - Per-roadmap home directory: `~/.roadmaps/<name>/` with permissions `0700`. The directory name is the roadmap name and is the container for all files the application uses for that roadmap.
 - Individual roadmap databases: `~/.roadmaps/<name>/project.db` with permissions `0600`, created with mode `0600` from the outset (no umask-derived window) and re-applied and re-verified every time `rmp` opens the database. A database that cannot be brought to `0600` fails the command. The SQLite sidecars `project.db-wal` and `project.db-shm` live alongside and use the same `0600` permissions, restricted opportunistically rather than as a hard guarantee. See `ARCHITECTURE.md § Open-Time Permission Enforcement`.
-- Neither the data directory nor any roadmap home directory may be a symbolic link; `rmp` refuses to follow a symlink when creating, opening, or migrating a roadmap directory (CWE-59). See `ARCHITECTURE.md § Directory Structure` and `ARCHITECTURE.md § Security Guarantees`.
+- Neither the data directory, nor any roadmap home directory, nor `project.db` or any of its `-wal`, `-shm` and `-journal` companions may be a symbolic link; `rmp` refuses to follow a symlink when creating, opening, or migrating a roadmap directory or database (CWE-59). See `ARCHITECTURE.md § Directory Structure` and `ARCHITECTURE.md § Security Guarantees`.
 - Per-roadmap knowledge graph store: `~/.roadmaps/<name>/graph/` (a directory) with permissions `0700`, created by `rmp graph serve` on first use. See `GRAPH.md § Persistence Layout`.
 - Per-roadmap graph server socket: `~/.roadmaps/<name>/graph.sock` with permissions `0600`, present only while `rmp graph serve` is running for that roadmap. See `GRAPH.md § Socket Path and Permissions`.
 - Roadmaps in the legacy `~/.roadmaps/<name>.db` layout are migrated automatically to the current layout at startup. See `ARCHITECTURE.md § Filesystem Layout Migration`.

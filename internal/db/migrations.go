@@ -264,20 +264,25 @@ func columnExists(tx *sql.Tx, table, column string) (bool, error) {
 // migrateV1_0_0_toV1_1_0 adds the position column to sprint_tasks table.
 // It initializes existing tasks with sequential positions based on their order.
 //
-// Idempotent: the ADD COLUMN is guarded by columnExists, so re-applying the
-// migration on a database that already has the column is a no-op (not an error).
+// Idempotent: the ADD COLUMN is guarded by columnExists, and the positions are
+// initialised only in the same application that adds the column, so
+// re-applying the migration on a database that already has the column changes
+// nothing (SPEC/VERSION.md § Migration Chain Guarantee, item 3). It used to
+// re-initialise the positions on every application, which replaced a sprint's
+// planned order with the order its tasks were added in.
 func migrateV1_0_0_toV1_1_0(tx *sql.Tx) error {
 	// Add position column with DEFAULT 0 only when it does not already exist.
 	exists, err := columnExists(tx, "sprint_tasks", "position")
 	if err != nil {
 		return err
 	}
-	if !exists {
-		if _, err := tx.Exec(
-			`ALTER TABLE sprint_tasks ADD COLUMN position INTEGER NOT NULL DEFAULT 0`,
-		); err != nil {
-			return fmt.Errorf("adding position column: %w", err)
-		}
+	if exists {
+		return nil
+	}
+	if _, err := tx.Exec(
+		`ALTER TABLE sprint_tasks ADD COLUMN position INTEGER NOT NULL DEFAULT 0`,
+	); err != nil {
+		return fmt.Errorf("adding position column: %w", err)
 	}
 
 	// Add index for sprint task ordering
@@ -778,6 +783,24 @@ func migrateV1_11_0_toV1_12_0(tx *sql.Tx) error {
 // that is already dense and distinct, and the index step is DROP … IF EXISTS
 // followed by CREATE … IF NOT EXISTS. Re-applying the migration is a no-op.
 func migrateV1_12_0_toV1_13_0(tx *sql.Tx) error {
+	// Step 0 — complete a schema the release recorded wrongly. The v1.0.0
+	// release created new databases recording schema version 1.2.0 with neither
+	// the sprint_tasks.position column of 1.1.0 nor the idx_one_open_sprint
+	// index of 1.2.0, so the two migrations that add them never ran on such a
+	// database, and this one — the first whose statements read position —
+	// failed with "no such column: position". Both are applied here first. Each
+	// is idempotent and changes nothing on a database that already carries its
+	// effects, which is every database that did not come from that release; on
+	// one that did, the positions are initialised by the order the tasks were
+	// added in, which is the only order such a database ever had
+	// (SPEC/VERSION.md § Migration Chain Guarantee).
+	if err := migrateV1_0_0_toV1_1_0(tx); err != nil {
+		return err
+	}
+	if err := migrateV1_1_0_toV1_2_0(tx); err != nil {
+		return err
+	}
+
 	// Step 1 — repair. Renumber every sprint's positions to a dense 0..N-1 run.
 	//
 	// The ranking is computed in a SUBQUERY that is evaluated as a unit and

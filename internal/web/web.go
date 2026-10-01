@@ -72,6 +72,13 @@ func Run(args []string, printHelp func()) error {
 func parseArgs(args []string) (opts options, showHelp bool, err error) {
 	opts = options{host: defaultHost, port: defaultPort}
 
+	// No flag is repeatable, and no value of a repeated flag is validated
+	// (SPEC/COMMANDS.md § Repeated Flags): the repetition is found before the
+	// loop below reads any value.
+	if help, rerr := refuseRepeatedFlags(args); rerr != nil || help {
+		return options{}, help, rerr
+	}
+
 	for i := 0; i < len(args); i++ {
 		arg := args[i]
 
@@ -129,6 +136,57 @@ func parseArgs(args []string) (opts options, showHelp bool, err error) {
 	}
 
 	return opts, false, nil
+}
+
+// refuseRepeatedFlags reads args left to right as parseArgs does and refuses
+// the second occurrence of --no-open, --host or --port, in either the separate
+// or the joined form, with the repeated-flag line — unless a help token
+// follows it, because a help token is served before any flag is refused
+// (SPEC/COMMANDS.md § Repeated Flags), in which case it reports help. It
+// examines no value. It stops, refusing nothing, at the first token the main
+// loop answers on its own — a help token, an unrecognised flag or an
+// unexpected argument — so that token keeps its own outcome.
+func refuseRepeatedFlags(args []string) (help bool, err error) {
+	var seen utils.FlagOccurrences
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		if arg == "-h" || arg == "--help" || arg == "help" {
+			return false, nil
+		}
+		name, _, hasInline := splitFlag(arg)
+		switch name {
+		case "--no-open", "--host", "--port":
+		default:
+			return false, nil
+		}
+		if rerr := seen.Note(name, arg); rerr != nil {
+			if helpTokenAhead(args[i+1:]) {
+				return true, nil
+			}
+			return false, rerr
+		}
+		if name != "--no-open" && !hasInline && i+1 < len(args) && !strings.HasPrefix(args[i+1], "-") {
+			i++
+		}
+	}
+	return false, nil
+}
+
+// helpTokenAhead reports whether args carries a help token in a token
+// position: every position except the value of a separately written --host or
+// --port, which is the flag's value unless it begins with "-"
+// (SPEC/HELP.md § Help tokens).
+func helpTokenAhead(args []string) bool {
+	for i := 0; i < len(args); i++ {
+		tok := args[i]
+		if tok == "-h" || tok == "--help" || tok == "help" {
+			return true
+		}
+		if (tok == "--host" || tok == "--port") && i+1 < len(args) && !strings.HasPrefix(args[i+1], "-") {
+			i++
+		}
+	}
+	return false
 }
 
 // splitFlag splits a "--flag=value" token into ("--flag", "value", true).

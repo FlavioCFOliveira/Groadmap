@@ -31,6 +31,7 @@
 - [Field Length Validation](#field-length-validation)
 - [Commit Hash Format Constraint](#commit-hash-format-constraint)
 - [SQLite Validation](#sqlite-validation)
+- [Opening a Roadmap Database File](#opening-a-roadmap-database-file)
 - [Migration Idempotency (ALTER TABLE ADD COLUMN)](#migration-idempotency-alter-table-add-column)
 - [Migration Idempotency (ALTER TABLE DROP COLUMN)](#migration-idempotency-alter-table-drop-column)
 - [Introducing a Uniqueness Constraint over Existing Rows](#introducing-a-uniqueness-constraint-over-existing-rows)
@@ -982,7 +983,10 @@ INSERT INTO _metadata (key, value) VALUES
 `internal/db/schema.go` and named in `VERSION.md § Current Schema Version`. No literal
 version is written here, because a literal would be falsified by the next migration: a
 database records the schema version of the binary that created it, and every migration
-applied afterwards advances the stored value (`VERSION.md § Migrations`). `created_at`
+applied afterwards advances the stored value (`VERSION.md § Migrations`). A stored
+value newer than the binary's `SchemaVersion` is never lowered and never migrated:
+the database is refused on open, for every command, as
+`VERSION.md § Database Schema Newer Than the Binary` specifies. `created_at`
 receives the creation instant in ISO 8601 UTC, and `application` is always the literal
 `Groadmap`.
 
@@ -2110,6 +2114,12 @@ so that the database never reaches a state where `tasks.status` and the
    already carries, and such a sprint stays above its cap until members leave or
    complete. What the addition guarantees is that it does not add to that excess,
    and that it takes no sprint from at or below its cap to above it.
+   **`task reopen` is bound by the same check, in the same way.** Reopening a
+   `COMPLETED` member returns it to `SPRINT` and so raises the active load; the
+   capacity check and the status update MUST occur in the same transaction, with
+   no TOCTOU window between them, and the reopening never raises a sprint's active
+   load above `max_tasks` (`COMMANDS.md § Reopen Task` states the count and the
+   refusal).
 4. **Adding tasks to a sprint (`AddTasksToSprint`).** Setting `SPRINT` on the
    named tasks that join from `BACKLOG`, inserting or re-parenting the
    `sprint_tasks` rows, and writing the audit entries — the `SPRINT_ADD_TASK` entry
@@ -2616,6 +2626,85 @@ SELECT name FROM sqlite_master WHERE type='table' AND name='_metadata';
 ```
 
 Or check magic bytes: SQLite files start with `"SQLite format 3\x00"`
+
+---
+
+## Opening a Roadmap Database File
+
+Every command that opens a roadmap's `project.db` decides what the file is before
+it runs any statement against it. The decision follows the symbolic-link refusal
+of `ARCHITECTURE.md § Directory Structure`, location rule 10, and the mode repair of
+`ARCHITECTURE.md § Open-Time Permission Enforcement`, and it precedes everything
+else the open does: configuring the connection, reading the schema version,
+running a migration, and creating the schema. A file is in exactly one of three
+shapes, and each has one outcome:
+
+| Shape of `project.db` | Outcome |
+|-----------------------|---------|
+| Zero bytes long | An uninitialised database. The schema is created and the command proceeds normally. |
+| Not empty, and not a SQLite database | Refused, with the line below and exit code `1`. |
+| A SQLite database | Opened. The schema version is checked, and a database newer than the binary is refused with the second line below and exit code `1` (`VERSION.md § Database Schema Newer Than the Binary`); otherwise the pending migrations are applied (`VERSION.md § Migration Chain Guarantee`). |
+
+**A zero-byte file is an uninitialised database, not a damaged one.** A file of
+zero bytes holds nothing to lose and nothing to misread: SQLite itself treats an
+empty file as an empty database. The command creates the whole schema in it,
+exactly as `roadmap create` does — every table and index of
+`DDL - Table Creation` and the three `_metadata` rows, in one transaction
+(`Transactional Atomicity Guarantees`, item 10) — and then performs the work it was
+invoked for, against an empty roadmap, with the output and the exit code it has on
+any empty roadmap. No error line and no warning is written for the
+initialisation. A zero-byte `project.db` is a roadmap that exists, under the
+definition of `COMMANDS.md § Roadmap Selection (Always Required)`, so it is never
+refused as one that does not.
+
+Two invocations that find the same zero-byte file at the same time both succeed:
+one creates the schema, and the other proceeds against the schema the first
+created. The schema is created once, `_metadata` holds one row per key, and
+neither invocation receives a constraint violation or any other text of the SQLite
+driver (`ARCHITECTURE.md § Classification of Database Driver Failures`).
+
+**A non-empty file that is not a SQLite database is refused, and left as it
+is.** The file is not a SQLite database when its first 16 bytes are not the
+SQLite header string `SQLite format 3` followed by a zero byte, or when the engine
+refuses to read it as a database. The command fails with `utils.ErrDatabase`,
+exit code `1`, and this line, `<path>` being the absolute path of the file:
+
+```
+Error: database error: <path> is not a valid roadmap database
+```
+
+The line names the file and the condition, and carries no text of the SQLite
+driver: no `file is not a database`, no result code such as `(26)`, and no
+description of the connection setting that happened to meet the file first. On
+the refusal the command has written nothing: the file's contents are byte for byte
+what they were, no connection setting has been written into it, no schema has been
+created and no migration applied, no sidecar has been created by the invocation,
+and nothing is written to stdout. The only change the open may already have made
+is the mode repair of `ARCHITECTURE.md § Open-Time Permission Enforcement`, which
+precedes this decision. A file that is a SQLite database but whose content is
+corrupt beyond its header is outside this rule: a failure the engine reports while
+reading it is a database failure of the kind
+`ARCHITECTURE.md § Classification of Database Driver Failures`, rule 3, describes.
+
+**A SQLite database whose schema is newer than the binary is refused.**
+`VERSION.md § Database Schema Newer Than the Binary` is canonical for the rule and
+for what the refusal must not have written. The command fails with
+`utils.ErrDatabase`, exit code `1`, and this line, `<path>` being the absolute path
+of the file and the two versions being the ones the placeholder table of
+`COMMANDS.md § Published Error Strings Are Exact` declares:
+
+```
+Error: database error: <path> has schema version <db-version>, newer than schema version <supported-version> supported by this rmp; upgrade rmp to open it
+```
+
+**The read-only open path creates nothing.** The web interface opens a roadmap
+database read-only for its requests
+(`ARCHITECTURE.md § Open-Time Permission Enforcement`, step **E**), and a read-only open creates no schema. The writable
+open its startup schema migration performs initialises a zero-byte file as above
+(`WEB.md § Startup Schema Migration`); a file that is still of zero bytes, or that
+is not a SQLite database, when a request reads it is a read failure on the
+affected route, answered as `WEB.md § Routes and Pages` answers any other read
+failure.
 
 ---
 

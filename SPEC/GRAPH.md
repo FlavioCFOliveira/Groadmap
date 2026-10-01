@@ -47,6 +47,7 @@
   - [What a Statement That Writes Nothing Changes on Disk](#what-a-statement-that-writes-nothing-changes-on-disk)
   - [Statement Time Budget](#statement-time-budget)
   - [Peak Resident Memory](#peak-resident-memory)
+  - [Statement-Scoped Memory Release](#statement-scoped-memory-release)
   - [Lock Contention](#lock-contention)
 - [Constraints](#constraints)
 - [Acceptance Criteria](#acceptance-criteria)
@@ -791,7 +792,9 @@ Rules:
    does not name is not thereby forbidden.
 6. Removing a roadmap (`rmp roadmap remove <name>`) deletes the entire roadmap
    home directory recursively, which includes `graph/`. No separate graph-removal
-   command is required (see `COMMANDS.md § Remove Roadmap`).
+   command is required (see `COMMANDS.md § Remove Roadmap`). The removal is
+   refused, and deletes nothing, while a graph server holds the store's lock
+   (see [Concurrency and Recovery](#concurrency-and-recovery)).
 7. The roadmap home directory layout, including the graph subdirectory, is
    described in `ARCHITECTURE.md § Directory Structure`. This file is the
    canonical source for the `graph/` subdirectory.
@@ -2716,8 +2719,9 @@ there is (see [Socket Path and Permissions](#socket-path-and-permissions)).
 
 **The server is the only process that opens the store, and that is what the lock
 now means.** A server holds the store's exclusive advisory lock for its whole
-process lifetime, which is a hold no finite wait can be sized against. Nothing else
-takes that lock: `rmp graph client` and the web graph data endpoint reach the graph
+process lifetime, which is a hold no finite wait can be sized against. No surface
+that reaches the graph takes that lock: `rmp graph client` and the web graph data
+endpoint reach the graph
 by resolving the roadmap's socket and sending the statement to the server, and
 neither has a second way in. With no server listening, each reports that the graph
 is unavailable rather than opening the store. That rule is stated once, in
@@ -4170,10 +4174,30 @@ Groadmap does not depend on the engine to serialise access to the store between
 processes. It serialises it itself, at the process level, through a single advisory
 lock file that Groadmap maintains in the roadmap's graph directory, `write.lock`
 (see [Persistence Layout](#persistence-layout)). **`rmp graph serve` is the only
-process that takes it.** It takes the lock **exclusively** before it opens the
-store and holds it until the process stops, so the lock's whole remaining purpose
-is to admit one server per roadmap. No caller takes it, because no caller opens a
-store (see [Server Resolution](#server-resolution)).
+process that holds it for its lifetime.** It takes the lock **exclusively** before
+it opens the store and holds it until the process stops, so the lock's purpose is
+to admit one server per roadmap and to make a running server observable. No caller
+takes it, because no caller opens a store (see
+[Server Resolution](#server-resolution)).
+
+**`rmp roadmap remove` is the one other process that takes it, and only to
+decide whether a server is running.** It takes the lock exclusively and without
+waiting before it deletes anything, refuses the removal when another process
+holds it, and otherwise holds it until the roadmap home directory is gone, so no
+server can start against a store that is being deleted.
+`COMMANDS.md § Remove Roadmap` is canonical for the decision and the refusal.
+Two obligations fall on the server so that the guarantee holds when its startup
+overlaps a removal:
+
+1. Once it holds the lock, the server confirms that the roadmap still exists, as
+   `COMMANDS.md § Roadmap Selection (Always Required)` defines existence, before it
+   opens the store. A roadmap removed between the resolution of step 1 of
+   [Server Startup](#server-startup) and the lock is refused as a roadmap that
+   does not exist, with the roadmap-not-found line and exit code `4`, and the
+   server opens, creates, and binds nothing further.
+2. The server never creates the roadmap home directory. It creates `graph/` only
+   inside a home directory that exists, so a startup that loses the race to a
+   removal fails rather than recreating a home the removal has just deleted.
 
 **There is one lock mode, because there is one holder.** A mode that distinguished
 readers from writers would have to be taken per statement by a party that knows
@@ -4481,12 +4505,15 @@ statement to the server and reads the answer back. The whole of this cost falls 
 long-lived. Three consequences follow, and all three are properties rather than
 figures:
 
-1. **A long-lived process does not return the memory promptly.** A short-lived
-   invocation returns it to the operating system by exiting; a server has no exit
-   to return it at. It releases some of it to the runtime in time and then settles
-   at a floor far above the baseline it started from, where it stays for as long
-   as the process is otherwise idle, because an idle runtime triggers no
-   collection.
+1. **A long-lived process has no exit at which to return the memory, so it MUST
+   return it when the statement ends.** A short-lived invocation returns the
+   memory to the operating system by exiting; a server has no exit to return it
+   at, and left to its runtime it releases some of it in time and then settles at
+   a floor far above the baseline it started from, where it stays for as long as
+   the process is otherwise idle, because an idle runtime triggers no collection.
+   That retention is a defect, and
+   [Statement-Scoped Memory Release](#statement-scoped-memory-release) below is the
+   requirement that removes it.
 2. **The store on disk is unchanged whichever surface paid.** On the server that
    is a requirement rather than an accident: an unconditional shutdown checkpoint
    would leave a residue on disk instead, which is why
@@ -4556,8 +4583,10 @@ declining each is a decision rather than an oversight.**
 **What that leaves, stated as the finding it is.** No configuration available to
 Groadmap both preserves throughput and bounds peak resident memory. One statement
 can still cost gigabytes at the budget in force, and far more given time; the cost
-falls on the graph server, and a long-lived process does not return it promptly.
-The bound has to come from the engine, exactly as the bound on the hold does (see
+falls on the graph server, which MUST return it to the operating system when the
+statement ends ([Statement-Scoped Memory Release](#statement-scoped-memory-release)).
+That requirement bounds how long the cost is held, not how large it grows. The
+bound on the size has to come from the engine, exactly as the bound on the hold does (see
 [Statement Time Budget](#statement-time-budget)), and it has to be a bound on the
 **work** a statement performs rather than on the result it returns. The engine's
 byte budgets are its only memory-shaped guard and they account for the
@@ -4567,15 +4596,62 @@ to cut a returning read outright does not cut the equivalent write at all, which
 runs to its deadline. Groadmap does not bound this from its own side, and this
 specification does not claim it can.
 
+### Statement-Scoped Memory Release
+
+**A graph server retains no memory a statement owned once that statement has
+ended.** This is a resource-hygiene requirement on `rmp graph serve`, and it holds
+however the statement ended: committed, rolled back, refused by the engine, lost to
+a serialisation conflict, or cut by the statement time budget
+([Statement Time Budget](#statement-time-budget)). A cut statement is the case the
+requirement exists for, because it is the one that accumulates the most before it
+ends ([Peak Resident Memory](#peak-resident-memory)).
+
+1. **Statement-scoped memory is everything the statement accumulated.** It is the
+   four accumulators [Peak Resident Memory](#peak-resident-memory) names — the
+   write-ahead-log operation buffer and the applied in-memory state of a write
+   that did not commit, the undo log, and the engine's index buffer — together with
+   the rows the statement materialised and the response it built. It excludes the
+   committed graph itself, which the server holds for as long as it serves, and
+   the server's fixed working state.
+2. **When the statement ends, the server keeps no reference to any of it.** No
+   cache, pool, buffer, or connection state carries a structure the statement
+   built past the moment its outcome has been written to the client, whatever the
+   outcome was. A rolled-back or cut write leaves no trace of its applied state in
+   memory, as it leaves none on disk.
+3. **The memory is returned to the operating system when the statement ends, not
+   at some later collection.** Releasing the references is not enough on its own:
+   a runtime that has freed memory may keep it mapped and resident until a later
+   collection that an idle server never triggers. The server MUST therefore
+   return the freed memory to the operating system as part of finishing the
+   statement, so that an idle server does not stay resident at the high-water mark
+   of the heaviest statement it has run. When other statements are still in flight,
+   only the memory of the statements that have ended is owed back; the memory of
+   the ones still running is theirs.
+4. **No figure is published.** The requirement is that the release happens, at
+   the end of every statement; it states no resident-memory threshold, because
+   this project keeps no performance-measurement tests and nothing would re-derive
+   such a figure (`BUILD.md § No Benchmarks and No Performance-Measurement Tests`).
+   It is verified by the property, not by a measurement: that the statement's
+   structures are unreachable once it has ended, and that the server returns freed
+   memory to the operating system on that path, on every outcome listed above.
+5. **What it does not bound.** The requirement bounds how long a statement's memory
+   is held, not how much a statement may use while it runs. The peak cost of one
+   statement, and the decision not to bound it from Groadmap's side, are unchanged
+   ([Peak Resident Memory](#peak-resident-memory)).
+
 ### Lock Contention
 
-**One process takes this lock, so one thing can contend for it: another server.**
-`rmp graph serve` takes the graph store's exclusive advisory lock before it opens
-the store and holds it until the process stops
+**One process holds this lock for its lifetime, so one thing can contend for it
+for long: another server.** `rmp graph serve` takes the graph store's exclusive
+advisory lock before it opens the store and holds it until the process stops
 ([Server Startup](#server-startup), step 2). No caller takes it, because no caller
-opens a store ([Server Resolution](#server-resolution)). The whole of the
-contention this section governs is therefore between two `rmp graph serve`
-processes for the same roadmap.
+opens a store ([Server Resolution](#server-resolution)). The one other process that
+takes it is `rmp roadmap remove`, which holds it only while it deletes the roadmap
+home directory and never waits for it
+([Concurrency and Recovery](#concurrency-and-recovery)). The contention this
+section governs is therefore between two `rmp graph serve` processes for the same
+roadmap, or between a starting server and a removal of its roadmap that holds the
+lock for the length of a directory deletion.
 
 1. A server that finds the exclusive lock held **waits**, under the bounded
    exponential-backoff policy specified in
@@ -4591,9 +4667,10 @@ processes for the same roadmap.
    the lock, because nothing records one.** The lock is advisory and carries no
    owner, and the server that failed to take it cannot find out who has it. It
    names the likely holder and does not assert it: another `rmp graph serve` is
-   now the only thing that can be holding this lock, so the line says that one
-   **may** already be running for the roadmap, which is a cause the reader can act
-   on without being told a fact the product does not have.
+   the only process that holds this lock for longer than a directory deletion, so
+   the line says that one **may** already be running for the roadmap, which is a
+   cause the reader can act on without being told a fact the product does not
+   have.
    `COMMANDS.md § Graph Server Socket Error Lines` publishes the exact line.
 
 **Waiting rather than failing fast is the policy because a restart is the ordinary

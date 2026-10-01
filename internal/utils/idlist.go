@@ -133,6 +133,17 @@ func SprintCapacityError(adding, sprintID, load, limit int) error {
 		ErrValidation, adding, sprintID, load, limit)
 }
 
+// ReopenCapacityError builds the refusal of a `task reopen` that would take
+// sprint sprintID past its max_tasks cap. reopening is the number of distinct
+// named COMPLETED tasks of that sprint the invocation would return to SPRINT,
+// load the sprint's active load before the reopening, and limit its cap
+// (SPEC/COMMANDS.md § Reopen Task). The line has the shape of
+// SprintCapacityError's, because the two commands apply one rule.
+func ReopenCapacityError(reopening, sprintID, load, limit int) error {
+	return fmt.Errorf("%w: reopening %d task(s) would exceed sprint #%d capacity (%d/%d tasks active)",
+		ErrValidation, reopening, sprintID, load, limit)
+}
+
 // JoinHashIDs renders ids as the published <id-list> placeholder: each id
 // prefixed with "#", separated by a comma and a space, in the order given
 // (SPEC/COMMANDS.md § Error Output). The caller supplies them in ascending id

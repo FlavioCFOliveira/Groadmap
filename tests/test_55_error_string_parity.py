@@ -140,7 +140,8 @@ import uuid
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from tests.base_test import (GroadmapTestBase, REPO_ROOT, COMMIT_OPEN_HASH,
-                             COMMIT_CLOSE_HASH, measure_socket_path_bound)
+                             COMMIT_CLOSE_HASH, commit_flags_for,
+                             measure_socket_path_bound)
 # The socket-path bound is MEASURED, never written down: it is 107 bytes on
 # Linux and Windows and 103 on macOS, FreeBSD and OpenBSD, so a literal here
 # would agree with a hard-coded implementation on one host and confirm the
@@ -150,6 +151,14 @@ from tests.base_test import (GroadmapTestBase, REPO_ROOT, COMMIT_OPEN_HASH,
 
 
 SPEC_PATH = REPO_ROOT / "SPEC" / "COMMANDS.md"
+
+# The schema version the binary supports, the <supported-version> of the
+# newer-schema refusal. It is read from its one declaration rather than
+# restated, so a schema bump cannot leave this module asserting the old one.
+SCHEMA_VERSION = re.search(
+    r'const SchemaVersion = "([0-9.]+)"',
+    (REPO_ROOT / "internal" / "db" / "schema.go").read_text(encoding="utf-8"),
+).group(1)
 
 # SPEC/STATE_MACHINE.md publishes four error strings (rmp task #456). Two of
 # them -- the completion guards -- are published nowhere else; the other two
@@ -1188,7 +1197,7 @@ class TestErrorStringParity:
     # Invocation helpers
     # ------------------------------------------------------------------
 
-    def run_stdin(self, args, input_text=None, stdin_fd=None, timeout=None):
+    def run_stdin(self, args, input_text=None, stdin_fd=None, timeout=None, home=None):
         """Run the CLI with `input_text` (or a closed/empty stdin when None)
         piped in, returning (exit_code, stdout, stderr).
 
@@ -1197,7 +1206,7 @@ class TestErrorStringParity:
         the descriptor rather than of the bytes on it -- a directory, whose
         read(2) is EISDIR. It and `input_text` are mutually exclusive."""
         env = os.environ.copy()
-        env["HOME"] = str(self.test.home_dir)
+        env["HOME"] = str(self.test.home_dir) if home is None else home
         if stdin_fd is not None:
             assert input_text is None, "stdin_fd and input_text are mutually exclusive"
             result = subprocess.run(
@@ -1219,7 +1228,7 @@ class TestErrorStringParity:
         )
         return result.returncode, result.stdout, result.stderr
 
-    def check(self, key, args, exit_code, subs=None, stdin=None, note="", timeout=None):
+    def check(self, key, args, exit_code, subs=None, stdin=None, note="", timeout=None, home=None):
         """The gate's core assertion: run `args` with stdin ALWAYS under this
         module's explicit control (empty by default -- never the inherited
         stdin of the process running the suite, which would make the result
@@ -1231,7 +1240,7 @@ class TestErrorStringParity:
             f"SPEC/COMMANDS.md: {key!r} ({note})"
         )
         expected = subst(key, subs or {})
-        rc, out, err = self.run_stdin(args, stdin, timeout=timeout)
+        rc, out, err = self.run_stdin(args, stdin, timeout=timeout, home=home)
         actual_line = err.splitlines()[0] if err else ""
         assert rc == exit_code, (
             f"[{note or key}] exit code: expected {exit_code}, got {rc}\n"
@@ -3290,9 +3299,12 @@ class TestErrorStringParity:
             ["audit", "list", "-r", r, "--entity-id", "0"], 6, subs={"N": "0"},
             note="audit list entity-id out of range",
         )
-        # #99: --entity-id non-integer.
+        # #99: --entity-id non-integer. The flag prints the format line of
+        # § Entity Identifier Range, rule 4, identical to the one `audit
+        # history` prints for the same token in its <entity-id> position (#101
+        # below drives that key through the positional).
         self.check(
-            "Error: invalid input: invalid entity ID: X",
+            'Error: invalid input: invalid entity ID: "X" (must be a positive integer)',
             ["audit", "list", "-r", r, "--entity-id", "abc"], 2, subs={"X": "abc"},
             note="audit list entity-id non-integer",
         )
@@ -4420,6 +4432,126 @@ class TestErrorStringParity:
         assert waited >= 7.0, (
             f"the client gave up after {waited:.2f}s, before its 7.5s backstop: whatever "
             f"ended the wait, it was not the backstop")
+
+    # ------------------------------------------------------------------
+    # The lines rmp tasks #577-#588 published: the home directory, the
+    # database file's shape and links, the newer schema, repeated flags, the
+    # sprint lifecycle refusals, the removal under a running graph server and
+    # the reopening past a sprint's capacity.
+    # ------------------------------------------------------------------
+
+    def test_home_and_database_file_lines(self):
+        r = self.roadmap
+        # A relative home is refused before anything is located under it. The
+        # working directory of the child is this module's, so nothing may
+        # appear relative to it either; the value is unique to make that
+        # observable.
+        relative = f"relative-home-{uuid.uuid4().hex[:8]}"
+        self.check(
+            'Error: database error: home directory "X" is not an absolute path; '
+            'refusing to locate the data directory under it',
+            ["task", "list", "-r", r], 1, subs={"X": relative}, home=relative,
+            note="relative HOME")
+        assert not os.path.exists(relative), "a refused relative home created a directory"
+
+        db_path = str(self.test.home_dir / ".roadmaps" / r / "project.db")
+
+        # A companion that is a symbolic link, dangling, is refused by name.
+        shm = db_path + "-shm"
+        if os.path.exists(shm):
+            os.remove(shm)
+        os.symlink(str(self.test.home_dir / "elsewhere-shm"), shm)
+        try:
+            self.check(
+                "Error: database error: <path> is a symbolic link; refusing to use it as a roadmap database file",
+                ["task", "list", "-r", r], 1, subs={"<path>": shm}, note="symlinked -shm")
+            assert not os.path.exists(str(self.test.home_dir / "elsewhere-shm")), "the link target was created"
+        finally:
+            os.remove(shm)
+
+        # A file that is not a SQLite database, in a roadmap of its own.
+        foreign = self._another_roadmap("foreign")
+        foreign_db = str(self.test.home_dir / ".roadmaps" / foreign / "project.db")
+        content = b"%PDF-1.7\n% settlement report for September\n"
+        with open(foreign_db, "wb") as fh:
+            fh.write(content)
+        self.check("Error: database error: <path> is not a valid roadmap database",
+                   ["task", "list", "-r", foreign], 1, subs={"<path>": foreign_db},
+                   note="a PDF where project.db belongs")
+        with open(foreign_db, "rb") as fh:
+            assert fh.read() == content, "the refused file changed"
+
+        # A database newer than the binary.
+        future = self._another_roadmap("future")
+        future_db = str(self.test.home_dir / ".roadmaps" / future / "project.db")
+        conn = sqlite3.connect(future_db)
+        try:
+            conn.execute("UPDATE _metadata SET value = '1.99.0' WHERE key = 'schema_version'")
+            conn.commit()
+        finally:
+            conn.close()
+        supported = SCHEMA_VERSION
+        self.check(
+            "Error: database error: <path> has schema version <db-version>, newer than schema version "
+            "<supported-version> supported by this rmp; upgrade rmp to open it",
+            ["task", "list", "-r", future], 1,
+            subs={"<path>": future_db, "<db-version>": "1.99.0", "<supported-version>": supported},
+            note="schema newer than the binary")
+
+    def test_repeated_flag_line(self):
+        r = self.roadmap
+        self.check("Error: invalid input: repeated flag: --title",
+                   ["task", "create", "-r", r, "-t", "First", "--title", "Second",
+                    "-fr", self.FR, "-tr", self.TR, "-ac", self.AC], 2,
+                   note="a repeated --title")
+
+    def test_sprint_state_refusals(self):
+        r = self.roadmap
+        pending = self.mk_sprint("Refund retries", self.SPRINT_DESC)
+        opened = self.mk_sprint("Chargeback automation", self.SPRINT_DESC)
+        closed = self.mk_sprint("Settlement reconciliation", self.SPRINT_DESC)
+        self.test.run_cmd(["sprint", "start", "-r", r, str(closed)])
+        self.test.run_cmd(["sprint", "close", "-r", r, str(closed)])
+        self.test.run_cmd(["sprint", "start", "-r", r, str(opened)])
+
+        self.check("Error: validation error: cannot start sprint with status X",
+                   ["sprint", "start", "-r", r, str(closed)], 6, subs={"X": "CLOSED"},
+                   note="start a CLOSED sprint")
+        self.check("Error: validation error: cannot close sprint with status X",
+                   ["sprint", "close", "-r", r, str(pending)], 6, subs={"X": "PENDING"},
+                   note="close a PENDING sprint")
+        self.check("Error: validation error: cannot reopen sprint with status X",
+                   ["sprint", "reopen", "-r", r, str(opened)], 6, subs={"X": "OPEN"},
+                   note="reopen an OPEN sprint")
+        self.check("Error: validation error: sprint #N is already open — close it first",
+                   ["sprint", "start", "-r", r, str(pending)], 6, subs={"N": str(opened)},
+                   note="start while another sprint is OPEN")
+
+    def test_reopen_capacity_line(self):
+        r = self.roadmap
+        sprint = self.mk_sprint("Capacity-bounded refund work", self.SPRINT_DESC, extra=["--max-tasks", "2"])
+        done = self.mk_task("Add idempotency keys to the refund endpoint", self.FR, self.TR, self.AC)
+        planned = self.mk_task("Retry provider webhooks with exponential backoff", self.FR, self.TR, self.AC)
+        doing = self.mk_task("Reconcile settlement totals against the daily report", self.FR, self.TR, self.AC)
+        self.test.run_cmd(["sprint", "add-tasks", "-r", r, str(sprint), str(done)])
+        for status in ("DOING", "TESTING", "COMPLETED"):
+            self.test.run_cmd(["task", "stat", "-r", r, str(done), status] + commit_flags_for(status))
+        self.test.run_cmd(["sprint", "add-tasks", "-r", r, str(sprint), f"{planned},{doing}"])
+        self.test.run_cmd(["task", "stat", "-r", r, str(doing), "DOING"] + commit_flags_for("DOING"))
+        self.check(
+            "Error: validation error: reopening N task(s) would exceed sprint #M capacity (<load>/<cap> tasks active)",
+            ["task", "reopen", "-r", r, str(done)], 6,
+            subs={"N": "1", "M": str(sprint), "<load>": "2", "<cap>": "2"},
+            note="reopen past the capacity cap")
+
+    def test_remove_while_graph_server_runs(self):
+        r = self.roadmap
+        self.test.start_graph_server(r)
+        self.check('Error: validation error: cannot remove roadmap "X": a graph server is running for it; '
+                   'stop the server first',
+                   ["roadmap", "remove", r], 6, subs={"X": r}, note="remove under a running server",
+                   timeout=60)
+        assert (self.test.home_dir / ".roadmaps" / r / "project.db").exists(), "the refusal removed project.db"
 
     # ------------------------------------------------------------------
     # SPEC/DATABASE.md § The failure surface: a migration that fails

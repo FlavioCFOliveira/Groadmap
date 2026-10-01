@@ -285,6 +285,9 @@ func TestGenerate_ExitCodeConditionsAreNotOneGenericSentence(t *testing.T) {
 		"More positional arguments were supplied than this subcommand accepts.": "the one arity " +
 			"enforcement point (internal/commands/positional_arity.go), on the only path that reaches " +
 			"a handler",
+		"A flag was supplied more than once; no flag is repeatable, and every spelling of one flag counts as that flag.": "the CLI-wide " +
+			"rule that no flag is repeatable (SPEC/COMMANDS.md § Repeated Flags), refused by the flag-reading step " +
+			"every subcommand with a flag other than --help shares",
 	}
 
 	counts := map[string]int{}

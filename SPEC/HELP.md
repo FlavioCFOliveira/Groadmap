@@ -142,8 +142,8 @@ The rule fixes, among others, these outcomes:
 - `rmp roadmap create help` and `rmp roadmap remove help` write the help of their
   subcommand and create or remove nothing: a positional argument stands in a token
   position, so the word `help` cannot be supplied as a roadmap name there. A
-  roadmap named `help` made outside the CLI is listed by `rmp roadmap list` and
-  reachable by no command, exactly as one named `con` is.
+  roadmap named `help` made outside the CLI is reachable by no command and is not
+  listed by `rmp roadmap list`, exactly as one named `con` is.
 
 **A token that carries a value after an `=` is refused, never served.**
 `--help=<value>` and `-h=<value>`, whatever the value and including the empty
@@ -430,6 +430,15 @@ machine-readable AI Agent Contract (`rmp --ai-help`) MUST document them:
    `task stat` as a way back to `BACKLOG`. The commit fields are named because their
    asymmetry contradicts the pattern every other tracking field follows, and a reader
    who assumes symmetry would be wrong. `STATE_MACHINE.md § Commit Tracking Fields` is canonical for the rule.
+   Every surface that summarises `task reopen` in one line names the same
+   destination: the `reopen` entry of the `task` family help's `Commands:` list,
+   the subcommand help's description, and the subcommand's summary in the AI Agent
+   Contract each state that the task returns to `SPRINT` in its sprint, and none
+   of them names `BACKLOG` as the destination of a reopening. The one exception a
+   surface may state is the legacy case of a `COMPLETED` task that belongs to no
+   sprint, which `task reopen` returns to `BACKLOG`, and it is stated as that
+   exception, never as the general destination.
+   `STATE_MACHINE.md § Reopening Behavior` is canonical for the destination.
 
 6. **Where the hash is recorded.** The help MUST state that the supplied hash is
    written both to the task and to the audit entry for the transition, and that the

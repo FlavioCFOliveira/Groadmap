@@ -93,6 +93,7 @@ TEST_MODULES = [
     "test_73_help_exit_codes_contract",
     "test_74_help_tokens_and_joined_flags",
     "test_75_docs_error_lines_and_links",
+    "test_76_correctness_and_security_lab",
 ]
 
 # Stress tests (run separately due to time/data volume)

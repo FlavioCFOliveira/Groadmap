@@ -126,7 +126,7 @@ func startRealServerOver(tb testing.TB, graphDir, socket string, cadence checkpo
 		tb.Fatalf("opening the graph store: %v", err)
 	}
 
-	closer, srv, err := build(st, graphDir, cadence, log)
+	closer, srv, err := build(st, graphDir, cadence, log, nil)
 	if err != nil {
 		tb.Fatalf("building the server: %v", err)
 	}

@@ -28,6 +28,12 @@ var ValidRoadmapNameRegex = regexp.MustCompile(`^[a-z0-9_-]+$`)
 
 // Sentinel errors for path and name validation.
 var (
+	// ErrHomeUnresolved marks a home directory that is not set, or is not an
+	// absolute path, so the data directory cannot be located. It is not a
+	// class of the catalogue: the refusal of a relative home carries
+	// ErrDatabase beside it, and an unset home carries no class.
+	ErrHomeUnresolved = errors.New("home directory unresolved")
+
 	ErrPermissionsMismatch         = errors.New("permissions mismatch (umask may have interfered)")
 	ErrRoadmapNameEmpty            = errors.New("roadmap name cannot be empty")
 	ErrRoadmapNameTooLong          = errors.New("roadmap name too long")
@@ -48,12 +54,41 @@ var WindowsReservedNames = map[string]bool{
 	"LPT6": true, "LPT7": true, "LPT8": true, "LPT9": true,
 }
 
-// GetDataDir returns the absolute path to the ~/.roadmaps/ directory.
-// Creates the directory if it doesn't exist with 0700 permissions.
+// GetDataDir returns the absolute path to the ~/.roadmaps/ directory. It
+// creates nothing.
+//
+// The home directory is the one the operating system's convention names — HOME
+// on a POSIX platform, USERPROFILE on Windows, which is what os.UserHomeDir
+// reads — and it MUST be an absolute path. A relative value would place the data
+// directory, and every roadmap in it, under whatever the working directory of
+// each invocation happens to be, so it is refused here, before anything is read,
+// created, or changed under it. Every surface that resolves the data directory
+// reaches this function first — the startup layout-migration sweep included — so
+// the refusal is made once, here (SPEC/ARCHITECTURE.md § Directory Structure,
+// location rule 1). It carries ErrDatabase, the class of the symbolic-link
+// refusal of rule 10, because it is the same kind of decision: the value was
+// read, and rmp refuses to locate the data directory under it. A home that is
+// not set at all is refused by os.UserHomeDir itself.
+//
+// Both refusals also carry ErrHomeUnresolved, which classifies nothing and
+// lets the startup layout-migration sweep tell a home it cannot use from a
+// data directory it cannot read: the sweep does not run under such a home, and
+// the refusal is left to the command, so an invocation that only writes help
+// is not refused (location rule 1).
 func GetDataDir() (string, error) {
 	homeDir, err := os.UserHomeDir()
 	if err != nil {
-		return "", fmt.Errorf("getting user home directory: %w", err)
+		return "", &MessageError{
+			Msg:       "getting user home directory: " + err.Error(),
+			Sentinels: []error{ErrHomeUnresolved, err},
+		}
+	}
+	if !filepath.IsAbs(homeDir) {
+		return "", &MessageError{
+			Msg: fmt.Sprintf("%s: home directory %q is not an absolute path; refusing to locate the data directory under it",
+				ErrDatabase, homeDir),
+			Sentinels: []error{ErrDatabase, ErrHomeUnresolved},
+		}
 	}
 
 	dataDir := filepath.Join(homeDir, DataDirName)
@@ -232,6 +267,17 @@ func ValidateRoadmapName(name string) error {
 	return nil
 }
 
+// IsValidRoadmapName reports whether name satisfies every rule of
+// ValidateRoadmapName. It is the ONE predicate roadmap enumeration filters on:
+// `rmp roadmap list`, the roadmap index of `rmp web` and the web server's
+// startup schema migration all enumerate through ListRoadmapEntries, which asks
+// it of every candidate directory, so a directory no command can select is
+// never offered as a roadmap (SPEC/ARCHITECTURE.md § Directory Structure,
+// location rule 9; SPEC/COMMANDS.md § List Roadmaps).
+func IsValidRoadmapName(name string) bool {
+	return ValidateRoadmapName(name) == nil
+}
+
 // GetRoadmapDir returns the absolute path to a roadmap's home directory
 // (~/.roadmaps/<name>/). This directory is the container for every file the
 // application stores for that roadmap (today the SQLite database and its
@@ -267,15 +313,44 @@ func GetRoadmapPath(name string) (string, error) {
 // permissions were applied correctly after creation (umask may interfere).
 // It mirrors EnsureDataDir but targets ~/.roadmaps/<name>/.
 func EnsureRoadmapDir(name string) error {
-	// The data directory must exist (and be private) before any roadmap
-	// home directory can be created under it.
-	if err := EnsureDataDir(); err != nil {
-		return err
-	}
+	return ensureRoadmapDir(name, true)
+}
 
+// SecureExistingRoadmapDir brings an EXISTING roadmap home directory, and the
+// data directory above it, to 0700 and verifies them, exactly as
+// EnsureRoadmapDir does, but creates neither. A home that does not exist is
+// reported as the roadmap-not-found refusal (utils.ErrNotFound, exit code 4).
+//
+// It exists for `rmp graph serve`, which never creates the roadmap home
+// directory: a startup that loses a race to `rmp roadmap remove` must fail
+// rather than recreate the home the removal has just deleted
+// (SPEC/GRAPH.md § Concurrency and Recovery, obligation 2).
+func SecureExistingRoadmapDir(name string) error {
+	return ensureRoadmapDir(name, false)
+}
+
+// ensureRoadmapDir is EnsureRoadmapDir and SecureExistingRoadmapDir; create
+// decides whether a missing directory is made or refused.
+func ensureRoadmapDir(name string, create bool) error {
 	dir, err := GetRoadmapDir(name)
 	if err != nil {
 		return err
+	}
+
+	if create {
+		// The data directory must exist (and be private) before any roadmap
+		// home directory can be created under it.
+		if err := EnsureDataDir(); err != nil {
+			return err
+		}
+	} else {
+		dataDir := filepath.Dir(dir)
+		if err := assertNotSymlink(dataDir); err != nil {
+			return err
+		}
+		if err := secureExistingDir(dataDir, name); err != nil {
+			return err
+		}
 	}
 
 	// Refuse to follow a symlink planted at ~/.roadmaps/<name>: the os.Chmod
@@ -283,6 +358,10 @@ func EnsureRoadmapDir(name string) error {
 	// through the link to a target outside ~/.roadmaps (finding #72).
 	if err := assertNotSymlink(dir); err != nil {
 		return err
+	}
+
+	if !create {
+		return secureExistingDir(dir, name)
 	}
 
 	if err := os.MkdirAll(dir, DataDirPerm); err != nil {
@@ -299,6 +378,28 @@ func EnsureRoadmapDir(name string) error {
 		return dirIOError(fmt.Errorf("verifying roadmap directory permissions: %w", err))
 	}
 
+	return nil
+}
+
+// secureExistingDir brings an existing directory to 0700 and verifies it. A
+// directory that does not exist is the roadmap name's not-found refusal.
+func secureExistingDir(dir, name string) error {
+	info, err := os.Lstat(dir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return fmt.Errorf("%w: roadmap %q not found", ErrNotFound, name)
+		}
+		return dirIOError(fmt.Errorf("checking directory %s: %w", dir, err))
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("%w: roadmap %q not found", ErrNotFound, name)
+	}
+	if err := os.Chmod(dir, DataDirPerm); err != nil {
+		return dirIOError(fmt.Errorf("setting permissions on directory %s: %w", dir, err))
+	}
+	if err := VerifyPermissions(dir, DataDirPerm); err != nil {
+		return dirIOError(fmt.Errorf("verifying directory permissions: %w", err))
+	}
 	return nil
 }
 
@@ -366,11 +467,30 @@ func RoadmapExists(name string) (bool, error) {
 	return !info.IsDir(), nil
 }
 
-// ListRoadmaps returns the names of all roadmaps in the data directory.
-// Under the current layout each roadmap is an immediate subdirectory of
-// ~/.roadmaps/ that contains a project.db database; top-level files are not
-// considered roadmaps.
-func ListRoadmaps() ([]string, error) {
+// RoadmapEntry is one roadmap found by enumeration: its name, the absolute path
+// of its project.db, and that file's size in bytes.
+type RoadmapEntry struct {
+	Name string
+	Path string
+	Size int64
+}
+
+// ListRoadmapEntries enumerates the roadmaps in the data directory, in the order
+// the directory listing returns them (lexical by name).
+//
+// It is the ONE enumeration rule of the application (SPEC/ARCHITECTURE.md
+// § Directory Structure, location rule 9): `rmp roadmap list`, the roadmap index
+// of `rmp web` and the web server's startup schema migration all read it. A
+// roadmap is an immediate subdirectory of ~/.roadmaps/ whose name satisfies
+// every roadmap name rule (IsValidRoadmapName) and that holds a project.db that
+// is not a directory. Every other entry — a top-level file, a subdirectory
+// without a project.db, and a subdirectory whose name breaks a rule, whether or
+// not it holds a project.db — is skipped silently: nothing is written, and the
+// skipped entry is neither read nor changed. The name check precedes the stat,
+// so a directory with an invalid name is not even examined.
+//
+// A data directory that does not exist yields an empty, non-nil slice.
+func ListRoadmapEntries() ([]RoadmapEntry, error) {
 	dataDir, err := GetDataDir()
 	if err != nil {
 		return nil, err
@@ -379,17 +499,15 @@ func ListRoadmaps() ([]string, error) {
 	entries, err := os.ReadDir(dataDir)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return []string{}, nil
+			return []RoadmapEntry{}, nil
 		}
 		return nil, fmt.Errorf("reading data directory: %w", err)
 	}
 
-	// Initialise non-nil so the empty case returns [] rather than null,
-	// matching the os.IsNotExist branch and the JSON contract expected by
-	// callers.
-	roadmaps := make([]string, 0, len(entries))
+	// Initialised non-nil so the empty case serialises as [] rather than null.
+	roadmaps := make([]RoadmapEntry, 0, len(entries))
 	for _, entry := range entries {
-		if !entry.IsDir() {
+		if !entry.IsDir() || !IsValidRoadmapName(entry.Name()) {
 			continue
 		}
 		dbPath := filepath.Join(dataDir, entry.Name(), DBFileName)
@@ -397,8 +515,21 @@ func ListRoadmaps() ([]string, error) {
 		if statErr != nil || info.IsDir() {
 			continue // not a roadmap home directory
 		}
-		roadmaps = append(roadmaps, entry.Name())
+		roadmaps = append(roadmaps, RoadmapEntry{Name: entry.Name(), Path: dbPath, Size: info.Size()})
 	}
-
 	return roadmaps, nil
+}
+
+// ListRoadmaps returns the names of the roadmaps ListRoadmapEntries
+// enumerates, in the same order.
+func ListRoadmaps() ([]string, error) {
+	entries, err := ListRoadmapEntries()
+	if err != nil {
+		return nil, err
+	}
+	names := make([]string, len(entries))
+	for i := range entries {
+		names[i] = entries[i].Name
+	}
+	return names, nil
 }

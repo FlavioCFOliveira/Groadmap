@@ -898,16 +898,25 @@ class TestTaskAndSprintComments:
         )
         print("✓ the TaskType and comment-type enums reject each other's values")
 
-    def test_repeated_type_flag_lets_the_last_occurrence_win(self):
-        """A repeated --type is last-wins in full: not a merge, not first-wins."""
-        self.run([
-            "task", "comment-add", "-r", ROADMAP, str(self.task),
-            "--type", "BOGUS", "--type", "NOTE", "--body", BODY["NOTE"],
-        ])
-        stored = self.task_comments()
-        assert self.types(stored) == ["NOTE"], self.types(stored)
-        assert self.bodies(stored) == [BODY["NOTE"]]
-        print("✓ a repeated --type resolves to the last occurrence")
+    def test_repeated_type_flag_is_refused(self):
+        """A repeated --type is refused, never resolved: no flag is repeatable.
+
+        The first occurrence's value is invalid and is never examined, because
+        the repetition is refused first; a repeated --body is refused the same
+        way (SPEC/COMMANDS.md § Repeated Flags).
+        """
+        self.assert_failure(
+            ["task", "comment-add", "-r", ROADMAP, str(self.task),
+             "--type", "BOGUS", "--type", "NOTE", "--body", BODY["NOTE"]],
+            EXIT_MISUSE, "Error: invalid input: repeated flag: --type",
+        )
+        self.assert_failure(
+            ["task", "comment-add", "-r", ROADMAP, str(self.task),
+             "--type", "NOTE", "-b", BODY["NOTE"], "--body", BODY["NOTE"]],
+            EXIT_MISUSE, "Error: invalid input: repeated flag: --body",
+        )
+        assert self.task_comments() == [], "a refused comment-add stored a comment"
+        print("✓ a repeated --type or --body is refused and stores nothing")
 
     def test_comment_list_type_filter_refuses_the_other_family_value(self):
         """The filter is validated against the family's own set, not silently empty.

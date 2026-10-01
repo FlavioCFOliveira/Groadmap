@@ -1786,6 +1786,22 @@ def _driver_occupied_roadmap_home(home):
     return code
 
 
+def _driver_unopenable_graph_lock(home):
+    """Exit 1 of `roadmap remove`: the roadmap's graph store lock cannot be
+    taken for a reason other than another process holding it -- a directory
+    stands where graph/write.lock belongs -- so the removal fails with a graph
+    store error and removes nothing (SPEC/COMMANDS.md § Remove Roadmap, rule 4)."""
+    name = "field-graph"
+    Workspace._rmp(["roadmap", "create", name], home)
+    roadmap_home = os.path.join(home, ".roadmaps", name)
+    os.makedirs(os.path.join(roadmap_home, "graph", "write.lock"), mode=0o700)
+    code, out, err = Workspace._rmp(["roadmap", "remove", name], home, check=False)
+    assert first_line(err).startswith("Error: graph store error: "), f"stderr {first_line(err)!r}"
+    assert out == "", f"stdout {out[:80]!r}; want nothing"
+    assert os.path.isfile(os.path.join(roadmap_home, "project.db")), "the failed removal deleted project.db"
+    return code
+
+
 RESIDUE_DRIVERS = {
     ("task comment-add", 1): _driver_corrupt_db(
         ["task", "comment-add", "-r", FIXTURE_ROADMAP, "1", "--type", "NOTE", "--body", "b"]),
@@ -1901,6 +1917,7 @@ RESIDUE_DRIVERS = {
     ("web", 6): _driver_plain(["web", "--port", "70000"]),
     ("ai-help", 2): _driver_plain(["ai-help", "stray"]),
     ("roadmap create", 1): _driver_occupied_roadmap_home,
+    ("roadmap remove", 1): _driver_unopenable_graph_lock,
     ("roadmap create", 6): _driver_plain(["roadmap", "create", "My Project!"]),
     ("roadmap remove", 6): _driver_plain(["roadmap", "remove", "My Project!"]),
     ("sprint create", 6): _driver_plain(

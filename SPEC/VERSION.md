@@ -177,6 +177,97 @@ The `_metadata` table records the active schema version. Migration steps and the
 
 `SchemaVersion = "1.17.0"` (defined in `internal/db/schema.go`).
 
+### Database Schema Newer Than the Binary
+
+A binary supports exactly the schema versions up to its own `SchemaVersion`. It
+knows every migration up to that version and nothing after it, so it cannot know
+what a later migration changed: which columns exist, which rules the data obeys,
+which values an enum may hold. Reading such a database could misreport it, and
+writing to it could break an invariant the newer binary relies on. A database whose
+stored schema version is newer than the binary's is therefore refused.
+
+**The rule.** On every open of a roadmap database, before any table other than
+`_metadata` is read and before anything is written, `rmp` reads
+`_metadata.schema_version` and compares it with its own `SchemaVersion`, numerically
+and component by component, so that `1.10.0` is newer than `1.9.0`. When the stored
+version is newer, the open is refused:
+
+- **For every command.** The refusal applies to every command that opens a roadmap
+  database, those that only read it and those that write it alike. No command reads
+  such a database in a degraded mode.
+- **The line.** The command fails with `utils.ErrDatabase` and exit code `1`, and
+  writes the line `DATABASE.md § Opening a Roadmap Database File` publishes for
+  this condition. The line names the database file, states both versions — the one
+  the database records and the one the binary supports — and the remedy, upgrading
+  `rmp`, and carries no text of the SQLite driver.
+- **Nothing is written.** The database file's contents are byte for byte what they
+  were: no connection setting is written into the file, no migration runs, no schema
+  is created, no row is read beyond `_metadata` and none is changed, no audit entry
+  is written, and `_metadata.schema_version` is never lowered. Nothing is written to
+  stdout. The only change the open may already have made is the mode repair of
+  `ARCHITECTURE.md § Open-Time Permission Enforcement`, which precedes this check.
+- **The web interface.** Its startup schema migration meets the refusal like any
+  other open and treats it as a roadmap that could not be migrated, which is
+  non-fatal (`WEB.md § Startup Schema Migration`, rule 6). Its read-only open path
+  applies the same check, and a request that reads such a database is a read
+  failure on the affected route, answered as `WEB.md § Routes and Pages` answers
+  any other read failure.
+
+A stored version equal to `SchemaVersion` is opened as it is, and an older one is
+migrated forward as `Migration Chain Guarantee` below specifies.
+
+### Migration Chain Guarantee
+
+**The binary migrates a database created at any earlier schema version to the
+current one.** The guarantee covers every schema version from the first, `1.0.0`,
+which is the schema the binary created before any migration existed, to the
+version immediately before `SchemaVersion`, whether or not a release published that
+version. Opening such a database applies the pending migrations of
+`internal/db/migrations.go`, and the result satisfies all of the following:
+
+1. **Every intermediate migration is applied, in strict sequence.** The migrations
+   whose target version is newer than the stored version are applied in ascending
+   order of target version, compared numerically. None is skipped, none is
+   reordered, and none is applied twice. A database at `1.0.0` passes through every
+   migration up to `SchemaVersion`, one at a time.
+2. **Each migration runs in its own transaction.** The migration's statements and
+   the update of `_metadata.schema_version` to its target version commit together,
+   or not at all. A migration that fails rolls back its own statements, leaves the
+   database at the version the previous migration reached, and fails the invocation
+   as `DATABASE.md § The failure surface` specifies; the migrations already
+   committed stay committed, and the next open resumes from there.
+3. **Each migration is idempotent.** Applying a migration to a database that
+   already carries its effects changes nothing and raises no error, and opening a
+   database already at `SchemaVersion` applies no migration at all.
+4. **All data is preserved.** Every row of every table survives the chain with
+   every value it held, except where the section of a migration below states a
+   change that migration makes — a repair, a reclassification, or a backfill — and
+   then exactly that change.
+5. **The chain ends correct.** After the last migration,
+   `SELECT value FROM _metadata WHERE key = 'schema_version'` returns
+   `SchemaVersion`, `PRAGMA integrity_check` returns the single row `ok`, and
+   `PRAGMA foreign_key_check` returns no row.
+
+**The test suite verifies the chain from every released schema version.** It keeps
+one fixture database for each released schema version, starting with the first,
+`1.0.0`. A schema version is released when a published release of `rmp` creates new
+databases at it. `1.0.0` has a fixture whether or not a release published it,
+because it is the first version of the chain. Each fixture:
+
+1. is a database at exactly that schema version, created by the schema of that
+   version and populated with realistic data that exercises every table the version
+   has;
+2. is immutable once added: a later change to the schema adds a fixture for its own
+   version when it is released, and never edits an existing one;
+3. is migrated by the current binary on a copy, never in place, and the test
+   asserts every item of the guarantee above for that copy: the final version is
+   `SchemaVersion`, the integrity and foreign-key checks are clean, every row the
+   fixture held is present with its values except for the changes the migrations
+   below state, and a second open applies nothing.
+
+A release that introduces a new schema version adds the fixture for that version in
+the same release.
+
 ### Migration Commands
 
 ```sql

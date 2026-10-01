@@ -30,6 +30,13 @@ const shutdownGrace = 5 * time.Second
 // browser, and serves until SIGINT/SIGTERM, after which it shuts down
 // gracefully and returns nil (exit 0).
 func serve(opts options) error {
+	// 0. A home directory that is not usable — unset, or not an absolute path —
+	//    is refused before anything is located under it, with its own line
+	//    (SPEC/ARCHITECTURE.md § Directory Structure, location rule 1).
+	if _, err := utils.GetDataDir(); err != nil {
+		return err
+	}
+
 	// 1. Ensure ~/.roadmaps/ exists and is readable. The legacy-layout
 	//    migration sweep already ran in main.go before dispatch; we only
 	//    confirm the data directory here.

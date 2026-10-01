@@ -72,7 +72,13 @@ transactions, or locks. The graph layer is specified in `GRAPH.md`.
 
 ### Location Rules
 
-1. The `.roadmaps` directory is located in the **user home directory**.
+1. The `.roadmaps` directory is located in the **user home directory**, which is the directory the operating system's convention names: the `HOME` environment variable on a POSIX platform, and `USERPROFILE` on Windows. **The home directory MUST be an absolute path.** Every invocation that resolves the data directory — every invocation except one that writes help, the version line, or the AI Agent Contract — refuses a home directory that is not an absolute path before it reads, creates, or changes anything under it: the startup layout-migration sweep does not run, no directory is created, and nothing is written to stdout. The refusal carries `utils.ErrDatabase` and exits `1`, the class and code of the symbolic-link refusal of rule 10, because it is the same kind of decision: the value was read, and `rmp` refuses to locate the data directory under it. A relative value would place the data directory, and every roadmap in it, under whatever the working directory of each invocation happens to be. The line is, `X` being the value as the environment supplies it:
+
+    ```
+    Error: database error: home directory "X" is not an absolute path; refusing to locate the data directory under it
+    ```
+
+    A home directory that is not set at all, or is set to the empty string, is refused as well, with exit code `1`, before anything is read or created.
 2. Directory name: exactly `.roadmaps` (dot prefix, lowercase).
 3. Permissions: the data directory is restricted to the owner (`0700` or `drwx------` on POSIX) to ensure data privacy.
 4. Each roadmap has its own **home directory** at `~/.roadmaps/<name>/`. The directory name is the roadmap name. This directory is the container for every file the `rmp` application uses for that roadmap.
@@ -80,8 +86,15 @@ transactions, or locks. The graph layer is specified in `GRAPH.md`.
 6. The roadmap's SQLite database lives inside the roadmap home directory at `~/.roadmaps/<name>/project.db` with `0600` permissions, applied and verified every time `rmp` opens the database and not only when it creates it (see `ARCHITECTURE.md § Open-Time Permission Enforcement`). Its SQLite sidecars (`project.db-wal`, `project.db-shm`) live alongside it.
 7. A roadmap home directory holds the SQLite database and its sidecars, and, once the knowledge graph is used, the `graph/` subdirectory. While a dedicated graph server is running for the roadmap it also holds that server's socket, `graph.sock` (see rule 11). The directory is the designated location for per-roadmap artefacts; additional file types may be added without changing this layout.
 8. The knowledge graph for a roadmap is stored in the subdirectory `~/.roadmaps/<name>/graph/` (mode `0700`), created by `rmp graph serve` when it starts for a roadmap that has none, and by nothing else (see `GRAPH.md § Server Startup`, step 1). It is a directory because the GoGraph backing store persists through an on-disk snapshot plus a write-ahead log; after the first fold of the write-ahead log, the directory also contains a `snapshot/` subdirectory (see `GRAPH.md § Synchronous Checkpoint on Write`). The directory also holds `write.lock`, the advisory lock file Groadmap itself maintains to serialise access to the store (see `GRAPH.md § Concurrency and Recovery`). Apart from that lock file, the internal layout is owned by GoGraph and is opaque to Groadmap. The graph store is the canonical subject of `GRAPH.md`; see `GRAPH.md § Persistence Layout`.
-9. Roadmap enumeration considers the immediate **subdirectories** of `~/.roadmaps/` (one directory per roadmap), not files at the top level. A roadmap is identified by the presence of `project.db`; neither the optional `graph/` subdirectory nor the optional `graph.sock` socket constitutes a roadmap on its own.
+9. Roadmap enumeration considers the immediate **subdirectories** of `~/.roadmaps/` (one directory per roadmap), not files at the top level. A roadmap is identified by the presence of `project.db`; neither the optional `graph/` subdirectory nor the optional `graph.sock` socket constitutes a roadmap on its own. Enumeration considers only a subdirectory whose name satisfies every rule of `COMMANDS.md § Roadmap Name Validation`; a subdirectory whose name breaks any of them is not a roadmap, whether or not it holds a `project.db`, and enumeration skips it silently, without a warning, without reading it, and without changing it. `rmp roadmap list` and the roadmap index of `rmp web` enumerate under this one rule (`COMMANDS.md § List Roadmaps`, `WEB.md § Roadmap Index Page`).
 10. **No symbolic links for the data directory or a roadmap home directory.** Neither the data directory `~/.roadmaps/` nor any roadmap home directory `~/.roadmaps/<name>/` may be a symbolic link. When creating, opening, or migrating a roadmap directory, `rmp` MUST refuse to follow a symbolic link: if `~/.roadmaps/` is a symlink, or if the resolved `~/.roadmaps/<name>/` path is a symlink (rather than a real directory), the operation fails with an error (`utils.ErrDatabase`, exit code 1) instead of following the link. This prevents an attacker from redirecting `project.db` writes outside the data directory and prevents `rmp` from applying its `0700`/`0600` permission changes to a directory or file outside `~/.roadmaps/` reached through a link (CWE-59, link following). The startup layout-migration sweep applies the same rule: a `.db`-named top-level symbolic link is never a migration candidate and is left untouched (see `ARCHITECTURE.md § Filesystem Layout Migration`, Edge Cases).
+    **The rule extends to the database file and its companions.** Neither `~/.roadmaps/<name>/project.db` nor any of its SQLite companions — `project.db-wal`, `project.db-shm`, and the rollback journal `project.db-journal` — may be a symbolic link. Before it reads the mode of any of these files, changes it, or establishes a database connection, every command that creates or opens a roadmap database, the read-only open path included, examines each of the four names without following a link. When any of them is a symbolic link, dangling or not, the command fails with `utils.ErrDatabase`, exit code `1`, and this line, `<path>` being the absolute path of the link:
+
+    ```
+    Error: database error: <path> is a symbolic link; refusing to use it as a roadmap database file
+    ```
+
+    The line is the file counterpart of the refusal of a symbolic-link directory, which reads `<path> is a symbolic link; refusing to use it as a roadmap directory` after the same sentinel, and it is classified the same way: the examination succeeded, and the refusal is `rmp`'s own safety decision (`ARCHITECTURE.md § Sentinel Error Catalogue`, rule 5). On the refusal the link's target is never opened, read, written, created, or chmod-ed; no database connection is established, so SQLite never follows the link either; the link itself is neither removed nor replaced; and nothing is written to stdout. A companion that does not exist is not refused: only a name that exists as a symbolic link is. The refusal takes precedence over the mode repair of `ARCHITECTURE.md § Open-Time Permission Enforcement`, whose step **B** and step **D** apply only to files that are not symbolic links.
 11. The dedicated graph server started by `rmp graph serve` binds a Unix domain socket at `~/.roadmaps/<name>/graph.sock` with mode `0600`, unless `--socket` names another path. On a platform with POSIX file modes, the socket is never connectable under a mode wider than `0600` at any instant of its existence, from the moment the file appears until it is removed, whatever the umask and wherever `--socket` places it; a socket bound under the umask and narrowed afterwards does not meet this, because a connection the kernel accepts before the narrowing is not revoked by it. On Windows, which has no umask and does not use the mode to decide who may connect, access to the socket is governed by the access-control list the socket file inherits from the directory that holds it (`~/.roadmaps/<name>/` by default), and the server binds and then sets the mode. The socket is not part of the graph store and carries no data: it exists while a server runs, is removed when that server stops, and a copy left behind by a killed server is stale and is replaced by the next one, which on a platform with POSIX file modes also removes the staging residue (a `.rmp-bind-` directory) a server killed while binding can leave beside it. Because the roadmap home directory is `0700`, which `rmp graph serve` re-establishes before it binds, a socket at the default path is unreachable by another user whatever its own mode is; the socket's own mode is the fence that still holds when `--socket` places it elsewhere. `GRAPH.md § Socket Path and Permissions` is canonical for the path, the mode, and the access model.
 
 ## Security Guarantees
@@ -90,7 +103,7 @@ Groadmap implements several security layers to protect user data and ensure syst
 
 ### 1. Data Isolation and Privacy
 - **Restricted Permissions**: The data directory `~/.roadmaps` and every per-roadmap home directory `~/.roadmaps/<name>/` are created with `0700` permissions, and individual `project.db` files are created with `0600` permissions **from the outset** (the file is created with mode `0600`, not created under the process umask and chmod-ed afterwards, so there is no window in which the database is more permissive than `0600`). The SQLite sidecars `project.db-wal` and `project.db-shm` are held to the same `0600` permissions as `project.db`, because they can hold the same data pages. These permissions are not a creation-time convention that later runs inherit: `0700` on the two directories and `0600` on `project.db` are re-applied and re-verified **every time `rmp` opens a roadmap database**, and after every layout migration. A `project.db` that cannot be brought to `0600` fails the command. The complete rule — the order of operations, the failure mode, the treatment of the sidecars, and the read-only open path — is `ARCHITECTURE.md § Open-Time Permission Enforcement`, which is the canonical statement of the permission model for the roadmap database.
-- **Filesystem Safety — No Symlink Following (CWE-59)**: Neither `~/.roadmaps/` nor any roadmap home directory `~/.roadmaps/<name>/` may be a symbolic link. When creating, opening, or migrating a roadmap directory, `rmp` MUST refuse to follow a symbolic link and fail with an error rather than following it. This prevents redirection of `project.db` writes to a path outside the data directory and prevents `rmp`'s `0700`/`0600` permission changes from being applied to an external directory or file reached through a link. The rule is stated in `ARCHITECTURE.md § Directory Structure`, location rule 10, and the layout-migration sweep enforces the same rule for `.db`-named top-level symlinks (see `ARCHITECTURE.md § Filesystem Layout Migration`, Edge Cases).
+- **Filesystem Safety — No Symlink Following (CWE-59)**: Neither `~/.roadmaps/` nor any roadmap home directory `~/.roadmaps/<name>/` may be a symbolic link, and neither may `project.db` or any of its companions `project.db-wal`, `project.db-shm` and `project.db-journal`. When creating, opening, or migrating a roadmap directory or a roadmap database, `rmp` MUST refuse to follow a symbolic link and fail with an error rather than following it. This prevents redirection of `project.db` writes to a path outside the data directory and prevents `rmp`'s `0700`/`0600` permission changes from being applied to an external directory or file reached through a link. The rule is stated in `ARCHITECTURE.md § Directory Structure`, location rule 10, and the layout-migration sweep enforces the same rule for `.db`-named top-level symlinks (see `ARCHITECTURE.md § Filesystem Layout Migration`, Edge Cases).
 - **Input Validation**: Roadmap names are strictly validated using the regex `^[a-z0-9_-]+$` with a maximum length of **50 characters** to prevent path traversal attacks and ensure filesystem compatibility. This validation MUST be applied as a central gate for all commands that accept a roadmap name (via `-r` or `--roadmap`).
 - **Length Validation Error**: When a roadmap name exceeds 50 characters, the error message is: "Error: Roadmap name must not exceed 50 characters (got N)"
 
@@ -116,9 +129,11 @@ the boundary that stops another user from reaching any file inside the roadmap
 home at all, so it stays re-applied and verified on every open.
 
 **B. The database file: read the mode, repair it, read it again.** After the
-directory permissions are applied and verified, and before any database
-connection is established, `rmp` reads the permission bits of
-`~/.roadmaps/<name>/project.db` when that file already exists, and then:
+directory permissions are applied and verified, after the database file and its
+companions have been examined for symbolic links and none was found
+(`§ Directory Structure`, location rule 10), and before any database connection is
+established, `rmp` reads the permission bits of `~/.roadmaps/<name>/project.db`
+when that file already exists, and then:
 
 1. If the mode is exactly `0600`, `rmp` proceeds and changes nothing. No mode
    change is attempted, so a database that the invoking user can read but does not
@@ -208,7 +223,9 @@ operate on it rather than warning and continuing.
 **D. Sidecars: restricted on every open, never fatal.** When `project.db-wal` or
 `project.db-shm` is present, `rmp` restricts it to `0600` on every open. A
 sidecar that cannot be restricted does **not** fail the command, and no warning
-is emitted. The asymmetry with `project.db` is deliberate, and it is not an
+is emitted. A sidecar that is a symbolic link is not a sidecar that cannot be
+restricted: it is refused before this step is reached, and the refusal is fatal
+(`§ Directory Structure`, location rule 10). The asymmetry with `project.db` is deliberate, and it is not an
 oversight to be "unified" later:
 
 - SQLite owns the sidecars' lifetime. The engine creates, removes, and recreates
@@ -595,7 +612,11 @@ version is written. The risk analysis and required mitigations are in
   `internal/backoff` packages of their own.
 - **What it deliberately does not own.** It does not create the graph directory:
   `rmp graph serve` creates it, before it takes the lock, because the lock file
-  lives inside it (`GRAPH.md § Server Startup`, step 1). And it does not execute
+  lives inside it (`GRAPH.md § Server Startup`, step 1). It does not own the
+  lock probe of `rmp roadmap remove`, which takes the store's lock without waiting
+  and without opening the store, to refuse a removal while a server runs
+  (`COMMANDS.md § Remove Roadmap`); that probe opens no store, so it is not a
+  second realisation of the sequence above. And it does not execute
   statements, drain results, or classify failures — those belong to the server
   that hosts it and to the surfaces that reach that server.
 
@@ -975,7 +996,7 @@ Each layer of the stack has a designated wrapping responsibility:
 | Layer | Source Error | Must Wrap As |
 |-------|-------------|-------------|
 | `internal/db/` | `sql.ErrNoRows` | `utils.ErrNotFound` |
-| `internal/db/` | SQLite constraint violation | `utils.ErrAlreadyExists` |
+| `internal/db/` | SQLite constraint violation | The sentinel of the published refusal for the rule the constraint guards — `utils.ErrAlreadyExists` for a uniqueness rule whose refusal is a name or value conflict, `utils.ErrValidation` for a state rule — as `§ Classification of Database Driver Failures` maps it |
 | `internal/db/` | Any other `database/sql` error | `utils.ErrDatabase` |
 | `internal/utils/`, `internal/web/` | Any failure to read, create, or secure the data directory or a roadmap home directory | `utils.ErrIO` |
 | `internal/web/` | A listener that cannot be bound, or that stops accepting once the server is serving | `utils.ErrIO` |
@@ -988,6 +1009,56 @@ Each layer of the stack has a designated wrapping responsibility:
 | `internal/commands/` | Invalid flag value / enum | `utils.ErrValidation` or `utils.ErrInvalidInput` |
 | `internal/commands/` | No `-r` flag provided | `utils.ErrNoRoadmap` |
 | `cmd/rmp/main.go` | Any unwrapped error | Maps via `errors.Is()` to exit code; falls back to exit 1 |
+
+#### Classification of Database Driver Failures
+
+**The text of the SQLite driver never reaches stderr for a condition the CLI can
+classify.** A driver error carries the engine's own vocabulary — `constraint
+failed`, `UNIQUE constraint failed: sprints.status`, an extended result code such
+as `(2067)`, `SQL logic error`, `no such table`, `file is not a database (26)` —
+and that vocabulary names the mechanism that detected a condition, not the
+condition the caller must act on. Where the CLI knows the condition, it prints the
+line it publishes for that condition, with that line's sentinel and exit code, and
+the driver's text appears nowhere on stderr, not even after the published line.
+
+The conditions the CLI classifies, and the line each maps to:
+
+| Condition | How it reaches the driver | Line printed | Exit Code |
+|-----------|---------------------------|--------------|-----------|
+| A write that loses a race to a concurrent write, where the rule it lost on is one the command checks before it writes | A constraint the schema declares — a unique index, a primary key, a `CHECK`, a `NOT NULL`, or a foreign key — rejects the loser's write, or the loser's in-transaction check finds the rule broken | The refusal the command publishes for that rule, worded for the committed state the winner left (rule 1 below) | That refusal's own code |
+| A roadmap database file that is not empty and is not a SQLite database | The engine refuses to read it (`file is not a database`) | `Error: database error: <path> is not a valid roadmap database` (`DATABASE.md § Opening a Roadmap Database File`) | 1 |
+| A roadmap database file of zero bytes | The engine reports a missing table on the first read | None: the file is an uninitialised database, the schema is created and the command proceeds (`DATABASE.md § Opening a Roadmap Database File`) | — |
+| A roadmap database whose schema version is newer than the binary supports | None: the version is read before any table the binary expects is touched | `Error: database error: <path> has schema version <db-version>, newer than schema version <supported-version> supported by this rmp; upgrade rmp to open it` (`DATABASE.md § Opening a Roadmap Database File`, `VERSION.md § Database Schema Newer Than the Binary`) | 1 |
+
+Three rules complete the table.
+
+1. **A race is resolved as if the invocations had run in sequence.** A write that
+   loses a race either completes exactly as it would have completed had it run
+   after the winner, or is refused with the line the command publishes for the
+   state the winner left, carrying that line's sentinel and exit code. Two
+   realisations meet this and both are permitted: the command repeats its check
+   inside the write transaction, against the state that transaction reads, so the
+   check itself refuses; or the command translates the constraint violation into
+   the refusal of the rule the constraint guards. Either way the constraint
+   remains in the schema as the backstop that keeps the database correct, and is
+   never the thing the caller reads. Each command's section in `COMMANDS.md`
+   states the rules it checks; `COMMANDS.md § Sprint Lifecycle` publishes the
+   concurrent outcome of the commands that open a sprint,
+   `COMMANDS.md § Create Roadmap` that of `roadmap create`, and `COMMANDS.md § Reopen Task` and
+   `COMMANDS.md § Task Assignment` the capacity checks that run inside the
+   transaction.
+2. **A violated constraint that guards no rule a command checks is not
+   classified.** When the CLI cannot attribute a constraint violation to a rule the
+   command checks, the violation means the application wrote what the schema
+   forbids, and it is reported as rule 3 reports any other failure.
+3. **Every other driver failure stays `utils.ErrDatabase`, with the driver's
+   diagnostic as its detail.** A failure the CLI cannot attribute to a condition of
+   its own — the database still busy once the retry policy of
+   `IMPLEMENTATION.md § Retry Logic` is exhausted, a full disk, an I/O error, or
+   corruption detected in the middle of a statement — is printed as
+   `Error: database error: <detail>`, where `<detail>` may carry the driver's text,
+   and exits `1`. The boundary is the classification, not the layer: a condition
+   in the table above is never printed this way, whichever layer detected it.
 
 #### Adding New Error Types
 

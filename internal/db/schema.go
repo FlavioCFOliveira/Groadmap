@@ -231,6 +231,25 @@ CREATE INDEX IF NOT EXISTS idx_sprint_comments_sprint_created ON sprint_comments
 // takes the statements as a parameter so a test can make one of them fail and
 // observe that nothing was left behind.
 func (db *DB) createSchema(statements []string) error {
+	return db.createSchemaTx(statements, false)
+}
+
+// createSchemaIfAbsent is CreateSchema for a database that may be initialised
+// by another invocation at the same moment: an uninitialised, zero-byte
+// project.db two commands found together (SPEC/DATABASE.md § Opening a Roadmap
+// Database File). The transaction first asks whether _metadata exists and
+// creates nothing when it does, so the schema is created once and _metadata
+// holds one row per key. The question and the creation share one transaction:
+// a concurrent creator that commits between them makes this transaction's
+// first write fail as busy, and the retry policy runs it again, when the
+// question finds the schema the other created.
+func (db *DB) createSchemaIfAbsent() error {
+	return db.createSchemaTx(schemaDDL(), true)
+}
+
+// createSchemaTx is createSchema and createSchemaIfAbsent: onlyIfAbsent makes
+// the transaction create nothing when the schema is already there.
+func (db *DB) createSchemaTx(statements []string, onlyIfAbsent bool) error {
 	tx, err := db.Begin()
 	if err != nil {
 		return fmt.Errorf("beginning schema transaction: %w", err)
@@ -238,6 +257,16 @@ func (db *DB) createSchema(statements []string) error {
 	// A rollback after a successful commit is a no-op that returns
 	// sql.ErrTxDone; on every failure path it discards the partial schema.
 	defer tx.Rollback() //nolint:errcheck // rollback on failure; the original error is returned
+
+	if onlyIfAbsent {
+		var present int
+		if err := tx.QueryRow("SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = '_metadata'").Scan(&present); err != nil {
+			return fmt.Errorf("checking for an existing schema: %w", err)
+		}
+		if present > 0 {
+			return nil
+		}
+	}
 
 	for _, ddl := range statements {
 		if _, err := tx.Exec(ddl); err != nil {

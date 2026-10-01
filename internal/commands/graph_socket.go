@@ -73,6 +73,11 @@ func extractSocketFlag(args []string) (string, []string, error) {
 	rest := make([]string, 0, len(args))
 
 	for i := 0; i < len(args); i++ {
+		// A second occurrence of the flag, in either form, is refused before
+		// its value is read (SPEC/COMMANDS.md § Repeated Flags).
+		if found && (args[i] == socketFlagLong || strings.HasPrefix(args[i], socketFlagLong+"=")) {
+			return "", nil, utils.RepeatedFlagError(args[i])
+		}
 		if joined, ok := strings.CutPrefix(args[i], socketFlagLong+"="); ok {
 			value = joined
 			found = true
