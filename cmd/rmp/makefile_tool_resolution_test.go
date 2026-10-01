@@ -277,6 +277,7 @@ func runResolutionCase(t *testing.T, lab *toolLab, tut *toolUnderTest, tc *resol
 	root := t.TempDir()
 	l := &layout{tool: tut.tool, missing: filepath.Join(root, "missing", tut.tool)}
 
+	// No case sets HOME (nor XDG_CONFIG_HOME): see requireTelemetryOff.
 	env := []string{
 		"GOENV=" + filepath.Join(root, "goenv"),
 		"GOTOOLCHAIN=local",
@@ -293,8 +294,7 @@ func runResolutionCase(t *testing.T, lab *toolLab, tut *toolUnderTest, tc *resol
 			l.gopaths = append(l.gopaths, dir)
 			installFake(t, fake, filepath.Join(dir, "bin", tut.tool))
 		}
-		env = append(env, "GOBIN=", "GOPATH="+strings.Join(l.gopaths, string(os.PathListSeparator)),
-			"HOME="+filepath.Join(root, "home"))
+		env = append(env, "GOBIN=", "GOPATH="+strings.Join(l.gopaths, string(os.PathListSeparator)))
 	default:
 		l.gobin = filepath.Join(root, "gobin")
 		if err := os.MkdirAll(l.gobin, 0o700); err != nil {
@@ -303,9 +303,9 @@ func runResolutionCase(t *testing.T, lab *toolLab, tut *toolUnderTest, tc *resol
 		if tc.gobin != "" {
 			installFake(t, tc.gobin, filepath.Join(l.gobin, tut.tool))
 		}
-		env = append(env, "GOBIN="+l.gobin, "GOPATH="+filepath.Join(root, "gopath"),
-			"HOME="+filepath.Join(root, "home"))
+		env = append(env, "GOBIN="+l.gobin, "GOPATH="+filepath.Join(root, "gopath"))
 	}
+	requireTelemetryOff(t, root, env)
 
 	pathDirs := make([]string, 0, len(tc.path)+1)
 	for i, fake := range tc.path {
@@ -376,6 +376,38 @@ func runResolutionCase(t *testing.T, lab *toolLab, tut *toolUnderTest, tc *resol
 	if got := reportLines(stderr.String()); !slices.Equal(got, want) {
 		t.Fatalf("`make %s` wrote the report\n  %s\nbut SPEC/BUILD.md § Local Tool Resolution requires\n  %s\n%s",
 			tut.target, strings.Join(got, "\n  "), strings.Join(want, "\n  "), transcript)
+	}
+}
+
+// requireTelemetryOff fails the case unless the go command, run with the case's
+// environment, reports Go telemetry as off.
+//
+// With telemetry on or local, every go command the Makefile runs (`go env`,
+// `go version -m`) records counters under os.UserConfigDir()/go/telemetry and
+// may start a daemonized telemetry child there that the go command does not
+// wait for: traced, the child outlived `make` by 2.4 ms. With HOME inside the
+// case's temporary directory, that child was still writing into it when the
+// test's cleanup removed the directory, which failed the case with "unlinkat
+// ...: directory not empty" on a slower machine. The case environment therefore
+// names no HOME and no XDG_CONFIG_HOME: with no configuration directory to
+// resolve, the go command keeps no telemetry, writes nothing, and starts no
+// child. `go env GOTELEMETRY` is the go command's own report of that mode, so
+// an environment that would bring telemetry back fails here, before make runs,
+// rather than intermittently at cleanup.
+func requireTelemetryOff(t *testing.T, root string, env []string) {
+	t.Helper()
+
+	cmd := exec.Command("go", "env", "GOTELEMETRY")
+	cmd.Dir = root
+	cmd.Env = env
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("go env GOTELEMETRY: %v", err)
+	}
+	if mode := strings.TrimSpace(string(out)); mode != "off" {
+		t.Fatalf("the case environment leaves Go telemetry %q, not off: every go command make runs would "+
+			"write telemetry under a configuration directory and may leave a telemetry child running "+
+			"there after make exits, racing the removal of the case's temporary directory", mode)
 	}
 }
 

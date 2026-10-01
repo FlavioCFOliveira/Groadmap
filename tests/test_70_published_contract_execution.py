@@ -590,6 +590,14 @@ def start_server(line, home, key, timeout=SERVER_START_TIMEOUT):
     Complete lines are accumulated and parsed as they arrive; `buffered` also
     carries the unterminated tail, so a failed start reports everything it read.
 
+    Stderr is drained in the same select() loop while the wait lasts. Left
+    unread, a process that writes more than the pipe's capacity to stderr
+    before its startup line blocks on that write and never announces itself,
+    and the start fails on its timeout for a reason that is the gate's, not the
+    process's (rmp task 483). What was read is kept, decoded, on the returned
+    process as `startup_stderr`, so a caller's diagnostics can report it; the
+    remainder is collected by stop_server() as before.
+
     A process that does not announce itself -- or that is still being read when
     an exception arrives -- is stopped here, before returning, so a caller's
     assertion on the startup line cannot leave it running.
@@ -597,9 +605,12 @@ def start_server(line, home, key, timeout=SERVER_START_TIMEOUT):
     env = _env_for(home)
     proc = _spawn(line, home, env, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     fd = proc.stdout.fileno()
+    err_fd = proc.stderr.fileno()
+    open_fds = [fd, err_fd]  # the descriptors not yet at end of file
     deadline = time.monotonic() + timeout
     complete = ""  # every newline-terminated line read so far, decoded
     pending = b""  # the bytes read after the last newline
+    err_read = b""  # every byte read from stderr so far
     started = None
     try:
         while started is None:
@@ -608,15 +619,25 @@ def start_server(line, home, key, timeout=SERVER_START_TIMEOUT):
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 break
+            if not open_fds:
+                # Both streams are at end of file with the process still
+                # alive: nothing more can arrive, and the deadline still
+                # bounds the wait for its exit.
+                time.sleep(0.02)
+                continue
             # A short slice, so an exit is noticed while nothing is written.
-            readable, _, _ = select.select([fd], [], [], min(remaining, 0.05))
-            if not readable:
+            readable, _, _ = select.select(open_fds, [], [], min(remaining, 0.05))
+            if err_fd in readable:
+                chunk = os.read(err_fd, 65536)
+                if chunk:
+                    err_read += chunk
+                else:
+                    open_fds.remove(err_fd)
+            if fd not in readable:
                 continue
             chunk = os.read(fd, 65536)
             if not chunk:
-                # End of file with the process still alive: nothing more can
-                # arrive, and the deadline still bounds the wait for its exit.
-                time.sleep(0.02)
+                open_fds.remove(fd)
                 continue
             pending += chunk
             while started is None and b"\n" in pending:
@@ -630,6 +651,7 @@ def start_server(line, home, key, timeout=SERVER_START_TIMEOUT):
                     started = obj
     finally:
         buffered = complete + pending.decode("utf-8", errors="replace")
+        proc.startup_stderr = err_read.decode("utf-8", errors="replace")
         if started is None:
             stop_server(proc)
     return started, buffered, proc
@@ -1189,6 +1211,44 @@ class TestPublishedExamplesAreExecuted:
                 f"the failed start left its process group running or registered: "
                 f"survivors={leftover!r}, registered={proc.pid in _LIVE_GROUPS}")
         finally:
+            shutil.rmtree(home, ignore_errors=True)
+
+    def test_a_server_that_fills_stderr_first_still_starts(self):
+        """rmp task 483: start_server drains stderr while it waits.
+
+        The process writes 128 KiB to stderr -- twice the default Linux pipe
+        capacity -- and only then prints its startup line. With stderr left
+        undrained the write blocks once the pipe is full, the startup line is
+        never written, and the start fails on its timeout. Draining stderr in
+        the same select() loop that reads stdout lets the write complete, so
+        the start must succeed, and every byte read from stderr must be kept
+        for diagnostics.
+
+        The outcome is read off `started`, not off a clock (SPEC/BUILD.md "No
+        Benchmarks and No Performance-Measurement Tests"): a blocked writer
+        never prints the line at all, so the start either sees it or does not.
+        """
+        size = 128 * 1024
+        home = Workspace.fresh()
+        proc = None
+        try:
+            started, buffered, proc = start_server(
+                f"head -c {size} /dev/zero | tr '\\0' e >&2; "
+                "printf '{\"socket\": \"/tmp/drain.sock\"}\\n'; sleep 30",
+                home, "socket", timeout=5.0)
+            stderr_read = proc.startup_stderr
+            assert started == {"socket": "/tmp/drain.sock"}, (
+                f"a process that wrote {size} bytes to stderr before its startup "
+                f"line was not seen to start: started={started!r}, stdout read "
+                f"{buffered[:200]!r}, stderr read {len(stderr_read)} bytes. A "
+                f"writer blocked on a full stderr pipe never reaches the line "
+                f"(rmp task 483)")
+            assert stderr_read == "e" * size, (
+                f"the start did not keep the stderr it read: {len(stderr_read)} "
+                f"bytes kept, {size} written")
+        finally:
+            if proc is not None:
+                stop_server(proc)
             shutil.rmtree(home, ignore_errors=True)
 
     def test_a_backgrounded_server_is_seen_and_stopped(self):
