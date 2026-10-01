@@ -4,6 +4,7 @@ package models
 import (
 	"errors"
 	"fmt"
+	"slices"
 
 	"github.com/FlavioCFOliveira/Groadmap/internal/utils"
 )
@@ -156,11 +157,39 @@ func ParseTaskStatus(s string) (TaskStatus, error) {
 	return "", fmt.Errorf("%w: %q", ErrInvalidTaskStatus, s)
 }
 
+// taskTransitions is the transition table of the task state machine, declared
+// once: CanTransitionTo and GetValidTransitions both read it, and neither
+// declares a table of its own, so the two agree by construction
+// (SPEC/STATE_MACHINE.md § Implementation). Each row lists its targets in
+// declaration order.
+//
+// The table holds the transitions a status change that does not change sprint
+// membership may make, plus the automatic BACKLOG -> SPRINT of
+// `sprint add-tasks`. No target is BACKLOG: a task returns to BACKLOG only when
+// it leaves its sprint (`sprint remove-tasks`, `sprint remove`), because a
+// sprint member is never in BACKLOG, and COMPLETED therefore has no target here
+// at all — `task reopen` returns it to SPRINT through its own path
+// (SPEC/STATE_MACHINE.md § Valid Transitions, § Sprint Membership and the
+// BACKLOG Status). DOING's only valid target is TESTING: `task stat` cannot set
+// SPRINT from any source. Finding #55.
+//
+// It is never handed out: GetValidTransitions returns a copy of a row, so no
+// caller can change the table.
+var taskTransitions = map[TaskStatus][]TaskStatus{
+	StatusBacklog:   {StatusSprint},
+	StatusSprint:    {StatusDoing},
+	StatusDoing:     {StatusTesting},
+	StatusTesting:   {StatusDoing, StatusCompleted},
+	StatusCompleted: {},
+}
+
 // CanTransitionTo checks if a status transition is valid according to the state machine.
 // See SPEC/STATE_MACHINE.md for the state diagram.
 // Returns false if:
 // - The current status is not a valid task status
 // - The transition is not allowed according to the state machine rules
+//
+// It answers membership of newStatus in the row of ts in taskTransitions.
 func (ts TaskStatus) CanTransitionTo(newStatus TaskStatus) bool {
 	// Validate current status is a valid task status
 	if !IsValidTaskStatus(string(ts)) {
@@ -172,35 +201,7 @@ func (ts TaskStatus) CanTransitionTo(newStatus TaskStatus) bool {
 		return false
 	}
 
-	// Define valid transitions. These are the transitions a status change
-	// that does not change sprint membership may make, plus the automatic
-	// BACKLOG -> SPRINT of `sprint add-tasks`. No target is BACKLOG: a task
-	// returns to BACKLOG only when it leaves its sprint (`sprint remove-tasks`,
-	// `sprint remove`), because a sprint member is never in BACKLOG, and
-	// COMPLETED therefore has no target here at all — `task reopen` returns it
-	// to SPRINT through its own path (SPEC/STATE_MACHINE.md § Valid
-	// Transitions, § Sprint Membership and the BACKLOG Status). DOING's only
-	// valid target is TESTING: `task stat` cannot set SPRINT from any source.
-	// Finding #55.
-	transitions := map[TaskStatus][]TaskStatus{
-		StatusBacklog:   {StatusSprint},
-		StatusSprint:    {StatusDoing},
-		StatusDoing:     {StatusTesting},
-		StatusTesting:   {StatusDoing, StatusCompleted},
-		StatusCompleted: {},
-	}
-
-	validTargets, ok := transitions[ts]
-	if !ok {
-		return false
-	}
-
-	for _, target := range validTargets {
-		if target == newStatus {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(taskTransitions[ts], newStatus)
 }
 
 // ValidateStatusTransition validates a status transition and returns a detailed error if invalid.
@@ -226,20 +227,13 @@ func ValidateStatusTransition(currentStatus, newStatus string) error {
 	return nil
 }
 
-// GetValidTransitions returns the list of valid next statuses for a given status.
+// GetValidTransitions returns the list of valid next statuses for a given
+// status: a copy of its row in taskTransitions, in declaration order, so the
+// caller may change the slice without changing the table. It returns nil for a
+// status that is not a task status.
 func GetValidTransitions(status TaskStatus) []TaskStatus {
-	// The same set CanTransitionTo accepts: no BACKLOG target, and none from
-	// COMPLETED (SPEC/STATE_MACHINE.md § Valid Transitions). Finding #55.
-	transitions := map[TaskStatus][]TaskStatus{
-		StatusBacklog:   {StatusSprint},
-		StatusSprint:    {StatusDoing},
-		StatusDoing:     {StatusTesting},
-		StatusTesting:   {StatusDoing, StatusCompleted},
-		StatusCompleted: {},
-	}
-
-	if valid, ok := transitions[status]; ok {
-		return valid
+	if valid, ok := taskTransitions[status]; ok {
+		return slices.Clone(valid)
 	}
 	return nil
 }

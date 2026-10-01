@@ -209,7 +209,12 @@ CREATE TABLE IF NOT EXISTS sprints (
 
 -- Indexes
 CREATE INDEX IF NOT EXISTS idx_sprints_status ON sprints(status);
-CREATE INDEX IF NOT EXISTS idx_sprints_created_at ON sprints(created_at);
+
+-- At most one sprint is OPEN at a time. The commands that open a sprint refuse
+-- when another is already OPEN, but that check runs before their write
+-- transaction; this partial unique index rejects the second OPEN row when two
+-- concurrent processes pass the check together.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_one_open_sprint ON sprints(status) WHERE status = 'OPEN';
 
 -- Uniqueness of the sprint execution order across the roadmap.
 -- Enforces that no two sprints share the same order_index value; an attempt to
@@ -217,6 +222,11 @@ CREATE INDEX IF NOT EXISTS idx_sprints_created_at ON sprints(created_at);
 -- caller as exit code 5 (see ARCHITECTURE.md § Exit Codes, ErrAlreadyExists).
 CREATE UNIQUE INDEX IF NOT EXISTS idx_sprints_order ON sprints(order_index);
 ```
+
+**This block is canonical.** The text between its fences is byte-identical to the
+`sprintsDDL` string in `internal/db/schema.go`, without the newline that opens that
+Go raw string literal, and a test enforces the identity. A change to the `sprints`
+DDL is made in this block first and copied into `sprintsDDL` unchanged.
 
 ### `sprint_tasks` Table (1:N Relationship)
 
@@ -2413,6 +2423,17 @@ the longer index does not serve, and it costs write time on every row change. Th
 schema therefore declares no index on `tasks(status)`, `tasks(priority)`,
 `sprint_tasks(task_id)`, `sprint_tasks(sprint_id, task_id)`,
 `task_dependencies(task_id)`, or a second index on `audit(performed_at)`.
+
+**No index is declared on `sprints(created_at)`.** No statement the application
+issues against `sprints` filters on `created_at` or orders by it: a sprint is read
+by its primary key, by `status` (through `idx_sprints_status`, or through
+`idx_one_open_sprint` when the status is `OPEN`), or in its planned order (through
+`idx_sprints_order`). An index on `created_at` would serve no read and would cost
+write time on every sprint inserted or removed. The one statement that ever read
+`sprints` in `created_at` order is the `order_index` backfill of
+`VERSION.md § Migration 1.7.0 → 1.8.0`, which runs only on a database below 1.8.0
+and therefore always before `VERSION.md § Migration 1.16.0 → 1.17.0` drops the
+index such a database still holds.
 
 **Grouped sprint resolution needs no new index.** The grouped query that resolves the sprint of many tasks at once (see `Resolve the Sprint of Many Tasks (Grouped)` above) filters with `WHERE sprint_tasks.task_id IN (...)` and joins `sprints` by primary key. The `task_id` lookup is served by the implicit unique index SQLite creates for the `UNIQUE` constraint on that column. No index is added for this query, and the index of the primary key (leading column `sprint_id`) is not the index that serves it.
 

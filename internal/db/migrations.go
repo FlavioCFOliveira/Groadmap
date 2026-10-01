@@ -105,6 +105,11 @@ var migrations = []Migration{
 		Name:    "Repair the rows that break the sprint membership invariant, then verify the whole roadmap with the sprint membership guard",
 		Apply:   migrateV1_15_0_toV1_16_0,
 	},
+	{
+		Version: "1.17.0",
+		Name:    "Drop idx_sprints_created_at, the index on sprints(created_at) that serves no statement",
+		Apply:   migrateV1_16_0_toV1_17_0,
+	},
 }
 
 // RunMigrations executes all pending migrations in a transaction.
@@ -1187,4 +1192,22 @@ ORDER BY st.task_id ASC`,
 		statement: `UPDATE tasks SET status = 'SPRINT'
 WHERE status = 'BACKLOG' AND id IN (SELECT task_id FROM sprint_tasks)`,
 	},
+}
+
+// migrateV1_16_0_toV1_17_0 drops idx_sprints_created_at, the index on
+// sprints(created_at), which serves no statement the application issues
+// (SPEC/VERSION.md § Migration 1.16.0 → 1.17.0; SPEC/DATABASE.md § Index Design
+// Rationale). A database created at 1.17.0 never holds it, so the drop brings
+// every existing database to the index set a fresh one is created with.
+//
+// The migration drops one index and does nothing else: it adds no table,
+// column, index or trigger, rebuilds no table and changes no row.
+//
+// Idempotent: the drop is guarded by IF EXISTS, so a second application finds
+// nothing to drop and raises no error.
+func migrateV1_16_0_toV1_17_0(tx *sql.Tx) error {
+	if _, err := tx.Exec(`DROP INDEX IF EXISTS idx_sprints_created_at`); err != nil {
+		return fmt.Errorf("dropping idx_sprints_created_at: %w", err)
+	}
+	return nil
 }

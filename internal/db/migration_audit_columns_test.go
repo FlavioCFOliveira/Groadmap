@@ -396,6 +396,7 @@ func buildRoadmapAtSchema1110(t *testing.T, roadmapName string) auditFixture {
 		t.Fatalf("removing the deleted-task fixture %d: %v", deletedID, err)
 	}
 
+	restoreSprintsCreatedAtIndex(t, database)
 	if _, err := database.Exec(
 		"UPDATE _metadata SET value = '1.11.0' WHERE key = 'schema_version'"); err != nil {
 		t.Fatalf("setting schema_version to 1.11.0: %v", err)
@@ -576,8 +577,8 @@ func TestMigrateV1_11_0_toV1_12_0_OnNextOpen(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reading schema version after open: %v", err)
 	}
-	if version != "1.16.0" {
-		t.Fatalf("schema_version after open = %q, want 1.16.0 (SPEC/VERSION.md § Current Schema Version)", version)
+	if version != "1.17.0" {
+		t.Fatalf("schema_version after open = %q, want 1.17.0 (SPEC/VERSION.md § Current Schema Version)", version)
 	}
 	if version != SchemaVersion {
 		t.Errorf("schema_version after open = %q but the SchemaVersion constant is %q; a migrated "+

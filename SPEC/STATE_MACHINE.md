@@ -408,6 +408,20 @@ The state machine is implemented in `internal/models/task.go`:
 - `ValidateStatusTransition(current, new string) error`: Validates transition with detailed error
 - `GetValidTransitions(status TaskStatus) []TaskStatus`: Returns valid next states
 
+The table these functions read holds the transitions of `Valid Transitions` above
+that change no sprint membership and do not go through `task reopen`: every
+transition that table lists except those to `BACKLOG`, which only leaving a sprint
+performs, and those to `SPRINT` that `task reopen` performs. It is
+`BACKLOG → SPRINT`, `SPRINT → DOING`, `DOING → TESTING`, `TESTING → DOING` and
+`TESTING → COMPLETED`, and `COMPLETED` has no target in it.
+
+That table is declared once, in `internal/models/task.go`, and `CanTransitionTo`
+and `GetValidTransitions` both read that one declaration; neither declares a table
+of its own. The two therefore agree by construction: for every pair of statuses
+`s` and `t`, `s.CanTransitionTo(t)` returns `true` exactly when `t` is a member of
+`GetValidTransitions(s)`. A change to the transitions is made in the one
+declaration and reaches both functions.
+
 ### Error Handling
 
 When an invalid transition is attempted, the system returns an error:

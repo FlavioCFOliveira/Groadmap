@@ -157,6 +157,7 @@ var indexSet1140 = []string{
 	`CREATE INDEX idx_audit_operation ON audit(operation)`,
 	`CREATE INDEX idx_audit_performed_at ON audit(performed_at)`,
 	`CREATE INDEX idx_task_deps_task_id ON task_dependencies(task_id)`,
+	createSprintsCreatedAtIndex,
 	`UPDATE _metadata SET value = '1.14.0' WHERE key = 'schema_version'`,
 }
 
@@ -348,8 +349,8 @@ func TestMigrateV1_14_0_toV1_15_0(t *testing.T) {
 		t.Fatalf("reading the schema version: %v", err)
 	}
 	// The migration set runs through 1.15.0 and on to the current version.
-	if version != "1.16.0" {
-		t.Fatalf("schema_version = %q after the migration, want 1.16.0", version)
+	if version != "1.17.0" {
+		t.Fatalf("schema_version = %q after the migration, want 1.17.0", version)
 	}
 
 	// Criterion 1: the same index set, columns and directions as a fresh database.
@@ -377,7 +378,7 @@ func TestMigrateV1_14_0_toV1_15_0(t *testing.T) {
 
 	// Criterion 3: no row changed, apart from the version the migration records.
 	rowsAfter := tableContents(t, database)
-	if strings.Replace(rowsBefore, "1.14.0", "1.16.0", 1) != rowsAfter {
+	if strings.Replace(rowsBefore, "1.14.0", "1.17.0", 1) != rowsAfter {
 		t.Errorf("the migration changed rows other than schema_version.\nbefore:\n%s\nafter:\n%s", rowsBefore, rowsAfter)
 	}
 

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"slices"
 	"testing"
 
 	"github.com/FlavioCFOliveira/Groadmap/internal/models"
@@ -46,8 +47,9 @@ const (
 // buildRoadmapAtSchema1150 creates a real on-disk roadmap under the test HOME,
 // writes the fixture through direct SQL — the states it holds are exactly the
 // ones no command can produce any more — and takes it back to schema 1.15.0.
-// Nothing between 1.15.0 and 1.16.0 changed a table, a column or an index, so a
-// current database with its schema_version reset is a faithful 1.15.0 database.
+// Nothing between 1.15.0 and 1.16.0 changed a table, a column or an index, and
+// 1.17.0 only dropped idx_sprints_created_at, so a current database with that
+// index restored and its schema_version reset is a faithful 1.15.0 database.
 // It returns with the database CLOSED.
 func buildRoadmapAtSchema1150(t *testing.T, roadmapName string) membershipFixture1150 {
 	t.Helper()
@@ -111,6 +113,7 @@ func buildRoadmapAtSchema1150(t *testing.T, roadmapName string) membershipFixtur
 			row.sprint, row.task, migTS1150Created, row.position)
 	}
 
+	restoreSprintsCreatedAtIndex(t, database)
 	exec(`UPDATE _metadata SET value = '1.15.0' WHERE key = 'schema_version'`)
 	return f
 }
@@ -220,9 +223,9 @@ func TestMigrateV1_15_0_toV1_16_0_RepairsBothHalvesOnNextOpen(t *testing.T) {
 	}
 	defer database.Close() //nolint:errcheck // test cleanup
 
-	// Criterion 8.
-	if version, err := database.GetSchemaVersion(); err != nil || version != "1.16.0" {
-		t.Fatalf("schema_version after open = %q (%v), want 1.16.0", version, err)
+	// Criterion 8: the migration set runs through 1.16.0 and on to the current version.
+	if version, err := database.GetSchemaVersion(); err != nil || version != "1.17.0" {
+		t.Fatalf("schema_version after open = %q (%v), want 1.17.0", version, err)
 	}
 
 	// Criterion 1: neither half is broken any more.
@@ -304,7 +307,7 @@ func TestMigrateV1_15_0_toV1_16_0_RepairsBothHalvesOnNextOpen(t *testing.T) {
 
 	// Criterion 6: a second application, directly and through a second open, is a no-op.
 	once := tableContents(t, database)
-	if err := database.runMigration(migrations[len(migrations)-1]); err != nil {
+	if err := database.runMigration(Migration{Version: "1.16.0", Name: "re-apply", Apply: migrateV1_15_0_toV1_16_0}); err != nil {
 		t.Fatalf("re-applying the migration: %v", err)
 	}
 	database.Close() //nolint:errcheck // reopened below
@@ -347,11 +350,14 @@ func TestMigrateV1_15_0_toV1_16_0_FailureRollsBack(t *testing.T) {
 	}
 }
 
-// TestMigrateV1_15_0_toV1_16_0_IsRegistered pins the registration: the newest
-// migration targets 1.16.0 and is this one.
+// TestMigrateV1_15_0_toV1_16_0_IsRegistered pins the registration: the
+// migration that targets 1.16.0 is this one.
 func TestMigrateV1_15_0_toV1_16_0_IsRegistered(t *testing.T) {
-	last := migrations[len(migrations)-1]
-	if last.Version != "1.16.0" || fmt.Sprintf("%p", last.Apply) != fmt.Sprintf("%p", migrateV1_15_0_toV1_16_0) {
-		t.Errorf("the newest migration is %s (%s), want 1.16.0 applied by migrateV1_15_0_toV1_16_0", last.Version, last.Name)
+	i := slices.IndexFunc(migrations, func(m Migration) bool { return m.Version == "1.16.0" })
+	if i < 0 {
+		t.Fatal("no migration targets 1.16.0")
+	}
+	if got := migrations[i]; fmt.Sprintf("%p", got.Apply) != fmt.Sprintf("%p", migrateV1_15_0_toV1_16_0) {
+		t.Errorf("the migration to 1.16.0 is %s, want the one applied by migrateV1_15_0_toV1_16_0", got.Name)
 	}
 }

@@ -175,7 +175,7 @@ The `_metadata` table records the active schema version. Migration steps and the
 
 ### Current Schema Version
 
-`SchemaVersion = "1.16.0"` (defined in `internal/db/schema.go`).
+`SchemaVersion = "1.17.0"` (defined in `internal/db/schema.go`).
 
 ### Migration Commands
 
@@ -1105,6 +1105,41 @@ and the verification finds nothing.
 6. Running the migration set twice against the same database produces the same result as running it once, writes no second set of entries, and raises no error.
 7. If any step fails, `_metadata.schema_version` remains `1.15.0`, and the `tasks` and `audit` tables are the ones the database held before the migration.
 8. After the migration, `SELECT value FROM _metadata WHERE key = 'schema_version'` returns `1.16.0`.
+
+### Migration 1.16.0 → 1.17.0
+
+Drops `idx_sprints_created_at`, the index on `sprints(created_at)`, which serves no
+statement the application issues (`DATABASE.md § Index Design Rationale`). A fresh
+database created at 1.17.0 never holds it, because
+`DATABASE.md § DDL - Table Creation` does not declare it; the migration brings every
+existing database to the same index set.
+
+The migration drops one index and does nothing else. It adds no table, column,
+index or trigger, rebuilds no table, and changes no row: no read returns different
+rows or a different order after it. The schema uses no triggers
+(`DATABASE.md § Business Rules Are Enforced by Application Code`).
+
+```sql
+-- 1. Drop the index that serves no statement.
+DROP INDEX IF EXISTS idx_sprints_created_at;
+
+-- Update schema version
+UPDATE _metadata SET value = '1.17.0' WHERE key = 'schema_version';
+```
+
+The migration runs in one transaction, like every migration: a failure rolls every
+step back and leaves `_metadata.schema_version` at `1.16.0`. Re-applying it is a
+no-op, because the drop is guarded by `IF EXISTS`.
+
+#### Acceptance criteria
+
+1. A database created at any earlier schema version, once migrated, and a fresh database created at 1.17.0 both report `1.17.0` from `SELECT value FROM _metadata WHERE key = 'schema_version'`.
+2. For every table, `PRAGMA index_list` on the migrated database reports exactly the set of indexes it reports on the fresh database, and `PRAGMA index_xinfo` reports the same columns, order and direction for each of them.
+3. After the migration, `SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND name = 'idx_sprints_created_at'` returns `0`.
+4. The migration leaves the row count of every table unchanged, and leaves every row unchanged.
+5. After the migration, `SELECT COUNT(*) FROM sqlite_master WHERE type = 'trigger'` returns `0`: the migration installs no trigger.
+6. Opening the migrated database a second time applies no migration step, changes no row and no index, and raises no error.
+7. If any step fails, `_metadata.schema_version` remains `1.16.0` and the index set is the one the database held before the migration.
 
 ## Release Process
 

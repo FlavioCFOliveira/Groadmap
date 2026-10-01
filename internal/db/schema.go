@@ -8,7 +8,41 @@ import (
 )
 
 // SchemaVersion is the current database schema version.
-const SchemaVersion = "1.16.0"
+const SchemaVersion = "1.17.0"
+
+// sprintsDDL is the DDL of the sprints table and its indexes. Without the
+// newline that opens the raw string, it is byte-identical to the block of
+// SPEC/DATABASE.md § DDL - Table Creation, `sprints` Table, and a test enforces
+// the identity: a change to it is made in that block first and copied here
+// unchanged.
+const sprintsDDL = `
+CREATE TABLE IF NOT EXISTS sprints (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    status TEXT NOT NULL DEFAULT 'PENDING' CHECK(status IN ('PENDING', 'OPEN', 'CLOSED')),
+    title TEXT NOT NULL CHECK(length(title) <= 255),  -- Sprint title, max 255 chars
+    description TEXT NOT NULL,
+    created_at TEXT NOT NULL,  -- ISO 8601 UTC
+    started_at TEXT,           -- ISO 8601 UTC, NULL if not started
+    closed_at TEXT,            -- ISO 8601 UTC, NULL if not closed
+    max_tasks INTEGER,         -- NULL means unlimited capacity
+    order_index INTEGER NOT NULL CHECK(order_index > 0)  -- Sprint execution order; positive integer (> 0), unique across the roadmap (see idx_sprints_order). Column named order_index because ORDER is a reserved SQL keyword.
+);
+
+-- Indexes
+CREATE INDEX IF NOT EXISTS idx_sprints_status ON sprints(status);
+
+-- At most one sprint is OPEN at a time. The commands that open a sprint refuse
+-- when another is already OPEN, but that check runs before their write
+-- transaction; this partial unique index rejects the second OPEN row when two
+-- concurrent processes pass the check together.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_one_open_sprint ON sprints(status) WHERE status = 'OPEN';
+
+-- Uniqueness of the sprint execution order across the roadmap.
+-- Enforces that no two sprints share the same order_index value; an attempt to
+-- insert or update a colliding value fails the constraint and is surfaced to the
+-- caller as exit code 5 (see ARCHITECTURE.md § Exit Codes, ErrAlreadyExists).
+CREATE UNIQUE INDEX IF NOT EXISTS idx_sprints_order ON sprints(order_index);
+`
 
 // CreateSchema creates all database tables and indexes, and the three
 // _metadata rows, in ONE transaction. This implements the DDL from
@@ -74,31 +108,6 @@ CREATE INDEX IF NOT EXISTS idx_tasks_severity_priority ON tasks(severity DESC, p
 
 -- Index for sub-task hierarchy lookups
 CREATE INDEX IF NOT EXISTS idx_tasks_parent_task_id ON tasks(parent_task_id);
-`
-
-	// Sprints table
-	sprintsDDL := `
-CREATE TABLE IF NOT EXISTS sprints (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    status TEXT NOT NULL DEFAULT 'PENDING' CHECK(status IN ('PENDING', 'OPEN', 'CLOSED')),
-    title TEXT NOT NULL CHECK(length(title) <= 255),
-    description TEXT NOT NULL,
-    created_at TEXT NOT NULL,
-    started_at TEXT,
-    closed_at TEXT,
-    max_tasks INTEGER,
-    order_index INTEGER NOT NULL CHECK(order_index > 0)  -- Sprint execution order; positive (> 0), unique across the roadmap (idx_sprints_order). Named order_index because ORDER is a reserved SQL keyword.
-);
-
-CREATE INDEX IF NOT EXISTS idx_sprints_status ON sprints(status);
-CREATE INDEX IF NOT EXISTS idx_sprints_created_at ON sprints(created_at);
-
--- Enforce at most one OPEN sprint at a time (prevents TOCTOU races between concurrent processes).
-CREATE UNIQUE INDEX IF NOT EXISTS idx_one_open_sprint ON sprints(status) WHERE status = 'OPEN';
-
--- Enforce uniqueness of the sprint execution order across the roadmap. A colliding
--- value fails this index and is surfaced to the caller as exit code 5 (ErrAlreadyExists).
-CREATE UNIQUE INDEX IF NOT EXISTS idx_sprints_order ON sprints(order_index);
 `
 
 	// Sprint tasks junction table

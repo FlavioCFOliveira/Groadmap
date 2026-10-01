@@ -154,6 +154,7 @@ func buildRoadmapAtSchema190(t *testing.T, roadmapName string) specialistsFixtur
 		}
 	}
 
+	restoreSprintsCreatedAtIndex(t, database)
 	if _, err := database.Exec(
 		"UPDATE _metadata SET value = '1.9.0' WHERE key = 'schema_version'"); err != nil {
 		t.Fatalf("setting schema_version to 1.9.0: %v", err)

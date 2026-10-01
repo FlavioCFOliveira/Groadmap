@@ -119,6 +119,7 @@ func buildRoadmapAtSchema1130(t *testing.T, roadmapName string, sprintTitles []s
 		}
 	}
 
+	restoreSprintsCreatedAtIndex(t, database)
 	if _, err := database.Exec(
 		"UPDATE _metadata SET value = '1.13.0' WHERE key = 'schema_version'",
 	); err != nil {
