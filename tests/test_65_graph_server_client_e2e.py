@@ -1608,7 +1608,9 @@ class TestHotNodeContention(GraphServerTestBase):
     own varying completion times. Measured here, at this exact load: the fixed
     ladder exhausts on 2.81%-3.44% of invocations, in every repetition, where
     the same load measured in-process exhausted on 0.18%-0.43%. Full jitter
-    exhausted on none of 7,040.
+    exhausts far less often, but not never: measured under synthetic CPU load
+    (one busy loop per core), the published cap of forty attempts exhausted on
+    1 of 28,800 invocations, and the rejected cap of twenty on 3 of 19,200.
 
     Why every exit code is asserted rather than a sample. The criterion says
     so, and the reason is arithmetic: the failure is a few percent of
@@ -1620,8 +1622,9 @@ class TestHotNodeContention(GraphServerTestBase):
     failure rate, sixteen statements go green about six times in ten under the
     very shape the criterion exists to reject. Sixteen clients each driving
     twenty sequential invocations puts the ladder's expected failure count at
-    about ten, so reverting the shape fails this test with near-certainty --
-    and it costs under a second under the shape that passes.
+    about ten, so reverting the shape fails this test in most runs (8 of 10
+    measured under synthetic CPU load) -- and it costs under a second under
+    the shape that passes.
     """
 
     WRITERS = 16

@@ -909,11 +909,28 @@ func openRoadmapReadOnly(roadmapName string, chmod chmodFunc) (*DB, error) {
 // trap. The driver fixes the order it applies them in -- _busy_timeout first,
 // _query_only last -- independent of the order written here.
 //
+// A read-write DSN also carries _txlock=immediate, which is not a PRAGMA: it
+// makes the driver begin every read-write transaction with BEGIN IMMEDIATE, so
+// the write lock is taken at BEGIN, before the transaction has read anything,
+// where SQLite does invoke the busy handler and busy_timeout applies. Begun
+// DEFERRED, a transaction that reads before it writes asks for the write lock
+// at its first write, and if another connection holds it SQLite returns
+// SQLITE_BUSY at once without invoking the busy handler, since waiting could not
+// succeed while the transaction keeps what it has read; concurrent writer
+// processes then failed instead of waiting for one another. A read-only DSN
+// carries no _txlock: an IMMEDIATE begin on a connection that never writes
+// would only hold the write lock against every writer for the length of each
+// read. The driver begins a transaction requested with sql.TxOptions{ReadOnly:
+// true} with a plain BEGIN whatever _txlock says. See SPEC/IMPLEMENTATION.md
+// § Transaction Lock Mode.
+//
 // See SPEC/IMPLEMENTATION.md § DSN Construction and https://www.sqlite.org/uri.html.
 func dsnFor(dbPath string, readOnly bool) string {
 	params := fmt.Sprintf("_busy_timeout=%d&_foreign_keys=1", DefaultBusyTimeout)
 	if readOnly {
 		params += "&_query_only=1"
+	} else {
+		params += "&_txlock=immediate"
 	}
 	return "file:" + uriPath(dbPath) + "?" + params
 }

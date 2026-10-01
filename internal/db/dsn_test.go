@@ -17,6 +17,9 @@ import (
 // parameters. The parameters are compared as a parsed key/value set, not by
 // substring, because the key names overlap -- "_busy_timeout=" contains
 // "_timeout=", so a substring check could not tell a primary key from its alias.
+// The exact count is also what keeps _txlock out of the read-only DSN: that
+// case lists every parameter it may carry, and _txlock is not among them
+// (SPEC/IMPLEMENTATION.md § Transaction Lock Mode).
 func TestDSNForProducesAFileURI(t *testing.T) {
 	const dbPath = "/home/dev/.roadmaps/platform/project.db"
 
@@ -31,6 +34,7 @@ func TestDSNForProducesAFileURI(t *testing.T) {
 			want: map[string]string{
 				"_busy_timeout": "10000",
 				"_foreign_keys": "1",
+				"_txlock":       "immediate",
 			},
 		},
 		{
@@ -110,6 +114,7 @@ func TestDSNRejectsAnInvalidValueOutright(t *testing.T) {
 		"_foreign_keys=yes_please",
 		"_busy_timeout=10s",
 		"_query_only=perhaps",
+		"_txlock=eventually",
 	} {
 		t.Run(bad, func(t *testing.T) {
 			database, err := sql.Open("sqlite", base+"?"+bad)

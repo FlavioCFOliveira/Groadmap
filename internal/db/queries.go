@@ -440,7 +440,11 @@ type queryer interface {
 // the id alone and every TaskRef's Title is empty.
 func (db *DB) ReadTaskListPage(ctx context.Context, filter *TaskListFilter, withTitle bool,
 	selectPage func(listing []TaskRef) []int) ([]TaskRow, error) {
-	tx, err := db.BeginTx(ctx, nil)
+	// ReadOnly, so the driver begins it with a plain BEGIN even on a read-write
+	// open, whose transactions otherwise begin IMMEDIATE and would hold the
+	// write lock against every writer for the length of this read
+	// (SPEC/IMPLEMENTATION.md § Transaction Lock Mode).
+	tx, err := db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 	if err != nil {
 		return nil, fmt.Errorf("beginning the task list read: %w", err)
 	}
@@ -3282,8 +3286,12 @@ func (db *DB) GetAuditStats(ctx context.Context, since, until *string) (*models.
 	q := buildAuditStatsQueries(since, until)
 
 	// The four statements share ONE read transaction, so every figure describes
-	// the same snapshot of the log (SPEC/DATABASE.md § Audit Statistics).
-	tx, err := db.BeginTx(ctx, nil)
+	// the same snapshot of the log (SPEC/DATABASE.md § Audit Statistics). It is
+	// ReadOnly, so the driver begins it with a plain BEGIN even on the read-write
+	// open of `rmp audit stats`, whose transactions otherwise begin IMMEDIATE and
+	// would hold the write lock against every writer for the length of this read
+	// (SPEC/IMPLEMENTATION.md § Transaction Lock Mode).
+	tx, err := db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 	if err != nil {
 		return nil, fmt.Errorf("beginning the audit stats read: %w", err)
 	}

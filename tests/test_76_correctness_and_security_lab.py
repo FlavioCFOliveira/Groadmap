@@ -20,6 +20,7 @@ and the exact published line on stderr.
   #587  roadmap list skips directories whose names no command could select.
   #588  audit list --entity-id prints the canonical format line.
   #590  every released schema version's fixture migrates through the binary.
+  #593  concurrent sprint add-tasks processes all succeed against one sprint.
 
 #589 (statement-scoped memory release in the graph server) has no case here:
 SPEC/GRAPH.md § Statement-Scoped Memory Release publishes no figure, and
@@ -392,6 +393,55 @@ class TestTask590ReleasedSchemaFixtures(LabBase):
             conn.close()
             schema = REPO_ROOT.joinpath("internal/db/schema.go").read_text().split('SchemaVersion = "')[1].split('"')[0]
             assert got == schema, f"{version}: migrated to {got}, want {schema}"
+
+
+class TestTask593ConcurrentSprintAddTasks(LabBase):
+    """Twenty rmp processes add one BACKLOG task each to the same sprint at once.
+
+    Every read-write transaction is begun IMMEDIATE (SPEC/IMPLEMENTATION.md
+    § Transaction Lock Mode), so the writers wait for one another under
+    busy_timeout at BEGIN. Begun DEFERRED, a transaction that has read before it
+    writes is refused SQLITE_BUSY at the upgrade without the busy handler, and
+    several of the twenty used to exit 1 after exhausting the retry policy.
+    """
+
+    WRITERS = 20
+    AREAS = ("refund", "dispute", "invoice", "ledger export", "payout", "chargeback")
+
+    def test_every_writer_succeeds_and_the_sprint_holds_every_task(self):
+        name = self.t.create_roadmap("payments-q4")
+        sprint = self.sprint(name, "Settlement hardening", "Close the reconciliation gaps before the audit")
+        backlog = [self.task(name, f"Reconcile {self.AREAS[i % len(self.AREAS)]} batch {i + 1} "
+                                   f"against the provider daily report")
+                   for i in range(60)]
+        chosen = backlog[::3][:self.WRITERS]
+        assert len(chosen) == self.WRITERS
+
+        results = self.run_many([["sprint", "add-tasks", "-r", name, str(sprint), str(task_id)]
+                                 for task_id in chosen])
+        failures = [(task_id, rc, err) for task_id, (rc, _out, err) in zip(chosen, results) if rc != 0]
+        assert not failures, f"{len(failures)} of {self.WRITERS} writers failed: {failures}"
+        for task_id, (_rc, out, _err) in zip(chosen, results):
+            assert out == "", f"task {task_id}: add-tasks wrote to stdout: {out!r}"
+
+        members = self.t.run_cmd_json(["sprint", "tasks", "-r", name, str(sprint)])
+        assert sorted(t["id"] for t in members) == sorted(chosen), (
+            f"the sprint holds {sorted(t['id'] for t in members)}, want {sorted(chosen)}")
+        assert {t["status"] for t in members} == {"SPRINT"}
+
+        conn = sqlite3.connect(self.db_of(name))
+        try:
+            positions = [r[0] for r in conn.execute(
+                "SELECT position FROM sprint_tasks WHERE sprint_id = ? ORDER BY position", (sprint,))]
+            added = conn.execute("SELECT COUNT(*) FROM audit WHERE operation = 'SPRINT_ADD_TASK'").fetchone()[0]
+            integrity = conn.execute("PRAGMA integrity_check").fetchone()[0]
+        finally:
+            conn.close()
+        assert positions == list(range(self.WRITERS)), f"sprint positions {positions}, want 0..{self.WRITERS - 1}"
+        assert added == self.WRITERS, f"{added} SPRINT_ADD_TASK audit entries, want {self.WRITERS}"
+        assert integrity == "ok", f"integrity_check returned {integrity!r}"
+        untouched = {t["id"] for t in self.t.list_tasks(name, status="BACKLOG")}
+        assert untouched == set(backlog) - set(chosen)
 
 
 def _run_all():

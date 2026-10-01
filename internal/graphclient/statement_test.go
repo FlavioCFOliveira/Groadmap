@@ -398,7 +398,7 @@ func TestSend_AnExhaustedRetryPolicyReportsTheConflictAsItself(t *testing.T) {
 		t.Errorf("the server saw %d RUN message(s), want strictly more than the fixed ladder's "+
 			"%d. A conflict is retried under the policy's FULL-JITTER shape, not its ladder: "+
 			"the ladder's rungs are hundreds of milliseconds each, so it spends the same 2500 ms "+
-			"budget in six attempts where jitter spends it in sixteen to twenty",
+			"budget in six attempts where jitter spends it in sixteen to forty",
 			runs, backoff.Attempts)
 	}
 }

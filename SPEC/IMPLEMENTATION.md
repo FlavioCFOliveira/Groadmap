@@ -8,6 +8,7 @@ This file contains the implementation strategies that support the contracts defi
   - [Entry Point](#entry-point)
   - [DSN Construction](#dsn-construction)
   - [Where Each PRAGMA Is Applied](#where-each-pragma-is-applied)
+  - [Transaction Lock Mode](#transaction-lock-mode)
   - [Read-Only Connections](#read-only-connections)
 - [Concurrency Model](#concurrency-model)
   - [WAL Mode](#wal-mode)
@@ -108,10 +109,40 @@ both is therefore a trap and is forbidden.
 reopening, and applies to every connection, so it is set once with a single `Exec`
 after the database is opened and MUST NOT be carried in the DSN.
 
+### Transaction Lock Mode
+
+A read-write open MUST carry the driver DSN parameter `_txlock=immediate`, so
+every transaction begun with `BeginTx` on a read-write connection issues
+`BEGIN IMMEDIATE`. The parameter is not a PRAGMA: it sets the statement the
+driver issues to begin a transaction. The driver validates its value against the
+set `deferred`, `immediate` and `exclusive`, and refuses the open on any other
+value. A transaction requested with `sql.TxOptions{ReadOnly: true}` is begun with
+a plain `BEGIN` whatever the parameter says.
+
+A read-only open (`_query_only=1`, see
+[Read-Only Connections](#read-only-connections)) MUST NOT carry `_txlock`, and
+its transactions keep SQLite's default `DEFERRED` mode. An `IMMEDIATE` begin takes
+the write lock, so on a connection that never writes it would only block the
+writers for the length of every read.
+
+**Rationale.** A `DEFERRED` transaction takes no lock at `BEGIN`; it takes a read
+lock at its first read and tries to take the write lock at its first write. When
+a transaction that has already read tries that upgrade while another connection
+holds the write lock, SQLite returns `SQLITE_BUSY` at once and does not invoke the
+busy handler, because waiting could not succeed while the transaction keeps what
+it has already read; this is SQLite's deadlock avoidance. `busy_timeout` therefore does not apply at that
+point, and the failure reaches the retry policy directly. An `IMMEDIATE`
+transaction takes the write lock at `BEGIN`, before it has read anything, and the
+busy handler does apply there, so a contended begin waits within `busy_timeout`
+for the other writer to commit instead of failing. See
+<https://www.sqlite.org/lang_transaction.html> and
+<https://www.sqlite.org/c3ref/busy_timeout.html>.
+
 ### Read-Only Connections
 
 The web interface opens databases read-only. Such a connection carries
-`_query_only=1` in addition to the connection-scoped PRAGMAs above, so the SQLite
+`_query_only=1` in addition to the connection-scoped PRAGMAs above, and does not
+carry `_txlock` (see [Transaction Lock Mode](#transaction-lock-mode)), so the SQLite
 engine itself rejects every write — schema change, row mutation, and audit insert
 alike — rather than relying on the calling code to refrain from writing. A
 read-only open also runs no migrations, since DDL is a write. `journal_mode` is
@@ -175,6 +206,12 @@ It is connection-scoped and therefore carried in the DSN, so that it holds on
 every pooled connection and not only on the one that would have serviced a
 one-shot `Exec`; see [Where Each PRAGMA Is Applied](#where-each-pragma-is-applied).
 
+SQLite waits under `busy_timeout` only where it invokes the busy handler. It does
+not invoke it when a transaction that has already read tries to upgrade to a
+write; [Transaction Lock Mode](#transaction-lock-mode) begins every read-write
+transaction `IMMEDIATE` so that the wait happens at `BEGIN`, where the handler
+applies.
+
 ### Retry Logic
 
 **Groadmap has one retry policy, and one package owns the whole of it.** One
@@ -222,8 +259,9 @@ disagree on without either of them contradicting the text.
 The implementation waits before each retry, and never after an attempt it does
 not retry. The ordering governs both shapes. Rules 1, 3 and 4 hold verbatim
 under either; rules 2 and 5 are written with the fixed ladder's values, and under
-full jitter the delay before each retry is the draw described below and the last
-attempt is the twentieth rather than the sixth:
+full jitter the delay before each retry is the draw described below, and the last
+attempt is the one at which the total wait is spent, or the fortieth when the cap
+is reached first, rather than the sixth:
 
 1. The first attempt runs immediately, with no preceding wait.
 2. Each retry is preceded by the next delay of the backoff pattern: 100ms before
@@ -241,6 +279,12 @@ attempt is the twentieth rather than the sixth:
 - Only retry on SQLite busy/locked errors (`database is locked`, `SQLITE_BUSY`)
 - Do not retry on schema errors, constraint violations, syntax errors, or invalid input errors
 
+For SQLite, the policy is a backstop, not the primary means of resolving write
+contention. Concurrent writers wait for one another under `busy_timeout` at the
+`BEGIN IMMEDIATE` of [Transaction Lock Mode](#transaction-lock-mode); a busy or
+locked error reaches the retry policy only when that wait is exhausted or when
+SQLite reports one at a point where it does not invoke the busy handler.
+
 These conditions are the classifier of the SQLite caller. Every other caller
 supplies its own and takes nothing else from this one: the graph store lock
 retries on lock contention alone (see
@@ -257,9 +301,16 @@ graph client retries on the serialisation conflict alone
   5, 10, 20, 40, 80, 160ms — and then held at 250ms for every retry after that.
   The ceiling grows monotonically; the delay does not, because each one is drawn
   independently, so a later delay may be shorter than an earlier one.
-- **Maximum attempts**: 20 — one initial attempt plus at most nineteen retries.
-  The cap is load-bearing rather than decorative: a draw may be near zero, so the
-  total wait alone does not bound how many times the loop turns.
+- **Maximum attempts**: 40 — one initial attempt plus at most thirty-nine
+  retries. The cap is load-bearing rather than decorative: a draw may be near
+  zero, so the total wait alone does not bound how many times the loop turns.
+  The cap is also sized so that, under contention, the total wait and not the
+  cap is what ends a walk. The expected draw is half the ceiling in force, so the
+  expected wait is 157.5ms over the first six retries and 125ms for each retry
+  after them: about 1.78s over nineteen retries, short of the total, and about
+  4.28s over thirty-nine, well past it. A walk that keeps losing therefore spends
+  the whole 2500ms before it reaches the cap, and the cap ends a walk only when
+  an improbable run of near-zero draws occurs.
 - **Maximum total wait**: 2500ms, the same total the fixed ladder spends. The
   loop stops as soon as that total is spent, so the shape changes how the waiting
   is distributed and never how long a caller can be made to wait.
@@ -294,14 +345,16 @@ than moving the point at which it appears — and it is what
 `GRAPH.md § Concurrency Inside the Server`, rule 8, states for the caller. This
 section is canonical for the shape, and no other section restates it.
 
-**Two ceilings that were tried and rejected, recorded so that they are not tried
-again.** A jitter ceiling that does not grow is adequate against a light
-contending set and collapses against a heavy one: a fixed cap of a few tens of
+**Two ceilings and one cap that were tried and rejected, recorded so that they
+are not tried again.** A jitter ceiling that does not grow is adequate against a
+light contending set and collapses against a heavy one: a fixed cap of a few tens of
 milliseconds cannot shed enough load. A ceiling that grows but stops at 100ms is
 worse than the fixed ladder under heavy contention. The ceiling has to grow and it
 has to reach a few hundred milliseconds; the cap, and not the randomisation alone,
 is what sheds the load. The published ceiling of 250ms is the decision those two
-rejections produced.
+rejections produced. A cap of twenty attempts was also tried and rejected: under
+contention it was measured to end every exhausted walk before the total wait was
+spent, so the failure it reported claimed a budget it had not used.
 
 **Lengthening the total instead of reshaping it is rejected, and the reason is a
 published derivation rather than a preference.** Walking the fixed ladder for
@@ -362,7 +415,7 @@ db.WithTransaction(func(tx *sql.Tx) error {
 
 ### Anti-Patterns to Avoid
 
-- **Multiple Writers Without Coordination**: Multiple uncoordinated writers may fail with "database is locked"
+- **Read-Write Transactions Begun `DEFERRED`**: A read-write transaction that reads before it writes fails with "database is locked" when another connection holds the write lock, without waiting under `busy_timeout`. Concurrent writer processes are a supported case: every read-write transaction is begun `IMMEDIATE` (see [Transaction Lock Mode](#transaction-lock-mode)), so they wait for one another under `busy_timeout`, and the retry policy remains a backstop (see [Retry Logic](#retry-logic)).
 - **Long-Running Transactions**: Holding locks for too long blocks other operations
 - **Ignoring Context Cancellation**: Always pass context for proper timeout/cancellation handling
 
