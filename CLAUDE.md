@@ -266,6 +266,7 @@ User Request → specification-manager → SPEC/ → [roadmap-manager] → go-de
 | Help | `HELP.md` | Help skeleton, error message format, structure |
 | Graph | `GRAPH.md` | Knowledge graph: GoGraph integration, persistence, the dedicated graph server and its client |
 | Web | `WEB.md` | `rmp web` server, read-only pages, knowledge-graph visualisation, embedded assets |
+| Skills | `SKILLS.md` | Agent skills shipped in `skills/`: scope partition, alignment invariant, packaging, installer |
 
 ### Update Rules
 
@@ -642,6 +643,7 @@ type(scope): subject
 ├── bin/                         # Build output
 ├── tests/                       # E2E tests
 ├── SPEC/                        # Technical specifications
+├── skills/                      # Agent skills shipped with rmp
 └── .claude/
     ├── agents/                  # Project-local agent definitions
     └── skills/                  # Project-local skill definitions

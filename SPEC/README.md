@@ -151,6 +151,11 @@ The SPEC is unversioned. Git is the source of truth for its evolution — recove
 | How `make lint` and `make security` find the pinned `golangci-lint` and `gosec` (the `go install` copy first, then `PATH`), the version check, and the report a mismatch writes | `BUILD.md § Local Tool Resolution` |
 | Installation / release | `DEPLOY.md` |
 | How `install.sh` reads the installed version, compares it with the latest release, and the messages it writes when the two are equal or differ | `DEPLOY.md § Installed Version Detection` |
+| Agent skills shipped in `skills/` (`roadmap-manager`, `knowledge-authority`) | `SKILLS.md` |
+| Which CLI commands each agent skill operates, and what counts as an invocation | `SKILLS.md § Scope Partition` and `SKILLS.md § Invocation` |
+| The skills alignment invariant against the AI Agent Contract, the version declaration, and the test that enforces it | `SKILLS.md § Alignment Invariant` |
+| The skills release archive and its checksum | `SKILLS.md § Packaging` |
+| The skills installer `install-skills.sh` (destination, full replacement, failure modes) | `SKILLS.md § Skills Installer` |
 
 ---
 
@@ -171,6 +176,7 @@ The SPEC is unversioned. Git is the source of truth for its evolution — recove
 | `VERSION.md` | Application and schema versioning, migrations |
 | `BUILD.md` | Build system, cross-compilation, validation gates, CI/CD |
 | `DEPLOY.md` | Installation, distribution, release process |
+| `SKILLS.md` | Agent skills shipped in `skills/`: scope partition, alignment invariant, packaging, installer |
 
 ---
 
