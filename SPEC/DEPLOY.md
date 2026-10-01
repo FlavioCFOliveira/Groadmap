@@ -80,6 +80,22 @@ go build -o rmp ./cmd/rmp
 sudo mv rmp /usr/local/bin/
 ```
 
+### 4. Agent Skills Installation Script
+
+**Location:** `install-skills.sh` in repository root
+
+**Usage:**
+```bash
+curl -fsSL https://raw.githubusercontent.com/FlavioCFOliveira/Groadmap/main/install-skills.sh | bash
+```
+
+Installs the two agent skills of the latest release, `roadmap-manager` and
+`knowledge-authority`, into the invoking user's personal skills directory,
+replacing any previously installed copy of each in full. It reuses this
+specification's release resolution, checksum verification, and staging-directory
+rules. The installer, the archive it installs, and the skills themselves are
+specified in `SKILLS.md`.
+
 ## Platform Detection
 
 ### Operating System Detection
@@ -735,6 +751,8 @@ rmp-{version}-{os}-{arch}.{ext}
 Each release includes:
 - Binary archives for all supported platforms (9 total)
 - SHA256 checksums for each archive
+- The agent skills archive `rmp-skills-{version}.tar.gz` and its checksum
+  `rmp-skills-{version}.tar.gz.sha256` (see `SKILLS.md § Packaging`)
 - Automatic release notes generated from commits
 
 ### Release Checklist
@@ -746,6 +764,7 @@ Each release includes:
 - [ ] The released binary names its commit: on a binary extracted from a published archive, `rmp --version` prints `(commit <commit>)` with the first seven characters of the commit the tag names, and no `modified` marker (see How a Released Binary Carries Its Commit)
 - [ ] Release notes prepared
 - [ ] Version updated in `cmd/rmp/main.go`
+- [ ] Both agent skills declare the released binary version, and the skills alignment test passes (see `SKILLS.md § Alignment Invariant`)
 - [ ] Documentation updated (`SPEC/VERSION.md`, `SPEC/README.md`)
 
 ## Acceptance Criteria
