@@ -5,6 +5,381 @@ All notable changes to **Groadmap** (`rmp`) are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.18.0] - 2026-10-01
+
+### Changed - BREAKING
+
+- **Sprint membership is now an enforced invariant, and six commands change
+  behaviour to keep it.** The invariant has two halves: a sprint member is never
+  in `BACKLOG`, and a task in `SPRINT`, `DOING` or `TESTING` always belongs to a
+  sprint. One application guard checks it inside the transaction of
+  `task create`, `task stat`, `task reopen`, `sprint add-tasks`,
+  `sprint move-tasks`, `sprint remove-tasks` and `sprint remove` (`ea76fd8`).
+  - **`task stat <ids> BACKLOG` is refused (exit `6`) for every sprint member.**
+    `1.17.3` set the status and left the task in its sprint. A task now leaves its
+    sprint only through `rmp sprint remove-tasks`, which is the one command that
+    yields `BACKLOG`. A non-member is already `BACKLOG` or is `COMPLETED`, which
+    has no transition to `BACKLOG`, so `task stat ... BACKLOG` can no longer
+    succeed at all.
+  - **A `COMPLETED` task stays in the sprint it was completed in.**
+    `sprint move-tasks`, `sprint remove-tasks` and `sprint add-tasks` refuse it
+    with exit `6` and the line
+    `task N is COMPLETED in sprint #M; a completed task stays in the sprint it was completed in`.
+    `1.17.3` moved it, through `move-tasks` and through `add-tasks` alike, and
+    `remove-tasks` set it to `BACKLOG` and took it out of the sprint.
+    `sprint remove` is refused while the sprint holds a `COMPLETED` member, with
+    `cannot remove sprint #M: completed tasks stay in their sprint: #N`;
+    `1.17.3` removed the sprint.
+  - **An unfinished task changes sprint keeping its status.** `sprint move-tasks`,
+    and `sprint add-tasks` naming a task held by another sprint, keep the task's
+    status and tracking fields, and record the change under the new audit
+    operation `TASK_SPRINT_CHANGE`. A move now writes three audit rows per task:
+    `SPRINT_MOVE_TASK_OUT`, `SPRINT_MOVE_TASK_IN` and `TASK_SPRINT_CHANGE`.
+  - **`task reopen` returns a `DOING`, `TESTING` or `COMPLETED` task to `SPRINT`
+    inside its sprint, at its position.** `1.17.3` returned a `SPRINT`, `DOING`,
+    `TESTING` or `COMPLETED` task to `BACKLOG`: the first three left their sprint,
+    and a `COMPLETED` task stayed a member. A task already in `SPRINT` is now skipped
+    with the stderr note `task #N is already in SPRINT`, exit `0`. `task reopen` is
+    now refused (exit `6`) while the task's sprint is
+    `CLOSED`, and when reopening `COMPLETED` tasks would take the sprint past its
+    `max_tasks` cap (`7d4beff`). `1.17.3` reopened into a `CLOSED` sprint.
+  - **`sprint add-tasks` counts against the `max_tasks` cap only the named tasks
+    that are not already members of the sprint.** `1.17.3` counted every named
+    task, so naming an existing member could exceed the cap.
+  - **Migration guidance.** A script that parked sprint work with
+    `task stat <id> BACKLOG` must call `rmp sprint remove-tasks -r <roadmap>
+    <sprint-id> <id>` instead. A script that moved finished work between sprints
+    must leave it where it is, or reopen it first. The schema `1.16.0` migration
+    repairs existing violations once, on first open (see **Database migrations**
+    below).
+
+- **Stricter input validation, with new exit codes and error lines.** Each item
+  below was measured against both binaries (`ea76fd8`, `7d4beff`).
+  - **A repeated flag is a usage error (exit `2`) on every subcommand**:
+    `Error: invalid input: repeated flag: -t`. `1.17.3` kept the last value.
+  - **The priority and severity filters of `task list` and `backlog list` are
+    range-checked.** `-p 12` is exit `6`
+    (`priority must be between 0 and 9, got 12`); `1.17.3` returned `[]` with
+    exit `0`.
+  - **A bounded integer flag that is not an integer no longer leaks `strconv`
+    text.** `-p x` still exits `2`, and now reads
+    `invalid value for --priority: "x" is not an integer in 0-9`.
+  - **A sign without digits is an id format error (exit `2`)**, not a range error
+    (exit `6`): `task get -` now reads `invalid task ID: "-" (must be a positive integer)`.
+  - **Date filters accept strict RFC 3339 or `YYYY-MM-DD` within
+    `1970-01-01`..`9999-12-31`.** `--since 0001-01-01` is now refused with exit
+    `6`; `1.17.3` accepted it.
+  - **`comment-edit --type` refuses piped data with exit `2`**:
+    `standard input carries data, but it is not read when --type is given; supply the new body with --body`.
+    `1.17.3` exited `0` and ignored the data.
+  - **A roadmap name's length is counted in characters**, not bytes: a 101-character
+    name reads `(got 101)`, where `1.17.3` reported its 202 bytes.
+  - **`roadmap list` and the web index omit a directory whose name breaks the
+    roadmap name rules.** `1.17.3` listed `Bad Name`, `-dash` and `UPPER` beside
+    valid roadmaps; `1.18.0` lists only the valid ones.
+  - **A regular file in the place of a roadmap home is a roadmap that does not
+    exist**: exit `4` (`resource not found: roadmap "<name>"`), and `404` on the
+    web interface. `1.17.3` exited `1` with an operating-system error.
+    `roadmap create` over such a file still exits `1`, now with the line
+    `cannot create roadmap "<name>": <path> is occupied and is not a directory`.
+  - **The ordering commands report a non-member with one line**,
+    `task N is not in sprint #M` (exit `6`), where `1.17.3` printed
+    `task N does not belong to sprint M`.
+  - **A relative `HOME` is refused** (exit `1`):
+    `home directory "<value>" is not an absolute path; refusing to locate the data directory under it`.
+  - **`roadmap remove` is refused (exit `6`) while a graph server runs for the
+    roadmap**: `cannot remove roadmap "<name>": a graph server is running for it; stop the server first`.
+    `1.17.3` removed it.
+  - **A database whose schema is newer than the binary is refused, with nothing
+    written** (exit `1`):
+    `<path> has schema version <x>, newer than schema version 1.17.0 supported by this rmp; upgrade rmp to open it`.
+  - **Other opening changes:** a symbolic-link database file or sidecar is
+    refused before any permission change, and a file that is not SQLite is
+    refused. A zero-byte `project.db` is initialised; `1.17.3` failed on it with
+    exit `1` and `no such table: tasks`.
+  - **Every subcommand that takes `-r` lists the invalid-roadmap-name exit `6`** in
+    its help and in the AI Agent Contract.
+  - **`audit list --entity-id` uses the canonical invalid-ID line**:
+    `invalid entity ID: "abc" (must be a positive integer)`, where `1.17.3` printed
+    `invalid entity ID: abc`.
+  - **Migration guidance.** A program that parses error lines or branches on exit
+    codes must be checked against the items above. `rmp --ai-help` publishes every
+    subcommand's exit-code conditions; its `schema_version` stays `2.0.0`, its
+    command set and flag names are unchanged, and its `AuditOperation` enum gains
+    `TASK_SPRINT_CHANGE`.
+
+- **The plain-text help changes on every subcommand.** Each of the 55
+  subcommand helps differs from `1.17.3`. Every subcommand except the three
+  `roadmap` subcommands gains the repeated-flag condition under exit `2`; the
+  subcommands that take `-r` gain the invalid-roadmap-name condition under exit
+  `6`; the helps of the commands above describe their new behaviour. The `roadmap`
+  helps change for other reasons: `roadmap list` states that entries breaking a
+  name rule are skipped, `roadmap create` gains the occupied-entry exit `1`, and
+  `roadmap remove` gains the graph-server refusal under exit `6`. Besides the
+  version header, the global help changes two lines: `backlog` now reads "a BACKLOG
+  task belongs to no sprint", and `web` no longer calls the interface read-only.
+  The family helps of `task`, `sprint` and `audit` change. Only `rmp ai-help
+  --help` is unchanged.
+
+- **Web: each task has its own page, and the task modal and its JSON endpoint are
+  gone** (`6d2251b`). `GET /roadmaps/{name}/tasks/{id}` serves a read-only page
+  with the sprint context, the details, the four Markdown fields and the
+  comments. `GET /roadmaps/{name}/tasks/{id}/data` now answers `404`; under
+  `1.17.3` it answered `200` with the task as JSON. Sprint board cards, and task
+  titles on the Tasks page, link to the task page. Migration: read task data with
+  `rmp task get` instead of the endpoint.
+
+- **Web: cross-site and foreign-host requests are refused** (`2f991be`). A request
+  guard runs before routing on every request, `/static/` included. It enforces a
+  `Host` allowlist per bind kind, and refuses a `Sec-Fetch-Site` other than
+  `same-origin` or `none` and a foreign or `null` `Origin`, with a `403`
+  `text/plain` answer. `1.17.3` answered `200` to each of these. A request the
+  client abandoned is answered `499` and logged at `INFO`, never as a `5xx`.
+  Migration: a reverse proxy or a client that sends another `Host` is refused.
+
+- **Web: the Tasks page is one filtered, paginated list instead of a board**
+  (`134c4ad`, `967740c`, `9dcb330`). The table has seven columns (ID, Title,
+  Type, Status, Severity, Priority, Created), and the title is the only link.
+  Filtering and pagination run on the server through the `q`, `sprint`,
+  `status`, `type`, `page` and `size` query parameters; `status` and `type` are
+  repeatable. Page sizes are 10, 25, 50 and 100; the default view shows every
+  status except `COMPLETED`, 25 rows per page. The filter state persists in the
+  `rmp_tasks_filters` cookie, and the route's responses carry `Vary: Cookie`.
+  The "Min priority" and "Min severity" filters are removed, and their `priority`
+  and `severity` URL parameters are now ignored. Search runs on the server through
+  a GET form; under `1.17.3` it ran in the browser and rewrote the URL with
+  `history.replaceState`.
+
+- **Web: page titles read `<roadmap> - <area> - <hostname>`** (`4e7e971`), the
+  index `Roadmaps - <hostname>`, and a task page `#<id> <title> - <roadmap> -
+  <hostname>`. They no longer contain `Groadmap`.
+
+- **Web: the sprint details datagrid holds only Created, Started and Closed**
+  (`14db500`). The sprint order and capacity are no longer displayed. The sprint
+  status summary line is removed (`b9d4163`).
+
+### Added
+
+- **The agent skills ship with the release** (`80e29ef`, `84d3327`).
+  `skills/roadmap-manager` and `skills/knowledge-authority` are Claude Code
+  skills that drive `rmp`. The release workflow packages them as
+  `rmp-skills-v1.18.0.tar.gz` with `rmp-skills-v1.18.0.tar.gz.sha256`, and
+  `install-skills.sh` installs the latest release's archive, after SHA-256
+  verification, into `$CLAUDE_CONFIG_DIR/skills` or `~/.claude/skills`,
+  replacing each of the two skills entirely and touching no other skill. A Go
+  test holds both skills to the AI Agent Contract and to the binary version.
+  For this release both skills were re-measured against the `1.18.0` binary and
+  declare `rmp-version: "1.18.0"`.
+- **Web: Markdown rendering of free-text fields** (`efc5f48`, `705c320`): the
+  task requirement fields, acceptance criteria and completion summary, task and
+  sprint comment bodies, and the sprint description render as HTML on the server.
+  Raw HTML is omitted, a dangerous URL renders as text, external links open with
+  `rel="noopener noreferrer"`, a remote image renders as a link to it, headings are
+  demoted to `h4`-`h6`, and code blocks are highlighted.
+- **Web: timestamps display as `YYYY-MM-DD HH:mm:ss` in UTC** inside a `<time>`
+  element carrying the stored value (`6ffb033`). The CLI and JSON keep ISO 8601.
+- **Web: collapsible sprint board columns** (`f7c2241`); a column with no task
+  starts collapsed when the sprint holds at least one task (`8543d8a`).
+- **Web: sprint board cards carry the id and the task type in their badge line**
+  (`ce0f031`, `9d46a71`, `34e83b4`). The `#<id>`, a plain line under the title in
+  `1.17.3`, becomes a black badge at the start of the badge line; severity now
+  precedes priority (`S<n> P<n>`, where `1.17.3` showed `P<n> S<n>`); and a
+  colour-coded task type badge is added. The sprint status badge sits in the page pretitle (`180a5a9`).
+- **Audit operation `TASK_SPRINT_CHANGE`**, for a task that changed sprint and
+  kept its status (`ea76fd8`).
+
+### Changed
+
+- **Database migrations: schema `1.14.0` → `1.17.0`**, run automatically and
+  transactionally on first open.
+  - `1.15.0` (`4c7153e`): drops six duplicate or prefix indexes and recreates the
+    task and audit indexes as composites matching their `ORDER BY` clauses.
+  - `1.16.0` (`ea76fd8`): repairs sprint-membership violations. An active task
+    outside every sprint returns to `BACKLOG` with a `TASK_STATUS_BACKLOG` audit
+    row; a sprint member in `BACKLOG` becomes `SPRINT` with a
+    `TASK_STATUS_SPRINT` audit row. It then checks every task with the guard.
+  - `1.17.0` (`9bb76da`): drops the unused `idx_sprints_created_at` index. No row
+    changes.
+  - The size `roadmap list` reports changes with the new index set. A freshly
+    created roadmap measures 135,168 bytes under `1.18.0` and 155,648 under
+    `1.17.3`; `4c7153e` records growth on its 20,000-task scenario.
+- **`rmp web --help` states what the interface writes** (`2f991be`). It no longer
+  says the interface never writes or is reachable only from the local machine. It
+  says every page is read-only and no roadmap database is written, that the
+  knowledge-graph query bar runs the Cypher typed into it, writes and deletes
+  included, without authentication, and that on loopback no other machine can
+  connect. `README.md` and `DOCS/commands/web.md` say the same.
+- **Web: the vendored Tabler is upgraded from `v1.4.0` to `v1.6.0`**, CSS and
+  JavaScript together (`b9d4163`), and the Inter italic face is vendored, so italic
+  is no longer synthesised (`705c320`). The sprint board's three column counts sum
+  to the sprint's task count. Dark-theme badge text and the focus outline meet
+  WCAG 2.2 AA contrast on the Tasks list and the sprint board (`134c4ad`).
+- **`roadmap create` builds `project.db` under a temporary name and claims it
+  atomically**, so exactly one of several concurrent creators wins and the others
+  exit `5` (`7d4beff`). Schema creation and its metadata run in one transaction,
+  so a failure leaves no partial schema (`4c7153e`).
+- **`graph serve` re-establishes mode `0700` on `~/.roadmaps/` and the roadmap
+  home at start**, and its socket-length check also measures the transient
+  staging path, refusing before any bind (`120e1e6`). It never creates a roadmap
+  home (`7d4beff`).
+
+### Changed - dependencies
+
+| Module or tool | `1.17.3` | `1.18.0` | Note |
+|---|---|---|---|
+| Go (`go.mod` floor) | `1.27.0` | `1.27.1` | `9dfa598` |
+| `github.com/yuin/goldmark` | — | `v1.8.6` | New. Markdown rendering (`efc5f48`) |
+| `github.com/alecthomas/chroma/v2` | — | `v2.27.0` | New. Syntax highlighting (`efc5f48`) |
+| `github.com/dlclark/regexp2/v2` | — | `v2.2.1` | New direct requirement, for one chroma lexer (`628d8c7`) |
+| `golangci-lint` (Makefile pin) | `v2.13.1` | `v2.14.0` | `9dfa598` |
+| `gosec` (Makefile pin) | `v2.28.0` | `v2.29.0` | `8e31cb4` |
+| Tabler (vendored web asset) | `v1.4.0` | `v1.6.0` | `b9d4163` |
+| Inter italic face (vendored web asset) | — | from `@fontsource-variable/inter` | `705c320`, SIL Open Font License 1.1 |
+
+  `github.com/FlavioCFOliveira/GoGraph` stays at `v0.15.0`, and
+  `modernc.org/sqlite` at `v1.59.0`. `goldmark-highlighting` was added in
+  `efc5f48` and removed in `628d8c7`, so it is not a dependency of this release.
+  The chroma lexers and the `github-dark` style are a generated, committed copy in
+  `internal/highlight`, carrying chroma's MIT notice.
+
+### Fixed
+
+- **Concurrent `sprint add-tasks` processes no longer exit `1`** (`704e8e2`).
+  Read-write SQLite transactions begin `IMMEDIATE`, so they wait under the busy
+  timeout instead of receiving `SQLITE_BUSY` on the lock upgrade.
+- **A lost `sprint start` race yields the sequential refusal**, never raw SQLite
+  text: driver failures are classified at one dispatch point (`7d4beff`).
+- **A cancelled graph statement is no longer committed** (`2f991be`): the client
+  closes the Bolt connection on cancellation, so the server cancels the
+  statement. A deadline keeps its published outcome.
+- **Migration `1.13.0` handles `v1.0.0`-release databases** lacking
+  `sprint_tasks.position` and `idx_one_open_sprint`, and migration `1.1.0` is
+  idempotent. One immutable fixture per released schema version and a chain test
+  cover the full migration path (`7d4beff`).
+
+### Security
+
+- **Cross-site writes and DNS rebinding against `rmp web` are closed**
+  (CWE-352, CWE-350; `2f991be`). See the request guard under
+  **Changed - BREAKING**.
+- **The graph server's socket is never connectable at a wider mode**
+  (`120e1e6`). On POSIX it is bound inside a private `0700` staging directory, set
+  to `0600` there, and hard-linked into place; before, another user could connect
+  in the window before the `chmod`. Startup removes same-user staging residue.
+- **Symbolic-link database files and sidecars are refused before any `chmod`**,
+  and a non-SQLite file is refused (`7d4beff`).
+- **Markdown is rendered safely** (`efc5f48`): raw HTML is omitted and dangerous
+  URLs render as text. The Content-Security-Policy is unchanged.
+- **The `rmp_tasks_filters` cookie is `HttpOnly` and `SameSite=Lax`**
+  (`9dcb330`); `Secure` is deliberately unset because `rmp web` serves plain HTTP
+  only, and `19b9dfe` registers that as a gosec G124 suppression.
+
+### Performance
+
+The figures below are the ones each commit recorded when it was made. They are
+attributed, not re-measured: `52f21a2` removed every
+benchmark and measurement test, so no gate reproduces them.
+
+- `4c7153e`: opening a database no longer pre-builds placeholder text
+  (6.75 ms / 9.78 MB to 1.62 ms / 15 KB); velocity and burndown pin their join
+  order (`stats` 125.7 to 37.3 ms); `roadmap create` 177 to 49 ms; lean
+  projections (`sprint show` 57.8 to 34.9 ms); batched audit writes (1,000 rows
+  15.4 to 5.98 ms); position renumbering touches only the affected range.
+- `628d8c7`: the chroma registry is no longer initialised at start-up
+  (`rmp --version` 16.43 to 6.00 ms; `task get` 17.99 to 7.99 ms); single-pass
+  indented JSON.
+- `f3c6127`: the web Tasks page reads in two phases (default page 109.70 to
+  34.02 ms).
+- `8c2f83d`: chunked JSON output (`sprint tasks` on a 4,000-task sprint 67.3 to
+  52.4 ms); velocity applies its five-sprint limit in a subquery before counting,
+  with byte-identical output (`stats` 26.4 to 14.6 ms); index-served `audit stats` (67.6 to 23.9 ms); one-read burndown;
+  id-only web listing (default page 34.4 to 10.6 ms).
+- `120e1e6`: an idle graph server writes 0 bytes, where it wrote about 255 KB per
+  due checkpoint instant; it folds only when the write-ahead log grew.
+- `7d4beff`: the graph server returns freed statement memory to the operating
+  system at statement end and after every checkpoint that ran.
+
+### Internal
+
+These change no output of the binary.
+
+- **No benchmarks and no measurement tests** (`52f21a2`). Timed behaviour is
+  proven deterministically through seams, and an AST gate fails on any
+  `Benchmark` function. The `heavy` build tag and `make test-heavy`, added there,
+  were removed in `134c4ad` together with the browser copy of the search they
+  tested.
+- **The end-to-end suite is a required CI and release job** (`ed2bed6`); nothing
+  is built or published unless it passes. The Makefile asserts the pinned
+  `golangci-lint` and `gosec` versions and reports every `PATH` copy on a
+  mismatch.
+- **Native fuzz targets** for the untrusted-input parsers (`15604e4`).
+- **Every SPEC DDL block is held byte-identical to `schema.go`** by a test
+  (`0f515ad`); the task transition table is declared once (`9bb76da`).
+- **Test harness hardening** (`4e801db`): two flaky gates fixed; the new `test_75`
+  checks every `Error:` line and relative link in `DOCS/` and `README.md`. The new
+  `test_76` (`7d4beff`) covers the correctness and security fixes, and `test_77`
+  (`80e29ef`) the skills installer.
+- **The schema `1.17.0` migration-chain fixture** is added, so the chain test
+  starts from every released schema version (release cut, working tree).
+- **Directory-creation failures under `graph serve` are classified as I/O errors
+  at the source**, with messages and exit codes unchanged (`120e1e6`).
+- **The generated chroma files are stored byte-exact**, so a clean checkout passes
+  the staleness test (`0a1be6d`).
+- **Specification and documentation corrections** (`8053d49`, `35d3e37`,
+  `f58becd`, `d31f5e4`); the new `SPEC/SKILLS.md` (`390249a`); project
+  instructions and knowledge model (`abc427a`, `ab013a8`, `bd6e163`).
+
+### Known Issues
+
+- **`rmp audit list --help` still says `TASK_STATUS_BACKLOG` carries `null` "from
+  'task stat'"**, which `task stat` can no longer produce, because it can no
+  longer set `BACKLOG` (see **Changed - BREAKING**). A `null` row now
+  comes only from a binary older than `1.18.0` or from the `1.16.0` migration.
+- **`rmp backlog --help` and `rmp backlog list --help` still say no 0-9
+  validation is enforced on `--priority`.** The binary refuses `-p 12` with exit
+  `6`, and `backlog list --help` lists that refusal under its own exit codes.
+- **`1.18.0` does not re-check sprint membership on open.** The `1.16.0` repair
+  runs once. A violation written afterwards by an older binary (see
+  **Downgrading** in the release notes) stays until a membership command touches
+  the task.
+- **`modernc.org/libc` is a later release than `modernc.org/sqlite` requires**
+  (`v1.76.0` against the `v1.75.7` that `modernc.org/sqlite v1.59.0` declares).
+  The project accepts the risk deliberately (`SPEC/BUILD.md § SQLite Driver
+  Rules`).
+- **Graph engine items, unchanged at GoGraph `v0.15.0`:** a failed statement can
+  replace an existing relationship; a list property holding `null` is not stored
+  as written; a property value the engine cannot store is refused with generic
+  text. The release notes list each with its reproduction.
+- **Further items, listed in the release notes:** two more engine hazards that
+  report success (`SPEC/GRAPH.md § What Groadmap Does Not Check`, items 4 and 8),
+  the published field-length line that has no producer at the pinned engine, and
+  the web query bar's `EXPLAIN`/`PROFILE` prefix check, which runs outside the
+  5-second budget.
+
+### Notes
+
+- **Why this is `1.18.0`, and what the number does not tell you.** A strict
+  reading of Semantic Versioning 2.0.0 gives `MAJOR`. The items under **Changed -
+  BREAKING** change exit codes, error lines and command behaviour that `1.17.3`
+  produced, and remove a web endpoint; that is not backward-compatible.
+
+- **The number is the owner's decision, against the strict `2.0.0` reading.** The
+  project publishes `1.18.0` by the owner's explicit decision, recorded here. It
+  follows the same decision taken for `1.17.2` and `1.17.3`, and is the ninth
+  consecutive release published under a smaller digit than the strict reading
+  gives.
+
+  **So do not read the minor digit as a promise that nothing breaks.** Upgrading
+  is safe unless a program of yours parks sprint tasks with `task stat ...
+  BACKLOG`, moves `COMPLETED` tasks between sprints, matches error lines or exit
+  codes listed above, repeats a flag, reads the web task data endpoint, or reaches
+  `rmp web` through another host name or origin.
+
+- **The database migrates forward and is not rolled back.** The first `1.18.0`
+  command on a roadmap raises its schema from `1.14.0` to `1.17.0`. A `1.17.3`
+  binary still opens a `1.17.0` database without refusal, and can write
+  sprint-membership violations into it; the release notes record the measurement.
+
 ## [1.17.3] - 2026-09-18
 
 ### Changed - BREAKING
@@ -3870,6 +4245,7 @@ behaviour.
   AI-contract E2E suite (`tests/test_30_aihelp_contract.py`) to lock in the
   revised help text and contract invariants.
 
+[1.18.0]: https://github.com/FlavioCFOliveira/Groadmap/compare/v1.17.3...v1.18.0
 [1.17.3]: https://github.com/FlavioCFOliveira/Groadmap/compare/v1.17.2...v1.17.3
 [1.17.2]: https://github.com/FlavioCFOliveira/Groadmap/compare/v1.17.1...v1.17.2
 [1.17.1]: https://github.com/FlavioCFOliveira/Groadmap/compare/v1.17.0...v1.17.1

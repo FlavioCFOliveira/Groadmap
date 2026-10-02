@@ -1,6 +1,6 @@
-# JSON shapes and field semantics (binary v1.17.3)
+# JSON shapes and field semantics (binary v1.18.0)
 
-Load this file when inspecting an unfamiliar field in `rmp` output, building a custom view, or verifying exact field names and types. Field lists below were verified against a live v1.17.3 binary.
+Load this file when inspecting an unfamiliar field in `rmp` output, building a custom view, or verifying exact field names and types. Field lists below were verified against a live v1.18.0 binary.
 
 ## Task object
 
@@ -27,7 +27,7 @@ Returned by `task list/get/next/subtasks/blockers/blocking` (as array elements),
 
 > There is **no `specialists` field**. It was removed together with `task assign`/`unassign` and the `-sp` flag.
 
-**`task edit` is a partial update.** The contract publishes defaults for its `--type`/`--priority`/`--severity` flags; they do not apply. An omitted flag leaves the field unchanged (verified at v1.17.3).
+**`task edit` is a partial update.** The contract publishes defaults for its `--type`/`--priority`/`--severity` flags; they do not apply. An omitted flag leaves the field unchanged (verified at v1.18.0).
 
 ## Comment object
 
@@ -56,7 +56,7 @@ Returned by `sprint list` (array) and `sprint get` (single).
 | `description` | ≤ 2048 chars (required at creation) — the sprint's macro objective |
 | `max_tasks` | Capacity cap on **active** tasks (`SPRINT`/`DOING`/`TESTING`); `null` if unset. Freely raised **or lowered** (1–10000); cannot be removed once set |
 | `order` | Execution order: positive integer, unique across the roadmap; auto-assigned to `max+1` when omitted; immutable once CLOSED. The JSON key is `order`, not `order_index` |
-| `tasks` | Array of member task ids in sprint order (`null` when there are none) |
+| `tasks` | Array of member task ids in sprint order (`[]` when there are none) |
 | `task_count` | Convenience count |
 | `created_at` / `started_at` / `closed_at` | ISO 8601 UTC timestamps (`null` until reached) |
 
@@ -88,9 +88,9 @@ The full operation vocabulary — including the four LEGACY operations that only
 ## I/O conventions
 
 - **stdout** — successful output is JSON (may be empty `{}` or `[]`, or empty for modification commands); render as human-readable tables/bullets in the user's language.
-- **stderr** — errors are plain text; surface them verbatim to the user. A failure writes **four lines**: `Error: …`, a blank, the `--ai-help` hint, a blank. With `AI_AGENT=1` the hint is printed first instead, so `Error:` becomes line 3. Extract with `grep '^Error:'`, never by line position, and drop the hint line when quoting. See `cli.md` § *The AI-agent hint*.
+- **stderr** — errors are plain text; surface them verbatim to the user. A failure writes **four lines**: `Error: …`, a blank, the `--ai-help` hint, a blank. With `AI_AGENT=1` the hint is printed first instead and is not repeated, so the failure writes three lines and `Error:` becomes line 3. Extract with `grep '^Error:'`, never by line position, and drop the hint line when quoting. See `cli.md` § *The AI-agent hint*.
 - **Timestamps** — ISO 8601 UTC with milliseconds, suffix `Z`: `2026-05-24T14:30:00.000Z`. Date-range filters (`--since`/`--until`/`--created-since`/`--created-until`) also accept the short `YYYY-MM-DD` form.
-- **Modification commands emit empty stdout** on success — do not parse; check the exit code. Measured empty at v1.17.3: `task stat`, `prio`, `sev`, `reopen`, `edit`, `remove`, `add-dep`, `remove-dep`, `comment-edit`, `comment-remove`, `sprint add-tasks`, `remove-tasks`, `move-tasks`, `update`, `start`, `close`, `reopen`, `remove`, `roadmap remove`.
+- **Modification commands emit empty stdout** on success — do not parse; check the exit code. Measured empty at v1.18.0: `task stat`, `prio`, `sev`, `reopen`, `edit`, `remove`, `add-dep`, `remove-dep`, `comment-edit`, `comment-remove`, `sprint add-tasks`, `remove-tasks`, `move-tasks`, `update`, `start`, `close`, `reopen`, `remove`, `roadmap remove`.
 - **Commands that DO print** — `roadmap create` → `{"name": …}`; `task create`, `sprint create`, `task comment-add`, `sprint comment-add` → `{"id": …}`.
 - **The five sprint ORDERING commands also print**, as their contract entries declare (`object`); only the contract's `parse_modification_stdout` pitfall still says `sprint reorder` prints nothing:
 
@@ -103,12 +103,12 @@ The full operation vocabulary — including the four LEGACY operations that only
   | `sprint swap` | `{"sprint_id": <int>, "success": true, "task_id_1": <int>, "task_id_2": <int>}` |
 
   `success` is always `true` when the exit code is 0, so it carries no information the exit code does not — **still judge the outcome by the exit code**. `position` is 0-based.
-- **stdin fallback** — `comment-add` and `comment-edit` read the body from standard input when `--body` is absent (bounded read). On `comment-edit` this happens only when `--type` is also absent. Neither source on `comment-add` → exit 2.
+- **stdin fallback** — `comment-add` and `comment-edit` read the body from standard input when `--body` is absent (bounded read). On `comment-edit` this happens only when `--type` is also absent; a type-only edit still reads a non-terminal stdin to check that it is empty, and refuses data there (exit 2). Neither source on `comment-add` → exit 2.
 - **Charset / locale** — UTF-8, `C` locale; list separator is `,` (CSV, no spaces).
 
 ## Numeric ranges
 
-- `--priority` / `-p`: 0–9 on create/edit/`task prio`, and as a *filter* (`task list -p`, `backlog list -p`) too: outside 0–9 → exit 6 (measured at v1.17.3, although `backlog list --help` still says any number is accepted).
+- `--priority` / `-p`: 0–9 on create/edit/`task prio`, and as a *filter* (`task list -p`, `backlog list -p`) too: outside 0–9 → exit 6 (measured at v1.18.0, although `backlog list --help` still says any number is accepted).
 - `--severity`: 0–9 (0 = lowest, 9 = most critical).
 - `sprint --max-tasks`: 1–10000 (0 → exit 6). `sprint --order`: ≥ 1.
 - `--limit`: task/backlog 1–100 (default 100; 0 or 101 → exit 6); audit 1–500 (default 100; 600 → exit 6).

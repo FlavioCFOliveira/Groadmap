@@ -82,7 +82,7 @@ That is how one production graph acquired 249 stub `Package` nodes.
 **Why the recipe has this shape — the relationship half of the trap.** Merging
 the whole pattern `(a:L {…})-[:R]->(b:L2 {…})` over nodes that already exist
 creates the relationship **and two fresh copies of its endpoints**, measured on
-rmp 1.17.3 as `nodesCreated: 2` with both keys now held twice. That is why the
+rmp 1.18.0 as `nodesCreated: 2` with both keys now held twice. That is why the
 endpoints are `MATCH`ed and only the relationship is `MERGE`d.
 
 Stamp edge provenance by **re-binding the relationship with an outgoing `MATCH`**,

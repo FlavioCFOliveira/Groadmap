@@ -209,7 +209,7 @@ rmp sprint move-tasks -r <rdm> <from-sid> <to-sid> <ids>   # task status preserv
 rmp sprint tasks -r <rdm> <to-sid>                         # verify — and check the resulting position order
 ```
 
-A `COMPLETED` task cannot be moved (exit 6): it stays in the sprint it was completed in. A move writes two audit rows per task (`SPRINT_MOVE_TASK_OUT` against the source, `SPRINT_MOVE_TASK_IN` against the destination). The legacy single `SPRINT_MOVE_TASK` operation is no longer written. Moved tasks land at the end of the destination's order — reorder if their execution sequence matters.
+A `COMPLETED` task cannot be moved (exit 6): it stays in the sprint it was completed in. A move writes three audit rows per task (`SPRINT_MOVE_TASK_OUT` against the source, `SPRINT_MOVE_TASK_IN` against the destination, and `TASK_SPRINT_CHANGE` against the task, naming the destination). The legacy single `SPRINT_MOVE_TASK` operation is no longer written. Moved tasks land at the end of the destination's order — reorder if their execution sequence matters.
 
 ---
 

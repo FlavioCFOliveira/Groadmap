@@ -4,7 +4,7 @@ Everything this skill may touch on the `rmp` CLI. All other `rmp` commands are
 **out of scope**: `task`, `sprint`, `backlog`, `stats`, `audit` and `roadmap`
 belong to the `roadmap-manager` skill, and `web` to neither skill.
 
-Baseline: **Groadmap v1.17.3**. The binary's own machine-readable contract is
+Baseline: **Groadmap v1.18.0**. The binary's own machine-readable contract is
 `rmp --ai-help`; run it whenever this reference and observed behaviour disagree —
 **the binary is the source of truth**. Setting `AI_AGENT=1` makes every invocation
 print a one-line hint to stderr pointing at `--ai-help`; every failure appends the
@@ -88,9 +88,10 @@ is 120 bytes and this platform allows at most 103. Use --socket to name a
 shorter path.
 ```
 
-**Measured on macOS: 103 bytes. Measured on Linux at 1.17.3: 99 bytes for
-`serve` and 107 for `client`** — the two ends need not agree, so a path that a
-client accepts can still be too long for the server. Believe the message over any
+**Measured on macOS: 103 bytes. Measured on Linux at 1.18.0: 107 bytes for
+`client` and for a `serve` given `--socket`, but 99 bytes for a `serve` on the
+derived default path** — the two ends need not agree, so a path that a client
+accepts can still be too long for the server. Believe the message over any
 remembered number.
 
 ## `client`
@@ -145,7 +146,7 @@ should have matched an existing node is the pattern-`MERGE` duplication trap
 firing — see SKILL.md. Read it on every write.
 
 `DROP INDEX … IF EXISTS` and `DROP CONSTRAINT … IF EXISTS` on an object that does
-not exist return `{"ok":true}` with no counters (measured at 1.17.3).
+not exist return `{"ok":true}` with no counters (measured at 1.18.0).
 
 ### `EXPLAIN` / `PROFILE`
 
@@ -165,7 +166,7 @@ usable index) versus **`NodeByIndexSeek`** (index in use).
 ## Schema DDL — the measured support matrix
 
 `client` runs schema statements and listings like any other. What the engine
-actually accepts was probed directly at 1.17.3; **every unsupported form fails
+actually accepts was probed directly at 1.18.0; **every unsupported form fails
 with exit 1**, most of them with a message naming what is not supported.
 
 ### Indexes

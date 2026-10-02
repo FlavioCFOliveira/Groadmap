@@ -1,4 +1,4 @@
-# `rmp` CLI — full reference (binary v1.17.3)
+# `rmp` CLI — full reference (binary v1.18.0)
 
 Load this file when invoking a command not covered by the cheat-sheet in `SKILL.md`, or when you need exact flag semantics. The binary's own `rmp --ai-help` emits the canonical machine-readable JSON contract — prefer it whenever in doubt about a flag, an enum, or an exit code.
 
@@ -31,12 +31,12 @@ The contract exposes `schema_version` (2.0.0), `tool`, `conventions`, `exit_code
 
 ### The AI-agent hint, and how to read stderr
 
-The hint line is ``AI agents usage: run `rmp --ai-help` for a machine-readable command contract.`` Its placement was measured at v1.17.3:
+The hint line is ``AI agents usage: run `rmp --ai-help` for a machine-readable command contract.`` Its placement was measured at v1.18.0:
 
 | `AI_AGENT` | stderr on failure | stderr on success |
 |---|---|---|
 | unset, or any value other than `1` | `Error: …` · blank · hint · blank | *empty* (0 bytes) |
-| `1` | hint · blank · `Error: …` · blank | hint · blank |
+| `1` | hint · blank · `Error: …` | hint · blank |
 
 So the hint is appended on **every failure regardless of `AI_AGENT`**, and `AI_AGENT=1` additionally prints it *before* every invocation — which pushes the `Error:` line to line 3. The contract documents only the `enable_value: "1"` half of this.
 
@@ -48,7 +48,7 @@ rmp <cmd> … 2>&1 | tail -1                      # WRONG — a blank line
 rmp <cmd> … 2>&1 | head -1                      # WRONG under AI_AGENT=1 — the hint
 ```
 
-### Divergences between the contract and the binary (measured v1.17.3)
+### Divergences between the contract and the binary (measured v1.18.0)
 
 **The binary wins.** Three contract statements are contradicted by it:
 
@@ -124,7 +124,7 @@ rmp task create -r <rdm> \
 
 `--parent` sets `parent_task_id` and bumps the parent's `subtask_count`. It does **not** set `-y SUB_TASK` — pass the type explicitly if you want it.
 
-> **Text-field parsing trap — a value must never start with `- `.** The CLI reads the leading hyphen as the next flag and aborts with `Error: required parameter missing: <flag> requires a value` (exit 2). Re-verified at v1.17.3 on `-t`/`--title`, `-fr`, `-tr`, `-ac` and sprint `-d`/`--description`, in both short and long forms; quoting does not help, because the check happens after the shell has passed the argument. `--summary` and comment `--body` tolerate it, but **use `*` for every bullet uniformly** so the rule needs no exceptions. Markdown otherwise round-trips byte-exact: `**bold**`, `` `code` ``, `*` lists, `###` headings and blank lines are all stored and returned unchanged. Content style is governed by the Writing rules in `SKILL.md`.
+> **Text-field parsing trap — a value must never start with `- `.** The CLI reads the leading hyphen as the next flag and aborts with `Error: required parameter missing: <flag> requires a value` (exit 2). Re-verified at v1.18.0 on `-t`/`--title`, `-fr`, `-tr`, `-ac` and sprint `-d`/`--description`, in both short and long forms; quoting does not help, because the check happens after the shell has passed the argument. `--summary` and comment `--body` tolerate it, but **use `*` for every bullet uniformly** so the rule needs no exceptions. Markdown otherwise round-trips byte-exact: `**bold**`, `` `code` ``, `*` lists, `###` headings and blank lines are all stored and returned unchanged. Content style is governed by the Writing rules in `SKILL.md`.
 
 ### Edit (status NOT editable here — use `task stat`)
 
@@ -134,7 +134,7 @@ rmp task edit <id> -r <rdm> [-t ...] [-fr ...] [-tr ...] [-ac ...] [-y ...] [-p 
 
 Each supplied field writes its own audit row (`TASK_TITLE_CHANGE`, `TASK_PRIORITY_CHANGE`, …). An invocation with no option succeeds as a no-op (exit 0).
 
-**A partial update, despite what the contract says.** `rmp --ai-help` publishes defaults for `task edit` (`--type TASK`, `--priority 0`, `--severity 0`); they do **not** apply. An omitted flag leaves the field untouched — verified at v1.17.3: editing only `-t` on a `BUG` with priority 1 and severity 8 left all three unchanged. Never pass a field "to keep it", and never read those defaults as a reset. Pair every content edit with an `UPDATE` comment saying why the definition changed.
+**A partial update, despite what the contract says.** `rmp --ai-help` publishes defaults for `task edit` (`--type TASK`, `--priority 0`, `--severity 0`); they do **not** apply. An omitted flag leaves the field untouched — verified at v1.18.0: editing only `-t` on a `BUG` with priority 1 and severity 8 left all three unchanged. Never pass a field "to keep it", and never read those defaults as a reset. Pair every content edit with an `UPDATE` comment saying why the definition changed.
 
 ### Status & lifecycle — the two commit-gated transitions
 
@@ -151,7 +151,7 @@ rmp task sev  <ids> <0-9> -r <rdm>            # set severity for one or many
 - One hash applies to every id of a multi-id invocation.
 - `--commit-open` on any target other than `DOING`, or `--commit-close` on any target other than `COMPLETED`, → exit 6.
 - `reopen` **preserves `commit_open`**; a later `stat DOING --commit-open <hash>` replaces it. No command ever clears it.
-- `reopen` keeps the task in its sprint and at its position. Ids already in `SPRINT` or `BACKLOG` are skipped with a note on stderr; a task whose sprint is `CLOSED` is refused (exit 6) — `sprint reopen` first.
+- `reopen` keeps the task in its sprint and at its position. Ids already in `SPRINT` or `BACKLOG` are skipped with a note on stderr; a task whose sprint is `CLOSED` is refused (exit 6) — `sprint reopen` first. A reopened `COMPLETED` task counts against `--max-tasks` again: a reopen that would exceed the cap is refused (exit 6) and changes nothing.
 - `SPRINT` is rejected on `task stat` (exit 6) — only `sprint add-tasks` and `task reopen` set it. `BACKLOG` is rejected on `task stat` for every sprint member, `COMPLETED` included (exit 6). `BACKLOG → DOING` is rejected too: a task must be in a sprint first.
 - Completing is gated on all subtasks and dependencies being `COMPLETED` (exit 6 otherwise).
 
@@ -170,7 +170,7 @@ Each writes two audit rows, one against each task of the pair, each naming the o
 rmp task remove <ids> -r <rdm>
 ```
 
-Rejected (exit 6) if any id is not `BACKLOG`, or if any id still has subtasks — of **any** status, `COMPLETED` included (measured at v1.17.3). A sprint member leaves its sprint with `sprint remove-tasks` first; a `COMPLETED` member must be returned to `SPRINT` with `task reopen` before that.
+Rejected (exit 6) if any id is not `BACKLOG`, or if any id still has subtasks — of **any** status, `COMPLETED` included (measured at v1.18.0). A sprint member leaves its sprint with `sprint remove-tasks` first; a `COMPLETED` member must be returned to `SPRINT` with `task reopen` before that.
 
 **Task object keys:** `id, title, status, type, functional_requirements, technical_requirements, acceptance_criteria, created_at, started_at, tested_at, closed_at, completion_summary, commit_open, commit_close, parent_task_id, priority, severity, subtask_count, depends_on, blocks`.
 
@@ -199,7 +199,7 @@ Semantics that matter:
 - **`-y`/`--type` here means a COMMENT type**, not the `TaskType` the same spelling carries on `task list/create/edit`. Passing `BUG` → exit 6.
 - **`HYPOTHESIS`, `TEST` and `NOTE` are task-only.** On a sprint comment → exit 6. A sprint comment records how the *sprint* went, not the diary of one task.
 - **`--type` is required on `comment-add`**, optional as a filter on `comment-list`, and optional on `comment-edit`.
-- **`--body` falls back to stdin.** Omit it and the body is read from standard input under a bounded read (max 4096 chars). Neither source → exit 2. On `comment-edit`, stdin is read only when **both** `--type` and `--body` are absent, so a type-only edit never blocks on input.
+- **`--body` falls back to stdin.** Omit it and the body is read from standard input under a bounded read (max 4096 chars). Neither source → exit 2. On `comment-edit`, stdin is the new body only when **both** `--type` and `--body` are absent. A type-only edit never reads a terminal, but it reads a piped or redirected stdin to check that it is empty: data there is refused (exit 2), and a pipe that never closes keeps it waiting — give it `</dev/null` in scripts.
 - **`comment-edit` requires a type or a body** — from `--type`, `--body`, or stdin. With neither flag and empty stdin it fails with exit 2; unlike `task edit`, it does not succeed as a no-op. With neither flag it **waits on stdin**, so never run it bare from a terminal.
 - **The positional id on `comment-edit`/`comment-remove` is the COMMENT's own id**, returned by `comment-add`, not the parent task's or sprint's id. Task and sprint comment ids are separate sequences.
 - **`comment-remove` accepts exactly one id** — no CSV.
@@ -294,9 +294,9 @@ rmp sprint bottom       <sid> <task> -r <rdm>       # move to last position
 
 Default ordering everywhere is **sprint position ascending**; `--order-by-priority` re-sorts by priority DESC (priority is 0 lowest … 9 highest). Position — not priority — is what `task next` follows.
 
-**The five ordering commands print JSON on success**, unlike every other mutation: `reorder` → `{"sprint_id", "success", "task_order"}`; `move-to`/`top`/`bottom` → `{"position", "sprint_id", "success", "task_id"}`; `swap` → `{"sprint_id", "success", "task_id_1", "task_id_2"}`. `add-tasks`, `remove-tasks` and `move-tasks` print nothing. The contract's subcommand entries declare exactly this; only its `parse_modification_stdout` pitfall still claims `sprint reorder` prints nothing — see [Divergences](#divergences-between-the-contract-and-the-binary-measured-v1173). Judge success by the exit code regardless.
+**The five ordering commands print JSON on success**, unlike every other mutation: `reorder` → `{"sprint_id", "success", "task_order"}`; `move-to`/`top`/`bottom` → `{"position", "sprint_id", "success", "task_id"}`; `swap` → `{"sprint_id", "success", "task_id_1", "task_id_2"}`. `add-tasks`, `remove-tasks` and `move-tasks` print nothing. The contract's subcommand entries declare exactly this; only its `parse_modification_stdout` pitfall still claims `sprint reorder` prints nothing — see [Divergences](#divergences-between-the-contract-and-the-binary-measured-v1180). Judge success by the exit code regardless.
 
-**Sprint object keys:** `id, status, title, description, created_at, started_at, closed_at, max_tasks, tasks (array of int, may be null), task_count, order`.
+**Sprint object keys:** `id, status, title, description, created_at, started_at, closed_at, max_tasks, tasks (array of int, empty when the sprint has none), task_count, order`.
 
 ---
 
@@ -335,7 +335,7 @@ rmp audit stats    -r <rdm> [--since <date>] [--until <date>]
 
 **Valid `-o` operations (current set).** Filters compose with AND; entries are newest first.
 
-- **Task lifecycle:** `TASK_CREATE`, `TASK_DELETE`, `TASK_REOPEN`, `TASK_SPRINT_CHANGE` (a task taken by `sprint add-tasks` from another sprint)
+- **Task lifecycle:** `TASK_CREATE`, `TASK_DELETE`, `TASK_REOPEN`, `TASK_SPRINT_CHANGE` (a task that changed sprint and kept its status: `sprint move-tasks`, or `sprint add-tasks` taking it from another sprint; it names the sprint entered)
 - **Task status (one per target status — there is no single "status change" op):** `TASK_STATUS_BACKLOG`, `TASK_STATUS_SPRINT`, `TASK_STATUS_DOING`, `TASK_STATUS_TESTING`, `TASK_STATUS_COMPLETED`
 - **Task field edits (one per field):** `TASK_TITLE_CHANGE`, `TASK_TYPE_CHANGE`, `TASK_FUNCTIONAL_REQUIREMENTS_CHANGE`, `TASK_TECHNICAL_REQUIREMENTS_CHANGE`, `TASK_ACCEPTANCE_CRITERIA_CHANGE`, `TASK_PRIORITY_CHANGE`, `TASK_SEVERITY_CHANGE`
 - **Task dependencies:** `TASK_ADD_DEP`, `TASK_REMOVE_DEP`
@@ -349,7 +349,7 @@ rmp audit stats    -r <rdm> [--since <date>] [--until <date>]
 Notable row semantics:
 
 - `TASK_STATUS_DOING` carries the `--commit-open` hash in `commit_hash`; `TASK_STATUS_COMPLETED` carries `--commit-close`. All other rows have `commit_hash: null`.
-- `TASK_STATUS_BACKLOG` from `sprint remove-tasks` names the departed sprint in `related_entity_id`; from `task stat BACKLOG` it is `null`.
+- `TASK_STATUS_BACKLOG` from `sprint remove-tasks` names the departed sprint in `related_entity_id`. `task stat BACKLOG` no longer writes it — it is refused for every sprint member, and a `BACKLOG` task cannot be set to `BACKLOG` again — so a row with a `null` `related_entity_id` was written by an older binary.
 - `task reopen` writes `TASK_REOPEN` **alone** — no `TASK_STATUS_SPRINT` row.
 - `TASK_ADD_DEP`/`TASK_REMOVE_DEP` write two rows, one per task of the pair, each naming the other.
 - Comment rows are logged against the **parent** task/sprint; the comment's own id is never recorded.
@@ -434,12 +434,12 @@ Two further comment-specific traps, documented in the contract under the same he
 
 ### Two further traps, not in the contract
 
-Found empirically, reproduced at v1.17.3, and absent from `rmp --ai-help`:
+Found empirically, reproduced at v1.18.0, and absent from `rmp --ai-help`:
 
 | Pitfall | Wrong | Correct |
 |---|---|---|
 | **A text field whose value starts with `- `** is read as the next flag → exit 2 `requires a value`. Hits `-t`/`--title`, `-fr`, `-tr`, `-ac`, sprint `-d`/`--description`, short and long forms alike; quoting does not help. (`--summary` and comment `--body` tolerate it.) | `rmp task create … -fr "- observed: X"` | `rmp task create … -fr "* observed: X"` |
-| **Reading the error off the wrong stderr line.** A failure writes four lines and the `Error:` line is first only when `AI_AGENT` is not `1` — see [The AI-agent hint](#the-ai-agent-hint-and-how-to-read-stderr). | `rmp task get -r rdm 9999 2>&1 \| tail -1` | `rmp task get -r rdm 9999 2>&1 >/dev/null \| grep '^Error:'` |
+| **Reading the error off the wrong stderr line.** A failure writes four lines (three under `AI_AGENT=1`) and the `Error:` line is first only when `AI_AGENT` is not `1` — see [The AI-agent hint](#the-ai-agent-hint-and-how-to-read-stderr). | `rmp task get -r rdm 9999 2>&1 \| tail -1` | `rmp task get -r rdm 9999 2>&1 >/dev/null \| grep '^Error:'` |
 
 Always echo the exit code after a create or edit: a bare `\| tail -2` swallows the error line and makes a failed create look like a success.
 

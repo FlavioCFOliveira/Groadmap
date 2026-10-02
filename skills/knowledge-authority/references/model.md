@@ -137,7 +137,7 @@ say so on the entry, before proposing `IS NOT NULL`.
 **The engine's index is single-property, node-only, and hash — therefore
 equality-only.** A range predicate (`>`, `<`) ignores it and falls back to a label
 scan. A `btree` index can be declared (`OPTIONS {indexType:'btree'}`), but
-measured at rmp 1.17.3 the planner used it for neither an equality nor a range
+measured at rmp 1.18.0 the planner used it for neither an equality nor a range
 lookup, so recommend the default hash index. So an index is worth recommending exactly where the skill issues an
 **equality lookup on one property**, which is what every identity lookup in
 `references/cypher.md` is.
