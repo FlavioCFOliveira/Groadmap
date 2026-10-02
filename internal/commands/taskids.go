@@ -1,6 +1,9 @@
 package commands
 
-import "github.com/FlavioCFOliveira/Groadmap/internal/models"
+import (
+	"github.com/FlavioCFOliveira/Groadmap/internal/db"
+	"github.com/FlavioCFOliveira/Groadmap/internal/models"
+)
 
 // taskIDsOf projects a task slice onto its ids, which is what the id-list
 // helpers in internal/utils compare against.
@@ -15,4 +18,53 @@ func taskIDsOf(tasks []models.Task) []int {
 		ids[i] = tasks[i].ID
 	}
 	return ids
+}
+
+// taskStateIDsOf projects a slice of lean task projections onto its ids, for
+// the same id-list helpers taskIDsOf serves.
+func taskStateIDsOf(states []db.TaskState) []int {
+	ids := make([]int, len(states))
+	for i := range states {
+		ids[i] = states[i].ID
+	}
+	return ids
+}
+
+// taskSprintStateIDsOf returns the id of each task sprint state, in the order
+// the read returned them.
+func taskSprintStateIDsOf(states []db.TaskSprintState) []int {
+	ids := make([]int, len(states))
+	for i := range states {
+		ids[i] = states[i].ID
+	}
+	return ids
+}
+
+// taskSprintStatesByID indexes the task sprint states by task id, so a caller
+// can walk the ids in the order the command line supplied them.
+func taskSprintStatesByID(states []db.TaskSprintState) map[int]db.TaskSprintState {
+	byID := make(map[int]db.TaskSprintState, len(states))
+	for _, st := range states {
+		byID[st.ID] = st
+	}
+	return byID
+}
+
+// tasksOfStates renders the member read of a sprint as the task values the
+// sprint report calculators take (models.CalculateSprintStats,
+// models.CalculateSprintShowResult and models.CalculateSprintBurndown). Those
+// calculators read a task's ID, Status, Severity and ClosedAt and nothing else,
+// which are exactly the columns the member read carries, so the report computed
+// from these values is the one the full rows would produce
+// (SPEC/IMPLEMENTATION.md, "Read only the columns the caller uses"). The values
+// are for those calculators only: every other field is its zero value.
+func tasksOfStates(states []db.SprintMemberState) []models.Task {
+	tasks := make([]models.Task, len(states))
+	for i := range states {
+		tasks[i] = models.Task{ID: states[i].ID, Status: states[i].Status, Severity: states[i].Severity}
+		if states[i].ClosedAt.Valid {
+			tasks[i].ClosedAt = &states[i].ClosedAt.String
+		}
+	}
+	return tasks
 }

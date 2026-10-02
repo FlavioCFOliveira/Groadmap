@@ -341,11 +341,16 @@ class TestCommitTracking:
             assert self._commits(task_id) == (OPEN_FIRST, CLOSE_HASH)
         print("✓ every task of a batch receives the same supplied hash")
 
-    # -- 11 to 14: the asymmetric clearing, all four routes ----------------
+    # -- 11 to 14: the asymmetric clearing, the three routes ---------------
+    #
+    # `task reopen` returns the task to SPRINT in its sprint; `sprint remove-tasks`
+    # and `sprint remove` return it to BACKLOG. `task stat <ids> BACKLOG` is no
+    # route at all: it is refused for every sprint member and clears nothing
+    # (SPEC/STATE_MACHINE.md § Commit Tracking Fields, rules 4 and 5).
 
-    def _assert_cleared_asymmetrically(self, task_id: int, route: str):
+    def _assert_cleared_asymmetrically(self, task_id: int, route: str, status: str = "BACKLOG"):
         task = self._task(task_id)
-        assert task["status"] == "BACKLOG", f"{route}: status {task['status']}, want BACKLOG"
+        assert task["status"] == status, f"{route}: status {task['status']}, want {status}"
         assert task["commit_close"] is None, (
             f"{route}: commit_close = {task['commit_close']!r}, want null; every return to "
             "BACKLOG clears it (SPEC/STATE_MACHINE.md § Commit Tracking Fields, rule 4)"
@@ -363,9 +368,12 @@ class TestCommitTracking:
         self._start_sprint()
         self._walk_to_completed(task_id)
 
-        self._stat(str(task_id), "BACKLOG")
-        self._assert_cleared_asymmetrically(task_id, "task stat <id> BACKLOG")
-        print("✓ task stat BACKLOG clears commit_close and preserves commit_open")
+        before = self._task(task_id)
+        exit_code, _, stderr = self._stat(str(task_id), "BACKLOG", check=False)
+        assert exit_code == EXIT_INVALID, f"task stat BACKLOG on a COMPLETED member: exit {exit_code}: {stderr}"
+        assert self._task(task_id) == before, "the refused `task stat <id> BACKLOG` changed the task"
+        assert before["commit_close"] == CLOSE_HASH and before["commit_open"] == OPEN_FIRST, before
+        print("✓ task stat BACKLOG is refused for a COMPLETED member and clears neither commit field")
 
     def test_task_reopen_clears_only_commit_close(self):
         completed = self._new_task("Re-run the migration on the replica")
@@ -375,8 +383,8 @@ class TestCommitTracking:
         self._stat(str(doing), "DOING", "--commit-open", OPEN_FIRST)
 
         self.test.run_cmd(["task", "reopen", "-r", self.roadmap, f"{completed},{doing}"])
-        self._assert_cleared_asymmetrically(completed, "task reopen (from COMPLETED)")
-        self._assert_cleared_asymmetrically(doing, "task reopen (from DOING)")
+        self._assert_cleared_asymmetrically(completed, "task reopen (from COMPLETED)", status="SPRINT")
+        self._assert_cleared_asymmetrically(doing, "task reopen (from DOING)", status="SPRINT")
         print("✓ task reopen clears commit_close and preserves commit_open")
 
     def test_sprint_remove_tasks_clears_only_commit_close(self):
@@ -387,11 +395,14 @@ class TestCommitTracking:
         self._stat(str(testing), "DOING", "--commit-open", OPEN_FIRST)
         self._stat(str(testing), "TESTING")
 
+        # A COMPLETED task is refused by `sprint remove-tasks`: it is first
+        # returned to SPRINT with `task reopen`, the route the SPEC prescribes.
+        self.test.run_cmd(["task", "reopen", "-r", self.roadmap, str(completed)])
         self.test.run_cmd([
             "sprint", "remove-tasks", "-r", self.roadmap, str(self.sprint_id),
             f"{completed},{testing}",
         ])
-        self._assert_cleared_asymmetrically(completed, "sprint remove-tasks (from COMPLETED)")
+        self._assert_cleared_asymmetrically(completed, "sprint remove-tasks (reopened from COMPLETED)")
         self._assert_cleared_asymmetrically(testing, "sprint remove-tasks (from TESTING)")
         print("✓ sprint remove-tasks clears commit_close and preserves commit_open")
 
@@ -405,8 +416,15 @@ class TestCommitTracking:
         self._stat(str(testing), "TESTING")
         self._stat(str(doing), "DOING", "--commit-open", OPEN_FIRST)
 
+        # A sprint holding a COMPLETED task is not removed; the task is
+        # reopened first, the route the SPEC prescribes.
+        exit_code, _, stderr = self.test.run_cmd(
+            ["sprint", "remove", "-r", self.roadmap, str(self.sprint_id)], check=False)
+        assert exit_code == EXIT_INVALID, f"sprint remove with a COMPLETED member: exit {exit_code}: {stderr}"
+        self.test.run_cmd(["task", "reopen", "-r", self.roadmap, str(completed)])
+
         self.test.run_cmd(["sprint", "remove", "-r", self.roadmap, str(self.sprint_id)])
-        self._assert_cleared_asymmetrically(completed, "sprint remove (from COMPLETED)")
+        self._assert_cleared_asymmetrically(completed, "sprint remove (reopened from COMPLETED)")
         self._assert_cleared_asymmetrically(testing, "sprint remove (from TESTING)")
         self._assert_cleared_asymmetrically(doing, "sprint remove (from DOING)")
         print("✓ sprint remove clears commit_close and preserves commit_open")
@@ -417,8 +435,8 @@ class TestCommitTracking:
         eligible = [self._new_task(f"Encrypt the token column, step {i}") for i in (1, 2, 3)]
         ineligible = self._new_task("Draft the compliance sign-off note")
         self._start_sprint()
-        # Send the fourth task back to BACKLOG, from where DOING is refused.
-        self._stat(str(ineligible), "BACKLOG")
+        # Walk the fourth task to COMPLETED, from where DOING is refused.
+        self._walk_to_completed(ineligible)
 
         every_id = eligible + [ineligible]
         csv_eligible = ",".join(str(i) for i in eligible)

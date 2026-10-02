@@ -20,10 +20,13 @@
 package graphserve
 
 import (
+	"os"
+	"os/exec"
 	"regexp"
 	"strings"
 	"testing"
 	"time"
+	_ "time/tzdata" // makes loggerZoneChildTZ resolvable where no system zoneinfo exists
 )
 
 // canonicalStamp is the shape SPEC/DATA_FORMATS.md § Dates - ISO 8601 with UTC
@@ -34,12 +37,76 @@ var canonicalStamp = regexp.MustCompile(`^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\
 // recordStamp extracts the value of a record's leading time attribute.
 var recordStamp = regexp.MustCompile(`^time=(\S+) `)
 
+// loggerZoneChildEnv, when set, makes a test that calls runInFixedZone run its
+// body instead of spawning a child. runInFixedZone sets it, together with
+// loggerZoneChildTZ, on the re-executed test binary and on nothing else.
+const loggerZoneChildEnv = "GROADMAP_GRAPHSERVE_TEST_LOGGER_ZONE_CHILD"
+
+// loggerZoneChildTZ is the child's TZ: a fixed +09:00 zone with no daylight
+// saving, resolvable on any machine because this file links time/tzdata.
+const loggerZoneChildTZ = "Asia/Tokyo"
+
+// runInFixedZone runs body in a child process whose local zone is
+// loggerZoneChildTZ, and fails t unless the child ran t's test and passed it.
+//
+// # Why a child process
+//
+// The local zone is the process-wide time.Local, which every goroutine reads
+// through time.Now. Assigning it inside the test binary races with any
+// goroutine a previous test left running — the engine's vacuum loop reads it on
+// every tick — and the race detector fails the run (rmp task #573). The zone is
+// therefore set the only race-free way: through TZ, read once at the start of a
+// fresh process. The parent re-executes this test binary with TZ set,
+// restricted to the calling test, and requires that the child both passed and
+// actually ran it, so a child that selected no test cannot pass vacuously.
+//
+// In the child, body runs only after the local offset is confirmed to be
+// +09:00: were TZ ignored or unresolvable, Go would fall back to UTC and every
+// assertion about the zone would pass vacuously.
+func runInFixedZone(t *testing.T, body func(t *testing.T)) {
+	t.Helper()
+	if os.Getenv(loggerZoneChildEnv) != "" {
+		if offset := time.Now().Format("-07:00"); offset != "+09:00" {
+			t.Fatalf("the child's local offset is %s, want +09:00 from TZ=%s; the test would be vacuous",
+				offset, loggerZoneChildTZ)
+		}
+		body(t)
+		return
+	}
+
+	self, err := os.Executable()
+	if err != nil {
+		t.Fatalf("locating the test binary: %v", err)
+	}
+	name := t.Name()
+	child := exec.Command(self, "-test.run=^"+regexp.QuoteMeta(name)+"$", "-test.count=1", "-test.v")
+	env := make([]string, 0, len(os.Environ())+2)
+	for _, kv := range os.Environ() {
+		if strings.HasPrefix(kv, "TZ=") || strings.HasPrefix(kv, loggerZoneChildEnv+"=") ||
+			strings.HasPrefix(kv, childRoleEnv+"=") {
+			continue
+		}
+		env = append(env, kv)
+	}
+	env = append(env, "TZ="+loggerZoneChildTZ, loggerZoneChildEnv+"=1")
+	child.Env = env
+
+	output, err := child.CombinedOutput()
+	if err != nil {
+		t.Fatalf("the child run under TZ=%s failed: %v\nchild output:\n%s", loggerZoneChildTZ, err, output)
+	}
+	if !strings.Contains(string(output), "--- PASS: "+name+" ") {
+		t.Fatalf("the child exited 0 without passing %s, so it asserted nothing\nchild output:\n%s",
+			name, output)
+	}
+}
+
 // TestLogger_TimestampIsCanonicalUTC pins the timestamp against BOTH halves of
 // the rule: the SHAPE, and the INSTANT.
 //
-// The distinction is the whole point. time.Local is forced to a fixed +09:00
-// zone first, so that: a handler with no hook at all emits `+09:00` and fails
-// the shape; and a hook that REFORMATTED the local reading rather than
+// The distinction is the whole point. The local zone is a fixed +09:00 zone
+// (runInFixedZone), so that: a handler with no hook at all emits `+09:00` and
+// fails the shape; and a hook that REFORMATTED the local reading rather than
 // converting it would pass the shape while being nine hours wrong, which only
 // the instant check catches. Checking one without the other would admit one of
 // the two mistakes.
@@ -48,9 +115,14 @@ var recordStamp = regexp.MustCompile(`^time=(\S+) `)
 // (TestLogTimestampIsCanonicalUTC), because the point of task #386 is that the
 // two long-lived surfaces answer this question identically.
 func TestLogger_TimestampIsCanonicalUTC(t *testing.T) {
-	savedLocal := time.Local
-	time.Local = time.FixedZone("TEST+09", 9*60*60)
-	t.Cleanup(func() { time.Local = savedLocal })
+	runInFixedZone(t, assertLoggerTimestampIsCanonicalUTC)
+}
+
+// assertLoggerTimestampIsCanonicalUTC is the body of
+// TestLogger_TimestampIsCanonicalUTC, run only in the child whose local zone is
+// loggerZoneChildTZ.
+func assertLoggerTimestampIsCanonicalUTC(t *testing.T) {
+	t.Helper()
 
 	var captured syncBuffer
 	probe := newLogger(&captured)
@@ -100,12 +172,18 @@ func TestLogger_TimestampIsCanonicalUTC(t *testing.T) {
 // and the reason "scope the rule to rmp's own emissions" was not the cheap
 // option it looked like.
 //
-// The local zone is forced for the same reason as above: without it a machine
-// already running in UTC would pass this test whether or not the hook exists.
+// The local zone is fixed for the same reason as above, and by the same
+// race-free method (runInFixedZone): without it a machine already running in
+// UTC would pass this test whether or not the hook exists.
 func TestLogger_TheEnginesStartupWarningsAreStampedByThisPackage(t *testing.T) {
-	savedLocal := time.Local
-	time.Local = time.FixedZone("TEST+09", 9*60*60)
-	t.Cleanup(func() { time.Local = savedLocal })
+	runInFixedZone(t, assertEnginesStartupWarningsAreStampedByThisPackage)
+}
+
+// assertEnginesStartupWarningsAreStampedByThisPackage is the body of
+// TestLogger_TheEnginesStartupWarningsAreStampedByThisPackage, run only in the
+// child whose local zone is loggerZoneChildTZ.
+func assertEnginesStartupWarningsAreStampedByThisPackage(t *testing.T) {
+	t.Helper()
 
 	var captured syncBuffer
 	_, _, stop := startRealServerLogging(t, productionCadence(), newLogger(&captured))

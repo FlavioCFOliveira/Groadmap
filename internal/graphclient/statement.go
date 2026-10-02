@@ -46,6 +46,7 @@ import (
 	"math"
 	"net"
 	"os"
+	"sync/atomic"
 	"time"
 
 	"github.com/FlavioCFOliveira/GoGraph/bolt/packstream"
@@ -381,6 +382,40 @@ func sendOnce(ctx context.Context, socketPath, statement string) (*Result, error
 		}
 	}
 
+	// **A caller that cancels stops the statement, not merely its wait for the
+	// answer.** The deadline above ends the wait, and it leaves the connection
+	// intact on purpose (see transportFailure). A cancellation is different: the
+	// caller has gone — a browser that disconnected from the web endpoint — and a
+	// connection left open would let the server run the statement to its end and
+	// commit it for nobody, which is what rmp task #563 observed: a write
+	// cancelled half a second in was committed seconds later. The server cancels a
+	// statement whose connection closes, so closing it is how the cancellation
+	// crosses the protocol (SPEC/WEB.md § Graph Query Time Budget, rule 2).
+	//
+	// Only a cancellation closes it. ctx is Send's derived context, so it reports
+	// Canceled when the caller's context was cancelled and DeadlineExceeded when a
+	// deadline fired; the second keeps its own classification, FailureUnanswered,
+	// which a closed connection would turn into FailureLost (SPEC/GRAPH.md
+	// § Server Resolution, rule 7).
+	var cancelled atomic.Bool
+	stopWatching := context.AfterFunc(ctx, func() {
+		if errors.Is(ctx.Err(), context.Canceled) {
+			cancelled.Store(true)
+			_ = conn.Close() //nolint:errcheck // closing is the whole purpose; the read it interrupts reports the outcome
+		}
+	})
+	defer stopWatching()
+
+	result, err := runExchange(ctx, conn, socketPath, statement)
+	if err != nil && cancelled.Load() {
+		return nil, cancelledFailure(err, ctx.Err())
+	}
+	return result, err
+}
+
+// runExchange runs one connection's Bolt exchange: handshake, authentication, and
+// the statement.
+func runExchange(ctx context.Context, conn net.Conn, socketPath, statement string) (*Result, error) {
 	s := &session{
 		socket: socketPath,
 		conn:   conn,
@@ -396,6 +431,23 @@ func sendOnce(ctx context.Context, socketPath, statement string) (*Result, error
 		return nil, err
 	}
 	return s.run(ctx, statement)
+}
+
+// cancelledFailure restates a failure the caller's cancellation caused, so its
+// cause says so: the transport observation alone reads as a server that closed
+// the connection, when it was this side that closed it. The kind is kept — a
+// statement that had been sent is still one whose outcome is unknown, because it
+// may have committed before the close reached the server — and the cancellation
+// is matchable with errors.Is.
+func cancelledFailure(err, cancellation error) error {
+	var sendErr *SendError
+	if !errors.As(err, &sendErr) {
+		return err
+	}
+	restated := *sendErr
+	restated.Cause = fmt.Errorf("the caller cancelled the statement: %w", errors.Join(cancellation, sendErr.Cause))
+	restated.retriable = false
+	return &restated
 }
 
 // session is one connection's client half of the Bolt exchange.

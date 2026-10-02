@@ -97,6 +97,25 @@ func startRealServerLogging(tb testing.TB, cadence checkpointCadence, log *slog.
 	if err := os.MkdirAll(graphDir, 0700); err != nil {
 		tb.Fatalf("creating %s: %v", graphDir, err)
 	}
+	served := startRealServerOver(tb, graphDir, filepath.Join(root, "graph.sock"), cadence, log)
+	return served.socket, graphDir, served.stop
+}
+
+// realServer is one server [startRealServerOver] assembled: the socket it
+// answers on, the closer [build] returned — which is where a test reaches the
+// in-flight fold's counters — and the teardown.
+type realServer struct {
+	closer *shutdownCloser
+	stop   func()
+	socket string
+}
+
+// startRealServerOver is [startRealServerLogging] over a graph directory the
+// caller supplies, which may already hold a store: a test of what a server does
+// to a store it did not create — one another server folded, or one a killed
+// server left a tail in — needs exactly that. The directory must exist.
+func startRealServerOver(tb testing.TB, graphDir, socket string, cadence checkpointCadence, log *slog.Logger) realServer {
+	tb.Helper()
 
 	hold, err := graphstore.Acquire(graphDir)
 	if err != nil {
@@ -107,12 +126,11 @@ func startRealServerLogging(tb testing.TB, cadence checkpointCadence, log *slog.
 		tb.Fatalf("opening the graph store: %v", err)
 	}
 
-	closer, srv, err := build(st, graphDir, cadence, log)
+	closer, srv, err := build(st, graphDir, cadence, log, nil)
 	if err != nil {
 		tb.Fatalf("building the server: %v", err)
 	}
 
-	socket = filepath.Join(root, "graph.sock")
 	ln, err := bind(socket)
 	if err != nil {
 		tb.Fatalf("binding %s: %v", socket, err)
@@ -125,8 +143,13 @@ func startRealServerLogging(tb testing.TB, cadence checkpointCadence, log *slog.
 	// statement is not racing the accept loop.
 	waitUntilServed(tb, socket)
 
-	return socket, graphDir, func() {
-		teardown(tb, srv, ln, st, closer, serveErr)
+	var once sync.Once
+	return realServer{
+		closer: closer,
+		socket: socket,
+		stop: func() {
+			once.Do(func() { teardown(tb, srv, ln, st, closer, serveErr) })
+		},
 	}
 }
 

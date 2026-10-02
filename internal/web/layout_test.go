@@ -22,6 +22,7 @@ var vendoredAssets = []string{
 	"static/vendor/tabler-icons/fonts/tabler-icons.woff2",
 	"static/vendor/inter/inter.css",
 	"static/vendor/inter/files/inter-latin-wght-normal.woff2",
+	"static/vendor/inter/files/inter-latin-wght-italic.woff2",
 	"static/vendor/d3/d3.min.js",
 	"static/vendor/d3/d3-sankey.min.js",
 	"static/graph.js",
@@ -129,13 +130,13 @@ func TestPages_AdminShellMarkup(t *testing.T) {
 	for _, path := range pagePaths(name) {
 		body := servePage(t, mux, path)
 		for _, marker := range []string{
-			"navbar-vertical",   // Tabler vertical sidebar
-			"page-wrapper",      // admin-shell content wrapper
-			"page-header",       // per-page header
-			"navbar-toggler",    // hamburger control (off-canvas collapse on small viewports)
-			`id="sidebar-menu"`, // collapsible sidebar target the toggler controls
-			">Roadmaps<",        // the always-present Roadmaps sidebar link
-			`<header class="navbar navbar-expand-md d-print-none">`, // the top navbar
+			"navbar-vertical",                      // Tabler vertical sidebar
+			"page-wrapper",                         // admin-shell content wrapper
+			"page-header",                          // per-page header
+			"navbar-toggler",                       // hamburger control (off-canvas collapse on small viewports)
+			`id="sidebar-menu"`,                    // collapsible sidebar target the toggler controls
+			">Roadmaps<",                           // the always-present Roadmaps sidebar link
+			`<header class="navbar d-print-none">`, // the top navbar
 		} {
 			if !strings.Contains(body, marker) {
 				t.Errorf("page %s missing admin-shell marker %q", path, marker)
@@ -686,6 +687,7 @@ func TestStatic_VendoredAssetsServed(t *testing.T) {
 		{"/static/vendor/d3/d3-sankey.min.js", "javascript"},
 		{"/static/graph.js", "javascript"},
 		{"/static/vendor/inter/files/inter-latin-wght-normal.woff2", ""},
+		{"/static/vendor/inter/files/inter-latin-wght-italic.woff2", ""},
 		{"/static/vendor/tabler-icons/fonts/tabler-icons.woff2", ""},
 		{"/static/favicon.svg", "image/svg"},
 	}
@@ -790,7 +792,7 @@ func TestSecurityHeaders(t *testing.T) {
 // has no dynamic HTTP probe and is verified here by inspecting the struct the
 // server builds.
 func TestServerTimeouts(t *testing.T) {
-	srv := newServer()
+	srv := newServer(newHostPolicy(defaultHost, defaultPort))
 	if srv.ReadHeaderTimeout != 10*time.Second {
 		t.Errorf("ReadHeaderTimeout = %v, want 10s", srv.ReadHeaderTimeout)
 	}

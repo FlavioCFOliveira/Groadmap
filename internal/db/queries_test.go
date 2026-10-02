@@ -1402,21 +1402,19 @@ func TestEmptyListsAreNonNil(t *testing.T) {
 	}
 }
 
-// ==================== UNBOUNDED LISTING FOR THE WEB TASK BOARD ====================
+// ==================== UNBOUNDED LISTING FOR THE WEB TASKS PAGE ====================
 
-// TestListAllTasksIsUnbounded is the gate for SPEC/DATABASE.md § Main SQL
-// Queries, "List All": the listing the web interface's Kanban board reads carries
-// no LIMIT, so it returns every task of the roadmap however many there are.
+// TestTaskListingIsUnbounded is the gate for SPEC/DATABASE.md § Main SQL
+// Queries, "List All": the listing the web interface's tasks page reads carries
+// no LIMIT, so it returns every task the filters admit however many there are.
 //
 // The seed is deliberately larger than models.MaxTaskLimit, which is the ceiling
-// the CLI listing clamps to. That is the bug this test exists to prevent: the
-// board used to read through ListTasks, whose limit is capped at MaxTaskLimit
-// (100), so a roadmap with more tasks than that had cards silently dropped while
-// the column headers still presented their counts as facts about the roadmap.
+// the CLI listing clamps to: a read through ListTasks would drop tasks while the
+// page still stated its total as a fact about the roadmap.
 //
 // The CLI's clamp is asserted alongside it, on the same data: the two reads must
 // differ, or the unbounded one is not doing anything.
-func TestListAllTasksIsUnbounded(t *testing.T) {
+func TestTaskListingIsUnbounded(t *testing.T) {
 	db, cleanup := setupTestDB(t)
 	defer cleanup()
 
@@ -1439,16 +1437,23 @@ func TestListAllTasksIsUnbounded(t *testing.T) {
 		}
 	}
 
-	all, err := db.ListAllTasks(testContext())
+	// Every id of the listing is selected, so the rows carry the ordering keys.
+	all, err := db.ReadTaskListPage(testContext(), nil, false, func(listing []TaskRef) []int {
+		ids := make([]int, len(listing))
+		for i := range listing {
+			ids[i] = listing[i].ID
+		}
+		return ids
+	})
 	if err != nil {
-		t.Fatalf("ListAllTasks: %v", err)
+		t.Fatalf("ReadTaskListPage: %v", err)
 	}
 	if len(all) != total {
-		t.Errorf("ListAllTasks returned %d tasks, want every one of the %d in the roadmap",
+		t.Errorf("the task listing returned %d tasks, want every one of the %d in the roadmap",
 			len(all), total)
 	}
 
-	// The order is the listing's own: priority DESC, then created_at ASC.
+	// The order is the listing's own: priority DESC, then created_at ASC, then id.
 	for i := 1; i < len(all); i++ {
 		prev, cur := all[i-1], all[i]
 		switch {
@@ -1472,7 +1477,7 @@ func TestListAllTasksIsUnbounded(t *testing.T) {
 	}
 	if len(all) <= len(capped) {
 		t.Errorf("the unbounded read returned %d tasks and the capped read %d; the seed does not "+
-			"exceed the cap, so this test would pass for a bounded board read", len(all), len(capped))
+			"exceed the cap, so this test would pass for a bounded read", len(all), len(capped))
 	}
 
 	// A nil filter still answers the CLI default page, unchanged by this addition.

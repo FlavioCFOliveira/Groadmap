@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -472,36 +473,30 @@ func TestCommentListingTypeFilter(t *testing.T) {
 	}
 }
 
-// TestGroupedTaskCommentCountsReadScalesBeyondThePlaceholderCache exercises the
-// grouped read with more ids than the connection's placeholder cache pre-generates
-// (1000), so both the cached and the generated placeholder paths are covered.
-// Without this, a board rendering more than a thousand tasks would be the first
-// thing to try the on-demand path.
-func TestGroupedTaskCommentCountsReadScalesBeyondThePlaceholderCache(t *testing.T) {
+// TestGroupedTaskCommentCountsReadScalesWithTheSprint exercises the grouped read
+// on a sprint with more members than SQLite accepts bound parameters in older
+// builds (999) and than the placeholder lists the id-list form used to build: the
+// read selects the members by the sprint id, so it binds one parameter and its
+// size does not depend on the number of members.
+func TestGroupedTaskCommentCountsReadScalesWithTheSprint(t *testing.T) {
 	db, cleanup := setupTestDB(t)
 	defer cleanup()
 
-	taskID, _ := seedCommentParents(t, db)
-	addTaskComment(t, db, taskID, models.CommentFinding,
+	sprintID, members := seedSprintWithTasks(t, db, "Settlement window backfill", 1200)
+	first, last := members[0], members[len(members)-1]
+	addTaskComment(t, db, first, models.CommentFinding,
 		"The grouped read is issued once per page, whatever the page holds.", "2026-08-17T07:00:00.000Z")
+	for i := range 2 {
+		addTaskComment(t, db, last, models.CommentProgress,
+			fmt.Sprintf("Backfill batch %d reconciled.", i+1), fmt.Sprintf("2026-08-17T0%d:00:00.000Z", i+8))
+	}
 
-	for _, parents := range []int{1000, 1500} {
-		ids := make([]int, 0, parents)
-		ids = append(ids, taskID)
-		// The remaining ids need not exist: the read is a lookup, and ids with no
-		// comments are simply absent from the result.
-		for candidate := taskID + 1; len(ids) < parents; candidate++ {
-			ids = append(ids, candidate)
-		}
-
-		counts, err := db.CountTaskCommentsByTasks(testContext(), ids)
-		if err != nil {
-			t.Fatalf("CountTaskCommentsByTasks over %d ids: %v", parents, err)
-		}
-		if len(counts) != 1 || counts[taskID] != 1 {
-			t.Errorf("the grouped read over %d ids returned %d entries, want exactly the one "+
-				"commented task", parents, len(counts))
-		}
+	counts, err := db.CountTaskCommentsBySprint(testContext(), sprintID)
+	if err != nil {
+		t.Fatalf("CountTaskCommentsBySprint over %d members: %v", len(members), err)
+	}
+	if want := map[int]int{first: 1, last: 2}; !reflect.DeepEqual(counts, want) {
+		t.Errorf("the grouped read over %d members returned %v, want %v", len(members), counts, want)
 	}
 }
 
@@ -1060,6 +1055,9 @@ func TestCommentReadsWorkOnAReadOnlyConnection(t *testing.T) {
 	}
 
 	taskID, sprintID := seedCommentParents(t, writable)
+	if err := writable.AddTasksToSprint(testContext(), sprintID, []int{taskID}); err != nil {
+		t.Fatalf("adding the task to the sprint: %v", err)
+	}
 	taskCommentID := addTaskComment(t, writable, taskID, models.CommentFinding,
 		"Window 2026-08-14 is short by 0.02 EUR: a rounding difference on refunds.", "2026-08-17T07:00:00.000Z")
 	addSprintComment(t, writable, sprintID, models.CommentProgress,
@@ -1084,8 +1082,8 @@ func TestCommentReadsWorkOnAReadOnlyConnection(t *testing.T) {
 	} else if len(comments) != 1 {
 		t.Errorf("the read-only sprint listing returned %d comments, want 1", len(comments))
 	}
-	if counts, err := readOnly.CountTaskCommentsByTasks(testContext(), []int{taskID}); err != nil {
-		t.Errorf("CountTaskCommentsByTasks on a read-only connection: %v", err)
+	if counts, err := readOnly.CountTaskCommentsBySprint(testContext(), sprintID); err != nil {
+		t.Errorf("CountTaskCommentsBySprint on a read-only connection: %v", err)
 	} else if counts[taskID] != 1 {
 		t.Errorf("the read-only grouped read counted %d comments for task %d, want 1",
 			counts[taskID], taskID)
@@ -1115,6 +1113,9 @@ func TestCommentsCascadeThroughTheQueryLayer(t *testing.T) {
 	defer cleanup()
 
 	taskID, sprintID := seedCommentParents(t, db)
+	if err := db.AddTasksToSprint(testContext(), sprintID, []int{taskID}); err != nil {
+		t.Fatalf("adding the task to the sprint: %v", err)
+	}
 	taskCommentID := addTaskComment(t, db, taskID, models.CommentFinding,
 		"Deleting the task must take this comment with it.", "2026-08-17T07:00:00.000Z")
 	sprintCommentID := addSprintComment(t, db, sprintID, models.CommentProgress,
@@ -1142,28 +1143,32 @@ func TestCommentsCascadeThroughTheQueryLayer(t *testing.T) {
 		t.Errorf("the listing of a deleted task returned %d comments, want 0", len(list))
 	}
 
-	counts, err := db.CountTaskCommentsByTasks(testContext(), []int{taskID})
+	counts, err := db.CountTaskCommentsBySprint(testContext(), sprintID)
 	if err != nil {
-		t.Fatalf("CountTaskCommentsByTasks on a deleted task: %v", err)
+		t.Fatalf("CountTaskCommentsBySprint on a deleted sprint: %v", err)
 	}
 	if len(counts) != 0 {
-		t.Errorf("the grouped read of a deleted task returned %d entries, want 0", len(counts))
+		t.Errorf("the grouped read of a deleted sprint's deleted member returned %d entries, want 0", len(counts))
 	}
 }
 
 // ==================== THE GROUPED COUNTING READ ====================
 
-// TestGroupedTaskCommentCountsRead proves the counting read keys every task by
-// its own count, leaves a task with no comment out of the map (whose missing key
-// reads as zero), and returns an empty map for an empty id set — the contract of
-// SPEC/DATABASE.md § Count Comments for Many Parents (Grouped).
+// TestGroupedTaskCommentCountsRead proves the counting read keys every member
+// task of the sprint by its own count, leaves a member with no comment out of the
+// map (whose missing key reads as zero), never counts a task outside the sprint,
+// and returns an empty, non-nil map for a sprint with no member or with no such
+// id — the contract of SPEC/DATABASE.md § Count Comments for the Member Tasks of
+// One Sprint (Grouped). The expected counts are built independently, from the
+// single-parent listing of every task.
 func TestGroupedTaskCommentCountsRead(t *testing.T) {
 	db, cleanup := setupTestDB(t)
 	defer cleanup()
 
-	three := newTestTask(t, db, "Reconcile the settlement ledger against the acquirer report")
-	one := newTestTask(t, db, "Alert on any settlement window that fails to balance")
-	none := newTestTask(t, db, "Document the settlement reconciliation runbook")
+	sprintID, members := seedSprintWithTasks(t, db, "Settlement reconciliation", 3)
+	emptyID, _ := seedSprintWithTasks(t, db, "Card-network certification", 0)
+	three, one, none := members[0], members[1], members[2]
+	outside := newTestTask(t, db, "Rotate the acquirer API credentials")
 
 	for i, body := range []string{
 		"Window 2026-08-14 is short by 0.02 EUR: a rounding difference on refunds.",
@@ -1176,97 +1181,77 @@ func TestGroupedTaskCommentCountsRead(t *testing.T) {
 	addTaskComment(t, db, one, models.CommentNote,
 		"The alert fires on the staging ledger; production wiring is next.",
 		"2026-08-16T08:00:00.000Z")
+	addTaskComment(t, db, outside, models.CommentDecision,
+		"Credentials rotate every 90 days through the vault.", "2026-08-17T08:00:00.000Z")
 
-	counts, err := db.CountTaskCommentsByTasks(testContext(), []int{none, one, three})
+	// The expected counts, from the listing that still materialises the bodies:
+	// one entry per member with at least one comment, and nothing else.
+	want := map[int]int{}
+	for _, id := range members {
+		listed, err := db.ListTaskComments(testContext(), id, nil)
+		if err != nil {
+			t.Fatalf("ListTaskComments(%d): %v", id, err)
+		}
+		if len(listed) > 0 {
+			want[id] = len(listed)
+		}
+	}
+	if !reflect.DeepEqual(want, map[int]int{three: 3, one: 1}) {
+		t.Fatalf("the fixture's listings give %v, want task %d: 3 and task %d: 1", want, three, one)
+	}
+
+	counts, err := db.CountTaskCommentsBySprint(testContext(), sprintID)
 	if err != nil {
-		t.Fatalf("CountTaskCommentsByTasks: %v", err)
+		t.Fatalf("CountTaskCommentsBySprint: %v", err)
 	}
-
-	if len(counts) != 2 {
-		t.Errorf("the counting read returned %d entries (%v), want 2: a task with no comment "+
-			"produces no group", len(counts), counts)
-	}
-	if _, present := counts[none]; present {
-		t.Errorf("task %d has no comment but is present in the map", none)
+	if !reflect.DeepEqual(counts, want) {
+		t.Errorf("the counting read returned %v, want %v: a member with no comment (%d) and a "+
+			"task outside the sprint (%d) have no entry", counts, want, none, outside)
 	}
 	if got := counts[none]; got != 0 {
 		t.Errorf("counts[%d] = %d, want the zero value for an absent key", none, got)
 	}
-	if got := counts[three]; got != 3 {
-		t.Errorf("counts[%d] = %d, want 3", three, got)
-	}
-	if got := counts[one]; got != 1 {
-		t.Errorf("counts[%d] = %d, want 1", one, got)
-	}
 
-	// The counting read agrees with the single-parent listing, which is the read
-	// that still materialises the bodies: same tasks, same numbers.
-	for _, id := range []int{none, one, three} {
-		listed, lerr := db.ListTaskComments(testContext(), id, nil)
-		if lerr != nil {
-			t.Fatalf("ListTaskComments(%d): %v", id, lerr)
+	for _, id := range []int{emptyID, 99999} {
+		empty, err := db.CountTaskCommentsBySprint(testContext(), id)
+		if err != nil {
+			t.Fatalf("CountTaskCommentsBySprint(%d): %v", id, err)
 		}
-		if counts[id] != len(listed) {
-			t.Errorf("task %d: the count read says %d and the listing says %d",
-				id, counts[id], len(listed))
+		if empty == nil || len(empty) != 0 {
+			t.Errorf("CountTaskCommentsBySprint(%d) = %#v, want an empty, non-nil map", id, empty)
 		}
-	}
-
-	empty, err := db.CountTaskCommentsByTasks(testContext(), nil)
-	if err != nil {
-		t.Fatalf("CountTaskCommentsByTasks with no ids: %v", err)
-	}
-	if empty == nil {
-		t.Error("CountTaskCommentsByTasks returned a nil map for an empty id set; it must return an empty map")
-	}
-	if len(empty) != 0 {
-		t.Errorf("CountTaskCommentsByTasks with no ids returned %d entries, want 0", len(empty))
-	}
-
-	// Duplicate ids are harmless: each task is counted once.
-	duplicated, err := db.CountTaskCommentsByTasks(testContext(), []int{three, three, one})
-	if err != nil {
-		t.Fatalf("CountTaskCommentsByTasks with duplicate ids: %v", err)
-	}
-	if duplicated[three] != 3 || len(duplicated) != 2 {
-		t.Errorf("a duplicated id yielded %v, want 3 for task %d across 2 entries", duplicated, three)
 	}
 }
 
 // TestGroupedTaskCommentCountsReadIssuesOneStatement is the database-level gate
-// for Acceptance Criterion 70 on the board's path: the comment counts of N tasks
-// are read with exactly ONE statement, whatever N, and with none for an empty id
-// set.
+// for Acceptance Criterion 70 on the board's path: the comment counts of a
+// sprint's N member tasks are read with exactly ONE statement, whatever N.
 func TestGroupedTaskCommentCountsReadIssuesOneStatement(t *testing.T) {
 	db, counter, cleanup := setupCountingDB(t)
 	defer cleanup()
 
-	taskIDs := make([]int, 0, 12)
-	for i := range 12 {
-		id := newTestTask(t, db, "Reconcile settlement window "+string(rune('A'+i)))
-		addTaskComment(t, db, id, models.CommentFinding,
-			"The window balances to the cent after the rounding fix.", "2026-08-17T07:00:00.000Z")
-		addTaskComment(t, db, id, models.CommentProgress,
-			"The reconciliation job now reports the residual per window.", "2026-08-17T08:00:00.000Z")
-		taskIDs = append(taskIDs, id)
-	}
-	if counter.count() == 0 {
-		t.Fatal("the statement counter did not observe the seeding writes, so it is not counting")
-	}
-
 	for _, tasks := range []int{1, 3, 12} {
-		ids := taskIDs[:tasks]
+		sprintID, ids := seedSprintWithTasks(t, db, fmt.Sprintf("Reconcile %d settlement windows", tasks), tasks)
+		for _, id := range ids {
+			addTaskComment(t, db, id, models.CommentFinding,
+				"The window balances to the cent after the rounding fix.", "2026-08-17T07:00:00.000Z")
+			addTaskComment(t, db, id, models.CommentProgress,
+				"The reconciliation job now reports the residual per window.", "2026-08-17T08:00:00.000Z")
+		}
+		if counter.count() == 0 {
+			t.Fatal("the statement counter did not observe the seeding writes, so it is not counting")
+		}
 
 		counter.reset()
-		counts, err := db.CountTaskCommentsByTasks(testContext(), ids)
+		counts, err := db.CountTaskCommentsBySprint(testContext(), sprintID)
 		if err != nil {
-			t.Fatalf("CountTaskCommentsByTasks(%d tasks): %v", tasks, err)
+			t.Fatalf("CountTaskCommentsBySprint(%d members): %v", tasks, err)
 		}
 		if got := counter.count(); got != 1 {
-			t.Errorf("the counting read of %d tasks issued %d statements, want exactly 1", tasks, got)
+			t.Errorf("the counting read of %d members issued %d statements, want exactly 1", tasks, got)
 		}
 		if len(counts) != tasks {
-			t.Errorf("the counting read of %d tasks returned %d entries, want %d", tasks, len(counts), tasks)
+			t.Errorf("the counting read of %d members returned %d entries, want %d", tasks, len(counts), tasks)
 		}
 		for _, id := range ids {
 			if counts[id] != 2 {
@@ -1285,13 +1270,5 @@ func TestGroupedTaskCommentCountsReadIssuesOneStatement(t *testing.T) {
 			t.Errorf("the per-task loop over %d tasks issued %d statements, want %d; the "+
 				"instrument does not track statements one-for-one", tasks, got, tasks)
 		}
-	}
-
-	counter.reset()
-	if _, err := db.CountTaskCommentsByTasks(testContext(), nil); err != nil {
-		t.Fatalf("CountTaskCommentsByTasks with no ids: %v", err)
-	}
-	if got := counter.count(); got != 0 {
-		t.Errorf("the counting read of an empty id set issued %d statements, want 0", got)
 	}
 }

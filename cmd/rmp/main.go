@@ -45,7 +45,7 @@ import (
 )
 
 const (
-	version = "1.17.3"
+	version = "1.18.0"
 	appName = "Groadmap"
 )
 
@@ -166,7 +166,13 @@ func main() {
 	// Per-roadmap skips and failures are non-fatal and already reported to
 	// stderr inside the sweep; only an unreadable data directory is fatal,
 	// surfaced here as ErrDatabase (exit 1) via the standard error path.
-	if err := utils.MigrateLegacyLayout(); err != nil {
+	//
+	// A home directory that is unset or not an absolute path is not a reason
+	// to fail here: the sweep does not run under it, and every command that
+	// resolves the data directory refuses it itself, with the published line,
+	// before it reads or creates anything — while one that only writes help
+	// is served (SPEC/ARCHITECTURE.md § Directory Structure, location rule 1).
+	if err := utils.MigrateLegacyLayout(); err != nil && !errors.Is(err, utils.ErrHomeUnresolved) {
 		os.Exit(handleError(err))
 	}
 

@@ -22,16 +22,15 @@
 // # Why there are two shapes and still one policy
 //
 // SPEC/IMPLEMENTATION.md § Retry Logic publishes both, and the reason is
-// measured rather than stylistic: the two conditions this project retries are
+// structural rather than stylistic: the two conditions this project retries are
 // not the same condition. A SQLite busy result and a held advisory lock are
 // waits for a resource somebody else holds, and the fixed ladder is right for
 // them. A serialisation conflict inside a graph server is a CONTENTION failure
 // whose rate is a function of the load the retries themselves offer, so the
-// delay is load shedding and synchronised retries defeat it. Measured against a
-// real server under identical load, re-sending immediately exhausted far more
-// often than the fixed ladder, and full jitter inside the same 2500 ms exhausted
-// less often than either (rmp task #384). That section is canonical for the
-// figures, and this comment does not restate them.
+// delay is load shedding and synchronised retries defeat it: a cohort released
+// at the same rung contends again as a cohort, while draws spread over the
+// interval below a ceiling do not. That section is canonical for the shape and
+// the reasoning behind it, and this comment does not restate them.
 //
 // What the two shapes SHARE is everything except the draw: the loop, the wait
 // ordering, the rule that a caller supplies the classifier and nothing more, and
@@ -55,9 +54,10 @@
 // caller chooses, because Groadmap issues every SQL statement itself, whereas
 // the graph store lock is held across the statement its invocation carries. A
 // hold may therefore lawfully last a whole statement budget, and a wait sized on
-// 2500 ms is shorter than the hold it has to cover. The consequence is measured
-// rather than feared: a lawful 4.71-second statement starved a contender that
-// gave up after 2.5018 seconds (SPEC/GRAPH.md § Lock Contention).
+// 2500 ms is shorter than the hold it has to cover, so a holder that stays
+// inside its own budget outlasts such a waiter and starves it. The two
+// quantities are compared as DECLARATIONS rather than on a clock
+// (SPEC/GRAPH.md § Lock Contention).
 //
 // The budget itself is NOT this package's to hold. It is a property of how long
 // that one lock may be held, which only internal/graphlock knows, so that
@@ -130,13 +130,15 @@ const (
 	// step out of the contending set briefly rather than wait for anything.
 	jitterInitialCeiling = 5 * time.Millisecond
 
-	// jitterMaxCeiling caps the doubling of the jitter ceiling. It is the
-	// measured quantity of this shape rather than a round number: a ceiling that
-	// stops at 100 ms is WORSE than the fixed ladder at sixty-four writers, and a
+	// jitterMaxCeiling caps the doubling of the jitter ceiling. It is a decision
+	// of this shape rather than a round number: a ceiling that stops at a hundred
+	// milliseconds is worse than the fixed ladder under heavy contention, and a
 	// ceiling that does not grow at all collapses there. The cap, and not the
-	// randomisation alone, is what sheds the load (rmp task #384).
-	// SPEC/IMPLEMENTATION.md § Retry Logic is canonical for the figures, and this
-	// comment does not restate them.
+	// randomisation alone, is what sheds the load — it is the width of the
+	// interval the contending set is spread over, and a narrow interval cannot
+	// spread a wide set. SPEC/IMPLEMENTATION.md § Retry Logic is canonical for
+	// the shape and for the two ceilings it records as rejected (rmp task #384),
+	// and this comment does not restate them.
 	jitterMaxCeiling = 250 * time.Millisecond
 
 	// jitterMaxRetries bounds how many times the full-jitter loop may turn, and
@@ -144,8 +146,11 @@ const (
 	// total wait bounds the retry count on its own, because every rung is at
 	// least initialDelay; under full jitter a draw may be near zero, so a walk
 	// bounded only by its total could turn indefinitely against a server that
-	// fails instantly.
-	jitterMaxRetries = 19
+	// fails instantly. It is also sized so that, under contention, the total
+	// wait and not the cap is what ends a walk: twenty attempts were measured
+	// to end every exhausted walk before the budget was spent.
+	// SPEC/IMPLEMENTATION.md § Retry Logic is canonical for that derivation.
+	jitterMaxRetries = 39
 )
 
 // Attempts is the number of times a retried operation is tried in the worst
@@ -159,7 +164,7 @@ const Attempts = 1 + maxRetries
 
 // JitterAttempts is the most attempts RetryJitteredWithin can make: one initial
 // attempt plus jitterMaxRetries retries. SPEC/IMPLEMENTATION.md § Retry Logic
-// states 20 and states why the cap exists at all.
+// states 40 and states why the cap exists at all.
 //
 // It is a MAXIMUM and not a count, which is where it differs from Attempts. The
 // fixed ladder's attempt count and its total wait determine one another, so a
@@ -441,17 +446,38 @@ func RetryWithin[T any](bound time.Duration, try func() (T, error), retryable fu
 // committed, so there is nothing left to wait for, and what the delay buys is
 // the loser removing itself from the contending set. The conflict rate is
 // therefore a function of the load the retries themselves offer, and identical
-// ladders walked by every loser at once keep that load synchronised. Measured
-// against a real server (rmp task #384; SPEC/GRAPH.md § Concurrency Inside the
-// Server, rule 7), sixteen writers on one node exhausted this shape less often
-// than the fixed ladder, inside the same 2500 ms and with a shorter worst case.
-// SPEC/IMPLEMENTATION.md § Retry Logic is canonical for the figures, and this
-// comment does not restate them.
+// ladders walked by every loser at once keep that load synchronised. Spreading
+// the losers over the interval below a growing ceiling clears a contended node
+// under a load at which the cohort does not, inside the same 2500 ms total
+// (rmp task #384; SPEC/GRAPH.md § Concurrency Inside the Server, rule 7).
+// SPEC/IMPLEMENTATION.md § Retry Logic is canonical for the shape and the
+// reasoning, and this comment does not restate them.
 //
 // A bound of zero or less makes exactly one attempt, as RetryWithin's does.
 func RetryJitteredWithin[T any](bound time.Duration, try func() (T, error), retryable func(error) bool) (T, error) {
 	return retryOver(jitterDelaysWithin(bound, jitterMaxRetries, drawUpTo), try, retryable)
 }
+
+// sleep is the one place this package — and therefore this binary — blocks on a
+// duration. It is a variable rather than a direct call for exactly one reason,
+// and the reason is a rule rather than a convenience: SPEC/BUILD.md § No
+// Benchmarks and No Performance-Measurement Tests forbids a test that reads the
+// clock and asserts on what it says, and names an INJECTED DELAY SOURCE as the
+// admissible observable in its place. This is that injection point. A test
+// substitutes a recorder, drives a walk to exhaustion, and asserts the sequence
+// of waits the loop ASKED for, which is the quantity the specification fixes;
+// the elapsed time never enters into it.
+//
+// Nothing in production reassigns it, no exported symbol exposes it, and the
+// behaviour with it in place is the behaviour without it: retryOver waits
+// exactly where it waited before, for exactly as long.
+//
+// It is written as a closure over time.Sleep rather than as time.Sleep itself so
+// that the call stays a CALL. internal/testenv's TestOnlyTheBackoffPackageWaits
+// requires this package to contain one, and a bare function value would leave
+// that gate asserting against a module in which no package blocks on time at
+// all.
+var sleep = func(d time.Duration) { time.Sleep(d) }
 
 // retryOver is THE loop: one initial attempt, then one further attempt after
 // each wait the sequence yields, stopping at the first success and at the first
@@ -470,7 +496,7 @@ func retryOver[T any](waits iter.Seq[time.Duration], try func() (T, error), retr
 	}
 
 	for delay := range waits {
-		time.Sleep(delay)
+		sleep(delay)
 
 		value, err = try()
 		if err == nil || !retryable(err) {

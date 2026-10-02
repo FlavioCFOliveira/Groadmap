@@ -8,6 +8,7 @@ This file contains the implementation strategies that support the contracts defi
   - [Entry Point](#entry-point)
   - [DSN Construction](#dsn-construction)
   - [Where Each PRAGMA Is Applied](#where-each-pragma-is-applied)
+  - [Transaction Lock Mode](#transaction-lock-mode)
   - [Read-Only Connections](#read-only-connections)
 - [Concurrency Model](#concurrency-model)
   - [WAL Mode](#wal-mode)
@@ -108,10 +109,40 @@ both is therefore a trap and is forbidden.
 reopening, and applies to every connection, so it is set once with a single `Exec`
 after the database is opened and MUST NOT be carried in the DSN.
 
+### Transaction Lock Mode
+
+A read-write open MUST carry the driver DSN parameter `_txlock=immediate`, so
+every transaction begun with `BeginTx` on a read-write connection issues
+`BEGIN IMMEDIATE`. The parameter is not a PRAGMA: it sets the statement the
+driver issues to begin a transaction. The driver validates its value against the
+set `deferred`, `immediate` and `exclusive`, and refuses the open on any other
+value. A transaction requested with `sql.TxOptions{ReadOnly: true}` is begun with
+a plain `BEGIN` whatever the parameter says.
+
+A read-only open (`_query_only=1`, see
+[Read-Only Connections](#read-only-connections)) MUST NOT carry `_txlock`, and
+its transactions keep SQLite's default `DEFERRED` mode. An `IMMEDIATE` begin takes
+the write lock, so on a connection that never writes it would only block the
+writers for the length of every read.
+
+**Rationale.** A `DEFERRED` transaction takes no lock at `BEGIN`; it takes a read
+lock at its first read and tries to take the write lock at its first write. When
+a transaction that has already read tries that upgrade while another connection
+holds the write lock, SQLite returns `SQLITE_BUSY` at once and does not invoke the
+busy handler, because waiting could not succeed while the transaction keeps what
+it has already read; this is SQLite's deadlock avoidance. `busy_timeout` therefore does not apply at that
+point, and the failure reaches the retry policy directly. An `IMMEDIATE`
+transaction takes the write lock at `BEGIN`, before it has read anything, and the
+busy handler does apply there, so a contended begin waits within `busy_timeout`
+for the other writer to commit instead of failing. See
+<https://www.sqlite.org/lang_transaction.html> and
+<https://www.sqlite.org/c3ref/busy_timeout.html>.
+
 ### Read-Only Connections
 
 The web interface opens databases read-only. Such a connection carries
-`_query_only=1` in addition to the connection-scoped PRAGMAs above, so the SQLite
+`_query_only=1` in addition to the connection-scoped PRAGMAs above, and does not
+carry `_txlock` (see [Transaction Lock Mode](#transaction-lock-mode)), so the SQLite
 engine itself rejects every write — schema change, row mutation, and audit insert
 alike — rather than relying on the calling code to refrain from writing. A
 read-only open also runs no migrations, since DDL is a write. `journal_mode` is
@@ -175,6 +206,12 @@ It is connection-scoped and therefore carried in the DSN, so that it holds on
 every pooled connection and not only on the one that would have serviced a
 one-shot `Exec`; see [Where Each PRAGMA Is Applied](#where-each-pragma-is-applied).
 
+SQLite waits under `busy_timeout` only where it invokes the busy handler. It does
+not invoke it when a transaction that has already read tries to upgrade to a
+write; [Transaction Lock Mode](#transaction-lock-mode) begins every read-write
+transaction `IMMEDIATE` so that the wait happens at `BEGIN`, where the handler
+applies.
+
 ### Retry Logic
 
 **Groadmap has one retry policy, and one package owns the whole of it.** One
@@ -186,7 +223,7 @@ constants, is therefore what is shared.
 
 **What the policy does not have is a single delay shape.** It publishes two, and
 each caller selects one. The two conditions this project retries are not the same
-condition, and the delay that is right for one is measurably wrong for the other:
+condition, and the delay that is right for one is wrong for the other:
 
 | Shape | Delay before each retry | Retried under it |
 |-------|-------------------------|------------------|
@@ -222,8 +259,9 @@ disagree on without either of them contradicting the text.
 The implementation waits before each retry, and never after an attempt it does
 not retry. The ordering governs both shapes. Rules 1, 3 and 4 hold verbatim
 under either; rules 2 and 5 are written with the fixed ladder's values, and under
-full jitter the delay before each retry is the draw described below and the last
-attempt is the twentieth rather than the sixth:
+full jitter the delay before each retry is the draw described below, and the last
+attempt is the one at which the total wait is spent, or the fortieth when the cap
+is reached first, rather than the sixth:
 
 1. The first attempt runs immediately, with no preceding wait.
 2. Each retry is preceded by the next delay of the backoff pattern: 100ms before
@@ -241,6 +279,12 @@ attempt is the twentieth rather than the sixth:
 - Only retry on SQLite busy/locked errors (`database is locked`, `SQLITE_BUSY`)
 - Do not retry on schema errors, constraint violations, syntax errors, or invalid input errors
 
+For SQLite, the policy is a backstop, not the primary means of resolving write
+contention. Concurrent writers wait for one another under `busy_timeout` at the
+`BEGIN IMMEDIATE` of [Transaction Lock Mode](#transaction-lock-mode); a busy or
+locked error reaches the retry policy only when that wait is exhausted or when
+SQLite reports one at a point where it does not invoke the busy handler.
+
 These conditions are the classifier of the SQLite caller. Every other caller
 supplies its own and takes nothing else from this one: the graph store lock
 retries on lock contention alone (see
@@ -257,90 +301,81 @@ graph client retries on the serialisation conflict alone
   5, 10, 20, 40, 80, 160ms — and then held at 250ms for every retry after that.
   The ceiling grows monotonically; the delay does not, because each one is drawn
   independently, so a later delay may be shorter than an earlier one.
-- **Maximum attempts**: 20 — one initial attempt plus at most nineteen retries.
-  The cap is load-bearing rather than decorative: a draw may be near zero, so the
-  total wait alone does not bound how many times the loop turns.
+- **Maximum attempts**: 40 — one initial attempt plus at most thirty-nine
+  retries. The cap is load-bearing rather than decorative: a draw may be near
+  zero, so the total wait alone does not bound how many times the loop turns.
+  The cap is also sized so that, under contention, the total wait and not the
+  cap is what ends a walk. The expected draw is half the ceiling in force, so the
+  expected wait is 157.5ms over the first six retries and 125ms for each retry
+  after them: about 1.78s over nineteen retries, short of the total, and about
+  4.28s over thirty-nine, well past it. A walk that keeps losing therefore spends
+  the whole 2500ms before it reaches the cap, and the cap ends a walk only when
+  an improbable run of near-zero draws occurs.
 - **Maximum total wait**: 2500ms, the same total the fixed ladder spends. The
   loop stops as soon as that total is spent, so the shape changes how the waiting
   is distributed and never how long a caller can be made to wait.
 
-**Why a second shape exists, stated as the measurement that produced it rather
-than as a preference.** A first-updater-wins serialisation conflict invites the
-reading that no delay is needed at all — the winner has already committed, so the
-loser should succeed on its next attempt. Measured against a real server, that
-reading is not merely suboptimal, it is a congestion collapse: retrying
-immediately, six attempts, failed **79.9%** of statements where the fixed ladder,
-under the identical load in the same experiment, failed **0.15%**. A loser that
-waits removes itself from the contending set; a loser that retries at once keeps
-that set saturated. **The delay is load shedding, and the conflict rate is a
-function of the offered load the retries themselves create.**
+**Why a second shape exists, stated as the mechanism rather than as a
+preference.** A first-updater-wins serialisation conflict invites the reading
+that no delay is needed at all — the winner has already committed, so the loser
+should succeed on its next attempt. That reading is wrong, and it is wrong by a
+wide margin rather than by a little: a loser that retries at once stays in the
+contending set and keeps it saturated, so the conflict rate rises with the load
+the retries themselves offer, and retrying immediately collapses under
+contention where a delayed retry does not. A loser that waits removes itself from
+that set. **The delay is load shedding, and the conflict rate is a function of the
+offered load the retries themselves create.**
 
 Once the delay is understood as load shedding, the shape follows from what sheds
-load best inside a fixed budget. Measured head to head under identical load on
-one server, with sixteen and then sixty-four concurrent writers all updating a
-single node:
+load best inside a fixed budget. Full jitter is that shape. It spreads the
+contending set over the whole interval below the ceiling instead of releasing it
+in a cohort at each rung, so it clears a contended node under a load at which the
+fixed ladder does not, and it does so without a longer worst case: both shapes
+spend the same 2500ms total. What it costs is server work, in the form of more
+attempts per contended statement, and it costs nothing at all when there is no
+contention, because an uncontended statement never reaches a retry under either
+shape.
 
-| Shape, all inside 2500ms | Exhausted, 16 writers | Exhausted, 64 writers | Worst observed wait | Attempts per statement |
-|--------------------------|----------------------|-----------------------|---------------------|------------------------|
-| The fixed ladder | 0.08-0.30% | 0.86-1.46% | 2.5s | 1.07-1.33 |
-| Full jitter, ceiling 5 to 250ms | 0-0.017% | 0.07-0.22% | 1.6-2.5s | 2.19-3.48 |
-
-The sixteen-writer figure for full jitter spans two samples of the same load. The
-head-to-head experiment saw no exhaustion in 18,000 statements; the later
-measurement of the shape in force, below, saw 4 in 60,000, and never more than
-one in a run of 6,000. A run that sees none is therefore no evidence that none
-occur, and neither figure is a bound.
-
-Full jitter cuts the failure at sixteen writers from 0.08-0.30% of statements to
-0-0.017%, cuts it by between four and thirteen times at sixty-four, holds a worst
-case **shorter** than the fixed ladder's rather than longer, halves the 99th-percentile wait at sixty-four
-writers, and raises throughput by 15-45%. What it costs is server work: about
-2.6 times the attempts per statement under contention, and nothing at all when
-there is no contention, because an uncontended statement never reaches a retry
-under either shape.
-
-**What full jitter leaves is a property of one hot node.** Measured against a
-real server built from the production composition and running the production
-checkpoint cadence, under the shape in force, with sixteen concurrent writers
-sending 6,000 statements per run — one connection per statement, each setting a
-property on one node, the writers rotating over the nodes — and only the number
-of distinct nodes varied:
-
-| Distinct nodes written | Runs | Exhausted | Statements per second |
-|------------------------|------|-----------|-----------------------|
-| 1 | 10 | 4 in 60,000 (0-0.017% per run) | 616-631 |
-| 2 | 3 | 0 in 18,000 | 762-772 |
-| 4 | 3 | 0 in 18,000 | 1,346-1,369 |
-| 8 | 3 | 0 in 18,000 | 2,426-2,594 |
-| 16 | 3 | 0 in 18,000 | 3,465-4,324 |
-| 32 | 3 | 0 in 18,000 | 5,886-6,168 |
-| 64 | 3 | 0 in 18,000 | 6,065-6,101 |
-
-Only the writers that shared a single node exhausted the retry at all, and
-throughput rose almost tenfold as the same sixteen writers spread over thirty-two
-nodes. The figures are samples from one sixteen-core machine and not bounds.
-What they establish is the shape — the failure belongs to writers converging on
-one node, and spreading them removes it — which
+**What full jitter leaves is a property of one hot node.** Writers spread across
+distinct nodes barely collide; writers converging on one node collide steadily
+however few of them there are, and it is only writers that all share a single
+node that exhaust the retry at all. That is the shape of the residual failure —
+it belongs to convergence on one node, and spreading the writes removes it rather
+than moving the point at which it appears — and it is what
 `GRAPH.md § Concurrency Inside the Server`, rule 8, states for the caller. This
-section is canonical for these figures, and no other section restates them.
+section is canonical for the shape, and no other section restates it.
 
-**Two shapes that were measured and rejected, recorded so that they are not
-measured again.** Jitter with a ceiling that does not grow is adequate at sixteen
-writers (0.03-0.08%) and collapses at sixty-four (8.7-9.0%): a fixed cap of a few
-tens of milliseconds cannot shed enough load. A ceiling that grows but stops at
-100ms is **worse than the fixed ladder** at sixty-four writers (1.21-1.48%). The
-ceiling has to grow and it has to reach a few hundred milliseconds; the cap, and
-not the randomisation alone, is what sheds the load.
+**Two ceilings and one cap that were tried and rejected, recorded so that they
+are not tried again.** A jitter ceiling that does not grow is adequate against a
+light contending set and collapses against a heavy one: a fixed cap of a few tens of
+milliseconds cannot shed enough load. A ceiling that grows but stops at 100ms is
+worse than the fixed ladder under heavy contention. The ceiling has to grow and it
+has to reach a few hundred milliseconds; the cap, and not the randomisation alone,
+is what sheds the load. The published ceiling of 250ms is the decision those two
+rejections produced. A cap of twenty attempts was also tried and rejected: under
+contention it was measured to end every exhausted walk before the total wait was
+spent, so the failure it reported claimed a budget it had not used.
 
-**Lengthening the total instead of reshaping it was measured and is dominated.**
-Walking the fixed ladder for 6 seconds rather than 2500ms buys one decimal order
-of magnitude for five extra seconds of worst case, which is less than full jitter
-buys for none. It also collides with a published derivation: the graph store's
-wait budget is the statement budget plus this policy's total
-(`GRAPH.md § Lock Contention`), and a caller that waited 6 seconds on a conflict
-would sit within 1.5 seconds of the deadline at which its failure is reported as
-a server that did not answer and a statement whose outcome is unknown — which,
-for a conflict whose loser provably committed nothing, would be false.
+**Lengthening the total instead of reshaping it is rejected, and the reason is a
+published derivation rather than a preference.** Walking the fixed ladder for
+longer than 2500ms buys less than reshaping the delay buys, and it costs a longer
+worst case where reshaping costs none. It also collides with a derivation this
+project publishes: the graph store's wait budget is the statement budget plus this
+policy's total (`GRAPH.md § Lock Contention`), so lengthening the total lengthens
+that wait. A caller that waited 6 seconds on a conflict would sit within 1.5
+seconds of the deadline at which its failure is reported as a server that did not
+answer and a statement whose outcome is unknown — which, for a conflict whose
+loser provably committed nothing, would be false.
+
+**How the two shapes are proven.** Neither shape is established by timing a run.
+The ladder, the ceiling sequence, the attempt caps and the 2500ms total are
+proven against the delay source the policy is given: a test supplies that source,
+drives the loop to exhaustion, and asserts the **sequence of delays the policy
+asked for** and the number of attempts it made. A caller's selection of a shape is
+proven by which entry point it calls, and the derived figures — the wait budget of
+`GRAPH.md § Lock Contention`, the retry figure the conflict line renders — are
+proven by comparing declarations, never by observing a clock
+(`BUILD.md § No Benchmarks and No Performance-Measurement Tests`).
 
 ### Safe Concurrent Patterns
 
@@ -380,7 +415,7 @@ db.WithTransaction(func(tx *sql.Tx) error {
 
 ### Anti-Patterns to Avoid
 
-- **Multiple Writers Without Coordination**: Multiple uncoordinated writers may fail with "database is locked"
+- **Read-Write Transactions Begun `DEFERRED`**: A read-write transaction that reads before it writes fails with "database is locked" when another connection holds the write lock, without waiting under `busy_timeout`. Concurrent writer processes are a supported case: every read-write transaction is begun `IMMEDIATE` (see [Transaction Lock Mode](#transaction-lock-mode)), so they wait for one another under `busy_timeout`, and the retry policy remains a backstop (see [Retry Logic](#retry-logic)).
 - **Long-Running Transactions**: Holding locks for too long blocks other operations
 - **Ignoring Context Cancellation**: Always pass context for proper timeout/cancellation handling
 
@@ -409,42 +444,42 @@ Multiple database functions build SQL queries using `fmt.Sprintf` with `strings.
 
 **Affected Operations:**
 - `GetTasks` - IN clause for task IDs
-- `UpdateTaskStatus` - IN clause for task IDs
-- `UpdateTaskPriority` - IN clause for task IDs
-- `UpdateTaskSeverity` - IN clause for task IDs
 - `AddTasksToSprint` - IN clause for task IDs
-- `RemoveTasksFromSprint` - IN clause for task IDs
 
-**Current Overhead:** 20-30% on repeated batch operations.
+**The overhead is a recompilation on every execution**, because a query string
+that is unique to its call can match nothing SQLite has already compiled. No
+figure is published for what that costs: nothing in this project measures it, and
+a figure no check re-derives is one a reader would be entitled to trust.
 
 ### Cache Strategy
 
-Pre-generate and cache query templates for common IN clause sizes to enable SQLite query plan reuse.
+Every batch operation of a given normalised size takes the same query text, so SQLite
+is presented with a statement it has already compiled. The text is generated on
+demand, when an operation asks for it, and nothing is precomputed when a database is
+opened: opening a roadmap costs no template or placeholder generation, and a command
+that issues no batch operation generates none.
 
-**Cached Sizes:**
-- **Standard sizes:** 1-100 (individual caches)
-- **Large batches:** 250, 500, 1000
+**Normalised sizes.** A requested size is normalised before the text is generated:
 
-Total cached templates: 103
+| Requested size *n* | Normalised size |
+|--------------------|-----------------|
+| *n* ≤ 0 | 1 |
+| 1 ≤ *n* ≤ 100 | *n* |
+| 101 ≤ *n* ≤ 250 | 250 |
+| 251 ≤ *n* ≤ 500 | 500 |
+| *n* > 500 | 1000 |
+
+The template of an operation is its SQL with one `?` placeholder per unit of the
+normalised size, comma-separated. A placeholder list requested on its own, outside a
+template, holds exactly *n* placeholders.
 
 ### Data Structures
 
 ```go
-// QueryCache stores pre-generated query templates for batch operations
-type QueryCache struct {
-    templates    map[string]string
-    placeholders []string
-    mu           sync.RWMutex
-}
-
-// Operation types for cache keys
+// Operation types for template keys
 const (
-    OpGetTasks              = "get_tasks"
-    OpUpdateTaskStatus      = "update_task_status"
-    OpUpdateTaskPriority    = "update_task_priority"
-    OpUpdateTaskSeverity    = "update_task_severity"
-    OpAddTasksToSprint      = "add_tasks_to_sprint"
-    OpRemoveTasksFromSprint = "remove_tasks_from_sprint"
+    OpGetTasks         = "get_tasks"
+    OpAddTasksToSprint = "add_tasks_to_sprint"
 )
 ```
 
@@ -460,12 +495,30 @@ type BatchProcessor struct {
 func (bp *BatchProcessor) ProcessChunks(ids []int, fn func(chunk []int) error) error
 ```
 
-### Performance Requirements
+### Cache Requirements
 
-- 20-30% improvement in batch update operations
-- Query plan cache hit rate above 90% for repeated operations
-- Batch processing handles 1000+ IDs efficiently
-- Thread-safe implementation verified with concurrent access
+These are the requirements on the cache, and every one of them is settled by
+inspection rather than by measurement
+(`BUILD.md § No Benchmarks and No Performance-Measurement Tests`):
+
+- A batch operation MUST take its query text from the template of its operation
+  at its normalised size, so that repeated operations of that size present SQLite
+  with a query it has already compiled. The requirement is on the **identity** of
+  the text: the same operation at the same requested size yields the same string on
+  every call, and two requested sizes with the same normalised size yield the same
+  string.
+- The normalised sizes MUST be exactly those of the table above.
+- Opening a database MUST NOT generate any template or placeholder list.
+- A list of any length MUST be processed correctly, including one above the
+  largest cached size and one above the SQLite variable limit, which
+  `BatchProcessor` chunks. Correctness here is the set of rows affected, and it
+  MUST NOT depend on how the list was chunked.
+- The implementation MUST be safe under concurrent access, proven by the race
+  detector over concurrent callers.
+
+No throughput figure or improvement percentage is required or published. The
+strategy is justified by the recompilation it removes, and that removal is visible
+in the query text without timing anything.
 
 ## Graph Store Concurrency
 
@@ -490,16 +543,19 @@ under the loop of [Retry Logic](#retry-logic) like every other retry in this
 project, and under that policy's **full-jitter** delay shape rather than its fixed
 ladder, because a conflict is a contention failure whose rate is a function of the
 load the retries themselves offer; that section is canonical for both shapes and
-for the measurements that separate them.
+for the reasoning that separates them.
 
 Groadmap does not depend on the engine to serialise access to the store between
 processes. It serialises it itself, at the process level, on a lock file that
 Groadmap maintains in the roadmap's graph directory (`write.lock`).
-**`rmp graph serve` is the only process that takes it**: it takes the lock
-**exclusively** before it opens the store and holds it for its process lifetime.
-No caller takes it, because no caller opens a store
-(`GRAPH.md § Server Resolution`). There is one mode, because there is one holder,
-and the lock's remaining purpose is to admit one server per roadmap. The operating
+**`rmp graph serve` is the only process that holds it for its lifetime**: it
+takes the lock **exclusively** before it opens the store and holds it for its
+process lifetime. No caller takes it, because no caller opens a store
+(`GRAPH.md § Server Resolution`). The one other process that takes it is
+`rmp roadmap remove`, without waiting and only while it deletes the roadmap, to
+refuse a removal while a server runs (`GRAPH.md § Concurrency and Recovery`).
+There is one mode, because there is one holder that opens the store, and the
+lock's purpose is to admit one server per roadmap. The operating
 system releases the lock when the holding process exits, so a crashed server does
 not strand it. This is the lock referred to throughout
 [Write Contention and Recovery](#write-contention-and-recovery); the contract it
@@ -603,9 +659,9 @@ the boundary.
    statement budget plus the backoff total, so the loop keeps retrying until that
    budget is exhausted rather than stopping after the five retries the SQLite
    policy makes.
-   `GRAPH.md § Lock Contention` is canonical for that sizing rule, for the figure
-   it yields, and for the measurements behind it, and this rule does not restate
-   those either. The SQLite total is not reused because the two locks do not
+   `GRAPH.md § Lock Contention` is canonical for that sizing rule and for the
+   figure it yields, and this rule does not restate them. The SQLite total is not
+   reused because the two locks do not
    cover the same thing: no SQLite lock is held across a statement whose cost a
    caller chooses, since Groadmap issues every SQL statement itself, while the
    graph store lock is held across an outgoing server's whole drain and shutdown.
@@ -628,8 +684,7 @@ the boundary.
    behind.
 
    Three limits survive that, and none is fixed by bounding the statement.
-   `GRAPH.md § Lock Contention` states all three and is canonical for them, with
-   the measurements behind them:
+   `GRAPH.md § Lock Contention` states all three and is canonical for them:
 
    - The allowance rule 3's wait budget reserves for the **fixed** part of a hold
      is a constant, while the quantity it covers grows linearly with the store's
@@ -691,12 +746,13 @@ records the runtime implications.
    reconciles the snapshot. A failure before or during the commit is an ordinary
    write failure (`utils.ErrGraphEngine`, exit code 1 at the caller), not a fold
    failure, and no fold is attempted.
-5. **Performance trade-off.** A full snapshot makes each fold cost proportional to
+5. **Cost trade-off.** A full snapshot makes each fold cost proportional to
    the live graph size, because the snapshot rewrites the committed state. That
    cost is why a long-lived server folds on a cadence rather than after every
    committed write: doing the latter would make every write cost the whole live
    graph while its neighbours waited for the quiesce the capture takes. The
-   cadence's value is set on measurement and is not fixed in this specification
+   cadence's value is an operational choice and is not fixed in this
+   specification
    (`GRAPH.md § Durability and Checkpointing in a Long-Lived Process`, rule 6).
 
 ### Statements Against a Contended Store
@@ -728,8 +784,10 @@ across distinct nodes the remedy rather than reducing the writer count.
 3. **WAL Mode**: Use `PRAGMA journal_mode=WAL;` to improve concurrency for read/write operations.
 4. **Foreign Keys**: Explicitly enable `PRAGMA foreign_keys=ON;` on every connection to enforce constraints and cascading actions.
 5. **Bulk Operations**: Encapsulate multiple updates in a single transaction. Batch ID lists larger than 500 to avoid SQLite variable limits.
-6. **Streaming Output**: Use `json.Encoder` for large result sets (e.g., `audit list`) to stream JSON directly to `stdout` instead of buffering.
+6. **Streaming Output, in one pass**: A command result written to `stdout` as JSON is encoded in a single pass that applies the indentation as it encodes; no second pass re-indents bytes already encoded. The bytes written are fixed by `DATA_FORMATS.md § Implementation Notes` and by these rules, which the encoder MUST reproduce exactly: two-space indentation and no prefix; one trailing newline; `<`, `>` and `&` written literally, not escaped; U+2028 and U+2029 escaped as `\u2028` and `\u2029`; an invalid UTF-8 byte in a string replaced by U+FFFD; an empty array written as `[]`. The `--ai-help` contract is produced by its own generator and is outside this rule (`DATA_FORMATS.md § AI Agent Contract`).
 7. **Concurrency**: Leverage Go's concurrency for independent read operations, but ensure writes are strictly sequential per roadmap file.
+8. **Read only the columns the caller uses**: A command that needs, of a set of tasks, only their ids, statuses, severities or priorities, or only how many there are, reads a projection of those columns or a `COUNT(*)`, never the complete `Task` object with its subtask count and dependency sets. The complete object is read only where the command publishes it. Likewise, a command that needs, of a sprint, only its existence or one of its columns reads `SELECT 1` or that column by the sprint's id, never the sprint with the aggregation of its member ids. The projection changes no output: the values a command reports and the decisions it takes come from the same columns either way.
+9. **No highlighting registry at start-up**: The lexers and the style that highlight a fenced code block of rendered Markdown are held in a generated registry that is built once, on the first rendering of a fenced code block that declares a language, and never while the program initialises; no package compiled into the binary imports chroma's `lexers` or `styles` package, whose package-level initialisers build their whole registries. An invocation that renders no such block pays nothing for highlighting. The rule is specified in `WEB.md § Markdown Rendering`, rule 6, and `BUILD.md § Markdown Rendering Rules`, rules 5 and 6.
 
 ## See Also
 

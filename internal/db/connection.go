@@ -6,6 +6,8 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"io"
+	"io/fs"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -33,6 +35,7 @@ const (
 const (
 	sqliteBusy                   = 5
 	sqliteLocked                 = 6
+	sqliteNotADB                 = 26   // SQLITE_NOTADB: the file is not a database
 	sqliteConstraintCheck        = 275  // SQLITE_CONSTRAINT_CHECK
 	sqliteConstraintForeignKey   = 787  // SQLITE_CONSTRAINT_FOREIGNKEY
 	sqliteConstraintNotNull      = 1299 // SQLITE_CONSTRAINT_NOTNULL
@@ -68,6 +71,42 @@ func IsUniqueConstraintErr(err error) bool {
 	code := extendedResultCode(err)
 	return code == sqliteConstraintUniqueViolat || code == sqliteConstraintPrimaryKey
 }
+
+// ClassifyDriverError gives an unclassified failure of the SQLite driver the
+// class SPEC/ARCHITECTURE.md § Classification of Database Driver Failures,
+// rule 3, assigns it: utils.ErrDatabase, printed as
+// `Error: database error: <detail>` with the driver's diagnostic as the detail,
+// and exit code 1.
+//
+// It changes nothing else. An error that already carries a sentinel of the
+// catalogue has been classified by whoever owns it — a lost race translated
+// into the refusal of the rule it lost on, the not-a-roadmap-database line, a
+// validation refusal — and is returned untouched, and so is an error that
+// carries no driver result code at all. The boundary is the classification,
+// not the layer, which is why the one dispatch point applies it to whatever a
+// handler returns.
+func ClassifyDriverError(err error) error {
+	if err == nil || utils.IsClassified(err) || extendedResultCode(err) == 0 {
+		return err
+	}
+	var published *migrationFailure
+	if errors.As(err, &published) {
+		return err
+	}
+	return fmt.Errorf("%w: %w", utils.ErrDatabase, err)
+}
+
+// migrationFailure is the failure of a migration applied on open. Its line is
+// published by SPEC/DATABASE.md § The failure surface, without a sentinel:
+//
+//	Error: running migrations: migration <version> failed: applying migration: <step>: <detail>
+//
+// so ClassifyDriverError leaves it as it is, and it exits 1 by the fallback
+// that table names.
+type migrationFailure struct{ err error }
+
+func (m *migrationFailure) Error() string { return "running migrations: " + m.err.Error() }
+func (m *migrationFailure) Unwrap() error { return m.err }
 
 // sqliteCoded is satisfied by modernc.org/sqlite's *sqlite.Error. The check
 // stays structural rather than a type assertion against that concrete type:
@@ -132,9 +171,8 @@ type DB struct {
 }
 
 // Placeholders returns a comma-separated string of n SQL "?" placeholders,
-// pulled from the connection's pre-generated cache when n is in range.
-// Use from command handlers to build IN (...) clauses without re-allocating
-// a []string + strings.Join on each call.
+// generated on demand (see QueryCache). Use from command handlers to build
+// IN (...) clauses.
 func (db *DB) Placeholders(n int) string {
 	return db.queryCache.GetPlaceholders(n)
 }
@@ -280,6 +318,22 @@ func Open(roadmapName string) (*DB, error) {
 }
 
 // openRoadmap is Open with the mode-changing primitive injected. See chmodFunc.
+//
+// The order of the steps is the one SPEC/ARCHITECTURE.md § Open-Time Permission
+// Enforcement and SPEC/DATABASE.md § Opening a Roadmap Database File fix, and
+// each step is what makes the next one safe:
+//
+//  1. the roadmap home and the data directory are brought to 0700;
+//  2. project.db and its three companions are examined for symbolic links,
+//     without following one, before anything reads or changes a mode;
+//  3. an absent project.db is pre-created at 0600, and the file's mode is
+//     repaired to 0600;
+//  4. the file's shape is decided — zero bytes, not SQLite, or SQLite — before
+//     any connection exists, so a file that is not a roadmap database is
+//     refused with nothing written into it;
+//  5. a SQLite file's schema version is read before any connection setting is
+//     written, so a database newer than this binary is refused unchanged;
+//  6. only then is WAL configured and the schema created or migrated.
 func openRoadmap(roadmapName string, chmod chmodFunc) (*DB, error) {
 	// Validate roadmap name
 	if err := utils.ValidateRoadmapName(roadmapName); err != nil {
@@ -299,10 +353,13 @@ func openRoadmap(roadmapName string, chmod chmodFunc) (*DB, error) {
 		return nil, err
 	}
 
-	// Check if file exists
-	isNew := false
-	if _, err := os.Stat(dbPath); os.IsNotExist(err) {
-		isNew = true
+	// No file the open is about to read, chmod, create or hand to SQLite may be
+	// a symbolic link (SPEC/ARCHITECTURE.md § Directory Structure, location
+	// rule 10). The examination precedes the pre-create below too: O_EXCL
+	// refuses a dangling link as an existing file, and the stat that follows it
+	// would then follow the link.
+	if err := refuseSymlinkedDBFiles(dbPath); err != nil {
+		return nil, err
 	}
 
 	// For a NEW database, pre-create the file with 0600 BEFORE sql.Open touches
@@ -311,24 +368,21 @@ func openRoadmap(roadmapName string, chmod chmodFunc) (*DB, error) {
 	// Open-Time Permission Enforcement). O_EXCL guarantees we are the creator;
 	// if a concurrent process created it first we fall back to treating it as
 	// existing. The umask can still NARROW the created mode (0600 &^ umask), so
-	// secureDBFile below settles it either way.
-	if isNew {
+	// secureDBFile below settles it either way. Whether the file was created
+	// here or found empty, the shape check below reads it as a zero-byte file
+	// and the schema is created once, under the check in createSchemaIfAbsent.
+	if _, statErr := os.Lstat(dbPath); os.IsNotExist(statErr) {
 		// #nosec G304 -- dbPath is the internal per-roadmap path ~/.roadmaps/<name>/project.db; <name> is validated by ValidateRoadmapName upstream (no traversal), and this O_EXCL pre-create at 0600 is the fix for security finding #77
 		f, err := os.OpenFile(dbPath, os.O_CREATE|os.O_EXCL|os.O_RDWR, utils.DBFilePerm)
 		if err != nil {
-			if os.IsExist(err) {
-				// Lost the race: another process created it. Treat as existing.
-				isNew = false
-			} else {
+			if !os.IsExist(err) {
 				return nil, fmt.Errorf("pre-creating database %s: %w", roadmapName, err)
 			}
-		} else {
-			// Close the descriptor immediately; sql.Open reopens the path. The
-			// file now exists and was never wider than 0600 at any instant;
-			// secureDBFile settles it at exactly 0600 next.
-			if cerr := f.Close(); cerr != nil {
-				return nil, fmt.Errorf("closing pre-created database %s: %w", roadmapName, cerr)
-			}
+			// Lost the race: another process created it. Treat as existing.
+		} else if cerr := f.Close(); cerr != nil {
+			// Close the descriptor immediately; the connector reopens the
+			// path. The file was never wider than 0600 at any instant.
+			return nil, fmt.Errorf("closing pre-created database %s: %w", roadmapName, cerr)
 		}
 	}
 
@@ -340,6 +394,13 @@ func openRoadmap(roadmapName string, chmod chmodFunc) (*DB, error) {
 	// 0600 fails the command here: no connection is established and no SQL runs
 	// (SPEC/ARCHITECTURE.md § Open-Time Permission Enforcement).
 	if err := secureDBFile(dbPath, chmod); err != nil {
+		return nil, err
+	}
+
+	// Decide what the file is before any connection exists
+	// (SPEC/DATABASE.md § Opening a Roadmap Database File).
+	shape, err := classifyDBFile(dbPath)
+	if err != nil {
 		return nil, err
 	}
 
@@ -365,7 +426,25 @@ func openRoadmap(roadmapName string, chmod chmodFunc) (*DB, error) {
 	if err != nil {
 		return nil, fmt.Errorf("opening database %s: %w", roadmapName, err)
 	}
+	sidecarsBefore := presentSidecars(dbPath)
 	sqlDB := sql.OpenDB(connector)
+
+	// A SQLite file is judged by its schema version before anything is written
+	// to it: the WAL setting configureConnection writes is a change to the
+	// file's header, and a database newer than this binary must be left byte
+	// for byte as it was (SPEC/VERSION.md § Database Schema Newer Than the
+	// Binary). A file whose header passed but that the engine still refuses to
+	// read is refused as not a roadmap database.
+	needsSchema := shape == dbShapeEmpty
+	if shape == dbShapeSQLite {
+		uninitialised, verr := checkSchemaVersion(sqlDB, dbPath)
+		if verr != nil {
+			sqlDB.Close() // #nosec G104 -- cleanup call in error path, original error returned
+			removeNewSidecars(dbPath, sidecarsBefore)
+			return nil, verr
+		}
+		needsSchema = uninitialised
+	}
 
 	// Configure connection with retry logic
 	if err := retryWithBackoff("configuring database", func() error {
@@ -381,10 +460,15 @@ func openRoadmap(roadmapName string, chmod chmodFunc) (*DB, error) {
 		batchProc:  NewBatchProcessor(100),
 	}
 
-	// Create schema if new database with retry logic
-	if isNew {
+	if needsSchema {
+		// An uninitialised database — a zero-byte file, whether pre-created
+		// above or found on disk — receives the whole schema in one
+		// transaction. The transaction re-checks for the schema itself, so two
+		// invocations that found the same empty file both succeed and the
+		// schema is created once (SPEC/DATABASE.md § Opening a Roadmap Database
+		// File).
 		if err := retryWithBackoff("creating schema", func() error {
-			return db.CreateSchema()
+			return db.createSchemaIfAbsent()
 		}); err != nil {
 			db.Close() // #nosec G104 -- cleanup call in error path, original error returned
 			return nil, fmt.Errorf("creating schema: %w", err)
@@ -401,7 +485,7 @@ func openRoadmap(roadmapName string, chmod chmodFunc) (*DB, error) {
 			return db.RunMigrations()
 		}); err != nil {
 			db.Close() // #nosec G104 -- cleanup call in error path, original error returned
-			return nil, fmt.Errorf("running migrations: %w", err)
+			return nil, &migrationFailure{err: err}
 		}
 	}
 
@@ -414,8 +498,279 @@ func openRoadmap(roadmapName string, chmod chmodFunc) (*DB, error) {
 	return db, nil
 }
 
+// dbShape is what a roadmap's project.db is, decided before any connection is
+// established (SPEC/DATABASE.md § Opening a Roadmap Database File).
+type dbShape int
+
+const (
+	// dbShapeEmpty is a file of zero bytes: an uninitialised database.
+	dbShapeEmpty dbShape = iota
+	// dbShapeSQLite is a file that begins with the SQLite header string.
+	dbShapeSQLite
+)
+
+// sqliteHeader is the 16-byte string every SQLite database file begins with:
+// "SQLite format 3" followed by a zero byte (https://www.sqlite.org/fileformat.html,
+// § 1.3.1).
+const sqliteHeader = "SQLite format 3\x00"
+
+// classifyDBFile reads the first bytes of dbPath and decides its shape. A file
+// that is not empty and does not begin with the SQLite header string is refused
+// with the published line; the file is opened read-only for the decision, so
+// nothing is written to it.
+func classifyDBFile(dbPath string) (dbShape, error) {
+	f, err := os.Open(dbPath) // #nosec G304 -- dbPath is the internal per-roadmap path ~/.roadmaps/<name>/project.db, examined for symbolic links before this read
+	if err != nil {
+		return 0, fmt.Errorf("%w: reading %s: %v", utils.ErrDatabase, dbPath, err)
+	}
+	defer f.Close() //nolint:errcheck // read-only descriptor; a close error cannot be acted on
+
+	var header [len(sqliteHeader)]byte
+	n, err := io.ReadFull(f, header[:])
+	switch {
+	case n == 0 && (err == nil || errors.Is(err, io.EOF)):
+		return dbShapeEmpty, nil
+	case err != nil && !errors.Is(err, io.ErrUnexpectedEOF):
+		return 0, fmt.Errorf("%w: reading %s: %v", utils.ErrDatabase, dbPath, err)
+	case n < len(sqliteHeader) || string(header[:]) != sqliteHeader:
+		return 0, notValidRoadmapDatabase(dbPath)
+	}
+	return dbShapeSQLite, nil
+}
+
+// notValidRoadmapDatabase renders the refusal of a file that is not empty and is
+// not a SQLite database:
+//
+//	Error: database error: <path> is not a valid roadmap database
+//
+// It carries no text of the SQLite driver (SPEC/DATABASE.md § Opening a Roadmap
+// Database File; SPEC/ARCHITECTURE.md § Classification of Database Driver
+// Failures).
+func notValidRoadmapDatabase(dbPath string) error {
+	return fmt.Errorf("%w: %s is not a valid roadmap database", utils.ErrDatabase, dbPath)
+}
+
+// newerSchemaRefusal renders the refusal of a database whose stored schema
+// version is newer than SchemaVersion (SPEC/VERSION.md § Database Schema Newer
+// Than the Binary; the line is published in SPEC/DATABASE.md § Opening a
+// Roadmap Database File).
+func newerSchemaRefusal(dbPath, dbVersion string) error {
+	return fmt.Errorf("%w: %s has schema version %s, newer than schema version %s supported by this rmp; upgrade rmp to open it",
+		utils.ErrDatabase, dbPath, dbVersion, SchemaVersion)
+}
+
+// checkSchemaVersion reads _metadata.schema_version through sqlDB, before any
+// other table is read and before anything is written, and refuses a database
+// whose version is newer than SchemaVersion, compared numerically component by
+// component.
+//
+// It reports uninitialised = true for a SQLite file that holds no schema object
+// at all — the same uninitialised database a zero-byte file is, in the form
+// SQLite gives one once a page size has been written. A file the engine refuses
+// to read as a database is refused with the not-a-roadmap-database line. A
+// database without a readable schema version that does hold schema objects is
+// left to the migration step, exactly as before this check existed.
+func checkSchemaVersion(sqlDB *sql.DB, dbPath string) (uninitialised bool, err error) {
+	var version string
+	qerr := retryWithBackoff("reading schema version", func() error {
+		return sqlDB.QueryRow("SELECT value FROM _metadata WHERE key = 'schema_version'").Scan(&version)
+	})
+	if qerr == nil {
+		if compareVersions(version, SchemaVersion) > 0 {
+			return false, newerSchemaRefusal(dbPath, version)
+		}
+		return false, nil
+	}
+	if extendedResultCode(qerr)&0xFF == sqliteNotADB {
+		return false, notValidRoadmapDatabase(dbPath)
+	}
+	if errors.Is(qerr, sql.ErrNoRows) {
+		return false, nil
+	}
+
+	var objects int
+	cerr := retryWithBackoff("reading schema", func() error {
+		return sqlDB.QueryRow("SELECT COUNT(*) FROM sqlite_master").Scan(&objects)
+	})
+	if cerr != nil {
+		if extendedResultCode(cerr)&0xFF == sqliteNotADB {
+			return false, notValidRoadmapDatabase(dbPath)
+		}
+		return false, fmt.Errorf("%w: reading schema of %s: %w", utils.ErrDatabase, dbPath, cerr)
+	}
+	return objects == 0, nil
+}
+
+// dbFileSuffixes are project.db and its three SQLite companions: the
+// write-ahead log, the shared-memory index, and the rollback journal. None of
+// them may be a symbolic link (SPEC/ARCHITECTURE.md § Directory Structure,
+// location rule 10). Declared as an array so the examination allocates nothing.
+var dbFileSuffixes = [...]string{"", "-wal", "-shm", "-journal"}
+
+// refuseSymlinkedDBFiles examines project.db and each of its companions without
+// following a link, and refuses the open when any of them is a symbolic link,
+// dangling or not:
+//
+//	Error: database error: <path> is a symbolic link; refusing to use it as a roadmap database file
+//
+// A name that does not exist is not refused. The link is neither followed,
+// removed nor replaced, and no connection is established, so SQLite never
+// follows it either.
+func refuseSymlinkedDBFiles(dbPath string) error {
+	for _, suffix := range dbFileSuffixes {
+		p := dbPath + suffix
+		info, err := os.Lstat(p)
+		if err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			return fmt.Errorf("%w: examining %s: %v", utils.ErrDatabase, p, err)
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf("%w: %s is a symbolic link; refusing to use it as a roadmap database file", utils.ErrDatabase, p)
+		}
+	}
+	return nil
+}
+
+// presentSidecars reports which of project.db's companions exist before a
+// connection is established, so a refusal that follows the first read can
+// remove exactly the companions this invocation's connection created and none
+// that were already there (SPEC/DATABASE.md § Opening a Roadmap Database File:
+// on the refusal "no sidecar has been created by the invocation").
+func presentSidecars(dbPath string) [len(dbFileSuffixes)]bool {
+	var present [len(dbFileSuffixes)]bool
+	for i, suffix := range dbFileSuffixes {
+		if suffix == "" {
+			continue
+		}
+		if _, err := os.Lstat(dbPath + suffix); err == nil {
+			present[i] = true
+		}
+	}
+	return present
+}
+
+// removeNewSidecars removes every companion of dbPath that presentSidecars did
+// not find, provided it is a regular file. It is best-effort: a companion that
+// cannot be removed changes neither the refusal nor its exit code.
+func removeNewSidecars(dbPath string, before [len(dbFileSuffixes)]bool) {
+	for i, suffix := range dbFileSuffixes {
+		if suffix == "" || before[i] {
+			continue
+		}
+		p := dbPath + suffix
+		if info, err := os.Lstat(p); err == nil && info.Mode().IsRegular() {
+			_ = os.Remove(p) // #nosec G104 -- best-effort cleanup on a refusal path; the refusal is returned either way
+		}
+	}
+}
+
+// CreateRoadmapDatabase creates ~/.roadmaps/<name>/project.db, complete, for
+// `rmp roadmap create`, atomically against every concurrent creator
+// (SPEC/COMMANDS.md § Create Roadmap, "Creation is atomic against concurrent
+// creators").
+//
+// The database is built whole under a temporary name inside the roadmap home
+// directory — created at 0600 from the outset by os.CreateTemp — and is then
+// published under project.db by os.Link, which fails when project.db already
+// exists and never replaces a file. That one operation is the claim on the
+// name: no check-then-create window exists in which two creators both find it
+// free, no invocation can observe project.db holding a partial schema, and a
+// creator that loses fails with the published already-exists refusal. The
+// temporary file and every companion SQLite gave it are removed on every path,
+// winner and loser alike, and a loser changes nothing the winner left.
+//
+// A project.db that is a symbolic link is neither a roadmap that exists nor a
+// name the command may claim: it is refused with the symbolic-link line.
+func CreateRoadmapDatabase(roadmapName string) error {
+	if err := utils.ValidateRoadmapName(roadmapName); err != nil {
+		return err
+	}
+	if err := utils.EnsureRoadmapDir(roadmapName); err != nil {
+		return err
+	}
+	dbPath, err := utils.GetRoadmapPath(roadmapName)
+	if err != nil {
+		return err
+	}
+	if err := refuseSymlinkedDBFiles(dbPath); err != nil {
+		return err
+	}
+	if _, err := os.Lstat(dbPath); err == nil {
+		return utils.RoadmapAlreadyExistsError(roadmapName)
+	}
+
+	tmp, err := os.CreateTemp(filepath.Dir(dbPath), ".rmp-create-*.db")
+	if err != nil {
+		return fmt.Errorf("%w: creating roadmap database %s: %v", utils.ErrDatabase, dbPath, err)
+	}
+	tmpPath := tmp.Name()
+	defer removeTempDatabase(tmpPath)
+	// CreateTemp asks for 0600 and the umask can only narrow it; a narrower
+	// mode would leave SQLite unable to write the database it is building, so
+	// the file is brought to exactly 0600 before it is used. It is never wider
+	// than 0600 at any instant.
+	if err := tmp.Chmod(utils.DBFilePerm); err != nil {
+		_ = tmp.Close() // #nosec G104 -- error path; the chmod failure is returned
+		return fmt.Errorf("%w: creating roadmap database %s: %v", utils.ErrDatabase, dbPath, err)
+	}
+	if err := tmp.Close(); err != nil {
+		return fmt.Errorf("%w: creating roadmap database %s: %v", utils.ErrDatabase, dbPath, err)
+	}
+
+	if err := buildDatabase(tmpPath); err != nil {
+		return err
+	}
+
+	if err := os.Link(tmpPath, dbPath); err != nil {
+		if errors.Is(err, fs.ErrExist) {
+			return utils.RoadmapAlreadyExistsError(roadmapName)
+		}
+		return fmt.Errorf("%w: publishing roadmap database %s: %v", utils.ErrDatabase, dbPath, err)
+	}
+	return nil
+}
+
+// buildDatabase creates the whole schema in the database file at path and
+// closes it, leaving no companion behind: the last connection to close in WAL
+// mode checkpoints the log and removes it.
+func buildDatabase(path string) error {
+	connector, err := sqlite.NewConnector(dsnFor(path, false))
+	if err != nil {
+		return fmt.Errorf("%w: opening %s: %v", utils.ErrDatabase, path, err)
+	}
+	sqlDB := sql.OpenDB(connector)
+	db := &DB{DB: sqlDB, queryCache: NewQueryCache(), batchProc: NewBatchProcessor(100)}
+
+	if err := configureConnection(sqlDB); err != nil {
+		db.Close() // #nosec G104 -- cleanup call in error path, original error returned
+		return fmt.Errorf("configuring database: %w", err)
+	}
+	if err := db.CreateSchema(); err != nil {
+		db.Close() // #nosec G104 -- cleanup call in error path, original error returned
+		return fmt.Errorf("creating schema: %w", err)
+	}
+	if err := db.Close(); err != nil {
+		return fmt.Errorf("%w: closing %s: %v", utils.ErrDatabase, path, err)
+	}
+	return nil
+}
+
+// removeTempDatabase removes the temporary database CreateRoadmapDatabase built
+// and every companion SQLite may have given it. Removing the temporary name of
+// a database already published by os.Link leaves the published name intact.
+func removeTempDatabase(tmpPath string) {
+	for _, suffix := range dbFileSuffixes {
+		_ = os.Remove(tmpPath + suffix) // #nosec G104 -- best-effort cleanup; an absent file is the expected case for the companions
+	}
+}
+
 // OpenExisting opens an existing roadmap database.
-// Returns an error if the database doesn't exist.
+// Returns an error if the database doesn't exist. A roadmap home that is a
+// regular file, or any other entry that is neither a directory nor a symbolic
+// link, is a roadmap that does not exist (SPEC/COMMANDS.md § Roadmap Selection
+// (Always Required)).
 func OpenExisting(roadmapName string) (*DB, error) {
 	exists, err := utils.RoadmapExists(roadmapName)
 	if err != nil {
@@ -449,6 +804,12 @@ func OpenExisting(roadmapName string) (*DB, error) {
 // Enforcement, E. The read-only open path; SPEC/WEB.md § Read-Only Data Flow).
 // A refusal is a read failure on the affected route (HTTP 500), not a reason
 // for the web server to stop.
+//
+// It applies the same refusals as Open, in the same order: a symbolic link
+// among the database's files, a file that is not a SQLite database, and a
+// schema newer than this binary (SPEC/DATABASE.md § Opening a Roadmap Database
+// File). A file of zero bytes is refused as well, because a read-only open
+// creates no schema.
 func OpenReadOnly(roadmapName string) (*DB, error) {
 	return openRoadmapReadOnly(roadmapName, os.Chmod)
 }
@@ -473,12 +834,24 @@ func openRoadmapReadOnly(roadmapName string, chmod chmodFunc) (*DB, error) {
 		return nil, err
 	}
 
+	if err := refuseSymlinkedDBFiles(dbPath); err != nil {
+		return nil, err
+	}
+
 	// Settle the mode before the connector exists, exactly as the writable path
 	// does. query_only blocks SQL writes, not the engine's creation of a
 	// sidecar, so the sidecars this path can produce still inherit their mode
 	// from project.db.
 	if err := secureDBFile(dbPath, chmod); err != nil {
 		return nil, err
+	}
+
+	shape, err := classifyDBFile(dbPath)
+	if err != nil {
+		return nil, err
+	}
+	if shape == dbShapeEmpty {
+		return nil, fmt.Errorf("%w: %s holds no schema; a read-only open creates none", utils.ErrDatabase, dbPath)
 	}
 
 	connector, err := sqlite.NewConnector(dsnFor(dbPath, true))
@@ -491,6 +864,11 @@ func openRoadmapReadOnly(roadmapName string, chmod chmodFunc) (*DB, error) {
 	sqlDB.SetMaxIdleConns(1)
 	sqlDB.SetConnMaxLifetime(30 * time.Minute)
 	sqlDB.SetConnMaxIdleTime(10 * time.Minute)
+
+	if _, err := checkSchemaVersion(sqlDB, dbPath); err != nil {
+		sqlDB.Close() // #nosec G104 -- cleanup call in error path, original error returned
+		return nil, err
+	}
 
 	restrictSidecars(dbPath, chmod)
 
@@ -531,11 +909,28 @@ func openRoadmapReadOnly(roadmapName string, chmod chmodFunc) (*DB, error) {
 // trap. The driver fixes the order it applies them in -- _busy_timeout first,
 // _query_only last -- independent of the order written here.
 //
+// A read-write DSN also carries _txlock=immediate, which is not a PRAGMA: it
+// makes the driver begin every read-write transaction with BEGIN IMMEDIATE, so
+// the write lock is taken at BEGIN, before the transaction has read anything,
+// where SQLite does invoke the busy handler and busy_timeout applies. Begun
+// DEFERRED, a transaction that reads before it writes asks for the write lock
+// at its first write, and if another connection holds it SQLite returns
+// SQLITE_BUSY at once without invoking the busy handler, since waiting could not
+// succeed while the transaction keeps what it has read; concurrent writer
+// processes then failed instead of waiting for one another. A read-only DSN
+// carries no _txlock: an IMMEDIATE begin on a connection that never writes
+// would only hold the write lock against every writer for the length of each
+// read. The driver begins a transaction requested with sql.TxOptions{ReadOnly:
+// true} with a plain BEGIN whatever _txlock says. See SPEC/IMPLEMENTATION.md
+// § Transaction Lock Mode.
+//
 // See SPEC/IMPLEMENTATION.md § DSN Construction and https://www.sqlite.org/uri.html.
 func dsnFor(dbPath string, readOnly bool) string {
 	params := fmt.Sprintf("_busy_timeout=%d&_foreign_keys=1", DefaultBusyTimeout)
 	if readOnly {
 		params += "&_query_only=1"
+	} else {
+		params += "&_txlock=immediate"
 	}
 	return "file:" + uriPath(dbPath) + "?" + params
 }

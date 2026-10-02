@@ -45,15 +45,15 @@ const (
 
 | Status | Set Automatically | Set Manually | Description |
 |--------|-------------------|--------------|-------------|
-| `BACKLOG` | Yes (on remove from sprint) | Yes | Task is in the backlog. It usually belongs to no sprint, but it can still be a sprint member; see `STATE_MACHINE.md § Sprint Membership and the BACKLOG Status` |
-| `SPRINT` | **Yes** | No | Task is assigned to sprint. **Do not set manually** - use `sprint add-tasks` |
+| `BACKLOG` | Yes (on removal from a sprint) | No | Task is in the backlog and belongs to no sprint; see `STATE_MACHINE.md § Sprint Membership and the BACKLOG Status` |
+| `SPRINT` | **Yes** | Via `task reopen` only | Task is a sprint member whose work has not started. Set when a `BACKLOG` task joins a sprint (`sprint add-tasks`) and by `task reopen`; `task stat` cannot set it |
 | `DOING` | No | Yes | Task is being worked on |
 | `TESTING` | No | Yes | Task is in testing phase |
-| `COMPLETED` | No | Yes | Task is complete |
+| `COMPLETED` | No | Yes | Task is complete; it stays in the sprint it was completed in |
 
-**Important:** The `SPRINT` status is automatically managed by sprint operations (`sprint add-tasks`, `sprint remove-tasks`). Attempting to manually transition to `SPRINT` via `task stat` should be rejected.
+**Important:** The `SPRINT` status is set by `sprint add-tasks`, when a `BACKLOG` task joins a sprint, and by `task reopen`. A manual transition to `SPRINT` via `task stat` is rejected, and so is `task stat <ids> BACKLOG` on any sprint member.
 
-**Status is not membership:** The `status` column does not record which sprint a task belongs to; the `sprint_tasks` table does (see `DATABASE.md § sprint_tasks Table (1:N Relationship)`). A task whose status is `BACKLOG` may still be a member of a sprint. `STATE_MACHINE.md § Sprint Membership and the BACKLOG Status` is the canonical description of that state.
+**Status is not membership:** The `status` column does not record which sprint a task belongs to; the `sprint_tasks` table does (see `DATABASE.md § sprint_tasks Table (1:N Relationship)`). The two are nevertheless bound by the **sprint membership invariant**: a task that is a member of a sprint is never in `BACKLOG` status, and a task in `BACKLOG` status belongs to no sprint. The schema enforces it (`DATABASE.md § Sprint Membership Invariant Enforcement`); `STATE_MACHINE.md § Sprint Membership and the BACKLOG Status` is canonical for it.
 
 ### Task Type
 ```go
@@ -763,7 +763,7 @@ type AuditEntry struct {
 - `RelatedEntityID`: The counterpart entity of the operation that produced the
   entry, or `nil` when that operation has no counterpart.
   `DATABASE.md § The Two Entities of a Relational Operation` is canonical for the
-  rule and for the eight operation-and-command combinations that write it. Note that
+  rule and for the operation-and-command combinations that write it. Note that
   one operation value can carry it or not depending on the command that produced the
   entry: `TASK_STATUS_BACKLOG` names a sprint when `sprint remove-tasks` wrote it and
   is `nil` when `task stat` did, because only the first has a second entity party to
@@ -922,7 +922,7 @@ type SprintShowResult struct {
     SeverityDistribution    SeverityDistribution    `json:"severity_distribution"`
     CriticalityDistribution CriticalityDistribution `json:"criticality_distribution"`
     TaskOrder               []int                   `json:"task_order"`   // Task IDs ordered by position
-    CurrentLoad             int                     `json:"current_load"` // Number of tasks currently in sprint
+    CurrentLoad             int                     `json:"current_load"` // Members in SPRINT, DOING or TESTING status
     MaxTasks                *int                    `json:"max_tasks"`    // Nullable; NULL means unlimited
     CapacityPct             *float64                `json:"capacity_pct"` // Nullable; NULL when max_tasks is unset
 }
@@ -941,7 +941,7 @@ type SprintShowResult struct {
 | `severity_distribution` | SeverityDistribution | Task counts per severity range (0-2, 3-5, 6-7, 8-9) |
 | `criticality_distribution` | CriticalityDistribution | Task counts per criticality level (low, medium, high, critical) |
 | `task_order` | []int | Task IDs ordered by position (ascending) |
-| `current_load` | int | Total number of tasks in the sprint |
+| `current_load` | int | Number of member tasks whose status is `SPRINT`, `DOING` or `TESTING` (the tasks that count against `max_tasks`); not the total member count |
 | `max_tasks` | *int | Capacity limit; null when unlimited |
 | `capacity_pct` | *float64 | `(current_load / max_tasks) * 100`; null when `max_tasks` is null |
 

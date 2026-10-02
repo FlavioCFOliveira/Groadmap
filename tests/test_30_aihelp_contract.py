@@ -49,22 +49,14 @@ from tests.base_test import GroadmapTestBase
 
 HINT_LINE = "AI agents usage: run `rmp --ai-help` for a machine-readable command contract."
 
-# Task-status words inside published prose, and the sentence boundary used to
-# read them. The semicolon matters: a clause joined that way carries its own
-# status words, and folding it into its neighbour would let one sentence's
-# states be read as another's.
+# Task-status words inside published prose.
 _STATUS_WORD = re.compile(r"\b(BACKLOG|SPRINT|DOING|TESTING|COMPLETED)\b")
-_SENTENCE_SPLIT = re.compile(r"(?:\.\s+|;\s+)")
 
 # The phrase the `backlog` summary must carry while both its subcommands filter
-# on the status alone, and the ways a summary can claim the opposite.
+# on the status alone, and the phrase it must carry while every task they return
+# belongs to no sprint, which the sprint membership invariant guarantees.
 _BACKLOG_STATUS_ONLY_MARKER = "status alone"
-_BACKLOG_EXCLUSION_CLAIMS = (
-    "not yet in a sprint",
-    "not in a sprint",
-    "outside a sprint",
-    "never in a sprint",
-)
+_BACKLOG_NO_SPRINT_MARKER = "belongs to no sprint"
 
 REQUIRED_TOP_LEVEL_KEYS = frozenset([
     "schema_version",
@@ -1370,14 +1362,15 @@ class TestAIHelpAuditOperationMembers:
 
 
 class TestAIHelpSprintToBacklogContract:
-    """The contract's account of the SPRINT -> BACKLOG route (rmp task #232).
+    """The contract's account of the routes into and out of BACKLOG (rmp tasks
+    #232 and #575).
 
-    SPEC/STATE_MACHINE.md § Sprint Membership and the BACKLOG Status describes a
-    state three published texts used to deny existed: a task reading BACKLOG
-    while still a member of a sprint. Each of the three is checked here against
-    the behaviour of the compiled binary, observed first and read second, so a
-    text and the code it describes cannot drift apart again without this class
-    going red.
+    SPEC/STATE_MACHINE.md § Sprint Membership and the BACKLOG Status binds
+    membership and status by one invariant: a sprint member is never in
+    BACKLOG. Three published texts describe what that means for an agent, and
+    each is checked here against the behaviour of the compiled binary, observed
+    first and read second, so a text and the code it describes cannot drift
+    apart again without this class going red.
 
     The unit-level half of these gates lives in internal/commands and
     internal/aihelp; neither half subsumes the other. Those cannot see the
@@ -1481,103 +1474,80 @@ class TestAIHelpSprintToBacklogContract:
 
     # -- the three published texts ---------------------------------------
 
-    def test_reopen_side_effects_name_the_sprint_tasks_delete(self):
-        """`task reopen` side effects name exactly the states that lose the row.
+    def test_reopen_side_effects_name_the_kept_membership(self):
+        """`task reopen` keeps the task in its sprint, and the contract says so.
 
-        The contract used to read "UPDATE tasks + audit log per task; one
-        transaction", which omits the DELETE FROM sprint_tasks the command runs
-        from SPRINT, DOING and TESTING. An agent believing it would expect a
-        reopened task to keep its place in the sprint -- true only from
-        COMPLETED.
+        A reopening returns a DOING, TESTING or COMPLETED task to SPRINT and never
+        touches sprint_tasks (SPEC/COMMANDS.md § Reopen Task). The membership is
+        observed per source state first; the published side effects are read
+        second, both ways.
         """
         roadmap, sprint = self._seed()
 
-        detaching, keeping = set(), set()
-        for state in self.NON_BACKLOG_STATES:
+        kept = set()
+        for state in ("DOING", "TESTING", "COMPLETED"):
             task_id = self._task_in_state(roadmap, sprint, state)
             assert task_id in self._members(roadmap, sprint), (
-                f"task #{task_id} walked to {state} is not a sprint member; "
-                f"the observation below would be vacuous"
+                f"task #{task_id} walked to {state} is not a sprint member; the observation would be vacuous"
             )
             self.test.run_cmd(["task", "reopen", "-r", roadmap, str(task_id)])
-            assert self._status_of(roadmap, task_id) == "BACKLOG", (
-                f"`task reopen` left task #{task_id} out of BACKLOG"
+            assert self._status_of(roadmap, task_id) == "SPRINT", (
+                f"`task reopen` left task #{task_id} (from {state}) out of SPRINT"
             )
             if task_id in self._members(roadmap, sprint):
-                keeping.add(state)
-            else:
-                detaching.add(state)
-
-        assert detaching, (
-            "`task reopen` detached nothing from any source state; either the fixture "
-            "never produced a member or the command stopped writing sprint_tasks"
-        )
+                kept.add(state)
 
         text = self._subcommand("task", "reopen")["side_effects"]["database"]
-        assert "sprint_tasks" in text, (
-            f"`task reopen` removed the sprint_tasks row from {sorted(detaching)}, but the "
-            f"published side effects never name the table: {text!r}"
-        )
-
-        delete_sentences = [s for s in _SENTENCE_SPLIT.split(text) if "DELETE FROM sprint_tasks" in s]
-        assert len(delete_sentences) == 1, (
-            f"the published side effects should name DELETE FROM sprint_tasks in exactly one "
-            f"sentence, found {len(delete_sentences)}: {text!r}"
-        )
-        declared = self._source_states(delete_sentences[0])
-        assert declared == detaching, (
-            f"the published side effects say DELETE FROM sprint_tasks runs for {sorted(declared)}, "
-            f"but it was observed to run for {sorted(detaching)}\n  sentence: {delete_sentences[0]!r}"
-        )
-
-        for state in keeping:
-            survives = [
-                s for s in _SENTENCE_SPLIT.split(text)
-                if "sprint_tasks" in s and s != delete_sentences[0] and state in s
-            ]
-            assert survives, (
-                f"a task reopened from {state} keeps its sprint_tasks row, but no other sentence "
-                f"of the published side effects says so: {text!r}"
+        if kept == {"DOING", "TESTING", "COMPLETED"}:
+            assert "DELETE FROM sprint_tasks" not in text, (
+                f"`task reopen` kept every task in its sprint, but the side effects name a DELETE: {text!r}"
+            )
+            assert "sprint_tasks is never touched" in text, (
+                f"`task reopen` kept every task in its sprint, but the side effects do not say "
+                f"sprint_tasks is never touched: {text!r}"
+            )
+        else:
+            assert "sprint_tasks is never touched" not in text, (
+                f"`task reopen` took a task out of its sprint (kept only from {sorted(kept)}), but the "
+                f"side effects say sprint_tasks is never touched: {text!r}"
             )
 
-        print(f"✓ task reopen side effects name the sprint_tasks DELETE for {sorted(detaching)} "
-              f"and its survival from {sorted(keeping)}")
+        print(f"✓ task reopen keeps the sprint membership from {sorted(kept)}, and the contract says so")
 
     def test_backlog_summary_matches_what_the_subcommands_return(self):
         """The `backlog` family summary matches what its subcommands return.
 
-        The summary used to call the family "a planning view for tasks not yet
-        in a sprint". Both subcommands filter on the status alone, so a task
-        moved to BACKLOG by `task stat` keeps its sprint_tasks row and is listed
-        all the same.
+        Both subcommands filter on the status alone, and under the invariant a
+        BACKLOG task belongs to no sprint. The observation -- does any listed task
+        belong to a sprint? -- comes first; the summary is read against it.
         """
         roadmap, sprint = self._seed()
 
         member = self._task_in_state(roadmap, sprint, "SPRINT")
-        self.test.run_cmd(["task", "stat", "-r", roadmap, str(member), "BACKLOG"])
-        loner = self._task_in_state(roadmap, sprint, "BACKLOG")
-
-        assert self._status_of(roadmap, member) == "BACKLOG"
-        assert member in self._members(roadmap, sprint), (
-            "`task stat <id> BACKLOG` detached the task from its sprint; SPEC/STATE_MACHINE.md "
-            "§ Sprint Membership and the BACKLOG Status says the row survives, and every claim "
-            "in this test is built on that"
+        exit_code, _, _ = self.test.run_cmd(
+            ["task", "stat", "-r", roadmap, str(member), "BACKLOG"], check=False)
+        assert exit_code == 6 and self._status_of(roadmap, member) == "SPRINT", (
+            "`task stat <id> BACKLOG` did not refuse a sprint member and leave it where it was"
         )
+        loner = self._task_in_state(roadmap, sprint, "BACKLOG")
+        departed = self._task_in_state(roadmap, sprint, "SPRINT")
+        self.test.run_cmd(["sprint", "remove-tasks", "-r", roadmap, str(sprint), str(departed)])
 
         listed = {t["id"] for t in self.test.run_cmd_json(["backlog", "list", "-r", roadmap])}
         next_listed = {t["id"] for t in self.test.run_cmd_json(
             ["backlog", "show-next", "-r", roadmap, "100"])}
 
-        assert loner in listed and loner in next_listed, (
-            f"the never-in-a-sprint task #{loner} is missing from the listings "
-            f"(list={sorted(listed)} show-next={sorted(next_listed)}); the observation would be vacuous"
-        )
-        assert (member in listed) == (member in next_listed), (
-            f"`backlog list` and `backlog show-next` disagree about the sprint-member BACKLOG task "
-            f"#{member}; one summary describes both"
+        for task_id in (loner, departed):
+            assert task_id in listed and task_id in next_listed, (
+                f"the BACKLOG task #{task_id} is missing from the listings "
+                f"(list={sorted(listed)} show-next={sorted(next_listed)}); the observation would be vacuous"
+            )
+        assert member not in listed and member not in next_listed, (
+            f"the SPRINT member #{member} is listed as backlog"
         )
 
-        lists_sprint_members = member in listed
+        members = self._members(roadmap, sprint)
+        lists_sprint_members = bool((listed | next_listed) & members)
 
         summary = None
         for command in self._contract()["commands"]:
@@ -1585,34 +1555,26 @@ class TestAIHelpSprintToBacklogContract:
                 summary = command["summary"]
         assert summary is not None, "the `backlog` family is absent from the published contract"
 
+        assert _BACKLOG_STATUS_ONLY_MARKER in summary, (
+            f"both backlog subcommands filter on the status alone, but the summary does not say so: {summary!r}"
+        )
         if lists_sprint_members:
-            assert _BACKLOG_STATUS_ONLY_MARKER in summary, (
-                f"both backlog subcommands returned the sprint-member BACKLOG task #{member}, but "
-                f"the published summary does not say the filter is the "
-                f"{_BACKLOG_STATUS_ONLY_MARKER!r}: {summary!r}"
+            assert _BACKLOG_NO_SPRINT_MARKER not in summary, (
+                f"a backlog subcommand returned a sprint member, but the summary claims a BACKLOG task "
+                f"{_BACKLOG_NO_SPRINT_MARKER!r}: {summary!r}"
             )
-            for claim in _BACKLOG_EXCLUSION_CLAIMS:
-                assert claim not in summary.lower(), (
-                    f"the published summary claims {claim!r}, but both backlog subcommands returned "
-                    f"the sprint-member BACKLOG task #{member}: {summary!r}"
-                )
         else:
-            assert _BACKLOG_STATUS_ONLY_MARKER not in summary, (
-                f"the backlog subcommands excluded the sprint-member BACKLOG task #{member}, but the "
-                f"published summary still says the filter is the "
-                f"{_BACKLOG_STATUS_ONLY_MARKER!r}: {summary!r}"
+            assert _BACKLOG_NO_SPRINT_MARKER in summary, (
+                f"no listed task is a sprint member, but the summary does not say a BACKLOG task "
+                f"{_BACKLOG_NO_SPRINT_MARKER!r}: {summary!r}"
             )
 
-        print(f"✓ the backlog summary matches the listing "
-              f"(sprint-member BACKLOG task listed: {lists_sprint_members})")
+        print(f"✓ the backlog summary matches the listing (a sprint member listed: {lists_sprint_members})")
 
     def test_delete_non_backlog_pitfall_names_the_task_stat_route(self):
-        """The `delete_non_backlog_task` pitfall names every route that works.
-
-        It used to name `sprint remove-tasks` and `task reopen` only, omitting
-        `task stat <ids> BACKLOG` -- the only route back that leaves the task in
-        its sprint, and therefore the one an agent should reach for first.
-        """
+        """The `delete_non_backlog_task` pitfall says where `task stat <ids>
+        BACKLOG` works from, and it works from no state: it is refused for every
+        sprint member (SPEC/STATE_MACHINE.md § Valid Transitions)."""
         roadmap, sprint = self._seed()
 
         accepted = set()
@@ -1635,8 +1597,6 @@ class TestAIHelpSprintToBacklogContract:
                     f"`task stat {task_id} BACKLOG` from {state} was refused but moved the task to {after}"
                 )
 
-        assert accepted, "`task stat <id> BACKLOG` worked from no source state at all"
-
         pitfalls = {p["id"]: p for p in self._contract()["pitfalls"]}
         description = pitfalls["delete_non_backlog_task"]["description"]
 
@@ -1652,8 +1612,8 @@ class TestAIHelpSprintToBacklogContract:
             f"observed to work from {sorted(accepted)}\n  description: {description}"
         )
 
-        print(f"✓ the delete_non_backlog_task pitfall names `task stat <ids> BACKLOG` "
-              f"from exactly {sorted(accepted)}")
+        print(f"✓ the delete_non_backlog_task pitfall says `task stat <ids> BACKLOG` works "
+              f"from exactly {sorted(accepted) or 'no state'}")
 
 
 def _run_all():

@@ -2,21 +2,13 @@ package commands
 
 import (
 	"testing"
-	"time"
 
 	"github.com/FlavioCFOliveira/Groadmap/internal/testenv"
 )
 
-// terminalRefusalBudget is how long readQueryStdin may take to refuse a
-// terminal. The contract is "without being read at all", so the honest budget is
-// microseconds; a second is chosen only so that a loaded machine cannot produce
-// a false failure, and it is still four orders of magnitude below the forty
-// minutes the defect burned.
-const terminalRefusalBudget = time.Second
-
 // TestReadQueryStdinRefusesATerminalWithoutWaiting is the regression gate for
-// the half of SPEC/GRAPH.md acceptance criterion 24 that an exit code cannot
-// express (task #181).
+// the half of SPEC/GRAPH.md acceptance criterion 24 that an exit code alone
+// cannot express (task #181).
 //
 // The defect: with --query absent and a terminal on standard input, the read
 // waited for a query nobody was going to type. Nothing on the command line looked
@@ -24,12 +16,23 @@ const terminalRefusalBudget = time.Second
 // killed after roughly forty minutes. Any automated caller, a script or a CI step
 // or an agent, blocks indefinitely with no diagnostic.
 //
-// WHY THIS IS ASSERTED ON WALL-CLOCK TIME. A test that only checked the error
-// would never fail on the defect: a call that never returns produces no error to
-// examine, so the assertion would hang with it. The property is therefore stated
-// as the specification states it — the refusal comes BEFORE any read — and the
-// only way to observe "before any read" from outside is that the call returns
-// while a read would still be waiting.
+// WHAT IS ASSERTED, AND WHY IT IS NOT A DURATION. The standard input this drives
+// is a pseudo-terminal that is never written to and never closed, so it will
+// never reach end of stream and never carry a byte. An implementation that reads
+// it before deciding cannot return at all. The assertion is therefore that the
+// call RETURNS, and returns the refusal — an outcome, and not a measurement of
+// how long it took. Criterion 24 says so in as many words, and SPEC/BUILD.md
+// § No Benchmarks and No Performance-Measurement Tests is the rule behind it:
+// "Requiring termination is not a timing assertion. A test may require that an
+// invocation exits rather than blocks; what it asserts is that the process
+// ended."
+//
+// A build that regressed hangs here rather than failing, and the run is ended by
+// the `test` gate's own timeout — the harness stopping a stuck run, which is
+// exactly what that paragraph reserves for this case. The call is therefore made
+// on this goroutine: a goroutine and a select would only convert that stop into a
+// deadline of this test's own choosing, which is the assertion the criterion
+// forbids.
 //
 // The file is constrained to Linux by its name, because it needs a real
 // pseudo-terminal and testenv.OpenPTY implements the Linux sequence. The
@@ -43,30 +46,13 @@ func TestReadQueryStdinRefusesATerminalWithoutWaiting(t *testing.T) {
 	defer func() { _ = slave.Close() }()
 	defer func() { _ = master.Close() }()
 
-	// Nothing is ever written to the master, so the terminal carries no input at
-	// all: exactly the situation the defect hung in.
-	type outcome struct {
-		err   error
-		query string
-	}
-	done := make(chan outcome, 1)
-	go func() {
-		query, readErr := readQueryStdin(slave)
-		done <- outcome{query: query, err: readErr}
-	}()
+	// Nothing is ever written to the master and neither end is closed, so the
+	// terminal carries no input and never will: exactly the situation the defect
+	// hung in.
+	query, readErr := readQueryStdin(slave)
 
-	select {
-	case got := <-done:
-		assertNoQuery(t, got.err)
-		if got.query != "" {
-			t.Errorf("a refused invocation must return no query, got %q", got.query)
-		}
-	case <-time.After(terminalRefusalBudget):
-		// The goroutine is parked in a read that will never complete; it ends with
-		// the test binary. Failing here rather than waiting is the whole point:
-		// the defect this gate closes is precisely a call that does not return.
-		t.Fatalf("readQueryStdin did not refuse a terminal within %s: it is waiting "+
-			"for input on a terminal instead of failing at once (SPEC/GRAPH.md "+
-			"§ Standard Input That Supplies No Query)", terminalRefusalBudget)
+	assertNoQuery(t, readErr)
+	if query != "" {
+		t.Errorf("a refused invocation must return no query, got %q", query)
 	}
 }

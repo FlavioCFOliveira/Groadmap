@@ -439,6 +439,13 @@ func ValidateIDStringAs(s string, field RangedField, rangeClass error) (int, err
 			return 0, idFormatError(field, s)
 		}
 	}
+	// A sign with no digit after it is not an integer of any value, so it is
+	// the format rule and never reaches the range rule below, which would echo
+	// it after "got" as though it were a number (SPEC/COMMANDS.md § Entity
+	// Identifier Range, "What an integer is, for this rule").
+	if s == "-" {
+		return 0, idFormatError(field, s)
+	}
 
 	// Parse the integer. The digit-only check above guarantees Atoi cannot
 	// fail on syntax, so any error here is an overflow: an all-digits value

@@ -10,7 +10,7 @@ The deliverable is fully self-contained: every asset required to render and oper
 
 `rmp web` operates across all roadmaps: it lists every roadmap found under `~/.roadmaps/` and you drill into one from the browser. It is the one command that is exempt from the always-required-roadmap rule, so it does **not** accept the `-r` / `--roadmap` flag. It has no subcommands.
 
-By default the server binds the loopback interface (`127.0.0.1`), so the read-only interface is reachable only from the local machine. Exposing it on the network is the explicit opt-in `--host 0.0.0.0` (all interfaces), which also writes a network-exposure warning to stderr at startup (see [Console Log](#console-log)).
+By default the server binds the loopback interface (`127.0.0.1`), so no other machine can connect to it. The bind limits which connections reach the server, not which requests it serves: a browser on the local machine connects on behalf of any page it loads, so which requests are served is decided by the host allowlist and the cross-site refusal (see [Security](#read-only-pages-one-writable-endpoint-and-security)). Exposing the interface on the network is the explicit opt-in `--host 0.0.0.0` (all interfaces), which also writes a network-exposure warning to stderr at startup (see [Console Log](#console-log)).
 
 **The browser launch is the only child process `rmp web` creates.** Unless `--no-open` is given, startup hands the served URL to the platform's conventional launcher — `xdg-open`, `open`, or `rundll32 url.dll,FileProtocolHandler` — as a single argument, started detached and never through a shell, and a failure to launch is ignored because the URL has already been printed. Nothing else spawns a process: serving a page does not, and neither does reaching a roadmap's graph, which is a socket connection made inside this process rather than a call out to the CLI.
 
@@ -26,7 +26,7 @@ rmp web [options]
 
 | Short Flag | Long Flag | Type | Default | Description |
 |------------|-----------|------|---------|-------------|
-| - | `--host` | string | `127.0.0.1` | Bind host. The default binds loopback only, so the read-only interface is reachable only from the local machine. Exposing it on the network is the explicit opt-in `--host 0.0.0.0` (all interfaces), which also prints a network-exposure warning to stderr |
+| - | `--host` | string | `127.0.0.1` | Bind host. The default binds loopback only, so no other machine can connect; which requests are served is decided by the host allowlist and the cross-site refusal (see [Security](#read-only-pages-one-writable-endpoint-and-security)). The bind host also sets which host names the allowlist admits. Exposing the interface on the network is the explicit opt-in `--host 0.0.0.0` (all interfaces), which also prints a network-exposure warning to stderr |
 | - | `--port` | integer | `8787` | Bind port (0-65535). When `--port` is omitted and `8787` is in use, the server falls back to an OS-chosen ephemeral port so it still starts. With an explicit `--port` there is no fallback. `--port 0` requests an ephemeral port |
 | - | `--no-open` | bool | false | Do not launch a browser; still start the server and print the served URL |
 | `-h` | `--help` | bool | false | Show command help |
@@ -63,18 +63,34 @@ Stdout is untouched by the log: it carries only the startup URL object, so a scr
 | Level | Meaning |
 |-------|---------|
 | `ERROR` | The server failed. The request was answered `500` and the fault is the server's or the environment's — a roadmap database that cannot be read, a template that will not execute, a response body that will not encode, or a roadmap whose derived graph socket path no process could ever bind |
-| `WARN` | The server did not fail, but you need to know what happened — a query-bar query rejected or failed (`400`), a graph server that is not running so the graph could not be reached (`503`), a roadmap skipped by the startup schema migration, or the interface bound to a non-loopback address |
+| `WARN` | The server did not fail, but you need to know what happened — a query-bar query rejected or failed (`400`), a request refused for the host it names or for the site it comes from (`403`), a graph server that is not running so the graph could not be reached (`503`), a roadmap skipped by the startup schema migration, or the interface bound to a non-loopback address |
+| `INFO` | Nothing failed and nothing calls for action, but the record states how a request ended — a request abandoned by its client before the server answered it (`499`; see [Requests abandoned by the client](#requests-abandoned-by-the-client)). A successful request and a successful startup write no record |
 
 ### What is recorded
 
 Every record carries `time`, `level`, and `msg`. `msg` is a fixed phrase naming the condition, never an interpolated string, so all records of one condition group together. A per-request record adds `method`, `path`, `status`, and `err` — the underlying error text, which is exactly what the HTTP response withholds — plus `roadmap` once the roadmap is known, and the route's own subject where there is one (`task`, `sprint`, `page`, `template`, or the query-bar `kind`).
 
+A `403` refusal is decided before any route is matched, so it carries no `roadmap` and no route subject. Its `msg` is `request refused: host not allowed` or `request refused: origin not allowed`, its `err` is the body line the response carries, and it adds the three values the checks examined as received: `host`, `origin` and `sec_fetch_site`, each empty when the field is absent.
+
 ### What is not recorded
 
-- **`404` and `405` are not logged.** An unknown roadmap, an unknown id, an unmapped path, or a write method on a read-only route is ordinary navigation, not a failure. Logging them would bury the real failures under every mistyped URL and every browser probe for an asset the server does not serve.
+- **`404` and `405` are not logged.** An unknown roadmap, a non-integer id, an id that belongs to no record, an unmapped path, or a non-read method on a known path is ordinary navigation, not a failure. Logging them would bury the real failures under every mistyped URL and every browser probe for an asset the server does not serve. A roadmap home that is a regular file, or any other entry that is neither a directory nor a symbolic link, is an unknown roadmap: `404`, not logged. The one exception: a roadmap whose existence check fails with an I/O error — for example a roadmap home whose permissions deny the server the search of it — is answered `500`, not `404`, and is logged. A `403` refusal is not ordinary navigation and is logged, as above.
 - **There is no access log.** A successful request writes nothing.
-- **The client address is not recorded.**
+- **The client address is not recorded.** It would add a personal datum to the console without adding diagnostic value.
 - **Nothing is redacted.** An error text may name a path under `~/.roadmaps/`. That is the diagnostic value of the record; it stays on your console and never reaches the HTTP response.
+
+### Requests abandoned by the client
+
+A client can go away before the server has answered: a browser tab is closed, the user navigates elsewhere while a page is loading, or a command-line client is interrupted. The work the request started then fails because of that cancellation, and none of it is a fault of the server, of a graph server, or of the statement. The server decides by the request's own context, not by the failure's text:
+
+- **It is answered `499`, with no body.** The status is the one nginx uses for "client closed request"; a client that does read it treats it as a `400`. It normally reaches no one, because the client has gone.
+- **It is recorded once, at `INFO`, and never as an error.** The record's `msg` is `request abandoned by client`; it carries `method`, `path`, `status=499`, `roadmap` and the route's subject where known, and `err` naming the failure the cancellation produced. It carries no `kind`. No `ERROR` and no `WARN` record is written for it.
+- **It is never a `503` or an `execution` failure.** A graph data request abandoned before a graph server was resolved is not answered `503`, even when no server is listening, and one abandoned while its statement ran is not answered `400` with `kind` `execution`.
+- **A browser disconnect stops a running graph statement.** A statement cancelled before its transaction committed writes nothing. One that committed before the disconnect arrived stays committed, and the `INFO` record states that the request was abandoned, not whether its statement committed.
+- **A cancellation the server makes itself keeps its classification.** The 5-second query time budget and the endpoint's backstop deadline are both answered `400` with `kind` `execution` and recorded at `WARN` (see [Query time budget: 5 seconds](#query-time-budget-5-seconds)).
+- **A request the server already answered is not re-examined**, whether or not its client was still there to read the answer.
+
+`SPEC/WEB.md § Requests Abandoned by the Client` is canonical for the rule.
 
 ### Timestamps and integrity
 
@@ -86,121 +102,111 @@ The log has no configuration: there is no logging flag, no environment variable,
 
 ## Routes and Pages
 
-All routes serve `GET` and `HEAD` only. Any other HTTP method on any route returns HTTP `405`.
+All routes serve `GET` and `HEAD` only. Any other HTTP method on any route returns HTTP `405`. Before any route is matched, every request passes the host allowlist and the cross-site refusal, and one that fails either is answered `403` (see [Security](#read-only-pages-one-writable-endpoint-and-security)).
 
 | Route | Purpose | Response |
 |-------|---------|----------|
 | `/` | Roadmap index: every roadmap under `~/.roadmaps/`, with links to each roadmap's sprints landing page and graph page (empty-state message when none) | HTML |
 | `/roadmaps/{name}` | Roadmap sprints page and landing page: that roadmap's sprints in three tabs (Próximos / Actual / Concluídos, Actual default), each tab carrying a count badge in the colour of the sprint status it groups; every sprint rendered through the same sprint card and linking to its own page. Selecting a roadmap on the index lands here | HTML |
-| `/roadmaps/{name}/tasks` | Roadmap tasks board: every task of that roadmap, of any status, laid out as a Kanban board of five fixed status columns with a count badge on each; narrowed by the header search and the three header filters through the `q`, `type`, `priority` and `severity` query parameters; clicking a card opens a read-only modal with all task fields and that task's comments timeline. See [The Tasks Board](#the-tasks-board) | HTML |
-| `/roadmaps/{name}/sprints/{id}` | Dedicated sprint page: all sprint details, the sprint's member tasks as a three-column board in planned execution order, and the sprint's own Comments card; each task card opens the task detail modal. See [The Sprint Board](#the-sprint-board) | HTML |
+| `/roadmaps/{name}/tasks` | Roadmap tasks page: the roadmap's tasks, of any status, as one paginated list (ID, title, type, status, severity, priority, created); filtered and paginated on the server through the `q`, `sprint`, `status`, `type`, `page` and `size` query parameters, with the filter state remembered in the `rmp_tasks_filters` cookie; each row links to that task's own page. See [The Tasks Page](#the-tasks-page) | HTML |
+| `/roadmaps/{name}/sprints/{id}` | Dedicated sprint page: all sprint details, the sprint's member tasks as a three-column board in planned execution order, and the sprint's own Comments card; each task card links to that task's own page. See [The Sprint Board](#the-sprint-board) | HTML |
+| `/roadmaps/{name}/tasks/{id}` | Dedicated task page: every field of the task, a small context of the sprint it belongs to, its four Markdown text fields, and its Comments card. A task id that is not an integer or names no task in that roadmap returns HTTP `404`. No path exists below it, so `/roadmaps/{name}/tasks/{id}/data` also returns `404`. See [The Task Page](#the-task-page) | HTML |
 | `/roadmaps/{name}/audit` | Roadmap audit log page: that roadmap's full audit log, showing every field of an audit entry (columns ID, Operation, Entity Type, Entity ID, Related Entity ID, Commit, Performed At, in that order; the two nullable columns are always present and render an em dash where the entry carries no value), ordered by Performed At descending (most recent first), paginated at 100 entries per page via the `page` query parameter (1-based, default 1; out-of-range or non-numeric values are clamped to the nearest valid page) with Previous/Next controls and a "Page X of Y" indicator | HTML |
 | `/roadmaps/{name}/graph` | Interactive knowledge-graph visualisation (D3.js; selectable Networks-section layouts via a dropdown, default Mobile patent suits; pan/zoom, touch, tap-to-inspect), driven by the editable Cypher query bar above the graph card. See [The Knowledge-Graph Query Bar and Data Endpoint](#the-knowledge-graph-query-bar-and-data-endpoint) | HTML |
 | `/roadmaps/{name}/graph/data` | The graph's nodes and edges for the visualisation, produced by sending the Cypher statement in the `q` parameter (the full-graph default query when absent) to the roadmap's running graph server, under the 5-second statement time budget that server enforces. The statement is executed as written and may write. An invalid limit or a failed statement answers HTTP `400` with an `error`/`kind` JSON body; a roadmap no server is serving is answered HTTP `503`; a roadmap whose derived socket path is longer than the platform allows is answered HTTP `500` before anything is probed | JSON |
-| `/roadmaps/{name}/tasks/{id}/data` | One task's full record for the read-only task detail modal: a JSON object with a `task` member carrying every field of the `Task` model and a `comments` member carrying that task's comments oldest first. It is fetched when a card is opened, which is why neither the tasks board nor the sprint page pays for it on its own read. A task id that names no task in that roadmap returns HTTP `404` | JSON |
 | `/static/...` | Embedded static assets (CSS, JS, vendored Tabler framework and D3.js + d3-sankey, fonts) | static file |
 
-`{name}` is validated against the roadmap-name rules (regex `^[a-z0-9_-]+$`, max 50 characters) before it is used to build any filesystem path; a name that fails validation, or a roadmap that does not exist, returns HTTP `404`. A request for a `/static/...` asset that is not embedded returns HTTP `404`. These HTTP statuses are distinct from the process exit codes below.
+`{name}` is validated against the roadmap-name rules (regex `^[a-z0-9_-]+$`, max 50 characters) before it is used to build any filesystem path; a name that fails validation, or a roadmap that does not exist, returns HTTP `404`. A roadmap exists exactly when the CLI says it does: `~/.roadmaps/{name}/` is a directory that holds `project.db`. No entry of that name, a directory without `project.db`, and a regular file at that path each return the same `404`, and the roadmap index lists none of them. A request for a `/static/...` asset that is not embedded returns HTTP `404`. These HTTP statuses are distinct from the process exit codes below.
 
-## The Tasks Board
+## The Tasks Page
 
-`/roadmaps/{name}/tasks` presents every task of the roadmap as a read-only **Kanban board**. The board is the page's only task presentation: the page renders no task table and offers no alternative table view. Its structure follows a GitLab issue board — columns that stand for states, cards that stand for work items, and a task count on each column header — and departs from it in interaction, because this board moves nothing and edits nothing.
+`/roadmaps/{name}/tasks` presents the roadmap's tasks, of any status, as **one list**: a single Tabler card holding one table, with one row per task. The list is not divided by status or by any other attribute; a task's status is a column of its row. The card's header carries the filter bar that narrows the list, and its footer paginates it. The page renders no board, no column per status, and no card per task.
 
-### Columns
+### The list card
 
-The board has exactly five columns, one for each task status, ordered left to right by the flow of the task state machine:
+- **Header.** The card title `Task list` at the leading edge and the filter bar at the trailing edge. Where the viewport is too narrow for both on one line, the filter bar moves to a line of its own below the title, still aligned to the trailing edge, and its controls wrap rather than overflowing the card.
+- **Table.** One row per task, in these columns:
 
-1. `BACKLOG`
-2. `SPRINT`
-3. `DOING`
-4. `TESTING`
-5. `COMPLETED`
+  | Column | Content |
+  |--------|---------|
+  | `ID` | The id badge, `#<id>` in white on black |
+  | `Title` | The task `title`, as a link to the task's own page |
+  | `Type` | The type badge, coloured by task type |
+  | `Status` | The status badge, coloured by task status |
+  | `Severity` | The severity badge, `S<n>`, coloured by severity band |
+  | `Priority` | The priority badge, `P<n>`, coloured by priority band |
+  | `Created` | The task's `created_at`, muted, after a calendar icon |
 
-The columns are fixed. All five are always present, in that order, whatever the roadmap's data contains, and a column holding no task is still rendered with its own in-column empty state. Neither the set of columns nor their order depends on the data, and each column title is the status identifier exactly as the enum spells it, in upper case.
+  The badges are the same badges, with the same colours and the same `S` and `P` prefixes, as those of the sprint board's cards. A long title wraps at word boundaries and is never broken mid-word; when the table is wider than the card it scrolls horizontally inside the card, never the page.
+- **Footer.** The range text `Showing <a> to <b> of <n> entries`, where `<n>` is the number of tasks the filters admit; a rows-per-page selector offering `10`, `25`, `50` and `100`, with `25` the default and the active size drawn with a solid fill; and a numbered pagination bar with Previous and Next controls, the same bar the audit log page uses.
 
-Each column header carries a Tabler badge with the number of tasks that column is showing, coloured by the status the column stands for, so the badge states a count in text and a status in colour; a column with no card shows the count `0`. Every task appears in exactly one column, the column of its own `status`, so on an unnarrowed board the five counts sum to the roadmap's total number of tasks.
+Each row carries exactly one link, the title, which leads to the task's page, `/roadmaps/{name}/tasks/{id}` (see [The Task Page](#the-task-page)). The row itself is not a link.
 
-Within a column the cards appear in descending `priority` and, for tasks of equal priority, ascending `created_at` — the same order `rmp task list` returns by default. The board introduces no second sort.
+Rows appear in descending `priority`, then ascending `created_at`, then ascending `id`. The first two keys are the default order of `rmp task list`; the third makes the order total, so a task lands on the same page on every request. Filtering removes rows from that order and never reorders the rows that remain.
 
-### Every task, never a page of them
+### Filter bar
 
-The page reads **every** task of the roadmap. The read carries no limit, no page size and no truncation, and the board has no pagination: whatever the roadmap holds, the board shows. There is no page window, no `page` parameter and no page clamping on this route.
+The filter bar is an ordinary HTML form submitted by `GET` to the page itself. It carries five controls, and no others:
 
-The `-l, --limit` default that sizes `rmp task list` output is deliberately not applied here. That default sizes the output of one command invocation, where a caller who wants more asks for more and can see that the listing was cut. The board offers no such affordance and it does not merely list: it counts each column and prints that count as a statement of fact about the roadmap. Under a partial read those counts would be wrong and would still be presented as true. Reading every task is therefore a correctness requirement of this page, not a performance choice.
+| Control | Parameter | Values | Filters by |
+|---------|-----------|--------|------------|
+| Search box | `q` | Any text | The task `title` or its `#<id>` reference contains the text |
+| Sprint | `sprint` | `Any sprint`, `No sprint` (`none`), or one option per sprint of the roadmap, shown as `Sprint #<id> <title>` in the planned sprint order | Membership: tasks in no sprint, or tasks of that sprint |
+| Status | `status` | A dropdown of checkboxes: `BACKLOG`, `SPRINT`, `DOING`, `TESTING`, `COMPLETED` | The task's `status` equals any checked value |
+| Type | `type` | A dropdown of checkboxes: the ten task types | The task's `type` equals any checked value |
+| Apply | - | - | Submits the form |
 
-(The audit log page, `/roadmaps/{name}/audit`, is a different page and **is** paginated; its own `page` parameter and clamping rules are in the route table above.)
+Choosing values and activating Apply, or pressing Enter in the search box, submits the form and the server renders the filtered list; choosing a sprint or checking a box does not submit by itself. A dropdown with no box checked does not filter its dimension; its toggle reads `Any status` or `Any type`, the value itself when one box is checked, or `<n> selected` when several are. Applying the filters always returns to page 1 and keeps the current page size. There is no priority filter, no severity filter and no reset button: priority and severity remain visible in every row. The filters are removed by choosing `Any sprint`, unchecking every box and emptying the search box, then applying; the `Reset` link shown when nothing matches restores the default filter state (see [Filter persistence](#filter-persistence)).
 
-### Cards
+- **OR within a dimension, AND across dimensions.** Several checked statuses admit a task whose status is any one of them, and likewise for types. A task is listed when it satisfies every active criterion, and a request with no active criterion lists every task. `?q=cache&status=DOING&status=TESTING&type=BUG` lists the tasks of type `BUG` whose status is `DOING` or `TESTING` and whose title or `#<id>` reference contains `cache`, and no other task.
+- **What the search matches.** Only the `title` and the reference written with its leading `#`, so both `42` and `#42` find task 42. Matching is case-insensitive substring matching after trimming surrounding whitespace from the term and applying Unicode normalisation (NFC), so a title typed with a precomposed `é` and one typed with `e` plus a combining accent are found by either spelling. Accents are not ignored: `cafe` does not find `Café`. Every other task field is excluded.
+- **Every control has an accessible name.** Each control carries a programmatic label, and each is reachable and operable from the keyboard.
 
-Each card presents one task, in this order:
+### Query parameters and pagination
 
-1. A **reference line** with the task reference `#<id>` and the task's `type`, both in muted text. The type carries no colour.
-2. The task **`title`**, as the card's prominent main content.
-3. A **`priority` badge** and a **`severity` badge**, each naming the value it carries with a one-letter prefix — `P` for the priority and `S` for the severity, so a task of priority `5` and severity `3` shows `P5` and `S3` — and coloured by the band that value falls in. The prefix is a label, not part of the value: the colour still follows the number alone.
-4. A **metadata footer** showing only the indicators the task actually has: the sprint it belongs to (identified by the sprint's `title` together with `Sprint #<id>`, as plain text rather than a link), its number of subtasks, its number of `depends_on` entries, its number of `blocks` entries, and its number of comments.
+Filtering and pagination are performed **on the server**, and the state of the list travels in the URL, so a filtered page survives a reload, can be bookmarked or shared, and is restored by the browser's Back navigation. The page accepts exactly six parameters:
 
-An indicator whose value is absent, empty or zero is not rendered at all: no dash, no placeholder, no empty slot. A task with none of the five shows no metadata footer. The card shows **no status badge**, because the column it sits in already states the task's status.
+| Parameter | Accepted value |
+|-----------|----------------|
+| `q` | Any string |
+| `sprint` | `none`, or the `id` of a sprint of this roadmap |
+| `status` | Repeatable; each occurrence one of the five task statuses, spelled exactly as the enum spells it |
+| `type` | Repeatable; each occurrence one of the ten task types, spelled exactly as the enum spells it |
+| `page` | An integer of at least `1` (1-based page number) |
+| `size` | `10`, `25`, `50` or `100` (rows per page; default `25`) |
 
-The whole card is a `<button>`: a pointer click, a touch tap, and the keyboard (Enter and Space) all open the read-only task detail modal for that task, which carries every field of the `Task` model and that task's comments timeline. The modal's data is fetched when the user opens the task, so it adds no query to the page's own read.
+Every pagination link and rows-per-page link keeps the active filters. Changing the page size returns to page 1.
 
-### Header controls
+**An invalid value is ignored, never an error.** A `sprint`, `status` or `type` value that is not accepted — a wrong case (`bug` for `BUG`), a sign, surrounding spaces, a leading zero, the `id` of another roadmap's sprint, or an empty value — lists exactly what the request would list without that value, and the control shows its *any* state. Each occurrence of `status` and `type` is validated on its own, so `?status=DOING&status=doing` filters by `DOING` alone, and a value repeated counts once. An unusable `page` falls back to `1`, and a `page` beyond the last page renders the last page. An unusable `size` falls back to `25`. A parameter the server cannot decode is treated as absent, a repeated `q`, `sprint`, `page` or `size` is read from its first occurrence, and any other parameter — `priority` and `severity` included — is ignored. The parameters are independent: an ignored one leaves the others applied. Whatever the parameters carry, the page answers HTTP `200`.
 
-The page header's actions column carries four controls, and no others — a search box and three filter dropdowns:
+The page loads no script of its own. Its one script is the vendored Tabler script, which opens the Status and Type dropdowns; filtering still submits through Apply, and the list and every control are rendered by the server. With scripting disabled the dropdowns do not open, so the checked statuses and types cannot be changed, while the search, the sprint select, Apply, pagination and the page-size selector still work.
 
-| Control | Kind | Query parameter | Matching |
-|---------|------|-----------------|----------|
-| Search tasks | text input | `q` | Case-insensitive substring over the task's `title` and its `#<id>` reference |
-| Type | dropdown (`Any type` plus the ten `TaskType` values) | `type` | **Equality**: the task's `type` is equal to the selected value |
-| Min priority | dropdown (`Any priority` plus `1` to `9`) | `priority` | **Threshold**: the task's `priority` is `>= n` |
-| Min severity | dropdown (`Any severity` plus `1` to `9`) | `severity` | **Threshold**: the task's `severity` is `>= n` |
+### Filter persistence
 
-Each control carries a real, programmatically associated label naming what it acts on, and each is reachable and operable from the keyboard. A dropdown's first option is a value meaning *no filter on this dimension*, not the control's name.
+The filter state — `q`, `sprint`, `status`, `type` and `size`, never `page` — is remembered across visits in one cookie, `rmp_tasks_filters`, which the server sets and reads; no script touches it and the page uses no browser storage. The cookie is shared by every roadmap and set with `Path=/`, `Max-Age=31536000` (one year), `HttpOnly` and `SameSite=Lax`.
 
-- **The three filters are the three dimensions `rmp task list` already filters by** — `-y, --type`, `-p, --priority` and `--severity` — and each keeps the meaning the flag of the same name carries, so one parameter name means one thing across the two surfaces. The type comparison is exact against the enum's own upper-case spelling; the thresholds start at `1` and not at `0`, because a threshold of `0` admits every task and is therefore the unfiltered board, which already has its own option and its own URL form.
-- **What the search matches** is only what identifies a task on its card: the `title` and the reference written with its leading `#`, so both `42` and `#42` find task 42. Every other field is excluded, because matching an attribute is the job of the three filters.
-- **The criteria combine conjunctively.** A task is shown when it satisfies *every* active criterion, and a board with no active criterion shows every task. `?q=cache&type=BUG&priority=7` shows the `BUG` tasks of priority `7` or above whose title or `#<id>` reference contains `cache`, and no other task. Narrowing a criterion can only shrink the shown set, never grow it.
-- **There is deliberately no status filter.** The five columns already are the status, so a status filter would perform narrowing the layout has performed already — and it could not do so without either leaving excluded columns present and stating a false count of `0`, or dropping columns and contradicting the rule that all five are always present.
+- **A request carrying any of the six parameters** takes its state from the URL alone and its HTTP 200 response sets the cookie to the accepted state. A value longer than 4000 bytes, which only a long search term can produce, is not written, and the cookie already held stays as it was.
+- **A request carrying none of them** — such as the sidebar's Tasks link or a task page's `Back to tasks` link — renders page 1 from the cookie, and never rewrites it. Every cookie part is validated as a URL parameter would be, for the roadmap being viewed, so a sprint of another roadmap is ignored.
+- **With no cookie**, the defaults apply: every status except `COMPLETED`, every type, every sprint, no search, 25 rows per page.
 
-### A narrowed board is a shareable URL
+The cookie holds a presentation choice only: it is not a session and grants nothing, and it is never written to a roadmap database or graph store. The page's responses carry `Vary: Cookie` besides `Cache-Control: no-store`, and never answer `304`.
 
-Every control is a URL query parameter, so the address bar always describes the board on screen and that address reproduces it.
+### Empty states
 
-- **Setting a control updates the URL in place.** Typing in the search box or selecting a filter value replaces the current history entry rather than pushing a new one, so the browser Back button leaves the board instead of stepping backwards through the control row.
-- **An inactive control leaves no parameter.** While the search box is empty or a dropdown sits on its no-filter option, that parameter is removed from the URL rather than left present and empty. Clearing every control restores the full board with its true counts and leaves the bare page URL.
-- **A cold load arrives already narrowed.** When the page is requested with any combination of `q`, `type`, `priority` and `severity`, the server applies all of them and the document it sends already carries the narrowing in its final state: the narrowed column counts, the in-column empty states, the no-match message where nothing matches, and each control already showing the value that produced the board. For any roadmap and any combination of values, the board reached by setting the controls on the page and the board reached by opening that URL cold are the same board — the same cards, in the same columns, in the same order, with the same counts.
-- **Order and repetition.** The four parameters are independent of each other and of their position in the query string. A repeated parameter is read as its first occurrence.
+When no task satisfies the request, the card keeps its header and filter bar, so the filters can be changed in place, and shows an empty state in place of the table and footer:
 
-### Nothing a control carries is an error
+- A roadmap with no task shows `No tasks yet` and points to `rmp task create`, whatever the filters, and offers no `Reset` link.
+- A roadmap holding tasks, none of which satisfies the active filters — including one whose tasks are all `COMPLETED`, under the defaults — shows `No task matches the filters` with a `Reset` link. The link restores the default filter state (`?status=BACKLOG&status=SPRINT&status=DOING&status=TESTING`), keeps the page size, and, being an explicit request, stores that state in the cookie.
 
-An unknown or malformed value applies **no filter on that dimension** and the board is rendered exactly as though that parameter were absent. This covers a `type` that is not one of the ten values (including one that differs only in case), a `priority` or `severity` that is not an integer or falls outside `1` to `9`, a value carrying a sign or surrounding spaces, a parameter present with an empty value, and a parameter the server cannot decode. The dimensions are independent under this rule: an unusable `type` leaves an accepted `priority` applied.
+### Read-only and read cost
 
-Every string is likewise a valid search term: a term that matches nothing renders an empty board, and a `q` the server cannot decode is treated as absent. No value of any of the four parameters produces an error page or changes the route's status codes; the page answers HTTP `200` whatever they carry.
+The page is read-only: it offers no control that creates, edits, moves or reorders a task, no selection and no modal. The filter form only narrows what the page shows, and the `rmp` CLI remains the sole write path.
 
-### What narrowing does to the board
-
-A task that does not satisfy every active criterion is not shown, and everything the board states then refers to the shown set rather than to the roadmap. As the user types or changes a filter, the cards, the counts, the empty states and the no-match message are updated together:
-
-- Each column shows only its matching cards, in the same order.
-- **Each column's count is the number of cards that column is showing**, so the counts narrow with the board.
-- The five columns remain present and in order. Neither searching nor filtering ever drops, hides or reorders a column.
-- A column left with no matching card shows its ordinary in-column empty state.
-- When no task matches at all, the board says so with a clear message beside the five empty columns, rather than leaving the user to interpret silence. A roadmap that holds no task is a different condition and reads differently: it shows the five in-column empty states alone, because it is the state of the roadmap and not the result of any control.
-
-### Read-only, like every other page
-
-The board offers no drag-and-drop and no control of any other kind that moves a task between columns, reorders cards, changes a task's status, or creates or edits a task or a column. The divergence from the GitLab issue board it is modelled on is deliberate: the inspiration is structural, never interactive. The header search and the three filters change only which of the already-read tasks the user is looking at — they write nothing, and are therefore not an exception to the read-only rule.
-
-### Layout and read cost
-
-The five columns are presented side by side. When they do not fit the viewport the board scrolls horizontally inside its own container, so the page itself never scrolls horizontally, and each column scrolls vertically and independently when its card list exceeds the available height. On narrow viewports each column keeps a minimum width at which its cards stay legible.
-
-Every column is `19rem` wide and never narrower than `17rem`, and no column grows or shrinks away from that width: a column stands for a state and not for a volume of work, so all five are the same width whatever number of tasks each holds, and the space a very wide viewport leaves beyond the board stays empty rather than being shared out among them. Inside a column, a card's body carries `0.75rem` of padding on all four sides instead of the `1rem` the UI framework gives a small card, because that padding is measure taken from the card's own text — its reference line, its title, its badges and its metadata footer — on a width the column has already narrowed. What the user presses is the whole card, so the hit target does not shrink with the padding. Both lengths are expressed in `rem` and therefore follow the reader's own text size.
-
-Rendering the page performs three reads and no more: the unbounded read of every task of the roadmap, one grouped query for the comment count of every rendered task, and one grouped query resolving the sprint of every rendered task. The board issues no query per column and none per card, so the number of queries does not grow with the number of tasks. A search term and the three filters add nothing to this: on a cold load they are applied in memory over the rows already read, and narrowing in the browser issues no request at all, because every card is already in the document.
+Rendering the page performs two reads: one read of the roadmap's sprints (for the sprint options and to validate `sprint`), and one read of the roadmap's tasks carrying the accepted `sprint`, `status` and `type` values as bound SQL parameters. A third read, a count of the roadmap's tasks, is issued only when that filtered read is empty and carried a sprint, status or type predicate, to choose between the two empty states. The page resolves no task's sprint, because no row shows one. The search, the total and the page are computed in memory over the rows already read. The `-l, --limit` default of `rmp task list` is not applied, so the total in the footer is the true number of matching tasks. The number of queries — two, or three for an empty filtered list — does not grow with the number of tasks, the page size, or the number of active filters.
 
 ## The Sprint Board
 
-`/roadmaps/{name}/sprints/{id}` presents the sprint's member tasks as a read-only **three-column board**, placed between the sprint's details card and its Comments card. It follows the same GitLab issue board model as the tasks board, and departs from it in the same way: the board moves nothing and edits nothing. The page renders no task table.
+`/roadmaps/{name}/sprints/{id}` presents the sprint's member tasks as a read-only **three-column board**, placed between the sprint's details card and its Comments card. It follows the GitLab issue board model in structure and departs from it in interaction: the board moves nothing and edits nothing. The page renders no task table.
 
 ### Three columns, grouped by what the work is doing
 
@@ -214,9 +220,9 @@ The board has exactly three columns, presented left to right:
 
 This is the same grouping the sprint status summary line at the top of the page already uses — pending, open, completed — rather than a second categorisation invented for the board. That is what makes the two agree by construction: the `WAITING` count is the summary line's `P`, the `DOING` count is its `A`, the `CLOSED` count is its `C`, and the three sum to its `T`. A task status enum with five closed values and three columns claiming all five means no member task can fall outside the board, so there is no fourth column and no "other" column.
 
-A `BACKLOG` task can be a sprint member — `rmp task stat <id> BACKLOG` returns a task to the backlog without removing it from the sprint — which is why `WAITING` groups `BACKLOG` with `SPRINT` rather than showing `SPRINT` alone.
+A sprint member is never in `BACKLOG` status: a task returns to `BACKLOG` only by leaving its sprint, and `rmp task stat <id> BACKLOG` is refused for every sprint member. In practice `WAITING` therefore holds `SPRINT` tasks. The column still claims `BACKLOG`, so that the three columns claim all five statuses and no member task can fall outside the board.
 
-Each column header carries a Tabler badge with that column's task count, coloured by the canonical status of the group it holds: `WAITING` takes the colour of `SPRINT`, `DOING` that of `DOING`, and `CLOSED` that of `COMPLETED`. The canonical status is the one a task is normally in at that stage — a task waiting in a sprint is normally `SPRINT`, and `BACKLOG` there is the exceptional case.
+Each column header carries a Tabler badge with that column's task count, coloured by the canonical status of the group it holds: `WAITING` takes the colour of `SPRINT`, `DOING` that of `DOING`, and `CLOSED` that of `COMPLETED`. The canonical status is the one a task is in at that stage — a task waiting in a sprint is `SPRINT`.
 
 All three columns are always present, in that order, whatever the sprint holds. A column with no task keeps its heading and its `0` count badge and shows its own in-column empty state, so a sprint with no member tasks renders an empty board rather than no board.
 
@@ -242,21 +248,35 @@ Each card presents one member task on three lines:
 
 1. The task **`title`**, leading the card.
 2. The task **reference** `#<id>` on its own line, in muted text.
-3. One line carrying both remaining groups: the **`priority` badge** and the **`severity` badge** at the leading edge, prefixed `P` and `S` and coloured by band exactly as on the tasks board, and the two **counters** at the trailing edge — the number of comments first, then the number of subtasks, each an icon followed by its number.
+3. One line carrying both remaining groups: the **`priority` badge** and the **`severity` badge** at the leading edge, prefixed `P` and `S` and coloured by band exactly as in the tasks page's list, and the two **counters** at the trailing edge — the number of comments first, then the number of subtasks, each an icon followed by its number.
 
 The badges and the counters share a line because they hold one kind of information — what the task is, and how much is attached to it — and because height is the scarce dimension in a column that is bounded and scrolls. Where the card is too narrow to hold both groups, the line wraps inside the card rather than overflowing it, so the card, its column and the page never scroll horizontally.
 
-Both counters are always rendered, including when either or both are `0`, so a zero is a statement rather than a silence. This is where the sprint card departs from the tasks board card, which renders only the indicators a task has and keeps them in a footer of their own: the sprint card carries exactly two counters and can put them on the badge line, while the tasks board card carries five indicators of mixed kinds, one of them text with no zero to show, which cannot share that line. The counter order differs for the same reason — comments before subtasks here, subtasks before comments in the tasks board's footer. The card shows no status badge, because the column it sits in already states the status, and it shows no type and no dependency counts: those are in the task detail modal the card opens.
+Both counters are always rendered, including when either or both are `0`, so a zero is a statement rather than a silence. The card shows no status badge, because the column it sits in already states the status, and it shows no type and no dependency counts: those are on the task page the card links to.
 
-The whole card is a `<button>`, so a pointer click, a touch tap, and the keyboard (Enter and Space) all open that task's read-only detail modal.
+The whole card is a link to that task's page, so a pointer click, a touch tap, and the Enter key open it (see [The Task Page](#the-task-page)).
 
 ### Layout and read cost
 
 The board takes a bounded height of `60vh`, never falling below the floor the interface uses for its full-height regions, and each column scrolls vertically and independently within it. It is deliberately not sized to the space the page body leaves: the page carries the sprint's details above the board and its Comments card below, and a board that grew with the sprint's task count would push those comments further away with every task added. When the three columns do not fit the viewport, the column strip scrolls horizontally inside its own container and the page itself never scrolls horizontally.
 
-The three columns divide the width of the board equally and grow with the viewport, down to a floor of `17rem` below which the strip scrolls horizontally. This is where the two boards part: the tasks board's five columns keep a fixed `19rem`, because five columns divided across a viewport would each be narrow enough to hurt the card's measure, and that board is a view of a whole roadmap whose column count the status enum fixes. The minimum column width, the gap between columns and the card's body padding stay shared by both boards.
+The three columns divide the width of the board equally and grow with the viewport, down to a floor of `17rem` below which the strip scrolls horizontally. The columns are separated by a `0.75rem` gap, and a card's body carries `0.75rem` of padding on all four sides instead of the `1rem` the UI framework gives a small card. Both lengths are expressed in `rem` and therefore follow the reader's own text size.
 
 The page performs two comment reads whatever the number of member tasks: the sprint's own comment log, which the Comments card renders in full, and one grouped query for the comment count of every rendered card. Neither grows with the number of member tasks, and the board issues no query per column and none per card. The subtask counter costs no read of its own, because the sprint's member-task read already carries it.
+
+## The Task Page
+
+`/roadmaps/{name}/tasks/{id}` shows one task on its own read-only page. It is the page every row of the tasks page's list and every card of the sprint board links to.
+
+- **Header.** The pretitle carries `Task #<id>` and the task's status badge; the task `title` is the page title. A `Back to tasks` action returns to the roadmap's tasks page. On viewports narrower than 576px the action sits on its own row below the title. The sidebar highlights the Tasks view.
+- **Browser tab title.** `#<id> <title> - <roadmap> - <hostname>`, so several open task pages can be told apart.
+- **Sprint context.** A small card names the sprint the task belongs to, `Sprint #<id>` and its title, as a link to the sprint page, with the sprint's status badge, the task's place in the sprint's planned execution order (`Position n of m`), and the sprint's progress (`c of m tasks completed`, with a progress bar). A task in no sprint shows `In the backlog: this task belongs to no sprint.` instead.
+- **Details.** Every remaining field of the task, Severity before Priority. The parent, depends-on and blocks references are links to those tasks' pages. Commit hashes are shown in full and wrap rather than being cut off.
+- **Text fields.** The four Markdown fields (functional requirements, technical requirements, acceptance criteria, completion summary) each in its own card, rendered as rich text across the full width of the card.
+- **Comments.** The task's Comments card, oldest first (see [Comment Surfaces](#comment-surfaces)).
+- **Layout.** On wide viewports the sprint context and details sit in a narrow side column to the right of the text and comments; on narrow viewports the page is one stacked column and the details list uses two columns. The page never scrolls horizontally.
+
+A task id that is not an integer, or that names no task in that roadmap, returns HTTP `404`.
 
 ## The Knowledge-Graph Query Bar and Data Endpoint
 
@@ -264,7 +284,7 @@ The knowledge-graph page renders its visualisation from a single editable Cypher
 
 Searching re-fetches `GET /roadmaps/{name}/graph/data` with the query box text as `q` and the dropdown value as `limit`, then re-renders the graph in the currently selected layout.
 
-**The statement is executed as written, and it may write.** The endpoint does not examine the statement and refuses nothing for what it does, so a `CREATE`, a `SET`, a `DETACH DELETE` or a schema `CREATE INDEX` typed into the query box is sent to the roadmap's graph server and committed there, exactly as the same statement would be under `rmp graph client`. The page shows no confirmation and asks for no credential before running one, and **nothing authenticates the request**: the only access control is the address the server is bound to. See [Security](#read-only-pages-one-writable-endpoint-and-security).
+**The statement is executed as written, and it may write.** The endpoint does not examine the statement and refuses nothing for what it does, so a `CREATE`, a `SET`, a `DETACH DELETE` or a schema `CREATE INDEX` typed into the query box is sent to the roadmap's graph server and committed there, exactly as the same statement would be under `rmp graph client`. The page shows no confirmation and asks for no credential before running one, and **nothing authenticates the request**: the only access controls are the bind address, the host allowlist and the cross-site refusal. See [Security](#read-only-pages-one-writable-endpoint-and-security).
 
 A statement that returns no node and no edge — one that matched nothing, one that returned a number, a `SHOW INDEXES` that returned tabular rows, and a `CREATE` that returned no columns at all — is answered HTTP `200` with `{"nodes": [], "edges": []}`. The four are indistinguishable in the response, because none of them failed: each ran, and none produced an element the response shape can carry. A schema listing is read from `rmp graph client`, which returns the rows; this endpoint's document has nowhere to put them.
 
@@ -298,7 +318,7 @@ This web server's own connection timeouts bound the connection, not the work a h
 
 - **The statement runs under a budget of 5 seconds, and the graph server is the end that enforces it.** That server takes the value as its maximum statement timeout and sets no default beside it: the maximum is clamped onto a client that asks for longer and applied unconditionally to one that asks for nothing, so a statement submitted here can neither raise its own nor escape the budget by naming none, and one that would run for longer is cancelled there. It is the same budget the CLI's statements run under, read from one declaration, so the two surfaces can never report different figures for it.
 - **The request keeps a later deadline of its own**, the wait budget of 7.5 seconds rather than the statement budget itself, purely as a backstop against a server that answers nothing. It is deliberately later than the budget so that a statement which committed just before the budget expired is never reported as one that wrote nothing.
-- **The request's own context still cancels**, so the two sources compose: a client that disconnects cancels the statement immediately, and the failure then names the cancellation rather than the budget, so the budget is never blamed for a caller that gave up.
+- **The request's own context still cancels**, so the two sources compose: a client that disconnects cancels the statement immediately. That request is not a query-bar failure and is not blamed on the budget: it is answered `499` and recorded at `INFO` (see [Requests abandoned by the client](#requests-abandoned-by-the-client)).
 - **The budget bounds the work; the node limit bounds only the result.** These are two different bounds, and neither substitutes for the other. The injected `LIMIT` clause bounds how many rows the query returns, and therefore how large the response is — it does not bound the work the engine performs to produce those rows. A query that aggregates over a Cartesian product, for instance, scans the whole product before any limit applies: its cost grows with the size of the store while its response stays a few bytes long. The time budget is the only bound on that work.
 - **Exhausting the budget is a query execution failure**, surfaced with the page's existing "query failed to execute" message, in place. The page does not crash, the failure triggers no write and no navigation, the graph already shown is left as it is, and the user can edit the query, lower the node limit and search again.
 - **No new status and no new error class.** A request whose query exceeded the budget is answered exactly as any other execution failure — HTTP `400` with `kind` `execution`. Exhausting the budget never terminates the process; the server keeps serving.
@@ -327,7 +347,7 @@ There are exactly three, and there is nothing else the endpoint can refuse:
 |--------|-------------|-----------------|
 | `invalid_limit` | The `limit` parameter is not one of the six allowed values. The endpoint rejects it rather than clamping it to the nearest allowed value, and the statement is not executed | The rejected value |
 | `plan_prefix` | The statement carries an `EXPLAIN` or `PROFILE` prefix, as the engine's own parser recognises one — in any mixture of case, and after whitespace or a comment. The response carries nodes and edges and has no place for a query plan, so the statement is refused and never sent: it writes nothing, and the answer is the same with no graph server running. A statement in which the word appears other than as its prefix, and text the parser cannot parse, are not refused here. To see the plan, remove the prefix here or run the statement with `rmp graph client` | Always the same line, naming neither the prefix nor the statement: `query not run: the query bar cannot show a query plan; remove the EXPLAIN or PROFILE prefix, or run the statement with rmp graph client` |
-| `execution` | The statement failed once it was running — invalid Cypher syntax, for example, or a schema statement the engine refuses; or it was cancelled for exhausting the 5-second budget, or because the client disconnected; or every attempt of the retry policy lost a serialisation conflict against another writer; or the connection to the server was lost, or went unanswered, after the statement had been sent | The engine's own diagnostic text, so the user reads the same diagnostic the CLI prints for that statement. Three cases carry `rmp`'s own words instead, because the engine's would not tell the user what to do: a cancelled statement names the cancellation rather than the budget, so the budget is never blamed for a caller that gave up; an exhausted retry names the contention, states that nothing was written and asks for the same statement again; and a lost or unanswered connection says plainly that the statement's outcome is unknown |
+| `execution` | The statement failed once it was running — invalid Cypher syntax, for example, or a schema statement the engine refuses; or it was cancelled for exhausting the 5-second budget; or every attempt of the retry policy lost a serialisation conflict against another writer; or the connection to the server was lost, or went unanswered, after the statement had been sent | The engine's own diagnostic text, so the user reads the same diagnostic the CLI prints for that statement. Two cases carry `rmp`'s own words instead, because the engine's would not tell the user what to do: an exhausted retry names the contention, states that nothing was written and asks for the same statement again; and a lost or unanswered connection says plainly that the statement's outcome is unknown |
 
 Three further values — `not_read_only`, `schema_introspection` and `relationship_read_direction` — were published while the endpoint still classified a statement by what it does before running it. It classifies nothing about what a statement does now, so there is no verdict left for them to carry, and the four-deep precedence rule between them went with them. The `plan_prefix` refusal is not such a verdict: it is decided by the answer a statement asks for, and the same statement without its prefix is sent like any other.
 
@@ -344,9 +364,9 @@ In every case the message is shown in place on the page, the page does not crash
 
 Comments recorded through `rmp task comment-add` and `rmp sprint comment-add` are surfaced on two read-only places in the interface. Both only display data: neither creates, edits, nor deletes a comment, and the CLI remains the sole write path.
 
-### Task comments: the detail modal timeline
+### Task comments: the task page's Comments card
 
-Anywhere a task is clickable — the cards of the roadmap tasks board and the sprint page's task list — the read-only task detail modal renders that task's comments as a chronological timeline, placed after the task's fields and last in the modal body.
+The task page (`/roadmaps/{name}/tasks/{id}`) shows the task's comments as a chronological timeline in a Comments card, rendered last on the page. Its header carries the title `Comments`, a badge with the number of comments, and the text `Oldest first`.
 
 - **Order and completeness.** Oldest first, exactly the order `rmp task comment-list` returns (`created_at` ascending, comment `id` ascending as the tie-breaker). Every comment of the task is rendered: no type filter and no count limit.
 - **What each entry shows.** The comment's `type` as a badge, its `created_at` timestamp, an edited marker carrying the `updated_at` timestamp when that value is not null, and the `body`.
@@ -358,9 +378,9 @@ Anywhere a task is clickable — the cards of the roadmap tasks board and the sp
 
 The dedicated sprint page (`/roadmaps/{name}/sprints/{id}`) shows the sprint's own comments in a Comments card, placed after the member-tasks board and rendered last on the page.
 
-- **Scope.** The card shows the comments of the sprint itself. It does not show, aggregate, or merge in the comments of the sprint's member tasks; those are reachable through each task's own detail modal.
+- **Scope.** The card shows the comments of the sprint itself. It does not show, aggregate, or merge in the comments of the sprint's member tasks; those are on each task's own page.
 - **Order and completeness.** Oldest first, exactly the order `rmp sprint comment-list` returns. Every comment of the sprint is rendered: no type filter and no count limit.
-- **Card header.** The card title `Comments` with a badge showing the number of comments.
+- **Card header.** The card title `Comments` with a badge showing the number of comments, and the text `Oldest first`.
 - **What each entry shows.** The same four elements as the task timeline: the `type` badge, `created_at`, the edited marker when `updated_at` is not null, and the `body`. The badge is neutral for every one of the four sprint comment types.
 - **Empty state.** A sprint with no comments shows an empty-state message in place of the timeline. The card itself is always present.
 
@@ -380,7 +400,7 @@ These are the exit codes of the `rmp web` **process** (distinct from the per-req
 ## Examples
 
 ```bash
-# Start on the default host (loopback, local machine only) and port (opens the browser)
+# Start on the default host (loopback: no other machine can connect) and port (opens the browser)
 rmp web
 
 # Start without launching a browser; just print the served URL
@@ -389,23 +409,34 @@ rmp web --no-open
 # Start on a specific port
 rmp web --port 9000
 
-# Expose the read-only interface on the network (all interfaces; prints a warning)
+# Expose the interface on the network (all interfaces; prints a warning; the graph query bar can write)
 rmp web --host 0.0.0.0 --port 9000
 ```
 
 ## Read-Only Pages, One Writable Endpoint, and Security
 
-- **The pages are read-only.** The server accepts only `GET` and `HEAD`; every other method returns HTTP `405`. It exposes no route that creates, edits, or deletes a roadmap, task, sprint, comment or audit entry, serving a page writes no rows and no audit-log entry, and the CLI remains the sole write path for all of them.
+- **The pages are read-only.** The server accepts only `GET` and `HEAD`; every other method that passes the host and site checks below returns HTTP `405`. It exposes no route that creates, edits, or deletes a roadmap, task, sprint, comment or audit entry, serving a page writes no rows and no audit-log entry, and the CLI remains the sole write path for all of them.
 - **The graph data endpoint is the exception, and it is a write grant.** `GET /roadmaps/{name}/graph/data` sends the Cypher statement its `q` parameter carries to the roadmap's graph server, as written. It does not classify the statement and refuses nothing for what the statement does, so:
   - a `GET` of that endpoint can create, change and delete nodes, relationships, properties and labels, and can create and drop indexes and constraints. `?q=MATCH (n) DETACH DELETE n` empties the roadmap's knowledge graph and commits it, in the graph server that runs it;
   - **no authentication stands in the way.** The server has no login, no token, no session and no per-route authorisation. Any client that can open the bound address can issue that request;
-  - **the only access control is the bind address.** On the default loopback bind the reachable set is the local machine's own processes. `--host 0.0.0.0`, or any other non-loopback address, extends that set to everything that can route to the host, and it is a **write** grant over every roadmap's knowledge graph, not a read grant;
+  - **the only access controls are the bind address, the host allowlist and the cross-site refusal.** On the default loopback bind no other machine can connect, but the local browser connects on behalf of any page it loads; the two checks below refuse the requests such a page causes. They do not refuse a local process that sends neither `Origin` nor `Sec-Fetch-Site` and names an allowed host, as `curl` does. `--host 0.0.0.0`, or any other non-loopback address, extends the reachable set to everything that can route to the host, and it is a **write** grant over every roadmap's knowledge graph, not a read grant;
   - a `GET` with side effects departs from RFC 9110 § 9.2.1, which defines `GET` as a safe method, so an intermediary, a browser prefetch, a crawler or a repeated history entry may re-execute a destructive statement without the user asking again. The endpoint stays `GET`-only because the query bar's contract is a URL, and the departure is recorded rather than left to be discovered;
   - there is no undo. The graph store has no per-statement history to roll back to, and `rmp` offers no graph restore command.
 - **A request touches the store through the graph server and never directly.** This process opens no graph store, so it runs no recovery, takes no advisory lock and folds no snapshot; what a statement changes on disk it changes inside `rmp graph serve`, and a request that runs no write leaves `snapshot/` and `wal` exactly as it found them. The one grant that matters is therefore the one above: reaching the bound address is reaching every graph a server is holding open.
-- **Loopback by default.** The server binds the loopback interface (`127.0.0.1`) by default, so the interface is reachable only from the local machine. Exposing it on the network via `--host 0.0.0.0` (all interfaces, or any other non-loopback address) is the explicit opt-in; doing so prints a network-exposure warning to stderr at startup. Read the graph-endpoint grant above before making that choice.
+- **Loopback by default.** The server binds the loopback interface (`127.0.0.1`) by default, so no other machine can connect to it. The bind limits which connections reach the server, not which requests it serves: which requests are served is decided by the two checks below. Exposing the interface on the network via `--host 0.0.0.0` (all interfaces, or any other non-loopback address) is the explicit opt-in; doing so prints a network-exposure warning to stderr at startup. Read the graph-endpoint grant above before making that choice.
+- **Host allowlist.** Every request, `/static/...` included, must name an allowed host in its `Host` field (or its absolute-form target) before any route is matched. The port must be the port the listener is bound to — the one the startup URL reports — and a host with no port is accepted only when that port is `80`. The allowed host parts depend on the bind host:
+
+  | Bind host | Allowed host parts |
+  |-----------|--------------------|
+  | Loopback (`localhost`, or any loopback address, the default `127.0.0.1` and `::1` included) | `127.0.0.1`, `localhost`, `[::1]`, and the bind host itself |
+  | Unspecified (`0.0.0.0`, `::`, or an empty host) | `localhost`, and any IP literal |
+  | Any other address or name | The bind host itself |
+
+  Names are compared ignoring ASCII case, and a name is admitted only when the server was told it, which is what defeats DNS rebinding. Under an unspecified bind the interface is therefore reachable by an IP address or `localhost` and by no other name; to reach it by a name, bind that name with `--host`.
+- **Cross-site refusal.** A request carrying `Sec-Fetch-Site` is served only when the field occurs once with the value `same-origin` or `none`; every other value, `same-site` and `cross-site` included, is refused. A request carrying `Origin` is served only when the field occurs once and names this interface's own origin for that request; a foreign origin and `null` are refused. No method is exempt: `GET` and `HEAD` are refused like every other method, because the graph data endpoint writes on a `GET`. A link to the interface from another site, a web mail message, or another local tool is therefore refused as well; reach the interface through the URL `rmp web` prints, a typed address, or a bookmark. A command-line client that sends neither field is served.
+- **A refused request is answered `403`.** The response is `text/plain; charset=utf-8` with the single line `host not allowed` or `origin not allowed` (the host check runs first), carries `Cache-Control: no-store`, runs no handler, and writes one `WARN` record (see [Console Log](#console-log)). `SPEC/WEB.md § Security and Constraints`, rules 13 to 15, is canonical for both checks.
 - **Path-traversal guard.** Roadmap names from the URL are validated before any filesystem path is built, so a crafted name cannot traverse outside `~/.roadmaps/`.
-- **Tabler dark-theme UI.** The interface is built on the vendored Tabler admin-dashboard framework in its dark theme (navigation sidebar that collapses to a hamburger menu on small viewports, top navbar, page headers, Tabler cards/tables/badges). The top navbar names the roadmap the current page belongs to, so the page's subject is stated at the top of the viewport even where the sidebar has collapsed behind the hamburger menu; the roadmap index page, which belongs to no roadmap, leaves that region empty. Each page header is rendered by one shared template and its title names the view rather than the roadmap - Sprints, Tasks, Audit, Knowledge graph - so the roadmap is stated once in the sidebar and once in the navbar, and never a third time. A sprint's own page is the exception: it shows that sprint's title with its status badge, under the pretitle `Sprint #<id>`. A page header carries an actions control only where one acts on the page (the tasks board's search box and its three filter dropdowns, the graph page's layout dropdown) or returns to the parent record (the sprint page's back link); it never repeats a link the sidebar already lists. Task and sprint status, priority, and severity render as colour-coded Tabler badges (for example completed work in green, in-progress in blue, high priority or critical severity in red), so state is scannable at a glance.
+- **Tabler dark-theme UI.** The interface is built on the vendored Tabler admin-dashboard framework in its dark theme (navigation sidebar that collapses to a hamburger menu on small viewports, top navbar, page headers, Tabler cards/tables/badges). The top navbar names the roadmap the current page belongs to, so the page's subject is stated at the top of the viewport even where the sidebar has collapsed behind the hamburger menu; the roadmap index page, which belongs to no roadmap, leaves that region empty. Each page header is rendered by one shared template and its title names the view rather than the roadmap - Sprints, Tasks, Audit, Knowledge graph - so the roadmap is stated once in the sidebar and once in the navbar, and never a third time. A sprint's own page is the exception: it shows that sprint's title with its status badge, under the pretitle `Sprint #<id>`. A page header carries an actions control only where one acts on the page (the graph page's layout dropdown) or returns to the parent record (the sprint page's back link); it never repeats a link the sidebar already lists. Task and sprint status, priority, and severity render as colour-coded Tabler badges (for example completed work in green, in-progress in blue, high priority or critical severity in red), so state is scannable at a glance. In the dark theme, the text of every badge has a contrast ratio of at least 4.5:1 against its background, and the keyboard focus indicator of every focusable element on the tasks page and the sprint board has a contrast ratio of at least 3:1 against every colour adjacent to it, meeting WCAG 2.2 Level AA.
 - **Self-contained.** Every asset (HTML, CSS, JavaScript, the vendored Tabler framework and D3.js with the d3-sankey plugin, the Tabler Icons webfont, and the Inter font) is served from the binary's embedded set under `/static/`; no page references a CDN, a remote font host, or any other remote origin, and the server makes no outbound request.
 
 ## See Also

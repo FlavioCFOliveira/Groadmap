@@ -25,11 +25,11 @@ Lists tasks in the selected roadmap (any status). All filters compose with AND.
 |------------|-----------|------|---------|-------------|
 | `-r` | `--roadmap` | string | - | Roadmap name (required) |
 | `-s` | `--status` | enum | - | Filter by exact status: BACKLOG, SPRINT, DOING, TESTING, COMPLETED |
-| `-p` | `--priority` | int | - | Filter: keep tasks with priority `>= min`. Lower-bound filter, not a validated `0-9` value: out-of-range numbers are accepted and simply match accordingly |
-| N/A | `--severity` | int | - | Filter: keep tasks with severity `>= min`. Lower-bound filter, not a validated `0-9` value |
+| `-p` | `--priority` | int | - | Filter: keep tasks with priority `>= min`. The value must be an integer in 0-9 |
+| N/A | `--severity` | int | - | Filter: keep tasks with severity `>= min`. The value must be an integer in 0-9 |
 | `-y` | `--type` | enum | - | Filter by task type (one of the 10 task types) |
-| N/A | `--created-since` | date | - | Include tasks created on/after this date (RFC3339 or YYYY-MM-DD) |
-| N/A | `--created-until` | date | - | Include tasks created on/before this date (RFC3339 or YYYY-MM-DD) |
+| N/A | `--created-since` | date | - | Include tasks created on/after this instant: a timestamp or a bare `YYYY-MM-DD`, from 1970-01-01 through 9999-12-31 (see Date filter values below) |
+| N/A | `--created-until` | date | - | Include tasks created on/before this instant, in the same forms and range as `--created-since` |
 | N/A | `--sort` | enum | `priority` | Sort field: priority, created, status, severity |
 | `-l` | `--limit` | int | `100` | Maximum results (1-100) |
 
@@ -38,6 +38,23 @@ Lists tasks in the selected roadmap (any status). All filters compose with AND.
 - `created` - by created_at ascending
 - `status` - by status (state-machine order)
 - `severity` - by severity descending
+
+**Date filter values:** a value is either a timestamp `YYYY-MM-DDTHH:mm:ss`, with an optional fraction of a second and a zone designator `Z`, `+hh:mm` or `-hh:mm` (for example `2026-01-01T00:00:00Z` or `2026-01-01T01:00:00+01:00`), or a bare calendar date `YYYY-MM-DD`, which denotes the first instant of that day in UTC. It must denote an instant from 1970-01-01 through 9999-12-31 in UTC. The rule is the one `audit list` and `audit stats` apply to `--since` and `--until` (see [DOCS/commands/audit.md](audit.md)). A value in neither form, or outside that range, is refused with exit code 6:
+
+```
+Error: validation error: --created-since: invalid date format: expected RFC3339 (2026-01-01T00:00:00Z) or date-only (2026-01-01): "X"
+```
+
+**Numeric filter errors:** checked before the roadmap database is opened.
+
+| Condition | Exit Code | stderr |
+|-----------|-----------|--------|
+| `-p, --priority` is not an integer | 2 | `Error: invalid input: invalid value for --priority: "X" is not an integer in 0-9` |
+| `--severity` is not an integer | 2 | `Error: invalid input: invalid value for --severity: "X" is not an integer in 0-9` |
+| `-l, --limit` is not an integer | 2 | `Error: invalid input: invalid value for --limit: "X" is not an integer in 1-100` |
+| `-p, --priority` is an integer outside 0-9 | 6 | `Error: validation error: priority must be between 0 and 9, got N` |
+| `--severity` is an integer outside 0-9 | 6 | `Error: validation error: severity must be between 0 and 9, got N` |
+| `-l, --limit` is outside 1-100 | 6 | `Error: validation error: limit must be between 1 and 100, got N` |
 
 **Output:** JSON array of Task objects.
 
@@ -73,6 +90,8 @@ Creates a new task. The task lands in `BACKLOG` status.
 | `-p` | `--priority` | int | `0` | Priority 0-9 (0 lowest, 9 highest) |
 | N/A | `--severity` | int | `0` | Severity 0-9 (0 lowest, 9 highest) |
 | N/A | `--parent` | int | - | Parent task ID; creates this task as a SUB_TASK of the given parent and bumps the parent's `subtask_count` (create only) |
+
+A `--priority` or `--severity` value that is not an integer is refused with exit code 2 and `Error: invalid input: invalid value for --priority: "X" is not an integer in 0-9` (or the same line naming `--severity`); the flag is named in its long spelling whichever spelling was written. An integer outside 0-9 is refused with exit code 6 and `Error: validation error: priority must be between 0 and 9, got N` (or `severity ...`). `task edit` applies the same two rules.
 
 **Output:** JSON object with the created task ID.
 
@@ -206,7 +225,7 @@ rmp task remove -r project1 42
 rmp task rm -r project1 1,2,3
 ```
 
-A task that is not in `BACKLOG` is rejected (exit 6).
+A task that is not in `BACKLOG` is rejected (exit 6). A `BACKLOG` task belongs to no sprint, so a task in `SPRINT`, `DOING` or `TESTING` is first taken out of its sprint with `sprint remove-tasks`, which returns it to `BACKLOG`. A `COMPLETED` task stays in its sprint: it is first returned to `SPRINT` with `task reopen`, and then removed from the sprint.
 
 ---
 
@@ -220,7 +239,7 @@ Changes the status of one or more tasks (manual transitions). Rejected transitio
 | Argument | Required | Description |
 |----------|----------|-------------|
 | `task-ids` | Yes | Comma-separated integer ids |
-| `new-status` | Yes | Target status: BACKLOG, DOING, TESTING, COMPLETED (SPRINT is rejected) |
+| `new-status` | Yes | Target status: DOING, TESTING, COMPLETED. `SPRINT` is always refused, and `BACKLOG` is refused for every sprint member (see Rules) |
 
 **Flags:**
 | Short Flag | Long Flag | Type | Max Length | Description |
@@ -233,11 +252,14 @@ Changes the status of one or more tasks (manual transitions). Rejected transitio
 **Status Flow:**
 ```
 BACKLOG --[sprint add-tasks]--> SPRINT --[stat DOING --commit-open]--> DOING --[stat TESTING]--> TESTING --[stat COMPLETED --commit-close]--> COMPLETED
-COMPLETED --[reopen / stat BACKLOG]--> BACKLOG
+DOING | TESTING | COMPLETED --[reopen]--> SPRINT          (the task stays in its sprint)
+SPRINT | DOING | TESTING --[sprint remove-tasks]--> BACKLOG   (the task leaves its sprint)
 ```
 
 **Rules:**
-- `stat <ids> SPRINT` is rejected (exit 6). Use `sprint add-tasks` instead; SPRINT is only set automatically.
+- A sprint member is never in `BACKLOG`, and a task in `BACKLOG` belongs to no sprint. `stat` never changes sprint membership, so it cannot move a task to or from `BACKLOG`.
+- `stat <ids> SPRINT` is rejected (exit 6). `SPRINT` is set only by `sprint add-tasks`, when a `BACKLOG` task joins a sprint, and by `task reopen`.
+- `stat <ids> BACKLOG` is rejected (exit 6) for every sprint member, and the line names the command that fits: `sprint remove-tasks` for a `SPRINT`, `DOING` or `TESTING` task, `task reopen` for a `COMPLETED` one.
 - Marking COMPLETED is rejected (exit 6) if any subtask or dependency is not yet COMPLETED.
 - The `--summary` text is recorded as `completion_summary` and is only accepted on the TESTING -> COMPLETED transition.
 
@@ -248,7 +270,16 @@ COMPLETED --[reopen / stat BACKLOG]--> BACKLOG
 - **Format.** A commit hash is 7 to 64 hexadecimal characters and is stored lowercase, so `5F93B51` and `5f93b51` are the same value. Groadmap validates the format alone: it invokes no git command, reads no working directory, and does not check that the hash names a commit that exists.
 - **One hash applies to the whole batch.** Every task named in `<task-ids>` receives the same value, exactly as every task receives the same `--summary`. A caller who needs different hashes issues separate commands.
 - **Neither field is editable.** `task create` accepts neither flag, because a task is created in `BACKLOG`, and `task edit` cannot change either value. A wrong hash is corrected by performing the transition again where the state machine allows it.
-- **`commit_open` survives a return to `BACKLOG`; `commit_close` does not.** All four routes back to `BACKLOG` — `stat BACKLOG`, `reopen`, `sprint remove-tasks`, and `sprint remove` — clear `commit_close` and leave `commit_open` untouched: reopening invalidates where the work ended, not where it began.
+- **`commit_open` survives a reopening and a return to `BACKLOG`; `commit_close` does not.** All three routes — `task reopen` (back to `SPRINT`), and `sprint remove-tasks` and `sprint remove` (back to `BACKLOG`) — clear `commit_close` and leave `commit_open` untouched: reopening invalidates where the work ended, not where it began.
+
+**Status Target Errors:**
+| Condition | Exit Code | stderr |
+|-----------|-----------|--------|
+| Target is `SPRINT` | 6 | `Error: validation error: status SPRINT cannot be set by 'task stat'; it is set by 'sprint add-tasks' and 'task reopen'` |
+| Target is `BACKLOG` and a task is `SPRINT`, `DOING` or `TESTING` | 6 | `Error: validation error: invalid status transition from X to BACKLOG for task N: a task leaves its sprint only through 'rmp sprint remove-tasks'` |
+| Target is `BACKLOG` and a task is `COMPLETED` | 6 | `Error: validation error: invalid status transition from COMPLETED to BACKLOG for task N: a completed task is reopened with 'rmp task reopen'` |
+
+`X` is the task's current status and `N` the first refused task in the order the command line supplied them. No task in the batch is changed.
 
 **Commit Flag Errors:**
 | Condition | Exit Code | stderr |
@@ -262,7 +293,7 @@ COMPLETED --[reopen / stat BACKLOG]--> BACKLOG
 
 In every case no task in the batch is changed: the commit flags are validated before the ids are resolved and before any write.
 
-**Audit:** one entry per task named in `<task-ids>`, naming the destination state: `TASK_STATUS_BACKLOG`, `TASK_STATUS_DOING`, `TASK_STATUS_TESTING`, or `TASK_STATUS_COMPLETED`. The `TASK_STATUS_DOING` entry records the `--commit-open` value and the `TASK_STATUS_COMPLETED` entry records the `--commit-close` value, each in the entry's own `commit_hash` field, so the audit log keeps the commit even after a later reopening clears it from the task. A `TASK_STATUS_BACKLOG` entry written here names no sprint, because no sprint is party to the operation; the one `sprint remove-tasks` writes does. No `TASK_STATUS_CHANGE` entry is written: that operation is legacy (see [DOCS/commands/audit.md](audit.md)).
+**Audit:** one entry per task named in `<task-ids>`, naming the destination state: `TASK_STATUS_DOING`, `TASK_STATUS_TESTING`, or `TASK_STATUS_COMPLETED`. The `TASK_STATUS_DOING` entry records the `--commit-open` value and the `TASK_STATUS_COMPLETED` entry records the `--commit-close` value, each in the entry's own `commit_hash` field, so the audit log keeps the commit even after a later reopening clears it from the task. `stat` writes no `TASK_STATUS_BACKLOG` entry, because it refuses the `BACKLOG` target for every sprint member; entries of that operation with no sprint named are ones it wrote before that rule. No `TASK_STATUS_CHANGE` entry is written: that operation is legacy (see [DOCS/commands/audit.md](audit.md)).
 
 **Examples:**
 ```bash
@@ -270,14 +301,18 @@ rmp task stat -r project1 1,2,3 DOING --commit-open 5f93b51
 rmp task stat -r project1 7 DOING --commit-open $(git rev-parse HEAD)
 rmp task stat -r project1 7 TESTING
 rmp task stat -r project1 7 COMPLETED --commit-close 2578d18 --summary "Shipped behind feature flag"
-rmp task stat -r project1 7 BACKLOG
 ```
 
 ---
 
 ### reopen
 
-Returns one or more tasks to `BACKLOG` and clears their lifecycle timestamps (`started_at`, `tested_at`, `closed_at`), their `completion_summary`, and their `commit_close`. `commit_open` is preserved: a reopening invalidates where the work ended, not where it began.
+Returns one or more `DOING`, `TESTING` or `COMPLETED` tasks to `SPRINT` inside the sprint each belongs to, and clears their lifecycle timestamps (`started_at`, `tested_at`, `closed_at`), their `completion_summary`, and their `commit_close`. `commit_open` is preserved: a reopening invalidates where the work ended, not where it began.
+
+- **Sprint membership is never changed.** The task keeps its sprint and its position. A task leaves its sprint, and so returns to `BACKLOG`, only through `sprint remove-tasks` or `sprint remove`.
+- **A task in a CLOSED sprint is refused** (exit 6), and nothing in the batch is changed: `Error: validation error: cannot reopen task N: sprint #M is CLOSED; reopen the sprint first with 'rmp sprint reopen'`. `N` is the first such task in the order the command line supplied them and `M` its sprint. Reopen the sprint with `sprint reopen`, then reopen the task.
+- **A task already in `SPRINT` or in `BACKLOG` is skipped** with an informational message on stderr; the command still exits 0.
+- **A `COMPLETED` task that belongs to no sprint**, which only data written before the sprint membership rules can hold, returns to `BACKLOG` instead, with the same fields cleared.
 
 **Usage:** `rmp task reopen -r <roadmap> <task-ids>`
 
@@ -293,7 +328,7 @@ Returns one or more tasks to `BACKLOG` and clears their lifecycle timestamps (`s
 
 **Output:** Empty on success (exit 0).
 
-**Audit:** one `TASK_REOPEN` entry per task. This command writes that entry and nothing else; in particular it writes no `TASK_STATUS_BACKLOG` entry. The `TASK_STATUS_COMPLETED` entry written earlier keeps its `commit_hash`, so the commit that concluded the task remains on the record even though the task no longer carries it.
+**Audit:** one `TASK_REOPEN` entry per task reopened. This command writes that entry and nothing else; in particular it writes no `TASK_STATUS_*` entry, and a skipped task receives no entry. The `TASK_STATUS_COMPLETED` entry written earlier keeps its `commit_hash`, so the commit that concluded the task remains on the record even though the task no longer carries it.
 
 **Examples:**
 ```bash
@@ -323,6 +358,8 @@ Sets the priority of one or more tasks to the same value.
 **Priority Scale:**
 - 0 = lowest urgency
 - 9 = maximum urgency (Product Owner perspective)
+
+A `<priority>` that is not an integer is refused with exit code 2 and `Error: invalid input: invalid priority: "X" is not an integer in 0-9`, after every id has been validated and before the roadmap is opened. An integer outside 0-9 is refused with exit code 6 and `Error: validation error: priority must be between 0 and 9, got N`.
 
 **Audit:** one `TASK_PRIORITY_CHANGE` entry per task named.
 
@@ -354,6 +391,8 @@ Sets the severity of one or more tasks to the same value.
 **Severity Scale:**
 - 0 = minimal impact
 - 9 = critical impact (Dev Team perspective)
+
+A `<severity>` that is not an integer is refused with exit code 2 and `Error: invalid input: invalid severity: "X" is not an integer in 0-9`, after every id has been validated and before the roadmap is opened. An integer outside 0-9 is refused with exit code 6 and `Error: validation error: severity must be between 0 and 9, got N`.
 
 **Audit:** one `TASK_SEVERITY_CHANGE` entry per task named.
 
@@ -612,7 +651,13 @@ Changes the type and/or the body of one existing task comment, identified by the
 | `-y` | `--type` | enum | - | New comment type; one of the seven task comment types |
 | `-b` | `--body` | string | 4096 | New comment text. Read from standard input when this flag is absent **and** `--type` is absent too (see below) |
 
-**Body from standard input:** standard input is read only when neither `--type` nor `--body` is given. When `--type` is present and `--body` is absent, only the type changes, standard input is not read, and a type-only edit therefore never blocks waiting for input. The trimming, empty-value, and missing-value rules are those of `comment-add`.
+**Body from standard input:** standard input is the new body only when neither `--type` nor `--body` is given. When `--type` is present and `--body` is absent, the body is left unchanged, and what happens to standard input depends on what it is:
+
+- **A terminal** is not read at all, so a type-only edit typed at a terminal never waits for input.
+- **A standard input that carries no data** — closed, or connected to `/dev/null` — is accepted, and only the type changes.
+- **A standard input that carries data**, even a single space or line break, is refused with exit code 2 and changes nothing: `Error: invalid input: standard input carries data, but it is not read when --type is given; supply the new body with --body`. A piped body is never silently ignored; pass it with `--body` instead.
+
+The trimming, empty-value, and missing-value rules are those of `comment-add`.
 
 **Replacement semantics:** the edit replaces the stored body in place and stamps `updated_at` with the edit's timestamp, so a later listing shows that the comment was altered. The previous text is not retained anywhere and cannot be recovered; the audit log records that an edit happened, not what it replaced.
 
@@ -681,11 +726,12 @@ The only alias for `task remove` is `rm`. The `delete` alias exists for `roadmap
 - The `-r`/`--roadmap` flag is REQUIRED on every `task` subcommand. There is no default or active roadmap.
 - Tasks are created with `BACKLOG` status by default.
 - Status transitions are validated according to the state machine (see SPEC/STATE_MACHINE.md).
-- `SPRINT` status is set automatically by `sprint add-tasks`; it cannot be set manually via `stat`.
+- `SPRINT` status is set by `sprint add-tasks`, when a `BACKLOG` task joins a sprint, and by `reopen`; it cannot be set manually via `stat`.
+- A sprint member is never in `BACKLOG`, and a task in `BACKLOG` belongs to no sprint. A `COMPLETED` task stays in the sprint it was completed in.
 - When transitioning to `DOING`, the `started_at` field is set automatically.
 - When transitioning to `TESTING`, the `tested_at` field is set automatically.
 - When transitioning to `COMPLETED`, the `closed_at` field is set automatically; an optional `--summary` records `completion_summary`.
-- When reopening to `BACKLOG` (via `reopen` or `stat BACKLOG` from COMPLETED), `started_at`, `tested_at`, `closed_at`, and `completion_summary` are cleared.
+- When a task is reopened to `SPRINT` (via `reopen`), and when it leaves its sprint and returns to `BACKLOG` (via `sprint remove-tasks` or `sprint remove`), `started_at`, `tested_at`, `closed_at`, `completion_summary`, and `commit_close` are cleared; `commit_open` is preserved.
 - Marking a task COMPLETED is rejected if any of its subtasks or dependencies is not yet COMPLETED.
 - Comments are strictly additive. They are accepted in every status, including `COMPLETED`; no comment subcommand checks or changes a task's status, and no comment gates a transition. `task reopen` does not touch comments.
 - `comment-add` and `comment-list` take the TASK's id; `comment-edit` and `comment-remove` take the COMMENT's own id.
@@ -697,7 +743,7 @@ The only alias for `task remove` is `rm`. The `delete` alias exists for `roadmap
 
 | Field | Required | Max Length / Range | Description |
 |-------|----------|--------------------|-------------|
-| `roadmap` | Yes | 50 chars (regex `^[a-z0-9_-]+$`) | Target roadmap name |
+| `roadmap` | Yes | 50 characters, counted in characters, not bytes (regex `^[a-z0-9_-]+$`) | Target roadmap name |
 | `title` | Yes (on create) | 255 chars | Task title/summary |
 | `functional-requirements` | Yes (on create) | 4096 chars | Why: functional requirements |
 | `technical-requirements` | Yes (on create) | 4096 chars | How: technical description |
@@ -711,11 +757,11 @@ The only alias for `task remove` is `rm`. The `delete` alias exists for `roadmap
 
 ### Task Status Values
 
-- `BACKLOG` - Task in backlog, not assigned to a sprint
-- `SPRINT` - Task assigned to a sprint (set automatically by `sprint add-tasks`)
-- `DOING` - Task in progress
-- `TESTING` - Task being tested
-- `COMPLETED` - Task finished
+- `BACKLOG` - Task in backlog; it belongs to no sprint
+- `SPRINT` - Task is a sprint member whose work has not started (set by `sprint add-tasks` and by `reopen`)
+- `DOING` - Task in progress, inside a sprint
+- `TESTING` - Task being tested, inside a sprint
+- `COMPLETED` - Task finished; it stays in the sprint it was completed in
 
 ### Task Type Values
 
@@ -775,12 +821,12 @@ All commands follow these conventions:
 |------|---------|
 | 0 | Success |
 | 1 | Database failure |
-| 2 | Misuse: missing required flag, bad syntax, or an invalid id argument (a `<task-id>`, `<task-ids>`, `<blocker-id>`, or `<comment-id>` that is not a positive integer is rejected by the parser before any database access). On the comment subcommands it also covers a missing `--type` on `comment-add`, a body supplied by neither `--body` nor standard input, and a `comment-edit` that requests no change at all |
+| 2 | Misuse: missing required flag, bad syntax, or an invalid id argument (a `<task-id>`, `<task-ids>`, `<blocker-id>`, or `<comment-id>` that is not an integer is rejected by the parser before any database access). It also covers a `--priority`, `--severity` or `--limit` value, or a `prio`/`sev` positional value, that is not an integer. On the comment subcommands it also covers a missing `--type` on `comment-add`, a body supplied by neither `--body` nor standard input, a `comment-edit` that requests no change at all, and a type-only `comment-edit` whose standard input carries data |
 | 3 | No roadmap specified (`-r` missing) |
-| 4 | Task or comment not found (a syntactically valid id that does not exist) |
-| 6 | Validation error: bad `--type`/`--status`/enum value, out-of-range number, oversized field, invalid state transition (including `stat SPRINT`), subtask/dependency guard, or dependency cycle. On `stat` it also covers a missing, misplaced, or malformed `--commit-open`/`--commit-close`. On the comment subcommands it covers a comment type outside the seven task values, a body over 4096 characters, and a body containing control characters |
+| 4 | Roadmap not found (including a `~/.roadmaps/<name>` that is a regular file or a directory without `project.db`), or task or comment not found (a syntactically valid id that does not exist) |
+| 6 | Validation error: bad `--type`/`--status`/enum value, out-of-range number, oversized field, a date filter value that is malformed or outside 1970-01-01 through 9999-12-31, invalid state transition (including `stat SPRINT`, and `stat BACKLOG` on a sprint member), `reopen` of a task whose sprint is CLOSED, subtask/dependency guard, or dependency cycle. On `stat` it also covers a missing, misplaced, or malformed `--commit-open`/`--commit-close`. On the comment subcommands it covers a comment type outside the seven task values, a body over 4096 characters, and a body containing control characters. On every subcommand it covers a `-r`/`--roadmap` name that breaks a roadmap name rule |
 | 127 | Unknown subcommand |
 
-Note the distinction: an id that is not a positive integer (for example `abc` or `0`) is an exit-code-2 syntax error, whereas a well-formed id for a task or a comment that does not exist is an exit-code-4 not-found error. An invalid `--type` or target status value is an exit-code-6 validation error.
+Note the distinction: an id that is not an integer (for example `abc`, or a lone `-`) is an exit-code-2 syntax error; an integer outside 1-2147483647 (for example `0`) is an exit-code-6 range error, and exit code 2 on the comment subcommands; and a well-formed id for a task or a comment that does not exist is an exit-code-4 not-found error. An invalid `--type` or target status value is an exit-code-6 validation error.
 
 The comment subcommands split the two failure kinds along the same line. A missing or unusable **body** is a misuse error (exit 2), because the command was invoked without the input it needs; an **oversized or control-character** body is a validation error (exit 6), because the input arrived and was rejected on its content.

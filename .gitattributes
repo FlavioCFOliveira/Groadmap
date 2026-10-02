@@ -1,0 +1,9 @@
+# The files internal/highlight/registry_gen.go generates are compared byte for
+# byte with a fresh run of the generator (TestGeneratedRegistryIsCurrent). Git
+# must therefore store and check them out exactly as written: some upstream
+# lexer definitions carry CRLF line endings, and any core.autocrlf setting would
+# otherwise rewrite them, or the LF files, on the way in or out.
+internal/highlight/COPYING.chroma -text
+internal/highlight/generated_*.go -text
+internal/highlight/embedded/** -text
+internal/highlight/styles/** -text

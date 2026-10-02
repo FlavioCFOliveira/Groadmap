@@ -4,12 +4,13 @@
 
 ### Output (Responses)
 
-**JSON output is reserved for query operations and record creation.**
+**JSON output is reserved for query operations, record creation, and the success object of the five sprint ordering commands.**
 
 - **Query operations (JSON)**: `list`, `ls`, `get`, `next`, `tasks`, `stats`, `show`, `history`, `hist`, `comment-list`, `c-ls`.
-- **Server startup (JSON)**: `web` prints a single JSON object naming the served URL on successful startup (e.g. `{"url": "http://127.0.0.1:8787"}`), then keeps running; see `COMMANDS.md § Web Interface`. While running, the server returns HTTP responses (HTML pages and its JSON endpoints, the graph data endpoint and the task detail endpoint), which are not command stdout output.
+- **Sprint ordering operations (JSON)**: `sprint reorder` (`order`), `sprint move-to` (`mvto`), `sprint swap`, `sprint top` and `sprint bottom` change the database and, unlike every other modification, write a JSON success object on success. Each object's exact keys, in the order they are written, are published by `COMMANDS.md § Task Ordering`, which is canonical for them.
+- **Server startup (JSON)**: `web` prints a single JSON object naming the served URL on successful startup (e.g. `{"url": "http://127.0.0.1:8787"}`), then keeps running; see `COMMANDS.md § Web Interface`. While running, the server returns HTTP responses (HTML pages and its one JSON endpoint, the graph data endpoint), which are not command stdout output.
 - **Creation operations (JSON)**: `create`, `new`, `comment-add`, `c-add`. These commands return a JSON object containing the ID of the newly created record (e.g., `{"id": 42}`).
-- **Other database modifications (No output)**: Commands that update, delete, or change the state of entities (status, priority, etc.) respond with **no content** on success, signaling completion via exit code `0`.
+- **Other database modifications (No output)**: Commands that update, delete, or change the state of entities (status, priority, etc.), other than the five sprint ordering commands above, respond with **no content** on success, signaling completion via exit code `0`.
 - **Help commands (Plain text)**: When no command is provided, or when using `-h` and `--help` flags, the application displays information in **plain text**, following traditional CLI application formats (not JSON).
 
 **Error responses follow typical CLI behavior (NOT JSON):**
@@ -84,6 +85,8 @@ Commands that alter the database state without creating new records (update, del
 - **Exit Code**: `0`
 - **Stdout**: Empty
 
+The five sprint ordering commands are the one exception: each writes a success object, whose keys `COMMANDS.md § Task Ordering` publishes.
+
 ### Help Response
 
 Help commands display human-readable text to stdout.
@@ -136,6 +139,13 @@ is rendered in the ISO 8601 form of its own type; see
 [Graph Query Result](#graph-query-result), **Temporal values**, which states that
 boundary in full.
 
+It does **not** govern how the web interface displays a stored timestamp to a
+reader. That display form (`WEB.md § Date and Time Display`) is a presentation of
+the stored value in a page's text, not a timestamp Groadmap generates: the stored
+value is unchanged by it, and every value Groadmap writes or emits in CLI output
+and in JSON — including every JSON the web interface serves — remains in the
+format above.
+
 **A record whose message came from a dependency is inside this rule rather than
 outside it.** The graph server's stderr carries records the graph engine
 produces, and it is tempting to read those as output the product merely relays
@@ -157,6 +167,66 @@ question differently: one of them is corrected and the other is not, and nothing
 between them notices. A surface that expresses the rule locally satisfies it for
 itself and for nothing else, which is the failure this requirement exists
 against.
+
+### Date Filter Values
+
+The rules above govern the timestamps Groadmap writes. This section governs the
+dates a caller writes: the value of a date-range filter flag. There are six such
+flags — `--created-since` and `--created-until` on `task list`, and `--since` and
+`--until` on `audit list` and on `audit stats` — and one acceptance rule governs
+all six, so no filter accepts a value another one refuses. Each flag's bound and
+its inclusivity are stated by the command that publishes it
+(`COMMANDS.md § List Tasks`, `COMMANDS.md § List Audit Log`,
+`COMMANDS.md § Audit Statistics`).
+
+**A value takes exactly one of two forms.**
+
+1. **A timestamp**: `YYYY-MM-DDTHH:mm:ss`, optionally followed by a fraction of a
+   second, and then by a zone designator, with nothing before or after it.
+   - `YYYY-MM-DD` is a calendar date that exists: a four-digit year, a two-digit
+     month from `01` to `12`, and a two-digit day that the month has in that year.
+   - `T` is the upper-case letter.
+   - `HH`, `mm` and `ss` are two digits each, from `00` to `23`, from `00` to `59`,
+     and from `00` to `59`. A leap second, `60`, is not accepted.
+   - The fraction, when present, is a full stop followed by one or more digits.
+   - The zone designator is the upper-case letter `Z`, or a sign, `+` or `-`,
+     followed by `hh:mm`: two digits of hours from `00` to `23`, a colon, and two
+     digits of minutes from `00` to `59`. The instant the timestamp denotes is its
+     date and time less that offset, so `2026-01-01T01:00:00+01:00`,
+     `2026-01-01T00:00:00+00:00`, `2026-01-01T00:00:00-00:00` and
+     `2026-01-01T00:00:00Z` denote one instant.
+
+   This is the date-time of RFC 3339 (section 5.6), with the `T` and the `Z`
+   upper case and without a leap second. The canonical format under
+   [Exact Format](#exact-format) is one instance of it.
+2. **A calendar date**: `YYYY-MM-DD`, under the same rule for the date as the
+   timestamp's, with nothing before or after it. It denotes the first instant of
+   that day in UTC, `YYYY-MM-DDT00:00:00.000Z`, on a lower bound and on an upper
+   bound alike.
+
+**The value MUST denote an instant from 1970-01-01 through 9999-12-31, in UTC.**
+The range is judged on the instant, after the zone designator has been applied,
+and it includes the whole of both days: an instant at or after
+`1970-01-01T00:00:00.000Z` and before `10000-01-01T00:00:00.000Z` is accepted, in
+either form, and every other instant is refused. `1969-12-31` and
+`1970-01-01T00:30:00+01:00`, which is `1969-12-31T23:30:00.000Z`, are refused;
+`9999-12-31` and `9999-12-31T23:59:59.999Z` are accepted, and
+`9999-12-31T23:00:00-02:00`, which falls on 10000-01-01 in UTC, is refused.
+
+**Every other value is refused.** Among the values refused are a lower-case `t`
+or `z`; a space in place of the `T`; an hour, a minute or a second of one digit;
+a comma in place of the full stop, and a full stop with no digit after it; a
+missing seconds field; an offset without its colon (`+0000`) or with a part out
+of range (`+24:00`, `+00:60`); a date that does not exist (`2026-02-30`); a year
+of other than four digits; leading or trailing whitespace; and an empty value.
+`1970-10-01T0:00:00,+00Z` is refused on two counts: a one-digit hour, and a comma
+that begins no fraction.
+
+**The refusal.** A value that is refused, whether for its form or for its range,
+fails with exit code 6 and the one line each flag's own table publishes, which
+names the flag and echoes the value. The line is the same for a malformed value
+and for a well-formed value outside the range, because the range is part of what
+the flag accepts. The refusal happens before the roadmap database is opened.
 
 ---
 
@@ -1526,101 +1596,6 @@ Rules:
 
 ---
 
-## Task Detail Data
-
-The web interface's task detail endpoint (`GET /roadmaps/{name}/tasks/{id}/data`,
-see `WEB.md § Task Detail Endpoint`) returns one task's full field set together
-with that task's comments, as a single JSON object. The read-only task detail
-modal fetches it when a user opens a task, and fills the page's single modal
-element with the result (see `WEB.md § Task Detail Modal`). The endpoint reads the
-roadmap's `project.db` **read-only**: it writes nothing, alters no schema, and
-produces no audit entry.
-
-This is the canonical specification of the task detail response shape. It
-**composes** the two object shapes this file already defines and introduces no new
-field definitions of its own: the task object is the [Task](#task) shape and each
-comment is the [Task Comment](#task-comment) shape. A value therefore carries the
-same field name, the same type, and the same null convention here as it does in
-the corresponding CLI output.
-
-### Shape
-
-```json
-{
-  "task": {
-    "id": 42,
-    "title": "Implement JWT authentication system",
-    "status": "DOING",
-    "type": "USER_STORY",
-    "functional_requirements": "Users must be able to authenticate securely",
-    "technical_requirements": "Create authentication module with JWT token support",
-    "acceptance_criteria": "Functional login with 24h valid tokens; proper error handling",
-    "created_at": "2026-03-12T10:00:00.000Z",
-    "started_at": "2026-03-12T10:30:00.000Z",
-    "tested_at": null,
-    "closed_at": null,
-    "completion_summary": null,
-    "commit_open": "5f93b51",
-    "commit_close": null,
-    "parent_task_id": null,
-    "priority": 9,
-    "severity": 0,
-    "subtask_count": 0,
-    "depends_on": [],
-    "blocks": []
-  },
-  "comments": [
-    {
-      "id": 12,
-      "task_id": 42,
-      "type": "FINDING",
-      "body": "The JWT middleware rejects tokens whose exp claim is exactly the current second.",
-      "created_at": "2026-03-12T11:15:00.000Z",
-      "updated_at": null
-    },
-    {
-      "id": 13,
-      "task_id": 42,
-      "type": "DECISION",
-      "body": "Token expiry is compared with !time.Now().Before(exp), so the boundary second expires.",
-      "created_at": "2026-03-12T11:40:00.000Z",
-      "updated_at": "2026-03-12T14:05:00.000Z"
-    }
-  ]
-}
-```
-
-**Notes:**
-
-1. The object carries exactly two members, `task` and `comments`. No other
-   top-level member is added.
-2. `task` is one [Task](#task) object, whose fields are defined for the `Task`
-   model in `MODELS.md § Task`. Every field the task detail modal displays is
-   present, including the long free-text fields (`functional_requirements`,
-   `technical_requirements`, `acceptance_criteria`, and `completion_summary`), the
-   lifecycle timestamps, and the two commit hashes (`commit_open` and
-   `commit_close`).
-3. `comments` is an array of [Task Comment](#task-comment) objects, whose fields
-   are defined for the `TaskComment` model in `MODELS.md § Task Comment`.
-4. **Order.** The `comments` array is ordered **oldest first**: `created_at`
-   ascending, with the comment `id` ascending as the tie-breaker. This is exactly
-   the order `rmp task comment-list` returns for the same task (see
-   `DATABASE.md § Comments`), and exactly the order the modal's timeline presents,
-   so one ordering rule serves the CLI and the web interface alike.
-5. **Completeness.** Every comment of the task is present. The endpoint applies no
-   type filter, no count limit, and no pagination.
-6. **A task with no comment yields `[]`, never `null`**, consistent with the
-   empty-array rule in [Implementation Notes](#implementation-notes).
-7. Free-text values preserve the author's interior line breaks as `\n` escapes in
-   JSON, exactly as they do in CLI output.
-8. The response is JSON-encoded and is never interpolated into HTML by the server.
-   Because these values reach the browser as data rather than as server-rendered
-   markup, the client that renders them MUST write every value into the DOM as
-   text and never as markup; that requirement is specified in
-   `WEB.md § Task Detail Modal`.
-
----
-
 ## Implementation Notes
 
 1. **No extra fields**: Do not include extra fields in JSON responses
@@ -2357,7 +2332,7 @@ generated from the command registry.
   "description": "Manually setting a task's status to SPRINT via `task stat` is rejected. The SPRINT status is owned by sprint operations and is set atomically when a task is added to a sprint.",
   "wrong_example": "rmp task stat -r myproject 42 SPRINT",
   "wrong_exit": 6,
-  "wrong_stderr": "Error: validation error: status SPRINT can only be set automatically via 'sprint add-tasks'",
+  "wrong_stderr": "Error: validation error: status SPRINT cannot be set by 'task stat'; it is set by 'sprint add-tasks' and 'task reopen'",
   "correct_example": "rmp sprint add-tasks -r myproject 7 42",
   "reference": "sprint add-tasks; see also enums.TaskStatus and the SPRINT entry."
 }
@@ -2370,7 +2345,7 @@ Each follows the shape shown above.
 |------|---------------------------|
 | `roadmap_identified_by_name` | Treating the roadmap as having a numeric ID. Roadmaps are identified by `name` only; every non-`roadmap` command needs `-r <name>` / `--roadmap <name>`. |
 | `manual_sprint_status` | Attempting `task stat <id> SPRINT`. SPRINT is set only by `sprint add-tasks`. |
-| `delete_non_backlog_task` | Calling `task remove` on a task that is not in `BACKLOG`. Move the task back to `BACKLOG` first (via `sprint remove-tasks` or `task reopen`). |
+| `delete_non_backlog_task` | Calling `task remove` on a task that is not in `BACKLOG`. Take the task out of its sprint first with `sprint remove-tasks`, which returns it to `BACKLOG`; a `COMPLETED` task stays in its sprint and is first returned to `SPRINT` with `task reopen`. |
 | `add_tasks_to_closed_sprint` | Calling `sprint add-tasks` against a sprint in `CLOSED` state. Use a `PENDING` or `OPEN` sprint, or create a new one. |
 | `next_without_open_sprint` | Calling `rmp task next` while no sprint is in `OPEN` state. Open a sprint with `sprint start` first. |
 | `complete_with_open_dependencies` | Transitioning a task to `COMPLETED` while it has incomplete subtasks or declared dependencies. Complete the blockers first or remove the dependency. |

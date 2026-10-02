@@ -116,6 +116,12 @@ SEED = "CREATE (:Spec {key:'socket-path-length', status:'implemented'})"
 READ = "MATCH (s:Spec) RETURN s.key"
 
 
+# The bytes a transient bind path adds to the socket's directory beyond one
+# separator: `.rmp-bind-` and six characters, a separator, and `s`
+# (SPEC/GRAPH.md 'Socket Path Length', rule 9).
+TRANSIENT_EXCESS = 18
+
+
 # ---------------------------------------------------------------------------
 # Measuring the bound
 # ---------------------------------------------------------------------------
@@ -278,16 +284,51 @@ class SocketLengthBase:
     def derived_socket_path(self) -> str:
         return str(self.test.home_dir / ".roadmaps" / self.roadmap / "graph.sock")
 
+    def serve_limit(self, path: str) -> int:
+        """The M `graph serve` reports for `path` on a platform with POSIX file
+        modes: the measured bound, less the bytes by which the transient bind
+        path -- the socket's directory, `.rmp-bind-` and six characters, and
+        `s` -- exceeds the target (SPEC/GRAPH.md 'Socket Path Length', rule 9).
+        That excess is 18 less the length of the target's final component, and
+        nothing when the component is 18 bytes or longer.
+        """
+        final = len(os.fsencode(os.path.basename(path)))
+        return self.bound - max(0, TRANSIENT_EXCESS - final)
+
+    def socket_path_with_final_component(self, length: int, final: str = "graph.sock") -> str:
+        """A path of exactly `length` bytes whose final component is `final`,
+        inside a padding directory this method creates under the module's
+        short socket directory. The padding directory is what makes "nothing at
+        or beside the path" checkable: it holds nothing else.
+        """
+        padding = length - len(self.socket_dir) - 2 - len(final)
+        assert padding >= 1, (
+            f"cannot build a {length}-byte path ending in {final!r} inside "
+            f"{self.socket_dir!r}"
+        )
+        directory = os.path.join(self.socket_dir, "d" * padding)
+        os.makedirs(directory, exist_ok=True)
+        path = os.path.join(directory, final)
+        assert len(os.fsencode(path)) == length, (len(path), length)
+        return path
+
     # ---- shared assertions -----------------------------------------------
 
-    def assert_path_length_refusal(self, rc, out, err, path):
+    def assert_path_length_refusal(self, rc, out, err, path, expected_limit=None):
         """Assert one invocation was refused by the path-length rule, with the
         published line and nothing on stdout.
 
         Every clause of Acceptance Criterion 65 is here: the exit code, the
         sentinel, the path, the two numbers ASSERTED SEPARATELY, the remedy, and
         the absence of the operating system's own text.
+
+        `expected_limit` is the M the line must carry: the measured bound for
+        `graph client`, and `serve_limit(path)` for `graph serve`, which also
+        measures its transient bind path (SPEC/GRAPH.md 'Socket Path Length',
+        rule 9). It defaults to the measured bound.
         """
+        if expected_limit is None:
+            expected_limit = self.bound
         assert rc == EXIT_ERROR, (
             f"exit={rc}, want {EXIT_ERROR}. stdout={out!r} stderr={err!r}"
         )
@@ -325,11 +366,13 @@ class SocketLengthBase:
             f"number must be the length of the path supplied, not the limit "
             f"printed twice. line={line!r}"
         )
-        assert limit == self.bound, (
-            f"the refusal reports a limit of {limit} and this platform was "
-            f"MEASURED to bind at most {self.bound} bytes. A hard-coded limit is "
-            f"the usual cause, and it is wrong on three of the five operating "
-            f"systems this project targets. line={line!r}"
+        assert limit == expected_limit, (
+            f"the refusal reports a limit of {limit}, want {expected_limit}: this "
+            f"platform was MEASURED to bind at most {self.bound} bytes, and "
+            f"`graph serve` reports that bound less what its transient bind path "
+            f"adds to this final component. A hard-coded limit is the usual "
+            f"cause, and it is wrong on three of the five operating systems this "
+            f"project targets. line={line!r}"
         )
         assert length != limit, (
             f"the two numbers coincide ({length}), so this assertion cannot tell "
@@ -499,6 +542,75 @@ class TestASuppliedPathAtAndOverTheBound(SocketLengthBase):
 
 
 # ---------------------------------------------------------------------------
+# Criterion 85: `graph serve` also measures its transient bind path
+# ---------------------------------------------------------------------------
+
+class TestServeMeasuresItsTransientBindPath(SocketLengthBase):
+    """Acceptance Criterion 85 (SPEC/GRAPH.md 'Socket Path Length', rule 9).
+
+    On a platform with POSIX file modes `graph serve` binds first at
+    <dir>/.rmp-bind-XXXXXX/s, which is 8 bytes longer than <dir>/graph.sock, so
+    a target ending in graph.sock is refused 8 bytes before the platform's
+    bound -- with the published line, N the target's length and M the bound
+    less 8 -- while `graph client`, which binds nothing, is not.
+    """
+
+    def setup_method(self):
+        super().setup_method()
+        assert os.name == "posix", "criterion 85 is stated for platforms with POSIX file modes"
+        self.limit = self.bound - (TRANSIENT_EXCESS - len("graph.sock"))
+
+    def test_serve_refuses_one_byte_over_its_limit_and_touches_nothing(self):
+        socket_path = self.socket_path_with_final_component(self.limit + 1)
+        directory = os.path.dirname(socket_path)
+        assert len(os.fsencode(socket_path)) <= self.bound, (
+            "the target itself must be inside the platform's bound, or this is criterion 64"
+        )
+
+        rc, out, err = self.run_cli(["graph", "serve", "-r", self.roadmap, "--socket", socket_path])
+        self.assert_path_length_refusal(rc, out, err, socket_path, expected_limit=self.limit)
+
+        assert os.listdir(directory) == [], (
+            f"a refused server left {os.listdir(directory)!r} in {directory!r}; the "
+            f"refusal precedes the lock, the probe, the unlink and every bind, so "
+            f"nothing may be created at or beside the path"
+        )
+
+    def test_serve_starts_and_answers_at_exactly_its_limit(self):
+        socket_path = self.socket_path_with_final_component(self.limit)
+
+        server = self.start_server(socket_path=socket_path)
+        assert server.socket == socket_path, (
+            f"the server announced {server.socket!r} for --socket {socket_path!r}"
+        )
+        rc, out, err = self.run_cli(
+            ["graph", "client", "-r", self.roadmap, "--socket", socket_path, "--query", READ]
+        )
+        assert rc == EXIT_OK, (
+            f"a server on a path of exactly its limit did not answer: exit={rc} "
+            f"stderr={err!r} server_stderr={server.stderr_text()!r}"
+        )
+        assert json.loads(out)["rows"] == [["socket-path-length"]], out
+        assert server.stop(signal.SIGINT) == EXIT_OK
+
+    def test_client_does_not_refuse_the_same_path_for_its_length(self):
+        socket_path = self.socket_path_with_final_component(self.limit + 1)
+
+        rc, out, err = self.run_cli(
+            ["graph", "client", "-r", self.roadmap, "--socket", socket_path, "--query", READ]
+        )
+        assert rc == EXIT_ERROR, f"exit={rc}, want {EXIT_ERROR}. stderr={err!r}"
+        line = err.splitlines()[0]
+        assert TOO_LONG not in line, (
+            f"`graph client` binds nothing, so a target inside the platform's bound "
+            f"must not be refused for its length: {line!r}"
+        )
+        assert line == (
+            f"Error: graph server error: no graph server is listening on {socket_path}"
+        ), f"got {line!r}"
+
+
+# ---------------------------------------------------------------------------
 # Criterion 66: the derived path, refused on the same rule
 # ---------------------------------------------------------------------------
 
@@ -536,7 +648,8 @@ class TestTheDerivedPathIsValidatedOnTheSameRule(SocketLengthBase):
 
     def test_serve_refuses_the_derived_path_with_the_same_line(self):
         rc, out, err = self.run_cli(["graph", "serve", "-r", self.roadmap])
-        self.assert_path_length_refusal(rc, out, err, self.derived)
+        self.assert_path_length_refusal(rc, out, err, self.derived,
+                                        expected_limit=self.serve_limit(self.derived))
         assert "--socket" not in " ".join(["graph", "serve", "-r", self.roadmap]), (
             "this check must run with NO --socket flag at all"
         )
@@ -557,17 +670,21 @@ class TestTheDerivedPathIsValidatedOnTheSameRule(SocketLengthBase):
 
         Asserting the two separately leaves room for two wordings of the same
         refusal; the whole point of the uniform rule is that an operator meets
-        the same answer at whichever surface they reach first.
+        the same answer at whichever surface they reach first. The one figure
+        allowed to differ is M: `graph serve` reports the bound less what its
+        transient bind path adds to `graph.sock` (SPEC/GRAPH.md 'Socket Path
+        Length', rule 9), so the lines are compared with M taken out, and each
+        M is asserted by assert_path_length_refusal.
         """
         invocations = {
-            "serve": ["graph", "serve", "-r", self.roadmap],
-            "client": ["graph", "client", "-r", self.roadmap, "--query", READ],
+            "serve": (["graph", "serve", "-r", self.roadmap], self.serve_limit(self.derived)),
+            "client": (["graph", "client", "-r", self.roadmap, "--query", READ], self.bound),
         }
         lines = {}
-        for name, args in invocations.items():
+        for name, (args, limit) in invocations.items():
             rc, out, err = self.run_cli(args)
-            self.assert_path_length_refusal(rc, out, err, self.derived)
-            lines[name] = err.splitlines()[0]
+            self.assert_path_length_refusal(rc, out, err, self.derived, expected_limit=limit)
+            lines[name] = err.splitlines()[0].replace(f"at most {limit}.", "at most M.")
 
         assert len(set(lines.values())) == 1, (
             f"the two subcommands publish different lines for one derived-path "

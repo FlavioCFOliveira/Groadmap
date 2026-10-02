@@ -42,8 +42,12 @@ Sprint lifecycle:
     - At most one sprint can be OPEN at any time (idx_one_open_sprint).
     - 'sprint close' rejects (exit 6) if any task is still SPRINT/DOING/TESTING — pass --force to override.
     - 'sprint add-tasks' rejects (exit 6) if sprint is CLOSED, or if --max-tasks capacity would be exceeded.
-    - 'sprint remove' resets all member task statuses back to BACKLOG.
-    - 'sprint add-tasks' atomically moves tasks BACKLOG -> SPRINT (manual stat SPRINT is forbidden).
+    - 'sprint remove' resets all member task statuses back to BACKLOG; it is rejected (exit 6)
+      while the sprint holds a COMPLETED task, which stays in its sprint.
+    - 'sprint add-tasks' atomically moves BACKLOG tasks -> SPRINT (manual stat SPRINT is forbidden);
+      a SPRINT, DOING or TESTING task from another sprint keeps its status.
+    - A COMPLETED task stays in the sprint it was completed in: add-tasks, move-tasks and
+      remove-tasks reject it (exit 6).
     - A sprint's --order is mutable only while PENDING or OPEN; once CLOSED it is immutable
       (change rejected exit 6). An --order value already used by another sprint is rejected exit 5.
 
@@ -115,9 +119,11 @@ Options (comment-add / comment-list / comment-edit):
                                            and comment-edit the body may instead arrive
                                            on standard input, under a bounded read, when
                                            absent — on comment-edit only if --type is
-                                           absent too, so a type-only edit never waits
-                                           for input. Supplying neither source is an
-                                           error (exit 2).
+                                           absent too. A type-only comment-edit does not
+                                           read a terminal, so it never waits for input
+                                           typed at one, and refuses a standard input
+                                           that carries data (exit 2). Supplying neither
+                                           source is an error (exit 2).
 
 Comment rules (per SPEC/COMMANDS.md § Sprint Comments):
   - A sprint comment records the progression of the sprint: findings, decisions,

@@ -66,6 +66,12 @@ must be executed. It must be a positive integer (`> 0`) and unique across all
 sprints in the roadmap. A non-positive or non-integer value exits with code 6;
 an order already used by another sprint exits with code 5.
 
+**The `max-tasks` field** caps the number of the sprint's tasks in `SPRINT`,
+`DOING` or `TESTING` status; `COMPLETED` members do not count. A value outside
+1-10000 exits with code 6. A value that is not an integer exits with code 2 and
+`Error: invalid input: invalid value for --max-tasks: "X" is not an integer in 1-10000`;
+`update` applies the same rule.
+
 **Examples:**
 ```bash
 rmp sprint create -r project1 -t "Auth hardening" -d "Deliver session-based authentication for every write command."
@@ -364,6 +370,8 @@ rmp sprint close -r project1 1
 rmp sprint close -r project1 1 --force
 ```
 
+**Carrying unfinished work over.** `--force` leaves the sprint's `SPRINT`, `DOING` and `TESTING` tasks in the closed sprint. Carry them to another sprint with `add-tasks`, which re-parents them and keeps their status: a `DOING` task is still `DOING` in the new sprint, with its `started_at` and `commit_open`. `move-tasks` cannot carry them, because it refuses a CLOSED source sprint. The sprint's `COMPLETED` tasks stay in it.
+
 ---
 
 ### reopen
@@ -391,7 +399,25 @@ rmp sprint reopen -r project1 1
 
 ### add-tasks
 
-Adds tasks to a sprint. Tasks must be in BACKLOG status.
+Adds tasks to a sprint, atomically.
+
+- A `BACKLOG` task joins the sprint and becomes `SPRINT`.
+- A `SPRINT`, `DOING` or `TESTING` task that belongs to another sprint is re-parented into this one and keeps its status and every tracking field. This is how unfinished work is carried over from a closed sprint (see [close](#close)).
+- A task already in this sprint keeps its status.
+- A `COMPLETED` task is refused (exit 6) and nothing is changed, whichever sprint is named, its own included: a completed task stays in the sprint it was completed in. `task reopen` returns it to `SPRINT` in its sprint, after which it can be moved.
+- A CLOSED sprint is refused (exit 6).
+
+**Capacity:** when the sprint sets `--max-tasks`, its load is the number of its members in `SPRINT`, `DOING` or `TESTING` status. The check counts the distinct named tasks that are not already members of this sprint, because each of them becomes active in it, and refuses the addition when the load plus that number exceeds the cap. A named task already in the sprint is not counted. With a cap of 5 and four active members, naming two tasks from outside the sprint prints `Error: validation error: adding 2 task(s) would exceed sprint #M capacity (4/5 tasks active)`.
+
+**Errors specific to membership:**
+| Condition | Exit Code | stderr |
+|-----------|-----------|--------|
+| A named task is `COMPLETED` | 6 | `Error: validation error: task N is COMPLETED in sprint #M; a completed task stays in the sprint it was completed in` |
+| A named task is `COMPLETED` and belongs to no sprint (only data written before the sprint membership rules) | 6 | `Error: validation error: task N is COMPLETED and belongs to no sprint; a completed task cannot join a sprint` |
+| The sprint is CLOSED | 6 | `Error: validation error: cannot add tasks to sprint #N: sprint is CLOSED` |
+| The addition would exceed the cap | 6 | `Error: validation error: adding N task(s) would exceed sprint #M capacity (<load>/<cap> tasks active)` |
+
+`N` in the first two lines is the first such task in the order the command line supplied them, and `M` its sprint.
 
 **Usage:** `rmp sprint add-tasks [OPTIONS] <sprint-id> <task-ids>` or `rmp sprint add [OPTIONS] <sprint-id> <task-ids>`
 
@@ -406,7 +432,15 @@ Adds tasks to a sprint. Tasks must be in BACKLOG status.
 |------------|------------|------|-----------|
 | `-r` | `--roadmap` | string | Roadmap name (required) |
 
-**Audit:** two mirrored entries per task. A `SPRINT_ADD_TASK` entry against the sprint names the task in its `related_entity_id` field, and a `TASK_STATUS_SPRINT` entry against the task names the sprint. The pair shares one `performed_at`, so `audit history SPRINT <id>` says which tasks joined and `audit history TASK <id>` says which sprint a task joined, without either reader consulting the other entity's history.
+**Audit:** a `SPRINT_ADD_TASK` entry against the sprint, naming the task in its `related_entity_id` field, for every task named, plus:
+
+| Task named | Further entries |
+|------------|-----------------|
+| A `BACKLOG` task | `TASK_STATUS_SPRINT` against the task, naming the sprint |
+| A task taken from another sprint | `SPRINT_MOVE_TASK_OUT` against the sprint it left, naming the task, and `TASK_SPRINT_CHANGE` against the task, naming the sprint it entered |
+| A task already in this sprint | None |
+
+All entries of one invocation share one `performed_at`, so `audit history SPRINT <id>` says which tasks joined and `audit history TASK <id>` says which sprint a task joined, without either reader consulting the other entity's history.
 
 **Examples:**
 ```bash
@@ -418,7 +452,9 @@ rmp sprint add -r project1 2 5,6,7,8
 
 ### remove-tasks
 
-Removes tasks from a sprint. Tasks return to BACKLOG status: the transition clears each task's lifecycle timestamps (`started_at`, `tested_at`, `closed_at`), its `completion_summary`, and its `commit_close`, and leaves `commit_open` untouched.
+Removes tasks from a sprint. Tasks return to BACKLOG status: the transition clears each task's lifecycle timestamps (`started_at`, `tested_at`, `closed_at`), its `completion_summary`, and its `commit_close`, and leaves `commit_open` untouched. This is the only command that takes a single task out of its sprint, and, with `sprint remove`, the only way a task returns to `BACKLOG`.
+
+A `COMPLETED` task is refused (exit 6) and nothing is changed: `Error: validation error: task N is COMPLETED in sprint #M; a completed task stays in the sprint it was completed in`. Return it to `SPRINT` with `task reopen` first. A task that is not a member of the sprint is refused with `Error: validation error: task N is not in sprint #M`. A CLOSED sprint is accepted.
 
 **Usage:** `rmp sprint remove-tasks [OPTIONS] <sprint-id> <task-ids>` or `rmp sprint rm-tasks [OPTIONS] <sprint-id> <task-ids>`
 
@@ -433,7 +469,7 @@ Removes tasks from a sprint. Tasks return to BACKLOG status: the transition clea
 |------------|------------|------|-----------|
 | `-r` | `--roadmap` | string | Roadmap name (required) |
 
-**Audit:** two mirrored entries per task, on the same rule as `add-tasks`. A `SPRINT_REMOVE_TASK` entry against the sprint names the task, and a `TASK_STATUS_BACKLOG` entry against the task names the sprint it left. This is the only way a `TASK_STATUS_BACKLOG` entry acquires a counterpart; the one `task stat <ids> BACKLOG` writes has none, because no sprint is party to that operation.
+**Audit:** two mirrored entries per task, on the same rule as `add-tasks`. A `SPRINT_REMOVE_TASK` entry against the sprint names the task, and a `TASK_STATUS_BACKLOG` entry against the task names the sprint it left. `task stat <ids> BACKLOG` refuses every sprint member and writes no entry, so every `TASK_STATUS_BACKLOG` entry written today names the sprint the task left.
 
 **Examples:**
 ```bash
@@ -445,7 +481,7 @@ rmp sprint rm-tasks -r project1 1 5,6
 
 ### move-tasks
 
-Moves tasks between sprints.
+Moves tasks between sprints in one transaction. Each task keeps its status and every tracking field: a `DOING` task stays `DOING`. A `COMPLETED` task is refused (exit 6) and nothing is changed: `Error: validation error: task N is COMPLETED in sprint #M; a completed task stays in the sprint it was completed in`. A CLOSED source or destination sprint is refused (exit 6); to carry unfinished work out of a closed sprint, use `add-tasks` (see [close](#close)). A task that is not a member of the source sprint is refused with `Error: validation error: task N is not in sprint #M`.
 
 **Usage:** `rmp sprint move-tasks [OPTIONS] <from-sprint> <to-sprint> <task-ids>` or `rmp sprint mv-tasks [OPTIONS] <from-sprint> <to-sprint> <task-ids>`
 
@@ -461,7 +497,7 @@ Moves tasks between sprints.
 |------------|------------|------|-----------|
 | `-r` | `--roadmap` | string | Roadmap name (required) |
 
-**Audit:** two entries per task, both against sprints: `SPRINT_MOVE_TASK_OUT` against the source sprint and `SPRINT_MOVE_TASK_IN` against the destination, each naming the task moved in its `related_entity_id` field. No `TASK_STATUS_*` entry is written, because a move preserves each task's status. No `SPRINT_MOVE_TASK` entry is written either: that operation is legacy (see [DOCS/commands/audit.md](audit.md)).
+**Audit:** three entries per task, sharing one `performed_at`: `SPRINT_MOVE_TASK_OUT` against the source sprint and `SPRINT_MOVE_TASK_IN` against the destination, each naming the task moved in its `related_entity_id` field, and `TASK_SPRINT_CHANGE` against the task, naming the destination sprint. No `TASK_STATUS_*` entry is written, because a move preserves each task's status. No `SPRINT_MOVE_TASK` entry is written either: that operation is legacy (see [DOCS/commands/audit.md](audit.md)).
 
 **Examples:**
 ```bash
@@ -514,7 +550,9 @@ rmp sprint upd -r project1 1 -t "Storage refactor" -d "Refactor persistence onto
 
 ### remove
 
-Removes a sprint permanently. Member tasks are not deleted; their status reverts to `BACKLOG`, which clears their lifecycle timestamps, their `completion_summary`, and their `commit_close`, and leaves `commit_open` untouched.
+Removes a sprint permanently. Member tasks are not deleted: each `SPRINT`, `DOING` or `TESTING` member leaves the sprint and reverts to `BACKLOG`, which clears its lifecycle timestamps, its `completion_summary`, and its `commit_close`, and leaves `commit_open` untouched.
+
+A sprint that holds at least one `COMPLETED` task is not removed (exit 6), and nothing is changed, because a completed task stays in the sprint it was completed in. The refusal names every `COMPLETED` member: `Error: validation error: cannot remove sprint #N: completed tasks stay in their sprint: <id-list>`, for example `... completed tasks stay in their sprint: #1`. Leave such a sprint CLOSED instead.
 
 **Usage:** `rmp sprint remove [OPTIONS] <id>` or `rmp sprint rm [OPTIONS] <id>`
 
@@ -528,7 +566,7 @@ Removes a sprint permanently. Member tasks are not deleted; their status reverts
 |------------|------------|------|-----------|
 | `-r` | `--roadmap` | string | Roadmap name (required) |
 
-**Audit:** one `SPRINT_DELETE` entry, and nothing else. No per-task entry is written even though every member task reverts to `BACKLOG`: the membership rows go away with the sprint, and the sprint such an entry would have named no longer exists once the deletion commits. The sprint's earlier entries survive the deletion.
+**Audit:** one `SPRINT_DELETE` entry, and nothing else; a refused removal writes nothing. No per-task entry is written even though every member task reverts to `BACKLOG`: the membership rows go away with the sprint, and the sprint such an entry would have named no longer exists once the deletion commits. The sprint's earlier entries survive the deletion.
 
 **Examples:**
 ```bash
@@ -541,6 +579,20 @@ rmp sprint rm -r project1 2
 ## Task Ordering Commands
 
 Commands for managing the execution order of tasks within a sprint. Tasks are ordered by position (0-based), where position 0 is the first task in the sprint.
+
+Unlike every other command that changes the database, the five ordering commands write a JSON success object on success. Each object's keys are written in ascending byte order of their names, `success` is always `true`, and no object carries a key its section does not show.
+
+The five share their error lines:
+
+| Condition | Exit Code | stderr |
+|-----------|-----------|--------|
+| Neither `-r` nor `--roadmap` given | 3 | `Error: no roadmap selected: use -r <name> or --roadmap <name>` |
+| The sprint id is not a positive integer | 2 | `Error: invalid input: invalid sprint ID: "X" (must be a positive integer)` |
+| A task id is not a positive integer | 2 | `Error: invalid input: invalid task ID: "X" (must be a positive integer)` |
+| No sprint holds the given id | 4 | `Error: resource not found: sprint N` |
+| A named task is not a member of the sprint | 6 | `Error: validation error: task N is not in sprint #M` |
+
+The missing-selector refusal comes first: it is reported before any id is validated and before an unrecognised flag is reported. When several named tasks are not members, `N` is the first of them in the order the command line supplied them.
 
 ### reorder
 
@@ -570,11 +622,11 @@ rmp sprint reorder -r project1 1 5,3,1,4,2
 rmp sprint order -r project1 1 10,11,12,13,14
 ```
 
-**Example output:**
+**Example output:** exactly the keys `sprint_id`, `success`, `task_order`, in that order:
 ```json
 {
-  "success": true,
   "sprint_id": 1,
+  "success": true,
   "task_order": [5, 3, 1, 4, 2]
 }
 ```
@@ -612,13 +664,13 @@ rmp sprint move-to -r project1 1 5 3    # Move task 5 to position 3
 rmp sprint mvto -r project1 1 10 5    # Move task 10 to position 5
 ```
 
-**Example output:**
+**Example output:** exactly the keys `position`, `sprint_id`, `success`, `task_id`, in that order; `position` reflects the requested position:
 ```json
 {
-  "success": true,
+  "position": 0,
   "sprint_id": 1,
-  "task_id": 5,
-  "position": 0
+  "success": true,
+  "task_id": 5
 }
 ```
 
@@ -654,11 +706,11 @@ Swaps the positions of two tasks within a sprint.
 rmp sprint swap -r project1 1 5 3    # Swap positions of tasks 5 and 3
 ```
 
-**Example output:**
+**Example output:** exactly the keys `sprint_id`, `success`, `task_id_1`, `task_id_2`, in that order:
 ```json
 {
-  "success": true,
   "sprint_id": 1,
+  "success": true,
   "task_id_1": 5,
   "task_id_2": 3
 }
@@ -684,6 +736,16 @@ Moves a task to the top of the sprint (position 0).
 | `-r` | `--roadmap` | string | Roadmap name (required) |
 
 **Behavior:** Equivalent to `move-to <task-id> 0`
+
+**Example output:** the keys of the `move-to` object, in the same order; `position` is `0`:
+```json
+{
+  "position": 0,
+  "sprint_id": 1,
+  "success": true,
+  "task_id": 5
+}
+```
 
 **Examples:**
 ```bash
@@ -713,6 +775,16 @@ Moves a task to the bottom of the sprint (last position).
 | `-r` | `--roadmap` | string | Roadmap name (required) |
 
 **Behavior:** Equivalent to `move-to <task-id> <task_count>`
+
+**Example output:** the keys of the `move-to` object, in the same order; `position` is the position the task now holds, one less than the member count, here on a sprint of five members:
+```json
+{
+  "position": 4,
+  "sprint_id": 1,
+  "success": true,
+  "task_id": 5
+}
+```
 
 **Examples:**
 ```bash
@@ -842,7 +914,13 @@ Changes the type and/or the body of one existing sprint comment, identified by t
 | `-y` | `--type` | enum | New comment type; one of the four sprint comment types |
 | `-b` | `--body` | string | New comment text, max 4096 chars. Read from standard input when this flag is absent **and** `--type` is absent too (see below) |
 
-**Body from standard input:** standard input is read only when neither `--type` nor `--body` is given. When `--type` is present and `--body` is absent, only the type changes, standard input is not read, and a type-only edit therefore never blocks waiting for input. The trimming, empty-value, and missing-value rules are those of `comment-add`.
+**Body from standard input:** standard input is the new body only when neither `--type` nor `--body` is given. When `--type` is present and `--body` is absent, the body is left unchanged, and what happens to standard input depends on what it is:
+
+- **A terminal** is not read at all, so a type-only edit typed at a terminal never waits for input.
+- **A standard input that carries no data** — closed, or connected to `/dev/null` — is accepted, and only the type changes.
+- **A standard input that carries data**, even a single space or line break, is refused with exit code 2 and changes nothing: `Error: invalid input: standard input carries data, but it is not read when --type is given; supply the new body with --body`. A piped body is never silently ignored; pass it with `--body` instead.
+
+The trimming, empty-value, and missing-value rules are those of `comment-add`.
 
 **Replacement semantics:** the edit replaces the stored body in place and stamps `updated_at` with the edit's timestamp, so a later listing shows that the comment was altered. The previous text is not retained anywhere and cannot be recovered; the audit log records that an edit happened, not what it replaced.
 
@@ -920,8 +998,9 @@ PENDING → OPEN → CLOSED
 
 - Sprints are created with `PENDING` status by default
 - State transitions are validated (cannot close an already closed sprint)
+- A sprint member is never in `BACKLOG`, and a task in `BACKLOG` belongs to no sprint. A `COMPLETED` task stays in the sprint it was completed in: `add-tasks`, `move-tasks` and `remove-tasks` refuse it, and `remove` refuses a sprint that holds one
 - When removing a sprint, associated tasks return to `BACKLOG` status, which clears their lifecycle timestamps, their `completion_summary`, and their `commit_close`; `commit_open` is preserved
-- When adding tasks to a sprint, the task status changes to `SPRINT`
+- When adding a `BACKLOG` task to a sprint, the task status changes to `SPRINT`; a task taken from another sprint, and a task moved with `move-tasks`, keeps its status
 - Task ordering commands maintain position consistency (0, 1, 2...n) automatically
 - The `stats` command shows the current `task_order` array for reference
 - Comments are strictly additive. They are accepted in every status, including `CLOSED`; no comment subcommand checks or changes a sprint's status, and no comment gates a transition
@@ -968,7 +1047,7 @@ Comment objects returned by `comment-list` contain:
 ## Output Format
 
 All commands follow these conventions:
-- **Success**: JSON output to stdout, exit code 0. `create` and `comment-add` emit `{"id": <int>}`; read commands, `comment-list` included, emit a JSON array; mutating commands, `comment-edit` and `comment-remove` included, emit empty stdout
+- **Success**: JSON output to stdout, exit code 0. `create` and `comment-add` emit `{"id": <int>}`; read commands, `comment-list` included, emit a JSON array; the five ordering commands (`reorder`, `move-to`, `swap`, `top`, `bottom`) emit a JSON success object; every other mutating command, `comment-edit` and `comment-remove` included, emits empty stdout
 - **Errors**: Plain text to stderr, non-zero exit code
 
 ## Exit Codes
@@ -977,11 +1056,11 @@ All commands follow these conventions:
 |------|---------|
 | 0 | Success |
 | 1 | General error (database failure) |
-| 2 | Misuse (missing required argument, bad syntax). On the comment subcommands it also covers a missing `--type` on `comment-add`, a body supplied by neither `--body` nor standard input, and a `comment-edit` that requests no change at all |
+| 2 | Misuse (missing required argument, bad syntax, a `--max-tasks` value that is not an integer). On the comment subcommands it also covers a missing `--type` on `comment-add`, a body supplied by neither `--body` nor standard input, a `comment-edit` that requests no change at all, and a type-only `comment-edit` whose standard input carries data |
 | 3 | No roadmap selected (`-r` missing) |
-| 4 | Sprint or comment not found |
+| 4 | Roadmap not found (including a `~/.roadmaps/<name>` that is a regular file or a directory without `project.db`), or sprint or comment not found |
 | 5 | `--order` value already used by another sprint (`create` / `update`) |
-| 6 | Validation error: bad enum; `--max-tasks` outside 1-10000; closing while SPRINT/DOING/TESTING tasks remain without `--force`; opening while another sprint is OPEN; changing `--order` on a CLOSED sprint; a comment type outside the four sprint values; a comment body over 4096 characters or containing control characters |
+| 6 | Validation error: bad enum; `--max-tasks` outside 1-10000; an addition that would exceed the sprint's cap; a named task that is `COMPLETED` on `add-tasks`, `move-tasks` or `remove-tasks`; a named task that is not a member of the sprint it is taken out of or ordered within; `remove` of a sprint that holds a `COMPLETED` task; adding to or moving into or out of a CLOSED sprint; closing while SPRINT/DOING/TESTING tasks remain without `--force`; opening while another sprint is OPEN; changing `--order` on a CLOSED sprint; a comment type outside the four sprint values; a comment body over 4096 characters or containing control characters; a `-r`/`--roadmap` name that breaks a roadmap name rule |
 | 127 | Unknown subcommand |
 
 The comment subcommands split the two failure kinds along a consistent line. A missing or unusable **body** is a misuse error (exit 2), because the command was invoked without the input it needs; an **oversized or control-character** body is a validation error (exit 6), because the input arrived and was rejected on its content.

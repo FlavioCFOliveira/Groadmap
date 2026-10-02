@@ -158,6 +158,22 @@ var StatementBudget = DefaultStatementBudget
 // force.
 func WaitBudget() time.Duration { return StatementBudget + backoff.Total() }
 
+// lockNB is the non-blocking lock attempt AcquireExclusive retries, held in a
+// variable so that a test can COUNT the attempts one acquisition makes.
+//
+// The count is what tells this package's two candidate sizings apart. A wait
+// budget of the statement budget plus the backoff total climbs strictly more
+// rungs than the SQLite policy's own total does, so it makes strictly more
+// attempts, and SPEC/BUILD.md § No Benchmarks and No Performance-Measurement
+// Tests names a count of attempts as an admissible observable while forbidding
+// the elapsed-time comparison that used to establish the same thing. The
+// platform half stays in graphlock_unix.go and graphlock_windows.go; only the
+// indirection is here, so there is one seam rather than one per platform.
+//
+// Production never reassigns it, it is unexported, and AcquireExclusive behaves
+// exactly as it did when the call was written out.
+var lockNB = lockExclusiveNB
+
 // LockFileName is the basename of the advisory lock file inside a roadmap's
 // graph directory. GoGraph knows nothing about it: Groadmap creates and
 // maintains it, its contents are never read or written, and only the advisory
@@ -251,7 +267,7 @@ func AcquireExclusive(graphDir string) (func(), error) {
 	// long a holder of this lock may lawfully keep it. Every failure of
 	// lockExclusiveNB is contention, so every one is retried.
 	release, err := backoff.RetryWithin(WaitBudget(), func() (func(), error) {
-		if lockErr := lockExclusiveNB(f); lockErr != nil {
+		if lockErr := lockNB(f); lockErr != nil {
 			return nil, lockErr
 		}
 		return releaseFunc(f), nil
@@ -279,6 +295,41 @@ func AcquireExclusive(graphDir string) (func(), error) {
 			utils.ErrGraphStore, ErrBusy)
 	}
 	return release, nil
+}
+
+// ErrHeld identifies the one failure of TryExclusive that means another process
+// holds the lock. Every other failure of TryExclusive is the lock file itself
+// failing, and carries utils.ErrGraphStore.
+var ErrHeld = errors.New("graph store lock is held by another process")
+
+// TryExclusive makes ONE non-blocking attempt to take the graph store's lock
+// exclusively, creating the lock file when it is absent, and returns a closure
+// that releases it. It never waits.
+//
+// It exists for `rmp roadmap remove`, the one process other than a server that
+// takes this lock: the attempt decides whether a server is running for the
+// roadmap, and the hold, kept until the roadmap home directory is gone, is what
+// stops a server from starting against a store that is being deleted
+// (SPEC/COMMANDS.md § Remove Roadmap; SPEC/GRAPH.md § Concurrency and
+// Recovery). An attempt that finds the lock held returns ErrHeld; any other
+// failure — a lock file that cannot be opened, or a lock call that fails for a
+// reason other than contention — returns an error carrying utils.ErrGraphStore.
+//
+// graphDir must exist: like every acquisition, this creates the lock file and
+// never the directory.
+func TryExclusive(graphDir string) (func(), error) {
+	f, err := openLockFile(graphDir)
+	if err != nil {
+		return nil, err
+	}
+	if lockErr := lockNB(f); lockErr != nil {
+		_ = f.Close()
+		if isContention(lockErr) {
+			return nil, ErrHeld
+		}
+		return nil, fmt.Errorf("%w: taking graph store lock: %v", utils.ErrGraphStore, lockErr)
+	}
+	return releaseFunc(f), nil
 }
 
 // openLockFile opens (creating on first use) the lock file inside graphDir.

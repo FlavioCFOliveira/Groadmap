@@ -2,6 +2,7 @@ package commands
 
 import (
 	"database/sql"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -20,11 +21,16 @@ func sprintStart(args []string) error {
 
 // sprintClose closes a sprint, blocking if tasks are still DOING or TESTING unless --force is given.
 func sprintClose(args []string) error {
-	// Parse --force flag before delegating to lifecycle.
+	// Parse --force flag before delegating to lifecycle. Like every flag, it
+	// takes at most one occurrence (SPEC/COMMANDS.md § Repeated Flags).
 	force := false
+	var seen utils.FlagOccurrences
 	filtered := args[:0:len(args)]
 	for _, a := range args {
 		if a == "--force" {
+			if err := seen.Note("--force", a); err != nil {
+				return err
+			}
 			force = true
 		} else {
 			filtered = append(filtered, a)
@@ -40,6 +46,12 @@ func sprintReopen(args []string) error {
 	return sprintLifecycle(args, models.SprintOpen, models.OpSprintReopen, false, func(s models.SprintStatus) bool {
 		return s.CanReopen()
 	}, "cannot reopen sprint with status %s")
+}
+
+// alreadyOpenError is the refusal of `sprint start` or `sprint reopen` while
+// another sprint is OPEN (SPEC/COMMANDS.md § Sprint Lifecycle, State refusals).
+func alreadyOpenError(openID int) error {
+	return fmt.Errorf("%w: sprint #%d is already open — close it first", utils.ErrValidation, openID)
 }
 
 // buildSprintUpdateQuery builds the UPDATE query and args for sprint status change.
@@ -148,13 +160,13 @@ func sprintLifecycle(args []string, newStatus models.SprintStatus, op models.Aud
 	// Prevent opening a sprint when another is already OPEN (task #77).
 	if newStatus == models.SprintOpen {
 		if open, err := database.GetOpenSprint(ctx); err == nil {
-			return fmt.Errorf("%w: sprint #%d is already open — close it first", utils.ErrValidation, open.ID)
+			return alreadyOpenError(open.ID)
 		}
 	}
 
 	// Block close when tasks are still SPRINT, DOING or TESTING unless --force is given.
 	if newStatus == models.SprintClosed {
-		activeTasks, err := database.GetActiveSprintTasks(ctx, sprintID)
+		activeTasks, err := database.GetActiveSprintTaskStates(ctx, sprintID)
 		if err != nil {
 			return fmt.Errorf("checking active tasks: %w", err)
 		}
@@ -173,8 +185,70 @@ func sprintLifecycle(args []string, newStatus models.SprintStatus, op models.Aud
 	}
 
 	now := utils.NowISO8601()
-	query, queryArgs := buildSprintUpdateQuery(newStatus, sprint.Status, now, sprintID)
 	return database.WithTransaction(func(tx *sql.Tx) error {
-		return execSprintUpdate(tx, query, queryArgs, sprintID, op, now)
+		// The checks above ran before this transaction, so a concurrent
+		// invocation can have changed the sprint, or opened another, since.
+		// They are repeated here against the state this transaction reads, so
+		// a lost race is refused with the line the sequential case prints for
+		// the state the winner left, never with the driver's text for
+		// idx_one_open_sprint (SPEC/COMMANDS.md § Sprint Lifecycle, "Concurrent
+		// invocations receive the refusals of the sequential case";
+		// SPEC/ARCHITECTURE.md § Classification of Database Driver Failures,
+		// rule 1). A concurrent commit between this read and the write below
+		// makes the write fail as busy, and the retry policy runs the whole
+		// transaction again, when the read sees it.
+		current, err := sprintStatusTx(tx, sprintID)
+		if err != nil {
+			return err
+		}
+		if !canTransition(current) {
+			return fmt.Errorf("%w: %s", utils.ErrValidation, fmt.Sprintf(errorMsg, current))
+		}
+		if newStatus == models.SprintOpen {
+			if openID, open, err := otherOpenSprintTx(tx, sprintID); err != nil {
+				return err
+			} else if open {
+				return alreadyOpenError(openID)
+			}
+		}
+
+		query, queryArgs := buildSprintUpdateQuery(newStatus, current, now, sprintID)
+		err = execSprintUpdate(tx, query, queryArgs, sprintID, op, now)
+		if err != nil && newStatus == models.SprintOpen && db.IsUniqueConstraintErr(err) {
+			// The schema's backstop, idx_one_open_sprint, rejected the write:
+			// another sprint became OPEN. It is translated into the refusal of
+			// the rule the index guards.
+			if openID, open, qerr := otherOpenSprintTx(tx, sprintID); qerr == nil && open {
+				return alreadyOpenError(openID)
+			}
+		}
+		return err
 	})
+}
+
+// sprintStatusTx reads the status of sprint id inside tx, or reports the
+// sprint's not-found refusal when it no longer exists.
+func sprintStatusTx(tx *sql.Tx, id int) (models.SprintStatus, error) {
+	var status string
+	if err := tx.QueryRow("SELECT status FROM sprints WHERE id = ?", id).Scan(&status); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return "", fmt.Errorf("%w: sprint %d", utils.ErrNotFound, id)
+		}
+		return "", fmt.Errorf("reading sprint status: %w", err)
+	}
+	return models.SprintStatus(status), nil
+}
+
+// otherOpenSprintTx reports the id of an OPEN sprint other than id, read inside
+// tx, and whether there is one.
+func otherOpenSprintTx(tx *sql.Tx, id int) (int, bool, error) {
+	var openID int
+	err := tx.QueryRow("SELECT id FROM sprints WHERE status = 'OPEN' AND id <> ? LIMIT 1", id).Scan(&openID)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return 0, false, nil
+		}
+		return 0, false, fmt.Errorf("reading open sprint: %w", err)
+	}
+	return openID, true, nil
 }

@@ -106,8 +106,8 @@ func TestHandleSprints_HappyPath(t *testing.T) {
 }
 
 // TestHandleTasks_HappyPath drives handleTasks end-to-end against a populated
-// roadmap: it must render 200 HTML showing the full task table with the seeded
-// task title and a task detail modal for that task. This covers loadTasks'
+// roadmap: it must render 200 HTML showing the task list with the seeded task
+// title and a row linking to that task's own page. This covers loadTasks'
 // read path (the full, unfiltered task list) and renderHTML's success branch
 // (SPEC/WEB.md § Roadmap Tasks Page; Tasks and Sprints from SQLite).
 func TestHandleTasks_HappyPath(t *testing.T) {
@@ -129,18 +129,17 @@ func TestHandleTasks_HappyPath(t *testing.T) {
 	if !contains(body, "Wire read-only web server to SQLite") {
 		t.Errorf("tasks body missing seeded task title")
 	}
-	// The Kanban board is the page's task presentation, and it renders no task
-	// table (SPEC/WEB.md § Roadmap Tasks Page; board_test.go pins the board
-	// itself).
-	if !contains(body, `data-role="task-board"`) {
-		t.Errorf("tasks page missing the Kanban task board")
+	// The list is the page's task presentation, and it renders no board
+	// (SPEC/WEB.md § Roadmap Tasks Page; tasks_list_test.go pins the list itself).
+	if !contains(body, `<table class="table table-vcenter card-table">`) {
+		t.Errorf("tasks page missing the task list table")
 	}
-	if contains(body, "<th>Type</th>") {
-		t.Errorf("tasks page renders a task table; the board replaced it")
+	if contains(body, `data-role="task-board"`) {
+		t.Errorf("tasks page renders a board; the list replaced it")
 	}
-	// A task detail modal is rendered for the seeded task.
-	if !contains(body, "task-modal-") {
-		t.Errorf("tasks page missing a task detail modal")
+	// The seeded task's row links to the task's own page.
+	if !contains(body, `href="/roadmaps/`+name+`/tasks/1"`) {
+		t.Errorf("tasks page missing the row link to the seeded task's page")
 	}
 }
 
@@ -333,23 +332,17 @@ func TestHandleIndex_ListError(t *testing.T) {
 
 // TestResolveRoadmap_ExistsError covers resolveRoadmap's 500 branch
 // (routes.go: RoadmapExists I/O error). The {name} passes validation, but the
-// existence check stats ~/.roadmaps/<name>/project.db where <name> is itself a
-// regular FILE, so the stat returns a "not a directory" error (not
-// IsNotExist). That is an internal read error, not a not-found, so the handler
-// must respond 500.
+// existence check cannot learn whether project.db is there, which is an
+// internal read error, not a not-found, so the handler must respond 500.
 func TestResolveRoadmap_ExistsError(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 
-	roadmapsDir := filepath.Join(home, ".roadmaps")
-	if err := os.MkdirAll(roadmapsDir, 0o700); err != nil {
-		t.Fatalf("creating ~/.roadmaps: %v", err)
-	}
-	// "data-pipeline" is a valid roadmap name, but here it is a file, so
-	// stat("~/.roadmaps/data-pipeline/project.db") yields ENOTDIR.
-	if err := os.WriteFile(filepath.Join(roadmapsDir, "data-pipeline"), []byte("x"), 0o600); err != nil {
-		t.Fatalf("seeding roadmap name as a file: %v", err)
-	}
+	// "data-pipeline" is a valid roadmap name whose existence check fails with
+	// an I/O error (see plantUnsearchableRoadmapHome). A regular file there
+	// would not do: it is a roadmap that does not exist, a 404 (SPEC/WEB.md
+	// Acceptance Criterion 264).
+	plantUnsearchableRoadmapHome(t, home, "data-pipeline")
 
 	mux := buildMux()
 	req := httptest.NewRequest(http.MethodGet, "/roadmaps/data-pipeline", nil)

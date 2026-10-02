@@ -14,12 +14,11 @@ import (
 
 // taskRemove removes tasks.
 //
-// Every named task must be in BACKLOG, and a BACKLOG task may still be a sprint
-// member (SPEC/STATE_MACHINE.md § Sprint Membership and the BACKLOG Status). The
-// sprint_tasks foreign key cascades on delete, so removing such a task takes its
-// membership row with it and thins that sprint's run; each sprint that loses a
-// row is compacted inside the same transaction (SPEC/DATABASE.md § Position
-// Density Within a Sprint).
+// Every named task must be in BACKLOG, and a BACKLOG task belongs to no sprint
+// under the sprint membership invariant (SPEC/STATE_MACHINE.md § Sprint
+// Membership and the BACKLOG Status), so the ON DELETE CASCADE of sprint_tasks
+// removes no membership row and no sprint's positions change (SPEC/DATABASE.md
+// § Position Density Within a Sprint, `task remove`).
 func taskRemove(args []string) error {
 	roadmapName, remaining, err := requireRoadmap(args)
 	if err != nil {
@@ -62,11 +61,11 @@ func taskRemove(args []string) error {
 	defer cancel()
 
 	// Fail-fast: verify all tasks exist and are in BACKLOG before deleting any (task #78).
-	tasks, err := database.GetTasks(ctx, ids)
+	tasks, err := database.GetTaskStates(ctx, ids)
 	if err != nil {
 		return err
 	}
-	if err := utils.TasksNotFoundError(utils.MissingIDs(ids, taskIDsOf(tasks))); err != nil {
+	if err := utils.TasksNotFoundError(utils.MissingIDs(ids, taskStateIDsOf(tasks))); err != nil {
 		return err
 	}
 	for i := range tasks {
@@ -88,20 +87,8 @@ func taskRemove(args []string) error {
 
 	// Delete within transaction with audit
 	return database.WithTransaction(func(tx *sql.Tx) error {
-		// A BACKLOG task can still be a sprint member (SPEC/STATE_MACHINE.md
-		// § Sprint Membership and the BACKLOG Status), and sprint_tasks declares
-		// ON DELETE CASCADE on task_id, so the DELETE below silently takes the
-		// membership row with the task and leaves a gap in that sprint's run.
-		// The sprint is never named on this command line, so it has to be read
-		// out of the membership rows while they still exist — after the delete
-		// there is nothing left to read (SPEC/DATABASE.md § Position Density
-		// Within a Sprint, `task remove` on a BACKLOG task that is still a
-		// sprint member).
-		losing, err := db.SprintsOfTasksTx(tx, ids)
-		if err != nil {
-			return err
-		}
-
+		audit := db.NewAuditWriter(tx)
+		defer audit.Close() //nolint:errcheck // releasing the statement; the transaction releases it too
 		for _, id := range ids {
 			// Delete task
 			result, err := tx.Exec("DELETE FROM tasks WHERE id = ?", id)
@@ -117,14 +104,11 @@ func taskRemove(args []string) error {
 				return fmt.Errorf("%w: task %d not found", utils.ErrNotFound, id)
 			}
 
-			if err := db.LogAuditTx(tx, models.OpTaskDelete, models.EntityTask, id, utils.NowISO8601()); err != nil {
+			if err := audit.Log(models.OpTaskDelete, models.EntityTask, id, utils.NowISO8601()); err != nil {
 				return err
 			}
 		}
-
-		// Close the gaps the cascade opened, in the same transaction as the
-		// deletion, so no committed state holds one.
-		return db.CompactSprintsTx(tx, losing)
+		return nil
 	})
 }
 
@@ -138,20 +122,24 @@ func taskRemove(args []string) error {
 //   - status: New status value (second positional argument)
 //
 // Valid manual status transitions (this command):
-//   - SPRINT → BACKLOG, DOING
+//   - SPRINT → DOING
 //   - DOING → TESTING
 //   - TESTING → DOING, COMPLETED
-//   - COMPLETED → BACKLOG (reopen)
 //
 // BACKLOG → SPRINT is automatic only (via `sprint add-tasks`); manual
 // `task stat <ids> SPRINT` is rejected with exit code 6.
 //
+// The BACKLOG target is refused for every sprint member, because a sprint
+// member is never in BACKLOG and this command never changes membership: from
+// SPRINT, DOING or TESTING the refusal names `sprint remove-tasks`, and from
+// COMPLETED it names `task reopen` (SPEC/STATE_MACHINE.md § Valid Transitions,
+// § Sprint Membership and the BACKLOG Status).
+//
 // DOING → SPRINT used to be listed above and never worked: the guard in
 // models.CanTransitionTo gives DOING the single target TESTING, and the SPRINT
-// rejection fifty lines below refuses that target from every source state. The
-// only command that returns a DOING or TESTING task to BACKLOG is `task reopen`
-// (SPEC/STATE_MACHINE.md § Valid Transitions). The list is pinned to the guard
-// by TestTaskStatDocComment_ListsExactlyTheTransitionsAccepted, which reads it
+// rejection below refuses that target from every source state; `task reopen`
+// performs that transition. The list is pinned to the guard by
+// TestTaskStatDocComment_ListsExactlyTheTransitionsAccepted, which reads it
 // back out of this file and compares it against transitions the command was
 // observed to accept.
 //
@@ -168,13 +156,10 @@ func taskRemove(args []string) error {
 //   - Sets started_at and commit_open when transitioning to DOING
 //   - Sets tested_at when transitioning to TESTING
 //   - Sets closed_at and commit_close when transitioning to COMPLETED
-//   - Clears lifecycle dates and commit_close when reopening to BACKLOG,
-//     preserving commit_open
 //   - Logs one audit entry per task, named for the state the task entered
-//     (TASK_STATUS_BACKLOG, TASK_STATUS_DOING, TASK_STATUS_TESTING or
-//     TASK_STATUS_COMPLETED), carrying the supplied commit hash on the two
-//     transitions that record one
-//   - Outputs updated task IDs as JSON to stdout
+//     (TASK_STATUS_DOING, TASK_STATUS_TESTING or TASK_STATUS_COMPLETED),
+//     carrying the supplied commit hash on the two transitions that record one
+//   - Runs the sprint membership guard before commit
 //
 // Complexity: O(n) where n is the number of tasks being updated
 //
@@ -190,11 +175,17 @@ func taskSetStatus(args []string) error {
 	// Extract --summary / -s, --commit-open / -co and --commit-close / -cc
 	// before positional arg parsing.
 	// Fail-fast: all validation happens before any database operation.
+	// No flag is repeatable (SPEC/COMMANDS.md § Repeated Flags): a second
+	// occurrence is refused when the loop reaches it, before its value is read.
 	var completionSummary, commitOpen, commitClose *string
+	var seen utils.FlagOccurrences
 	filtered := make([]string, 0, len(remaining))
 	for i := 0; i < len(remaining); i++ {
 		switch remaining[i] {
 		case "--summary", "-s":
+			if err := seen.Note("--summary", remaining[i]); err != nil {
+				return err
+			}
 			if i+1 >= len(remaining) {
 				return fmt.Errorf("%w: --summary requires a value", utils.ErrRequired)
 			}
@@ -211,6 +202,9 @@ func taskSetStatus(args []string) error {
 			completionSummary = &s
 			i++ // consume the value
 		case "--commit-open", "-co":
+			if err := seen.Note("--commit-open", remaining[i]); err != nil {
+				return err
+			}
 			value, valErr := commitFlagValue("--commit-open", remaining, i)
 			if valErr != nil {
 				return valErr
@@ -218,6 +212,9 @@ func taskSetStatus(args []string) error {
 			commitOpen = &value
 			i++ // consume the value
 		case "--commit-close", "-cc":
+			if err := seen.Note("--commit-close", remaining[i]); err != nil {
+				return err
+			}
 			value, valErr := commitFlagValue("--commit-close", remaining, i)
 			if valErr != nil {
 				return valErr
@@ -255,10 +252,11 @@ func taskSetStatus(args []string) error {
 		return fmt.Errorf("%w: %w", utils.ErrValidation, err)
 	}
 
-	// SPRINT is an automatic transition triggered exclusively by `sprint add-tasks`.
-	// Manual `task stat <ids> SPRINT` is rejected per SPEC/STATE_MACHINE.md.
+	// SPRINT is set by `sprint add-tasks`, when a BACKLOG task joins a sprint,
+	// and by `task reopen`; manual `task stat <ids> SPRINT` is rejected per
+	// SPEC/STATE_MACHINE.md § Valid Transitions, Rejection rule.
 	if newStatus == models.StatusSprint {
-		return fmt.Errorf("%w: status SPRINT can only be set automatically via 'sprint add-tasks'", utils.ErrValidation)
+		return fmt.Errorf("%w: status SPRINT cannot be set by 'task stat'; it is set by 'sprint add-tasks' and 'task reopen'", utils.ErrValidation)
 	}
 
 	// A "-"-prefixed token between or after the positional arguments stands in
@@ -346,12 +344,21 @@ func taskSetStatus(args []string) error {
 	defer cancel()
 
 	// Validate status transitions using batch query (O(1) vs N+1)
-	tasks, err := database.GetTasks(ctx, ids)
+	tasks, err := database.GetTaskStates(ctx, ids)
 	if err != nil {
 		return err
 	}
-	if err := utils.TasksNotFoundError(utils.MissingIDs(ids, taskIDsOf(tasks))); err != nil {
+	if err := utils.TasksNotFoundError(utils.MissingIDs(ids, taskStateIDsOf(tasks))); err != nil {
 		return err
+	}
+	// The BACKLOG target is refused for every sprint member, with the line that
+	// names the command fitting its status, naming the first refused task in
+	// the order the command line supplied them (SPEC/COMMANDS.md § Change
+	// Status (stat), Transitioning to BACKLOG).
+	if newStatus == models.StatusBacklog {
+		if err := backlogTargetRefusal(ids, tasks); err != nil {
+			return err
+		}
 	}
 	for i := range tasks {
 		if !tasks[i].Status.CanTransitionTo(newStatus) {
@@ -400,8 +407,8 @@ func taskSetStatus(args []string) error {
 		// - DOING: set started_at and commit_open
 		// - TESTING: set tested_at
 		// - COMPLETED: set closed_at, completion_summary (nil → NULL) and commit_close
-		// - BACKLOG: clear all tracking dates, completion_summary (task #96) and
-		//   commit_close, preserving commit_open
+		// The BACKLOG target never reaches this point: it is refused above for
+		// every sprint member, and BACKLOG → BACKLOG is no transition.
 		var query string
 		var args []any
 
@@ -453,29 +460,11 @@ func taskSetStatus(args []string) error {
 			auditOp = models.OpTaskStatusCompleted
 			auditOpts = []db.AuditOption{db.WithCommitHash(*commitClose)}
 
-		case models.StatusBacklog:
-			// Reopening to BACKLOG: clear all tracking dates, the completion
-			// summary and commit_close for a fresh cycle. commit_open is
-			// deliberately absent from the SET list — the commit the work
-			// started from stays a true historical fact, while the commit it
-			// was concluded at is invalidated by the reopening
-			// (SPEC/STATE_MACHINE.md § Commit Tracking Fields).
-			query = fmt.Sprintf( // #nosec G201 -- only ? placeholders interpolated, values are parameterized
-				"UPDATE tasks SET status = ?, started_at = NULL, tested_at = NULL, closed_at = NULL, completion_summary = NULL, commit_close = NULL WHERE id IN (%s)",
-				placeholders,
-			)
-			args = append([]any{newStatus}, makeInterfaceSlice(ids)...)
-			// No sprint is party to a `task stat` invocation, so this row names
-			// no counterpart. The same TASK_STATUS_BACKLOG operation written by
-			// `sprint remove-tasks` does name one, because there the sprint is
-			// the counterpart (SPEC/DATABASE.md § The Two Entities of a
-			// Relational Operation).
-			auditOp = models.OpTaskStatusBacklog
-
 		default:
 			// Unreachable, and a guard rather than a fall-through. ParseTaskStatus
 			// admits five values, the SPRINT target is rejected before the database
-			// is opened, and the four cases above cover the rest. A generic "just
+			// is opened, the BACKLOG target is refused for every task above, and
+			// the three cases above cover the rest. A generic "just
 			// update the status" branch would let a sixth state reach the audit
 			// write with no operation of its own and store a row that names no
 			// destination, which is the one thing a destination-named catalogue
@@ -492,13 +481,44 @@ func taskSetStatus(args []string) error {
 		// timestamp captured for the invocation. The write is inside the same
 		// transaction as the UPDATE above, so a batch that fails anywhere
 		// leaves the audit table untouched.
+		audit := db.NewAuditWriter(tx)
+		defer audit.Close() //nolint:errcheck // releasing the statement; the transaction releases it too
 		for _, id := range ids {
-			if err := db.LogAuditTx(tx, auditOp, models.EntityTask, id, now, auditOpts...); err != nil {
+			if err := audit.Log(auditOp, models.EntityTask, id, now, auditOpts...); err != nil {
 				return err
 			}
 		}
-		return nil
+
+		// The sprint membership guard checks the result before commit
+		// (SPEC/DATABASE.md § Sprint Membership Invariant Enforcement).
+		return db.CheckSprintMembershipTx(tx, ids)
 	})
+}
+
+// backlogTargetRefusal returns the refusal of `task stat <ids> BACKLOG` for the
+// first named task, in the order ids supplies them, whose status is SPRINT,
+// DOING, TESTING or COMPLETED, or nil when there is none. A task in one of
+// those statuses is a sprint member, and a sprint member is never in BACKLOG
+// (SPEC/STATE_MACHINE.md § Valid Transitions, "task stat BACKLOG target rule").
+// The line names the command that fits the status: `sprint remove-tasks` takes
+// an active task out of its sprint, and `task reopen` returns a completed task
+// to SPRINT, because a completed task stays in its sprint.
+func backlogTargetRefusal(ids []int, tasks []db.TaskState) error {
+	status := make(map[int]models.TaskStatus, len(tasks))
+	for i := range tasks {
+		status[tasks[i].ID] = tasks[i].Status
+	}
+	for _, id := range ids {
+		switch status[id] {
+		case models.StatusSprint, models.StatusDoing, models.StatusTesting:
+			return fmt.Errorf("%w: invalid status transition from %s to %s for task %d: a task leaves its sprint only through 'rmp sprint remove-tasks'",
+				utils.ErrValidation, status[id], models.StatusBacklog, id)
+		case models.StatusCompleted:
+			return fmt.Errorf("%w: invalid status transition from %s to %s for task %d: a completed task is reopened with 'rmp task reopen'",
+				utils.ErrValidation, models.StatusCompleted, models.StatusBacklog, id)
+		}
+	}
+	return nil
 }
 
 // commitFlagValue returns the value written after a commit-hash flag found at
@@ -544,16 +564,20 @@ func normalizeCommitFlag(flag, value string) (string, error) {
 	return normalised, nil
 }
 
-// taskReopen transitions one or more tasks back to BACKLOG, clearing all
-// lifecycle timestamps, the completion summary and commit_close, and preserving
-// commit_open.
-// Tasks already in BACKLOG are skipped with an informational message.
+// taskReopen returns one or more tasks to SPRINT inside the sprint each
+// belongs to, clearing all lifecycle timestamps, the completion summary and
+// commit_close, and preserving commit_open (SPEC/COMMANDS.md § Reopen Task).
 // Accepts comma-separated IDs with fail-fast on any invalid ID.
 //
-// A task reopened from SPRINT, DOING or TESTING loses its sprint membership; one
-// reopened from COMPLETED keeps it. Each sprint that loses a row is compacted
-// inside the same transaction, so its remaining members hold a gapless 0..N-1
-// run (SPEC/DATABASE.md § Position Density Within a Sprint).
+// Only a DOING, TESTING or COMPLETED task is reopened. A task already in SPRINT
+// or in BACKLOG is skipped with an informational message and no audit entry.
+// The command never touches sprint_tasks: the task keeps its sprint and its
+// position. A task whose sprint is CLOSED is refused, before anything is
+// written, because a closed sprint takes no work back. A COMPLETED task that
+// belongs to no sprint, which only data written before the sprint membership
+// invariant can hold, returns to BACKLOG instead, the one status a task outside
+// every sprint may hold (SPEC/STATE_MACHINE.md § Sprint Membership and the
+// BACKLOG Status).
 func taskReopen(args []string) error {
 	roadmapName, remaining, err := requireRoadmap(args)
 	if err != nil {
@@ -593,86 +617,115 @@ func taskReopen(args []string) error {
 	ctx, cancel := db.WithDefaultTimeout()
 	defer cancel()
 
-	tasks, err := database.GetTasks(ctx, ids)
+	states, err := database.GetTaskSprintStates(ctx, ids)
 	if err != nil {
 		return err
 	}
-	if err := utils.TasksNotFoundError(utils.MissingIDs(ids, taskIDsOf(tasks))); err != nil {
+	if err := utils.TasksNotFoundError(utils.MissingIDs(ids, taskSprintStateIDsOf(states))); err != nil {
 		return err
 	}
+	byID := taskSprintStatesByID(states)
 
-	// Separate already-BACKLOG tasks from tasks that need transition.
-	// Track which tasks are in sprint-associated states so we can clean up sprint_tasks rows.
-	var toReopen []int
-	var toRemoveFromSprint []int
-	for i := range tasks {
-		if tasks[i].Status == models.StatusBacklog {
-			fmt.Fprintf(os.Stderr, "task #%d is already in BACKLOG\n", tasks[i].ID)
-			continue
-		}
-		toReopen = append(toReopen, tasks[i].ID)
-		// Tasks in SPRINT, DOING, or TESTING have a row in sprint_tasks that must be removed.
-		if tasks[i].Status == models.StatusSprint || tasks[i].Status == models.StatusDoing || tasks[i].Status == models.StatusTesting {
-			toRemoveFromSprint = append(toRemoveFromSprint, tasks[i].ID)
+	// A task in a CLOSED sprint is not reopened: the refusal names the first
+	// such task in the order the command line supplied them, once every id has
+	// been resolved and before anything is written.
+	for _, id := range ids {
+		st := byID[id]
+		if reopenable(st.Status) && st.SprintID != 0 && st.SprintStatus == models.SprintClosed {
+			return fmt.Errorf("%w: cannot reopen task %d: sprint #%d is CLOSED; reopen the sprint first with 'rmp sprint reopen'",
+				utils.ErrValidation, id, st.SprintID)
 		}
 	}
 
-	if len(toReopen) == 0 {
+	// A member returns to SPRINT; a task outside every sprint returns to
+	// BACKLOG. A task already in SPRINT or in BACKLOG is reported and skipped.
+	var toSprint, toBacklog, reopened []int
+	for i := range states {
+		st := states[i]
+		if !reopenable(st.Status) {
+			fmt.Fprintf(os.Stderr, "task #%d is already in %s\n", st.ID, st.Status)
+			continue
+		}
+		reopened = append(reopened, st.ID)
+		if st.SprintID != 0 {
+			toSprint = append(toSprint, st.ID)
+		} else {
+			toBacklog = append(toBacklog, st.ID)
+		}
+	}
+
+	if len(reopened) == 0 {
 		return nil
+	}
+
+	// The capacity check counts, per capped sprint, the named members that are
+	// COMPLETED: they are the reopenings that raise the sprint's load. The
+	// candidates keep the command line's order, which decides the sprint a
+	// refusal names (SPEC/COMMANDS.md § Reopen Task).
+	candidates := make([]db.ReopenCandidate, 0, len(toSprint))
+	for _, id := range ids {
+		if st := byID[id]; st.SprintID != 0 && st.Status == models.StatusCompleted {
+			candidates = append(candidates, db.ReopenCandidate{TaskID: id, SprintID: st.SprintID})
+		}
 	}
 
 	now := utils.NowISO8601()
 
 	return database.WithTransaction(func(tx *sql.Tx) error {
-		// commit_close is cleared with the lifecycle timestamps and the
-		// completion summary; commit_open is preserved, which is why it is
-		// absent from the SET list (SPEC/STATE_MACHINE.md § Commit Tracking
-		// Fields, rules 4 and 5).
-		query := fmt.Sprintf( // #nosec G201 -- only ? placeholders interpolated, values are parameterized
-			"UPDATE tasks SET status = ?, started_at = NULL, tested_at = NULL, closed_at = NULL, completion_summary = NULL, commit_close = NULL WHERE id IN (%s)",
-			database.Placeholders(len(toReopen)),
-		)
-		args := append([]any{models.StatusBacklog}, makeInterfaceSlice(toReopen)...)
-		if _, err := tx.Exec(query, args...); err != nil {
+		// Fail-fast and atomic: the capacity check runs inside the transaction
+		// that reopens the tasks, before anything is written, against the
+		// state the transaction reads, so no task is reopened, no field
+		// cleared and no audit entry written when it refuses, and two
+		// concurrent invocations cannot both pass it.
+		if err := db.CheckReopenCapacityTx(tx, candidates); err != nil {
 			return err
 		}
 
-		// Remove sprint_tasks rows for tasks that were associated with a sprint.
-		//
-		// Which sprint each of those rows belongs to is read FIRST, because the
-		// DELETE destroys the evidence and the sprint is never named on this
-		// command line: `task reopen` takes task ids, so the sprint it damages
-		// is one the caller's arguments do not mention (SPEC/DATABASE.md
-		// § Position Density Within a Sprint, `task reopen` from SPRINT, DOING
-		// or TESTING). A task reopened from COMPLETED keeps its row and is
-		// absent from toRemoveFromSprint, so it contributes no sprint here.
-		var losing []int
-		if len(toRemoveFromSprint) > 0 {
-			owners, err := db.SprintsOfTasksTx(tx, toRemoveFromSprint)
-			if err != nil {
-				return err
+		// commit_close is cleared with the lifecycle timestamps and the
+		// completion summary; commit_open is preserved, which is why it is
+		// absent from the SET list (SPEC/STATE_MACHINE.md § Commit Tracking
+		// Fields, rules 4 and 5). sprint_tasks is not touched.
+		for _, group := range []struct {
+			status models.TaskStatus
+			ids    []int
+		}{
+			{models.StatusSprint, toSprint},
+			{models.StatusBacklog, toBacklog},
+		} {
+			if len(group.ids) == 0 {
+				continue
 			}
-			losing = owners
-
-			delQuery := fmt.Sprintf( // #nosec G201 -- only ? placeholders interpolated, values are parameterized
-				"DELETE FROM sprint_tasks WHERE task_id IN (%s)",
-				database.Placeholders(len(toRemoveFromSprint)),
+			query := fmt.Sprintf( // #nosec G201 -- only ? placeholders interpolated, values are parameterized
+				"UPDATE tasks SET status = ?, started_at = NULL, tested_at = NULL, closed_at = NULL, completion_summary = NULL, commit_close = NULL WHERE id IN (%s)",
+				database.Placeholders(len(group.ids)),
 			)
-			if _, err := tx.Exec(delQuery, makeInterfaceSlice(toRemoveFromSprint)...); err != nil {
+			args := append([]any{group.status}, makeInterfaceSlice(group.ids)...)
+			if _, err := tx.Exec(query, args...); err != nil {
 				return err
 			}
 		}
 
-		for _, id := range toReopen {
-			if err := db.LogAuditTx(tx, models.OpTaskReopen, models.EntityTask, id, now); err != nil {
+		// TASK_REOPEN and nothing else, one per reopened task (SPEC/COMMANDS.md
+		// § Reopen Task, Audit, rule 1).
+		audit := db.NewAuditWriter(tx)
+		defer audit.Close() //nolint:errcheck // releasing the statement; the transaction releases it too
+		for _, id := range reopened {
+			if err := audit.Log(models.OpTaskReopen, models.EntityTask, id, now); err != nil {
 				return err
 			}
 		}
 
-		// Close the gaps the DELETE opened, in the same transaction as the
-		// removal, so no committed state holds one.
-		return db.CompactSprintsTx(tx, losing)
+		// The sprint membership guard checks the result before commit
+		// (SPEC/DATABASE.md § Sprint Membership Invariant Enforcement).
+		return db.CheckSprintMembershipTx(tx, reopened)
 	})
+}
+
+// reopenable reports whether `task reopen` changes a task in status s: DOING,
+// TESTING and COMPLETED are reopened; SPRINT and BACKLOG are already at the
+// start of the lifecycle and are left as they are.
+func reopenable(s models.TaskStatus) bool {
+	return s == models.StatusDoing || s == models.StatusTesting || s == models.StatusCompleted
 }
 
 // makeInterfaceSlice converts []int to []interface{}
@@ -712,20 +765,13 @@ func taskSetPriority(args []string) error {
 
 	priority, err := strconv.Atoi(remaining[1])
 	if err != nil {
-		// A non-numeric priority is a domain value-validation failure
-		// (exit 6 / ErrValidation per SPEC/ARCHITECTURE.md): priority is a
-		// 0-9 enum-like value, so any token that is not a valid value in
-		// that range — numeric out-of-range or non-numeric — is invalid data.
-		//
-		// This is NOT the range rule below, and its wording is deliberately
-		// left as it stands. The range rule refuses a well-formed integer for
-		// being outside the bounds; this refuses a token that is not an integer
-		// at all, so the two are different rules that happen to share an exit
-		// code. rmp task 318 converged the RANGE wording across the four
-		// commands that apply it; rewording this one alongside it would have
-		// changed a message no specification publishes and that no other call
-		// site emits.
-		return fmt.Errorf("%w: invalid priority: must be 0-9", utils.ErrValidation)
+		// A <priority> that cannot be read as an integer — a value too large
+		// for the platform's integer type included — is misuse, not a
+		// validation failure: exit 2, the value echoed as supplied, and the
+		// tail of the -p, --priority refusal. It is NOT the range rule below,
+		// which refuses a well-formed integer outside 0-9 with exit 6
+		// (SPEC/COMMANDS.md § Change Priority (prio)).
+		return errNotAnInteger("priority", remaining[1], intRange(models.MinPriority, models.MaxPriority))
 	}
 	// The bounds and the wording of their refusal belong to the field, not to
 	// this command: models.ValidatePriority is the one place either is stated,
@@ -755,11 +801,11 @@ func taskSetPriority(args []string) error {
 	// this, nonexistent IDs returned exit 0, mutated valid tasks in a mixed
 	// batch, and wrote phantom audit rows for IDs that do not exist
 	// (SPEC/COMMANDS.md § Change Priority). Mirrors task remove/stat/reopen.
-	tasks, err := database.GetTasks(ctx, ids)
+	tasks, err := database.GetTaskStates(ctx, ids)
 	if err != nil {
 		return err
 	}
-	if err := utils.TasksNotFoundError(utils.MissingIDs(ids, taskIDsOf(tasks))); err != nil {
+	if err := utils.TasksNotFoundError(utils.MissingIDs(ids, taskStateIDsOf(tasks))); err != nil {
 		return err
 	}
 
@@ -776,8 +822,10 @@ func taskSetPriority(args []string) error {
 		}
 
 		// Log audit with same timestamp
+		audit := db.NewAuditWriter(tx)
+		defer audit.Close() //nolint:errcheck // releasing the statement; the transaction releases it too
 		for _, id := range ids {
-			if err := db.LogAuditTx(tx, models.OpTaskPriorityChange, models.EntityTask, id, now); err != nil {
+			if err := audit.Log(models.OpTaskPriorityChange, models.EntityTask, id, now); err != nil {
 				return err
 			}
 		}
@@ -813,20 +861,9 @@ func taskSetSeverity(args []string) error {
 
 	severity, err := strconv.Atoi(remaining[1])
 	if err != nil {
-		// A non-numeric severity is a domain value-validation failure
-		// (exit 6 / ErrValidation per SPEC/ARCHITECTURE.md): severity is a
-		// 0-9 enum-like value, so any token that is not a valid value in
-		// that range — numeric out-of-range or non-numeric — is invalid data.
-		//
-		// This is NOT the range rule below, and its wording is deliberately
-		// left as it stands. The range rule refuses a well-formed integer for
-		// being outside the bounds; this refuses a token that is not an integer
-		// at all, so the two are different rules that happen to share an exit
-		// code. rmp task 318 converged the RANGE wording across the four
-		// commands that apply it; rewording this one alongside it would have
-		// changed a message no specification publishes and that no other call
-		// site emits.
-		return fmt.Errorf("%w: invalid severity: must be 0-9", utils.ErrValidation)
+		// The rule taskSetPriority applies to <priority>, with the line
+		// SPEC/COMMANDS.md § Change Severity (sev) publishes.
+		return errNotAnInteger("severity", remaining[1], intRange(models.MinSeverity, models.MaxSeverity))
 	}
 	// One rule, one message: see the note in taskSetPriority above.
 	if err := models.ValidateSeverity(severity); err != nil {
@@ -851,11 +888,11 @@ func taskSetSeverity(args []string) error {
 	// this, nonexistent IDs returned exit 0, mutated valid tasks in a mixed
 	// batch, and wrote phantom audit rows for IDs that do not exist
 	// (SPEC/COMMANDS.md § Change Severity). Mirrors task remove/stat/reopen.
-	tasks, err := database.GetTasks(ctx, ids)
+	tasks, err := database.GetTaskStates(ctx, ids)
 	if err != nil {
 		return err
 	}
-	if err := utils.TasksNotFoundError(utils.MissingIDs(ids, taskIDsOf(tasks))); err != nil {
+	if err := utils.TasksNotFoundError(utils.MissingIDs(ids, taskStateIDsOf(tasks))); err != nil {
 		return err
 	}
 
@@ -872,8 +909,10 @@ func taskSetSeverity(args []string) error {
 		}
 
 		// Log audit with same timestamp
+		audit := db.NewAuditWriter(tx)
+		defer audit.Close() //nolint:errcheck // releasing the statement; the transaction releases it too
 		for _, id := range ids {
-			if err := db.LogAuditTx(tx, models.OpTaskSeverityChange, models.EntityTask, id, now); err != nil {
+			if err := audit.Log(models.OpTaskSeverityChange, models.EntityTask, id, now); err != nil {
 				return err
 			}
 		}

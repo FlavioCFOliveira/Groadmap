@@ -636,8 +636,8 @@ class TestBoundaryUnicode:
         base_args = [
             "task", "create", "-r", roadmap,
             "-t", "Boundary test task",
-            "-fr", "Functional",
-            "-tr", "Technical",
+            "-fr", "Product owners can rank work by priority and severity",
+            "-tr", "Reject priority and severity values outside the 0 to 9 range",
             "-ac", "Criteria",
         ]
 
@@ -653,8 +653,8 @@ class TestBoundaryUnicode:
         base_args = [
             "task", "create", "-r", roadmap,
             "-t", "Boundary test task",
-            "-fr", "Functional",
-            "-tr", "Technical",
+            "-fr", "Product owners can rank work by priority and severity",
+            "-tr", "Reject priority and severity values outside the 0 to 9 range",
             "-ac", "Criteria",
         ]
 

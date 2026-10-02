@@ -1,21 +1,20 @@
 // Package aihelp — the gate that pins the `delete_non_backlog_task` pitfall to
-// the routes back to BACKLOG that actually work (rmp task #232).
+// the routes toward BACKLOG that actually work (rmp task #232).
 //
-// The pitfall told an agent that a non-BACKLOG task "must be moved back to
-// BACKLOG first (via `sprint remove-tasks` for SPRINT, or `task reopen` for
-// COMPLETED)". Both halves are true and the sentence is still wrong, because
-// the route it leaves out — `task stat <ids> BACKLOG`, legal from SPRINT and
-// from COMPLETED — is the cheap one, and it is the only one that returns the
-// task without also throwing away its place in the sprint. An agent that
-// followed the pitfall as written would detach a task from its sprint to delete
-// a sibling.
+// The pitfall once told an agent to return a task to BACKLOG with
+// `task stat <ids> BACKLOG`, which then kept the task a member of its sprint.
+// Under the sprint membership invariant that route is refused for every sprint
+// member, a task returns to BACKLOG only by leaving its sprint through
+// `sprint remove-tasks`, and a COMPLETED task, which stays in its sprint, is
+// first returned to SPRINT with `task reopen` (SPEC/STATE_MACHINE.md § Sprint
+// Membership and the BACKLOG Status; SPEC/DATA_FORMATS.md, the pitfall table).
 //
 // A pitfall is prose, so the only way to keep it honest is to measure the thing
 // it describes and read the prose back against the measurement. That is what
 // this file does: for each of the four non-BACKLOG source states it tries every
-// route the pitfall names, records which ones landed the task in BACKLOG, and
-// requires the sentence to name exactly the states each route was observed to
-// work from.
+// route the pitfall names, records which source states each route was observed
+// to take to the state that route is for, and requires the sentence to name
+// exactly those states.
 //
 // The commands are driven through commands.AppRegistry(), the same resolution
 // the binary performs, so a renamed subcommand fails this gate instead of
@@ -244,34 +243,41 @@ func (f *pitfallFixture) statusOf(t *testing.T, id int) models.TaskStatus {
 // The routes the pitfall names
 // ---------------------------------------------------------------------------
 
-// backlogRoute is one way back to BACKLOG, as the pitfall names it and as the
-// CLI performs it. marker is the literal the pitfall must use, so a reworded
-// pitfall fails this gate rather than losing a route from it silently.
+// backlogRoute is one route the pitfall names, as the CLI performs it. marker is
+// the literal the pitfall must use, so a reworded pitfall fails this gate rather
+// than losing a route from it silently. lands is the status the route is for: a
+// source state counts as one the route works from when the command succeeds and
+// leaves the task in that status. A route whose marker names no source state is
+// one the pitfall declares refused everywhere, and the measurement must agree.
 type backlogRoute struct {
 	run    func(t *testing.T, f *pitfallFixture, id int) error
 	marker string
+	lands  models.TaskStatus
 }
 
 var backlogRoutes = []backlogRoute{
 	{
-		marker: "`task stat <ids> BACKLOG` from ",
+		marker: "`sprint remove-tasks` from ",
+		lands:  models.StatusBacklog,
 		run: func(t *testing.T, f *pitfallFixture, id int) error {
-			_, err := invoke(t, "task", "stat", "-r", pitfallRoadmap, itoa(id), string(models.StatusBacklog))
+			_, err := invoke(t, "sprint", "remove-tasks",
+				"-r", pitfallRoadmap, itoa(f.sprintID), itoa(id))
 			return err
 		},
 	},
 	{
 		marker: "`task reopen` from ",
+		lands:  models.StatusSprint,
 		run: func(t *testing.T, f *pitfallFixture, id int) error {
 			_, err := invoke(t, "task", "reopen", "-r", pitfallRoadmap, itoa(id))
 			return err
 		},
 	},
 	{
-		marker: "`sprint remove-tasks` from ",
+		marker: "`task stat <ids> BACKLOG` from ",
+		lands:  models.StatusBacklog,
 		run: func(t *testing.T, f *pitfallFixture, id int) error {
-			_, err := invoke(t, "sprint", "remove-tasks",
-				"-r", pitfallRoadmap, itoa(f.sprintID), itoa(id))
+			_, err := invoke(t, "task", "stat", "-r", pitfallRoadmap, itoa(id), string(models.StatusBacklog))
 			return err
 		},
 	},
@@ -318,7 +324,8 @@ func declaredSources(t *testing.T, description, marker string) map[models.TaskSt
 
 	out := map[models.TaskStatus]bool{}
 	for _, word := range statusWord.FindAllString(matches[0][1], -1) {
-		// BACKLOG is the destination of every route, never a source of one.
+		// BACKLOG is never a source of a route: it is the status the pitfall is
+		// about reaching.
 		if status := models.TaskStatus(word); status != models.StatusBacklog {
 			out[status] = true
 		}
@@ -337,8 +344,8 @@ func TestDeleteNonBacklogPitfall_NamesEveryRouteBackToBacklog(t *testing.T) {
 
 		for _, source := range nonBacklogStates {
 			// A roadmap per case: `sprint remove-tasks` empties the sprint and
-			// `task stat` mutates in place, so sharing one would let an earlier
-			// case decide a later one.
+			// the task commands mutate in place, so sharing one would let an
+			// earlier case decide a later one.
 			f := setupPitfallRoadmap(t)
 			id := f.taskInState(t, source)
 
@@ -346,11 +353,12 @@ func TestDeleteNonBacklogPitfall_NamesEveryRouteBackToBacklog(t *testing.T) {
 			after := f.statusOf(t, id)
 
 			switch {
-			case err == nil && after == models.StatusBacklog:
+			case err == nil && after == route.lands && after != source:
 				observed[source] = true
-			case err == nil:
-				t.Fatalf("%q from %s reported success but left task #%d in %s", route.marker, source, id, after)
-			case after != source:
+			case err == nil && after != source:
+				t.Fatalf("%q from %s reported success but left task #%d in %s, not %s",
+					route.marker, source, id, after, route.lands)
+			case err != nil && after != source:
 				t.Fatalf("%q from %s was refused (%v) but moved task #%d to %s; a refusal must leave "+
 					"the task untouched", route.marker, source, err, id, after)
 			}
@@ -362,24 +370,15 @@ func TestDeleteNonBacklogPitfall_NamesEveryRouteBackToBacklog(t *testing.T) {
 				"  description: %s", route.marker, statesString(declared), statesString(observed),
 				pitfall.Description)
 		}
-		if len(observed) == 0 {
-			t.Errorf("%q returned nothing to BACKLOG from any source state; a route the pitfall names "+
-				"must be a route that works", route.marker)
-		}
 	}
 }
 
-// TestDeleteNonBacklogPitfall_StatBacklogKeepsSprintMembership pins the closing
-// claim of the corrected description: the task `task stat <ids> BACKLOG`
-// returns is still a sprint member, and `task remove` takes it anyway because
-// the deletion precondition tests the status alone
-// (SPEC/STATE_MACHINE.md § Task Deletion Precondition).
-//
-// The claim matters because it is the reason the omitted route is the one an
-// agent should reach for: it is the only route back that costs the task
-// nothing, so an agent that does not know it exists pays for the deletion of
-// one task with the sprint membership of another.
-func TestDeleteNonBacklogPitfall_StatBacklogKeepsSprintMembership(t *testing.T) {
+// TestDeleteNonBacklogPitfall_StatBacklogIsRefusedForEveryMember pins the
+// closing claim of the description: `task stat <ids> BACKLOG` is refused for a
+// sprint member, leaves it a member of its sprint, and so leaves `task remove`
+// refusing it too (SPEC/STATE_MACHINE.md § Valid Transitions, "task stat
+// BACKLOG target rule").
+func TestDeleteNonBacklogPitfall_StatBacklogIsRefusedForEveryMember(t *testing.T) {
 	f := setupPitfallRoadmap(t)
 	id := f.taskInState(t, models.StatusSprint)
 
@@ -388,7 +387,7 @@ func TestDeleteNonBacklogPitfall_StatBacklogKeepsSprintMembership(t *testing.T) 
 		t.Fatal("`task remove` accepted a SPRINT task; the pitfall exists because it refuses one")
 	}
 
-	mustInvoke(t, "task", "stat", "-r", pitfallRoadmap, itoa(id), string(models.StatusBacklog))
+	_, statErr := invoke(t, "task", "stat", "-r", pitfallRoadmap, itoa(id), string(models.StatusBacklog))
 
 	members := decodeIDs(t, "sprint tasks",
 		mustInvoke(t, "sprint", "tasks", "-r", pitfallRoadmap, itoa(f.sprintID)))
@@ -399,27 +398,25 @@ func TestDeleteNonBacklogPitfall_StatBacklogKeepsSprintMembership(t *testing.T) 
 		}
 	}
 
-	if _, err := invoke(t, "task", "remove", "-r", pitfallRoadmap, itoa(id)); err != nil {
-		t.Fatalf("`task remove` refused the BACKLOG task #%d: %v", id, err)
-	}
-
 	description := deleteNonBacklogPitfall(t).Description
-	const membershipClaim = "stays a member of its sprint"
+	const refusalClaim = "refused for every sprint member"
 
-	if stillMember {
-		if !strings.Contains(description, membershipClaim) {
-			t.Errorf("`task stat <id> BACKLOG` left task #%d a member of sprint %d and `task remove` "+
-				"took it anyway, but the pitfall does not say the membership survives (missing %q):\n%s",
-				id, f.sprintID, membershipClaim, description)
+	if statErr != nil && stillMember {
+		if !strings.Contains(description, refusalClaim) {
+			t.Errorf("`task stat <id> BACKLOG` was refused for sprint member #%d, but the pitfall does not "+
+				"say so (missing %q):\n%s", id, refusalClaim, description)
+		}
+		if _, err := invoke(t, "task", "remove", "-r", pitfallRoadmap, itoa(id)); err == nil {
+			t.Errorf("`task remove` took task #%d, which `task stat` left a SPRINT member", id)
 		}
 		return
 	}
 
-	// The other direction: if the route ever starts detaching, the claim above
-	// is the false one and this is what says so.
-	if strings.Contains(description, membershipClaim) {
-		t.Errorf("`task stat <id> BACKLOG` detached task #%d from sprint %d, but the pitfall still says "+
-			"%q:\n%s", id, f.sprintID, membershipClaim, description)
+	// The other direction: if the route ever starts working, the claim above is
+	// the false one and this is what says so.
+	if strings.Contains(description, refusalClaim) {
+		t.Errorf("`task stat <id> BACKLOG` was not refused for sprint member #%d (err %v, still a member: %v), "+
+			"but the pitfall still says %q:\n%s", id, statErr, stillMember, refusalClaim, description)
 	}
 }
 

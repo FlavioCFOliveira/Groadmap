@@ -1,6 +1,8 @@
 package web
 
 import (
+	"regexp"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -47,43 +49,107 @@ func TestSprintCard_ShowsTitle(t *testing.T) {
 	}
 }
 
-// TestSprintDetail_ShowsTitleAndOrder asserts the Sprint Detail Sub-Template's
-// metadata datagrid carries both the sprint's Title (placed first, before ID)
-// and its execution Order (placed after Status), with the actual values
-// rendered (SPEC/WEB.md § Sprint Detail Sub-Template, rule 2; § Roadmap Sprint
-// Page, "Sprint details"). The OPEN sprint was seeded with a known title and
-// Order (99).
-func TestSprintDetail_ShowsTitleAndOrder(t *testing.T) {
+// datagridItemPattern captures the title and the content of one item of the
+// sprint metadata datagrid, as the Sprint Detail Sub-Template writes it.
+var datagridItemPattern = regexp.MustCompile(
+	`<div class="datagrid-item">\s*<div class="datagrid-title">([^<]*)</div>\s*<div class="datagrid-content[^"]*">(.*?)</div>\s*</div>`)
+
+// sprintDatagridItems returns the [title, content] pairs of the one sprint
+// metadata datagrid a sprint page carries, in document order. It fails the test
+// when the page carries no datagrid or more than one.
+func sprintDatagridItems(t *testing.T, body string) [][2]string {
+	t.Helper()
+	const open = `<div class="datagrid">`
+	if n := strings.Count(body, open); n != 1 {
+		t.Fatalf("sprint page carries %d metadata datagrids, want exactly 1", n)
+	}
+	_, grid, _ := strings.Cut(body, open)
+	// The member-tasks board follows the Sprint details card, so it bounds the
+	// datagrid from above.
+	if end := strings.Index(grid, `data-role="task-board"`); end >= 0 {
+		grid = grid[:end]
+	}
+	matches := datagridItemPattern.FindAllStringSubmatch(grid, -1)
+	items := make([][2]string, 0, len(matches))
+	for _, m := range matches {
+		items = append(items, [2]string{m[1], m[2]})
+	}
+	// Every datagrid item must have been captured: an item the pattern missed
+	// would hide an extra field from the exact-shape assertion.
+	if got, want := len(items), strings.Count(grid, `<div class="datagrid-item">`); got != want {
+		t.Fatalf("captured %d datagrid items, but the datagrid carries %d", got, want)
+	}
+	return items
+}
+
+// TestSprintDetail_DatagridHoldsExactlyCreatedStartedClosed asserts the sprint
+// metadata datagrid of the Sprint details card holds exactly three fields, in the
+// order Created, Started, Closed, with an em dash in place of an unset
+// started_at or closed_at, and carries none of the ID, Title, Status, Order,
+// Capacity, or Tasks fields; the page shows neither the execution order nor the
+// capacity (SPEC/WEB.md § Sprint Detail Sub-Template, rule 2; § Roadmap Sprint
+// Page, "Sprint details"; Acceptance Criterion 14).
+//
+// The fixture gives the three sprints every combination the placeholder rule
+// distinguishes: the OPEN sprint is started and not closed, the PENDING sprint is
+// neither, and the lower CLOSED sprint is closed (at a fixed instant) without
+// ever having been started.
+func TestSprintDetail_DatagridHoldsExactlyCreatedStartedClosed(t *testing.T) {
 	t.Setenv("HOME", shortHome(t))
-	f := seedSprintFixture(t, "web-sprint-detail-title-order")
+	f := seedSprintFixture(t, "web-sprint-detail-datagrid")
 	mux := buildMux()
 
-	body := servePage(t, mux, "/roadmaps/"+f.name+"/sprints/"+itoa(f.openID))
-
-	// The datagrid carries the Title and Order titles.
-	for _, marker := range []string{">Title<", ">Order<"} {
-		if !strings.Contains(body, marker) {
-			t.Errorf("sprint detail datagrid missing %q", marker)
-		}
+	const emDash = "&mdash;"
+	cases := []struct {
+		name    string
+		id      int
+		started bool   // started_at is set: a timestamp, not the em dash
+		closed  string // the expected Closed content
+	}{
+		{"OPEN (started, not closed)", f.openID, true, emDash},
+		{"PENDING (neither started nor closed)", f.pendingID, false, emDash},
+		{"CLOSED (closed, never started)", f.closedLower, false, "2026-05-20T18:30:00Z"},
 	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			body := servePage(t, mux, "/roadmaps/"+f.name+"/sprints/"+itoa(c.id))
+			items := sprintDatagridItems(t, body)
 
-	// Title must appear before ID in the datagrid (first item), and Order must
-	// appear after Status, matching the required field order.
-	assertOrdered(t, "sprint detail datagrid order", body, []string{
-		">Title<", ">ID<", ">Status<", ">Order<",
-	})
+			titles := make([]string, len(items))
+			for i, it := range items {
+				titles[i] = it[0]
+			}
+			if want := []string{"Created", "Started", "Closed"}; !slices.Equal(titles, want) {
+				t.Fatalf("datagrid titles = %q, want exactly %q", titles, want)
+			}
 
-	// The OPEN sprint's actual title and execution order value (99) are rendered.
-	const openTitle = "Deliver the sprint detail page and task modal"
-	if !strings.Contains(body, openTitle) {
-		t.Errorf("sprint detail page missing the sprint title %q", openTitle)
-	}
-	// The Order value 99 is rendered in its datagrid-content. Scope the check to
-	// the Order datagrid-item so an unrelated "99" elsewhere cannot satisfy it.
-	orderItem := `<div class="datagrid-title">Order</div>
-                  <div class="datagrid-content">99</div>`
-	if !strings.Contains(body, orderItem) {
-		t.Errorf("sprint detail page does not render the execution order value 99 in the Order datagrid item")
+			created, started, closed := items[0][1], items[1][1], items[2][1]
+			if created == "" || created == emDash {
+				t.Errorf("Created = %q, want the sprint's created_at", created)
+			}
+			if c.started {
+				if started == "" || started == emDash {
+					t.Errorf("Started = %q, want the sprint's started_at", started)
+				}
+			} else if started != emDash {
+				t.Errorf("Started = %q, want the em dash placeholder %q", started, emDash)
+			}
+			if closed != c.closed {
+				t.Errorf("Closed = %q, want %q", closed, c.closed)
+			}
+
+			// None of the six removed fields, anywhere on the page: the datagrid
+			// is the only place a datagrid title is written.
+			for _, gone := range []string{"ID", "Title", "Status", "Order", "Capacity", "Tasks"} {
+				if strings.Contains(body, `<div class="datagrid-title">`+gone+`</div>`) {
+					t.Errorf("the page still carries the %q datagrid field", gone)
+				}
+			}
+			// Neither the capacity nor its unset form is shown.
+			if strings.Contains(body, "Unlimited") {
+				t.Errorf("the page still shows the capacity placeholder %q", "Unlimited")
+			}
+		})
 	}
 }
 
@@ -112,7 +178,7 @@ func TestSprintPage_HeaderShowsTitle(t *testing.T) {
 // TestSprint_TitleIsHTMLEscaped locks in safe rendering: a sprint title
 // containing HTML metacharacters (`<`, `&`) MUST be auto-escaped by the template
 // everywhere it is rendered — the card header on the sprints landing page, and
-// the datagrid plus H2 header on the single sprint page — so no raw markup can
+// the H2 header on the single sprint page — so no raw markup can
 // reach the browser (SPEC/WEB.md § Security and Constraints; the template marks
 // the title with neither template.HTML nor a safe pipeline). This is a
 // regression guard against switching the title to unescaped output.
@@ -147,7 +213,7 @@ func TestSprint_TitleIsHTMLEscaped(t *testing.T) {
 
 	for _, path := range []string{
 		"/roadmaps/" + name, // sprints landing (card header)
-		"/roadmaps/" + name + "/sprints/" + itoa(sprintID), // single sprint page (datagrid + H2)
+		"/roadmaps/" + name + "/sprints/" + itoa(sprintID), // single sprint page (H2 header)
 	} {
 		body := servePage(t, mux, path)
 		if !strings.Contains(body, escapedTitle) {

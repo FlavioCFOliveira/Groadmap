@@ -57,7 +57,10 @@ import (
 // An entry added here from now on is a decision, not an inheritance: it says
 // this package exports something the binary cannot reach and someone chose to
 // keep it. The reason has to say why deleting it is not the answer.
-var unreachedExports = map[string]string{}
+var unreachedExports = map[string]string{
+	"Unwrap": "the errors.Unwrap protocol method of migrationFailure: the errors package calls it through the " +
+		"interface it asserts, so production code reaches it without naming it",
+}
 
 // TestEveryExportedIdentifierIsReachedFromProduction is the gate itself.
 func TestEveryExportedIdentifierIsReachedFromProduction(t *testing.T) {

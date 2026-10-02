@@ -16,27 +16,16 @@
 //     nor a method for it. html/template resolves promoted fields and exported
 //     methods by name at execution time, so this reflection walk covers exactly
 //     the surface a template expression could reach.
-//  4. The card's metadata predicate has exactly FIVE contributors and each one is
-//     individually sufficient. The retired field was a sixth, and removing a
-//     contributor from a disjunction changes when the region renders, so the
-//     predicate is pinned in both directions: none of the five renders no footer,
-//     and any one of the five alone renders a footer holding that indicator and
-//     no other (Acceptance Criteria 85 and 91).
-//  5. The JSON the task detail modal is filled from carries no key for it, so the
-//     modal script is never fed a key that no longer exists.
+//  4. The task page, which shows a task's full field set, names it nowhere.
 //
-// The board's four query parameters are NOT touched by this removal: the header
-// search deliberately excludes the field and always did, and `q`, `type`,
-// `priority` and `severity` remain the whole control surface. Their names, their
-// number and their behaviour are pinned by search_test.go and filter_test.go,
-// which this file does not duplicate.
+// The tasks page's search deliberately excludes the field and always did; its
+// query parameters and their behaviour are pinned by tasks_list_test.go, which
+// this file does not duplicate.
 package web
 
 import (
 	"context"
-	"encoding/json"
 	"io/fs"
-	"net/http"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -54,16 +43,6 @@ import (
 // ("task-card-specialists") and the retired JSON key alike.
 const retiredFieldNeedle = "specialist"
 
-// retiredCardRole is the data-role the retired metadata indicator carried, and
-// retiredCardIcon the Tabler glyph it was drawn with. They are named here because
-// the rendered assertions below look for the MARKUP a surviving indicator would
-// emit, not for a stored value: no fixture can produce a value for a field the
-// model no longer has, so the markup is the only thing left to assert against.
-const (
-	retiredCardRole = "task-card-specialists"
-	retiredCardIcon = "ti ti-users"
-)
-
 // ==================== WHAT THE SERVER SHIPS ====================
 
 // TestSpecialistsRemoval_NoEmbeddedAssetNamesTheField sweeps every embedded
@@ -72,10 +51,8 @@ const (
 // It reads templatesFS and staticFS — the compiled-in filesystems the server
 // actually serves from, never the host filesystem (SPEC/WEB.md § Self-Contained
 // Deliverable) — so it cannot pass against a stale working tree, and it covers
-// the two sites the removal touched here: the tasks board card's indicator in
-// templates/tasks.html and the datagrid item in static/task-modal.js. It also
-// covers every asset neither of them is in, which is the point of sweeping
-// rather than asserting file by file.
+// every asset the removal could have left the field in, which is the point of
+// sweeping rather than asserting file by file.
 func TestSpecialistsRemoval_NoEmbeddedAssetNamesTheField(t *testing.T) {
 	swept := 0
 	for what, tree := range map[string]fs.FS{"templates": templatesFS, "static": staticFS} {
@@ -215,41 +192,44 @@ func TestSpecialistsRemoval_NoPackageSourceNamesTheField(t *testing.T) {
 // `{{.Specialists}}` or `{{.SpecialistsText}}` render again, and this test is what
 // stands between that and a page.
 func TestSpecialistsRemoval_ViewModelExposesNothingForTheField(t *testing.T) {
-	viewType := reflect.TypeOf(taskView{})
+	// The two view models a task reaches a template through: the sprint board's
+	// card, and the tasks page's list row, which is the task itself.
+	for _, viewType := range []reflect.Type{reflect.TypeOf(taskView{}), reflect.TypeOf(models.Task{})} {
+		// Fields, embedded ones included. FieldByName traverses the embedded struct
+		// exactly as the template's name resolution does.
+		for _, name := range promotedFieldNames(viewType) {
+			if indexOfNeedle(name) >= 0 {
+				t.Errorf("%s still exposes the field %q; a template could render it", viewType, name)
+			}
+		}
 
-	// Fields, embedded ones included. FieldByName traverses the embedded struct
-	// exactly as the template's name resolution does.
-	for _, name := range promotedFieldNames(viewType) {
-		if indexOfNeedle(name) >= 0 {
-			t.Errorf("taskView still exposes the field %q; a template could render it", name)
+		// The two exact names the template used, asserted by the resolution rule the
+		// template uses, so the walk above cannot pass by walking the wrong type.
+		for _, name := range []string{"Specialists", "SpecialistsText"} {
+			if _, ok := viewType.FieldByName(name); ok {
+				t.Errorf("%s.%s resolves as a field; the Task entity no longer carries it", viewType, name)
+			}
+		}
+
+		// Methods. Only exported methods are reachable from a template, and only
+		// exported methods are what reflect reports here, so the two sets coincide.
+		pointerType := reflect.PointerTo(viewType)
+		for i := range pointerType.NumMethod() {
+			if name := pointerType.Method(i).Name; indexOfNeedle(name) >= 0 {
+				t.Errorf("%s still exposes the method %q; a template could call it", pointerType, name)
+			}
+		}
+
+		// The control: the walk really does see the names it is meant to police. If
+		// promotedFieldNames returned nothing, every assertion above would be vacuous.
+		names := promotedFieldNames(viewType)
+		if !containsName(names, "Title") || !containsName(names, "SubtaskCount") {
+			t.Fatalf("the field walk did not reach the promoted models.Task fields of %s; it saw %v", viewType, names)
 		}
 	}
-
-	// The two exact names the template used, asserted by the resolution rule the
-	// template uses, so the walk above cannot pass by walking the wrong type.
-	for _, name := range []string{"Specialists", "SpecialistsText"} {
-		if _, ok := viewType.FieldByName(name); ok {
-			t.Errorf("taskView.%s resolves as a field; the Task entity no longer carries it", name)
-		}
-	}
-
-	// Methods. Only exported methods are reachable from a template, and only
-	// exported methods are what reflect reports here, so the two sets coincide.
-	pointerType := reflect.TypeOf(&taskView{})
-	for i := range pointerType.NumMethod() {
-		if name := pointerType.Method(i).Name; indexOfNeedle(name) >= 0 {
-			t.Errorf("*taskView still exposes the method %q; a template could call it", name)
-		}
-	}
-
-	// The control: the walk really does see the names it is meant to police. If
-	// promotedFieldNames returned nothing, every assertion above would be vacuous.
-	names := promotedFieldNames(viewType)
-	if !containsName(names, "Title") || !containsName(names, "SubtaskCount") {
-		t.Fatalf("the field walk did not reach the promoted models.Task fields; it saw %v", names)
-	}
-	if !hasMethod(pointerType, "HasMeta") {
-		t.Fatalf("the method walk did not see HasMeta, so asserting an absence proves nothing")
+	// The method walk's control: it does see an exported method where one exists.
+	if !hasMethod(reflect.TypeOf(sprintView{}), "Card") {
+		t.Fatalf("the method walk did not see sprintView.Card, so asserting an absence proves nothing")
 	}
 }
 
@@ -282,60 +262,9 @@ func hasMethod(t reflect.Type, want string) bool {
 	return ok
 }
 
-// ==================== THE METADATA RENDER PREDICATE ====================
-
-// TestSpecialistsRemoval_HasMetaHasExactlyFiveContributors pins the predicate
-// itself, away from any page: with none of the five the footer is not rendered,
-// and with any ONE of the five it is.
-//
-// The retired field was a sixth term of this disjunction, so removing it changed
-// when the region renders. Both directions are asserted because either alone is
-// satisfiable by a broken predicate: a `return false` passes the empty case and a
-// `return true` passes all five populated ones (SPEC/WEB.md § Roadmap Tasks Page,
-// absent metadata renders nothing; Acceptance Criterion 85).
-func TestSpecialistsRemoval_HasMetaHasExactlyFiveContributors(t *testing.T) {
-	sprint := &db.SprintRef{ID: 4, Title: "Checkout hardening"}
-
-	for _, c := range []struct {
-		name string
-		view taskView
-		want bool
-	}{
-		{"no contributor at all", taskView{}, false},
-		{"the sprint alone", taskView{Sprint: sprint}, true},
-		{"the subtask count alone", taskView{Task: models.Task{SubtaskCount: 1}}, true},
-		{"the depends-on list alone", taskView{Task: models.Task{DependsOn: []int{7}}}, true},
-		{"the blocks list alone", taskView{Task: models.Task{Blocks: []int{7}}}, true},
-		{"the comment count alone", taskView{CommentCount: 1}, true},
-	} {
-		view := c.view
-		if got := view.HasMeta(); got != c.want {
-			t.Errorf("%s: HasMeta() = %t, want %t", c.name, got, c.want)
-		}
-	}
-
-	// The zero values that must NOT count. An indicator whose value is zero or
-	// empty renders nothing, so a predicate that tested for presence of the slice
-	// rather than for its length would render an empty footer.
-	for _, c := range []struct {
-		name string
-		view taskView
-	}{
-		{"a zero subtask count", taskView{Task: models.Task{SubtaskCount: 0}}},
-		{"an empty depends-on list", taskView{Task: models.Task{DependsOn: []int{}}}},
-		{"an empty blocks list", taskView{Task: models.Task{Blocks: []int{}}}},
-		{"a zero comment count", taskView{CommentCount: 0}},
-	} {
-		view := c.view
-		if view.HasMeta() {
-			t.Errorf("%s: HasMeta() = true; a zero or empty value is not an indicator", c.name)
-		}
-	}
-}
-
 // singleIndicatorFixture names the six tasks seedSingleIndicatorFixture creates:
-// one for each of the five metadata contributors, carrying that contributor and
-// nothing else, plus one carrying none.
+// one in a sprint, one with a subtask, the two ends of one dependency edge, one
+// with a comment, and one carrying none of these.
 type singleIndicatorFixture struct {
 	name string
 
@@ -349,13 +278,9 @@ type singleIndicatorFixture struct {
 	bare         int // nothing at all
 }
 
-// seedSingleIndicatorFixture builds the board that isolates each contributor.
-//
-// The single dependency edge is what gives two of the tasks their one indicator:
-// dependsOnly depends on blocksOnly, so the first shows a depends-on count and the
-// second a blocks count, and neither shows anything else. The subtask child is a
-// task of the roadmap but carries no indicator of its own, so it appears on the
-// board as a second bare card and disturbs nothing.
+// seedSingleIndicatorFixture builds a roadmap whose tasks each carry one kind of
+// related data, so the task page under test has every kind of field populated
+// somewhere in the roadmap.
 func seedSingleIndicatorFixture(t *testing.T, name string) singleIndicatorFixture {
 	t.Helper()
 
@@ -377,9 +302,9 @@ func seedSingleIndicatorFixture(t *testing.T, name string) singleIndicatorFixtur
 			Priority:               5,
 			Severity:               3,
 			ParentTaskID:           parent,
-			FunctionalRequirements: "The board must show this task exactly one metadata indicator.",
+			FunctionalRequirements: "The task page must show every field of this task.",
 			TechnicalRequirements:  "Seeded read-only against the roadmap database.",
-			AcceptanceCriteria:     "The card's metadata footer holds one indicator and no other.",
+			AcceptanceCriteria:     "The task page names no retired field.",
 			CreatedAt:              created,
 		})
 		if cerr != nil {
@@ -426,150 +351,29 @@ func seedSingleIndicatorFixture(t *testing.T, name string) singleIndicatorFixtur
 	return f
 }
 
-// allCardRoles is every data-role the metadata footer can emit, plus the role the
-// removed indicator used to emit. Each rendered case below asserts exactly one of
-// these present and every other absent, so a footer that gained an indicator fails
-// as loudly as one that lost the right one.
-var allCardRoles = []string{
-	"task-card-sprint",
-	"task-card-subtasks",
-	"task-card-depends-on",
-	"task-card-blocks",
-	"task-card-comments",
-	retiredCardRole,
-}
+// ==================== THE TASK PAGE ====================
 
-// TestSpecialistsRemoval_MetadataFooterRendersPerContributor is the rendered half
-// of the predicate gate, and the one Acceptance Criteria 85 and 91 are written
-// against: it drives the real board through the real mux.
-//
-// A task carrying exactly one of the five contributors renders a footer holding
-// that indicator and no other; the task carrying none renders no footer element
-// at all. Together with TestSpecialistsRemoval_HasMetaHasExactlyFiveContributors,
-// which pins the predicate away from the page, this covers both the case where
-// other metadata is present and the case where none is.
-func TestSpecialistsRemoval_MetadataFooterRendersPerContributor(t *testing.T) {
+// TestSpecialistsRemoval_TaskPageHasNoItemForTheField serves the page that shows a
+// task's full field set and asserts no part of it names the retired field: the
+// Details card lists every short field, so a datagrid item that outlived the
+// field would show here (SPEC/WEB.md § Roadmap Task Page; Acceptance Criterion
+// 15).
+func TestSpecialistsRemoval_TaskPageHasNoItemForTheField(t *testing.T) {
 	t.Setenv("HOME", shortHome(t))
 	f := seedSingleIndicatorFixture(t, "settlement-platform")
 	mux := buildMux()
 
-	body := servePage(t, mux, "/roadmaps/"+f.name+"/tasks")
-	columns := boardColumns(t, body)
+	body := servePage(t, mux, "/roadmaps/"+f.name+"/tasks/"+itoa(f.commentsOnly))
 
-	for _, c := range []struct {
-		name   string
-		taskID int
-		role   string
-		text   string
-	}{
-		{"the sprint alone", f.sprintOnly, "task-card-sprint",
-			"Settlement reconciliation (Sprint #" + itoa(f.sprintID) + ")"},
-		{"the subtask count alone", f.subtasksOnly, "task-card-subtasks", "Subtasks: 1"},
-		{"the depends-on count alone", f.dependsOnly, "task-card-depends-on", "Depends on: 1"},
-		{"the blocks count alone", f.blocksOnly, "task-card-blocks", "Blocks: 1"},
-		{"the comment count alone", f.commentsOnly, "task-card-comments", "Comments: 1"},
-	} {
-		card := cardAnywhere(t, columns, c.taskID)
-		meta := metaFooter(t, card)
-		if meta == "" {
-			t.Errorf("%s: task #%d renders no metadata footer, but it has one indicator\ncard: %s",
-				c.name, c.taskID, card)
-			continue
-		}
-		if !strings.Contains(meta, c.text) {
-			t.Errorf("%s: the footer does not show %q\nfooter: %s", c.name, c.text, meta)
-		}
-		for _, role := range allCardRoles {
-			present := strings.Contains(meta, role)
-			if role == c.role && !present {
-				t.Errorf("%s: the footer does not carry data-role=%q\nfooter: %s",
-					c.name, role, meta)
-			}
-			if role != c.role && present {
-				t.Errorf("%s: the footer also carries data-role=%q, which this task has no "+
-					"value for\nfooter: %s", c.name, role, meta)
-			}
-		}
-		if strings.Contains(meta, retiredCardIcon) {
-			t.Errorf("%s: the footer draws the retired specialists icon %q\nfooter: %s",
-				c.name, retiredCardIcon, meta)
+	// The control: the page really is the task's page with its Details card, so
+	// the sweep below has something to sweep.
+	for _, required := range []string{`<div class="datagrid-title">Subtasks</div>`, "Functional requirements"} {
+		if !strings.Contains(body, required) {
+			t.Fatalf("the task page carries no %q, so it is not the task's full field set", required)
 		}
 	}
-
-	// None of the five: no footer element, no placeholder, and no dash — and the
-	// card is still a full card, so the absence is of indicators, not of the task.
-	bare := cardAnywhere(t, columns, f.bare)
-	if strings.Contains(bare, `data-role="task-card-meta"`) {
-		t.Errorf("a task with none of the five indicators renders a metadata footer\ncard: %s", bare)
-	}
-	for _, role := range allCardRoles {
-		if strings.Contains(bare, role) {
-			t.Errorf("a task with no metadata renders data-role=%q\ncard: %s", role, bare)
-		}
-	}
-	if !strings.Contains(bare, "Audit the settlement webhook signature verification") {
-		t.Errorf("the metadata-free card lost its title\ncard: %s", bare)
-	}
-}
-
-// cardAnywhere returns one task's card from whichever board column holds it. The
-// fixture spreads its tasks over two columns — sprint membership moves one of them
-// — so the column a card sits in is not what the assertions are about.
-func cardAnywhere(t *testing.T, columns []string, taskID int) string {
-	t.Helper()
-
-	for _, column := range columns {
-		if strings.Contains(column, cardMarker(taskID)) {
-			return cardSlice(t, column, taskID)
-		}
-	}
-	t.Fatalf("task #%d has no card in any of the %d board columns", taskID, len(columns))
-	return ""
-}
-
-// ==================== WHAT FILLS THE MODAL ====================
-
-// TestSpecialistsRemoval_TaskDetailJSONHasNoKeyForTheField decodes the endpoint
-// the modal is filled from into a generic map and asserts no key of the task
-// object names the retired field.
-//
-// Decoding into a map rather than into taskDetailView is the whole point: the
-// typed decode would silently ignore a key the struct no longer has, which is
-// exactly the failure this guards against. The modal script reads the object key
-// by key, so a key that outlived the field would reach datagridItem — and a key
-// the script no longer reads would be dead weight on every modal open
-// (SPEC/WEB.md § Task Detail Endpoint; Acceptance Criterion 15).
-func TestSpecialistsRemoval_TaskDetailJSONHasNoKeyForTheField(t *testing.T) {
-	t.Setenv("HOME", shortHome(t))
-	f := seedSingleIndicatorFixture(t, "settlement-platform")
-	mux := buildMux()
-
-	status, body := fetchTaskDetail(t, mux, f.name, f.commentsOnly)
-	if status != http.StatusOK {
-		t.Fatalf("GET the detail of task #%d: status = %d, want 200; body=%q",
-			f.commentsOnly, status, body)
-	}
-
-	var envelope struct {
-		Task map[string]json.RawMessage `json:"task"`
-	}
-	if err := json.Unmarshal([]byte(body), &envelope); err != nil {
-		t.Fatalf("decoding the task detail: %v; body=%q", err, body)
-	}
-
-	// The control: the object really is the task, so an empty map cannot make the
-	// sweep below pass by having nothing to sweep.
-	for _, required := range []string{"id", "title", "functional_requirements", "subtask_count"} {
-		if _, ok := envelope.Task[required]; !ok {
-			t.Fatalf("the decoded task object has no %q key, so it is not the task payload; "+
-				"body=%q", required, body)
-		}
-	}
-
-	for key := range envelope.Task {
-		if indexOfNeedle(key) >= 0 {
-			t.Errorf("the task detail JSON still carries the key %q; the Task entity no longer "+
-				"has the field", key)
-		}
+	if at := indexOfNeedle(body); at >= 0 {
+		t.Errorf("the task page still names the retired field at byte %d: %q", at,
+			excerptAround(body, at))
 	}
 }

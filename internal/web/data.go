@@ -4,7 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"net/url"
+	"html/template"
 	"regexp"
 	"sort"
 	"strconv"
@@ -242,9 +242,9 @@ func asGraphUnavailable(err error) (*graphUnavailableError, bool) {
 // Every sprint in every tab is rendered through the single shared sprintCard
 // partial, so all sprints share identical card markup. The OPEN sprint under
 // Actual uses the same card as a PENDING or CLOSED sprint and is NOT expanded
-// into an inline task table or per-task modals; the full sprint detail block
-// lives only on the single Roadmap Sprint Page. The sprints page therefore
-// renders no task detail modal at all (SPEC/WEB.md § Shared Sprint-Card Partial;
+// into an inline task table; the full sprint detail block lives only on the
+// single Roadmap Sprint Page, and the sprints page links to no task page
+// (SPEC/WEB.md § Shared Sprint-Card Partial;
 // Acceptance Criteria 8/12/38).
 type sprintsData struct {
 	Name            string
@@ -254,404 +254,22 @@ type sprintsData struct {
 	SprintsClosed   []sprintView
 }
 
-// taskView pairs one task with its comment log and, where the surface shows it,
-// with the sprint the task belongs to. It is the context every surface that shows
-// a task consumes: the board card and the sprint page's table row, and the
-// read-only task detail modal both of them open, whose last block renders the
-// comments as a chronological timeline (SPEC/WEB.md § Task Detail Modal, comments
-// timeline).
+// taskView pairs one task with its comment count. It is the context the card of
+// the sprint page's member-tasks board consumes, each card a link to the task's
+// own page (SPEC/WEB.md § Sprint Detail Sub-Template; § Roadmap Task Page).
 //
 // models.Task is EMBEDDED rather than a named field: html/template resolves
-// promoted fields, so every card, row, and modal expression that reads a task's
-// own fields ({{.ID}}, {{.Title}}, {{.CompletionSummary}}, ...) is unchanged by
-// the addition of the comment log, and the timeline block reads {{.Comments}}.
+// promoted fields, so every card expression that reads a task's own fields
+// ({{.ID}}, {{.Title}}, ...) reads them directly.
 //
 // CommentCount is how many comments the task has, which is all a card shows. The
-// comment TEXT is deliberately absent: it is read only when a user opens that
-// task's modal, by the task detail endpoint, one task at a time, so a page never
-// reads a comment body in order to display a number (SPEC/WEB.md § Roadmap Tasks
-// Page, read cost; SPEC/DATABASE.md § Count Comments for Many Parents (Grouped)).
-//
-// Match is whether the task satisfies EVERY active board control: the search term
-// and the type, minimum-priority and minimum-severity filters, conjoined. It is
-// true for every task when no control is active. The four controls reach the card
-// through this ONE verdict rather than through a criterion of their own, which is
-// what keeps the board to a single filtering model (SPEC/WEB.md § Roadmap Tasks
-// Page, How the criteria compose). A task that does not match stays in the
-// document — every card is in the page so the browser can narrow without a round
-// trip — but is not SHOWN, and does not count towards its column's badge
-// (SPEC/WEB.md § Roadmap Tasks Page, Effect on the board).
-//
-// Sprint is the sprint the task belongs to, or nil when it belongs to none — a
-// task belongs to at most one, which sprint_tasks.task_id's UNIQUE constraint
-// guarantees. It is populated only by the surface that shows it, the tasks page's
-// board cards; the sprint page leaves it nil, because that page renders one
-// sprint and would gain a query for a value its markup never reads (SPEC/WEB.md
-// § Roadmap Tasks Page, the sprint indicator).
-//
-// Field order places the pointer-bearing fields before the embedded struct to
-// keep the pointer-scan prefix minimal (govet fieldalignment), as in sprintView.
+// comment TEXT is deliberately absent: it is read only by that task's own page,
+// one task at a time, so the board never reads a comment body in order to display
+// a number (SPEC/WEB.md § Sprint Detail Sub-Template, Read cost;
+// SPEC/DATABASE.md § Count Comments for the Member Tasks of One Sprint (Grouped)).
 type taskView struct {
-	Sprint *db.SprintRef
 	models.Task
 	CommentCount int
-	Match        bool
-}
-
-// SearchText is the task's title normalised and folded by the board search's
-// rules, which the card carries so the browser matches against the SAME text the
-// server matched against.
-//
-// Transforming the corpus once, here, is what keeps the two paths equivalent: the
-// script normalises and folds only the term the user typed, never the task text,
-// so nothing about a task's text is ever transformed twice (SPEC/WEB.md § Roadmap
-// Tasks Page, One rule, and only one implementation of it; Server and client
-// produce the same board).
-//
-// The transformation is searchableText, the same function foldSearchTerm prepares
-// a term with, so the corpus and the term are one implementation of one rule
-// rather than two implementations of one description (see fold.go). The title is
-// NOT trimmed: the trim is the term's alone, so a task's own leading or trailing
-// whitespace is part of its text.
-//
-// It is a DERIVED form and nothing else. The bytes rmp stores are untouched, and
-// the card renders v.Title itself, so normalisation reaches the comparison and
-// neither storage nor display (SPEC/WEB.md § Roadmap Tasks Page, The
-// normalisation rule; Acceptance Criterion 152).
-func (v *taskView) SearchText() string {
-	return searchableText(v.Title)
-}
-
-// HasMeta reports whether the card has at least one metadata indicator to show:
-// its sprint, its subtasks, its dependencies, the tasks it blocks, or its
-// comments. A task with none of the five renders no metadata footer at all — not
-// an empty one (SPEC/WEB.md § Roadmap Tasks Page, absent metadata renders
-// nothing; Acceptance Criterion 85).
-//
-// The five conditions are exactly the five the footer's own items are rendered
-// under, so the footer can never be emitted empty and can never swallow an
-// indicator the card should show.
-//
-// It governs the TASKS board's card alone. The sprint page's member-tasks board
-// needs no such predicate: its card carries exactly two indicators, both of them
-// counts, and renders both on every card including when either is 0, so its footer
-// row is unconditional (SPEC/WEB.md § Sprint Detail Sub-Template, rule 4, Both
-// counters are always rendered; Acceptance Criterion 134).
-func (v *taskView) HasMeta() bool {
-	return v.Sprint != nil ||
-		v.SubtaskCount > 0 ||
-		len(v.DependsOn) > 0 ||
-		len(v.Blocks) > 0 ||
-		v.CommentCount > 0
-}
-
-// matchesSearch reports whether the task matches an already-folded term.
-//
-// The searchable text is exactly the two things the card itself displays: the
-// task title, and the task reference written with its leading "#". Matching the
-// reference as the literal string "#42" is what lets both `42` and `#42` find task
-// 42 under the one substring rule, with no special case for either form.
-//
-// Every other task field is deliberately outside the search: a term occurring
-// only in a task's `functional_requirements`, and matching nothing in that task's
-// title or reference, does not match it. The box answers "which task is this?"
-// from what identifies a task on its card, and matching an attribute would answer
-// a different question through the same control (SPEC/WEB.md § Roadmap Tasks
-// Page, What the search matches; Acceptance Criterion 101).
-func (v *taskView) matchesSearch(folded string) bool {
-	if folded == "" {
-		return true
-	}
-	if strings.Contains(v.SearchText(), folded) {
-		return true
-	}
-	return strings.Contains("#"+strconv.Itoa(v.ID), folded)
-}
-
-// The board's minimum-priority and minimum-severity filters offer the thresholds
-// minFilterThreshold to maxFilterThreshold. That is the priority and severity
-// range of SPEC/MODELS.md § Task WITHOUT its 0 floor: a threshold of 0 admits
-// every task and IS the unfiltered board, which already has its own option and
-// its own URL form — the parameter absent — so offering it would give one board
-// two URLs and two control settings (SPEC/WEB.md § Roadmap Tasks Page, What each
-// filter matches).
-//
-// 0 is therefore free to mean "no filter on this dimension", which is exactly
-// what `task.Priority >= 0` computes for every task: the inactive filter needs no
-// branch of its own.
-const (
-	minFilterThreshold = 1
-	maxFilterThreshold = 9
-)
-
-// boardControls is what one request asked the roadmap tasks board to show: the
-// search term and the three header filters, reduced to the values the matching
-// rule compares with.
-//
-// The three filters carry ACCEPTED values only. A value a dimension does not
-// accept never reaches this struct: the parser turns it into the zero value,
-// which is the same state the parameter's absence produces, so "no filter value
-// is an error" is settled once, at the boundary, and every consumer downstream
-// sees one representation of "this dimension is not filtered" (SPEC/WEB.md
-// § Roadmap Tasks Page, No filter value is an error).
-//
-// Search keeps the term exactly as the request carried it, because that string is
-// echoed back into the input and the no-match message; folded is the same term in
-// the form the matching rule uses, computed ONCE per request rather than once per
-// task.
-//
-// Field order places the three string-shaped fields before the two ints, so the
-// pointer-scan prefix stops at the ints (govet fieldalignment).
-type boardControls struct {
-	Search   string
-	folded   string
-	Type     models.TaskType
-	Priority int
-	Severity int
-}
-
-// newBoardControls builds the controls from values already reduced to their
-// accepted forms, folding the term once.
-func newBoardControls(search string, taskType models.TaskType, priority, severity int) boardControls {
-	return boardControls{
-		Search:   search,
-		folded:   foldSearchTerm(search),
-		Type:     taskType,
-		Priority: priority,
-		Severity: severity,
-	}
-}
-
-// parseBoardControls reads the board's four header controls out of a request's
-// query string. It cannot fail: every value a caller can send maps to a control
-// state, so this route's status codes do not depend on what the query carries
-// (SPEC/WEB.md § Roadmap Tasks Page, No malformed term is an error; No filter
-// value is an error).
-//
-// url.Values.Get answers the FIRST value of a repeated parameter, which is the
-// reading the specification fixes for ?type=BUG&type=EPIC, and answers "" for a
-// parameter url.URL.Query could not decode, which is the reading it fixes for an
-// undecodable one. Both rules therefore come from the standard library's own
-// semantics rather than from a special case here.
-func parseBoardControls(query url.Values) boardControls {
-	return newBoardControls(
-		query.Get("q"),
-		parseTypeFilter(query.Get("type")),
-		parseThresholdFilter(query.Get("priority")),
-		parseThresholdFilter(query.Get("severity")),
-	)
-}
-
-// parseTypeFilter reduces a raw type parameter to the TaskType it names, or to
-// the empty TaskType when it names none.
-//
-// The comparison is EXACT against the enum's own spelling, in upper case, and no
-// case folding is applied: `rmp task list -y bug` is rejected by the CLI for the
-// same reason, so one parameter name means one thing across the two surfaces
-// (SPEC/WEB.md § Roadmap Tasks Page, What each filter matches; SPEC/COMMANDS.md
-// § List Tasks). A comma-packed value such as "BUG,EPIC" is one string, is not
-// one of the ten, and is ignored whole — no filter is ever partly applied.
-func parseTypeFilter(raw string) models.TaskType {
-	if models.IsValidTaskType(raw) {
-		return models.TaskType(raw)
-	}
-	return ""
-}
-
-// parseThresholdFilter reduces a raw minimum-priority or minimum-severity
-// parameter to the threshold it names, or to 0 — no filter — when it names none.
-//
-// Accepted is the canonical spelling of an integer in [minFilterThreshold,
-// maxFilterThreshold] and nothing else. strconv.Atoi already rejects a value with
-// surrounding spaces or a non-numeric body; the round-trip through strconv.Itoa
-// rejects the decorated spellings it would otherwise accept — "+5" and "05" parse
-// as 5 but are not how 5 is written — so a decorated value applies no filter
-// rather than silently applying one the URL does not say (SPEC/WEB.md § Roadmap
-// Tasks Page, No filter value is an error).
-//
-// strconv.Itoa allocates nothing for a value below 100: it slices a package-level
-// string of the small integers.
-func parseThresholdFilter(raw string) int {
-	n, err := strconv.Atoi(raw)
-	if err != nil || n < minFilterThreshold || n > maxFilterThreshold {
-		return 0
-	}
-	if raw != strconv.Itoa(n) {
-		return 0
-	}
-	return n
-}
-
-// active reports whether any control is narrowing the board. It is the condition
-// that separates a board narrowed to nothing — which says so — from a roadmap
-// that holds no task at all, which does not (SPEC/WEB.md § Roadmap Tasks Page,
-// Empty states).
-func (c boardControls) active() bool {
-	return c.folded != "" || c.Type != "" || c.Priority > 0 || c.Severity > 0
-}
-
-// matches is the board's ONE verdict on one task: the task is shown when it
-// satisfies EVERY active control, and a board with no active control shows every
-// task (SPEC/WEB.md § Roadmap Tasks Page, How the criteria compose).
-//
-// The conjunction is total and each clause decides only its own dimension, so
-// narrowing a control can only shrink the shown set and no control ever re-admits
-// a task another control excluded.
-//
-// The two ordinal clauses need no "is this filter active" test: an inactive
-// threshold is 0, and every priority and severity is >= 0 by the range
-// SPEC/MODELS.md § Task fixes, so the inactive filter admits everything by
-// arithmetic rather than by a branch.
-//
-// The clauses are ordered cheapest first, which a conjunction of pure predicates
-// leaves free to choose: the two integer comparisons and the string equality cost
-// nothing, while the term clause folds the task's title (taskView.SearchText).
-// Rejecting a task on a threshold therefore skips that fold entirely. Measured
-// over 200 tasks with all four controls in force
-// (BenchmarkTaskMatches_OrdinalFirst vs BenchmarkTaskMatches_TermFirst):
-// 513 ns/op and 0 allocs against 20158 ns/op and 200 allocs — one allocation per
-// task saved per render (three runs, 20000 iterations each, all within 0.4%). Evaluation order cannot change the verdict, so the
-// property that server and client agree is untouched.
-func (v *taskView) matches(c boardControls) bool {
-	return v.Priority >= c.Priority &&
-		v.Severity >= c.Severity &&
-		(c.Type == "" || v.Type == c.Type) &&
-		v.matchesSearch(c.folded)
-}
-
-// filterOption is one option of a header filter dropdown: the value the URL
-// parameter carries, the text the option shows, and whether this request's value
-// selected it.
-//
-// Value and Label are the SERVER's own strings — a TaskType from the enum, a
-// threshold from the range, or the empty value of the dimension's no-filter
-// option — never a string the caller supplied. A caller's parameter only decides
-// which of them carries Selected, so no caller-supplied string reaches the page
-// through type, priority, or severity (SPEC/WEB.md § Roadmap Tasks Page, A filter
-// value is never echoed into the page).
-type filterOption struct {
-	Value    string
-	Label    string
-	Selected bool
-}
-
-// boardFilters is the three header dropdowns as the template renders them: one
-// fixed option set per dimension, with exactly one option marked selected.
-type boardFilters struct {
-	Types      []filterOption
-	Priorities []filterOption
-	Severities []filterOption
-}
-
-// newBoardFilters builds the three option sets for one request's controls.
-func newBoardFilters(c boardControls) boardFilters {
-	return boardFilters{
-		Types:      typeFilterOptions(c.Type),
-		Priorities: thresholdFilterOptions("Any priority", c.Priority),
-		Severities: thresholdFilterOptions("Any severity", c.Severity),
-	}
-}
-
-// typeFilterOptions enumerates the type dropdown: the no-filter option, then the
-// ten TaskType values.
-//
-// The values come from models.ValidTaskTypes rather than from a literal here or
-// in the template, so the dropdown cannot drift from the enum: a type added to
-// SPEC/MODELS.md § Enums appears here with no change to this file.
-func typeFilterOptions(selected models.TaskType) []filterOption {
-	options := make([]filterOption, 0, len(models.ValidTaskTypes)+1)
-	options = append(options, filterOption{Label: "Any type", Selected: selected == ""})
-	for _, taskType := range models.ValidTaskTypes {
-		options = append(options, filterOption{
-			Value:    string(taskType),
-			Label:    string(taskType),
-			Selected: taskType == selected,
-		})
-	}
-	return options
-}
-
-// thresholdFilterOptions enumerates one threshold dropdown: the no-filter option,
-// then the thresholds minFilterThreshold to maxFilterThreshold. The range is the
-// one the constants fix, so the offered set and the accepted set are the same set
-// and neither can drift from the other.
-func thresholdFilterOptions(anyLabel string, selected int) []filterOption {
-	options := make([]filterOption, 0, maxFilterThreshold-minFilterThreshold+2)
-	options = append(options, filterOption{Label: anyLabel, Selected: selected == 0})
-	for threshold := minFilterThreshold; threshold <= maxFilterThreshold; threshold++ {
-		value := strconv.Itoa(threshold)
-		options = append(options, filterOption{
-			Value:    value,
-			Label:    value,
-			Selected: threshold == selected,
-		})
-	}
-	return options
-}
-
-// taskColumn is one column of the roadmap tasks page's Kanban board: a task
-// status, the cards of the tasks in that status, and the count its header shows.
-//
-// Tasks holds POINTERS into the page's flat task list rather than copies, so the
-// board and the task detail modals it opens are rendered from one set of values
-// and cannot drift apart. It holds every task of that status, including the ones a
-// search hides: the card stays in the document so the browser can show it again
-// without a round trip.
-//
-// Count is the number of tasks the column SHOWS — those whose Match is true — so
-// the header badge always states what the user is looking at. A count that kept
-// reporting the unnarrowed total while the column displayed fewer cards would
-// state something false, which is exactly what the count exists to prevent
-// (SPEC/WEB.md § Roadmap Tasks Page, Count per column; Effect on the board;
-// Acceptance Criteria 83 and 101).
-//
-// Field order puts the string before the slice so the pointer-scan prefix stops
-// at the slice header rather than spanning the whole struct (govet
-// fieldalignment).
-type taskColumn struct {
-	Status models.TaskStatus
-	Tasks  []*taskView
-	Count  int
-}
-
-// tasksData is the view model handed to the roadmap tasks template. It presents
-// the roadmap's full task set — every task, any status — as a Kanban board of
-// five fixed columns, one per models.TaskStatus, each card clickable to open the
-// read-only task detail modal. It is read-only; nothing here is persisted
-// (SPEC/WEB.md § Roadmap Tasks Page).
-//
-// Tasks is the full, unfiltered task list in the order the read returned it
-// (priority DESC, created_at ASC), each task carrying its own comment log and its
-// sprint. It is the single source of the page's task values: the board's columns
-// point into it, and it is what the page ranges over to render exactly one task
-// detail modal per task.
-//
-// Columns is that same list grouped into the board's five columns, in the order
-// of the task state machine's flow. The grouping is in memory over the values
-// already read: the board issues no query of its own, none per column and none
-// per card (SPEC/WEB.md § Roadmap Tasks Page, read cost).
-// Search is the term exactly as the request carried it, echoed back into the
-// search input and into the no-match message; html/template escapes it in both
-// places. Filters is the three header dropdowns with their fixed option sets and
-// the one option this request selected — the server's own strings throughout, so
-// no filter value is ever echoed into the page.
-//
-// SearchActive says a term is in force (the folded term is non-empty), which is
-// what decides whether the no-match message names the term at all. NoMatches says
-// at least one control is in force and nothing matched it, which is the condition
-// for the board's "no task matches" message — a different condition from a
-// roadmap that holds no task at all. One message covers the term and the three
-// filters together, because the shown set is their conjunction (SPEC/WEB.md
-// § Roadmap Tasks Page, Effect on the board; Empty states).
-type tasksData struct {
-	Name         string
-	Search       string
-	Chrome       chrome
-	Filters      boardFilters
-	Tasks        []taskView
-	Columns      []taskColumn
-	SearchActive bool
-	NoMatches    bool
 }
 
 // auditPageSize is the fixed number of audit entries shown per page on the
@@ -688,48 +306,6 @@ type auditData struct {
 	NextPage   int
 	HasPrev    bool
 	HasNext    bool
-}
-
-// sprintCompletion is the precomputed per-sprint completion summary the shared
-// sprint presentation sub-template renders as its status summary line. It is
-// derived ONLY from the sprint's own loaded member tasks (no extra DB query),
-// using the shared models.CalculateSprintSummary categorisation so it never
-// diverges from models.CalculateSprintShowResult (SPEC/WEB.md § Shared Sprint
-// Presentation Sub-Template, sprint status summary line). Precomputing it keeps
-// the template declarative: the template reads fields instead of computing.
-type sprintCompletion struct {
-	Pending    int // P: tasks in BACKLOG or SPRINT.
-	InProgress int // A ("Abertas"): tasks in DOING or TESTING.
-	Completed  int // C: tasks in COMPLETED.
-	Total      int // T: total member tasks.
-	Pct        int // completion percentage, rounded to the nearest integer (0 when Total == 0).
-}
-
-// newSprintCompletion builds the completion summary for one sprint from its
-// loaded member tasks. It reuses models.CalculateSprintSummary (the same
-// categorisation models.CalculateSprintShowResult encodes) so the web summary
-// and the CLI sprint report agree exactly.
-func newSprintCompletion(tasks []models.Task) sprintCompletion {
-	summary := models.CalculateSprintSummary(tasks)
-	return sprintCompletion{
-		Pending:    summary.Pending,
-		InProgress: summary.InProgress,
-		Completed:  summary.Completed,
-		Total:      summary.TotalTasks,
-		Pct:        summary.CompletionPercentage(),
-	}
-}
-
-// Line renders the sprint status summary line in the exact documented format
-// `<pct>% - P:<p> A:<a> C:<c> - T:<t>` (for example `33% - P:8 A:29 C:18 - T:55`).
-// P, A and C always sum to T: the three categories partition the closed task
-// status enum, so no member task is counted twice and none is left out.
-// It is the single place the format string lives, so both call sites of the
-// shared sub-template produce a byte-identical line (SPEC/WEB.md § Shared Sprint
-// Presentation Sub-Template, sprint status summary line).
-func (c sprintCompletion) Line() string {
-	return fmt.Sprintf("%d%% - P:%d A:%d C:%d - T:%d",
-		c.Pct, c.Pending, c.InProgress, c.Completed, c.Total)
 }
 
 // sprintView is one sprint as the Roadmap Sprints Page presents it: the sprint
@@ -786,11 +362,10 @@ type sprintCard struct {
 // by, and the cards of the sprint's tasks it holds.
 //
 // Tasks holds POINTERS into the page's flat member-task list rather than copies,
-// so the board and the single modal shell its cards open are rendered from one
-// set of values and cannot drift apart. There is no Count field: the column's
+// so the board is rendered from the one set of values the page read and cannot
+// drift from it. There is no Count field: the column's
 // badge is len(Tasks), because this board carries no narrowing control and so has
-// no second notion of "how many are shown" to keep in step with a stored number
-// (contrast taskColumn, whose count is what the tasks page's search left visible).
+// no second notion of "how many are shown" to keep in step with a stored number.
 //
 // CanonicalStatus is the status the column's count badge takes its colour from: a
 // column of this board groups a SET of statuses and writes none of them, so the
@@ -798,37 +373,47 @@ type sprintCard struct {
 // model rather than in the template. The template hands it to taskStatusBadge, the
 // same helper every task status badge takes its colour from, so the board reads
 // the ONE semantic mapping instead of carrying colour literals that could drift
-// from it (SPEC/WEB.md § Sprint Detail Sub-Template, rule 4, Column header;
+// from it (SPEC/WEB.md § Sprint Detail Sub-Template, rule 3, Column header;
 // § Status, Priority, and Severity Badge Colours, rule 2; Acceptance Criterion
 // 140).
 //
-// Field order puts the two strings before the slice so the pointer-scan prefix
-// stops at the slice header rather than spanning the whole struct (govet
+// BodyID is the id of the column's body — the element holding its cards or its
+// empty state — which the column's collapse toggle names in aria-controls and
+// static/sprint-board.js resolves to find the element it hides. It is taken from
+// the column table below rather than derived in the template, so the three ids
+// are fixed literals, unique within the page by construction (SPEC/WEB.md
+// § Sprint Detail Sub-Template, rule 3, Column collapse; Acceptance Criterion
+// 213).
+//
+// Field order puts the strings before the slice so the pointer-scan prefix stops
+// at the slice header rather than spanning the whole struct (govet
 // fieldalignment).
 type sprintBoardColumn struct {
 	Heading         string
+	BodyID          string
 	CanonicalStatus models.TaskStatus
 	Tasks           []*taskView
 }
 
 // sprintBoardColumns is the board's three fixed columns, left to right, each
 // pairing the heading it shows with the sprint-summary category it holds
-// (SPEC/WEB.md § Sprint Detail Sub-Template, rule 4, Three fixed columns).
+// (SPEC/WEB.md § Sprint Detail Sub-Template, rule 3, Three fixed columns).
 //
-// The category is models.TaskStatusCategory — the SAME categorisation the sprint
-// status summary line is computed from (models.CalculateSprintSummary, which
-// counts through models.CategorizeTaskStatus). Naming the categories here rather
-// than the statuses is what makes each column's badge equal one of that line's own
-// numbers by construction instead of by coincidence: there is one mapping from
-// status to bucket in the project, and both presentations read it (Acceptance
-// Criterion 131).
+// The category is models.TaskStatusCategory — the SAME categorisation
+// models.CalculateSprintShowResult counts its Summary.Pending,
+// Summary.InProgress, and Summary.Completed through
+// (models.CategorizeTaskStatus). Naming the categories here rather than the
+// statuses is what makes each column's badge equal one of those counters by
+// construction instead of by coincidence: there is one mapping from status to
+// bucket in the project, and both the board and the CLI sprint report read it
+// (Acceptance Criterion 131).
 //
 // The headings are written exactly as the specification spells them, in upper
 // case, and are not translated.
 //
 // The third field is the CANONICAL status of the group — the status a task is
 // normally in at that stage of the sprint — and it is what the column's count
-// badge is coloured by (SPEC/WEB.md § Sprint Detail Sub-Template, rule 4, Column
+// badge is coloured by (SPEC/WEB.md § Sprint Detail Sub-Template, rule 3, Column
 // header; Acceptance Criterion 140). A task waiting in a sprint is normally a
 // SPRINT task: a BACKLOG task inside a sprint is the exceptional case, the case of
 // a task returned to the backlog without leaving the sprint, so SPRINT is the
@@ -844,7 +429,7 @@ type sprintBoardColumn struct {
 //
 // The fourth field is the column's own ORDERING KEY: the timestamp the column's
 // cards are ordered by, descending, read off the task the card presents
-// (SPEC/WEB.md § Sprint Detail Sub-Template, rule 4, Order within a column;
+// (SPEC/WEB.md § Sprint Detail Sub-Template, rule 3, Order within a column;
 // Acceptance Criteria 14 and 132). The three columns do not share one order, so
 // naming each column's key beside the column itself keeps the whole ordering rule
 // in one table instead of spread over a switch elsewhere.
@@ -861,15 +446,22 @@ type sprintBoardColumn struct {
 // into DOING for both, so a TESTING card takes its place from when its task
 // entered DOING and never from when it entered TESTING (SPEC/STATE_MACHINE.md
 // § Date Tracking Fields).
+//
+// The fifth field is the id of the column's body, the element the column's
+// collapse toggle controls. The specification fixes the three ids, so they are
+// written out here in full, beside the heading they belong to, rather than
+// assembled from it (SPEC/WEB.md § Sprint Detail Sub-Template, rule 3, Column
+// collapse; Acceptance Criterion 213).
 var sprintBoardColumns = [...]struct {
 	orderingTimestamp func(*models.Task) *string
 	heading           string
+	bodyID            string
 	canonical         models.TaskStatus
 	category          models.TaskStatusCategory
 }{
-	{nil, "WAITING", models.StatusSprint, models.CategoryPending},
-	{startedAt, "DOING", models.StatusDoing, models.CategoryInProgress},
-	{closedAt, "CLOSED", models.StatusCompleted, models.CategoryCompleted},
+	{nil, "WAITING", "sprint-board-column-waiting", models.StatusSprint, models.CategoryPending},
+	{startedAt, "DOING", "sprint-board-column-doing", models.StatusDoing, models.CategoryInProgress},
+	{closedAt, "CLOSED", "sprint-board-column-closed", models.StatusCompleted, models.CategoryCompleted},
 }
 
 // startedAt and closedAt are the two ordering keys sprintBoardColumns names. Each
@@ -889,34 +481,30 @@ func closedAt(t *models.Task) *string { return t.ClosedAt }
 // sub-template, so the full sprint detail block appears only there (SPEC/WEB.md
 // § Sprint Detail Sub-Template; Acceptance Criterion 38).
 //
-// Tasks is the sprint's member tasks in planned in-sprint execution order
-// (sprint_tasks position ascending), each carrying its own comment count; Columns
-// is that same list grouped into the member-tasks board's three fixed columns and
-// ordered per column — WAITING keeping the position order, DOING and CLOSED
-// reordered by started_at and closed_at descending — which is what the
-// sub-template renders. Both describe the same tasks: Columns points into Tasks,
-// and only the order in which it walks them differs.
+// Columns is the sprint's member tasks, each carrying its own comment count,
+// grouped into the member-tasks board's three fixed columns and ordered per
+// column — WAITING keeping the planned in-sprint execution order (sprint_tasks
+// position ascending), DOING and CLOSED reordered by started_at and closed_at
+// descending — which is what the sub-template renders.
 //
 // Comments is the sprint's OWN comment log — the sprint's progression account —
 // oldest first, rendered in the Comments card the sub-template places last. It
-// never carries a member task's comments: those belong to that task's own detail
-// modal, and the sprint level presents no aggregate of them (SPEC/WEB.md § Sprint
+// never carries a member task's comments: those are shown on that task's own
+// page, and the sprint level presents no aggregate of them (SPEC/WEB.md § Sprint
 // Detail Sub-Template, Comments card scope; Acceptance Criterion 69). A board
 // card shows the NUMBER of a member task's comments and never their text, which
-// is read only when a user opens that task's modal, one task at a time.
+// is read only by that task's own page, one task at a time.
 type sprintDetail struct {
 	Name     string
-	Tasks    []taskView
 	Columns  []sprintBoardColumn
 	Comments []models.SprintComment
 	Sprint   models.Sprint
-	Summary  sprintCompletion
 }
 
 // sprintPageData is the view model handed to the roadmap sprint template. It
-// presents a single sprint with all of its fields, its member tasks as a Kanban
-// board of three fixed columns each ordered by its own key — each card clickable
-// to open the read-only task detail modal — and the sprint's own comments
+// presents a single sprint's details, its member tasks as a Kanban
+// board of three fixed columns each ordered by its own key — each card a link to
+// that task's own page — and the sprint's own comments
 // (SPEC/WEB.md § Roadmap Sprint Page). It is read-only.
 type sprintPageData struct {
 	Name     string
@@ -925,7 +513,6 @@ type sprintPageData struct {
 	Columns  []sprintBoardColumn
 	Comments []models.SprintComment
 	Sprint   models.Sprint
-	Summary  sprintCompletion
 }
 
 // Detail returns the context object the "sprintDetail" sub-template consumes
@@ -941,10 +528,8 @@ func (d sprintPageData) Detail() sprintDetail {
 	return sprintDetail{
 		Name:     d.Name,
 		Sprint:   d.Sprint,
-		Tasks:    d.Tasks,
 		Columns:  d.Columns,
 		Comments: d.Comments,
-		Summary:  d.Summary,
 	}
 }
 
@@ -956,43 +541,32 @@ type graphView struct {
 	Edges []map[string]any `json:"edges"`
 }
 
-// taskCommentCounter is the ONLY comment read the tasks page is given: the
-// grouped COUNT over the whole set of rendered task ids, one statement for every
-// task (SPEC/DATABASE.md § Count Comments for Many Parents (Grouped)).
+// taskCommentCounter is the ONLY task-comment read the sprint page is given: the
+// grouped COUNT over the sprint's member tasks, one statement binding one
+// parameter, the sprint id, for every card (SPEC/DATABASE.md § Count Comments for
+// the Member Tasks of One Sprint (Grouped)).
 //
 // The per-task listing (db.ListTaskComments) is deliberately absent from this
 // interface, and it is the only read that could bring a comment BODY onto this
 // path. Its absence therefore carries two guarantees at once: the page cannot
 // express the N+1 pattern SPEC/WEB.md forbids — one query per rendered task — and
 // it cannot read comment text at all. The board shows a number, and a task's
-// comment text is read only when a user opens that task's modal, by the task
-// detail endpoint. *db.DB satisfies the interface.
+// comment text is read only by that task's own page. *db.DB satisfies the
+// interface.
 type taskCommentCounter interface {
-	CountTaskCommentsByTasks(ctx context.Context, taskIDs []int) (map[int]int, error)
+	CountTaskCommentsBySprint(ctx context.Context, sprintID int) (map[int]int, error)
 }
 
-// taskSprintReader is the ONLY sprint read the tasks page is given: the grouped
-// resolution over the whole set of rendered task ids, one statement for every
-// task (SPEC/DATABASE.md § Resolve the Sprint of Many Tasks (Grouped)).
+// taskSprintReader is the grouped sprint resolution over a whole set of task ids,
+// one statement for every task (SPEC/DATABASE.md § Resolve the Sprint of Many
+// Tasks (Grouped)). The tasks page resolves the sprint of every row it renders
+// through it, and the task page the sprint of its one task.
 //
 // The per-task and per-sprint reads (db.GetSprint, db.GetSprintTasks) are
-// deliberately absent from this interface. The board's read path therefore cannot
-// express the pattern SPEC/WEB.md § Roadmap Tasks Page forbids — one query per
-// rendered card or per board column — because the methods that would do it are not
-// reachable through the dependency it is handed. *db.DB satisfies the interface.
+// deliberately absent from this interface, so a page handed only this read cannot
+// express one query per rendered row. *db.DB satisfies the interface.
 type taskSprintReader interface {
 	GetSprintsByTasks(ctx context.Context, taskIDs []int) (map[int]db.SprintRef, error)
-}
-
-// tasksSource is the complete read surface of the roadmap tasks page: the full
-// task list, the grouped comment read for the modals it renders, and the grouped
-// sprint read for the sprint each card names. Naming it separates opening the
-// database (loadTasks) from reading it (readTasks), so the page's queries can be
-// counted against a real database (Acceptance Criteria 70 and 92).
-type tasksSource interface {
-	ListAllTasks(ctx context.Context) ([]models.Task, error)
-	taskCommentCounter
-	taskSprintReader
 }
 
 // sprintTaskSource resolves a sprint's member tasks in the planned in-sprint
@@ -1013,8 +587,7 @@ type sprintTaskSource interface {
 // is populated on every sprint it hands back (SPEC/MODELS.md § Sprint;
 // SPEC/COMMANDS.md § List Sprints).
 //
-// The member-task read (db.GetSprintTasksFull) is deliberately absent, exactly
-// as the per-task comment listing is absent from tasksSource: it is the read
+// The member-task read (db.GetSprintTasksFull) is deliberately absent: it is the read
 // that would make the page's cost grow with the number of sprints, and the page
 // renders no member task at all (SPEC/WEB.md § Tasks and Sprints from SQLite).
 // Its absence means the sprints page cannot express that pattern through the
@@ -1029,18 +602,17 @@ type sprintsSource interface {
 //
 // The page makes exactly TWO comment reads, whatever the number of member tasks:
 // the sprint's own listing, which the Comments card renders in full as a log, and
-// ONE grouped count over the whole set of rendered member-task ids, which is what
-// gives each board card its comment number. Neither grows with the member-task
+// ONE grouped count over the sprint's member tasks, selected by the sprint id,
+// which is what gives each board card its comment number. Neither grows with the member-task
 // count (SPEC/WEB.md § Sprint Detail Sub-Template, Read cost; Acceptance Criteria
 // 70 and 137).
 //
 // The per-task listing (db.ListTaskComments) is deliberately absent from this
-// interface, exactly as it is from tasksSource: it is the only read that could
+// interface: it is the only read that could
 // bring a comment BODY onto this path, so its absence carries two guarantees at
 // once — the page cannot express the N+1 pattern SPEC/WEB.md forbids, one query
 // per rendered card, and it cannot read comment text at all. A member task's
-// comment text is read only when a user opens that task's modal, one task at a
-// time, through the task detail endpoint.
+// comment text is read only by that task's own page, one task at a time.
 //
 // The sprint comment read is the SINGLE-parent listing: there is deliberately no
 // grouped multi-sprint read, because this page renders exactly one sprint
@@ -1121,187 +693,9 @@ func readSprints(ctx context.Context, src sprintsSource, name string) (sprintsDa
 	}, nil
 }
 
-// loadTasks reads a roadmap's full task set read-only for the tasks page. It
-// opens the roadmap database, reads every task (no status filter), the comments
-// of every task, and the sprint of every task, and returns them grouped into the
-// board's five columns (SPEC/WEB.md § Roadmap Tasks Page). The database handle is
-// released before the function returns; no row is written and no audit entry is
-// produced (SPEC/WEB.md § Tasks and Sprints from SQLite).
-//
-// The caller is responsible for the {name} validation and existence check
-// (resolveRoadmap); this function trusts name is a validated, existing
-// roadmap.
-func loadTasks(ctx context.Context, name string, controls boardControls) (tasksData, error) {
-	database, err := db.OpenReadOnly(name)
-	if err != nil {
-		return tasksData{}, err
-	}
-	defer database.Close() //nolint:errcheck // read-only handle; close error is non-actionable
-
-	return readTasks(ctx, database, name, controls)
-}
-
-// readTasks is the tasks page's entire read, expressed against the page's read
-// surface rather than a concrete connection. It is THREE reads and no more: the
-// full task list, then the comment COUNT of every task the page renders in ONE
-// grouped query, then the sprint of every task the page renders in ONE grouped
-// query (SPEC/WEB.md § Roadmap Tasks Page, read cost).
-//
-// The page reads comment counts, never comment bodies: the card shows a number,
-// and a task's comment text is read only when a user opens that task's modal, by
-// the task detail endpoint (SPEC/WEB.md § Task Detail Endpoint).
-//
-// A roadmap with no task costs ONE read: both grouped queries take the set of
-// rendered task ids, and that set is empty, so both are skipped outright rather
-// than issued against an empty IN list.
-//
-// Grouping the tasks into the board's five columns is done here, in memory, over
-// the values already read: no query is issued per column and none per card, so
-// the page's query count is independent of the number of tasks, of sprints, and
-// of columns.
-//
-// Separating it from loadTasks is what makes the query count of a page render
-// measurable against a real database: the caller supplies the source, so a test
-// can hand in a counting one (Acceptance Criteria 70 and 92).
-func readTasks(ctx context.Context, src tasksSource, name string, controls boardControls) (tasksData, error) {
-	// EVERY task of the roadmap, any status, with no limit and no pagination.
-	// The board prints a count on each column header as a statement of fact about
-	// the roadmap, so a partial read would publish wrong counts as true ones with
-	// nothing on the page to reveal the omission: reading every row is what makes
-	// those counts correct by construction, which is a correctness requirement
-	// rather than a performance choice (SPEC/WEB.md § Roadmap Tasks Page,
-	// Unbounded read; SPEC/DATABASE.md § Main SQL Queries, "List All").
-	//
-	// Task already carries depends_on, blocks, subtask_count, and parent_task_id.
-	// The order is the read's own — priority DESC, created_at ASC — and the board
-	// preserves it.
-	tasks, err := src.ListAllTasks(ctx)
-	if err != nil {
-		return tasksData{}, err
-	}
-
-	views := newTaskViews(tasks)
-
-	if err := attachCommentCounts(ctx, src, views); err != nil {
-		return tasksData{}, err
-	}
-
-	if err := attachSprints(ctx, src, views); err != nil {
-		return tasksData{}, err
-	}
-
-	// The header controls narrow what the board SHOWS; they narrow neither what
-	// the page reads nor what the document carries. Every card stays in the page,
-	// which is what lets the browser re-narrow with no round trip, and the ONE
-	// verdict recorded here — the conjunction of the term and the three filters —
-	// is the one the browser recomputes when the user types or picks a value.
-	//
-	// A filter adds no clause to the read above, no second read, and no
-	// per-dimension query: it is applied in memory over the rows already in hand,
-	// exactly as the term is, so the page's query count is the same narrowed as
-	// unnarrowed (SPEC/WEB.md § Roadmap Tasks Page, Read cost; Server and client
-	// produce the same board).
-	shown := 0
-	for i := range views {
-		views[i].Match = views[i].matches(controls)
-		if views[i].Match {
-			shown++
-		}
-	}
-
-	return tasksData{
-		Name:         name,
-		Search:       controls.Search,
-		Filters:      newBoardFilters(controls),
-		Tasks:        views,
-		Columns:      groupIntoColumns(views),
-		SearchActive: controls.folded != "",
-		NoMatches:    controls.active() && shown == 0,
-	}, nil
-}
-
-// attachSprints resolves the sprint of EVERY view in one grouped query over the
-// whole set of rendered task ids — never one per card and never one per board
-// column (SPEC/DATABASE.md § Resolve the Sprint of Many Tasks (Grouped);
-// SPEC/WEB.md Acceptance Criterion 92).
-//
-// A page that renders no task issues no sprint query at all: the read is skipped
-// outright rather than called with an empty id set (which db.GetSprintsByTasks
-// would also answer without a statement).
-//
-// A task that belongs to no sprint is ABSENT from the grouped map, so its view
-// keeps a nil Sprint and its card renders no sprint indicator — not a dash and
-// not an empty slot.
-func attachSprints(ctx context.Context, r taskSprintReader, views []taskView) error {
-	if len(views) == 0 {
-		return nil
-	}
-
-	sprints, err := r.GetSprintsByTasks(ctx, taskViewIDs(views))
-	if err != nil {
-		return err
-	}
-
-	for i := range views {
-		if sprint, ok := sprints[views[i].ID]; ok {
-			views[i].Sprint = &sprint
-		}
-	}
-	return nil
-}
-
-// groupIntoColumns groups the page's task views into the board's five fixed
-// columns, one per task status.
-//
-// The columns come from models.ValidTaskStatuses, which is both the set and the
-// order the board needs: the five values of the TaskStatus enum, in the order of
-// the task state machine's flow (BACKLOG, SPRINT, DOING, TESTING, COMPLETED).
-// Taking them from the model rather than from a literal here or in the template
-// is what makes the board's columns fixed — all five are built on every request,
-// whatever the data holds, and an empty column is a built column with no card
-// (SPEC/WEB.md § Roadmap Tasks Page, columns; Acceptance Criterion 81).
-//
-// The grouping is a single ordered pass, so the cards of one column keep the
-// relative order the read returned them in — priority DESC, created_at ASC — and
-// the board applies no sort of its own (Acceptance Criterion 84).
-//
-// Every task lands in exactly one column, because tasks.status is restricted by a
-// CHECK constraint to exactly these five values (SPEC/DATABASE.md § tasks Table),
-// so the board needs no sixth column and no "other" column, and the five counts
-// sum to the roadmap's task count (Acceptance Criterion 82).
-func groupIntoColumns(views []taskView) []taskColumn {
-	columns := make([]taskColumn, len(models.ValidTaskStatuses))
-	byStatus := make(map[models.TaskStatus]int, len(models.ValidTaskStatuses))
-	for i, status := range models.ValidTaskStatuses {
-		columns[i] = taskColumn{Status: status}
-		byStatus[status] = i
-	}
-
-	for i := range views {
-		if column, ok := byStatus[views[i].Status]; ok {
-			columns[column].Tasks = append(columns[column].Tasks, &views[i])
-		}
-	}
-
-	for i := range columns {
-		shown := 0
-		for _, task := range columns[i].Tasks {
-			if task.Match {
-				shown++
-			}
-		}
-		columns[i].Count = shown
-	}
-	return columns
-}
-
-// newTaskViews wraps every task in the view the templates consume. It performs
-// no read: a view carries the task itself, and the two values a surface may add
-// to it — the comment count and the sprint — are attached by the loaders that
-// need them.
-//
-// It is the one place a page turns tasks into task views, so both surfaces that
-// show a clickable task build the same value from the same rule.
+// newTaskViews wraps every task in the view the sprint board's cards consume. It
+// performs no read: a view carries the task itself, and the comment count is
+// attached by attachCommentCounts.
 func newTaskViews(tasks []models.Task) []taskView {
 	views := make([]taskView, len(tasks))
 	for i := range tasks {
@@ -1310,24 +704,25 @@ func newTaskViews(tasks []models.Task) []taskView {
 	return views
 }
 
-// attachCommentCounts reads the comment COUNT of EVERY view in one grouped query
-// over the whole set of rendered task ids — never one per card, and never the
-// comment bodies (SPEC/DATABASE.md § Count Comments for Many Parents (Grouped);
-// SPEC/WEB.md Acceptance Criterion 70).
+// attachCommentCounts reads the comment COUNT of EVERY view, the member tasks of
+// sprint sprintID, in one grouped query over that sprint's members, selected by
+// the sprint id rather than by a list of the member ids, so the statement binds
+// one parameter whatever the number of cards — never one query per card, and
+// never the comment bodies (SPEC/DATABASE.md § Count Comments for the Member
+// Tasks of One Sprint (Grouped); SPEC/WEB.md Acceptance Criteria 70 and 137).
 //
-// A page that renders no task issues no comment query at all: the read is skipped
-// outright rather than called with an empty id set (which
-// db.CountTaskCommentsByTasks would also answer without a statement).
+// A page that renders no task issues no comment query at all: the member-task
+// read has already shown that there is no card to count for.
 //
 // A task with no comment is ABSENT from the grouped map, and the zero value a
 // missing key yields is already the right count, so the pairing needs no presence
 // check.
-func attachCommentCounts(ctx context.Context, r taskCommentCounter, views []taskView) error {
+func attachCommentCounts(ctx context.Context, r taskCommentCounter, sprintID int, views []taskView) error {
 	if len(views) == 0 {
 		return nil
 	}
 
-	counts, err := r.CountTaskCommentsByTasks(ctx, taskViewIDs(views))
+	counts, err := r.CountTaskCommentsBySprint(ctx, sprintID)
 	if err != nil {
 		return err
 	}
@@ -1338,93 +733,215 @@ func attachCommentCounts(ctx context.Context, r taskCommentCounter, views []task
 	return nil
 }
 
-// taskViewIDs is the set of rendered task ids, in render order, which is what
-// every grouped read of this page is given.
-func taskViewIDs(views []taskView) []int {
-	ids := make([]int, len(views))
-	for i := range views {
-		ids[i] = views[i].ID
-	}
-	return ids
-}
-
-// taskDetailSource is the complete read surface of the task detail endpoint: one
-// task, and that task's comments in full.
+// taskPageSource is the complete read surface of the Roadmap Task Page: the task,
+// that task's comments in full, the grouped sprint resolution over the set that
+// holds the one task id, and — only when that resolution finds a sprint — the
+// sprint itself and its member tasks in sprint_tasks position order (SPEC/WEB.md
+// § Roadmap Task Page, Read cost).
 //
-// The comment read here is the SINGLE-parent listing, deliberately: the endpoint
-// serves exactly one task, requested when a user opens its modal, so there is no
-// set of ids to group over. It is also the only path on which the web interface
-// reads comment TEXT for a task, which is what keeps the page-rendering paths
-// free of it (SPEC/WEB.md § Task Detail Endpoint, Reads).
-type taskDetailSource interface {
+// The comment read is the SINGLE-parent listing, deliberately: the page renders
+// exactly one task, so there is no set of ids to group over. It is the only path
+// on which the web interface reads comment TEXT for a task, which is what keeps
+// the sprint board and the tasks page's list free of it. The grouped comment count is absent: the page shows no
+// card of a member task, so it has no count to display. *db.DB satisfies the
+// interface.
+type taskPageSource interface {
 	GetTask(ctx context.Context, id int) (*models.Task, error)
 	ListTaskComments(ctx context.Context, taskID int, commentType *models.CommentType) ([]models.TaskComment, error)
+	GetSprint(ctx context.Context, id int) (*models.Sprint, error)
+	taskSprintReader
+	sprintTaskSource
 }
 
-// taskDetailView is the JSON body of the task detail endpoint: exactly two
-// members, `task` and `comments` (SPEC/WEB.md § Task Detail Endpoint, Response).
+// taskPageData is the view model handed to the roadmap task template: one task,
+// its comments oldest first, the context of the sprint it belongs to, and the four
+// Markdown field cards (SPEC/WEB.md § Roadmap Task Page). It is read-only.
 //
-// It introduces NO new object shape. Task and TaskComment are marshalled through
-// their own JSON tags, which are the shapes SPEC/DATA_FORMATS.md § Task and
-// § Task Comment already fix for CLI output, so a value carries the same field
-// names, types, and null conventions here as it does there.
-//
-// Comments is never nil: a task with no comment yields `[]`, not `null`.
-type taskDetailView struct {
-	Comments []models.TaskComment `json:"comments"`
-	Task     models.Task          `json:"task"`
+// Sprint is nil exactly when the task belongs to no sprint, which is what selects
+// the backlog form of the Sprint card; membership, not status, decides it.
+type taskPageData struct {
+	Sprint   *taskSprintContext
+	Name     string
+	Chrome   chrome
+	Fields   []taskFieldCard
+	Comments []models.TaskComment
+	Task     models.Task
 }
 
-// loadTaskDetail reads one task and its comments read-only for the task detail
-// endpoint. It opens the roadmap database, reads, and releases the handle; no row
-// is written and no audit entry is produced (SPEC/WEB.md § Task Detail Endpoint,
-// Read-only).
+// taskSprintContext is what the Sprint card of the task page shows about the
+// sprint the task belongs to, and nothing more: the sprint record, the task's
+// 1-based rank in the sprint's planned execution order, the number of member
+// tasks, and how many of them are COMPLETED (SPEC/WEB.md § Roadmap Task Page,
+// Sprint card).
+type taskSprintContext struct {
+	Sprint    models.Sprint
+	Position  int
+	Members   int
+	Completed int
+}
+
+// taskFieldCard is one of the four Markdown field cards of the task page: the
+// card title, and the renderer's HTML for the field, or Empty when the field is
+// empty or null, in which case the card shows the em dash in place of the
+// Markdown container (SPEC/WEB.md § Roadmap Task Page, Markdown field cards).
+type taskFieldCard struct {
+	Title string
+	HTML  template.HTML
+	Empty bool
+}
+
+// errTaskSprintInconsistent reports that the sprint the membership read named
+// could not be read back as holding the task, which only a write racing the
+// page's reads produces. It deliberately does not wrap utils.ErrNotFound: the
+// task itself was found, so the answer is a 500 and never the task page's 404.
+var errTaskSprintInconsistent = errors.New("the sprint of the task changed during the read")
+
+// loadTask reads one task of a roadmap read-only for the Roadmap Task Page. It
+// opens the roadmap database, reads, and releases the handle; no row is written
+// and no audit entry is produced (SPEC/WEB.md § Tasks and Sprints from SQLite).
 //
-// The caller is responsible for the {name} validation and existence check
-// (resolveRoadmap); this function trusts name is a validated, existing roadmap.
-// A task id that is not a task of THIS roadmap yields utils.ErrNotFound, which
-// the handler maps to 404: a task of another roadmap is not reachable through
-// this roadmap's path space, because the read is scoped to this roadmap's own
-// database file.
-func loadTaskDetail(ctx context.Context, name string, id int) (taskDetailView, error) {
+// The caller validates {name} and confirms it exists (resolveRoadmap) and parses
+// {id} to an integer before calling. An id that is not a task of THIS roadmap
+// yields utils.ErrNotFound, which the handler maps to 404: a task of another
+// roadmap is not reachable through this roadmap's path space, because the read is
+// scoped to this roadmap's own database file.
+func loadTask(ctx context.Context, name string, id int) (taskPageData, error) {
 	database, err := db.OpenReadOnly(name)
 	if err != nil {
-		return taskDetailView{}, err
+		return taskPageData{}, err
 	}
 	defer database.Close() //nolint:errcheck // read-only handle; close error is non-actionable
 
-	return readTaskDetail(ctx, database, id)
+	return readTask(ctx, database, name, id)
 }
 
-// readTaskDetail is the endpoint's entire read, expressed against its read
-// surface rather than a concrete connection: the task, then that task's comments.
-// Two reads for the one task requested, issued only when a user opens a modal, so
-// they are not on the page-rendering path.
+// readTask is the task page's entire read, expressed against its read surface
+// rather than a concrete connection, so its query count can be measured against a
+// real database (SPEC/WEB.md § Roadmap Task Page, Read cost; Acceptance Criterion
+// 226):
 //
-// Separating it from loadTaskDetail is what makes the endpoint's query count
-// measurable against a real database, as it is for every page loader.
+//  1. the task, with subtask_count, depends_on, and blocks;
+//  2. the task's comments, every one of them, oldest first, with no type filter;
+//  3. the sprint the task belongs to, through the grouped resolution over the set
+//     holding the one task id;
+//  4. only when a sprint was found, that sprint and its member tasks in
+//     sprint_tasks position order.
 //
-// The comments are oldest first — created_at ascending, comment id ascending as
-// the tie-breaker — exactly the order `rmp task comment-list` returns and the
-// order the modal's timeline presents. No type filter (nil) and no count limit
-// apply: every comment of the task is returned.
-func readTaskDetail(ctx context.Context, src taskDetailSource, id int) (taskDetailView, error) {
+// That is at most five reads, and three for a task in no sprint, whatever the
+// number of comments or of member tasks. The position and the progress are
+// computed in memory over the member tasks already read.
+func readTask(ctx context.Context, src taskPageSource, name string, id int) (taskPageData, error) {
 	task, err := src.GetTask(ctx, id)
 	if err != nil {
-		return taskDetailView{}, err
+		return taskPageData{}, err
 	}
 
 	comments, err := src.ListTaskComments(ctx, id, nil)
 	if err != nil {
-		return taskDetailView{}, err
-	}
-	// A task with no comment must serialise as [], never null: the client walks
-	// the array unconditionally.
-	if comments == nil {
-		comments = []models.TaskComment{}
+		return taskPageData{}, err
 	}
 
-	return taskDetailView{Task: *task, Comments: comments}, nil
+	refs, err := src.GetSprintsByTasks(ctx, []int{id})
+	if err != nil {
+		return taskPageData{}, err
+	}
+
+	var sprintContext *taskSprintContext
+	if ref, ok := refs[id]; ok {
+		sprintContext, err = readTaskSprintContext(ctx, src, ref.ID, id)
+		if err != nil {
+			return taskPageData{}, err
+		}
+	}
+
+	fields, err := newTaskFieldCards(task)
+	if err != nil {
+		return taskPageData{}, err
+	}
+
+	return taskPageData{
+		Name:     name,
+		Task:     *task,
+		Comments: comments,
+		Sprint:   sprintContext,
+		Fields:   fields,
+	}, nil
+}
+
+// readTaskSprintContext reads the sprint a task belongs to and its member tasks,
+// and derives the Sprint card's position and progress from them in memory.
+//
+// The position is the task's 1-based rank among the member tasks in sprint_tasks
+// position ascending order — the order the read returns them in, and the order
+// the WAITING column of the sprint page's board keeps — whatever the task's
+// status. The progress counts the member tasks the project's one status
+// categorisation places in the completed category, which is the count the CLOSED
+// column of the sprint page's board carries (SPEC/WEB.md § Roadmap Task Page,
+// Sprint card).
+func readTaskSprintContext(ctx context.Context, src taskPageSource, sprintID, taskID int) (*taskSprintContext, error) {
+	sprint, err := src.GetSprint(ctx, sprintID)
+	if err != nil {
+		if errors.Is(err, utils.ErrNotFound) {
+			return nil, fmt.Errorf("%w: sprint %d is gone", errTaskSprintInconsistent, sprintID)
+		}
+		return nil, err
+	}
+
+	members, err := sprintOrderedTasks(ctx, src, sprintID)
+	if err != nil {
+		return nil, err
+	}
+
+	sc := &taskSprintContext{Sprint: *sprint, Members: len(members)}
+	for i := range members {
+		if members[i].ID == taskID {
+			sc.Position = i + 1
+		}
+		if models.CategorizeTaskStatus(members[i].Status) == models.CategoryCompleted {
+			sc.Completed++
+		}
+	}
+	if sc.Position == 0 {
+		return nil, fmt.Errorf("%w: task %d is not a member of sprint %d", errTaskSprintInconsistent, taskID, sprintID)
+	}
+	return sc, nil
+}
+
+// newTaskFieldCards renders the task's four Markdown fields, in the order the page
+// presents them, through the one Markdown renderer in its ordinary form and with
+// the footnote identifier prefix of each field (SPEC/WEB.md § Markdown Rendering,
+// rule 12). An empty or null field renders nothing and is marked Empty, so its
+// card shows the em dash in place of the Markdown container.
+func newTaskFieldCards(task *models.Task) ([]taskFieldCard, error) {
+	summary := ""
+	if task.CompletionSummary != nil {
+		summary = *task.CompletionSummary
+	}
+	sources := [...]struct {
+		title  string
+		field  string
+		source string
+	}{
+		{"Functional requirements", "functional_requirements", task.FunctionalRequirements},
+		{"Technical requirements", "technical_requirements", task.TechnicalRequirements},
+		{"Acceptance criteria", "acceptance_criteria", task.AcceptanceCriteria},
+		{"Completion summary", "completion_summary", summary},
+	}
+
+	cards := make([]taskFieldCard, len(sources))
+	for i, s := range sources {
+		cards[i].Title = s.title
+		if s.source == "" {
+			cards[i].Empty = true
+			continue
+		}
+		html, err := trustedMarkdown(s.source, taskFieldIDPrefix(task.ID, s.field), markdownInteractive)
+		if err != nil {
+			return nil, err
+		}
+		cards[i].HTML = html
+	}
+	return cards, nil
 }
 
 // loadAudit reads one page of a roadmap's full audit log read-only for the
@@ -1521,19 +1038,19 @@ func loadSprint(ctx context.Context, name string, id int) (sprintPageData, error
 // readSprint is the sprint page's entire read, expressed against the page's read
 // surface rather than a concrete connection: the sprint, its member tasks in
 // planned in-sprint execution order, the comment COUNT of every one of those
-// tasks in ONE grouped query, and the sprint's OWN comments (SPEC/WEB.md
+// tasks in ONE grouped query selected by the sprint id, and the sprint's OWN
+// comments (SPEC/WEB.md
 // § Roadmap Sprint Page; § Tasks and Sprints from SQLite, rule 1).
 //
 // TWO comment reads, and only two, whatever the number of member tasks: the
 // sprint's own log, which the Comments card renders in full, and the grouped
 // count that gives each board card its comment number. Neither grows with the
 // member-task count, and the page reads no comment BODY for a task it renders —
-// the text of a member task's comments is fetched only when a user opens that
-// task's modal, by the task detail endpoint (Acceptance Criteria 70 and 137).
+// the text of a member task's comments is read only by that task's own page
+// (Acceptance Criteria 70 and 137).
 //
-// A sprint with no member task costs one of those two: the grouped count takes
-// the set of rendered task ids, and that set is empty, so it is skipped outright
-// rather than issued against an empty IN list. The Comments card is always
+// A sprint with no member task costs one of those two: there is no card to count
+// for, so the grouped count is skipped outright. The Comments card is always
 // present, so the sprint's own listing is issued regardless.
 //
 // Grouping the member tasks into the board's three columns AND ordering each
@@ -1556,10 +1073,9 @@ func readSprint(ctx context.Context, src sprintSource, name string, id int) (spr
 	views := newTaskViews(orderedTasks)
 
 	// The comment count of every rendered member task, in one grouped query over
-	// the whole set of ids — the same helper and the same statement the tasks
-	// page's board uses, so the two boards read their card counts one way
-	// (SPEC/DATABASE.md § Count Comments for Many Parents (Grouped)).
-	if err := attachCommentCounts(ctx, src, views); err != nil {
+	// the sprint's members, binding the sprint id alone (SPEC/DATABASE.md § Count
+	// Comments for the Member Tasks of One Sprint (Grouped)).
+	if err := attachCommentCounts(ctx, src, sprint.ID, views); err != nil {
 		return sprintPageData{}, err
 	}
 
@@ -1579,30 +1095,30 @@ func readSprint(ctx context.Context, src sprintSource, name string, id int) (spr
 		Tasks:    views,
 		Columns:  groupIntoSprintBoardColumns(views),
 		Comments: comments,
-		Summary:  newSprintCompletion(orderedTasks),
 	}, nil
 }
 
 // groupIntoSprintBoardColumns groups a sprint's member-task views into the
 // member-tasks board's three fixed columns — WAITING, DOING, CLOSED — in that
-// order (SPEC/WEB.md § Sprint Detail Sub-Template, rule 4; Acceptance Criteria
+// order (SPEC/WEB.md § Sprint Detail Sub-Template, rule 3; Acceptance Criteria
 // 130 to 132).
 //
 // The bucket a task falls in comes from models.CategorizeTaskStatus, which is the
 // project's ONE mapping from a task status to a sprint-summary category and is
-// what models.CalculateSprintSummary counts the summary line's P, A and C through.
-// Reusing it, rather than writing a second status-to-column mapping here, is what
-// makes each column's badge equal its counterpart in the summary line by
-// construction: there is a single categorisation, so the board and the line cannot
-// come to disagree about which tasks are waiting, which are being worked on, and
-// which are done (Acceptance Criterion 131).
+// what models.CalculateSprintShowResult counts its Pending, InProgress, and
+// Completed counters through. Reusing it, rather than writing a second
+// status-to-column mapping here, is what makes each column's badge equal its
+// counterpart counter by construction: there is a single categorisation, so the
+// board and the CLI sprint report cannot come to disagree about which tasks are
+// waiting, which are being worked on, and which are done (Acceptance Criterion
+// 131).
 //
 // All three columns are built on every request, whatever the sprint holds, so an
 // empty column is a built column with no card and a sprint with no member task
 // renders an empty board rather than an absent one (Acceptance Criterion 130).
 //
 // EACH COLUMN THEN TAKES ITS OWN ORDER, because the three columns answer three
-// different questions (SPEC/WEB.md § Sprint Detail Sub-Template, rule 4, Order
+// different questions (SPEC/WEB.md § Sprint Detail Sub-Template, rule 3, Order
 // within a column; Acceptance Criteria 14 and 132):
 //
 //   - WAITING keeps the sprint_tasks position order, ascending — the plan, which
@@ -1642,14 +1158,13 @@ func readSprint(ctx context.Context, src sprintSource, name string, id int) (spr
 // CHECK constraint to the five values of the closed status enum
 // (SPEC/DATABASE.md § tasks Table), each of which one of the three categories
 // claims. models.CategoryOther is therefore unreachable from stored data; a view
-// carrying it is placed in no column rather than in an invented fourth one, which
-// is the same defensive treatment groupIntoColumns gives an unknown status on the
-// tasks board.
+// carrying it is placed in no column rather than in an invented fourth one.
 func groupIntoSprintBoardColumns(views []taskView) []sprintBoardColumn {
 	columns := make([]sprintBoardColumn, len(sprintBoardColumns))
 	for i := range sprintBoardColumns {
 		columns[i] = sprintBoardColumn{
 			Heading:         sprintBoardColumns[i].heading,
+			BodyID:          sprintBoardColumns[i].bodyID,
 			CanonicalStatus: sprintBoardColumns[i].canonical,
 		}
 	}
@@ -1673,7 +1188,7 @@ func groupIntoSprintBoardColumns(views []taskView) []sprintBoardColumn {
 
 // sortByTimestampDescending orders a board column's cards by the timestamp key
 // reads off each card's task: most recent first, and a card whose timestamp is
-// absent last (SPEC/WEB.md § Sprint Detail Sub-Template, rule 4, The tiebreaker is
+// absent last (SPEC/WEB.md § Sprint Detail Sub-Template, rule 3, The tiebreaker is
 // the plan; Acceptance Criterion 132).
 //
 // The sort is STABLE and the comparison reads the timestamp and nothing else, so
@@ -1695,7 +1210,7 @@ func sortByTimestampDescending(cards []*taskView, key func(*models.Task) *string
 	// length, so sorting an empty or single-card column costs an allocation and
 	// about 32ns to reach a conclusion that is free here. Both are ordinary
 	// columns — a sprint whose work has not started renders an empty DOING and an
-	// empty CLOSED (SPEC/WEB.md § Sprint Detail Sub-Template, rule 4, Every column
+	// empty CLOSED (SPEC/WEB.md § Sprint Detail Sub-Template, rule 3, Every column
 	// is always rendered).
 	if len(cards) < 2 {
 		return
@@ -1738,10 +1253,11 @@ func sprintBoardColumnOf(category models.TaskStatusCategory) (int, bool) {
 // idx_sprint_tasks_order index). db.GetSprintTasksFull with a nil status
 // filter and orderByPriority=false returns the full task records ordered by
 // st.position ASC, so each task carries its status, depends_on, blocks, and
-// the rest of its fields for the sprint page and the task detail modal — all
+// the rest of its fields for the sprint page and the task page — all
 // without a second per-task query.
 //
-// Only the single Roadmap Sprint Page reads through it. The sprints landing page
+// The single Roadmap Sprint Page and the Roadmap Task Page, which derives its
+// Sprint card from a sprint's member tasks, read through it. The sprints landing page
 // does not: it renders every sprint as a card with no member tasks on it, so it
 // would be paying a full member-task read per sprint for a number the sprint
 // record already carries (SPEC/WEB.md § Tasks and Sprints from SQLite).
@@ -2133,26 +1649,22 @@ func resolveGraphServerForRequest(ctx context.Context, name string) (string, err
 		return socket, nil
 	}
 	// **A probe the REQUEST's own cancellation stopped is not evidence about the
-	// server**, and reporting it as one is the defect this branch closes.
+	// server.** The probe runs under the request's context, so a client that
+	// disconnects before it completes fails the dial — and every failed dial
+	// otherwise means "nothing is listening". The two are opposite conditions: one
+	// is a dependency the operator starts, the other is a caller that went away,
+	// and a server may well be listening throughout the second.
 	//
-	// The probe runs under the request's context, so a client that disconnects
-	// before it completes fails the dial — and every failed dial otherwise means
-	// "nothing is listening". The two are opposite conditions with opposite
-	// remedies: one is a dependency the operator starts, the other is a caller
-	// that went away, and a server may well be listening throughout the second.
-	// Left undistinguished, an ordinary disconnect produced a WARN record reading
-	// "graph server unavailable" and naming a socket that was in fact being
-	// served, which is the one record an operator is meant to act on
-	// (SPEC/WEB.md Acceptance Criteria 164 and 165).
-	//
-	// The parent is consulted rather than the probe's own error, which is the same
-	// disambiguation graphExecutionError performs one layer down for the same pair
-	// of causes, and it is classified the same way it is there: an execution
-	// failure, HTTP 400, no new kind and no new status. Nothing reads that body —
-	// the caller has gone — so what the classification decides is the record.
-	if ctx.Err() != nil {
-		return "", newGraphQueryError(graphErrExecution,
-			"query failed to execute: the request was cancelled before the graph server could be reached")
+	// This branch does not classify the request; handleGraphData does, from the
+	// request's context, before it looks at this error at all (SPEC/WEB.md
+	// § Requests Abandoned by the Client, rule 1). What it decides is the TEXT the
+	// abandoned request's record carries: that the probe was stopped, rather than
+	// a no-server line naming a socket that may have been served throughout.
+	// The probe's own failure, when it has one, is kept beside the cancellation,
+	// so the record still states what the cancellation produced (rule 3).
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return "", fmt.Errorf("the graph server probe was stopped by the request's cancellation: %w",
+			errors.Join(ctxErr, probeErr))
 	}
 	if state.NotServed() {
 		return "", newGraphUnavailable(graphNoServerListening(socket))
@@ -2249,6 +1761,16 @@ func servedGraphView(ctx context.Context, socket, query string) (graphView, erro
 // before it is acknowledged — and this process has no store to re-run it against
 // in any case (SPEC/GRAPH.md § Server Resolution, rules 4 and 7).
 func servedGraphError(ctx context.Context, socket string, err error) error {
+	// A failure the request's own cancellation produced is not classified: it
+	// is neither a failed statement nor a missing server, and handleGraphData
+	// answers it as an abandoned request from the request's context. It is handed
+	// back as the client reported it, so the record names the cancellation rather
+	// than a lost connection (SPEC/WEB.md § Query-Bar Error Handling, rule 8;
+	// § Requests Abandoned by the Client, rule 3).
+	if ctx.Err() != nil {
+		return err
+	}
+
 	var sendErr *graphclient.SendError
 	if !errors.As(err, &sendErr) {
 		return fmt.Errorf("%w: graph store unavailable: %v", utils.ErrGraphStore, err)
@@ -2302,14 +1824,14 @@ func servedGraphError(ctx context.Context, socket string, err error) error {
 	case graphclient.FailureBudget:
 		// The budget line, produced by the one function that owns it, so the two
 		// paths report an exhausted budget in the same words.
-		return graphExecutionError(ctx, graphlock.StatementBudget, context.DeadlineExceeded)
+		return graphExecutionError(graphlock.StatementBudget, context.DeadlineExceeded)
 	default:
 		return newGraphQueryError(graphErrExecution, "query failed to execute: "+sendErr.Diagnostic)
 	}
 }
 
 // graphExecutionError words a statement the time budget cut as the single
-// execution-failure kind, truthfully about which cancellation source fired.
+// execution-failure kind.
 //
 // The budget is enforced by the graph server, which takes the value as its
 // MAXIMUM statement timeout and sets no default beside it (SPEC/GRAPH.md § Server
@@ -2323,36 +1845,23 @@ func servedGraphError(ctx context.Context, socket string, err error) error {
 // new kind, no new sentinel, no new status (§ Graph Query Time Budget, rules 4
 // and 5).
 //
-// Only the reason differs, and it must not lie about which of the two composed
-// cancellation sources fired. The request's own context still cancels the
-// statement when the client disconnects, and that cancellation and the server's
-// budget are two independent ends of the same statement:
+// The request's own context still cancels the statement when the client
+// disconnects, and that cancellation and the server's budget are two independent
+// ends of the same statement. The cancellation never reaches this function as a
+// classification: handleGraphData answers a request whose context is done as
+// abandoned, 499 at INFO, before it examines the failure at all, so the budget is
+// never blamed for a caller that gave up and a caller that gave up is never
+// reported as a failed statement (SPEC/WEB.md § Requests Abandoned by the Client,
+// rules 1 and 5).
 //
-//   - A budget exhaustion is reported as context.DeadlineExceeded and a client
-//     disconnect as context.Canceled, both matchable with errors.Is.
-//   - DeadlineExceeded alone is not proof of the budget: it is also what a
-//     parent context with its own earlier deadline reports through a derived
-//     one. parent is therefore consulted — it is the REQUEST's context, without
-//     the budget layered on — and only a live parent attributes the failure to
-//     the budget.
-//
-// The page renders whichever reason it is given verbatim in place, so all three
-// read as the same "query failed to execute" message the user already knows
-// (graph.js showQueryError).
-func graphExecutionError(parent context.Context, budget time.Duration, err error) *graphQueryError {
-	switch {
-	case errors.Is(err, context.DeadlineExceeded) && parent.Err() == nil:
-		// The request is still live, so the deadline that fired is ours.
+// The page renders the reason verbatim in place, so it reads as the same "query
+// failed to execute" message the user already knows (graph.js showQueryError).
+func graphExecutionError(budget time.Duration, err error) *graphQueryError {
+	if errors.Is(err, context.DeadlineExceeded) {
 		return newGraphQueryError(graphErrExecution,
 			"query failed to execute: exceeded the "+budget.String()+" query time budget")
-	case errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded):
-		// The request's own context died first: the client disconnected, or the
-		// caller gave up. Not the budget.
-		return newGraphQueryError(graphErrExecution,
-			"query failed to execute: the request was cancelled before the query finished")
-	default:
-		return newGraphQueryError(graphErrExecution, "query failed to execute: "+err.Error())
 	}
+	return newGraphQueryError(graphErrExecution, "query failed to execute: "+err.Error())
 }
 
 // graphCollector accumulates the deduplicated nodes and relationships found by

@@ -50,6 +50,8 @@ var rangeRuleCallers = map[string]string{
 	"internal/commands:taskSetPriority": "`rmp task prio <ids> <n>` checks the bound before the UPDATE.",
 	"internal/commands:taskSetSeverity": "`rmp task sev <ids> <n>` checks the bound before the UPDATE.",
 	"internal/commands:taskEdit":        "`rmp task edit <id> -p <n> --severity <n>` checks both bounds before the UPDATE.",
+	"internal/commands:taskList":        "`rmp task list -p <n> --severity <n>` checks both filter bounds before the roadmap is opened.",
+	"internal/commands:backlogList":     "`rmp backlog list -p <n>` checks the filter bound before the roadmap is opened.",
 }
 
 // TestRangeRuleHasNoUnreachableCallers is the gate itself.

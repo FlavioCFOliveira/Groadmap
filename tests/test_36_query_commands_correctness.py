@@ -217,9 +217,11 @@ class TestQueryCommandsCorrectness:
           reorder`) is deliberately NOT ascending task-id order, so a test
           that asserts "list/get return ascending ids while sprint tasks
           returns the planned order" cannot pass by accident.
-        - s_medium also parks one member (t4) back in BACKLOG status while it
-          stays a sprint member, so membership counting can be shown to be
-          status-independent.
+        - s_medium also starts one member (t4), so it reads DOING while its
+          siblings read SPRINT, and membership counting can be shown to be
+          status-independent. (Under the sprint membership invariant a member
+          is never in BACKLOG, so a member in a status other than SPRINT is the
+          way to show it.)
         - Sprints end in different statuses (PENDING x2, OPEN, CLOSED) so the
           --status filter has something real to narrow.
 
@@ -276,10 +278,9 @@ class TestQueryCommandsCorrectness:
                             ",".join(str(t[k]) for k in ("t3", "t4", "t5", "t6"))])
         self.test.run_cmd(["sprint", "reorder", "-r", r, str(s_medium),
                             ",".join(str(i) for i in medium_order)])
-        self.test.run_cmd(["task", "stat", "-r", r, str(t["t4"]), "BACKLOG"])
+        self.test.run_cmd(["task", "stat", "-r", r, str(t["t4"]), "DOING", "--commit-open", "5f93b51"])
         self.test.run_cmd(["sprint", "start", "-r", r, str(s_medium)])
-        # t3/t5/t6 are still SPRINT (only t4 was parked in BACKLOG), so
-        # closing requires --force.
+        # t3/t5/t6 are still SPRINT and t4 DOING, so closing requires --force.
         self.test.run_cmd(["sprint", "close", "-r", r, str(s_medium), "--force"])
 
         # s_small: 2 members, started last so it is the sprint left OPEN.
@@ -432,42 +433,48 @@ class TestQueryCommandsCorrectness:
         print("✓ tasks (ascending id order) genuinely differs from sprint tasks (planned position order)")
 
     def test_sprint_membership_backlog_member_counted_and_listed(self):
-        """A member task parked in BACKLOG status stays counted in
-        task_count and listed in tasks -- membership is status-independent."""
+        """A member task in a status other than its siblings' stays counted in
+        task_count and listed in tasks -- membership is status-independent.
+        The member is DOING: under the sprint membership invariant no member is
+        in BACKLOG (SPEC/STATE_MACHINE.md § Sprint Membership and the BACKLOG
+        Status), so `sprint tasks -s BACKLOG` returns none."""
         r, ids, _ = self._build_membership_scenario()
         sid = ids["s_medium"]
         t4 = ids["t4"]
 
-        # Ground truth: t4 really is BACKLOG while remaining a sprint member.
+        # Ground truth: t4 really is DOING while remaining a sprint member.
         t4_task = self._as_task(self.test.run_cmd_json(["task", "get", "-r", r, str(t4)]))
-        assert t4_task["status"] == "BACKLOG", t4_task["status"]
+        assert t4_task["status"] == "DOING", t4_task["status"]
 
         get_entry = self.test.run_cmd_json(["sprint", "get", "-r", r, str(sid)])
-        assert t4 in get_entry["tasks"], f"BACKLOG member {t4} missing from tasks: {get_entry['tasks']}"
+        assert t4 in get_entry["tasks"], f"DOING member {t4} missing from tasks: {get_entry['tasks']}"
         assert get_entry["task_count"] == 4, get_entry["task_count"]
 
         listing = self.test.run_cmd_json(["sprint", "list", "-r", r])
         list_entry = next(s for s in listing if s["id"] == sid)
-        assert t4 in list_entry["tasks"], f"BACKLOG member {t4} missing from list tasks: {list_entry['tasks']}"
+        assert t4 in list_entry["tasks"], f"DOING member {t4} missing from list tasks: {list_entry['tasks']}"
         assert list_entry["task_count"] == 4, list_entry["task_count"]
 
         # sprint tasks (unfiltered) still surfaces it, with its real status.
         unfiltered = self.test.run_cmd_json(["sprint", "tasks", "-r", r, str(sid)])
         row = next((x for x in unfiltered if x["id"] == t4), None)
-        assert row is not None, "sprint tasks (unfiltered) must include the BACKLOG member"
-        assert row["status"] == "BACKLOG", row["status"]
+        assert row is not None, "sprint tasks (unfiltered) must include the DOING member"
+        assert row["status"] == "DOING", row["status"]
 
-        # Status-filtered sprint tasks: BACKLOG isolates it, SPRINT excludes it,
-        # neither changes task_count on a later membership read.
+        # Status-filtered sprint tasks: DOING isolates it, SPRINT excludes it,
+        # BACKLOG finds no member, and none changes task_count on a later
+        # membership read.
+        doing_only = self.test.run_cmd_json(["sprint", "tasks", "-r", r, str(sid), "-s", "DOING"])
+        assert {x["id"] for x in doing_only} == {t4}, doing_only
         backlog_only = self.test.run_cmd_json(["sprint", "tasks", "-r", r, str(sid), "-s", "BACKLOG"])
-        assert {x["id"] for x in backlog_only} == {t4}, backlog_only
+        assert backlog_only == [], backlog_only
 
         sprint_only = self.test.run_cmd_json(["sprint", "tasks", "-r", r, str(sid), "-s", "SPRINT"])
         assert {x["id"] for x in sprint_only} == {ids["t3"], ids["t5"], ids["t6"]}, sprint_only
 
         recheck = self.test.run_cmd_json(["sprint", "get", "-r", r, str(sid)])
         assert recheck["task_count"] == 4, "status-filtered reads must not change task_count"
-        print("✓ a BACKLOG member is still counted and listed as sprint membership")
+        print("✓ a DOING member is still counted and listed as sprint membership")
 
     def test_sprint_membership_status_filter_does_not_alter_membership(self):
         """`--status` on `sprint list` narrows which SPRINTS are returned; it

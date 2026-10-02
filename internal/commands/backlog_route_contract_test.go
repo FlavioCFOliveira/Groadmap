@@ -1,19 +1,17 @@
-// Package commands — gates that tie what the binary SAYS about the
-// SPRINT-to-BACKLOG route to what it DOES (rmp task #232).
+// Package commands — gates that tie what the binary SAYS about the routes into
+// and out of BACKLOG to what it DOES (rmp task #232).
 //
-// SPEC/STATE_MACHINE.md § Sprint Membership and the BACKLOG Status describes a
-// state the published contract used to deny existed: a task whose status reads
-// BACKLOG while it is still a member of a sprint, reached by
-// `task stat <ids> BACKLOG` from the SPRINT source state. Several descriptions
-// inside the binary repeated that denial, and each was wrong about code that
-// was right. Correcting prose is worthless on its own — prose drifts silently —
-// so each corrected sentence is pinned here to the behaviour it describes, by a
-// test that first OBSERVES the behaviour and only then reads the sentence.
+// SPEC/STATE_MACHINE.md § Sprint Membership and the BACKLOG Status binds
+// membership and status by one invariant: a sprint member is never in BACKLOG,
+// and a task in SPRINT, DOING or TESTING belongs to a sprint. Several
+// descriptions inside the binary describe that relationship, and prose drifts
+// silently, so each is pinned here to the behaviour it describes, by a test that
+// first OBSERVES the behaviour and only then reads the sentence.
 //
 // The observation always comes first, and the assertion is two-way wherever the
-// sentence has an opposite. A gate that only checked "the summary contains this
-// phrase" would keep passing after someone narrowed `backlog list` to exclude
-// sprint members; the branch on the observed value is what makes it fail then.
+// sentence has an opposite: a gate that only checked "the summary contains this
+// phrase" would keep passing after the behaviour changed; the branch on the
+// observed value is what makes it fail then.
 //
 // The doc comment on taskSetStatus is pinned by its own file,
 // task_stat_doc_comment_test.go, which reuses the fixture below.
@@ -22,7 +20,6 @@ package commands
 import (
 	"context"
 	"encoding/json"
-	"regexp"
 	"strings"
 	"testing"
 
@@ -274,115 +271,124 @@ func backlogFamilySummary(t *testing.T) string {
 // coming back here and re-establishing what the code does.
 const backlogStatusOnlyMarker = "status alone"
 
-// backlogExclusionClaims are the ways a summary can claim the opposite — that
-// the listing is confined to tasks outside a sprint. Any of them appearing
-// while the observed behaviour is inclusive is the exact defect #232 closed.
-var backlogExclusionClaims = []string{
-	"not yet in a sprint",
-	"not in a sprint",
-	"outside a sprint",
-	"never in a sprint",
+// backlogNoSprintMarker is the phrase the summary and the `task next` help must
+// carry while every task the backlog subcommands return belongs to no sprint,
+// which the sprint membership invariant guarantees (SPEC/STATE_MACHINE.md
+// § Sprint Membership and the BACKLOG Status).
+const backlogNoSprintMarker = "belongs to no sprint"
+
+// backlogFixtureTasks manufactures the three tasks every backlog gate below
+// observes: a sprint member in SPRINT, a task that never joined a sprint, and a
+// task that left its sprint through `sprint remove-tasks`, the one route back
+// to BACKLOG for a member. It also confirms that `task stat <id> BACKLOG`
+// refuses the member and leaves it where it was, because under the invariant
+// that is how the state the old contract described can no longer be reached.
+func backlogFixtureTasks(t *testing.T, f *backlogRouteFixture) (member, loner, departed int) {
+	t.Helper()
+
+	member = f.taskInState(t, models.StatusSprint)
+	if err := f.tryStat(t, member, models.StatusBacklog); err == nil {
+		t.Fatalf("`task stat %d BACKLOG` accepted a sprint member; SPEC/STATE_MACHINE.md refuses it", member)
+	}
+	if got := f.statusOf(t, member); got != models.StatusSprint || !f.isSprintMember(t, member) {
+		t.Fatalf("the refused `task stat %d BACKLOG` changed the task (status %s, member %v)",
+			member, got, f.isSprintMember(t, member))
+	}
+
+	loner = f.taskInState(t, models.StatusBacklog)
+
+	departed = f.taskInState(t, models.StatusSprint)
+	run(t, func() error {
+		return sprintRemoveTasks([]string{"-r", f.roadmap, itoa(f.sprintID), itoa(departed)})
+	})
+	if got := f.statusOf(t, departed); got != models.StatusBacklog || f.isSprintMember(t, departed) {
+		t.Fatalf("`sprint remove-tasks` left task #%d in %s (member %v); want BACKLOG outside every sprint",
+			departed, got, f.isSprintMember(t, departed))
+	}
+	return member, loner, departed
 }
 
 // TestBacklogSummary_MatchesWhatTheSubcommandsReturn pins the `backlog` family
 // summary to what `backlog list` and `backlog show-next` actually return.
 //
-// The summary used to call the family "a planning view for tasks not yet in a
-// sprint". Both subcommands build a db.TaskListFilter carrying nothing but
-// Status: BACKLOG, so a task moved to BACKLOG by `task stat <ids> BACKLOG`
-// keeps its sprint_tasks row and is listed all the same — and an agent that
-// believed the summary would read the listing as a sprint-membership query and
-// plan the next sprint on a set that is not the one it thought.
+// Both subcommands build a db.TaskListFilter carrying nothing but Status:
+// BACKLOG, and under the sprint membership invariant a BACKLOG task belongs to
+// no sprint, so the listing is also the set of tasks outside every sprint. The
+// gate observes both halves — what is listed, and whether any listed task is a
+// sprint member — before it reads the summary, so it fails whichever side moves.
 func TestBacklogSummary_MatchesWhatTheSubcommandsReturn(t *testing.T) {
 	f := setupBacklogRouteRoadmap(t, "backlog-summary-contract")
-
-	// A task that reaches BACKLOG the way the SPEC describes: from SPRINT, by
-	// `task stat`, which never touches sprint_tasks.
-	member := f.taskInState(t, models.StatusSprint)
-	f.mustStat(t, member, models.StatusBacklog)
-
-	// A task that was never in a sprint, so the listing has something to return
-	// either way and an empty result cannot be mistaken for agreement.
-	loner := f.taskInState(t, models.StatusBacklog)
-
-	if got := f.statusOf(t, member); got != models.StatusBacklog {
-		t.Fatalf("task #%d should read BACKLOG after `task stat`, reads %s", member, got)
-	}
-	if !f.isSprintMember(t, member) {
-		t.Fatal("`task stat <id> BACKLOG` detached the task from its sprint; " +
-			"SPEC/STATE_MACHINE.md § Sprint Membership and the BACKLOG Status says the row survives, " +
-			"and every claim in this file is built on that")
-	}
+	member, loner, departed := backlogFixtureTasks(t, f)
 
 	listed := f.backlogListIDs(t)
 	nextListed := f.backlogShowNextIDs(t)
 
-	if !listed[loner] || !nextListed[loner] {
-		t.Fatalf("the never-in-a-sprint task #%d is missing from the listings "+
-			"(list=%v show-next=%v); the observation below would be vacuous", loner, listed, nextListed)
+	for _, id := range []int{loner, departed} {
+		if !listed[id] || !nextListed[id] {
+			t.Fatalf("the BACKLOG task #%d is missing from the listings (list=%v show-next=%v); the "+
+				"observation below would be vacuous", id, listed, nextListed)
+		}
 	}
-	if listed[member] != nextListed[member] {
-		t.Fatalf("`backlog list` and `backlog show-next` disagree about the sprint-member BACKLOG task "+
-			"#%d (list=%v show-next=%v); one summary describes both, so it cannot be true of one and "+
-			"false of the other", member, listed[member], nextListed[member])
+	if listed[member] || nextListed[member] {
+		t.Fatalf("the SPRINT member #%d is listed as backlog (list=%v show-next=%v); the listings filter "+
+			"on BACKLOG status", member, listed[member], nextListed[member])
 	}
 
-	// THE OBSERVATION. Everything asserted about the published text branches on
-	// it, so the gate fails whichever side of the pair moves.
-	listsSprintMembers := listed[member]
+	// THE OBSERVATION: does any listed task belong to a sprint?
+	listsSprintMembers := false
+	for id := range listed {
+		if f.isSprintMember(t, id) {
+			listsSprintMembers = true
+		}
+	}
+	for id := range nextListed {
+		if f.isSprintMember(t, id) {
+			listsSprintMembers = true
+		}
+	}
 
 	summary := backlogFamilySummary(t)
-
-	if listsSprintMembers {
-		if !strings.Contains(summary, backlogStatusOnlyMarker) {
-			t.Errorf("both backlog subcommands returned the sprint-member BACKLOG task #%d, but the "+
-				"published summary does not say the filter is the %q: %q",
-				member, backlogStatusOnlyMarker, summary)
-		}
-		for _, claim := range backlogExclusionClaims {
-			if strings.Contains(strings.ToLower(summary), claim) {
-				t.Errorf("the published summary claims %q, but both backlog subcommands returned the "+
-					"sprint-member BACKLOG task #%d: %q", claim, member, summary)
-			}
-		}
-		return
+	if !strings.Contains(summary, backlogStatusOnlyMarker) {
+		t.Errorf("both backlog subcommands filter on the status alone, but the published summary does not "+
+			"say so (missing %q): %q", backlogStatusOnlyMarker, summary)
 	}
-
-	// The other direction. If the filter ever narrows to non-members, the
-	// corrected summary becomes the false one and this branch is what says so.
-	if strings.Contains(summary, backlogStatusOnlyMarker) {
-		t.Errorf("the backlog subcommands excluded the sprint-member BACKLOG task #%d, but the published "+
-			"summary still says the filter is the %q: %q", member, backlogStatusOnlyMarker, summary)
+	switch {
+	case listsSprintMembers && strings.Contains(summary, backlogNoSprintMarker):
+		t.Errorf("a backlog subcommand returned a sprint member, but the published summary claims a "+
+			"BACKLOG task %q: %q", backlogNoSprintMarker, summary)
+	case !listsSprintMembers && !strings.Contains(summary, backlogNoSprintMarker):
+		t.Errorf("no task the backlog subcommands returned is a sprint member, but the published summary "+
+			"does not say that a BACKLOG task %q: %q", backlogNoSprintMarker, summary)
 	}
 }
 
 // TestTaskNextHelp_MatchesWhatBacklogShowNextReturns pins the same fact where
-// `task next` help draws the comparison with `backlog show-next`. The line
-// there read "operates on BACKLOG only (not yet in a sprint)" — the same false
-// exclusion as the registry summary, in the text a human reads at the terminal.
+// `task next` help draws the comparison with `backlog show-next`.
 func TestTaskNextHelp_MatchesWhatBacklogShowNextReturns(t *testing.T) {
 	f := setupBacklogRouteRoadmap(t, "task-next-help-contract")
+	backlogFixtureTasks(t, f)
 
-	member := f.taskInState(t, models.StatusSprint)
-	f.mustStat(t, member, models.StatusBacklog)
-	if !f.isSprintMember(t, member) {
-		t.Fatal("`task stat <id> BACKLOG` detached the task; the observation below would be vacuous")
+	returnsSprintMembers := false
+	returned := f.backlogShowNextIDs(t)
+	if len(returned) == 0 {
+		t.Fatal("`backlog show-next` returned nothing; the observation below would be vacuous")
 	}
-
-	returnsSprintMembers := f.backlogShowNextIDs(t)[member]
+	for id := range returned {
+		if f.isSprintMember(t, id) {
+			returnsSprintMembers = true
+		}
+	}
 
 	help := captureStdout(t, printTaskNextHelp)
 	if !strings.Contains(help, "backlog show-next") {
 		t.Fatalf("`task next` help no longer compares itself to `backlog show-next`; this gate pins that "+
 			"comparison and can no longer see it:\n%s", help)
 	}
-
-	for _, claim := range backlogExclusionClaims {
-		mentions := strings.Contains(strings.ToLower(help), claim)
-		if returnsSprintMembers && mentions {
-			t.Errorf("`task next` help claims backlog show-next is %q, but it returned the sprint-member "+
-				"BACKLOG task #%d", claim, member)
-		}
+	claims := strings.Contains(help, backlogNoSprintMarker)
+	if returnsSprintMembers == claims {
+		t.Errorf("`backlog show-next` returned a sprint member: %v; the `task next` help claims a BACKLOG "+
+			"task %q: %v. The two must disagree in exactly one of them being true:\n%s",
+			returnsSprintMembers, backlogNoSprintMarker, claims, help)
 	}
 }
 
@@ -390,52 +396,25 @@ func TestTaskNextHelp_MatchesWhatBacklogShowNextReturns(t *testing.T) {
 // Site 4: the published side effects of `task reopen`
 // ---------------------------------------------------------------------------
 
-// reopenSourceStates are the four states `task reopen` accepts as a source.
+// reopenSourceStates are the three states `task reopen` changes.
 var reopenSourceStates = []models.TaskStatus{
-	models.StatusSprint,
 	models.StatusDoing,
 	models.StatusTesting,
 	models.StatusCompleted,
 }
 
-// statusToken matches a task-status word inside published prose.
-var statusToken = regexp.MustCompile(`\b(BACKLOG|SPRINT|DOING|TESTING|COMPLETED)\b`)
-
-// sentenceSplit breaks published prose at a full stop or a semicolon. The
-// semicolon matters: a clause joined that way carries its own status words, and
-// folding it into its neighbour would let one sentence's states be read as
-// another's.
-var sentenceSplit = regexp.MustCompile(`(?:\.\s+|;\s+)`)
-
-// sentencesNaming returns every sentence of a text that contains needle.
-func sentencesNaming(text, needle string) []string {
-	out := make([]string, 0, 2)
-	for _, part := range sentenceSplit.Split(text, -1) {
-		if strings.Contains(part, needle) {
-			out = append(out, part)
-		}
-	}
-	return out
-}
-
-// TestTaskReopenSideEffects_NameTheSprintTasksDeletion pins the published
+// TestTaskReopenSideEffects_NameTheKeptMembership pins the published
 // `side_effects.database` of `task reopen` to the writes it performs.
 //
-// The contract used to read "UPDATE tasks + audit log per task; one
-// transaction", which omits the DELETE FROM sprint_tasks the command runs for
-// every task whose source state is SPRINT, DOING or TESTING. An agent reading
-// that contract would expect a reopened task to stay in its sprint — true only
-// from the COMPLETED source state, which is precisely the distinction the old
-// text erased.
-//
-// The deletion is observed per source state first, and the two state sets are
-// derived from the observation, so a change to either side breaks the gate.
-func TestTaskReopenSideEffects_NameTheSprintTasksDeletion(t *testing.T) {
+// Under the sprint membership invariant a reopening returns the task to SPRINT
+// in its sprint and never touches sprint_tasks (SPEC/COMMANDS.md § Reopen
+// Task). The contract used to name a DELETE FROM sprint_tasks, which the command
+// no longer runs. The membership and the position are observed per source state
+// first, and the published text is read against the observation both ways.
+func TestTaskReopenSideEffects_NameTheKeptMembership(t *testing.T) {
 	f := setupBacklogRouteRoadmap(t, "reopen-side-effects-contract")
 
-	detaching := map[models.TaskStatus]bool{}
-	keeping := map[models.TaskStatus]bool{}
-
+	kept := map[models.TaskStatus]bool{}
 	for _, source := range reopenSourceStates {
 		id := f.taskInState(t, source)
 		if !f.isSprintMember(t, id) {
@@ -445,100 +424,64 @@ func TestTaskReopenSideEffects_NameTheSprintTasksDeletion(t *testing.T) {
 
 		run(t, func() error { return taskReopen([]string{"-r", f.roadmap, itoa(id)}) })
 
-		if got := f.statusOf(t, id); got != models.StatusBacklog {
-			t.Fatalf("task reopen left task #%d in %s", id, got)
+		if got := f.statusOf(t, id); got != models.StatusSprint {
+			t.Fatalf("task reopen left task #%d (from %s) in %s, want SPRINT", id, source, got)
 		}
 		if f.isSprintMember(t, id) {
-			keeping[source] = true
-		} else {
-			detaching[source] = true
+			kept[source] = true
 		}
-	}
-
-	if len(detaching) == 0 {
-		t.Fatal("`task reopen` detached nothing from any source state; either the fixture never produced " +
-			"a member or the command stopped writing sprint_tasks entirely")
 	}
 
 	text := subcommandSideEffects(t, "task", "reopen")
-
-	if !strings.Contains(text, "sprint_tasks") {
-		t.Fatalf("`task reopen` removes the sprint_tasks row from %s, but the published side effects "+
-			"never name the table: %q", statusSetString(detaching), text)
-	}
-
-	// The sentence that names the DELETE must name exactly the source states
-	// observed to lose the row — no more, no fewer.
-	deleteSentences := sentencesNaming(text, "DELETE FROM sprint_tasks")
-	if len(deleteSentences) != 1 {
-		t.Fatalf("the published side effects should name DELETE FROM sprint_tasks in exactly one "+
-			"sentence, found %d: %q", len(deleteSentences), text)
-	}
-	declared := map[models.TaskStatus]bool{}
-	for _, m := range statusToken.FindAllString(deleteSentences[0], -1) {
-		if status := models.TaskStatus(m); status != models.StatusBacklog {
-			// BACKLOG is the destination of every reopening, never a source.
-			declared[status] = true
+	if len(kept) == len(reopenSourceStates) {
+		if strings.Contains(text, "DELETE FROM sprint_tasks") {
+			t.Errorf("`task reopen` kept every reopened task in its sprint, but the published side "+
+				"effects still name DELETE FROM sprint_tasks: %q", text)
 		}
+		if !strings.Contains(text, "sprint_tasks is never touched") {
+			t.Errorf("`task reopen` kept every reopened task in its sprint, but the published side "+
+				"effects do not say sprint_tasks is never touched: %q", text)
+		}
+		return
 	}
-	if !sameStatusSet(declared, detaching) {
-		t.Errorf("the published side effects say DELETE FROM sprint_tasks runs for %s, but it was "+
-			"observed to run for %s.\n  sentence: %q",
-			statusSetString(declared), statusSetString(detaching), deleteSentences[0])
-	}
-
-	// And every state whose row survives must be named as surviving, or an
-	// agent reading the corrected text learns half a rule.
-	for _, source := range reopenSourceStates {
-		if !keeping[source] {
-			continue
-		}
-		found := false
-		for _, sentence := range sentencesNaming(text, "sprint_tasks") {
-			if sentence != deleteSentences[0] && strings.Contains(sentence, string(source)) {
-				found = true
-			}
-		}
-		if !found {
-			t.Errorf("a task reopened from %s keeps its sprint_tasks row, but no other sentence of the "+
-				"published side effects says so: %q", source, text)
-		}
+	if strings.Contains(text, "sprint_tasks is never touched") {
+		t.Errorf("`task reopen` took a task out of its sprint (kept only from %s), but the published side "+
+			"effects say sprint_tasks is never touched: %q", statusSetString(kept), text)
 	}
 }
 
 // TestTaskReopenSideEffects_NameTheSkipOfAnAlreadyBacklogTask pins the other
-// claim the corrected text makes: a task already in BACKLOG is skipped
-// entirely, membership included. The command reports it on stderr and exits 0,
-// so a contract promising an UPDATE and an audit entry for every id on the
-// command line would be wrong about a call that is legal and idempotent.
+// claim the published text makes: a task already in SPRINT or in BACKLOG is
+// skipped entirely. The command reports it on stderr and exits 0, so a contract
+// promising an UPDATE and an audit entry for every id on the command line would
+// be wrong about a call that is legal and idempotent.
 func TestTaskReopenSideEffects_NameTheSkipOfAnAlreadyBacklogTask(t *testing.T) {
 	f := setupBacklogRouteRoadmap(t, "reopen-skip-contract")
 
-	// A BACKLOG task that IS a member: reached from SPRINT by `task stat`.
 	member := f.taskInState(t, models.StatusSprint)
-	f.mustStat(t, member, models.StatusBacklog)
-	if !f.isSprintMember(t, member) {
-		t.Fatal("`task stat <id> BACKLOG` detached the task; the skip below would prove nothing")
-	}
+	loner := f.taskInState(t, models.StatusBacklog)
 
-	before := len(auditRecordsFor(t, f.database, member))
+	for _, id := range []int{member, loner} {
+		before := len(auditRecordsFor(t, f.database, id))
+		status, wasMember := f.statusOf(t, id), f.isSprintMember(t, id)
 
-	run(t, func() error { return taskReopen([]string{"-r", f.roadmap, itoa(member)}) })
+		run(t, func() error { return taskReopen([]string{"-r", f.roadmap, itoa(id)}) })
 
-	if got := len(auditRecordsFor(t, f.database, member)); got != before {
-		t.Errorf("task reopen wrote %d audit entries for an already-BACKLOG task; the published side "+
-			"effects say it is skipped entirely", got-before)
-	}
-	if !f.isSprintMember(t, member) {
-		t.Error("task reopen detached an already-BACKLOG task from its sprint; the published side " +
-			"effects say its membership is untouched")
+		if got := len(auditRecordsFor(t, f.database, id)); got != before {
+			t.Errorf("task reopen wrote %d audit entries for task #%d already in %s; the published side "+
+				"effects say it is skipped entirely", got-before, id, status)
+		}
+		if got := f.statusOf(t, id); got != status || f.isSprintMember(t, id) != wasMember {
+			t.Errorf("task reopen changed task #%d already in %s (now %s, member %v)",
+				id, status, got, f.isSprintMember(t, id))
+		}
 	}
 
 	text := subcommandSideEffects(t, "task", "reopen")
-	for _, phrase := range []string{"already in BACKLOG", "skipped"} {
+	for _, phrase := range []string{"already in SPRINT or in BACKLOG", "skipped"} {
 		if !strings.Contains(text, phrase) {
-			t.Errorf("`task reopen` skips an already-BACKLOG task, but the published side effects do "+
-				"not say so (missing %q): %q", phrase, text)
+			t.Errorf("`task reopen` skips a task already in SPRINT or in BACKLOG, but the published side "+
+				"effects do not say so (missing %q): %q", phrase, text)
 		}
 	}
 }
@@ -566,16 +509,4 @@ func statusSetString(set map[models.TaskStatus]bool) string {
 		return "(none)"
 	}
 	return strings.Join(parts, ", ")
-}
-
-func sameStatusSet(a, b map[models.TaskStatus]bool) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for k := range a {
-		if !b[k] {
-			return false
-		}
-	}
-	return true
 }

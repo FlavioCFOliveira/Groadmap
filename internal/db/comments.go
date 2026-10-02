@@ -183,30 +183,6 @@ var sprintCommentStmts = commentStatements{
 	parseType:    models.ParseSprintCommentType,
 }
 
-// groupedTaskCommentCountsQuery returns the grouped counting read of
-// SPEC/DATABASE.md § Count Comments for Many Parents (Grouped) for an IN list of
-// the given placeholders. It reads no body: a surface that shows a NUMBER has no
-// use for the text, and reading every comment of every task in order to display a
-// count is work thrown away.
-//
-// The GROUP BY drops a task with no comment rather than returning a zero row, so
-// the caller reads a missing key as zero. The ORDER BY is task_id ascending, so
-// the result is walkable in one pass against a caller-side set of task ids.
-//
-// It is a function rather than a constant because the IN list has one placeholder
-// per id. Assembly is separated from execution so the index tests can plan the
-// exact SQL production runs, rather than a lookalike.
-func groupedTaskCommentCountsQuery(placeholders string) string {
-	return fmt.Sprintf( // #nosec G201 -- only ? placeholders are interpolated; every id is bound
-		`SELECT task_id, COUNT(*) AS comment_count
-	 FROM task_comments
-	 WHERE task_id IN (%s)
-	 GROUP BY task_id
-	 ORDER BY task_id ASC`,
-		placeholders,
-	)
-}
-
 // ==================== COMMENT MUTATIONS (transactional) ====================
 
 // InsertTaskCommentTx inserts one comment on a task inside an existing
@@ -466,39 +442,46 @@ func (db *DB) ListSprintComments(ctx context.Context, sprintID int, commentType 
 	return listComments(ctx, db, &sprintCommentStmts, sprintID, commentType, (*commentRow).toSprintComment)
 }
 
-// CountTaskCommentsByTasks returns how many comments each of the given tasks has,
-// keyed by task id, in ONE statement whatever the number of tasks — and without
-// reading a single comment body.
-//
-// This is the read a surface that displays a comment COUNT must use. The web
-// interface's Kanban board shows a count on each card and no comment text: a
-// task's comment text is read only when a user opens that task's detail modal, by
-// the task detail endpoint, which reads that one task through the single-parent
-// listing above (SPEC/WEB.md § Roadmap Tasks Page, read cost; § Task Detail
-// Endpoint). No surface reads the comment text of several tasks at once, so no
-// grouped listing exists.
-//
-// A task with no comment is ABSENT from the map: the GROUP BY produces no group
-// for it, so the query never returns a zero row and the caller reads the missing
-// key's zero value, which is already the right answer.
-//
-// An empty id set issues no statement at all and returns an empty map. Duplicate
-// ids in the input are harmless; each task is counted once.
-func (db *DB) CountTaskCommentsByTasks(ctx context.Context, taskIDs []int) (map[int]int, error) {
-	counts := make(map[int]int, len(taskIDs))
-	if len(taskIDs) == 0 {
-		return counts, nil
-	}
+// sprintTaskCommentCountsQuery is the grouped counting read of SPEC/DATABASE.md
+// § Count Comments for the Member Tasks of One Sprint (Grouped): the member ids
+// are a sub-select on sprint_tasks, so the statement binds ONE parameter, the
+// sprint id, whatever the number of members. The GROUP BY drops a task with no
+// comment rather than returning a zero row, and the ORDER BY is task_id
+// ascending. The sub-select is served by the sprint_tasks primary key, whose
+// leading column is sprint_id, and the count by idx_task_comments_task_created;
+// no body is read: a surface that shows a NUMBER has no use for the text.
+const sprintTaskCommentCountsQuery = `SELECT task_id, COUNT(*) AS comment_count
+	 FROM task_comments
+	 WHERE task_id IN (SELECT task_id FROM sprint_tasks WHERE sprint_id = ?)
+	 GROUP BY task_id
+	 ORDER BY task_id ASC`
 
-	args := make([]any, len(taskIDs))
-	for i, id := range taskIDs {
-		args[i] = id
-	}
-
-	rows, err := db.QueryContext(ctx, groupedTaskCommentCountsQuery(db.Placeholders(len(taskIDs))), args...)
+// CountTaskCommentsBySprint returns how many comments each member task of one
+// sprint has, keyed by task id, in ONE statement binding one parameter whatever
+// the number of members — and without reading a single comment body. It is the
+// read the web interface's sprint board uses for the comment number on each
+// card (SPEC/WEB.md § Sprint Detail Sub-Template, Read cost).
+//
+// A member task with no comment is ABSENT from the map: the GROUP BY produces no
+// group for it, so the caller reads the missing key's zero value, which is
+// already the right answer. A sprint with no member, or with no such id, yields
+// an empty, non-nil map.
+//
+// No surface reads the comment text of several tasks at once: a task's comment
+// text is read only by that task's own page, through the single-parent listing
+// above (SPEC/WEB.md § Sprint Detail Sub-Template, Read cost; § Roadmap Task
+// Page).
+func (db *DB) CountTaskCommentsBySprint(ctx context.Context, sprintID int) (map[int]int, error) {
+	rows, err := db.QueryContext(ctx, sprintTaskCommentCountsQuery, sprintID)
 	if err != nil {
-		return nil, fmt.Errorf("counting task comments by task: %w", err)
+		return nil, fmt.Errorf("counting task comments by sprint: %w", err)
 	}
+	return scanCommentCounts(rows, map[int]int{})
+}
+
+// scanCommentCounts reads the (task_id, comment_count) rows of a grouped counting
+// read into counts, closing rows.
+func scanCommentCounts(rows *sql.Rows, counts map[int]int) (map[int]int, error) {
 	defer rows.Close()
 
 	for rows.Next() {

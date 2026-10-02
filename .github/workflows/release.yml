@@ -40,7 +40,7 @@ jobs:
       - name: Run golangci-lint
         uses: golangci/golangci-lint-action@v9.3.0
         with:
-          version: v2.13.1
+          version: v2.14.0
           args: --timeout=5m
 
       - name: Run tests
@@ -52,38 +52,81 @@ jobs:
       # in CI and in a local `make check`. A failure to install fails the job:
       # the gate is never skipped.
       - name: Install gosec
-        run: go install github.com/securego/gosec/v2/cmd/gosec@v2.28.0
+        run: go install github.com/securego/gosec/v2/cmd/gosec@v2.29.0
 
       - name: Run gosec
         run: gosec -exclude-dir=.claude/worktrees ./...
 
+  # Not a validation gate: the end-to-end suite runs beside the gate job, and
+  # the build job needs both, so no artefact is built from a commit whose suite
+  # did not pass. The binary under test is built in this job, in a step of its
+  # own, and restored from no cache and no artefact. See SPEC/BUILD.md § The
+  # End-to-End Suite Is a Required Pipeline Job; the python-version input is
+  # the same in both workflows.
+  e2e:
+    name: End-to-End Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7.0.1
+
+      - name: Set up Go
+        uses: actions/setup-go@v7.0.0
+        with:
+          go-version-file: go.mod
+
+      - name: Set up Python
+        uses: actions/setup-python@v7.0.0
+        with:
+          python-version: '3.12'
+
+      - name: Build rmp
+        run: go build -o ./bin/rmp ./cmd/rmp
+
+      # -u keeps the harness's announcement of each module unbuffered, so a job
+      # cut off by its timeout still shows the module that was running.
+      - name: Run end-to-end tests
+        run: python3 -u tests/run_tests.py
+
   build:
     name: Build Release Binaries
-    needs: test
+    needs: [test, e2e]
     runs-on: ubuntu-latest
     # This matrix is the full set of Primary Platforms in
-    # SPEC/BUILD.md § Supported Build Targets, in the same order.
+    # SPEC/BUILD.md § Supported Build Targets, in the same order. Every entry
+    # defines goarm, empty where the target has no GOARM level, so each
+    # expression below that reads matrix.goarm names a defined property.
     strategy:
       matrix:
         include:
           - goos: linux
             goarch: amd64
+            goarm: ""
           - goos: linux
             goarch: arm64
+            goarm: ""
           - goos: darwin
             goarch: amd64
+            goarm: ""
           - goos: darwin
             goarch: arm64
+            goarm: ""
           - goos: windows
             goarch: amd64
+            goarm: ""
           - goos: windows
             goarch: arm64
+            goarm: ""
           - goos: freebsd
             goarch: amd64
+            goarm: ""
           - goos: openbsd
             goarch: amd64
+            goarm: ""
           - goos: openbsd
             goarch: arm64
+            goarm: ""
     steps:
       - name: Checkout code
         uses: actions/checkout@v7.0.1
@@ -217,6 +260,49 @@ jobs:
 
       - name: List downloaded artifacts
         run: ls -la dist/
+
+      # SPEC/SKILLS.md § Packaging: the agent skills ship as one archive and its
+      # checksum, built here from this job's checkout of the tag, before the
+      # release is created. The archive's top-level entries are exactly
+      # roadmap-manager/ and knowledge-authority/, with no leading ./; it holds
+      # each skill's file set (every regular file, recursively, except paths
+      # with a component beginning with '.') and the directories that contain
+      # it, and nothing else. The checksum is sha256sum's own output, run from
+      # inside dist/ exactly as for a binary archive, so the next step attaches
+      # both files by the same dist/*.tar.gz and dist/*.sha256 rule.
+      - name: Package agent skills
+        run: |
+          set -euo pipefail
+          version="${{ steps.get_version.outputs.VERSION }}"
+          archive="rmp-skills-${version}.tar.gz"
+
+          for skill in roadmap-manager knowledge-authority; do
+            if [ -L "skills/${skill}" ] || [ ! -d "skills/${skill}" ]; then
+              echo "skills/${skill} is missing, so the release cannot publish the agent skills." >&2
+              exit 1
+            fi
+          done
+
+          # A link, a device or any other entry that is neither a directory nor
+          # a regular file is never shipped; one in a skill fails the job rather
+          # than being dropped silently.
+          unsupported=$(cd skills && find roadmap-manager knowledge-authority \
+            -name '.*' -prune -o ! -type d ! -type f -print)
+          if [ -n "${unsupported}" ]; then
+            echo "skills/ holds entries that are neither directories nor regular files:" >&2
+            echo "${unsupported}" >&2
+            exit 1
+          fi
+
+          entries="$(mktemp)"
+          (cd skills && find roadmap-manager knowledge-authority \
+            -name '.*' -prune -o \( -type d -o -type f \) -print | LC_ALL=C sort) > "${entries}"
+          tar --no-recursion -czf "dist/${archive}" -C skills -T "${entries}"
+          rm -f "${entries}"
+
+          (cd dist && sha256sum "${archive}" > "${archive}.sha256")
+          tar -tzf "dist/${archive}"
+          (cd dist && sha256sum -c "${archive}.sha256")
 
       - name: Create GitHub Release
         env:

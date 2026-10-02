@@ -30,10 +30,11 @@ three:
    Groadmap builds on the current Go release line. Where the two constraints above
    would admit an older release line, this decision is what sets the floor, and it
    is a decision rather than a consequence. Moving the floor onto a new release
-   line can also change the Unicode version the board search reads, because
-   `golang.org/x/text/unicode/norm` selects its character data by toolchain (see
-   `Unicode Data Rules`, Rule 5). Such an adoption is chosen and not inherited, and
-   Rule 5 requires it to be treated as a change to the board search.
+   line can also change the Unicode version the tasks page's search and the graph
+   key comparison read, because `golang.org/x/text/unicode/norm` selects its
+   character data by toolchain (see `Unicode Data Rules`, Rule 5). Such an adoption
+   is chosen and not inherited, and Rule 5 requires it to be treated as a change to
+   both.
 
 The four advisories item 2 names:
 
@@ -91,7 +92,7 @@ the `go` directive of `go.mod` names.
 
 ### External Dependencies
 
-Groadmap has exactly **four** direct module dependencies. Each one is listed
+Groadmap has exactly **seven** direct module dependencies. Each one is listed
 below, and each one is governed by its own set of rules.
 
 The table lists them in the order the first `require` block of `go.mod` lists
@@ -108,8 +109,11 @@ module is the one `go.mod` pins.
 | Module | Path | Purpose |
 |--------|------|---------|
 | GoGraph | `github.com/FlavioCFOliveira/GoGraph` | Labelled property graph, Cypher engine, and durable store backing the `graph` command. See `GRAPH.md`. |
+| Syntax highlighting | `github.com/alecthomas/chroma/v2` | The lexer engine and the HTML formatter that highlight a fenced code block of a Markdown field in the web interface by its declared language, the source of the generated lexer registry and style those blocks are highlighted with, and the CSS of the syntax-highlighting stylesheet. Only its root package and `formatters/html` are compiled into the binary. See `WEB.md § Markdown Rendering` and Markdown Rendering Rules below. |
+| Regular expressions | `github.com/dlclark/regexp2/v2` | The regular-expression engine chroma requires. Groadmap imports it directly because the generated lexer registry holds a copy of chroma's Raku lexer, whose Go source imports it. See Markdown Rendering Rules below. |
+| Markdown | `github.com/yuin/goldmark` | The CommonMark-compliant parser and renderer, with its GitHub Flavored Markdown, footnote, and definition-list extensions, that turns a Markdown field into the HTML the web interface shows. See `WEB.md § Markdown Rendering` and Markdown Rendering Rules below. |
 | System calls | `golang.org/x/sys` | The operating-system calls the Go standard library does not publish. Groadmap imports the module at four sites, and each of the four compiles for one platform family only. `golang.org/x/sys/unix` is imported by `internal/terminal/terminal_unix.go`, for the `TIOCGWINSZ` ioctl that decides whether a stream is a terminal, and by `internal/testenv/pty_linux.go`, for the `/dev/ptmx` sequence that opens a pseudo-terminal pair. `golang.org/x/sys/windows` is imported by `internal/terminal/terminal_windows.go`, for the `GetConsoleMode` call that asks the console subsystem that same terminal question, and by `internal/graphlock/graphlock_windows.go`, for the `LockFileEx` and `UnlockFileEx` calls that are the graph store's mutual exclusion on that platform. See `GRAPH.md § Concurrency and Recovery` for the lock the last of those four implements. |
-| Unicode data | `golang.org/x/text` | The Unicode character data the roadmap tasks board's search normalises a term and a task's searchable text by. `internal/unicodenorm` imports `golang.org/x/text/unicode/norm` — the Go project's own implementation of the normalisation forms UAX #15 defines — and no other package of the module. See `WEB.md § Roadmap Tasks Page` for the rule that normalisation serves and for the check that holds the client's copy of it equal to the server's. |
+| Unicode data | `golang.org/x/text` | The Unicode character data the roadmap tasks page's search normalises a term and a task's searchable text by, and the knowledge-graph key comparison normalises keys by. `internal/unicodenorm` imports `golang.org/x/text/unicode/norm` — the Go project's own implementation of the normalisation forms UAX #15 defines — and no other package of the module. See `WEB.md § Roadmap Tasks Page` and `GRAPH.md § Node Key Uniqueness` for the rules that normalisation serves, and Unicode Data Rules below. |
 | SQLite driver | `modernc.org/sqlite` | Pure-Go SQLite driver backing every roadmap database (`~/.roadmaps/<name>/project.db`). It is the storage engine for all task, sprint, and audit data: `internal/db` registers it under the driver name `sqlite` and opens every database connection through it. Being pure Go, it needs no C toolchain and builds under `CGO_ENABLED=0`. See `DATABASE.md` for the schema it stores, `ARCHITECTURE.md § 3. internal/db/` for the layer that opens it, and `IMPLEMENTATION.md § Database Connections` for the entry point and DSN form that layer must use. |
 
 #### GoGraph Rules
@@ -178,116 +182,27 @@ module is the one `go.mod` pins.
 
    The pin carries more weight here than for any other dependency, and for a
    different reason. This module carries Unicode character data, and that data
-   decides **which tasks a search term finds** on the roadmap tasks board (see
-   `WEB.md § Roadmap Tasks Page`). A floated version is therefore not merely a
-   build that differs from another build: it is a product that answers the same
-   user's search differently.
+   decides **which tasks a search term finds** on the roadmap tasks page (see
+   `WEB.md § Roadmap Tasks Page`) and which knowledge-graph node keys count as the
+   same key (see `GRAPH.md § Node Key Uniqueness`). A floated version is therefore
+   not merely a build that differs from another build: it is a product that answers
+   the same user's search differently.
 2. **The module is admitted because the standard library cannot do this.** Go's
    `unicode` package publishes case mappings, character categories, and scripts,
    but it publishes no canonical decomposition data and no composition data. There
    is no way to normalise on the server without a module that carries that data,
    and `golang.org/x/text/unicode/norm` is the Go project's own implementation of
-   it. Admitting a fourth direct dependency was accepted deliberately on that
+   it. Admitting this direct dependency was accepted deliberately on that
    ground, and on no other.
-3. **The server normalises with this module, and the browser's copy of the rule
-   is derived from the module's data and proven equal to it.** Groadmap's server
-   takes Normalization Form C from `golang.org/x/text/unicode/norm` — `norm.NFC` —
-   for the roadmap tasks board's search and for the key comparison of
-   `GRAPH.md § Node Key Uniqueness`. The browser cannot call the module, so the
-   binary ships it the rule as three tables Groadmap derives from the module's
-   character data — the full canonical decompositions, the canonical combining
-   classes, and the primary composites — together with a script that runs UAX
-   #15's algorithm over them. `WEB.md § Roadmap Tasks Page` is canonical for the
-   tables and for the checks that hold the shipped copy equal to `norm.NFC`; this
-   rule fixes where the tables' data comes from and what Groadmap keeps in order
-   to check them.
-
-   **Groadmap keeps a Go statement of the browser's algorithm, in
-   `internal/unicodenorm`, and the server does not normalise through it.** It
-   decomposes with the data the first table carries, orders by the classes the
-   second carries, and composes from the pairs the third carries, as the shipped
-   script does. Its only use is as the subject of the checks that hold the shipped
-   rule equal to the server's: those checks have to run the shipped rule somewhere,
-   and no Go test can run the script itself (see `WEB.md § Roadmap Tasks Page`).
-   Putting it on the server's search path would make the server answer with the
-   browser's copy, and leave `norm.NFC` answering nothing any check compares.
-
-   **The primary composites are derived, and the derivation reads one character
-   property.** A primary composite is a code point whose canonical decomposition
-   is two characters, the first of them a starter, that Unicode does not exclude
-   from composition. The decompositions come from the module. The exclusion is
-   Unicode's Full_Composition_Exclusion property, and **exactly one query reads
-   it: `norm.NFC.IsNormalString` of the single code point.** For a code point
-   carrying a canonical decomposition, that query is false exactly when the
-   property is true. It returns a property of its argument rather than a
-   transformed string, and it runs in the one-time derivation of the tables —
-   once per process on the server, and once per run of the generator — never on a
-   search.
-
-   **`norm.NFC.QuickSpanString` is NOT that lookup, and MUST NOT be used as one.**
-   It reports a boundary up to which a string is *quick-checked* to be in
-   Normalization Form C, and its own documentation states that the boundary is not
-   guaranteed to be the largest such. For a single code point the boundary is
-   therefore the whole of it or none of it, and none of it means NFC_QC **is not
-   Yes** — `No` **or** `Maybe` — where the property this lookup needs is `No`
-   alone. NFC_QC=Maybe is carried by every code point that can be the second
-   element of a primary composite, and such a code point is not excluded from
-   composition; it is the reason the composition table has any entries at all.
-
-   The two questions had the same answer under Unicode 15.0.0, because no code
-   point then carried both a canonical decomposition and NFC_QC=Maybe, and the
-   distinction was invisible for exactly that reason. Unicode 16.0.0 introduced
-   twelve that do — `U+113C5`, `U+113C7` and `U+113C8`, `U+16121` through
-   `U+16128`, and `U+16D68` — and the quick-check form reported all twelve as
-   excluded, dropping their composites from the table and leaving the shipped rule
-   returning the decomposition of a code point that composes, which is not
-   Normalization Form C. The two forms disagree on **132** code points in all; the
-   other 120 carry no canonical decomposition, and the derivation never asks the
-   question of a code point that carries none, so those never reached the table.
-   Twelve was the symptom; the predicate was the fault.
-
-   **The exclusions are not derivable from the decomposition data, which is why
-   the derivation reads a property.** A script exclusion such as `U+0958`, and a
-   post-composition-version exclusion such as `U+2ADC`, decompose exactly as an
-   ordinary composite does, so no inspection of the decompositions can separate
-   them; the exclusions have to be read from somewhere. Reading the property from
-   the same module that supplies the decompositions makes the two move together
-   when the Unicode version moves. The alternative is to write the exclusions into
-   this specification, or into the code, as a list, and that is precisely the
-   stored copy of expected results that `WEB.md § Roadmap Tasks Page`, **What keeps
-   the shipped rule equal to the server's**, refuses: such a list would go stale in
-   silence the day the Unicode version changed, in the one document a reader
-   trusts.
-
-   **A test MAY hold the derived exclusions to a transcribed copy of the property,
-   and the transcription is deliberate.** The reference the test in
-   `internal/unicodenorm` compares against is copied from
-   `DerivedNormalizationProps.txt` of the Unicode Character Database. It is
-   neither derived nor fetched, and three reasons rule out the alternatives:
-
-   - **The property has four sources, and two of them cannot be derived at all.**
-     UAX #15, under *Composition Exclusion Types*, names four: script-specific
-     exclusions, post composition version exclusions, singleton decompositions,
-     and non-starter decompositions. Of the first two it states that the list
-     "cannot be computed from the decomposition mappings in the Unicode Character
-     Database, and must instead be explicitly listed".
-   - **The last two are not derivable from this module either.**
-     `norm.NFD.Properties(b).Decomposition()` returns the FULL, recursive
-     canonical decomposition, so a singleton such as `U+212B` — whose one-step
-     mapping is `U+00C5` — is indistinguishable from an ordinary two-character
-     composite. Deriving them would mean transcribing `UnicodeData.txt` instead,
-     which is larger and no more authoritative.
-   - **Asking the module is what the test exists to check.** A reference has to
-     come from outside the thing measured, so the module cannot be it.
-
-   Admitting a stored copy here does not contradict what the paragraph above
-   refuses for this specification and for the code. That refusal is of a stored
-   copy the rule is READ from; this is a reference the rule is HELD to, and when
-   the Unicode version moves it fails the test and names the code points rather
-   than going stale in silence. Fetching the file at test time is forbidden for
-   the same reason: a test that reached the network would fail offline, and would
-   follow a property that had moved instead of reporting it.
-
+3. **The server normalises with this module, and nothing else normalises.**
+   Groadmap takes Normalization Form C from `golang.org/x/text/unicode/norm` —
+   `norm.NFC` — through one function in `internal/unicodenorm`, and both the
+   roadmap tasks page's search and the key comparison of
+   `GRAPH.md § Node Key Uniqueness` normalise through that function. Groadmap
+   derives no normalisation data of its own from the module, ships no normalisation
+   data or algorithm to the browser, and keeps no second statement of the
+   algorithm: the search is applied on the server alone (see
+   `WEB.md § Roadmap Tasks Page`).
 4. **The import adds exactly one module to the graph.**
    `golang.org/x/text/unicode/norm` imports the standard library and
    `golang.org/x/text/transform`, which is a package of the same module.
@@ -321,36 +236,12 @@ module is the one `go.mod` pins.
    The other half of that rule is already in the same position: the case fold
    reads the standard library's own tables, so its Unicode version comes from the
    toolchain alone. **Raising the Go floor in `Go Toolchain` is consequently also a
-   change to the board search, and MUST be treated as one.** So is a build made
-   with a toolchain newer than that floor, which no pin can prevent and which
-   Rule 6 is what catches.
-6. **Unlike the driver's coupling, a drift here IS caught, and by an ordinary
-   test.** `SQLite Driver Rules`, Rule 4 records that no gate detects a
-   mismatched `modernc.org/libc`. The opposite holds for this module. The copy of
-   the rule the binary ships to the browser is generated from the character data
-   the server's normalisation reads, and a guard test compares the two over the
-   whole of Unicode, so a change of Unicode version — whether the module version or the toolchain that ran
-   produced it — fails the `test` gate until that shipped copy is regenerated from
-   the new data. A server whose rule moved is **caught**, never silently followed.
-   The check itself is specified in `WEB.md § Roadmap Tasks Page`.
-
-   What that gate does not do is decide whether the new Unicode version is wanted.
-   It reports that the rule moved; regenerating is a deliberate act, taken with the
-   change that caused it — a new module version, or a new toolchain — and never as
-   a way of making a failing test pass.
-
-   Further tests, in `internal/unicodenorm`, cover the other directions. One holds
-   the composition exclusions the package derives to a transcribed copy of
-   Full_Composition_Exclusion over the whole of Unicode, in both directions. The
-   others hold the Go statement of the browser's algorithm (Rule 3) equal to
-   `norm.NFC` over every single code point and over every two-code-point sequence
-   `WEB.md § Roadmap Tasks Page` enumerates, so a module upgrade that changes how
-   the server normalises, rather than which data it reads, fails the `test` gate
-   too. The first guard catches shipped data that has drifted away from the
-   server's; the exclusion test catches derived data that has drifted away from
-   Unicode while the client faithfully follows it; and the equality tests catch a
-   shipped algorithm that no longer answers as the server does.
-
+   change to the tasks page's search and to the key comparison of
+   `GRAPH.md § Node Key Uniqueness`, and MUST be treated as one.** So is a build
+   made with a toolchain newer than that floor, which no pin can prevent. Groadmap
+   ships no copy of either rule to the browser, so there is no second copy that a
+   change of Unicode version could leave behind: the server's rule is the only
+   one, and it moves as a whole.
 #### SQLite Driver Rules
 
 1. `modernc.org/sqlite` MUST be pinned to an exact, immutable version in `go.mod`,
@@ -401,6 +292,50 @@ module is the one `go.mod` pins.
    is a clean security scan: a defect the mismatch introduces would surface only
    at runtime, inside the storage engine.
 
+#### Markdown Rendering Rules
+
+1. `github.com/yuin/goldmark`, `github.com/alecthomas/chroma/v2`, and
+   `github.com/dlclark/regexp2/v2` MUST each be pinned to an exact, immutable
+   version in `go.mod`, not a floating reference, so that every build of a given
+   commit renders the same stored Markdown into the same HTML. `go.sum` MUST record
+   the checksum of each pinned version, and the build MUST fail if a checksum does
+   not match.
+2. **chroma's regular-expression module is a direct dependency.** chroma requires
+   `dlclark/regexp2`, under the module path the pinned chroma's own `go.mod` names,
+   and the generated lexer registry imports it too, through its copy of chroma's
+   Raku lexer (rule 5). It is therefore a row of the table above, pinned in the
+   first `require` block of `go.mod`, and `go.sum` records its checksum.
+3. **All three modules are pure Go and compiled in.** None needs a C toolchain, so
+   the build stays under `CGO_ENABLED=0`, and neither they nor the generated lexer
+   registry load a lexer, a style, or any other file at runtime or fetch anything
+   from the network: the renderer is part of the binary (see
+   `WEB.md § Self-Contained Deliverable`).
+4. **An upgrade of any of the three modules changes rendered output, and is
+   re-validated as such.** The HTML these modules produce is what the web interface
+   inserts without escaping, so an upgrade MUST be re-validated against the
+   Markdown acceptance criteria of `WEB.md § Acceptance Criteria`, including those
+   that prove raw HTML is not emitted and dangerous links are not active. An
+   upgrade of chroma also changes the CSS of the syntax-highlighting
+   stylesheet and the generated lexer registry, which the test gate holds equal to
+   the pinned chroma's output (see `WEB.md § Markdown Rendering`, rules 6 and 7).
+5. **The lexer registry is generated from the pinned chroma and committed.** The
+   lexers and the `github-dark` style that highlight a fenced code block come from
+   a registry generated from the module source of the chroma version `go.mod`
+   pins: a copy of every lexer that version ships, both those defined in its
+   embedded XML definitions and those defined in Go, and of that style's
+   definition. The generator runs through `go generate`, beside the generator of
+   the syntax-highlighting stylesheet, and its output is committed, so `go build`
+   runs no generation step. A test regenerates the registry in memory and fails
+   when the committed files differ from it. The generated files carry chroma's
+   copyright and permission notice. The registry's contents, lookup, and
+   construction are specified in `WEB.md § Markdown Rendering`, rule 6.
+6. **chroma's registry packages are not compiled into the binary.**
+   `github.com/alecthomas/chroma/v2/lexers` and
+   `github.com/alecthomas/chroma/v2/styles` each build their whole registry in a
+   package-level initialiser, which every `rmp` invocation would pay whatever it
+   does. No package compiled into the `rmp` binary imports either; tests and the
+   generators, which the binary does not contain, may.
+
 ## Vendored Web Assets
 
 The `rmp web` command serves a read-only web interface from assets embedded into
@@ -418,11 +353,13 @@ Rules:
    embedded asset categories is:
    - HTML templates;
    - the stylesheet (all CSS, including the vendored Tabler CSS framework — the UI
-     framework — and any further vendored CSS);
+     framework — the syntax-highlighting stylesheet of rendered Markdown, and
+     any further vendored CSS);
    - all client JavaScript, including the Tabler JavaScript and the D3.js
      knowledge-graph visualisation library (and the d3-sankey plugin) and any of
      their dependencies;
-   - web fonts, including the Inter font and the Tabler Icons webfont;
+   - web fonts, including the Inter font, in its upright and its italic face, and
+     the Tabler Icons webfont;
    - icons and images, including the Tabler Icons set;
    - the favicon;
    - any other static asset the interface requires.
@@ -444,7 +381,18 @@ Rules:
    any remote origin. The fonts and icons the Tabler shell depends on are likewise
    vendored: the Inter font and the Tabler Icons webfont are committed font files
    under `internal/web/static/`, embedded with `go:embed`, and served only from
-   `/static/...` (see `WEB.md § UI Framework`). Upgrading or replacing any of these
+   `/static/...` (see `WEB.md § UI Framework`). Inter is committed as two
+   variable-weight faces from the one `@fontsource-variable/inter` source, the
+   upright `inter-latin-wght-normal.woff2` and the italic
+   `inter-latin-wght-italic.woff2`, both under `internal/web/static/vendor/inter/files/`
+   and both declared in `internal/web/static/vendor/inter/inter.css`
+   (`WEB.md § UI Framework`, rule 4). `internal/web/static/vendor/LICENSES.md`
+   records, for every vendored web asset, its location, its upstream project, and
+   its licence; the Inter entry names both faces under the SIL Open Font License
+   1.1. The vendored Tabler CSS and the vendored Tabler JavaScript are always taken
+   from the same Tabler release, and they are upgraded together, in one change; the
+   Tabler Icons webfont and the Inter font are separate projects and are not bound
+   to that release. Upgrading or replacing any of these
    vendored Tabler assets — the framework CSS or JavaScript, the Inter font, or the
    Tabler Icons webfont — is a change to the committed asset and to this section,
    recorded in git.
@@ -558,8 +506,11 @@ the board qualifies by running a 64-bit operating system.
 ## GitHub Actions Workflow
 
 Two workflows run in GitHub Actions, and both enforce the complete validation
-gate set. `Validation Gates` — not this section — is the authoritative statement
-of which gates exist, what each one runs, and where each one is enforced. This
+gate set and run the end-to-end suite as a required job. `Validation Gates` — not
+this section — is the authoritative statement of which gates exist, what each one
+runs, and where each one is enforced, and
+`The End-to-End Suite Is a Required Pipeline Job` is the authoritative statement
+of the end-to-end job. This
 section describes only the shape of each workflow: what triggers it, which jobs
 it declares, and the order those jobs run in.
 
@@ -591,7 +542,13 @@ each build job also runs a stamp check: before it uploads its artefact, it runs
      that is absent fails the job (see `Validation Gates`)
    - Every gate MUST pass before the build job starts
 
-2. **build** — declares `needs: test`
+2. **e2e** (job name "End-to-End Tests")
+   - Builds `rmp` and runs the end-to-end suite against it, as
+     `The End-to-End Suite Is a Required Pipeline Job` specifies. It is not a
+     gate, and it runs beside the test job rather than after it
+   - The suite MUST pass before the build job starts
+
+3. **build** — declares `needs: [test, e2e]`
    - The `build` gate: builds the binary for all nine Primary Platforms listed
      in `Supported Build Targets`, in the same order
    - Builds with `-buildvcs=true` and passes no `-X` linker flag, so a build that
@@ -611,7 +568,7 @@ each build job also runs a stamp check: before it uploads its artefact, it runs
    workflow produces and what the installation script asks for (see
    `DEPLOY.md § Architecture Detection`).
 
-3. **release** — declares `needs: build`
+4. **release** — declares `needs: build`
    - Downloads every build artifact and creates the GitHub release, attaching the
      archives and their checksums
 
@@ -623,7 +580,7 @@ permissions:
 
 The workflow grants `contents: read`. Only the `release` job, which creates the
 GitHub release, raises its own permission to `contents: write`; no other job
-writes to the repository.
+writes to the repository, the `e2e` job included.
 
 **Build Configuration:**
 ```yaml
@@ -651,14 +608,19 @@ env:
      the job
    - Every gate MUST pass before the build job starts
 
-2. **build** — declares `needs: test`
+2. **e2e** (job name "End-to-End Tests")
+   - The same job as the release workflow's `e2e` job, run on every push to
+     `main` and on every pull request targeting `main`
+   - The suite MUST pass before the build job starts
+
+3. **build** — declares `needs: [test, e2e]`
    - The `build` gate: builds the four-target fast-feedback subset defined in
      `Validation Gates`, for the rolling `dev` pre-release
    - Builds with `-buildvcs=true` and passes no `-X` linker flag, and runs the same
      stamp check before uploading its artefact, as the release workflow's build job
      does
 
-3. **dev-release** — declares `needs: build`
+4. **dev-release** — declares `needs: build`
    - Publishes the rolling `dev` pre-release. It runs only for a push to `main`,
      never for a pull request
 
@@ -672,7 +634,8 @@ The CI workflow follows the same least-privilege pattern as the release
 workflow. It grants `contents: read` at workflow level, and only the
 `dev-release` job — the one job that writes to the repository, because it
 replaces the rolling `dev` release and its tag — raises its own permission to
-`contents: write`. The gate job and the build job read; neither may write.
+`contents: write`. The gate job, the `e2e` job, and the build job read; none of
+them may write.
 
 ## Static Analysis
 
@@ -704,11 +667,12 @@ rule:
 machine can hold more than one copy of either tool, and the copy `PATH` finds
 first need not be the pinned one: a packaged linter that tracks the latest
 release, such as a snap in `/snap/bin`, can precede the directory `go install`
-writes to. `make lint` and `make security` therefore do not run whichever binary
-`PATH` resolves. Each runs the binary `Local Tool Resolution` names, and only
-after checking that binary's version against the pin, so a machine whose tools
-are not the pinned versions fails the gate instead of passing it on a different
-tool. Install the pinned version of both tools.
+writes to. `make lint` and `make security` therefore prefer the copy in that
+directory to any copy `PATH` finds, and consult `PATH` only when that directory
+holds none. Whichever binary they resolve, as `Local Tool Resolution` specifies,
+they run it only after checking its version against the pin, so a machine whose
+tools are not the pinned versions fails the gate instead of passing it on a
+different tool. Install the pinned version of both tools.
 
 **Where the pins live, and how they change.** Each tool's pin has one
 authoritative value and exactly two copies, and a pipeline reads it from nowhere
@@ -727,6 +691,19 @@ Each workflow's copy of a pin MUST equal the `Makefile`'s value for that tool, a
 the `test` gate MUST fail when a workflow's copy differs from the `Makefile`'s, as
 it MUST when the `Makefile` does not assign a pin variable exactly once.
 
+**How the workflows use the pins.** The workflows do not call `make lint` or
+`make security`. Each runs the command the gate defines in `Validation Gates`,
+through the tool it installs in the same job at its copy of the pin: the linter
+through the `golangci-lint` action, whose `version` input is the copy, and the
+scanner through the `gosec` that the copied install command writes. Neither
+workflow therefore holds a version of its own. The value each one installs is
+the `Makefile`'s, held equal to it by the `test` gate, so a pin raised in the
+`Makefile` alone fails the next run of either workflow rather than letting a
+workflow and the local gate run different versions. On a developer's machine,
+which may hold several copies of either tool, the version check of
+`Local Tool Resolution` does the same work: it refuses to run any copy that is
+not the pinned version.
+
 The pin on the `golangci-lint` action itself
 (`golangci/golangci-lint-action@<version>`) is a separate pin, and the `Makefile`
 does not hold it: it is written only in the two workflows. Both workflows MUST name
@@ -740,9 +717,10 @@ its gate on source that no commit modified.
 ### Local Tool Resolution
 
 The `lint` and `security` targets of the `Makefile` never run their tool by its
-bare name. Each resolves the tool to one binary through a make variable, reads
-that binary's version, and runs the tool only when the version matches the pin.
-One rule governs both tools:
+bare name. Each resolves the tool to one binary through a make variable,
+preferring the copy `go install` wrote to any copy `PATH` finds, then reads that
+binary's version, and runs the tool only when the version matches the pin:
+prefer, then assert. One rule governs both tools:
 
 | Tool | Variable in the `Makefile` | How the gate reads the binary's version |
 |------|----------------------------|-----------------------------------------|
@@ -755,20 +733,39 @@ version is the one `Static Analysis` pins. The rule is therefore not a differenc
 between the three places that enforce the gates: it is what makes the local gate
 run the version the two workflows install on a fresh runner.
 
-**Resolution.** Each variable defaults to the tool's executable name inside the
-directory `go install` writes executables to, which is where the install command
-in the tool's own section puts the tool:
+**Resolution.** When the caller does not set the variable, it resolves to one
+binary, the first of these that exists:
 
-1. the directory `go env GOBIN` reports, when that value is not empty;
-2. otherwise, the `bin` directory of the first entry of the list `go env GOPATH`
-   reports.
+1. **The copy `go install` wrote.** This is the tool's executable name inside the
+   directory `go install` writes executables to, which is where the install
+   command in the tool's own section puts the tool. That directory is the one
+   `go env GOBIN` reports, when that value is not empty, and otherwise the `bin`
+   directory of the first entry of the list `go env GOPATH` reports. The copy
+   exists when that path names an existing file. A file that exists there but
+   cannot be executed, or whose version cannot be read, is still the resolved
+   binary: it fails the version check, and does not give way to a copy on
+   `PATH`.
+2. **The copy `PATH` finds first**, when the first step finds none: the tool's
+   name joined to the first directory of `PATH` that holds an executable file of
+   that name, which is the entry `which -a` lists first for the tool.
+3. **No copy.** When neither step finds one, the variable holds the path of step
+   1 — the path the install command would write — and the gate fails with the
+   no-readable-version line below. When `go env` reports neither a `GOBIN` nor a
+   `GOPATH`, that path, and therefore the variable, is empty.
 
-Both values are read from `go env` rather than from the shell's environment,
-because `go env` also reports a setting written with `go env -w`. Only the first
-entry of `GOPATH` counts: `go install` writes to that entry's `bin` directory and
-to no other, so appending `/bin` to a `GOPATH` that lists several directories
-would name no directory at all. The resolved binary is run by that path, so
-`PATH` plays no part in which binary a gate runs.
+`GOBIN` and `GOPATH` are read from `go env` rather than from the shell's
+environment, because `go env` also reports a setting written with `go env -w`.
+Only the first entry of `GOPATH` counts: `go install` writes to that entry's
+`bin` directory and to no other, so appending `/bin` to a `GOPATH` that lists
+several directories would name no directory at all.
+
+The resolved binary is run by its path, never by its bare name. `PATH` decides
+which binary a gate runs only when the directory `go install` writes to holds no
+copy, and it never decides whether the gate passes: the version check applies to
+a copy `PATH` found exactly as to the preferred one. A copy of another version
+that comes first on `PATH` therefore cannot pass a gate. It is not run at all
+when that directory holds a copy, and it fails the version check when that
+directory holds none.
 
 **Override.** A caller names a different binary by setting the variable, on the
 make command line or in the environment:
@@ -781,9 +778,10 @@ GOSEC=/opt/gosec/bin/gosec make security
 A command-line assignment takes precedence over the environment, and either takes
 precedence over the default. An override changes where the binary is found and
 nothing else: the version check applies to an overriding binary exactly as it
-applies to the default one, and nothing disables the check. A variable set to the
-empty string names no binary, and fails the check rather than falling back to the
-default.
+applies to the default one, and nothing disables the check. An override is never
+subject to the fallback to `PATH`: the binary it names is the binary the gate
+checks, present or not. A variable set to the empty string names no binary, and
+fails the check rather than falling back to the default.
 
 **Version check.** Before the tool runs, the gate reads the resolved binary's
 version as the table above gives, and compares it with the pin: the value of the
@@ -806,8 +804,10 @@ from each, so a report of `1.2.3` matches a pin of `v1.2.3`. Nothing looser
 matches: there is no prefix match, no range, and no rule that accepts a newer
 release.
 
-**Failure.** When the version is readable and does not match, the gate writes one
-line to standard error, according to the tool:
+**Failure.** A failed check writes a report of three parts to standard error: the
+line that states the failure, the copies of the tool on `PATH`, and the command
+that installs the pinned version. When the version is readable and does not
+match, the first line is, according to the tool:
 
 ```
 golangci-lint at {path} is version {found}, but the Makefile pins {pin}. Install golangci-lint {pin}, or name a binary of it with GOLANGCI_LINT=<path>.
@@ -816,11 +816,27 @@ gosec at {path} is version {found}, but the Makefile pins {pin}. Install gosec {
 
 When no readable version can be obtained — the path names no file, the file
 cannot be executed, `go version -m` finds no Go build information in it, or what
-the reading yields is not readable — the gate writes this line instead:
+the reading yields is not readable — the first line is this one instead:
 
 ```
 golangci-lint at {path} has no readable version, but the Makefile pins {pin}. Install golangci-lint {pin}, or name a binary of it with GOLANGCI_LINT=<path>.
 gosec at {path} has no readable version, but the Makefile pins {pin}. Install gosec {pin}, or name a binary of it with GOSEC=<path>.
+```
+
+The lines that follow the first one are the same for both failures. When `PATH`
+holds at least one copy of the tool, they are:
+
+```
+PATH holds these copies of {tool}, in PATH order:
+  {entry}
+Install the pinned version with: {install}
+```
+
+When `PATH` holds no copy of the tool, they are:
+
+```
+PATH holds no copy of {tool}.
+Install the pinned version with: {install}
 ```
 
 | Placeholder | Value |
@@ -828,12 +844,17 @@ gosec at {path} has no readable version, but the Makefile pins {pin}. Install go
 | `{path}` | The resolved path, exactly as the variable holds it; empty when the variable is empty |
 | `{found}` | The version read from the binary, with a leading `v` added when it has none |
 | `{pin}` | The value the `Makefile` assigns to the tool's pin variable, `GOLANGCI_LINT_VERSION` or `GOSEC_VERSION`, with its leading `v` |
+| `{tool}` | The tool's executable name: `golangci-lint` or `gosec` |
+| `{entry}` | A list, one line per copy, each line indented by two spaces: the path of every executable file named `{tool}` in a directory of `PATH`, in `PATH` order, which is the list `which -a {tool}` prints. Every such copy is listed, including a copy of the pinned version, and including the copy step 1 of the resolution found when a directory of `PATH` holds it |
+| `{install}` | The install command of the tool's own section (`Linter: golangci-lint` or `Security Scan: gosec`), with its placeholder replaced by `{pin}` |
 
 `<path>` is literal text, not a placeholder: it shows the reader the form of the
-override. The line is the whole of what the check writes. The gate then exits
-with a non-zero status without running the tool, and `make check` fails with it.
-What `make` itself prints about the failed target follows the line; that is
-`make`'s own text and is not specified here.
+override. The report is the whole of what the check writes. It names the version
+found when one is readable, the pin, every copy of the tool that `PATH` reaches,
+and how to install the pinned one, so the reader can tell which copy was checked
+and which copies shadow it or are shadowed by it. The gate then exits with a
+non-zero status without running the tool, and `make check` fails with it. What `make` itself prints about the failed target
+follows the report; that is `make`'s own text and is not specified here.
 
 ### Linter: golangci-lint
 
@@ -867,8 +888,9 @@ the pinned version itself. The check then passes while a bare `golangci-lint`
 command runs a binary the pin never installed. Run `which -a golangci-lint` first:
 it lists every match in `PATH` order, so it reveals a shadow that `--version` alone
 cannot. Read the version of the entry it lists first, because that is the one a
-bare `golangci-lint` command runs. `make lint` does not depend on that order: it
-runs, and first checks, the binary `Local Tool Resolution` names.
+bare `golangci-lint` command runs. `make lint` depends on that order only when the
+directory `go install` writes to holds no copy, and in no case runs a copy that
+fails its version check (see `Local Tool Resolution`).
 
 In the workflows, the pinned version is the `version` input passed to the
 `golangci-lint` GitHub Action, `version: <GOLANGCI_LINT_VERSION>`, with the
@@ -1076,6 +1098,12 @@ authoritative definition. The gate set is the six gates in the table below.
 Everything that enforces gates — the local pre-commit check, the CI workflow, and
 the release workflow — enforces this set, whole and unchanged.
 
+The end-to-end suite is not one of the six gates. Both workflows run it as a
+separate required job, outside the gate set and beside it, and `make check` does
+not run it; `The End-to-End Suite Is a Required Pipeline Job` specifies that job.
+Every rule in this section that speaks of the gates, the gate set, or a subset of
+it speaks of the six gates in the table and of nothing else.
+
 `make check` is the aggregate command that runs the six gates locally, in the
 order the target declares them, and every one of them MUST pass before a commit.
 
@@ -1101,6 +1129,10 @@ Each gate is also available on its own, for example `make lint` or
 `make security`. Running the gates individually is a convenience during
 development; it does not replace `make check` before a commit.
 
+What the `test` gate may contain is bounded by
+`No Benchmarks and No Performance-Measurement Tests` below: the suite proves
+behaviour, and it measures nothing.
+
 ### Where the Gate Set Is Enforced
 
 The same six gates run in three places, and they mean the same thing in each:
@@ -1111,16 +1143,21 @@ The same six gates run in three places, and they mean the same thing in each:
 3. **In the release workflow** (`.github/workflows/release.yml`), on every push
    of a `v*` tag.
 
-There is no per-pipeline exception. No pipeline runs a subset of the gates, and
-no gate belongs to one place only. A green CI run and a green release run are
-therefore each evidence that all six gates passed, and a `v*` tag cannot publish
-a release unless the linter and the security scan both ran and reported nothing.
+There is no per-pipeline exception. No pipeline runs a subset of the six gates,
+and no gate belongs to one place only. A green CI run and a green release run are
+therefore each evidence that all six gates passed — and, because each workflow
+also runs the end-to-end job, that the end-to-end suite passed — and a `v*` tag
+cannot publish a release unless the linter and the security scan both ran and
+reported nothing. The end-to-end job runs in the two workflows and not in
+`make check`; since it is not a gate, that is not a subset of the gate set and
+not a difference between the three places the gates run.
 
 In both workflows, the gates other than `build` run in the workflow's gate job,
 and the `build` gate is the workflow's build job. The build job MUST declare
-`needs:` on the gate job, and the job that publishes artefacts MUST declare
-`needs:` on the build job. No job may build or publish an artefact in parallel
-with the gates, or independently of them.
+`needs:` on the gate job and on the end-to-end job, and the job that publishes
+artefacts MUST declare `needs:` on the build job. No job may build or publish an
+artefact in parallel with the gates or the end-to-end job, or independently of
+them.
 
 ### A Missing Tool Is a Failure, Never a Skip
 
@@ -1144,7 +1181,7 @@ a gate, and none may be invented: a host that lacks `gosec` is a host that fails
 the run, not a host that is exempt from the security gate. The same rule governs
 a local run — whoever lacks either tool has not run `make check`. Locally the rule
 is enforced as well as stated: a missing tool, or a tool of another version, fails
-its gate with a line `Local Tool Resolution` publishes.
+its gate with the report `Local Tool Resolution` publishes.
 
 **No release may report a gate as skipped.** Every gate MUST have run and passed
 in the release workflow before a release is published. Release notes, release
@@ -1213,6 +1250,157 @@ same command over the same scope in all three places:
   scanner version, so the scanned scope, the accepted `#nosec` suppressions, and
   the rule set are identical everywhere.
 
+### The End-to-End Suite Is a Required Pipeline Job
+
+The end-to-end suite, run by `tests/run_tests.py`, drives the compiled `rmp`
+binary through its command-line surface. It is not a validation gate: it adds no
+row to the table above, `make check` does not run it, and the rules of
+`Validation Gates` that speak of the gate set do not count it. It is nevertheless
+required in both workflows. A workflow run whose end-to-end job did not pass
+builds no artefact and publishes none.
+
+**Where it runs.** Each workflow declares a job with the ID `e2e` and the name
+"End-to-End Tests":
+
+1. **In the CI workflow**, on every push to `main` and on every pull request
+   targeting `main`.
+2. **In the release workflow**, on every push of a `v*` tag.
+
+The job runs on the same Linux runner image as the gate job. It declares no
+`needs:`, so it runs beside the gate job rather than after it, and the build job
+declares `needs:` on it (see `Where the Gate Set Is Enforced`). No artefact is
+therefore built, and none published, from a commit whose suite did not pass. The
+job reads the repository and never writes to it: it raises no permission above
+the workflow-level `contents: read`.
+
+**What it runs.** The job takes these steps, in this order:
+
+1. It checks out the repository.
+2. It sets up the Go toolchain from `go.mod` (`go-version-file: go.mod`), as the
+   gate job and the build job do.
+3. It sets up Python, as the paragraph on Python below specifies.
+4. It builds the binary it tests, with `go build -o ./bin/rmp ./cmd/rmp`, in a
+   step of its own that runs before the suite. The job tests only a binary built
+   by that step in the same run: nothing restores `./bin/rmp` from a cache or
+   from an artefact of another job. A compilation error therefore fails the build
+   step and is reported as a build failure, not as a failing test.
+5. It runs the suite with `python3 -u tests/run_tests.py`. That is the default
+   module set, the same one a local `python3 tests/run_tests.py` runs; the stress
+   modules, which only `--stress` and `--all` select, are not part of the job.
+
+The harness keeps its own staleness guard. Before any module runs, it compares
+the binary with the newest source compiled into it and rebuilds a binary older
+than that source; `tests/test_53_e2e_harness_binary_staleness.py` proves the
+guard. The build step and the guard do not replace each other. The step makes
+the tested binary a product of the run; the guard stops a stale binary from
+reaching the suite by any path the step does not cover, and it is the only
+protection a local run has.
+
+**A failure names the failing module.** The harness runs each module as a
+separate process and exits with a non-zero status when any module fails, which
+fails the job. Before it exits, it writes the name of every failing module,
+followed by that module's own output, so a failed job states which modules
+failed and why. A check the harness runs before any module — a test file that no
+registry lists, a suite class a module never runs, a module the index of
+`tests/README.md` does not document — fails the job the same way, naming the
+module concerned. The `-u` flag makes the interpreter's output unbuffered. The
+harness announces each module as it starts it, and without `-u` those lines stay
+in a buffer whenever standard output is not a terminal, which in a runner it
+never is. With `-u`, a job cut off by its timeout still shows, as the last
+module it announced, the module that was running.
+
+**Timeout.** The job declares `timeout-minutes: 60`. The harness gives a module
+no time limit of its own, so a module that hangs — a server that never exits, a
+socket nobody closes — would otherwise hold the job until the platform's default
+job limit, six hours. The suite runs for minutes on a development machine, on the
+order of ten, and a hosted runner is slower. Sixty minutes is several times that
+duration, so the suite's growth does not reach the limit unnoticed, while a hang
+still ends within the hour. Like the `test` gate's `-timeout=30m` (see
+`Permitted Differences Between the Three Pipelines`), the value is an execution
+limit and not a change of scope; a suite that grows toward it raises it
+deliberately.
+
+**Python.** The suite needs Python 3.12 or later and nothing beyond the standard
+library. Its sources use the replacement-field syntax that Python 3.12
+introduced — a backslash inside the expression of an f-string — which an earlier
+interpreter rejects at compile time; Python 3.11 refuses to compile
+`tests/test_35_web_interface.py`. Each workflow installs Python in the job with
+the `actions/setup-python` action, pinned to an exact version like every action
+the workflows use (see `Static Analysis`), and passes it a `python-version` input
+that names Python 3.12 or a later release. That value is written only in the two
+workflows, and both MUST name the same one, so the suite runs under the same
+interpreter in CI and at release. The job does not use the `python3` the runner
+image happens to carry, because that one changes whenever the image does. Beyond
+the Go toolchain and Python, the suite uses only tools the runner image provides
+(`bash`, `sh`, `git`, `tar`, `unzip`, `sha256sum`, and `mktemp`), and the job
+installs nothing else.
+
+**Nothing skips the suite.** The rules of
+`A Missing Tool Is a Failure, Never a Skip` bind this job as they bind a gate
+job. No step tests whether Python or a tool is present and continues without it,
+no step of the job carries `continue-on-error`, and a module that cannot run
+fails the job. A release whose
+end-to-end job did not run and pass MUST NOT be published.
+
+### No Benchmarks and No Performance-Measurement Tests
+
+**This project keeps no benchmarks and no performance-measurement tests, and no
+statement in this specification may require one.** The `test` gate runs the suite
+that proves behaviour. Nothing in that suite establishes how fast the product is,
+how much memory it uses, how many allocations it makes, or what throughput it
+sustains, and nothing anywhere in the repository does.
+
+The following are forbidden, in every package and every pipeline:
+
+1. A `Benchmark` function, whether or not any gate runs it. The gate set runs
+   `go test ./...`, which does not execute benchmarks, so an unrun benchmark
+   would be dead weight that no gate could ever defend.
+2. A test that asserts a duration, an allocation count, a resident-memory figure,
+   or a rate, or that compares two such quantities against each other.
+3. A requirement in this specification whose only stated proof is a benchmark or
+   a measurement of any of those quantities, and a performance target expressed
+   as a figure to reach.
+
+**Specified time-bounded behaviour is kept, and is proven without measuring.**
+Several behaviours this specification fixes are defined in terms of time: the
+graph statement budget (`GRAPH.md § Statement Time Budget`), the delay ladder and
+the jitter ceiling of the single retry policy (`IMPLEMENTATION.md § Retry Logic`),
+the graph store lock's bounded wait (`GRAPH.md § Lock Contention`), and the
+signal-ownership window of a long-lived server (`GRAPH.md § Server Startup`).
+Those requirements stand and the durations in them are contractual. What may not
+stand is a proof that reads the clock. A test establishes such a behaviour by an
+**observable other than elapsed time**, and the admissible observables are:
+
+- an injected clock or an injected delay source, which the test advances itself;
+- a count of attempts, of waits, or of steps taken;
+- a count of statements issued, which is how a claim about what a page or a
+  command costs the database is already settled (`WEB.md § Acceptance Criteria`,
+  criterion 92, and `DATABASE.md § Resolve the Sprint of Many Tasks (Grouped)`);
+- a state change that outlives the operation — a row, a file, a byte-for-byte
+  comparison of the graph store before and after;
+- the identity of the published error line, which distinguishes one failure
+  cause from another;
+- the exit code.
+
+A test MUST NOT sleep and then assert on what the clock says, MUST NOT assert
+that an operation finished within or after a given duration, and MUST NOT assert
+that one operation was quicker than another. Where a duration is itself the
+contract, the test asserts the **declared value** — that the constant the code
+reads is the one this specification fixes, and that it is read from one
+declaration rather than restated — and proves the behaviour around it by the
+observables above.
+
+**Requiring termination is not a timing assertion.** A test may require that an
+invocation exits rather than blocks; what it asserts is that the process ended,
+which is an outcome and not a duration. A run that hangs is ended by the `test`
+gate's own timeout (see `Permitted Differences Between the Three Pipelines`),
+which is the harness stopping a stuck run rather than a test measuring one.
+
+**This is not a gate.** It adds no target to the table above, changes no command
+any pipeline runs, and is enforced by review of what is written rather than by a
+check that runs. Adding a static check for it would be a change to the gate set
+and is not specified here.
+
 ## Artifact Structure
 
 Every archive the project publishes carries the same three entries: the compiled
@@ -1274,9 +1462,13 @@ separate published asset, not a fourth entry inside the archive.
 - [ ] `make check` passes: format, vet, unit tests, host build, `golangci-lint`, and the `gosec` security scan all succeed. The security scan reports no unsuppressed finding (see Validation Gates and Security Scan: gosec)
 - [ ] `make check` exits 0 on a machine where both tools are installed at their pinned versions by the documented install commands, including a machine whose `PATH` holds a different version of either tool ahead of them (see Local Tool Resolution)
 - [ ] `make lint` runs the pinned linter even when another `golangci-lint` comes first on `PATH`: with the pinned version installed by the documented command, placing first on `PATH` a `golangci-lint` that fails whenever it is run leaves `make lint` passing. The same holds for `make security` with such a `gosec` first on `PATH`
-- [ ] Neither the `lint` target nor the `security` target of the `Makefile` runs its tool by its bare name. Each runs the binary its variable resolves to, and each variable defaults to the tool's name in the directory `go env GOBIN` reports, or, when that value is empty, in the `bin` directory of the first entry of `go env GOPATH`
-- [ ] A version mismatch fails the gate before the tool runs and names both versions: `make lint GOLANGCI_LINT=<path>`, with `<path>` a linter of another release, exits non-zero, writes to standard error the mismatch line Local Tool Resolution publishes, with that release as `{found}` and the pin as `{pin}`, and does not run the linter. `make security GOSEC=<path>` behaves the same way for a `gosec` of another release
-- [ ] A path that names no file, and a file from which no readable version can be obtained, each fail their gate with the no-readable-version line Local Tool Resolution publishes, for both tools
+- [ ] Neither the `lint` target nor the `security` target of the `Makefile` runs its tool by its bare name. Each runs the binary its variable resolves to. Unset, each variable resolves to the tool's name in the directory `go env GOBIN` reports, or, when that value is empty, in the `bin` directory of the first entry of `go env GOPATH`, when that path names an existing file, and otherwise to the first copy of the tool on `PATH` (see Local Tool Resolution)
+- [ ] The preferred copy is never bypassed: with a `golangci-lint` of another release installed in the directory `go install` writes to and the pinned version first on `PATH`, `make lint` exits non-zero with the mismatch report naming the preferred copy's path, and does not fall back to the copy on `PATH`. The same holds for `make security` with a `gosec` of another release
+- [ ] The fallback to `PATH` is checked like the preferred copy: with no copy in the directory `go install` writes to, a pinned `golangci-lint` that is the first copy on `PATH` passes `make lint` and is the binary it runs; a `golangci-lint` of another release that is the first copy on `PATH` fails `make lint`, even when the pinned version comes later on `PATH`. The same holds for `make security` with `gosec`
+- [ ] A shadowing binary of the wrong version cannot produce a passing `make check`: on a machine where a `golangci-lint` or a `gosec` of another release is the first copy of that tool on `PATH`, `make check` either runs the pinned copy in the directory `go install` writes to, or exits non-zero with the mismatch report; in no case does it run the shadowing copy as its `lint` or `security` gate
+- [ ] A version mismatch fails the gate before the tool runs and reports what it found: `make lint GOLANGCI_LINT=<path>`, with `<path>` a linter of another release, exits non-zero, writes to standard error the report Local Tool Resolution publishes — the mismatch line with that release as `{found}` and the pin as `{pin}`, then every copy of `golangci-lint` on `PATH` in `PATH` order (or the line stating that `PATH` holds none), then the install command with the pin in place of its placeholder — and does not run the linter. `make security GOSEC=<path>` behaves the same way for a `gosec` of another release
+- [ ] A path that names no file, and a file from which no readable version can be obtained, each fail their gate with the report Local Tool Resolution publishes, whose first line is the no-readable-version line, for both tools. With no copy of a tool in the directory `go install` writes to and none on `PATH`, the gate fails with that report, `{path}` is the path the install command would write, and the second line states that `PATH` holds no copy of the tool
+- [ ] The `security` gate reads `gosec`'s version from the `mod` line of `go version -m`, not from `gosec --version`: a `gosec` of the pinned version built by `go install`, whose `--version` prints `dev`, passes the version check
 - [ ] An override set in the environment is honoured and checked exactly as one set on the make command line, and a command-line assignment takes precedence over the environment
 - [ ] The `Makefile` assigns each tool's pin exactly once, as `override GOLANGCI_LINT_VERSION := <version>` and `override GOSEC_VERSION := <version>`, and the `test` gate fails when either variable is assigned any other number of times (see Static Analysis)
 - [ ] The `test` gate fails when a workflow's copy of a tool pin differs from the `Makefile`'s value: the `version` input of the `golangci-lint` action in `.github/workflows/ci.yml` or `.github/workflows/release.yml` differing from `GOLANGCI_LINT_VERSION`, or the version in either workflow's `gosec` install command differing from `GOSEC_VERSION` (see Static Analysis)
@@ -1284,12 +1476,13 @@ separate published asset, not a fourth entry inside the archive.
 - [ ] No specification file names the version of a Go module dependency, of the Go toolchain, or of `golangci-lint`, `gosec`, or the `golangci-lint` action: those versions are written in `go.mod`, the `Makefile`, and the two workflows (see Go Toolchain, External Dependencies, and Static Analysis)
 - [ ] `go.mod` pins **every** direct dependency the External Dependencies table names — `github.com/FlavioCFOliveira/GoGraph`, `golang.org/x/sys`, `golang.org/x/text`, and `modernc.org/sqlite` — to an exact version, and the first `require` block of `go.mod` requires those four modules and no others, so the table and the block still agree row for row (see External Dependencies)
 - [ ] `go.mod` pins `modernc.org/libc` and `modernc.org/memory` to exact versions, as SQLite Driver Rules, Rule 2 requires. Those versions are not checked against the ones the pinned `modernc.org/sqlite` requires: a later release is the risk Rule 3 accepts, and no gate compares them — neither any gate run by `make check` (format, vet, test, build, `golangci-lint`, `gosec`) nor the E2E suite (see External Dependencies, SQLite Driver Rules 2 to 4)
-- [ ] Any change to the pinned `golang.org/x/text` version, and any raise of the `go` directive in `go.mod` (see Go Toolchain), has been treated as a change to the roadmap tasks board's search: the copy of the search rule the binary ships to the browser was regenerated from the new Unicode character data, and the guard test that holds it equal to the server's own rule passes (see External Dependencies, Unicode Data Rules 5 and 6, and `WEB.md § Roadmap Tasks Page`)
+- [ ] Any change to the pinned `golang.org/x/text` version, and any raise of the `go` directive in `go.mod` (see Go Toolchain), has been treated as a change to the roadmap tasks page's search and to the graph key comparison: the tests of both pass on the new Unicode character data (see External Dependencies, Unicode Data Rules 5, `WEB.md § Roadmap Tasks Page`, and `GRAPH.md § Node Key Uniqueness`)
 - [ ] Archive naming follows convention: `rmp-{version}-{target}.{ext}`
 - [ ] Every published archive holds exactly the three entries Artifact Structure lists, and nothing else. Listing a `.tar.gz` (`tar -tzf`) shows `rmp`, `LICENSE`, and `README.md`; listing a Windows `.zip` (`unzip -l`) shows `rmp.exe`, `LICENSE`, and `README.md`. Every entry is at the archive root, with no leading directory component
 - [ ] The dev pre-release archive holds the same three entries as a release archive. This is checked on a published `dev` asset, not only on a release asset, because both workflows pack archives and only one of them builds release tags
 - [ ] The `.sha256` file for each archive is published as a separate asset and is not an entry inside the archive
 - [ ] Every web asset category (HTML templates, the stylesheet including the vendored Tabler CSS framework, all client JS including the vendored Tabler JavaScript and D3.js with the d3-sankey plugin and their dependencies, web fonts including the Inter font and the Tabler Icons webfont, icons and images, and the favicon) is embedded via `go:embed`; the build uses the Go toolchain only, with no Node.js or `node_modules` step (see Vendored Web Assets)
+- [ ] The vendored Tabler CSS and the vendored Tabler JavaScript come from the same Tabler release: the release named in the licence banner at the head of the committed CSS file equals the release named in the banner at the head of the committed JavaScript file (see Vendored Web Assets)
 - [ ] The web interface is fully self-contained: with networking disabled and with only the `rmp` binary present on disk (no sidecar files and no separate assets directory), `rmp web` serves the full UI — every page and the knowledge-graph visualisation render and function with no network egress (see Vendored Web Assets and `WEB.md § Self-Contained Deliverable`)
 
 ### Architecture Verification
@@ -1307,7 +1500,11 @@ separate published asset, not a fourth entry inside the archive.
 - [ ] The documented local install command for each tool installs the pinned version, and the linter it installs can actually run this project: the golangci-lint module path carries the `/v2` suffix, so `golangci-lint run ./...` reads `.golangci.yml` (`version: "2"`) instead of rejecting it
 - [ ] `gosec` runs in both workflows with the invocation the `security` gate defines (`gosec -exclude-dir=.claude/worktrees ./...`), so the scanned scope and the accepted `#nosec` suppressions are the same everywhere
 - [ ] Every gate fails its job when it fails: introducing one violation at a time — an unformatted file, a `go vet` finding, a failing test, a `golangci-lint` violation, and an unsuppressed `gosec` finding — fails the workflow run in each case, in both workflows
-- [ ] No artefact is built or published on a run whose gates did not pass: the build job declares `needs:` on the gate job, and the publishing job declares `needs:` on the build job
+- [ ] No artefact is built or published on a run whose gates or end-to-end suite did not pass: the build job declares `needs:` on the gate job and on the `e2e` job, and the publishing job declares `needs:` on the build job
+- [ ] Each workflow declares a job with the ID `e2e`, which runs on a Linux runner, declares `timeout-minutes: 60`, holds no permission above `contents: read`, sets up Go from `go.mod`, sets up Python with `actions/setup-python` pinned to an exact version, builds the binary with `go build -o ./bin/rmp ./cmd/rmp` in a step before the suite, restores `./bin/rmp` from no cache and no artefact, and runs `python3 -u tests/run_tests.py`. No step of the job carries `continue-on-error` or tests whether a tool is present (see The End-to-End Suite Is a Required Pipeline Job)
+- [ ] The `python-version` input of the `e2e` job is the same in `.github/workflows/ci.yml` and in `.github/workflows/release.yml`, and names Python 3.12 or a later release
+- [ ] The end-to-end suite fails its workflow run when it fails: making one module fail fails the `e2e` job in both workflows, the job's log names that module, and neither workflow builds or publishes an artefact on that run
+- [ ] The end-to-end suite stays outside the gate set: the gate table of Validation Gates still lists exactly the six gates, and the `check` target of the `Makefile` still runs exactly those six and not the suite
 - [ ] The release workflow builds all nine Primary Platforms, and the CI build job builds the four-target fast-feedback subset (see Validation Gates, Permitted Differences Between the Three Pipelines)
 - [ ] Both workflows build `rmp` with `-buildvcs=true` and pass no `-X` linker flag: reading the `go build` command of the build job in `.github/workflows/ci.yml` and in `.github/workflows/release.yml` shows the flag (see GitHub Actions Workflow)
 - [ ] Every build job of both workflows runs the stamp check before uploading its artefact: reading `.github/workflows/ci.yml` and `.github/workflows/release.yml` shows, in each build job, a step placed after the `go build` step and before the upload step that runs `go version -m` on the built binary and fails the job when its output carries no `vcs.revision` build setting (see GitHub Actions Workflow and `DEPLOY.md § How a Released Binary Carries Its Commit`)

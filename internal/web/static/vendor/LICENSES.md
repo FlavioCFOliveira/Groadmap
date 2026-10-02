@@ -8,7 +8,7 @@ from `/static/...` and never from a remote origin (see `SPEC/BUILD.md
 |-------|----------|---------|---------|
 | Tabler (CSS framework + JS) | `tabler/tabler.min.css`, `tabler/tabler.min.js` | Tabler | MIT |
 | Tabler Icons (webfont + CSS) | `tabler-icons/tabler-icons.min.css`, `tabler-icons/fonts/*` | Tabler Icons | MIT |
-| Inter (variable webfont) | `inter/inter.css`, `inter/files/inter-latin-wght-normal.woff2` | Inter (Rasmus Andersson) | SIL Open Font License 1.1 |
+| Inter (variable webfont, upright and italic faces) | `inter/inter.css`, `inter/files/inter-latin-wght-normal.woff2`, `inter/files/inter-latin-wght-italic.woff2` | Inter (Rasmus Andersson), via `@fontsource-variable/inter` | SIL Open Font License 1.1 |
 | D3.js (graph library) | `d3/d3.min.js` | D3 (Mike Bostock) | ISC |
 | d3-sankey (Sankey layout plugin) | `d3/d3-sankey.min.js` | d3-sankey (Mike Bostock) | ISC |
 

@@ -40,7 +40,7 @@ import (
 // tree answers 57 where the scanner sees 56: one hit is the string inside a
 // sentence in cmd/rmp/workflow_gates_test.go, and gosec honours the directive
 // only at the start of a comment group or at the start of a line within one
-// (gosec v2.28.0 analyzer.go, findNoSecTag). The register used to carry a
+// (gosec v2.29.0 analyzer.go, findNoSecTag). The register used to carry a
 // footnote apologising for that difference. Reading comment groups the way the
 // scanner reads them settles it instead, and it also sees the second suppression
 // syntax, //gosec:disable, which a #nosec grep is blind to and which would
@@ -81,7 +81,7 @@ import (
 // gosecRegisterRelPath is the register, relative to the module root.
 const gosecRegisterRelPath = ".gosec.yaml"
 
-// The two suppression syntaxes gosec honours (gosec v2.28.0 analyzer.go).
+// The two suppression syntaxes gosec honours (gosec v2.29.0 analyzer.go).
 const (
 	noSecTag           = "#nosec"
 	gosecDisablePrefix = "//gosec:disable"
@@ -245,7 +245,7 @@ func TestNosecRegisterAccountsForEverySuppressionInTheSource(t *testing.T) {
 // not the one the author had in mind, and would keep suppressing a finding of a
 // class nobody reviewed. A directive with no `-- reason` leaves a reviewer with
 // nothing to check. gosec can enforce both itself, through the
-// -nosec-require-rules and -nosec-require-justification flags of v2.28.0, but
+// -nosec-require-rules and -nosec-require-justification flags of v2.29.0, but
 // the project's invocation passes neither; enforcing them here keeps the rule in
 // force under the invocation SPEC/BUILD.md actually defines.
 func TestEveryNosecDirectiveNamesARuleAndCarriesAJustification(t *testing.T) {
@@ -337,7 +337,7 @@ func sweepSuppressions(t *testing.T, root string) []suppression {
 // findSuppressionDirective reports whether a comment group carries a suppression
 // directive and returns everything after the tag.
 //
-// It reproduces gosec v2.28.0's findNoSecDirective/findNoSecTag: the tag counts
+// It reproduces gosec v2.29.0's findNoSecDirective/findNoSecTag: the tag counts
 // at the start of the group's text or at the start of a line within it, so the
 // same string in the middle of a sentence is prose, exactly as the scanner reads
 // it. //gosec:disable is then looked for on each comment of the group, which is

@@ -398,7 +398,7 @@ func TestSend_AnExhaustedRetryPolicyReportsTheConflictAsItself(t *testing.T) {
 		t.Errorf("the server saw %d RUN message(s), want strictly more than the fixed ladder's "+
 			"%d. A conflict is retried under the policy's FULL-JITTER shape, not its ladder: "+
 			"the ladder's rungs are hundreds of milliseconds each, so it spends the same 2500 ms "+
-			"budget in six attempts where jitter spends it in sixteen to twenty",
+			"budget in six attempts where jitter spends it in sixteen to forty",
 			runs, backoff.Attempts)
 	}
 }
@@ -561,9 +561,14 @@ func TestSend_ClassifiesAServerThatCannotBeReached(t *testing.T) {
 // bounds. The outcome is unknown for the same reason a lost connection's is, and
 // the caller does not fall back to the store.
 //
-// The budget is shortened through the same declaration production reads, so what
-// the test asserts is the relationship — the caller waits the WAIT budget — rather
-// than a figure of its own.
+// The budget is shortened through the same declaration production reads, so the
+// case is reached cheaply. WHICH deadline the caller arms is not asserted here
+// and is not asserted on a clock anywhere: it is a relationship between two
+// declared quantities, and TestSend_TheBackstopIsTheWaitBudgetAndNotTheStatementBudget
+// compares those declarations directly (SPEC/IMPLEMENTATION.md § Retry Logic;
+// SPEC/BUILD.md § No Benchmarks and No Performance-Measurement Tests). What this
+// test asserts is the CLASSIFICATION, which is the thing a silent server has to
+// be told apart by.
 func TestSend_ClassifiesAServerThatDoesNotAnswer(t *testing.T) {
 	previous := graphlock.StatementBudget
 	t.Cleanup(func() { graphlock.StatementBudget = previous })
@@ -578,9 +583,7 @@ func TestSend_ClassifiesAServerThatDoesNotAnswer(t *testing.T) {
 		}, runCount)
 	})
 
-	started := time.Now()
 	_, err := Send(context.Background(), server.socket, "MATCH (n) DETACH DELETE n")
-	elapsed := time.Since(started)
 
 	var sendErr *SendError
 	if !errors.As(err, &sendErr) {
@@ -590,10 +593,57 @@ func TestSend_ClassifiesAServerThatDoesNotAnswer(t *testing.T) {
 		t.Errorf("kind = %v, want FailureUnanswered: the connection is intact and the server is "+
 			"alive, so this is not a lost connection", sendErr.Kind)
 	}
-	if budget := graphlock.WaitBudget(); elapsed < budget {
-		t.Errorf("Send gave up after %v, before its %v backstop. The backstop is deliberately LATER "+
-			"than the server's statement budget so that a statement which committed just before the "+
-			"budget expired is never reported as one that wrote nothing", elapsed, budget)
+}
+
+// TestSend_ACancelledCallerStopsTheStatement is the client half of the
+// regression for rmp task #563: the caller's cancellation must reach the Bolt
+// exchange, not merely end the caller's wait.
+//
+// Before the fix the context was consulted only for its deadline, so a caller
+// that cancelled while its statement ran kept the connection open until the
+// backstop fired, and a real server ran the statement to its end and committed
+// it. The server cancels a statement whose connection closes, so the client
+// closes the connection the moment the caller cancels.
+//
+// The server here accepts the statement and answers nothing, so only the
+// cancellation can end the call before the backstop; what is asserted is the
+// classification that proves it did, with no clock. A call ended by the
+// backstop reports FailureUnanswered with a deadline as its cause; a call ended
+// by the cancellation reports the statement as sent and its connection closed
+// (FailureLost: the statement may have committed before the close reached the
+// server), with context.Canceled as its cause, and it is not retried.
+func TestSend_ACancelledCallerStopsTheStatement(t *testing.T) {
+	server := startScriptedServer(t, func(request any, runCount int64) exchange {
+		return defaultSession(request, func(request any, _ int64) exchange {
+			if _, isRun := request.(*proto.Run); isRun {
+				return exchange{silent: true}
+			}
+			return ok()
+		}, runCount)
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	timer := time.AfterFunc(100*time.Millisecond, cancel)
+	defer timer.Stop()
+
+	_, err := Send(ctx, server.socket, "MATCH (a),(b),(c) WITH count(*) AS n CREATE (:Marker {n:n})")
+
+	var sendErr *SendError
+	if !errors.As(err, &sendErr) {
+		t.Fatalf("error = %v (%T), want a *SendError", err, err)
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Errorf("error = %v, want it to carry context.Canceled: the cancellation must end the "+
+			"exchange, not the backstop deadline", err)
+	}
+	if sendErr.Kind != FailureLost {
+		t.Errorf("kind = %v, want FailureLost: the statement had been sent and its connection was "+
+			"closed, so its outcome is unknown", sendErr.Kind)
+	}
+	if runs := server.runs.Load(); runs != 1 {
+		t.Errorf("the server received %d RUN message(s), want exactly 1: a cancelled statement is "+
+			"never re-sent", runs)
 	}
 }
 

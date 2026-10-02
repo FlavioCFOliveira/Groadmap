@@ -101,6 +101,61 @@ func TasksNotInSprintError(notMembers []int, sprintID int) error {
 	}
 }
 
+// CompletedTaskInSprintError builds the refusal `sprint add-tasks`,
+// `sprint move-tasks` and `sprint remove-tasks` all print for a named task that
+// is COMPLETED in sprint sprintID: a completed task stays in the sprint it was
+// completed in (SPEC/STATE_MACHINE.md § Sprint Membership and the BACKLOG
+// Status, rule 4). The line is one string on all three commands, so it is built
+// in one place. taskID is the first such task in the order the command line
+// supplied them.
+func CompletedTaskInSprintError(taskID, sprintID int) error {
+	return fmt.Errorf("%w: task %d is COMPLETED in sprint #%d; a completed task stays in the sprint it was completed in",
+		ErrValidation, taskID, sprintID)
+}
+
+// CompletedTaskWithoutSprintError builds the refusal `sprint add-tasks` prints
+// for a named COMPLETED task that belongs to no sprint, a state only data
+// written before the sprint membership invariant can hold (SPEC/STATE_MACHINE.md
+// § Sprint Membership and the BACKLOG Status).
+func CompletedTaskWithoutSprintError(taskID int) error {
+	return fmt.Errorf("%w: task %d is COMPLETED and belongs to no sprint; a completed task cannot join a sprint",
+		ErrValidation, taskID)
+}
+
+// SprintCapacityError builds the refusal of a `sprint add-tasks` that would take
+// sprint sprintID past its max_tasks cap. adding is the number of distinct named
+// tasks that become active in the sprint, load the sprint's active load, and
+// limit its cap (SPEC/COMMANDS.md § Task Assignment). The line is the same
+// whichever of the two capacity checks refuses the addition, so both build it
+// here.
+func SprintCapacityError(adding, sprintID, load, limit int) error {
+	return fmt.Errorf("%w: adding %d task(s) would exceed sprint #%d capacity (%d/%d tasks active)",
+		ErrValidation, adding, sprintID, load, limit)
+}
+
+// ReopenCapacityError builds the refusal of a `task reopen` that would take
+// sprint sprintID past its max_tasks cap. reopening is the number of distinct
+// named COMPLETED tasks of that sprint the invocation would return to SPRINT,
+// load the sprint's active load before the reopening, and limit its cap
+// (SPEC/COMMANDS.md § Reopen Task). The line has the shape of
+// SprintCapacityError's, because the two commands apply one rule.
+func ReopenCapacityError(reopening, sprintID, load, limit int) error {
+	return fmt.Errorf("%w: reopening %d task(s) would exceed sprint #%d capacity (%d/%d tasks active)",
+		ErrValidation, reopening, sprintID, load, limit)
+}
+
+// JoinHashIDs renders ids as the published <id-list> placeholder: each id
+// prefixed with "#", separated by a comma and a space, in the order given
+// (SPEC/COMMANDS.md § Error Output). The caller supplies them in ascending id
+// order, which is the order that placeholder requires.
+func JoinHashIDs(ids []int) string {
+	parts := make([]string, len(ids))
+	for i, id := range ids {
+		parts[i] = "#" + strconv.Itoa(id)
+	}
+	return strings.Join(parts, ", ")
+}
+
 // JoinIDs renders ids separated by a comma and a space, which is the published
 // rendering of the <ids> placeholder (SPEC/COMMANDS.md § Error Output). Go's own
 // slice rendering was used before and produced "[4 4]" -- bracketed, space

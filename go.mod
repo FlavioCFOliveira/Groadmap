@@ -1,9 +1,12 @@
 module github.com/FlavioCFOliveira/Groadmap
 
-go 1.27.0
+go 1.27.1
 
 require (
 	github.com/FlavioCFOliveira/GoGraph v0.15.0
+	github.com/alecthomas/chroma/v2 v2.27.0
+	github.com/dlclark/regexp2/v2 v2.2.1
+	github.com/yuin/goldmark v1.8.6
 	golang.org/x/sys v0.48.0
 	golang.org/x/text v0.42.0
 	modernc.org/sqlite v1.59.0

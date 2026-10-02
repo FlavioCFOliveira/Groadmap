@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"database/sql/driver"
 	"path/filepath"
+	"sync"
 	"sync/atomic"
 	"testing"
 
@@ -32,13 +33,85 @@ import (
 
 // stmtCounter counts the statements executed on the connections of one database.
 // database/sql opens connections from several goroutines, so the counter is atomic.
+//
+// It also records the text of every statement prepared and of every statement
+// executed, so a test can count the preparations and executions of one given
+// statement (see prepared and executed).
 type stmtCounter struct {
 	n atomic.Int64
+
+	mu       sync.Mutex
+	prepares []string
+	execs    []string
+
+	// before, when set, runs just before each counted execution, with the
+	// statement's text, outside mu.
+	before atomic.Pointer[func(query string)]
+}
+
+// setBeforeExecute installs fn to run just before each counted execution, or
+// removes the hook when fn is nil.
+func (c *stmtCounter) setBeforeExecute(fn func(query string)) {
+	if fn == nil {
+		c.before.Store(nil)
+		return
+	}
+	c.before.Store(&fn)
 }
 
 func (c *stmtCounter) add()       { c.n.Add(1) }
-func (c *stmtCounter) reset()     { c.n.Store(0) }
 func (c *stmtCounter) count() int { return int(c.n.Load()) }
+
+func (c *stmtCounter) reset() {
+	c.n.Store(0)
+	c.mu.Lock()
+	c.prepares, c.execs = nil, nil
+	c.mu.Unlock()
+}
+
+// executedText counts one execution of the statement whose text is query.
+func (c *stmtCounter) executedText(query string) {
+	if fn := c.before.Load(); fn != nil {
+		(*fn)(query)
+	}
+	c.add()
+	c.mu.Lock()
+	c.execs = append(c.execs, query)
+	c.mu.Unlock()
+}
+
+// preparedText records one preparation of the statement whose text is query.
+func (c *stmtCounter) preparedText(query string) {
+	c.mu.Lock()
+	c.prepares = append(c.prepares, query)
+	c.mu.Unlock()
+}
+
+// prepared returns how many times the statement whose text is query was
+// prepared since the last reset.
+func (c *stmtCounter) prepared(query string) int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return countText(c.prepares, query)
+}
+
+// executed returns how many times the statement whose text is query was
+// executed since the last reset, by either path.
+func (c *stmtCounter) executed(query string) int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return countText(c.execs, query)
+}
+
+func countText(texts []string, query string) int {
+	n := 0
+	for _, q := range texts {
+		if q == query {
+			n++
+		}
+	}
+	return n
+}
 
 // countingConnector wraps a driver.Connector so every connection it opens counts
 // the statements it executes.
@@ -68,7 +141,8 @@ func (c *countingConn) Prepare(query string) (driver.Stmt, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &countingStmt{Stmt: stmt, counter: c.counter}, nil
+	c.counter.preparedText(query)
+	return &countingStmt{Stmt: stmt, counter: c.counter, query: query}, nil
 }
 
 func (c *countingConn) PrepareContext(ctx context.Context, query string) (driver.Stmt, error) {
@@ -80,7 +154,8 @@ func (c *countingConn) PrepareContext(ctx context.Context, query string) (driver
 	if err != nil {
 		return nil, err
 	}
-	return &countingStmt{Stmt: stmt, counter: c.counter}, nil
+	c.counter.preparedText(query)
+	return &countingStmt{Stmt: stmt, counter: c.counter, query: query}, nil
 }
 
 func (c *countingConn) QueryContext(ctx context.Context, query string, args []driver.NamedValue) (driver.Rows, error) {
@@ -90,7 +165,7 @@ func (c *countingConn) QueryContext(ctx context.Context, query string, args []dr
 		// prepared path, which counts on the statement instead.
 		return nil, driver.ErrSkip
 	}
-	c.counter.add()
+	c.counter.executedText(query)
 	return queryer.QueryContext(ctx, query, args)
 }
 
@@ -99,7 +174,7 @@ func (c *countingConn) ExecContext(ctx context.Context, query string, args []dri
 	if !ok {
 		return nil, driver.ErrSkip
 	}
-	c.counter.add()
+	c.counter.executedText(query)
 	return execer.ExecContext(ctx, query, args)
 }
 
@@ -117,15 +192,16 @@ func (c *countingConn) BeginTx(ctx context.Context, opts driver.TxOptions) (driv
 type countingStmt struct {
 	driver.Stmt
 	counter *stmtCounter
+	query   string
 }
 
 func (s *countingStmt) Query(args []driver.Value) (driver.Rows, error) {
-	s.counter.add()
+	s.counter.executedText(s.query)
 	return s.Stmt.Query(args) //nolint:staticcheck // the deprecated form is what the embedded driver.Stmt offers
 }
 
 func (s *countingStmt) Exec(args []driver.Value) (driver.Result, error) {
-	s.counter.add()
+	s.counter.executedText(s.query)
 	return s.Stmt.Exec(args) //nolint:staticcheck // the deprecated form is what the embedded driver.Stmt offers
 }
 
@@ -134,7 +210,7 @@ func (s *countingStmt) QueryContext(ctx context.Context, args []driver.NamedValu
 	if !ok {
 		return nil, driver.ErrSkip
 	}
-	s.counter.add()
+	s.counter.executedText(s.query)
 	return queryer.QueryContext(ctx, args)
 }
 
@@ -143,7 +219,7 @@ func (s *countingStmt) ExecContext(ctx context.Context, args []driver.NamedValue
 	if !ok {
 		return nil, driver.ErrSkip
 	}
-	s.counter.add()
+	s.counter.executedText(s.query)
 	return execer.ExecContext(ctx, args)
 }
 

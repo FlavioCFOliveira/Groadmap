@@ -940,6 +940,7 @@ func buildRoadmapAtSchema180(t *testing.T, roadmapName string) (taskIDs, sprintI
 			t.Fatalf("dropping %s to build the 1.8.0 fixture: %v", table, err)
 		}
 	}
+	restoreSprintsCreatedAtIndex(t, database)
 	if _, err := database.Exec(
 		"UPDATE _metadata SET value = '1.8.0' WHERE key = 'schema_version'"); err != nil {
 		t.Fatalf("setting schema_version to 1.8.0: %v", err)

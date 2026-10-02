@@ -48,15 +48,20 @@ const (
 	makefilePath        = "../../Makefile"
 )
 
-// pipeline names the three jobs SPEC/BUILD.md § GitHub Actions Workflow
+// pipeline names three of the jobs SPEC/BUILD.md § GitHub Actions Workflow
 // declares for one workflow: the job that runs the gates, the job that is the
-// `build` gate, and the job that publishes artefacts.
+// `build` gate, and the job that publishes artefacts. The fourth, the job that
+// runs the end-to-end suite, has the same ID in both workflows, e2eJobID.
 type pipeline struct {
 	path       string
 	gateJob    string
 	buildJob   string
 	publishJob string
 }
+
+// e2eJobID is the ID SPEC/BUILD.md § The End-to-End Suite Is a Required
+// Pipeline Job gives the end-to-end job in each workflow.
+const e2eJobID = "e2e"
 
 // pipelines returns the two workflows under test, described in the terms
 // SPEC/BUILD.md § GitHub Actions Workflow uses for each.
@@ -784,7 +789,7 @@ func TestWorkflowGateStepsCannotBeSkipped(t *testing.T) {
 
 // TestWorkflowJobsDependOnTheGates enforces the `needs:` chain of
 // SPEC/BUILD.md § Where the Gate Set Is Enforced: nothing is built or published
-// in parallel with the gates, or independently of them.
+// in parallel with the gates or the end-to-end job, or independently of them.
 func TestWorkflowJobsDependOnTheGates(t *testing.T) {
 	for _, p := range pipelines() {
 		t.Run(filepath.Base(p.path), func(t *testing.T) {
@@ -797,6 +802,13 @@ func TestWorkflowJobsDependOnTheGates(t *testing.T) {
 					"parallel with the gates (it declares needs: %v). SPEC/BUILD.md § Where the Gate Set Is "+
 					"Enforced requires the build job to declare `needs:` on the gate job.",
 					p.rel(), p.buildJob, p.gateJob, build.needs)
+			}
+			if !slices.Contains(build.needs, e2eJobID) {
+				t.Errorf("%s: the build job %q does not declare `needs: %s`, so it can build artefacts from a "+
+					"commit whose end-to-end suite did not pass (it declares needs: %v). SPEC/BUILD.md § Where the "+
+					"Gate Set Is Enforced requires the build job to declare `needs:` on the gate job and on the "+
+					"end-to-end job.",
+					p.rel(), p.buildJob, e2eJobID, build.needs)
 			}
 			if !slices.Contains(publish.needs, p.buildJob) {
 				t.Errorf("%s: the publishing job %q does not declare `needs: %s`, so it can publish artefacts "+
@@ -844,11 +856,11 @@ func TestWorkflowPermissionsAreLeastPrivilege(t *testing.T) {
 					p.rel(), writers, p.publishJob)
 			}
 
-			for _, id := range []string{p.gateJob, p.buildJob} {
+			for _, id := range []string{p.gateJob, e2eJobID, p.buildJob} {
 				for scope, level := range mustJob(t, wf, id).permissions {
 					if level == "write" {
 						t.Errorf("%s: job %q grants itself `%s: write`. SPEC/BUILD.md § GitHub Actions Workflow "+
-							"states that the gate job and the build job read; neither may write.",
+							"states that the gate job, the `e2e` job and the build job read; none of them may write.",
 							p.rel(), id, scope)
 					}
 				}
@@ -1983,6 +1995,57 @@ func (g *gateJob) resolveGates(t *testing.T, facts specGates) map[string]int {
 	return found
 }
 
+// TestWorkflowReaderEndsABlockScalarAtALessIndentedLine is the regression test
+// for the reader reading a comment that follows a `run: |` script into the
+// script. A comment indented less than the script — the one that introduces the
+// next step — sits inside the step's body, because a step's body runs to the
+// next sequence item, and wfValue used to keep every line of that body. It then
+// cut the comment at the script's column, so "# Then run the tests." became the
+// command "en run the tests.": a line no workflow runs, which a gate test
+// matching commands could count or be misled by. The fixture also carries a
+// shell comment and a blank line at the script's own indentation, which are
+// part of the script and must stay in it.
+func TestWorkflowReaderEndsABlockScalarAtALessIndentedLine(t *testing.T) {
+	src := "on: push\njobs:\n  test:\n    runs-on: ubuntu-latest\n    steps:\n" +
+		"      - name: Build and vet\n" +
+		"        run: |\n" +
+		"          # Build first.\n" +
+		"          go build ./...\n" +
+		"\n" +
+		"          go vet ./...\n" +
+		"\n" +
+		"      # Then run the tests.\n" +
+		"      - name: Run tests\n" +
+		"        run: |\n" +
+		"          go test ./...\n" +
+		"    # The last comment of the job.\n" +
+		"  build:\n    runs-on: ubuntu-latest\n    steps:\n      - name: Build\n        run: go build ./...\n"
+
+	job := mustJob(t, parseWorkflowSource(src, "fixture.yml"), "test")
+	if len(job.steps) != 2 {
+		t.Fatalf("parsed %d steps, want 2", len(job.steps))
+	}
+	for i, want := range []string{
+		"# Build first.\ngo build ./...\n\ngo vet ./...",
+		"go test ./...",
+	} {
+		if got := job.steps[i].run; got != want {
+			t.Errorf("step %d (%q): run is %q, want %q. A block scalar ends at the first non-blank line "+
+				"indented less than its content (YAML 1.2 § 8.1.1.1), a comment included.",
+				i+1, job.steps[i].name, got, want)
+		}
+	}
+
+	listed := jobCommands(&job)
+	commands := make([]string, 0, len(listed))
+	for _, cmd := range listed {
+		commands = append(commands, cmd.text)
+	}
+	if want := []string{"go build ./...", "go vet ./...", "go test ./..."}; !slices.Equal(commands, want) {
+		t.Errorf("the job's commands are %q, want %q", commands, want)
+	}
+}
+
 // -----------------------------------------------------------------------------
 // A very small YAML reader
 // -----------------------------------------------------------------------------
@@ -2027,12 +2090,16 @@ type wfStep struct {
 
 // wfJob is one entry of a workflow's `jobs:` mapping.
 type wfJob struct {
-	needs       []string
-	steps       []wfStep
-	matrix      []map[string]string // the entries of `strategy.matrix.include`
-	permissions map[string]string
-	id          string
-	num         int
+	needs           []string
+	steps           []wfStep
+	matrix          []map[string]string // the entries of `strategy.matrix.include`
+	permissions     map[string]string
+	id              string
+	name            string
+	runsOn          string
+	timeoutMinutes  string
+	continueOnError string // the job-level `continue-on-error` value, empty when absent
+	num             int
 }
 
 // wfWorkflow is a parsed workflow file.
@@ -2115,6 +2182,14 @@ func wfParseJob(entry wfEntry) wfJob {
 	job := wfJob{id: entry.key, num: entry.num}
 	for _, field := range wfMapping(entry.body) {
 		switch field.key {
+		case "name":
+			job.name = field.value
+		case "runs-on":
+			job.runsOn = field.value
+		case "timeout-minutes":
+			job.timeoutMinutes = field.value
+		case "continue-on-error":
+			job.continueOnError = field.value
 		case "needs":
 			job.needs = wfStringList(field)
 		case "permissions":
@@ -2311,22 +2386,36 @@ func wfSequence(block []wfLine) [][]wfLine {
 }
 
 // wfValue returns an entry's value, flattening a block scalar into its text.
+//
+// A block scalar's content indentation is the indentation of its first
+// non-blank line, and the scalar ends at the first non-blank line indented less
+// than that, as YAML 1.2 § 8.1.1.1 defines. A comment is such a line too: one
+// indented less than the content — the comment that introduces the next step,
+// say — is not part of the script, while a `#` line at the content's indentation
+// is shell text inside it. The body of an entry runs to the next key of its
+// mapping, so without that end a less-indented comment following the scalar
+// was read into it, cut at the content's column into text that is neither a
+// comment nor a command.
 func wfValue(entry wfEntry) string {
 	if entry.value == "" || (entry.value[0] != '|' && entry.value[0] != '>') {
 		return entry.value
 	}
 
-	base := wfBaseIndent(entry.body)
-	if base < 0 {
-		return ""
-	}
+	base := -1
 	lines := make([]string, 0, len(entry.body))
 	for _, line := range entry.body {
-		if len(line.text) > base {
-			lines = append(lines, line.text[base:])
+		if strings.TrimSpace(line.text) == "" {
+			lines = append(lines, "")
 			continue
 		}
-		lines = append(lines, "")
+		indent := wfIndent(line.text)
+		if base < 0 {
+			base = indent
+		}
+		if indent < base {
+			break
+		}
+		lines = append(lines, line.text[base:])
 	}
 	return strings.Trim(strings.Join(lines, "\n"), "\n")
 }

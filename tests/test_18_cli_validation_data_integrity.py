@@ -311,7 +311,12 @@ class TestTaskReopenCommand:
                 break
 
     def test_reopen_completed_task_goes_to_backlog(self):
-        """task reopen transitions a COMPLETED task to BACKLOG."""
+        """task reopen returns a COMPLETED task to SPRINT in its sprint.
+
+        The name is kept for the history of this suite; under the sprint
+        membership invariant a reopening lands in SPRINT, not BACKLOG
+        (SPEC/COMMANDS.md § Reopen Task).
+        """
         roadmap = self.test.create_roadmap()
         task_id = self._create_task(roadmap)
 
@@ -320,9 +325,9 @@ class TestTaskReopenCommand:
         self.test.run_cmd(["task", "reopen", "-r", roadmap, str(task_id)])
 
         result = self.test.run_cmd_json(["task", "get", "-r", roadmap, str(task_id)])
-        assert result[0]["status"] == "BACKLOG"
+        assert result[0]["status"] == "SPRINT"
 
-        print("✓ COMPLETED task reopened to BACKLOG")
+        print("✓ COMPLETED task reopened to SPRINT")
 
     def test_reopen_clears_lifecycle_timestamps(self):
         """All timestamps started_at, tested_at, closed_at are NULL after reopen."""
@@ -342,7 +347,7 @@ class TestTaskReopenCommand:
         print("✓ Lifecycle timestamps cleared after reopen")
 
     def test_reopen_doing_task(self):
-        """task reopen transitions a DOING task to BACKLOG."""
+        """task reopen transitions a DOING task to SPRINT in its sprint."""
         roadmap = self.test.create_roadmap()
         task_id = self._create_task(roadmap)
 
@@ -351,12 +356,12 @@ class TestTaskReopenCommand:
         self.test.run_cmd(["task", "reopen", "-r", roadmap, str(task_id)])
 
         result = self.test.run_cmd_json(["task", "get", "-r", roadmap, str(task_id)])
-        assert result[0]["status"] == "BACKLOG"
+        assert result[0]["status"] == "SPRINT"
 
-        print("✓ DOING task reopened to BACKLOG")
+        print("✓ DOING task reopened to SPRINT")
 
     def test_reopen_testing_task(self):
-        """task reopen transitions a TESTING task to BACKLOG."""
+        """task reopen transitions a TESTING task to SPRINT in its sprint."""
         roadmap = self.test.create_roadmap()
         task_id = self._create_task(roadmap)
 
@@ -365,12 +370,13 @@ class TestTaskReopenCommand:
         self.test.run_cmd(["task", "reopen", "-r", roadmap, str(task_id)])
 
         result = self.test.run_cmd_json(["task", "get", "-r", roadmap, str(task_id)])
-        assert result[0]["status"] == "BACKLOG"
+        assert result[0]["status"] == "SPRINT"
 
-        print("✓ TESTING task reopened to BACKLOG")
+        print("✓ TESTING task reopened to SPRINT")
 
     def test_reopen_sprint_task(self):
-        """task reopen transitions a SPRINT task to BACKLOG."""
+        """task reopen leaves a SPRINT task unchanged: it is already at the start
+        of the lifecycle (SPEC/COMMANDS.md § Reopen Task)."""
         roadmap = self.test.create_roadmap()
         task_id = self._create_task(roadmap)
 
@@ -379,9 +385,9 @@ class TestTaskReopenCommand:
         self.test.run_cmd(["task", "reopen", "-r", roadmap, str(task_id)])
 
         result = self.test.run_cmd_json(["task", "get", "-r", roadmap, str(task_id)])
-        assert result[0]["status"] == "BACKLOG"
+        assert result[0]["status"] == "SPRINT"
 
-        print("✓ SPRINT task reopened to BACKLOG")
+        print("✓ SPRINT task left unchanged by reopen")
 
     def test_reopen_bulk_multiple_tasks(self):
         """task reopen <id1>,<id2> reopens multiple tasks in one call."""
@@ -397,9 +403,9 @@ class TestTaskReopenCommand:
 
         for tid in [task_a, task_b]:
             result = self.test.run_cmd_json(["task", "get", "-r", roadmap, str(tid)])
-            assert result[0]["status"] == "BACKLOG", f"Task {tid} should be BACKLOG after reopen"
+            assert result[0]["status"] == "SPRINT", f"Task {tid} should be SPRINT after reopen"
 
-        print("✓ Bulk reopen transitions multiple tasks to BACKLOG")
+        print("✓ Bulk reopen transitions multiple tasks to SPRINT")
 
     def test_reopen_already_backlog_is_not_an_error(self):
         """Task already in BACKLOG returns informational message, not error."""

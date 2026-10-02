@@ -192,10 +192,10 @@ class TestEdgeCasesErrors:
 
         cases = [
             # (missing field name, args)
-            ("--title",                  ["-fr", "Functional", "-tr", "Technical", "-ac", "Criteria"]),
-            ("--functional-requirements", ["-t", "Title", "-tr", "Technical", "-ac", "Criteria"]),
-            ("--technical-requirements",  ["-t", "Title", "-fr", "Functional", "-ac", "Criteria"]),
-            ("--acceptance-criteria",     ["-t", "Title", "-fr", "Functional", "-tr", "Technical"]),
+            ("--title",                  ["-fr", "Customers receive an email receipt after checkout", "-tr", "Queue the receipt on the outbound mail worker after payment capture", "-ac", "Criteria"]),
+            ("--functional-requirements", ["-t", "Title", "-tr", "Queue the receipt on the outbound mail worker after payment capture", "-ac", "Criteria"]),
+            ("--technical-requirements",  ["-t", "Title", "-fr", "Customers receive an email receipt after checkout", "-ac", "Criteria"]),
+            ("--acceptance-criteria",     ["-t", "Title", "-fr", "Customers receive an email receipt after checkout", "-tr", "Queue the receipt on the outbound mail worker after payment capture"]),
         ]
         for missing, extra_args in cases:
             exit_code, _, stderr = self.test.run_cmd(
@@ -241,26 +241,32 @@ class TestEdgeCasesErrors:
         print("✓ Edit nonexistent task test passed")
 
     def test_invalid_priority_values(self):
-        """Test invalid priority values are rejected with exit 6 and a 'priority' message."""
-        roadmap = self.test.create_roadmap()
-        task_id = self.test.create_task(roadmap, "Task", "Functional", "Technical", "Criteria")
+        """Test invalid priority values are rejected with a 'priority' message.
 
-        for bad in ["-1", "10", "high"]:
+        An integer outside 0-9 is a range refusal (exit 6); a value that is not an
+        integer at all is misuse (exit 2), with the line SPEC/COMMANDS.md § Change
+        Priority (prio) publishes.
+        """
+        roadmap = self.test.create_roadmap()
+        task_id = self.test.create_task(roadmap, "Send checkout receipt email", "Customers receive an email receipt after checkout", "Queue the receipt on the outbound mail worker after payment capture", "Criteria")
+
+        for bad, code in [("-1", 6), ("10", 6), ("high", 2)]:
             exit_code, _, stderr = self.test.run_cmd(
                 ["task", "prio", "-r", roadmap, str(task_id), bad],
                 check=False,
             )
-            assert exit_code == 6, f"priority={bad!r} must exit 6; got {exit_code}, stderr={stderr}"
+            assert exit_code == code, f"priority={bad!r} must exit {code}; got {exit_code}, stderr={stderr}"
             assert "priority" in stderr.lower(), (
                 f"stderr must mention 'priority' for value {bad!r}; got {stderr!r}"
             )
+        assert stderr.splitlines()[0] == 'Error: invalid input: invalid priority: "high" is not an integer in 0-9', stderr
 
-        print("✓ Invalid priority values rejected with exit 6 + 'priority' message")
+        print("✓ Invalid priority values rejected (exit 6 out of range, exit 2 non-integer) + 'priority' message")
 
     def test_invalid_severity_values(self):
         """Test invalid severity values are rejected with exit 6 and a 'severity' message."""
         roadmap = self.test.create_roadmap()
-        task_id = self.test.create_task(roadmap, "Task", "Functional", "Technical", "Criteria")
+        task_id = self.test.create_task(roadmap, "Send checkout receipt email", "Customers receive an email receipt after checkout", "Queue the receipt on the outbound mail worker after payment capture", "Criteria")
 
         for bad in ["-1", "10"]:
             exit_code, _, stderr = self.test.run_cmd(
@@ -341,7 +347,7 @@ class TestEdgeCasesErrors:
     def test_add_tasks_to_nonexistent_sprint(self):
         """Test adding tasks to non-existent sprint fails."""
         roadmap = self.test.create_roadmap()
-        task_id = self.test.create_task(roadmap, "Task", "Functional", "Technical", "Criteria")
+        task_id = self.test.create_task(roadmap, "Send checkout receipt email", "Customers receive an email receipt after checkout", "Queue the receipt on the outbound mail worker after payment capture", "Criteria")
 
         exit_code, _, _ = self.test.run_cmd(
             ["sprint", "add-tasks", "-r", roadmap, "99999", str(task_id)],
@@ -423,7 +429,7 @@ class TestEdgeCasesErrors:
 
         # Try to create task without -r flag and no default
         exit_code, _, _ = self.test.run_cmd(
-            ["task", "create", "-t", "Task", "-fr", "Functional", "-tr", "Technical", "-ac", "Criteria"],
+            ["task", "create", "-t", "Send checkout receipt email", "-fr", "Customers receive an email receipt after checkout", "-tr", "Queue the receipt on the outbound mail worker after payment capture", "-ac", "Criteria"],
             check=False
         )
         assert exit_code == 3, "Should fail with exit code 3 (no roadmap selected)"
@@ -433,7 +439,7 @@ class TestEdgeCasesErrors:
     def test_boundary_priority_values(self):
         """Test boundary priority values (0 and 9)."""
         roadmap = self.test.create_roadmap()
-        task_id = self.test.create_task(roadmap, "Task", "Functional", "Technical", "Criteria")
+        task_id = self.test.create_task(roadmap, "Send checkout receipt email", "Customers receive an email receipt after checkout", "Queue the receipt on the outbound mail worker after payment capture", "Criteria")
 
         # Minimum priority
         self.test.run_cmd(["task", "prio", "-r", roadmap, str(task_id), "0"])
@@ -450,7 +456,7 @@ class TestEdgeCasesErrors:
     def test_boundary_severity_values(self):
         """Test boundary severity values (0 and 9)."""
         roadmap = self.test.create_roadmap()
-        task_id = self.test.create_task(roadmap, "Task", "Functional", "Technical", "Criteria")
+        task_id = self.test.create_task(roadmap, "Send checkout receipt email", "Customers receive an email receipt after checkout", "Queue the receipt on the outbound mail worker after payment capture", "Criteria")
 
         # Minimum severity
         self.test.run_cmd(["task", "sev", "-r", roadmap, str(task_id), "0"])
@@ -512,7 +518,7 @@ class TestEdgeCasesErrors:
     def test_remove_already_removed_task(self):
         """Test removing an already removed task fails."""
         roadmap = self.test.create_roadmap()
-        task_id = self.test.create_task(roadmap, "Task", "Functional", "Technical", "Criteria")
+        task_id = self.test.create_task(roadmap, "Send checkout receipt email", "Customers receive an email receipt after checkout", "Queue the receipt on the outbound mail worker after payment capture", "Criteria")
 
         # Remove task
         self.test.run_cmd(["task", "remove", "-r", roadmap, str(task_id)])
@@ -534,7 +540,7 @@ class TestEdgeCasesErrors:
         stdout.
         """
         roadmap = self.test.create_roadmap()
-        task_id = self.test.create_task(roadmap, "Task", "Functional", "Technical", "Criteria")
+        task_id = self.test.create_task(roadmap, "Send checkout receipt email", "Customers receive an email receipt after checkout", "Queue the receipt on the outbound mail worker after payment capture", "Criteria")
 
         exit_code, stdout, stderr = self.test.run_cmd(
             ["task", "edit", "-r", roadmap, str(task_id)],

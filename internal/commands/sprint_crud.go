@@ -310,12 +310,14 @@ func sprintShow(args []string) error {
 		return err
 	}
 
-	tasks, err := database.GetSprintTasksFull(ctx, sprintID, nil, false)
+	// The report reads only the member tasks' ids, statuses and severities, so
+	// the lean projection is read rather than the full rows.
+	states, err := database.GetSprintTaskStates(ctx, sprintID)
 	if err != nil {
 		return err
 	}
 
-	result := models.CalculateSprintShowResult(sprint, tasks)
+	result := models.CalculateSprintShowResult(sprint, tasksOfStates(states))
 	return utils.PrintJSON(result)
 }
 
@@ -496,7 +498,17 @@ func sprintUpdate(args []string) error {
 	})
 }
 
+// sprintRemoveResetChunk is the largest number of former members one reset
+// statement of `sprint remove` binds.
+const sprintRemoveResetChunk = 500
+
 // sprintRemove removes a sprint.
+//
+// A sprint holding a COMPLETED task is refused and nothing is written.
+// Otherwise the membership rows are deleted, every former member is reset to
+// BACKLOG, the sprint membership guard checks the result, and the sprint row and
+// its SPRINT_DELETE entry follow, all in one transaction (SPEC/COMMANDS.md
+// § Remove Sprint; SPEC/DATABASE.md § Transactional Atomicity Guarantees #1).
 func sprintRemove(args []string) error {
 	roadmapName, remaining, err := requireRoadmap(args)
 	if err != nil {
@@ -527,29 +539,58 @@ func sprintRemove(args []string) error {
 
 	// Delete within transaction with audit
 	return database.WithTransaction(func(tx *sql.Tx) error {
-		// First reset task statuses to BACKLOG, clearing ALL lifecycle
-		// timestamps, the completion summary and commit_close. Tasks may have
-		// progressed to DOING/TESTING/COMPLETED inside the sprint, so leaving
-		// those fields set on a BACKLOG task violates the state machine's
-		// reopening invariant (SPEC/STATE_MACHINE.md Reopening Behavior;
-		// finding #49). commit_open is deliberately NOT cleared: a task whose
-		// sprint is deleted keeps the record of where its work started
-		// (SPEC/STATE_MACHINE.md § Commit Tracking Fields).
-		_, resetErr := tx.Exec(
-			`UPDATE tasks SET status = 'BACKLOG', started_at = NULL, tested_at = NULL,
-			        closed_at = NULL, completion_summary = NULL, commit_close = NULL WHERE id IN (
-				SELECT task_id FROM sprint_tasks WHERE sprint_id = ?
-			)`,
-			sprintID,
-		)
-		if resetErr != nil {
-			return resetErr
+		// A sprint that holds a COMPLETED task is not removed: a completed task
+		// stays in the sprint it was completed in (SPEC/COMMANDS.md § Remove
+		// Sprint). The refusal writes nothing and names every COMPLETED member.
+		completed, err := db.CompletedSprintMembersTx(tx, sprintID)
+		if err != nil {
+			return err
+		}
+		if len(completed) > 0 {
+			return fmt.Errorf("%w: cannot remove sprint #%d: completed tasks stay in their sprint: %s",
+				utils.ErrValidation, sprintID, utils.JoinHashIDs(completed))
+		}
+
+		// Read the member ids while the membership rows still exist, so the
+		// reset below can name them once the rows are gone
+		// (SPEC/DATABASE.md § Clear All Tasks from Sprint).
+		members, err := db.SprintMemberIDsTx(tx, sprintID)
+		if err != nil {
+			return err
 		}
 
 		// Remove sprint_tasks entries
-		_, deleteTasksErr := tx.Exec("DELETE FROM sprint_tasks WHERE sprint_id = ?", sprintID)
-		if deleteTasksErr != nil {
-			return deleteTasksErr
+		if _, err := tx.Exec("DELETE FROM sprint_tasks WHERE sprint_id = ?", sprintID); err != nil {
+			return err
+		}
+
+		// Then reset every former member to BACKLOG, clearing ALL lifecycle
+		// timestamps, the completion summary and commit_close. Members may have
+		// progressed to DOING or TESTING inside the sprint, so leaving those
+		// fields set on a BACKLOG task violates the state machine's reopening
+		// invariant (SPEC/STATE_MACHINE.md Reopening Behavior; finding #49).
+		// commit_open is deliberately NOT cleared: a task whose sprint is
+		// deleted keeps the record of where its work started
+		// (SPEC/STATE_MACHINE.md § Commit Tracking Fields).
+		// The ids are chunked, as every IN list is, so a large sprint stays
+		// within SQLite's variable limit (SPEC/ARCHITECTURE.md § Security
+		// Guarantees, Bulk Operation Limits).
+		if err := db.NewBatchProcessor(sprintRemoveResetChunk).ProcessChunks(members, func(chunk []int) error {
+			query := fmt.Sprintf( // #nosec G201 -- only ? placeholders interpolated, values are parameterized
+				`UPDATE tasks SET status = 'BACKLOG', started_at = NULL, tested_at = NULL,
+				        closed_at = NULL, completion_summary = NULL, commit_close = NULL WHERE id IN (%s)`,
+				database.Placeholders(len(chunk)),
+			)
+			_, execErr := tx.Exec(query, makeInterfaceSlice(chunk)...)
+			return execErr
+		}); err != nil {
+			return err
+		}
+
+		// The sprint membership guard checks the result before commit
+		// (SPEC/DATABASE.md § Sprint Membership Invariant Enforcement).
+		if err := db.CheckSprintMembershipTx(tx, members); err != nil {
+			return err
 		}
 
 		// Delete sprint

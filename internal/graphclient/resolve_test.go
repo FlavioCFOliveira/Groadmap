@@ -22,6 +22,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -214,13 +215,19 @@ func TestResolve_ServedRequiresTheHandshake(t *testing.T) {
 		// policy, so a knob to shorten it here would be a second opinion about
 		// that policy. 2.5 seconds spent once is the price of driving the state
 		// the specification gives the handshake for.
+		//
+		// That the probe is BOUNDED is asserted as the outcome it is — Resolve
+		// returns — and not as a duration: a probe that was not bounded would not
+		// return at all, and the run would be ended by the test gate's own
+		// timeout (SPEC/BUILD.md § No Benchmarks and No Performance-Measurement
+		// Tests). That the bound is the project's backoff total and no figure of
+		// this package's own is asserted against the declaration, by
+		// TestProbeDeadline_IsTheProjectsBackoffTotal.
 		path := socketPathIn(t)
 		stop := listenWithoutAnswering(t, path)
 		defer stop()
 
-		started := time.Now()
 		state, err := Resolve(context.Background(), path)
-		elapsed := time.Since(started)
 
 		if state != StateUnreachable {
 			t.Errorf("state = %v, want %v: a socket that accepts a connection is not yet evidence "+
@@ -233,10 +240,6 @@ func TestResolve_ServedRequiresTheHandshake(t *testing.T) {
 		if state.NotServed() {
 			t.Error("an unreachable socket must NOT be read as a definite negative. Rule 2: " +
 				"falling back on it would send the caller at a lock a server may well be holding")
-		}
-		if elapsed > ProbeDeadline()+2*time.Second {
-			t.Errorf("the probe took %v against a %v deadline; it is bounded and is not retried",
-				elapsed, ProbeDeadline())
 		}
 	})
 }
@@ -326,17 +329,27 @@ func TestResolve_LeavesNothingBehind(t *testing.T) {
 //
 // The web graph data endpoint is the caller that brings one: its context is the
 // request's.
+//
+// The caller's deadline is set to one that has ALREADY passed, and what that
+// buys is an observable other than the clock. A probe governed by the caller's
+// context cannot reach the socket at all, so the listener never accepts a
+// connection; a probe that ignored the context and armed only its own budget
+// would connect, and the listener would count it. The accept count is therefore
+// what separates the two deadlines, exactly and with no tolerance
+// (SPEC/BUILD.md § No Benchmarks and No Performance-Measurement Tests).
+//
+// The listener is one that accepts and answers nothing, so a probe that DID
+// reach it would go on to spend the whole probe deadline — which is the
+// behaviour this test exists to refuse.
 func TestResolve_RespectsACallerDeadlineNearerThanTheProbeBudget(t *testing.T) {
 	path := socketPathIn(t)
-	stop := listenWithoutAnswering(t, path)
+	accepted, stop := countingListenerWithoutAnswering(t, path)
 	defer stop()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 150*time.Millisecond)
+	ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
 	defer cancel()
 
-	started := time.Now()
 	state, err := Resolve(ctx, path)
-	elapsed := time.Since(started)
 
 	if state != StateUnreachable {
 		t.Errorf("state = %v, want %v", state, StateUnreachable)
@@ -344,9 +357,54 @@ func TestResolve_RespectsACallerDeadlineNearerThanTheProbeBudget(t *testing.T) {
 	if err == nil {
 		t.Error("a probe cut by the caller's deadline must carry the observation behind it")
 	}
-	if elapsed >= ProbeDeadline() {
-		t.Errorf("the probe took %v, which reached its own %v budget; a nearer caller deadline "+
-			"must end it first", elapsed, ProbeDeadline())
+	if got := accepted.Load(); got != 0 {
+		t.Errorf("the listener accepted %d connection(s) under a caller deadline that had already "+
+			"passed; the probe is bounded by ctx as well as by its own %v budget, so a caller "+
+			"whose deadline is nearer must end it before it reaches the socket", got, ProbeDeadline())
+	}
+
+	// Non-vacuity: the counter must be able to see a probe at all. Without this
+	// half the assertion above would pass against a listener that counted
+	// nothing, and against a Resolve that had stopped connecting entirely.
+	if _, probeErr := Resolve(context.Background(), path); probeErr == nil {
+		t.Fatal("a listener that answers nothing must still be reported as unreachable")
+	}
+	if got := accepted.Load(); got == 0 {
+		t.Fatal("the listener counted no connection even for a probe with no caller deadline, so " +
+			"it cannot see one at all and the assertion above proves nothing")
+	}
+}
+
+// countingListenerWithoutAnswering is listenWithoutAnswering with a counter over
+// the connections it accepted, so a test can assert that the probe never reached
+// the socket at all.
+func countingListenerWithoutAnswering(t *testing.T, path string) (*atomic.Int64, func()) {
+	t.Helper()
+
+	ln, err := net.Listen("unix", path)
+	if err != nil {
+		t.Fatalf("binding %s: %v", path, err)
+	}
+	var accepted atomic.Int64
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for {
+			conn, acceptErr := ln.Accept()
+			if acceptErr != nil {
+				return
+			}
+			accepted.Add(1)
+			go func(c net.Conn) {
+				// Read and discard for ever; answer nothing.
+				_, _ = io.Copy(io.Discard, c)
+				_ = c.Close() //nolint:errcheck // the stand-in has nothing to report
+			}(conn)
+		}
+	}()
+	return &accepted, func() {
+		_ = ln.Close() //nolint:errcheck // the stand-in listener is done with
+		<-done
 	}
 }
 

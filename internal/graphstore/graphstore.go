@@ -156,14 +156,14 @@ func RecoveryOptions() recovery.Options[string, float64] { return openOpts }
 // only concurrency control — but the Store's own bookkeeping is NOT: Checkpoint
 // and Close both mutate unsynchronised fields.
 //
-// That is correct and free for a caller that opens, runs one statement and
-// closes, which is what the CLI and the web endpoint each do. A caller that holds
-// one Store across concurrent statements — a long-running server — MUST serialise
-// its own Checkpoint and Close calls against each other, and must take the
+// The one production caller is the dedicated graph server, which holds one Store
+// across concurrent statements for its whole process lifetime. It MUST serialise
+// its own checkpoint and Close calls against each other, and must take the
 // checkpoint at a transaction boundary rather than mid-commit, for which the
 // engine supplies txn.Store.RunUnderCommitLock (reachable through Txn). The
-// requirement is stated here rather than met with a mutex the two current callers
-// would pay for and never need.
+// server meets both itself — its in-flight fold and its shutdown checkpoint pass
+// through one mutex of its own — so the requirement is stated here rather than
+// met with a second mutex inside this type.
 //
 // Every Store MUST be closed, and Close is idempotent.
 type Store struct {
@@ -177,10 +177,14 @@ type Store struct {
 
 	dir string
 
-	// mark is the write-ahead log's durable offset as of the last point from
-	// which "has anything been appended since?" is asked: the open, or the most
-	// recent successful checkpoint. Checkpoint compares against it and updates
-	// it; nothing else reads it.
+	// mark is the offset in the write-ahead log up to which a fold this Store
+	// gated has covered the log: every byte below it is in the snapshot, and
+	// every byte at or above it is not. It starts at ZERO, the beginning of the
+	// log, and not at the log's length at open: a log tail the open replayed is
+	// a tail no snapshot covers, so it counts as grown from the moment the store
+	// is opened (SPEC/GRAPH.md § Durability and Checkpointing in a Long-Lived
+	// Process, rule 4). [Store.CheckpointIfAppended] compares against it and
+	// moves it; nothing else reads it.
 	mark int64
 
 	closed bool
@@ -326,14 +330,34 @@ func (h *Hold) Open() (*Store, error) {
 		engine:  engine,
 		release: release,
 		dir:     graphDir,
-		// Taken here, after the engine is constructed, because that is where both
-		// former copies took it: everything between the writer opening and this
-		// line is construction, and a mark taken earlier would attribute
-		// construction's appends — if there were ever any — to the caller's
-		// statement.
-		mark: w.DurableOffset(),
+		// The mark is left at zero: whatever the log already holds at open is a
+		// tail no fold has covered, and the first checkpoint owes it a fold (see
+		// the field's documentation).
 	}, nil
 }
+
+// walRetryable is the classifier openWAL hands the retry policy, held in a
+// variable so that a test can COUNT the failed opens the policy classified.
+//
+// That count is the observable the regression fence for #294 turns on at this
+// call site, and it determines the attempt count exactly: the loop asks the
+// classifier once after every attempt that FAILED and never after one that
+// succeeded, so an exhausted open classifies once per attempt and an open that
+// succeeds classifies once per attempt before the last. The defect was a loop
+// that gave up an attempt early, and SPEC/BUILD.md § No Benchmarks and No
+// Performance-Measurement Tests names a count of attempts as an admissible proof
+// while forbidding the elapsed-time comparison that used to stand here.
+//
+// The seam is here rather than on wal.Open so that the call to wal.Open stays a
+// call to wal.Open: internal/testenv's TestGraphEngineConstructionsMatchSpec
+// reads this function's write-side shape from that call expression, and a seam
+// that hid it would make this constructor look like one that opens a
+// transactional store over no write-ahead log at all.
+//
+// Production never reassigns it, it is unexported, and openWAL behaves exactly as
+// it did when backoff.Always was passed literally: every failure is retryable
+// either way.
+var walRetryable = backoff.Always
 
 // openWAL opens the write-ahead-log writer at walPath under the project's single
 // bounded backoff policy (internal/backoff), which owns the attempt count and the
@@ -344,7 +368,7 @@ func (h *Hold) Open() (*Store, error) {
 // — another process holding the WAL directory lock — and a WAL that cannot be
 // opened for any other reason is not distinguishable here anyway.
 func openWAL(walPath string) (*wal.Writer, error) {
-	w, err := backoff.Retry(func() (*wal.Writer, error) { return wal.Open(walPath) }, backoff.Always)
+	w, err := backoff.Retry(func() (*wal.Writer, error) { return wal.Open(walPath) }, walRetryable)
 	if err != nil {
 		return nil, fmt.Errorf("%w: graph store unavailable: %v", utils.ErrGraphStore, err)
 	}
@@ -399,106 +423,113 @@ func (s *Store) Dir() string { return s.dir }
 //
 // # Failure
 //
-// Checkpoint MUST be called only after the write transaction has committed
-// durably. A failure here is NOT a failure of the write: the commit is the
-// durability boundary, the log is intact, recovery still works, and the next
-// write reconciles the snapshot. Callers surface the error as a diagnostic and
-// keep their success (SPEC FR7).
+// A failure here is NOT a failure of any write: every write it would fold
+// committed durably before it was acknowledged, the log is intact, recovery still
+// works, and the next successful checkpoint reconciles the snapshot. A caller
+// reports the error as a diagnostic (SPEC/GRAPH.md § Synchronous Checkpoint on
+// Write, failure policy).
 func (s *Store) Checkpoint() (bool, error) {
 	return s.CheckpointIfAppended(s.writeSnapshotAndTruncate)
 }
 
 // CheckpointIfAppended runs fold — the caller's own realisation of a checkpoint —
-// if and only if the write-ahead log has grown since this Store was opened or
-// since the last checkpoint taken through this Store. It reports whether fold
-// ran, and returns fold's error unchanged.
+// if and only if the write-ahead log holds bytes that no fold this Store gated
+// has covered, including a tail the log already held when the store was opened.
+// It reports whether fold ran, and returns fold's error unchanged.
+//
+// fold reports how many leading bytes of the log it truncated: the prefix its
+// snapshot covers when it cut that prefix away, and zero when it cut nothing.
+// That figure is what moves the mark, and it is the reason fold returns it.
 //
 // # The gate
 //
-// A transaction that appended nothing MUST NOT snapshot and MUST NOT truncate: it
-// would rewrite a full snapshot of the whole graph for every statement that read,
-// and it would shorten the history a later recovery replays (SPEC/GRAPH.md § What
-// a Statement That Writes Nothing Changes on Disk, rules 2 and 3). The log's own
-// durable offset is the answer to "did anything append", which is the question
-// the specification asks — not a guess made from the statement's text, which
-// Groadmap does not examine.
+// A fold nothing owes MUST NOT snapshot and MUST NOT truncate: it would rewrite a
+// full snapshot of the whole graph for nothing, and it would publish whatever a
+// rolled-back statement left behind in the key mapper and the tombstone set
+// (SPEC/GRAPH.md § What a Statement That Writes Nothing Changes on Disk; §
+// Durability and Checkpointing in a Long-Lived Process, rule 8). The log's own
+// durable offset is the answer to "is anything unfolded", which is the question
+// the specification asks — not a guess made from a statement's text, which
+// Groadmap does not examine. It is read ONCE per call, before the fold, and it is
+// the whole of the gate's cost: one value, nothing that grows with the graph.
 //
 // The comparison lives in here rather than at the call sites, because it is the
-// rule and not the number that has to hold.
+// rule and not the number that has to hold, and the dedicated graph server puts
+// BOTH of its checkpoints — the in-flight fold its cadence makes due and the
+// shutdown checkpoint — through this one method, so the two share one comparison
+// and one mark (rules 4 and 5 of that section).
 //
-// # Why the decision is exported apart from the fold it usually guards
+// # What the mark records after a fold, and what it must never record
 //
-// Because a caller needs it that way, and because the alternative is a second
-// copy of the rule. The dedicated graph server does not write its snapshot
-// through this package: it composes the engine's own checkpointer, which holds
-// the store's commit lock across a capture the server may take while sessions are
-// live, and asks it to fold. That checkpointer has NO gate of its own — it
-// serialises the whole graph and rewrites the whole snapshot unconditionally —
-// and an ungated fold is not merely wasteful. A statement the budget cut and
-// rolled back leaves the key mapper's interned keys and the tombstone set behind
-// even though the graph is restored, so the fold PUBLISHES that residue: measured
-// on rmp task #380, ONE cut write served by `rmp graph serve` grew an 80 KB store
-// holding 600 nodes to 134 MB permanently, and a later `MATCH (n) RETURN count(*)`
-// over the same 600 nodes cost 1.48 s and 670 MB instead of 0.01 s and 21.6 MB.
-// The direct path was never exposed to it, for exactly one reason: this gate.
+// The mark is the point the fold CAPTURED, never the offset read after the fold
+// returns. A fold captures the graph at one transaction boundary and covers the
+// log up to that boundary; writers keep committing while it writes its snapshot,
+// and what they append lies beyond the capture and survives the truncation.
+// Taking the offset after the fold as the mark would record those bytes as folded,
+// and a server that then received no further write would fold them neither in
+// flight nor at shutdown (rule 10).
 //
-// So the server passes its own fold and gets this decision, rather than carrying
-// a copy of the comparison beside a copy of the mark (SPEC/ARCHITECTURE.md module
-// 8: this package is the single realisation of the store lifecycle).
+// This Store cannot read the capture point off the fold, so it derives it from the
+// two things it does know:
 //
-// # A fold this Store did not perform
+//   - A fold that truncated a prefix cut away exactly the prefix it captured. The
+//     log that remains begins at the capture point, so every byte left in it is
+//     unfolded, and the mark is the beginning of the log: zero.
+//   - A fold that truncated nothing left the log's coordinates unchanged. Its
+//     capture was taken after the offset this call read, and the offset only
+//     grows while nothing truncates, so that offset is a point the fold is proven
+//     to have covered, and it becomes the mark. It may be short of the capture,
+//     and the cost of that is at most one fold more than was needed; it is never
+//     beyond it, which is the direction that would lose a fold.
 //
-// A caller that composes the engine's checkpointer has a SECOND party truncating
-// the log: that checkpointer cuts the folded prefix with wal.Writer.TruncatePrefix
-// and the durable offset DROPS, without this Store's mark moving. Left
-// unaccounted for, the next comparison would read an offset below the mark, take
-// it for "nothing appended", and skip a fold that is owed — the log's surviving
-// suffix is precisely the part no snapshot covers.
+// A fold that FAILED moves nothing: the fold is still owed, and the next call
+// makes it again.
+//
+// # A truncation this Store did not gate
+//
+// A caller that composes a checkpointer of its own has a party that can truncate
+// the log without passing through here. If one did, the durable offset would drop
+// below the mark without the mark moving, and the next comparison would read an
+// offset below the mark as "nothing unfolded" and skip a fold that is owed.
 //
 // An offset BELOW the mark is therefore read as what it can only be: a fold
-// somebody else performed, which folded everything up to it and left the rest
-// unfolded. The mark drops to zero to say so, and whatever remains counts as
-// appended. The clause cannot fire on the direct path — nothing there truncates
-// but this Store — so the CLI and the web endpoint keep byte-for-byte the
-// behaviour they had.
+// somebody else performed, which folded everything up to the point it cut and
+// left the rest unfolded. The mark drops to zero to say so, and whatever remains
+// counts as unfolded. The dedicated graph server gives no other party that
+// opportunity — the engine's checkpointer folds there only when this method asks
+// it to — so the clause is the gate refusing to trust that arrangement rather
+// than a path the server takes.
 //
 // # Concurrency
 //
 // The mark is unsynchronised, like the rest of a Store's own bookkeeping, so a
 // caller that holds one Store across concurrent statements must serialise this
-// against [Store.Checkpoint] and [Store.Close] exactly as the type documents.
-func (s *Store) CheckpointIfAppended(fold func() error) (bool, error) {
-	if !s.appendedSinceMark() {
-		return false, nil
-	}
-	if err := fold(); err != nil {
-		return false, err
-	}
-	// Re-read rather than assume: a fold truncates, and this mark is what the
-	// next call compares against. wal.Writer.Truncate resets the durable offset
-	// to zero and wal.Writer.TruncatePrefix leaves the unfolded suffix, so the
-	// writer is the only party that can say which of the two just happened.
-	s.mark = s.wal.DurableOffset()
-	return true, nil
-}
-
-// appendedSinceMark reports whether the write-ahead log holds anything this Store
-// has not already accounted for, and repairs the mark when a fold outside this
-// Store has moved the log underneath it. See [Store.CheckpointIfAppended] for
-// both halves.
-func (s *Store) appendedSinceMark() bool {
+// against itself and against [Store.Close] exactly as the type documents.
+func (s *Store) CheckpointIfAppended(fold func() (truncated int64, err error)) (bool, error) {
 	off := s.wal.DurableOffset()
 	if off < s.mark {
 		s.mark = 0
 	}
-	return off > s.mark
+	if off <= s.mark {
+		return false, nil
+	}
+	truncated, err := fold()
+	if err != nil {
+		return false, err
+	}
+	if truncated > 0 {
+		s.mark = 0
+	} else {
+		s.mark = off
+	}
+	return true, nil
 }
 
 // writeSnapshotAndTruncate is [Store.Checkpoint]'s own fold: publish a
 // self-sufficient full snapshot, then truncate the log it covers. It is called
 // only through the gate, and only after the write transaction has committed
 // durably; see [Store.Checkpoint] for the order and the failure policy.
-func (s *Store) writeSnapshotAndTruncate() error {
+func (s *Store) writeSnapshotAndTruncate() (int64, error) {
 	// A CSR view of the committed in-memory graph, for the snapshot.
 	cs := csr.BuildFromAdjList(s.graph.AdjList())
 
@@ -518,16 +549,17 @@ func (s *Store) writeSnapshotAndTruncate() error {
 	// truncation below then leaves nothing to recover it from.
 	if err := snapshot.WriteSnapshotFullWithMapperCodecConstraintsAndIndexDefs(
 		snapDir, cs, s.graph, txn.NewStringCodec(), constraints, indexDefs); err != nil {
-		return fmt.Errorf("snapshot write: %w", err)
+		return 0, fmt.Errorf("snapshot write: %w", err)
 	}
 
 	// Flush the log, then truncate it to bound its growth. Truncation happens
 	// only after the snapshot is durable, so no committed data is lost.
 	if err := s.wal.Sync(); err != nil {
-		return fmt.Errorf("wal sync: %w", err)
+		return 0, fmt.Errorf("wal sync: %w", err)
 	}
-	if _, err := s.wal.Truncate(); err != nil {
-		return fmt.Errorf("wal truncate: %w", err)
+	truncated, err := s.wal.Truncate()
+	if err != nil {
+		return 0, fmt.Errorf("wal truncate: %w", err)
 	}
 
 	// Keep the snapshot directory consistent with the 0700 the roadmap tree
@@ -537,7 +569,7 @@ func (s *Store) writeSnapshotAndTruncate() error {
 	// #nosec G302 G703 -- 0700 on a DIRECTORY is mandated by SPEC (CLAUDE.md §10: 0700 for the ~/.roadmaps tree), and gosec G302 false-positives on directory permissions; snapDir derives from the graph directory the caller resolved through utils.GetRoadmapDir, so no traversal is reachable
 	_ = os.Chmod(snapDir, 0700)
 
-	return nil
+	return truncated, nil
 }
 
 // Close releases everything Open took, in the one order that is safe: the

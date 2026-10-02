@@ -81,7 +81,6 @@ import os
 import pty
 import subprocess
 import sys
-import time
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -123,7 +122,15 @@ WRITE_CONFLICT_LINE = (
 # query. The contract is that it does not wait at all, so the honest budget is
 # milliseconds; ten seconds is chosen only so a loaded machine cannot produce a
 # false failure, and it is still far below the forty minutes the defect burned.
-NO_WAIT_BUDGET_SECONDS = 10.0
+# The bound on a single invocation that is expected to REFUSE and exit. It is
+# the harness's hang-breaker and not an assertion: SPEC/GRAPH.md acceptance
+# criterion 24 fixes the exit and its code as the assertion and forbids a
+# duration, and SPEC/BUILD.md "No Benchmarks and No Performance-Measurement
+# Tests" allows a stuck run to be ended by the harness. An implementation that
+# reads a standard input which is never written to and never closed cannot reach
+# the exit at all, so what this value does is turn that hang into a reported
+# failure instead of a suite that never finishes.
+HUNG_RUN_BOUND_SECONDS = 10.0
 
 
 class TestGraphConcurrencyInput:
@@ -502,8 +509,7 @@ class TestGraphConcurrencyInput:
 
     def _assert_no_query_refusal(self, stdin_arg, description):
         """Run `rmp graph client` with the given standard input and assert the
-        missing-query refusal: exit 2, the exact message, nothing on stdout, and
-        a process that did NOT wait.
+        missing-query refusal: exit 2, the exact message, and nothing on stdout.
 
         No server is listening, and that is deliberate. `readQuery` runs before
         the roadmap's existence is checked and before a socket is resolved, so a
@@ -511,28 +517,32 @@ class TestGraphConcurrencyInput:
         the command would fail with the no-server line instead, which the exit
         code alone would not distinguish.
 
-        The wall-clock assertion is not decoration. The defect being closed is a
-        command that never returns, and a test that checked only the exit code
-        could not discriminate it: a hung process never produces one.
+        THE EXIT IS THE ASSERTION, and never a duration. Each of the three
+        standard inputs below is one an implementation that read it could not
+        get past -- /dev/null and the whitespace pipe are closed, so they are
+        read and refused, and the terminal is never written to and never closed,
+        so a read of it cannot return. Reaching the exit at all is therefore what
+        separates the refusal from the defect, exactly as SPEC/GRAPH.md
+        acceptance criterion 24 states. A build that regressed hangs here and is
+        stopped by the bound above, which is the harness ending a stuck run
+        rather than this test measuring one.
         """
         self.assert_nothing_is_listening()
-        start = time.monotonic()
         proc = subprocess.Popen(
             [self.test.cli_path, "graph", "client", "-r", self.roadmap],
             stdin=stdin_arg, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
             env=self._client_env(),
         )
         try:
-            stdout, stderr = proc.communicate(timeout=NO_WAIT_BUDGET_SECONDS)
+            stdout, stderr = proc.communicate(timeout=HUNG_RUN_BOUND_SECONDS)
         except subprocess.TimeoutExpired:
             proc.kill()
             proc.communicate()
             raise AssertionError(
-                f"{description}: the command was still running after "
-                f"{NO_WAIT_BUDGET_SECONDS}s. It is waiting for input that will "
-                f"never arrive instead of failing at once"
+                f"{description}: the command never exited. It is waiting for "
+                f"input that will never arrive instead of failing at once "
+                f"(SPEC/GRAPH.md acceptance criterion 24)"
             ) from None
-        elapsed = time.monotonic() - start
 
         assert proc.returncode == EXIT_MISUSE, (
             f"{description}: standard input that supplies no query must exit "
@@ -549,20 +559,16 @@ class TestGraphConcurrencyInput:
             f"{description}: a failing invocation writes nothing to stdout; "
             f"got {stdout!r}"
         )
-        assert elapsed < NO_WAIT_BUDGET_SECONDS, (
-            f"{description}: took {elapsed:.2f}s to refuse"
-        )
-        return elapsed
 
     def test_stdin_at_end_of_stream_fails_exit_2_at_once(self):
         """Standard input already at end of stream -- here /dev/null, which the
         specification names -- supplies no query (SPEC/GRAPH.md Acceptance
         Criterion 24).
         """
-        elapsed = self._assert_no_query_refusal(
+        self._assert_no_query_refusal(
             subprocess.DEVNULL, "standard input at end of stream"
         )
-        print(f"✓ an empty standard input is refused in {elapsed * 1000:.0f} ms")
+        print("✓ an empty standard input is refused with exit 2")
 
     def test_whitespace_only_stdin_fails_exit_2_at_once(self):
         """Standard input carrying only whitespace trims to nothing, so it
@@ -574,40 +580,38 @@ class TestGraphConcurrencyInput:
         os.write(write_fd, b"   \n\t\r\n  ")
         os.close(write_fd)
         try:
-            elapsed = self._assert_no_query_refusal(
+            self._assert_no_query_refusal(
                 read_fd, "whitespace-only standard input"
             )
         finally:
             os.close(read_fd)
-        print(f"✓ a whitespace-only standard input is refused in "
-              f"{elapsed * 1000:.0f} ms")
+        print("✓ a whitespace-only standard input is refused with exit 2")
 
     def test_terminal_stdin_fails_exit_2_without_waiting(self):
         """Standard input connected to a TERMINAL is refused WITHOUT BEING READ
         (SPEC/GRAPH.md Acceptance Criterion 24).
 
-        This is the case that regressed into a hang, and the only one whose proof
-        has to be a clock. An invocation that omitted --query, with a terminal on
-        standard input, printed nothing and never returned; it was killed after
-        roughly forty minutes. Nothing on the command line looked wrong and no
-        diagnostic appeared, so a script, a CI step, or an agent driving the
-        binary simply stopped.
+        This is the case that regressed into a hang. An invocation that omitted
+        --query, with a terminal on standard input, printed nothing and never
+        returned; it was killed after roughly forty minutes. Nothing on the
+        command line looked wrong and no diagnostic appeared, so a script, a CI
+        step, or an agent driving the binary simply stopped.
 
-        The pseudo-terminal below is never written to, so the terminal carries no
-        input at all: exactly the situation the defect hung in. An implementation
-        that read before deciding would sit here until the budget expires, and the
-        helper turns that into a failure rather than a hang of the suite.
+        The pseudo-terminal below is never written to and neither end is closed,
+        so the terminal carries no input and never will: exactly the situation
+        the defect hung in. An implementation that read before deciding could not
+        return at all, so THE EXIT is what proves the refusal came first.
         """
         master, slave = pty.openpty()
         try:
-            elapsed = self._assert_no_query_refusal(
+            self._assert_no_query_refusal(
                 slave, "a terminal on standard input"
             )
         finally:
             os.close(slave)
             os.close(master)
-        print(f"✓ a terminal on standard input is refused in "
-              f"{elapsed * 1000:.0f} ms, without waiting for a query")
+        print("✓ a terminal on standard input is refused with exit 2, "
+              "without waiting for a query")
 
 
 def _run_all():

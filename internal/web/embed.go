@@ -1,8 +1,10 @@
-// Package web implements the read-only `rmp web` command: an HTTP server,
+// Package web implements the `rmp web` command: an HTTP server,
 // embedded into the rmp binary, that presents the roadmaps under
 // ~/.roadmaps/ as server-rendered HTML and an interactive knowledge-graph
-// visualisation. The interface never writes; the rmp CLI remains the sole
-// write path. See SPEC/WEB.md for the full behaviour and SPEC/COMMANDS.md
+// visualisation. Every page is read-only and no roadmap database is written;
+// the knowledge-graph query bar is the exception, because it sends the Cypher
+// statement it is given, which may write, to the roadmap's graph server. See
+// SPEC/WEB.md for the full behaviour and SPEC/COMMANDS.md
 // § Web Interface for the command-line contract.
 package web
 
@@ -58,18 +60,25 @@ func init() {
 }
 
 // templateFuncs is the complete FuncMap the page templates are parsed with: the
-// semantic badge colour helpers (see badge.go) and the audit-cell helpers (see
-// audit.go).
+// semantic badge colour helpers (see badge.go), the audit-cell helpers (see
+// audit.go), the Markdown-field helpers (see markdown.go), and the timestamp
+// display helper (see timestamp.go).
 //
 // It is a function returning a fresh map rather than a package-level variable so
 // a test can take the real set, replace one entry with a probe, and re-parse the
 // templates against it without mutating the map the server uses.
 func templateFuncs() template.FuncMap {
-	funcs := make(template.FuncMap, len(badgeFuncMap)+len(auditFuncMap))
+	funcs := make(template.FuncMap, len(badgeFuncMap)+len(auditFuncMap)+len(markdownFuncMap)+len(timestampFuncMap))
 	for name, fn := range badgeFuncMap {
 		funcs[name] = fn
 	}
 	for name, fn := range auditFuncMap {
+		funcs[name] = fn
+	}
+	for name, fn := range markdownFuncMap {
+		funcs[name] = fn
+	}
+	for name, fn := range timestampFuncMap {
 		funcs[name] = fn
 	}
 	return funcs

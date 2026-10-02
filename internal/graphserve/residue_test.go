@@ -3,12 +3,14 @@
 //
 // # The defect this fences
 //
-// Measured on rmp task #380 against this server: ONE statement the budget cut
-// while it was writing — `MATCH (a),(b),(c) CREATE ()`, rolled back whole — grew
-// an 80 KB store holding 600 nodes to 134 MB, permanently, and made a later
-// `MATCH (n) RETURN count(*)` over the same 600 nodes cost 1.48 s and 670 MB
-// instead of 0.01 s and 21.6 MB. The isolating control was a cut READ over the
-// same store, which left it at 80 KB.
+// Found on rmp task #380 against this server: ONE statement the budget cut while
+// it was writing — `MATCH (a),(b),(c) CREATE ()`, rolled back whole — grew a
+// small store by orders of magnitude, permanently, and every later reader of that
+// store paid for it. The isolating control was a cut READ over the same store,
+// which left it byte-identical. SPEC/GRAPH.md § Durability and Checkpointing in a
+// Long-Lived Process, rule 8, is canonical for the condition, and no figure is
+// published for the growth
+// (SPEC/BUILD.md § No Benchmarks and No Performance-Measurement Tests).
 //
 // The rollback restores the LOGICAL graph and not the PHYSICAL one: the key
 // mapper keeps the interned key of every node the statement created and the
@@ -30,10 +32,11 @@
 //
 // # Why the statement is cut by a CLIENT-supplied timeout
 //
-// The production budget is 5 seconds and the memory a cut write reaches over that
-// budget is measured in gigabytes — 3618 MB for this exact statement — which is
-// not a cost a unit test may impose on whoever runs `go test ./...`, still less
-// under the race detector. The engine's Bolt session honours a per-statement
+// The production budget is 5 seconds, and a write cut at the end of that budget
+// reaches a peak resident memory this test must not impose on whoever runs
+// `go test ./...`, still less under the race detector
+// (SPEC/GRAPH.md § Peak Resident Memory is canonical for that cost). The engine's
+// Bolt session honours a per-statement
 // `timeout` in the RUN metadata, clamped by the server's own maximum, so a client
 // may ask for LESS. The cut is then the same cut, taken by the same deadline
 // mechanism at the same point in the same statement, at a hundredth of the cost.
@@ -53,7 +56,6 @@ import (
 	"strings"
 	"syscall"
 	"testing"
-	"time"
 
 	"github.com/FlavioCFOliveira/GoGraph/bolt/packstream"
 	"github.com/FlavioCFOliveira/GoGraph/bolt/proto"
@@ -107,15 +109,21 @@ func TestServedCutWrite_LeavesTheStoreExactlyAsItFoundIt(t *testing.T) {
 	server := startServerProcess(t, root, "cut")
 	session := dialBolt(t, server.socket)
 
-	started := time.Now()
 	failure := runExpectingFailure(t, session, "MATCH (a),(b),(c) CREATE ()", residueCutMillis)
-	elapsed := time.Since(started)
 
-	if elapsed < residueCutMillis*time.Millisecond {
-		t.Fatalf("the statement failed after %v, sooner than the %dms it was given, with %s: %s. "+
-			"It was refused rather than CUT, so it applied nothing, rolled back nothing, and "+
-			"left no residue for this test to be about",
-			elapsed, residueCutMillis, failure.Code, failure.Message)
+	// It was CUT and not refused, established by WHICH failure the server sent.
+	// A statement the deadline stops carries the transaction-timeout code; a
+	// statement refused for any other reason — a parse failure, a guard rail, a
+	// store that could not be reached — carries another, and the code separates
+	// them exactly. A refusal would have applied nothing, rolled back nothing and
+	// left no residue for this test to be about, so the distinction is the
+	// premise of everything below (SPEC/BUILD.md § No Benchmarks and No
+	// Performance-Measurement Tests: the identity of the published failure, never
+	// a duration).
+	if want := "Neo.ClientError.Transaction.TransactionTimedOut"; failure.Code != want {
+		t.Fatalf("the statement failed with %s: %s, want %s. It was refused rather than CUT, so it "+
+			"applied nothing, rolled back nothing, and left no residue for this test to be about",
+			failure.Code, failure.Message, want)
 	}
 
 	// The rollback is real: the graph the same server answers from holds the

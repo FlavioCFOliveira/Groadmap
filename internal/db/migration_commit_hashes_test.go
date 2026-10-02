@@ -224,6 +224,7 @@ func buildRoadmapAtSchema1100(t *testing.T, roadmapName string) commitFixture {
 		parent:    sql.NullInt64{Int64: int64(backlogID), Valid: true},
 	})
 
+	restoreSprintsCreatedAtIndex(t, database)
 	if _, err := database.Exec(
 		"UPDATE _metadata SET value = '1.10.0' WHERE key = 'schema_version'"); err != nil {
 		t.Fatalf("setting schema_version to 1.10.0: %v", err)
@@ -334,8 +335,8 @@ func TestMigrateV1_10_0_toV1_11_0_OnNextOpen(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reading schema version after open: %v", err)
 	}
-	if version != "1.14.0" {
-		t.Fatalf("schema_version after open = %q, want 1.14.0 (SPEC/VERSION.md § Current Schema Version)", version)
+	if version != "1.17.0" {
+		t.Fatalf("schema_version after open = %q, want 1.17.0 (SPEC/VERSION.md § Current Schema Version)", version)
 	}
 	if version != SchemaVersion {
 		t.Errorf("schema_version after open = %q but the SchemaVersion constant is %q; a migrated "+
@@ -785,12 +786,6 @@ func TestCommitHashesRoundTripThroughEveryTaskReadPath(t *testing.T) {
 	}
 	assertCarriesHashes("ListTasks", listed)
 
-	all, err := database.ListAllTasks(ctx)
-	if err != nil {
-		t.Fatalf("ListAllTasks: %v", err)
-	}
-	assertCarriesHashes("ListAllTasks", all)
-
 	subtasks, err := database.GetSubTasks(ctx, blockerID)
 	if err != nil {
 		t.Fatalf("GetSubTasks: %v", err)
@@ -814,12 +809,6 @@ func TestCommitHashesRoundTripThroughEveryTaskReadPath(t *testing.T) {
 		t.Fatalf("GetBlocking: %v", err)
 	}
 	assertCarriesHashes("GetBlocking", blocking)
-
-	active, err := database.GetActiveSprintTasks(ctx, sprintID)
-	if err != nil {
-		t.Fatalf("GetActiveSprintTasks: %v", err)
-	}
-	assertCarriesHashes("GetActiveSprintTasks", active)
 
 	full, err := database.GetSprintTasksFull(ctx, sprintID, nil, false)
 	if err != nil {

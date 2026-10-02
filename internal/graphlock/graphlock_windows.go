@@ -20,6 +20,7 @@
 package graphlock
 
 import (
+	"errors"
 	"os"
 
 	"golang.org/x/sys/windows"
@@ -75,3 +76,18 @@ func unlockFile(f *os.File) error {
 		new(windows.Overlapped),
 	)
 }
+
+// isContention reports whether err, returned by lockExclusiveNB, means another
+// handle holds the lock: LockFileEx with LOCKFILE_FAIL_IMMEDIATELY fails with
+// ERROR_LOCK_VIOLATION when the range is locked by someone else.
+func isContention(err error) bool {
+	return errors.Is(err, windows.ERROR_LOCK_VIOLATION)
+}
+
+// LockFileRemovableWhileHeld reports whether the lock file can be unlinked while
+// this process holds the lock on it. On Windows it cannot: the handle that holds
+// the lock was opened without FILE_SHARE_DELETE, so the file cannot be deleted
+// while it is open. `rmp roadmap remove` therefore deletes everything else while
+// it holds the lock and releases it only to delete the lock file and the
+// directories that held it.
+const LockFileRemovableWhileHeld = false

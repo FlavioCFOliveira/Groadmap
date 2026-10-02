@@ -1,0 +1,219 @@
+{{define "task.html"}}<!doctype html>
+<html lang="en" data-bs-theme="dark">
+<head>
+{{template "head" .}}
+</head>
+<body class="layout-fluid">
+  <div class="page">
+{{template "sidebar" .}}
+{{template "topnavbar" .}}
+    <div class="page-wrapper">
+      <div class="page-header d-print-none">
+        <div class="container-xl">
+          <div class="row g-2 align-items-center">
+{{template "pageTitle" .Chrome.Heading}}
+            {{/*
+              The one navigation link of the actions column. It returns to the
+              roadmap's tasks page, the parent view of the record on display, a
+              relationship the sidebar's flat list of views does not express. It
+              carries no query parameter, so it opens the list on its first page
+              with the filter state stored in the tasks page's cookie, or the
+              default filter state when none is stored; the way to the sprint page
+              is the Sprint card's link below, so each destination is offered once
+              (SPEC/WEB.md § Roadmap Task Page, The way back; § Shared Page-Header
+              Partial, rule 5). The column is full width
+              below the sm breakpoint, so it takes its own row below a long title
+              instead of squeezing it (SPEC/WEB.md § UI Framework, rule 16).
+            */}}
+            <div class="col-12 col-sm-auto ms-auto d-print-none">
+              <a class="btn btn-outline-secondary" href="/roadmaps/{{.Name}}/tasks"><i class="ti ti-arrow-left me-1"></i>Back to tasks</a>
+            </div>
+          </div>
+        </div>
+      </div>
+      <main class="page-body">
+        <div class="container-xl">
+
+          {{/*
+            One Tabler row of two columns (SPEC/WEB.md § Roadmap Task Page, Layout).
+            The side column comes first in the document, so below the lg
+            breakpoint a narrow viewport meets the sprint context and the short
+            fields before the long text; order-lg-last moves it to the right of
+            the main column at lg and wider, where the main column takes two
+            thirds of the width. task-page is what static/style.css keys the
+            absence of the 80-character line length on: the Markdown containers of
+            this page span the full width of their card's body (SPEC/WEB.md
+            § Markdown Rendering, rule 13).
+
+            Every value is rendered through html/template's contextual escaping;
+            the only unescaped HTML is the Markdown renderer's output for the four
+            Markdown fields and for each comment body. The page loads no script of
+            its own and fetches nothing after it loads (SPEC/WEB.md § Roadmap Task
+            Page, Rendered on the server, complete).
+          */}}
+          <div class="row row-cards task-page">
+            <div class="col-12 col-lg-4 order-lg-last">
+
+              {{/*
+                The Sprint card: context, not a sprint view. Membership decides
+                its form: a task that belongs to a sprint, whatever its status,
+                shows the sprint link, the sprint's status badge, its position in
+                the planned execution order, and the sprint's progress; a task
+                that belongs to none shows the backlog text and nothing else. The
+                progress bar is the native <progress> element under Tabler's
+                progress classes, which needs no inline style and no script
+                (SPEC/WEB.md § Roadmap Task Page, Sprint card).
+              */}}
+              <div class="card card-sm mb-3" data-role="task-sprint-card">
+                <div class="card-header">
+                  <h3 class="card-title">Sprint</h3>
+                </div>
+                <div class="card-body">
+                  {{with .Sprint}}
+                  <div class="d-flex flex-wrap align-items-center gap-2 mb-2">
+                    <a class="d-inline-block py-1" href="/roadmaps/{{$.Name}}/sprints/{{.Sprint.ID}}" data-role="task-sprint-link">Sprint #{{.Sprint.ID}} {{.Sprint.Title}}</a>
+                    <span class="badge {{sprintStatusBadge .Sprint.Status}}">{{.Sprint.Status}}</span>
+                  </div>
+                  <div class="text-secondary mb-2" data-role="task-sprint-position">Position {{.Position}} of {{.Members}}</div>
+                  <div class="mb-1" data-role="task-sprint-progress">{{.Completed}} of {{.Members}} tasks completed</div>
+                  <progress class="progress progress-sm" value="{{.Completed}}" max="{{.Members}}" aria-label="Sprint progress"></progress>
+                  {{else}}
+                  <p class="text-secondary mb-0" data-role="task-sprint-backlog">In the backlog: this task belongs to no sprint.</p>
+                  {{end}}
+                </div>
+              </div>
+
+              {{/*
+                The Details card: the task's short fields, exactly thirteen, in the
+                specified order, as a Tabler datagrid — the idiom of the sprint
+                page's Sprint details card. The id, title, and status are in the
+                page header and are not repeated. The priority and severity badges
+                carry the bare integer, with no P or S badge label: the field name
+                already stands beside each. Task references are links to the
+                referenced task's page, built from the validated roadmap segment
+                and the integer id only. An absent value is the em dash, through
+                the same helper the audit log uses, and a commit hash is shown as
+                stored in a monospaced face, with no link (SPEC/WEB.md § Roadmap
+                Task Page, Details card). A commit hash is shown whole and wraps;
+                task-details-grid is what static/style.css keys the datagrid's
+                column count on: two equal columns below lg, one in the side
+                column from lg up.
+              */}}
+              <div class="card" data-role="task-details-card">
+                <div class="card-header">
+                  <h3 class="card-title">Details</h3>
+                </div>
+                <div class="card-body">
+                  <div class="datagrid task-details-grid">
+                    <div class="datagrid-item">
+                      <div class="datagrid-title">Type</div>
+                      <div class="datagrid-content">{{.Task.Type}}</div>
+                    </div>
+                    <div class="datagrid-item">
+                      <div class="datagrid-title">Severity</div>
+                      <div class="datagrid-content"><span class="badge {{severityBadge .Task.Severity}}">{{.Task.Severity}}</span></div>
+                    </div>
+                    <div class="datagrid-item">
+                      <div class="datagrid-title">Priority</div>
+                      <div class="datagrid-content"><span class="badge {{priorityBadge .Task.Priority}}">{{.Task.Priority}}</span></div>
+                    </div>
+                    <div class="datagrid-item">
+                      <div class="datagrid-title">Parent task</div>
+                      {{with .Task.ParentTaskID}}<div class="datagrid-content"><a href="/roadmaps/{{$.Name}}/tasks/{{.}}">#{{.}}</a></div>{{else}}{{with absentCell}}<div class="datagrid-content {{.Class}}">{{.Text}}</div>{{end}}{{end}}
+                    </div>
+                    <div class="datagrid-item">
+                      <div class="datagrid-title">Subtasks</div>
+                      <div class="datagrid-content">{{.Task.SubtaskCount}}</div>
+                    </div>
+                    <div class="datagrid-item">
+                      <div class="datagrid-title">Depends on</div>
+                      {{if .Task.DependsOn}}<div class="datagrid-content d-flex flex-wrap gap-2">{{range .Task.DependsOn}}<a href="/roadmaps/{{$.Name}}/tasks/{{.}}">#{{.}}</a>{{end}}</div>{{else}}{{with absentCell}}<div class="datagrid-content {{.Class}}">{{.Text}}</div>{{end}}{{end}}
+                    </div>
+                    <div class="datagrid-item">
+                      <div class="datagrid-title">Blocks</div>
+                      {{if .Task.Blocks}}<div class="datagrid-content d-flex flex-wrap gap-2">{{range .Task.Blocks}}<a href="/roadmaps/{{$.Name}}/tasks/{{.}}">#{{.}}</a>{{end}}</div>{{else}}{{with absentCell}}<div class="datagrid-content {{.Class}}">{{.Text}}</div>{{end}}{{end}}
+                    </div>
+                    <div class="datagrid-item">
+                      <div class="datagrid-title">Created</div>
+                      <div class="datagrid-content text-secondary">{{timestamp .Task.CreatedAt}}</div>
+                    </div>
+                    <div class="datagrid-item">
+                      <div class="datagrid-title">Started</div>
+                      <div class="datagrid-content text-secondary">{{timestamp .Task.StartedAt}}</div>
+                    </div>
+                    <div class="datagrid-item">
+                      <div class="datagrid-title">Tested</div>
+                      <div class="datagrid-content text-secondary">{{timestamp .Task.TestedAt}}</div>
+                    </div>
+                    <div class="datagrid-item">
+                      <div class="datagrid-title">Closed</div>
+                      <div class="datagrid-content text-secondary">{{timestamp .Task.ClosedAt}}</div>
+                    </div>
+                    <div class="datagrid-item">
+                      <div class="datagrid-title">Commit open</div>
+                      {{with taskCommitHashCell .Task.CommitOpen}}<div class="datagrid-content {{.Class}}">{{.Text}}</div>{{end}}
+                    </div>
+                    <div class="datagrid-item">
+                      <div class="datagrid-title">Commit close</div>
+                      {{with taskCommitHashCell .Task.CommitClose}}<div class="datagrid-content {{.Class}}">{{.Text}}</div>{{end}}
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+            </div>
+            <div class="col-12 col-lg-8">
+
+              {{/*
+                The four Markdown field cards, in the specified order. Each keeps
+                its card whatever the field holds: an empty or null field shows the
+                em dash in place of the Markdown container (SPEC/WEB.md § Roadmap
+                Task Page, Markdown field cards).
+              */}}
+              {{range .Fields}}
+              <div class="card mb-3" data-role="task-field-card">
+                <div class="card-header">
+                  <h3 class="card-title">{{.Title}}</h3>
+                </div>
+                <div class="card-body">
+                  {{if .Empty}}{{with absentCell}}<span class="{{.Class}}">{{.Text}}</span>{{end}}{{else}}<div class="markdown">{{.HTML}}</div>{{end}}
+                </div>
+              </div>
+              {{end}}
+
+              {{/*
+                The task's comments, its work log, as the last card of the main
+                column: the sprint page's Comments card applied to a task. Oldest
+                first, every comment, through the one shared timeline partial; the
+                card is always present, and a task with no comment shows the empty
+                state in place of the timeline (SPEC/WEB.md § Roadmap Task Page,
+                Comments card).
+              */}}
+              <div class="card" data-role="task-comments-card">
+                <div class="card-header">
+                  <h3 class="card-title">Comments <span class="badge bg-secondary-lt ms-2">{{len .Comments}}</span></h3>
+                  <div class="card-actions text-secondary">Oldest first</div>
+                </div>
+                <div class="card-body">
+                  {{if .Comments}}
+                  {{template "commentTimeline" .Comments}}
+                  {{else}}
+                  <div class="empty">
+                    <p class="empty-title">No comments</p>
+                    <p class="empty-subtitle text-secondary">Nothing has been recorded on this task yet.</p>
+                  </div>
+                  {{end}}
+                </div>
+              </div>
+
+            </div>
+          </div>
+
+        </div>
+      </main>
+    </div>
+  </div>
+
+  <script src="/static/vendor/tabler/tabler.min.js"></script>
+</body>
+</html>{{end}}

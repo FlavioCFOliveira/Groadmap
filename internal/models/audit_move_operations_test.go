@@ -126,15 +126,15 @@ func TestLegacySprintMoveTaskStaysValidAndUnwritten(t *testing.T) {
 	}
 }
 
-// TestOperationCarriesRelatedEntity pins the eight-operation answer that the
+// TestOperationCarriesRelatedEntity pins the nine-operation answer that the
 // single audit writer enforces at the point of the INSERT. The check is
 // exhaustive over the whole valid set, so an operation added later is covered
-// without anyone remembering to extend this test: only the eight named below may
+// without anyone remembering to extend this test: only the nine named below may
 // answer true.
 //
 // The predicate answers MAY, not MUST, and TASK_STATUS_BACKLOG is why: it is
 // written by `sprint remove-tasks`, which names the sprint the task left, and by
-// `task stat <ids> BACKLOG`, which has no second entity to name. Which of the
+// the migration to schema 1.16.0, which has no second entity to name. Which of the
 // two wrote a row is known only to the call site; what the operation alone
 // decides is whether a counterpart is admissible at all.
 func TestOperationCarriesRelatedEntity(t *testing.T) {
@@ -145,6 +145,7 @@ func TestOperationCarriesRelatedEntity(t *testing.T) {
 		OpTaskStatusBacklog: true,
 		OpSprintMoveTaskOut: true,
 		OpSprintMoveTaskIn:  true,
+		OpTaskSprintChange:  true,
 		OpTaskAddDep:        true,
 		OpTaskRemoveDep:     true,
 	}
@@ -152,20 +153,20 @@ func TestOperationCarriesRelatedEntity(t *testing.T) {
 	for _, op := range ValidAuditOperations {
 		if got, want := OperationCarriesRelatedEntity(op), permitted[op]; got != want {
 			t.Errorf("OperationCarriesRelatedEntity(%s) = %v, want %v; related_entity_id belongs to the "+
-				"eight operations of SPEC/DATABASE.md § The Two Entities of a Relational Operation and "+
+				"nine operations of SPEC/DATABASE.md § The Two Entities of a Relational Operation and "+
 				"is NULL on every other one", op, got, want)
 		}
 	}
 
-	// The eight really are in the valid set, so the loop above compared
+	// The nine really are in the valid set, so the loop above compared
 	// something for each of them.
 	for op := range permitted {
 		if !IsValidAuditOperation(string(op)) {
 			t.Errorf("%s is not in the valid set, so the assertion above is vacuous for it", op)
 		}
 	}
-	if len(permitted) != 8 {
-		t.Errorf("the permitted set holds %d operations, want the 8 the catalogue's table lists",
+	if len(permitted) != 9 {
+		t.Errorf("the permitted set holds %d operations, want the 9 the catalogue's table lists",
 			len(permitted))
 	}
 

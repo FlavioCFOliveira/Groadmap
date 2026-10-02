@@ -174,7 +174,7 @@ func TestAddTasksToSprintChunksALargeIDSet(t *testing.T) {
 	// the status update is split and every chunk must execute for the
 	// assertions below to hold.
 	const n = 350
-	ids := createBenchmarkTasks(t, db, n)
+	ids := seedTasks(t, db, n)
 
 	sprintID := mustSeedSprint(t, db, &models.Sprint{
 		Title:       "Absorb the March reconciliation backlog",

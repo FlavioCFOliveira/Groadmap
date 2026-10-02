@@ -443,7 +443,7 @@ func TestHandleGraphData_CacheControlOnError(t *testing.T) {
 	name := servedRoadmap(t, "web-ui-rollout", graphSeedQueries()...)
 
 	// Use the full handler chain so the security/cache middleware runs.
-	srv := httptest.NewServer(handler())
+	srv := liveServer(t)
 	defer srv.Close()
 
 	resp, err := http.Get(srv.URL + "/roadmaps/" + name + "/graph/data?q=" + url.QueryEscape("MATCH (n) RETURN") + "&limit=7")

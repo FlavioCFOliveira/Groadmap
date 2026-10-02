@@ -1,15 +1,17 @@
 /*
  * Inter variable web font, vendored for the rmp web interface.
  *
- * Self-contained: the font file is committed under files/ and served from
+ * Self-contained: the font files are committed under files/ and served from
  * /static/vendor/inter/, never from a content delivery network or any remote
- * font host (SPEC/WEB.md UI Framework, BUILD.md Vendored Web Assets). Two
- * @font-face families are declared because Tabler's default sans-serif stack
- * begins with "Inter Var", Inter; both names resolve to the same variable
- * file, with the 100-900 weight axis covering every Tabler weight.
+ * font host (SPEC/WEB.md UI Framework, rule 4; BUILD.md Vendored Web Assets).
+ * Inter is vendored as two variable-weight faces, the upright and the italic,
+ * each declared under both family names Tabler's default sans-serif stack
+ * begins with, "Inter Var" and Inter, with the 100-900 weight axis covering
+ * every Tabler weight. Italic text is therefore drawn from the real italic face,
+ * never from a slant the browser synthesises from the upright one.
  *
  * Source: @fontsource-variable/inter (Inter by Rasmus Andersson, SIL OFL 1.1),
- * file inter-latin-wght-normal.woff2.
+ * files inter-latin-wght-normal.woff2 and inter-latin-wght-italic.woff2.
  */
 @font-face {
   font-family: 'Inter Var';
@@ -25,4 +27,20 @@
   font-display: swap;
   font-weight: 100 900;
   src: url('./files/inter-latin-wght-normal.woff2') format('woff2');
+}
+
+@font-face {
+  font-family: 'Inter Var';
+  font-style: italic;
+  font-display: swap;
+  font-weight: 100 900;
+  src: url('./files/inter-latin-wght-italic.woff2') format('woff2');
+}
+
+@font-face {
+  font-family: 'Inter';
+  font-style: italic;
+  font-display: swap;
+  font-weight: 100 900;
+  src: url('./files/inter-latin-wght-italic.woff2') format('woff2');
 }

@@ -83,7 +83,7 @@ class TestConcurrency:
         # Create a sprint and add a task
         sprint_id = self.test.create_sprint(roadmap, "Test Sprint")
         task_id = self.test.create_task(
-            roadmap, "Test task", "Functional", "Technical", "Criteria"
+            roadmap, "Test task", "Several engineers can update the roadmap at the same time", "Retry a busy SQLite write with bounded backoff", "Criteria"
         )
         self.test.run_cmd([
             "sprint", "add-tasks", "-r", roadmap, str(sprint_id), str(task_id)
@@ -140,7 +140,7 @@ class TestConcurrency:
         task_ids = []
         for i in range(5):
             task_id = self.test.create_task(
-                roadmap, f"Task {i}", "Functional", "Technical", "Criteria"
+                roadmap, f"Task {i}", "Several engineers can update the roadmap at the same time", "Retry a busy SQLite write with bounded backoff", "Criteria"
             )
             task_ids.append(task_id)
 
@@ -164,7 +164,7 @@ class TestConcurrency:
                 for i in range(3):
                     self.test.create_task(
                         roadmap, f"New task {worker_id}-{i}",
-                        "Functional", "Technical", "Criteria"
+                        "Several engineers can update the roadmap at the same time", "Retry a busy SQLite write with bounded backoff", "Criteria"
                     )
                     time.sleep(0.02)
             except Exception as e:
@@ -211,8 +211,8 @@ import sys
 result = subprocess.run(
     ["{self.test.cli_path}", "task", "create", "-r", "{roadmap}",
      "-t", "Subprocess task",
-     "-fr", "Functional",
-     "-tr", "Technical",
+     "-fr", "Several engineers can update the roadmap at the same time",
+     "-tr", "Retry a busy SQLite write with bounded backoff",
      "-ac", "Criteria"],
     capture_output=True,
     text=True

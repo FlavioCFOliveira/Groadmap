@@ -7,9 +7,12 @@
 // exit codes on purpose:
 //
 //   - a producer that writes too much. The query read from standard input was
-//     io.ReadAll with no bound, so 256 MiB offered to the graph family reached
-//     867 MB of resident memory and 15.9 s of wall time before anything rejected
-//     it. That is now a validation failure, exit code 6.
+//     io.ReadAll with no bound, so whatever a producer chose to send was buffered
+//     whole and handed to a parse attempt that was never going to accept it.
+//     That is now a validation failure, exit code 6, and what proves the bound is
+//     the count of bytes the reader CONSUMES — asserted exactly, below, at
+//     1048577 whatever is offered (SPEC/GRAPH.md § Bounded Standard-Input Read;
+//     SPEC/BUILD.md § No Benchmarks and No Performance-Measurement Tests).
 //   - a producer that writes NOTHING. The same unbounded read, given a terminal,
 //     waited for a query nobody was going to type: an invocation that omitted
 //     --query once hung for roughly forty minutes, printing nothing. That is now

@@ -16,7 +16,7 @@ import (
 // The Roadmap Sprints Page reads the roadmap's sprints and each sprint's total
 // task count for its card footer, but NO member tasks, because the page renders
 // every sprint as a card with no member tasks on it (SPEC/WEB.md § Tasks and
-// Sprints from SQLite; § Roadmap Sprints Page; § Task Detail Modal).
+// Sprints from SQLite; § Roadmap Sprints Page; § Roadmap Task Page).
 //
 // This file is the gate for that rule. It measures what a render of the page
 // costs, on a real roadmap, and pins the two properties that make the cost

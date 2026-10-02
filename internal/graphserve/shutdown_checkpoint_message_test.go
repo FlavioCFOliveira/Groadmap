@@ -1,11 +1,10 @@
 // Regression fence for the shutdown checkpoint's diagnostic (rmp task #413).
 //
-// This is the ONE checkpoint of the server whose error Groadmap holds: the
-// in-flight cadence runs on the engine's own loop and exposes its last failure as
-// a rendered STRING, which is not an error and which SPEC/GRAPH.md
-// § Field Length Limits, rule 8, forbids matching. So the classification exists
-// here and nowhere else in this package, and the assertion below that the
-// in-flight message is untouched is part of the fence rather than an aside.
+// Since rmp task #383 Groadmap holds the error of BOTH of the server's
+// checkpoints — the shutdown checkpoint and the in-flight fold it now requests
+// itself — so both classify an over-long field with errors.Is (SPEC/GRAPH.md
+// § Field Length Limits, rule 8). The last sub-test below keeps the two reports
+// apart: they share a stderr stream and the wording after their subjects.
 package graphserve
 
 import (
@@ -46,8 +45,8 @@ func TestShutdownCheckpointMessage(t *testing.T) {
 		}
 	})
 
-	t.Run("both branches name THIS checkpoint", func(t *testing.T) {
-		// The in-flight watch reports on the same stderr stream of the same
+	t.Run("both checkpoints name themselves", func(t *testing.T) {
+		// The in-flight fold reports on the same stderr stream of the same
 		// process, so a reader must be able to tell the two apart. Each branch
 		// carries the shutdown subject, and neither may read as the other's.
 		for _, got := range []string{
@@ -58,19 +57,20 @@ func TestShutdownCheckpointMessage(t *testing.T) {
 				t.Errorf("the message does not name the shutdown checkpoint:\n%s", got)
 			}
 			if strings.Contains(got, "in-flight") {
-				t.Errorf("the shutdown message reads as the in-flight watch's:\n%s", got)
+				t.Errorf("the shutdown message reads as the in-flight fold's:\n%s", got)
 			}
 		}
-		// And the in-flight watch is deliberately NOT classified: what it can
-		// observe is a rendered string, and matching it is what rule 8 forbids
-		// (SPEC/GRAPH.md § Field Length Limits, rule 8, states the limitation as
-		// a limitation rather than closing it with a text match).
-		if !strings.Contains(checkpointFailedMessage, "an in-flight graph checkpoint failed") {
-			t.Error("the in-flight message no longer identifies itself as the in-flight one")
+		// And the in-flight fold's two reports name the in-flight checkpoint,
+		// and share the unhealable condition's wording with the shutdown's, so
+		// the four things rule 9 requires are said once.
+		for _, got := range []string{checkpointFailedMessage, inFlightFieldTooLongMessage()} {
+			if !strings.Contains(got, "in-flight graph checkpoint") {
+				t.Errorf("the in-flight report does not identify itself as the in-flight one:\n%s", got)
+			}
 		}
-		if strings.Contains(checkpointFailedMessage, "committed graph state") {
-			t.Error("the in-flight watch now claims the unhealable condition, which it cannot " +
-				"observe without matching the engine's text (rule 8)")
+		if want := graphstore.FieldTooLongCheckpointDiagnostic("an in-flight graph checkpoint"); inFlightFieldTooLongMessage() != want {
+			t.Errorf("the in-flight fold does not use the one shared wording\n got:  %q\n want: %q",
+				inFlightFieldTooLongMessage(), want)
 		}
 	})
 }

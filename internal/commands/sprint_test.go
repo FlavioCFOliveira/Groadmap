@@ -815,7 +815,8 @@ func TestSprintRemoveTasks_MembershipGuard(t *testing.T) {
 // TestSprintRemoveTasks_ClearsLifecycleAndCompacts is a regression gate for
 // findings #49 and #50: removing a task from a sprint must reset it to BACKLOG
 // with ALL lifecycle dates/summary cleared (even when it had progressed to
-// COMPLETED), and the remaining tasks' positions must stay contiguous (0..N-1).
+// TESTING; a COMPLETED task is refused, because it stays in its sprint), and the
+// remaining tasks' positions must stay contiguous (0..N-1).
 func TestSprintRemoveTasks_ClearsLifecycleAndCompacts(t *testing.T) {
 	testName := "testsprintremovelifecycle"
 	database, cleanup := setupTestTaskRoadmap(t, testName)
@@ -830,10 +831,9 @@ func TestSprintRemoveTasks_ClearsLifecycleAndCompacts(t *testing.T) {
 		t.Fatalf("adding tasks: %v", err)
 	}
 
-	// Drive t2 all the way to COMPLETED so it has started_at/tested_at/closed_at set.
-	// The entry into DOING carries the mandatory --commit-open, and the entry
-	// into COMPLETED the mandatory --commit-close (SPEC/COMMANDS.md § Change
-	// Status (stat)).
+	// Drive t2 to TESTING so it has started_at and tested_at set. The entry into
+	// DOING carries the mandatory --commit-open (SPEC/COMMANDS.md § Change Status
+	// (stat)). It stops short of COMPLETED, which `sprint remove-tasks` refuses.
 	for _, st := range []struct {
 		status string
 		flags  []string
@@ -845,12 +845,6 @@ func TestSprintRemoveTasks_ClearsLifecycleAndCompacts(t *testing.T) {
 		if err := HandleTask(args); err != nil {
 			t.Fatalf("transition t2 -> %s: %v", st.status, err)
 		}
-	}
-	if err := HandleTask([]string{
-		"stat", "-r", testName, strconv.Itoa(t2), "COMPLETED",
-		"--commit-close", "2578d18", "--summary", "all done",
-	}); err != nil {
-		t.Fatalf("complete t2: %v", err)
 	}
 
 	// Remove the middle task t2 from the sprint.

@@ -44,7 +44,7 @@ class TestTaskStateMachine:
         """Test SPRINT -> DOING transition."""
         roadmap = self.test.create_roadmap()
 
-        task_id = self.test.create_task(roadmap, "Test task", "Functional", "Technical", "Criteria")
+        task_id = self.test.create_task(roadmap, "Test task", "Engineers can move a task through its workflow states", "Validate each transition against the state machine before the update", "Criteria")
         sprint_id = self.test.create_sprint(roadmap, "Sprint 1")
 
         self.test.run_cmd([
@@ -61,7 +61,7 @@ class TestTaskStateMachine:
         """Test DOING -> TESTING transition."""
         roadmap = self.test.create_roadmap()
 
-        task_id = self.test.create_task(roadmap, "Test task", "Functional", "Technical", "Criteria")
+        task_id = self.test.create_task(roadmap, "Test task", "Engineers can move a task through its workflow states", "Validate each transition against the state machine before the update", "Criteria")
         sprint_id = self.test.create_sprint(roadmap, "Sprint 1")
 
         self.test.run_cmd([
@@ -79,7 +79,7 @@ class TestTaskStateMachine:
         """Test TESTING -> COMPLETED transition."""
         roadmap = self.test.create_roadmap()
 
-        task_id = self.test.create_task(roadmap, "Test task", "Functional", "Technical", "Criteria")
+        task_id = self.test.create_task(roadmap, "Test task", "Engineers can move a task through its workflow states", "Validate each transition against the state machine before the update", "Criteria")
         sprint_id = self.test.create_sprint(roadmap, "Sprint 1")
 
         self.test.run_cmd([
@@ -99,17 +99,18 @@ class TestTaskStateMachine:
         print("✓ TESTING to COMPLETED transition test passed")
 
     def test_completed_to_backlog_transition(self):
-        """Test COMPLETED -> BACKLOG transition (reopen).
+        """Test the reopening of a COMPLETED task.
 
-        Per SPEC/STATE_MACHINE.md line 116, reopening must clear EVERY
-        lifecycle field set during the forward path: started_at,
-        tested_at, closed_at, and completion_summary. Earlier the test
-        only checked closed_at, so regressions on the other three
-        could slip through.
+        `task stat <id> BACKLOG` is refused for a COMPLETED sprint member,
+        naming `task reopen`, and changes nothing; `task reopen` returns the
+        task to SPRINT in its sprint and must clear EVERY lifecycle field set
+        during the forward path: started_at, tested_at, closed_at, and
+        completion_summary (SPEC/STATE_MACHINE.md § Valid Transitions and
+        § Reopening Behavior).
         """
         roadmap = self.test.create_roadmap()
 
-        task_id = self.test.create_task(roadmap, "Test task", "Functional", "Technical", "Criteria")
+        task_id = self.test.create_task(roadmap, "Test task", "Engineers can move a task through its workflow states", "Validate each transition against the state machine before the update", "Criteria")
         sprint_id = self.test.create_sprint(roadmap, "Sprint 1")
 
         # Complete the task through every state, attaching a real summary.
@@ -130,9 +131,20 @@ class TestTaskStateMachine:
         assert before["closed_at"] is not None, "closed_at must be set after COMPLETED"
         assert before["completion_summary"] is not None, "completion_summary must be stored when supplied"
 
-        # Reopen to BACKLOG.
-        self.test.run_cmd(["task", "stat", "-r", roadmap, str(task_id), "BACKLOG"])
-        self.test.assert_task_status(roadmap, task_id, "BACKLOG")
+        # `task stat BACKLOG` is refused for a sprint member and changes nothing.
+        code, _, err = self.test.run_cmd(["task", "stat", "-r", roadmap, str(task_id), "BACKLOG"], check=False)
+        assert code == 6, f"task stat BACKLOG on a COMPLETED member must exit 6, got {code}: {err!r}"
+        assert err.splitlines()[0] == (
+            f"Error: validation error: invalid status transition from COMPLETED to BACKLOG for task {task_id}: "
+            "a completed task is reopened with 'rmp task reopen'"
+        ), err
+        self.test.assert_task_status(roadmap, task_id, "COMPLETED")
+
+        # Reopen: back to SPRINT in the same sprint.
+        self.test.run_cmd(["task", "reopen", "-r", roadmap, str(task_id)])
+        self.test.assert_task_status(roadmap, task_id, "SPRINT")
+        members = [t["id"] for t in self.test.run_cmd_json(["sprint", "tasks", "-r", roadmap, str(sprint_id)])]
+        assert members == [task_id], f"a reopened task stays in its sprint; members = {members}"
 
         # Reopen must wipe every lifecycle timestamp and the completion summary.
         after = self.test.run_cmd_json(["task", "get", "-r", roadmap, str(task_id)])[0]
@@ -143,7 +155,7 @@ class TestTaskStateMachine:
             f"completion_summary must be NULL after reopen; got {after['completion_summary']!r}"
         )
 
-        print("✓ COMPLETED to BACKLOG clears started_at, tested_at, closed_at, completion_summary")
+        print("✓ COMPLETED reopens to SPRINT, clearing started_at, tested_at, closed_at, completion_summary")
 
     def test_manual_sprint_transition_rejected(self):
         """Test that manual `task stat <id> SPRINT` is rejected per SPEC/STATE_MACHINE.md.
@@ -152,7 +164,7 @@ class TestTaskStateMachine:
         """
         roadmap = self.test.create_roadmap()
 
-        task_id = self.test.create_task(roadmap, "Test task", "Functional", "Technical", "Criteria")
+        task_id = self.test.create_task(roadmap, "Test task", "Engineers can move a task through its workflow states", "Validate each transition against the state machine before the update", "Criteria")
         sprint_id = self.test.create_sprint(roadmap, "Sprint 1")
 
         self.test.run_cmd([
@@ -177,7 +189,7 @@ class TestTaskStateMachine:
         """Test TESTING -> DOING transition (failed test)."""
         roadmap = self.test.create_roadmap()
 
-        task_id = self.test.create_task(roadmap, "Test task", "Functional", "Technical", "Criteria")
+        task_id = self.test.create_task(roadmap, "Test task", "Engineers can move a task through its workflow states", "Validate each transition against the state machine before the update", "Criteria")
         sprint_id = self.test.create_sprint(roadmap, "Sprint 1")
 
         self.test.run_cmd([
@@ -196,7 +208,7 @@ class TestTaskStateMachine:
         """Test SPRINT -> BACKLOG transition (remove from sprint)."""
         roadmap = self.test.create_roadmap()
 
-        task_id = self.test.create_task(roadmap, "Test task", "Functional", "Technical", "Criteria")
+        task_id = self.test.create_task(roadmap, "Test task", "Engineers can move a task through its workflow states", "Validate each transition against the state machine before the update", "Criteria")
         sprint_id = self.test.create_sprint(roadmap, "Sprint 1")
 
         self.test.run_cmd([
@@ -215,7 +227,7 @@ class TestTaskStateMachine:
         """Test invalid state transitions are rejected."""
         roadmap = self.test.create_roadmap()
 
-        task_id = self.test.create_task(roadmap, "Test task", "Functional", "Technical", "Criteria")
+        task_id = self.test.create_task(roadmap, "Test task", "Engineers can move a task through its workflow states", "Validate each transition against the state machine before the update", "Criteria")
 
         # BACKLOG cannot go directly to DOING
         exit_code, _, _ = self.test.run_cmd(
@@ -301,8 +313,12 @@ class TestTaskStateMachine:
         self.test.run_cmd(["task", "stat", "-r", roadmap, str(task_id), "COMPLETED", "--commit-close", "fcb1c8a"])
         self.test.assert_task_status(roadmap, task_id, "COMPLETED")
 
-        # Reopen (bug found in production)
-        self.test.run_cmd(["task", "stat", "-r", roadmap, str(task_id), "BACKLOG"])
+        # Reopen (bug found in production): back to SPRINT in its sprint.
+        self.test.run_cmd(["task", "reopen", "-r", roadmap, str(task_id)])
+        self.test.assert_task_status(roadmap, task_id, "SPRINT")
+
+        # Out of the sprint, which is the one route back to BACKLOG.
+        self.test.run_cmd(["sprint", "remove-tasks", "-r", roadmap, str(sprint_id), str(task_id)])
         self.test.assert_task_status(roadmap, task_id, "BACKLOG")
 
         print("✓ Full task workflow test passed")

@@ -92,6 +92,9 @@ TEST_MODULES = [
     "test_72_unknown_flag_beside_positionals",
     "test_73_help_exit_codes_contract",
     "test_74_help_tokens_and_joined_flags",
+    "test_75_docs_error_lines_and_links",
+    "test_76_correctness_and_security_lab",
+    "test_77_install_skills",
 ]
 
 # Stress tests (run separately due to time/data volume)

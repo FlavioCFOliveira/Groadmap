@@ -26,6 +26,14 @@
 //     budget cannot starve a waiter;
 //   - the contended acquisition path does not leak a file descriptor.
 //
+// None of it is established on a clock. SPEC/BUILD.md § No Benchmarks and No
+// Performance-Measurement Tests forbids asserting that an operation finished
+// within or after a duration, so what the waiting tests count is ATTEMPTS, at
+// the lockNB seam: one acquisition makes one attempt per rung of the walk it
+// climbs plus the initial one, and the two candidate sizings climb walks of
+// different lengths. The figure the wait budget yields is asserted where it is
+// declared, by TestWaitBudgetIsDerivedFromTheStatementBudget.
+//
 // The tests use two distinct file descriptors on the same lock file from the
 // same process. That is a faithful stand-in for two processes: flock(2) treats
 // separate open file descriptions independently even inside one process, and
@@ -59,11 +67,27 @@ import (
 // (SPEC/COMMANDS.md § Graph Server Socket Error Lines).
 const busyExclusiveMessage = "graph store is busy: still held when the bounded wait was exhausted"
 
-// firstRung is the ladder's first delay, used by the assertions that an
-// acquisition did NOT wait. It comes from the shared policy, so no test in this
-// package names a figure of the policy's own; the figures themselves are
-// asserted once, in internal/backoff's TestPolicyMatchesTheSpecification.
-const firstRung = backoff.FirstDelay
+// countLockAttempts replaces the non-blocking lock attempt with a counting
+// wrapper around the real one for the duration of one test, and returns the
+// counter.
+//
+// It wraps rather than replaces, so the exclusion below stays genuine: every
+// attempt really does reach the platform call and really does fail against a
+// held lock. No test in this package calls t.Parallel, so no test observes
+// another test's counter.
+func countLockAttempts(t *testing.T) *int {
+	t.Helper()
+
+	previous := lockNB
+	t.Cleanup(func() { lockNB = previous })
+
+	attempts := 0
+	lockNB = func(f *os.File) error {
+		attempts++
+		return previous(f)
+	}
+	return &attempts
+}
 
 // budgetlessHold is the statement budget the three exhaustion tests below run
 // under, and zero is the honest value rather than merely the cheap one: the
@@ -74,10 +98,8 @@ const firstRung = backoff.FirstDelay
 // It is a test-time cost control and not a weakening. What matters about the
 // value in force is fenced independently of it: the derivation by
 // TestWaitBudgetIsDerivedFromTheStatementBudget, and the fact that the wait
-// genuinely tracks the budget — on the wall clock, against a lawful hold — by
-// TestAcquireExclusive_WaitsTheDerivedBudgetNotTheSQLiteTotal. At the production
-// budget each of these acquisitions would spend 7.5 s instead of 2.5 s and prove
-// nothing extra.
+// genuinely tracks the budget — by the attempt count, against a lawful hold — by
+// TestAcquireExclusive_WaitsTheDerivedBudgetNotTheSQLiteTotal.
 const budgetlessHold time.Duration = 0
 
 // setStatementBudget installs a statement budget for the duration of one test
@@ -98,8 +120,8 @@ func setStatementBudget(t *testing.T, d time.Duration) {
 // This test used to say something else, and what it said was wrong twice over.
 // It asserted that the lock's wait WAS backoff.Total, and that the wait stayed
 // under a tenth of the web server's 30 s write timeout. Both were satisfied,
-// comfortably, by the sizing that let a lawful 4.71-second holder starve a
-// contender which gave up after 2.5018 seconds:
+// comfortably, by the sizing that let a holder inside its own statement budget
+// starve a contender sized on the SQLite total alone:
 //
 //   - equality with backoff.Total is exactly the defect. The SQLite total is the
 //     allowance for the FIXED part of a hold; a hold here also spans a statement
@@ -115,7 +137,9 @@ func setStatementBudget(t *testing.T, d time.Duration) {
 // What is asserted instead is the sizing rule SPEC/GRAPH.md § Lock Contention
 // states — wait budget = statement budget + backoff total — and the property
 // that rule exists to deliver: the wait STRICTLY outlasts the longest lawful
-// statement, with the fixed-cost allowance as the margin.
+// statement, with the fixed-cost allowance as the margin. It is a comparison of
+// DECLARATIONS, which is how SPEC/IMPLEMENTATION.md § Retry Logic says a derived
+// figure is proven.
 func TestWaitBudgetIsDerivedFromTheStatementBudget(t *testing.T) {
 	assert := func(t *testing.T, when string) {
 		t.Helper()
@@ -145,19 +169,21 @@ func TestWaitBudgetIsDerivedFromTheStatementBudget(t *testing.T) {
 }
 
 // TestAcquireExclusive_WaitsTheDerivedBudgetNotTheSQLiteTotal is the regression
-// fence for the defect itself, measured on the wall clock rather than computed
-// from the constants.
+// fence for the defect itself, and it turns on the number of attempts the
+// acquisition makes rather than on how long it took.
 //
-// The arithmetic above cannot catch this one. A build that derived WaitBudget
-// correctly and then went on calling backoff.Retry — the fixed 2500 ms — would
-// satisfy every assertion in this file except this one, and would starve exactly
-// the waiter the budget exists to protect. So the acquisition is timed against a
-// held lock and required to have waited the DERIVED budget.
+// The arithmetic in the test above cannot catch this one. A build that derived
+// WaitBudget correctly and then went on calling backoff.Retry — the fixed
+// 2500 ms — would satisfy every assertion in this file except this one, and
+// would starve exactly the waiter the budget exists to protect.
 //
-// The statement budget is set to the fixed-cost allowance itself, which puts the
-// two candidate sizings a clean factor of two apart on the clock: 5 s if the
-// budget is honoured, 2.5 s if the SQLite total is used instead. No scheduling
-// noise closes a gap that wide, and the cost is one acquisition.
+// The two sizings are separated exactly, with no tolerance and no clock. The
+// statement budget is set to the fixed-cost allowance itself, so the wait budget
+// is strictly greater than backoff.Total; a walk bounded by a greater budget
+// climbs strictly more rungs of the same ladder, so it makes strictly more
+// attempts than backoff.Attempts. A build that used the SQLite total would make
+// exactly backoff.Attempts of them. The counts are integers, so the two cannot
+// be confused by a loaded machine.
 func TestAcquireExclusive_WaitsTheDerivedBudgetNotTheSQLiteTotal(t *testing.T) {
 	dir := t.TempDir()
 
@@ -169,55 +195,43 @@ func TestAcquireExclusive_WaitsTheDerivedBudgetNotTheSQLiteTotal(t *testing.T) {
 	}
 	defer release()
 
+	// Counted only around the CONTENDED acquisition, so the holder's own single
+	// successful attempt is not in the figure.
+	attempts := countLockAttempts(t)
+
 	type attempt struct {
 		release func()
 		err     error
-		elapsed time.Duration
 	}
 	done := make(chan attempt, 1)
 	go func() {
-		start := time.Now()
 		r, acqErr := AcquireExclusive(dir)
-		done <- attempt{release: r, err: acqErr, elapsed: time.Since(start)}
+		done <- attempt{release: r, err: acqErr}
 	}()
 
-	select {
-	case got := <-done:
-		if got.err == nil {
-			got.release()
-			t.Fatal("contended acquisition succeeded; the lock is not exclusive")
-		}
-		if !errors.Is(got.err, utils.ErrGraphStore) {
-			t.Errorf("contention must surface as utils.ErrGraphStore (exit 1), got: %v", got.err)
-		}
-		// The regression, named: a wait sized on the SQLite total alone would
-		// have given up here, while a statement running the whole budget in force
-		// would still have been holding the lock.
-		//
-		// The threshold clears backoff.Total by a tenth rather than testing
-		// against it exactly, because an exhausted 2500 ms ladder lands a few
-		// milliseconds PAST 2500 ms — the sleeps guarantee a minimum and the
-		// clock is read around the whole loop. Measured, the reverted
-		// implementation returns at 2.5029 s, which a strict comparison against
-		// 2.5 s would let through. The derived budget in force here is twice the
-		// total, so the two sizings stay unambiguously apart.
-		if outlasted := backoff.Total() + backoff.Total()/10; got.elapsed < outlasted {
-			t.Errorf("the contended acquisition gave up after %v, no meaningfully longer than the "+
-				"SQLite policy's total of %v, while the statement budget in force is %v and the "+
-				"derived wait is %v. The wait is sized on backoff.Total again, so a holder that stays "+
-				"inside its own budget starves the waiter (SPEC/GRAPH.md § Lock Contention)",
-				got.elapsed, backoff.Total(), StatementBudget, WaitBudget())
-		}
-		// A little slack below the nominal figure: time.Sleep guarantees a
-		// minimum, but the comparison is against a clock read taken around the
-		// whole loop, and coarse timer resolution can shave a fraction off.
-		if floor := WaitBudget() - WaitBudget()/10; got.elapsed < floor {
-			t.Errorf("the contended acquisition waited %v, less than the derived budget of %v",
-				got.elapsed, WaitBudget())
-		}
-	case <-time.After(4 * WaitBudget()):
-		t.Fatalf("contended acquisition still blocked after %v; the wait must be BOUNDED "+
-			"(SPEC/GRAPH.md § Lock Contention rule 2)", 4*WaitBudget())
+	got := <-done
+	if got.err == nil {
+		got.release()
+		t.Fatal("contended acquisition succeeded; the lock is not exclusive")
+	}
+	if !errors.Is(got.err, utils.ErrGraphStore) {
+		t.Errorf("contention must surface as utils.ErrGraphStore (exit 1), got: %v", got.err)
+	}
+
+	// The premise of the comparison, asserted rather than assumed: with the
+	// budget in force the derived wait must exceed the SQLite total, or the two
+	// sizings would climb the same walk and the count below would prove nothing.
+	if WaitBudget() <= backoff.Total() {
+		t.Fatalf("the derived wait is %v and the SQLite total is %v; the two sizings are not "+
+			"separated under this statement budget, so the attempt count cannot tell them apart",
+			WaitBudget(), backoff.Total())
+	}
+	if *attempts <= backoff.Attempts {
+		t.Errorf("the contended acquisition made %d attempts, no more than the %d the SQLite "+
+			"policy's own total pays for, while the statement budget in force is %v and the derived "+
+			"wait is %v. The wait is sized on backoff.Total again, so a holder that stays inside "+
+			"its own budget starves the waiter (SPEC/GRAPH.md § Lock Contention)",
+			*attempts, backoff.Attempts, StatementBudget, WaitBudget())
 	}
 }
 
@@ -238,9 +252,8 @@ func TestAcquireExclusive_MutualExclusion(t *testing.T) {
 
 	// A second acquisition while the first is held must not succeed, and must
 	// fail only after the bounded wait rather than on the first collision.
-	start := time.Now()
+	attempts := countLockAttempts(t)
 	release2, err := AcquireExclusive(dir)
-	elapsed := time.Since(start)
 	if err == nil {
 		release2()
 		release1()
@@ -252,10 +265,17 @@ func TestAcquireExclusive_MutualExclusion(t *testing.T) {
 	if !strings.Contains(err.Error(), busyExclusiveMessage) {
 		t.Errorf("contention message = %q, want it to contain %q", err.Error(), busyExclusiveMessage)
 	}
-	if elapsed < firstRung {
-		t.Errorf("the second acquisition failed after %v, which is less than the ladder's first "+
-			"delay of %v: it failed on the first collision instead of waiting "+
-			"(SPEC/GRAPH.md § Lock Contention rule 1)", elapsed, firstRung)
+	// It waited rather than failing on the first collision, and it waited the
+	// whole walk. At a statement budget of zero the derived wait IS the SQLite
+	// total, and the budgeted walk at that bound is the SQLite ladder element for
+	// element (internal/backoff's TestBudgetedLadderMatchesTheRetryLadder), so
+	// the attempt count is exactly backoff.Attempts. One attempt would be the
+	// first-collision failure this rule forbids.
+	if *attempts != backoff.Attempts {
+		t.Errorf("the second acquisition made %d attempts, want %d. One means it failed on the "+
+			"first collision instead of waiting; fewer than %d means it gave up inside the bounded "+
+			"wait (SPEC/GRAPH.md § Lock Contention rule 1)",
+			*attempts, backoff.Attempts, backoff.Attempts)
 	}
 
 	// After releasing the first lock, it must be acquirable again.
@@ -271,17 +291,20 @@ func TestAcquireExclusive_MutualExclusion(t *testing.T) {
 // criterion 20 for the exclusive mode, and pins BOTH halves of the contention
 // policy, because each half on its own is satisfied by a broken implementation:
 //
-//   - the contended acquisition must take AT LEAST the bounded wait, or it is
-//     failing on the first collision and every statement against a busy roadmap
-//     becomes intermittently unavailable;
+//   - the contended acquisition must make every attempt the bounded wait pays
+//     for, or it is failing on the first collision and every statement against a
+//     busy roadmap becomes intermittently unavailable;
 //   - it must RETURN, and with utils.ErrGraphStore, or an invocation hangs — and
 //     one of the two callers of this lock is an HTTP request handler.
 //
-// The lower bound is what would have caught the pre-collapse behaviour, in
-// which a second acquisition failed at once; the upper bound is what catches a
-// port that drops LOCK_NB or LOCKFILE_FAIL_IMMEDIATELY, since either turns the
+// The attempt count is what would have caught the pre-collapse behaviour, in
+// which a second acquisition failed at once; the RETURN is what catches a port
+// that drops LOCK_NB or LOCKFILE_FAIL_IMMEDIATELY, since either turns the
 // bounded Go-side wait into an unbounded kernel block that no assertion on the
-// returned error could ever see.
+// returned error could ever see. Requiring that the call ends is an outcome and
+// not a duration (SPEC/BUILD.md § No Benchmarks and No Performance-Measurement
+// Tests); a run in which it never ends is stopped by the test gate's own
+// timeout.
 //
 // The contended call is made on a separate goroutine so that a blocking
 // implementation fails this test with a clear diagnostic rather than
@@ -297,43 +320,36 @@ func TestAcquireExclusive_ContentionWaitsThenFails(t *testing.T) {
 	}
 	defer release()
 
+	attempts := countLockAttempts(t)
+
 	type attempt struct {
 		release func()
 		err     error
-		elapsed time.Duration
 	}
 	done := make(chan attempt, 1)
 	go func() {
-		start := time.Now()
 		r, err := AcquireExclusive(dir)
-		done <- attempt{release: r, err: err, elapsed: time.Since(start)}
+		done <- attempt{release: r, err: err}
 	}()
 
-	// Generously larger than the bounded wait: this ceiling only distinguishes
-	// "returned" from "blocked forever".
-	ceiling := 4 * WaitBudget()
-	select {
-	case got := <-done:
-		if got.err == nil {
-			got.release()
-			t.Fatal("contended acquisition succeeded; the lock is not exclusive")
-		}
-		if !errors.Is(got.err, utils.ErrGraphStore) {
-			t.Errorf("contention must surface as utils.ErrGraphStore (exit 1), got: %v", got.err)
-		}
-		if !strings.Contains(got.err.Error(), busyExclusiveMessage) {
-			t.Errorf("contention message = %q, want it to contain %q", got.err.Error(), busyExclusiveMessage)
-		}
-		// A little slack below the nominal figure: time.Sleep guarantees a
-		// minimum, but the comparison is against a clock read taken around the
-		// whole loop, and coarse timer resolution can shave a fraction off.
-		if floor := WaitBudget() - WaitBudget()/10; got.elapsed < floor {
-			t.Errorf("the contended acquisition gave up after %v; it must wait the derived budget "+
-				"(about %v) before failing (SPEC/GRAPH.md § Lock Contention rule 1)", got.elapsed, WaitBudget())
-		}
-	case <-time.After(ceiling):
-		t.Fatalf("contended acquisition still blocked after %v; the wait must be BOUNDED and end in "+
-			"a failure, never an indefinite block (SPEC/GRAPH.md § Lock Contention rule 2)", ceiling)
+	got := <-done
+	if got.err == nil {
+		got.release()
+		t.Fatal("contended acquisition succeeded; the lock is not exclusive")
+	}
+	if !errors.Is(got.err, utils.ErrGraphStore) {
+		t.Errorf("contention must surface as utils.ErrGraphStore (exit 1), got: %v", got.err)
+	}
+	if !strings.Contains(got.err.Error(), busyExclusiveMessage) {
+		t.Errorf("contention message = %q, want it to contain %q", got.err.Error(), busyExclusiveMessage)
+	}
+	// Every attempt the derived wait pays for was made. At the statement budget
+	// in force here the derived wait is the SQLite total, whose budgeted walk is
+	// the SQLite ladder, so the count is exactly backoff.Attempts.
+	if *attempts != backoff.Attempts {
+		t.Errorf("the contended acquisition made %d attempts, want %d: it must climb the whole "+
+			"derived wait before failing (SPEC/GRAPH.md § Lock Contention rule 1)",
+			*attempts, backoff.Attempts)
 	}
 }
 

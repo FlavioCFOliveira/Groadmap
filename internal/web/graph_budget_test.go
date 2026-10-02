@@ -130,7 +130,7 @@ func TestGraphQueryBudget_ProductionDefault(t *testing.T) {
 func TestGraphQueryBudget_StatementAndWaitFitTheWriteTimeout(t *testing.T) {
 	// The term comes from the server the process actually builds, so the fence
 	// moves with the timeout instead of restating it.
-	writeTimeout := newServer().WriteTimeout
+	writeTimeout := newServer(newHostPolicy(defaultHost, defaultPort)).WriteTimeout
 	if want := 30 * time.Second; writeTimeout != want {
 		t.Fatalf("WriteTimeout = %v, want %v (SPEC/WEB.md § HTTP Server Timeouts): the budgets below "+
 			"are sized against this figure, so a change to it is a change to them", writeTimeout, want)
@@ -190,11 +190,17 @@ func TestHandleGraphData_BudgetIsNotCallerControlled(t *testing.T) {
 // aggregate over a Cartesian product returns a single 33-byte row after scanning
 // the whole product, at a cost cubic in the size of the store.
 //
-// The test proves the three properties SPEC/WEB.md § Acceptance Criteria,
-// criterion 110 requires: the request comes back inside the budget instead of
-// running to completion, it is answered as a query EXECUTION failure (the same
-// classification an engine failure gets, not a new one), and the server keeps
-// serving afterwards.
+// The test proves the properties SPEC/WEB.md § Acceptance Criteria, criterion 110
+// requires: the request is answered as a query EXECUTION failure (the same
+// classification an engine failure gets, not a new one), the reason names the
+// budget in force, and the server keeps serving afterwards.
+//
+// **The reason line is what establishes that the BUDGET stopped the query.** A
+// query that failed for any other cause carries a different reason, so the line
+// already separates the budget from every other outcome; an assertion on how long
+// the request took would separate nothing and would make the test a measurement
+// of the machine (SPEC/BUILD.md § No Benchmarks and No Performance-Measurement
+// Tests).
 func TestHandleGraphData_ExpensiveQueryHitsTimeBudget(t *testing.T) {
 	t.Setenv("HOME", shortHome(t))
 	name := seedRoadmap(t, "web-ui-rollout")
@@ -211,20 +217,9 @@ func TestHandleGraphData_ExpensiveQueryHitsTimeBudget(t *testing.T) {
 	const budget = 150 * time.Millisecond
 	serveGraphAtBudget(t, name, budget)
 
-	started := time.Now()
 	rec := doGraphData(t, name, url.Values{"q": {expensiveGraphQuery}, "limit": {"3000"}})
-	elapsed := time.Since(started)
 
-	// (i) It returned within the budget rather than running to completion. The
-	// ceiling is generous (13x the budget) so a loaded or race-instrumented
-	// machine cannot flake it, and still an order of magnitude below the ~6s the
-	// unbounded query costs against this store.
-	if elapsed > 2*time.Second {
-		t.Errorf("request took %v with a %v budget over %d nodes: the query ran to completion; the budget did not bound the work", elapsed, budget, nodes)
-	}
-	t.Logf("expensive query over %d nodes returned in %v under a %v budget (unbounded cost: ~6s)", nodes, elapsed, budget)
-
-	// (ii) It is classified as a query execution failure — case 2 of
+	// (i) It is classified as a query execution failure — case 2 of
 	// § Query-Bar Error Handling — with no new status and no new kind
 	// (SPEC/WEB.md § Graph Query Time Budget, rules 4 and 5).
 	if rec.Code != http.StatusBadRequest {
@@ -376,89 +371,75 @@ func TestHandleGraphData_OrdinaryQueryUnaffectedByBudget(t *testing.T) {
 	}
 }
 
-// TestLoadGraphView_ClientDisconnectIsNotReportedAsTheBudget guards the trap in
-// classifying the two composed cancellation sources: the budget is derived FROM
-// the request context, so both a client disconnect and an exhausted budget abort
-// the same query through the same derived context. They must not be confused.
+// TestLoadGraphView_ClientDisconnectIsNotClassified guards the trap in the two
+// composed cancellation sources: the budget is derived FROM the request context,
+// so both a client disconnect and an exhausted budget can end the same
+// statement. They must not be confused, and the disconnect must not be
+// classified at all.
 //
 // A request whose own context is already cancelled — the client disconnected —
-// must still be an execution failure (rule 4: no new kind), but reported as the
-// cancellation it is, never as budget exhaustion.
-func TestLoadGraphView_ClientDisconnectIsNotReportedAsTheBudget(t *testing.T) {
+// is not a query-bar failure: it is answered 499 by the handler, which decides
+// it from the request's context (SPEC/WEB.md § Requests Abandoned by the Client,
+// rule 1; § Query-Bar Error Handling, rule 8). So what loadGraphView hands back
+// must be neither a classified query-bar failure, which the handler would answer
+// 400 with kind execution, nor an unavailable graph server, which it would answer
+// 503; and it must not blame the budget. The withdrawn line "the request was
+// cancelled before the query finished" is asserted absent by content: no
+// classified reason is produced at all.
+func TestLoadGraphView_ClientDisconnectIsNotClassified(t *testing.T) {
 	t.Setenv("HOME", shortHome(t))
 	// A REACHABLE graph, because the point of the test is what a disconnect is
-	// reported as and not what an unserved roadmap is. Without a server the
-	// request would fail at the resolution and the classification below would be
-	// about the missing server.
+	// reported as and not what an unserved roadmap is.
 	name := servedRoadmapAtBudget(t, "web-ui-rollout", time.Hour, graphSeedQueries()...)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // the client went away before the query could run
 
 	_, err := loadGraphView(ctx, name, "MATCH (n) RETURN n", "100")
-	qe, ok := asGraphQueryError(err)
-	if !ok {
-		t.Fatalf("err = %v (%T), want a classified graphQueryError", err, err)
+	if err == nil {
+		t.Fatal("a request whose context was already cancelled succeeded; the cancellation must stop it")
 	}
-	if qe.Kind != graphErrExecution {
-		t.Errorf("kind = %q, want %q: a cancelled request is still an execution failure, not a new kind", qe.Kind, graphErrExecution)
+	if qe, ok := asGraphQueryError(err); ok {
+		t.Errorf("err is a classified query-bar failure (kind %q, reason %q): an abandoned request is "+
+			"not a query-bar failure and carries no kind", qe.Kind, qe.Reason)
 	}
-	if strings.Contains(qe.Reason, "budget") {
-		t.Errorf("reason = %q: the client disconnected, so the failure must not be blamed on the query time budget", qe.Reason)
+	if ue, ok := asGraphUnavailable(err); ok {
+		t.Errorf("err is an unavailable graph server (%v): a probe the request's own cancellation "+
+			"stopped is no evidence about the server", ue)
 	}
-	if !strings.HasPrefix(qe.Reason, "query failed to execute: ") {
-		t.Errorf("reason = %q, want the existing \"query failed to execute: \" message", qe.Reason)
+	if !errors.Is(err, context.Canceled) {
+		t.Errorf("err = %v, want it to carry context.Canceled so the record names the cancellation", err)
+	}
+	if strings.Contains(err.Error(), "budget") {
+		t.Errorf("err = %v: the client disconnected, so the failure must not be blamed on the query time budget", err)
 	}
 }
 
 // TestGraphExecutionError_Classification drives the classifier directly over the
-// three failures the endpoint can see, including the pair a live parent context
-// separates. It is the unit-level companion to the two tests above: it fences
-// the wording of each reason, and it fences the rule that all three keep the
-// single execution kind (SPEC/WEB.md § Graph Query Time Budget, rules 4 and 5).
+// two failures it words, and fences the rule that both keep the single execution
+// kind (SPEC/WEB.md § Graph Query Time Budget, rules 4 and 5). A cancellation by
+// the client is not one of them: it is answered as an abandoned request before
+// any classification (SPEC/WEB.md § Requests Abandoned by the Client, rule 5).
 func TestGraphExecutionError_Classification(t *testing.T) {
-	live := context.Background()
-
-	cancelled, cancel := context.WithCancel(context.Background())
-	cancel()
-
 	// What the engine returns: it wraps ctx.Err() with a "cypher:" prefix
 	// (cypher.checkContext), so the wrapped sentinel is what must be matched.
 	wrappedDeadline := fmt.Errorf("cypher: %w", context.DeadlineExceeded)
-	wrappedCancel := fmt.Errorf("cypher: %w", context.Canceled)
 	engineFailure := errors.New("cypher: parse error at offset 12")
 
 	cases := []struct {
 		name         string
-		parent       context.Context
 		err          error
 		wantContains string
 		wantAbsent   string
 	}{
 		{
-			name:         "budget exhausted on a live request",
-			parent:       live,
+			name:         "budget exhausted",
 			err:          wrappedDeadline,
 			wantContains: "exceeded the 150ms query time budget",
 			wantAbsent:   "cancelled",
 		},
 		{
-			name:         "client disconnected",
-			parent:       cancelled,
-			err:          wrappedCancel,
-			wantContains: "the request was cancelled before the query finished",
-			wantAbsent:   "budget",
-		},
-		{
-			name:         "parent deadline, not ours",
-			parent:       cancelled,
-			err:          wrappedDeadline,
-			wantContains: "the request was cancelled before the query finished",
-			wantAbsent:   "budget",
-		},
-		{
 			name:         "ordinary engine failure keeps its message",
-			parent:       live,
 			err:          engineFailure,
 			wantContains: "cypher: parse error at offset 12",
 			wantAbsent:   "budget",
@@ -467,7 +448,7 @@ func TestGraphExecutionError_Classification(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			qe := graphExecutionError(tc.parent, 150*time.Millisecond, tc.err)
+			qe := graphExecutionError(150*time.Millisecond, tc.err)
 			if qe.Kind != graphErrExecution {
 				t.Errorf("kind = %q, want %q for every execution failure", qe.Kind, graphErrExecution)
 			}

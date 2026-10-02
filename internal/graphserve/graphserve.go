@@ -40,8 +40,10 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"math"
 	"net"
 	"os"
+	"path/filepath"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -295,67 +297,61 @@ const maxConnections = 128
 // the socket, which is the only party that issues a BEGIN here.
 const maxOpenTxPerPrincipal = maxConnections
 
-// checkpointCadence is the pair of durations the in-flight checkpointer runs
-// under: how stale the snapshot may become before a fold is owed, and how often
-// the loop looks.
+// checkpointCadence is the pair of durations the in-flight fold runs under: how
+// long after the last fold another one becomes due, and how often the cadence
+// looks.
 //
 // # Why a parameter and not a package constant
 //
 // At a five-minute cadence fixed in a constant, NOTHING can drive the in-flight
-// checkpointer in a test: the fold is unreachable inside any run a test may take,
-// so every assertion about what an in-flight checkpoint does would have to be
-// made about a code path that never executes (rmp task #369, FINDING #282). The
-// value and the seam are therefore the same question, and this type takes both.
+// fold in a test: it is unreachable inside any run a test may take, so every
+// assertion about what an in-flight checkpoint does would have to be made about a
+// code path that never executes (rmp task #369, FINDING #282). The value and the
+// seam are therefore the same question, and this type takes both.
 //
-// The engine's own seam for this is unusable from here. checkpoint.WithClock
-// injects a clock the cadence loop reads, but its parameter type is
-// clock.Clock from GoGraph/internal/clock, and an internal package of another
-// module cannot be imported. Injecting the DURATIONS is the only seam available,
-// and it has the advantage of driving the production loop rather than a virtual
-// one.
+// # Who reads it
 //
-// # Why Interval is set explicitly rather than left to default to MaxAge/4
+// Groadmap, and not the engine. The engine's checkpointer is constructed with no
+// cadence at all, so its own loop never folds on a timer; [inFlightCheckpoint]
+// ticks at interval, and at each tick on which maxAge has elapsed since the last
+// fold it consults the gate and asks the checkpointer to fold only when the gate
+// finds the write-ahead log grown (SPEC/GRAPH.md § Durability and Checkpointing
+// in a Long-Lived Process, rules 9 and 10). The two durations mean what they
+// meant when the engine's loop read them, because the driver reproduces that
+// loop's timing exactly:
 //
-// The loop only CHECKS MaxAge on a tick, so Interval is the real granularity of
-// the cadence: a fold is owed at MaxAge and taken at the first tick after it, so
-// the effective staleness bound is MaxAge + Interval and not MaxAge. Interval
-// also fixes when the FIRST fold happens — the loop's lastFire starts at the zero
-// time, so clock.Since(lastFire) already exceeds any MaxAge at the very first
-// tick and the first checkpoint fires one INTERVAL into the process, not one
-// MaxAge in. Leaving Interval derived makes one of the two numbers a surprise
-// rather than a decision, and it is the number that governs both of those
-// behaviours.
+//   - interval is the real granularity: a fold becomes due at maxAge and is
+//     taken at the first tick after it, so the effective staleness bound is
+//     maxAge + interval and not maxAge.
+//   - The last fold starts at the zero time, so the very first tick finds a fold
+//     due: the first fold is consulted one INTERVAL into the process, not one
+//     maxAge in.
+//   - A due fold the gate withholds is not a fold. The last-fold time does not
+//     move, so the cadence stays due and the gate is consulted again at the next
+//     tick, and a write that arrives after any idle interval is folded no later
+//     than the cadence would have folded it on a server that had never been idle.
+//
+// Leaving interval derived makes one of the two numbers a surprise rather than a
+// decision, and it is the number that governs all three behaviours above.
 //
 // # What the cadence can and cannot bound
 //
-// It can only be a TIME. checkpoint.Config carries exactly Dir, MaxAge and
-// Interval: there is no size trigger and no operation-count trigger, so the
-// write-ahead log's growth between folds is bounded by the write rate alone. A
-// burst inside one window grows the log without limit, and the next open replays
-// all of it. That is the residual SPEC/GRAPH.md § Durability and Checkpointing in
-// a Long-Lived Process, rule 6, leaves open by fixing that a cadence exists
-// rather than what it bounds.
+// It can only be a TIME. There is no size trigger and no operation-count trigger,
+// so the write-ahead log's growth between folds is bounded by the write rate
+// alone. A burst inside one window grows the log without limit, and the next open
+// replays all of it. That is the residual SPEC/GRAPH.md § Durability and
+// Checkpointing in a Long-Lived Process, rule 6, leaves open by fixing that a
+// cadence exists rather than what it bounds.
 //
-// A maxAge of zero DISABLES age-based triggering, which is the engine's
-// documented meaning for it and not a Groadmap convention. It is what the
-// benchmarks use to hold the write-ahead log still while they measure its growth
-// per write: a fold that truncated the log mid-measurement would destroy the
-// quantity being measured.
+// # The zero value disables the in-flight fold altogether
 //
-// # The zero value disables MORE than the trigger, deliberately
-//
-// checkpointCadence{} leaves interval at zero as well as maxAge, and the two
-// zeroes compose into something stronger than "the age trigger never fires".
-// checkpoint.New derives Interval = MaxAge/4 only when Interval == 0 AND
-// MaxAge > 0, so a disabled cadence reaches the loop with Interval still zero —
-// and the loop builds a ticker only when Interval is positive. A disabled cadence
-// is therefore a loop with NO CLOCK at all, selecting on its stop and trigger
-// channels and nothing else, rather than a loop that ticks and declines to fire.
-//
-// That is the property a benchmark wants: no periodic wake-up landing inside a
-// timed region, not merely no fold. It is also why [build] starts no
-// [checkpointWatch] under it — with no ticker there is no in-flight attempt to
-// observe, so a poller would sample a level nothing ever writes.
+// A maxAge of zero means no fold is ever due, and [build] then starts no
+// [inFlightCheckpoint] at all: no ticker, no goroutine, no periodic wake-up. That
+// is what a test of the fold's EFFECTS wants — nothing the server does on its own
+// can change the store under the assertion — and it is what a test of the log
+// itself uses to hold the write-ahead log still, since a fold that truncated the
+// log mid-assertion would remove the very bytes the assertion is about. The
+// shutdown checkpoint is unaffected by it.
 type checkpointCadence struct {
 	maxAge   time.Duration
 	interval time.Duration
@@ -363,99 +359,57 @@ type checkpointCadence struct {
 
 // productionCadence is the cadence a real `rmp graph serve` runs under.
 //
-// SPEC/GRAPH.md § Durability and Checkpointing in a Long-Lived Process requires
-// that a cadence EXIST and that it be bounded by something other than the
-// process's lifetime, and deliberately fixes no value: the cost of a checkpoint
-// is proportional to the live graph — 19.7 ms on a 1.3 MB store, 964 ms on a
-// 122 MB one — and its benefit is proportional to how fast the log is growing,
-// which is a property of the workload. Neither quantity is knowable from a
-// specification.
+// SPEC/GRAPH.md § Durability and Checkpointing in a Long-Lived Process, rule 6,
+// requires that a cadence EXIST and that it be bounded by something other than
+// the process's lifetime, and deliberately fixes no value: the cost of a
+// checkpoint is proportional to the live graph and its benefit is proportional to
+// how fast the log is growing, which is a property of the workload. Neither
+// quantity is knowable from a specification, and this project publishes no figure
+// for either (SPEC/BUILD.md § No Benchmarks and No Performance-Measurement
+// Tests).
 //
 // Five minutes was chosen provisionally, by analogy with the interval PostgreSQL
-// has defaulted its own checkpoint timeout to for two decades. rmp task #370
-// measured the two costs that analogy stands in for, and the measurement INVERTED
-// the expected profile: the cost everyone expects to bind is zero, and the cost
-// that actually decides the value is one the analogy never raises. The values
-// survive. The reason they survive has nothing to do with the analogy that chose
-// them, and the rest of this comment is that reason and not that analogy.
+// has defaulted its own checkpoint timeout to for two decades. What keeps it is
+// stated below; the analogy is not part of it.
 //
-// # The writer cost, which everyone expects to be binding, is zero
+// # The idle cost no longer enters the decision
 //
-// BenchmarkServedWriteWithCheckpointing runs one write load twice at eight
-// concurrent writers, 20,000 writes per run, four interleaved repeats per arm:
-// once with no cadence at all, once folding every second. Folding every second
-// gives 2730 ops/s against the control arm's 2725 — 0.2% apart, against a 1.5%
-// spread WITHIN each arm — and p99 4.78 ms against 5.60 ms, which is inside the
-// control arm's own 4.12-5.74 ms spread. The difference is not merely small: it
-// is below the noise of the measurement that went looking for it.
+// The value used to be defended by what an IDLE server cost: the engine's own
+// loop folded unconditionally, rewriting the whole snapshot at every tick whether
+// or not anything had been written, so a shorter cadence meant more disk traffic
+// from a server doing nothing. That argument is gone. Groadmap drives the fold
+// itself, and the gate withholds every fold that would fold nothing (rules 9 and
+// 10), so an idle server writes nothing at ANY cadence, and a server that is
+// written to folds once per window however short the window is.
 //
-// The engine's three-phase design is why, and it is the reason the result
-// generalises past this hardware. Only phase 1a — quiesce, read the durable
-// watermark, open the MVCC read instant — and phase 3 — truncate the log prefix —
-// hold the commit lock, and both are O(1) in the graph. Phase 1b's O(V+E)
-// serialisation and phase 2's "potentially multi-second" disk write both run with
-// the lock RELEASED, and writers commit throughout them. There is therefore no
-// p99 argument against any cadence, however short.
+// # What decides it now
 //
-// # The benefit of a shorter cadence, quantified
+// Two costs remain, and they are both the cost of a fold that is owed.
 //
-// The write-ahead log grows 83.97 bytes per single-property write, constant at
-// every concurrency measured. Recovery is linear in the log at 0.232 s per MB:
-// 0.47 MB in 0.144 s, 1.90 MB in 0.466 s, 4.79 MB in 1.128 s, 9.59 MB in 2.222 s.
-// At the maximum rate the server can be driven in process, 6729 writes/s, that is
-// 565 KB/s of log, so five minutes is a worst case of about 162 MB of log and
-// 38 s of recovery; at the 1265 writes/s concurrent `rmp graph client` processes
-// reach, one statement per process, it is 30 MB and 7.0 s. Those are the numbers
-// a shorter cadence buys down, and they are the whole of what it buys.
+// The benefit of a shorter cadence is recovery. The write-ahead log grows by a
+// roughly constant amount per write, and recovery is linear in the log, so the
+// log a kill leaves behind and the time to recover it are both bounded by the
+// cadence times the write rate. A shorter cadence buys that bound down, and that
+// is the whole of what it buys.
 //
-// # The cost of a shorter cadence, which is the one that decides it
+// The cost of a shorter cadence is the fold itself, paid once per window in which
+// anything was written: a serialisation of the whole graph and a rewrite of the
+// whole snapshot, proportional to the live graph and not to what changed. It does
+// not stall writers — only the capture and the prefix truncation hold the commit
+// lock, both O(1) in the graph, while the serialisation and the disk write run
+// with the lock released (rmp task #370) — so it is paid in I/O and CPU rather
+// than in latency. A knowledge graph is written in bursts, at a commit, so a
+// shorter window buys little recovery bound between bursts and turns one burst
+// into several whole-graph rewrites.
 //
-// The engine's checkpointer has NO no-op gate. runNonBlocking captures and
-// writeAndTruncate writes unconditionally; nothing anywhere compares this fold's
-// watermark against the previous fold's, so a fold with nothing to fold still
-// serialises the whole graph and still rewrites the whole snapshot. Measured
-// directly rather than inferred: a server on a two-second cadence, with NO client
-// connected and not one statement sent, rewrote its 20.2 MB snapshot on every
-// tick, the manifest's mtime advancing every two to three seconds.
+// Five minutes sits between the two: a kill leaves the next open at most one
+// window of write-ahead log to replay beyond the snapshot, and a burst of writes
+// inside one window is folded once rather than once per statement. The value is unchanged by the gate; what changed is that the
+// reason for it no longer includes a cost that is now zero.
 //
-// That is the opposite of the direct path, where graphstore.Store.Checkpoint
-// carries exactly that gate — it compares the writer's durable offset against the
-// mark the last fold left and returns without writing when nothing was appended —
-// so a statement that appended nothing leaves snapshot/ and wal untouched. The
-// gate exists in this project; it does not exist in the loop.
-//
-// Over ONE DAY of an idle server, on the real 1.4 MB knowledge graph: 403 MB
-// written at five minutes, 1.0 GB at two minutes, 2.0 GB at one minute. On a
-// 36 MB graph — the largest real KNOWLEDGE GRAPH this project has measured, as
-// distinct from the synthetic stores the checkpoint-cost figures above come
-// from — 10 GB, 26 GB and 52 GB respectively.
-//
-// # The conclusion, stated as the inversion it is
-//
-// The two costs point in OPPOSITE directions, and the one expected to decide the
-// value decides nothing: the writer cost of folding is zero, so nothing argues for
-// a longer cadence from the writers' side, while the idle cost of folding is a
-// whole graph rewritten per tick, which argues for a longer one from the disk's.
-// This product's server is idle far more often than it is saturated — a knowledge
-// graph is queried in bursts and written at a commit — so the idle cost is the one
-// that is actually paid, and the longer cadence is the better one.
-//
-// Five minutes therefore survives, on evidence that has nothing to do with the
-// analogy that provisionally chose it. Seventy-five seconds is its quarter, which
-// is what the engine would have derived; it is stated rather than derived for the
-// reasons [checkpointCadence] gives.
-//
-// # What would stop this being a trade-off at all
-//
-// The idle cost is entirely an artefact of the missing gate, and Groadmap could
-// supply one: drive the fold itself with the checkpointer's trigger, gated on
-// wal.Writer.DurableOffset having advanced since the last one, exactly as
-// graphstore.Store.Checkpoint gates the direct path. An idle server would then
-// write nothing at any cadence, and the cadence could be chosen on recovery time
-// alone — which is the only quantity left once the idle cost is zero. That is
-// recorded as an open question for the owner on rmp task #370 and is deliberately
-// NOT built here: it moves the cadence decision out of the engine's loop and into
-// this package, which is a change of ownership rather than a tuning change.
+// Seventy-five seconds is its quarter, which is the interval the engine's own
+// loop would have derived; it is stated rather than derived for the reasons
+// [checkpointCadence] gives.
 func productionCadence() checkpointCadence {
 	return checkpointCadence{maxAge: 5 * time.Minute, interval: 75 * time.Second}
 }
@@ -547,6 +501,16 @@ type Options struct {
 	// serialises nothing (SPEC/ARCHITECTURE.md module 10).
 	Announce func(socket string) error
 
+	// ConfirmRoadmap is called once the store lock is held, before anything
+	// else is probed, removed, bound or opened, and a non-nil result stops the
+	// startup with that error. `rmp graph serve` passes the check that the
+	// roadmap still exists: `rmp roadmap remove` takes the same lock while it
+	// deletes the roadmap, so a server that takes it after such a removal must
+	// find the roadmap gone and serve nothing (SPEC/GRAPH.md § Concurrency and
+	// Recovery, obligation 1). It is a callback because resolving a roadmap is
+	// the CLI's half of the work; nil skips the check.
+	ConfirmRoadmap func() error
+
 	// RoadmapName is the roadmap whose graph is served. It appears in the lock
 	// failure's published line, which names the roadmap rather than the
 	// directory.
@@ -612,6 +576,19 @@ func Run(opts Options) error {
 		return lockRefusal(opts.RoadmapName, err)
 	}
 
+	// The lock is also what `rmp roadmap remove` takes while it deletes the
+	// roadmap, so a server that takes it only after such a removal must find
+	// the roadmap gone and serve nothing. Existence is therefore confirmed
+	// again here, once the lock is held and before anything is probed,
+	// removed, bound or opened (SPEC/GRAPH.md § Concurrency and Recovery,
+	// obligation 1).
+	if opts.ConfirmRoadmap != nil {
+		if err := opts.ConfirmRoadmap(); err != nil {
+			hold.Release()
+			return err
+		}
+	}
+
 	// Step 3. Refuse to start when a live server already answers there, and leave
 	// its socket exactly as it was found.
 	if state, _ := graphclient.Resolve(context.Background(), opts.SocketPath); state.Served() {
@@ -624,8 +601,13 @@ func Run(opts Options) error {
 	// what lets a relaunch after a kill succeed instead of failing on a name that
 	// is already taken.
 	removeStaleSocket(opts.SocketPath)
+	// The same step removes the staging residue a server killed while it was
+	// binding left beside the socket, and nothing else that carries the
+	// reserved prefix (SPEC/GRAPH.md § Socket Path and Permissions, rule 9).
+	removeStagingResidue(filepath.Dir(opts.SocketPath))
 
-	// Step 5. Bind, and set the mode.
+	// Step 5. Bind, with the socket at mode 0600 from its first instant at the
+	// path (see bind).
 	ln, err := bind(opts.SocketPath)
 	if err != nil {
 		hold.Release()
@@ -643,7 +625,7 @@ func Run(opts Options) error {
 		return err
 	}
 
-	closer, srv, err := build(st, opts.GraphDir, productionCadence(), logger)
+	closer, srv, err := build(st, opts.GraphDir, productionCadence(), logger, ln.releaser.statementEnded)
 	if err != nil {
 		_ = closer.Close() //nolint:errcheck // tearing down a server that never served; the close error cannot be acted on
 		_ = st.Close()     //nolint:errcheck // idem: the lock is released by this call whatever it returns
@@ -745,37 +727,14 @@ func removeStaleSocket(path string) {
 	_ = os.Remove(path) //nolint:errcheck // a removal that fails surfaces as the bind failure below, with its own published line
 }
 
-// bind creates the listener and sets the socket's mode.
-//
-// The mode is set explicitly rather than left to the process umask: connecting to
-// a Unix domain socket requires write permission on the file, so a permissive
-// umask leaves the socket connectable by the user's group or by every account on
-// the machine (SPEC/GRAPH.md § Socket Path and Permissions, rule 3). It is set
-// immediately after the bind and therefore before the server answers its first
-// connection, which is what the rule requires; the roadmap home directory's 0700
-// is the outer fence that covers the instant between the two on the default path.
-//
-// A chmod failure closes the listener and reports the bind line, because a socket
-// whose mode could not be set is a socket this server must not answer on.
-func bind(path string) (*serverListener, error) {
-	ln, err := net.Listen("unix", path)
-	if err != nil {
-		return nil, fmt.Errorf("%w: cannot bind %s: %v", utils.ErrGraphServer, path, err)
-	}
-	if err := os.Chmod(path, graphclient.SocketMode); err != nil {
-		_ = ln.Close() //nolint:errcheck // already failing; the close unlinks the socket and its own error cannot be acted on
-		return nil, fmt.Errorf("%w: cannot bind %s: %v", utils.ErrGraphServer, path, err)
-	}
-	return newServerListener(ln), nil
-}
-
 // build assembles the durability stack and the Bolt server over an open store.
 //
-// The checkpointer is the in-flight half of SPEC/GRAPH.md § Durability and
-// Checkpointing in a Long-Lived Process: a server has later opportunities than a
-// short-lived invocation, so it does not checkpoint per write, but the
-// write-ahead log would otherwise grow for the whole process lifetime and the
-// cost of recovering from a kill would grow with it.
+// The checkpointer is what folds the write-ahead log into the snapshot, at the
+// two moments SPEC/GRAPH.md § Durability and Checkpointing in a Long-Lived
+// Process fixes: at a due instant of the cadence while the server runs (rules 5,
+// 9 and 10), and at shutdown (rule 4). The server does not checkpoint per write,
+// but the log would otherwise grow for the whole process lifetime and the cost of
+// recovering from a kill would grow with it.
 //
 // Three of the options are what make the snapshot it writes correct, and none is
 // optional:
@@ -791,6 +750,22 @@ func bind(path string) (*serverListener, error) {
 //     and CREATE CONSTRAINT the graph has seen — the defect of release 1.15.2,
 //     arriving through the engine instead of through our own snapshot call.
 //
+// # Why the checkpointer is given no cadence
+//
+// Its Config carries the directory and nothing else. A zero MaxAge disables the
+// engine's age trigger and a zero Interval builds no ticker, so the engine's loop
+// folds only when it is asked to. It is asked by exactly two parties, both in
+// this package and both through one [foldGate]: [inFlightCheckpoint], at the
+// instants the cadence makes a fold due, and [shutdownCloser], at shutdown.
+//
+// That is the whole point of the arrangement. The engine's loop folds
+// unconditionally — it serialises the whole graph and rewrites the whole snapshot
+// at every fold it takes, whether or not anything was appended since the last
+// one — so a server left to it rewrote its snapshot at every tick while no client
+// was connected, and published at the first tick after a cut write the residue
+// that write left behind (see [foldGate]). Driving the fold from here puts both
+// folds behind the gate the store lifecycle owns (rules 9 and 10).
+//
 // A [shutdownCloser] over the composed store.DB is handed to the server as its
 // Closer, which is what puts the shutdown checkpoint and the write-ahead log's
 // close AFTER the drain rather than beside it: the server closes it only once no
@@ -801,21 +776,17 @@ func bind(path string) (*serverListener, error) {
 // WithFinalCheckpoint is deliberately NOT set, and [shutdownCloser] takes that
 // checkpoint instead. The two run at the same instant and in the same order; what
 // differs is that the composed store discards the checkpoint's error into a
-// metric this project does not read, and shutdownCloser reports it. See there.
+// metric this project does not read, and shutdownCloser reports it — and that the
+// composed store's would be ungated. See there.
 //
 // The cadence is a PARAMETER rather than a constant read from here, for the
-// reason [checkpointCadence] gives: at a production cadence nothing can drive the
-// in-flight checkpointer within a test's lifetime, so the seam and the value are
-// the same question. Production passes [productionCadence].
+// reason [checkpointCadence] gives. Production passes [productionCadence]; a
+// disabled cadence starts no in-flight fold at all.
 //
-// A [checkpointWatch] is started over the checkpointer's statistics whenever the
-// cadence is enabled, which is what makes an in-flight checkpoint failure
-// observable at all (rmp task #369, DECISION #281). It is NOT started when the
-// cadence is disabled: with no age trigger there is no in-flight attempt to
-// observe, and a poller over a checkpointer that never fires would report on the
-// shutdown checkpoint alone — which [shutdownCloser] already reports itself, in
-// the words that fit it.
-func build(st *graphstore.Store, graphDir string, cadence checkpointCadence, log *slog.Logger) (*shutdownCloser, *server.Server, error) {
+// afterFold, which may be nil, runs after every fold that ran: the server
+// passes its memory releaser's, so the memory a fold used is returned to the
+// operating system when the fold ends (see [foldGate.foldIfOwed]).
+func build(st *graphstore.Store, graphDir string, cadence checkpointCadence, log *slog.Logger, afterFold func()) (*shutdownCloser, *server.Server, error) {
 	txnStore := st.Txn()
 	engine := st.Engine()
 
@@ -825,7 +796,7 @@ func build(st *graphstore.Store, graphDir string, cadence checkpointCadence, log
 	var unused sync.Mutex
 
 	cp := checkpoint.New[string, float64](
-		checkpoint.Config{Dir: graphDir, MaxAge: cadence.maxAge, Interval: cadence.interval},
+		checkpoint.Config{Dir: graphDir},
 		st.Graph(), st.WAL(), &unused,
 		checkpoint.WithCommitSerialiser[string, float64](txnStore.RunUnderCommitLock),
 		checkpoint.WithMapperCodec[string, float64](txnStore.Codec()),
@@ -833,23 +804,22 @@ func build(st *graphstore.Store, graphDir string, cadence checkpointCadence, log
 		checkpoint.WithConstraintSpecs[string, float64](engine.ConstraintSpecsForSnapshot),
 		checkpoint.WithIndexSpecs[string, float64](engine.IndexSpecsForSnapshot),
 	)
-	// The loop's own lifetime is bounded by store.DB.Close, which stops it, and
-	// not by this context: a context cancelled from here would stop the loop
-	// without the final checkpoint the shutdown owes.
+	// The loop is what answers a fold request, so it runs even though it never
+	// folds on its own. Its lifetime is bounded by store.DB.Close, which stops
+	// it, and not by this context: a context cancelled from here would stop the
+	// loop before the shutdown checkpoint could be requested of it.
 	cp.Start(context.Background())
 
 	db := store.New(st.WAL(),
 		store.WithCheckpointer(cp),
 		store.WithQuiesce(txnStore.RunUnderCommitLock))
 
-	closer := &shutdownCloser{db: db, cp: cp, st: st}
+	gate := &foldGate{st: st, cp: cp, afterFold: afterFold}
+	closer := &shutdownCloser{db: db, gate: gate}
 
-	// The poll period is DERIVED from the cadence rather than picked; see
-	// [checkpointWatch] for the sampling argument that fixes it at half the
-	// checkpointer's own interval.
 	if cadence.maxAge > 0 {
-		closer.watch = newCheckpointWatch(cp.Stats, watchPeriod(cadence), log)
-		closer.watch.start()
+		closer.inFlight = newInFlightCheckpoint(gate.foldIfOwed, cadence, log)
+		closer.inFlight.start()
 	}
 
 	srv, err := server.NewServer(engine, serverOptions(closer, log))
@@ -857,6 +827,113 @@ func build(st *graphstore.Store, graphDir string, cadence checkpointCadence, log
 		return closer, nil, fmt.Errorf("%w: graph server unavailable: %v", utils.ErrGraphServer, err)
 	}
 	return closer, srv, nil
+}
+
+// foldGate is the ONE place either of the server's checkpoints folds through,
+// and it is what puts both behind the store lifecycle's gate.
+//
+// # The gate, and why it is the store's and not this package's
+//
+// Every fold passes through graphstore.Store.CheckpointIfAppended, which folds
+// only when the write-ahead log holds bytes no fold has covered — including a
+// tail the store already held when it was opened — and records the point the
+// fold captured as the mark the next call compares against. SPEC/GRAPH.md
+// § Durability and Checkpointing in a Long-Lived Process, rules 4 and 5, require
+// ONE comparison and ONE mark for both folds, so neither fold carries a copy of
+// the rule; this type is how both reach the single realisation of it.
+//
+// # What an ungated fold publishes
+//
+// Until rmp task #380 an ungated fold was believed to cost nothing but a wasted
+// write. It costs a permanent one. A statement the budget cuts while it is
+// writing is rolled back, and the rollback restores the LOGICAL graph and not the
+// PHYSICAL one: the key mapper keeps the interned key of every node the statement
+// created and the tombstone set keeps a tombstone for each. An ungated fold
+// writes that residue to disk, where nothing removes it. Measured end to end
+// against this server: ONE cut `MATCH (a),(b),(c) CREATE ()` over a store of 80
+// KB holding 600 nodes left the store at 134 MB — mapper.bin 80.2 MB,
+// tombstones.bin 28.3 MB — and a later `MATCH (n) RETURN count(*)` over the same
+// 600 nodes then cost 1.48 s and 670 MB against 0.01 s and 21.6 MB on a clean
+// store. The control isolates it: one cut READ over the same store left it at 80
+// KB. A cut statement appends nothing, so the gate owes no fold on its account,
+// and the residue reaches the disk only inside a fold a genuine write made owed —
+// a fold that would have captured the same graph with or without it (rule 8).
+//
+// # What the fold reports to the gate
+//
+// The gate needs to know whether the fold cut the prefix it captured, because
+// that decides the mark (see graphstore.Store.CheckpointIfAppended). The engine's
+// checkpointer does not return it, and its statistics do: WALTruncBytes is the
+// lifetime total of the prefixes it has cut, so the difference across one
+// request is what THAT fold cut. The difference is exact because nothing else
+// asks this checkpointer to fold: its own loop has no cadence (see [build]), and
+// every request is made under this type's mutex.
+//
+// # Why the mutex
+//
+// The in-flight fold and the shutdown checkpoint must never run at the same time
+// (rule 10), and the Store's mark is unsynchronised bookkeeping (see
+// graphstore.Store). The shutdown also stops the in-flight fold before it
+// checkpoints, which already keeps the two apart; the mutex is what makes that a
+// property of this type rather than of the order in which its callers happen to
+// run.
+type foldGate struct {
+	st *graphstore.Store
+	cp *checkpoint.Checkpointer[string, float64]
+	// afterFold, when set, runs after every fold that ran; see foldIfOwed.
+	// It is fixed at construction, before any fold can run.
+	afterFold func()
+	mu        sync.Mutex
+}
+
+// foldIfOwed folds the write-ahead log into the snapshot when, and only when, the
+// log has grown since it was last folded, and reports whether a fold ran.
+//
+// The request is unbounded on purpose: SPEC/GRAPH.md § Server Shutdown and the
+// Drain does not bound the shutdown, and a deadline here would abandon a capture
+// that is quiescing behind an undo replay rather than shorten it. The in-flight
+// fold inherits the same property, which is why stopping the in-flight fold waits
+// for one in progress rather than abandoning it.
+//
+// A fold that ran serialised the whole graph, and the memory that took is
+// garbage once it returns. It is handed back to the operating system through
+// afterFold, outside the gate's mutex, for the reason [memoryReleaser] gives:
+// an idle server triggers no collection of its own, and the runtime's
+// background scavenger returns such memory over minutes. Measured on rmp task
+// #589: an in-flight fold after a cut write took an idle server from 0.38 GB
+// to 1.1 GB, where it stayed for more than two minutes without this release.
+func (g *foldGate) foldIfOwed() (bool, error) {
+	ran, err := g.fold()
+	if ran && g.afterFold != nil {
+		g.afterFold()
+	}
+	return ran, err
+}
+
+// fold is foldIfOwed's fold, under the gate's mutex.
+func (g *foldGate) fold() (bool, error) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.st.CheckpointIfAppended(func() (int64, error) {
+		before := g.cp.Stats().WALTruncBytes
+		err := g.cp.TriggerCtx(context.Background())
+		return truncatedSince(before, g.cp.Stats().WALTruncBytes), err
+	})
+}
+
+// truncatedSince is the number of log bytes the checkpointer cut between two
+// readings of its lifetime WALTruncBytes counter, as the signed length the gate
+// takes. A counter that did not advance — or, impossibly, went backwards — cut
+// nothing.
+func truncatedSince(before, after uint64) int64 {
+	if after <= before {
+		return 0
+	}
+	delta := after - before
+	if delta > math.MaxInt64 {
+		return math.MaxInt64
+	}
+	return int64(delta)
 }
 
 // shutdownCloser is what the engine's server closes once its connections have
@@ -868,68 +945,34 @@ func build(st *graphstore.Store, graphDir string, cadence checkpointCadence, log
 //
 // The composed store takes that checkpoint itself when it is constructed with a
 // final-checkpoint option, in the same place and in the same order. What it does
-// NOT do is report the outcome: its own documentation makes the final checkpoint
-// best-effort and its error is deliberately dropped into a metric, on the ground
-// that durability does not depend on it. That ground is correct — every
-// acknowledged commit is already durable in the write-ahead log, which is why
-// step 7 still exits 0 — and the conclusion drawn from it is not ours to draw:
-// SPEC/GRAPH.md § Durability and Checkpointing in a Long-Lived Process, rule 7,
-// and § Synchronous Checkpoint on Write's failure policy both require a
+// NOT do is gate it or report the outcome: its own documentation makes the final
+// checkpoint best-effort and its error is deliberately dropped into a metric, on
+// the ground that durability does not depend on it. That ground is correct —
+// every acknowledged commit is already durable in the write-ahead log, which is
+// why step 7 still exits 0 — and the conclusion drawn from it is not ours to
+// draw: SPEC/GRAPH.md § Durability and Checkpointing in a Long-Lived Process,
+// rule 7, and § Synchronous Checkpoint on Write's failure policy both require a
 // checkpoint failure to reach the reader as a diagnostic without changing the
 // exit code. A server that silently skipped its shutdown checkpoint left a
 // write-ahead log the next open replays in full and a snapshot older than the
 // graph, and nothing anywhere said so.
 //
-// So the checkpoint is requested here, where the error is in hand, and the
-// composed store is then closed for the two steps whose ordering it exists to
-// own: stop the checkpoint loop, then close the write-ahead log under the commit
-// lock. Requesting it before that close is not a choice either — a stopped
-// checkpointer refuses the request — and it is the same order the composed store
-// performs internally.
-//
-// # Why the checkpoint is GATED, and what an ungated one publishes
-//
-// It is taken through graphstore.Store.CheckpointIfAppended, which folds only if
-// the write-ahead log has grown since the store was opened or since the last fold
-// taken through it. The engine's checkpointer has no gate of its own — it
-// serialises the whole graph and rewrites the whole snapshot whenever it is asked
-// — and until rmp task #380 that was believed to cost nothing but a wasted write.
-//
-// It costs a permanent one. A statement the budget cuts while it is writing is
-// rolled back, and the rollback restores the LOGICAL graph and not the PHYSICAL
-// one: the key mapper keeps the interned key of every node the statement created
-// and the tombstone set keeps a tombstone for each. An ungated fold writes that
-// residue to disk, where nothing removes it. Measured end to end against this
-// server: ONE cut `MATCH (a),(b),(c) CREATE ()` over a store of 80 KB holding 600
-// nodes left the store at 134 MB — mapper.bin 80.2 MB, tombstones.bin 28.3 MB —
-// and a later `MATCH (n) RETURN count(*)` over the same 600 nodes then cost 1.48 s
-// and 670 MB against 0.01 s and 21.6 MB on a clean store. The control isolates it:
-// one cut READ over the same store left it at 80 KB.
-//
-// The withdrawn `rmp graph execute` and `rmp web` were never exposed to any of that, and the
-// gate is the whole of the difference — which is why this reuses theirs instead of
-// growing a second one here.
-//
-// # What the gate does NOT cover, stated because it is still reachable
-//
-// The IN-FLIGHT checkpointer publishes the same residue without any shutdown at
-// all: it folds 75 seconds into the process and every five minutes after that,
-// through the engine's own loop, which this package does not drive. Gating that
-// one means Groadmap driving the fold itself — new behaviour inside the server
-// process rather than a value — and rmp task #370, DECISION #302 declined it for
-// this sprint and recorded it as a backlog task. So a server that outlives its
-// first fold can still publish a residue this gate would have refused, and the
-// bound on how long that window is closed is the cadence, not this code.
+// So the checkpoint is requested here, through the same [foldGate] the in-flight
+// fold uses, where the error is in hand, and the composed store is then closed
+// for the two steps whose ordering it exists to own: stop the checkpoint loop,
+// then close the write-ahead log under the commit lock. Requesting it before that
+// close is not a choice either — a stopped checkpointer refuses the request — and
+// it is the same order the composed store performs internally.
 //
 // # Why no error is exempted
 //
 // Every way this checkpoint can fail is worth a line. A refusal from a stopped
-// checkpointer cannot happen from here — this is the only caller, it runs once,
-// and it runs before the loop is stopped — so treating one as benign would
-// silence the one message that would tell us the assumption had broken. The
-// remaining failures are a write-ahead log the engine has poisoned, a capture
-// that could not reach a transaction boundary, and a snapshot the filesystem
-// refused; a reader can act on each of them and on none of them silently.
+// checkpointer cannot happen from here — the loop is stopped only by the close
+// below, after this request — so treating one as benign would silence the one
+// message that would tell us the assumption had broken. The remaining failures
+// are a write-ahead log the engine has poisoned, a capture that could not reach a
+// transaction boundary, and a snapshot the filesystem refused; a reader can act
+// on each of them and on none of them silently.
 //
 // Close is idempotent and returns the same result to every caller, which is what
 // the engine requires of it: the server closes it from whichever of its two
@@ -937,18 +980,14 @@ func build(st *graphstore.Store, graphDir string, cadence checkpointCadence, log
 // the startup paths where nothing was ever served.
 type shutdownCloser struct {
 	db *store.DB
-	cp *checkpoint.Checkpointer[string, float64]
-	// st is the open store, held for its checkpoint GATE and for nothing else:
-	// Close asks it whether the write-ahead log has grown, and folds through the
-	// checkpointer above only if it has. The store's own Close stays with Run,
-	// which took the hold (see [Close] and graphstore.Store.CheckpointIfAppended).
-	st *graphstore.Store
-	// watch is the in-flight checkpoint poller, or nil when the cadence is
-	// disabled and there is nothing in flight to observe. Close stops it before
-	// anything else; see there for why that ordering is load-bearing.
-	watch *checkpointWatch
-	err   error
-	once  sync.Once
+	// gate is the one path either checkpoint folds through; see [foldGate]. The
+	// store's own Close stays with Run, which took the hold.
+	gate *foldGate
+	// inFlight is the in-flight fold, or nil when the cadence is disabled. Close
+	// stops it before anything else; see there for why.
+	inFlight *inFlightCheckpoint
+	err      error
+	once     sync.Once
 }
 
 // Close performs the shutdown checkpoint and then closes the durability stack.
@@ -958,41 +997,24 @@ type shutdownCloser struct {
 // division SPEC/GRAPH.md fixes: a failed close of the log is a teardown failure,
 // and a failed checkpoint after commits that are already durable is a diagnostic.
 //
-// # Why the watch is stopped FIRST
+// # Why the in-flight fold is stopped FIRST
 //
-// The ordering is load-bearing and not tidiness. The shutdown checkpoint below
-// runs through the SAME checkpoint.runCheckpoint the in-flight cadence runs, and
-// that call records its own outcome in Stats().LastError — a LEVEL, overwritten
-// by every completed attempt. A watch still running would therefore sample the
-// SHUTDOWN checkpoint's failure and report it a second time, worded as though an
-// in-flight fold had failed, while this function reports the same failure once
-// more in the words that actually fit it.
-//
-// The same fact is why reading LastError once at shutdown is not a substitute for
-// the poll: by the time the shutdown checkpoint has run, the value describes the
-// shutdown checkpoint and no longer describes any in-flight attempt. An in-flight
-// failure that a later in-flight success cleared is unobservable after the fact by
-// construction, which is what makes the poller the only place it can be seen.
+// The in-flight fold and the shutdown checkpoint never run at the same time, and
+// they share one mark (SPEC/GRAPH.md § Durability and Checkpointing in a
+// Long-Lived Process, rule 10). Stopping the in-flight fold joins its goroutine,
+// waiting for a fold already in progress to finish rather than abandoning it, so
+// by the time the shutdown checkpoint consults the gate, the mark already records
+// whatever that fold covered, and no in-flight fold can begin behind it. It also
+// means no goroutine of this package outlives the server.
 func (c *shutdownCloser) Close() error {
 	c.once.Do(func() {
-		// Before anything else, and before the checkpoint below overwrites the
-		// level the watch samples. stop joins, so no goroutine of this package's
-		// outlives the server.
-		if c.watch != nil {
-			c.watch.stop()
+		if c.inFlight != nil {
+			c.inFlight.stop()
 		}
 
-		// Step 4, under the graph store's own gate: fold ONLY if the write-ahead
-		// log has grown. See the type documentation for what an ungated fold
-		// publishes and why the gate is the store's rather than this package's.
-		//
-		// The trigger itself is unbounded on purpose: SPEC/GRAPH.md § Server
-		// Shutdown and the Drain does not bound the shutdown, and a deadline here
-		// would abandon a capture that is quiescing behind an undo replay rather
-		// than shorten it.
-		if _, err := c.st.CheckpointIfAppended(func() error {
-			return c.cp.TriggerCtx(context.Background())
-		}); err != nil {
+		// Step 4, under the gate: fold ONLY if the write-ahead log has grown since
+		// it was last folded. See [foldGate] for what an ungated fold publishes.
+		if _, err := c.gate.foldIfOwed(); err != nil {
 			logger.Error(shutdownCheckpointMessage(err), slog.String("err", err.Error()))
 		}
 		// Step 5, the store's half: stop the checkpoint loop, then close the
@@ -1007,9 +1029,9 @@ func (c *shutdownCloser) Close() error {
 // between the two conditions a checkpoint can be in.
 //
 // Both branches name THIS checkpoint rather than checkpoints in general, and that
-// is load-bearing rather than tidy: the in-flight watch reports on the same
-// stderr stream of the same process, and a reader must be able to tell which of
-// the two failed (see checkpointwatch.go, which owns the other subject line).
+// is load-bearing rather than tidy: the in-flight fold reports on the same stderr
+// stream of the same process, and a reader must be able to tell which of the two
+// failed (see checkpointwatch.go, which owns the other subject line).
 //
 // The general branch says what is safe and what did not happen, which is the
 // whole of what an operator can act on for a condition that may clear the next
@@ -1017,9 +1039,9 @@ func (c *shutdownCloser) Close() error {
 // the field the snapshot format refuses is committed graph state, so it refuses
 // every later checkpoint too — including this one, on every later shutdown of
 // this store — until a statement removes or shortens it. Its wording is
-// graphstore's, shared with the CLI and the web endpoint so the four things
+// graphstore's, shared with the in-flight fold's report so the four things
 // SPEC/GRAPH.md § Field Length Limits, rule 9, requires are said once rather than
-// three times.
+// twice.
 //
 // Neither branch folds in the engine's own error: the caller logs it as the "err"
 // attribute, which is where a reader of structured output finds which field is at
@@ -1441,6 +1463,11 @@ type serverListener struct {
 	// from an error it did not.
 	stopped chan struct{}
 
+	// bound is the socket file this listener must remove when it stops
+	// accepting, or nil when the underlying listener removes its own (see
+	// [boundSocket]).
+	bound *boundSocket
+
 	// conns is every accepted connection that has not yet been closed, mapped to
 	// the write-sequence value markWrites last recorded for it. It is bounded by
 	// maxConnections, which is the one ceiling that bounds every per-connection
@@ -1448,6 +1475,10 @@ type serverListener struct {
 	// beside the mutex that guards it because the pointer-bearing fields are kept
 	// together, which is what govet's field alignment asks for.
 	conns map[*drainConn]uint64
+
+	// releaser returns a statement's memory to the operating system when one
+	// of this listener's connections ends a statement (see memrelease.go).
+	releaser *memoryReleaser
 
 	// live counts connections accepted and not yet closed. It is what the drain
 	// waits on; see drain for why nothing finer is observable from out here.
@@ -1469,6 +1500,7 @@ func newServerListener(ln net.Listener) *serverListener {
 		released: make(chan struct{}),
 		stopped:  make(chan struct{}),
 		conns:    make(map[*drainConn]uint64),
+		releaser: newMemoryReleaser(),
 	}
 }
 
@@ -1489,7 +1521,7 @@ func (l *serverListener) Accept() (net.Conn, error) {
 		return nil, err
 	}
 	l.live.Add(1)
-	wrapped := &drainConn{Conn: conn, owner: l}
+	wrapped := &drainConn{Conn: conn, owner: l, summaries: newSummaryScanner()}
 	l.connsMu.Lock()
 	// Zero is the mark of a connection markWrites has never seen, and zero is
 	// even, so a connection accepted after the mark is never a candidate for the
@@ -1613,6 +1645,7 @@ func (l *serverListener) cutBlockedWrites() int {
 // Serve closes this listener from its own close goroutine and Shutdown closes it
 // again, and Groadmap has closed it once already by the time either runs.
 func (l *serverListener) Close() error {
+	l.releaser.stop()
 	l.stopAccepting()
 	l.releaseOnce.Do(func() { close(l.released) })
 	return nil
@@ -1624,7 +1657,44 @@ func (l *serverListener) stopAccepting() {
 	l.stopOnce.Do(func() {
 		close(l.stopped)
 		_ = l.Listener.Close() //nolint:errcheck // the socket is going away either way; a close error cannot be acted on
+		if l.bound != nil {
+			l.bound.remove()
+		}
 	})
+}
+
+// boundSocket is the socket file a staged bind gave its final name, and the
+// identity of the inode behind it.
+//
+// The standard library's Unix listener unlinks, on Close, the path it was bound
+// to. A staged bind binds under a staging name and links the socket to its final
+// path (see bind), so the listener's own unlink would reach only the staging
+// name, which is already gone, and it is switched off. This is what removes the
+// final name instead, at the moment the listener would have: when the server
+// stops accepting.
+//
+// The identity is why it is a type and not a path. The file at the path is
+// removed only while it is still this server's socket, which the inode settles
+// and the name does not: a file some other party has since put at the path is
+// left exactly as it is.
+type boundSocket struct {
+	info os.FileInfo
+	path string
+}
+
+// remove unlinks the socket's final name if it still names this socket.
+func (b *boundSocket) remove() { removeIfSame(b.path, b.info) }
+
+// removeIfSame removes path when it names the file info describes, and leaves it
+// alone otherwise. A removal that fails is not reported: the socket is going
+// away either way, and step 6 of the shutdown sequence removes a stale socket
+// file whoever left it.
+func removeIfSame(path string, info os.FileInfo) {
+	current, err := os.Lstat(path)
+	if err != nil || !os.SameFile(current, info) {
+		return
+	}
+	_ = os.Remove(path) //nolint:errcheck // see the function comment
 }
 
 // drainConn is one accepted connection, counted by its listener so the drain
@@ -1642,6 +1712,12 @@ func (l *serverListener) stopAccepting() {
 type drainConn struct {
 	net.Conn
 	owner *serverListener
+
+	// summaries finds, in the bytes this connection writes, the summaries
+	// that end a statement, so the statement's memory is returned to the
+	// operating system as the statement ends (see memrelease.go). Like
+	// writeSeq it is touched only by the connection's single writer.
+	summaries *summaryScanner
 
 	// writeSeq is an even/odd sequence counter over this connection's writes: it
 	// is incremented on entry to Write and again on return, so an ODD value means
@@ -1661,10 +1737,20 @@ type drainConn struct {
 // See [serverListener.cutBlockedWrites] for what reads the counter and why the
 // increment cannot be folded into a boolean: the shutdown has to tell one write
 // from the next, not merely writing from not writing.
+//
+// Once the write has returned — so the client already holds what was written,
+// and the write is no longer outstanding for the shutdown's selector — a write
+// that completed a statement's summary returns that statement's memory to the
+// operating system (SPEC/GRAPH.md § Statement-Scoped Memory Release).
 func (c *drainConn) Write(b []byte) (int, error) {
 	c.writeSeq.Add(1)
 	n, err := c.Conn.Write(b)
 	c.writeSeq.Add(1)
+	// The whole buffer is scanned, written or not: a statement whose summary
+	// could not be delivered — its client has gone — has ended all the same.
+	if c.summaries.feed(b) > 0 {
+		c.owner.releaser.statementEnded()
+	}
 	return n, err
 }
 
@@ -1673,6 +1759,9 @@ func (c *drainConn) Write(b []byte) (int, error) {
 func (c *drainConn) Close() error {
 	err := c.Conn.Close()
 	c.closeOnce.Do(func() {
+		// A connection that closes ends whatever statement it was serving,
+		// whether or not a summary was written for it.
+		defer c.owner.releaser.statementEnded()
 		// The registry is left BEFORE the count is decremented, so that a drain
 		// which observes live == 0 can never then find this connection still
 		// registered. See [serverListener.cutBlockedWrites] for what that

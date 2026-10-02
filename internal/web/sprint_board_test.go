@@ -3,6 +3,7 @@ package web
 import (
 	"context"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -14,21 +15,18 @@ import (
 
 // This file is the gate for the Roadmap Sprint Page's member-tasks board: the
 // three fixed columns, the placement and ordering of the cards inside them, the
-// identity between the column counts and the sprint status summary line, the
+// agreement between the column counts and the sprint's member tasks, the
 // card's content, the board's bounded height, and the page's comment read cost
-// (SPEC/WEB.md § Sprint Detail Sub-Template, rule 4; Acceptance Criteria 130 to
-// 140). The COLOUR of each column's count badge is guarded separately, together
-// with the tasks board's, in board_column_badge_test.go.
+// (SPEC/WEB.md § Sprint Detail Sub-Template, rule 3; Acceptance Criteria 130 to
+// 140). The COLOUR of each column's count badge is guarded separately, in
+// board_column_badge_test.go.
 //
 // It replaces the assertions that pinned the six-column member-tasks table the
 // board supersedes: the page renders no table at all any more, so a test written
 // against that table would fail for the wrong reason — its subject is gone.
 //
-// The markup helpers of the tasks board (boardRegion, columnHeader, cardSlice,
-// spanWithRole, cardOpen, cardMarker, shownEmptyState in board_test.go) are reused
-// verbatim wherever they apply, because the two boards emit the same classes and
-// the same data-role hooks: they are one presentation rendered on two pages, and
-// a helper that worked on only one of them would be evidence they had diverged.
+// The markup helpers (boardRegion, columnHeader, cardSlice, spanWithRole,
+// cardOpen, cardMarker, shownEmptyState) live in board_helpers_test.go.
 // The one helper NOT reused here is metaFooter, and its absence is the point: this
 // board's card carries no metadata footer at all, because its two counters share
 // the badge line (SPEC/WEB.md § Sprint Detail Sub-Template, The two cards differ
@@ -43,7 +41,7 @@ import (
 // The six member tasks populate all three columns, with two statuses in WAITING
 // and two in DOING, so a board that mapped one status per column — or that
 // grouped by a categorisation of its own — could not produce the counts the
-// summary line states.
+// member tasks' statuses call for.
 type sprintBoardFixture struct {
 	name     string
 	sprintID int
@@ -72,15 +70,15 @@ func (f *sprintBoardFixture) wantColumns() [][]int {
 	}
 }
 
-// wantSummaryLine is the sprint status summary line the fixture produces: three
-// WAITING, two DOING, one CLOSED, one of six completed (17%).
+// wantColumnCounts is what the fixture's member-task statuses call for: three
+// in BACKLOG or SPRINT, two in DOING or TESTING, one in COMPLETED.
 //
 // The three counts are pairwise distinct and none is zero, which is what makes
-// the identity assertion of Acceptance Criterion 131 discriminating: a board that
-// mapped the categories to the wrong columns would show three numbers that no
-// longer line up with P, A and C, where equal or zero counts would let a
-// mis-mapping pass unnoticed.
-const wantSummaryLine = "17% - P:3 A:2 C:1 - T:6"
+// the assertion of Acceptance Criterion 131 discriminating: a board that mapped
+// the categories to the wrong columns would show three numbers that no longer
+// line up with the statuses, where equal or zero counts would let a mis-mapping
+// pass unnoticed.
+var wantColumnCounts = [3]int{3, 2, 1}
 
 // The member-task titles, named so the fixture and the assertions agree on them
 // without repeating string literals.
@@ -180,7 +178,7 @@ func seedSprintBoardFixture(t *testing.T, name string) sprintBoardFixture {
 	// Membership forces every member to SPRINT, so the statuses that populate the
 	// other columns are set from there. runbook goes back to BACKLOG, which is
 	// the second status the WAITING column holds: SPEC/WEB.md assigns BACKLOG and
-	// SPRINT to that one column, and the sprint summary line counts both as
+	// SPRINT to that one column, and models.CalculateSprintShowResult counts both as
 	// pending, so a member in BACKLOG is a state the board must place, not a
 	// contrived one.
 	for status, ids := range map[models.TaskStatus][]int{
@@ -286,8 +284,8 @@ func seedSprintWithMembers(t *testing.T, name string, n int) int {
 //
 // Bounding it before the Comments card is what makes every "the board shows X"
 // and "the board shows no X" assertion falsifiable: the sprint page renders three
-// cards outside the board — the Sprint details card above it, the Comments card
-// below it, and the single modal shell after the page wrapper — and a page-wide
+// cards outside the board — the Sprint details card above it and the Comments card
+// below it — and a page-wide
 // check would answer for their content as readily as for the board's.
 //
 // The container's marker is `data-role="task-board">`, with the closing angle
@@ -321,12 +319,16 @@ func memberBoardColumns(t *testing.T, body string) []string {
 	return parts[1:]
 }
 
+// reMemberCardID captures the task id of a card from the href of its link to the
+// task's own page.
+var reMemberCardID = regexp.MustCompile(`class="card card-sm card-link text-reset task-card" href="/roadmaps/[^/"]+/tasks/(\d+)"`)
+
 // memberCardIDs returns the task ids of a column's cards, in document order,
 // which is the order the reader sees them in.
 func memberCardIDs(t *testing.T, column string) []int {
 	t.Helper()
 
-	matches := reModalTarget.FindAllStringSubmatch(column, -1)
+	matches := reMemberCardID.FindAllStringSubmatch(column, -1)
 	ids := make([]int, 0, len(matches))
 	for _, m := range matches {
 		id, err := strconv.Atoi(m[1])
@@ -336,29 +338,6 @@ func memberCardIDs(t *testing.T, column string) []int {
 		ids = append(ids, id)
 	}
 	return ids
-}
-
-// reSummaryLine captures the five values of the sprint status summary line.
-var reSummaryLine = regexp.MustCompile(
-	`data-role="sprint-summary">(\d+)% - P:(\d+) A:(\d+) C:(\d+) - T:(\d+)<`)
-
-// summaryLineCounts returns the P, A, C and T values of the summary line the page
-// rendered, read out of the served HTML rather than computed by the test.
-func summaryLineCounts(t *testing.T, body string) (pending, inProgress, completed, total int) {
-	t.Helper()
-
-	m := reSummaryLine.FindStringSubmatch(body)
-	if m == nil {
-		t.Fatalf("the sprint page renders no sprint status summary line in the documented format")
-	}
-	value := func(s string) int {
-		n, err := strconv.Atoi(s)
-		if err != nil {
-			t.Fatalf("the summary line carries the non-integer value %q: %v", s, err)
-		}
-		return n
-	}
-	return value(m[2]), value(m[3]), value(m[4]), value(m[5])
 }
 
 // ==================== THE THREE FIXED COLUMNS ====================
@@ -485,63 +464,81 @@ func TestSprintBoard_EmptySprintIsAnEmptyBoard(t *testing.T) {
 	}
 }
 
-// ==================== THE COUNTS ARE THE SUMMARY LINE'S OWN ====================
+// ==================== THE COUNTS ARE THE MEMBER TASKS' OWN ====================
 
-// TestSprintBoard_ColumnCountsAreTheSummaryLinesOwnNumbers is the gate for
-// Acceptance Criterion 131: each column's badge equals its counterpart in the
-// sprint status summary line rendered at the top of the same page — WAITING is P,
-// DOING is A, CLOSED is C — and the three sum to T.
+// TestSprintBoard_ColumnCountsMatchTheMemberTaskStatuses is the gate for
+// Acceptance Criterion 131: each column's badge is the number of the sprint's
+// member tasks in the statuses the column groups — WAITING counts BACKLOG and
+// SPRINT, DOING counts DOING and TESTING, CLOSED counts COMPLETED — which are the
+// Summary.Pending, Summary.InProgress, and Summary.Completed counters of
+// models.CalculateSprintShowResult for that sprint, and the three sum to
+// Summary.TotalTasks.
 //
-// Both sides are read out of ONE served page and compared against each other,
-// which is what the criterion asks for and is stronger than comparing each
-// against a number the test computes: the property under test is that the board
-// and the line group the sprint's tasks by the SAME categorisation, and a board
-// that grouped the statuses differently could still show three counts that each
-// looked plausible on its own.
-//
-// The fixture's three counts are pairwise distinct and none is zero, so a board
-// that mapped the categories to the wrong columns cannot satisfy the comparison by
-// coincidence.
-func TestSprintBoard_ColumnCountsAreTheSummaryLinesOwnNumbers(t *testing.T) {
+// The expected counts are derived from the sprint's member tasks as the database
+// holds them, read back independently of the page, and each badge is asserted
+// against its own expected count: a board that grouped the statuses differently
+// could still show three counts whose sum is right. The status groups are
+// written out here rather than taken from models.CategorizeTaskStatus, so the
+// check does not borrow the categorisation it is checking.
+func TestSprintBoard_ColumnCountsMatchTheMemberTaskStatuses(t *testing.T) {
 	t.Setenv("HOME", shortHome(t))
 	f := seedSprintBoardFixture(t, "settlement-platform")
 	mux := buildMux()
 
 	body := servePage(t, mux, f.path())
 
-	// The line is exactly the documented format, so the numbers below are read
-	// from the rendering the reader sees.
-	if !strings.Contains(body, wantSummaryLine) {
-		t.Fatalf("the sprint page's summary line is not %q", wantSummaryLine)
+	database, err := db.Open(f.name)
+	if err != nil {
+		t.Fatalf("opening the fixture roadmap: %v", err)
 	}
-	pending, inProgress, completed, total := summaryLineCounts(t, body)
+	defer database.Close() //nolint:errcheck // test cleanup
+	members, err := database.GetSprintTasksFull(context.Background(), f.sprintID, nil, false)
+	if err != nil {
+		t.Fatalf("reading the sprint's member tasks: %v", err)
+	}
+
+	groups := [3][]models.TaskStatus{
+		{models.StatusBacklog, models.StatusSprint},
+		{models.StatusDoing, models.StatusTesting},
+		{models.StatusCompleted},
+	}
+	var want [3]int
+	for _, task := range members {
+		for i, group := range groups {
+			if slices.Contains(group, task.Status) {
+				want[i]++
+			}
+		}
+	}
+
+	// The derivation agrees with the fixture's documented statuses and with the
+	// counters the SPEC names, so none of the three is a number of the test's own
+	// invention.
+	if want != wantColumnCounts {
+		t.Fatalf("the member tasks' statuses call for %v, want the fixture's %v", want, wantColumnCounts)
+	}
+	report := models.CalculateSprintShowResult(&models.Sprint{ID: f.sprintID, Status: models.SprintOpen}, members)
+	if got := [3]int{report.Summary.Pending, report.Summary.InProgress, report.Summary.Completed}; got != want {
+		t.Fatalf("CalculateSprintShowResult counts %v, the member tasks' statuses call for %v", got, want)
+	}
+	total := report.Summary.TotalTasks
+	if total != len(members) {
+		t.Fatalf("CalculateSprintShowResult counts %d tasks, the sprint has %d members", total, len(members))
+	}
 
 	// Falsifiability control: with equal or zero counts a mis-mapped board would
 	// satisfy the comparison below without grouping anything correctly.
-	if pending == inProgress || inProgress == completed || pending == completed {
-		t.Fatalf("the summary line reads P:%d A:%d C:%d; the three must differ for the "+
-			"comparison to discriminate", pending, inProgress, completed)
-	}
-	if pending == 0 || inProgress == 0 || completed == 0 {
-		t.Fatalf("the summary line reads P:%d A:%d C:%d; none may be zero for the comparison "+
-			"to discriminate", pending, inProgress, completed)
+	if want[0] == want[1] || want[1] == want[2] || want[0] == want[2] || slices.Contains(want[:], 0) {
+		t.Fatalf("the expected counts %v must be pairwise distinct and non-zero to discriminate", want)
 	}
 
 	columns := memberBoardColumns(t, body)
-	wantCounts := []struct {
-		label string
-		value int
-	}{
-		{"P", pending}, {"A", inProgress}, {"C", completed},
-	}
-
 	sum := 0
 	for i, column := range columns {
 		heading, count := columnHeader(t, column)
-		if count != wantCounts[i].value {
-			t.Errorf("the %s column's badge reads %d and the summary line's %s reads %d; the "+
-				"board and the line must group the sprint's tasks by the same categorisation",
-				heading, count, wantCounts[i].label, wantCounts[i].value)
+		if count != want[i] {
+			t.Errorf("the %s column's badge reads %d; the sprint has %d member tasks in %v",
+				heading, count, want[i], groups[i])
 		}
 		// The badge states what the column actually holds, not a number carried
 		// beside it: a count that disagreed with the cards would be false about
@@ -553,10 +550,10 @@ func TestSprintBoard_ColumnCountsAreTheSummaryLinesOwnNumbers(t *testing.T) {
 		sum += count
 	}
 	if sum != total {
-		t.Errorf("the three column badges sum to %d and the summary line's T reads %d", sum, total)
+		t.Errorf("the three column badges sum to %d and the sprint has %d member tasks", sum, total)
 	}
 	if cards := strings.Count(memberBoardRegion(t, body), cardOpen); cards != total {
-		t.Errorf("the board renders %d cards and the summary line's T reads %d", cards, total)
+		t.Errorf("the board renders %d cards and the sprint has %d member tasks", cards, total)
 	}
 }
 
@@ -570,7 +567,7 @@ func TestSprintBoard_ColumnCountsAreTheSummaryLinesOwnNumbers(t *testing.T) {
 // Four per column is the smallest set that can carry every case the ordering
 // rule states at once: two cards separated by their timestamp, two carrying the
 // SAME timestamp (the tie), and one carrying none at all (SPEC/WEB.md § Sprint
-// Detail Sub-Template, rule 4, The tiebreaker is the plan; Acceptance Criterion
+// Detail Sub-Template, rule 3, The tiebreaker is the plan; Acceptance Criterion
 // 132).
 //
 // The fields are grouped by column and declared in ID order within each group,
@@ -1112,7 +1109,7 @@ var sprintTieStartedAt = [...]string{
 // property the tiebreaker rests on: the sort that orders a column by its
 // timestamp is STABLE, so the cards the timestamp does not separate come out in
 // the sprint_tasks position order the read delivered them in (SPEC/WEB.md
-// § Sprint Detail Sub-Template, rule 4, The tiebreaker is the plan; Acceptance
+// § Sprint Detail Sub-Template, rule 3, The tiebreaker is the plan; Acceptance
 // Criterion 132).
 //
 // It exists because that property is INVISIBLE in a small column. Go's
@@ -1266,19 +1263,18 @@ func reorderSprintTasks(t *testing.T, roadmap string, sprintID int, taskIDs []in
 
 // ==================== THE CARD ====================
 
-// TestSprintBoard_CardShowsSixDataPointsInOrder is the gate for Acceptance
-// Criterion 133: the card shows exactly six data points, on THREE lines, in this
-// order — the title leading the card, the reference `#<id>` on its own line as
-// secondary text, and one line carrying the priority badge and the severity badge
-// at its leading edge and the number of comments followed by the number of
-// subtasks at its trailing edge, each counter as its icon followed by its number.
+// TestSprintBoard_CardShowsSevenDataPointsInOrder is the gate for Acceptance
+// Criterion 133: the card shows exactly seven data points, on TWO lines, in this
+// order — the title leading the card, then one line carrying at its leading edge
+// the badge line (the id badge reading `#<id>` in bg-black with text-white, the
+// severity badge, the priority badge, and the type badge in the variant the task
+// type mapping assigns) and at its trailing edge the number of comments followed
+// by the number of subtasks, each counter as its icon followed by its number.
 //
 // The COUNTER ORDER is asserted explicitly, and the criterion requires that: a
 // card showing the subtask count before the comment count satisfies every other
-// clause, so an order left implicit is an order the template is free to flip. It
-// is also the order the tasks board's footer does NOT use, which is why the two
-// are stated separately (SPEC/WEB.md § Sprint Detail Sub-Template, The counter
-// order differs from the tasks board's too).
+// clause, so an order left implicit is an order the template is free to flip
+// (SPEC/WEB.md § Sprint Detail Sub-Template, The card).
 //
 // The badge classes are taken FROM the semantic mapping (priorityBadge and
 // severityBadge) rather than written out here, so this test states that the card
@@ -1287,13 +1283,13 @@ func reorderSprintTasks(t *testing.T, roadmap string, sprintID int, taskIDs []in
 // bands, so the two badges carry different classes and a card that read one field
 // for both, or swapped them, fails here.
 //
-// Each badge writes its value behind the one-letter prefix that names it — P9 and
-// S2 — exactly as the tasks board's card does, because the rule is stated once for
-// the card of both boards (SPEC/WEB.md § Roadmap Tasks Page, Card content, item 3;
-// Acceptance Criteria 85 and 133). The prefix is a label and not a value: the
-// class each badge carries is still the one the mapping assigns to the integer
-// alone, which is why the classes below are still read from the helpers.
-func TestSprintBoard_CardShowsSixDataPointsInOrder(t *testing.T) {
+// Each value badge writes its value immediately behind the one-letter badge label
+// that names it — S2 and P9 (SPEC/WEB.md § Sprint Detail Sub-Template, The card;
+// Acceptance Criterion 133). The badge label is a label and
+// not a value: the class each badge carries is still the one the mapping assigns
+// to the integer alone, which is why the classes below are still read from the
+// helpers.
+func TestSprintBoard_CardShowsSevenDataPointsInOrder(t *testing.T) {
 	t.Setenv("HOME", shortHome(t))
 	f := seedSprintBoardFixture(t, "settlement-platform")
 	mux := buildMux()
@@ -1301,18 +1297,21 @@ func TestSprintBoard_CardShowsSixDataPointsInOrder(t *testing.T) {
 	columns := memberBoardColumns(t, servePage(t, mux, f.path()))
 	card := cardSlice(t, columns[0], f.reconcile) // the WAITING column's fullest card
 
-	// 1. The title, leading the card as its prominent main content.
-	title := `<span class="d-block fw-bold text-break" data-role="task-card-title">` +
+	// 1. The title, leading the card.
+	title := `<span class="d-block fw-bold text-break mb-1" data-role="task-card-title">` +
 		sprintTaskReconcile + `</span>`
-	// 2. The reference, on its own line as secondary muted text, carrying the id
-	//    and nothing else.
-	ref := `<span class="d-block small text-secondary mb-1" data-role="task-card-ref">#` +
-		itoa(f.reconcile) + `</span>`
-	// 3 and 4. The two badges, at the LEADING edge of the card's third line: the
-	//          prefixed value, in the variant the semantic mapping assigns to it.
-	priority := `<span class="badge ` + priorityBadge(9) + `">P9</span>`
+	// 2 to 5. The badge line, at the LEADING edge of the card's second line: the id
+	//         badge, black with white text for every task; the severity and the
+	//         priority, each the labelled value in the variant the semantic
+	//         mapping assigns to it; then the type badge, whose class is taken
+	//         from the task type mapping (the reconciliation task is a USER_STORY).
+	idBadge := `<span class="d-flex flex-wrap gap-1" data-role="task-card-badges">` +
+		`<span class="badge bg-black text-white">#` + itoa(f.reconcile) + `</span>`
 	severity := `<span class="badge ` + severityBadge(2) + `">S2</span>`
-	// 5 and 6. The counters, at the TRAILING edge of that same line, each an icon
+	priority := `<span class="badge ` + priorityBadge(9) + `">P9</span>`
+	typeBadge := `<span class="badge ` + taskTypeBadge(models.TypeUserStory) + `">` +
+		string(models.TypeUserStory) + `</span></span>`
+	// 6 and 7. The counters, at the TRAILING edge of that same line, each an icon
 	//          followed by its number, and the COMMENT count first.
 	comments := counterMarkup("task-card-comments", "ti ti-message", 3)
 	subtasks := counterMarkup("task-card-subtasks", "ti ti-subtask", 2)
@@ -1329,9 +1328,10 @@ func TestSprintBoard_CardShowsSixDataPointsInOrder(t *testing.T) {
 		markup string
 	}{
 		{"title", title},
-		{"reference", ref},
-		{"priority badge", priority},
+		{"id badge", idBadge},
 		{"severity badge", severity},
+		{"priority badge", priority},
+		{"type badge", typeBadge},
 		{"comment counter", comments},
 		{"subtask counter", subtasks},
 	}
@@ -1348,43 +1348,46 @@ func TestSprintBoard_CardShowsSixDataPointsInOrder(t *testing.T) {
 		previous = at
 	}
 
-	// A badge carrying the bare integer does not satisfy Acceptance Criterion 133,
-	// so the unprefixed form is asserted ABSENT rather than left unasserted: a card
-	// rendering both forms would otherwise pass the presence checks above.
-	for _, unprefixed := range []string{
+	// A badge carrying the bare integer, a separator between the letter and the
+	// digits, or the retired Sev:/Pri: label in either spacing does not satisfy
+	// Acceptance Criterion 133, so each is
+	// asserted ABSENT rather than left unasserted: a card rendering two forms would
+	// otherwise pass the presence checks above.
+	for _, wrong := range []string{
 		`<span class="badge ` + priorityBadge(9) + `">9</span>`,
 		`<span class="badge ` + severityBadge(2) + `">2</span>`,
+		`>P 9<`, `>S 2<`, `>P:9<`, `>S:2<`,
+		`>Pri:9<`, `>Sev:2<`, `>Pri: 9<`, `>Sev: 2<`, `Sev:`, `Pri:`,
 	} {
-		if strings.Contains(card, unprefixed) {
-			t.Errorf("the card renders %s; the priority and severity badges name the value they "+
-				"carry with a one-letter prefix, exactly as the tasks board's card does "+
-				"(Acceptance Criteria 85 and 133)\ncard: %s", unprefixed, card)
+		if strings.Contains(card, wrong) {
+			t.Errorf("the card renders %s; the severity and priority badges name the value they "+
+				"carry with the one-letter badge label immediately followed by the value "+
+				"(Acceptance Criterion 133)\ncard: %s", wrong, card)
 		}
 	}
 
-	// The four values above sit on ONE line, not on two: the badges and the
-	// counters are both inside the card's third line, which is what makes the
-	// order asserted above an order WITHIN a line rather than an order of lines.
+	// The badges and the counters sit on ONE line: both are inside the card's
+	// second line, which is what makes the order asserted above an order WITHIN a
+	// line rather than an order of lines.
 	// The line's own layout — trailing edge, wrapping, no separate footer — is the
 	// subject of TestSprintBoard_CardMergesBadgesAndCountersOntoOneLine.
 	line := spanWithRole(t, card, "task-card-summary")
 	if line == "" {
-		t.Fatalf("the card renders no third line carrying both groups\ncard: %s", card)
+		t.Fatalf("the card renders no second line carrying both groups\ncard: %s", card)
 	}
-	for _, want := range []string{priority, severity, comments, subtasks} {
+	for _, want := range []string{idBadge, severity, priority, typeBadge, comments, subtasks} {
 		if !strings.Contains(line, want) {
-			t.Errorf("the card's third line does not carry %q; the badges and the counters "+
+			t.Errorf("the card's second line does not carry %q; the badges and the counters "+
 				"share one line (Acceptance Criterion 133)\nline: %s", want, line)
 		}
 	}
 
 	// And nothing else. Each of these is a value the task HAS — so the assertion
 	// is about the card omitting it, not about the roadmap lacking it — and each
-	// is reached through the task detail modal the card opens.
+	// is shown on the task page the card links to.
 	for what, absent := range map[string]string{
 		"a status badge":       taskStatusBadge(models.StatusSprint),
 		"the status value":     ">SPRINT<",
-		"the task type":        string(models.TypeUserStory),
 		"a specialists icon":   "ti ti-users",
 		"a depends-on count":   "Depends on:",
 		"a blocks count":       "Blocks:",
@@ -1393,8 +1396,8 @@ func TestSprintBoard_CardShowsSixDataPointsInOrder(t *testing.T) {
 		"a sprint indicator":   "ti ti-flag",
 	} {
 		if strings.Contains(card, absent) {
-			t.Errorf("the card shows %s (%q); the column states the status and the modal the "+
-				"card opens carries every field\ncard: %s", what, absent, card)
+			t.Errorf("the card shows %s (%q); the column states the status and the task page "+
+				"the card links to carries every field\ncard: %s", what, absent, card)
 		}
 	}
 
@@ -1407,21 +1410,21 @@ func TestSprintBoard_CardShowsSixDataPointsInOrder(t *testing.T) {
 	// what would betray a surviving indicator, and it is asserted absent from the
 	// TASKS board too, where a value could once have reached a card
 	// (TestTaskBoard_CardShowsEveryPart, TestTaskBoard_AbsentMetadataRendersNothing).
-	view := decodeTaskDetail(t, mux, f.name, f.reconcile)
-	if len(view.Task.Blocks) == 0 && len(view.Task.DependsOn) == 0 {
+	stored := storedTask(t, f.name, f.reconcile)
+	if len(stored.Blocks) == 0 && len(stored.DependsOn) == 0 {
 		t.Errorf("the reconciliation task has no dependency edge at all, so asserting the card " +
 			"omits the counts proves nothing")
 	}
-	if view.Task.Type != models.TypeUserStory {
-		t.Errorf("the reconciliation task's type is %q, not the distinctive value the absence "+
-			"assertion is written against", view.Task.Type)
+	if stored.Type != models.TypeUserStory {
+		t.Errorf("the reconciliation task's type is %q, not the value the type badge "+
+			"assertion is written against", stored.Type)
 	}
 }
 
 // TestSprintBoard_BothCountersAlwaysRender is the gate for Acceptance Criterion
 // 134: the comment count and the subtask count are present on EVERY card of this
 // board, including when either or both are `0`, so the trailing edge of the card's
-// third line carries both numbers on every card the board renders.
+// second line carries both numbers on every card the board renders.
 //
 // The subject is the card whose two counts are both zero, because that is the only
 // card the criterion discriminates on: a card that has something to count renders
@@ -1446,7 +1449,7 @@ func TestSprintBoard_BothCountersAlwaysRender(t *testing.T) {
 	bare := cardSlice(t, columns[0], f.runbook)
 	if !strings.Contains(bare, `data-role="task-card-counters"`) {
 		t.Errorf("a member task with no subtask and no comment renders no counter group; both "+
-			"counters close the third line of every card of this board (Acceptance "+
+			"counters close the second line of every card of this board (Acceptance "+
 			"Criterion 134)\ncard: %s", bare)
 	}
 	for what, want := range map[string]string{
@@ -1535,7 +1538,7 @@ func TestSprintBoard_BothCountersAlwaysRender(t *testing.T) {
 // a narrow column, and the card renders no separate footer row for the counters.
 //
 // The contents and their order are asserted by
-// TestSprintBoard_CardShowsSixDataPointsInOrder; what is asserted here is that the
+// TestSprintBoard_CardShowsSevenDataPointsInOrder; what is asserted here is that the
 // four values are laid out as ONE line rather than two, which is the whole of the
 // change and is invisible to any check that only looks for the values.
 //
@@ -1548,11 +1551,6 @@ func TestSprintBoard_BothCountersAlwaysRender(t *testing.T) {
 // counters drop directly below the badges inside the same card. Without
 // `flex-wrap` the two groups would be squeezed onto one line and the card would
 // overflow its column, which Acceptance Criteria 27 and 133 both forbid.
-//
-// The tasks board's card is asserted UNCHANGED in the same test, because "this
-// board has no metadata footer" states nothing unless the other board still has
-// one: a template that had dropped the footer from both cards would satisfy every
-// absence assertion here.
 func TestSprintBoard_CardMergesBadgesAndCountersOntoOneLine(t *testing.T) {
 	t.Setenv("HOME", shortHome(t))
 	f := seedSprintBoardFixture(t, "settlement-platform")
@@ -1617,8 +1615,8 @@ func TestSprintBoard_CardMergesBadgesAndCountersOntoOneLine(t *testing.T) {
 		t.Errorf("the trailing group does not carry both of the card's counters\ncounters: %s", counters)
 	}
 
-	// No card of the board renders a separate footer row: not under the tasks
-	// board's role, not under the row's own trailing-edge alignment, and not with
+	// No card of the board renders a separate footer row: not under a footer
+	// role, not under the row's own trailing-edge alignment, and not with
 	// the top margin that separated it from the badges. A template that merely
 	// renamed the footer, or that kept a second row beside the merged line, keeps
 	// at least one of the three, so all three are asserted absent from EVERY card
@@ -1631,7 +1629,7 @@ func TestSprintBoard_CardMergesBadgesAndCountersOntoOneLine(t *testing.T) {
 		for _, id := range ids {
 			each := cardSlice(t, memberBoardRegion(t, sprintPage), id)
 			for _, gone := range []string{
-				`data-role="task-card-meta"`, // the tasks board's footer, which this card has not
+				`data-role="task-card-meta"`, // a separate metadata footer, which this card has not
 				"justify-content-end",        // that footer's own trailing-edge alignment
 				"mt-2",                       // the gap that separated the footer from the badges
 			} {
@@ -1642,38 +1640,6 @@ func TestSprintBoard_CardMergesBadgesAndCountersOntoOneLine(t *testing.T) {
 				}
 			}
 		}
-	}
-
-	// The control that keeps those absences from being vacuous: the ROADMAP TASKS
-	// page's card is untouched by this criterion. It still renders its metadata
-	// footer, and that footer still lists the subtask count BEFORE the comment
-	// count — the order this board deliberately reverses.
-	tasksPage := servePage(t, mux, "/roadmaps/"+f.name+"/tasks")
-	tasksBoard := boardRegion(t, tasksPage)
-	if !strings.Contains(tasksBoard, `data-role="task-card-meta"`) {
-		t.Fatalf("the roadmap tasks page's board renders no metadata footer at all, so asserting " +
-			"the sprint board has none proves nothing; that card is unchanged by Acceptance " +
-			"Criterion 133")
-	}
-	if strings.Contains(tasksBoard, `data-role="task-card-summary"`) {
-		t.Errorf("the roadmap tasks page's card grew the sprint card's merged line; that card " +
-			"keeps its separate metadata footer (Acceptance Criterion 133)")
-	}
-	// The reconciliation task carries two subtasks and three comments, so its card
-	// on the tasks board renders both indicators; it sits in that board's SPRINT
-	// column, which is its second.
-	tasksFooter := metaFooter(t, cardSlice(t, boardColumns(t, tasksPage)[1], f.reconcile))
-	sub := strings.Index(tasksFooter, `data-role="task-card-subtasks"`)
-	com := strings.Index(tasksFooter, `data-role="task-card-comments"`)
-	if sub < 0 || com < 0 {
-		t.Fatalf("the tasks board's control card does not render both counters (subtasks at %d, "+
-			"comments at %d), so the order comparison below is vacuous\nfooter: %s",
-			sub, com, tasksFooter)
-	}
-	if sub > com {
-		t.Errorf("the tasks board's metadata footer now lists the comment count before the "+
-			"subtask count; that footer keeps its own order, and the sprint card's reversed "+
-			"order is stated separately from it\nfooter: %s", tasksFooter)
 	}
 }
 
@@ -1693,14 +1659,14 @@ func counterMarkup(role, icon string, n int) string {
 // TestSprintBoard_IsReadOnly is the gate for Acceptance Criterion 138: the board
 // offers no drag-and-drop and no control of any other kind that moves a task
 // between columns, reorders cards, changes a task's status, or creates or edits
-// anything. The only button in the board is the card itself, and activating it
-// opens the read-only modal.
+// anything. Every card is a link to a read-only task page, and every button of
+// the board is a column collapse toggle, one per column header, whose activation
+// changes only the board's presentation.
 //
 // The assertion is made on the board REGION rather than on the page, because the
 // page legitimately carries controls that submit nothing — the page header's
-// "Back to sprints" link, the modal's Close button, the sidebar links — and a
-// page-wide check would either fail on those or have to be weakened until it
-// proved nothing.
+// "Back to sprints" link, the sidebar links — and a page-wide check would either
+// fail on those or have to be weakened until it proved nothing.
 func TestSprintBoard_IsReadOnly(t *testing.T) {
 	t.Setenv("HOME", shortHome(t))
 	f := seedSprintBoardFixture(t, "settlement-platform")
@@ -1712,28 +1678,33 @@ func TestSprintBoard_IsReadOnly(t *testing.T) {
 	// Anything that could carry a change to the server, plus the attributes that
 	// would make an element do so or make a card draggable.
 	for _, bad := range []string{
-		"<form", "<input", "<textarea", "<select", "<a ", "href=", "action=", "formaction=",
+		"<form", "<input", "<textarea", "<select", "action=", "formaction=",
 		"method=", "onclick=", "onsubmit=", "ondrop=", "ondragstart=", "draggable=",
-		"contenteditable", "sortable",
+		"contenteditable", "sortable", "data-bs-toggle",
 	} {
 		if strings.Contains(low, bad) {
 			t.Errorf("the member-tasks board must be read-only but contains %q", bad)
 		}
 	}
 
-	// The only buttons in the board are the cards, and every one of them is a
-	// modal trigger. A count of zero would make this vacuous, so it is checked.
+	// The board's links are the six cards and nothing else, each a link to a task
+	// page; its buttons are the three column toggles and nothing else. A count of
+	// zero would make this vacuous, so the totals are checked exactly.
+	cards := strings.Count(region, cardOpen)
+	if cards != 6 {
+		t.Errorf("the board carries %d cards, want the 6 of its member tasks", cards)
+	}
+	if links := strings.Count(region, "<a "); links != cards {
+		t.Errorf("the board carries %d links, want only its %d cards", links, cards)
+	}
+	if hrefs := strings.Count(region, `href="/roadmaps/`+f.name+`/tasks/`); hrefs != cards {
+		t.Errorf("the board carries %d task-page hrefs for %d cards", hrefs, cards)
+	}
 	buttons := strings.Count(region, "<button")
-	if buttons != 6 {
-		t.Errorf("the board carries %d buttons, want the 6 cards of its member tasks", buttons)
-	}
-	if got := strings.Count(region, cardOpen); got != buttons {
-		t.Errorf("the board carries %d buttons of which %d are cards; every button in the board "+
-			"must be a card", buttons, got)
-	}
-	if got := strings.Count(region, `data-bs-toggle="modal"`); got != buttons {
-		t.Errorf("the board carries %d buttons and %d modal triggers; the only thing a card does "+
-			"is open the read-only modal", buttons, got)
+	toggles := strings.Count(region, columnToggleOpen)
+	if toggles != 3 || buttons != toggles {
+		t.Errorf("the board carries %d buttons of which %d are column toggles, want exactly the 3 "+
+			"toggles", buttons, toggles)
 	}
 }
 
@@ -1784,10 +1755,11 @@ func TestSprintBoard_CommentCountIsOneGroupedQueryWhateverN(t *testing.T) {
 		}
 
 		// The one query covered EVERY rendered card, which is what makes one query
-		// sufficient rather than merely few.
-		if len(src.lastGroupedIDs) != members {
-			t.Errorf("%d members: the comment count was given %d ids, want %d",
-				members, len(src.lastGroupedIDs), members)
+		// sufficient rather than merely few: it selects the members by the sprint
+		// id, whatever their number.
+		if src.lastCountedSprint != sprintID {
+			t.Errorf("%d members: the comment count was taken for sprint #%d, want sprint #%d",
+				members, src.lastCountedSprint, sprintID)
 		}
 
 		// The subtask number costs no query of its own: the member-task read
@@ -1812,12 +1784,12 @@ func TestSprintBoard_CommentCountIsOneGroupedQueryWhateverN(t *testing.T) {
 				members, len(data.Columns), len(sprintBoardColumns))
 		}
 
-		// The control that makes those counts falsifiable: the per-card alternative
-		// the SPEC forbids, measured on the same instrument.
+		// The control that makes those counts falsifiable: one count read per card,
+		// the shape the SPEC forbids, measured on the same instrument, registers one
+		// read per card.
 		src.groupedCommentCounts = 0
-		for i := range data.Tasks {
-			if _, err := src.CountTaskCommentsByTasks(context.Background(),
-				[]int{data.Tasks[i].ID}); err != nil {
+		for range data.Tasks {
+			if _, err := src.CountTaskCommentsBySprint(context.Background(), sprintID); err != nil {
 				t.Fatalf("%d members: per-card control read: %v", members, err)
 			}
 		}
@@ -1872,8 +1844,9 @@ func TestSprintBoard_CommentCountIsOneGroupedQueryWhateverN(t *testing.T) {
 // invented fourth one.
 //
 // This is the unit-level half of Acceptance Criterion 131. The page-level test
-// above compares two renderings of one sprint; this one states WHY they can never
-// disagree — there is one mapping from status to bucket, and the board reads it.
+// above checks the rendered counts against the member tasks' statuses; this one
+// states WHY the board can never disagree with models.CalculateSprintShowResult —
+// there is one mapping from status to bucket, and both read it.
 func TestGroupIntoSprintBoardColumns_ReusesTheSummaryCategorisation(t *testing.T) {
 	// Every status of the closed enum, and the column its category assigns it.
 	for _, status := range models.ValidTaskStatuses {

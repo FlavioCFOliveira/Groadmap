@@ -1,7 +1,6 @@
 package web
 
 import (
-	"net/http"
 	"regexp"
 	"strings"
 	"testing"
@@ -9,87 +8,88 @@ import (
 	"github.com/FlavioCFOliveira/Groadmap/internal/models"
 )
 
-// The guards in this file cover ONE rule and its exclusions: on the card of
-// either board, the priority badge writes `P` immediately followed by the task's
-// priority and the severity badge writes `S` immediately followed by the task's
-// severity, with no space and no separator, and no other badge in this interface
-// takes a prefix (SPEC/WEB.md § Roadmap Tasks Page, Card content, item 3;
-// Acceptance Criteria 85 and 133).
+// The guards in this file cover ONE rule and its exclusions: on the card of the
+// sprint page's board and in each row of the tasks page's list, the severity
+// badge writes the badge label `S` immediately followed by the task's severity,
+// the priority badge writes `P` immediately followed by the task's priority —
+// with no colon, space, or other separator between the letter and the digits,
+// severity first — and no other badge in this interface takes a badge label
+// (SPEC/WEB.md § Sprint Detail Sub-Template, The card; § Roadmap Tasks Page, Row
+// content; Acceptance Criteria 85 and 133).
 //
-// Why the rule needs guards of its own, beyond the two boards' own card tests.
-// The SPEC states it ONCE, for the card of both boards, precisely so the two
-// cards cannot drift apart on it — and a rule stated once is not enforced by two
-// tests that each assert a copy of it, because two copies can be changed one at a
-// time and still both pass. So the checks here compare the two boards against
-// EACH OTHER, the way the board layout guards compare their class-token sets
-// rather than two expected lists that agree on the day they are written.
+// Why the rule needs guards of its own, beyond each surface's own tests. The SPEC
+// requires the list to repeat the card's form so that a task reads the same in
+// both places — and that is not enforced by two tests that each assert a copy of
+// it, because two copies can be changed one at a time and still both pass. So the
+// checks here compare the two surfaces against EACH OTHER.
 //
 // The other half of the rule is the exclusion, and an exclusion is only enforced
-// where it is asserted: the prefix earns its place on a card because a card
-// carries no label naming either value, which is false of the task detail modal
-// (its datagrid names every field it shows) and false of every status badge (its
-// own text is the status name). Those are checked here too, so "only these two
-// badges take a prefix" is a measured property of the served bytes rather than an
-// assumption.
+// where it is asserted: the badge label earns its place on a card because a card
+// carries no field name beside either value, which is false of the task page's
+// Details card (its datagrid names every field it shows) and false of every status badge
+// (its own text is the status name). Those are checked here too, so "only these
+// two badges take a badge label" is a measured property of the served bytes
+// rather than an assumption.
 
-// ==================== ONE FORM FOR BOTH BOARDS ====================
+// ==================== ONE FORM ON BOTH PAGES ====================
 
-// TestBadgePrefix_BothBoardsRenderOnePairForm is the gate for the clause that
-// makes Acceptance Criteria 85 and 133 one criterion rather than two: the card of
-// the sprint's member-tasks board renders the priority/severity pair EXACTLY as
-// the tasks board's card does.
+// TestBadgePrefix_ListAndBoardRenderOnePairForm is the gate for the clause that
+// ties Acceptance Criteria 85 and 133 together: the row of the tasks page's list
+// renders the severity/priority pair EXACTLY as the card of the sprint's
+// member-tasks board does (Acceptance Criterion 179).
 //
-// The comparison is made between the two boards' rendered bytes, for the same
-// task, so a change applied to one card and not to the other fails here whatever
-// the change is — a dropped prefix, a separator, a swapped order, a different
-// element. Both boards are then compared against the prefixed form built from the
-// task's own priority and severity, so the two agreeing on the UNPREFIXED form
+// The comparison is made between the two surfaces' rendered bytes, for the same
+// task, so a change applied to one and not to the other fails here whatever the
+// change is — a dropped label, an added separator, a swapped order, a different
+// element. Both are then compared against the labelled form built from the
+// task's own severity and priority, so the two agreeing on the UNLABELLED form
 // cannot pass either.
-func TestBadgePrefix_BothBoardsRenderOnePairForm(t *testing.T) {
+func TestBadgePrefix_ListAndBoardRenderOnePairForm(t *testing.T) {
 	t.Setenv("HOME", shortHome(t))
 	f := seedSprintBoardFixture(t, "settlement-platform")
 	mux := buildMux()
 
 	// Every member task of the sprint is also a task of the roadmap, so each one
-	// has a card on BOTH boards: the same task, rendered twice, which is what
-	// makes the two renderings comparable at all.
-	tasksBoard := boardRegion(t, servePage(t, mux, "/roadmaps/"+f.name+"/tasks"))
+	// has a card on the board and a row in the list: the same task, rendered twice,
+	// which is what makes the two renderings comparable at all. The list is asked
+	// for at its largest page size so every task is on its one page.
+	tasksBoard := boardRegion(t, servePage(t, mux, "/roadmaps/"+f.name+"/tasks?size=100"))
 	sprintBoard := memberBoardRegion(t, servePage(t, mux, f.path()))
 
 	priorityVariants := map[string]bool{}
 	severityVariants := map[string]bool{}
 
 	for _, id := range sprintBoardMembers(&f) {
-		task := decodeTaskDetail(t, mux, f.name, id).Task
+		task := storedTask(t, f.name, id)
 
-		onTasks := cardBadgePair(t, cardMarkupOf(t, tasksBoard, id, "the tasks board"),
-			id, "the tasks board")
+		onTasks := rowBadgePair(t, rowMarkupOf(t, tasksBoard, id, "the tasks list"),
+			id, "the tasks list")
 		onSprint := cardBadgePair(t, cardMarkupOf(t, sprintBoard, id, "the sprint board"),
 			id, "the sprint board")
 
 		// One form, compared board against board.
 		if onTasks != onSprint {
-			t.Errorf("task #%d renders its priority/severity pair as\n  tasks board:  %s %s\n"+
-				"  sprint board: %s %s\nThe rule is stated once for the card of both boards "+
-				"(SPEC/WEB.md § Roadmap Tasks Page, Card content, item 3), so the two cards "+
-				"render one form and a change to either is a change to both",
-				id, onTasks.priority, onTasks.severity, onSprint.priority, onSprint.severity)
+			t.Errorf("task #%d renders its severity/priority pair as\n  tasks list:   %s %s\n"+
+				"  sprint board: %s %s\nThe list repeats the card's badges so a task reads the "+
+				"same in both places (SPEC/WEB.md § Roadmap Tasks Page, Row content)",
+				id, onTasks.severity, onTasks.priority, onSprint.severity, onSprint.priority)
 		}
 
-		// And that one form is the prefixed one, built from the task's own values
+		// And that one form is the labelled one, built from the task's own values
 		// and the mapping's own variants rather than written out here.
 		want := badgePair{
-			priority: `<span class="badge ` + priorityBadge(task.Priority) + `">P` +
-				itoa(task.Priority) + `</span>`,
 			severity: `<span class="badge ` + severityBadge(task.Severity) + `">S` +
 				itoa(task.Severity) + `</span>`,
+			priority: `<span class="badge ` + priorityBadge(task.Priority) + `">P` +
+				itoa(task.Priority) + `</span>`,
 		}
 		if onTasks != want {
-			t.Errorf("task #%d (priority %d, severity %d) renders %s %s, want %s %s: each badge "+
-				"names the value it carries with a one-letter prefix, with no space and no "+
-				"separator (Acceptance Criteria 85 and 133)",
-				id, task.Priority, task.Severity,
-				onTasks.priority, onTasks.severity, want.priority, want.severity)
+			t.Errorf("task #%d (severity %d, priority %d) renders %s %s, want %s %s: each badge "+
+				"names the value it carries with its one-letter badge label immediately followed "+
+				"by the value, "+
+				"severity first (Acceptance Criteria 85 and 133)",
+				id, task.Severity, task.Priority,
+				onTasks.severity, onTasks.priority, want.severity, want.priority)
 		}
 
 		priorityVariants[priorityBadge(task.Priority)] = true
@@ -114,43 +114,48 @@ func TestBadgePrefix_BothBoardsRenderOnePairForm(t *testing.T) {
 // TestBadgePrefix_ColourFollowsTheValueNotThePrefixedText is the gate for the
 // clause of Acceptance Criterion 85 that keeps Acceptance Criterion 61 in force
 // through the change: the semantic mapping is applied to the VALUE alone and not
-// to the prefixed text, so the prefix selects no colour, introduces no band, and
-// changes no badge's variant (SPEC/WEB.md § Status, Priority, and Severity Badge
+// to the labelled text, so the badge label selects no colour, introduces no band,
+// and changes no badge's variant (SPEC/WEB.md § Status, Priority, and Severity Badge
 // Colours, rule 2).
 //
 // Two cases carry the weight, and the fixture is required to contain both:
 //
 //   - A task whose priority and severity fall in DIFFERENT bands must still get
 //     the two different band colours. This is the case a mapping keyed on the
-//     badge's text — "P9" and "S2" are two strings in no band at all — would fail,
-//     by falling back to one variant for both.
+//     badge's text — "P9" and "S2" are two strings in no band at all —
+//     would fail, by falling back to one variant for both.
 //   - A task whose priority and severity fall in the SAME band is the case that
-//     shows why the prefix exists: the two badges are then identical but for the
-//     letter, and without it the card would show two same-coloured integers and
-//     state nowhere which is the priority. The SPEC's own worked example, priority
-//     5 and severity 3, is exactly this case.
+//     shows why the badge label exists: the two badges are then identical but for
+//     the label, and without it the card would show two same-coloured integers and
+//     state nowhere which is the priority. The SPEC's own worked example, severity
+//     3 and priority 5, is exactly this case.
 //
-// Both boards are checked, because both carry the pair.
+// Both surfaces are checked, because both carry the pair.
 func TestBadgePrefix_ColourFollowsTheValueNotThePrefixedText(t *testing.T) {
 	t.Setenv("HOME", shortHome(t))
 	f := seedSprintBoardFixture(t, "settlement-platform")
 	mux := buildMux()
 
 	boards := map[string]string{
-		"the tasks board":  boardRegion(t, servePage(t, mux, "/roadmaps/"+f.name+"/tasks")),
+		"the tasks list":   boardRegion(t, servePage(t, mux, "/roadmaps/"+f.name+"/tasks?size=100")),
 		"the sprint board": memberBoardRegion(t, servePage(t, mux, f.path())),
 	}
 
 	var bandsDiffer, bandsAgree, tablesDiffer int
 
 	for _, id := range sprintBoardMembers(&f) {
-		task := decodeTaskDetail(t, mux, f.name, id).Task
+		task := storedTask(t, f.name, id)
 
 		for where, region := range boards {
-			pair := cardBadgePair(t, cardMarkupOf(t, region, id, where), id, where)
+			var pair badgePair
+			if where == "the tasks list" {
+				pair = rowBadgePair(t, rowMarkupOf(t, region, id, where), id, where)
+			} else {
+				pair = cardBadgePair(t, cardMarkupOf(t, region, id, where), id, where)
+			}
 
 			// The class is the class the mapping assigns to the INTEGER, which the
-			// helpers cannot see a prefix through: they take an int.
+			// helpers cannot see a badge label through: they take an int.
 			if got, want := pair.priorityClasses(), "badge "+priorityBadge(task.Priority); got != want {
 				t.Errorf("%s: task #%d's priority badge carries the classes %q, want %q — the "+
 					"variant of the priority %d itself", where, id, got, want, task.Priority)
@@ -160,8 +165,8 @@ func TestBadgePrefix_ColourFollowsTheValueNotThePrefixedText(t *testing.T) {
 					"variant of the severity %d itself", where, id, got, want, task.Severity)
 			}
 
-			// And the text is the value behind its letter, so the badge whose colour
-			// was checked is the badge the reader is told the field of.
+			// And the text is the value behind its badge label, so the badge whose
+			// colour was checked is the badge the reader is told the field of.
 			if got, want := pair.priorityText(), "P"+itoa(task.Priority); got != want {
 				t.Errorf("%s: task #%d's priority badge reads %q, want %q",
 					where, id, got, want)
@@ -191,13 +196,13 @@ func TestBadgePrefix_ColourFollowsTheValueNotThePrefixedText(t *testing.T) {
 	// the corresponding assertion above vacuous without failing anything.
 	if bandsDiffer == 0 {
 		t.Errorf("no member task's priority and severity fall in different bands, so a card " +
-			"colouring both badges from one value — or from the prefixed text, which is in no " +
+			"colouring both badges from one value — or from the labelled text, which is in no " +
 			"band at all — would satisfy every assertion above")
 	}
 	if bandsAgree == 0 {
 		t.Errorf("no member task's priority and severity share a badge variant, so the case the " +
-			"prefix exists for — two identically coloured integers side by side, with nothing " +
-			"but the letter to say which is the priority — is never exercised")
+			"badge label exists for — two identically coloured integers side by side, with " +
+			"nothing but the label to say which is the priority — is never exercised")
 	}
 	if tablesDiffer == 0 {
 		t.Errorf("no member task's severity resolves to a different variant under the priority " +
@@ -206,110 +211,78 @@ func TestBadgePrefix_ColourFollowsTheValueNotThePrefixedText(t *testing.T) {
 	}
 }
 
-// ==================== THE MODAL TAKES NO PREFIX ====================
+// ==================== THE TASK PAGE TAKES NO BADGE LABEL ====================
 
-// TestBadgePrefix_TaskDetailModalRendersTheValuesBare is the gate for the
-// exclusion SPEC/WEB.md § Task Detail Modal states and Acceptance Criterion 85
-// repeats: the one-letter prefix belongs to the board card, and the same task's
-// priority and severity in the modal render as the bare integer beside the field
-// name that already names it (Acceptance Criterion 15 continues to hold).
-//
-// The modal is painted by /static/task-modal.js from the task detail endpoint, so
-// the exclusion has two halves and both are asserted:
-//
-//   - the endpoint sends the raw integers, so nothing server-side formats them on
-//     the way out;
-//   - the script writes the field itself into the badge — the badge's text
-//     argument is the bare `task.priority` expression, with no literal spliced in
-//     front of it — and the datagrid item beside it carries the field's NAME,
-//     which is the whole reason a prefix would state the same thing twice here.
-//
-// There is no browser in the Go suite and SPEC/BUILD.md rules out a JavaScript
-// toolchain, so the script is read as source. That is enough for this rule: a
-// prefix could only reach the modal's badge as a literal in the expression that
-// builds it, and the check is that the expression is the bare field reference.
-func TestBadgePrefix_TaskDetailModalRendersTheValuesBare(t *testing.T) {
+// TestBadgePrefix_TaskPageRendersTheValuesBare is the gate for the exclusion
+// SPEC/WEB.md § Roadmap Task Page, No badge label on the priority and severity
+// badges, states and Acceptance Criteria 85 and 224 repeat: the badge label
+// belongs to the board card and the list row, and the same task's priority and severity on the
+// task page's Details card render as the bare integer beside the field name that
+// already names it, in the colour the mapping gives the value.
+func TestBadgePrefix_TaskPageRendersTheValuesBare(t *testing.T) {
 	t.Setenv("HOME", shortHome(t))
 	f := seedSprintBoardFixture(t, "settlement-platform")
 	mux := buildMux()
 
-	// The server half. The schema task carries the SPEC's own worked example,
-	// priority 5 and severity 3, whose card reads P5 and S3 — so if the values
-	// travelled prefixed, this is where it would show.
-	status, body := fetchTaskDetail(t, mux, f.name, f.schema)
-	if status != http.StatusOK {
-		t.Fatalf("GET the detail of task #%d: status = %d, want 200; body=%q",
-			f.schema, status, body)
-	}
-	// The values reach the modal as the integers they are. Decoding into the typed
-	// view is the stronger half of that statement: a prefixed value is not an
-	// integer and would not decode at all.
-	task := decodeTaskDetail(t, mux, f.name, f.schema).Task
+	// The schema task carries the SPEC's own worked example, severity 3 and
+	// priority 5, whose card reads S3 and P5.
+	task := storedTask(t, f.name, f.schema)
 	if task.Priority != 5 || task.Severity != 3 {
 		t.Fatalf("task #%d carries priority %d and severity %d, want the SPEC's worked example "+
 			"5 and 3, which the assertions below are written against",
 			f.schema, task.Priority, task.Severity)
 	}
-	for _, prefixed := range []string{"P5", "S3"} {
-		if strings.Contains(body, prefixed) {
-			t.Errorf("the task detail endpoint carries %q; the prefix is the board card's and is "+
-				"applied where the card is rendered, never in the data\nbody: %s", prefixed, body)
-		}
-	}
-	// The control that keeps the two absences above from being vacuous: the card
-	// of that very task really does write those two strings.
-	card := cardMarkupOf(t, boardRegion(t, servePage(t, mux, "/roadmaps/"+f.name+"/tasks")),
-		f.schema, "the tasks board")
-	for _, prefixed := range []string{">P5<", ">S3<"} {
-		if !strings.Contains(card, prefixed) {
-			t.Errorf("the card of task #%d does not render %s, so asserting the endpoint omits "+
-				"the prefixed form proves nothing\ncard: %s", f.schema, prefixed, card)
-		}
-	}
 
-	// The script half.
-	script := stripJSComments(readEmbeddedAsset(t, "static/task-modal.js"))
-	for label, field := range map[string]string{
-		"Priority": "task.priority",
-		"Severity": "task.severity",
+	page := servePage(t, mux, "/roadmaps/"+f.name+"/tasks/"+itoa(f.schema))
+	details := detailsCardSlice(t, page)
+	for label, want := range map[string]string{
+		"Priority": `<div class="datagrid-content"><span class="badge ` + priorityBadge(5) + `">5</span></div>`,
+		"Severity": `<div class="datagrid-content"><span class="badge ` + severityBadge(3) + `">3</span></div>`,
 	} {
-		args := jsDatagridBadgeArgs(t, script, label)
-		if len(args) != 3 {
-			t.Fatalf("the modal's %s badge is built from el(%v), want three arguments "+
-				"(tag, class, text)", label, args)
-		}
-		if args[2] != field {
-			t.Errorf("the modal's %s badge is given the text %q, want exactly %q: the datagrid "+
-				"item already writes the field's name beside the value, so the badge carries "+
-				"the bare value and a prefix would state the same thing twice (SPEC/WEB.md "+
-				"§ Task Detail Modal, No prefix on the modal's priority and severity badges)",
-				label, args[2], field)
+		if got := datagridContent(t, details, label); got != want {
+			t.Errorf("the task page's %s = %s, want %s: the field name already stands beside the "+
+				"value, so the badge carries the bare value", label, got, want)
 		}
 	}
+	for _, label := range []string{">S3<", ">P5<", "Sev:", "Pri:"} {
+		if strings.Contains(page, label) {
+			t.Errorf("the task page carries %q; the badge label is the board card's and the list row's alone", label)
+		}
+	}
+	// The header's status badge carries the bare status too.
+	if !strings.Contains(page, `<span class="badge `+taskStatusBadge(task.Status)+`">`+string(task.Status)+`</span>`) {
+		t.Errorf("the task page's status badge does not carry the bare status %s", task.Status)
+	}
 
-	// The modal's own status badge is filled with the bare status too. It is the
-	// third badge the modal paints and the one a blanket "prefix the badges"
-	// change would sweep up with the other two.
-	if !strings.Contains(script, "statusEl.textContent = task.status;") {
-		t.Errorf("the modal script does not set its status badge to the bare task.status; a " +
-			"status badge is never ambiguous — its own text is the status name — so it takes " +
-			"no prefix anywhere (SPEC/WEB.md § Roadmap Tasks Page, Card content, item 3, " +
-			"Only these two badges take a prefix)")
+	// The control that keeps the absences above from being vacuous: the row of
+	// that very task really does write the labelled strings.
+	card := rowMarkupOf(t, boardRegion(t, servePage(t, mux, "/roadmaps/"+f.name+"/tasks?size=100")),
+		f.schema, "the tasks list")
+	for _, labelled := range []string{">S3<", ">P5<"} {
+		if !strings.Contains(card, labelled) {
+			t.Errorf("the row of task #%d does not render %s, so asserting the task page omits "+
+				"the labelled form proves nothing\nrow: %s", f.schema, labelled, card)
+		}
 	}
 }
 
 // ==================== AND NO OTHER BADGE ANYWHERE ====================
 
 // TestBadgePrefix_NoOtherBadgeTakesAPrefix is the gate for the exclusive half of
-// the rule: a prefix earns its place only where no label names the value, which
-// is true of the board card's two badges and of no other badge in this interface
-// (SPEC/WEB.md § Roadmap Tasks Page, Card content, item 3, Only these two badges
-// take a prefix).
+// the rule: a badge label earns its place on the board card's severity and
+// priority badges, which the tasks page's list repeats in its row, and on no other
+// badge in this interface (SPEC/WEB.md § Sprint Detail Sub-Template, The card;
+// § Roadmap Tasks Page, Row content).
 //
 // The check is TOTAL rather than sampled. Every page of the interface is served,
 // every badge it renders is read, and the badges are partitioned by whether they
-// sit inside a board card. Each card must carry exactly its two prefixed badges,
-// and no badge outside a card may carry a prefix — which covers the column count
+// sit inside a board card or a task-list row. Each row must carry exactly its
+// five badges — id, type, status, severity, priority (Acceptance Criterion 85).
+// Each card must carry exactly the four badges of its
+// badge line — the id badge, the labelled severity and priority badges, and the
+// unlabelled type badge, in that order (Acceptance Criteria 85, 133 and 179) —
+// and no badge outside a card may carry a badge label — which covers the column
+// count
 // badges, the sprint tab count badges, the sprint status badges of the shared
 // sprint card, the sprint page's header and datagrid, the comment type badges,
 // and the graph sidebar's totals in one statement, with no list of them to keep
@@ -336,49 +309,81 @@ func TestBadgePrefix_NoOtherBadgeTakesAPrefix(t *testing.T) {
 		"/roadmaps/" + board.name + "/tasks",
 		"/roadmaps/" + board.name + "/audit",
 		"/roadmaps/" + board.name + "/graph",
+		"/roadmaps/" + board.name + "/tasks/" + itoa(board.schema),
 		board.path(),
 		"/roadmaps/" + sprints.name,
 		"/roadmaps/" + sprints.name + "/tasks",
 		"/roadmaps/" + sprints.name + "/sprints/" + itoa(sprints.openID),
 		"/roadmaps/" + sprints.name + "/sprints/" + itoa(sprints.pendingID),
 		"/roadmaps/" + sprints.name + "/sprints/" + itoa(sprints.closedLower),
+		"/roadmaps/" + sprints.name + "/tasks/" + itoa(sprints.openTaskID),
 	}
 
 	statusNames := statusBadgeTexts()
 	var (
 		cardsSeen  int
+		rowsSeen   int
 		statusSeen = map[string]bool{}
 	)
 
 	for _, path := range paths {
-		cards, outside := splitBoardCards(t, servePage(t, mux, path))
+		cards, outsideCards := splitBoardCards(t, servePage(t, mux, path))
+		rows, outside := splitListRows(t, outsideCards)
 
-		// Inside a card: exactly the two prefixed badges, in that order, and no
-		// third badge — the card shows no status badge, because its column already
-		// states the status.
-		for _, card := range cards {
-			cardsSeen++
-			found := pageBadges(card)
-			if len(found) != 2 {
-				t.Errorf("%s: a board card carries %d badges, want exactly 2 — the priority and "+
-					"severity badges and no other\ncard: %s", path, len(found), card)
+		for _, row := range rows {
+			rowsSeen++
+			found := pageBadges(row)
+			if len(found) != 5 {
+				t.Errorf("%s: a task-list row carries %d badges, want exactly 5 — the id, type, "+
+					"status, severity, and priority badges\nrow: %s", path, len(found), row)
 				continue
 			}
-			if !rePriorityBadgeText.MatchString(found[0].text) ||
-				!reSeverityBadgeText.MatchString(found[1].text) {
-				t.Errorf("%s: a board card's badges read %q and %q, want a priority badge reading "+
-					"P then its value and a severity badge reading S then its value, in that "+
-					"order\ncard: %s", path, found[0].text, found[1].text, card)
+			if !reIDBadgeText.MatchString(found[0].text) || !models.IsValidTaskType(found[1].text) ||
+				!models.IsValidTaskStatus(found[2].text) || !reSeverityBadgeText.MatchString(found[3].text) ||
+				!rePriorityBadgeText.MatchString(found[4].text) {
+				t.Errorf("%s: a task-list row's badges read %q %q %q %q %q, want #<id>, a TaskType, a "+
+					"TaskStatus, S<n> and P<n>, in that order\nrow: %s", path, found[0].text,
+					found[1].text, found[2].text, found[3].text, found[4].text, row)
 			}
 		}
 
-		// Outside a card: no prefix at all. Every badge here belongs to a surface
-		// that names what it shows some other way.
+		// Inside a card: the id badge, then exactly the two labelled badges,
+		// severity first, then the unlabelled type badge, and no fifth badge — the
+		// card shows no status badge, because its column already states the status.
+		for _, card := range cards {
+			cardsSeen++
+			found := pageBadges(card)
+			if len(found) != 4 {
+				t.Errorf("%s: a board card carries %d badges, want exactly 4 — the id, severity, "+
+					"priority, and type badges, and no other\ncard: %s",
+					path, len(found), card)
+				continue
+			}
+			for _, unlabelled := range []badge{found[0], found[3]} {
+				if reLabelledBadgeText.MatchString(unlabelled.text) {
+					t.Errorf("%s: a board card's id or type badge reads %q; those badges take no "+
+						"badge label\ncard: %s", path, unlabelled.text, card)
+				}
+			}
+			if !reIDBadgeText.MatchString(found[0].text) || !models.IsValidTaskType(found[3].text) {
+				t.Errorf("%s: a board card's first and last badges read %q and %q, want the id "+
+					"badge reading #<id> and the type badge reading a TaskType value\ncard: %s",
+					path, found[0].text, found[3].text, card)
+			}
+			if !reSeverityBadgeText.MatchString(found[1].text) ||
+				!rePriorityBadgeText.MatchString(found[2].text) {
+				t.Errorf("%s: a board card's middle badges read %q and %q, want a severity badge "+
+					"reading \"S\" immediately followed by its value and a priority badge reading "+
+					"\"P\" immediately followed by its value, in that order\ncard: %s", path, found[1].text, found[2].text, card)
+			}
+		}
+
+		// Outside a card: no badge label at all. Every badge here belongs to a
+		// surface that names what it shows some other way.
 		for _, b := range pageBadges(outside) {
-			if rePrefixedBadgeText.MatchString(b.text) {
-				t.Errorf("%s: a badge outside a board card reads %q; the one-letter prefix "+
-					"belongs to the card, which carries no label naming either value, and to "+
-					"nothing else in this interface", path, b.text)
+			if reLabelledBadgeText.MatchString(b.text) {
+				t.Errorf("%s: a badge outside a board card and a task-list row reads %q; the badge "+
+					"label belongs to those two and to nothing else in this interface", path, b.text)
 			}
 			// A status badge names itself: its text is the status, whole, with
 			// nothing in front of it.
@@ -401,6 +406,10 @@ func TestBadgePrefix_NoOtherBadgeTakesAPrefix(t *testing.T) {
 	// Falsifiability controls. Both halves of the partition must have had
 	// something in them: a page set that rendered no card, or no status badge,
 	// would satisfy every assertion above by rendering nothing to check.
+	if rowsSeen == 0 {
+		t.Errorf("the pages served rendered no task-list row at all, so asserting what a row "+
+			"carries proves nothing (paths: %v)", paths)
+	}
 	if cardsSeen == 0 {
 		t.Errorf("the pages served rendered no board card at all, so asserting what a card "+
 			"carries proves nothing (paths: %v)", paths)
@@ -408,7 +417,7 @@ func TestBadgePrefix_NoOtherBadgeTakesAPrefix(t *testing.T) {
 	for _, status := range models.ValidSprintStatuses {
 		if !statusSeen[string(status)] {
 			t.Errorf("no page rendered a badge carrying the sprint status %s, so asserting that "+
-				"a status badge takes no prefix is vacuous for it", status)
+				"a status badge takes no badge label is vacuous for it", status)
 		}
 	}
 }
@@ -416,8 +425,8 @@ func TestBadgePrefix_NoOtherBadgeTakesAPrefix(t *testing.T) {
 // ==================== HELPERS ====================
 
 // sprintBoardMembers returns the ids of the sprint fixture's member tasks, which
-// are the tasks that have a card on BOTH boards and are therefore the ones the
-// two renderings can be compared over.
+// are the tasks that have both a board card and a list row and are therefore the
+// ones the two renderings can be compared over.
 func sprintBoardMembers(f *sprintBoardFixture) []int {
 	columns := f.wantColumns()
 	members := make([]int, 0, len(columns)*3)
@@ -435,11 +444,11 @@ type badge struct {
 	text    string
 }
 
-// badgePair is the priority/severity pair of one board card, as the two elements
+// badgePair is the severity/priority pair of one board card, as the two elements
 // the page actually renders, so two cards can be compared byte for byte.
 type badgePair struct {
-	priority string
 	severity string
+	priority string
 }
 
 func (p badgePair) priorityClasses() string { return badgeClassesOf(p.priority) }
@@ -467,14 +476,19 @@ func badgeTextOf(markup string) string {
 // the scan and a card body is never mistaken for a badge.
 var reLeafSpan = regexp.MustCompile(`<span\b([^>]*)>([^<]*)</span>`)
 
-// rePriorityBadgeText, reSeverityBadgeText and rePrefixedBadgeText recognise the
-// prefixed form. The value is an integer in 0-9 (MODELS.md § Task), and the
-// pattern admits no space and no separator between the letter and the digits,
-// which is the form Acceptance Criteria 85 and 133 fix.
+// rePriorityBadgeText and reSeverityBadgeText recognise the labelled form: the
+// one-letter badge label immediately followed by the value, an integer in 0-9
+// (MODELS.md § Task), which is the form Acceptance Criteria 85 and 133 fix — so
+// `S 3`, `S:3`, `Sev:3`, `Sev: 3`, and a bare `3` do not match.
+// reLabelledBadgeText recognises a badge carrying either one-letter label, or
+// the retired `Sev:`/`Pri:` label, with ANY separator, which is what the
+// exclusion checks must refuse wherever a label does not belong. reIDBadgeText
+// recognises the id badge's #<id> reference form.
 var (
 	rePriorityBadgeText = regexp.MustCompile(`^P[0-9]+$`)
 	reSeverityBadgeText = regexp.MustCompile(`^S[0-9]+$`)
-	rePrefixedBadgeText = regexp.MustCompile(`^[PS][0-9]+$`)
+	reLabelledBadgeText = regexp.MustCompile(`^(?:Sev|Pri|S|P)\s*:?\s*[0-9]+$`)
+	reIDBadgeText       = regexp.MustCompile(`^#[0-9]+$`)
 )
 
 // pageBadges returns every badge element of a markup region, in document order.
@@ -513,7 +527,7 @@ func hasClassToken(classes, want string) bool {
 func cardMarkupOf(t *testing.T, region string, taskID int, where string) string {
 	t.Helper()
 
-	const cardClose = "</button>"
+	const cardClose = "</a>"
 
 	at := strings.Index(region, cardMarker(taskID))
 	if at < 0 {
@@ -531,33 +545,35 @@ func cardMarkupOf(t *testing.T, region string, taskID int, where string) string 
 	return region[start : start+end+len(cardClose)]
 }
 
-// cardBadgePair returns a card's two badges, in the order the card renders them.
-// A card carrying any other number of badges is a failure in itself: the card
-// shows a priority badge and a severity badge and no status badge at all
-// (Acceptance Criteria 85 and 133).
+// cardBadgePair returns a card's severity and priority badges, the second and
+// third badges of its badge line. A card carrying any number of badges other than
+// four is a failure in itself: the badge line shows the id, severity, priority,
+// and type badges, and the card shows no status badge at all (Acceptance Criteria
+// 85, 133 and 179). The id and type badges are asserted by the card tests that
+// own them (card_reference_line_test.go).
 func cardBadgePair(t *testing.T, card string, taskID int, where string) badgePair {
 	t.Helper()
 
 	found := pageBadges(card)
-	if len(found) != 2 {
-		t.Fatalf("%s: the card of task #%d carries %d badges, want exactly 2 — its priority "+
-			"badge and its severity badge, and no status badge\ncard: %s",
+	if len(found) != 4 {
+		t.Fatalf("%s: the card of task #%d carries %d badges, want exactly 4 — its id, "+
+			"severity, priority, and type badges, and no status badge\ncard: %s",
 			where, taskID, len(found), card)
 	}
-	return badgePair{priority: found[0].markup, severity: found[1].markup}
+	return badgePair{severity: found[1].markup, priority: found[2].markup}
 }
 
 // splitBoardCards partitions a served page into the markup of every board card,
 // in document order, and everything the page renders outside those cards.
 //
-// The split is what lets "only the card's two badges take a prefix" be asserted
+// The split is what lets "only the card's two badges take a badge label" be asserted
 // over the whole interface at once, rather than against a list of the surfaces
 // that must not take one — a list that would silently stop covering a surface
 // added later.
 func splitBoardCards(t *testing.T, page string) ([]string, string) {
 	t.Helper()
 
-	const cardClose = "</button>"
+	const cardClose = "</a>"
 
 	var (
 		cards   []string
@@ -595,77 +611,66 @@ func statusBadgeTexts() map[string]bool {
 }
 
 // isASCIILetter reports whether a byte is an unaccented Latin letter, which is
-// what a one-letter badge prefix is.
+// what a one-letter badge prefix would be.
 func isASCIILetter(c byte) bool {
 	return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
 }
 
-// jsDatagridBadgeArgs returns the arguments of the el(...) call that builds the
-// badge of one named datagrid item in the modal script, so what the badge is
-// given as its text can be read rather than guessed from the surrounding source.
-func jsDatagridBadgeArgs(t *testing.T, script, label string) []string {
+// rowMarkupOf returns the markup of ONE task's row of the tasks page's list, from
+// its <tr> to its </tr>.
+func rowMarkupOf(t *testing.T, region string, taskID int, where string) string {
 	t.Helper()
 
-	open := regexp.MustCompile(`datagridItem\(\s*"` + label + `"\s*,\s*el\(`)
-	loc := open.FindStringIndex(script)
-	if loc == nil {
-		t.Fatalf("the modal script builds no %q datagrid item holding a badge; either the "+
-			"extraction is broken or the modal stopped naming the field beside the value, "+
-			"which is the reason it carries no prefix", label)
+	at := strings.Index(region, cardMarker(taskID))
+	if at < 0 {
+		t.Fatalf("%s renders no row for task #%d", where, taskID)
 	}
-	return jsCallArguments(t, script[loc[1]:], label)
+	start := strings.LastIndex(region[:at], "<tr>")
+	end := strings.Index(region[at:], "</tr>")
+	if start < 0 || end < 0 {
+		t.Fatalf("%s: task #%d's link is not inside a table row", where, taskID)
+	}
+	return region[start : at+end+len("</tr>")]
 }
 
-// jsCallArguments splits the top-level arguments of a JavaScript call whose
-// opening parenthesis has already been consumed, ignoring commas nested inside
-// parentheses, brackets, braces, and string literals.
-func jsCallArguments(t *testing.T, rest, where string) []string {
+// rowBadgePair returns a list row's severity and priority badges, the fourth and
+// fifth of its five badges: id, type, status, severity, priority (Acceptance
+// Criterion 85).
+func rowBadgePair(t *testing.T, row string, taskID int, where string) badgePair {
 	t.Helper()
 
-	var (
-		args  []string
-		arg   strings.Builder
-		depth = 1
-		quote byte
-	)
-	for i := 0; i < len(rest); i++ {
-		c := rest[i]
-		if quote != 0 {
-			arg.WriteByte(c)
-			if c == '\\' && i+1 < len(rest) {
-				i++
-				arg.WriteByte(rest[i])
-				continue
-			}
-			if c == quote {
-				quote = 0
-			}
-			continue
-		}
-		switch c {
-		case '"', '\'':
-			quote = c
-			arg.WriteByte(c)
-		case '(', '[', '{':
-			depth++
-			arg.WriteByte(c)
-		case ')', ']', '}':
-			depth--
-			if depth == 0 {
-				return append(args, strings.TrimSpace(arg.String()))
-			}
-			arg.WriteByte(c)
-		case ',':
-			if depth == 1 {
-				args = append(args, strings.TrimSpace(arg.String()))
-				arg.Reset()
-				continue
-			}
-			arg.WriteByte(c)
-		default:
-			arg.WriteByte(c)
-		}
+	found := pageBadges(row)
+	if len(found) != 5 {
+		t.Fatalf("%s: the row of task #%d carries %d badges, want exactly 5 — its id, type, "+
+			"status, severity, and priority badges\nrow: %s", where, taskID, len(found), row)
 	}
-	t.Fatalf("the call built for %q is never closed in the modal script", where)
-	return nil
+	return badgePair{severity: found[3].markup, priority: found[4].markup}
+}
+
+// splitListRows partitions markup into the task-list rows it holds — every <tr>
+// carrying the id badge — and everything else.
+func splitListRows(t *testing.T, markup string) ([]string, string) {
+	t.Helper()
+
+	const idBadge = `<span class="badge bg-black text-white">`
+	var (
+		rows    []string
+		outside strings.Builder
+	)
+	remaining := markup
+	for {
+		at := strings.Index(remaining, idBadge)
+		if at < 0 {
+			outside.WriteString(remaining)
+			return rows, outside.String()
+		}
+		start := strings.LastIndex(remaining[:at], "<tr>")
+		end := strings.Index(remaining[at:], "</tr>")
+		if start < 0 || end < 0 {
+			t.Fatalf("an id badge sits outside a table row and outside a board card")
+		}
+		outside.WriteString(remaining[:start])
+		rows = append(rows, remaining[start:at+end+len("</tr>")])
+		remaining = remaining[at+end+len("</tr>"):]
+	}
 }

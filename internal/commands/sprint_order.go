@@ -8,6 +8,45 @@ import (
 	"github.com/FlavioCFOliveira/Groadmap/internal/utils"
 )
 
+// The success objects of the five sprint ordering commands (SPEC/COMMANDS.md
+// § Task Ordering). Each is a struct so that its keys are written in the
+// published order, which is the order of the fields: ascending byte order of
+// the key names, each key once, and no key the SPEC does not name. The bytes
+// are the ones the map literals these replace produced, because encoding/json
+// writes a map's keys in that same sorted order.
+
+// sprintReorderResult is the success object of `sprint reorder`: the sprint,
+// and the task ids in the order the command set, first to last.
+//
+//nolint:govet // fieldalignment: field order is the published JSON key order.
+type sprintReorderResult struct {
+	SprintID  int   `json:"sprint_id"`
+	Success   bool  `json:"success"`
+	TaskOrder []int `json:"task_order"`
+}
+
+// sprintPositionResult is the success object of `sprint move-to`, `sprint top`
+// and `sprint bottom`: the position the task holds, the sprint, and the task.
+//
+//nolint:govet // fieldalignment: field order is the published JSON key order.
+type sprintPositionResult struct {
+	Position int  `json:"position"`
+	SprintID int  `json:"sprint_id"`
+	Success  bool `json:"success"`
+	TaskID   int  `json:"task_id"`
+}
+
+// sprintSwapResult is the success object of `sprint swap`: the sprint and the
+// two task ids as the command line supplied them.
+//
+//nolint:govet // fieldalignment: field order is the published JSON key order.
+type sprintSwapResult struct {
+	SprintID int  `json:"sprint_id"`
+	Success  bool `json:"success"`
+	TaskID1  int  `json:"task_id_1"`
+	TaskID2  int  `json:"task_id_2"`
+}
+
 // sprintReorder reorders tasks in a sprint by defining their exact positions.
 //
 // Parameters:
@@ -84,7 +123,7 @@ func sprintReorder(args []string) error {
 	defer cancel()
 
 	// Verify sprint exists
-	_, err = database.GetSprint(ctx, sprintID)
+	err = database.CheckSprintExists(ctx, sprintID)
 	if err != nil {
 		return err
 	}
@@ -108,7 +147,7 @@ func sprintReorder(args []string) error {
 	}
 	for _, id := range taskIDs {
 		if !currentSet[id] {
-			return fmt.Errorf("%w: task %d does not belong to sprint %d", utils.ErrValidation, id, sprintID)
+			return utils.TasksNotInSprintError([]int{id}, sprintID)
 		}
 	}
 
@@ -117,11 +156,7 @@ func sprintReorder(args []string) error {
 		return err
 	}
 
-	return utils.PrintJSON(map[string]any{
-		"success":    true,
-		"sprint_id":  sprintID,
-		"task_order": taskIDs,
-	})
+	return utils.PrintJSON(sprintReorderResult{SprintID: sprintID, Success: true, TaskOrder: taskIDs})
 }
 
 // sprintMoveTo moves a task to a specific position within a sprint.
@@ -193,7 +228,7 @@ func sprintMoveTo(args []string) error {
 	defer cancel()
 
 	// Verify sprint exists
-	_, err = database.GetSprint(ctx, sprintID)
+	err = database.CheckSprintExists(ctx, sprintID)
 	if err != nil {
 		return err
 	}
@@ -217,7 +252,7 @@ func sprintMoveTo(args []string) error {
 		}
 	}
 	if !found {
-		return fmt.Errorf("%w: task %d does not belong to sprint %d", utils.ErrValidation, taskID, sprintID)
+		return utils.TasksNotInSprintError([]int{taskID}, sprintID)
 	}
 
 	// Move task to position
@@ -225,12 +260,7 @@ func sprintMoveTo(args []string) error {
 		return err
 	}
 
-	return utils.PrintJSON(map[string]any{
-		"success":   true,
-		"sprint_id": sprintID,
-		"task_id":   taskID,
-		"position":  position,
-	})
+	return utils.PrintJSON(sprintPositionResult{Position: position, SprintID: sprintID, Success: true, TaskID: taskID})
 }
 
 // sprintSwap swaps the positions of two tasks in a sprint.
@@ -304,7 +334,7 @@ func sprintSwap(args []string) error {
 	defer cancel()
 
 	// Verify sprint exists
-	_, err = database.GetSprint(ctx, sprintID)
+	err = database.CheckSprintExists(ctx, sprintID)
 	if err != nil {
 		return err
 	}
@@ -321,10 +351,10 @@ func sprintSwap(args []string) error {
 	}
 
 	if !currentSet[taskID1] {
-		return fmt.Errorf("%w: task %d does not belong to sprint %d", utils.ErrValidation, taskID1, sprintID)
+		return utils.TasksNotInSprintError([]int{taskID1}, sprintID)
 	}
 	if !currentSet[taskID2] {
-		return fmt.Errorf("%w: task %d does not belong to sprint %d", utils.ErrValidation, taskID2, sprintID)
+		return utils.TasksNotInSprintError([]int{taskID2}, sprintID)
 	}
 
 	// Swap tasks
@@ -332,10 +362,5 @@ func sprintSwap(args []string) error {
 		return err
 	}
 
-	return utils.PrintJSON(map[string]any{
-		"success":   true,
-		"sprint_id": sprintID,
-		"task_id_1": taskID1,
-		"task_id_2": taskID2,
-	})
+	return utils.PrintJSON(sprintSwapResult{SprintID: sprintID, Success: true, TaskID1: taskID1, TaskID2: taskID2})
 }

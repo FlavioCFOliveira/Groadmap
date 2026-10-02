@@ -286,10 +286,15 @@ func storeFingerprint(t *testing.T, roadmap string) string {
 // the defect itself: a statement whose work exceeds the budget is cancelled
 // rather than run to completion, and it fails with the published line.
 //
-// It asserts the four things SPEC/GRAPH.md § Statement Time Budget states of a
-// cut invocation, and the elapsed-time floor is not decoration: without it, an
-// implementation that refused the statement instantly for some unrelated reason
-// would satisfy an upper bound on its own.
+// It asserts the three things SPEC/GRAPH.md § Statement Time Budget states of a
+// cut invocation, and acceptance criterion 39 is explicit that the PUBLISHED
+// LINE is the whole of the proof that the budget is what cut the statement: an
+// invocation that failed for any other reason carries a different line, so the
+// line already separates the budget from every other cause. The criterion
+// forbids adding an assertion on how long the invocation took, for a read or for
+// a write (SPEC/BUILD.md § No Benchmarks and No Performance-Measurement Tests),
+// because a duration separates nothing here and would make the test a
+// measurement of the machine.
 func TestGraphExecute_StatementBudgetCutsAnExpensiveStatement(t *testing.T) {
 	name := seedBudgetGraph(t, "graph-budget-cuts-read")
 
@@ -297,41 +302,29 @@ func TestGraphExecute_StatementBudgetCutsAnExpensiveStatement(t *testing.T) {
 	budgetServer(t, name, budget)
 
 	var err error
-	started := time.Now()
 	stdout, stderr := captureStdStreams(t, func() {
 		err = runGraphClient([]string{"-r", name, "--query", budgetCartesianRead})
 	})
-	elapsed := time.Since(started)
 
 	// (i) It failed, in the class the specification fixes: utils.ErrGraphEngine,
 	// which is exit code 1. No new sentinel and no new exit code
 	// (SPEC/GRAPH.md § Constraints, rule 5).
 	if err == nil {
-		t.Fatalf("the statement completed in %v under a %v budget over %d nodes: the budget bounded nothing", elapsed, budget, budgetSeedNodes)
+		t.Fatalf("the statement completed under a %v budget over %d nodes: the budget bounded nothing", budget, budgetSeedNodes)
 	}
 	if !errors.Is(err, utils.ErrGraphEngine) {
 		t.Errorf("err = %v, want it to wrap utils.ErrGraphEngine (exit code 1)", err)
 	}
 
 	// (ii) The message is the published line, with the budget rendered from the
-	// value that produced the deadline.
+	// value that produced the deadline. This is the assertion that the BUDGET cut
+	// it: a statement that failed to parse, or against a server that was not
+	// there, carries another line entirely.
 	if got, want := err.Error(), wantBudgetLine(budget); got != want {
 		t.Errorf("message mismatch (SPEC/COMMANDS.md § Graph Management)\n got:  %q\n want: %q", got, want)
 	}
 
-	// (iii) It was cut at the budget rather than run to completion, and it did
-	// not fail before the deadline could fire. The ceiling is generous so a
-	// loaded or race-instrumented machine cannot flake it, and still far below
-	// the tens of seconds the statement costs unbounded.
-	if elapsed < budget {
-		t.Errorf("the invocation returned after %v, before its %v budget could elapse: the failure was not the budget", elapsed, budget)
-	}
-	if elapsed > 20*time.Second {
-		t.Errorf("the invocation took %v under a %v budget: the deadline was not honoured promptly", elapsed, budget)
-	}
-	t.Logf("a %d-node three-way Cartesian product was cut after %v under a %v budget", budgetSeedNodes, elapsed, budget)
-
-	// (iv) Nothing was printed as a success. A cut statement produces no result.
+	// (iii) Nothing was printed as a success. A cut statement produces no result.
 	if stdout != "" {
 		t.Errorf("stdout = %q, want nothing: a cut statement produces no result", stdout)
 	}
@@ -419,6 +412,18 @@ func TestGraphExecute_BudgetCutWritesNothing(t *testing.T) {
 // TestGraphQueryBudget_ProductionDefault, against the same declaration. It is
 // not restated here; what is asserted here is that this surface READS it.
 func TestGraphExecute_BudgetIsTheSharedDeclaration(t *testing.T) {
+	// One declaration, serving both surfaces. internal/web applies
+	// graphlock.StatementBudget as the graph data endpoint's own deadline and
+	// this package applies it here, so the identity below is what makes the two
+	// subtests' messages evidence about the SHARED value rather than about a
+	// constant of this package's own
+	// (SPEC/GRAPH.md § Acceptance Criteria, criterion 40).
+	if graphlock.StatementBudget != graphlock.DefaultStatementBudget {
+		t.Fatalf("the statement budget in force is %v and the declaration's default is %v; a test "+
+			"that started from a moved budget would prove nothing about the declaration",
+			graphlock.StatementBudget, graphlock.DefaultStatementBudget)
+	}
+
 	name := seedBudgetGraph(t, "graph-budget-shared-declaration")
 
 	for _, budget := range []time.Duration{200 * time.Millisecond, 700 * time.Millisecond} {
@@ -429,23 +434,25 @@ func TestGraphExecute_BudgetIsTheSharedDeclaration(t *testing.T) {
 			stop := budgetServer(t, name, budget)
 			defer stop()
 
+			// The declaration the server was started under and the one this
+			// process renders from are the same one, so a surface reading a
+			// constant of its own would disagree with it here.
+			if graphlock.StatementBudget != budget {
+				t.Fatalf("the shared declaration reads %v after the server was started under %v",
+					graphlock.StatementBudget, budget)
+			}
+
 			var err error
-			started := time.Now()
 			_, _ = captureStdStreams(t, func() {
 				err = runGraphClient([]string{"-r", name, "--query", budgetCartesianRead})
 			})
-			elapsed := time.Since(started)
 
 			if err == nil {
-				t.Fatalf("the statement completed in %v under a %v budget: the moved declaration did not move the deadline", elapsed, budget)
+				t.Fatalf("the statement completed under a %v budget: the moved declaration did not move the deadline", budget)
 			}
 			if got, want := err.Error(), wantBudgetLine(budget); got != want {
 				t.Errorf("the message does not name the budget in force\n got:  %q\n want: %q", got, want)
 			}
-			if elapsed < budget {
-				t.Errorf("cut after %v under a %v budget: the deadline did not follow the declaration", elapsed, budget)
-			}
-			t.Logf("budget %v: cut after %v", budget, elapsed)
 		})
 	}
 }

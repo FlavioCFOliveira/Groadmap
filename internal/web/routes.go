@@ -52,7 +52,7 @@ func (f noDirFS) Open(name string) (fs.File, error) {
 // assets under /static/... are excluded and remain cacheable (SPEC/WEB.md
 // § Cache Policy). Setting it here — the outermost layer that runs on every
 // response, including the fallback handler's data-state-dependent 404/405/500 —
-// covers all dynamic pages, the JSON data endpoint, and those error responses
+// covers all dynamic pages, the graph data endpoint, and those error responses
 // in one place. It is deliberately NOT duplicated in renderHTML/renderJSON, so
 // the no-store guarantee has exactly one source of truth and cannot diverge.
 func securityHeaders(next http.Handler) http.Handler {
@@ -73,11 +73,19 @@ func securityHeaders(next http.Handler) http.Handler {
 	})
 }
 
-// handler builds the fully wired read-only HTTP handler: the route mux wrapped
-// by the security-header middleware, which is the outermost layer so every
-// response carries the hardening headers.
-func handler() http.Handler {
-	return securityHeaders(buildMux())
+// newHandler builds the fully wired HTTP handler for a listener bound as policy
+// describes: the route mux behind the request guard, both wrapped by the
+// security-header middleware.
+//
+// The security-header middleware is the outermost layer, so every response —
+// a refusal included — carries the hardening headers. The request guard sits
+// directly inside it and ahead of the mux, so a request with a host this
+// listener does not serve, or one a browser made on behalf of another site, is
+// refused before any route is matched, any method examined, or any roadmap,
+// database, or socket touched (SPEC/WEB.md § Security and Constraints, rules 13
+// to 15).
+func newHandler(policy hostPolicy) http.Handler {
+	return securityHeaders(guardRequests(policy, buildMux()))
 }
 
 // buildMux wires the read-only routes onto an http.ServeMux. Go 1.22+
@@ -113,16 +121,15 @@ func buildMux() *http.ServeMux {
 	mux.HandleFunc("GET /roadmaps/{name}/tasks", handleTasks)
 	mux.HandleFunc("HEAD /roadmaps/{name}/tasks", handleTasks)
 
-	// Task detail endpoint: the JSON one task's detail modal is filled from,
-	// fetched when the user opens that task. The /data suffix is what marks a
-	// path as a JSON payload rather than an HTML page, exactly as the graph's
-	// own data endpoint does, which keeps the bare {collection}/{id} shape
-	// reserved for the HTML-page idiom /roadmaps/{name}/sprints/{id} uses:
-	// /roadmaps/{name}/tasks/{id} is deliberately NOT a route and falls through
-	// to the 404 handler. {id} is parsed and validated inside the handler
-	// (SPEC/WEB.md § Task Detail Endpoint).
-	mux.HandleFunc("GET /roadmaps/{name}/tasks/{id}/data", handleTaskData)
-	mux.HandleFunc("HEAD /roadmaps/{name}/tasks/{id}/data", handleTaskData)
+	// Roadmap task page: one task's fields, its comments, and its sprint context,
+	// rendered on the server. {id} is parsed and validated inside the handler; a
+	// non-integer id, or an id that is not a task of the roadmap, is a 404. No
+	// route lies below this path: /roadmaps/{name}/tasks/{id}/data and every
+	// other longer path match no pattern and fall through to the 404 handler
+	// (SPEC/WEB.md § Roadmap Task Page; § Routes and Pages, path-parameter rules
+	// 4 and 5).
+	mux.HandleFunc("GET /roadmaps/{name}/tasks/{id}", handleTask)
+	mux.HandleFunc("HEAD /roadmaps/{name}/tasks/{id}", handleTask)
 
 	// Roadmap audit log page: the full audit log, paginated. A distinct, more
 	// specific pattern than /roadmaps/{name}; Go 1.22+ ServeMux routes the
@@ -193,8 +200,7 @@ func resolveRoadmap(w http.ResponseWriter, r *http.Request) (string, bool) {
 		// roadmap that cannot be resolved is logged: the 404 branches below are
 		// ordinary navigation outcomes and stay silent
 		// (SPEC/WEB.md § What Is Not Logged, rule 1).
-		logServerError(r, "roadmap existence check failed", err, slog.String("roadmap", name))
-		http.Error(w, "internal server error", http.StatusInternalServerError)
+		failServer(w, r, "roadmap existence check failed", err, slog.String("roadmap", name))
 		return "", false
 	}
 	if !exists {

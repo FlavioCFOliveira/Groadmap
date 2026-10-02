@@ -146,6 +146,7 @@ func buildRoadmapAtSchema1120(t *testing.T, roadmapName string, sprintTitles []s
 		}
 	}
 
+	restoreSprintsCreatedAtIndex(t, database)
 	if _, err := database.Exec(
 		"UPDATE _metadata SET value = '1.12.0' WHERE key = 'schema_version'",
 	); err != nil {
@@ -364,8 +365,8 @@ func TestMigrateV1_12_0_toV1_13_0_OnNextOpen(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reading schema version after open: %v", err)
 	}
-	if version != "1.14.0" {
-		t.Fatalf("schema_version after open = %q, want 1.14.0 (SPEC/VERSION.md § Current Schema Version)", version)
+	if version != "1.17.0" {
+		t.Fatalf("schema_version after open = %q, want 1.17.0 (SPEC/VERSION.md § Current Schema Version)", version)
 	}
 	if version != SchemaVersion {
 		t.Errorf("schema_version after open = %q but the SchemaVersion constant is %q; a migrated "+
