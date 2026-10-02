@@ -186,7 +186,7 @@ jobs:
           fi
           buildinfo=$(go version -m "${binary}")
           if ! grep -Eq '^[[:space:]]+build[[:space:]]+vcs\.revision=' <<< "${buildinfo}"; then
-            echo "${binary} carries no vcs.revision build setting, so it cannot name the commit it was built from; the job stops before the artefact is uploaded." >&2
+            echo "${binary} carries no vcs.revision build setting, so it cannot name the commit it was built from; the job stops before the binary leaves it." >&2
             exit 1
           fi
 
