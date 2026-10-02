@@ -304,6 +304,18 @@ jobs:
           tar -tzf "dist/${archive}"
           (cd dist && sha256sum -c "${archive}.sha256")
 
+      # SPEC/DEPLOY.md § GitHub Release Body: the release body is the version's
+      # section of CHANGELOG.md, read from this job's checkout of the tag. The
+      # script fails the job here, before any release exists, when CHANGELOG.md
+      # holds no section for the version, more than one, or an empty one.
+      - name: Extract release notes from CHANGELOG.md
+        env:
+          VERSION: ${{ steps.get_version.outputs.VERSION }}
+        run: |
+          set -euo pipefail
+          scripts/changelog-section.sh "${VERSION}" CHANGELOG.md > "${RUNNER_TEMP}/release-notes.md"
+          cat "${RUNNER_TEMP}/release-notes.md"
+
       - name: Create GitHub Release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -315,6 +327,9 @@ jobs:
           # being passed through literally.
           artifacts=(dist/*.tar.gz dist/*.zip dist/*.sha256)
 
+          # An existing release (a re-run) keeps its body: only the artefacts are
+          # uploaded. A new release takes the extracted section as its body, and
+          # gh places it before the notes GitHub generates for the tag.
           if gh release view "${version}" &>/dev/null; then
             echo "Release ${version} already exists. Uploading new artifacts..."
             for file in "${artifacts[@]}"; do
@@ -323,6 +338,7 @@ jobs:
           else
             gh release create "${version}" \
               --title "Release ${version}" \
+              --notes-file "${RUNNER_TEMP}/release-notes.md" \
               --generate-notes \
               --verify-tag \
               "${artifacts[@]}"

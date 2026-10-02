@@ -576,6 +576,10 @@ binary and fails when the binary carries no
 4. **release** — declares `needs: build`
    - Downloads every build artifact and creates the GitHub release, attaching the
      archives and their checksums
+   - Builds the release body from the version's section of `CHANGELOG.md`, and
+     fails before creating the release when that section is missing or empty.
+     `DEPLOY.md § GitHub Release Body` is the authoritative statement of the
+     body's source, its composition, and the failure
 
 **Permissions:**
 ```yaml

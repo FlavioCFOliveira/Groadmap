@@ -638,9 +638,53 @@ once in `VERSION.md § Release Process`.
 
 3. **Create GitHub Release**
    - Runs after all builds complete
-   - Creates release using `gh release create`
-   - Generates release notes automatically
+   - Extracts the version's section of `CHANGELOG.md`, and fails before the
+     release is created when that section is missing or empty (see GitHub
+     Release Body)
+   - Creates release using `gh release create`, with the extracted section as
+     the release body, followed by the notes GitHub generates (see GitHub
+     Release Body)
    - Attaches all built binaries and checksums
+
+### GitHub Release Body
+
+The body of every GitHub Release MUST contain the release's section of
+`CHANGELOG.md`. This subsection is the normative statement of where the body
+comes from and how the release job builds it; `BUILD.md § Release Workflow`
+refers to it and does not restate it.
+
+**Source.** `CHANGELOG.md` at the repository root follows the Keep a Changelog
+format. The release's section is the one whose heading line is `## [X.Y.Z]` or
+`## [X.Y.Z] - YYYY-MM-DD`, where `X.Y.Z` is the release tag without its leading
+`v`: the tag `v1.18.0` selects the heading `## [1.18.0] - 2026-10-02`.
+
+**Section body.** The section body is every line after that heading line, up to
+but not including the next line that starts with `## [`, or up to the end of the
+file when no such line follows. The heading line itself is not part of the body.
+Leading and trailing blank lines are removed from the body; the lines between
+them are kept exactly as written.
+
+**Extraction.** The release job extracts the section body from the checked-out
+tag before it creates the release. `CHANGELOG.md` MUST hold exactly one heading
+for the version. If it holds no heading for the version, or the section body is
+empty once its blank lines are trimmed, the job MUST fail before the release is
+created, writing to standard error an error that names the version and states
+which of the two conditions was found. If it holds more than one heading for the
+version, `CHANGELOG.md` itself is wrong: the job MUST fail before the release is
+created, writing to standard error an error that names the version and states
+that `CHANGELOG.md` holds duplicate sections for it, which must be merged into
+one. No release exists for the tag after any of these failures, so the version is
+corrected as `VERSION.md § Correcting a Failed Release Workflow` specifies.
+
+**Composition.** The release body is the extracted section body followed by the
+notes GitHub generates for the tag, which carry the `Full Changelog` comparison
+link. The job obtains this by passing the extracted section to
+`gh release create` through `--notes-file` together with `--generate-notes`:
+`gh` places the notes it is given before the notes GitHub generates.
+
+**Existing release.** When a GitHub Release already exists for the tag, as on a
+re-run of the release workflow, the job uploads every archive and checksum to it
+with `gh release upload --clobber` and does not rewrite the release body.
 
 ### How a Released Binary Carries Its Commit
 
@@ -756,7 +800,8 @@ Each release includes:
 - SHA256 checksums for each archive
 - The agent skills archive `rmp-skills-{version}.tar.gz` and its checksum
   `rmp-skills-{version}.tar.gz.sha256` (see `SKILLS.md § Packaging`)
-- Automatic release notes generated from commits
+- A release body made of the version's section of `CHANGELOG.md`, followed by
+  the notes GitHub generates (see GitHub Release Body)
 
 ### Release Checklist
 
@@ -769,6 +814,8 @@ Each release includes:
 - [ ] SHA256 checksums generated
 - [ ] The released binary names its commit: on a binary extracted from a published archive, `rmp --version` prints `(commit <commit>)` with the first seven characters of the commit the tag names, and no `modified` marker (see How a Released Binary Carries Its Commit)
 - [ ] Release notes prepared
+- [ ] Before the tag is created, `CHANGELOG.md` at the tagged commit holds exactly one section headed `## [X.Y.Z]` or `## [X.Y.Z] - YYYY-MM-DD` for the version being released, and that section's body is not empty (see GitHub Release Body)
+- [ ] The published GitHub Release's body begins with that section's body (see GitHub Release Body)
 - [ ] Version updated in `cmd/rmp/main.go`
 - [ ] Both agent skills declare the released binary version, and the skills alignment test passes (see `SKILLS.md § Alignment Invariant`)
 - [ ] Documentation updated (`SPEC/VERSION.md`, `SPEC/README.md`)
@@ -816,6 +863,11 @@ Each release includes:
 - [ ] No standard-library vulnerability reachable from Groadmap's own code is present at the released commit. Should one be found, the `go` directive of `go.mod` is raised to the release that fixes it, the advisory is recorded in `BUILD.md § Go Toolchain`, and `govulncheck ./...` re-run clean before the tag is created (see `VERSION.md § Pre-Release Vulnerability Check`)
 - [ ] The `go` directive of `go.mod` is not lower than any floor `BUILD.md § Go Toolchain` sets: the minimum Go version each required module declares, and the release that carries the fix for every reachable standard-library advisory
 - [ ] Any vulnerability reported but not called is recorded in the release notes rather than silently dropped
+- [ ] The release job builds the release body from `CHANGELOG.md`: reading `.github/workflows/release.yml` shows a step, placed before the step that creates the release, that extracts the section whose heading is `## [X.Y.Z]` or `## [X.Y.Z] - YYYY-MM-DD` for the tag without its leading `v`, and a `gh release create` command that passes the extracted section with `--notes-file` together with `--generate-notes` (see GitHub Release Body)
+- [ ] The extracted section body excludes the heading line, ends before the next line that starts with `## [` or at the end of the file, and carries no leading or trailing blank line: for `CHANGELOG.md` as committed at the tag `v1.18.0`, it is exactly the lines after `## [1.18.0] - 2026-10-02` and before `## [1.17.3] - 2026-09-18`, with blank lines trimmed at both ends
+- [ ] A tag whose version has no section in `CHANGELOG.md`, or whose section body is empty, fails the release job before any release is created: no GitHub Release exists for the tag afterwards, and the job's standard error names the version (see GitHub Release Body)
+- [ ] A tag whose version has more than one heading in `CHANGELOG.md` (`## [X.Y.Z]`, `## [X.Y.Z] - YYYY-MM-DD`, or one of each) fails the release job before any release is created: no GitHub Release exists for the tag afterwards, and the job's standard error names the version and states that `CHANGELOG.md` holds duplicate sections for it that must be merged into one (see GitHub Release Body)
+- [ ] A re-run of the release workflow for a tag whose GitHub Release already exists uploads the archives and checksums with `gh release upload --clobber` and leaves the release body unchanged (see GitHub Release Body)
 - [ ] `govulncheck` is run as a release step only. It is not added to `make check`, to `.github/workflows/ci.yml`, or to `.github/workflows/release.yml`, and the gate set stays at the six gates of `BUILD.md § Validation Gates`
 - [ ] This specification documents no linker flag that the release workflow does not pass, and the release workflow passes no `-X` linker flag
 - [ ] Both workflows build `rmp` with `-buildvcs=true`: reading `.github/workflows/release.yml` and `.github/workflows/ci.yml` shows the flag on the `go build` command of each build job (see How a Released Binary Carries Its Commit)
