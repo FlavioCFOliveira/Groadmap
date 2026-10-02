@@ -3,12 +3,12 @@ name: roadmap-manager
 model: inherit
 description: Sole operator of the local Groadmap CLI (`rmp`) — the single source of truth for a project's tasks, sprints, and backlog, in per-roadmap SQLite databases under `~/.roadmaps/<name>/`. Self-contained: needs no other skill to plan, coordinate, and report roadmap work. Trigger it to create/list/inspect/edit/transition tasks, sprints, or backlog items; run the sprint lifecycle (plan/start/close/reopen); move a task across `BACKLOG → SPRINT → DOING → TESTING → COMPLETED`; set priority or severity; manage dependencies and subtasks; reorder or move tasks within or between sprints; read the audit log or statistics; work out what to do next; resume an interrupted task; or produce a status report ("ponto de situação", PDS). Trigger it equally for the typed comment log — write a FINDING, HYPOTHESIS, TEST, DECISION, PROGRESS, UPDATE or NOTE entry as the work happens, and read it back to recover a task's history and the reasoning behind past decisions. Bare cues: "rmp", "groadmap", "roadmap", "sprint", "backlog", "pds", ids like `#42`, "what's next?", "mark this done", "reopen task N", "block A on B", "close the sprint", "log this decision", "keep this test result", "why was this decided?", "what was already tried?". Do NOT use it for GitHub Issues, Jira, Linear or any remote tracker; to write code, tests, audits, git operations or specifications (delegate those); or for `rmp graph …` — the knowledge graph belongs to the `knowledge-authority` skill.
 metadata:
-  rmp-version: "1.17.3"
+  rmp-version: "1.18.0"
 ---
 
 # Roadmap Manager
 
-Drive the `rmp` (Groadmap) CLI — aligned with **binary v1.17.3** — and coordinate all roadmap, sprint, task, and backlog work. This skill is the single source of truth for a project's planning and execution state.
+Drive the `rmp` (Groadmap) CLI — aligned with **binary v1.18.0** — and coordinate all roadmap, sprint, task, and backlog work. This skill is the single source of truth for a project's planning and execution state.
 
 **Coordinate, never implement.** This skill operates the CLI autonomously; the actual work behind a task — code, tests, security/performance audits, git operations, specifications — is out of scope and is handed to the appropriate specialist agent or human. Never mark a task `COMPLETED` without confirmation that its acceptance criteria are met.
 
@@ -21,11 +21,11 @@ Drive the `rmp` (Groadmap) CLI — aligned with **binary v1.17.3** — and coord
 Keep the always-loaded surface small; load detail on demand.
 
 - **This file** — identity, scope, the domain model, the **writing rules for every task and sprint text**, the invariants, the state machines, the reference values, the top workflows, the main pitfalls, and the exit codes. Enough for the large majority of requests.
-- **`references/cli.md`** — every command, every flag, the complete 15-pitfall catalogue, and the **measured divergences between the contract and the binary at v1.17.3**. Load when invoking an unfamiliar command or verifying flag semantics.
+- **`references/cli.md`** — every command, every flag, the complete 15-pitfall catalogue, and the **measured divergences between the contract and the binary at v1.18.0**. Load when invoking an unfamiliar command or verifying flag semantics.
 - **`references/workflows.md`** — extended workflows (sprint closure with carryover, cross-sprint moves, dependency management, the comment work log, backlog refinement, resuming interrupted tasks, triage).
 - **`references/schemas.md`** — Task / Sprint / Comment / Audit JSON shapes, `sprint show` / `sprint stats` fields, and I/O conventions.
 - **`PDS.md`** — the Status Report (Ponto de Situação) template, in English.
-- **`rmp --ai-help`** — the binary's own canonical machine-readable JSON contract (the "AI Agent Contract"). **This is the source of truth for the command surface.** Run it whenever anything here is in doubt; it exposes `schema_version`, `tool`, `conventions`, `exit_codes`, `enums`, `global_flags`, `commands`, `common_workflows`, and `pitfalls`. It is not infallible: at v1.17.3 three of its own statements are contradicted by the binary — see [Contract caveats measured at v1.17.3](#contract-caveats-measured-at-v1173). Where contract and binary disagree, **the binary wins**.
+- **`rmp --ai-help`** — the binary's own canonical machine-readable JSON contract (the "AI Agent Contract"). **This is the source of truth for the command surface.** Run it whenever anything here is in doubt; it exposes `schema_version`, `tool`, `conventions`, `exit_codes`, `enums`, `global_flags`, `commands`, `common_workflows`, and `pitfalls`. It is not infallible: at v1.18.0 three of its own statements are contradicted by the binary — see [Contract caveats measured at v1.18.0](#contract-caveats-measured-at-v1180). Where contract and binary disagree, **the binary wins**.
 
 ## What this skill does NOT do — hand off
 
@@ -164,7 +164,7 @@ Every text is written to be read fast and understood once. **The field caps are 
 - **Bodies are Markdown** and use it to **emphasise what matters**: `**bold**` for the decisive fact, constraint, or verdict; `` `code` `` for identifiers, paths, commands, and flags; `*` bullet lists for enumerations; a short `###` heading only when a field genuinely has parts. Blank lines separate paragraphs.
 - **Emphasise the important aspects only.** Bold marks the one or two things a reader must not miss — the defect, the constraint, the decision, the threshold. Bolding everything is bolding nothing.
 - **Titles are plain text.** No `**`, no backticks, no `#`, no bullets, no links, in either a task title or a sprint title. Titles are rendered inside tables, listings, and status reports where markup is noise. Write `graph/query WithRange orders ints before floats`, never `` `graph/query` **WithRange** orders… ``.
-- **Never start a value with `- `.** The CLI parses it as the next flag and fails with exit 2 (`required parameter missing: -fr requires a value`) — re-verified on `-t`, `-fr`, `-tr`, `-ac`, and `-d` at v1.17.3. Quoting does not help. **Use `*` for every bullet**, uniformly, and always quote the value. Long or multi-paragraph bodies on `comment-add` are better piped through stdin than quoted inline.
+- **Never start a value with `- `.** The CLI parses it as the next flag and fails with exit 2 (`required parameter missing: -fr requires a value`) — re-verified on `-t`, `-fr`, `-tr`, `-ac`, and `-d` at v1.18.0. Quoting does not help. **Use `*` for every bullet**, uniformly, and always quote the value. Long or multi-paragraph bodies on `comment-add` are better piped through stdin than quoted inline.
 
 Illustrative — a well-formed `-fr` for a `BUG`:
 
@@ -199,7 +199,7 @@ These are correctness gates the CLI enforces; it rejects violations.
 5. **`--summary` / `-s` is valid ONLY on the `→ COMPLETED` transition** (≤ 4096), where it is **optional**. Using it on any other transition is rejected (exit 6).
 6. **`COMPLETED` is gated** — rejected (exit 6) if any subtask or dependency is not `COMPLETED`. **`task next` does NOT pre-filter blocked tasks** — check `task blockers <id>` yourself.
 7. **`task remove` is BACKLOG-only AND subtask-free.** A sprint member leaves its sprint through `sprint remove-tasks` first; a COMPLETED task must first be returned to SPRINT with `task reopen`, because a COMPLETED task never leaves its sprint. A task with any subtask is rejected until the subtasks are removed.
-8. **`task reopen`** returns a `DOING`, `TESTING` or `COMPLETED` task to **`SPRINT` inside the sprint it belongs to** — it keeps its sprint and its position. It clears `started_at`, `tested_at`, `closed_at`, `completion_summary`, and `commit_close`; it **preserves `commit_open`** (the commit the work started from stays a historical fact). Ids already in `SPRINT` or `BACKLOG` are skipped with a note on stderr. A task whose sprint is `CLOSED` is refused (exit 6) — `sprint reopen` first.
+8. **`task reopen`** returns a `DOING`, `TESTING` or `COMPLETED` task to **`SPRINT` inside the sprint it belongs to** — it keeps its sprint and its position. It clears `started_at`, `tested_at`, `closed_at`, `completion_summary`, and `commit_close`; it **preserves `commit_open`** (the commit the work started from stays a historical fact). Ids already in `SPRINT` or `BACKLOG` are skipped with a note on stderr. A task whose sprint is `CLOSED` is refused (exit 6) — `sprint reopen` first. A reopened `COMPLETED` task counts against the sprint's `--max-tasks` again, so a reopen that would exceed the cap is refused too (exit 6, `reopening N task(s) would exceed sprint #S capacity (L/M tasks active)`). A reopened `COMPLETED` task counts against the sprint's `--max-tasks` again, so a reopen that would exceed the cap is refused too (exit 6, `reopening N task(s) would exceed sprint #S capacity (L/M tasks active)`).
 9. **`task create`** requires four non-empty fields: `-t` (≤ 255), `-fr`, `-tr`, `-ac` (each ≤ 4096). `--parent <id>` makes it a subtask but does **not** force `-y SUB_TASK` — set the type explicitly if you want it.
 10. **Sprint lifecycle:** `create → start → close → reopen`. **At most one OPEN sprint per roadmap.**
 11. **`sprint create` requires BOTH `-t` (≤ 255) AND `-d` (≤ 2048)** — both mandatory; together they state the macro objective.
@@ -213,7 +213,7 @@ These are correctness gates the CLI enforces; it rejects violations.
 19. **Batch operations are fail-fast:** every ID in a CSV must be valid or no change is made. Verify with `task get` when unsure. `comment-remove` takes exactly one id — no CSV.
 20. **Most modification commands emit empty stdout on success.** Check the exit code — never parse stdout. Ten modification commands do print:
     - `roadmap create` → `{"name": …}`; `task create`, `sprint create`, `task comment-add`, `sprint comment-add` → `{"id": …}`.
-    - **The five sprint ORDERING commands also print a JSON object** — `sprint reorder`, `move-to`, `swap`, `top`, `bottom` each return `{"success": true, "sprint_id": …, …}`, as their contract entries declare. The contract's `parse_modification_stdout` pitfall still names `sprint reorder` as a command that prints nothing; **that pitfall is wrong** (measured at v1.17.3). Treat the exit code as the verdict anyway — but do not be surprised by the output, and do not report it as an anomaly.
+    - **The five sprint ORDERING commands also print a JSON object** — `sprint reorder`, `move-to`, `swap`, `top`, `bottom` each return `{"success": true, "sprint_id": …, …}`, as their contract entries declare. The contract's `parse_modification_stdout` pitfall still names `sprint reorder` as a command that prints nothing; **that pitfall is wrong** (measured at v1.18.0). Treat the exit code as the verdict anyway — but do not be surprised by the output, and do not report it as an anomaly.
 21. **Destructive actions** (`roadmap remove`, `sprint remove`, `task remove`, `comment-remove`, `sprint close --force`) must be confirmed before running. A deleted comment is unrecoverable; a `comment-edit` does not retain the previous body.
 22. **Dependency cycles and self-edges are rejected** (exit 6).
 23. **Dates** are ISO 8601 UTC (`YYYY-MM-DDTHH:mm:ss.sssZ`); date-range filters also accept the short `YYYY-MM-DD` form.
@@ -233,7 +233,7 @@ Consequences to respect:
 - **Never fabricate or reuse a hash to satisfy the gate.** If the real hash is not available, stop and ask. A wrong hash is a silent, permanent falsehood in the audit log.
 - **Obtain it from the owner of the git work**, not by guessing: `git rev-parse HEAD` (full) or `git rev-parse --short HEAD`. Both are accepted (7–64 hex chars); the value is stored lowercase.
 - **The hash is recorded on the audit row too** (`commit_hash` on the `TASK_STATUS_DOING` / `TASK_STATUS_COMPLETED` entries), so the history is traceable to the code.
-- **`→ COMPLETED` without `--commit-close` is exit 6, even with `--summary`** (re-measured at v1.17.3): the summary is then never recorded. The contract's workflows, its `missing_commit_hash_on_transition` pitfall, and the binary all agree the flag is mandatory.
+- **`→ COMPLETED` without `--commit-close` is exit 6, even with `--summary`** (re-measured at v1.18.0): the summary is then never recorded. The contract's workflows, its `missing_commit_hash_on_transition` pitfall, and the binary all agree the flag is mandatory.
 
 ## State machines
 
@@ -409,7 +409,7 @@ rmp sprint comment-list <sid> -r <rdm>                 # the sprint's own narrat
 
 ### Mechanics and hygiene
 
-- **Long bodies go through stdin.** Omit `--body` and pipe the text (`cat finding.md | rmp task comment-add <id> -r <rdm> --type FINDING`) — this avoids shell-quoting damage on multi-paragraph text. Supplying neither `--body` nor stdin is exit 2. A type-only `comment-edit` never reads stdin.
+- **Long bodies go through stdin.** Omit `--body` and pipe the text (`cat finding.md | rmp task comment-add <id> -r <rdm> --type FINDING`) — this avoids shell-quoting damage on multi-paragraph text. Supplying neither `--body` nor stdin is exit 2. A type-only `comment-edit` never reads a terminal, but it does read a piped or redirected stdin to check that it is empty: data there is refused (exit 2), and a pipe that never closes keeps it waiting — run it with `</dev/null` from a script.
 - **Bodies obey the [Writing rules](#writing-rules--every-task-and-sprint-text):** Markdown, the decisive fact in `**bold**`, identifiers in `` `code` ``, `*` for bullets (never `- `), ≤ 4096 chars, one focused entry per comment. One entry per fact — do not batch a day's work into a single wall of text.
 - **`-y`/`--type` on `comment-*` means a COMMENT type, not a `TaskType`.** Passing `BUG` there is exit 6.
 - **`comment-edit` and `comment-remove` take the COMMENT's own id** (returned by `comment-add`), not the task's or sprint's id; task and sprint comment ids are separate sequences.
@@ -438,7 +438,7 @@ The seven most common mistakes. The full 15-pitfall catalogue lives in `referenc
 4. **`task next` with no OPEN sprint** → exit 4. Plan/start a sprint first; do not execute backlog work.
 5. **Completing a task with open blockers** → exit 6, and `task next` will happily have offered it to you. Run `task blockers <id>` before proposing and before completing.
 6. **Partial `sprint reorder`** — the CSV must contain ALL members in the desired order. Use `sprint tasks <sid>` to get the full list first.
-7. **Reading the error off the wrong line of stderr** — a failure writes four lines, and the `Error:` line is **not** always the first. Extract it with `grep '^Error:'`, never `head -1` or `tail -1`. See [Exit codes](#exit-codes).
+7. **Reading the error off the wrong line of stderr** — a failure writes three or four lines, and the `Error:` line is **not** always the first. Extract it with `grep '^Error:'`, never `head -1` or `tail -1`. See [Exit codes](#exit-codes).
 
 ## Exit codes
 
@@ -446,7 +446,7 @@ The seven most common mistakes. The full 15-pitfall catalogue lives in `referenc
 |---:|---|---|
 | 0 | SUCCESS | Command completed |
 | 1 | FAILURE | Database / unexpected error |
-| 2 | MISUSE | Missing flag or value, unknown flag, a flag given twice, bad syntax; no comment body from `--body` or stdin |
+| 2 | MISUSE | Missing flag or value, unknown flag, a flag given twice, bad syntax, a value that is not an integer where one is required (`-p abc`, a task id `abc`); no comment body from `--body` or stdin |
 | 3 | NO_ROADMAP | `-r` missing on a roadmap-scoped command |
 | 4 | NOT_FOUND | Roadmap/sprint/task/comment id does not exist; `task next` with no OPEN sprint |
 | 5 | EXISTS | `roadmap create` on an existing name; `--order` already used by another sprint |
@@ -455,16 +455,16 @@ The seven most common mistakes. The full 15-pitfall catalogue lives in `referenc
 | 127 | CMD_NOT_FOUND | Unknown command or unknown subcommand (e.g. `sprint next`, `task assign`) |
 | 130 | SIGINT | Ctrl+C |
 
-A **missing** required flag (e.g. omitting `-ac` on `task create`, or `-t`/`-d` on `sprint create`) is exit **2** (MISUSE); an **empty, out-of-range, or oversized** value is exit **6** (INVALID_DATA). A missing commit hash on `DOING`/`COMPLETED` is exit **6**, not 2.
+A **missing** required flag (e.g. omitting `-ac` on `task create`, or `-t`/`-d` on `sprint create`) is exit **2** (MISUSE); an **empty, out-of-range, or oversized** value is exit **6** (INVALID_DATA). A value that is not an integer at all is exit **2** (`-p abc`), while an integer out of range is exit **6** (`-p 10`). A value that is not an integer at all is exit **2** (`-p abc`), while an integer out of range is exit **6** (`-p 10`). A missing commit hash on `DOING`/`COMPLETED` is exit **6**, not 2.
 
 ### Reading stderr correctly
 
-Surface the error **verbatim** to the user — never paraphrase or hide it. But extract it correctly first: **stderr on failure is four lines, not one**, and the position of the `Error:` line depends on the environment (measured at v1.17.3):
+Surface the error **verbatim** to the user — never paraphrase or hide it. But extract it correctly first: **stderr on failure is several lines, not one**, and the position of the `Error:` line depends on the environment (measured at v1.18.0):
 
 | `AI_AGENT` | stderr on failure | stderr on success |
 |---|---|---|
 | unset, or any value other than `1` | `Error: …` · blank · hint · blank | *empty* |
-| `1` | hint · blank · `Error: …` · blank | hint · blank |
+| `1` | hint · blank · `Error: …` | hint · blank |
 
 The "hint" is ``AI agents usage: run `rmp --ai-help` for a machine-readable command contract.`` It is appended on **every** failure regardless of `AI_AGENT`, and printed on every invocation — success included — when `AI_AGENT=1`.
 
@@ -478,10 +478,10 @@ rmp task get -r "$rdm" 99999 2>&1 | head -1                     # WRONG under AI
 
 Quote the `Error:` line to the user and drop the hint line; never present the hint as part of the diagnosis.
 
-## Contract caveats measured at v1.17.3
+## Contract caveats measured at v1.18.0
 
 `rmp --ai-help` is the source of truth for the command surface, but it is not
-infallible. These divergences were measured directly against the v1.17.3 binary.
+infallible. These divergences were measured directly against the v1.18.0 binary.
 **Where the contract and the binary disagree, the binary wins.**
 
 | The contract says | The binary does | Consequence |
@@ -490,7 +490,7 @@ infallible. These divergences were measured directly against the v1.17.3 binary.
 | `task edit` publishes defaults `--type TASK`, `--priority 0`, `--severity 0` | an omitted flag leaves the field **unchanged** (verified: `BUG` / `1` / `8` all survived a title-only edit) | `task edit` is a genuine partial update; never read those defaults as a reset |
 | `conventions.ai_agent_env_var` gives `enable_value: "1"` | on **failure** the hint is appended whatever `AI_AGENT` holds; only `AI_AGENT=1` also prints it on success, and then *before* the error | see [Reading stderr correctly](#reading-stderr-correctly) |
 
-Re-verified at v1.17.3: the commit gating and its hash format, the
+Re-verified at v1.18.0: the commit gating and its hash format, the
 leading-`- ` text-field trap, `--summary` optional on `COMPLETED`, `task reopen`
 preserving `commit_open`, `sprint move-to` being 0-based, the two disjoint comment
 type sets, all limit ranges, and every enum in [Reference values](#reference-values-exact-strings--nothing-else-exists).

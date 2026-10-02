@@ -3,7 +3,7 @@ name: knowledge-authority
 model: inherit
 description: Empirical authority and single source of truth about THIS project's code content, backed by the per-roadmap knowledge graph (`rmp graph`, Cypher over a Label-Property Graph served by a Bolt server) and the project's `./knowledge-model.md`. This is the FIRST place to look for any factual question about the codebase — which file or function implements a feature, which packages/types/functions/tests/dependencies/specs exist, what a component complies with, how the architecture fits together, or the scope and impact of a change — even when the answer looks one `grep` away; consult the graph before reading files. Also use it to sync, refresh, or audit the graph after a commit, on request, or whenever the project files change, and to maintain `./knowledge-model.md` — the label/predicate dictionary, the model's constraints, and its index recommendations, and nothing else — in conformance with the live graph; this file is written exclusively by this skill. Trigger cues: "knowledge authority", "KA", "KG", "knowledge graph", "grafo de conhecimento", "where is X implemented", "what depends on Y", "which tests cover Z", "sync/refresh/audit the graph". Do NOT use for roadmap/sprint/backlog/task-status work (that is the `roadmap-manager` skill); for writing or implementing code; for git operations; or for general programming, Cypher, or graph-algorithm questions unrelated to this repository's content.
 metadata:
-  rmp-version: "1.17.3"
+  rmp-version: "1.18.0"
 ---
 
 # Knowledge Authority
@@ -23,7 +23,7 @@ This skill is **transversal**: it is installed at the user-profile level because
 it serves every project, not one. On each invocation it operates on the *current*
 project's graph and model.
 
-> **Contract baseline: rmp 1.17.3.** The graph command was rebuilt as a
+> **Contract baseline: rmp 1.18.0.** The graph command was rebuilt as a
 > server/client pair in the 1.17 line. If `rmp --version` reports older, or a
 > behaviour here disagrees with the binary, **the binary wins** — run
 > `rmp --ai-help` and correct this skill.
@@ -152,7 +152,8 @@ Two constraints on any value you propose:
 - **Length.** The whole path must be short enough for the platform's
   `sockaddr_un`, or `serve` fails with exit 1 and a message naming the limit
   ("… is 120 bytes and this platform allows at most 103"). **Measured on macOS:
-  103 bytes; on Linux at 1.17.3, 99 bytes for `serve` and 107 for `client`.**
+  103 bytes; on Linux at 1.18.0, 107 bytes for `client` and for a `serve` given
+  `--socket`, but 99 bytes for a `serve` on the derived default path.**
   Trust the message over any remembered figure. A path under a deep scratch
   directory will breach it.
 - **Prefer the derived default.** The web interface (the `web` command, which this
@@ -228,7 +229,7 @@ than read and re-interpret files; file reading is only the fallback.
 
 **`MERGE` over a *pattern* creates every node in that pattern afresh unless the
 whole pattern already matches.** It does not bind an existing node by its
-property map the way a reader expects. Verified at 1.17.3:
+property map the way a reader expects. Verified at 1.18.0:
 
 | Statement sequence | Result |
 |---|---|
@@ -279,7 +280,7 @@ of the silent hazards below — read them before writing an edge.
 The rule above fails loudly enough for `counters` to catch it. These do not: each
 **exits `0`, reports success, and writes nothing, part of what you asked for, or
 the wrong element.** No exit code tells you. Every one was re-measured on the
-installed **rmp 1.17.3** against a throwaway roadmap; the reproductions below are
+installed **rmp 1.18.0** against a throwaway roadmap; the reproductions below are
 that run's statements and results.
 
 ### 1. `MERGE` over a pattern duplicates a relationship's endpoints
@@ -319,7 +320,7 @@ joined by exactly one relationship in that direction the matched `MERGE` was
 measured sound.
 
 A relationship **created** by `CREATE`, or by a `MERGE` that created it, takes
-its own assignments and removals on 1.17.3, on any pair. Its **`DELETE`** is not
+its own assignments and removals on 1.18.0, on any pair. Its **`DELETE`** is not
 sound on a pair already joined in that direction — it removes a pre-existing
 relationship and keeps the created one, with `counters` reporting one created and
 one deleted either way:
@@ -339,7 +340,7 @@ MERGE (a)-[:R]->(b)
 WITH DISTINCT a, b
 MATCH (a)-[e:R]->(b)
 SET e.$PC='$COMMIT', e.$PD='$GDATE'
-  -> measured: writes to the R edge only, propertiesWritten 1
+  -> measured: writes to the R edge only, propertiesWritten 2 (one per property)
 ```
 
 `WITH DISTINCT` collapses the extra rows a matched `MERGE` can emit, so the `SET`
@@ -362,7 +363,7 @@ MATCH (a:P {key:'a'})-[e:U]->(b:P {key:'b'}) REMOVE e.t   -> counters properties
 **Remedy:** remove relationship properties only through an **outgoing** pattern
 that names the stored source on the left.
 
-**Fixed as of rmp 1.17.3, and measured so:** an **assignment** (`SET e.k = …`)
+**Fixed as of rmp 1.17.3, and measured so again at 1.18.0:** an **assignment** (`SET e.k = …`)
 through an undirected or incoming pattern now persists on the relationship it
 matched, and so does an assignment to a relationship bound by `CREATE` or by a
 `MERGE` that created it. Earlier engines lost both; do not rely on the fix on an
@@ -421,7 +422,7 @@ matrix):
   index** and falls back to a label scan. `TEXT`/`RANGE`/`POINT`/`FULLTEXT`/
   `LOOKUP`, composite, and relationship-property indexes are all unsupported.
   `OPTIONS {indexType:'btree'}` is accepted and reported as `type: btree`, but
-  measured at 1.17.3 the planner used it for neither an equality nor a range
+  measured at 1.18.0 the planner used it for neither an equality nor a range
   lookup — create the default hash index.
 
 **Recommend an index from the query shapes this skill actually issues** — the

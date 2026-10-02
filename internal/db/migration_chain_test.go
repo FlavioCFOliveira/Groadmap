@@ -36,6 +36,8 @@ import (
 //	1.8.0   v1.10.0
 //	1.12.0  v1.15.0
 //	1.14.0  v1.15.1
+//	1.17.0  faeaba8 (the develop head release/1.18.0 was cut from; v1.18.0 is
+//	        the first release that creates databases at 1.17.0)
 //
 // The data is one payments-service roadmap: nine tasks, among them a subtask
 // where the version has parent_task_id, in every status — BACKLOG, SPRINT,
@@ -66,7 +68,7 @@ import (
 
 // chainFixtureVersions are the schema versions a fixture exists for, in
 // ascending order.
-var chainFixtureVersions = []string{"1.0.0", "1.1.0", "1.2.0", "1.6.0", "1.8.0", "1.12.0", "1.14.0"}
+var chainFixtureVersions = []string{"1.0.0", "1.1.0", "1.2.0", "1.6.0", "1.8.0", "1.12.0", "1.14.0", "1.17.0"}
 
 // chainRoadmap is the roadmap name a fixture copy is installed under.
 const chainRoadmap = "payments-chain"
