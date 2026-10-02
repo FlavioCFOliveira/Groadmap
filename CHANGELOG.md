@@ -5,7 +5,7 @@ All notable changes to **Groadmap** (`rmp`) are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [1.18.0] - 2026-10-01
+## [1.18.0] - 2026-10-02
 
 ### Changed - BREAKING
 
@@ -247,8 +247,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Concurrent `sprint add-tasks` processes no longer exit `1`** (`704e8e2`).
   Read-write SQLite transactions begin `IMMEDIATE`, so they wait under the busy
   timeout instead of receiving `SQLITE_BUSY` on the lock upgrade.
-- **A lost `sprint start` race yields the sequential refusal**, never raw SQLite
-  text: driver failures are classified at one dispatch point (`7d4beff`).
+- **The loser of a concurrent `sprint start` or `sprint reopen` receives the
+  refusal the sequential case prints** (`7d4beff`, `d48bb9e`). When the winner has
+  opened the same sprint, the loser is refused with
+  `cannot start sprint with status OPEN` or `cannot reopen sprint with status OPEN`
+  (exit `6`). Under `1.17.3` it could instead receive the driver's text for
+  `idx_one_open_sprint`, or, when it had read the sprint as `PENDING` before the
+  winner committed, `sprint #N is already open — close it first`, as if another
+  sprint were open. `7d4beff` repeats the status and open-sprint checks inside the
+  transaction; `d48bb9e` makes the open-sprint check made before the transaction
+  ignore the caller's own sprint. `sprint close` and every sequential invocation
+  are unchanged.
 - **A cancelled graph statement is no longer committed** (`2f991be`): the client
   closes the Bolt connection on cancellation, so the server cancels the
   statement. A deadline keeps its published outcome.
@@ -320,11 +329,15 @@ These change no output of the binary.
   `test_76` (`7d4beff`) covers the correctness and security fixes, and `test_77`
   (`80e29ef`) the skills installer.
 - **The schema `1.17.0` migration-chain fixture** is added, so the chain test
-  starts from every released schema version (release cut, working tree).
+  starts from every released schema version (`01dc938`).
 - **Directory-creation failures under `graph serve` are classified as I/O errors
   at the source**, with messages and exit codes unchanged (`120e1e6`).
 - **The generated chroma files are stored byte-exact**, so a clean checkout passes
   the staleness test (`0a1be6d`).
+- **The graph server's drain test parks a blob of `0xFF` bytes instead of zeros**
+  (`d48bb9e`). Zero byte pairs are zero-length chunk headers, the response
+  scanner's worst case, and exceeded the test's 30-second window on a loaded CI
+  runner.
 - **Specification and documentation corrections** (`8053d49`, `35d3e37`,
   `f58becd`, `d31f5e4`); the new `SPEC/SKILLS.md` (`390249a`); project
   instructions and knowledge model (`abc427a`, `ab013a8`, `bd6e163`).
