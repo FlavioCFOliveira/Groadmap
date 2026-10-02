@@ -589,15 +589,17 @@ adversary who does not control the release origin.
 
 ### Automated Release Creation
 
-Releases are created automatically when a tag matching `v*` pattern is pushed:
+Releases are created automatically when a tag matching `v*` pattern is pushed. The
+tag is pushed only after the CI workflow run on the push of `main` has succeeded;
+the order of every release step, and the handling of a failed run, are specified
+once in `VERSION.md § Release Process`.
 
-1. Push git tag: `git tag -a v1.0.0 -m "Release v1.0.0"`
-2. Push tag: `git push origin v1.0.0`
-3. GitHub Actions workflow triggers automatically
-4. The workflow runs the complete validation gate set (see
+1. The tag is pushed: `git push origin v1.0.0`
+2. GitHub Actions workflow triggers automatically
+3. The workflow runs the complete validation gate set (see
    `BUILD.md § Validation Gates`); binaries are built for all platforms only
    after every gate passes
-5. GitHub Release is created automatically with all assets attached
+4. GitHub Release is created automatically with all assets attached
 
 ### GitHub Actions Workflow
 
@@ -665,10 +667,11 @@ of these conditions MUST hold:
    `go build` writes into the checkout, so git reports the tree unmodified and the
    stamp records `vcs.modified=false`. The binary the build itself writes under
    `dist/` does not affect the stamp of that same build.
-4. **The build job checks the stamp before the artefact leaves the job.** After the
-   step that runs `go build` and before the step that uploads the job's artefact, a
-   step runs `go version -m` on the binary the build wrote, and fails the job when
-   that binary carries no `vcs.revision` build setting. It requires the revision and
+4. **The build job checks the stamp before the binary leaves the job.** After the
+   step that runs `go build` — and, in the release workflow, before the step that
+   uploads the job's artefact; the CI workflow's build job uploads none — a step
+   runs `go version -m` on the binary the build wrote, and fails the job when that
+   binary carries no `vcs.revision` build setting. It requires the revision and
    nothing else: it does not examine `vcs.modified`.
 
 **The stamp check.** The step decides on the output of `go version -m`, not on its
@@ -678,7 +681,7 @@ identifies one. When the revision is absent, the step writes this one line to
 standard error and exits with status 1:
 
 ```
-{binary} carries no vcs.revision build setting, so it cannot name the commit it was built from; the job stops before the artefact is uploaded.
+{binary} carries no vcs.revision build setting, so it cannot name the commit it was built from; the job stops before the binary leaves it.
 ```
 
 `{binary}` is the path the step passed to `go version -m`, such as `dist/rmp` or
@@ -758,6 +761,9 @@ Each release includes:
 ### Release Checklist
 
 - [ ] `govulncheck ./...` was run on the tree being released and its result acted on: no standard-library vulnerability is reachable from Groadmap's own code, and any reported-but-not-called vulnerability is recorded in the release notes (see `VERSION.md § Pre-Release Vulnerability Check`)
+- [ ] The release reached `main` and the remote through direct pushes, and no step went through a pull request (see `VERSION.md § Release Process`)
+- [ ] The CI workflow run triggered by the push of `main` concluded successfully as a whole, every one of its jobs — `test`, `e2e`, and the `build` matrix — passing, before the tag was created and pushed (see `VERSION.md § Release Process`)
+- [ ] The release workflow run triggered by the tag push concluded successfully, and the GitHub Release it publishes exists for the tag
 - [ ] Every validation gate ran and passed in the release workflow, and no gate is reported as skipped, waived, or not installed (see `BUILD.md § Validation Gates`)
 - [ ] All binaries built successfully
 - [ ] SHA256 checksums generated
@@ -813,5 +819,5 @@ Each release includes:
 - [ ] `govulncheck` is run as a release step only. It is not added to `make check`, to `.github/workflows/ci.yml`, or to `.github/workflows/release.yml`, and the gate set stays at the six gates of `BUILD.md § Validation Gates`
 - [ ] This specification documents no linker flag that the release workflow does not pass, and the release workflow passes no `-X` linker flag
 - [ ] Both workflows build `rmp` with `-buildvcs=true`: reading `.github/workflows/release.yml` and `.github/workflows/ci.yml` shows the flag on the `go build` command of each build job (see How a Released Binary Carries Its Commit)
-- [ ] Every build job of `.github/workflows/release.yml` and `.github/workflows/ci.yml` runs the stamp check: reading each workflow shows a step that runs `go version -m` on the built binary and fails the job when its output carries no `vcs.revision` build setting, placed after the step that runs `go build` and before the step that uploads the artefact. The step decides on the command's output, not its exit status, and it examines no setting other than `vcs.revision` (see How a Released Binary Carries Its Commit)
+- [ ] Every build job of `.github/workflows/release.yml` and `.github/workflows/ci.yml` runs the stamp check: reading each workflow shows a step that runs `go version -m` on the built binary and fails the job when its output carries no `vcs.revision` build setting, placed after the step that runs `go build` and, in the release workflow, before the step that uploads the artefact. The step decides on the command's output, not its exit status, and it examines no setting other than `vcs.revision` (see How a Released Binary Carries Its Commit)
 - [ ] A binary extracted from a published release archive prints `Groadmap version <version> (commit <commit>)`, where `<commit>` is the first seven characters of the commit the release tag names; `go version -m` on the same binary reports that commit as `vcs.revision` and reports `vcs.modified=false` (see How a Released Binary Carries Its Commit)

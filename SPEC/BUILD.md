@@ -514,6 +514,10 @@ of the end-to-end job. This
 section describes only the shape of each workflow: what triggers it, which jobs
 it declares, and the order those jobs run in.
 
+The release workflow is the only workflow that publishes a release, and the only
+one that publishes anything. The CI workflow publishes nothing: no release, no
+pre-release, and no build artefact.
+
 Both workflows take the Go toolchain from `go.mod` (`go-version-file: go.mod`),
 so both track the version required by `Go Toolchain`.
 
@@ -521,8 +525,9 @@ Both workflows build `rmp` with `-buildvcs=true`, and neither passes a `-X` link
 flag. The flag makes a build that finds the repository but cannot record its
 version-control stamp fail, instead of producing a binary that reports
 `(commit unknown)`. The flag cannot catch a build that finds no repository at all, so
-each build job also runs a stamp check: before it uploads its artefact, it runs
-`go version -m` on the built binary and fails when the binary carries no
+each build job also runs a stamp check: after the build, and in the release
+workflow before the job uploads its artefact, it runs `go version -m` on the built
+binary and fails when the binary carries no
 `vcs.revision` build setting. The stamp, the flag, and the check are specified in
 `VERSION.md § Build Identification` and
 `DEPLOY.md § How a Released Binary Carries Its Commit`.
@@ -614,15 +619,17 @@ env:
    - The suite MUST pass before the build job starts
 
 3. **build** — declares `needs: [test, e2e]`
-   - The `build` gate: builds the four-target fast-feedback subset defined in
-     `Validation Gates`, for the rolling `dev` pre-release
+   - The `build` gate: a compile check of the four-target fast-feedback subset
+     defined in `Validation Gates`. For each target it runs two steps: the
+     `go build` of `rmp`, and the stamp check of the binary that build wrote
    - Builds with `-buildvcs=true` and passes no `-X` linker flag, and runs the same
-     stamp check before uploading its artefact, as the release workflow's build job
-     does
+     stamp check as the release workflow's build job, placed after the `go build`
+     step
+   - Packs no archive, generates no checksum, and uploads no artefact: the binary
+     it builds does not leave the job
 
-4. **dev-release** — declares `needs: build`
-   - Publishes the rolling `dev` pre-release. It runs only for a push to `main`,
-     never for a pull request
+The CI workflow declares no other job, and it publishes nothing (see
+`GitHub Actions Workflow`).
 
 **Permissions:**
 ```yaml
@@ -630,12 +637,8 @@ permissions:
   contents: read
 ```
 
-The CI workflow follows the same least-privilege pattern as the release
-workflow. It grants `contents: read` at workflow level, and only the
-`dev-release` job — the one job that writes to the repository, because it
-replaces the rolling `dev` release and its tag — raises its own permission to
-`contents: write`. The gate job, the `e2e` job, and the build job read; none of
-them may write.
+The CI workflow grants `contents: read` at workflow level, and no job raises it.
+The gate job, the `e2e` job, and the build job read; none of them may write.
 
 ## Static Analysis
 
@@ -1154,8 +1157,8 @@ not a difference between the three places the gates run.
 
 In both workflows, the gates other than `build` run in the workflow's gate job,
 and the `build` gate is the workflow's build job. The build job MUST declare
-`needs:` on the gate job and on the end-to-end job, and the job that publishes
-artefacts MUST declare `needs:` on the build job. No job may build or publish an
+`needs:` on the gate job and on the end-to-end job, and the job of the release
+workflow that publishes the release MUST declare `needs:` on the build job. No job may build or publish an
 artefact in parallel with the gates or the end-to-end job, or independently of
 them.
 
@@ -1225,16 +1228,16 @@ narrows it.
 3. **`build` is a host build locally and a matrix build in the workflows.**
    `make check` builds the binary for the host platform only. The CI workflow
    builds a four-target fast-feedback subset — `linux/amd64`, `linux/arm64`,
-   `darwin/amd64`, and `darwin/arm64` — for the rolling `dev` pre-release. The
-   release workflow builds all nine Primary Platforms and ships them. That
+   `darwin/amd64`, and `darwin/arm64` — as a compile check, and publishes none
+   of the binaries. The release workflow builds all nine Primary Platforms and ships them. That
    subset is a statement about feedback speed, not about portability: the `test`
    gate compiles every Primary Platform wherever it runs, because the unit-test
    suite cross-compiles the whole target table (see `Supported Build Targets`).
    No supported target can therefore break unnoticed in any of the three places.
    Both workflows also build with `-buildvcs=true`, where a local build keeps the
    default `-buildvcs=auto`, and each workflow build job checks the binary's stamp
-   with `go version -m` before uploading it, which a local build does not. A
-   workflow therefore never publishes a binary that carries no commit (see
+   with `go version -m` after building it, which a local build does not; the
+   release workflow does so before uploading it. A workflow therefore never publishes a binary that carries no commit (see
    `GitHub Actions Workflow`).
 
 Nothing else may differ. In particular, `vet`, `lint`, and `security` run the
@@ -1407,7 +1410,8 @@ Every archive the project publishes carries the same three entries: the compiled
 binary, the licence, and the quick-start guide. The licence is not optional
 packaging — the project's licence travels with every binary the project
 distributes — so this structure governs every published archive without
-exception, the release archives and the rolling `dev` pre-release archive alike.
+exception. The release workflow is the only workflow that publishes archives (see
+`GitHub Actions Workflow`).
 
 ```
 rmp-{version}-{target}.tar.gz
@@ -1435,21 +1439,11 @@ otherwise, and the installation script expects that name inside the archive. The
 other two entries are identical in both forms, under exactly the names `LICENSE`
 and `README.md`.
 
-**Every published archive is covered.** Two workflows publish archives, and this
-structure governs both:
-
-| Archive | Name | Published by |
-|---------|------|--------------|
-| Release archive | `rmp-{version}-{target}.{ext}` | The release workflow, for all nine Primary Platforms |
-| Dev pre-release archive | `rmp-dev-{sha}-{target}.tar.gz` | The CI workflow, for the four-target fast-feedback subset |
-
-`{version}` is the `v*` tag being released, `{target}` is the Target Name from
-`Supported Build Targets`, `{ext}` is the format the table above gives for the
-target's operating system, and `{sha}` is the first seven characters of the
-commit the pre-release was built from. Every dev archive is a `.tar.gz` holding
-`rmp`, because the fast-feedback subset contains no Windows target; were one ever
-added to that subset, the format and binary-name rule above would apply to it
-exactly as it does to a release archive.
+**Every published archive is covered.** The release workflow publishes one
+archive per Primary Platform, named `rmp-{version}-{target}.{ext}`. `{version}` is
+the `v*` tag being released, `{target}` is the Target Name from
+`Supported Build Targets`, and `{ext}` is the format the table above gives for the
+target's operating system.
 
 Each archive is published alongside a `.sha256` checksum file. That file is a
 separate published asset, not a fourth entry inside the archive.
@@ -1479,7 +1473,6 @@ separate published asset, not a fourth entry inside the archive.
 - [ ] Any change to the pinned `golang.org/x/text` version, and any raise of the `go` directive in `go.mod` (see Go Toolchain), has been treated as a change to the roadmap tasks page's search and to the graph key comparison: the tests of both pass on the new Unicode character data (see External Dependencies, Unicode Data Rules 5, `WEB.md § Roadmap Tasks Page`, and `GRAPH.md § Node Key Uniqueness`)
 - [ ] Archive naming follows convention: `rmp-{version}-{target}.{ext}`
 - [ ] Every published archive holds exactly the three entries Artifact Structure lists, and nothing else. Listing a `.tar.gz` (`tar -tzf`) shows `rmp`, `LICENSE`, and `README.md`; listing a Windows `.zip` (`unzip -l`) shows `rmp.exe`, `LICENSE`, and `README.md`. Every entry is at the archive root, with no leading directory component
-- [ ] The dev pre-release archive holds the same three entries as a release archive. This is checked on a published `dev` asset, not only on a release asset, because both workflows pack archives and only one of them builds release tags
 - [ ] The `.sha256` file for each archive is published as a separate asset and is not an entry inside the archive
 - [ ] Every web asset category (HTML templates, the stylesheet including the vendored Tabler CSS framework, all client JS including the vendored Tabler JavaScript and D3.js with the d3-sankey plugin and their dependencies, web fonts including the Inter font and the Tabler Icons webfont, icons and images, and the favicon) is embedded via `go:embed`; the build uses the Go toolchain only, with no Node.js or `node_modules` step (see Vendored Web Assets)
 - [ ] The vendored Tabler CSS and the vendored Tabler JavaScript come from the same Tabler release: the release named in the licence banner at the head of the committed CSS file equals the release named in the banner at the head of the committed JavaScript file (see Vendored Web Assets)
@@ -1500,14 +1493,15 @@ separate published asset, not a fourth entry inside the archive.
 - [ ] The documented local install command for each tool installs the pinned version, and the linter it installs can actually run this project: the golangci-lint module path carries the `/v2` suffix, so `golangci-lint run ./...` reads `.golangci.yml` (`version: "2"`) instead of rejecting it
 - [ ] `gosec` runs in both workflows with the invocation the `security` gate defines (`gosec -exclude-dir=.claude/worktrees ./...`), so the scanned scope and the accepted `#nosec` suppressions are the same everywhere
 - [ ] Every gate fails its job when it fails: introducing one violation at a time — an unformatted file, a `go vet` finding, a failing test, a `golangci-lint` violation, and an unsuppressed `gosec` finding — fails the workflow run in each case, in both workflows
-- [ ] No artefact is built or published on a run whose gates or end-to-end suite did not pass: the build job declares `needs:` on the gate job and on the `e2e` job, and the publishing job declares `needs:` on the build job
+- [ ] No artefact is built or published on a run whose gates or end-to-end suite did not pass: the build job declares `needs:` on the gate job and on the `e2e` job, and the release workflow's publishing job declares `needs:` on the build job
+- [ ] The CI workflow publishes nothing: reading `.github/workflows/ci.yml` shows the jobs `test`, `e2e`, and `build` and no other, and no step of it packs an archive, generates a checksum, uploads a build artefact, or creates or deletes a release or a tag. The release workflow is the only workflow that publishes a release
 - [ ] Each workflow declares a job with the ID `e2e`, which runs on a Linux runner, declares `timeout-minutes: 60`, holds no permission above `contents: read`, sets up Go from `go.mod`, sets up Python with `actions/setup-python` pinned to an exact version, builds the binary with `go build -o ./bin/rmp ./cmd/rmp` in a step before the suite, restores `./bin/rmp` from no cache and no artefact, and runs `python3 -u tests/run_tests.py`. No step of the job carries `continue-on-error` or tests whether a tool is present (see The End-to-End Suite Is a Required Pipeline Job)
 - [ ] The `python-version` input of the `e2e` job is the same in `.github/workflows/ci.yml` and in `.github/workflows/release.yml`, and names Python 3.12 or a later release
 - [ ] The end-to-end suite fails its workflow run when it fails: making one module fail fails the `e2e` job in both workflows, the job's log names that module, and neither workflow builds or publishes an artefact on that run
 - [ ] The end-to-end suite stays outside the gate set: the gate table of Validation Gates still lists exactly the six gates, and the `check` target of the `Makefile` still runs exactly those six and not the suite
 - [ ] The release workflow builds all nine Primary Platforms, and the CI build job builds the four-target fast-feedback subset (see Validation Gates, Permitted Differences Between the Three Pipelines)
 - [ ] Both workflows build `rmp` with `-buildvcs=true` and pass no `-X` linker flag: reading the `go build` command of the build job in `.github/workflows/ci.yml` and in `.github/workflows/release.yml` shows the flag (see GitHub Actions Workflow)
-- [ ] Every build job of both workflows runs the stamp check before uploading its artefact: reading `.github/workflows/ci.yml` and `.github/workflows/release.yml` shows, in each build job, a step placed after the `go build` step and before the upload step that runs `go version -m` on the built binary and fails the job when its output carries no `vcs.revision` build setting (see GitHub Actions Workflow and `DEPLOY.md § How a Released Binary Carries Its Commit`)
+- [ ] Every build job of both workflows runs the stamp check: reading `.github/workflows/ci.yml` and `.github/workflows/release.yml` shows, in each build job, a step placed after the `go build` step — and, in the release workflow, before the upload step — that runs `go version -m` on the built binary and fails the job when its output carries no `vcs.revision` build setting (see GitHub Actions Workflow and `DEPLOY.md § How a Released Binary Carries Its Commit`)
 - [ ] Artifacts uploaded successfully
-- [ ] Permissions set to minimum required in BOTH workflows: each grants `contents: read` at workflow level, and exactly one job in each raises that to `contents: write` — `release` in the release workflow, `dev-release` in the CI workflow. No gate job and no build job holds write permission
+- [ ] Permissions set to minimum required in BOTH workflows: each grants `contents: read` at workflow level; exactly one job of the release workflow, `release`, raises that to `contents: write`, and no job of the CI workflow raises it. No gate job and no build job holds write permission
 - [ ] No release reports any gate as skipped, waived, not installed, or not applicable

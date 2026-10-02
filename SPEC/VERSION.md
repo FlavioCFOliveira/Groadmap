@@ -24,7 +24,7 @@ The constant does not name release artefacts. A release archive such as
 `rmp-v1.2.1-linux-amd64.tar.gz` takes its version from the `v*` tag whose push
 triggered the release workflow, not from this constant (see
 `BUILD.md § Artifact Structure`). The Release Process below is what keeps the two
-equal: it bumps the constant (step 2) before it creates the tag (step 5).
+equal: it bumps the constant (step 2) before it creates the tag (step 8).
 
 ### Build Identification
 
@@ -73,9 +73,7 @@ The displayed commit is the first seven characters of `vcs.revision`, always exa
 seven. It is a fixed-length prefix, not git's abbreviation: `git rev-parse --short`
 prints as many characters as the repository needs for a unique prefix, which can be
 more than seven, so a test that compares the displayed commit with git MUST compare it
-with the first seven characters of `git rev-parse HEAD`. Seven is also the length
-`BUILD.md § Artifact Structure` uses for the commit in the name of a dev pre-release
-archive.
+with the first seven characters of `git rev-parse HEAD`.
 
 #### The three displays
 
@@ -109,7 +107,7 @@ each of the following cases. Each was measured on the Go version
   Under `-buildvcs=true`, which both workflows pass, the same build fails and writes
   no binary. The flag does not change the copy-without-`.git` case above: that build
   still succeeds unstamped with the flag present, and it is the workflows' stamp check
-  that stops such a binary before it is uploaded (see
+  that fails the build job on such a binary, before the release workflow uploads it (see
   `DEPLOY.md § How a Released Binary Carries Its Commit`).
 
 `go install github.com/FlavioCFOliveira/Groadmap/cmd/rmp@<version>` belongs to the
@@ -1234,15 +1232,28 @@ no-op, because the drop is guarded by `IF EXISTS`.
 
 ## Release Process
 
+A release is published by pushing directly to the repository. It MUST NOT go through a pull request, at any step.
+
+The release validation MUST guarantee that the GitHub workflows pass: the version tag is pushed only after the CI workflow has passed on `main`, and the release is published only when the release workflow that the tag push triggers succeeds.
+
 1. Run the pre-release vulnerability check on the tree being released and act on its result before going further (see Pre-Release Vulnerability Check)
 2. Bump the version constant in `cmd/rmp/main.go`
 3. Update `CHANGELOG.md` and add the release notes file `release-notes/v<version>-<date>.md`
-4. Commit the changes
-5. Create the annotated git tag: `git tag -a v<version> -m "Release v<version>"`
-6. Push `main` and the tag: `git push origin main && git push origin v<version>`
-7. On the tag push, the `.github/workflows/release.yml` workflow builds the binaries and publishes the GitHub release
+4. Commit the changes on the release branch
+5. Merge the release branch into `main`
+6. Push `main`, and only `main`: `git push origin main`
+7. Wait for the run of the CI workflow (`.github/workflows/ci.yml`, see `BUILD.md § CI Workflow`) that this push triggers, and confirm that the run as a whole concluded successfully, every one of its jobs passing: the `test` job (the gates, with the race detector and coverage), the `e2e` job, and the `build` matrix. The tag MUST NOT be created or pushed before this run has succeeded. If the run fails, the tag is not pushed: the failure is corrected on the release branch, and the procedure resumes at step 4
+8. Create the annotated git tag on the `main` commit that the CI run validated: `git tag -a v<version> -m "Release v<version>"`
+9. Push the tag: `git push origin v<version>`
+10. The tag push triggers the release workflow (`.github/workflows/release.yml`, see `BUILD.md § Release Workflow`), which builds the binaries and publishes the GitHub Release. The release is published only when that workflow succeeds; if it fails, see Correcting a Failed Release Workflow
 
 Past releases are discoverable via `git tag --list` and `git log v<previous>..v<current>` — no Version History table is kept here.
+
+### Correcting a Failed Release Workflow
+
+When the release workflow fails after the tag was pushed, and no GitHub Release exists for that tag, the project owner MAY decide to correct the same version and re-cut its tag, rather than cut a new version. Re-cutting deletes the tag, locally and on the remote, and recreates it on the corrected `main` commit. Because it rewrites a published tag, it MUST NOT be done without the project owner's explicit confirmation, given for that tag.
+
+The correction itself follows the Release Process from step 4: it is committed on the release branch and merged into `main`, `main` is pushed, and the recreated tag is pushed only after the CI run on that push has succeeded.
 
 ### Pre-Release Vulnerability Check
 
