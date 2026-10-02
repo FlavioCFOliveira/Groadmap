@@ -12,6 +12,12 @@ import (
 	"github.com/FlavioCFOliveira/Groadmap/internal/utils"
 )
 
+// afterSprintStatusRead, when non-nil, runs in sprintLifecycle between the
+// read of the sprint's status and the read of the OPEN sprint. It is a test
+// seam that lets a test commit a competing transition inside that window; it
+// is nil outside tests.
+var afterSprintStatusRead func()
+
 // sprintStart starts a sprint.
 func sprintStart(args []string) error {
 	return sprintLifecycle(args, models.SprintOpen, models.OpSprintStart, false, func(s models.SprintStatus) bool {
@@ -157,9 +163,18 @@ func sprintLifecycle(args []string, newStatus models.SprintStatus, op models.Aud
 		return fmt.Errorf("%w: %s", utils.ErrValidation, msg)
 	}
 
-	// Prevent opening a sprint when another is already OPEN (task #77).
+	if afterSprintStatusRead != nil {
+		afterSprintStatusRead()
+	}
+
+	// Prevent opening a sprint when another is already OPEN (task #77). Only
+	// another sprint counts: when the OPEN sprint is this one, a concurrent
+	// invocation opened it after the status read above, and the transaction
+	// below refuses with the status line, which the sequential case prints
+	// because its status check runs first (SPEC/COMMANDS.md § Sprint
+	// Lifecycle).
 	if newStatus == models.SprintOpen {
-		if open, err := database.GetOpenSprint(ctx); err == nil {
+		if open, err := database.GetOpenSprint(ctx); err == nil && open.ID != sprintID {
 			return alreadyOpenError(open.ID)
 		}
 	}

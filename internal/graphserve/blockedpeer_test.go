@@ -189,6 +189,15 @@ type parkedWriter struct {
 // default sets, so one write of it cannot complete unread.
 const parkedWriterBlob = 8 << 20
 
+// parkedWriterFill is the byte the parked write is made of. Every write is fed
+// to the statement-summary scanner, which reads the stream as Bolt chunks. A
+// zero byte pair is a zero-length chunk header, so a blob of zeros is the
+// scanner's worst case: one header per two bytes, about two seconds for 8 MiB
+// under -race with atomic coverage, enough to push a test past its deadline on
+// a loaded machine. 0xFF pairs announce maximal 65535-byte chunks, so the
+// scanner skips the blob in about 128 steps.
+const parkedWriterFill = 0xFF
+
 // park starts a write that cannot complete and returns once it is outstanding.
 func (w *parkedWriter) park(t *testing.T) {
 	t.Helper()
@@ -196,7 +205,7 @@ func (w *parkedWriter) park(t *testing.T) {
 	before := w.conn.writeSeq.Load()
 	w.failed = make(chan error, 1)
 	go func() {
-		_, err := w.conn.Write(make([]byte, parkedWriterBlob))
+		_, err := w.conn.Write(bytes.Repeat([]byte{parkedWriterFill}, parkedWriterBlob))
 		w.failed <- err
 	}()
 	waitFor(t, func() bool {
